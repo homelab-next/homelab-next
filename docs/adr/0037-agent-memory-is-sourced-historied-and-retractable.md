@@ -1,6 +1,6 @@
 ---
 summary: Every agent memory entry records its sources, TLP and revision history; an operator retracts a bad source and everything built on it.
-summary_of: outline:sha256:659df10cd6ad9e61
+summary_of: outline:sha256:6a503131303d6a02
 ---
 # ADR-0037: Agent memory is sourced, historied and retractable
 
@@ -35,7 +35,8 @@ ADR-0035 makes it the coordinator's ledger too. What an entry is today:
   ceiling was lowered.
 - **Memory is never in a pack.** `assemble_pack` records only the names of `memory_scopes`. No
   code renders entries into a section yet; ADR-0035's renderer will be the first.
-- `MemoryBackend` has `load(owner)` and `transact(owner, fn)` and no way to list owners.
+- `MemoryBackend` has `load(owner)` and `transact(owner, fn)`, no way to list owners, and no
+  transaction across two keys; `InMemoryBackend` has no lock.
 - **Reads are owner-scoped.** A cross-agent read raises `MemoryAccessError`. ADR-0035 rests on
   that, and it stays.
 
@@ -46,241 +47,314 @@ was shown, never from what the model says about its sources.
 
 ## Decision
 
-### History (PR 1)
+### History (PR 1, may merge while this ADR is proposed)
 
 1. **Every applied update appends a change record.** Per owner, the store keeps an append-only
    log. A record holds `at` (apply time, from the injected clock; not the report's `finished_at`),
    `scope`, `key`, `op`, the resulting `rev`, `value` (absent for `retire` and `verify`),
-   `value_digest` (sha256 of the value), `pack_id`, `sources`, `exposed` (decision 9), `tlp`, the
-   base-source closure (decision 10), `checked` (decision 7) and `reason` (only on records the
-   operator causes). The entry and its records are written in the **same backend
-   transaction**: a batch that fails writes neither an entry nor a record, on `InMemoryBackend`
-   and `FileBackend` alike, and a test proves it for both.
+   `value_digest` (sha256 of the value), `pack_id`, `sources`, `checked`, `tlp`, the
+   base-source closure (decision 10) and `reason` (only on records an operator causes). Until PR
+   2, every record is written with `sources: []`, `checked: false` and `tlp: red`, so stored
+   records keep one shape. The entry and its records are written in the **same backend
+   transaction**: a batch that fails writes neither, on `InMemoryBackend` and `FileBackend`
+   alike, and a test proves it for both.
 2. **Entries are derived from the log.** Per owner, the stored value becomes `{entries, log}`; the
    entries are a cache of the log, and a test proves that folding the log reproduces them on both
-   backends (ADR-0014's derived state). An entry gains `rev` and `updated_at`. `rev` starts at 1
-   on a key's first `add`, rises by one on every record for that key, and **never restarts**,
-   even after `retire` and a later `add`, so `@rev` names one value for the store's whole life.
-   Existing entries migrate once to `rev: 1`, `checked: false`, `tlp: red`, `sources: []`.
+   backends (ADR-0014's derived state). An entry gains `rev`, `updated_at` and `reasserted_at`.
+   `rev` starts at 1 on a key's first `add`, rises by one on every record for that key, and
+   **never restarts**, even after `retire` and a later `add`, so `@rev` names one value for the
+   store's whole life. Existing entries migrate once to `rev: 1`, `checked: false`, `tlp: red`,
+   `sources: []`.
 3. **The clock is injected.** The store takes `now=` (a callable returning UTC). `_apply` reads no
    clock of its own.
-4. **No secret enters the log.** Before the transaction, every `value` is run through the
-   platform's secret screen (`homelabnext.agent.screen`, secret types) and the leak-scan shapes.
-   A match refuses the whole batch; the refusal names the key and the type, never the value. An
-   append-only log would otherwise make a leaked credential permanent (ADR-0033 decision 14).
+4. **No secret enters the log.** Before the transaction, every `key` and `value` is run through
+   the platform's secret screen (`homelabnext.agent.screen`, secret types) and the leak-scan
+   shapes. A match refuses the whole batch; the refusal names the key's position and the type,
+   never the value. An append-only log would otherwise make a leaked credential permanent
+   (ADR-0033 decision 14).
 5. **History is read through the owner's scope.** `history(profile, scope, key)` returns the key's
    records in order. `as_of(profile, scope, t)` returns the scope's live entries as they stood at
    `t`, rebuilt from the log; it shows what the profile believed at `t`, including facts retracted
-   later (follow-up 1). Both are owner-scoped like `read` (`owner=` naming another profile raises
-   `MemoryAccessError`) and both apply the reader's ceiling at the time of the read (decision 8).
-   They are read-only; `MemoryStore`'s public API becomes `{apply_updates, apply_report, read,
-   history, as_of}`, and `test_the_store_has_no_unvalidated_write_path` changes only by those two.
-6. **The log is bounded.** Each owner has a hard cap on records, set in the profile. At the cap a
-   write is refused and the operator is paged; nothing is dropped silently. A key may declare
-   `keep_last: N` (ADR-0035's cursor keys use it), and only that key's oldest records beyond N are
-   compacted, keeping their `value_digest`, `sources` and `tlp`. Every write also emits the
-   owner's log-head digest (sha256 of the last record) into the event outbox, so a later
-   tamper-evident chain (follow-up 2) has an outside anchor. Until then the log is a record of
-   what the platform wrote, not proof against someone who can edit the state file.
+   later (follow-up 1), and answers `compacted` for a key whose records at `t` were compacted
+   (decision 6), never a wrong value. Both are owner-scoped like `read` (`owner=` naming another
+   profile raises `MemoryAccessError`), both apply the reader's ceiling at the time of the read,
+   and both report withheld records as a count only, as `read` does (decision 8). They are
+   read-only: `MemoryStore`'s public API becomes `{apply_updates, apply_report, read, history,
+   as_of}`, and `test_the_store_has_no_unvalidated_write_path` changes only by those two.
+6. **The log is bounded per scope.** The profile gains an additive field, `memory_limits:
+   {records: {<scope>: N}, keep_last: {<scope>: {<key pattern>: N}}}`, set in the compiled
+   profile and never by a report.
+   - Every scope has a record cap. Platform scopes (decision 7) have their own, which
+     model-written scopes cannot consume.
+   - At a cap, writes to that scope are refused and the operator is paged once per crossing
+     (state-diffed), never silently dropped.
+   - `keep_last` (platform scopes only) compacts a key's records beyond the last N.
+   - A retired key in a platform scope may be compacted whole, to one tombstone record.
+   - Compaction keeps each record's `rev`, `value_digest`, `sources`, closure, `tlp` and the
+     `pack_id` that points at its exposure (decision 9), and drops only values.
 
-### Sources and labels (PR 2)
+   This is what bounds ADR-0035's ledger, whose item keys are new every time.
+
+### Sources and labels (PR 2, merges only after this ADR is accepted)
 
 7. **An update names its sources, and only identifiers the platform wrote count.** A
-   `memory_updates` item gains an optional `sources` list. `report_result` becomes **1.2**, an
-   additive minor that also adds `verify` to `op` (decision 14) and bounds the lists:
-   `memory_updates` at most 64 items, `cites` at most 128, `sources` at most 16 unique items,
-   each matching exactly one of:
+   `memory_updates` item gains an optional `sources` list: at most 16 unique items, each matching
+   exactly one of:
    - a content digest, `^sha256:[0-9a-f]{64}$`;
    - a canonical record uid (UUIDv7), never a legacy record code;
    - a memory revision, `mem:<profile id>/<scope>/<key>@<rev>`.
 
-   Patterns are anchored as in `ids/common`. 1.2 is a normal frozen minor (ADR-0001 decisions 3
-   and 4: a released major cannot be `x-draft`), so PR 2 merges only after this ADR is accepted.
+   Patterns are anchored as in `ids/common`. `report_result` becomes **1.2**, an additive minor
+   that adds `sources` and adds `verify` to `op` (decision 15). It is a normal frozen minor
+   (ADR-0001 decisions 3 and 4: a released major cannot be `x-draft`). Existing lists are not
+   tightened in the schema, since that would not be additive. `validate_report` and
+   `apply_updates` refuse more than 64 `memory_updates` or 128 `cites`.
 
-   When a report is applied with its pack, every source must equal an identifier the **pack
-   assembler** wrote into the pack's structured records, for something the pack actually
+   **A report is applied only with its pack**, and every source must equal an identifier the
+   **pack assembler** wrote into the pack's structured records for something the pack actually
    **rendered** (a section that survived the budget):
    - a rendered knowledge item's `digest`, `file_digest`, or the uid of its record node id
      (`lesson:<uid>` gives `<uid>`);
    - a rendered input item's `digest` or `uid`, which the caller supplies per item in `inputs`
-     and the pack records (never parsed from the text);
+     and the pack records (never parsed from the text; the uid must be platform-issued, decision
+     13);
    - an entry in the pack's `memory` block (decision 11).
 
    Text is never a source: not `cites[].ref`, not a section body, not `summary`. Anything else
-   refuses the whole report. An update with no `sources` is stored with `sources: []` and is
-   reported as `unsourced`.
+   refuses the whole report. An update with no `sources` is stored with `sources: []` and reported
+   as `unsourced`.
 
-   Platform code that applies updates without a report (ADR-0035's fold) passes `sources=` and
-   `unchecked=True` explicitly; the default of `apply_report` is the checked path. An unchecked
-   record is marked `checked: false`, and the reverse index marks its edges as unchecked.
-8. **An entry's label has a floor set by everything the model saw.** The pack gains labels: each
-   rendered knowledge item and input item carries `tlp`, set by the assembler from the input's
-   declared label (a record's or page's label; an input item's label from the caller), never from
-   the text; an item with no label is `red`. The pack's label is the strictest of its rendered
-   items. The store computes each record's `tlp` as the strictest of:
-   - the pack's label (`red` for a report applied without its pack, and for platform writes
-     unless the caller passes a label it computed by ADR-0033 decision 4);
+   **Platform scopes.** A compiled profile may list `platform_scopes` (for ADR-0035,
+   `fleet-ledger`). Only `apply_updates(..., unchecked=True)` writes a platform scope, and it
+   writes nothing else. A report's update naming a platform scope is refused. An unchecked record
+   is `checked: false`, and the reverse index marks its edges as unchecked.
+8. **An entry's label has a floor set by everything the model saw.** The pack gains labels.
+   - Each rendered knowledge item and input item carries `tlp`, set by the assembler from the
+     input's declared label (a record's or page's label; an input item's label from the caller),
+     never from the text; an item with no label is `red`.
+   - Pregate sections count as `red` (lab data, ADR-0033 decision 2). Static sections take the
+     manifest's declared label, `red` when absent.
+   - The pack's label is the strictest of all of these.
+
+   The store computes each record's `tlp` as the strictest of:
+   - the pack's label;
    - the label of each source;
    - the entry's current label.
 
-   This holds for every op. A label is never lowered except by a release transform (ADR-0033
-   decision 7). Until packs carry labels, every pack is `red`, so all memory is `red`.
+   Unchecked platform writes are `red`; the store takes no label from a caller. This holds for
+   every op. A label is never lowered except by a release transform (ADR-0033 decision 7). Until
+   packs carry labels, every pack is `red`, so all memory is `red`.
 
    Reads take the reader's ceiling from the `VerifiedProfile` (its attested `tlp_ceiling`, else
    the ceiling its `data_tier` gives), never from a caller argument. An entry above the ceiling
-   is not returned, and its key is not returned either: keys are model-chosen slugs that can
-   carry content. A read reports only `withheld: <count>` per scope. While all memory is `red`,
-   a profile whose ceiling is below `red` reads its whole memory as withheld; that is the
-   intended conservative state, and it is said here so it is not mistaken for a bug.
-9. **A pack that rendered a source exposes its facts to it.** Every change record keeps, besides
-   the sources it cites, the identifiers of everything its pack rendered (`exposed`). Citing is
-   the model's claim; exposure is the platform's knowledge.
+   is not returned, and its key is not returned either: keys are model-chosen slugs that can carry
+   content. A read reports only `withheld: <count>` per scope. While all memory is `red`, a
+   profile whose ceiling is below `red` reads its whole memory as withheld. That is the intended
+   conservative state, said here so it is not mistaken for a bug.
+9. **A pack that rendered a source exposes its facts to it, through memory too.** For each pack
+   whose report changed memory, the store keeps the pack's exposure once, keyed by `pack_id`,
+   and records point at it. The exposure is:
+   - every identifier the pack rendered;
+   - for each entry in the pack's `memory` block, that revision's closure and its own exposure.
+
+   So exposure propagates through memory exactly as citation does. Exposure is capped at 1,024
+   identifiers; a pack over the cap is refused at assembly. Citing is the model's claim; exposure
+   is the platform's knowledge.
 10. **Sources accumulate, and dependence is computed at write time.** An entry's **effective
     sources** are the union of the sources of every record since its last `add`: a `replace` or
     `verify` adds sources, never removes them. Each record stores its **base-source closure**: its
     effective sources, the closures of the `mem:` revisions it cites, and the aliases of each
-    source (decision 13), capped at 256 identifiers (an update exceeding the cap is refused).
-    `mem:` references name only revisions that already exist, so the memory graph has no cycles.
-    Records carry no `derived_from` today (ADR-0033's consequences); when the records library
-    exposes it, the closure includes it, cycles visited once.
+    source (decision 13). The closure is capped at 256 identifiers. An update that would exceed
+    the cap is refused, so such a key is retired and added again. `mem:` references name only
+    revisions that already exist, so the memory graph has no cycles. Records carry no
+    `derived_from` today (ADR-0033's consequences); when the records library exposes it, the
+    closure includes it, cycles visited once.
 
 ### Memory citing memory (PR 3)
 
 11. **A `mem:` source names a revision the pack showed.** When platform code renders memory
     entries into a pack, the pack gains a `memory` block of `{scope, key, rev, value_digest, tlp}`
     for each entry it carries. A `mem:` source is valid only when it names an entry in that block.
-    Until something fills the block (ADR-0035's renderer), every `mem:` source is refused. A `mem:`
-    source naming another owner is refused before any store lookup, with the same message whether
-    or not the entry exists, so the check is no existence oracle. No update may cite any revision
-    of its own key.
+    Until something fills the block (ADR-0035's renderer), every `mem:` source is refused. A
+    `mem:` source naming another owner is refused before any store lookup, with the same message
+    whether or not the entry exists, so the check is no existence oracle. No update may cite any
+    revision of its own key.
 
 ### Reverse index and retraction (PR 3)
 
 12. **Retraction is an operator tool outside the agent's reach.** `dependents`, `retract`, `lift`
-    and `purge` live on `MemoryAdmin(backend)`, a separate class the agent runtime never
-    constructs; an import-graph test holds that line. Each takes an `OperatorPrincipal`, built only
-    by the `hnx agent memory` command from the invoking operating-system user (or, later, from the
-    broker's operator peers); passing a `VerifiedProfile` or a string raises. `MemoryBackend`
-    gains `owners()`. None of these is a broker action: `hnx broker validate` refuses an action
-    named `memory.retract`, `memory.lift`, `memory.purge` or `memory.dependents`. If it is ever
-    exposed through the broker, it is an operator operation answered only to an operator peer, not
-    affected by `approvers` or `allow_agent_approvers`, and never answered to a profile.
-    `test_cross_agent_read_is_refused` passes unchanged.
-13. **`retract` denies every name of a source, first.**
-    - `dependents(source)` returns two sets across owners: **cited** (records whose closure
-      reaches the source) and **exposed** (records written from a pack that rendered it without
-      citing it). Unchecked edges are marked.
-    - `retract(source, reason, by=)` resolves the source to its alias set (the uid, every content
-      and file digest the store has seen for it, its graph id) and appends one deny record per
-      alias **before** anything else, in its own transaction. Whether a uid retraction covers all
-      its content revisions is the operator's choice (`revision: this | all`, default `all`).
-    - It then retires every live entry in **cited**, owner by owner, each with a record `op:
-      retire, reason: retracted:<source>`; with `include_exposed` it retires **exposed** too. The
-      retirements are idempotent, so re-running `retract` completes one that crashed part-way.
-    - It returns the affected owners, scopes and keys to the operator, and offers the same
-      `dependents` output as a dry run first.
+    and `purge` live on `MemoryAdmin(backend)`, a separate class.
+    - An import-graph test holds that `homelabnext.agent`, `homelabnext.broker` and
+      `homelabnext.orchestration` never import it.
+    - Each method takes an `OperatorPrincipal`. It is built only by the `hnx agent memory` command
+      from the invoking operating-system user, and it refuses the uids the agent runtime and the
+      broker run as. It accepts only users in the store's operators list. Passing a
+      `VerifiedProfile` or a string raises.
+    - None of these is a broker action: `hnx broker validate` refuses an action named
+      `memory.retract`, `memory.lift`, `memory.purge` or `memory.dependents`. If it is ever
+      exposed through the broker, it is an operator operation, answered only to an operator peer,
+      not affected by `approvers` or `allow_agent_approvers`, and never answered to a profile.
+    - `test_cross_agent_read_is_refused` passes unchanged.
+13. **`retract` denies every platform-issued name of a source, first.**
+    - **Aliases come only from platform-issued pairings:**
+      - a knowledge node's graph id, record uid and repository digests;
+      - an input item's uid, which must be issued by the platform (a lake row's or record's
+        uid), never taken from feed content.
+
+      A pack in which an input item's uid is also a knowledge uid with a different digest is
+      refused at assembly.
+    - `dependents(source)` returns two sets across owners:
+      - **cited:** records whose closure reaches the source;
+      - **exposed:** records whose pack's exposure reaches it without citing it.
+
+      Unchecked edges are marked. It doubles as the dry run: it lists the alias set and the
+      affected owners, scopes and keys, and gives a digest of that list.
+    - `retract(source, reason, by=, confirm=<dry-run digest>)` appends one deny record per alias
+      **before** anything else, in its own transaction.
+      - With `revision: all` (the default), it denies by uid. At check time, each pack's own
+        pairing resolves a new digest to its uid, so later revisions of the same record are
+        covered.
+      - It then retires every live entry in **cited**, owner by owner, each with a record `op:
+        retire, reason: retracted:<source>`. With `include_exposed`, it retires **exposed** too.
+      - The retirements are idempotent, so re-running `retract` completes one that crashed
+        part-way.
     - The deny list is an append-only log of `retract` and `lift` records, kept by the backend
       under a reserved key that no profile id can take. Retracting twice changes nothing the
       second time.
 14. **A retraction sticks.**
-    - Every `apply_*` re-checks the deny list inside its owner transaction, under the same lock,
-      against each record's closure and its `exposed` set, so a report validated before a
-      retraction cannot land after it.
-    - A report whose pack **rendered** a denied source is refused, whatever it cites.
-    - The pack assembler excludes denied sources at selection time (a knowledge exclusion with
-      reason `retracted`, an input item listed as omitted), so no new run is shown one.
-    - For a scope written only by platform code (ADR-0035's `fleet-ledger`), a denied update is
-      dropped from its batch and reported; the rest applies, so a retraction cannot stall the
-      fold.
-    - `lift(source, reason, by=)` appends a lift record. It restores nothing: retired entries stay
-      retired until a new report adds them.
-    - `purge(owner, scope, key, rev, reason, by=)` replaces one record's `value` with nothing,
-      keeps its `value_digest`, `sources` and `tlp`, and writes its own record. It is how a
-      retracted poisoned value, or a secret the screen missed, leaves the log.
+    - **Writes re-check the deny list.**
+      - `MemoryBackend` gains `owners()`.
+      - `transact(owner, fn)` passes the deny log, read under the same lock: `FileBackend` uses
+        `StateStore.rewrite`, and `InMemoryBackend` gains a lock.
+      - Every apply re-checks each record's closure and its pack's exposure against the deny log
+        inside its transaction, so a report validated before a retraction cannot land after it.
+      - A report whose pack **rendered** a denied source is refused, whatever it cites.
+      - A checked batch with a denied update is refused whole. An unchecked platform batch drops
+        the denied update, reports it, and applies the rest, so a retraction cannot stall
+        ADR-0035's fold.
+    - **New packs leave denied sources out.** The caller passes the deny set (`retracted=`) to
+      `select_knowledge`, which excludes those items with reason `retracted`, and to
+      `assemble_pack`, which lists denied input items as omitted and leaves out of the `memory`
+      block any entry whose closure or exposure reaches a denied source. Neither function reads
+      the store.
+    - **Lifting a retraction.** `lift(source, reason, by=)` appends a lift record. It restores
+      nothing: retired entries stay retired until a new report adds them.
+    - **Purging a value.** `purge(owner, value_digest | scope/key@rev, reason, by=)`:
+      - retires the entry first if a purged revision is current;
+      - blanks the value in every record with that digest and in the cached entry, keeping
+        `value_digest`, `sources` and `tlp`;
+      - writes its own record.
+
+      `history` and `as_of` show `purged`. It is how a retracted poisoned value, or a secret the
+      screen missed, leaves the store. Copies outside the store are not reached: backups,
+      quarantined corrupt state files, and rendered packs kept in the activity detail tier.
 
 ### Staleness (PR 4)
 
-15. **A model can reassert a fact; only a verifier verifies it.** An entry gains `verified_at` and
-    `reasserted_at`, both set at write time. `op: verify` takes no value, bumps `rev`, and must
-    cite at least one non-`mem:` source the pack rendered; it sets `reasserted_at`, never
-    `verified_at`. `verified_at` is set only by a `Verifier` implementation (a protocol is defined;
-    none ships). `read(..., stale_after=)` reports entries whose `verified_at` is older than the
-    budget as stale, with `reasserted_at` beside it.
+15. **A model can reassert a fact; only a verifier verifies it.** `add`, `replace` and `verify`
+    set `reasserted_at`.
+    - `op: verify` takes no value, bumps `rev`, and must cite at least one non-`mem:` source the
+      pack rendered.
+    - `verified_at` is absent until a `Verifier` implementation sets it. A `Verifier` protocol is
+      defined; none ships.
+    - `read(..., stale_after=)` reports as stale an entry whose `verified_at` is absent or older
+      than the budget, with `reasserted_at` beside it. So until a verifier ships, every entry is
+      stale under any `stale_after`, by design.
 
 ### Evals (PR 5)
 
 16. **Memory is judged by replay.** A fixture history of reports and packs, with timestamps,
-    sources, labels and a retraction partway through, is replayed into a fresh store. Golden
-    questions have exact expected answers: the value of key K as of T; the history of K; what
-    `dependents(S)` returns, cited and exposed; what is retired after `retract(S)`, and that a
-    later report citing or rendering S is refused; which entries are unsourced, unchecked or
-    stale; and what a reader at a given ceiling sees withheld. It lives under `tests/agent/`, runs
-    in `make check`, and judges later changes to the memory design the same way.
+    sources, labels, a write through memory and a retraction partway through, is replayed into a
+    fresh store. Golden questions have exact expected answers:
+    - the value of key K as of T;
+    - the history of K;
+    - what `dependents(S)` returns, cited and exposed, including one hop through memory;
+    - what is retired after `retract(S)`, and that a later report citing or rendering S is
+      refused;
+    - which entries are unsourced, unchecked or stale;
+    - what a reader at a given ceiling sees withheld.
 
-### What this changes in ADR-0035
+    It lives under `tests/agent/`, runs in `make check`, and judges later changes to the memory
+    design the same way.
+
+### What this changes elsewhere (PR 3)
 
 17. **Amendments to ADR-0035** (it lists this ADR as amending it):
-    - **Decision 4 (the fold):** the fold applies its updates with `unchecked=True`, its
-      `sources=` and its computed label; a denied update is dropped, not fatal (decision 14).
+    - **Decision 4 (the fold):** the fold writes `fleet-ledger`, a platform scope, with
+      `unchecked=True` and its `sources=`. Its records are `red`, which is never below a ledger
+      value's own `tlp` field. A denied update is dropped, not fatal (decision 14).
     - **Decision 5 (value fields):** `tlp` inside a ledger value stays for the coordinator's own
-      reading, but the store's `tlp` (decision 8) governs reads, and the two never disagree
-      downward: the store's label is at least the value's.
-    - **Decision 7 (pack fill order):** within a level, stale entries (decision 15) and withheld
-      counts are reported; the renderer, not this ADR, decides their rank.
-    - **Decision 8 (tiers):** "removes" an entry means retire plus, for `drop` and `count` entries
-      beyond the cap, compaction of their records (decision 6); the tiers stay capped because the
-      log is capped.
+      reading. The renderer writes the store's label into what it renders, not the value's field.
+    - **Decision 7 (pack fill order):** stale entries (decision 15) and withheld counts are
+      reported. The renderer, not this ADR, decides their rank.
+    - **Decision 8 (tiers):** "removes" an entry means retiring it and compacting the retired key
+      whole (decision 6). The tiers stay capped because platform scopes have their own record cap
+      and retired keys compact.
     - **Decision 10 (sole writer):** `MemoryAdmin.retract` and `purge` may also write
       `fleet-ledger`, as operator actions.
-    - **Consequences ("the store's tiers are capped"):** true again only with decision 6.
-18. **A report shown to another profile carries its `memory_updates` as a count only.** ADR-0035
-    shows the coordinator other profiles' reports; their memory values, sources and `mem:` keys
-    would otherwise be a cross-agent read through the report.
+    - **Consequences ("the store's tiers are capped"):** true with decision 6.
+18. **A report served to another profile carries its `memory_updates` as a count only.**
+    Wherever a report is served to a profile other than its author, `memory_updates` is replaced
+    by `{count: n}`: the context store's level reads by digest, and ADR-0035's renderer. A test
+    reads another profile's report by digest and finds no value, source or key. Otherwise the
+    report would be a cross-agent read of memory.
 
 ## Consequences
 
 - **Easier:**
-  - Every fact traces to what its profile was shown, and back: from a bad source to every fact
-    that cited it or was written in its presence, at any depth.
-  - A wrong source is withdrawn in one operator action, denied under every name it has, and kept
-    out of new packs.
+  - Every fact traces to what its profile was shown, and back. From a bad source the trace
+    reaches every fact that cited it, or was written in its presence, directly or through memory.
+  - A wrong source is withdrawn in one operator action, after a dry run. It is denied under every
+    platform-issued name it has, and kept out of new packs and new memory blocks.
   - "What did this profile believe at T" has an exact answer for incident review.
-  - Labels cannot be lowered by choosing what to cite, so memory does not move `amber` or `red`
-    content into a lower context.
-  - A secret cannot enter the log, and one that slips through can be purged.
+  - Labels cannot be lowered by choosing what to cite, and no caller can set one. So memory does
+    not move `amber` or `red` content into a lower context.
+  - A secret cannot enter the log, and one that slips through can be purged from the store.
   - The replay turns "is this memory design better" into a test.
 - **Harder:**
   - Until packs carry labels, all memory is `red`, and profiles below `red` see only withheld
     counts. That is the price of not guessing labels.
-  - Every write adds records, and `FileBackend` rewrites one file holding every owner, so the
-    log's size raises the cost of every write fleet-wide, not only the writer's. The caps
-    (decision 6) bound it; a per-owner file is a later backend change.
-  - Retraction by exposure (`include_exposed`) can retire facts that never used the source; it is
+  - Until a verifier ships, every entry is stale under any `stale_after`.
+  - Every write adds records, and `FileBackend` rewrites one file holding every owner. So the log
+    raises the cost of every write fleet-wide, not only the writer's. The per-scope caps bound
+    it; a per-owner file is a later backend change.
+  - Retraction by exposure (`include_exposed`) can retire facts that never used the source. It is
     the operator's choice, shown in the dry run.
   - "A retraction sticks" holds for `MemoryStore` only. The broker's free-form `memory.write` lane
-    (granted without approval in the example manifest) can still carry the same fact; routing or
+    (granted without approval in the example manifest) can still carry the same fact. Routing or
     removing that lane is a precondition of relying on retraction fleet-wide.
-  - `rev` never restarting means keys grow numbers over a long life; that is the cost of `@rev`
-    being unambiguous.
+  - A key whose closure reaches 256 identifiers must be retired and added again.
+  - Purge cannot reach copies outside the store.
 - **Obliges us to maintain:**
-  - the log, its all-or-nothing and fold-reproduces-entries tests on both backends, the migration,
-    the caps and the head-digest event (PR 1);
-  - the secret screen on values (PR 1);
-  - `report_result` 1.2, per-item identities and labels in packs, the source check and the
-    label computation (PR 2);
-  - the pack `memory` block and the `mem:` rules (PR 3);
-  - `MemoryAdmin`, `OperatorPrincipal`, `owners()`, the deny log, the import-graph test and the
-    broker-validate refusal (PR 3);
-  - `verify`, `reasserted_at`, `verified_at` and the `Verifier` protocol (PR 4);
-  - the replay fixture and its golden answers (PR 5);
-  - `docs/modules/egress.md`'s line on memory stores, once the withheld read ships.
+  - **PR 1:**
+    - the log and the migration;
+    - the all-or-nothing and fold-reproduces-entries tests on both backends;
+    - `memory_limits` in the profile schema (an additive minor), the per-scope caps, the
+      once-per-crossing page and compaction;
+    - the secret screen on keys and values.
+  - **PR 2:**
+    - `report_result` 1.2 and the list limits in `validate_report`;
+    - per-item identities and labels in packs, including pregate and static labels;
+    - `platform_scopes` in the profile;
+    - the source check and the label computation.
+  - **PR 3:**
+    - the pack `memory` block and the `mem:` rules;
+    - `MemoryAdmin` and `OperatorPrincipal` with its operators list;
+    - `owners()` and the deny log passed into `transact`;
+    - the `retracted=` arguments, the import-graph test and the broker-validate refusal;
+    - decisions 17 and 18.
+  - **PR 4:** `verify`, `reasserted_at`, `verified_at` and the `Verifier` protocol.
+  - **PR 5:** the replay fixture and its golden answers.
+  - **Docs:** `docs/modules/egress.md`'s line on memory stores, once the withheld read ships.
 - **Follow-ups** (named here, decided later, each by amending this ADR):
   1. **Two meanings of "as of".** `as_of(T)` shows what was believed at T. A second mode that
      applies today's retractions to that past state is what replaying a past decision needs.
-  2. **Tamper-evident history.** A hash chain over the log, anchored by the head digests decision
-     6 already emits.
-  3. **Wider limits on history.** Compaction beyond `keep_last` (folding old revisions of any key
-     into a snapshot that keeps their sources), and a per-owner log file.
+  2. **Tamper-evident history.** A hash chain over the log, with its head digest emitted to an
+     outside anchor (a broker audit record or an event with its own schema), so the chain can be
+     checked by someone who cannot edit the state file. Until then the log records what the
+     platform wrote; it is not proof against someone who can edit the file.
+  3. **Wider compaction.** Folding old revisions of model-written keys into a snapshot that keeps
+     their sources, and a per-owner log file.
   4. **Value scanning beyond secrets.** Personal data and other screen types on stored values.
   5. **Staleness by scope.** A default `stale_after` per scope (for example `ops` 7 days,
      `profile` 90 days), so callers do not each choose their own.
@@ -290,13 +364,18 @@ was shown, never from what the model says about its sources.
 
 ## Alternatives
 
-- **Label by cited sources only.** It lets a model lower a label by citing the green item and not
-  the red one. Rejected for the pack floor (decision 8).
+- **Label by cited sources only, or accept a caller's label.** Either lets a label be lowered: by
+  citing the green item and not the red one, or by passing `clear`. Rejected for the pack floor
+  and `red` platform writes (decision 8).
 - **Let the model state its sources freely, or accept a digest found in a cite's text.** A
   fabricated or planted identifier is indistinguishable from a real one. Rejected for structured
   identifiers the assembler wrote (decision 7).
 - **Retract only what cited the source.** A misled model may cite nothing, or cite an innocent
-  item; the fact would survive. Rejected for cited plus exposed (decisions 9 and 13).
+  item, and the fact would survive. So may a fact one hop away in memory. Rejected for cited plus
+  exposed, propagated through memory (decisions 9 and 13).
+- **Take aliases from whatever pairings a pack recorded.** A poisoned item could claim a good
+  record's uid and get it retracted, or claim a fresh one and escape. Rejected for
+  platform-issued pairings (decision 13).
 - **Record only `pack_id` and retract everything a pack produced.** It retires every fact from
   every run, including ones the source never touched. Kept only as the operator's opt-in exposed
   set.
@@ -306,9 +385,13 @@ was shown, never from what the model says about its sources.
   a profile, so a profile would choose the source and see the result across owners. Rejected for
   `MemoryAdmin` (decision 12).
 - **Retract without a deny list, or deny one name only.** The next report, or the same source
-  under another digest or uid, puts the fact back. Rejected (decisions 13 and 14).
+  under another name, puts the fact back. Rejected (decisions 13 and 14).
 - **Defer the secret scan.** With an append-only log, a leaked credential would be permanent.
   Rejected (decision 4).
+- **One record cap per owner.** A model-written scope could fill it and stall the platform's
+  ledger. Rejected for per-scope caps (decision 6).
+- **Bound `memory_updates` and `cites` in the 1.2 schema.** That tightens an existing list, which
+  is not additive under ADR-0001. Rejected for limits in code (decision 7).
 - **Treat a model's `verify` as verification.** A misled model would keep its own bad fact fresh
   forever. Rejected for `reasserted_at` (decision 15).
 - **Return withheld entries by key.** Keys are model-chosen and can carry content. Rejected for a
