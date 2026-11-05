@@ -49,7 +49,7 @@ author: unknown
 ## Outputs
 
 <!-- hnx:gen:outputs -->
-- Metrics: `/metrics`
+- Metrics: none declared
 - MCP server `agent-runtime` (sse, `/sse`): read; owner platform-team; active; catalog record `mcp/agent-runtime.yml`
 <!-- /hnx:gen -->
 
