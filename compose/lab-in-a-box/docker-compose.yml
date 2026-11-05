@@ -575,3 +575,4 @@ services:
       llm-gateway:
         condition: service_healthy
     mem_limit: 64m
+    networks: [lab]

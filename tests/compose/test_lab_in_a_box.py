@@ -332,6 +332,26 @@ def test_negative_postgres_18_on_the_old_data_mount_is_caught(compose):
     ]
 
 
+def off_lab_network(compose) -> list[str]:
+    """Services that would land on compose's implicit default network, where no lab alias
+    (``*.svc.example.internal``) resolves: each joins ``lab`` or has no network at all."""
+    return sorted(
+        name
+        for name, svc in compose["services"].items()
+        if svc.get("network_mode") != "none" and "lab" not in (svc.get("networks") or [])
+    )
+
+
+def test_every_service_is_on_the_lab_network(compose):
+    assert off_lab_network(compose) == []
+
+
+def test_negative_a_service_without_networks_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    del broken["services"]["llm-gateway-keys"]["networks"]
+    assert off_lab_network(broken) == ["llm-gateway-keys"]
+
+
 def test_trino_heap_is_tiny():
     heap = re.search(r"^-Xmx(\d+)M$", (LAB / "config/trino/jvm.config").read_text(), re.M)
     assert heap and int(heap[1]) <= 1024
