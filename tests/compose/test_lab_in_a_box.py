@@ -444,9 +444,11 @@ def test_docker_compose_config_rejects_a_missing_required_variable(tmp_path):
 # --- smoke script --------------------------------------------------------------------------------
 
 
-# a fake Uptime Kuma 1.23 behind provision.js's client interface: the socket.io events it uses
+# a fake Uptime Kuma 2.x behind provision.js's client interface: the socket.io events it uses
 # (needSetup, setup, login, add, addStatusPage, saveStatusPage) and the lists Kuma sends after a
-# login; addStatusPage refuses a slug that exists, as Kuma's unique index does
+# login; addStatusPage refuses a slug that exists, as Kuma's unique index does, and add and
+# saveStatusPage refuse what a real 2.5.6 refused when the 1.23 provisioning ran against it
+# (monitor.conditions is NOT NULL; an analyticsType that is not null or a known type)
 _FAKE_KUMA = r"""
 const { provision } = require(process.argv[1]);
 const state = { setup: true, monitors: {}, pages: {}, next: 1, calls: [] };
@@ -458,6 +460,12 @@ const kuma = {
         case "setup": state.setup = false; return { ok: true };
         case "login": return { ok: !state.setup };
         case "add": {
+            if (!Array.isArray(args[0].conditions) || !Array.isArray(args[0].rabbitmqNodes)) {
+                return { ok: false, msg: "NOT NULL constraint failed: monitor.conditions" };
+            }
+            if (!args[0].accepted_statuscodes.every((c) => typeof c === "string")) {
+                return { ok: false, msg: "Accepted status codes are not all strings" };
+            }
             const id = state.next++;
             state.monitors[id] = { id, name: args[0].name, url: args[0].url };
             return { ok: true, monitorID: id };
@@ -468,7 +476,16 @@ const kuma = {
             }
             state.pages[state.next] = { id: state.next++, slug: args[1], title: args[0] };
             return { ok: true };
-        case "saveStatusPage": return { ok: true };
+        case "saveStatusPage": {
+            const c = args[1];
+            if (c.analyticsType !== null && !["google", "umami", "plausible", "matomo", "rybbit"].includes(c.analyticsType)) {
+                return { ok: false, msg: "Invalid analytics type" };
+            }
+            if (typeof c.showOnlyLastHeartbeat !== "boolean" || !Array.isArray(c.domainNameList)) {
+                return { ok: false, msg: "NOT NULL constraint failed: status_page.show_only_last_heartbeat" };
+            }
+            return { ok: true };
+        }
         default: return { ok: false, msg: `unknown event ${event}` };
         }
     },
@@ -497,7 +514,7 @@ def test_uptime_kuma_provisioning_is_idempotent():
     existing status-page slug.  Run twice against a fake Kuma, the second run creates nothing.
     (The real socket.io API -- that Kuma sends monitorList and statusPageList after a login --
     is only exercised by the nightly lab smoke.)"""
-    script = str(LAB / "config" / "uptime-kuma" / "provision.js")
+    script = str(LAB / "config" / "uptime" / "provision.js")
     res = subprocess.run(
         ["node", "-e", _FAKE_KUMA, script], capture_output=True, text=True, timeout=60, check=False
     )
@@ -568,8 +585,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
     ROUTES: ClassVar[dict[str, str]] = {
         "/api/v1/alerts": "prometheus-alerts",
         "/api/v1/query": "prometheus-query-up",
-        "/api/status-page/lab": "uptime-kuma-status-page",
-        "/api/status-page/heartbeat/lab": "uptime-kuma-heartbeat",
+        "/api/status-page/lab": "kuma-2-status-page",  # the lab runs Uptime Kuma 2.x
+        "/api/status-page/heartbeat/lab": "kuma-2-heartbeat",
     }
 
     def do_GET(self):
@@ -790,6 +807,20 @@ HARDENED_EXCEPTIONS: set[str] = set()  # none: OpenBao (2.6+) starts as its own 
 def test_the_secrets_service_adds_no_capability_back(compose):
     # OpenBao dropped mlock in 2.0 and starts as its own user since 2.6: IPC_LOCK must not return.
     assert "cap_add" not in compose["services"]["secrets"]
+
+
+def test_the_uptime_service_runs_its_rootless_image_and_adds_no_capability_back(compose):
+    # 1.x's entrypoint chowned /app/data and switched user (CHOWN, SETGID, SETUID); 2.x's
+    # *-slim-rootless image starts as `node` (uid 1000), which owns /app/data in the image
+    images = set()
+    for name in ("uptime", "uptime-init"):
+        svc = compose["services"][name]
+        assert "cap_add" not in svc and "user" not in svc, name
+        images.add(svc["image"])
+    (image,) = images  # one pin for both
+    assert re.fullmatch(r"[\w/-]+:2\.\d+\.\d+-slim-rootless@sha256:[0-9a-f]{64}", image), image
+    # SQLite by its environment variable, not the first-run "setup database" page
+    assert list(compose["services"]["uptime"]["environment"].values()) == ["sqlite"]
 
 
 def test_containers_drop_capabilities_and_forbid_new_privileges(compose):

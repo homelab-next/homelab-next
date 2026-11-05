@@ -338,7 +338,7 @@ services:
     port: 3001
     health: {kind: http, path: /api/entry-page, expect_status: 200}
     owner: platform-team
-    version: "1.23.17"
+    version: "2.5.6"
     tls: none
     auth: idp
     public_hostname: uptime.lab.example

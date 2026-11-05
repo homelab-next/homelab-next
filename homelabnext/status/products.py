@@ -20,8 +20,9 @@ responses (``tests/status/fixtures/``).  What each reads, and where the shape wa
     The public status page, no login: ``GET /api/status-page/<slug>`` (the monitors of its public
     groups) and ``GET /api/status-page/heartbeat/<slug>`` (each monitor's latest heartbeats and
     its 24-hour uptime).  Each monitor is an item: up ok, down fail, pending warn, maintenance
-    unknown; a pinned incident is one more item.  Shape: Uptime Kuma 1.23
-    ``server/routers/status-page-router.js`` and a real 1.23.16.
+    unknown; each pinned incident is one more item (1.x sends one as ``incident``, 2.x a list
+    as ``incidents``).  Shape: Uptime Kuma ``server/routers/status-page-router.js`` and
+    ``server/model/status_page.js``, a real 1.23.16 and a real 2.5.6.
 ``poll-stackstorm``
     ``GET <path>?limit=..&sort_desc=true&timestamp_gt=<window start>`` (``/api/v1/executions``)
     and ``?status=running``, with ``St2-Api-Key`` from the secret store: each action with a
@@ -316,11 +317,16 @@ def uptime_kuma(
                 (name, {"id": mid}, Draft(clean_item(name, fallback_item), state, summary))
             )
     out = _unique([(d.item, labels, d) for _, labels, d in drafts])
-    incident = page.get("incident")
-    if isinstance(incident, Mapping):
+    # 1.x: "incident", the one pinned incident or null; 2.x: "incidents", every pinned active one
+    incidents = page.get("incidents")
+    if not isinstance(incidents, list):
+        incidents = [page.get("incident")]
+    pinned = [i for i in incidents if isinstance(i, Mapping)]
+    for n, incident in enumerate(pinned, 1):
         state = "fail" if raw_text(incident.get("style")) == "danger" else "warn"
         title = incident.get("title") or "incident"
-        out.append(Draft("incident", state, clean_summary(f"pinned incident: {title}")))
+        item = "incident" if len(pinned) == 1 else f"incident-{n}"
+        out.append(Draft(item, state, clean_summary(f"pinned incident: {title}")))
     return out
 
 
