@@ -255,13 +255,25 @@ own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
   webhooks, image, audio (Realtime voice included) and code execution, external apps (`APP_*`),
   OAuth, OIDC, LDAP and SCIM, the database, MFA, `CUSTOM_NAME` (it fetches a logo from upstream
   at start), sign-in and its cookies, CORS and `WEBUI_URL`; every fixed setting is refused by
-  name. To use another
-  harmless setting, read it in the pinned release and add it to the allowlist.
+  name. Values are plain strings: one holding `{{` or `{%` is refused. `GLOBAL_LOG_LEVEL` may be
+  `INFO`, `WARNING`, `ERROR` or `CRITICAL` only, since at `DEBUG` Open WebUI logs whole chat
+  requests and replies. To use another harmless setting, read it in the pinned release and add it
+  to the allowlist.
+- Two admin-only routes still fetch any URL an admin gives them and return the body:
+  `POST /api/v1/tools/load/url` and `POST /api/v1/functions/load/url` (0.12.3
+  `routers/tools.py` and `routers/functions.py`). No setting gates them; with Tools and Functions
+  off, nothing fetched is ever run, but the fetch itself happens. The role cannot deny them (it
+  runs the container only, and the front door's routes for it are site configuration, not
+  generated here), so they are left open: the host egress rule below is what bounds where they
+  can reach. A site's front door may deny both paths.
 - `open_webui_public_url` (optional, `https://host[:port]`, no path) is the address users reach
   it at through the front door. It sets `WEBUI_URL` and makes that the only `CORS_ALLOW_ORIGIN`.
   Without it, upstream's default `*` applies, with credentials allowed, so any origin's script
   could make credentialed requests a SameSite=lax cookie lets through (a sibling host on the
-  lab's parent domain is same-site). Set it.
+  lab's parent domain is same-site). Set it. The host is lower case (punycode for a non-ASCII
+  name); an IPv6 literal, a path and the default port `:443` are refused (the websocket's origin
+  check is exact, and a browser never sends `:443`, so that URL would break the websocket). Once
+  it is set, any other origin, such as a tunnel or a second host name, loses the websocket too.
 - Egress: the role cannot restrict the container's network (`compose_app` has no networks
   setting, and the gateway runs on another host, so an internal-only compose network would cut it
   off too). Restrict it on the host firewall instead: in nftables' `DOCKER-USER` path, let the

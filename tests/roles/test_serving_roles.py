@@ -811,7 +811,7 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
     assert env["ENABLE_SIGNUP"] == "false" and env["OFFLINE_MODE"] == "true"
     assert env["ENABLE_PERSISTENT_CONFIG"] == "false"  # the environment wins on every start
     assert env["ENABLE_APPS"] == "false"  # 0.12.1's external apps keep a live connection out
-    # tool servers, Tools and Functions (admin-supplied Python) are off, and nothing is pip-installed
+    # tool servers, Tools and Functions (admin-supplied Python) are off; nothing is pip-installed
     off = ("PLUGINS", "TOOLS", "FUNCTIONS", "TOOL_SERVERS", "PIP_INSTALL_FRONTMATTER_REQUIREMENTS")
     assert {n: env["ENABLE_" + n] for n in off} == dict.fromkeys(off, "false")
     assert "WEBUI_URL" not in env and "CORS_ALLOW_ORIGIN" not in env  # no public URL given
@@ -910,6 +910,28 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
         {"open_webui_public_url": "https://chat.example.internal/ui"},
         {"open_webui_public_url": "*"},
         {"open_webui_public_url": "https://a.example.internal;https://b.example.internal"},
+        # the default port breaks the websocket's exact origin check; a port must be 1 to 65535
+        {
+            "open_webui_public_url": "https://chat.example.internal:443"  # no-raw-endpoint: allow a refused input
+        },
+        {
+            "open_webui_public_url": "https://chat.example.internal:65536"  # no-raw-endpoint: allow a refused input
+        },
+        {
+            "open_webui_public_url": "https://chat.example.internal:0"  # no-raw-endpoint: allow a refused input
+        },
+        {"open_webui_public_url": "https://Chat.example.internal"},
+        {"open_webui_public_url": "https://[fd00::1]"},  # scrub-allow: an IPv6 literal, refused
+        # below INFO, Open WebUI logs whole chat requests and replies
+        {"open_webui_extra_env": {"GLOBAL_LOG_LEVEL": "DEBUG"}},
+        {"open_webui_extra_env": {"GLOBAL_LOG_LEVEL": "debug"}},
+        # a value is never a template
+        {
+            "open_webui_extra_env": {
+                "WEBUI_NAME": "{% raw %}{{ lookup('env', 'HOME') }}{% endraw %}"
+            }
+        },
+        {"open_webui_extra_env": {"WEBUI_NAME": "{% raw %}{% if 1 %}x{% endif %}{% endraw %}"}},
     ],
 )
 @first_run(lambda tmp, over: {"role": "open_webui", "tasks_from": "main",
@@ -982,6 +1004,31 @@ def test_open_webui_keeps_extra_settings_that_do_not_re_point_it(first):
     assert {k: env[k] for k in ALLOWED_EXTRA} == ALLOWED_EXTRA
     # the public URL is the address and the only CORS origin (upstream's default is '*')
     assert env["WEBUI_URL"] == env["CORS_ALLOW_ORIGIN"] == "https://chat.example.internal"
+
+
+def _widened(tmp, name):
+    """The allowlist widened (as a site's -e would) by a name a backstop rule must still refuse."""
+    allowed = yaml.safe_load((ROOT / "ansible/roles/open_webui/vars/main.yml").read_text())
+    v = webui_vars(
+        tmp,
+        open_webui_allowed_env=[
+            *allowed["open_webui_allowed_env"],
+            "ENABLE_SIGNUP",
+            "OPENAI_API_BASE_URL",
+        ],
+        open_webui_extra_env={name: "x"},
+    )
+    return {"role": "open_webui", "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@pytest.mark.parametrize("name", ["ENABLE_SIGNUP", "OPENAI_API_BASE_URL"])
+@first_run(_widened)
+def test_open_webui_backstops_refuse_what_the_allowlist_lets_through(first, name):
+    """A fixed setting is refused by name, and a reserved name by the pattern, even when the
+    allowlist names them: each rule holds on its own."""
+    r, tmp_path = first
+    assert r.returncode != 0 and "refused names: " + name in r.stdout, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
 def test_open_webui_allowlist_and_reserved_names_stay_apart():
