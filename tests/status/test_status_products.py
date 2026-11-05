@@ -14,6 +14,7 @@ real Prometheus 2.54.1 and Uptime Kuma 1.23.16 (scrape-target ``instance`` label
 from __future__ import annotations
 
 import copy
+import re
 import threading
 from urllib.parse import parse_qs, urlsplit
 
@@ -203,22 +204,36 @@ _WARNING = {"id": 2, "style": "warning", "title": "maintenance window", "pin": T
 
 
 @pytest.mark.parametrize(
-    "key, pinned, want",
+    "key, pinned, monitor, want",
     [
-        ("incident", _DANGER, {"incident": "fail"}),  # 1.x: the one pinned incident, or null
-        ("incidents", [], {}),  # 2.x: every pinned active incident, a list
-        ("incidents", [_DANGER], {"incident": "fail"}),
-        ("incidents", [_DANGER, _WARNING, "x"], {"incident-1": "fail", "incident-2": "warn"}),
+        # 1.x: the one pinned incident, or null; 2.x: every pinned active incident, a list.  The
+        # item is incident-<id> in both, so it survives the upgrade and other incidents' churn.
+        ("incident", _DANGER, "unreachable", {"incident-1": "fail"}),
+        ("incident", None, "unreachable", {}),
+        ("incidents", [], "unreachable", {}),
+        ("incidents", [_DANGER], "unreachable", {"incident-1": "fail"}),
+        ("incidents", [_WARNING], "unreachable", {"incident-2": "warn"}),
+        ("incidents", [_DANGER, _WARNING, "x"], "unreachable", {"incident-1": "fail", "incident-2": "warn"}),
+        ("incidents", [{"style": "danger", "title": "no id"}], "unreachable", {"incident": "fail"}),
+        # a monitor called like an incident item: both kept, told apart by their labels' digest
+        ("incidents", [_DANGER], "incident-1", None),
     ],
-)
-def test_uptime_kuma_no_heartbeat_duplicate_group_and_incident(key, pinned, want):
+)  # fmt: skip
+def test_uptime_kuma_no_heartbeat_duplicate_group_and_incident(key, pinned, monitor, want):
     page, beats = fixture("uptime-kuma-status-page"), fixture("uptime-kuma-heartbeat")
+    page["publicGroupList"][0]["monitorList"][1]["name"] = monitor
     page["publicGroupList"].append(copy.deepcopy(page["publicGroupList"][0]))  # same monitors
     del beats["heartbeatList"]["2"]
     page[key] = pinned
     drafts = uptime_kuma(page, beats, {"states": {"up": "ok"}}, _kuma_now(), "src")
-    assert [d.item for d in drafts] == ["metrics", "unreachable", *want]
-    assert _items(drafts) == {"metrics": "ok", "unreachable": "unknown", **want}
+    if want is None:
+        assert drafts[0].item == "metrics" and len({d.item for d in drafts}) == len(drafts) == 3
+        clash = {d.item: d.state for d in drafts[1:]}
+        assert all(re.fullmatch(r"incident-1@[0-9a-f]{8}", i) for i in clash), clash
+        assert sorted(clash.values()) == ["fail", "unknown"]
+    else:
+        assert [d.item for d in drafts] == ["metrics", "unreachable", *want]
+        assert _items(drafts) == {"metrics": "ok", "unreachable": "unknown", **want}
     with pytest.raises(MappingError, match="publicGroupList and heartbeatList"):
         uptime_kuma({"config": {}}, beats, {}, _kuma_now(), "src")
 

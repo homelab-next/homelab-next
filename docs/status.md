@@ -922,9 +922,11 @@ It reads the **public status page** API, which needs no login and no API key:
 `GET /api/status-page/heartbeat/<slug>` (each monitor's last heartbeats and its 24-hour uptime).
 Each monitor is an item named after it, from its newest heartbeat: up `ok`, down `fail`, pending
 `warn`, maintenance `unknown`, no heartbeat yet `unknown`; the summary carries the 24-hour uptime,
-the ping and the heartbeat's age. A pinned incident is one more item (`danger` fail, any other
-style warn): `incident` for Kuma 1.x's single `incident`, and for 2.x's `incidents` list
-`incident` when one is pinned, `incident-1`, `incident-2`, ... when several are. `states`
+the ping and the heartbeat's age. Each pinned incident is one more item (`danger` fail, any other
+style warn) named `incident-<id>` after Kuma's incident id, from 1.x's single `incident` and 2.x's
+`incidents` list alike, so an incident keeps its item while others come and go and across the
+upgrade (`incident` only for one without an id). A monitor and an incident of the same item name
+are both kept, each suffixed with a digest of its labels, as are two monitors of one name. `states`
 overrides the four words (`{maintenance: ok}`). Publish only the monitors the hub should see on
 that page. Two things from the product itself: Kuma caches these answers (the page 5 minutes, the
 heartbeats 1 minute), so a reading can be that old; and an unknown slug is a 404 in Kuma 2.x

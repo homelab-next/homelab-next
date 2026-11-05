@@ -20,9 +20,10 @@ responses (``tests/status/fixtures/``).  What each reads, and where the shape wa
     The public status page, no login: ``GET /api/status-page/<slug>`` (the monitors of its public
     groups) and ``GET /api/status-page/heartbeat/<slug>`` (each monitor's latest heartbeats and
     its 24-hour uptime).  Each monitor is an item: up ok, down fail, pending warn, maintenance
-    unknown; each pinned incident is one more item (1.x sends one as ``incident``, 2.x a list
-    as ``incidents``).  Shape: Uptime Kuma ``server/routers/status-page-router.js`` and
-    ``server/model/status_page.js``, a real 1.23.16 and a real 2.5.6.
+    unknown; each pinned incident is one more item, ``incident-<id>`` (1.x sends one as
+    ``incident``, 2.x a list as ``incidents``).  Shape: Uptime Kuma
+    ``server/routers/status-page-router.js`` and ``server/model/status_page.js``, a real 1.23.16
+    and a real 2.5.6.
 ``poll-stackstorm``
     ``GET <path>?limit=..&sort_desc=true&timestamp_gt=<window start>`` (``/api/v1/executions``)
     and ``?status=running``, with ``St2-Api-Key`` from the secret store: each action with a
@@ -316,18 +317,25 @@ def uptime_kuma(
             drafts.append(
                 (name, {"id": mid}, Draft(clean_item(name, fallback_item), state, summary))
             )
-    out = _unique([(d.item, labels, d) for _, labels, d in drafts])
-    # 1.x: "incident", the one pinned incident or null; 2.x: "incidents", every pinned active one
+    # Each pinned incident is the item incident-<Kuma's incident id>, in either shape (1.x:
+    # "incident", the one pinned incident or null; 2.x: "incidents", every pinned active one), so
+    # an incident keeps its item while others come and go and across the 1.x -> 2.x upgrade.
     incidents = page.get("incidents")
     if not isinstance(incidents, list):
         incidents = [page.get("incident")]
-    pinned = [i for i in incidents if isinstance(i, Mapping)]
-    for n, incident in enumerate(pinned, 1):
+    for incident in incidents:
+        if not isinstance(incident, Mapping):
+            continue
         state = "fail" if raw_text(incident.get("style")) == "danger" else "warn"
         title = incident.get("title") or "incident"
-        item = "incident" if len(pinned) == 1 else f"incident-{n}"
-        out.append(Draft(item, state, clean_summary(f"pinned incident: {title}")))
-    return out
+        iid = incident.get("id")
+        name = f"incident-{iid}" if isinstance(iid, int | str) and str(iid) else "incident"
+        summary = clean_summary(f"pinned incident: {title}")
+        labels = {"incident": str(iid) if iid is not None else str(title)}
+        drafts.append((name, labels, Draft(clean_item(name, "incident"), state, summary)))
+    # one pass over monitors and incidents: a monitor called incident-1 and incident 1 (or two
+    # monitors of one name) are told apart by a digest of their labels, never merged
+    return _unique([(d.item, labels, d) for _, labels, d in drafts])
 
 
 class UptimeKumaCollector:

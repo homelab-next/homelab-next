@@ -216,7 +216,8 @@ only. `smoke.sh` and `make lab-up` refuse any other `LAB_BIND` unless
 cannot resolve the configuration at all); docker publishes ports through
 its own firewall rules, ahead of ufw or firewalld, so a host firewall is no substitute. Containers
 run with `no-new-privileges` and `cap_drop: [ALL]` (postgres adds back what its entrypoint needs;
-Uptime Kuma runs its rootless image, as the image's `node` user). A real deployment changes each service as follows:
+Uptime Kuma runs its rootless image, as the image's `node` user). A real deployment changes each
+service as follows:
 
 | Lab service | Lab shortcut | Production replacement |
 |---|---|---|

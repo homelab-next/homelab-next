@@ -509,7 +509,7 @@ const opts = { username: "lab", password: "fake-kuma-password", slug: "lab",
 
 
 @pytest.mark.requires_tool("node")
-def test_uptime_kuma_provisioning_is_idempotent():
+def test_uptime_provisioning_is_idempotent():
     """Regression: a re-run on a persisted volume added both monitors again and failed on the
     existing status-page slug.  Run twice against a fake Kuma, the second run creates nothing.
     (The real socket.io API -- that Kuma sends monitorList and statusPageList after a login --
@@ -526,6 +526,38 @@ def test_uptime_kuma_provisioning_is_idempotent():
     assert second["calls"][-1] == "saveStatusPage" and second["out"]["created"] == []
     assert second["out"]["monitors"] == first["out"]["monitors"]
     assert (out["monitors"], out["pages"]) == (2, 1)
+
+
+@pytest.mark.parametrize(
+    "ps, hint",
+    [
+        ("running healthy\n", False),
+        ("", False),  # never created: nothing to say
+        ("running unhealthy\n", True),
+        ("restarting starting\n", True),
+        ("exited \n", True),
+    ],
+)
+def test_smoke_hints_at_a_kept_root_owned_volume_when_uptime_is_unhealthy(ps, hint):
+    m = re.search(r"^uptime_hint\(\) \{\n.*?^\}\n", (LAB / "smoke.sh").read_text(), re.M | re.S)
+    assert m, "smoke.sh defines uptime_hint"
+    fake_dc = (
+        'dc() { [ "$*" = "ps -a --format {{.State}} {{.Health}} uptime" ] && printf "$PS"; }\n'
+    )
+    p = subprocess.run(
+        [shutil.which("bash"), "-c", fake_dc + m.group(0) + "uptime_hint\n"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={"PATH": "/usr/bin:/bin", "PS": ps},
+    )
+    assert p.stdout == ""
+    lines = p.stderr.splitlines()
+    if hint:
+        assert len(lines) == 1 and "make lab-down (docker compose down -v)" in lines[0]
+        assert lines[0].startswith(f"smoke.sh: hint: uptime is not healthy ({ps.rstrip(chr(10))})")
+    else:
+        assert lines == []
 
 
 def test_smoke_script_syntax_and_executable_bit():
@@ -819,8 +851,8 @@ def test_the_uptime_service_runs_its_rootless_image_and_adds_no_capability_back(
         images.add(svc["image"])
     (image,) = images  # one pin for both
     assert re.fullmatch(r"[\w/-]+:2\.\d+\.\d+-slim-rootless@sha256:[0-9a-f]{64}", image), image
-    # SQLite by its environment variable, not the first-run "setup database" page
-    assert list(compose["services"]["uptime"]["environment"].values()) == ["sqlite"]
+    # SQLite by its environment variable, not the first-run "setup database" page (unauthenticated)
+    assert compose["services"]["uptime"]["environment"]["UPTIME_KUMA_DB_TYPE"] == "sqlite"
 
 
 def test_containers_drop_capabilities_and_forbid_new_privileges(compose):
