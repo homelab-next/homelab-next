@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `secrets`
 - Contract: [secrets capability reference](../capabilities/secrets.md) ([[capabilities/secrets|secrets capability]]): operations, data shapes, conformance checks, adapters
-- Implementation: `openbao` 2.1.1
+- Implementation: `openbao` 2.7.1
 - Owner: identity-team
 - Tags: core, secrets
 <!-- /hnx:gen -->
