@@ -15,7 +15,8 @@ responses (``tests/status/fixtures/``).  What each reads, and where the shape wa
     ``GET /api/v1/alerts``: every *firing* alert is an item, ``fail`` or ``warn`` by its
     ``severity`` label; pending and resolved alerts are not listed by Prometheus as firing, so
     they drop out.  Shape: Prometheus ``web/api/v1/api.go`` (``QueryData``, ``Alert``) and a
-    real v2.54.1.
+    real v2.54.1; v3.15.1 (the lab's) answers in the same shape (``api.go`` ``Response``,
+    ``QueryData``, ``Alert`` and ``json_codec.go``'s sample fields are unchanged since 2.54.1).
 ``poll-uptime-kuma``
     The public status page, no login: ``GET /api/status-page/<slug>`` (the monitors of its public
     groups) and ``GET /api/status-page/heartbeat/<slug>`` (each monitor's latest heartbeats and

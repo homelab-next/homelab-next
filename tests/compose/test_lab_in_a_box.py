@@ -301,6 +301,70 @@ def test_trino_heap_is_tiny():
     assert heap and int(heap[1]) <= 1024
 
 
+# flags the metrics product's 3.0 removed (or made defaults) and ones a later 3.x deprecated
+METRICS_GONE_FLAGS = (
+    "--storage.tsdb.retention=",
+    "--storage.tsdb.retention.time",
+    "--storage.tsdb.retention.size",
+    "--storage.tsdb.allow-overlapping-blocks",
+    "--alertmanager.timeout",
+    "--log.level",
+    "--enable-feature",
+)
+
+
+def metrics_mounts(service: dict) -> dict[str, Path]:
+    """The metrics service's mounted config files, by in-container name (``rules.yml``, ...)."""
+    out = {}
+    for v in service.get("volumes", []):
+        src, dst = v.split(":")[:2]
+        out[Path(dst).name] = LAB / src
+    return out
+
+
+def metrics_v3_problems(service: dict, config: dict, rules: str) -> list[str]:
+    """What in the lab's metrics service would not run, or would read differently, on the 3.x
+    line it pins (the upstream migration guide, docs/migration.md)."""
+    out = []
+    tag = service.get("image", "").partition(":")[2]
+    if not tag.startswith("v3."):
+        out.append(f"the image tag {tag!r} is not the 3.x line")
+    out += [f"flag {a}" for a in service.get("command", []) if a.startswith(METRICS_GONE_FLAGS)]
+    if not config.get("storage", {}).get("tsdb", {}).get("retention", {}).get("time"):
+        out.append("no storage.tsdb.retention.time in the config file")
+    for job in config.get("scrape_configs", []):
+        if "scrape_classic_histograms" in job:  # renamed always_scrape_classic_histograms
+            out.append(f"job {job.get('job_name')}: scrape_classic_histograms")
+    for am in config.get("alerting", {}).get("alertmanagers", []):
+        if am.get("api_version") == "v1":
+            out.append("an Alertmanager on the v1 API")
+    if "holt_winters" in rules:  # double_exponential_smoothing, behind a feature flag
+        out.append("holt_winters in the rules")
+    if re.search(r"\b(?:le|quantile)\s*=~?\s*\"[0-9]+\"", rules):  # normalised to 1.0 on ingest
+        out.append("an integer le/quantile matcher in the rules")
+    return out
+
+
+def test_the_metrics_service_is_configured_for_its_3_x_line(compose):
+    service = compose["services"]["metrics"]
+    files = metrics_mounts(service)
+    config = yaml.safe_load(files[Path(service["command"][0].partition("=")[2]).name].read_text())
+    rules = "".join(files[Path(r).name].read_text() for r in config["rule_files"])
+    assert metrics_v3_problems(service, config, rules) == []
+
+
+def test_negative_2_x_metrics_settings_are_caught(compose):
+    service = {**compose["services"]["metrics"]}
+    service["image"] = service["image"].split(":")[0] + ":v2.55.1"
+    service["command"] = [*service["command"], "--storage.tsdb.retention.time=2h"]
+    config = {
+        "scrape_configs": [{"job_name": "j", "scrape_classic_histograms": True}],
+        "alerting": {"alertmanagers": [{"api_version": "v1"}]},
+    }
+    rules = 'expr: holt_winters(x[5m], 0.5, 0.5) > 1 or h_bucket{le="1"} > 0'
+    assert len(metrics_v3_problems(service, config, rules)) == 7
+
+
 def test_every_capability_has_a_registry_style_alias(compose):
     aliases = {
         a

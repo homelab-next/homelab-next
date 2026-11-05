@@ -295,7 +295,7 @@ services:
     metrics: {path: /metrics}
     upstreams: [notify]
     owner: platform-team
-    version: "2.55.1"
+    version: "3.15.1"
     tls: none
     auth: idp
     public_hostname: metrics.lab.example

@@ -864,7 +864,7 @@ them from `tests/status/fixtures/`.
 
 | Product | How | Verified against | Where it runs in CI |
 |---|---|---|---|
-| Prometheus | kind `poll-prometheus` | `web/api/v1/api.go` (`QueryData`, `Alert`); a real 2.54.1 | fixtures (recorded) + lab-in-a-box nightly |
+| Prometheus | kind `poll-prometheus` | `web/api/v1/api.go` (`QueryData`, `Alert`) and `json_codec.go`, unchanged from 2.54.1 to 3.15.1 (the lab's); a real 2.54.1 | fixtures (recorded) + lab-in-a-box nightly |
 | Uptime Kuma | kind `poll-uptime-kuma` | 1.23 `server/routers/status-page-router.js`, `model/{group,monitor,heartbeat,incident}.js`; a real 1.23.16 | fixtures (recorded) + lab-in-a-box nightly |
 | StackStorm | kind `poll-stackstorm` | `st2common/openapi.yaml` (`/api/v1/executions`), `ActionExecutionAPI`, `constants/action.py` | fixtures only: it needs MongoDB, RabbitMQ and a dozen st2 services, far over the 4 GB lab's remaining 256 MB |
 | Apache NiFi | kind `poll-nifi` | `FlowResource` (`/flow/status`, `/flow/bulletin-board`), `ControllerStatusDTO`, `BulletinBoardEntity`, `BulletinEntity`/`BulletinDTO` | fixtures only: its default JVM heap alone is 1 GB (`bootstrap.conf`), four times what the 4 GB lab has left |
