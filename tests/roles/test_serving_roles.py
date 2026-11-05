@@ -421,7 +421,7 @@ def vllm_vars(tmp_path: Path, **kw) -> dict:
         )["vllm_server_exposure"],
         "vllm_server_listen_address": ZONE_ADDRESS,
         "vllm_server_store_root": str(tmp_path / "srv"),
-        "vllm_server_bin": logging_fake(tmp_path, "vllm", "0.31.0\n"),
+        "vllm_server_bin": logging_fake(tmp_path, "vllm", "0.32.0\n"),
         "vllm_server_systemctl_cli": logging_fake(tmp_path, "systemctl"),
         "vllm_server_unit_dir": str(tmp_path / "units"),
         "vllm_server_verify_bin": str(tmp_path / "hnx-model-verify"),
@@ -550,14 +550,14 @@ def test_vllm_server_retires_a_unit_the_plan_no_longer_has(first):
 
 def _first(tmp_path):
     v = vllm_vars(tmp_path)
-    logging_fake(tmp_path, "vllm", "0.30.0\n")  # the installed one is not the pin
+    logging_fake(tmp_path, "vllm", "0.31.0\n")  # the installed one is not the pin
     return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v}
 
 
 @first_run(_first)
 def test_vllm_server_refuses_a_vllm_that_is_not_the_pinned_one(first):
     r, tmp_path = first
-    assert r.returncode != 0 and "the pin is 0.31.0" in r.stdout
+    assert r.returncode != 0 and "the pin is 0.32.0" in r.stdout
     assert not any(c.startswith("systemctl") for c in calls(tmp_path))
 
 
@@ -744,7 +744,7 @@ def _first(tmp_path):
     return {
         "role": "vllm_server",
         "tasks_from": "upgrade",
-        "extra_vars": {**v, "vllm_server_target_version": "0.32.0"},
+        "extra_vars": {**v, "vllm_server_target_version": "0.33.0"},
         "setup": {"v": v},
     }
 
@@ -754,8 +754,8 @@ def test_vllm_server_upgrade_hook(first):
     ok, tmp_path = first
     v = first.setup["v"]
     assert ok.returncode == 0, ok.stdout
-    assert (tmp_path / "state" / "pending-version").read_text() == "0.32.0\n"
-    for target in ("0.30.0", "0.31.0", "latest"):
+    assert (tmp_path / "state" / "pending-version").read_text() == "0.33.0\n"
+    for target in ("0.31.0", "0.32.0", "latest"):
         bad = run_role(
             tmp_path, "vllm_server", "upgrade", {**v, "vllm_server_target_version": target}
         )

@@ -4,7 +4,7 @@
 # (vllm_server/instances.yml) from the model store, the role table and the serving spec, so
 # --served-model-name is the role's backend model id and --max-model-len its max_context_tokens.
 # vLLM itself is a prerequisite: a virtualenv at the pinned version (main refuses any other).
-vllm_server_version: "0.31.0"
+vllm_server_version: "0.32.0"
 vllm_server_bin: /opt/vllm/bin/vllm
 vllm_server_store_root: /srv/models
 # Units run as this account, in the model store's group: the weights are readable, never writable.
