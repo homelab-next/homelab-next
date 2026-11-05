@@ -211,22 +211,184 @@ def started(compose, names) -> set[str]:
     return seen
 
 
-def documented_gateway_path() -> tuple[list[str], int]:
+UP_GATEWAY = r"up -d --build --wait (?:--wait-timeout \d+ )?([\w -]+)\n"
+RUN_KEYS = r"run --rm --build (?:-T )?([\w -]+)\n"
+
+
+def documented_gateway_path() -> tuple[list[str], list[str], int]:
+    """The documented gateway-only path: what `up --wait` starts, what `run` runs in the foreground
+    afterwards (the one-shot, whose exit code `up --wait` does not report), and the stated total."""
     text = GATEWAY_DOC.read_text()
-    up = re.search(r"--profile gateway up -d --build --wait ([\w -]+)\n", text)
-    total = re.search(r"what it depends on \(postgres, the fake inference\): (\d+) MB", text)
-    assert up and total, "docs/llm-gateway.md no longer shows the gateway-only command and total"
-    return up[1].split(), int(total[1])
+    up = re.search(r"--profile gateway " + UP_GATEWAY, text)
+    run = re.search(r"--profile gateway " + RUN_KEYS, text)
+    total = re.search(r"then its keys one-shot:\n# (\d+) MB of mem_limit in all", text)
+    assert up and run and total, "docs/llm-gateway.md no longer shows the gateway-only path"
+    return up[1].split(), run[1].split(), int(total[1])
 
 
 def test_the_documented_gateway_only_path_fits_the_runner(compose):
-    names, stated = documented_gateway_path()
-    assert names == ["llm-gateway", "llm-gateway-keys"]
-    closure = started(compose, names)
+    up, run, stated = documented_gateway_path()
+    assert up == ["llm-gateway"] and run == ["llm-gateway-keys"]
+    closure = started(compose, up + run)
     assert closure == {"llm-gateway", "llm-gateway-keys", "postgres", "inference"}
     total = sum(mem_mb(compose["services"][n]["mem_limit"]) for n in closure)
     assert total == stated, f"docs say {stated} MB, the closure's mem_limit sum is {total} MB"
     assert total <= RUNNER_MB
+
+
+GATEWAY_TARGET = "compose/lab-in-a-box/targets/inference-gateway.yml"
+GATEWAY_CHECKS = (
+    "gateway-rejects-bad-key",
+    "gateway-limit-throttles",
+    "gateway-models-match-roles",
+)
+
+
+def gateway_job() -> dict:
+    return yaml.safe_load((WORKFLOW.parent / "ci.yml").read_text())["jobs"]["lab-gateway"]
+
+
+def gateway_step(name_part: str) -> dict:
+    (step,) = [s for s in gateway_job()["steps"] if name_part in s.get("name", "")]
+    return step
+
+
+def test_pull_requests_run_the_documented_gateway_only_path():
+    """ci.yml's lab-gateway job brings up exactly the documented gateway-only path (so the 1280 MB
+    it is budgeted at is what runs), provisions the keys in the foreground (their exit code fails
+    the job), runs the inference suite against the gateway target, and always collects, tears down
+    and uploads."""
+    job = gateway_job()
+    assert job["permissions"] == {"contents": "read"}
+    assert job["defaults"] == {"run": {"shell": "bash"}}  # bash -eo pipefail, not bash -e
+    assert job["env"] == {
+        "COMPOSE_FILE": "compose/lab-in-a-box/docker-compose.yml",
+        "COMPOSE_ENV_FILES": "compose/lab-in-a-box/.env.example",  # throwaway values, no secret
+        "COMPOSE_PROFILES": "gateway",
+    }
+    steps = job["steps"]
+    assert not any("shell" in s or "continue-on-error" in s for s in steps)
+    runs = [s.get("run", "") for s in steps]
+    up_doc, run_doc, _ = documented_gateway_path()
+    (up_i,) = [i for i, r in enumerate(runs) if "docker compose up " in r]
+    m = re.search(r"docker compose " + UP_GATEWAY, runs[up_i])
+    assert m and m[1].split() == up_doc, runs[up_i]
+    # the one-shot runs in the foreground as the whole step, so its exit code is the step's
+    (keys_i,) = [i for i, r in enumerate(runs) if "llm-gateway-keys" in r]
+    m = re.fullmatch(r"docker compose " + RUN_KEYS, runs[keys_i] + "\n")
+    assert m and m[1].split() == run_doc, runs[keys_i]
+    assert "if" not in steps[keys_i]
+    (conform_i,) = [i for i, r in enumerate(runs) if "conform run inference" in r]
+    assert f"--target {GATEWAY_TARGET}" in runs[conform_i]
+    assert "HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE" in runs[conform_i]
+    (verdict_i,) = [i for i, r in enumerate(runs) if all(c in r for c in GATEWAY_CHECKS)]
+    assert up_i < keys_i < conform_i < verdict_i
+    for i in (up_i, keys_i, conform_i, verdict_i):
+        assert "if" not in steps[i], steps[i]["name"]
+    suite = (ROOT / "conformance" / "suites" / "inference.py").read_text()
+    assert all(f'"{c}"' in suite for c in GATEWAY_CHECKS)  # the names CI asserts are the suite's
+    target = yaml.safe_load((ROOT / GATEWAY_TARGET).read_text())
+    assert "gateway" in target["capabilities"]["inference"]["features"]
+    # after the checks, whatever happened: collect, tear down (with volumes), upload
+    collect = gateway_step("collect")
+    down = gateway_step("tear")
+    upload = gateway_step("upload")
+    for step in (collect, down, upload):
+        assert step["if"] == "always()", step["name"]
+    assert "docker compose down --volumes" in down["run"]
+    assert upload["with"]["path"] == "build/lab-gateway/"
+    assert verdict_i < steps.index(collect) < steps.index(down) < steps.index(upload)
+
+
+def _run_step(step: dict, tmp_path: Path, env: dict[str, str]) -> int:
+    """Run a lab-gateway step's script the way the runner does under `shell: bash`."""
+    summary = tmp_path / "summary.md"
+    full = {**os.environ, **env, "GITHUB_STEP_SUMMARY": str(summary)}
+    return subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        env=full,
+        capture_output=True,
+        check=False,
+    ).returncode
+
+
+def _python_on_path(tmp_path: Path, script: str | None = None) -> dict[str, str]:
+    """A PATH whose `python` is this interpreter (or a stand-in script)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    py = bin_dir / "python"
+    py.write_text(script or f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    py.chmod(0o755)
+    return {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def _result(**over) -> dict:
+    run = {
+        "verdict": "pass",
+        "counts": {"executed": 12, "skipped": 5},
+        "results": [{"check": c, "status": "pass"} for c in GATEWAY_CHECKS]
+        + [{"check": "turn-records-are-neutral", "status": "skip"}],
+    }
+    run.update(over)
+    return {"runs": [run]}
+
+
+def _skipped(check: str) -> dict:
+    res = _result()
+    for r in res["runs"][0]["results"]:
+        if r["check"] == check:
+            r["status"] = "skip"
+    return res
+
+
+def _missing(check: str) -> dict:
+    res = _result()
+    res["runs"][0]["results"] = [r for r in res["runs"][0]["results"] if r["check"] != check]
+    return res
+
+
+def _renamed() -> dict:
+    res = _result()
+    res["runs"][0]["checks"] = res["runs"][0].pop("results")
+    return res
+
+
+@pytest.mark.parametrize(
+    ("doc", "ok"),
+    [
+        (_result(), True),
+        (_skipped("gateway-limit-throttles"), False),
+        (_skipped("gateway-rejects-bad-key"), False),
+        (_missing("gateway-models-match-roles"), False),
+        (_result(verdict="fail"), False),
+        ({"runs": [_result()["runs"][0], _result()["runs"][0]]}, False),  # two runs
+        ({"runs": []}, False),
+        (_renamed(), False),  # a renamed `results` key is no result, not a pass
+        (None, False),  # no result file at all
+    ],
+)
+def test_the_gateway_verdict_step_fails_unless_the_gateway_checks_passed(tmp_path, doc, ok):
+    out = tmp_path / "build" / "lab-gateway"
+    out.mkdir(parents=True)
+    if doc is not None:
+        (out / "conform-inference.json").write_text(json.dumps(doc))
+    step = gateway_step("the gateway's own checks")
+    assert (_run_step(step, tmp_path, _python_on_path(tmp_path)) == 0) is ok
+    # the verdict (or the error) reaches the job summary either way
+    assert (tmp_path / "summary.md").read_text().strip()
+
+
+@pytest.mark.parametrize(("rc", "ok"), [(0, True), (1, False), (100, False)])
+def test_the_gateway_conform_step_carries_the_suite_s_exit_code(tmp_path, rc, ok):
+    (tmp_path / "build" / "lab-gateway").mkdir(parents=True)
+    env_file = tmp_path / "compose" / "lab-in-a-box" / ".env.example"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(ENV_EXAMPLE.read_text())
+    stand_in = f"#!/bin/sh\necho 'a stand-in suite'\nexit {rc}\n"
+    step = gateway_step("inference conformance")
+    assert (_run_step(step, tmp_path, _python_on_path(tmp_path, stand_in)) == 0) is ok
+    assert "stand-in suite" in (tmp_path / "build/lab-gateway/conform-inference.log").read_text()
 
 
 def test_negative_a_new_gateway_dependency_is_counted(compose):
@@ -234,7 +396,7 @@ def test_negative_a_new_gateway_dependency_is_counted(compose):
     broken["services"]["llm-gateway"]["depends_on"]["lake-query"] = {"condition": "service_healthy"}
     closure = started(broken, ["llm-gateway", "llm-gateway-keys"])
     assert {"lake-query", "lab-init", "object-store"} <= closure  # pulled in transitively
-    _, stated = documented_gateway_path()
+    _, _, stated = documented_gateway_path()
     assert sum(mem_mb(broken["services"][n]["mem_limit"]) for n in closure) != stated
 
 

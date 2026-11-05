@@ -15,8 +15,10 @@
 """Which changes can affect the lab-in-a-box smoke (``compose/lab-in-a-box/smoke.sh``).
 
 CI's ``lab-in-a-box`` job brings the real stack up on a pull request (and a push to main) only
-when the change touches one of :data:`LAB_PATHS`; ``lab-ok`` is the one check that sums it up, so
-a change that touches none of them passes without starting a container.  The list is derived from
+when the change touches one of :data:`LAB_PATHS`, and ``lab-gateway`` its optional LLM gateway
+profile on the same decision (the profile's services are in the compose file, so the derivation
+below covers them too); ``lab-ok`` is the one check that sums both up, so a change that touches
+none of them passes without starting a container.  The list is derived from
 what the smoke actually uses, and ``--check`` (run by the unit tests) re-derives it from the
 compose file, so a new build context, ``COPY``, bind mount or conformance adapter that the list
 does not cover fails rather than silently skipping the stack:
