@@ -72,8 +72,27 @@ def test_thresholds(value, thresholds, want):
     assert threshold_state(value, thresholds)[0] == want
 
 
-def test_prometheus_query_names_items_by_label_and_judges_each_value():
-    drafts = prometheus_query(fixture("prometheus-query-up"), UP_QUERY, "metrics-targets")
+def _v3(payload):
+    """A recorded 2.54.1 answer as the lab's 3.x line may give it.  v3.15.1's ``web/api/v1``
+    keeps the ``Response``, ``QueryData``, sample and ``Alert`` fields; a 3.x answer may add
+    ``warnings``/``infos``, a UTF-8 label name (valid by default), a float-normalised ``le`` and
+    ``keepFiringSince``, none of which the mapping reads."""
+    doc = copy.deepcopy(payload)
+    doc["infos"] = ["PromQL info: metric might not be a counter"]
+    doc["warnings"] = ["PromQL warning: a warning"]
+    for series in doc["data"].get("result", []):
+        series["metric"].update({"service.name": "lab", "le": "1.0"})
+    for a in doc["data"].get("alerts", []):
+        a["keepFiringSince"] = a["activeAt"]
+    return doc
+
+
+V2_AND_V3 = pytest.mark.parametrize("shape", [lambda p: p, _v3], ids=["recorded", "v3-shaped"])
+
+
+@V2_AND_V3
+def test_prometheus_query_names_items_by_label_and_judges_each_value(shape):
+    drafts = prometheus_query(shape(fixture("prometheus-query-up")), UP_QUERY, "metrics-targets")
     assert _items(drafts) == {
         "dead-target:9": "fail",
         # two series share instance self:9090 (jobs node and prometheus): told apart, stably
@@ -82,7 +101,7 @@ def test_prometheus_query_names_items_by_label_and_judges_each_value():
     assert len(drafts) == 3 and len({d.item for d in drafts}) == 3
     dead = next(d for d in drafts if d.item == "dead-target:9")
     assert dead.summary == "instance=dead-target:9: 0 (fail at or below 0)" and dead.value == 0
-    again = prometheus_query(fixture("prometheus-query-up"), UP_QUERY, "metrics-targets")
+    again = prometheus_query(shape(fixture("prometheus-query-up")), UP_QUERY, "metrics-targets")
     assert [d.item for d in again] == [d.item for d in drafts]
 
 
@@ -124,8 +143,9 @@ def test_prometheus_collector_sends_the_query_url_encoded(http):
     assert http.headers == [{}]  # no auth declared, no credential sent
 
 
-def test_prometheus_alerts_firing_by_severity_resolved_drop_out(make_hub, clock):
-    payload = fixture("prometheus-alerts")
+@V2_AND_V3
+def test_prometheus_alerts_firing_by_severity_resolved_drop_out(make_hub, clock, shape):
+    payload = shape(fixture("prometheus-alerts"))
     drafts = prometheus_alerts(payload, {"builtin": "prometheus-alerts"}, "metrics-alerts")
     assert _items(drafts) == {"LabSmokeWarning": "warn", "LabSmokeCritical": "fail"}
     crit = next(d for d in drafts if d.item == "LabSmokeCritical")

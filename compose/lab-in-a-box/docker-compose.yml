@@ -169,17 +169,16 @@ services:
   # --- lake-query: Trino, single node, tiny heap ------------------------------------------
   lake-query:
     <<: [*restart, *hardened]
-    image: trinodb/trino:470@sha256:a591436ddc20cef15a4424704423326828591727b0e7c40c6ea4165d4564df67
+    image: trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
     environment:
       LAB_WAREHOUSE: ${LAB_WAREHOUSE:?see .env.example}
       LAB_S3_REGION: ${LAB_S3_REGION:?see .env.example}
       LAB_S3_ACCESS_KEY: ${LAB_S3_ACCESS_KEY:?see .env.example}
       LAB_S3_SECRET_KEY: ${LAB_S3_SECRET_KEY:?see .env.example}
     volumes:
-      - ./config/trino/config.properties:/etc/trino/config.properties:ro
-      - ./config/trino/jvm.config:/etc/trino/jvm.config:ro
-      - ./config/trino/node.properties:/etc/trino/node.properties:ro
-      - ./config/trino/catalog:/etc/trino/catalog:ro
+      # the whole etc directory (config, jvm.config, node.properties, catalog/): nothing in the
+      # image's own etc is used
+      - ./config/trino:/etc/trino:ro
       - query-data:/data/trino
     depends_on:
       lab-init:
@@ -187,7 +186,10 @@ services:
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_QUERY:-8080}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info | grep -q '\"starting\":false'"]
+      # the image's own check (bash builtins and curl): since 484 the image has no grep to pipe
+      # /v1/info through. It reads the port from config.properties and passes once the server
+      # reports "starting":false.
+      test: ["CMD", "/usr/lib/trino/bin/health-check"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -327,11 +329,12 @@ services:
   # sees a warning and a critical alert, the query mapping sees the self-scrape target up.
   metrics:
     <<: [*restart, *hardened]
-    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
+    # Prometheus 3: retention lives in prometheus.yml (`storage.tsdb.retention`); the
+    # --storage.tsdb.retention.time flag is deprecated and --storage.tsdb.retention is gone.
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=2h
     volumes:
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./config/prometheus/rules.yml:/etc/prometheus/rules.yml:ro

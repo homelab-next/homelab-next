@@ -249,7 +249,7 @@
    "openbao": 2,
    "prometheus": 10,
    "stackstorm": 4,
-   "trino": 10,
+   "trino": 5,
    "uptime-kuma": 3
   },
   "compose/lab-in-a-box/rehearsals/swap-lake-query.sh": {
