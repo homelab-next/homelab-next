@@ -136,8 +136,8 @@ cutover is a defect to be recorded as a lesson.
 `compose/lab-in-a-box/` stands up a laptop- and CI-sized instance of the data, events, secrets,
 notification and inference seams inside a 4 GB RAM budget, addressed through the
 same `<capability>.svc.example.internal` aliases a real deployment uses. It is the place where
-the conformance suites run against real containers rather than fakes (nightly, never on a pull
-request). It is a rehearsal environment, not a deployment: every credential is a throwaway and
+the conformance suites run against real containers rather than fakes (nightly, and on every pull
+request that can affect the stack: CI's `lab-in-a-box` job, summed up by `lab-ok`). It is a rehearsal environment, not a deployment: every credential is a throwaway and
 every service is single node. See the README "Try it" section.
 
 | Alias | Service | Capability |
@@ -167,6 +167,34 @@ once; any of its own tooling that calls the admin API moves to the v2 endpoints 
 imports the lab's S3 key once and Garage v2 refuses to import a key id it has ever held (409
 `KeyAlreadyExists`, even after the key is deleted), so a changed `LAB_S3_ACCESS_KEY` or
 `LAB_S3_SECRET_KEY` on a kept volume needs `docker compose down -v` first.
+
+The lake catalog is Lakekeeper 0.14 (`quay.io/lakekeeper/catalog:v0.14.1`; `catalog-migrate`
+runs its `migrate` before `serve`, so a kept Postgres volume from 0.9 is migrated forward on the
+first start, one way). Three upstream changes since 0.9 matter here:
+
+- **How clients reach the table files (0.11).** A client that sends no
+  `X-Iceberg-Access-Delegation` header now gets vended credentials (always a temporary STS, R2
+  or OSS credential, never the stored key) whenever the warehouse can issue them (STS on, or a
+  Cloudflare R2 or Alibaba OSS credential), else remote signing. The lab's warehouse states both
+  modes rather than relying on that default: `lab_init.py` creates it with `sts-enabled: false`
+  and `remote-signing-enabled: true` and an access-key credential, so no credential is vended
+  and clients get remote signing (already the 0.9 behaviour) or nothing, and Trino keeps
+  `iceberg.rest-catalog.vended-credentials-enabled=false` and reads the object store with its
+  own keys. A production warehouse that wants vended credentials enables STS against an object
+  store that offers it, with a role scoped to the warehouse's prefix.
+- **Storage layout (0.13).** A namespace created from 0.13 on keeps its tables at
+  `<warehouse base>/<table uuid>` (it was `<base>/<namespace uuid>/<table uuid>`); namespaces
+  created earlier keep the old layout, and a warehouse can set `storage-layout` explicitly.
+  Nothing here derives a path from the layout: table locations are read from the catalog.
+- **Authentication (0.14), for the production row below.** `LAKEKEEPER__OPENID_SCOPE` is a single
+  word and needs `LAKEKEEPER__OPENID_PROVIDER_URI` (an empty value no longer means "no scope");
+  an unknown key under `LAKEKEEPER__OPENID_PROVIDERS__<IDP_ID>__` aborts startup; such a provider
+  that enforces a scope or required claims must keep `__REQUIRE_CONNECTED_ON_STARTUP` at its
+  default, `true`; Kubernetes authentication beside a provider that enforces either needs
+  `LAKEKEEPER__KUBERNETES_AUTHENTICATION_AUDIENCE`. The scope is read from the token's `scp`
+  claim only when `scope` carries none, and an array-shaped scope claim is accepted. Token roles and admission gates now hold in every project, and the
+  permissions-check API no longer accepts the `update_storage_credential` action (use
+  `update_storage`).
 
 The query engine is Trino 484 (`trinodb/trino:484`, on JDK 25). Since 484 its image is built on
 Red Hat's hardened core runtime, which has no `grep`, so the healthcheck runs the image's own
@@ -212,7 +240,7 @@ only. `smoke.sh` and `make lab-up` refuse any other `LAB_BIND` unless
 cannot resolve the configuration at all); docker publishes ports through
 its own firewall rules, ahead of ufw or firewalld, so a host firewall is no substitute. Containers
 run with `no-new-privileges` and `cap_drop: [ALL]` (postgres and uptime add back what their
-entrypoints need; OpenBao keeps docker's defaults). A real deployment changes each service as follows:
+entrypoints need). A real deployment changes each service as follows:
 
 | Lab service | Lab shortcut | Production replacement |
 |---|---|---|
