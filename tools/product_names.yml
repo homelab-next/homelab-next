@@ -57,6 +57,8 @@ allow:
     reason: the version-pin report maps each pin dependabot cannot parse to its product's upstream release list, as the licence register maps each image; the configuration that runs a product is counted where it lives
   - path: "tools/tests/test_pin_*.py"
     reason: the pin tests read the pins (role defaults, CI versions, example registries) and hold the copies of one product's version equal; the configuration they read is counted where it lives
+  - path: ".github/dependabot.yml"
+    reason: "dependabot's ignore rules name an image or package by its registry name (a release never to propose, such as a compromised one); the configuration that runs it is counted where it lives"
   - path: "tools/licences.yml"
     reason: the licence register names each pinned package and compose image it reviews; the configuration that runs them is counted where it lives
   - path: "compose/lab-in-a-box/config/nats/nats.conf"
