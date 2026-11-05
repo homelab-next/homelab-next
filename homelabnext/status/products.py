@@ -15,13 +15,16 @@ responses (``tests/status/fixtures/``).  What each reads, and where the shape wa
     ``GET /api/v1/alerts``: every *firing* alert is an item, ``fail`` or ``warn`` by its
     ``severity`` label; pending and resolved alerts are not listed by Prometheus as firing, so
     they drop out.  Shape: Prometheus ``web/api/v1/api.go`` (``QueryData``, ``Alert``) and a
-    real v2.54.1.
+    real v2.54.1; v3.15.1 (the lab's) answers in the same shape (``api.go`` ``Response``,
+    ``QueryData``, ``Alert`` and ``json_codec.go``'s sample fields are unchanged since 2.54.1).
 ``poll-uptime-kuma``
     The public status page, no login: ``GET /api/status-page/<slug>`` (the monitors of its public
     groups) and ``GET /api/status-page/heartbeat/<slug>`` (each monitor's latest heartbeats and
     its 24-hour uptime).  Each monitor is an item: up ok, down fail, pending warn, maintenance
-    unknown; a pinned incident is one more item.  Shape: Uptime Kuma 1.23
-    ``server/routers/status-page-router.js`` and a real 1.23.16.
+    unknown; each pinned incident is one more item, ``incident-<id>`` (1.x sends one as
+    ``incident``, 2.x a list as ``incidents``).  Shape: Uptime Kuma
+    ``server/routers/status-page-router.js`` and ``server/model/status_page.js``, a real 1.23.16
+    and a real 2.5.6.
 ``poll-stackstorm``
     ``GET <path>?limit=..&sort_desc=true&timestamp_gt=<window start>`` (``/api/v1/executions``)
     and ``?status=running``, with ``St2-Api-Key`` from the secret store: each action with a
@@ -315,13 +318,25 @@ def uptime_kuma(
             drafts.append(
                 (name, {"id": mid}, Draft(clean_item(name, fallback_item), state, summary))
             )
-    out = _unique([(d.item, labels, d) for _, labels, d in drafts])
-    incident = page.get("incident")
-    if isinstance(incident, Mapping):
+    # Each pinned incident is the item incident-<Kuma's incident id>, in either shape (1.x:
+    # "incident", the one pinned incident or null; 2.x: "incidents", every pinned active one), so
+    # an incident keeps its item while others come and go and across the 1.x -> 2.x upgrade.
+    incidents = page.get("incidents")
+    if not isinstance(incidents, list):
+        incidents = [page.get("incident")]
+    for incident in incidents:
+        if not isinstance(incident, Mapping):
+            continue
         state = "fail" if raw_text(incident.get("style")) == "danger" else "warn"
         title = incident.get("title") or "incident"
-        out.append(Draft("incident", state, clean_summary(f"pinned incident: {title}")))
-    return out
+        iid = incident.get("id")
+        name = f"incident-{iid}" if isinstance(iid, int | str) and str(iid) else "incident"
+        summary = clean_summary(f"pinned incident: {title}")
+        labels = {"incident": str(iid) if iid is not None else str(title)}
+        drafts.append((name, labels, Draft(clean_item(name, "incident"), state, summary)))
+    # one pass over monitors and incidents: a monitor called incident-1 and incident 1 (or two
+    # monitors of one name) are told apart by a digest of their labels, never merged
+    return _unique([(d.item, labels, d) for _, labels, d in drafts])
 
 
 class UptimeKumaCollector:

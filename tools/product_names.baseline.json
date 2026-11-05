@@ -238,9 +238,6 @@
   "compose/lab-in-a-box/config/trino/node.properties": {
    "trino": 1
   },
-  "compose/lab-in-a-box/config/uptime-kuma/": {
-   "uptime-kuma": 1
-  },
   "compose/lab-in-a-box/docker-compose.yml": {
    "example-27b": 1,
    "example-4b": 1,
@@ -249,7 +246,7 @@
    "openbao": 2,
    "prometheus": 10,
    "stackstorm": 4,
-   "trino": 10,
+   "trino": 5,
    "uptime-kuma": 3
   },
   "compose/lab-in-a-box/rehearsals/swap-lake-query.sh": {
@@ -1258,7 +1255,7 @@
    "prometheus": 3,
    "stackstorm": 7,
    "trino": 3,
-   "uptime-kuma": 5
+   "uptime-kuma": 2
   },
   "tests/compute/fixtures/bpg_proxmox_schema.json": {
    "proxmox": 4

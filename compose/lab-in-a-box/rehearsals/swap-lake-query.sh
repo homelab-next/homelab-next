@@ -47,7 +47,7 @@ record="$out/swap-lake-query-rehearsal.swap.json"
 
 echo "== the flip the cutover applied, and its inverse (rollback)"
 hnx_swap plan --registry "$out/services.yml" --service lake-query \
-  --to-host lab-lake-query --to-impl trino --to-version 470.0 | tee "$out/flip-plan.txt" | tail -n 8
+  --to-host lab-lake-query --to-impl trino --to-version 484.0 | tee "$out/flip-plan.txt" | tail -n 8
 
 echo "== the record"
 hnx_swap status "$record" || rc=1

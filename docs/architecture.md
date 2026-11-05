@@ -168,6 +168,19 @@ imports the lab's S3 key once and Garage v2 refuses to import a key id it has ev
 `KeyAlreadyExists`, even after the key is deleted), so a changed `LAB_S3_ACCESS_KEY` or
 `LAB_S3_SECRET_KEY` on a kept volume needs `docker compose down -v` first.
 
+The catalog database is PostgreSQL 18 (`postgres:18.6-alpine`). From 18 the official image keeps
+its data at `/var/lib/postgresql/18/docker` (`PGDATA`) under a volume at `/var/lib/postgresql`,
+so the lab mounts `postgres-data` there, not at the old `/var/lib/postgresql/data`; a later major
+gets its own `<major>/docker` beside it, which is what lets `pg_upgrade --link` work inside one
+mount. A major upgrade never converts data: the entrypoint refuses a volume an older server
+initialised (after creating an empty `18/docker` in it), so a lab recreates it
+(`docker compose down -v`) and a site with data to keep dumps and restores, or runs `pg_upgrade`,
+first. For `pg_upgrade` the clusters must agree on data checksums: one the 16 image made has them
+off and 18's `initdb` turns them on, so initialise the 18 cluster with
+`POSTGRES_INITDB_ARGS=--no-data-checksums` (or `pg_checksums --enable` the stopped 16 cluster
+first); a dump and restore is unaffected. The healthcheck probes over TCP because the entrypoint's
+init server listens on the socket only, so postgres is not reported healthy mid-initialisation.
+
 The lake catalog is Lakekeeper 0.14 (`quay.io/lakekeeper/catalog:v0.14.1`; `catalog-migrate`
 runs its `migrate` before `serve`, so a kept Postgres volume from 0.9 is migrated forward on the
 first start, one way). Three upstream changes since 0.9 matter here:
@@ -196,6 +209,63 @@ first start, one way). Three upstream changes since 0.9 matter here:
   permissions-check API no longer accepts the `update_storage_credential` action (use
   `update_storage`).
 
+The metrics service is Prometheus 3 (`prom/prometheus:v3.15.1`, the busybox image, so its
+`wget` healthcheck stands). Its 2-hour retention is `storage.tsdb.retention.time` in
+`config/prometheus/prometheus.yml`, since the `--storage.tsdb.retention.time` flag is deprecated.
+The status hub's `poll-prometheus` collector reads 3.x's `/api/v1/query` and `/api/v1/alerts`
+unchanged. For a production Prometheus, 3.0 broke several things
+([migration guide](https://prometheus.io/docs/prometheus/latest/migration/)):
+
+- A scrape whose `Content-Type` is missing or unknown fails, where 2.x read it as the text
+  format. The lab scrapes only itself, which is verified. The example registry's endpoints are
+  expected to be fine, because each is served by a Prometheus client library that sets a
+  supported type (Lakekeeper's `metrics-exporter-prometheus` sends `text/plain`, read in its
+  source); the others are inferred from the library each product uses, not tested against a
+  live endpoint. So the generated `scrape_configs` set no `fallback_scrape_protocol`.
+  A generated job is "do not edit", so a site cannot add a fallback to it by hand. When a
+  target does need one, the plan is an optional, pattern-validated registry field
+  `metrics.fallback_protocol` that the generator copies into that job. The protocol name then
+  lives in site data, not core code. Until that field exists, a site keeps such a target out of
+  the generated file and writes the job in its own scrape config.
+- UTF-8 metric and label names are valid by default (`metric_name_validation_scheme: legacy`
+  restores the old check).
+- Classic-histogram `le` and summary `quantile` values are normalised to floats on ingestion, so
+  a rule or dashboard matching `le="1"` must match `le="1.0"`.
+- Range selectors and lookback are left-open.
+- `holt_winters` is `double_exponential_smoothing`, behind
+  `--enable-feature=promql-experimental-functions`.
+- `scrape_classic_histograms` is `always_scrape_classic_histograms`.
+- Alertmanager's v1 API is gone (`api_version: v2`, Alertmanager 0.16 or later).
+- The `--storage.tsdb.retention` and `--alertmanager.timeout` flags are removed.
+
+Nothing in this repository's rules or generated config used any of these.
+`tests/compose/test_lab_in_a_box.py` fails if the lab's config brings one back. A kept 2.x data
+directory opens in 3.x, but after that it can be downgraded only to 2.55.
+
+The query engine is Trino 484 (`trinodb/trino:484`, on JDK 25). Since 484 its image is built on
+Red Hat's hardened core runtime, which has no `grep`, so the healthcheck runs the image's own
+`/usr/lib/trino/bin/health-check` (curl and bash builtins), and the image no longer has the
+`run-trino` wrapper that set the node id, so the lab's `node.properties` sets
+`node.id=${ENV:HOSTNAME}` itself (a node id must match `[A-Za-z0-9][_A-Za-z0-9-]*`, so an
+overlay that gives the service a dotted `hostname:` fails at start). Trino's launcher (airlift
+launcher 321) appends a set of options per JDK major (21 to 28) after `jvm.config`; for JDK 25
+they are `-XX:+EnableDynamicAgentLoading`, `--add-modules=jdk.incubator.vector`,
+`--sun-misc-unsafe-memory-access=allow`, `--enable-native-access=ALL-UNNAMED` and
+`-XX:+UseCompactObjectHeaders` (plus `-XX:-RewriteBytecodes` on arm64). The lab's `jvm.config`
+therefore sets none of them: only heap, GC and diagnostics options (with the image default
+`-XX:-OmitStackTraceInFastThrow`). The mounted `config/trino/` replaces the whole `/etc/trino`, so it holds exactly
+`config.properties`, `jvm.config`, `node.properties` and `catalog/*.properties` (a
+`secrets.toml` there would replace the environment-variable resolver behind `${ENV:...}`). The Iceberg catalog turns on the native S3 file system by its
+current name, `fs.s3.enabled` (the legacy S3 file system is gone since 481, and
+`fs.native-s3.enabled` is only a deprecated alias). Releases 471 to 484 also changed SQL
+semantics the repository's adapters do not rely on: decimal arithmetic precision (477), `char` to
+`varchar` coercion (482), typed `lower_bounds`/`upper_bounds` in the Iceberg `$files` table (482),
+and in 484 JSON values that keep numeric types and member order, UTC timestamps in the Iceberg
+`$snapshots` and `$history` tables, case-preserved user names in `GRANT`, and interval
+arithmetic. A site's own queries over the lake are worth re-reading against the
+[release notes](https://trino.io/docs/current/release.html). The redesigned Web UI is now at
+`/ui` (the previous one at `/ui/legacy`, off by default).
+
 **The broker end to end.** The smoke's `broker` check runs `broker_e2e.py run` inside
 `broker-edge` against the real broker and hub containers: the broker serves
 `examples/broker/manifest.production.yml` (callers and the relay by system user) on a socket in a
@@ -215,8 +285,9 @@ only. `smoke.sh` and `make lab-up` refuse any other `LAB_BIND` unless
 `docker compose config` resolves, refuses a `.env` line it cannot read, and refuses when it
 cannot resolve the configuration at all); docker publishes ports through
 its own firewall rules, ahead of ufw or firewalld, so a host firewall is no substitute. Containers
-run with `no-new-privileges` and `cap_drop: [ALL]` (postgres and uptime add back what their
-entrypoints need). A real deployment changes each service as follows:
+run with `no-new-privileges` and `cap_drop: [ALL]` (postgres adds back what its entrypoint needs;
+Uptime Kuma runs its rootless image, as the image's `node` user). A real deployment changes each
+service as follows:
 
 | Lab service | Lab shortcut | Production replacement |
 |---|---|---|

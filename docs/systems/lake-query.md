@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `lake-query`
 - Contract: [lake-query capability reference](../capabilities/lake-query.md) ([[capabilities/lake-query|lake-query capability]]): operations, data shapes, conformance checks, adapters
-- Implementation: `trino` 450.0
+- Implementation: `trino` 484.0
 - Owner: data-team
 - Tags: data, query
 <!-- /hnx:gen -->

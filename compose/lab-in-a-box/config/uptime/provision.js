@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Headless provisioning of the lab's Uptime Kuma through its own socket.io API (the one its UI
-// uses; Uptime Kuma 1.23 has no REST API for setup, monitors or status pages).  It runs in the
-// uptime-kuma image itself, so it uses that image's own socket.io-client, and:
+// uses; Uptime Kuma 2.x, like 1.x, has no REST API for setup, monitors or status pages).  It
+// runs in the uptime-kuma image itself, so it uses that image's own socket.io-client, and:
 //
 //   1. creates the admin user (first run) or logs in;
 //   2. reads what exists (the monitorList and statusPageList events Kuma sends after a login)
@@ -51,6 +51,9 @@ function monitor(name, target) {
         accepted_statuscodes: [ "200-299" ],
         kafkaProducerBrokers: [],
         kafkaProducerSaslOptions: { mechanism: "None" },
+        // 2.x stores these as JSON text (the UI's defaults); conditions is NOT NULL
+        conditions: [],
+        rabbitmqNodes: [],
     };
 }
 
@@ -97,17 +100,25 @@ async function provision(kuma, o) {
         must(await kuma.call("addStatusPage", "Lab", o.slug), "addStatusPage");
         created.push(`status page ${o.slug}`);
     }
+    // The shape of Kuma 2.x StatusPage.toJSON(), which its UI sends back.  saveStatusPage
+    // rejects an analyticsType that is not null or a known type (undefined included), and
+    // show_only_last_heartbeat is NOT NULL, so both are explicit.
     const config = {
         slug: o.slug,
         title: "Lab",
         description: "lab-in-a-box status page (provisioned headlessly)",
         theme: "auto",
+        autoRefreshInterval: 300,
         showTags: false,
         footerText: "",
         customCSS: "",
         showPoweredBy: false,
         showCertificateExpiry: false,
-        googleAnalyticsId: "",
+        showOnlyLastHeartbeat: false,
+        analyticsId: null,
+        analyticsScriptUrl: null,
+        analyticsType: null,
+        rssTitle: null,
         domainNameList: [],
     };
     const groups = [ { name: "Lab", monitorList: [ { id: ids.metrics }, { id: ids.unreachable } ] } ];

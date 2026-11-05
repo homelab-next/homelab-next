@@ -131,7 +131,7 @@ images:
   louislam/uptime-kuma: {spdx: MIT, kind: service, reason: "the uptime monitor; the project's LICENSE"}
   nats: {spdx: Apache-2.0, kind: service, reason: "the event bus; the project's LICENSE (v2.15.1: still Apache-2.0, unchanged since v2.10.29)"}
   openbao/openbao: {spdx: MPL-2.0, kind: service, reason: "the secrets store; the project's LICENSE"}
-  postgres: {spdx: PostgreSQL, kind: service, reason: "the catalog database; the PostgreSQL licence"}
+  postgres: {spdx: PostgreSQL, kind: service, reason: "the catalog database; the PostgreSQL licence (18.6: its COPYRIGHT is unchanged)"}
   python: {spdx: PSF-2.0, kind: service, reason: "the base image the lab's broker and fakes images are built FROM (compose/lab-in-a-box/*/Dockerfile); the interpreter's licence, its Debian packages under their own"}
   prom/prometheus: {spdx: Apache-2.0, kind: service, reason: "the metrics service; the project's LICENSE"}
   quay.io/lakekeeper/catalog: {spdx: Apache-2.0, kind: service, reason: "the lake catalog; the project's LICENSE (v0.14.1: still Apache-2.0, its LICENSE and Cargo.toml)"}
