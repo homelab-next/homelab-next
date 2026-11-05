@@ -23,10 +23,9 @@ x-restart: &restart
   restart: "no"
   init: true
 
-# Least privilege for every container that still works with it (see tests/compose).  The
-# exceptions are spelled out where they occur: postgres and uptime add back the capabilities their
-# entrypoints need to chown the data directory and switch user, and secrets (OpenBao) keeps
-# docker's default set.
+# Least privilege for every container (see tests/compose).  The exceptions are spelled out where
+# they occur: postgres and uptime add back the capabilities their entrypoints need to chown the
+# data directory and switch user.
 x-hardened: &hardened
   security_opt: ["no-new-privileges:true"]
   cap_drop: [ALL]
@@ -237,19 +236,18 @@ services:
   # while the token is still the placeholder.  Production uses OpenBao in server mode instead:
   # integrated (raft) storage, TLS, real unseal keys or auto-unseal, and the root token revoked
   # after initialisation (docs/architecture.md, "The reference environment").
-  # It keeps docker's default capabilities and no no-new-privileges: its entrypoint chowns its
-  # directories, sets a file capability for mlock and drops to the openbao user, all of which
-  # cap_drop ALL and no-new-privileges would break.
+  # It runs hardened like the rest: since 2.6 the image starts as the openbao user, so its
+  # entrypoint neither chowns nor switches user, and OpenBao has not used mlock since 2.0 (no
+  # IPC_LOCK).
   # ==========================================================================================
   secrets:
-    <<: *restart
+    <<: [*restart, *hardened]
     image: openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
     # the image's own default since 2.2: the root token is not written to ~/.vault-token
     command: ["server", "-dev", "-dev-no-store-token"]
     environment:
       BAO_DEV_ROOT_TOKEN_ID: ${LAB_SECRETS_DEV_TOKEN:?see .env.example}
       BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-    cap_add: [IPC_LOCK]
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_SECRETS:-8200}:8200"
     healthcheck:
