@@ -239,10 +239,29 @@ own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
   (fixed in `vars/`), and `ENABLE_PERSISTENT_CONFIG=false`: the environment is the configuration
   on every start, so a connection added in the admin UI, or external apps turned on there, does
   not outlive a restart.
-  `open_webui_extra_env` may not name any `*_BASE_URL*`, `*API_BASE*`, `*API_KEY*` or `*ENDPOINT*`
-  variable, `TOOL_SERVER_CONNECTIONS`, the web-search, RAG, image, audio (Realtime voice included)
-  and code-execution settings, `ENABLE_APPS` or `APP_*` (each calls an endpoint of its own), or
-  any fixed setting; names are upper-case only.
+- Tool servers (OpenAPI, MCP and terminal servers), workspace Tools and Functions are off:
+  `ENABLE_PLUGINS`, `ENABLE_TOOLS`, `ENABLE_FUNCTIONS` and `ENABLE_TOOL_SERVERS` are `false`, and
+  `ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS=false`. These are environment-only switches, so,
+  unlike external apps, an admin cannot turn them on in the UI even until the next restart. Tools
+  and Functions run admin-supplied Python in the container, and their requirements would be
+  pip-installed from the package index.
+- `open_webui_extra_env` is an allowlist: only the names in `open_webui_allowed_env` (in
+  `vars/`), which shape the UI and chat behaviour (`WEBUI_NAME`, `DEFAULT_MODELS`, banners,
+  `TASK_MODEL`, which generation tasks run, and a few more), are accepted; names are upper-case
+  only. Any name matching `open_webui_reserved_env_pattern` is refused as well, and a test holds
+  the two apart. The pattern covers every `*_BASE_URL*`, `*API_BASE*`, `*API_KEY*`, `*ENDPOINT*`
+  and `*_CLIENT_SECRET` variable, tool and terminal servers, plugins, pip, web search, RAG and
+  content extraction (Tika, Docling, MinerU), vector databases, file storage (S3, GCS, Azure),
+  webhooks, image, audio (Realtime voice included) and code execution, external apps (`APP_*`),
+  OAuth, OIDC, LDAP and SCIM, the database, MFA, `CUSTOM_NAME` (it fetches a logo from upstream
+  at start), sign-in and its cookies, CORS and `WEBUI_URL`; every fixed setting is refused by
+  name. To use another
+  harmless setting, read it in the pinned release and add it to the allowlist.
+- `open_webui_public_url` (optional, `https://host[:port]`, no path) is the address users reach
+  it at through the front door. It sets `WEBUI_URL` and makes that the only `CORS_ALLOW_ORIGIN`.
+  Without it, upstream's default `*` applies, with credentials allowed, so any origin's script
+  could make credentialed requests a SameSite=lax cookie lets through (a sibling host on the
+  lab's parent domain is same-site). Set it.
 - Egress: the role cannot restrict the container's network (`compose_app` has no networks
   setting, and the gateway runs on another host, so an internal-only compose network would cut it
   off too). Restrict it on the host firewall instead: in nftables' `DOCKER-USER` path, let the

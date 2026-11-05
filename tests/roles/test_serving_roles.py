@@ -811,6 +811,10 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
     assert env["ENABLE_SIGNUP"] == "false" and env["OFFLINE_MODE"] == "true"
     assert env["ENABLE_PERSISTENT_CONFIG"] == "false"  # the environment wins on every start
     assert env["ENABLE_APPS"] == "false"  # 0.12.1's external apps keep a live connection out
+    # tool servers, Tools and Functions (admin-supplied Python) are off, and nothing is pip-installed
+    off = ("PLUGINS", "TOOLS", "FUNCTIONS", "TOOL_SERVERS", "PIP_INSTALL_FRONTMATTER_REQUIREMENTS")
+    assert {n: env["ENABLE_" + n] for n in off} == dict.fromkeys(off, "false")
+    assert "WEBUI_URL" not in env and "CORS_ALLOW_ORIGIN" not in env  # no public URL given
     assert not any("KEY" in k for k in env)  # the keys are only in the env_file
     published = "127.0.0.1:3000:8080"  # no-raw-endpoint: allow the published loopback port
     assert svc["ports"] == [published]
@@ -852,6 +856,60 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
         {"open_webui_extra_env": {"APP_ALLOWED_PRIVATE_ORIGINS": "https://apps.example.internal"}},
         {"open_webui_extra_env": {"AUDIO_REALTIME_ENABLED": "true"}},
         {"open_webui_extra_env": {"openai_api_base_url": "http://gpu-01.example.internal"}},
+        # tool servers, plugins, Tools, Functions and their pip installs (fixed off)
+        {"open_webui_extra_env": {"ENABLE_PLUGINS": "true"}},
+        {"open_webui_extra_env": {"ENABLE_TOOL_SERVERS": "true"}},
+        {"open_webui_extra_env": {"ENABLE_TOOLS": "true"}},
+        {"open_webui_extra_env": {"ENABLE_FUNCTIONS": "true"}},
+        {"open_webui_extra_env": {"ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS": "true"}},
+        # settings that call out but passed the old denylist
+        {"open_webui_extra_env": {"TERMINAL_SERVER_CONNECTIONS": "[]"}},
+        {"open_webui_extra_env": {"STORAGE_PROVIDER": "s3"}},
+        {"open_webui_extra_env": {"S3_BUCKET_NAME": "chats"}},
+        {"open_webui_extra_env": {"GCS_BUCKET_NAME": "chats"}},
+        {"open_webui_extra_env": {"AZURE_STORAGE_CONTAINER_NAME": "chats"}},
+        {"open_webui_extra_env": {"GOOGLE_APPLICATION_CREDENTIALS_JSON": "{}"}},
+        {"open_webui_extra_env": {"CONTENT_EXTRACTION_ENGINE": "tika"}},
+        {"open_webui_extra_env": {"TIKA_SERVER_URL": "http://tika.example.internal"}},
+        {"open_webui_extra_env": {"DOCLING_SERVER_URL": "http://docling.example.internal"}},
+        {"open_webui_extra_env": {"MINERU_API_URL": "http://mineru.example.internal"}},
+        {"open_webui_extra_env": {"WEBHOOK_URL": "https://hooks.example.internal"}},
+        {"open_webui_extra_env": {"ENABLE_USER_WEBHOOKS": "true"}},
+        {"open_webui_extra_env": {"PIP_OPTIONS": "--index-url=https://pypi.example.internal"}},
+        {"open_webui_extra_env": {"PIP_PACKAGE_INDEX_OPTIONS": "--extra-index-url=x"}},
+        {"open_webui_extra_env": {"CUSTOM_NAME": "lab"}},
+        {"open_webui_extra_env": {"VECTOR_DB": "qdrant"}},
+        {"open_webui_extra_env": {"QDRANT_URI": "http://qdrant.example.internal"}},
+        {"open_webui_extra_env": {"MILVUS_URI": "http://milvus.example.internal"}},
+        {"open_webui_extra_env": {"CHROMA_HTTP_HOST": "chroma.example.internal"}},
+        {"open_webui_extra_env": {"ELASTICSEARCH_URL": "http://es.example.internal"}},
+        {"open_webui_extra_env": {"OPENSEARCH_URI": "http://os.example.internal"}},
+        {"open_webui_extra_env": {"PGVECTOR_DB_URL": "postgresql://pg.example.internal/v"}},
+        {"open_webui_extra_env": {"PINECONE_ENVIRONMENT": "lab"}},
+        {"open_webui_extra_env": {"YACY_QUERY_URL": "http://yacy.example.internal"}},
+        {"open_webui_extra_env": {"YANDEX_WEB_SEARCH_URL": "http://yandex.example.internal"}},
+        {"open_webui_extra_env": {"OPENID_PROVIDER_URL": "https://idp.example.internal"}},
+        {"open_webui_extra_env": {"OAUTH_CLIENT_ID": "chat"}},
+        {"open_webui_extra_env": {"MICROSOFT_CLIENT_SECRET": "secret-fake"}},
+        {"open_webui_extra_env": {"DATABASE_PASSWORD": "pw-fake"}},
+        {"open_webui_extra_env": {"SCIM_TOKEN": "token-fake"}},
+        {"open_webui_extra_env": {"MFA_ENCRYPTION_KEY": "key-fake"}},
+        # CORS, the public URL, sign-in and its cookies are the role's, not extra env
+        {"open_webui_extra_env": {"CORS_ALLOW_ORIGIN": "*"}},
+        {"open_webui_extra_env": {"WEBUI_URL": "https://chat.example.internal"}},
+        {"open_webui_extra_env": {"WEBUI_SESSION_COOKIE_SAME_SITE": "none"}},
+        {"open_webui_extra_env": {"WEBUI_AUTH_COOKIE_SAME_SITE": "none"}},
+        {"open_webui_extra_env": {"WEBUI_AUTH": "false"}},
+        # a fixed setting, and names outside the allowlist that no reserved rule names
+        {"open_webui_extra_env": {"ENABLE_SIGNUP": "true"}},
+        {"open_webui_extra_env": {"ENABLE_API_KEYS": "true"}},
+        {"open_webui_extra_env": {"DEFAULT_USER_ROLE": "admin"}},
+        # a public URL is an https origin: no path, no other scheme, no wildcard
+        {"open_webui_public_url": "http://chat.example.internal"},
+        {"open_webui_public_url": "https://chat.example.internal/"},
+        {"open_webui_public_url": "https://chat.example.internal/ui"},
+        {"open_webui_public_url": "*"},
+        {"open_webui_public_url": "https://a.example.internal;https://b.example.internal"},
     ],
 )
 @first_run(lambda tmp, over: {"role": "open_webui", "tasks_from": "main",
@@ -898,8 +956,20 @@ def test_open_webui_resolves_its_target_through_the_registry(first, row, ok):
         assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
+ALLOWED_EXTRA = {
+    "DEFAULT_MODELS": "main-reasoner",
+    "WEBUI_NAME": "Lab chat",
+    "TASK_MODEL_EXTERNAL": "main-reasoner",
+    "ENABLE_ADMIN_CHAT_ACCESS": "false",
+}
+
+
 def _first(tmp_path):
-    v = webui_vars(tmp_path, open_webui_extra_env={"DEFAULT_MODELS": "main-reasoner"})
+    v = webui_vars(
+        tmp_path,
+        open_webui_extra_env=ALLOWED_EXTRA,
+        open_webui_public_url="https://chat.example.internal",
+    )
     return {"role": "open_webui", "tasks_from": "main", "extra_vars": v, "env": SECRETS}
 
 
@@ -908,7 +978,26 @@ def test_open_webui_keeps_extra_settings_that_do_not_re_point_it(first):
     r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
-    assert doc["services"]["open-webui"]["environment"]["DEFAULT_MODELS"] == "main-reasoner"
+    env = doc["services"]["open-webui"]["environment"]
+    assert {k: env[k] for k in ALLOWED_EXTRA} == ALLOWED_EXTRA
+    # the public URL is the address and the only CORS origin (upstream's default is '*')
+    assert env["WEBUI_URL"] == env["CORS_ALLOW_ORIGIN"] == "https://chat.example.internal"
+
+
+def test_open_webui_allowlist_and_reserved_names_stay_apart():
+    """The allowlist is reviewed by hand; the reserved pattern and the fixed settings guard it:
+    no allowed name may match the pattern or be fixed, and every name the role sets from its own
+    inputs must match the pattern."""
+    import re
+
+    v = yaml.safe_load((ROOT / "ansible/roles/open_webui/vars/main.yml").read_text())
+    reserved = re.compile(v["open_webui_reserved_env_pattern"])
+    allowed = v["open_webui_allowed_env"]
+    assert len(allowed) == len(set(allowed))
+    assert [n for n in allowed if reserved.search(n)] == []
+    assert set(allowed).isdisjoint(v["open_webui_fixed_env"])
+    own = ["WEBUI_URL", "CORS_ALLOW_ORIGIN", "OPENAI_API_BASE_URLS", "OPENAI_API_KEYS"]
+    assert [n for n in own if not reserved.search(n)] == []
 
 
 def test_open_webui_health_reads_the_container_and_the_port(tmp_path):

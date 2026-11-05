@@ -18,16 +18,55 @@ open_webui_fixed_env:
   # the environment is the configuration on every start; a setting changed in the admin UI (a
   # new connection, say) is not kept in the database past a restart
   ENABLE_PERSISTENT_CONFIG: "false"
+  # Tool servers (OpenAPI, MCP, terminal), workspace Tools and Functions: the last two run
+  # admin-supplied Python in the container, and all of them are environment-only switches, so an
+  # admin cannot turn them back on in the UI. ENABLE_PLUGINS=false already forces the other three
+  # off in 0.12.3 (env.py ANDs each with it); they are fixed too, so a release that decouples
+  # them does not silently turn one back on.
+  ENABLE_PLUGINS: "false"
+  ENABLE_TOOLS: "false"
+  ENABLE_FUNCTIONS: "false"
+  ENABLE_TOOL_SERVERS: "false"
+  # a Tool's or Function's frontmatter requirements are not pip-installed from the index
+  ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS: "false"
 # Names of model backends: the gateway id may not be one (Open WebUI never calls an engine).
 open_webui_backend_id_pattern: '^(inference|vllm|llama|ollama|lmstudio|unsloth)([-.]|\Z)'
 # What the gateway id must resolve to in the registry (its service's capability): a registry id
 # that is not the gateway (gpu-01 pointing at a vLLM, say) is refused whatever it is named.
 open_webui_gateway_capability: llm-gateway
-# extra env may not name a model or tool endpoint, a key, or a feature that calls out of the lab
-# (web search, RAG loaders and embeddings, image, audio, code execution, external apps), nor the
-# fixed settings
+# open_webui_extra_env is an allowlist: each name below was read in the pinned release and only
+# shapes the UI or the chat behaviour inside the gateway's models (a name, a default model, a
+# banner, which generation tasks run). Anything else is refused; a name an overlay needs is added
+# here after it is read in the pinned release.
+open_webui_allowed_env:
+  - WEBUI_NAME
+  - DEFAULT_LOCALE
+  - DEFAULT_MODELS
+  - DEFAULT_PINNED_MODELS
+  - MODEL_ORDER_LIST
+  - DEFAULT_PROMPT_SUGGESTIONS
+  - WEBUI_BANNERS
+  - PENDING_USER_OVERLAY_TITLE
+  - PENDING_USER_OVERLAY_CONTENT
+  - RESPONSE_WATERMARK
+  - SHOW_ADMIN_DETAILS
+  - ENABLE_MESSAGE_RATING
+  - ENABLE_ADMIN_EXPORT
+  - ENABLE_ADMIN_CHAT_ACCESS
+  - TASK_MODEL
+  - TASK_MODEL_EXTERNAL
+  - ENABLE_TITLE_GENERATION
+  - ENABLE_TAGS_GENERATION
+  - ENABLE_FOLLOW_UP_GENERATION
+  - ENABLE_AUTOCOMPLETE_GENERATION
+  - GLOBAL_LOG_LEVEL
+# The second gate, and the guard on the allowlist itself (a test holds the two apart, and
+# validate.yml refuses the fixed settings by name as well): extra env may never name a model or tool endpoint, a key or secret, a feature that calls out of the lab
+# (web search, RAG loaders and embeddings, content extraction, vector databases, file storage,
+# webhooks, pip, image, audio, code execution, external apps, tool and terminal servers), sign-in
+# and its cookies, the database, CORS and the public URL.
 open_webui_reserved_env_pattern: >-
-  (?i)(BASE_URL|API_BASE|API_KEY|ENDPOINT|^TOOL_SERVER|^OPENAI_|^OLLAMA_|^WEBUI_SECRET_KEY|^ENABLE_(OPENAI_API|OLLAMA_API|DIRECT_CONNECTIONS|PERSISTENT_CONFIG|WEB_SEARCH|RAG_WEB_SEARCH|IMAGE_GENERATION|CODE_EXECUTION|CODE_INTERPRETER|WEBSOCKET_SUPPORT|APPS)|^(RAG|WEB_SEARCH|WEB_LOADER|IMAGES?|IMAGE_GENERATION|AUDIO|STT|TTS|WHISPER|COMFYUI|AUTOMATIC1111|SEARXNG|TAVILY|BRAVE|SERPER|SERPAPI|SERPSTACK|SERPLY|JINA|BING|EXA|PERPLEXITY|KAGI|MOJEEK|GOOGLE_PSE|DDGS|FIRECRAWL|EXTERNAL|CODE_EXECUTION|CODE_INTERPRETER|PLAYWRIGHT|YOUTUBE|OAUTH|LDAP|APP)_)
+  (?i)(BASE_URL|API_BASE|API_KEY|ENDPOINT|_CLIENT_SECRET|_COOKIE_SAME_SITE|^TOOL_SERVER|^TERMINAL_SERVER|^OPENAI_|^OLLAMA_|^WEBUI_SECRET_KEY|^WEBUI_AUTH|^WEBUI_URL|^CORS_ALLOW|^CUSTOM_NAME|^STORAGE_PROVIDER|^GOOGLE_APPLICATION_CREDENTIALS|^CONTENT_EXTRACTION_ENGINE|^WEBHOOK_URL|^VECTOR_DB|^ENABLE_(OPENAI_API|OLLAMA_API|DIRECT_CONNECTIONS|PERSISTENT_CONFIG|WEB_SEARCH|RAG_WEB_SEARCH|IMAGE_GENERATION|CODE_EXECUTION|CODE_INTERPRETER|WEBSOCKET_SUPPORT|APPS|PLUGINS|TOOL|FUNCTIONS|PIP_INSTALL|USER_WEBHOOKS)|^(RAG|WEB_SEARCH|WEB_LOADER|IMAGES?|IMAGE_GENERATION|AUDIO|STT|TTS|WHISPER|COMFYUI|AUTOMATIC1111|SEARXNG|TAVILY|BRAVE|SERPER|SERPAPI|SERPSTACK|SERPLY|JINA|BING|EXA|PERPLEXITY|KAGI|MOJEEK|GOOGLE_PSE|DDGS|FIRECRAWL|EXTERNAL|CODE_EXECUTION|CODE_INTERPRETER|PLAYWRIGHT|YOUTUBE|OAUTH|OPENID|LDAP|APP|S3|GCS|AZURE_STORAGE|TIKA|DOCLING|MINERU|PIP|QDRANT|MILVUS|CHROMA|ELASTICSEARCH|OPENSEARCH|PGVECTOR|PINECONE|YACY|YANDEX|DATABASE|SCIM|MFA)_)
 open_webui_repository: "{{ open_webui_image.split('@')[0].rsplit(':', 1)[0] }}"
 open_webui_tag: "{{ open_webui_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
 open_webui_digest: "{{ open_webui_image.split('@')[1] | default('') }}"

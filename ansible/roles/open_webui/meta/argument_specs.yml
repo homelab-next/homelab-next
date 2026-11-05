@@ -45,8 +45,12 @@ argument_specs:
         default: 2g
       open_webui_extra_env:
         type: dict
-        description: "Extra non-secret Open WebUI settings; backend, Ollama and direct-connection settings are refused."
+        description: "Extra non-secret Open WebUI settings, each named in the role's allowlist (open_webui_allowed_env); any other name is refused."
         default: {}
+      open_webui_public_url:
+        type: str
+        description: "https://host[:port] users reach it at (no path); sets WEBUI_URL and makes it the only CORS origin. Empty keeps upstream's default."
+        default: ""
       open_webui_export_dir: &export
         type: path
         description: "Open-format export target."
