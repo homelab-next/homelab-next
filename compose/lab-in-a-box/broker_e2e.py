@@ -39,6 +39,8 @@ approver reads the page (token and digest from the form) and approves through
 (``not-pending``); with an events bus configured, the broker's outbox relay (as its own
 uid) publishes the request's ``decision.requested`` and ``decision.returned`` to the bus, in order,
 as ``svc:broker`` with the event id as the message id, and a second relay pass publishes nothing;
+on that bus (``bus-acl``) a client without a user is refused, the StackStorm bridge's user can
+neither forge a ``decision.returned`` nor purge the stream, and its acks on its own durable take;
 the audit trail holds every step, each with the peer's ``via``.
 
 ``tests/compose/test_lab_broker_e2e.py`` runs :func:`run_scenario` against local processes.
@@ -81,14 +83,16 @@ LAB_EVENTS_STREAM, LAB_EVENTS_PREFIX = "HNXLAB_BROKER", "hnxlab"
 BROKER_SOURCE = "svc:broker"  # homelabnext.broker.relay.BROKER_SOURCE (tests/compose pins it)
 STREAM_MAX_BYTES = 64 << 20  # the lab's standing stream (its DLQ gets a quarter)
 #: the lab's NATS users in the HNX account (config/nats/nats.conf) -> their password variables
-LAB_BUS_USERS = {
-    "hnx-broker": "HNX_SECRET_EVENTS_BROKER",
-    "hnx-st2-bridge": "HNX_SECRET_EVENTS_ST2_BRIDGE",
-    "hnx-lab-admin": "HNX_SECRET_EVENTS_ADMIN",
-}
 LAB_ADMIN = "hnx-lab-admin"
 #: a consumer of the broker's decisions that must not be able to forge one
 LAB_NOT_BROKER = "hnx-st2-bridge"
+#: its durable on decision.returned (workflows/stackstorm/bridge.json; tests/compose pins it)
+LAB_NOT_BROKER_DURABLE = "st2-decision-returned"
+LAB_BUS_USERS = {
+    "hnx-broker": "HNX_SECRET_EVENTS_BROKER",
+    LAB_NOT_BROKER: "HNX_SECRET_EVENTS_ST2_BRIDGE",
+    LAB_ADMIN: "HNX_SECRET_EVENTS_ADMIN",
+}
 #: the hub's public name: the Host and Origin the edge passes on (registry public_hostname)
 HUB_HOST = "status.lab.example"
 SECRET_ENV = "HNX_SECRET_STATUS_FRONT_DOOR_SECRET"
@@ -594,10 +598,45 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
     after = last_returned()
     if after != before:
         raise StepFailed(f"the last decision.returned moved: {before} -> {after}")
+    acked = check_bridge_acks(relay)
     return (
         f"no user: refused ({anonymous}); {LAB_NOT_BROKER}: forged decision.returned and "
-        f"purge refused; last decision.returned still seq {after}"
+        f"purge refused; last decision.returned still seq {after}; {acked}"
     )
+
+
+def check_bridge_acks(relay: Relay) -> str:
+    """What the bus ACL must still allow: the bridge's user reads ``decision.returned`` through its
+    own durable and its acks take, in whichever ack reply-subject form the server sends (ADR-15;
+    the ACL grants both).  A refused ack is a publish violation the client never hears about, so
+    the step reads the consumer back: nothing it was handed may still be pending."""
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    wire = relay.wire(LAB_NOT_BROKER)
+    try:
+        # replay: the lab runs no bridge, so a durable created now still sees the relay's events
+        bus = nj.JetStreamBus(wire, stream=relay.stream, subject_prefix=relay.prefix,
+                              provision=False, replay_s=86400.0)  # fmt: skip
+        consumer = bus.consumer(LAB_NOT_BROKER_DURABLE, "homelabnext.decision.returned")
+        got = consumer.fetch(16)
+        if not got:
+            raise StepFailed(f"{LAB_NOT_BROKER}'s durable was handed no decision.returned")
+        for d in got:
+            try:
+                d.ack()
+            except Exception as exc:
+                raise StepFailed(f"{LAB_NOT_BROKER}'s ack of seq {d.seq} failed: {exc}") from None
+        info = bus.api(f"CONSUMER.INFO.{relay.stream}.{consumer.durable}")
+        pending = int(info.get("num_ack_pending", -1))
+        floor = (info.get("ack_floor") or {}).get("stream_seq")
+        if pending != 0 or (floor is not None and int(floor) < max(d.seq for d in got)):
+            raise StepFailed(
+                f"{LAB_NOT_BROKER}'s acks did not take: {pending} pending, ack floor {floor}, "
+                f"acked up to seq {max(d.seq for d in got)} (is each ack form granted?)"
+            )
+    finally:
+        wire.close()
+    return f"{LAB_NOT_BROKER} acked {len(got)} delivery(ies) on its durable, none pending"
 
 
 def check_audit(setup: Setup, rid: str, profile: str) -> str:

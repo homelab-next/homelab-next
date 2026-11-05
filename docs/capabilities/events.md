@@ -285,9 +285,9 @@ How the contract maps onto JetStream:
   deliverable now and a `404`/`408` status, so an empty consumer returns at once.  The attempt
   number is the delivery count from the ack reply subject, in either of its formats (ADR-15):
   v1 `$JS.ACK.<stream>.<consumer>...` or v2, with `<domain>.<account hash>` after `ACK`,
-  which nats-server 2.14+ hands out with its `js_ack_fc_v2` feature flag (NATS announced it as
-  the future default; 2.15.1 still sends v1).  A user's ack grant must cover the form the
-  server sends (docs/stackstorm.md; the lab pins the flag off).
+  which nats-server 2.14+ hands out with its `js_ack_fc_v2` feature flag (2.15.1 still sends
+  v1; enabled in 2.16, flag removed in 2.17, on upstream main).  A user's ack grants cover both
+  forms, token for token (docs/stackstorm.md).
 * **ack / nack / term** are `+ACK` / `-NAK` / `+TERM` sent as *requests*: the server answers
   each one after processing it ("ack the ack"), so a following fetch cannot overtake it.  Only the
   first settlement of a delivery is sent; later ones are no-ops on the client.

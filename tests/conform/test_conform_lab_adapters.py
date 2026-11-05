@@ -48,7 +48,7 @@ def _bus(wire=None, **kw):
 @pytest.mark.parametrize("ack_format", ["v1", "v2"])
 def test_events_suite_passes_over_the_jetstream_wire(ack_format):
     """Both ack reply-subject formats (ADR-15): nats-server 2.14+ hands out v2 with its
-    ``js_ack_fc_v2`` feature flag, announced as the future default."""
+    ``js_ack_fc_v2`` feature flag (enabled in 2.16, flag removed in 2.17, on upstream main)."""
     results = run_checks(events_suite.SUITE, lambda: _bus(FakeJetStreamWire(ack_format=ack_format)))
     assert _failing(results) == []
     assert len(results) == len(events_suite.SUITE.specs)

@@ -5,11 +5,13 @@ config`` validation when docker is present, and the smoke checks against the pro
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
 import re
 import shutil
+import string
 import subprocess
 import sys
 import threading
@@ -1216,6 +1218,9 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     bridge = hnx["hnx-st2-bridge"]
     bridge_json = json.loads((ROOT / "workflows" / "stackstorm" / "bridge.json").read_text())
     prefix = e2e.LAB_EVENTS_PREFIX
+    # the bus-acl step reads and acks through the bridge's own durable on decision.returned
+    by_subject = {s["subject"]: s["durable"] for s in bridge_json["subscriptions"]}
+    assert by_subject["homelabnext.decision.returned"] == e2e.LAB_NOT_BROKER_DURABLE
     for sub in bridge_json["subscriptions"]:
         d = sub["durable"]
         for what in ("INFO", "MSG.NEXT"):
@@ -1232,14 +1237,31 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     assert not nats_allowed(hnx["hnx-broker"], "publish", f"$JS.API.STREAM.CREATE.{stream}")
 
 
-def test_the_server_hands_out_the_ack_subjects_the_acl_grants():
-    """The bridge's acks are granted in ADR-15's v1 form only, so the server must send v1:
-    nats-server 2.14+ sends v2 (``$JS.ACK.<domain>.<account hash>.<stream>.<durable>...``) with
-    ``js_ack_fc_v2`` on, announced as a future default, and under a v1-only grant every ack would
-    be a publish violation.  The config pins the flag off; a v2 ack is not granted."""
+def nats_account_hash(account: str) -> str:
+    """The account hash in a v2 ack subject, as nats-server computes it (``server/events.go``
+    ``getHash``/``getHashSize`` at v2.15.1, digits from ``server/accounts.go``): each of the first
+    8 bytes of sha256(name), mod 62, as a character of ``0-9A-Za-z``."""
+    digits = string.digits + string.ascii_uppercase + string.ascii_lowercase  # 0-9A-Za-z
+    return "".join(digits[b % 62] for b in hashlib.sha256(account.encode()).digest()[:8])
+
+
+def test_the_account_hash_is_the_servers():
+    # read off a 2.15.1 server with js_ack_fc_v2 on: $JS.ACK._.hKkTAyOX.HNXLAB_BROKER.<durable>...
+    assert nats_account_hash("HNX") == "hKkTAyOX"
+
+
+def test_acks_are_granted_token_exact_in_both_reply_subject_forms():
+    """ADR-15: v1 ``$JS.ACK.<stream>.<consumer>.<5 numbers>`` (what 2.15.1 sends) and v2
+    ``$JS.ACK.<domain>.<account hash>.<stream>.<consumer>.<5 numbers>[...]`` (upstream main
+    enables it in 2.16 and removes the flag in 2.17).  Each ack grant is exactly the consumer's
+    own subscription: no wildcard over the stream or consumer (``$JS.ACK.*.*.<s>.<d>.>`` would
+    also match another consumer's 9-token v1 subject, which takes ``+NXT``) and no ``>`` on v1."""
     conf = parse_nats_conf(NATS_CONF.read_text())
-    assert conf["feature_flags"] == {"js_ack_fc_v2": False}
+    # no JetStream domain anywhere, so the v2 domain token is the server's "_"
+    assert "domain" not in conf["jetstream"] and '"domain"' not in json.dumps(conf)
+    assert "js_ack_fc_v2" not in json.dumps(conf.get("feature_flags", {}))  # upstream's default
     e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    stream = e2e.LAB_EVENTS_STREAM
     ackers = 0
     for user in nats_users().values():
         allow = (user.get("permissions") or {}).get("publish", {}).get("allow", [])
@@ -1247,12 +1269,33 @@ def test_the_server_hands_out_the_ack_subjects_the_acl_grants():
         if not acks:
             continue
         ackers += 1  # the bridge: the one user granted acks on the standing stream
-        assert all(s.split(".")[2] == e2e.LAB_EVENTS_STREAM for s in acks), acks
-        for durable in {s.split(".")[3] for s in acks}:
-            v1 = f"$JS.ACK.{e2e.LAB_EVENTS_STREAM}.{durable}.1.2.3.4.5"
-            v2 = f"$JS.ACK._.hKkTAyOX.{e2e.LAB_EVENTS_STREAM}.{durable}.1.2.3.4.5"
-            assert nats_allowed(user, "publish", v1) and not nats_allowed(user, "publish", v2)
+        h = nats_account_hash(user["account"])
+        durables = {s.split(".")[3] for s in acks if s.split(".")[2] == stream}
+        assert durables
+        assert sorted(acks) == sorted(
+            [f"$JS.ACK.{stream}.{d}.*.*.*.*.*" for d in durables]
+            + [f"$JS.ACK._.{h}.{stream}.{d}.*.*.*.*.>" for d in durables]
+        )
+        for d in durables:
+            v1, v2 = f"$JS.ACK.{stream}.{d}.1.2.3.4.5", f"$JS.ACK._.{h}.{stream}.{d}.1.2.3.4.5"
+            assert nats_allowed(user, "publish", v1) and nats_allowed(user, "publish", v2)
+            refused = [
+                f"$JS.ACK.Other.other.{stream}.{d}.1.2.3",  # another consumer's v1 subject
+                f"$JS.ACK.{stream}.other.1.2.3.4.5",  # another durable, v1
+                f"$JS.ACK._.{h}.{stream}.other.1.2.3.4.5",  # another durable, v2
+                f"$JS.ACK.dom.{h}.{stream}.{d}.1.2.3.4.5",  # another domain
+                f"$JS.ACK._.AAAAAAAA.{stream}.{d}.1.2.3.4.5",  # another account's hash
+                f"$JS.ACK.{stream}.{d}.1.2.3.4.5.6.7",  # v1 with extra tokens
+                f"$JS.ACK.{stream}.{d}.1.2.3.4",  # v1 short of a token
+            ]
+            for subject in refused:
+                assert not nats_allowed(user, "publish", subject), subject
     assert ackers == 1
+
+
+def test_negative_a_wildcard_ack_grant_matches_another_consumers_v1_subject():
+    loose = {"user": "x", "permissions": {"publish": {"allow": ["$JS.ACK.*.*.S.d.>"]}}}
+    assert nats_allowed(loose, "publish", "$JS.ACK.Other.other.S.d.1.2.3")
 
 
 def test_negative_a_wildcard_grant_would_be_caught():

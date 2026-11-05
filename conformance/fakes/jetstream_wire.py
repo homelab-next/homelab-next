@@ -26,7 +26,9 @@ nats-server shapes them (read from the server source, ``server/consumer.go``, ``
 * strict API requests (2.12+, ``jetstream { strict: true }`` by default): a ``STREAM.CREATE``,
   ``CONSUMER.CREATE`` or ``STREAM.MSG.GET`` body with a field the server's request type does not
   have is refused (``invalid JSON`` 10025), where 2.10/2.11 only logged it.  ``strict=False`` is
-  the older behaviour.
+  the older behaviour.  Narrower than the server: only the top-level keys (and a consumer
+  request's ``config`` keys) are checked, and case-sensitively, where Go's decoder also refuses
+  an unknown nested field and matches field names case-insensitively.
 
 What it does not model: clustering, push consumers, flow control, limits other than the dedup
 window, and the server's lingering of a ``no_wait`` pull that cannot be filled (it simply ends the

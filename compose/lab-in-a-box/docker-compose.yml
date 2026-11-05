@@ -487,6 +487,7 @@ services:
       # the bus-relay and bus-acl steps: the broker's relay publishes its outbox to the events
       # service as hnx-broker (the relay's process gets only that password); the operator
       # (hnx-lab-admin) provisions the stream and reads it back; hnx-st2-bridge tries to forge
+      # one, then reads and acks through its own durable (its acks must take)
       HNX_ENDPOINT_EVENTS: nats://events.svc.example.internal:4222
       LAB_BROKER_EVENTS_TARGET: /src/compose/lab-in-a-box/broker/events-relay.yml
       HNX_SECRET_EVENTS_BROKER: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}

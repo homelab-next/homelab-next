@@ -125,10 +125,10 @@ def lab(tmp_path, e2e, monkeypatch):
 class _SharedWire:
     """The JetStream wire fake, kept open across the relay's and the check's adapters."""
 
-    def __init__(self):
+    def __init__(self, **kw):
         from conformance.fakes.jetstream_wire import FakeJetStreamWire
 
-        self.server = FakeJetStreamWire()
+        self.server = FakeJetStreamWire(**kw)
 
     def request(self, *a, **kw):
         return self.server.request(*a, **kw)
@@ -315,4 +315,51 @@ def test_the_acl_check_fails_on_a_bus_anyone_may_publish_to(e2e, tmp_path):
     # users required, but the bridge's may publish anything: the forgery itself is caught
     setup.relay.wire_as = lambda user: _AclWire(shared, user, permissive=user is not None)
     with pytest.raises(e2e.StepFailed, match=r"hnx-st2-bridge published a decision\.returned"):
+        e2e.check_bus_acl(setup, "req-1")
+
+
+@pytest.mark.parametrize("ack_format", ["v1", "v2"])
+def test_the_acl_check_reads_and_acks_as_the_bridge(e2e, tmp_path, ack_format):
+    """The bus-acl step also proves the ACL still lets the bridge work: its user fetches from its
+    own durable and acks, in either ack reply-subject form (ADR-15; nats-server 2.15.1 sends v1,
+    2.16 sends v2), and the step reads back that nothing is pending.  An ACL granting acks in
+    one form only fails it once the server sends the other."""
+    from test_lab_in_a_box import nats_users
+
+    from homelabnext.broker.relay import BROKER_SOURCE
+    from homelabnext.broker.state import StateDir
+    from homelabnext.events.envelope import build_event
+
+    state = StateDir(tmp_path / "state")
+    data = {"decision_id": "req-1", "verdict": "accept", "confidence": 1.0, "tier_used": "human"}
+    state.put_outbox(build_event("homelabnext.decision.returned", BROKER_SOURCE, data,
+                                 dedupe_key="r", subject="req-1"))  # fmt: skip
+    setup = e2e.Setup(socket=tmp_path / "s", hub="", data_root=tmp_path, uids={}, secret="")
+    shared = _SharedWire(ack_format=ack_format)
+    setup.relay = _relay(e2e, state.root, shared)
+    setup.relay.provision()
+    setup.relay.run_once()
+    detail = e2e.check_bus_acl(setup, "req-1")
+    assert f"{e2e.LAB_NOT_BROKER} acked 1 delivery(ies) on its durable, none pending" in detail
+    durable = shared.server.streams[e2e.LAB_EVENTS_STREAM].consumers[e2e.LAB_NOT_BROKER_DURABLE]
+    assert durable.pending == {}
+
+    # the bridge's grants with the other form's ack grants removed: its acks are refused
+    bridge = nats_users()[e2e.LAB_NOT_BROKER]
+    allow = bridge["permissions"]["publish"]["allow"]
+    other = "$JS.ACK._." if ack_format == "v1" else "$JS.ACK.HNXLAB"
+    narrowed = {**bridge, "permissions": {**bridge["permissions"], "publish": {
+        "allow": [s for s in allow if not s.startswith("$JS.ACK.") or s.startswith(other)]}}}  # fmt: skip
+
+    def wire_as(user):
+        w = _AclWire(shared, user)
+        if user == e2e.LAB_NOT_BROKER:
+            w.user = narrowed
+        return w
+
+    state.put_outbox(build_event("homelabnext.decision.returned", BROKER_SOURCE, data,
+                                 dedupe_key="r2", subject="req-1"))  # fmt: skip
+    setup.relay.run_once()
+    setup.relay.wire_as = wire_as
+    with pytest.raises(e2e.StepFailed, match=r"ack of seq \d+ failed"):
         e2e.check_bus_acl(setup, "req-1")
