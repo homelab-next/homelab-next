@@ -498,7 +498,15 @@ creates a missing durable through the filtered form
 later), whose subject the server holds the request's filter to; grant that subject, never the bare
 `...CREATE.<stream>.<durable>`, which takes any filter. A NATS ACL cannot forbid a push
 `deliver_subject` in that request; the bridge only ever creates pull durables, and where even that
-is too much, create the durables once as the admin and grant the bridge no `CREATE` at all. The
+is too much, create the durables once as the admin and grant the bridge no `CREATE` at all. Its
+acks go to the delivery's reply subject: `$JS.ACK.<stream>.<durable>.>` (ADR-15's v1 form), or
+`$JS.ACK.<domain>.<account hash>.<stream>.<durable>.>` from a server that hands out the v2 form
+(nats-server 2.14 and later with the `js_ack_fc_v2` feature flag on, which NATS announced as a
+future default; 2.15.1 still hands out v1). Grant the form the server sends, or it refuses every
+ack and each delivery runs to `max_deliver` and into the DLQ: pin the flag
+(`feature_flags { js_ack_fc_v2: false }`, as the lab does) and grant v1, or grant
+`$JS.ACK.*.*.<stream>.<durable>.>` as well (a v1 subject never matches it: its fifth token is a
+delivery count). The
 lab-in-a-box enforces exactly this (stream `HNXLAB_BROKER`; `tests/compose` fails when this
 excerpt drifts from it):
 

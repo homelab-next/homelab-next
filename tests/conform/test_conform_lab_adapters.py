@@ -45,10 +45,62 @@ def _bus(wire=None, **kw):
     return nj.make(wire=wire or FakeJetStreamWire(), **kw)
 
 
-def test_events_suite_passes_over_the_jetstream_wire():
-    results = run_checks(events_suite.SUITE, _bus)
+@pytest.mark.parametrize("ack_format", ["v1", "v2"])
+def test_events_suite_passes_over_the_jetstream_wire(ack_format):
+    """Both ack reply-subject formats (ADR-15): nats-server 2.14+ hands out v2 with its
+    ``js_ack_fc_v2`` feature flag, announced as the future default."""
+    results = run_checks(events_suite.SUITE, lambda: _bus(FakeJetStreamWire(ack_format=ack_format)))
     assert _failing(results) == []
     assert len(results) == len(events_suite.SUITE.specs)
+
+
+def test_v2_ack_subjects_settle_and_carry_the_attempt():
+    wire = FakeJetStreamWire(ack_format="v2")
+    bus = _bus(wire)
+    c = bus.consumer("worker", "a.b")
+    bus.publish("a.b", b"x")
+    [d] = c.fetch(1)
+    acks = [s for s, _, _ in wire.log if s.startswith("$JS.ACK.")]
+    d.nack()
+    sent = [s for s, _, _ in wire.log if s.startswith("$JS.ACK.")][len(acks) :]
+    assert sent[0].startswith(f"$JS.ACK._.{wire.account_hash}.{bus.stream}.worker.1.")
+    [again] = c.fetch(1)
+    assert again.attempt == 2 and again.seq == d.seq
+    again.ack()
+    assert c.fetch(1) == []
+    # an ack for another domain or account never reaches this consumer, as on the server
+    other = FakeJetStreamWire(ack_format="v2")
+    bus2 = _bus(other)
+    c2 = bus2.consumer("worker", "a.b")
+    bus2.publish("a.b", b"y")
+    [d2] = c2.fetch(1)
+    other.request(f"$JS.ACK.elsewhere.{other.account_hash}.{bus2.stream}.worker.1.{d2.seq}.1.0.0",
+                  b"+ACK", timeout=1)  # fmt: skip
+    stream = other.streams[bus2.stream]
+    assert d2.seq in stream.consumers["worker"].pending
+
+
+def test_fake_wire_refuses_unknown_request_fields_as_a_strict_server_does():
+    """nats-server 2.12+ decodes JetStream API requests strictly by default: an unknown field is
+    an error (10025), no longer a warning, so the adapter must send only the server's fields."""
+    wire = FakeJetStreamWire()
+    bus = _bus(wire)
+    with pytest.raises(nj.JetStreamApiError, match="unknown field"):
+        bus.api("STREAM.CREATE.X", {"name": "X", "subjects": ["x.>"], "max_msgz": 1})
+    with pytest.raises(nj.JetStreamApiError, match="unknown field"):
+        bus.api(f"STREAM.MSG.GET.{bus.stream}", {"seq": 1, "last": True})
+    with pytest.raises(nj.JetStreamApiError, match="unknown field"):
+        bus.api(
+            f"CONSUMER.CREATE.{bus.stream}.w",
+            {"stream_name": bus.stream, "config": {"durable_name": "w", "ack": "explicit"}},
+        )
+    with pytest.raises(nj.JetStreamApiError, match="unknown field"):
+        bus.api(f"CONSUMER.CREATE.{bus.stream}.w", {"stream_name": bus.stream, "cfg": {}})
+    # what the adapter itself sends passes (the suite above), and a lenient fake takes anything
+    lenient = _bus(FakeJetStreamWire(strict=False))
+    lenient.api("STREAM.CREATE.X", {"name": "X", "subjects": ["x.>"], "max_msgz": 1})
+    with pytest.raises(ValueError):
+        FakeJetStreamWire(ack_format="v3")
 
 
 def test_events_suite_catches_a_server_that_drops_dlq_advisories():

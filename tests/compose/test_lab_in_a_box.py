@@ -1147,7 +1147,11 @@ def test_the_events_service_requires_a_user_and_reads_the_lab_config(compose, en
     conf = parse_nats_conf(NATS_CONF.read_text())
     assert "authorization" not in conf and "no_auth_user" not in str(conf)  # no anonymous user
     variables = nats_vars(NATS_CONF.read_text())
-    assert variables == set(events["environment"])
+    assert variables == set(events["environment"]) - {"GOMEMLIMIT"}
+    # the Go runtime's soft limit sits below the container's, so the server's caches (2.12+)
+    # are freed under GC pressure before the kernel kills it
+    soft = int(events["environment"]["GOMEMLIMIT"].removesuffix("MiB"))
+    assert 0 < soft < int(events["mem_limit"].removesuffix("m"))
     for var in variables:
         assert events["environment"][var] == f"${{{var}:?see .env.example}}"
         assert "fake" in env_vars[var]
@@ -1222,9 +1226,33 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
         assert not nats_allowed(bridge, "publish", create)  # any filter, any shape
         assert not nats_allowed(bridge, "publish", f"{create}.{prefix}.homelabnext.other")
         assert nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.{d}.1.2.3.4.5")
+    assert not nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.other.1.2.3.4.5")
     assert not nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.CREATE.{stream}.other")
     assert not nats_allowed(bridge, "publish", f"$JS.API.STREAM.CREATE.{stream}")
     assert not nats_allowed(hnx["hnx-broker"], "publish", f"$JS.API.STREAM.CREATE.{stream}")
+
+
+def test_the_server_hands_out_the_ack_subjects_the_acl_grants():
+    """The bridge's acks are granted in ADR-15's v1 form only, so the server must send v1:
+    nats-server 2.14+ sends v2 (``$JS.ACK.<domain>.<account hash>.<stream>.<durable>...``) with
+    ``js_ack_fc_v2`` on, announced as a future default, and under a v1-only grant every ack would
+    be a publish violation.  The config pins the flag off; a v2 ack is not granted."""
+    conf = parse_nats_conf(NATS_CONF.read_text())
+    assert conf["feature_flags"] == {"js_ack_fc_v2": False}
+    e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    ackers = 0
+    for user in nats_users().values():
+        allow = (user.get("permissions") or {}).get("publish", {}).get("allow", [])
+        acks = [s for s in allow if s.startswith("$JS.ACK.")]
+        if not acks:
+            continue
+        ackers += 1  # the bridge: the one user granted acks on the standing stream
+        assert all(s.split(".")[2] == e2e.LAB_EVENTS_STREAM for s in acks), acks
+        for durable in {s.split(".")[3] for s in acks}:
+            v1 = f"$JS.ACK.{e2e.LAB_EVENTS_STREAM}.{durable}.1.2.3.4.5"
+            v2 = f"$JS.ACK._.hKkTAyOX.{e2e.LAB_EVENTS_STREAM}.{durable}.1.2.3.4.5"
+            assert nats_allowed(user, "publish", v1) and not nats_allowed(user, "publish", v2)
+    assert ackers == 1
 
 
 def test_negative_a_wildcard_grant_would_be_caught():
