@@ -522,6 +522,18 @@ def compile_profile(
     }
     if include:
         profile["include"] = include
+    # memory limits (ADR-0037 decision 6): only when the spec states them, so a profile that does
+    # not use them keeps its digest
+    platform_scopes = spec.get("platform_scopes")
+    if platform_scopes is not None and not isinstance(platform_scopes, list):
+        raise SpecError("platform_scopes must be a list of memory scopes")
+    if platform_scopes:
+        profile["platform_scopes"] = sorted(set(platform_scopes))
+    if spec.get("memory_limits") is not None:
+        profile["memory_limits"] = copy.deepcopy(spec["memory_limits"])
+    mproblems = memory_limit_problems(profile)
+    if mproblems:
+        raise SpecError("; ".join(mproblems))
     # the spec entry digests the *normalised* spec, so list order in the source file is irrelevant
     provenance = sorted(
         ({"id": p.id, "source": library.source, "digest": p.digest} for p in parts),
@@ -534,6 +546,34 @@ def compile_profile(
     if errs:
         raise SpecError("compiled profile fails its schema: " + "; ".join(errs))
     return profile
+
+
+def memory_limit_problems(profile: Mapping[str, Any]) -> list[str]:
+    """Where a profile's ``platform_scopes`` and ``memory_limits`` name scopes they may not
+    (ADR-0037 decision 6): every platform scope and every capped scope is one of its
+    ``memory_scopes``, and ``keep_last`` compacts platform scopes only."""
+
+    def names(x: Any) -> set[str]:  # a malformed value is the schema's to report
+        return set(x) if isinstance(x, (list, Mapping)) else set()
+
+    scopes = names(profile.get("memory_scopes"))
+    platform = names(profile.get("platform_scopes"))
+    limits = profile.get("memory_limits")
+    limits = limits if isinstance(limits, Mapping) else {}
+    problems = [
+        f"platform_scopes: {s!r} is not one of the profile's memory_scopes"
+        for s in sorted(platform - scopes)
+    ]
+    problems += [
+        f"memory_limits.records: {s!r} is not one of the profile's memory_scopes"
+        for s in sorted(names(limits.get("records")) - scopes)
+    ]
+    problems += [
+        f"memory_limits.keep_last: {s!r} is not a platform scope (keep_last compacts platform "
+        "scopes only)"
+        for s in sorted(names(limits.get("keep_last")) - platform)
+    ]
+    return problems
 
 
 def profile_digest(profile: Mapping[str, Any]) -> str:
@@ -584,6 +624,7 @@ def verify_profile(
             problems.append("include is not in normalised form (edited after compile?)")
     except AgentError as exc:
         problems.append(str(exc))
+    problems += memory_limit_problems(profile)
     if profile_digest(profile) != profile["digest"]:
         problems.append("digest does not match the profile content (edited after compile?)")
     if lock is not None:

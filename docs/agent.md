@@ -40,7 +40,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-All are versioned 1.0 except `agent/profile` (1.5), `agent/report_result` (1.1),
+All are versioned 1.0 except `agent/profile` (1.6), `agent/report_result` (1.1),
 `agent/context_manifest` (1.2), `agent/golden_task` (1.1), `broker/manifest` (1.8),
 `broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
 additive, and each schema's `description` says what each minor added. Every version is
@@ -552,6 +552,47 @@ access. The caller is platform code, not the model: it loads the profile with
 `load_verified_profile(path, policy, lock)`.
 Backends store data only: `InMemoryBackend` (the fake) and `FileBackend` (one
 `homelabnext.state` file keyed by profile id).
+
+**History** ([ADR-0037](adr/0037-agent-memory-is-sourced-historied-and-retractable.md), PR 1).
+Per owner the stored value is `{entries, log}`. Every applied update appends one change record
+(`at`, `scope`, `key`, `op`, `rev`, `value`, `value_digest`, `pack_id`, `sources`, `checked`,
+`tlp`, `closure`; `value` is absent on `retire`) in the same backend transaction as the entry, so
+a refused batch writes neither, on both backends. `entries` is a cache of the log (`fold(log)`
+rebuilds it) and each entry carries `rev`, `updated_at` and `reasserted_at` (set by `add` and
+`replace`). `rev` starts at 1 on a key's first `add`, rises by one on every record of the key and
+never restarts, through `retire` and a later `add`. Until sources and labels ship (PR 2) every
+record is `sources: []`, `checked: false`, `tlp: red` with an empty closure. Memory stored before
+the log migrates once, on its owner's next write, to one `migrated: true` record per entry
+(`rev: 1`). The clock is injected (`MemoryStore(now=...)`, an aware UTC `datetime`, read once per
+batch inside the transaction).
+
+No secret enters the log: every key and value passes the screen's secret types
+(`homelabnext.agent.screen.SECRET_TYPES`) and the leak scanner's credential shapes
+(`homelabnext.shapes`) before anything else, the schema check included. A match refuses the whole
+batch, naming the update's position, the field and the type, never the value.
+
+`history(profile, scope, key)` returns `{records, withheld}`, the key's records in order.
+`as_of(profile, scope, t)` returns `{at, entries, compacted, withheld}`: the scope's live entries
+as they stood at `t`, rebuilt from the log. A key whose state at `t` lies in compacted records
+(or before a migration) is listed under `compacted`, never given a value. Both are owner-scoped
+exactly like `read`. `withheld` is 0 until records carry labels (PR 2 applies the reader's TLP
+ceiling there). The public API is exactly `apply_updates`, `apply_report`, `read`, `history` and
+`as_of`.
+
+The log is bounded per scope. A profile's `memory_limits.records` (profile schema 1.6) caps each
+scope; without an entry a scope gets 10,000 records, or 100,000 if it is one of the profile's
+`platform_scopes`. A batch that would take a scope past its cap is refused whole
+(`MemoryLimitError`) and pages the operator through the state-diffed notifier
+(`MemoryStore(notifier=..., topic=...)`, pair `AGENT_MEMORY_CAP` in
+`homelabnext.notify.core_pairs`), once per crossing, with its recovery when a write to the scope
+is accepted again; without a notifier the crossing is logged once. In a platform scope,
+`memory_limits.keep_last: {<scope>: {<key glob>: N}}` drops the values of a key's records beyond
+its last N (every other field kept), and a retired key compacts whole to one tombstone record that
+keeps the last `rev`, `since` (its first record's time), the union of sources and closures, the
+`pack_ids` and the value digests. The compiler copies both fields from the spec only when set,
+and refuses a platform or capped scope that is not a memory scope, and `keep_last` on a scope that
+is not a platform scope. Until PR 2 restricts platform scopes to platform writes, a report may
+still write one.
 
 
 Two stores are called memory, and only this one carries the M-09 guarantees. The broker's

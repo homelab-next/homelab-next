@@ -75,6 +75,9 @@ TYPES = (
     "ip",
     "phone",
 )
+#: the types that are credentials rather than personal data: agent memory refuses a key or value
+#: holding one (ADR-0037 decision 4), where the screener only redacts it
+SECRET_TYPES = ("private-key", "jwt", "token", "secret")
 _PRIORITY = {t: i for i, t in enumerate(TYPES)}
 LABEL_RE = re.compile(r"\[REDACTED:(?P<type>[a-z-]+):(?P<n>\d+)\]")
 # a label this screener could have written: a known type and a count it could reach.  Only these
