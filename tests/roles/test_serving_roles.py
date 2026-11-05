@@ -801,8 +801,8 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     svc = doc["services"]["open-webui"]
     assert svc["image"] == (
-        "ghcr.io/open-webui/open-webui:v0.11.4@sha256:"
-        "9591b13f13843c7721c2b8eaf7382846c81b3ffe126526d1888d1fed50c6a33f"
+        "ghcr.io/open-webui/open-webui:v0.12.3@sha256:"
+        "a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def"
     )
     env = svc["environment"]
     gateway = "https://gateway-01.example.internal:4000"  # no-raw-endpoint: allow the stub registry
@@ -810,6 +810,7 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
     assert env["ENABLE_OLLAMA_API"] == "false" and env["ENABLE_DIRECT_CONNECTIONS"] == "false"
     assert env["ENABLE_SIGNUP"] == "false" and env["OFFLINE_MODE"] == "true"
     assert env["ENABLE_PERSISTENT_CONFIG"] == "false"  # the environment wins on every start
+    assert env["ENABLE_APPS"] == "false"  # 0.12.1's external apps keep a live connection out
     assert not any("KEY" in k for k in env)  # the keys are only in the env_file
     published = "127.0.0.1:3000:8080"  # no-raw-endpoint: allow the published loopback port
     assert svc["ports"] == [published]
@@ -846,6 +847,10 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
         {"open_webui_extra_env": {"IMAGES_OPENAI_API_KEY": "key-fake"}},
         {"open_webui_extra_env": {"AUDIO_STT_ENGINE": "openai"}},
         {"open_webui_extra_env": {"ENABLE_PERSISTENT_CONFIG": "true"}},
+        # 0.12: external apps and Realtime voice calls each connect to an address of their own
+        {"open_webui_extra_env": {"ENABLE_APPS": "true"}},
+        {"open_webui_extra_env": {"APP_ALLOWED_PRIVATE_ORIGINS": "https://apps.example.internal"}},
+        {"open_webui_extra_env": {"AUDIO_REALTIME_ENABLED": "true"}},
         {"open_webui_extra_env": {"openai_api_base_url": "http://gpu-01.example.internal"}},
     ],
 )

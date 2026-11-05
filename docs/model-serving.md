@@ -223,7 +223,7 @@ own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
 ### `open_webui`
 
 `open_webui` runs Open WebUI as a [compose_app](role-interface.md), pinned
-`ghcr.io/open-webui/open-webui:v0.11.4@sha256:9591b13f…`:
+`ghcr.io/open-webui/open-webui:v0.12.3@sha256:a537bbe1…`:
 
 - `OPENAI_API_BASE_URLS` is the gateway's registry URL plus `/v1` (`open_webui_gateway_id`,
   required). A backend id (`inference-*`, `vllm*`, `llama*`, `ollama*`) is refused, and the id is
@@ -234,12 +234,15 @@ own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
   `secret:llm-gateway/key-chat-ui`, the `chat-ui` key in `examples/model-serving/gateway.yml`).
   The gateway scopes it to the roles chat may use and limits it. The key goes only into compose's
   `0600` env file, never into `docker-compose.yml`.
-- Ollama, direct connections, sign-up, community sharing and the update check are off (fixed in
-  `vars/`), and `ENABLE_PERSISTENT_CONFIG=false`: the environment is the configuration on every
-  start, so a connection added in the admin UI does not outlive a restart. `open_webui_extra_env`
-  may not name any `*_BASE_URL*`, `*API_BASE*`, `*API_KEY*` or `*ENDPOINT*` variable,
-  `TOOL_SERVER_CONNECTIONS`, the web-search, RAG, image, audio and code-execution settings (each
-  calls an endpoint of its own), or any fixed setting; names are upper-case only.
+- Ollama, direct connections, sign-up, community sharing, the update check and external apps
+  (`ENABLE_APPS`, Open WebUI 0.12.1's channel bots that it keeps a live connection to) are off
+  (fixed in `vars/`), and `ENABLE_PERSISTENT_CONFIG=false`: the environment is the configuration
+  on every start, so a connection added in the admin UI, or external apps turned on there, does
+  not outlive a restart.
+  `open_webui_extra_env` may not name any `*_BASE_URL*`, `*API_BASE*`, `*API_KEY*` or `*ENDPOINT*`
+  variable, `TOOL_SERVER_CONNECTIONS`, the web-search, RAG, image, audio (Realtime voice included)
+  and code-execution settings, `ENABLE_APPS` or `APP_*` (each calls an endpoint of its own), or
+  any fixed setting; names are upper-case only.
 - Egress: the role cannot restrict the container's network (`compose_app` has no networks
   setting, and the gateway runs on another host, so an internal-only compose network would cut it
   off too). Restrict it on the host firewall instead: in nftables' `DOCKER-USER` path, let the
