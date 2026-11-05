@@ -200,8 +200,11 @@ writable export. That share is the file server's role, not this one.
   `Restart=on-failure` included, so a unit never serves bytes that changed after `model_store`
   verified them. It reads every byte: minutes per hundred GB, inside `TimeoutStartSec=1800`;
 - with `vllm_server_api_key_ref`, a `0600` environment file holding `VLLM_API_KEY`, so vLLM refuses
-  callers without the gateway's backend key. In the gateway spec, declare that backend with the
-  same `api_key` and port.
+  callers without the gateway's backend key on its `/v1` API. In the gateway spec, declare that
+  backend with the same `api_key` and port. The key does not guard every route: vLLM checks it
+  only under `/v1`, `/v2`, `/inference` and `/cohere`, so `/invocations`, `/tokenize`, `/pooling`,
+  `/score`, `/rerank` and `/classify` answer without it. The host firewall admitting only the
+  gateway is the control that keeps other callers out.
 
 `main` refuses a vLLM that is not `vllm_server_version`, and an instance whose model is not in the
 store. It also stops and removes every `hnx-vllm-*.service` the plan no longer lists, so the old
