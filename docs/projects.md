@@ -240,6 +240,12 @@ mirrors every strategy record into the Strategy project:
 
 ### Change feed (OpenProject -> events)
 
+> **Stage 2, library only.** `ChangeFeed` and `make_webhook_server` are tested code with no
+> caller: no `hnx` command, unit or timer runs the poll or the receiver, so nothing publishes
+> `homelabnext.project.changed` for OpenProject today. `hnx projects openproject` has only
+> `doctor` and `sync-strategy`, and `hnx projects feed` reads the frozen Markdown store, not
+> OpenProject. See [Developer follow-ups](#developer-follow-ups).
+
 Webhooks are a hint, not a guarantee: they are sent after the journal aggregation window (5
 minutes by default), retried only on timeouts, carry no delete or relation events, and are signed
 with an HMAC-SHA1 without a timestamp. So `ChangeFeed.poll(cursor)` reads every work item whose
@@ -271,3 +277,10 @@ strategy work package changed by anyone but the sync user is noted for the next 
 * Relation-only changes do not move `updatedAt` in OpenProject; the adapter's own link changes do
   (through `hnx state`), one made by hand in the UI shows only at the work package's next change.
 * Pin the image to 17.9 and re-run the suite before an upgrade (the API moves monthly).
+
+### Developer follow-ups
+
+* **Wire the OpenProject change feed.** Add `hnx projects openproject feed` (one poll from a
+  stored cursor) and `serve-webhook` (`make_webhook_server`, loopback unless `--allow-remote`),
+  with a systemd unit or timer for each and an event publisher, so `project.changed` is produced
+  for the OpenProject backend. Until then the feed is library code only.
