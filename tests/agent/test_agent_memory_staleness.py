@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from agent_support import item, labelled_pack, library, spec, uid, verified
+from memory_admin_support import operator
 
 from homelabnext.agent import SpecError, compile_profile, validate_report
 from homelabnext.agent.memory import (
@@ -21,6 +22,7 @@ from homelabnext.agent.memory import (
     fold,
     memory_block_input,
 )
+from homelabnext.memory_admin import MemoryAdmin
 
 T0 = datetime(2026, 11, 6, 9, 0, tzinfo=UTC)
 FL = "fleet-ledger"
@@ -43,8 +45,8 @@ class Clock:
 
 
 class StubVerifier(Verifier):
-    """A test :class:`Verifier` (none ships): confirms what ``answer`` says and records every
-    request."""
+    """A test :class:`Verifier` (none ships): answers what ``answer`` says (a list: one answer
+    per request, in order) and records every request."""
 
     def __init__(self, answer=True):
         self.answer = answer
@@ -52,9 +54,10 @@ class StubVerifier(Verifier):
 
     def verify(self, request):
         self.asked.append(request)
-        if isinstance(self.answer, Exception):
-            raise self.answer
-        return self.answer
+        answer = self.answer.pop(0) if isinstance(self.answer, list) else self.answer
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
 def _profile(**extra):
@@ -218,22 +221,82 @@ def test_only_a_verifier_sets_verified_at_and_then_read_reports_fresh(reader, ba
     }  # fmt: skip
 
 
-def test_an_unconfirmed_replace_clears_verified_at_and_an_unconfirmed_verify_keeps_it(
-    reader, backend
-):
+def test_an_unconfirmed_replace_or_a_refuted_verify_clears_verified_at(reader, backend):
     clock = Clock()
     stub = StubVerifier()
     store = MemoryStore(backend, now=clock, verifier=stub)
-    put(store, reader, [up("add", "a", "A"), up("add", "b", "B")])
+    put(store, reader, [up("add", "a", "A"), up("add", "b", "B"), up("add", "d", "D")])
     assert entry(backend, reader, "a")["verified_at"] == stamp(T0)
+    clock.tick()
+    # a verifier that cannot tell (it raises, or answers anything but a bool) keeps the stamp
+    stub.answer = [RuntimeError("down"), "yes", False]
+    put(
+        store,
+        reader,
+        [
+            up("verify", "a", sources=[uid(1)]),
+            up("verify", "d", sources=[uid(1)]),
+            up("replace", "b", "B2"),
+        ],
+    )
+    assert entry(backend, reader, "a")["verified_at"] == stamp(T0)  # the same value, still
+    assert entry(backend, reader, "d")["verified_at"] == stamp(T0)
+    assert "verified_at" not in entry(backend, reader, "b")  # a new value is unverified
+    # an explicit False on a verify says the fact does not hold: the old stamp goes
     stub.answer = False
     clock.tick()
-    put(store, reader, [up("verify", "a", sources=[uid(1)]), up("replace", "b", "B2")])
-    assert entry(backend, reader, "a")["verified_at"] == stamp(T0)  # the same value, still
-    assert "verified_at" not in entry(backend, reader, "b")  # a new value is unverified
+    put(store, reader, [up("verify", "a", sources=[uid(1)])])
+    assert "verified_at" not in entry(backend, reader, "a")
+    rec = store.history(reader, "analyst", "a")["records"][-1]
+    assert rec["refuted"] is True and "verified_at" not in rec
+    stored = backend.load(reader["id"])
+    assert fold(stored["log"]) == stored["entries"]
+    assert store.read(reader, "analyst", stale_after=timedelta(days=1))["stale"]["a"] == {
+        "reasserted_at": stamp(clock.t)
+    }
     stub.answer = "yes"  # only True confirms
     put(store, reader, [up("add", "c", "C")])
     assert "verified_at" not in entry(backend, reader, "c")
+
+
+def test_the_verifier_is_asked_only_about_an_accepted_batch_and_gets_the_label(reader, backend):
+    stub = StubVerifier()
+    store = MemoryStore(backend, now=Clock(), verifier=stub)
+    with pytest.raises(MemoryUpdateError, match="replace of a key that is not live"):
+        put(store, reader, [up("add", "a", "secret A"), up("replace", "z", "Z")])
+    assert stub.asked == []  # a refused batch's values never reach the verifier
+    put(store, reader, [up("add", "a", "A")], [item(1, "amber")])
+    put(store, reader, [up("add", "b", "B")], [item(1, "green")])
+    assert [ask.tlp for ask in stub.asked] == ["amber", "green"]
+    assert [entry(backend, reader, k)["tlp"] for k in "ab"] == ["amber", "green"]
+
+
+def test_a_verify_in_the_same_batch_as_its_add_keeps_the_adds_stamp(reader, backend):
+    stub = StubVerifier([True, RuntimeError("down")])
+    store = MemoryStore(backend, now=Clock(), verifier=stub)
+    put(store, reader, [up("add", "a", "A"), up("verify", "a", sources=[uid(1)])])
+    assert [r.op for r in stub.asked] == ["add", "verify"]
+    e = entry(backend, reader, "a")
+    assert e["rev"] == 2 and e["verified_at"] == stamp(T0)
+
+
+def test_a_verified_at_from_the_future_reads_stale_after_a_restamp(reader, backend, tmp_path):
+    ahead = Clock(T0 + timedelta(days=365))
+    store = MemoryStore(backend, now=ahead, verifier=StubVerifier())
+    put(store, reader, [up("add", "a", "A")])
+    assert entry(backend, reader, "a")["verified_at"] == stamp(ahead.t)
+    back = Clock(T0)
+    admin = MemoryAdmin(backend, now=back)
+    admin.restamp(reader["id"], "clock ran a year ahead", by=operator(tmp_path), expect_now=T0)
+    back.tick(60 * 24 * 30)
+    late = MemoryStore(backend, now=back)
+    assert late.read(reader, "analyst", stale_after=timedelta(days=1))["stale"] == {
+        "a": {"reasserted_at": stamp(T0), "verified_at": stamp(ahead.t)}
+    }
+    (mem,) = memory_block_input(late, reader, ["analyst"], stale_after=timedelta(days=1))
+    assert mem["stale"] is True
+    seen = late.as_of(reader, "analyst", back.t, stale_after=timedelta(days=1))
+    assert seen["stale"] == {"a": {"reasserted_at": stamp(T0), "verified_at": stamp(ahead.t)}}
 
 
 def test_a_verifier_that_raises_verifies_nothing_and_refuses_nothing(reader, backend, caplog):
@@ -262,13 +325,26 @@ def test_unverified_entries_are_stale_under_any_budget(reader, backend):
         store.read(reader, "analyst", stale_after=3600)
 
 
+def test_a_budget_reaching_past_the_calendar_marks_only_unverified_entries_stale(reader, backend):
+    clock = Clock()
+    store = MemoryStore(backend, now=clock, verifier=StubVerifier([True, False]))
+    put(store, reader, [up("add", "a", "A"), up("add", "b", "B")])
+    for budget in (timedelta.max, T0 - datetime(999, 1, 1, tzinfo=UTC)):
+        read = store.read(reader, "analyst", stale_after=budget)
+        assert read["stale"] == {"b": {"reasserted_at": stamp(T0)}}
+        seen = store.as_of(reader, "analyst", T0, stale_after=budget)
+        assert seen["stale"] == read["stale"]
+        mem = memory_block_input(store, reader, ["analyst"], stale_after=budget)
+        assert [m["stale"] for m in mem] == [False, True]
+
+
 # ---------------------------------------------------------------- history, as_of and the fold
 def test_history_as_of_and_the_fold_carry_both_stamps(reader, backend):
     clock = Clock()
     stub = StubVerifier()
     store = MemoryStore(backend, now=clock, verifier=stub)
     put(store, reader, [up("add", "a", "A")])  # verified at T0
-    stub.answer = False
+    stub.answer = RuntimeError("down")
     clock.tick(30)
     put(store, reader, [up("verify", "a", sources=[uid(1)])])  # reasserted at T0+30, unverified
     stub.answer = True
@@ -290,6 +366,19 @@ def test_history_as_of_and_the_fold_carry_both_stamps(reader, backend):
     assert "stale" not in store.as_of(reader, "analyst", clock.t)
 
 
+def test_as_of_judges_staleness_at_t_not_at_now(reader, backend):
+    clock = Clock()
+    store = MemoryStore(backend, now=clock, verifier=StubVerifier())
+    put(store, reader, [up("add", "a", "A")])  # verified at T0
+    clock.tick(60)
+    half = timedelta(minutes=30)
+    then = store.as_of(reader, "analyst", T0 + timedelta(minutes=20), stale_after=half)
+    assert then["entries"] == {"a": "A"} and then["stale"] == {}  # fresh at T0+20
+    assert store.read(reader, "analyst", stale_after=half)["stale"] == {
+        "a": {"reasserted_at": stamp(T0), "verified_at": stamp(T0)}
+    }  # stale now, at T0+60
+
+
 def test_compaction_keeps_the_stamps_of_what_it_folds(backend):
     ledger = _profile(
         memory_scopes=["analyst", FL],
@@ -309,6 +398,27 @@ def test_compaction_keeps_the_stamps_of_what_it_folds(backend):
     )
     assert fold(stored["log"]) == stored["entries"]
     assert stored["entries"][FL]["cursor"]["verified_at"] == stamp(clock.t)
+
+
+def test_a_folded_record_carries_verified_at_into_the_fold(backend):
+    ledger = _profile(
+        memory_scopes=["analyst", FL],
+        platform_scopes=[FL],
+        memory_limits={"keep_last": {FL: {"cursor": 1}}},
+    )
+    clock = Clock()
+    store = MemoryStore(backend, now=clock, verifier=StubVerifier())
+    store.apply_updates(ledger, [up("add", "cursor", "1", scope=FL)], unchecked=True)
+    clock.tick()
+    store.apply_updates(ledger, [up("retire", "cursor", scope=FL)], unchecked=True)
+    stored = backend.load(ledger["id"])
+    (folded,) = [r for r in stored["log"] if r["key"] == "cursor"]
+    assert folded["compacted"] and folded["verified_at"] == stamp(T0)
+    # the retired entry's stamp comes from the folded record alone
+    assert fold(stored["log"])[FL]["cursor"]["verified_at"] == stamp(T0)
+    assert fold(stored["log"]) == stored["entries"]
+    read = store.read(ledger, FL, include_retired=True, stale_after=timedelta(days=1))
+    assert read["stale"] == {}
 
 
 # ---------------------------------------------------------------- the pack's memory block
@@ -339,3 +449,6 @@ def test_the_pack_memory_block_reports_stale_entries(reader, backend):
     half = [{k: v for k, v in mem[0].items() if k != "reasserted_at"}]
     with pytest.raises(SpecError, match="when staleness is reported"):
         labelled_pack([item(2)], [item(3)], memory_block=half)
+    fresh = [{**mem[0], "stale": False}]  # no verified_at: it cannot be fresh
+    with pytest.raises(SpecError, match="no verified_at is stale"):
+        labelled_pack([item(2)], [item(3)], memory_block=fresh)

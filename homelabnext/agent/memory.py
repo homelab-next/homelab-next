@@ -157,14 +157,17 @@ Staleness (ADR-0037 decision 15, PR 4):
   :func:`~homelabnext.agent.report.verify_problems`) takes no value, bumps ``rev``, adds its
   sources to the entry's, and leaves the value unchanged.
 * **``verified_at``** is absent until a :class:`Verifier` (``MemoryStore(verifier=...)``) sets
-  it.  The store asks the verifier about every ``add``, ``replace`` and ``verify`` it applies,
-  inside the transaction, with a :class:`VerifyRequest`; only ``True`` stamps the record's
-  ``verified_at`` (its own ``at``), and anything else, an exception included, leaves it unset.  A
-  ``replace`` the verifier does not confirm clears the entry's ``verified_at`` (the value
-  changed); a ``verify`` it does not confirm keeps the earlier one.  The protocol is defined and
-  no implementation ships, so today every entry is stale.
+  it.  Once a batch is accepted (never for a refused one), the store asks the verifier about
+  every ``add``, ``replace`` and ``verify`` in it, inside the transaction, with a
+  :class:`VerifyRequest` (which carries the record's label, so a verifier can keep to its egress
+  ceiling); only ``True`` stamps the record's ``verified_at`` (its own ``at``).  A ``replace`` the
+  verifier does not confirm clears the entry's ``verified_at`` (the value changed); a ``verify``
+  it answers ``False`` is marked ``refuted`` and clears it too (the fact does not hold), and one
+  it cannot answer (an exception, or anything but a bool) keeps the earlier one.  The protocol
+  is defined and no implementation ships, so today every entry is stale.
 * **Stale reads.**  ``read(..., stale_after=)`` reports, beside the entries, each shown entry
-  whose ``verified_at`` is absent or older than the budget, with its ``reasserted_at``;
+  whose ``verified_at`` is absent, older than the budget or later than now (a clock that ran
+  ahead never makes a fact read fresh), with its ``reasserted_at``;
   :func:`memory_block_input` (``stale_after=``) marks such entries in the pack's memory block.
   The renderer, not the store, decides how a stale entry ranks (decision 17, ADR-0035
   decision 7).  ``fold``, compaction and :meth:`MemoryStore.as_of` carry both stamps.
@@ -283,6 +286,7 @@ RECORD_FIELDS = (
     "by",
     "by_sudo",
     "verified_at",
+    "refuted",
 )
 #: the label of a record with nothing to lower it: a migrated or unchecked record, and every
 #: record while packs carry no labels (ADR-0037 decision 8)
@@ -454,7 +458,9 @@ class VerifyRequest:
     ``owner``'s ``scope/key`` (``op`` one of :data:`REASSERTING`, its ``rev``), the value the
     entry will hold (None when the log no longer holds it: compacted or purged) and its digest,
     the entry's effective sources after the record, the pack it came from (None for an unchecked
-    platform write) and whether it was checked against that pack."""
+    platform write), whether it was checked against that pack, and the record's label (``tlp``):
+    a verifier must not send the value or its sources past that label's egress ceiling
+    (ADR-0033, ``tlp_egress``)."""
 
     owner: str
     scope: str
@@ -466,14 +472,19 @@ class VerifyRequest:
     sources: tuple[str, ...]
     pack_id: str | None
     checked: bool
+    tlp: str
 
 
 class Verifier(Protocol):
     """Checks a fact against something other than the model that wrote it (ADR-0037 decision
-    15).  ``verify`` returns ``True`` only when the fact holds now; the store then stamps the
-    record's ``verified_at``.  It runs inside the backend's transaction (under the owner's lock),
-    so it should be quick, do no writes of its own and never call back into the store.  No
-    implementation ships: until one does, every entry is stale."""
+    15).  ``verify`` returns ``True`` only when the fact holds now (the store then stamps the
+    record's ``verified_at``) and ``False`` when it does not (a ``verify`` record is then marked
+    ``refuted`` and the entry loses its earlier ``verified_at``); raising, or returning anything
+    else, means it cannot tell, and changes nothing.  It is asked only about a batch the store
+    has accepted, inside the backend's transaction (under the owner's lock), so it should be
+    quick, do no writes of its own and never call back into the store.  The request carries the
+    plaintext value: a verifier must not send it, or its sources, past the record's label's
+    egress ceiling.  No implementation ships: until one does, every entry is stale."""
 
     def verify(self, request: VerifyRequest) -> bool: ...
 
@@ -1234,7 +1245,10 @@ def _step(entry: dict[str, Any] | None, rec: Mapping[str, Any]) -> dict[str, Any
         value = entry.get("value") if entry else None
         sources = _union(entry["sources"] if entry else [], rec["sources"])
         reasserted = rec["at"]
-        verified = rec.get("verified_at") or (entry.get("verified_at") if entry else None)
+        if rec.get("verified_at") or rec.get("refuted"):  # confirmed, or refuted: no stamp
+            verified = rec.get("verified_at")
+        else:  # the verifier could not tell (or there is none): the earlier stamp stands
+            verified = entry.get("verified_at") if entry else None
     else:  # retire keeps the value it retires (when its record still holds it)
         value = entry.get("value") if entry else None
         sources = _union(entry["sources"] if entry else [], rec["sources"])
@@ -1451,7 +1465,9 @@ def _apply(
     its own records, outside this function.)
 
     ``verifier`` (ADR-0037 decision 15) is asked about every ``add``, ``replace`` and ``verify``
-    that is about to be appended; only ``True`` stamps the record's ``verified_at``."""
+    the batch appends, once the batch is accepted (never about a refused one, whose values must
+    not leave the store); ``True`` stamps the record's ``verified_at`` and ``False`` marks a
+    ``verify`` record ``refuted``."""
     entries: Memory = stored["entries"]
     records: list[Record] = stored["log"]
     exposure: dict[str, Any] = dict(stored.get("exposure") or {})
@@ -1486,6 +1502,7 @@ def _apply(
     dropped: list[str] = []
     dropped_in: dict[str, int] = {}  # scope -> updates dropped at the closure cap
     touched: dict[tuple[str, str], None] = {}
+    ask: list[tuple[Record, VerifyRequest]] = []  # what the verifier is asked, once accepted
     for n, u in enumerate(updates):
         where = f"memory_updates/{n}"
         scope = entries.setdefault(u["scope"], {})
@@ -1558,7 +1575,7 @@ def _apply(
                 continue
             rec["closure"] = closure
             if verifier is not None and u["op"] in REASSERTING:
-                ask = VerifyRequest(
+                request = VerifyRequest(
                     owner=owner,
                     scope=u["scope"],
                     key=u["key"],
@@ -1569,10 +1586,9 @@ def _apply(
                     sources=tuple(entry["sources"]),
                     pack_id=check.pack_id,
                     checked=check.checked,
+                    tlp=label,
                 )
-                if _verified(verifier, ask):
-                    rec["verified_at"] = at
-                    entry = _step(cur, rec)
+                ask.append((rec, request))
             # platform scopes are written unchecked only, so their records (and the range records
             # they fold into) never point at an exposure (ADR-0037 decision 9, amended)
             if check.checked and u["scope"] in _platform_scopes(profile):  # never: _check refuses
@@ -1583,6 +1599,15 @@ def _apply(
             touched[k] = None
     if problems:
         raise MemoryUpdateError(problems)
+    # the verifier is asked only now, about an accepted batch; its answer goes on the record
+    # alone, because every touched key is refolded from the log below (so the cache, and the
+    # range records compaction builds, see the stamp)
+    for rec, request in ask:
+        answer = _verified(verifier, request)  # type: ignore[arg-type]
+        if answer is True:
+            rec["verified_at"] = at
+        elif answer is False and rec["op"] == "verify":
+            rec["refuted"] = True
     new_exposure = (
         check.rendered is not None
         and bool(check.pack_id)
@@ -1673,11 +1698,12 @@ def _apply(
     return {"entries": entries, "log": records, "exposure": exposure}
 
 
-def _verified(verifier: Verifier, request: VerifyRequest) -> bool:
-    """Whether ``verifier`` confirms ``request``: exactly ``True``.  A verifier that raises
-    confirms nothing (the entry stays stale) and is logged, never echoed into a refusal."""
+def _verified(verifier: Verifier, request: VerifyRequest) -> bool | None:
+    """``verifier``'s answer to ``request``: ``True`` (it holds), ``False`` (it does not) or
+    None (it cannot tell: any other answer, or an exception, which is logged by type only and
+    never echoed into a refusal)."""
     try:
-        return verifier.verify(request) is True
+        answer = verifier.verify(request)
     except Exception as exc:  # a broken verifier must not refuse a write, nor verify one
         log.warning(
             "memory verifier %s raised %s for %s; the record is not verified",
@@ -1685,14 +1711,17 @@ def _verified(verifier: Verifier, request: VerifyRequest) -> bool:
             type(exc).__name__,
             request.owner,
         )
-        return False
+        return None
+    return answer if type(answer) is bool else None
 
 
-def _stale(entry: Mapping[str, Any], cutoff: str) -> bool:
-    """Whether ``entry`` is stale against ``cutoff`` (a log stamp): no ``verified_at``, or one
-    older than the cutoff (ADR-0037 decision 15)."""
+def _stale(entry: Mapping[str, Any], cutoff: str, when: str) -> bool:
+    """Whether ``entry``, judged at ``when``, is stale against ``cutoff`` (both log stamps): no
+    ``verified_at``, one older than the cutoff, or one later than ``when`` (ADR-0037 decision
+    15).  A stamp from the future (a clock that ran ahead, which a restamp moves ``at`` back
+    from but not ``verified_at``) never reads as fresh."""
     verified = entry.get("verified_at")
-    return not verified or verified < cutoff
+    return not verified or verified < cutoff or verified > when
 
 
 def _stale_row(entry: Mapping[str, Any]) -> dict[str, Any]:
@@ -1703,10 +1732,23 @@ def _stale_row(entry: Mapping[str, Any]) -> dict[str, Any]:
     return row
 
 
-def _budget(stale_after: Any) -> timedelta:
+#: the earliest cutoff: a budget reaching before it marks only unverified entries stale
+_MIN_STAMP = "0001-01-01T00:00:00.000000Z"
+
+
+def _cutoff(when: datetime, stale_after: Any) -> tuple[str, str]:
+    """``(cutoff, when)`` as log stamps for a staleness judgement at ``when``: ``cutoff`` is
+    ``when - stale_after`` (a non-negative ``timedelta``), clamped to :data:`_MIN_STAMP` when
+    that lies before year 1000 (where ``%Y`` would not keep stamps fixed-width) or out of
+    range."""
     if not isinstance(stale_after, timedelta) or stale_after < timedelta(0):
         raise ValueError("stale_after must be a non-negative timedelta")
-    return stale_after
+    now = _stamp(when)
+    try:
+        cut = when.astimezone(UTC) - stale_after
+    except OverflowError:
+        return _MIN_STAMP, now
+    return (_MIN_STAMP if cut.year < 1000 else _stamp(cut)), now
 
 
 def _readable(profile: VerifiedProfile, records: list[Record]) -> tuple[list[Record], int]:
@@ -1835,7 +1877,7 @@ def memory_block_input(
     the renderer decides its rank."""
     out: list[dict[str, Any]] = []
     ceiling = read_ceiling(profile)
-    cutoff = _stamp(store._now() - _budget(stale_after)) if stale_after is not None else None
+    cutoff = _cutoff(store._now(), stale_after) if stale_after is not None else None
     for scope in sorted(set(scopes)):
         me = store._reader(profile, scope, None)
         stored = store._load(me)
@@ -1856,7 +1898,7 @@ def memory_block_input(
                 "closure": list(rec.get("closure") or ()),
             }
             if cutoff is not None:
-                row.update(stale=_stale(e, cutoff), **_stale_row(e))
+                row.update(stale=_stale(e, *cutoff), **_stale_row(e))
             out.append(row)
     return out
 
@@ -2188,7 +2230,7 @@ class MemoryStore:
         ``owner`` other than the caller's own profile id is a cross-agent read and is refused.
         """
         me = self._reader(profile, scope, owner)
-        cutoff = _stamp(self._now() - _budget(stale_after)) if stale_after is not None else None
+        cutoff = _cutoff(self._now(), stale_after) if stale_after is not None else None
         ceiling = read_ceiling(profile)
         entries = self._load(me)["entries"].get(scope, {})
         shown, withheld = {}, 0
@@ -2198,7 +2240,7 @@ class MemoryStore:
                 continue
             if tlp.allows(ceiling, e.get("tlp")):
                 shown[k] = e["value"]
-                if cutoff is not None and _stale(e, cutoff):
+                if cutoff is not None and _stale(e, *cutoff):
                     stale[k] = _stale_row(e)
             else:
                 withheld += 1
@@ -2259,7 +2301,7 @@ class MemoryStore:
         me = self._reader(profile, scope, owner)
         ceiling = read_ceiling(profile)
         when = _stamp(t)
-        cutoff = _stamp(t - _budget(stale_after)) if stale_after is not None else None
+        cutoff = _cutoff(t, stale_after) if stale_after is not None else None
         mine = [r for r in self._load(me)["log"] if r["scope"] == scope]
         state: dict[str, dict[str, Any]] = {}
         held: dict[str, bool] = {}  # key -> the value in effect at t is not in the log
@@ -2305,7 +2347,7 @@ class MemoryStore:
             "withheld": len(hidden),
         }
         if cutoff is not None:
-            out["stale"] = {k: _stale_row(state[k]) for k in shown if _stale(state[k], cutoff)}
+            out["stale"] = {k: _stale_row(state[k]) for k in shown if _stale(state[k], *cutoff)}
         return out
 
     # ------------------------------------------------------------ internals

@@ -531,10 +531,18 @@ was shown, never from what the model says about its sources.
       cite a source the pack rendered. A verify of a key that is not live is refused, and so is
       one with a value. `validate_report` refuses the malformed ones too.
     - The store asks its `Verifier` (`MemoryStore(verifier=)`) about every `add`, `replace` and
-      `verify` it applies, inside the transaction. Only `True` stamps the record's `verified_at`
-      (the record's own time); an exception verifies nothing and refuses nothing. A `replace` the
-      verifier does not confirm clears the entry's `verified_at`, since the value changed; a
-      `verify` it does not confirm keeps the earlier one.
+      `verify` of a batch once the batch is accepted, inside the transaction; it is never asked
+      about a refused batch, whose values must not leave the store. The request carries the
+      record's label, and a verifier must not send the value past that label's egress ceiling
+      (ADR-0033). Only `True` stamps the record's `verified_at` (the record's own time). A
+      `replace` the verifier does not confirm clears the entry's `verified_at`, since the value
+      changed. A `verify` it answers `False` is a statement that the fact does not hold: the
+      record is marked `refuted` and the entry's `verified_at` is cleared. A verifier that cannot
+      answer (it raises, or returns anything but a bool) verifies nothing and refuses nothing,
+      and a `verify` it cannot answer keeps the earlier stamp.
+    - A `verified_at` later than the time staleness is judged at is stale: an operator restamp
+      (decision 3) moves `at` back after a clock ran ahead but leaves `verified_at`, which must
+      not then read as fresh for as long as the clock was wrong.
     - `as_of(..., stale_after=)` judges staleness at `t`, from the stamps as they stood then.
       `memory_block_input(..., stale_after=)` marks each entry `stale` with its stamps, and the
       pack's memory block records them; the renderer decides their rank (decision 17).

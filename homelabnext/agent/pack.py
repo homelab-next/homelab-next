@@ -97,10 +97,11 @@ each ``{scope, key, rev, value_digest, tlp, closure}``.  It needs ``profile=``, 
 be one of the profile's ``memory_scopes``, and the pack records them as its ``memory`` block,
 ``{scope, key, rev, value_digest, tlp}`` each (the closure is not recorded).  An entry from
 ``memory_block_input(..., stale_after=)`` also carries ``stale``, ``reasserted_at`` and, when a
-verifier set it, ``verified_at`` (decision 15), and the block records them: staleness is
-reported in the pack, and the renderer decides how a stale entry ranks.  The block is what a
-``mem:`` source may name, and each entry's label counts toward the pack's.  A pack assembled
-without ``memory=`` has no block (and its hash is what it was).
+verifier set it, ``verified_at`` (decision 15), and the block records them (an entry with no
+``verified_at`` that says it is not stale is refused): staleness is reported in the pack, and
+the renderer decides how a stale entry ranks.  The block is what a ``mem:`` source may name,
+and each entry's label counts toward the pack's.  A pack assembled without ``memory=`` has no
+block (and its hash is what it was).
 
 Retraction (ADR-0037 decision 14).  ``retracted=`` takes the active
 :class:`~homelabnext.agent.deny.DenySet` (the caller reads it from the store's deny log; the
@@ -350,6 +351,10 @@ def _memory_block(
             raise SpecError(
                 f"{where}: stale is a boolean, reasserted_at a memory stamp or null, verified_at "
                 "a memory stamp"
+            )
+        if extra and e["stale"] is False and "verified_at" not in e:
+            raise SpecError(
+                f"{where}: an entry with no verified_at is stale (ADR-0037 decision 15)"
             )
         if (scope, key) in block:
             raise SpecError(f"{where}: a key appears in the memory block once")
