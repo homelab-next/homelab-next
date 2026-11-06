@@ -10,6 +10,7 @@ from labdata import SNAPSHOT
 
 from homelabnext.cli import COMMANDS
 from homelabnext.decommission import (
+    ACTIONS,
     PLANES,
     Adapters,
     DirTree,
@@ -272,3 +273,24 @@ def test_host_vars_directory_form_names_a_known_guest():
 def test_snapshot_guests_must_be_a_list_of_strings():
     with pytest.raises(ValueError):
         Adapters.from_snapshot({"guests": "app-core"})
+
+
+def test_plan_lists_ambiguous_secrets_apart_from_the_ones_to_delete(files):
+    """Mixed REMNANT: `app_db` is the target's; `app_core_db` may be sibling `app-core`'s."""
+    snap = {"secrets": {"names": ["app_db", "app_core_db"]}, "guests": ["app-core"]}
+    rep = run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"])
+    assert rep.results[0].status is Status.REMNANT
+    lines = plan(rep).splitlines()
+    start = lines.index("1. secret-names: " + ACTIONS["secret-names"]) + 1
+    marker = lines.index("     review, do not delete:")
+    delete = [ln.strip() for ln in lines[start:marker]]
+    assert delete == ["app_db"]
+    review = [ln.strip() for ln in lines[marker + 1 : -1]]
+    assert len(review) == 1 and review[0].startswith("AMBIGUOUS app_core_db")
+
+
+def test_plan_has_nothing_to_delete_when_every_secret_is_ambiguous(files):
+    snap = {"secrets": {"names": ["app_core_db"]}, "guests": ["app-core"]}
+    rep = run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"])
+    p = plan(rep)
+    assert "1. secret-names: review\n" in p and "delete the secret" not in p

@@ -360,6 +360,9 @@ def _known_guests(t: Target, a: Adapters) -> set[str]:
     return {g for g in known if _fold(g) not in own}
 
 
+AMBIGUOUS = "AMBIGUOUS"  # item prefix: may belong to another guest, so review it, never delete
+
+
 @plane("secret-names")
 def secret_names(t: Target, a: Adapters) -> Result:
     """Secret-store variable NAMES only.  ``app-core`` (or an ``--alias``) also matches
@@ -388,7 +391,7 @@ def secret_names(t: Target, a: Adapters) -> Result:
             g for g, p in others.items() if p.search(f) and len(_fold(g)) > max(matched)
         )
         if owners:
-            ambiguous.append(f"AMBIGUOUS {n}: may belong to guest {', '.join(owners)}")
+            ambiguous.append(f"{AMBIGUOUS} {n}: may belong to guest {', '.join(owners)}")
         else:
             hits.append(n)
     if hits:

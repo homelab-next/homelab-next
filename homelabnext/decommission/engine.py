@@ -7,7 +7,7 @@ from collections.abc import Iterable
 
 from .adapters import Adapters
 from .model import Report, Result, Status, Target
-from .planes import ACTIONS, PLANES
+from .planes import ACTIONS, AMBIGUOUS, PLANES
 
 
 def run(target: Target, adapters: Adapters, only: Iterable[str] | None = None) -> Report:
@@ -45,8 +45,15 @@ def plan(report: Report) -> str:
     for r in report.results:
         if r.status in (Status.REMNANT, Status.REVIEW):
             n += 1
-            lines.append(f"{n}. {r.plane}: {ACTIONS.get(r.plane, 'review')}")
-            lines += [f"     {i}" for i in r.items]
+            # an AMBIGUOUS item may belong to another guest: it is never listed under the action
+            review = [i for i in r.items if i.startswith(AMBIGUOUS)]
+            act = [i for i in r.items if not i.startswith(AMBIGUOUS)]
+            action = ACTIONS.get(r.plane, "review") if act or not review else "review"
+            lines.append(f"{n}. {r.plane}: {action}")
+            lines += [f"     {i}" for i in act]
+            if review:
+                lines.append("     review, do not delete:")
+                lines += [f"       {i}" for i in review]
         elif r.status is Status.INFO:
             lines.append(f"-  {r.plane}: note: {r.detail}")
         elif r.status is Status.SKIP:
