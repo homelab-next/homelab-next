@@ -582,6 +582,24 @@ def test_the_webhook_receiver_refuses_a_bad_signature(op):
         make_webhook_server(feed, host=DOC_HOST)
 
 
+def test_a_failing_webhook_handler_still_answers_500(op):
+    class Boom:
+        def on_webhook(self, payload):
+            raise RuntimeError("boom")
+
+    body = b'{"action": "work_package:updated"}'
+    good = "sha1=" + hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha1).hexdigest()
+    env = {"HNX_SECRET_HOOK_S": WEBHOOK_SECRET}
+    srv = make_webhook_server(Boom(), secret="secret:hook/s", env=env, path="/hook")  # type: ignore[arg-type]
+    threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+    url = f"http://{srv.server_address[0]}:{srv.server_address[1]}/hook"
+    try:
+        assert _post(url, body, good) == 500
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_verify_signature_is_exact():
     body = b'{"action":"work_package:updated"}'
     sig = "sha1=" + hmac.new(b"fake-k", body, hashlib.sha1).hexdigest()
