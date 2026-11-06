@@ -61,9 +61,11 @@ onto the request (`homelabnext.edge_identity`, ADR-0034): `X-Auth-Request-Prefer
 identity and approver subject, the same claim the SSH CA signs from), `X-Auth-Request-Groups`
 (one value per group, joined with `,` by the edge), `X-Auth-Request-Email`, and
 `X-Auth-Request-User` (the proxy's user-id claim, an email by default or `sub`; copied for apps
-that want it, never used as a person's name by the platform). Keep the `profile` scope in its
-scopes (the default) so the token carries `preferred_username`; without it the hub sees no
-identity and answers 403.
+that want it, never used as a person's name by the platform). The generated realm maps
+`preferred_username` onto this client's tokens whatever scopes it asks for; a token without it
+gives the hub no identity, and the hub answers 403. Do not enable self-registration or an
+identity-brokering provider that lets a user choose their username: that name is what the
+approver allowlists list (ADR-0034 decision 4).
 <!-- /hnx:todo -->
 
 ## How to use it

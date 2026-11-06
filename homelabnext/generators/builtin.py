@@ -18,6 +18,7 @@ from homelabnext.edge_identity import (
     AUTH_PROXY_PREFIX,
     AUTH_PROXY_SIGN_IN,
     IDENTITY_HEADERS,
+    USERNAME_CLAIM,
     IdentityHeaders,
 )
 from homelabnext.registry.model import Registry, Service, secret_env_name
@@ -572,7 +573,11 @@ def _mfa_flows() -> list[dict]:
 
 def _mappers(client: str) -> list[dict]:
     """The claims every client's tokens carry beyond the trimmed scopes: the audience (the
-    client itself), the user's groups (names, not paths) and the user's roles of this client."""
+    client itself), the user's groups (names, not paths), the user's roles of this client and
+    the username as :data:`~homelabnext.edge_identity.USERNAME_CLAIM` (the platform's one name
+    for a person: the hub's approver and the SSH CA's principal). The username is mapped here,
+    not left to the optional ``profile`` scope, so a client that narrows its scopes still gets
+    it (without it the hub knows nobody and every approve is ``403``)."""
 
     def mapper(name: str, kind: str, config: dict[str, str]) -> dict:
         tokens = {"access.token.claim": "true", "id.token.claim": "true"}
@@ -601,6 +606,16 @@ def _mappers(client: str) -> list[dict]:
             "groups",
             "oidc-group-membership-mapper",
             {"claim.name": GROUPS_CLAIM, "full.path": "false", "userinfo.token.claim": "true"},
+        ),
+        mapper(
+            "username",
+            "oidc-usermodel-attribute-mapper",
+            {
+                "claim.name": USERNAME_CLAIM,
+                "jsonType.label": "String",
+                "user.attribute": "username",
+                "userinfo.token.claim": "true",
+            },
         ),
     ]
 

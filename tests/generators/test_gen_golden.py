@@ -200,6 +200,17 @@ def test_idp_realm_keeps_the_username_claim_fixed():
     assert _realm()["editUsernameAllowed"] is False
 
 
+def test_idp_realm_maps_the_username_claim_on_every_client():
+    """The username claim does not hang on the optional ``profile`` scope: a proxy whose
+    ``--scope`` drops ``profile`` must still get preferred_username, or the hub knows nobody."""
+    for c in _realm()["clients"]:
+        mapped = {
+            m["config"].get("claim.name"): m["config"].get("user.attribute")
+            for m in c["protocolMappers"]
+        }
+        assert mapped.get("preferred_username") == "username", c["clientId"]
+
+
 def test_idp_realm_has_a_confidential_client_per_idp_service_and_the_auth_proxy():
     realm = _realm()
     clients = {c["clientId"]: c for c in realm["clients"]}

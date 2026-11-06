@@ -106,9 +106,14 @@ one IdP product.
    hub's private tier and its approver subject read the username header, and the SSH CA signs
    from the same claim (`hnx ssh-ca` refuses any other `oidc.user_claim`), so an approver
    allowlist entry and an SSH certificate name the same person the same way. The realm
-   generator renders `editUsernameAllowed: false`: a user who could rename themselves could take
-   a name an allowlist lists. A token without the claim gives no identity (the hub answers
-   `403`), never a fallback to the user-id claim. The Caddy generator, the edge lint (F-23)
+   generator maps the username into the claim on every client (a `username` protocol mapper),
+   so it does not depend on the optional `profile` scope a proxy may narrow away, and renders
+   `editUsernameAllowed: false` (with `registrationAllowed: false` and no identity providers): a
+   user who could choose or change their own username could take a name an allowlist lists. An
+   overlay that enables self-registration, or adds an identity-brokering provider whose first
+   login lets a user pick or review their username, re-opens that path and must not. A token
+   without the claim gives no identity (the hub answers `403`), never a fallback to the user-id
+   claim. The Caddy generator, the edge lint (F-23)
    and the status hub read this declaration and nothing else. Every public site strips, at site
    level and before `forward_auth`, every client-sent header carrying the mark in every spelling
    (`request_header -*auth-request*` and `-*auth_request*`); the lint fails closed on anything
@@ -142,10 +147,10 @@ one IdP product.
 - The status hub's private tier and Approvals page need `roles.viewer` and `roles.approver` on
   the hub's registry row (or, for a row without `roles`, the deprecated `agents.yml` keys).
 - New obligations: the realm import, the auth proxy's deployment (its cookie secret and client
-  secret from the secret store, `--set-xauthrequest`, `--reverse-proxy`, and the `profile` scope
-  in its scopes, which its default holds, so the token carries `preferred_username`) and the break-glass
+  secret from the secret store, `--set-xauthrequest`, `--reverse-proxy`) and the break-glass
   admins are lab-side steps; Keycloak and oauth2-proxy are not yet in the product-name
-  vocabulary, which takes a provider module for each.
+  vocabulary, which takes a provider module for each. A non-default IdP must put the username
+  in `preferred_username` for every client, as the generated realm's mapper does.
 
 ## Alternatives
 
