@@ -638,3 +638,20 @@ def test_cli_explain_on_the_repository_graph(tmp_path, capsys, monkeypatch):
     assert "Backup job silently skipped a new guest" in pack["text"]
     assert cli.main(["agent", "pack", str(tmp_path / "manifest.json"), "--inputs",
                      str(tmp_path / "inputs.json"), "--explain"]) == 1  # fmt: skip
+
+
+def test_a_retracted_node_is_excluded_with_reason_retracted(root):
+    """ADR-0037 decision 14: ``retracted=`` (the deny set the caller read from the memory
+    store) excludes a node whose graph id or content digest is denied, whatever rule chose it."""
+    from homelabnext.agent.deny import DenySet
+
+    sel = select_knowledge(profile_with(RULE), fake_graph(), root)
+    lesson = next(i for i in sel.included if i["id"] == "lesson:LL-010")
+    for names in ({"lesson:LL-010"}, {lesson["digest"]}):
+        gone = select_knowledge(profile_with(RULE), fake_graph(), root, retracted=DenySet(names))
+        assert "lesson:LL-010" not in ids(gone) and reasons(gone)["lesson:LL-010"] == "retracted"
+        assert ids(gone) == [i for i in ids(sel) if i != "lesson:LL-010"]
+    same = select_knowledge(profile_with(RULE), fake_graph(), root, retracted=DenySet())
+    assert ids(same) == ids(sel)
+    with pytest.raises(TypeError, match="DenySet"):
+        select_knowledge(profile_with(RULE), fake_graph(), root, retracted={"lesson:LL-010"})

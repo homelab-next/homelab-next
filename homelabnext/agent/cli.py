@@ -31,6 +31,10 @@
 ``prompts render TEMPLATE [--values FILE]``         render a template (default: its examples).
 ``injection run [--fake MODE | --role ROLE ...]``   G-02 injection eval; ``--check`` a golden.
 ``injection check-report REPORT``                   a stored report is current with 0 follows.
+``memory dependents|retract|lift|purge|restamp``    the operator's retraction tools (ADR-0037
+                                                  decision 12); ``hnx`` routes them to the
+                                                  memory admin's own command, which this package
+                                                  never imports.
 
 Library file (YAML or JSON): ``{parts: {<logical id>: <path relative to the file>}}``.
 Policy file: ``{ceilings: {<profile id>: {mcp, capabilities, tier, budgets, reads_untrusted,

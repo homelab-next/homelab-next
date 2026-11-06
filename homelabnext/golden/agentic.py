@@ -482,7 +482,10 @@ def score_trace(suite: Suite, task: Task, trace: Trace) -> dict[str, Any]:
         checks.append({"scorer": "denied_calls"})  # max 0 unless the task sets another
     checks.append({"scorer": "ungranted_actions"})  # always applied (TRACE_SCORERS)
     if trace.answered:
-        answer, detail = score(trace.answer_text, task.expect)
+        try:
+            answer, detail = score(trace.answer_text, task.expect)
+        except Exception as exc:  # a scorer fault fails this task, not the eval
+            answer, detail = 0.0, f"scorer error: {type(exc).__name__}"
     else:
         answer, detail = 0.0, "no answer"
     rows = []
