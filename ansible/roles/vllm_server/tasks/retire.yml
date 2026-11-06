@@ -8,12 +8,13 @@
 # The unit, and the instance's API key file and cache: the unit's file name is hnx-vllm-<name>.service.
 - name: Remove the retired unit, its key file and its cache
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ item.path }}"
     state: absent
+  when: item.always or instance is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\\Z')
   vars:
     unit: "{{ vllm_server_stale }}"
     instance: "{{ unit | regex_replace('^hnx-[^-]+-(.*)[.]service$', '\\1') }}"
   loop:
-    - "{{ vllm_server_unit_dir }}/{{ unit }}"
-    - "{{ vllm_server_env_dir }}/{{ instance }}.env"
-    - "{{ vllm_server_cache_dir }}/{{ instance }}"
+    - {path: "{{ vllm_server_unit_dir }}/{{ unit }}", always: true}
+    - {path: "{{ vllm_server_env_dir }}/{{ instance }}.env", always: false}
+    - {path: "{{ vllm_server_cache_dir }}/{{ instance }}", always: false}

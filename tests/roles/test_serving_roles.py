@@ -681,6 +681,9 @@ def _first(tmp_path):
     (tmp_path / "env").mkdir()
     (tmp_path / "env" / "gpu0.env").write_text("VLLM_API_KEY=old\n")
     (tmp_path / "cache" / "gpu0").mkdir(parents=True)
+    # a stray, unnamed unit must not point the cleanup at the whole cache root
+    stale.with_name(stale.name.replace("gpu0", "")).write_text("[Service]\n")
+    (tmp_path / "cache" / "keep.txt").write_text("kept\n")
     return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v, "setup": {"stale": stale}}
 
 
@@ -693,6 +696,7 @@ def test_vllm_server_retires_a_unit_the_plan_no_longer_has(first):
     assert "systemctl disable --now hnx-vllm-gpu0.service" in calls(tmp_path)
     # the instance's key file and cache go with it
     assert not (tmp_path / "env" / "gpu0.env").exists()
+    assert (tmp_path / "cache" / "keep.txt").exists()
     assert not (tmp_path / "cache" / "gpu0").exists()
     assert (tmp_path / "cache" / "inference-large").is_dir()
 

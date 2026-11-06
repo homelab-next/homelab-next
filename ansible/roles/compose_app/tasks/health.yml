@@ -30,7 +30,7 @@
   ansible.builtin.assert:
     that:
       - item.State == 'running'
-      - item.Health | default('healthy') in ['healthy', '']
+      - item.Health | default('healthy') == 'healthy'
     fail_msg: "{{ item.Service }} is {{ item.State }} / {{ item.Health | default('n/a') }}"
   loop: "{{ compose_app_containers }}"
   loop_control:

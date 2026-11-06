@@ -24,7 +24,7 @@
           the agent's configuration names {{ found | join(', ') or 'no manager' }}, not {{ want }}
           (moving the agent to another manager is a reinstall)
       vars:
-        found: "{{ conf.content | b64decode | regex_findall('<address>\\s*([^<\\s]+)\\s*</address>') }}"
+        found: "{{ conf.content | b64decode | regex_replace('(?s)<!--.*?-->', '') | regex_findall('<address>\\s*([^<\\s]+)\\s*</address>') }}"
   vars:
     home: "{{ wazuh_agent_state_file | dirname | dirname | dirname }}"
     want: "{{ lookup('hnx_registry', wazuh_agent_manager_id, field='host') }}"

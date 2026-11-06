@@ -20,13 +20,18 @@ def ndjson(*rows):
     return "".join(json.dumps(r) + "\n" for r in rows)
 
 
-GOOD = [row("web", health="healthy"), row("db")]
+GOOD = [row("web", health="healthy"), row("db", health="healthy")]
 CASES = {
     "ndjson, all up": (ndjson(*GOOD), False, ""),
     "older compose, one array": (json.dumps(GOOD), False, ""),
     "empty output (no containers)": ("", True, "no container for"),
     "empty array": ("[]", True, "no container for"),
     "a service has no container": (ndjson(row("web")), True, "no container for db"),
+    "running with no healthcheck": (
+        ndjson(row("web", health="healthy"), row("db")),
+        True,
+        "items failed",
+    ),
     "a container is down": (ndjson(row("web"), row("db", "exited")), True, "items failed"),
     "a container is unhealthy": (
         ndjson(row("web", health="unhealthy"), row("db")),

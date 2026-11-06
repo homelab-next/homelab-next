@@ -106,6 +106,11 @@ HEALTH_CASES = {
     "disconnected": ("disconnected", "<address>siem-01.example.internal</address>", "not connected"),
     "connected to a manager that moved": ("connected", "<address>old.example.internal</address>", "old.example.internal"),
     "no manager configured": ("connected", "<ossec_config></ossec_config>", "no manager"),
+    "the registry's manager only in a comment": (
+        "connected",
+        "<!-- <address>siem-01.example.internal</address> --><address>old.example.internal</address>",
+        "old.example.internal",
+    ),
     "the manager among several": (
         "connected",
         "<address>old.example.internal</address><address> siem-01.example.internal </address>",
