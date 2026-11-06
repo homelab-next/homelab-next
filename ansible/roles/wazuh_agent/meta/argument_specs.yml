@@ -50,7 +50,7 @@ argument_specs:
         description: Where the backup and upgrade hooks write their records.
         default: /var/lib/homelabnext/wazuh-agent
   health:
-    short_description: Fail unless the agent reports itself connected to its manager.
+    short_description: Fail unless the agent reports itself connected to the manager the registry names for it (its configuration must name that manager).
     options:
       wazuh_agent_state_file: *state
   readiness:

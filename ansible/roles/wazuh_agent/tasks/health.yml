@@ -3,10 +3,29 @@
     - name: Read the agent state file
       ansible.builtin.slurp:
         src: "{{ wazuh_agent_state_file }}"
-      register: wazuh_agent_state
+      register: state
     - name: Fail unless the agent is connected to its manager
       ansible.builtin.assert:
         that:
-          - (wazuh_agent_state.content | b64decode) is search("^status='connected'", multiline=True)
-        fail_msg: "wazuh_agent: the agent is not connected to its manager ({{ wazuh_agent_state_file }})"
+          - (state.content | b64decode) is search("^status='connected'", multiline=True)
+        fail_msg: "the agent is not connected to its manager"
+    # The manager is handed to the package at the first install only, so a manager that moved in
+    # the registry leaves the agent connected to the old one: compare the agent's configuration
+    # (<home>/etc/ossec.conf, the home being three levels above <home>/var/run/<state file>).
+    - name: Read the agent configuration
+      ansible.builtin.slurp:
+        src: "{{ home }}/etc/ossec.conf"
+      register: conf
+    - name: Fail unless the agent's configured manager is the registry's
+      ansible.builtin.assert:
+        that:
+          - want in found
+        fail_msg: >-
+          the agent's configuration names {{ found | join(', ') or 'no manager' }}, not {{ want }}
+          (moving the agent to another manager is a reinstall)
+      vars:
+        found: "{{ conf.content | b64decode | regex_findall('<address>\\s*([^<\\s]+)\\s*</address>') }}"
+  vars:
+    home: "{{ wazuh_agent_state_file | dirname | dirname | dirname }}"
+    want: "{{ lookup('hnx_registry', wazuh_agent_manager_id, field='host') }}"
   tags: [health]

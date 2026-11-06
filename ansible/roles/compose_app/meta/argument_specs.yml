@@ -127,10 +127,14 @@ argument_specs:
         description: Run docker compose up -d after rendering.
         default: true
   health:
-    short_description: Assert every container with a healthcheck reports healthy.
+    short_description: Assert every service of the spec has a container and every container is running and healthy.
     options:
       compose_app_name: *id001
       compose_app_dir: *id002
+      compose_app_spec:
+        type: dict
+        description: The application spec; its services are the set that must be running.
+        required: true
   readiness:
     short_description: Check every declared dependency is reachable.
     options:

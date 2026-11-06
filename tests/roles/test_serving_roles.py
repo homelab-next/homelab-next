@@ -538,9 +538,12 @@ def test_model_store_backup_and_export_hooks(tmp_path):
 
 
 # ---------------------------------------------------------------- vllm_server
+ENGINE_ROLE = "vllm_server"
+
+
 def instances(tmp_path: Path) -> list[dict]:
     """The example plan's instances, with the store root moved under ``tmp_path``."""
-    doc = yaml.safe_load((EXAMPLE / "vllm_server" / "instances.yml").read_text())
+    doc = yaml.safe_load((EXAMPLE / ENGINE_ROLE / "instances.yml").read_text())
     out = doc["vllm_server_instances"]
     for i in out:
         i["model_path"] = i["model_path"].replace("/srv/models", str(tmp_path / "srv"))
@@ -556,7 +559,7 @@ def vllm_vars(tmp_path: Path, **kw) -> dict:
     v = {
         "vllm_server_instances": instances(tmp_path),
         "vllm_server_exposure": yaml.safe_load(
-            (EXAMPLE / "vllm_server" / "instances.yml").read_text()
+            (EXAMPLE / ENGINE_ROLE / "instances.yml").read_text()
         )["vllm_server_exposure"],
         "vllm_server_listen_address": ZONE_ADDRESS,
         "vllm_server_store_root": str(tmp_path / "srv"),
@@ -585,7 +588,7 @@ def test_the_rendered_instances_are_the_plans():
 
 def _first(tmp_path):
     v = vllm_vars(tmp_path)
-    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+    return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
 
 
 @first_run(_first)
@@ -626,7 +629,7 @@ def test_vllm_server_writes_one_unit_per_served_model_from_the_plan(first):
     assert "systemctl restart hnx-vllm-inference-large.service" in log
     # unchanged on a second run: nothing restarted, both kept enabled and running
     (tmp_path / "calls.log").unlink()
-    assert run_role(tmp_path, "vllm_server", "main", v).returncode == 0
+    assert run_role(tmp_path, ENGINE_ROLE, "main", v).returncode == 0
     assert sorted(calls(tmp_path)[1:]) == [
         "systemctl enable --now hnx-vllm-inference-large.service",
         "systemctl enable --now hnx-vllm-inference-triage.service",
@@ -636,7 +639,7 @@ def test_vllm_server_writes_one_unit_per_served_model_from_the_plan(first):
 def _first(tmp_path):
     v = vllm_vars(tmp_path, vllm_server_verify_bin=str(tmp_path / "bin" / "hnx-model-verify"))
     (tmp_path / "bin").mkdir()
-    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+    return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
 
 
 @first_run(_first)
@@ -675,7 +678,10 @@ def _first(tmp_path):
     v = vllm_vars(tmp_path)
     stale = tmp_path / "units" / "hnx-vllm-gpu0.service"
     stale.write_text("[Service]\n")
-    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "setup": {"stale": stale}}
+    (tmp_path / "env").mkdir()
+    (tmp_path / "env" / "gpu0.env").write_text("VLLM_API_KEY=old\n")
+    (tmp_path / "cache" / "gpu0").mkdir(parents=True)
+    return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v, "setup": {"stale": stale}}
 
 
 @first_run(_first)
@@ -685,12 +691,16 @@ def test_vllm_server_retires_a_unit_the_plan_no_longer_has(first):
     assert r.returncode == 0, r.stdout + r.stderr
     assert not stale.exists()
     assert "systemctl disable --now hnx-vllm-gpu0.service" in calls(tmp_path)
+    # the instance's key file and cache go with it
+    assert not (tmp_path / "env" / "gpu0.env").exists()
+    assert not (tmp_path / "cache" / "gpu0").exists()
+    assert (tmp_path / "cache" / "inference-large").is_dir()
 
 
 def _first(tmp_path):
     v = vllm_vars(tmp_path)
     logging_fake(tmp_path, "vllm", "0.31.0\n")  # the installed one is not the pin
-    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v}
+    return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v}
 
 
 @first_run(_first)
@@ -703,7 +713,7 @@ def test_vllm_server_refuses_a_vllm_that_is_not_the_pinned_one(first):
 def _first(tmp_path):
     v = vllm_vars(tmp_path)
     (Path(v["vllm_server_instances"][1]["model_path"]) / "config.json").unlink()
-    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
+    return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v, "setup": {"v": v}}
 
 
 @first_run(_first)
@@ -711,7 +721,7 @@ def test_vllm_server_refuses_a_model_missing_from_the_store(first):
     r, tmp_path = first
     v = first.setup["v"]
     assert r.returncode != 0 and "model_store fetches and verifies it" in r.stdout
-    ready = run_role(tmp_path, "vllm_server", "readiness", v)
+    ready = run_role(tmp_path, ENGINE_ROLE, "readiness", v)
     assert ready.returncode != 0 and "example-4b-triage" in ready.stdout
 
 
@@ -749,7 +759,7 @@ def _bad(tmp_path, field, value):
         ("digest", "sha256:abc"),
     ],
 )
-@first_run(lambda tmp, field, value: {"role": "vllm_server", "tasks_from": "main",
+@first_run(lambda tmp, field, value: {"role": ENGINE_ROLE, "tasks_from": "main",
                                       "extra_vars": _bad(tmp, field, value)})  # fmt: skip
 def test_vllm_server_refuses_an_edited_instance(first, field, value):
     r, _ = first
@@ -768,7 +778,7 @@ def test_vllm_server_refuses_an_edited_instance(first, field, value):
 )
 @first_run(
     lambda tmp, exposure, address, ok: {
-        "role": "vllm_server",
+        "role": ENGINE_ROLE,
         "tasks_from": "main",
         "extra_vars": vllm_vars(
             tmp, vllm_server_exposure=exposure, vllm_server_listen_address=address
@@ -785,7 +795,7 @@ def test_vllm_server_holds_the_listen_address_to_the_plans_exposure(first, expos
 def _first(tmp_path):
     v = vllm_vars(tmp_path)
     v["vllm_server_instances"][1]["gpus"] = [1]
-    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v}
+    return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v}
 
 
 @first_run(_first)
@@ -794,14 +804,14 @@ def test_vllm_server_refuses_two_instances_on_one_gpu_or_port(first):
     assert r.returncode != 0 and "distinct names, ports and GPUs" in r.stdout
     v = vllm_vars(tmp_path)
     v["vllm_server_instances"][1]["port"] = 8000
-    assert run_role(tmp_path, "vllm_server", "main", v).returncode != 0
+    assert run_role(tmp_path, ENGINE_ROLE, "main", v).returncode != 0
 
 
 def _first(tmp_path):
     v = vllm_vars(tmp_path, vllm_server_api_key_ref="secret:llm-gateway/backend-key",
                   vllm_server_nccl_p2p_disable=True)  # fmt: skip
     env = {"HNX_SECRET_LLM_GATEWAY_BACKEND_KEY": "backend-key-fake"}
-    return {"role": "vllm_server", "tasks_from": "main", "extra_vars": v, "env": env}
+    return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v, "env": env}
 
 
 @first_run(_first)
@@ -815,6 +825,38 @@ def test_vllm_server_api_key_and_p2p_settings(first):
     envfile = tmp_path / "env" / "inference-triage.env"
     assert envfile.read_text() == "VLLM_API_KEY=backend-key-fake\n"
     assert oct(envfile.stat().st_mode & 0o777) == "0o600"
+
+
+def _first(tmp_path):
+    v = vllm_vars(tmp_path, vllm_server_api_key_ref="secret:llm-gateway/backend-key")
+    env = {"HNX_SECRET_LLM_GATEWAY_BACKEND_KEY": "key-one-fake"}
+    return {"role": ENGINE_ROLE, "tasks_from": "main", "extra_vars": v, "env": env,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_vllm_server_restarts_an_instance_whose_api_key_changed(first):
+    """EnvironmentFile is read at start only: a rotated key restarts the engines (the gateway is
+    given the new one), and an unchanged key leaves them running."""
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    large, triage = "hnx-vllm-inference-large.service", "hnx-vllm-inference-triage.service"
+    log = tmp_path / "calls.log"
+
+    def rerun(env_key, **kw):
+        log.unlink()
+        env = {"HNX_SECRET_LLM_GATEWAY_BACKEND_KEY": env_key}
+        p = run_role(tmp_path, ENGINE_ROLE, "main", {**v, **kw}, env=env)
+        assert p.returncode == 0, p.stdout + p.stderr
+        return sorted(c for c in calls(tmp_path) if c.startswith("systemctl") and "daemon" not in c)
+
+    assert rerun("key-one-fake") == [
+        f"systemctl enable --now {large}",
+        f"systemctl enable --now {triage}",
+    ]
+    assert rerun("key-two-fake") == [f"systemctl restart {large}", f"systemctl restart {triage}"]
+    assert (tmp_path / "env" / "inference-large.env").read_text() == "VLLM_API_KEY=key-two-fake\n"
 
 
 # K-14 on the host: the health hook's verdict and the probe's are the same on the same answers
@@ -835,7 +877,7 @@ def test_vllm_server_health_agrees_with_the_k14_probe(tmp_path, served, ctx, hea
         host, port = srv.address
         inst["port"] = port
         v = vllm_vars(tmp_path, vllm_server_instances=[inst], vllm_server_health_host=host)
-        r = run_role(tmp_path, "vllm_server", "health", v)
+        r = run_role(tmp_path, ENGINE_ROLE, "health", v)
         rm = ResolvedModel(
             role="main-reasoner", asked="main-reasoner", kind="chat",
             model_id=inst["served_model_name"], backend="inference-large",
@@ -858,8 +900,8 @@ def test_vllm_server_health_fails_when_health_is_down(tmp_path):
         v = vllm_vars(
             tmp_path, vllm_server_instances=[inst], vllm_server_health_host=srv.address[0]
         )
-        assert run_role(tmp_path, "vllm_server", "health", v).returncode == 0
-    r = run_role(tmp_path, "vllm_server", "health", v)  # the server is gone
+        assert run_role(tmp_path, ENGINE_ROLE, "health", v).returncode == 0
+    r = run_role(tmp_path, ENGINE_ROLE, "health", v)  # the server is gone
     assert r.returncode != 0
 
 
@@ -870,9 +912,9 @@ def test_vllm_server_health_presents_the_api_key(tmp_path):
         inst["port"] = srv.address[1]
         v = vllm_vars(tmp_path, vllm_server_instances=[inst], vllm_server_health_host=srv.address[0],
                       vllm_server_api_key_ref="secret:llm-gateway/backend-key")  # fmt: skip
-        ok = run_role(tmp_path, "vllm_server", "health", v,
+        ok = run_role(tmp_path, ENGINE_ROLE, "health", v,
                       env={"HNX_SECRET_LLM_GATEWAY_BACKEND_KEY": "backend-key-fake"})  # fmt: skip
-        wrong = run_role(tmp_path, "vllm_server", "health", v,
+        wrong = run_role(tmp_path, ENGINE_ROLE, "health", v,
                          env={"HNX_SECRET_LLM_GATEWAY_BACKEND_KEY": "other-key-fake"})  # fmt: skip
     assert ok.returncode == 0, ok.stdout
     assert wrong.returncode != 0 and "other-key-fake" not in wrong.stdout
@@ -881,7 +923,7 @@ def test_vllm_server_health_presents_the_api_key(tmp_path):
 def _first(tmp_path):
     v = vllm_vars(tmp_path)
     return {
-        "role": "vllm_server",
+        "role": ENGINE_ROLE,
         "tasks_from": "upgrade",
         "extra_vars": {**v, "vllm_server_target_version": "0.33.0"},
         "setup": {"v": v},
@@ -896,11 +938,11 @@ def test_vllm_server_upgrade_hook(first):
     assert (tmp_path / "state" / "pending-version").read_text() == "0.33.0\n"
     for target in ("0.31.0", "0.32.0", "latest"):
         bad = run_role(
-            tmp_path, "vllm_server", "upgrade", {**v, "vllm_server_target_version": target}
+            tmp_path, ENGINE_ROLE, "upgrade", {**v, "vllm_server_target_version": target}
         )
         assert bad.returncode != 0, target
     for hook in ("backup", "restore", "export"):
-        assert run_role(tmp_path, "vllm_server", hook, v).returncode == 0
+        assert run_role(tmp_path, ENGINE_ROLE, hook, v).returncode == 0
 
 
 # ---------------------------------------------------------------- open_webui

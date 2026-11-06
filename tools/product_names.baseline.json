@@ -173,7 +173,7 @@
    "wazuh": 1
   },
   "ansible/roles/wazuh_agent/tasks/health.yml": {
-   "wazuh": 5
+   "wazuh": 3
   },
   "ansible/roles/wazuh_agent/tasks/main.yml": {
    "wazuh": 24
@@ -1724,7 +1724,7 @@
   "tests/roles/test_product_roles.py": {
    "suricata": 44,
    "tailscale": 43,
-   "wazuh": 47
+   "wazuh": 39
   },
   "tests/roles/test_role_lint.py": {
    "nifi": 1,
@@ -1737,7 +1737,7 @@
    "example-27b": 16,
    "example-4b": 10,
    "ollama": 2,
-   "vllm": 106
+   "vllm": 92
   },
   "tests/schemas/fixtures/baseline_set.1_1.central.yml": {
    "suricata": 1,

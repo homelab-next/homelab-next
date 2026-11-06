@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, first_run, run_role
+from rolerun import fake, first_run, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
@@ -46,6 +46,9 @@ GUESTS = [
 
 
 # ---------------------------------------------------------------- wazuh_agent
+SIEM_ROLE = "wazuh_agent"
+
+
 def wazuh_vars(tmp_path, **kw):
     d = {
         "wazuh_agent_manager_id": "siem",
@@ -57,7 +60,7 @@ def wazuh_vars(tmp_path, **kw):
 
 
 def _first(tmp_path):
-    return {"role": "wazuh_agent", "tasks_from": "validate", "extra_vars": wazuh_vars(tmp_path)}
+    return {"role": SIEM_ROLE, "tasks_from": "validate", "extra_vars": wazuh_vars(tmp_path)}
 
 
 @first_run(_first)
@@ -82,7 +85,7 @@ def test_wazuh_agent_accepts_good_inputs(first):
         {"wazuh_agent_groups": ["ok", "x,y"]},
     ],
 )
-@first_run(lambda tmp, over: {"role": "wazuh_agent", "tasks_from": "validate",
+@first_run(lambda tmp, over: {"role": SIEM_ROLE, "tasks_from": "validate",
                                "extra_vars": wazuh_vars(tmp, **over)})  # fmt: skip
 def test_wazuh_agent_refuses_bad_inputs(first, over):
     r, _ = first
@@ -93,34 +96,55 @@ def test_wazuh_agent_refuses_bad_inputs(first, over):
 def test_wazuh_agent_needs_a_manager(tmp_path):
     v = wazuh_vars(tmp_path)
     del v["wazuh_agent_manager_id"]
-    r = run_role(tmp_path, "wazuh_agent", "main", v)
+    r = run_role(tmp_path, SIEM_ROLE, "main", v)
     assert r.returncode != 0 and "wazuh_agent_manager_id" in r.stdout + r.stderr
 
 
+HEALTH_CASES = {
+    # case: (state file, ossec.conf, failure message or None)
+    "connected, the registry's manager": ("connected", "<address>siem-01.example.internal</address>", None),
+    "disconnected": ("disconnected", "<address>siem-01.example.internal</address>", "not connected"),
+    "connected to a manager that moved": ("connected", "<address>old.example.internal</address>", "old.example.internal"),
+    "no manager configured": ("connected", "<ossec_config></ossec_config>", "no manager"),
+    "the manager among several": (
+        "connected",
+        "<address>old.example.internal</address><address> siem-01.example.internal </address>",
+        None,
+    ),
+}  # fmt: skip
+
+
 def _first(tmp_path):
-    state = tmp_path / "wazuh-agentd.state"
-    state.write_text("# State file\nstatus='connected'\nlast_keepalive='2026-10-20 10:00:00'\n")
+    # each case is an agent home: <home>/var/run/<state file> and <home>/etc/ossec.conf
+    overrides = []
+    for i, (status, conf, _) in enumerate(HEALTH_CASES.values()):
+        home = tmp_path / f"home{i}"
+        (home / "var" / "run").mkdir(parents=True)
+        (home / "etc").mkdir()
+        (home / "var" / "run" / "agentd.state").write_text(f"# State file\nstatus='{status}'\n")
+        (home / "etc" / "ossec.conf").write_text(f"<server>{conf}</server>")
+        overrides.append({"wazuh_agent_state_file": str(home / "var" / "run" / "agentd.state")})
     return {
-        "role": "wazuh_agent",
+        "runner": run_cases,
+        "role": SIEM_ROLE,
         "tasks_from": "health",
-        "extra_vars": wazuh_vars(tmp_path),
-        "setup": {"state": state},
+        "base_vars": wazuh_vars(tmp_path),
+        "overrides": overrides,
     }
 
 
 @first_run(_first)
-def test_wazuh_agent_health_reads_the_state_file(first):
-    r, tmp_path = first
-    state = first.setup["state"]
-    assert r.returncode == 0, r.stdout + r.stderr
-    state.write_text("# State file\nstatus='disconnected'\n")
-    r = run_role(tmp_path, "wazuh_agent", "health", wazuh_vars(tmp_path))
-    assert r.returncode != 0 and "not connected" in r.stdout
+def test_wazuh_agent_health_reads_the_state_file_and_the_configured_manager(first):
+    results, _ = first
+    for (name, (_, _, msg)), (failed, got) in zip(HEALTH_CASES.items(), results, strict=True):
+        assert failed is (msg is not None), (name, got)
+        assert msg is None or msg in got, (name, got)
+    assert "reinstall" in results[2][1]
 
 
 def _first(tmp_path):
     v = wazuh_vars(tmp_path)
-    return {"role": "wazuh_agent", "tasks_from": "backup", "extra_vars": v, "setup": {"v": v}}
+    return {"role": SIEM_ROLE, "tasks_from": "backup", "extra_vars": v, "setup": {"v": v}}
 
 
 @first_run(_first)
@@ -130,10 +154,10 @@ def test_wazuh_agent_upgrade_and_backup_hooks(first):
     assert r.returncode == 0, r.stdout + r.stderr
     manifest = json.loads((tmp_path / "manifest" / "backup-manifest.json").read_text())
     assert manifest["paths"] == []
-    ok = run_role(tmp_path, "wazuh_agent", "upgrade", {**v, "wazuh_agent_target_version": "4.15.0"})
+    ok = run_role(tmp_path, SIEM_ROLE, "upgrade", {**v, "wazuh_agent_target_version": "4.15.0"})
     assert ok.returncode == 0, ok.stdout
     assert (tmp_path / "manifest" / "pending-version").read_text() == "4.15.0\n"
-    bad = run_role(tmp_path, "wazuh_agent", "upgrade", {**v, "wazuh_agent_target_version": "4.9.0"})
+    bad = run_role(tmp_path, SIEM_ROLE, "upgrade", {**v, "wazuh_agent_target_version": "4.9.0"})
     assert bad.returncode != 0
 
 
