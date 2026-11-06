@@ -34,6 +34,7 @@ from .pack import (
     ESCAPE_PREFIX,
     PREGATE_PREFIX,
     assemble_pack,
+    delimiter_problems,
     looks_like_fence,
     split_lines,
 )
@@ -154,6 +155,7 @@ def lint_template(doc: Any, *, source: str = "") -> list[str]:
     if not isinstance(doc, Mapping):
         return [f"{where}template must be a mapping"]
     problems = [f"schema {e}" for e in schema_errors("agent", "prompt_template", doc)]
+    problems += delimiter_problems(doc)
     delim = doc.get("delimiter") or DEFAULT_DELIMITER
     delims = tuple(sorted({str(delim), DEFAULT_DELIMITER}))
     slots = doc.get("slots") if isinstance(doc.get("slots"), list) else []
