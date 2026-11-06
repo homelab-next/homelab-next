@@ -1,11 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
-- name: Stop and disable {{ vllm_server_stale }}
+- name: Stop and disable the retired unit
   ansible.builtin.command:
     argv: ["{{ vllm_server_systemctl_cli }}", disable, --now, "{{ vllm_server_stale }}"]
   changed_when: true
   when: vllm_server_start | bool
 
-- name: Remove {{ vllm_server_stale }}
+# The unit, and the instance's API key file and cache: the unit's file name is hnx-vllm-<name>.service.
+- name: Remove the retired unit, its key file and its cache
   ansible.builtin.file:
-    path: "{{ vllm_server_unit_dir }}/{{ vllm_server_stale }}"
+    path: "{{ item.path }}"
     state: absent
+  when: item.always or instance is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\\Z')
+  vars:
+    unit: "{{ vllm_server_stale }}"
+    instance: "{{ unit | regex_replace('^hnx-[^-]+-(.*)[.]service$', '\\1') }}"
+  loop:
+    - {path: "{{ vllm_server_unit_dir }}/{{ unit }}", always: true}
+    - {path: "{{ vllm_server_env_dir }}/{{ instance }}.env", always: false}
+    - {path: "{{ vllm_server_cache_dir }}/{{ instance }}", always: false}

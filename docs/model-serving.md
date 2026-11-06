@@ -371,3 +371,7 @@ without the hardware. Each item is a test to run before promising capacity:
 - vLLM Playground (a launch-settings GUI, test instance only) and benchmarking harnesses.
 - A live run of any of this on a GPU host. CI proves the roles against fakes, and the K-14 probe
   against the fake inference server.
+- Developer follow-ups (review 2): clearing `vllm_server_api_key_ref` drops the unit's
+  `EnvironmentFile` and restarts the instance without a key, but leaves the old `0600`
+  `<env_dir>/<name>.env` on disk; remove it in the same run. And verify, then refuse, an engine
+  bound to the zone address with no API key (review item ansible-m-z--gaps--3).

@@ -6,13 +6,33 @@
   changed_when: false
   tags: [health]
 
+# `docker compose ps --format json` prints one JSON object per line (compose 2.21+) or one array
+# (older compose); an empty output is a project with no containers at all.
+- name: Read the container list
+  ansible.builtin.set_fact:
+    compose_app_containers: >-
+      {{ (compose_app_ps.stdout | trim | from_json) if (compose_app_ps.stdout | trim).startswith('[')
+         else (compose_app_ps.stdout_lines | select('match', '\s*\S') | map('from_json') | list) }}
+  tags: [health]
+
+- name: Assert every service in the spec has a container
+  ansible.builtin.assert:
+    that:
+      - compose_app_containers | length > 0
+      - compose_app_spec.services.keys() | list | difference(compose_app_containers | map(attribute='Service') | list) | length == 0
+    fail_msg: >-
+      compose_app: no container for {{ compose_app_spec.services.keys() | list
+      | difference(compose_app_containers | map(attribute='Service') | list) | sort | join(', ') }}
+      (docker compose ps listed {{ compose_app_containers | length }} containers; is the project up?)
+  tags: [health]
+
 - name: Assert every container is running and healthy
   ansible.builtin.assert:
     that:
       - item.State == 'running'
       - item.Health | default('healthy') == 'healthy'
     fail_msg: "{{ item.Service }} is {{ item.State }} / {{ item.Health | default('n/a') }}"
-  loop: "{{ compose_app_ps.stdout_lines | map('from_json') | list }}"
+  loop: "{{ compose_app_containers }}"
   loop_control:
     label: "{{ item.Service }}"
   tags: [health]

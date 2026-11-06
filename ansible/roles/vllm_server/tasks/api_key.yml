@@ -5,13 +5,14 @@
     state: directory
     mode: "0750"
 
-- name: Write VLLM_API_KEY for each instance (the gateway's backend key)
+- name: Write each instance's backend API key file (the gateway's key)
   ansible.builtin.copy:
     dest: "{{ vllm_server_env_dir }}/{{ item.name }}.env"
     content: "VLLM_API_KEY={{ lookup('hnx_secret', vllm_server_api_key_ref) }}\n"
     owner: "{{ vllm_server_user }}"
     group: "{{ vllm_server_group }}"
     mode: "0600"
+  register: vllm_server_env_files
   loop: "{{ vllm_server_instances }}"
   loop_control:
     label: "{{ item.name }}"

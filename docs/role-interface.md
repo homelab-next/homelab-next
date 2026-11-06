@@ -210,6 +210,10 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
   flag and its own `compose_app_bind_extra` entry; host root, `/run`, `/var` and `/var/lib` cannot
   be listed, so they stay refused.
 
+Developer follow-ups (review 2): the health hook now asserts every `compose_app_spec` service has a
+running, healthy container. Still unverified: the backup manifest may omit `./` bind sources
+(review item ansible-a-l--practice--5), and a restore may not keep file ownership (--8).
+
 ## 7. Linter rules
 
 | Rule | Meaning |
