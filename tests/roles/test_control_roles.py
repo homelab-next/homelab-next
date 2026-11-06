@@ -3012,7 +3012,7 @@ def test_clamav_clearing_the_private_mirror_removes_the_line_and_restarts_freshc
     conf.write_text("DatabaseMirror database.clamav.net\n")
     v = scanner_vars(tmp_path, "clamav", clamav_paths=["/srv"], clamav_freshclam_config=str(conf),
                      clamav_private_mirror="clamav-mirror.example.internal")  # fmt: skip
-    cmd, env = _invocation(tmp_path, "clamav", "config", {})  # v are play vars: cases override them
+    cmd, env = _invocation(tmp_path, "clamav", "config", {})
     snap = {
         "ansible.builtin.shell": f"cp {conf} {conf}.{{n}}; cp -f {tmp_path}/calls.log {tmp_path}/calls.{{n}}"
     }
@@ -3021,7 +3021,8 @@ def test_clamav_clearing_the_private_mirror_removes_the_line_and_restarts_freshc
         tasks += [
             {
                 "ansible.builtin.include_role": {"name": "clamav", "tasks_from": "config"},
-                "vars": over,
+                # task vars: the role's vars/main.yml (clamav_script) outranks play vars
+                "vars": {**v, **over},
             },
             {"ansible.builtin.meta": "flush_handlers"},
             {"ansible.builtin.shell": snap["ansible.builtin.shell"].format(n=n)},
