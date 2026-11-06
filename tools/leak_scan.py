@@ -26,7 +26,9 @@ the file.
 
 What is scanned: inside a git work tree, the files ``git ls-files`` reports (tracked plus untracked
 files that are not ignored); elsewhere, a directory walk that skips ``build``, ``dist`` and virtual
-environments only at the top of the scanned directory.  A file that cannot be scanned (binary,
+environments only at the top of the scanned directory.  ``--walk`` always walks, even inside a work
+tree, so git-ignored files are scanned too (a guest's ``/etc`` under etckeeper is a work tree whose
+``.gitignore`` hides ``*.dpkg-old`` and friends); ``.git`` itself is never scanned.  A file that cannot be scanned (binary,
 larger than 5 MB, unreadable) is reported and fails the run unless ``--allow-skip GLOB`` names it.
 A symbolic link is never followed: its target path is scanned as text.
 
@@ -49,6 +51,7 @@ Usage::
     python3 tools/leak_scan.py --history origin/main..HEAD
     python3 tools/leak_scan.py --list               # show the built-in patterns
     python3 tools/leak_scan.py --groups secret .    # only one group of patterns
+    python3 tools/leak_scan.py --walk /etc          # ignore git: scan git-ignored files too
 """
 
 from __future__ import annotations
@@ -825,7 +828,8 @@ def _git_files(directory: Path) -> list[Path] | None:
     return [directory / n for n in names]
 
 
-def iter_files(paths: Iterable[str]) -> Iterator[Path]:
+def iter_files(paths: Iterable[str], walk: bool = False) -> Iterator[Path]:
+    """Files to scan under ``paths``; ``walk`` ignores git (and so its ignore rules)."""
     for raw in paths:
         p = Path(raw)
         if not p.exists() and not p.is_symlink():
@@ -833,7 +837,7 @@ def iter_files(paths: Iterable[str]) -> Iterator[Path]:
         if not p.is_dir() or p.is_symlink():
             yield p
             continue
-        tracked = _git_files(p)
+        tracked = None if walk else _git_files(p)
         if tracked is not None:
             for f in tracked:
                 if f.exists() or f.is_symlink():  # deleted-but-tracked files are skipped
@@ -891,11 +895,12 @@ def scan_paths(
     suppressed: list[str] | None = None,
     skipped: list[Skipped] | None = None,
     allow_skip: Iterable[str] = (),
+    walk: bool = False,
 ) -> list[Hit]:
     hits: list[Hit] = []
     pats = list(patterns)
     globs = list(allow_skip)
-    for f in iter_files(paths):
+    for f in iter_files(paths, walk):
         text = read_text_file(f)
         if isinstance(text, Skipped):
             if skipped is not None and not _allowed_skip(text.path, globs):
@@ -993,8 +998,16 @@ def main(argv: list[str] | None = None) -> int:
         metavar="GLOB",
         help="a file matching GLOB may be skipped (binary/large) without failing the run",
     )
+    ap.add_argument(
+        "--walk",
+        action="store_true",
+        help="walk directories even inside a git work tree, so git-ignored files are scanned too",
+    )
     ap.add_argument("--list", action="store_true", help="print the built-in patterns and exit")
     args = ap.parse_args(argv)
+    if args.walk and (args.stdin or args.history or args.check_authors):
+        print("leak_scan: --walk applies to path scans only", file=sys.stderr)
+        return EXIT_CONFIG
 
     if args.list:
         for p in PATTERNS:
@@ -1025,7 +1038,13 @@ def main(argv: list[str] | None = None) -> int:
             hits = scan_text(sys.stdin.read(), "<stdin>", patterns, denylist, suppressed)
         else:
             hits = scan_paths(
-                args.paths or ["."], patterns, denylist, suppressed, skipped, args.allow_skip
+                args.paths or ["."],
+                patterns,
+                denylist,
+                suppressed,
+                skipped,
+                args.allow_skip,
+                args.walk,
             )
     except ConfigError as exc:
         print(f"leak_scan: {exc}", file=sys.stderr)

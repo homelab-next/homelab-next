@@ -406,6 +406,24 @@ def test_git_mode_scans_tracked_and_untracked_but_not_ignored(tmp_path: Path):
     assert run_scan(str(tmp_path)).returncode == 1  # untracked and not ignored: scanned
 
 
+def test_walk_scans_git_ignored_files_but_never_dot_git(tmp_path: Path):
+    _git(tmp_path, "init")
+    (tmp_path / ".gitignore").write_text("*.dpkg-old\n")
+    (tmp_path / "app.conf").write_text("clean\n")
+    (tmp_path / "app.conf.dpkg-old").write_text(PLANTED["aws-access-key"] + "\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-m", "seed")
+    (tmp_path / ".git" / "description").write_text(PLANTED["aws-access-key"] + "\n")
+    assert run_scan("--groups", "secret", str(tmp_path)).returncode == 0  # git listing: ignored
+    r = run_scan("--groups", "secret", "--walk", str(tmp_path))
+    assert r.returncode == 1 and "app.conf.dpkg-old:1: [aws-access-key]" in r.stdout
+    assert ".git" + "/" not in r.stdout  # .git stays excluded
+
+
+def test_walk_applies_to_path_scans_only():
+    assert run_scan("--walk", "--stdin", stdin="x\n").returncode == 2
+
+
 def test_symlink_is_not_followed(tmp_path: Path):
     outside = tmp_path / "outside.txt"
     outside.write_text(PLANTED["private-ipv4"] + "\n")

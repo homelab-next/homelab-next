@@ -1558,6 +1558,61 @@ def test_config_leak_scan_refuses_a_relative_path(first):
     assert r.returncode != 0 and "at least one absolute path" in r.stdout
 
 
+def _first(tmp_path):
+    import subprocess
+
+    etc = leak_tree(tmp_path)
+    # etckeeper makes /etc a git work tree whose .gitignore hides package leftovers
+    subprocess.run(["git", "init", "-q", str(etc)], check=True)
+    (etc / ".gitignore").write_text("*.dpkg-old\n")
+    (etc / "app" / "app.conf.dpkg-old").write_text("old = 1\n" + PEM)
+    (etc / ".git" / "description").write_text(PEM)  # .git itself is never scanned
+    v = leak_vars(etc, tmp_path)
+    return {
+        "role": "config_leak_scan",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"etc": etc},
+    }
+
+
+@first_run(_first)
+def test_config_leak_scan_walks_the_files_a_git_work_tree_ignores(first):
+    r, tmp_path = first
+    etc = first.setup["etc"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads((tmp_path / "state" / "report.json").read_text())
+    assert report["hits"] == [
+        {"path": f"{etc}/app/app.conf.dpkg-old", "line": 2, "pattern": "private-key-block"}
+    ]
+    assert report["unscanned"] == []  # the binary is skipped, not a gap
+    scan = (ROOT / "ansible/roles/config_leak_scan/tasks/scan.yml").read_text()
+    assert "'--walk'" in scan and "--allow-skip" not in scan.split("argv:")[1].split("\n")[0]
+
+
+def _first(tmp_path):
+    etc = leak_tree(tmp_path)
+    (etc / "app" / "huge.conf").write_text("x" * (5 * 1024 * 1024 + 1))
+    v = leak_vars(etc, tmp_path)
+    return {
+        "role": "config_leak_scan",
+        "tasks_from": "health",
+        "extra_vars": v,
+        "setup": {"etc": etc, "v": v},
+    }
+
+
+@first_run(_first)
+def test_config_leak_scan_health_fails_on_a_file_it_could_not_scan_unless_accepted(first):
+    r, tmp_path = first
+    etc = first.setup["etc"]
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert f"not scanned: {etc}/app/huge.conf larger than 5 MB" in r.stdout
+    v = dict(first.setup["v"], config_leak_scan_unscanned_accepted=[f"{etc}/app/*.conf"])
+    ok = run_role(tmp_path, "config_leak_scan", "health", v)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
 # ---------------------------------------------------------------- restore_drill
 DRILL = r"""
 import json, os, sys
