@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+event: review
+by: agent:example-checker
+kind: agent
+role: check
+date: '2026-11-06'
+verdict: pass
+digest: sha256:60e2e01d7d3e068f02c52beadacfb0cef6c973fcfc281b727fd062045e840f9d
+note: fictional example review (the pinned commit is the tracked locks/hnx-ref, proved on main)

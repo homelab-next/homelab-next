@@ -161,7 +161,8 @@ and `meaning_changes` is recorded, never checked.
   (`homelabnext.golden.pins.DEFAULT_SUITES`), the code CI installs from the pinned commit, never a
   file of the change. The overlay template's `checks.yml` job `swap-gate` runs
   `hnx modules swap-gate --overlay . --ci-base` on every pull request and push, with the pinned
-  `HNX_REF` (refused unless a full SHA), a refusal of an `hnx/` the change carries, a full-history
+  `HNX_REF` (the tracked file `locks/hnx-ref`, proved on homelab-next's `main` by the `hnx-pin`
+  job), a refusal of an `hnx/` the change carries, a full-history
   checkout for the base, and no secret. `swap-check` still refuses `--overlay`. Two things for an
   operator: add `swap-gate` to the overlay's required status checks with the template's other
   jobs (a job no rule requires gates nothing), and the change that adds an overlay's **first**

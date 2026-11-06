@@ -99,4 +99,6 @@ services:
     owner: platform-team
     version: "2.11.7"
     tls: public
-    public_hostname: portal.lab.example
+    # no public_hostname: this row is the front door itself, and a public_hostname here would
+    # publish a site that proxies the edge to itself with no login (a public route needs auth);
+    # the edge's public sites are the other rows' public_hostnames (login.lab.example)

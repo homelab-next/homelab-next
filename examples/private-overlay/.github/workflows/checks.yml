@@ -8,6 +8,10 @@
 # all.  Decrypting and validating the sealed files happens only in deploy.yml, which runs only
 # when the operator dispatches it from main.  `pull_request` (never pull_request_target): a pull request's code
 # runs with a read-only token and no secrets.
+#
+# The homelab-next commit every job uses (HNX_REF) is the tracked file locks/hnx-ref, read and
+# proved to be on homelab-next's main by the `hnx-pin` job; the other jobs use only the commit it
+# hands them (docs/private-overlay.md, "The pinned homelab-next commit").
 name: checks
 
 on:
@@ -23,14 +27,69 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # HNX_REF, from this change's locks/hnx-ref, refused unless it is a full commit SHA on
+  # homelab-next's main: GitHub serves any commit of the fork network (an unmerged pull request,
+  # a fork's branch) under the parent's name, so a full SHA alone proves nothing was reviewed.
+  # Nothing from hnx/ runs in this job.
+  hnx-pin:
+    name: hnx pin on homelab-next main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.hnx-ref.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: refuse an unpinned hnx
+        # HNX_REF is the tracked file locks/hnx-ref: one full commit SHA, comment lines allowed
+        id: hnx-ref
+        run: |
+          set -euo pipefail
+          if [ ! -f locks/hnx-ref ] || [ -L locks/hnx-ref ]; then echo "::error::locks/hnx-ref (the pinned homelab-next commit) is missing"; exit 1; fi
+          ref="$(grep -Ev '^[[:space:]]*(#|$)' locks/hnx-ref || true)"
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::locks/hnx-ref must hold one full commit SHA (40 lowercase hex) and nothing else but comments"; exit 1; }
+          [[ ! "$ref" =~ ^0{40}$ ]] || { echo "::error::locks/hnx-ref still holds the template's placeholder: pin the homelab-next commit you reviewed"; exit 1; }
+          echo "sha=$ref" >> "$GITHUB_OUTPUT"
+
+      - name: refuse an hnx/ the change itself carries
+        # the pinned checkout goes to hnx/: a pull request that tracks hnx/ must not get its own
+        # files under the pinned commit's name
+        run: |
+          set -euo pipefail
+          if [ -e hnx ] || [ -L hnx ]; then echo "::error::the overlay tracks hnx/, where the pinned homelab-next goes"; exit 1; fi
+
+      - name: homelab-next at the pinned commit (its history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: homelab-next/homelab-next
+          ref: ${{ steps.hnx-ref.outputs.sha }}
+          path: hnx
+          fetch-depth: 0  # the history the ancestry check below walks
+          persist-credentials: false
+
+      - name: refuse an hnx commit that is not on homelab-next main
+        env:
+          HNX_REF: ${{ steps.hnx-ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(git -C hnx rev-parse HEAD)"
+          [ "$head" = "$HNX_REF" ] || { echo "::error::hnx/ is at $head, not the pinned $HNX_REF"; exit 1; }
+          [ "$(git -C hnx rev-parse --is-shallow-repository)" = false ] || { echo "::error::hnx/ is a shallow clone: its ancestry cannot be checked"; exit 1; }
+          git -C hnx fetch --quiet --no-tags origin +refs/heads/main:refs/hnx-pin/main
+          git -C hnx merge-base --is-ancestor "$HNX_REF" refs/hnx-pin/main || { echo "::error::HNX_REF $HNX_REF is not on homelab-next main: only code merged to homelab-next main runs"; exit 1; }
+          echo "hnx $HNX_REF is on homelab-next main"
+
   private-leak-check:
     name: private leak check
+    needs: hnx-pin
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: refuse an unpinned hnx
         env:
-          HNX_REF: ${{ vars.HNX_REF }}
+          HNX_REF: ${{ needs.hnx-pin.outputs.sha }}
         run: |
           set -euo pipefail
           [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
@@ -50,7 +109,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: homelab-next/homelab-next
-          ref: ${{ vars.HNX_REF }}
+          ref: ${{ needs.hnx-pin.outputs.sha }}
           path: hnx
           persist-credentials: false
 
@@ -74,12 +133,13 @@ jobs:
   # what runs stay in deploy.yml: they need the hosts.
   module-loader:
     name: module loader
+    needs: hnx-pin
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: refuse an unpinned hnx
         env:
-          HNX_REF: ${{ vars.HNX_REF }}
+          HNX_REF: ${{ needs.hnx-pin.outputs.sha }}
         run: |
           set -euo pipefail
           [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
@@ -99,7 +159,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: homelab-next/homelab-next
-          ref: ${{ vars.HNX_REF }}
+          ref: ${{ needs.hnx-pin.outputs.sha }}
           path: hnx
           persist-credentials: false
 
@@ -117,6 +177,61 @@ jobs:
       - name: the module loader over this lab's own selection
         run: hnx modules check --root hnx --overlay . --deploy
 
+  # The specs the operator applies by hand (docs/private-overlay.md, "SSH certificates" and
+  # "Seeding the credentials"): the SSH certificate roles (`hnx ssh-ca check`) and how each
+  # credential is seeded (`hnx secrets plan --spec`, which reads names only and reaches no
+  # store), so a broken one shows on the pull request, not on the day it is applied.  Both files
+  # are optional.  hnx is the pinned commit, no secret.
+  lab-specs:
+    name: lab specs
+    needs: hnx-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: refuse an unpinned hnx
+        env:
+          HNX_REF: ${{ needs.hnx-pin.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: refuse an hnx/ the change itself carries
+        # the pinned checkout goes to hnx/ and is installed from there: a pull request that
+        # tracks hnx/ must not get its own files under the pinned commit's name
+        run: |
+          set -euo pipefail
+          if [ -e hnx ] || [ -L hnx ]; then echo "::error::the overlay tracks hnx/, where the pinned homelab-next goes"; exit 1; fi
+
+      - name: homelab-next at the pinned commit (the spec checks)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: homelab-next/homelab-next
+          ref: ${{ needs.hnx-pin.outputs.sha }}
+          path: hnx
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: hnx, hash-pinned bootstrap
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --no-deps -r hnx/constraints/bootstrap.txt
+          python -m pip install --disable-pip-version-check -c hnx/constraints/ci.txt PyYAML jsonschema referencing setuptools
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation ./hnx
+
+      - name: the SSH certificate roles and the seeding spec validate
+        # both are optional; a lab that has one gets it checked (a link counts as present)
+        run: |
+          set -euo pipefail
+          if [ -e lab/ssh-ca.yml ] || [ -L lab/ssh-ca.yml ]; then hnx ssh-ca check lab/ssh-ca.yml; fi
+          if [ -e lab/secrets.yml ] || [ -L lab/secrets.yml ]; then hnx secrets plan lab --spec lab/secrets.yml; fi
+
   # The review tier of a change to what the lab claims (docs/private-overlay.md, "What a change to
   # the lab claims"): every change to the site, the selection, the registry, the guests and the
   # overlay's modules is human-approve but those the check knows widen nothing.  Each needs a code
@@ -125,12 +240,13 @@ jobs:
   # require it.  hnx is the pinned commit, the base is read through git, no secret.
   site-review-tier:
     name: site review tier
+    needs: hnx-pin
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: refuse an unpinned hnx
         env:
-          HNX_REF: ${{ vars.HNX_REF }}
+          HNX_REF: ${{ needs.hnx-pin.outputs.sha }}
         run: |
           set -euo pipefail
           [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
@@ -151,7 +267,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: homelab-next/homelab-next
-          ref: ${{ vars.HNX_REF }}
+          ref: ${{ needs.hnx-pin.outputs.sha }}
           path: hnx
           persist-credentials: false
 
@@ -181,12 +297,13 @@ jobs:
   # through git, no secret.
   swap-gate:
     name: swap gate
+    needs: hnx-pin
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: refuse an unpinned hnx
         env:
-          HNX_REF: ${{ vars.HNX_REF }}
+          HNX_REF: ${{ needs.hnx-pin.outputs.sha }}
         run: |
           set -euo pipefail
           [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
@@ -207,7 +324,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: homelab-next/homelab-next
-          ref: ${{ vars.HNX_REF }}
+          ref: ${{ needs.hnx-pin.outputs.sha }}
           path: hnx
           persist-credentials: false
 
@@ -235,7 +352,7 @@ jobs:
   checks:
     name: checks
     if: always()
-    needs: [private-leak-check, module-loader, site-review-tier, swap-gate]
+    needs: [hnx-pin, private-leak-check, module-loader, lab-specs, site-review-tier, swap-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
