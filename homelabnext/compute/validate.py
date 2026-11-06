@@ -35,6 +35,22 @@ def _in_range(ip: ipaddress.IPv4Address, rng: tuple[str, str]) -> bool:
     return lo <= ip <= hi
 
 
+def unresolved_keys(fleet: Fleet) -> dict[str, list[str]]:
+    """Guest id -> ssh key names its cloud-init lists that ``fleet.keys`` does not hold.
+
+    Only the guests the cloud-init target renders (IaC virtual machines) are checked."""
+    out: dict[str, list[str]] = {}
+    for g in fleet.iac():
+        if g.kind != "vm":
+            continue
+        miss = sorted(
+            {k for k in g.cloudinit.get("ssh_authorized_keys", []) if k not in fleet.keys}
+        )
+        if miss:
+            out[g.id] = miss
+    return out
+
+
 def _check_network(g: Guest, fleet: Fleet) -> list[Problem]:
     out: list[Problem] = []
     z: ZoneInfo | None = fleet.zones.zone(g.zone)
