@@ -469,7 +469,7 @@ change until its ADR is accepted):
 | `broker/audit` | 1.4 | `schemas/broker/audit.schema.json` | stable |
 | `broker/decision` | 1.2 | `schemas/broker/decision.schema.json` | stable |
 | `broker/handler` | 1.3 | `schemas/broker/handler.schema.json` | stable |
-| `broker/manifest` | 1.8 | `schemas/broker/manifest.schema.json` | stable |
+| `broker/manifest` | 1.9 | `schemas/broker/manifest.schema.json` | stable |
 | `broker/request` | 1.1 | `schemas/broker/request.schema.json` | stable |
 | `codemode/execution_request` | 1.0 | `schemas/codemode/execution_request.schema.json` | draft |
 | `codemode/execution_result` | 1.0 | `schemas/codemode/execution_result.schema.json` | draft |

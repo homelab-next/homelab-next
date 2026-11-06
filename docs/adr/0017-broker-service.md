@@ -1,6 +1,6 @@
 ---
 summary: 'Agents ask a broker for named actions: default deny, pinned handlers, approvals bound to the request digest, every outcome audited.'
-summary_of: outline:sha256:6593177f24c509b3
+summary_of: outline:sha256:c60df505d993e6ba
 ---
 # ADR-0017: Broker service
 
@@ -200,7 +200,34 @@ who still use an SSH-forwarded socket.
   audited once per peer and window; the socket's mode and group bound who can reach it.
 - Exec handlers are single self-contained files run from the state directory, which must not be
   mounted `noexec`. Lane writes and handler runs leave files the operator owns; retention of the
-  state directory (audit, runs) is an operator decision.
+  state directory (audit, runs) is an operator decision, which the manifest's `retention` states
+  since 1.9 (note below).
+
+### Successful calls are bounded too (note, 2026-11-06)
+
+Review 2 (F14) found the bounds above covered refusals and accepted *pending* work, not successful
+calls: a loop of a granted read action, every call `ok`, left a run directory (with a copy of the
+handler and up to 1 MiB each of stdout and stderr) and two audit records per call, nothing pruned
+either, and once the state disk filled every action of every agent and every approval was refused
+`audit-unavailable`. The operator decided (2026-11-06), as manifest 1.9, additively:
+
+- **A per-actor call rate**, `quotas.calls_per_minute`, on by default at 60: every operation
+  that writes an audit record for an agent (admitted calls, submits and Code Mode token
+  operations, and the owner operations `status`, `run` and `cancel` on its own requests) counts,
+  per actor in any 60 s; one past it is refused `call-rate-exceeded`, audited, and counts against
+  the peer's `refusal_limit`, so the refusals of a loop are bounded as before. A sandbox's token
+  operation is the exception: its refusal is bounded by the token's `max_calls`.
+- **Retention**: a run's handler copy is removed when the handler ends (the pinned digest makes
+  it redundant); finished runs' directories go after `retention.runs_days` (default 30) and audit
+  records after `retention.audit_days` (default 400, the trail being evidence; `null` keeps it),
+  never those of a request still pending or running, and none while more than `audit_days`
+  separate the records past retention from the rest, or nothing is newer than the cutoff (the
+  clock moved, or the broker sat idle: the older records are kept until `audit_days` have passed
+  under the new clock). A forward step shorter than `audit_days` is not detected. The hourly prune runs on a
+  background thread, never on a caller's request.
+
+These bound the *rate* at which an agent grows the state directory, not its size: the
+deployment still sizes the state filesystem for them and alerts on its free space.
 
 ## Alternatives
 

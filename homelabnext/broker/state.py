@@ -67,12 +67,15 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import logging
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +125,23 @@ OUTBOX_SEQ = "outbox.seq"
 #: the relay's directory under the state directory, and its kinds of "done with this event"
 RELAY_DIR = "relay"
 RELAY_DONE = ("delivered", "undeliverable", "quarantine")
+#: the UTC stamp an audit record's file name starts with (``strftime``): sorts as it orders
+AUDIT_STAMP = "%Y%m%dT%H%M%S%fZ"
+
+
+def _audit_gap(newest_old: str, oldest_new: str | None, stamp: str) -> float:
+    """Days between two audit record names' leading stamps; infinite with no newer record (or a
+    name whose stamp does not parse, so a malformed name never makes the trail prunable)."""
+    if oldest_new is None:
+        return float("inf")
+    try:
+        a, b = (datetime.strptime(n[: len(stamp)], AUDIT_STAMP) for n in (newest_old, oldest_new))
+    except ValueError:
+        return float("inf")
+    return (b - a).total_seconds() / 86400
+
+
+log = logging.getLogger("homelabnext.broker.state")
 #: how often (at most) the broker removes outbox files the relay is done with
 PRUNE_INTERVAL_S = 60.0
 
@@ -536,6 +556,75 @@ class StateDir:
             doc = _load(p)
             if doc is not None:
                 yield doc
+
+    # ---------------------------------------------------------------- retention
+    def _live_request(self, rid: Any) -> bool:
+        """Whether ``rid`` names a stored request that is still pending or running (its state
+        must not be pruned).  A direct ``call`` stores no request: it is finished when it
+        returns."""
+        if not (isinstance(rid, str) and is_id(rid)):
+            return False
+        if not (self._dir("requests") / f"{rid}.json").exists():
+            return False
+        return self.state_of(rid) in ("pending", "running")
+
+    def prune_retained(
+        self, now_s: float, *, runs_days: float | None, audit_days: float | None
+    ) -> dict[str, int]:
+        """Remove ``runs/<rid>/`` last written more than ``runs_days`` days before ``now_s``
+        (epoch seconds), and audit records (with their ``decisions/`` entries) stamped more than
+        ``audit_days`` days before it, skipping any whose request is still pending or running.
+        ``None`` keeps that kind for ever.  Symlinks are never followed.  Returns the counts."""
+        removed = {"runs": 0, "audit": 0}
+        if runs_days is not None:
+            cutoff = now_s - runs_days * 86400
+            with os.scandir(self._dir("runs")) as it:
+                entries = list(it)
+            for e in entries:
+                try:
+                    if not e.is_dir(follow_symlinks=False):
+                        continue
+                    if e.stat(follow_symlinks=False).st_mtime >= cutoff:
+                        continue
+                except FileNotFoundError:
+                    continue
+                if self._live_request(e.name):
+                    continue
+                shutil.rmtree(e.path, ignore_errors=True)
+                removed["runs"] += 1
+        if audit_days is not None:
+            then = datetime.fromtimestamp(now_s - audit_days * 86400, UTC)
+            stamp = then.strftime(AUDIT_STAMP)  # a record's name starts with its stamp
+            with os.scandir(self._dir("audit")) as it:
+                names = [e.name for e in it if e.name.endswith(".json")]
+            old = [n for n in names if n[: len(stamp)] < stamp]
+            newer = [n for n in names if n[: len(stamp)] >= stamp]
+            if old and _audit_gap(max(old), min(newer) if newer else None, stamp) > audit_days:
+                # no record newer than the cutoff, or more than audit_days between the newest
+                # record past it and the oldest one inside it: a clock stepped forward (or a
+                # broker idle longer than audit_days).  The trail is evidence and deleting it
+                # cannot be undone, so it is kept: one record written under a stepped clock does
+                # not make every earlier one prunable an hour later
+                log.warning(
+                    "retention: %d audit records are older than %s but separated from the rest "
+                    "by more than %s days; none removed (check the clock)",
+                    len(old),
+                    then.isoformat(),
+                    audit_days,
+                )
+                old = []
+            for name in old:
+                try:
+                    doc = _load(self._dir("audit") / name)
+                except (OSError, ValueError):
+                    doc = None  # unreadable and past retention: nothing to keep it for
+                if isinstance(doc, dict) and self._live_request(doc.get("request_id")):
+                    continue
+                for where in ("decisions", "audit"):  # the index first: it is the derived copy
+                    with contextlib.suppress(FileNotFoundError):
+                        (self._dir(where) / name).unlink()
+                removed["audit"] += 1
+        return removed
 
     # ---------------------------------------------------------------- the digest key
     def digest_key(self) -> bytes:
