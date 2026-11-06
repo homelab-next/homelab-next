@@ -119,6 +119,29 @@ def test_main_reports_an_unreachable_candidate_as_exit_2(tmp_path, monkeypatch):
     assert main(["--report-dir", str(tmp_path), "--domain", ""]) == 2
 
 
+@pytest.mark.parametrize(
+    ("extra", "user", "credential"),
+    [
+        ([], "hnx-conform", None),
+        (["--user", "profile:r", "--credential", "secret:x"], "profile:r", "secret:x"),
+    ],
+)
+def test_main_signs_the_candidate_in_as_user_with_its_credential(
+    tmp_path, monkeypatch, extra, user, credential
+):
+    import homelabnext.conform.adapters.lake as adapter
+
+    seen = {}
+
+    def fake_make_lake(**kw):
+        seen.update(kw)
+        raise LookupError("stop here")
+
+    monkeypatch.setattr(adapter, "make_lake", fake_make_lake)
+    assert main(["--report-dir", str(tmp_path), *extra]) == 2
+    assert seen["user"] == user and seen["credential"] == credential
+
+
 def _script_env(**extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("HNX_ENDPOINT_", "LAB_"))}
     env.update(HNX_PYTHON=sys.executable, PYTHONPATH=str(ROOT), **extra)

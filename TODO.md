@@ -21,6 +21,16 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
   `swap-gate` has no base table to hold the first one against, so it exits 2 and `checks` fails.
   Every later change is gated normally ([docs/modules/swap-flow.md](docs/modules/swap-flow.md),
   "The overlay's gate").
+- [ ] **In the private overlay, move `HNX_REF` into the tracked file `locks/hnx-ref`** and take up
+  the template's new `checks.yml` and `deploy.yml`, in one pull request you review and merge: the
+  file holds one full homelab-next commit SHA on its `main` (the value of today's `HNX_REF`
+  variable, if that commit is on `main`), and both workflows refuse any other. Then delete the
+  `HNX_REF` variable (repository and `production` Environment), so nothing outside review can
+  change what runs. Branch protection needs no change: the required `checks` job already needs
+  the new `hnx-pin` and `lab-specs` jobs ([docs/private-overlay.md](docs/private-overlay.md), "The pinned homelab-next commit").
+  In the same pull request, change the overlay's own `CLAUDE.md` ("Validate lab data") to read
+  the pin from `locks/hnx-ref` instead of `gh variable get HNX_REF`, so agents stop reading the
+  variable you delete.
 
 ## 2. Secrets and the deploy path (before the first deploy)
 
@@ -44,9 +54,9 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
 - [ ] **Create the overlay's `production` Environment**, with deployment branch `main` only.
   - Secrets: `BAO_SECRET_ID`, `SOPS_AGE_KEY`, `DEPLOY_SSH_KEY`; `ANSIBLE_VAULT_PASSWORD` only if the
     vault password is not in the secrets store.
-  - Variables: `HNX_REF` (a full commit SHA), `SOPS_VERSION`, `SOPS_SHA256`, `HNX_DEPLOY_PATH`,
-    `BAO_ADDR`, `BAO_ROLE_ID`, `BAO_CACERT_PEM`, `HNX_VAULT_PASSWORD_REF`, and for the VPN path
-    `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`.
+  - Variables: `SOPS_VERSION`, `SOPS_SHA256`, `HNX_DEPLOY_PATH`, `BAO_ADDR`, `BAO_ROLE_ID`,
+    `BAO_CACERT_PEM`, `HNX_VAULT_PASSWORD_REF`, and for the VPN path `TS_OAUTH_CLIENT_ID` and
+    `TS_AUDIENCE`. Not `HNX_REF`: that is the tracked file `locks/hnx-ref` (section 1).
 - [ ] **Record host keys** in the overlay's `ansible/known_hosts`, checking each fingerprint out of
   band.
 - [ ] **Run the first deploy by hand** (`deploy.yml` on `main`, from the overlay's Actions page or
@@ -78,10 +88,30 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
   1. declare `tlp_readers` (including `analyzer:novelty`) in the overlay;
   2. render `lake-access.json` (`hnx modules render`) and load it into the query engine, and
      again after every change to `tlp_readers`;
-  3. have the lake-query adapter sign each reader in to the engine as the user named by its whole
-     reader id (`analyzer:novelty`, `profile:x`, ...), and each `group:` reader as the engine
-     group of that name;
-  4. confirm a reader below `red` sees only rows at or below its ceiling.
+  3. **make the engine authenticate each reader id** (it must never accept a bare user header):
+     turn on its password authenticator (over https; people may keep signing in through the IdP
+     beside it) with a password file holding one entry per reader login, the reader id with its
+     first `:` written as `.` (`analyzer.novelty`, `profile.x`, ...), plus one for the login the
+     conformance and swap-rehearsal runs use (`hnx-conform` by default, the rehearsal's `--user`);
+     map logins back with a user-mapping **rules file** (the single-pattern setting keeps only the
+     first group): first pattern `(profile|module|analyzer|user)\.(.+)`, user `$1:$2`, so each
+     session user is the whole reader id again, then pattern `(.*)`, user `$1`, so a login with no
+     prefix (`hnx-conform`) stays itself; each `group:` reader is the engine group of that name,
+     not a login;
+  4. **deny impersonation**: a signed-in reader must not name another user in its user header.
+     `lake-access.json` carries the rule (nobody may act as another user); load it as the
+     engine's access control and add no other impersonation rule;
+  5. **make the catalog authenticate too**: a `lake-catalog` reachable off loopback must require
+     its token, and it must not hand storage credentials (or the object store be readable) to
+     anyone but the engine, since a reader reading the data files directly skips every row filter;
+  6. put each reader's password in the secrets store as `lake-query/readers/<login>` (for the
+     novelty analyzer `lake-query/readers/analyzer.novelty`, delivered to `hnx novelty` as
+     `HNX_SECRET_LAKE_QUERY_READERS_ANALYZER_NOVELTY`; for the rehearsal's default login
+     `lake-query/readers/hnx-conform`, passed as `--credential`); the client refuses a
+     non-loopback lake without one;
+  7. confirm a reader with no password, or a wrong one, is refused; a signed-in reader that sends
+     another reader's id as its user is refused; and a reader below `red` sees only rows at or
+     below its ceiling.
 
   The lake starts fresh, so there is nothing to backfill. `hnx modules tlp-backfill` is only for
   a table created before it had a `tlp` column.

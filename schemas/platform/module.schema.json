@@ -1870,7 +1870,7 @@
                 "maxLength": 200
               }
             },
-            "description": "platform/service rows; names start with the module id (a provider's row is keyed by its slot and renamed to the instance). A public_hostname needs auth other than none and an overlay grant."
+            "description": "platform/service rows; names start with the module id (a provider's row is keyed by its slot and renamed to the instance). A public_hostname needs auth: idp or own (never none or mtls: the edge terminates TLS) and an overlay grant."
           }
         },
         "status_sources": {

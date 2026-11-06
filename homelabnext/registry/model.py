@@ -156,6 +156,9 @@ def schema_problems(doc: Any) -> list[str]:
     return out
 
 
+_V4_MAPPED = ipaddress.IPv6Network("::ffff:0:0/96")
+
+
 def semantic_problems(doc: dict) -> list[str]:
     """Cross-reference and uniqueness checks. Assumes the schema already passed."""
     problems: list[str] = []
@@ -165,10 +168,23 @@ def semantic_problems(doc: dict) -> list[str]:
     nets = {}
     for zname, z in zones.items():
         try:
-            nets[zname] = ipaddress.ip_network(z["cidr"], strict=True)
+            net = ipaddress.ip_network(z["cidr"], strict=True)
         except ValueError as exc:
             problems.append(f"zone {zname}: bad cidr {z['cidr']!r}: {exc}")
-    seen_addr: dict[str, str] = {}
+            continue
+        # an IPv4-mapped IPv6 zone (::ffff:0:0/96) names IPv4 addresses a second time, so it
+        # would get past the overlap and duplicate-address checks below
+        if net.version == 6 and net.subnet_of(_V4_MAPPED):
+            problems.append(f"zone {zname}: cidr {net} is IPv4-mapped; use the IPv4 cidr")
+            continue
+        nets[zname] = net
+    named = sorted(nets.items())
+    for i, (za, na) in enumerate(named):
+        for zb, nb in named[i + 1 :]:
+            # an IPv4 and an IPv6 network never overlap (ipaddress returns False across families)
+            if na.overlaps(nb):
+                problems.append(f"zone {zb}: cidr {nb} overlaps zone {za} ({na})")
+    seen_addr: dict[ipaddress.IPv4Address | ipaddress.IPv6Address, str] = {}
     for hname, h in hosts.items():
         if h["zone"] not in zones:
             problems.append(f"host {hname}: unknown zone {h['zone']!r}")
@@ -177,11 +193,16 @@ def semantic_problems(doc: dict) -> list[str]:
         except ValueError:
             problems.append(f"host {hname}: bad address {h['address']!r}")
             continue
-        if h["address"] in seen_addr:
+        if ip.version == 6 and ip.ipv4_mapped is not None:
             problems.append(
-                f"host {hname}: address {h['address']} already used by {seen_addr[h['address']]}"
+                f"host {hname}: address {h['address']} is IPv4-mapped; use {ip.ipv4_mapped}"
             )
-        seen_addr[h["address"]] = hname
+            continue
+        # compared as addresses, not strings: two spellings of one IPv6 address (2001:db8::1 and
+        # 2001:db8:0::1) are the same host address
+        if ip in seen_addr:
+            problems.append(f"host {hname}: address {h['address']} already used by {seen_addr[ip]}")
+        seen_addr[ip] = hname
         net = nets.get(h["zone"])
         if net is not None and ip not in net:
             problems.append(
@@ -212,6 +233,17 @@ def semantic_problems(doc: dict) -> list[str]:
                     f"service {sname}: public_hostname {pub!r} already used by {pubs[pub]}"
                 )
             pubs[pub] = sname
+            # the same rule a module's rows meet (modules/rules.py): the edge publishes the
+            # site, so a row with no login of its own and no IdP in front is open to anyone
+            # who reaches the edge; mtls is refused too, as the edge terminates TLS and adds
+            # no client-certificate check (ADR-0034)
+            if s.get("auth", "none") == "none":
+                problems.append(f"service {sname}: a public route needs auth")
+            elif s["auth"] == "mtls":
+                problems.append(
+                    f"service {sname}: a public route needs auth: idp or own "
+                    "(the edge terminates TLS, so mtls is never checked)"
+                )
         for z in s.get("clients", []):
             if z not in zones:
                 problems.append(f"service {sname}: clients names unknown zone {z!r}")

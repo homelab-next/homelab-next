@@ -474,7 +474,7 @@
   },
   "homelabnext/conform/adapters/lake.py": {
    "iceberg": 1,
-   "trino": 12
+   "trino": 10
   },
   "homelabnext/conform/adapters/litellm_spend_log.py": {
    "litellm": 1

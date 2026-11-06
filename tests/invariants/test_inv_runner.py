@@ -396,3 +396,27 @@ def test_cli_a_misspelt_notify_ceiling_is_a_usage_error(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc:
         inv_main(["run", str(reg), "--notify-ceiling", "gren"])
     assert exc.value.code == 2
+
+
+def test_cli_notify_cmd_without_a_ceiling_is_a_usage_error(tmp_path, capsys):
+    reg = tmp_path / "invariants.yml"
+    reg.write_text(REGISTER.replace("{cmd}", "exit 0"))
+    argv = ["run", str(reg), "--root", str(tmp_path), "--state", str(tmp_path / "s.json")]
+    with pytest.raises(SystemExit) as exc:
+        inv_main([*argv, "--notify-cmd", "true"])
+    assert exc.value.code == 2
+    assert "--notify-ceiling" in capsys.readouterr().err
+
+
+def test_cli_notify_cmd_with_a_ceiling_withholds_red_evidence(tmp_path):
+    reg = tmp_path / "invariants.yml"
+    reg.write_text(REGISTER.replace("{cmd}", "echo secret-evidence-text; exit 1"))
+    sink = tmp_path / "sink.txt"
+    cmd = tmp_path / "pager.sh"
+    cmd.write_text(f'#!/bin/sh\nprintf "%s\\n%s\\n" "$1" "$2" >> {sink}\n')
+    cmd.chmod(0o755)
+    argv = ["run", str(reg), "--root", str(tmp_path), "--out", str(tmp_path / "r.json")]
+    argv += ["--state", str(tmp_path / "s.json"), "--notify-cmd", str(cmd)]
+    assert inv_main([*argv, "--notify-ceiling", "amber"]) == 1
+    got = sink.read_text()
+    assert "Notification withheld (TLP)" in got and "secret-evidence-text" not in got

@@ -41,10 +41,7 @@ def test_dns_records_come_from_registry_and_static_and_are_sorted(ir):
         by_origin.setdefault(r.origin, []).append(r)
     assert len(by_origin["registry.host"]) == 7
     assert len(by_origin["registry.service"]) == 7
-    assert {r.fqdn for r in by_origin["split-horizon"]} == {
-        "login.lab.example",
-        "portal.lab.example",
-    }
+    assert {r.fqdn for r in by_origin["split-horizon"]} == {"login.lab.example"}
     assert by_origin["static"][0].fqdn == "router.example.internal"
     alias = next(r for r in ir.dns_records if r.fqdn == "idp.svc.example.internal")
     assert (alias.type, alias.value) == ("CNAME", "idp-core.example.internal")
