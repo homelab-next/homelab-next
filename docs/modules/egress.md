@@ -130,7 +130,7 @@ spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
 |---|---|---|---|
 | the publishing gate (the static host) | `tlp_allowed` (`clear`, `green` for a community audience) | `grants.publish` | `tlp_allowed` checked at load (never above `green`); the per-item check is the gate module's |
 | the status hub's public view and exports | `clear` | not a module grant: the hub's release transforms decide what is shown | the hub's view ceilings and release transforms |
-| model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` | the model gateway: each key's sending ceiling |
+| model requests to a role that leaves the lab | the role's TLP ceiling | `grants.cloud_models` | the model gateway: each key's sending ceiling; the per-request `model_tlp.admit` has no caller yet ([developer follow-ups](#developer-follow-ups)) |
 | enrichment lookups to an external analyzer | the analyzer's declared maximum (`analyzers_for`) | `grants.egress` (`internet`) | none in this repository yet (`job_label`, `analyzers_for` are for the client) |
 | notification channels | the channel's reader ceiling | `cap:notify` (a send class) | `notify.CeilingSender`: the broker's, the status hub's and the invariants runner's pages (`--notify-ceiling`); no producer labels its messages yet, so below `red` every page arrives as the withheld notice |
 | webhooks | the receiver's ceiling | `grants.egress` | not yet |
@@ -154,3 +154,30 @@ enrichment lookup is labelled by the records that cause it (`job_label`: their s
 `red` with none, raised to the submitter's ceiling) and is to be sent only to analyzers whose
 declared maximum admits it; an analyzer with no maximum, or one that is not a canonical label, is
 sent nothing.
+
+A broker request built by the reader-to-actor handoff carries the label of the data its params
+came from (`tlp`, `broker/request` 1.1, bound by the request digest; see
+[Actors act only on validated structured input](../agent.md#actors-act-only-on-validated-structured-input-g-04)):
+the strictest of what the reader may hold, the pack's label and any marker in the output. So a
+handler that sends a request's params out of the lab has the label `egress_check` needs; no handler
+applies it yet. The handoff itself refuses an actor whose receive ceiling is below that label.
+
+### Developer follow-ups
+
+Work on the code, tracked here rather than in `TODO.md` (which holds only the operator's stand-up
+tasks):
+
+1. **Per-request model admission (ADR-0033 decision 11, amendment).**
+   `homelabnext.registry.model_tlp.admit(roles, role, claimed, sender=)` has no caller. Its call
+   site is the agent runner, at the point it sends a session's context to the model gateway:
+   after `homelabnext.agent.access.start_session` returns the pack and before each model
+   request, with `claimed` the strictest of `homelabnext.agent.pack.pack_label(pack)`, the labels
+   of the MCP tool results and broker results the session has added since, and any marker in them
+   (`tlp_egress.egress_label`), and `sender` the profile's `send_ceiling(tlp_ceiling, data_tier)`;
+   the runner logs `Admission.record()` for every request, allowed or refused, and does not send a
+   refused one. Dependencies: the runner is not in this repository; pack labels exist
+   (`pack_label`, ADR-0037 PR 2), but every session pack is `red` until records, pages and
+   manifests declare labels (ADR-0037 follow-up 6), so until then a wired `admit` refuses every
+   request to a role that leaves the lab, which key scope already does. Until it is wired, key
+   scope and the `--check` audit are the enforcement (`docs/llm-gateway.md`, "TLP labels on
+   requests").

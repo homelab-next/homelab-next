@@ -74,7 +74,9 @@ from homelabnext.grants import TIER_RANK, grant_for, tier_exceeds
 #: what a caller may do to a request that already exists (``execute`` is :func:`decide`)
 ACCESS_OPERATIONS = ("read", "cancel")
 DEFAULT_APPROVAL_TTL_S = 900
-_DIGEST_FIELDS = ("action", "actor", "target", "params")
+#: what an approval binds; ``tlp`` (request 1.1) only when the request carries one, so a request
+#: without it keeps its digest
+_DIGEST_FIELDS = ("action", "actor", "target", "params", "tlp")
 _SEP_RE = re.compile(r"[._\s]+")
 
 

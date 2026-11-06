@@ -17,6 +17,7 @@ import pytest
 from agent_support import inputs, manifest
 
 from homelabnext.agent import assemble_pack
+from homelabnext.agent.digest import digest_of
 from homelabnext.agent.handoff import (
     Accepted,
     Handoff,
@@ -29,6 +30,10 @@ from homelabnext.agent.handoff import (
     is_closed_pattern,
     is_constrained,
 )
+from homelabnext.agent.readers import held_label, profile_ceiling
+from homelabnext.agent.schemas import schema_errors
+from homelabnext.broker import decide, request_digest
+from homelabnext.tlp import Label
 
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLES = REPO / "schemas" / "agent" / "examples"
@@ -41,6 +46,7 @@ def _load(name):
 
 READER = _load("profile.reader.json")
 ACTOR = _load("profile.actor.json")
+PROFILES = {"reader_profile": READER, "actor_profile": ACTOR}
 
 
 def _decl(**over):
@@ -153,13 +159,13 @@ def test_the_actor_refuses_anything_but_a_valid_structured_report(pack, case, mu
     p, h = pack
     handoff = Handoff.from_mapping(_decl())
     with pytest.raises(HandoffRefused) as exc:
-        accept(handoff, mutate(_report(h)), pack=p, pack_hash=h, manifest=manifest())
+        accept(handoff, mutate(_report(h)), pack=p, pack_hash=h, manifest=manifest(), **PROFILES)
     assert any(why in prob for prob in exc.value.problems), exc.value.problems
 
 
 def test_a_valid_report_is_accepted_and_only_its_output_is_kept(pack):
     p, h = pack
-    acc = accept(Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h)
+    acc = accept(Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h, **PROFILES)
     assert acc.output == {"verdict": "malicious", "domain": "login.example.com", "note": "rm -rf /"}
     assert acc.report_digest.startswith("sha256:")
 
@@ -175,7 +181,7 @@ def test_an_accepted_output_cannot_be_forged():
 @pytest.fixture
 def accepted(pack):
     p, h = pack
-    return accept(Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h)
+    return accept(Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h, **PROFILES)
 
 
 def test_a_declared_action_runs_with_params_from_constrained_output_only(accepted):
@@ -186,6 +192,7 @@ def test_a_declared_action_runs_with_params_from_constrained_output_only(accepte
         "actor": "profile:responder",
         "target": "svc:records",
         "params": {"verdict": "malicious", "domain": "login.example.com", "source": "handoff"},
+        "tlp": "red",
     }
     assert (decision["verdict"], decision["reason"]) == ("allow", "allowed")
     blob = json.dumps(request)
@@ -220,6 +227,124 @@ def _declaration(doc, reader=READER, actor=ACTOR, broker=None):
 def test_the_shipped_example_declaration_is_clean():
     assert _declaration(_decl()) == []
     assert _declaration(_load("handoff.phish-block.json")) == []
+
+
+# ---------------------------------------------------------------- TLP across the handoff (F11)
+def _profile(base, **over):
+    doc = copy.deepcopy(base)
+    for key, value in over.items():
+        if value is None:
+            doc.pop(key, None)
+        else:
+            doc[key] = value
+    return doc
+
+
+CLEAR_ACTOR = _profile(ACTOR, data_tier="cloud-allowed", tlp_ceiling="clear")
+
+
+def test_a_red_ceiling_reader_cannot_hand_off_to_a_clear_actor():
+    """ADR-0033 decisions 4 and 6: the reader's output carries what the reader may hold, so an
+    actor whose ceiling is below it is refused at declaration."""
+    problems = _declaration(_decl(), actor=CLEAR_ACTOR)
+    assert any("receives at most clear" in p and "(red)" in p for p in problems), problems
+    # a reader with no tlp_ceiling still holds what its data_tier lets it receive
+    reader = _profile(READER, tlp_ceiling=None)
+    assert any("receives at most clear" in p for p in _declaration(_decl(), reader, CLEAR_ACTOR))
+
+
+@pytest.mark.parametrize(
+    ("reader", "actor"),
+    [
+        ({"tlp_ceiling": "red"}, {"tlp_ceiling": "red"}),
+        ({"tlp_ceiling": "amber"}, {"tlp_ceiling": "amber"}),
+        ({"tlp_ceiling": "amber"}, {"tlp_ceiling": "red"}),
+        ({"tlp_ceiling": None}, {"tlp_ceiling": None}),  # both local-only: red to red
+    ],
+    ids=["red-red", "amber-amber", "amber-to-red", "tier-only"],
+)
+def test_a_handoff_at_or_above_the_readers_ceiling_passes(reader, actor):
+    problems = _declaration(_decl(), _profile(READER, **reader), _profile(ACTOR, **actor))
+    # an amber reader is refused its red lake server (grant rule), never the handoff ceiling
+    assert not any("receives at most" in p for p in problems), problems
+    if reader["tlp_ceiling"] != "amber":
+        assert problems == []
+
+
+def test_an_amber_reader_cannot_hand_off_to_a_green_actor():
+    reader = _profile(READER, tlp_ceiling="amber")
+    actor = _profile(ACTOR, data_tier="cloud-allowed", tlp_ceiling="green")
+    assert any("receives at most green" in p for p in _declaration(_decl(), reader, actor))
+
+
+def test_what_a_profile_holds_and_receives():
+    assert held_label({"data_tier": "cloud-allowed"}) == Label.CLEAR
+    assert held_label({"data_tier": "local-only"}) == Label.RED
+    assert held_label({}) == Label.RED  # unknown is red
+    assert held_label({"tlp_ceiling": "AMBER-ish"}) == Label.RED  # not a label: red
+    assert profile_ceiling({}) == Label.CLEAR  # receives the least
+    assert profile_ceiling({"tlp_ceiling": "amber", "data_tier": "local-only"}) == Label.AMBER
+
+
+def test_accept_labels_the_output_and_build_request_passes_it_on(pack):
+    p, h = pack
+    acc = accept(Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h, **PROFILES)
+    assert acc.label == Label.RED
+    req = build_request(acc, "records.annotate", request_id="r-6")
+    assert req["tlp"] == "red"
+    assert not schema_errors(
+        "broker", "request", {**req, "created": NOW, "digest": "sha256:" + "0" * 64}
+    )
+
+
+def test_accept_refuses_an_output_above_the_actors_ceiling(pack):
+    """The runtime backstop: an undeclared pairing still cannot pass red data to a clear actor."""
+    p, h = pack
+    with pytest.raises(HandoffRefused, match="above actor profile:responder's ceiling clear"):
+        accept(
+            Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h,
+            reader_profile=READER, actor_profile=CLEAR_ACTOR,
+        )  # fmt: skip
+
+
+def test_accept_refuses_profiles_that_are_not_the_handoffs(pack):
+    p, h = pack
+    other = _profile(ACTOR, id="profile:other")
+    with pytest.raises(HandoffRefused, match="actor profile is 'profile:other'"):
+        accept(
+            Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h,
+            reader_profile=READER, actor_profile=other,
+        )  # fmt: skip
+    with pytest.raises(HandoffRefused, match="reader profile is 'profile:responder'"):
+        accept(
+            Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h,
+            reader_profile=ACTOR, actor_profile=ACTOR,
+        )  # fmt: skip
+
+
+def test_the_label_is_bound_by_the_request_digest(accepted):
+    """Lowering the label after approval no longer matches the approval's digest."""
+    request = build_request(accepted, "service.restart", request_id="r-7")
+    lowered = {**request, "tlp": "clear"}
+    assert request_digest(request) != request_digest(lowered)
+    unlabelled = {k: v for k, v in request.items() if k != "tlp"}
+    # a request without a label keeps the digest it had before request 1.1
+    assert request_digest(unlabelled) == digest_of(
+        {k: unlabelled[k] for k in ("action", "actor", "target", "params")}
+    )
+    approval = {
+        "approval_id": "appr-1",
+        "request_id": "r-7",
+        "request_digest": request_digest(request),
+        "approver": {"issuer": "sso", "subject": "approver-one"},
+        "decision": "approved",
+        "approved_at": "2026-01-15T10:01:00Z",
+        "expires_at": "2026-01-15T10:15:00Z",
+    }
+    ok = decide(_broker(), request, approval, now=NOW)
+    assert ok["verdict"] == "allow", ok
+    bad = decide(_broker(), lowered, approval, now=NOW)
+    assert (bad["verdict"], bad["reason"]) == ("deny", "approval-digest-mismatch")
 
 
 def _with_params(**params):
@@ -429,6 +554,7 @@ def test_array_index_and_escaped_dollar_resolve(pack):
         _report(h, output={"verdict": "benign", "domain": "a.example.com", "ports": [443]}),
         pack=p,
         pack_hash=h,
+        **PROFILES,
     )
     req = build_request(acc, "records.annotate", request_id="r-5")
     assert req["params"] == {"first": 443, "lit": "$output.note"}

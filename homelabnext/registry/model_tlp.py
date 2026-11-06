@@ -20,7 +20,8 @@ request (:mod:`homelabnext.generators.llm_gateway` scopes no key to a role whose
 the key's sending ceiling, and refuses a cloud binding the role table does not mark
 ``leaves_lab``, so the ceiling read here is the one the gateway deploys), and the component that
 assembles a request's context is to apply :func:`admit` to each request.  No component calls it
-yet (ADR-0033, amendment to decision 11): until one does, key scope is the enforcement.
+yet (ADR-0033, amendment to decision 11; the call site and what it waits on are tracked in
+docs/modules/egress.md, "Developer follow-ups"): until one does, key scope is the enforcement.
 Standard library only.
 """
 
