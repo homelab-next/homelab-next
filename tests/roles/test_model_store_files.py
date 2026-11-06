@@ -178,6 +178,134 @@ def test_the_module_walks_only_when_asked(tmp_path):
     assert rc == 0 and out["strays"] == ["x (a link)"]
 
 
+def test_the_walk_allows_the_files_of_every_entry_of_the_run(mod, tmp_path):
+    """Two export entries may share a run (the key is (source, run, quant)): each entry's walk
+    allows both entries' files, as homelabnext.models.store.check_disk unions them."""
+    run, files = export(tmp_path)
+    (run / "model-q4.gguf").write_bytes(b"q4\n")
+    assert mod.walk_entry(str(run), files) == ["model-q4.gguf (not in the manifest)"]
+    union = [f["path"] for f in files] + ["model-q4.gguf"]
+    assert mod.walk_entry(str(run), files, union) == []
+    os.link(run / "model-q4.gguf", tmp_path / "other-name")
+    assert mod.walk_entry(str(run), files, union) == ["model-q4.gguf (hard-linked: 2 links)"]
+
+
+# Root can chown to another account; an unprivileged run (CI) can only "take" for itself, which
+# still shows every mode the lock sets and every file it must leave alone.
+if os.geteuid() == 0:
+    import pwd
+
+    _NOBODY = pwd.getpwnam("nobody")
+    OWNER = (_NOBODY.pw_uid, _NOBODY.pw_gid)
+else:
+    OWNER = (os.getuid(), os.getgid())
+
+
+def trainer_written(run: Path) -> None:
+    for p in [run, *run.rglob("*")]:
+        if not p.is_symlink():
+            p.chmod(0o2777 if p.is_dir() else 0o666)
+
+
+def modes(*paths: Path) -> list[int]:
+    return [p.lstat().st_mode & 0o7777 for p in paths]
+
+
+def test_the_lock_takes_a_clean_export_by_descriptor(mod, tmp_path):
+    run, files = export(tmp_path)
+    trainer_written(run)
+    (run / "sub" / "model.safetensors").chmod(0o777)  # executable for someone: X keeps it so
+    assert mod.lock_entry(str(run), files, *OWNER) == ([], True)
+    assert modes(run, run / "sub", run / "config.json", run / "sub" / "model.safetensors") == [
+        0o750,
+        0o750,
+        0o640,
+        0o750,
+    ]  # u=rwX,g=rX,o= with the trainers' setgid cleared, as ansible.builtin.file sets it
+    assert {(p.stat().st_uid, p.stat().st_gid) for p in [run, *run.rglob("*")]} == {OWNER}
+    assert mod.lock_entry(str(run), files, *OWNER) == ([], False)  # idempotent
+    assert mod.lock_entry(str(tmp_path / "absent"), files, *OWNER) == ([], False)
+
+
+def test_the_lock_refuses_strays_without_touching_a_file_or_a_link_target(mod, tmp_path):
+    """exports/<run>/x -> a host file: nothing is opened through the link, no listed file is
+    taken, and the directories stay closed (0700) for an operator to clean."""
+    run, files = export(tmp_path)
+    host = tmp_path / "host-passwd"
+    host.write_text("root:x:0:0::/root:/bin/sh\n")
+    host.chmod(0o644)
+    (run / "x").symlink_to(host)
+    (run / "sub" / "notes.txt").write_text("unlisted\n")
+    trainer_written(run)
+    before = host.stat()
+    strays, changed = mod.lock_entry(str(run), files, *OWNER)
+    assert strays == ["sub/notes.txt (not in the manifest)", "x (a link)"] and changed
+    after = host.stat()
+    assert (after.st_mode, after.st_uid, after.st_gid) == (
+        before.st_mode,
+        before.st_uid,
+        before.st_gid,
+    )
+    assert modes(run / "config.json", run / "sub" / "notes.txt") == [0o666, 0o666]
+    assert modes(run, run / "sub") == [0o700, 0o700]
+
+
+def test_the_lock_refuses_an_entry_directory_that_is_a_link(mod, tmp_path):
+    run, files = export(tmp_path)
+    trainer_written(run)
+    (tmp_path / "exports" / "linked").symlink_to(run)
+    assert mod.lock_entry(str(tmp_path / "exports" / "linked"), files, *OWNER) == (
+        [". (the entry directory is a link)"],
+        False,
+    )
+    assert modes(run) == [0o2777]
+
+
+def test_the_lock_never_follows_a_swap_after_it_opened_the_entry(mod, tmp_path, monkeypatch):
+    """The F01 race: exports/<run> renamed and replaced by a link to / between a check and the
+    chown.  The lock holds the directory it opened (O_NOFOLLOW), not its path, so a swap after
+    the open leaves the link's target alone; a swap of a subdirectory for a link between its
+    lstat and its open is refused (O_NOFOLLOW), never entered."""
+    run, files = export(tmp_path)
+    trainer_written(run)
+    root = tmp_path / "pretend-root"
+    (root / "etc").mkdir(parents=True)
+    (root / "etc" / "shadow").write_text("secret\n")
+    (root / "etc" / "shadow").chmod(0o600)
+    moved = tmp_path / "exports" / "moved"
+    real_listdir, real_stat, swapped = os.listdir, os.stat, []
+
+    def listdir_then_swap(fd):
+        names = real_listdir(fd)
+        if not swapped:  # the trainer's renameat2 loop, landing right after the open
+            swapped.append(True)
+            run.rename(moved)
+            run.symlink_to(root)
+        return names
+
+    def lstat_then_swap(name, *a, **kw):
+        st = real_stat(name, *a, **kw)
+        if name == "sub" and not (moved / "sub").is_symlink():  # between its lstat and its open
+            (moved / "sub").rename(moved / "sub-real")
+            (moved / "sub").symlink_to(root / "etc")
+        return st
+
+    monkeypatch.setattr(mod.os, "listdir", listdir_then_swap)
+    monkeypatch.setattr(mod.os, "stat", lstat_then_swap)
+    strays, _ = mod.lock_entry(str(run), files, *OWNER)
+    assert strays == ["sub (changed while it was read)"]
+    assert modes(root, root / "etc", root / "etc" / "shadow") == [0o755, 0o755, 0o600]
+    assert {p.stat().st_uid for p in [root, *root.rglob("*")]} == {os.getuid()}
+    assert modes(moved) == [0o700]  # the directory it opened is the one it closed
+
+
+def test_the_lock_changes_nothing_in_check_mode(mod, tmp_path):
+    run, files = export(tmp_path)
+    trainer_written(run)
+    assert mod.lock_entry(str(run), files, *OWNER, apply=False) == ([], True)
+    assert modes(run, run / "config.json") == [0o2777, 0o666]
+
+
 def run_module(tmp_path: Path, args: dict) -> tuple[int, dict]:
     a = tmp_path / "args.json"
     a.write_text(json.dumps({"ANSIBLE_MODULE_ARGS": args}))

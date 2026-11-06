@@ -16,29 +16,41 @@
     get_checksum: false
   register: model_store_export_dir_stat
 
-# Order matters, because everything in exports/<run> is the trainers' until this block ends:
-# 1. walk it without following links and refuse a link, a special file or a file the manifest
-#    does not list (and an entry directory that is a link) BEFORE any chown or chmod, which would
-#    otherwise be applied as root to whatever a planted link names;
-# 2. take ownership without following links, so its bytes can no longer change under the check;
-# 3. only then verify every file by sha256, walking again (nothing may appear during step 2).
+# Everything in exports/<run> is the trainers' until it is locked, and a trainer can rename or
+# swap any name in it (or exports/<run> itself) between a check and a path-based chown, so no
+# ansible.builtin.file touches it. model_store_files (lock) works by descriptor instead:
+# 1. it opens exports/<run> with O_NOFOLLOW (a link is refused) and closes it to everyone but the
+#    store owner (fchown, fchmod 0700) BEFORE listing it, then does the same to each directory
+#    below, opened relative to its parent, so nothing can be planted after it is read;
+# 2. the same walk refuses a link, a special file, a file no export entry of this run lists, or a
+#    listed file with another hard link; with any of these no file is touched (a link's target
+#    never is, even for a moment) and the directories stay closed until an operator removes it;
+# 3. otherwise it takes each listed file through its own O_NOFOLLOW descriptor, then sets the
+#    directories to u=rwX,g=rX,o=;
+# 4. only then is every file verified by sha256, now that the trainers can no longer open it.
 - name: Check, lock and verify {{ model_store_entry.key }}
   when: model_store_export_dir_stat.stat.exists
   block:
-    - name: Refuse links, special files and unlisted files before taking ownership
-      ansible.builtin.include_tasks: verify_entry.yml
-      vars:
-        model_store_sizes_only: true
-    - name: Give the export to the store owner, read-only for the engines' group
-      ansible.builtin.file:
-        path: "{{ model_store_entry_dir }}"
-        state: directory
-        recurse: true
-        follow: false
+    - name: Take the export from the trainers by descriptor, refusing links and unlisted files
+      model_store_files:
+        dir: "{{ model_store_entry_dir }}"
+        files: "{{ model_store_entry.value.files }}"
+        listed: "{{ model_store_entry_listed }}"
+        checksum: false
+        lock: true
         owner: "{{ model_store_owner }}"
         group: "{{ model_store_group }}"
-        mode: "u=rwX,g=rX,o="
-    - name: Verify every file by sha256, now that the trainers can no longer change it
+      register: model_store_lock
+    - name: Fail unless the export holds only its listed files
+      ansible.builtin.assert:
+        that: model_store_lock.strays | length == 0
+        fail_msg: >-
+          model_store: {{ model_store_entry.key }} holds what no manifest entry for run
+          {{ model_store_entry.value.source.run }} lists in {{ model_store_entry_dir }}:
+          {{ model_store_lock.strays | join(', ') }} (no file was taken and no link followed; the
+          directories are now the store's, closed: remove the export or what does not belong as
+          root, list every file Studio wrote with its sha256, and run again)
+    - name: Verify every file by sha256, now that the trainers can no longer open it
       ansible.builtin.include_tasks: verify_entry.yml
       vars:
         model_store_sizes_only: false

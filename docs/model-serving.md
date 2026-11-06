@@ -165,14 +165,21 @@ against fakes.
    interrupted or tampered download never reaches the store. The live entry is then verified by
    sha256 again, and a snapshot file that links out of its repository's `blobs/` fails;
 5. takes each promoted export (in the manifest, on disk) out of the trainers' hands and verifies
-   it. Studio writes exports into a trainer-writable directory, so the role first walks
-   `exports/<run>/` without following links and refuses, before any chown or chmod, a link, a
-   special file, a file the manifest does not list, a listed file with another hard link, or an
-   `exports/<run>` that is itself a link (a followed recursive chown would apply to whatever a
-   planted link names). It then makes the export `models:models`, `u=rwX,g=rX,o=` (never
-   following links), and only then checks every file by sha256, so the bytes cannot change between
-   the check and the lock. An export becomes served bytes only once it is store-owned and matches;
-   one that fails after the lock stays store-owned, and the operator removes it;
+   it. Studio writes exports into a trainer-writable directory, and a trainer can rename any name
+   in it, `exports/<run>` included, between a check and a path-based chown. So nothing takes an
+   export by path: `model_store_files` (`lock: true`) opens `exports/<run>` with `O_NOFOLLOW`
+   (a link is refused) and closes it to all but the store owner (`fchown`, `fchmod 0700`) before
+   it lists it, then each directory below the same way, each opened relative to its parent. The
+   same walk refuses a link, a special file, a file that no manifest entry for that run lists (two
+   quants of one run share the directory), or a listed file with another hard link; with any of
+   these no file is touched, no link's target is ever opened, chowned or chmodded, and the
+   directories stay closed until an operator removes what does not belong. Otherwise each listed
+   file is taken through its own `O_NOFOLLOW` descriptor (`models:models`, `u=rwX,g=rX,o=`), and
+   only then is every file checked by sha256: a trainer can no longer open the export for writing
+   once it is store-owned. Residual risk: a write descriptor a trainer process already held open
+   survives the ownership change, so bytes can still change after the check; the vLLM unit's
+   `ExecStartPre` sha256 check is the last gate. An export becomes served bytes only once it is
+   store-owned and matches; one that fails stays store-owned, and the operator removes it;
 6. writes each entry's `sha256sum` listing to `manifests/listings/<id>.sha256`, the file every vLLM
    unit checks before it starts.
 
@@ -302,7 +309,7 @@ Studio is the GUI: it chats, compares models side by side, trains, and exports (
 3. To serve an export, **promote** it: add a manifest entry (`format: export`, the run id, `base`,
    `layout`, every file's sha256, which `hnx models store list` and `sha256sum` give you). List
    every file in `exports/<run-id>/` or remove the ones not to serve: promotion refuses an export
-   holding anything the manifest does not list, and any link. Then pin
+   holding anything that no manifest entry for that run lists, and any link. Then pin
    a binding to its digest, run `hnx models serving render`, and deploy `model_store` and
    `vllm_server`. Nothing is served from `exports/` without its hashes in git.
 

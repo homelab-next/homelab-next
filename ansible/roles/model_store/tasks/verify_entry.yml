@@ -3,8 +3,8 @@
 # model_store_sizes_only) its sha256.  A hub-cache snapshot file is a symlink to its blob: followed,
 # but only into its repository's blobs/ (an hf entry) or its own directory; a link anywhere else
 # would keep the digest while bytes nothing manages change behind it.  An export (written by the
-# trainers' group) is also walked without following links: a link, a special file or a file the
-# manifest does not list anywhere in it fails, and so does an entry directory that is a link.
+# trainers' group) is also walked without following links: a link, a special file or a file no
+# export entry of its run lists anywhere in it fails, and so does an entry directory that is a link.
 - name: Locate the entry
   ansible.builtin.include_tasks: entry_paths.yml
   tags: [health, verify]
@@ -17,6 +17,7 @@
     files: "{{ model_store_entry.value.files }}"
     checksum: "{{ not (model_store_sizes_only | default(false) | bool) }}"
     walk: "{{ model_store_entry.value.format == 'export' }}"
+    listed: "{{ model_store_entry_listed }}"
   register: model_store_stats
   tags: [health, verify]
 

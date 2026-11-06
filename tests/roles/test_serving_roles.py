@@ -396,6 +396,12 @@ def untouched(*paths: Path) -> bool:
     return all(p.lstat().st_mode & 0o002 for p in paths)
 
 
+def closed(*dirs: Path) -> bool:
+    """A refused export's directories: the store's, 0700, so nothing can be planted in them while
+    an operator cleans up (their files untouched)."""
+    return all(d.lstat().st_mode & 0o7777 == 0o700 for d in dirs)
+
+
 def test_model_store_refuses_a_link_in_an_export_before_taking_ownership(tmp_path):
     """exports/<run>/x -> a host file: the root-run chown/chmod would follow it and make that file
     store-owned (/etc/passwd in the attack; a stand-in here, never a real host file).  The walk
@@ -407,7 +413,8 @@ def test_model_store_refuses_a_link_in_an_export_before_taking_ownership(tmp_pat
     (run / "x").symlink_to(target)
     r = run_role(tmp_path, "model_store", "main", v)
     assert r.returncode != 0 and "x (a link)" in r.stdout, r.stdout
-    assert untouched(target, run, *run.iterdir()), oct(target.stat().st_mode)
+    assert untouched(target, *run.iterdir()), oct(target.stat().st_mode)
+    assert closed(run)
 
 
 def test_model_store_refuses_an_unlisted_file_in_an_export(tmp_path):
@@ -418,7 +425,7 @@ def test_model_store_refuses_an_unlisted_file_in_an_export(tmp_path):
     (run / "sub" / "extra.bin").chmod(0o666)
     r = run_role(tmp_path, "model_store", "main", v)
     assert r.returncode != 0 and "sub/extra.bin (not in the manifest)" in r.stdout, r.stdout
-    assert untouched(run, *run.rglob("*"))
+    assert untouched(*(p for p in run.rglob("*") if p.is_file())) and closed(run, run / "sub")
     (run / "sub" / "extra.bin").unlink()
     (run / "sub").rmdir()
     ok = run_role(tmp_path, "model_store", "main", v)
@@ -465,7 +472,46 @@ def test_every_recursive_file_task_in_model_store_never_follows_links():
             if isinstance(args, dict) and args.get("recurse"):
                 found += 1
                 assert args.get("follow") is False, (path.name, task.get("name"))
-    assert found >= 2
+    assert found >= 1  # fetch_entry.yml: the store's own staging, never a trainer's directory
+
+
+def test_an_export_is_never_taken_by_path():
+    """Any path-based chown of exports/<run> races a trainer's rename (the entry directory swapped
+    for a link to / between the check and the lchown): promotion takes it by descriptor alone."""
+    tasks = yaml.safe_load(
+        (ROOT / "ansible/roles/model_store/tasks/promote_export.yml").read_text()
+    )
+    stack, used = list(tasks), []
+    while stack:
+        task = stack.pop()
+        stack.extend(task.get("block") or [])
+        used.extend(k for k in task if k.startswith(("ansible.builtin.", "model_store_files")))
+    assert "ansible.builtin.file" not in used and "model_store_files" in used, used
+
+
+def test_model_store_promotes_two_quants_of_one_run(tmp_path):
+    """The manifest key is (source, run, quant), so two export entries may share exports/<run>:
+    each one's walk allows the other's files (check_disk unions them by directory)."""
+    store = manifest()
+    first = next(k for k, e in store["models"].items() if e["format"] == "export")
+    e = store["models"][first]
+    body = content(first + "-q4", "model-q4.gguf")
+    second = json.loads(json.dumps(e))
+    second.update(quant="q4_k_m", files=[])
+    second["files"].append(
+        {"path": "model-q4.gguf", "size": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+    )
+    second["served_model_name"] = first + "-q4"
+    store["models"][first + "-q4"] = second
+    st = store_mod.Store.from_dict(store)  # a valid manifest: the run is shared, the key is not
+    remote_tree(tmp_path, store)  # health reads every entry, so fetch the hub ones too
+    v = store_vars(tmp_path, store)
+    write_export(tmp_path / "srv", store)
+    r = run_role(tmp_path, "model_store", "main", v)
+    assert r.returncode == 0, r.stdout
+    h = run_role(tmp_path, "model_store", "health", v)
+    assert h.returncode == 0, h.stdout
+    assert store_mod.check_disk(st, tmp_path / "srv", only=[first, first + "-q4"]) == []
 
 
 def test_model_store_backup_and_export_hooks(tmp_path):
