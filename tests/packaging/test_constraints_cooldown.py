@@ -32,21 +32,29 @@ def _stale(entries: list[str], today: dt.date) -> list[str]:
     for e in entries:
         m = re.fullmatch(r"([A-Za-z0-9_.-]+)=(\d{4}-\d{2}-\d{2})", e)
         assert m, f"CONSTRAINTS_FRESH entry {e!r} is not pkg=YYYY-MM-DD"
-        if (today - dt.date.fromisoformat(m.group(2))).days > COOLDOWN_DAYS:
+        age = (today - dt.date.fromisoformat(m.group(2))).days
+        # A future date admits every release until it passes: a permanent waiver, so reject it.
+        if age > COOLDOWN_DAYS or age < 0:
             out.append(e)
     return out
 
 
+# Failing here once an exemption passes 14 days is the intended expiry, not a regression: delete it.
 def test_exemptions_are_dated_and_none_is_older_than_the_cooldown():
     stale = _stale(_fresh(MAKEFILE), dt.datetime.now(dt.UTC).date())
     assert not stale, (
-        f"drop exemptions older than {COOLDOWN_DAYS} days (the cutoff covers them): {stale}"
+        f"drop exemptions older than {COOLDOWN_DAYS} days (the cutoff covers them) or dated in the future: {stale}"
     )
 
 
 def test_staleness_check_catches_an_old_and_an_undated_entry():
     today = dt.date(2026, 11, 6)
     assert _stale(["a=2026-10-01", "b=2026-10-30"], today) == ["a=2026-10-01"]
+    # future-dated (a standing waiver) is flagged; today's date is not
+    assert _stale(["c=2026-11-07", "d=2099-12-31", "e=2026-11-06"], today) == [
+        "c=2026-11-07",
+        "d=2099-12-31",
+    ]
     with pytest.raises(AssertionError):
         _stale(["certifi"], today)  # the old undated form
 
