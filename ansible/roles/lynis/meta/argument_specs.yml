@@ -31,6 +31,10 @@ argument_specs:
         type: int
         description: "The health hook fails when the last run is older than this."
         default: 48
+      lynis_max_run_seconds: &runsec
+        type: int
+        description: "The report may predate the run's last-run record by at most this long (the audit's own duration)."
+        default: 3600
       lynis_systemctl_cli: &systemctl
         type: str
         description: "The systemctl command (daemon-reload, enable the timer)."
@@ -147,6 +151,7 @@ argument_specs:
       lynis_min_hardening_index: *index
       lynis_max_warnings: *warnings
       lynis_max_age_hours: *age
+      lynis_max_run_seconds: *runsec
       lynis_state_dir: *state
       lynis_dpkg_verify: *verify
       lynis_dpkg_verify_max_findings: *vmax

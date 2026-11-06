@@ -2,13 +2,19 @@
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
+- name: Look at the guest's freshclam configuration
+  ansible.builtin.stat:
+    path: "{{ clamav_freshclam_config }}"
+  register: clamav_freshclam_stat
+
 - name: Point freshclam at the lab mirror
   ansible.builtin.lineinfile:
     path: "{{ clamav_freshclam_config }}"
     regexp: '^PrivateMirror '
     line: "PrivateMirror {{ clamav_private_mirror }}"
     state: "{{ 'present' if clamav_private_mirror else 'absent' }}"
-  when: clamav_private_mirror | length > 0 or clamav_freshclam_config is file
+  when: clamav_private_mirror | length > 0 or clamav_freshclam_stat.stat.exists
+  notify: Restart freshclam
 
 - name: Ensure the script directory exists
   ansible.builtin.file:

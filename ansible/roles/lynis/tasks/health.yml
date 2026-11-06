@@ -9,12 +9,26 @@
         src: "{{ lynis_state_dir }}/last-run"
       register: lynis_last_rc
       when: lynis_last.stat.exists
-    - name: Fail unless a run finished recently
+    - name: Fail unless a run finished recently and the scanner exited cleanly
       ansible.builtin.assert:
         that:
           - lynis_last.stat.exists
           - (now(utc=true).timestamp() - lynis_last.stat.mtime) < lynis_max_age_hours | int * 3600
-        fail_msg: "lynis: no Lynis host audit in the last {{ lynis_max_age_hours }}h ({{ lynis_state_dir }}/last-run is missing or older)"
+          - (lynis_last_rc.content | b64decode | trim) == '0'
+        fail_msg: >-
+          lynis: no Lynis host audit in the last {{ lynis_max_age_hours }}h ({{ lynis_state_dir }}/last-run is missing or older),
+          or the last audit exited {{ (lynis_last_rc.content | b64decode | trim) if lynis_last_rc.content is defined else 'unknown' }}
+          (see {{ lynis_state_dir }}/lynis.log)
+    - name: Look at the report
+      ansible.builtin.stat:
+        path: "{{ lynis_state_dir }}/report.dat"
+      register: lynis_report_stat
+    - name: Fail unless the report belongs to the last run
+      ansible.builtin.assert:
+        that:
+          - lynis_report_stat.stat.exists
+          - lynis_report_stat.stat.mtime + lynis_max_run_seconds | int >= lynis_last.stat.mtime
+        fail_msg: "lynis: {{ lynis_state_dir }}/report.dat is missing or older than the last run (a stale report is not evidence)"
     - name: Read the report
       ansible.builtin.slurp:
         src: "{{ lynis_state_dir }}/report.dat"
@@ -32,6 +46,18 @@
           lynis: hardening index {{ lynis_index }} (at least {{ lynis_min_hardening_index }}), {{ lynis_warnings | length }}
           warning(s) (at most {{ lynis_max_warnings }}): {{ lynis_warnings | map('regex_replace', '\\|.*$', '') | join(', ') }}
 
+    - name: Look at the package integrity sweep
+      ansible.builtin.stat:
+        path: "{{ lynis_state_dir }}/dpkg-verify.json"
+      register: lynis_verify_stat
+      when: lynis_dpkg_verify | bool
+    - name: Fail unless the sweep ran after the audit it belongs to
+      ansible.builtin.assert:
+        that:
+          - lynis_verify_stat.stat.exists
+          - lynis_verify_stat.stat.mtime >= lynis_last.stat.mtime
+        fail_msg: "lynis: {{ lynis_state_dir }}/dpkg-verify.json is missing or older than the last run (the sweep failed or did not run)"
+      when: lynis_dpkg_verify | bool
     - name: Read the package integrity sweep
       ansible.builtin.slurp:
         src: "{{ lynis_state_dir }}/dpkg-verify.json"

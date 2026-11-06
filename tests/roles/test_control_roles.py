@@ -14,6 +14,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from rolerun import calls, fake, first_run, last_run_vars, logging_fake, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2085,7 +2086,7 @@ def test_lynis_files_the_run_through_the_broker_when_a_socket_is_set(first):
     run_scan(tmp_path)
     assert (tmp_path / "argv").read_text() == "broker call finding.write --socket"
     filed = json.loads((tmp_path / "filed.json").read_text())
-    assert filed["name"].startswith("lynis-") and "Hardening index: 70" in filed["content"]
+    assert "-lynis-" in filed["name"] and "Hardening index: 70" in filed["content"]
     assert "- X-1|w|" in filed["content"]
 
 
@@ -2918,3 +2919,147 @@ def test_dpkg_verify_still_reports_a_missing_file_dpkg_was_told_to_keep(first):
     assert run_sweep(tmp_path).returncode == 0
     doc = json.loads((tmp_path / "state" / "dpkg-verify.json").read_text())
     assert [f["path"] for f in doc["findings"]] == ["/usr/share/doc/sudo/copyright"]
+
+
+# ---------------------------------------------------------------- lynis and clamav: health that can fail
+# One config run and one batched health run cover every state: the states are made with the
+# generated scan and sweep scripts (plain Python), copied aside, and each copy is the state
+# directory of one health case (run_cases).
+LYNIS_STEERED = """
+import os, sys
+d = {tmp!r}
+args = sys.argv[1:]
+if not os.path.exists(d + "/skip-report"):
+    open(args[args.index("--report-file") + 1], "w").write("hardening_index=70\\n")
+sys.exit(int(open(d + "/rc").read()))
+"""
+
+
+def test_lynis_health_fails_on_every_stale_or_failed_audit_state(tmp_path):
+    import os
+
+    tmp = str(tmp_path)
+    (tmp_path / "rc").write_text("0")
+    v, _ = sweep_setup(tmp_path, "")
+    filed = tmp_path / "filed.json"
+    v["lynis_cli"] = fake(tmp_path / "lynis-cli", LYNIS_STEERED.format(tmp=tmp))
+    v["lynis_hnx_cli"] = fake(
+        tmp_path / "hnx",
+        "import shutil, sys\n"
+        f"shutil.copy(sys.argv[sys.argv.index('--params-file') + 1], {str(filed)!r})\n",
+    )
+    v["lynis_broker_socket"] = "/run/hnx-broker/broker.sock"
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    snaps: list[tuple[str, str]] = []  # (state copy, what its health run must say; "" = pass)
+
+    def snap(name, says):
+        shutil.copytree(state, tmp_path / name)
+        snaps.append((str(tmp_path / name), says))
+
+    # a good-looking report, but the scanner reported an error
+    (tmp_path / "rc").write_text("1")
+    run_scan(tmp_path)
+    assert (state / "last-run").read_text().strip() == "1"
+    snap("rc1", "the last audit exited 1")
+    # a clean run, and its sweep
+    (tmp_path / "rc").write_text("0")
+    run_scan(tmp_path)
+    assert run_sweep(tmp_path).returncode == 0
+    snap("ok", "")
+    last = (state / "last-run").stat().st_mtime
+    # a leftover report: older than the run by more than the run's allowed duration
+    os.utime(state / "report.dat", (last - 7200, last - 7200))
+    snap("oldreport", "report.dat is missing or older")
+    os.utime(state / "report.dat", (last, last))
+    # a sweep result left by an earlier run
+    os.utime(state / "dpkg-verify.json", (last - 60, last - 60))
+    snap("oldsweep", "dpkg-verify.json is missing or older")
+    # the sweep never wrote one: a clean failure, not a traceback
+    (state / "dpkg-verify.json").unlink()
+    snap("nosweep", "dpkg-verify.json is missing or older")
+    # the broker filing name is one the example findings lanes accept
+    import re
+
+    name = json.loads(filed.read_text())["name"]
+    root = Path(__file__).resolve().parents[2] / "examples" / "broker"
+    for manifest in ("manifest.yml", "manifest.production.yml"):
+        lanes = yaml.safe_load((root / manifest).read_text())["lanes"]
+        (lane,) = [x for x in lanes if x["name"] == "findings"]
+        assert re.fullmatch(lane["filename_pattern"], name), (manifest, name)
+    # a scan that fails before writing a report never leaves an earlier report in place
+    (state / "report.dat").write_text("hardening_index=99\n")
+    (tmp_path / "rc").write_text("1")
+    (tmp_path / "skip-report").write_text("")
+    run_scan(tmp_path)
+    assert not (state / "report.dat").exists()
+    snap("noreport", "the last audit exited 1")
+    cases = [{"lynis_state_dir": d} for d, _ in snaps]
+    results = run_cases(tmp_path, "lynis", "health", v, cases)
+    for (d, says), (failed, msg) in zip(snaps, results, strict=True):
+        name = Path(d).name
+        assert failed == bool(says), (name, msg)
+        assert says in msg.replace("\n", " "), (name, msg)
+
+
+def test_clamav_clearing_the_private_mirror_removes_the_line_and_restarts_freshclam(tmp_path):
+    import subprocess
+
+    from rolerun import _invocation
+
+    conf = tmp_path / "freshclam.conf"
+    conf.write_text("DatabaseMirror database.clamav.net\n")
+    v = scanner_vars(tmp_path, "clamav", clamav_paths=["/srv"], clamav_freshclam_config=str(conf),
+                     clamav_private_mirror="clamav-mirror.example.internal")  # fmt: skip
+    cmd, env = _invocation(tmp_path, "clamav", "config", {})
+    snap = {
+        "ansible.builtin.shell": f"cp {conf} {conf}.{{n}}; cp -f {tmp_path}/calls.log {tmp_path}/calls.{{n}}"
+    }
+    tasks = []
+    for n, over in enumerate(({}, {}, {"clamav_private_mirror": ""}), 1):
+        tasks += [
+            {
+                "ansible.builtin.include_role": {"name": "clamav", "tasks_from": "config"},
+                # task vars: the role's vars/main.yml (clamav_script) outranks play vars
+                "vars": {**v, **over},
+            },
+            {"ansible.builtin.meta": "flush_handlers"},
+            {"ansible.builtin.shell": snap["ansible.builtin.shell"].format(n=n)},
+        ]
+    play = [
+        {
+            "hosts": "localhost",
+            "connection": "local",
+            "gather_facts": False,
+            "vars": v,
+            "tasks": tasks,
+        }
+    ]
+    (tmp_path / "play.yml").write_text(yaml.safe_dump(play))
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    restart = "systemctl restart clamav-freshclam"
+
+    def restarts(n):
+        return (tmp_path / f"calls.{n}").read_text().splitlines().count(restart)
+
+    assert (
+        "PrivateMirror clamav-mirror.example.internal\n"
+        in (tmp_path / "freshclam.conf.1").read_text()
+    )
+    assert restarts(1) == 1
+    assert restarts(2) == 1  # unchanged: no restart
+    cleared = (tmp_path / "freshclam.conf.3").read_text()
+    assert "PrivateMirror" not in cleared and "DatabaseMirror" in cleared
+    assert restarts(3) == 2
+
+
+def test_clamav_config_reads_the_guest_file_not_the_controller():
+    # controller == guest in the harness, so pin the structure: the guest stat is registered
+    # before the lineinfile and gates it, and the controller-side `is file` test is gone.
+    src = (ROOT / "ansible" / "roles" / "clamav" / "tasks" / "config.yml").read_text()
+    assert "ansible.builtin.stat" in src and "register: clamav_freshclam_stat" in src
+    assert src.index("ansible.builtin.stat") < src.index("ansible.builtin.lineinfile")
+    assert "clamav_freshclam_stat.stat.exists" in src
+    assert " is file" not in src
