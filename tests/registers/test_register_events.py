@@ -896,3 +896,57 @@ def test_the_decider_fails_closed_without_a_review_policy(lab, inbox, capsys):
     assert _lanes(inbox)["decided/completed"] == []  # a dry run moves nothing
     assert registers_main([*argv, "--no-policy"]) == 0  # the explicit opt-out
     assert "applied" in capsys.readouterr().out
+
+
+def _ll_003_partial(inbox, lab):
+    name = _intent(
+        inbox,
+        "ll-003-partial",
+        record=U["LL-003"],
+        **{"from": "open", "to": "partial"},
+        reason="a detector exists; the backup gap is still open for new guests",
+    )
+    _give_ll_003_a_control(lab)
+    return name
+
+
+def _ll_003_status(lab):
+    return load_register(lab / "lessons")["lessons"][2]["status"]
+
+
+@pytest.mark.parametrize("how", ["hard link", "symlink"])
+def test_a_linked_intent_is_refused_before_anything_is_applied(lab, inbox, tmp_path, how):
+    """The decider reads the intent through the movers' safe load: a hard-linked or symlinked
+    intent used to be applied, then refused by the move, leaving it in inbox/ for good."""
+    name = _ll_003_partial(inbox, lab)
+    p = inbox / "inbox" / name
+    if how == "hard link":
+        (tmp_path / "kept.md").hardlink_to(p)
+    else:
+        p.rename(tmp_path / "kept.md")
+        p.symlink_to(tmp_path / "kept.md")
+    rec = lab / "lessons" / f("LL-003")
+    [out] = _decider(lab, inbox).decide_all()
+    assert out.result == "invalid", out
+    assert _ll_003_status(lab) == "open"
+    assert [e for e in ev.read_events(ev.events_dir(rec), []) if e.kind == "transition"] == []
+    assert _lanes(inbox)["decided/completed"] == []
+
+
+def test_an_intent_rewritten_after_the_decision_files_the_bytes_decided_on(lab, inbox, monkeypatch):
+    name = _ll_003_partial(inbox, lab)
+    p = inbox / "inbox" / name
+    original = p.read_bytes()
+    import homelabnext.registers.write as w
+
+    real = w.write_events
+
+    def rewrite_then_write(*a, **kw):
+        with open(p, "r+b") as fh:  # the agent rewrites its inode once the decision is made
+            fh.write(original.replace(b"a detector exists", b"nothing exists...."))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(w, "write_events", rewrite_then_write)
+    [out] = _decider(lab, inbox).decide_all()
+    assert out.result == "applied", out
+    assert (inbox / "decided" / "completed" / name).read_bytes() == original

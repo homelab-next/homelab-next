@@ -2,13 +2,15 @@
 """The records decider re-creates a decided note instead of renaming the agent's file, refuses
 symlinks and hard-linked notes, and has an operator command (``hnx records decide``)."""
 
+import errno
 import os
+import stat
 from datetime import UTC, datetime
 
 import pytest
 
 from homelabnext.cli import main as hnx
-from homelabnext.records import LaneViolation, Records, parse_note
+from homelabnext.records import LaneViolation, NoteError, Records, parse_note
 from homelabnext.records.decider import Decider, init_tree
 from homelabnext.records.decider import main as decide_main
 
@@ -157,3 +159,120 @@ def test_operator_command_refusals_and_usage(rec, tree, capsys):
 def test_records_router_still_reaches_the_identity_commands(capsys):
     assert hnx(["records", "uid", "-n", "2"]) == 0
     assert len(capsys.readouterr().out.split()) == 2
+
+
+def test_a_crlf_note_approves_and_its_bytes_are_kept(rec, tree):
+    p = _propose(rec)
+    crlf = p.read_bytes().replace(b"\n", b"\r\n")
+    p.write_bytes(crlf)
+    dest = _decider(tree).approve(p.name)
+    assert dest.read_bytes() == crlf
+
+
+def test_a_note_swapped_after_it_was_read_files_the_read_bytes(rec, tree, monkeypatch, capsys):
+    p = _propose(rec)
+    original = p.read_bytes()
+    d = _decider(tree)
+    real_move = Decider._move
+
+    def swap_then_move(self, note, *a, **kw):
+        # a new inode renamed over the name (written first, so it cannot reuse the inode number)
+        repl = p.with_name("replacement.tmp")
+        repl.write_bytes(original.replace(b"Revert the threshold", b"none, irreversible"))
+        os.rename(repl, p)
+        return real_move(self, note, *a, **kw)
+
+    monkeypatch.setattr(Decider, "_move", swap_then_move)
+    dest = d.approve(p.name)
+    assert dest.read_bytes() == original
+    assert b"irreversible" in p.read_bytes()  # the replacement is left where it was
+    assert "changed after it was read" in capsys.readouterr().err
+
+
+def test_read_then_approve_files_what_read_returned(rec, tree):
+    """A caller deciding on Decider.read's note files those bytes even if the inode changes."""
+    p = _propose(rec)
+    original = p.read_bytes()
+    d = _decider(tree)
+    note = d.read("inbox", p.name)
+    assert note.frontmatter["rollback"] == "Revert the threshold"
+    with open(p, "r+b") as fh:  # the agent rewrites its own inode after the decision was made
+        fh.write(original.replace(b"Revert the threshold", b"none, irreversible  "))
+    assert d.approve(p.name).read_bytes() == original
+
+
+def test_a_failed_unlink_leaves_nothing_in_the_decided_lane(rec, tree, monkeypatch):
+    p = _propose(rec)
+    real_unlink = os.unlink
+
+    def refuse(path, *a, **kw):
+        if str(path) == str(p):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_unlink(path, *a, **kw)
+
+    monkeypatch.setattr(os, "unlink", refuse)
+    with pytest.raises(PermissionError):
+        _decider(tree).approve(p.name)
+    monkeypatch.undo()
+    assert p.exists()
+    assert os.listdir(tree / "decided" / "approved") == []
+    assert _decider(tree).approve(p.name).exists()  # a retry, once permitted, goes through
+
+
+def test_decided_notes_are_not_world_readable(rec, tree):
+    old = os.umask(0o022)
+    try:
+        dest = _decider(tree).approve(_propose(rec).name)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(os.stat(dest).st_mode) == 0o640
+    side = dest.with_name(dest.name + ".decision.json")
+    assert stat.S_IMODE(os.stat(side).st_mode) == 0o640
+
+
+def test_an_open_error_other_than_a_symlink_is_reported_as_itself(rec, tree, monkeypatch):
+    p = _propose(rec)
+    real_open = os.open
+
+    def eacces(path, *a, **kw):
+        if str(path) == str(p):
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(os, "open", eacces)
+    with pytest.raises(PermissionError) as exc:
+        _decider(tree).approve(p.name)
+    assert not isinstance(exc.value, LaneViolation)
+    assert exc.value.errno == errno.EACCES
+
+
+def test_complete_refuses_a_related_entry_outside_the_approved_lane(rec, tree):
+    p = _propose(rec)
+    d = _decider(tree)
+    d.approve(p.name)
+    other = _propose(rec, slug="other")
+    d.deny(other.name)
+    req = rec.completion_request([p.name], "Done.", agent="triage")
+    text = req.read_text().replace(f"decided/approved/{p.name}", f"decided/denied/{other.name}")
+    req.write_text(text)
+    with pytest.raises(NoteError):
+        d.complete(req.name)
+    assert (tree / "decided" / "approved" / p.name).exists()
+    assert req.exists()
+
+
+def test_operator_command_reports_os_errors_and_an_empty_by(rec, tree, monkeypatch, capsys):
+    p = _propose(rec)
+    root = str(tree)
+    assert decide_main(["approve", p.name, "--root", root, "--by", ""]) == 2
+    assert "decided_by" in capsys.readouterr().err
+    real_unlink = os.unlink
+
+    def refuse(path, *a, **kw):
+        if str(path) == str(p):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_unlink(path, *a, **kw)
+
+    monkeypatch.setattr(os, "unlink", refuse)
+    assert decide_main(["approve", p.name, "--root", root, "--by", "op"]) == 1
+    assert "refused" in capsys.readouterr().err

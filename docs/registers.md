@@ -32,6 +32,7 @@ hnx registers events migrate examples/registers/lessons docs/systems   # inline 
 hnx registers decide examples/registers RECORDS_ROOT --as human:operator [--policy F | --no-review-policy | --no-policy] [--dry-run]
 hnx ids check-lost | check-dupes | check-uids                          # make ids-check
 hnx records uid | numbers examples/registers | assign-uids TREE...     # identity (ADR-0019)
+hnx records decide approve|deny|complete NAME --root DIR --by WHO     # generic notes (docs/broker.md)
 ```
 
 The strategy-to-task records (objectives, measures, requirements, RFIs; [strategy](strategy.md),

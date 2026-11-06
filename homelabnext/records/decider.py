@@ -21,12 +21,27 @@ by it) and only then unlinks the source.  What lands in ``decided/`` is exactly 
 validated, and nothing the agent holds refers to it.  The guarantee holds only when the decider
 runs as its own OS user: run as the agent's user it owns the copy too.  The command is
 ``hnx records decide approve|deny|complete`` (:func:`main`).
+
+A caller that decides on a note's content (the register and strategy deciders) reads it with
+:meth:`Decider.read`, the same safe load, and the movers then file exactly the bytes that call
+read: a note an agent could rewrite, or one that is a symlink or hard-linked, is refused before
+anything is applied, and the bytes applied are the bytes filed.
+
+A decided note (and its sidecar) is created mode ``0640`` less the decider's umask (``mode=``):
+agents read ``decided/`` through the group of the decider's directories, so give ``decided/`` the
+agents' group (setgid on the lane directories keeps it on new files).  A decider umask of ``077``
+leaves the copies unreadable to :class:`~homelabnext.records.RecordsReader`.
+
+The source is unlinked only while its inode is still the one read.  Between that check and the
+unlink an agent can swap in another file at the same name, which the decider then deletes; only
+the agent's own replacement is lost, so this is documented rather than closed.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import json
 import os
 import stat
@@ -51,6 +66,12 @@ from .notes import (
 
 APPROVED, DENIED, COMPLETED = DECIDED_LANES
 
+#: what open(O_NOFOLLOW) fails with on a symlink: ELOOP (Linux, POSIX), EMLINK (FreeBSD),
+#: EFTYPE (NetBSD, macOS); any other error is reported as itself
+_SYMLINK_ERRNOS = frozenset(
+    e for e in (errno.ELOOP, errno.EMLINK, getattr(errno, "EFTYPE", None)) if e is not None
+)
+
 
 def init_tree(root: str | os.PathLike) -> None:
     """Create the lane directories (the operator owns the tree layout)."""
@@ -65,25 +86,36 @@ class Decider:
         *,
         decided_by: str,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        mode: int = 0o640,
     ):
         if not decided_by:
             raise ValueError("decided_by is required (the audit sidecar names the decider)")
         self.root = Path(root)
         self.decided_by = decided_by
         self.clock = clock
-        # (lane, name) -> the validated bytes and the (st_dev, st_ino) they were read from;
-        # _move writes exactly these bytes, never re-reading the source
-        self._loaded: dict[tuple[str, str], tuple[bytes, tuple[int, int]]] = {}
+        self.mode = mode
+        # (lane, name) -> the validated bytes, the (st_dev, st_ino) they were read from and the
+        # note parsed from them; _move writes exactly these bytes, never re-reading the source
+        self._loaded: dict[tuple[str, str], tuple[bytes, tuple[int, int], Note]] = {}
 
     # ---------------------------------------------------------------- public movers
+    def read(self, lane: str, name: str) -> Note:
+        """Load ``lane/name`` the way a move does (no symlink, one link, validated) and keep its
+        bytes: a following :meth:`approve`, :meth:`deny` or :meth:`fulfil` of that note files
+        exactly these bytes, so a caller that decides on what this returns files what it decided
+        on.  Raises :class:`LaneViolation` (a :class:`PermissionError`) for a symlink or a
+        hard-linked note and :class:`NoteError` for one that does not validate.  The file name
+        is not checked against the front-matter here (:meth:`approve` does)."""
+        return self._load(lane, name, validate_filename=False)
+
     def approve(self, name: str) -> Path:
-        note = self._load(AGENT_LANE, name)
+        note = self._note(AGENT_LANE, name)
         if note.type == "completion-request":
             raise NoteError("a completion-request is closed with complete(), not approve()")
         return self._move(note, APPROVED, "approved", None)
 
     def deny(self, name: str, reason: str | None = None) -> Path:
-        note = self._load(AGENT_LANE, name)
+        note = self._note(AGENT_LANE, name)
         return self._move(note, DENIED, "denied", reason)
 
     def complete(self, name: str, reason: str | None = None) -> list[Path]:
@@ -94,11 +126,16 @@ class Decider:
         the request itself), the call raises before the first move and changes nothing.
         The request itself is filed under ``decided/completed/`` as well.
         """
-        req = self._load(AGENT_LANE, name)
+        req = self._note(AGENT_LANE, name)
         if req.type != "completion-request":
             raise NoteError(f"{name} is type {req.type!r}, not a completion-request")
-        related = list(req.frontmatter.get("related", []))
-        missing = [r for r in related if not (self.root / r).is_file()]
+        related = [str(r) for r in req.frontmatter.get("related", [])]
+        # exactly decided/approved/<file>.md: the note completed is the one named, never a path
+        # elsewhere that is only stat'ed (the schema says so too; this does not rely on it)
+        bad = [r for r in related if r != f"{APPROVED}/{Path(r).name}"]
+        if bad:
+            raise NoteError(f"related: not a {APPROVED}/<file>.md entry: {', '.join(bad)}")
+        missing = [r for r in related if not os.path.lexists(self.root / r)]
         if missing:
             raise NoteError(f"related: not in the approved lane: {', '.join(missing)}")
         notes = [self._load(APPROVED, Path(rel).name, validate_filename=False) for rel in related]
@@ -129,6 +166,18 @@ class Decider:
         return self._move(note, COMPLETED, "completed", reason)
 
     # ---------------------------------------------------------------- internals
+    def _note(self, lane: str, name: str) -> Note:
+        """The note :meth:`read` kept for ``lane/name``, its file name checked; else a fresh
+        load."""
+        hit = self._loaded.get((lane, name))
+        if hit is None:
+            return self._load(lane, name)
+        note = hit[2]
+        problems = check_filename(name, note.frontmatter)
+        if problems:
+            raise NoteError("; ".join(problems))
+        return note
+
     def _load(self, lane: str, name: str, *, validate_filename: bool = True) -> Note:
         if "/" in name or "\\" in name or not name.endswith(".md"):
             raise LaneViolation(f"not a bare note filename: {name!r}")
@@ -137,8 +186,10 @@ class Decider:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
             raise FileNotFoundError(f"{lane}/{name} does not exist") from None
-        except OSError as ex:  # ELOOP: the name is a symlink
-            raise LaneViolation(f"{lane}/{name} is not a regular file (a symlink?)") from ex
+        except OSError as ex:
+            if ex.errno in _SYMLINK_ERRNOS:
+                raise LaneViolation(f"{lane}/{name} is not a regular file (a symlink)") from ex
+            raise
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
@@ -157,6 +208,9 @@ class Decider:
             text = data.decode("utf-8")
         except UnicodeDecodeError as ex:
             raise NoteError(f"{lane}/{name} is not UTF-8 text") from ex
+        # parse with universal newlines, as read_note's read_text does (a CRLF note validates);
+        # the bytes filed are still the ones read
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
         fm, body = parse_note(text)
         note = Note(lane=lane, name=name, frontmatter=fm, body=body.lstrip("\n"))
         validate_note(note.frontmatter)
@@ -164,14 +218,14 @@ class Decider:
             problems = check_filename(name, note.frontmatter)
             if problems:
                 raise NoteError("; ".join(problems))
-        self._loaded[(lane, name)] = (data, (st.st_dev, st.st_ino))
+        self._loaded[(lane, name)] = (data, (st.st_dev, st.st_ino), note)
         return note
 
     def _move(
         self, note: Note, dest_lane: str, decision: str, reason: str | None, via: str | None = None
     ) -> Path:
         try:
-            data, ident = self._loaded[(note.lane, note.name)]
+            data, ident, _ = self._loaded[(note.lane, note.name)]
         except KeyError:
             raise NoteError(f"{note.lane}/{note.name} was not loaded by this decider") from None
         src = self.root / note.lane / note.name
@@ -193,15 +247,28 @@ class Decider:
         sidecar = dest_dir / f"{note.name}.decision.json"
         tmp = dest_dir / f".{note.name}.{os.getpid()}.decision.tmp"
         tmp.write_text(json.dumps(side, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        os.chmod(tmp, self.mode & ~_umask())
         os.replace(tmp, sidecar)
-        _create(dest_dir, note.name, data)
+        created = False
         try:
-            cur = os.lstat(src)
-        except FileNotFoundError:
-            cur = None
-        if cur is not None and (cur.st_dev, cur.st_ino) == ident:
-            os.unlink(src)
-        elif cur is not None:
+            _create(dest_dir, note.name, data, self.mode)
+            created = True
+            try:
+                cur = os.lstat(src)
+            except FileNotFoundError:
+                cur = None
+            if cur is not None and (cur.st_dev, cur.st_ino) == ident:
+                os.unlink(src)
+        except OSError:
+            # all or nothing, as the rename was: a source the decider may not unlink (EACCES,
+            # EPERM: a sticky inbox it does not own) leaves no copy behind in dest_lane
+            if created:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(dest)
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(sidecar)
+            raise
+        if cur is not None and (cur.st_dev, cur.st_ino) != ident:
             # swapped after it was read: the decision is on the bytes that were read (now in
             # dest_lane); the replacement is left where it is, for the operator to look at
             print(
@@ -213,13 +280,19 @@ class Decider:
         return dest
 
 
-def _create(dest_dir: Path, name: str, data: bytes) -> None:
+def _umask() -> int:
+    cur = os.umask(0)
+    os.umask(cur)
+    return cur
+
+
+def _create(dest_dir: Path, name: str, data: bytes, mode: int) -> None:
     """Create ``dest_dir/name`` holding ``data``, exclusively and atomically: a new inode written
     by this process (so owned by the decider's user), linked into place without following a
     symlink, never replacing an existing name."""
     dfd = os.open(dest_dir, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        tmp = write_temp(name, data, dir_fd=dfd, mode=0o644)
+        tmp = write_temp(name, data, dir_fd=dfd, mode=mode)
         try:
             os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)
         finally:
@@ -251,7 +324,11 @@ def main(argv: list[str] | None = None) -> int:
     if ns.action == "approve" and ns.reason:
         print("[records] --reason is for deny and complete", file=sys.stderr)
         return 2
-    d = Decider(ns.root, decided_by=ns.by)
+    try:
+        d = Decider(ns.root, decided_by=ns.by)
+    except ValueError as ex:
+        print(f"[records] {ex}", file=sys.stderr)
+        return 2
     try:
         if ns.action == "approve":
             moved = [d.approve(ns.name)]
@@ -259,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
             moved = [d.deny(ns.name, ns.reason)]
         else:
             moved = d.complete(ns.name, ns.reason)
-    except (NoteError, LaneViolation, FileNotFoundError, FileExistsError) as ex:
+    except (NoteError, OSError) as ex:  # LaneViolation, FileNotFoundError: OSErrors too
         print(f"[records] refused: {ex}", file=sys.stderr)
         return 1
     root = Path(ns.root)

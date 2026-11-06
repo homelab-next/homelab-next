@@ -256,9 +256,10 @@ Records(root, clock, *, agent=None).propose(note, *, body="", slug=None) -> Path
 Records.completion_request(related, body, *, agent=None, ...) -> Path   # related: decided/approved/<file>.md
 RecordsReader(root).list(lane) / .read(lane, name) / .iter_notes(lane)
 # homelabnext.records.decider (operator side; CLI: hnx records decide approve|deny|complete NAME --root DIR --by WHO)
-Decider(root, *, decided_by, clock).approve(name) / .deny(name, reason) / .complete(name, reason)
+Decider(root, *, decided_by, clock, mode=0o640).approve(name) / .deny(name, reason) / .complete(name, reason)
+Decider.read(lane, name) -> Note   # the same safe load; a following approve/deny/fulfil files exactly these bytes
 #   each move reads the note O_NOFOLLOW (regular file, one link, else LaneViolation), validates it and
-#   writes those bytes to a NEW file in the destination lane before unlinking the source
+#   writes those bytes to a NEW file (mode 0640 less umask) in the destination lane before unlinking the source
 validate_note(note) / parse_note(text) / render_note(...)   # note schema: schemas/records/note.schema.json
 
 # homelabnext.decide
