@@ -184,7 +184,17 @@ class StatusHub:
             obs = Observation.from_dict(
                 {**obs.to_dict(), "observed_at": iso(observed), "expires_at": iso(expires)}
             )
-        self._put(obs, now)
+        held = (self.store.get(self._obs_key(obs.key)) or {}).get("latest")
+        # a late or replayed event must not replace a newer reading: keep the stored record
+        # when its observed_at is later (equal or newer replaces)
+        if held is None or parse_iso(held["observed_at"]) <= parse_iso(obs.observed_at):
+            self._put(obs, now)
+        else:
+            _log.warning(
+                "status source %s: ignored an observation older than the stored one (%s)",
+                spec.id,
+                obs.key,
+            )
         src = dict(self.store.get(self._src_key(spec.id)) or {})
         src.update(last_attempt=iso(now), last_ok=iso(now), error=None)
         if skew:
