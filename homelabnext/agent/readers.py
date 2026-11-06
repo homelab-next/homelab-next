@@ -684,13 +684,19 @@ def manifest_problems(
     """A context manifest's ``tools`` (MCP servers) must be grantable catalog servers that act,
     if at all, through the broker (a manifest is bound to a persona, not to a profile, so no
     policy names a direct exception for it); and a manifest with any ``source: input`` section
-    feeds untrusted content to its agent, so its tools obey the reader rule too."""
+    feeds untrusted content to its agent, so its tools obey the reader rule too.  The reader rule
+    also refuses a ``source: input`` section declared ``tier: stable``
+    (:func:`stable_input_problems`) and a delimiter that cannot fence input
+    (:func:`~homelabnext.agent.pack.delimiter_problems`).  ``start_session`` refuses both too, so
+    the ``sessions`` lint rule reports them again for each profile the manifest names."""
+    from .pack import delimiter_problems
+
     sections = doc.get("sections") or []
     who = f"manifest {doc.get('id', '?')}"
     tools = {"mcp": doc.get("tools") or []}
     problems: list[str] = []
     if READERS in rules:
-        problems += stable_input_problems(doc)
+        problems += [f"{who}: {p}" for p in stable_input_problems(doc) + delimiter_problems(doc)]
         problems += grant_problems(tools, classes, who)
         if any(isinstance(s, Mapping) and s.get("source") == "input" for s in sections):
             problems += reader_problems(tools, classes, who)

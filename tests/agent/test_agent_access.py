@@ -314,3 +314,33 @@ def test_a_session_refuses_an_input_section_declared_stable(profile, registry):
     assert any("'findings'" in p and "tier: stable" in p for p in session_problems(m, profile))
     with pytest.raises(SpecError, match="tier: stable"):
         start_session(m, inputs(), profile, registry)
+
+
+def test_a_session_refuses_a_delimiter_that_cannot_fence_input(profile, registry):
+    m = manifest()
+    m["delimiter"] = "ab\ncd"
+    assert any("line break" in p for p in session_problems(m, profile))
+    with pytest.raises(SpecError, match="line break"):
+        start_session(m, inputs(), profile, registry)
+
+
+def test_start_session_ages_pre_gates_against_its_now(profile, registry):
+    from datetime import datetime
+
+    late = datetime.fromisoformat("2026-01-15T10:15:01+00:00")
+    pack, _ = start_session(manifest(), inputs(), profile, registry, now=lambda: late)
+    assert pack["status"] == "deferred"
+    assert any("over max_age_s" in r for r in pack["deferred_reasons"])
+
+
+def test_cli_pack_ages_pre_gates_at_now(tmp_path, capsys):
+    for name, doc in {"m.json": manifest(), "i.json": inputs()}.items():
+        (tmp_path / name).write_text(json.dumps(doc))
+    args = ["agent", "pack", str(tmp_path / "m.json"), "--inputs", str(tmp_path / "i.json")]
+    out = ["--out", str(tmp_path / "pack.json")]
+    assert cli.main([*args, *out, "--now", "2026-01-15T10:15:00Z"]) == 0
+    assert cli.main([*args, *out, "--now", "2026-01-15T10:15:01+00:00"]) == 3
+    assert "over max_age_s=900" in capsys.readouterr().err
+    for bad in ("2026-01-15T10:15:00", "tomorrow"):  # usage error: no offset, not a time
+        assert cli.main([*args, *out, "--now", bad]) == 2
+        assert "RFC 3339 time with an offset" in capsys.readouterr().err

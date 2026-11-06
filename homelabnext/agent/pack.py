@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Context-pack assembler: ``(manifest, inputs) -> (pack, hash)``, a pure function.
+"""Context-pack assembler: ``(manifest, inputs, now) -> (pack, hash)``, a pure function.
+
+The only clock is ``now=`` (default: the current UTC time), and it is read only to age a
+pre-gate output whose gate sets ``max_age_s``.  Replaying a pack by its hash therefore needs the
+same ``now`` as well as the same manifest and inputs: the same inputs assembled later can defer.
 
 Ordering is stable before volatile: sections are emitted by tier (``stable``, ``session``,
 ``volatile``) and, within a tier, by name, so the byte-identical prefix is as long as possible
@@ -23,16 +27,18 @@ schema check and so defers too.
 
 Fencing.  Stable sections are fenced ``<delim> <name> [stable] <delim>``; their text comes from
 the manifest, so a ``source: input`` section may never be ``tier: stable``
-(:func:`~homelabnext.agent.readers.stable_input_problems`; refused at assembly).  Session and volatile sections carry untrusted input, so they are fenced with a
-per-pack nonce, ``<delim> <name> [<tier>] <nonce> <delim>`` ... ``<delim> end <name> <nonce>
-<delim>``, where the nonce is derived from the digest of the fenced content (deterministic, so the
+(:func:`~homelabnext.agent.readers.stable_input_problems`; refused at assembly).  Session and
+volatile sections carry untrusted input, so they are fenced with a per-pack nonce,
+``<delim> <name> [<tier>] <nonce> <delim>`` ... ``<delim> end <name> <nonce> <delim>``, where the nonce is derived from the digest of the fenced content (deterministic, so the
 pack stays a pure function, but not knowable to whoever wrote that content).  Any line of
 session or volatile text that starts with the delimiter (or the default one) is escaped with
 :data:`ESCAPE_PREFIX`, so input cannot open a fake section, stable or otherwise.  A line is what
 any Unicode line boundary ends (CR, VT, FF, NEL, LS and PS as well as LF), and leading
 whitespace and format characters (zero-width space, BOM) do not hide a delimiter.  The
-delimiters are read the same way (:func:`fence_key`), so a full-width, space-led or
-zero-width-laced custom delimiter is matched as a reader sees it too.
+delimiters are read the same way (:func:`fence_key`), so a full-width, space-led,
+zero-width-laced or accented (precomposed or decomposed) custom delimiter is matched as a reader
+sees it too.  A delimiter that holds a line break, or that a reader sees as fewer than
+:data:`MIN_VISIBLE_DELIMITER` characters, is refused (:func:`delimiter_problems`).
 
 Screening.  Before fencing, every section filled from input (``source: input``) is passed through
 :class:`~homelabnext.agent.screen.Screener`, which replaces secrets and PII with typed labels that
@@ -115,7 +121,7 @@ import re
 import unicodedata
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
-from functools import cache
+from functools import lru_cache
 from typing import Any
 
 from homelabnext import tlp
@@ -143,6 +149,9 @@ QUARANTINE_TITLE, QUARANTINE_CLEARED = AGENT_PACK_QUARANTINED
 MAX_RENDERED = 1024
 #: how far in the future a pre-gate's ``observed_at`` may be before the output is refused
 MAX_CLOCK_SKEW_S = 300
+#: the fewest characters a custom delimiter must keep once read as a reader sees it
+#: (:func:`fence_key`): a fence a reader cannot see does not separate data from instructions
+MIN_VISIBLE_DELIMITER = 4
 _RED = str(tlp.Label.RED)
 
 
@@ -175,6 +184,8 @@ def _gate_problem(gate: Mapping[str, Any], out: Any, now: Any) -> str | None:
     if observed is None:
         return "has an observed_at that is not an RFC 3339 time with an offset"
     clock = now() if now is not None else _now()
+    if not isinstance(clock, datetime) or clock.tzinfo is None:
+        raise SpecError("now must return a timezone-aware datetime")
     age = (clock - observed).total_seconds()
     if age > max_age:
         return f"is {int(age)}s old, over max_age_s={max_age}"
@@ -363,13 +374,15 @@ _BLANK_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
 
 def fence_key(line: str, width: int | None = None) -> str:
     """What a fence test must look at: ``line`` as a reader sees it.  Every character is
-    NFKC-folded (a full-width delimiter reads as the ASCII one), invisible characters are
-    dropped wherever they are (:data:`_INVISIBLE_CATEGORIES`, :data:`_BLANK_FILLERS`), and
-    leading whitespace is skipped.  With ``width``, folding stops once that many characters are kept, so a very long
-    line costs no more than its start."""
+    NFKD-folded (a full-width delimiter reads as the ASCII one, and a precomposed accented
+    letter decomposes, so it and its base letter plus a combining mark read the same), invisible
+    characters, combining marks included, are dropped wherever they are
+    (:data:`_INVISIBLE_CATEGORIES`, :data:`_BLANK_FILLERS`), and leading whitespace is skipped.
+    With ``width``, folding stops once that many characters are kept, so a very long line costs
+    no more than its start."""
     out: list[str] = []
     for ch in line:
-        for c in ch if ch.isascii() else unicodedata.normalize("NFKC", ch):
+        for c in ch if ch.isascii() else unicodedata.normalize("NFKD", ch):
             if not c.isascii() and (
                 c in _BLANK_FILLERS or unicodedata.category(c) in _INVISIBLE_CATEGORIES
             ):
@@ -382,19 +395,41 @@ def fence_key(line: str, width: int | None = None) -> str:
     return "".join(out)
 
 
-@cache
+def delimiter_problems(doc: Mapping[str, Any]) -> list[str]:
+    """Why the ``delimiter`` of a manifest or prompt template cannot fence untrusted input (empty
+    = it can, or none is set).  A delimiter holding a line break cannot be matched against any
+    one line of input, so input could forge a fence line by line; one a reader sees as fewer than
+    :data:`MIN_VISIBLE_DELIMITER` characters (:func:`fence_key`, trailing whitespace dropped) is
+    a fence nobody can see, and would make every input line look like one.  The messages never
+    quote the delimiter."""
+    delim = doc.get("delimiter") if isinstance(doc, Mapping) else None
+    if not isinstance(delim, str):
+        return []
+    if LINE_BREAK.search(delim):
+        return ["delimiter holds a line break, so a fence could be forged line by line"]
+    if len(fence_key(delim).rstrip()) < MIN_VISIBLE_DELIMITER:
+        return [
+            f"delimiter reads as fewer than {MIN_VISIBLE_DELIMITER} visible characters "
+            "(whitespace, invisible characters and combining marks do not count)"
+        ]
+    return []
+
+
+@lru_cache(maxsize=64)
 def _folded(delims: tuple[str, ...]) -> tuple[tuple[str, ...], int]:
-    """``delims`` read as a reader sees them (:func:`fence_key`), and how many characters of a
-    line a fence test must fold to compare them and the escape prefix."""
+    """``delims`` read as a reader sees them (:func:`fence_key`, trailing whitespace dropped, so
+    a line that differs only in the spaces after the delimiter still matches), and how many
+    characters of a line a fence test must fold to compare them and the escape prefix."""
     escape = ESCAPE_PREFIX.rstrip()
-    keys = tuple(sorted({fence_key(d) for d in delims}))
+    keys = tuple(sorted({fence_key(d).rstrip() for d in delims}))
     return keys, max([len(escape), *map(len, keys)])
 
 
 def looks_like_fence(line: str, delims: tuple[str, ...]) -> bool:
     """True when ``line`` would read as a fence (or as the escape prefix) to a model.  The line
     and the delimiters are both folded (:func:`fence_key`): a delimiter spelled with full-width
-    characters, a leading space or a zero-width space matches its plain-looking forgery."""
+    characters, a leading space, a zero-width space or an accent matches its plain-looking
+    forgery."""
     keys, width = _folded(tuple(delims))
     key = fence_key(line, width)
     return key.startswith(keys) or key.startswith(ESCAPE_PREFIX.rstrip())
@@ -433,7 +468,8 @@ def assemble_pack(
     retracted: DenySet | None = None,
     now: Any = None,
 ) -> tuple[dict, str]:
-    """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments.
+    """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments; the only clock
+    is ``now`` (below).
 
     ``denylist``: deny-list lines whose terms are redacted from input sections (see module doc).
     ``knowledge``: a :class:`~homelabnext.agent.knowledge.Selection` to add (see module doc).
@@ -456,7 +492,8 @@ def assemble_pack(
     retracted content: the default is no deny set).
     ``now``: a zero-argument callable returning a timezone-aware :class:`~datetime.datetime`,
     the clock a pre-gate's ``max_age_s`` is checked against (default: the current UTC time).  It
-    is called only when a gate with ``max_age_s`` has an output.
+    is called only when a gate with ``max_age_s`` has an output; a value that is not an aware
+    datetime raises :class:`SpecError`.
     """
     if now is not None and not callable(now):
         raise SpecError("now must be a callable returning a timezone-aware datetime")
@@ -475,9 +512,9 @@ def assemble_pack(
             )
         if s.get("tier") not in _RANK:
             raise SpecError(f"section {s.get('name')!r}: tier must be one of {list(TIERS)}")
-    stable_input = stable_input_problems(manifest)
-    if stable_input:
-        raise SpecError("; ".join(stable_input))
+    unfenceable = stable_input_problems(manifest) + delimiter_problems(manifest)
+    if unfenceable:
+        raise SpecError("; ".join(unfenceable))
     bound = None
     if profile is not None:
         require_verified(profile, "assemble_pack")
