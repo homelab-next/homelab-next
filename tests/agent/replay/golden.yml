@@ -2,7 +2,8 @@
 # The memory replay's golden answers (ADR-0037 decision 16): one per step and question of
 # fixture.yml, under the same name, in fixture form (uid:N, digest:N, mem:<who>/..., times of
 # day; a record's pack is named by the fixture step that first assembled it, and an operator's
-# user is <operator>).  Each was checked by hand against the ADR when it was written:
+# user is <operator>; a time of day reads as a string, quoted or not).  Each was checked by
+# hand against the ADR when it was written:
 #
 # - as-of-*: what the profile believed at T, rebuilt from the log (decision 5); as-of-0950-after
 #   still shows a and b, retracted later, because as_of shows belief at T (follow-up 1).
@@ -13,10 +14,18 @@
 #   hop through memory (its pack's memory block showed a@1), e is exposed by rendering uid:1,
 #   and the ledger's unchecked item-1 is cited with checked: false (decision 13).
 # - retract-uid-1: cited entries are retired across owners, exposed ones are not without
-#   include_exposed; cites-retracted, renders-retracted and cites-through-memory are refused
-#   and change nothing (decision 14).
+#   include_exposed (decision 14).  retract-lesson-20 retracts a knowledge item by its graph id,
+#   which closes to its uid and digest, so l (citing the digest) is retired.
+# - refusals, each changing nothing: cites-retracted and renders-retracted reach the same
+#   check (the pack's inputs; a citation must be rendered, so a citing report is always also a
+#   rendering one), renders-retracted-lesson the pack's knowledge names, cites-through-memory
+#   the marked revision in its memory block; ledger-2, an unchecked write with no pack, reaches
+#   the closure check, which drops its update citing uid:1 and applies the rest.
 # - audit-*: every entry is stale except g, which the test verifier confirmed at 09:40 (no
-#   Verifier ships); n and cursor-0 are unsourced; the ledger's platform writes are unchecked.
+#   Verifier ships), and g too in audit-reader-short, whose 30-minute budget its stamp has
+#   outlived.  unsourced is the store's own meaning (decision 7; the `unsourced` of p8-replace):
+#   the entry's last add or replace named no source, so a (replaced without sources at 09:30),
+#   n and cursor-0; the ledger's platform writes are unchecked.
 # - as-of-0925-green, withheld-green: the reader at a lowered ceiling (green) sees the amber h
 #   withheld, by count only (decision 8).
 p1-a:
@@ -214,6 +223,7 @@ audit-reader:
     n:
       reasserted_at: 09:01
   unsourced:
+  - a
   - n
   unchecked: []
 audit-ledger:
@@ -240,6 +250,12 @@ withheld-green:
     g: G2
     n: N
   withheld: 1
+p-lesson:
+  revs:
+    analyst/l: 1
+  unsourced: []
+  withheld: 0
+  dropped: []
 dependents-uid-1:
   source: uid:1
   revision: all
@@ -363,6 +379,24 @@ retract-uid-1:
     key: b
     rev: 2
   resumed: false
+retract-lesson-20:
+  dry_run:
+    cited:
+    - owner: profile:reader
+      scope: analyst
+      key: l
+    exposed: []
+  aliases:
+  - uid:20
+  - lesson:uid:20
+  - digest:20
+  marks: 1
+  retired:
+  - owner: profile:reader
+    scope: analyst
+    key: l
+    rev: 2
+  resumed: false
 live-after:
   reader/analyst:
     d: D
@@ -411,6 +445,7 @@ as-of-0950-after:
     e: E
     g: G2
     h: H
+    l: L
     n: N
   compacted: []
   purged: []
@@ -428,6 +463,21 @@ renders-retracted:
   - 'the pack rendered a retracted source: a write from it is refused whatever it cites (an operator retraction,
     ADR-0037 decision 14); nothing was applied'
   changed: false
+renders-retracted-lesson:
+  refused: MemoryUpdateError
+  problems:
+  - 'the pack rendered a retracted source: a write from it is refused whatever it cites (an operator retraction,
+    ADR-0037 decision 14); nothing was applied'
+  changed: false
+ledger-2:
+  revs:
+    fleet-ledger/cursor-0: 2
+  unsourced:
+  - fleet-ledger/cursor-0
+  withheld: 0
+  dropped:
+  - 'memory_updates/0: its closure reaches a retracted source, or cites a revision a retraction reached
+    (ADR-0037 decision 14) (dropped; the rest of the batch applies)'
 cites-through-memory:
   refused: MemoryUpdateError
   problems:
@@ -453,6 +503,32 @@ audit-reader-after:
       reasserted_at: 09:11
     e:
       reasserted_at: 09:12
+    h:
+      reasserted_at: 09:20
+    k:
+      reasserted_at: '10:12'
+    n:
+      reasserted_at: 09:01
+  unsourced:
+  - n
+  unchecked: []
+audit-reader-short:
+  entries:
+    d: D
+    e: E
+    g: G2
+    h: H
+    k: K
+    n: N
+  withheld: 0
+  stale:
+    d:
+      reasserted_at: 09:11
+    e:
+      reasserted_at: 09:12
+    g:
+      reasserted_at: 09:40
+      verified_at: 09:40
     h:
       reasserted_at: 09:20
     k:

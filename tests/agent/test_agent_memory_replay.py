@@ -11,9 +11,15 @@ changes only with a change of behaviour that is meant.
 
 The questions: the value of a key as of T (``as_of``), the history of a key, ``dependents(S)``
 (cited and exposed, including one hop through memory), what ``retract(S)`` retires and that a
-later report citing or rendering S is refused, which entries are unsourced, unchecked or stale
-(everything is stale, since no ``Verifier`` ships, except the one a test verifier confirmed),
-and what a reader at a lowered ceiling sees withheld."""
+later report citing or rendering S is refused (by its input uid, by a knowledge item's name,
+through a marked memory revision, and by the closure of an unchecked platform write), which
+entries are unsourced, unchecked or stale (everything is stale, since no ``Verifier`` ships,
+except the one a test verifier confirmed, and that one too once its budget has passed), and what
+a reader at a lowered ceiling sees withheld.
+
+The goldens are read with :class:`GoldenLoader`, which leaves a time of day such as ``10:12`` a
+string: YAML 1.1 reads it as the base-60 integer 612, so a hand edit dropping its quotes would
+otherwise show as a confusing ``612`` against ``'10:12'``."""
 
 import difflib
 import re
@@ -23,9 +29,11 @@ from pathlib import Path
 import pytest
 import yaml
 from agent_support import digest, item, labelled_pack, library, spec, uid, verified
-from memory_admin_support import operator
+from memory_admin_support import operator, operators_file
 
 from homelabnext.agent import compile_profile
+from homelabnext.agent.deny import DenySet
+from homelabnext.agent.knowledge import Selection
 from homelabnext.agent.memory import (
     FileBackend,
     InMemoryBackend,
@@ -33,6 +41,7 @@ from homelabnext.agent.memory import (
     MemoryStore,
     MemoryUpdateError,
     Verifier,
+    deny_path_from,
     memory_block_input,
 )
 from homelabnext.memory_admin import MemoryAdmin
@@ -59,6 +68,26 @@ RECORD_FIELDS = (
     "refuted",
     "purged",
 )
+
+
+class GoldenLoader(yaml.SafeLoader):
+    """YAML's safe loader without base-60 integers, so ``10:12`` (a time of day, as the goldens
+    write it) reads as the string it is, quoted or not.  Every other integer form is kept."""
+
+
+GoldenLoader.yaml_implicit_resolvers = {
+    first: [(tag, rx) for tag, rx in resolvers if tag != "tag:yaml.org,2002:int"]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+GoldenLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:int",
+    re.compile(r"^(?:[-+]?0b[0-1_]+|[-+]?0[0-7_]+|[-+]?(?:0|[1-9][0-9_]*)|[-+]?0x[0-9a-fA-F_]+)$"),
+    list("-+0123456789"),
+)
+
+
+def load(path):
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=GoldenLoader)
 
 
 class Clock:
@@ -103,6 +132,8 @@ class Replay:
             return uid(int(value[4:]))
         if value.startswith("digest:"):
             return digest(int(value[7:]))
+        if value.startswith("lesson:uid:"):
+            return f"lesson:{uid(int(value[11:]))}"
         m = re.fullmatch(r"mem:([^/]+)/(.+)", value)
         if m:
             return f"mem:{self.profiles[m[1]]['id']}/{m[2]}"
@@ -143,6 +174,9 @@ class Replay:
         }
 
     def run(self):
+        # a fresh store: no owner's memory and no deny state before the first step
+        assert not list(self.backend.owners()), "the replay must start from an empty store"
+        assert not any(self.backend.load_deny().values()), "the replay must start undenied"
         for step in self.fx["steps"]:
             self.clock.t = self.at(step["at"])
             if "ask" in step:
@@ -176,11 +210,15 @@ class Replay:
                 for e in memory_block_input(store, profile, scopes)
                 if e["key"] in spec_["memory_block"]
             ]
+        extra = {}
+        if "knowledge" in spec_:
+            extra["knowledge"] = self.lessons(profile, spec_["knowledge"])
         pack, h = labelled_pack(
             [item(n, label) for n, label in spec_["findings"]],
             [item(999, "clear")],
             profile=profile,
             memory_block=block,
+            **extra,
         )
         self.packs.setdefault(h, step["name"])  # the step that first assembled it
         report = {
@@ -203,6 +241,23 @@ class Replay:
                 "problems": getattr(exc, "problems", [str(exc)]),
                 "changed": self.state() != before,
             }
+
+    @staticmethod
+    def lessons(profile, numbers):
+        """A knowledge selection of lessons ``numbers``: lesson N is ``lesson:<uid N>`` with
+        content digest N, as the knowledge graph would select it for ``profile``."""
+        included = tuple(
+            {"id": f"lesson:{uid(n)}", "kind": "lesson", "title": f"lesson {n}", "path": None,
+             "reviewed": [], "distance": 0, "score": 1.0, "via": "seed", "from": "replay",
+             "rules": [0], "max_chars": 1000, "digest": digest(n), "text": f"lesson {n}",
+             "rank": i, "section": f"knowledge-{i:03d}-lesson"}
+            for i, n in enumerate(numbers, 1)
+        )  # fmt: skip
+        return Selection(
+            profile=profile["id"], profile_digest="sha256:" + "a" * 64,
+            graph_digest="sha256:" + "b" * 64, rules=(), seeds=(), excluded=(),
+            included=included,
+        )  # fmt: skip
 
     def retract(self, spec_):
         admin = MemoryAdmin(self.backend, now=self.clock)
@@ -239,16 +294,19 @@ class Replay:
         return self.store().read(self.profiles[q["as"]], q.get("scope", "analyst"))
 
     def ask_audit(self, q):
-        """Which shown entries are stale, unsourced (no record since the key's last ``add``
-        names a source) and unchecked (its last record was an unchecked platform write)."""
+        """Which shown entries are stale, unsourced and unchecked.  ``unsourced`` is the store's
+        own meaning (the ``unsourced`` of the write that set the value, ADR-0037 decision 7): the
+        entry's last value-setting record (``add`` or ``replace``) has no ``sources``, though its
+        closure may still hold the sources since its ``add``.  ``unchecked``: its last record was
+        an unchecked platform write."""
         p, scope = self.profiles[q["as"]], q.get("scope", "analyst")
         store = self.store()
         got = store.read(p, scope, stale_after=timedelta(minutes=q["stale_after_min"]))
         unsourced, unchecked = [], []
         for key in got["entries"]:
             recs = store.history(p, scope, key)["records"]
-            adds = [i for i, r in enumerate(recs) if r["op"] == "add"]
-            if not any(r["sources"] for r in recs[adds[-1] :]):
+            setting = [r for r in recs if r["op"] in ("add", "replace")]
+            if not setting[-1]["sources"]:
                 unsourced.append(key)
             if not recs[-1]["checked"]:
                 unchecked.append(key)
@@ -277,7 +335,7 @@ class Replay:
 
 
 def replay(backend, op):
-    fixture = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
+    fixture = load(FIXTURE)
     return Replay(fixture, backend, op).run()
 
 
@@ -297,8 +355,9 @@ def mismatches(answers, golden):
 def backend(request, tmp_path):
     if request.param == "memory":
         return InMemoryBackend()
-    # the deny file the operators file names (memory_admin_support.operators_file)
-    return FileBackend(tmp_path / "memory.json", deny_path=tmp_path / "memory-deny.json")
+    # the deny file the operators file names, read from it as the runtime reads it (decision 14)
+    deny = deny_path_from(operators_file(tmp_path))
+    return FileBackend(tmp_path / "memory.json", deny_path=deny)
 
 
 @pytest.fixture
@@ -308,7 +367,7 @@ def op(tmp_path):
 
 @pytest.fixture(scope="module")
 def golden():
-    return yaml.safe_load(GOLDEN.read_text(encoding="utf-8"))
+    return load(GOLDEN)
 
 
 def test_the_replay_matches_the_golden_answers(backend, op, golden):
@@ -322,18 +381,60 @@ def test_the_replay_matches_the_golden_answers(backend, op, golden):
         )
 
 
-def test_a_changed_memory_behaviour_fails_the_replay(op, golden, monkeypatch):
-    """The replay is a test of the design, not a recording: make ``dependents`` stop following
-    ``mem:`` hops (a reference to a revision reads as no reference) and the replay names the
-    answers that moved, with a diff that shows ``d`` (exposed through a@1) gone."""
+def _no_mem_hops(monkeypatch):
     from homelabnext.memory_admin import admin
 
     monkeypatch.setattr(admin, "parse_mem_ref", lambda ref: None)
-    problems = mismatches(replay(InMemoryBackend(), op), golden)
+
+
+def _stale_ignores_budget(monkeypatch):
+    from homelabnext.agent import memory
+
+    def stale(entry, cutoff, when):
+        return not entry.get("verified_at") or entry["verified_at"] > when
+
+    monkeypatch.setattr(memory, "_stale", stale)
+
+
+def _no_name_deny(monkeypatch):
+    monkeypatch.setattr(DenySet, "denies", lambda self, names: False)
+
+
+#: a memory behaviour changed on purpose -> (the patch, the answers that must move, and one
+#: answer's diff line that shows how)
+MUTATIONS = {
+    # dependents stop following mem: hops: d (exposed through a@1) is gone
+    "dependents-ignore-mem-hops": (
+        _no_mem_hops,
+        {"dependents-uid-1", "retract-uid-1"},
+        ("dependents-uid-1", "-  key: d"),
+    ),
+    # staleness ignores the budget: g, verified at 09:40, reads fresh at 10:15 against 30 min
+    "stale-ignores-budget": (
+        _stale_ignores_budget,
+        {"audit-reader-short"},
+        ("audit-reader-short", "-  g:"),
+    ),
+    # the name-based deny check is off: a pack rendering a retracted knowledge item is applied
+    "no-name-deny": (
+        _no_name_deny,
+        {"renders-retracted-lesson"},
+        ("renders-retracted-lesson", "-refused: MemoryUpdateError"),
+    ),
+}
+
+
+@pytest.mark.parametrize("mutation", sorted(MUTATIONS))
+def test_a_changed_memory_behaviour_fails_the_replay(mutation, backend, op, golden, monkeypatch):
+    """The replay is a test of the design, not a recording: change one memory behaviour and the
+    replay names the answers that moved, with a diff that shows how, on both backends."""
+    patch, must_move, (name, line) = MUTATIONS[mutation]
+    patch(monkeypatch)
+    problems = mismatches(replay(backend, op), golden)
     moved = {p.splitlines()[0][4:] for p in problems}
-    assert "dependents-uid-1" in moved and "retract-uid-1" in moved
-    (dep,) = [p for p in problems if p.startswith("--- dependents-uid-1\n")]
-    assert "-  key: d" in dep
+    assert must_move <= moved, moved
+    (diff,) = [p for p in problems if p.startswith(f"--- {name}\n")]
+    assert line in diff.splitlines(), diff
 
 
 def test_a_golden_mismatch_prints_a_readable_diff():
@@ -347,7 +448,7 @@ def test_a_golden_mismatch_prints_a_readable_diff():
 
 
 def test_every_question_has_a_golden_answer_and_every_golden_a_question(golden):
-    fixture = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
+    fixture = load(FIXTURE)
     asked = [s.get("ask") or s["name"] for s in fixture["steps"]]
     assert len(asked) == len(set(asked)), "a question or step name is used twice"
     assert set(asked) == set(golden)
@@ -357,8 +458,15 @@ def test_every_question_has_a_golden_answer_and_every_golden_a_question(golden):
     assert all(golden[n]["changed"] is False for n in refused)
 
 
-def test_the_replay_starts_from_a_fresh_store_and_the_clock_never_runs_back():
-    fixture = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
+def test_fixture_times_are_in_order_and_utc():
+    """(That each replay starts from a fresh store is asserted by :meth:`Replay.run`.)"""
+    fixture = load(FIXTURE)
     times = [s["at"] for s in fixture["steps"]]
     assert times == sorted(times)
     assert datetime.fromisoformat(fixture["start"].replace("Z", "+00:00")).tzinfo == UTC
+
+
+def test_the_golden_loader_keeps_a_time_of_day_a_string():
+    assert yaml.safe_load("t: 10:12") == {"t": 612}  # what YAML 1.1 makes of it
+    got = yaml.load("t: 10:12\nn: 42\nh: 0x1f\nf: 1.5\nq: '09:30'", Loader=GoldenLoader)
+    assert got == {"t": "10:12", "n": 42, "h": 31, "f": 1.5, "q": "09:30"}
