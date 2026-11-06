@@ -1,6 +1,6 @@
 ---
 summary: 'The read-only status hub: registering sources, collecting, views, the page and status.json contract, events, agent activity and the broker Approvals page.'
-summary_of: outline:sha256:b092be7736f5ba63
+summary_of: outline:sha256:d1f8f8e52b102f21
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -55,7 +55,7 @@ generated from it (`hnx status catalog generate`, checked by `hnx status catalog
 |---|---|---|
 | `poll-http-json` | `GET` the service's capability alias + `path`, 2xx JSON | `service` (default: the declaring one), `path` |
 | `poll-file` | a JSON or YAML file, a records directory or a last-run record directory, under the status root (`--root`) | `file` (relative, no `..`) |
-| `push-event` | `homelabnext.status.observed` events the source publishes itself: the envelope `source` must be `svc:<the declaring service>` and the module the one the source reports; an `observed_at` in the future is clamped to now (kept as the source's `clock_skew_s`) and `expires_at` is capped at now + `stale_after_s` | none: silence for `stale_after_s` reads stale |
+| `push-event` (stage 2, library only: no consumer is wired, see [Developer follow-ups](#developer-follow-ups)) | `homelabnext.status.observed` events the source publishes itself: the envelope `source` must be `svc:<the declaring service>` and the module the one the source reports; an `observed_at` in the future is clamped to now (kept as the source's `clock_skew_s`), `expires_at` is capped at now + `stale_after_s`, and an event older than the stored reading is ignored (the source still counts as heard from) | none: silence for `stale_after_s` reads stale |
 | `agent-activity` | drains agent activity into the activity store and reports stuck and errored sessions (section 6) | `file` for `agent-spool` and `agentmetry-jsonl`, none for `agent-push` |
 | `poll-prometheus` | a Prometheus instant query, or its firing alerts (section 7) | `service`, `path` (`.../api/v1/query` or `.../api/v1/alerts`) |
 | `poll-uptime-kuma` | an Uptime Kuma public status page and its heartbeats, no login (section 7) | `service`, `path` `.../api/status-page/<slug>` |
@@ -1156,3 +1156,13 @@ public status page `lab`), and the nightly smoke (`smoke_checks.py`, checks `met
 expects exactly warn + fail alerts, the self-scrape target `ok`, and the two monitors `ok` and
 `fail`. StackStorm and NiFi do not fit the lab's 4 GB budget and are tested against their
 fixtures only.
+
+### Developer follow-ups
+
+* **Wire push-event status sources.** Nothing in tree calls `StatusHub.ingest_event`: add a
+  consumer (an `hnx status` command or a bus subscriber that feeds the hub) and a publisher for
+  `homelabnext.status.observed`. Until then a declared `push-event` source reads stale. The
+  consumer must feed the hub from one thread, or hold a lock around the read-compare-write in
+  `StatusHub.ingest` (the keep-newer guard is not atomic, and nor is the history update in
+  `_put`). An ignored older event still refreshes the source's `last_ok`; consider recording an
+  ignored count so a replaying publisher is visible.

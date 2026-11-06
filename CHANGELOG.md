@@ -7,6 +7,8 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- Status hub: `ingest` keeps the stored reading when a pushed observation is older than it (a late or replayed event used to replace a newer state); an equal or newer one still replaces it, and the source still counts as heard from. The OpenProject webhook receiver answers 500 when the feed fails on a delivery instead of dropping the connection.
+- Docs: the OpenProject change feed and webhook receiver, and push-event status sources (`StatusHub.ingest_event`, `status.observed`), are marked stage 2, library only: no command, unit or publisher runs them yet. The wiring is tracked as developer follow-ups in `docs/projects.md` and `docs/status.md`.
 - The `trivy` role's CycloneDX SBOM run takes the same options as the scan (`--severity`, `--skip-db-update`, `--db-repository`), so an offline guest or a mirror is honoured on that line too; the test asserts the full command line.
 - **Breaking for overlay sites:** the `trivy` role pins `trivy_version` to `0.76.1` (tagged 2026-10-21, past the 14-day cooldown), installs exactly that package and always holds it; an empty `trivy_version` (the repository's newest, unheld) is now refused for every profile, and `tools/pin_freshness.py` tracks the pin.
 - Novelty docs (`docs/novelty.md`) list `burst` among the statuses `corroborate` groups as signals, as the code does, and ADR-0036 decision 3 says a burst is a signal only for an entity quiet while learning: an entity noisy in both windows is reported once as `high_cardinality`, not as a signal (behaviour unchanged, now documented and pinned by a test). A doc test holds the documented signal set to `corroborate.SIGNALS`.
