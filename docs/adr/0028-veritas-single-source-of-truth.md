@@ -103,8 +103,9 @@ file.
      with `hnx guests render --target inventory` from `lab/guests/` holds a derived copy
      (decision 6);
    - the deploy tools' pins, `locks/deploy.in` (the hash-locked `locks/deploy.txt` is compiled from
-     it). The public commit a deploy uses, `HNX_REF`, is an Actions Environment variable, outside
-     git;
+     it), and the public commit the checks and the deploy use, `HNX_REF`: the file
+     `locks/hnx-ref` (one full commit SHA on homelab-next's `main`, ADR-0021 decision 7), changed
+     by a reviewed pull request like any other Veritas file;
    - secret **names** (`secret:<name>`). Secret values are not part of Veritas: they live only in
      the secret store (OpenBao), and the offline keys stay offline (ADR-0021 decisions 3 and 4).
 5. **Every other copy is generated from Veritas or checked against it; a hand-edited copy is

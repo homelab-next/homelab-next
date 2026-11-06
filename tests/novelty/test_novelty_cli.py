@@ -227,3 +227,59 @@ def test_a_lake_that_cannot_be_resolved_is_a_usage_error(files, capsys, monkeypa
     argv += ["--site", str(files["site"]), "--domain", "example.internal", "--warehouse", "lab"]
     rc, _, err = _main([*argv, "--dry-run"], capsys)
     assert rc == 2 and "no endpoint for example.internal" in err
+
+
+# ---------------------------------------------------------------- signing in to a live lake
+SECRET = "secret:lake-query/readers/analyzer.novelty"
+SECRET_VAR = "HNX_SECRET_LAKE_QUERY_READERS_ANALYZER_NOVELTY"
+
+
+def _live(files, *extra):
+    argv = ["novelty", "run", "--spec", str(files["spec"]), "--as-of", "2026-03-10T00:00:00Z"]
+    live = ["--site", str(files["site"]), "--domain", "example.internal", "--warehouse", "lab"]
+    return [*argv, *live, "--dry-run", *extra]
+
+
+def test_a_live_lake_is_read_signed_in_as_the_analyzer(files, capsys, monkeypatch):
+    import homelabnext.conform.adapters.lake as adapter
+    from homelabnext.novelty import READER
+
+    seen = {}
+
+    def spy(**kw):
+        seen.update(kw)
+        raise LookupError("stop here")
+
+    monkeypatch.setattr(adapter, "make_lake", spy)
+    rc, _, err = _main(_live(files), capsys)
+    assert rc == 2 and "stop here" in err
+    assert seen["user"] == READER and seen["credential"] == SECRET
+    assert adapter.reader_secret(READER) == SECRET
+    rc, _, _ = _main(_live(files, "--credential", "secret:lake-query/readers/other"), capsys)
+    assert seen["credential"] == "secret:lake-query/readers/other"
+
+
+def test_an_unset_analyzer_password_is_a_usage_error_naming_its_variable(
+    files, capsys, monkeypatch
+):
+    monkeypatch.delenv(SECRET_VAR, raising=False)
+    monkeypatch.setenv(
+        "HNX_ENDPOINT_LAKE_QUERY", "http://127.0.0.1:1"
+    )  # no-raw-endpoint: allow never contacted
+    monkeypatch.setenv(
+        "HNX_ENDPOINT_LAKE_CATALOG", "http://127.0.0.1:1"
+    )  # no-raw-endpoint: allow never contacted
+    rc, _, err = _main(_live(files), capsys)
+    assert rc == 2 and SECRET_VAR in err
+
+
+def test_the_docstring_names_the_credential_the_cli_sends():
+    from homelabnext.conform.adapters.lake import engine_login, reader_secret
+    from homelabnext.novelty import READER
+    from homelabnext.novelty import cli as ncli
+    from homelabnext.registry.model import secret_env_name
+
+    doc = " ".join(ncli.__doc__.split())
+    assert f"default the secret ``{reader_secret(READER).removeprefix('secret:')}``" in doc
+    assert f"``{secret_env_name(reader_secret(READER))}``" in doc
+    assert f"(login ``{engine_login(READER)}``)" in doc

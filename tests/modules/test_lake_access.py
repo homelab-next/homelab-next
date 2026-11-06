@@ -232,6 +232,13 @@ def test_no_one_may_run_a_procedure():
     assert own and all("filter" in r for r in own)
 
 
+def test_no_one_may_act_as_another_user():
+    """A signed-in reader cannot name another reader (a red one) as its session user."""
+    doc = _rules(_r("analyzer:novelty", "amber", writes=["novelty_finding"]), _r("user:a", "red"))
+    assert doc["impersonation"] == [{"original_user": ".*", "new_user": ".*", "allow": False}]
+    assert _rules()["impersonation"] == doc["impersonation"]
+
+
 def test_reader_problems_writes_only_analyzer_tables():
     base = _site(_r("module:collector", "red"), _r("profile:collector-analyst", "green"))
     bad = _site(*base["tlp_readers"], _r("analyzer:n", "amber", writes=["authentication"]))

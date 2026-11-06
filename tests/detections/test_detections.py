@@ -587,3 +587,28 @@ def test_decision_specs_are_agent_facing_files(tmp_path):
         "homelabnext/decide/examples/decision_spec.yml",
     }
     assert len(lint.lint_agent_ids(lint.find_agent_files(tmp_path))) == 2
+
+
+# ---- workflow packs are agent-facing: an undefined det: id in one fails lint-ids ----
+
+
+def test_workflow_packs_are_agent_facing_and_undefined_det_ids_fail(tmp_path, monkeypatch, capsys):
+    pack = tmp_path / "workflows/packs/p.yml"
+    pack.parent.mkdir(parents=True)
+    pack.write_text("trigger: {where: [{ref: $event.data.detection, equals: det:no-such-det}]}\n")
+    assert pack in lint.find_agent_files(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "detections").mkdir()
+    (tmp_path / "detections/det_map.yml").write_text((REPO / "detections/det_map.yml").read_text())
+    assert main(["--root", "detections", "lint-ids"]) == 1
+    assert "det:no-such-det" in capsys.readouterr().out
+
+
+def test_shipped_workflow_packs_cite_only_defined_det_ids():
+    import yaml
+
+    repo = REPO
+    det_map = yaml.safe_load((repo / "detections/det_map.yml").read_text())
+    packs = sorted((repo / "workflows/packs").glob("*.yml"))
+    assert packs and set(packs) <= set(lint.find_agent_files(repo))
+    assert lint.lint_agent_ids(packs, det_map) == []
