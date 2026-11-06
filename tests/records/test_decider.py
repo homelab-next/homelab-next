@@ -1,0 +1,664 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The records decider re-creates a decided note instead of renaming the agent's file, refuses
+symlinks and hard-linked notes, and has an operator command (``hnx records decide``)."""
+
+import errno
+import os
+import stat
+from datetime import UTC, datetime
+
+import pytest
+
+from homelabnext.cli import main as hnx
+from homelabnext.records import LaneViolation, NoteError, Records, parse_note
+from homelabnext.records.decider import Decider, init_tree
+from homelabnext.records.decider import main as decide_main
+
+NOW = datetime(2026, 1, 1, 9, 30, tzinfo=UTC)
+AGENT = "profile:triage"
+
+
+@pytest.fixture
+def tree(tmp_path):
+    init_tree(tmp_path / "records")
+    return tmp_path / "records"
+
+
+@pytest.fixture
+def rec(tree):
+    return Records(tree, lambda: NOW)
+
+
+def _propose(rec, slug="raise-threshold"):
+    return rec.propose(
+        {
+            "title": "Raise auth burst threshold",
+            "risk": "low",
+            "rollback": "Revert the threshold",
+            "requesting_agent": AGENT,
+        },
+        slug=slug,
+    )
+
+
+def _decider(tree):
+    return Decider(tree, decided_by="op", clock=lambda: NOW)
+
+
+def _ident(path):
+    st = os.stat(path)
+    return st.st_dev, st.st_ino
+
+
+def test_approved_note_is_a_new_inode_and_the_inbox_entry_is_gone(rec, tree):
+    p = _propose(rec)
+    before = _ident(p)
+    dest = _decider(tree).approve(p.name)
+    assert _ident(dest) != before
+    assert os.stat(dest).st_nlink == 1
+    assert not os.path.lexists(p)
+    assert parse_note(dest.read_text())[0]["rollback"] == "Revert the threshold"
+
+
+def test_a_descriptor_the_agent_kept_cannot_rewrite_the_approved_note(rec, tree):
+    p = _propose(rec)
+    original = p.read_bytes()
+    fd = os.open(p, os.O_WRONLY)  # the agent keeps its file open across the decision
+    try:
+        dest = _decider(tree).approve(p.name)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, original.replace(b"Revert the threshold", b"none, irreversible  "))
+    finally:
+        os.close(fd)
+    assert dest.read_bytes() == original
+
+
+def test_complete_reads_and_files_the_deciders_copy(rec, tree):
+    p = _propose(rec)
+    original = p.read_bytes()
+    d = _decider(tree)
+    fd = os.open(p, os.O_WRONLY)
+    try:
+        approved = d.approve(p.name)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, original.replace(b"Revert", b"Ignore"))
+    finally:
+        os.close(fd)
+    approved_ident = _ident(approved)
+    req = rec.completion_request([p.name], "Done.", agent="triage")
+    completed = d.complete(req.name)[0]
+    assert completed.parent.name == "completed"
+    assert completed.read_bytes() == original
+    assert _ident(completed) != approved_ident
+    assert not os.path.lexists(approved)
+
+
+def test_a_symlink_in_the_inbox_is_refused(rec, tree, tmp_path):
+    p = _propose(rec)
+    target = tmp_path / "elsewhere.md"
+    os.rename(p, target)
+    os.symlink(target, p)
+    with pytest.raises(LaneViolation, match="regular file"):
+        _decider(tree).approve(p.name)
+    assert os.path.islink(p)
+    assert not (tree / "decided" / "approved" / p.name).exists()
+
+
+def test_a_hard_linked_note_is_refused(rec, tree, tmp_path):
+    p = _propose(rec)
+    os.link(p, tmp_path / "kept.md")  # the agent keeps a second name for the inode
+    with pytest.raises(LaneViolation, match="hard links"):
+        _decider(tree).approve(p.name)
+    with pytest.raises(LaneViolation, match="hard links"):
+        _decider(tree).deny(p.name)
+    assert p.exists()
+    assert not (tree / "decided" / "approved" / p.name).exists()
+
+
+def test_a_symlink_in_the_approved_lane_is_refused_by_complete(rec, tree, tmp_path):
+    p = _propose(rec)
+    approved = _decider(tree).approve(p.name)
+    target = tmp_path / "swap.md"
+    os.rename(approved, target)
+    os.symlink(target, approved)
+    req = rec.completion_request([p.name], "Done.", agent="triage")
+    with pytest.raises(LaneViolation):
+        _decider(tree).complete(req.name)
+    assert (tree / "inbox" / req.name).exists()
+
+
+def test_operator_command_approve_deny_complete(rec, tree, capsys):
+    a = _propose(rec, slug="one")
+    b = _propose(rec, slug="two")
+    root = str(tree)
+    assert hnx(["records", "decide", "approve", a.name, "--root", root, "--by", "op"]) == 0
+    assert capsys.readouterr().out.strip() == f"decided/approved/{a.name}"
+    rc = decide_main(["deny", b.name, "--root", root, "--by", "op", "--reason", "too broad"])
+    assert rc == 0
+    assert (tree / "decided" / "denied" / b.name).exists()
+    side = (tree / "decided" / "denied" / f"{b.name}.decision.json").read_text()
+    assert "too broad" in side and '"op"' in side
+    capsys.readouterr()
+    req = rec.completion_request([a.name], "Done.", agent="triage")
+    assert hnx(["records", "decide", "complete", req.name, "--root", root, "--by", "op"]) == 0
+    out = capsys.readouterr().out.split()
+    assert out == [f"decided/completed/{a.name}", f"decided/completed/{req.name}"]
+
+
+def test_operator_command_refusals_and_usage(rec, tree, capsys):
+    root = str(tree)
+    assert decide_main(["approve", "2026-01-01-triage-x.md", "--root", root, "--by", "op"]) == 1
+    assert "refused" in capsys.readouterr().err
+    assert decide_main(["approve"]) == 2
+    assert decide_main(["publish", "x.md", "--root", root, "--by", "op"]) == 2
+    p = _propose(rec)
+    assert decide_main(["approve", p.name, "--root", root, "--by", "op", "--reason", "x"]) == 2
+    assert p.exists()
+
+
+def test_records_router_still_reaches_the_identity_commands(capsys):
+    assert hnx(["records", "uid", "-n", "2"]) == 0
+    assert len(capsys.readouterr().out.split()) == 2
+
+
+def test_a_crlf_note_approves_and_its_bytes_are_kept(rec, tree):
+    p = _propose(rec)
+    crlf = p.read_bytes().replace(b"\n", b"\r\n")
+    p.write_bytes(crlf)
+    dest = _decider(tree).approve(p.name)
+    assert dest.read_bytes() == crlf
+
+
+def test_a_note_swapped_after_it_was_read_files_the_read_bytes(rec, tree, monkeypatch, capsys):
+    p = _propose(rec)
+    original = p.read_bytes()
+    d = _decider(tree)
+    real_move = Decider._move
+
+    def swap_then_move(self, note, *a, **kw):
+        # a new inode renamed over the name (written first, so it cannot reuse the inode number)
+        repl = p.with_name("replacement.tmp")
+        repl.write_bytes(original.replace(b"Revert the threshold", b"none, irreversible"))
+        os.rename(repl, p)
+        return real_move(self, note, *a, **kw)
+
+    monkeypatch.setattr(Decider, "_move", swap_then_move)
+    dest = d.approve(p.name)
+    assert dest.read_bytes() == original
+    assert b"irreversible" in p.read_bytes()  # the replacement is left where it was
+    assert "changed after it was read" in capsys.readouterr().err
+
+
+def test_read_then_approve_files_what_read_returned(rec, tree):
+    """A caller deciding on Decider.read's note files those bytes even if the inode changes."""
+    p = _propose(rec)
+    original = p.read_bytes()
+    d = _decider(tree)
+    note = d.read("inbox", p.name)
+    assert note.frontmatter["rollback"] == "Revert the threshold"
+    with open(p, "r+b") as fh:  # the agent rewrites its own inode after the decision was made
+        fh.write(original.replace(b"Revert the threshold", b"none, irreversible  "))
+    assert d.approve(p.name).read_bytes() == original
+
+
+def _refuse_moving(monkeypatch, p):
+    """The source may not be moved out of the inbox (a sticky inbox the decider does not own)."""
+    real_rename = os.rename
+
+    def refuse(src, *a, **kw):
+        if str(src) == str(p):
+            raise PermissionError(13, "Permission denied", str(src))
+        return real_rename(src, *a, **kw)
+
+    monkeypatch.setattr(os, "rename", refuse)
+
+
+def test_a_refused_claim_leaves_nothing_in_the_decided_lane(rec, tree, monkeypatch):
+    p = _propose(rec)
+    _refuse_moving(monkeypatch, p)
+    with pytest.raises(PermissionError):
+        _decider(tree).approve(p.name)
+    monkeypatch.undo()
+    assert p.exists()
+    assert os.listdir(tree / "decided" / "approved") == []
+    assert _decider(tree).approve(p.name).exists()  # a retry, once permitted, goes through
+
+
+def test_decided_notes_are_not_world_readable(rec, tree):
+    old = os.umask(0o022)
+    try:
+        dest = _decider(tree).approve(_propose(rec).name)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(os.stat(dest).st_mode) == 0o640
+    side = dest.with_name(dest.name + ".decision.json")
+    assert stat.S_IMODE(os.stat(side).st_mode) == 0o640
+
+
+def test_an_open_error_other_than_a_symlink_is_reported_as_itself(rec, tree, monkeypatch):
+    p = _propose(rec)
+    real_open = os.open
+
+    def eacces(path, *a, **kw):
+        if str(path) == str(p):
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(os, "open", eacces)
+    with pytest.raises(PermissionError) as exc:
+        _decider(tree).approve(p.name)
+    assert not isinstance(exc.value, LaneViolation)
+    assert exc.value.errno == errno.EACCES
+
+
+def test_complete_refuses_a_related_entry_outside_the_approved_lane(rec, tree):
+    p = _propose(rec)
+    d = _decider(tree)
+    d.approve(p.name)
+    other = _propose(rec, slug="other")
+    d.deny(other.name)
+    req = rec.completion_request([p.name], "Done.", agent="triage")
+    text = req.read_text().replace(f"decided/approved/{p.name}", f"decided/denied/{other.name}")
+    req.write_text(text)
+    with pytest.raises(NoteError):
+        d.complete(req.name)
+    assert (tree / "decided" / "approved" / p.name).exists()
+    assert req.exists()
+
+
+def test_operator_command_reports_os_errors_and_an_empty_by(rec, tree, monkeypatch, capsys):
+    p = _propose(rec)
+    root = str(tree)
+    assert decide_main(["approve", p.name, "--root", root, "--by", ""]) == 2
+    assert "decided_by" in capsys.readouterr().err
+    _refuse_moving(monkeypatch, p)
+    assert decide_main(["approve", p.name, "--root", root, "--by", "op"]) == 1
+    assert "refused" in capsys.readouterr().err
+
+
+def test_of_an_approve_and_a_deny_raced_on_one_note_exactly_one_wins(rec, tree):
+    """Both deciders load the note; the second to claim it finds it gone and files nothing."""
+    p = _propose(rec)
+    first, second = _decider(tree), _decider(tree)
+    first.read("inbox", p.name)
+    second.read("inbox", p.name)
+    dest = first.approve(p.name)
+    with pytest.raises(FileNotFoundError):
+        second.deny(p.name, "raced")
+    assert dest.exists()
+    assert os.listdir(tree / "decided" / "denied") == []
+    assert os.listdir(tree / "decided" / ".claims") == []
+
+
+def test_a_swap_after_another_decider_filed_the_note_is_refused(rec, tree, capsys):
+    """The inode read was taken by another decider and the agent wrote a new one at the name:
+    the claim gets the replacement, which is put back, and this move fails.  The decider holds
+    the descriptor of its read, so the new file cannot reuse the freed inode number (ext4 would
+    hand it straight back) and pass for the note that was read."""
+    p = _propose(rec)
+    original = p.read_bytes()
+    first, second = _decider(tree), _decider(tree)
+    second.read("inbox", p.name)
+    first.approve(p.name)
+    p.write_bytes(original)  # a new inode at the decided name
+    with pytest.raises(FileNotFoundError, match="decided meanwhile"):
+        second.deny(p.name, "raced")
+    assert p.read_bytes() == original
+    assert os.listdir(tree / "decided" / "denied") == []
+
+
+def test_a_move_failing_after_its_claim_puts_the_note_back(rec, tree, monkeypatch):
+    p = _propose(rec)
+    original = p.read_bytes()
+    import homelabnext.records.decider as decider
+
+    def fail(*a, **kw):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(decider, "_create", fail)
+    with pytest.raises(OSError, match="No space"):
+        _decider(tree).approve(p.name)
+    monkeypatch.undo()
+    assert p.read_bytes() == original
+    assert os.listdir(tree / "decided" / "approved") == []
+    assert os.listdir(tree / "decided" / ".claims") == []
+    assert _decider(tree).approve(p.name).read_bytes() == original
+
+
+def _lanes_of(tree, name):
+    return [
+        lane
+        for lane in ("inbox", "decided/approved", "decided/denied", "decided/completed")
+        if os.path.lexists(tree / lane / name)
+    ]
+
+
+def test_a_stale_decider_cannot_take_a_resubmission_on_a_reused_inode_number(rec, tree):
+    """B approves, the agent hunts for the freed inode number and renames a new note onto the
+    name: the decider still holding its read's descriptor keeps that number taken, so A's stale
+    deny sees another file and is refused, and the resubmission stays in the inbox."""
+    p = _propose(rec)
+    original = p.read_bytes()
+    a, b = _decider(tree), _decider(tree)
+    a.read("inbox", p.name)
+    b.read("inbox", p.name)
+    ino = os.stat(p).st_ino
+    b.approve(p.name)
+    resubmitted = original.replace(b"Revert the threshold", b"resubmitted")
+    junk = []
+    for i in range(300):
+        q = p.with_name(f"hunt{i}.tmp")
+        q.write_bytes(resubmitted)
+        if os.stat(q).st_ino == ino:  # pragma: no cover - the held descriptor prevents it
+            os.rename(q, p)
+            break
+        junk.append(q)
+    else:
+        os.rename(junk.pop(), p)
+    for q in junk:
+        q.unlink()
+    with pytest.raises(FileNotFoundError, match="decided meanwhile"):
+        a.deny(p.name, "stale")
+    assert _lanes_of(tree, p.name) == ["inbox", "decided/approved"]
+    assert p.read_bytes() == resubmitted
+
+
+def test_close_releases_the_descriptors_of_notes_never_moved(rec, tree):
+    p = _propose(rec)
+    with _decider(tree) as d:
+        note = d.read("inbox", p.name)
+        (_, fd, _) = d._held[id(note)]
+        os.fstat(fd)  # held open
+    with pytest.raises(OSError):
+        os.fstat(fd)
+    assert d._loaded == {} and d._held == {}
+
+
+def test_one_decider_raced_with_itself_still_files_exactly_one_decision(rec, tree, monkeypatch):
+    """The conform fake drives approve and deny through ONE Decider from two threads.  A deny
+    run whole while the approve is inside its claim must neither close nor take the approve's
+    held descriptor (that left the claimed note stranded in decided/.claims/ with both
+    decisions failed), and exactly one decision is filed."""
+    p = _propose(rec)
+    d = _decider(tree)
+    real_rename, out = os.rename, {}
+
+    def rename(src, dst, *a, **kw):
+        if str(src) == str(p) and "deny" not in out:
+            try:
+                out["deny"] = d.deny(p.name, "raced")
+            except Exception as ex:  # judged below
+                out["deny"] = ex
+        return real_rename(src, dst, *a, **kw)
+
+    monkeypatch.setattr(os, "rename", rename)
+    dest = d.approve(p.name)
+    assert isinstance(out["deny"], (FileNotFoundError, NoteError)), out
+    assert _lanes_of(tree, p.name) == ["decided/approved"]
+    assert dest.read_bytes()
+    assert os.listdir(tree / "decided" / ".claims") == []
+    assert d._held == {}
+
+
+def test_a_failure_after_the_claim_anywhere_puts_the_note_back(rec, tree, monkeypatch):
+    """Even a failure before filing starts (the identity check) puts the claimed entry back."""
+    p = _propose(rec)
+    d = _decider(tree)
+    real_lstat = os.lstat
+
+    def lstat(path, *a, **kw):
+        if ".claims" in str(path) and not str(path).endswith(".lock"):
+            raise OSError(errno.EIO, "Input/output error", str(path))
+        return real_lstat(path, *a, **kw)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    with pytest.raises(OSError, match="Input/output"):
+        d.approve(p.name)
+    monkeypatch.undo()
+    assert _lanes_of(tree, p.name) == ["inbox"]
+    assert os.listdir(tree / "decided" / ".claims") == []
+
+
+def test_a_move_paused_while_filing_makes_a_second_decider_lose(rec, tree, monkeypatch):
+    """A has claimed the note and is writing its copy; B, run whole meanwhile, must fail at the
+    name lock and file nothing (this kills a claim taken only after filing)."""
+    import homelabnext.records.decider as decider
+
+    p = _propose(rec)
+    a, b = _decider(tree), _decider(tree)
+    a.read("inbox", p.name)
+    b.read("inbox", p.name)
+    real_create, out = decider._create, {}
+
+    def create(dest_dir, name, data, mode):
+        if "b" not in out:
+            try:
+                out["b"] = b.deny(p.name, "raced")
+            except Exception as ex:
+                out["b"] = ex
+        return real_create(dest_dir, name, data, mode)
+
+    monkeypatch.setattr(decider, "_create", create)
+    a.approve(p.name)
+    assert isinstance(out["b"], FileNotFoundError), out
+    assert _lanes_of(tree, p.name) == ["decided/approved"]
+    assert os.listdir(tree / "decided" / ".claims") == []
+
+
+def test_a_swap_while_another_move_is_filing_is_refused_at_the_name_lock(rec, tree, monkeypatch):
+    """B claimed the note and is paused inside _create; the agent writes a replacement at the
+    name; A (stale) comes through the swap path.  The lanes do not show B's decision yet, but
+    A fails at B's name lock, so only B's decision is filed and the replacement is untouched."""
+    import threading
+
+    import homelabnext.records.decider as decider
+
+    p = _propose(rec)
+    original = p.read_bytes()
+    a, b = _decider(tree), _decider(tree)
+    a.read("inbox", p.name)
+    b.read("inbox", p.name)
+    in_create, go = threading.Event(), threading.Event()
+    real_create, res = decider._create, {}
+
+    def create(dest_dir, name, data, mode):
+        if threading.current_thread().name == "B":
+            in_create.set()
+            go.wait(5)
+        return real_create(dest_dir, name, data, mode)
+
+    monkeypatch.setattr(decider, "_create", create)
+
+    def run_b():
+        try:
+            res["b"] = b.approve(p.name)
+        except Exception as ex:  # judged below
+            res["b"] = ex
+
+    t = threading.Thread(target=run_b, name="B")
+    t.start()
+    assert in_create.wait(5)
+    replacement = original.replace(b"Revert the threshold", b"replacement")
+    p.write_bytes(replacement)
+    try:
+        with pytest.raises(FileNotFoundError, match="being decided by another move"):
+            a.deny(p.name, "raced")
+    finally:
+        go.set()
+        t.join(5)
+    assert isinstance(res["b"], os.PathLike), res
+    assert _lanes_of(tree, p.name) == ["inbox", "decided/approved"]
+    assert p.read_bytes() == replacement
+    assert (tree / "decided/approved" / p.name).read_bytes() == original
+
+
+def test_a_losing_move_never_removes_the_winners_sidecar(rec, tree, monkeypatch):
+    """The destination name is filed (copy and sidecar) by someone else while this move is
+    writing: its copy fails EEXIST, and its rollback removes only what it created itself."""
+    import homelabnext.records.decider as decider
+
+    p = _propose(rec)
+    d = _decider(tree)
+    d.approve(p.name)
+    note = d._load("decided/approved", p.name, validate_filename=False)
+    real_create, state = decider._create, {}
+
+    def create(dest_dir, name, data, mode):
+        if not state:
+            state["x"] = 1
+            (dest_dir / name).write_bytes(data)
+            (dest_dir / f"{name}.decision.json").write_text('{"winner": true}\n')
+        return real_create(dest_dir, name, data, mode)
+
+    monkeypatch.setattr(decider, "_create", create)
+    with pytest.raises(FileExistsError):
+        d._move(note, "decided/completed", "completed", None)
+    side = tree / "decided" / "completed" / f"{p.name}.decision.json"
+    assert side.read_text() == '{"winner": true}\n'
+    assert (tree / "decided" / "approved" / p.name).exists()  # put back
+
+
+def test_a_name_that_reappears_during_rollback_is_not_replaced(rec, tree, monkeypatch, capsys):
+    """The move fails after its claim and, before it puts the note back, the agent writes a new
+    file at the name: the new file is kept, the claimed note stays in decided/.claims/ and that
+    is reported; the name lock is released."""
+    import homelabnext.records.decider as decider
+
+    p = _propose(rec)
+    original = p.read_bytes()
+
+    def fail(*a, **kw):
+        p.write_bytes(b"the agent's new file")
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(decider, "_create", fail)
+    with pytest.raises(OSError, match="No space"):
+        _decider(tree).approve(p.name)
+    assert p.read_bytes() == b"the agent's new file"
+    left = os.listdir(tree / "decided" / ".claims")
+    assert len(left) == 1 and left[0].startswith(p.name + ".")
+    assert not left[0].endswith(".lock")
+    assert (tree / "decided" / ".claims" / left[0]).read_bytes() == original
+    assert "is left in" in capsys.readouterr().err
+    assert os.listdir(tree / "decided" / "approved") == []
+
+
+def test_inbox_and_decided_on_two_mounts_is_refused_clearly(rec, tree, monkeypatch):
+    p = _propose(rec)
+    real_rename = os.rename
+
+    def exdev(src, *a, **kw):
+        if str(src) == str(p):
+            raise OSError(errno.EXDEV, "Invalid cross-device link", str(src))
+        return real_rename(src, *a, **kw)
+
+    monkeypatch.setattr(os, "rename", exdev)
+    with pytest.raises(OSError, match="must be on one mount") as exc:
+        _decider(tree).approve(p.name)
+    assert exc.value.errno == errno.EXDEV
+    assert p.exists()
+    assert os.listdir(tree / "decided" / "approved") == []
+    assert os.listdir(tree / "decided" / ".claims") == []
+
+
+def test_a_note_file_name_has_a_length_cap():
+    from homelabnext.records.notes import MAX_FILENAME_BYTES, check_filename
+
+    name = "2026-01-01-triage-" + "x" * MAX_FILENAME_BYTES + ".md"
+    assert check_filename(name, {}) == [f"filename is longer than {MAX_FILENAME_BYTES} bytes"]
+
+
+def _open_fds():
+    """Descriptors this process holds: /proc/self/fd on Linux, else /dev/fd."""
+    for d in ("/proc/self/fd", "/dev/fd"):
+        if os.path.isdir(d):
+            return len(os.listdir(d))
+    pytest.skip("no /proc/self/fd or /dev/fd to count descriptors with")
+
+
+def test_rereading_a_note_releases_the_earlier_reads_descriptor(rec, tree):
+    p = _propose(rec)
+    d = _decider(tree)
+    before = _open_fds()
+    for _ in range(20):
+        last = d.read("inbox", p.name)
+    assert _open_fds() == before + 1  # only the last read is held
+    assert len(d._held) == 1
+    assert d.approve(p.name).exists()  # and it is the one a following approve files
+    assert _open_fds() == before
+    assert last.name == p.name
+
+
+def test_a_refused_complete_releases_what_its_preflight_loaded(rec, tree):
+    d = _decider(tree)
+    a, b = _propose(rec, slug="one"), _propose(rec, slug="two")
+    d.approve(a.name)
+    d.approve(b.name)
+    (tree / "decided" / "completed" / b.name).write_text("in the way\n")
+    req = rec.completion_request([a.name, b.name], "Done.", agent="triage")
+    before = _open_fds()
+    with pytest.raises(FileExistsError):
+        d.complete(req.name)
+    assert _open_fds() == before
+    assert d._held == {} and d._loaded == {}
+
+
+def test_moving_a_note_whose_load_was_superseded_says_another_read_took_it(rec, tree):
+    """D: a move that misses its record because a later read (or another move) took it gets
+    FileNotFoundError, not "was not loaded"; a note never loaded still gets NoteError."""
+    from homelabnext.records.notes import read_note
+
+    p = _propose(rec)
+    d = _decider(tree)
+    first = d.read("inbox", p.name)
+    d.read("inbox", p.name)
+    with pytest.raises(FileNotFoundError, match="another move, or was read again"):
+        d._move(first, "decided/approved", "approved", None)
+    with pytest.raises(NoteError, match="was not loaded"):
+        d._move(read_note(p, "inbox"), "decided/approved", "approved", None)
+    assert _lanes_of(tree, p.name) == ["inbox"]
+
+
+def test_a_lock_records_its_holder_and_a_dead_one_is_named_stale(rec, tree, monkeypatch):
+    import socket
+
+    import homelabnext.records.decider as decider
+
+    p = _propose(rec)
+    seen = {}
+    real_create = decider._create
+
+    def create(dest_dir, name, data, mode):
+        seen.setdefault("lock", (tree / "decided/.claims" / f"{p.name}.lock").read_text())
+        return real_create(dest_dir, name, data, mode)
+
+    monkeypatch.setattr(decider, "_create", create)
+    _decider(tree).approve(p.name)
+    monkeypatch.undo()
+    fields = dict(f.split("=", 1) for f in seen["lock"].split())
+    assert fields["pid"] == str(os.getpid()) and fields["host"] == socket.gethostname()
+    assert fields["since"].endswith("Z")
+
+    q = _propose(rec, slug="stale")
+    lock = tree / "decided/.claims" / f"{q.name}.lock"
+    host = socket.gethostname()
+    lock.write_text(f"pid={os.getpid()} host={host} since=2026-01-01T00:00:00Z\n")
+    with pytest.raises(FileNotFoundError, match="that process is running"):
+        _decider(tree).approve(q.name)
+    monkeypatch.setattr(decider, "_pid_alive", lambda pid: False)
+    with pytest.raises(FileNotFoundError, match="no such process: a move that crashed"):
+        _decider(tree).approve(q.name)
+    lock.write_text("pid=1 host=elsewhere since=2026-01-01T00:00:00Z\n")
+    with pytest.raises(FileNotFoundError, match="another host"):
+        _decider(tree).approve(q.name)
+    assert q.exists()
+
+
+def test_operator_command_names_leftover_claims(rec, tree, capsys):
+    p = _propose(rec)
+    lock = tree / "decided/.claims" / f"{p.name}.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("pid=999999999 host=elsewhere since=2026-01-01T00:00:00Z\n")
+    assert decide_main(["approve", p.name, "--root", str(tree), "--by", "op"]) == 1
+    err = capsys.readouterr().err
+    assert f"holds {p.name}.lock" in err

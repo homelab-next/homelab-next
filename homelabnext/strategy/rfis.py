@@ -306,7 +306,7 @@ class StrategyDecider(TransitionDecider):
 
     def _finish(self, name: str, ident: str, dry_run: bool) -> Outcome:
         try:
-            note = self.reader.read(APPROVED, name)
+            note = self.movers.read(APPROVED, name)
         except (OSError, ValueError):
             note = None
         if note is not None and note.type == RAISE_TYPE:
