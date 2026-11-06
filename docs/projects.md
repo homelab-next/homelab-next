@@ -1,6 +1,6 @@
 ---
 summary: 'Projects as the sixteenth capability: the model and board rules, the Markdown reference, hub page, events, links to strategy records, the OpenProject adapter.'
-summary_of: outline:sha256:d051baa570de47de
+summary_of: outline:sha256:9ee268305d99cf75
 ---
 # Projects: project management as a capability
 
