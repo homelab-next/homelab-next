@@ -23,6 +23,9 @@ DECIDED_LANES = ("decided/approved", "decided/denied", "decided/completed")
 ALL_LANES = (AGENT_LANE, *DECIDED_LANES)
 
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+#: the longest note file name, in bytes: the decider's sidecar (and its temporary name), lock and
+#: claim names add up to about 40 bytes to it, within the usual NAME_MAX of 255
+MAX_FILENAME_BYTES = 200
 _FILENAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})-([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\.md$")
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---[ \t]*(?:\n|\Z)", re.S)
 MAX_SLUG = 60
@@ -89,6 +92,8 @@ def build_filename(frontmatter: dict[str, Any], slug: str) -> str:
 
 
 def check_filename(name: str, frontmatter: dict[str, Any]) -> list[str]:
+    if len(name.encode("utf-8", "surrogateescape")) > MAX_FILENAME_BYTES:
+        return [f"filename is longer than {MAX_FILENAME_BYTES} bytes"]
     m = _FILENAME_RE.match(name)
     if not m:
         return [f"filename {name!r} is not <YYYY-MM-DD>-<agent>-<slug>.md"]

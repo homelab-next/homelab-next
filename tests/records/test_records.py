@@ -303,6 +303,7 @@ def test_agent_api_cannot_reach_the_operator_movers():
     code = (
         "import sys, homelabnext.records as r\n"
         "assert 'homelabnext.records.decider' not in sys.modules\n"
+        "assert 'homelabnext.records.cli' not in sys.modules\n"
         "for n in ('Decider','init_tree','approve','deny','complete'):\n"
         "    assert not hasattr(r, n), n\n"
         "print('isolated')\n"
@@ -319,8 +320,10 @@ def test_agent_api_cannot_reach_the_operator_movers():
 
 def test_no_agent_side_module_imports_the_decider():
     pkg = ROOT / "homelabnext" / "records"
+    # cli.py is the operator's command router (``hnx records decide``), never agent-side; the
+    # isolation test above pins that importing the agent API does not load it
     for f in pkg.glob("*.py"):
-        if f.name == "decider.py":
+        if f.name in ("decider.py", "cli.py"):
             continue
         src = f.read_text()
         for node in ast.walk(ast.parse(src)):

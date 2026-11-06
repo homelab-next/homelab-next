@@ -249,7 +249,12 @@ class TransitionDecider:
     def decide(self, name: str, *, dry_run: bool = False) -> Outcome:
         self.records_root.mkdir(parents=True, exist_ok=True)
         with file_lock(self.records_root / LOCK_NAME):
-            return self._decide(name, dry_run)
+            try:
+                return self._decide(name, dry_run)
+            finally:
+                # an intent that ends waiting, gone, refused or in a dry run is read but never
+                # moved: release its held descriptor now, not at the end of the run
+                self.movers.close()
 
     def _decide(self, name: str, dry_run: bool) -> Outcome:
         if name in self.reader.list("inbox"):
@@ -259,7 +264,10 @@ class TransitionDecider:
         else:
             return Outcome(name, "?", "gone", "no longer in the inbox (decided elsewhere)")
         try:
-            note = self.reader.read(lane, name)
+            # the movers' own safe load (no symlink, one link, validated) and the bytes they
+            # file: a note refused here is refused before anything is applied, and the note
+            # filed in decided/ is the one decided on, not a rewrite of the agent's inode
+            note = self.movers.read(lane, name)
         except (OSError, UnicodeDecodeError, ValueError) as ex:  # NoteError is a ValueError
             why = f"the note does not validate ({ex}); its agent must fix or withdraw it"
             return Outcome(name, "?", "invalid", why.replace("\n", " "))
