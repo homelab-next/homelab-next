@@ -286,7 +286,9 @@ it, or ship it elsewhere first); neither is removed while its request is still p
 `audit_days: null` keeps the trail for ever. Audit age is read off the wall clock, so when no record
 is newer than the cutoff, or more than `audit_days` separate the newest record past it from the
 oldest one inside it (a clock stepped forward, or a broker idle that long), none is removed and a
-warning is logged; a record written under a stepped clock does not make the earlier ones prunable.
+warning is logged; a record written under a stepped clock does not make the earlier ones prunable
+until `audit_days` have passed under the new clock. A forward step shorter than `audit_days` is not
+detected: it prunes as if that time had passed.
 Requests, claims, results and approvals
 are not pruned (they are small, and `submit` is bounded by `pending_per_actor` and the call rate).
 

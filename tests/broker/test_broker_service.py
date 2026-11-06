@@ -725,6 +725,18 @@ def test_an_owner_s_spellings_of_itself_share_one_call_rate(tmp_path):
     assert info.value.reason == "call-rate-exceeded"
 
 
+def test_admission_counts_an_actor_s_spellings_in_one_bucket(tmp_path):
+    """Admission keyed the call rate on the raw actor, so a caller whose spellings the manifest
+    or a dev identity accepted got one bucket per spelling."""
+    svc = _quota_svc(tmp_path, Clock(), calls_per_minute=3)
+    assert [svc._take_call(s) for s in ("ops_bot", "Ops.Bot", "OPS-BOT", "ops bot")] == [
+        True,
+        True,
+        True,
+        False,
+    ]
+
+
 def test_audit_days_null_keeps_the_trail_for_ever(tmp_path):
     clock = Clock()
     manifest, docs = load_manifest(EXAMPLE)

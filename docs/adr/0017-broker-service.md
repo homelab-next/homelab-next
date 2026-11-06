@@ -222,7 +222,8 @@ either, and once the state disk filled every action of every agent and every app
   records after `retention.audit_days` (default 400, the trail being evidence; `null` keeps it),
   never those of a request still pending or running, and none while more than `audit_days`
   separate the records past retention from the rest, or nothing is newer than the cutoff (the
-  clock moved, or the broker sat idle: none is removed until an operator looks). The hourly prune runs on a
+  clock moved, or the broker sat idle: the older records are kept until `audit_days` have passed
+  under the new clock). A forward step shorter than `audit_days` is not detected. The hourly prune runs on a
   background thread, never on a caller's request.
 
 These bound the *rate* at which an agent grows the state directory, not its size: the

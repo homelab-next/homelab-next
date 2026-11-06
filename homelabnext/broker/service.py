@@ -138,6 +138,7 @@ from homelabnext.generators.safe import CONTROL_RE
 from . import (
     check_manifest_handlers,
     decide,
+    normalize_identity,
     request_digest,
     validation,
 )
@@ -1022,10 +1023,12 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
 
     def _take_call(self, actor: str) -> bool:
         """Count one admitted operation of ``actor`` (manifest 1.9 ``quotas.calls_per_minute``,
-        a sliding window on the monotonic clock); False, counting nothing, when it is over."""
+        a sliding window on the monotonic clock); False, counting nothing, when it is over.
+        Keyed on the normalized identity, as ownership is compared, so one actor's spellings of
+        itself share one bucket."""
         now = self._mono()
         with self._calls_lock:
-            seen = self._calls.setdefault(actor, deque())
+            seen = self._calls.setdefault(normalize_identity(actor), deque())
             while seen and seen[0] <= now - CALL_RATE_WINDOW_S:
                 seen.popleft()
             if len(seen) >= self.calls_per_minute:

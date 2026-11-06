@@ -398,7 +398,7 @@
     },
     "retention": {
       "type": "object",
-      "description": "1.9: how long the broker keeps finished state on disk; it prunes at start and at most once an hour. runs_days: a run directory (runs/<request id>/: stdout, stderr and what the handler left) is removed this many days after it was last written, unless its request is still pending or running; absent 30. audit_days: an audit record (and its decisions/ index entry) older than this many days is removed unless its request is still pending or running, and none is when every record is that old (the clock moved); absent 400; null keeps the audit trail for ever (then ship it elsewhere before the disk fills). The handler copy is removed when each run ends whatever these say.",
+      "description": "1.9: how long the broker keeps finished state on disk; it prunes at start and at most once an hour. runs_days: a run directory (runs/<request id>/: stdout, stderr and what the handler left) is removed this many days after it was last written, unless its request is still pending or running; absent 30. audit_days: an audit record (and its decisions/ index entry) older than this many days is removed unless its request is still pending or running, and none while no record is newer than the cutoff or more than audit_days separate the records past it from the rest (the clock moved, or the broker sat idle); absent 400; null keeps the audit trail for ever (then ship it elsewhere before the disk fills). The handler copy is removed when each run ends whatever these say.",
       "properties": {
         "runs_days": {"type": "number", "exclusiveMinimum": 0, "maximum": 36500},
         "audit_days": {"type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 36500}
