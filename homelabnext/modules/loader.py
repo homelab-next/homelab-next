@@ -550,7 +550,7 @@ def module_reader(tree: Tree, budget: Budget | None = None) -> ModuleReader:
 
 # ``contributions`` is the module-level plane (the swap flow audits what a module contributed);
 # every other name must be a registered ``hnx decommission`` plane.
-AUDIT_EXTRA_PLANES = frozenset({"contributions"})
+AUDIT_EXTRA_PLANES = frozenset({"contributions"})  # accepted; no plane audits it yet
 
 
 def _record_problems(doc: Doc, mod_dir: Path, load) -> list[str]:

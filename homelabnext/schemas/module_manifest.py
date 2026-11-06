@@ -968,7 +968,7 @@ def _defs() -> dict[str, Any]:
                         ),
                         "audit": arr(
                             ref("slug"),
-                            "Decommission planes (homelabnext/decommission/planes.py's registry) plus the contributions plane; the loader refuses any other name.",
+                            "Decommission planes (homelabnext/decommission/planes.py's registry) plus the contributions plane (specified, not implemented: no decommission plane reads it yet); the loader refuses any other name.",
                             1,
                         ),
                     },
@@ -1118,7 +1118,10 @@ def module_schema() -> dict[str, Any]:
             "kind": {"enum": ["provider", "feature", "core"]},
             "title": text(80),
             "description": text(500),
-            "owner": ref("slug", "Owning team; the licence probe pages it."),
+            "owner": ref(
+                "slug",
+                "Owning team; the specified (not yet implemented) licence probe would page it.",
+            ),
             "author": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_-]*:[A-Za-z0-9._@-]+" + G,

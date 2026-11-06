@@ -11,6 +11,8 @@ has no section below.
 - The module `licence` probe (warn at 30 days, page at 7, red on expiry) is marked "specified, not implemented" in `docs/modules.md`, the manifest schema and the follow-up list: nothing reads `licence.expires`.
 - `hnx new schema` writes the layout X-03 checks (`examples/<name>.valid.json`, `negative/<name>.*.json`, a version-pinned `$id`), and its verify runs the X-03 check. `hnx new` names are matched in full (a trailing newline is refused), and `hnx new role` outside a checkout fails cleanly before writing files.
 - The decommission `secret-names` plane no longer lists a sibling guest's secrets for deletion (key `app` matched `app_core_*`): a name that also belongs to another known guest (snapshot `guests`, or a `host_vars` file) is reported `AMBIGUOUS` for review.
+  The most specific key wins: a target's own secrets (`app-core`'s `app_core_*` with a sibling guest `app`) stay firm remnants, `host_vars/<guest>/*.yml` names the guest, and a non-list snapshot `guests` is refused.
+- The `contributions` audit plane is marked "specified, not implemented" in the manifest schema, the swap flow and the follow-up list; the loader still accepts the name.
 
 ### Changed
 - `hnx status serve` reuses one built document while its input files (state file, activity store and its `-wal`) are unchanged, for at most 15 seconds (`status.serve.DocumentMemo`), instead of rebuilding it and loading every activity event on every request; a write or a retention purge rebuilds it.

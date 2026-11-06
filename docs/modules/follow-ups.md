@@ -169,3 +169,5 @@ Still open:
   exist no module can provide them, by the privileged-slot rule.
 - **The loader's own trust boundary**: whether module code runs in-process (as specified) or in a
   sandboxed worker for third-party origins.
+- The `contributions` decommission plane is specified, not implemented: the loader accepts it in
+  `lifecycle.remove.audit`, but `hnx decommission` has no such plane, so nothing audits it yet.

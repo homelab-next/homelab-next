@@ -156,6 +156,9 @@ class Adapters:
         def lst(sec: str, key: str) -> SnapshotList | None:
             return SnapshotList(doc[sec], key) if sec in doc else None
 
+        guests = doc.get("guests") or []
+        if not isinstance(guests, (list, tuple)) or not all(isinstance(g, str) for g in guests):
+            raise ValueError("snapshot 'guests' must be a list of guest-name strings")
         return cls(
             tree=tree,
             hypervisor=SnapshotHypervisor(doc["hypervisor"]) if "hypervisor" in doc else None,
@@ -165,7 +168,7 @@ class Adapters:
             dns=lst("dns", "records"),
             proxy=lst("proxy", "routes"),
             dhcp=lst("dhcp", "reservations"),
-            known_guests=frozenset(str(g) for g in doc.get("guests", ()) or ()),
+            known_guests=frozenset(guests),
         )
 
     @classmethod

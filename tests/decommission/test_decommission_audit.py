@@ -250,3 +250,25 @@ def test_secret_plane_derives_known_guests_from_host_vars(files):
     snap = {"secrets": {"names": ["app_core_db_password"]}}
     r = by_plane(run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"]))
     assert r["secret-names"].status is Status.REVIEW
+
+
+def test_target_keeps_its_own_secrets_when_a_shorter_named_sibling_exists(files):
+    """Target `app-core`, sibling guest `app`: `app_core_*` is the target's, a firm remnant."""
+    snap = {"secrets": {"names": ["app_core_db_password"]}, "guests": ["app"]}
+    r = by_plane(
+        run(Target("app-core"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"])
+    )
+    assert r["secret-names"].status is Status.REMNANT
+    assert r["secret-names"].items == ["app_core_db_password"]
+
+
+def test_host_vars_directory_form_names_a_known_guest():
+    tree = MemTree({"inventory/host_vars/app-core/main.yml": "x: 1\n"})
+    snap = {"secrets": {"names": ["app_core_db_password"]}}
+    r = by_plane(run(Target("app"), Adapters.from_snapshot(snap, tree), ["secret-names"]))
+    assert r["secret-names"].status is Status.REVIEW
+
+
+def test_snapshot_guests_must_be_a_list_of_strings():
+    with pytest.raises(ValueError):
+        Adapters.from_snapshot({"guests": "app-core"})
