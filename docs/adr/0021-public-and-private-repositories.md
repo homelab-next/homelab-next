@@ -56,6 +56,14 @@ workstation was both a single point of failure (F-16) and the place where every 
    not the bare envelope, a file it could not scan, or a committed key; `tools/private_leak_check.py public` (this repository's
    `make check` and CI) fails if any part of an overlay, any SOPS ciphertext or any key is
    committed here. `tools/leak_scan.py` also flags an age identity.
+7. **The public commit the overlay runs is a tracked pin.** `HNX_REF`, the full homelab-next
+   commit SHA the overlay's checks and deploy check out into `hnx/`, is the file
+   `locks/hnx-ref` in the overlay, under CODEOWNERS, never an Actions variable: it changes only
+   through a reviewed pull request, and what was deployed when is that file's history. Both
+   workflows refuse it unless it is one full SHA **on homelab-next's `main`** (`git merge-base
+   --is-ancestor` against a freshly fetched `main`, before anything from `hnx/` is installed or
+   run), because GitHub serves any commit of the fork network, an unmerged pull request's
+   included, under the parent repository's name.
 
 ## Consequences
 
@@ -70,8 +78,9 @@ workstation was both a single point of failure (F-16) and the place where every 
 - The operator maintains an Environment, an OpenBao AppRole, a Tailscale tag, its ACL and a
   federated identity (or a runner provisioner and template), and the rotation routine in
   `docs/private-overlay.md`.
-- The deploy pins a homelab-next commit, so a public change reaches the lab only when the overlay
-  moves `HNX_REF`, through its own reviewed pull request.
+- The deploy pins a homelab-next commit (`locks/hnx-ref`, decision 7), so a public change reaches
+  the lab only once it is merged to homelab-next's `main` and the overlay moves that pin, through
+  its own reviewed pull request.
 - The deploy tag's tailnet access is site data (`tailnet.deploy`, site 1.2): the Tailscale policy
   generator emits `tag:ci-deploy`, its SSH rule and policy tests, and refuses a wildcard
   destination or a port beyond SSH without a stated reason.

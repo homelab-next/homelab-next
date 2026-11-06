@@ -1,6 +1,6 @@
 ---
-summary: 'The public repo and the private overlay: where data lives, how hnx finds it, encryption, bootstrap, the runner, reviews, deploys and SSH certificates.'
-summary_of: outline:sha256:29a71d429b78fa98
+summary: 'The public repo and the private overlay: where data lives, how hnx finds it, encryption, bootstrap, reviews, the pinned commit, deploys and SSH certificates.'
+summary_of: outline:sha256:b4c93d67bb8bee49
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The public repository and the private overlay
@@ -37,8 +37,9 @@ homelab-next/  (PUBLIC)                       lab-private/  (PRIVATE, the operat
                                               ├── runner/job-started.sh      self-hosted runner hook
                                               ├── lab/   services.yml site.yml guests/ registers/
                                               │          strategy/ customizations/ sealed/
-                 ┌──────────── pinned ──────► └── locks/deploy.txt          (hash-locked)
-                 │  the deploy checks out homelab-next at HNX_REF (a full commit SHA) into ./hnx
+                 ┌──────────── pinned ──────► └── locks/hnx-ref  locks/deploy.txt (hash-locked)
+                 │  checks and deploy check out homelab-next at HNX_REF (locks/hnx-ref: a full
+                 │  commit SHA, refused unless it is on homelab-next's main) into ./hnx
 ```
 
 Nothing flows the other way: the public repository never references the private one, and the
@@ -52,6 +53,7 @@ reverse guard (below) fails its CI if any part of an overlay is committed to it.
 | A complete fictional lab, the overlay skeleton | public `examples/` | plain text, documentation values only |
 | Real site, registry, guests, registers, strategy, customizations, the MCP catalog (`lab/mcp/`) and its render specs, the module selection with the site's network scope (`lab/modules.yml`, [modules](modules/network-scope.md#the-network-scope)) | private `lab/` | plain text under the repository's access control |
 | Real data that would hurt if the private repository leaked (WAN addresses, peer details) | private `lab/sealed/` | SOPS + age, one file at a time |
+| The homelab-next commit the checks and the deploy run (`HNX_REF`) | private `locks/hnx-ref` | one full commit SHA on homelab-next's `main`, moved by a reviewed pull request ([the pinned commit](#the-pinned-homelab-next-commit)) |
 | Inventory variables that must stay confidential and no role takes as a reference | private `ansible/inventory/*/group_vars/*/vault.yml` | ansible-vault |
 | Credentials (passwords, tokens, API keys, enrollment secrets), and the vault password | OpenBao | referenced in git as `secret:<name>`; the deploy reads them by name through its AppRole |
 | The deploy's own credentials (the AppRole `secret_id`, age identity, SSH key) | the private repository's protected Actions Environment `production` | Actions secrets (Tailscale needs none: workload identity federation) |
@@ -151,7 +153,9 @@ overlay's own configuration to say what must be sealed:
 Order matters: each step needs the one before it, and nothing secret is ever written into git.
 
 1. **Create the private repository** from the skeleton: copy `examples/private-overlay/`, delete
-   `fictional: true` from `.hnx-private-overlay.yml`, protect `main` (pull requests, the
+   `fictional: true` from `.hnx-private-overlay.yml`, replace the placeholder in
+   `locks/hnx-ref` with the homelab-next commit you reviewed (a full SHA on its `main`,
+   [the pinned commit](#the-pinned-homelab-next-commit)), protect `main` (pull requests, the
    `checks` job required: the last job of `checks.yml`, which needs every other one).
 2. **Keys offline first.** Generate the operator's age identity on the workstation
    (`age-keygen`); store it in the password manager and print a paper copy. Put its public
@@ -202,12 +206,12 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
      `ANSIBLE_VAULT_PASSWORD` only if the vault password is not in OpenBao. No
      role credential is an Actions secret (they are read from OpenBao by name) and Tailscale
      needs no secret.
-   * **Variables** (Environment variables, so only the deploy job sees them): `HNX_REF` (a full
-     homelab-next commit SHA), `SOPS_VERSION`, `SOPS_SHA256`, `HNX_DEPLOY_PATH` (`tailscale` or
+   * **Variables** (Environment variables, so only the deploy job sees them): `SOPS_VERSION`,
+     `SOPS_SHA256`, `HNX_DEPLOY_PATH` (`tailscale` or
      `self-hosted`), `BAO_ADDR` (`https://...`), `BAO_ROLE_ID`, `BAO_CACERT_PEM` (the internal
      CA's certificate, PEM), `HNX_VAULT_PASSWORD_REF` (`secret:ansible/vault-password`), and for
      Tailscale `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE` (the federated identity's client id and
-     audience).
+     audience). `HNX_REF` is not a variable: it is the tracked file `locks/hnx-ref` (step 1).
    * **Branch protection on `main`** (a ruleset or classic protection; both exist for private
      repositories on Pro): pull requests required, the `checks` job required, **one approving
      review and "Require review from Code Owners"** (the skeleton's `.github/CODEOWNERS` owns
@@ -531,11 +535,14 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
    for the OIDC token the Tailscale action exchanges. The token cannot write to the repository.
 3. **Environment `production`**: its deployment-branch policy releases its secrets only to a run
    from `main` (and, on a plan with required reviewers, only after a reviewer approves).
-4. **Pins**: refuses to start unless `HNX_REF` is a 40-hex commit SHA, the sops version and
-   checksum are set, and `BAO_ADDR` is `https://` with a `BAO_ROLE_ID`. Actions are pinned to full commit SHAs (`tailscale/github-action` v4.3.0
-   included).
-5. **Checkouts**: the private repository, then homelab-next at `HNX_REF` into `./hnx`, both with
-   `persist-credentials: false`.
+4. **Pins**: refuses to start unless the sops version and checksum are set, and `BAO_ADDR` is
+   `https://` with a `BAO_ROLE_ID`. Actions are pinned to full commit SHAs
+   (`tailscale/github-action` v4.3.0 included).
+5. **Checkouts**: the private repository, then `HNX_REF` is read from `locks/hnx-ref` (one full
+   commit SHA, else the run stops), then homelab-next at that commit into `./hnx` with its full
+   history, both with `persist-credentials: false`; the next step refuses the commit unless it
+   is on homelab-next's `main` ([the pinned commit](#the-pinned-homelab-next-commit)), before
+   anything from `./hnx` is installed or run.
 6. **Tools**: pip from `hnx/constraints/bootstrap.txt` (`--require-hashes`), hnx's dependencies
    under `hnx/constraints/ci.txt`, hnx itself without dependencies, the deploy's own tools from
    `locks/deploy.txt` with hashes; sops downloaded and checked against `SOPS_SHA256`.
@@ -592,13 +599,43 @@ with 1.31.1) over them when those tools are installed (the tests skip otherwise)
 (`HNX_REQUIRE_TOOLS`: a missing one fails the tests there), so the templates are linted on every
 push.
 
-`checks.yml` runs on every pull request with no secret and no Environment: its jobs are the
-private leak check (`private-leak-check`), the module loader (`module-loader`: `hnx modules check
---root hnx --overlay . --deploy`, with the pinned `hnx`, the overlay read as data), the site
-review tier (`site-review-tier`) and the swap gate (`swap-gate`), and a last job, `checks`, that
-needs all of them and fails unless each succeeded: it is the one check branch protection requires,
-so no job can be left out of it. A pull request's code never sees a credential, and a module
-problem shows on the pull request, not only at the deploy.
+`checks.yml` runs on every pull request with no secret and no Environment: its jobs are the pin
+(`hnx-pin`: reads `locks/hnx-ref` and refuses a commit not on homelab-next's `main`; every other
+job needs it and checks out only the commit it hands on), the private leak check
+(`private-leak-check`), the module loader (`module-loader`: `hnx modules check --root hnx
+--overlay . --deploy`, with the pinned `hnx`, the overlay read as data), the specs the operator
+applies by hand (`lab-specs`: `hnx ssh-ca check lab/ssh-ca.yml` and `hnx secrets plan lab --spec
+lab/secrets.yml`, each when the file exists; the plan reads names only and reaches no store), the
+site review tier (`site-review-tier`) and the swap gate (`swap-gate`), and a last job, `checks`,
+that needs all of them and fails unless each succeeded: it is the one check branch protection
+requires, so no job can be left out of it. A pull request's code never sees a credential, and a
+module or spec problem shows on the pull request, not only at the deploy or when it is applied.
+
+## The pinned homelab-next commit
+
+`HNX_REF`, the homelab-next commit the checks and the deploy check out into `./hnx` and run with
+the deploy's credentials and root on every host, lives in one place: the tracked file
+`locks/hnx-ref` of the private repository (ADR-0021 decision 7, ADR-0028). It holds one full
+commit SHA (lines starting with `#` are comments), and CODEOWNERS owns `locks/`, so it changes
+only through a reviewed pull request, and `git log locks/hnx-ref` is the record of what was run
+when. It is not an Actions variable: a variable changes outside review, outside git, and outside
+anything a pull request shows.
+
+Both workflows read it the same way and refuse, before anything from `./hnx` is installed or run:
+
+* a missing file, a link, anything but one full lowercase SHA, or the template's all-zero
+  placeholder;
+* a commit that is **not on homelab-next's `main`**: they check out the pin with full history,
+  fetch `main` from homelab-next into a ref of their own and run `git merge-base --is-ancestor
+  HNX_REF <that ref>`. GitHub serves any commit of a repository's fork network (an unmerged pull
+  request, a fork's branch) under the parent's name, so a full SHA alone proves nothing was
+  reviewed; ancestry proves it was merged. A shallow checkout is refused too, since its ancestry
+  cannot be walked.
+
+To move it: pick a commit on homelab-next's `main` (a release, or a `main` commit you have read),
+open a pull request in the private repository that changes only `locks/hnx-ref` (and whatever
+that release's notes say the overlay must change with it), let `checks` run against the new pin,
+and merge it. The next dispatched deploy runs that commit.
 
 ## The leak checks, both directions
 
@@ -619,17 +656,19 @@ The identity provider (Keycloak) has no LDAP outpost, so SSH sign-on does not go
 (`sssd_ldap` and the `central-auth` control are superseded for SSH). Instead OpenBao is the SSH
 user CA: a person logs in to OpenBao with OIDC against the identity provider and gets a
 certificate for their own public key valid for hours; the deploy job gets one for a key it
-generates per job, valid for minutes. Hosts trust the CA's public key and map each local account
-to the principals it accepts. Nothing a host trusts is a standing private key.
+generates per job, valid no longer than the deploy job may run (an hour). Hosts trust the CA's
+public key and map each local account to the principals it accepts. Nothing a host trusts is a standing private key.
 
 **The OpenBao side** is `lab/ssh-ca.yml` (start from `examples/private-overlay/lab/ssh-ca.yml`):
 one entry per signing role, `for: deploy` or `for: human`, its principals, TTLs (capped: deploy 1 h,
 person 24 h), certificate extensions (a deploy role carries no forwarding and no user rc; the
 template gives it none at all, add `permit-pty` only if a play needs a terminal), optional
 `source_addresses` (the certificate's `source-address` critical option) and, for a person's
-role, the identity provider's groups that may use it. `hnx ssh-ca check lab/ssh-ca.yml` validates
-it; `hnx ssh-ca render lab/ssh-ca.yml --format sh` prints the writes: an ACL policy per role that
-may only `update` `ssh/sign/<role>`, the SSH role (user certificates only, no host certificates,
+role, the identity provider's groups that may use it. A deploy role's `ttl` must cover the
+deploy job's `timeout-minutes` (the template: 1 h for 60 minutes): a connection opened after the
+certificate expires fails. `hnx ssh-ca check lab/ssh-ca.yml` validates it (`checks.yml`'s
+`lab-specs` job runs it on every pull request); `hnx ssh-ca render lab/ssh-ca.yml --format sh`
+prints the writes: an ACL policy per role that may only `update` `ssh/sign/<role>`, the SSH role (user certificates only, no host certificates,
 no client-chosen key ids, key id `<role>-<token display name>` so the audit log names the
 holder), and an OIDC login role bound to the groups claim whose token lives 10 minutes (it only
 signs a key). Once, as an admin:

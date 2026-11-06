@@ -21,6 +21,13 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
   `swap-gate` has no base table to hold the first one against, so it exits 2 and `checks` fails.
   Every later change is gated normally ([docs/modules/swap-flow.md](docs/modules/swap-flow.md),
   "The overlay's gate").
+- [ ] **In the private overlay, move `HNX_REF` into the tracked file `locks/hnx-ref`** and take up
+  the template's new `checks.yml` and `deploy.yml`, in one pull request you review and merge: the
+  file holds one full homelab-next commit SHA on its `main` (the value of today's `HNX_REF`
+  variable, if that commit is on `main`), and both workflows refuse any other. Then delete the
+  `HNX_REF` variable (repository and `production` Environment), so nothing outside review can
+  change what runs. Branch protection needs no change: the required `checks` job already needs
+  the new `hnx-pin` and `lab-specs` jobs ([docs/private-overlay.md](docs/private-overlay.md), "The pinned homelab-next commit").
 
 ## 2. Secrets and the deploy path (before the first deploy)
 
@@ -44,9 +51,9 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
 - [ ] **Create the overlay's `production` Environment**, with deployment branch `main` only.
   - Secrets: `BAO_SECRET_ID`, `SOPS_AGE_KEY`, `DEPLOY_SSH_KEY`; `ANSIBLE_VAULT_PASSWORD` only if the
     vault password is not in the secrets store.
-  - Variables: `HNX_REF` (a full commit SHA), `SOPS_VERSION`, `SOPS_SHA256`, `HNX_DEPLOY_PATH`,
-    `BAO_ADDR`, `BAO_ROLE_ID`, `BAO_CACERT_PEM`, `HNX_VAULT_PASSWORD_REF`, and for the VPN path
-    `TS_OAUTH_CLIENT_ID` and `TS_AUDIENCE`.
+  - Variables: `SOPS_VERSION`, `SOPS_SHA256`, `HNX_DEPLOY_PATH`, `BAO_ADDR`, `BAO_ROLE_ID`,
+    `BAO_CACERT_PEM`, `HNX_VAULT_PASSWORD_REF`, and for the VPN path `TS_OAUTH_CLIENT_ID` and
+    `TS_AUDIENCE`. Not `HNX_REF`: that is the tracked file `locks/hnx-ref` (section 1).
 - [ ] **Record host keys** in the overlay's `ansible/known_hosts`, checking each fingerprint out of
   band.
 - [ ] **Run the first deploy by hand** (`deploy.yml` on `main`, from the overlay's Actions page or

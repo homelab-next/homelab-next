@@ -20,7 +20,6 @@
 #   ANSIBLE_VAULT_PASSWORD   optional: the ansible-vault password, when it is not in OpenBao
 # and the Environment's variables (not secret; Environment, not repository, variables, so only
 # this job sees them):
-#   HNX_REF                  full commit SHA of homelab-next whose roles and tools this deploys
 #   SOPS_VERSION, SOPS_SHA256  the sops release and the sha256 of its linux.amd64 binary
 #   HNX_DEPLOY_PATH          `tailscale` (default: a GitHub-hosted runner joins the tailnet) or
 #                            `self-hosted` (an ephemeral JIT runner inside the lab, labels
@@ -32,6 +31,11 @@
 #                            Tailscale workload identity federation (a federated identity with the
 #                            auth_keys scope and tag:ci-deploy, trusting this repository's
 #                            `environment:production` subject): no Tailscale secret is stored
+#
+# The homelab-next commit this deploys (HNX_REF) is not a variable: it is the tracked file
+# locks/hnx-ref (one full commit SHA), changed only by a reviewed pull request (CODEOWNERS owns
+# locks/), and the job refuses it unless that commit is on homelab-next's main
+# (docs/private-overlay.md, "The pinned homelab-next commit").
 #
 # Never add pull_request_target, never run this on a pull request, and never attach a
 # self-hosted runner to a public repository: anyone who can open a pull request could run code
@@ -58,16 +62,14 @@ jobs:
       contents: read
       id-token: write  # the Tailscale action exchanges the job's OIDC token (workload identity)
     steps:
-      - name: refuse an unpinned hnx or sops, or no OpenBao
+      - name: refuse an unpinned sops, or no OpenBao
         env:
-          HNX_REF: ${{ vars.HNX_REF }}
           SOPS_VERSION: ${{ vars.SOPS_VERSION }}
           SOPS_SHA256: ${{ vars.SOPS_SHA256 }}
           BAO_ADDR: ${{ vars.BAO_ADDR }}
           BAO_ROLE_ID: ${{ vars.BAO_ROLE_ID }}
         run: |
           set -euo pipefail
-          [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
           [[ "$SOPS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::SOPS_VERSION must be X.Y.Z"; exit 1; }
           [[ "$SOPS_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::SOPS_SHA256 must be a sha256"; exit 1; }
           [[ "$BAO_ADDR" == https://* ]] || { echo "::error::BAO_ADDR must be an https:// address"; exit 1; }
@@ -77,6 +79,17 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: refuse an unpinned hnx
+        # HNX_REF is the tracked file locks/hnx-ref: one full commit SHA, comment lines allowed
+        id: hnx-ref
+        run: |
+          set -euo pipefail
+          if [ ! -f locks/hnx-ref ] || [ -L locks/hnx-ref ]; then echo "::error::locks/hnx-ref (the pinned homelab-next commit) is missing"; exit 1; fi
+          ref="$(grep -Ev '^[[:space:]]*(#|$)' locks/hnx-ref || true)"
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::locks/hnx-ref must hold one full commit SHA (40 lowercase hex) and nothing else but comments"; exit 1; }
+          [[ ! "$ref" =~ ^0{40}$ ]] || { echo "::error::locks/hnx-ref still holds the template's placeholder: pin the homelab-next commit you reviewed"; exit 1; }
+          echo "sha=$ref" >> "$GITHUB_OUTPUT"
 
       - name: refuse an hnx/ the change itself carries
         # the pinned checkout goes to hnx/ and is installed from there: a pull request that
@@ -89,9 +102,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: homelab-next/homelab-next
-          ref: ${{ vars.HNX_REF }}
+          ref: ${{ steps.hnx-ref.outputs.sha }}
           path: hnx
+          fetch-depth: 0  # the history the ancestry check below walks
           persist-credentials: false
+
+      - name: refuse an hnx commit that is not on homelab-next main
+        # GitHub serves any commit of the repository's fork network (an unmerged pull request, a
+        # fork's branch) under the parent's name, so a full SHA alone proves nothing was reviewed.
+        # Nothing from hnx/ has run yet: this stops the job before anything does.
+        env:
+          HNX_REF: ${{ steps.hnx-ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(git -C hnx rev-parse HEAD)"
+          [ "$head" = "$HNX_REF" ] || { echo "::error::hnx/ is at $head, not the pinned $HNX_REF"; exit 1; }
+          [ "$(git -C hnx rev-parse --is-shallow-repository)" = false ] || { echo "::error::hnx/ is a shallow clone: its ancestry cannot be checked"; exit 1; }
+          git -C hnx fetch --quiet --no-tags origin +refs/heads/main:refs/hnx-pin/main
+          git -C hnx merge-base --is-ancestor "$HNX_REF" refs/hnx-pin/main || { echo "::error::HNX_REF $HNX_REF is not on homelab-next main: only merged, reviewed code runs"; exit 1; }
+          echo "hnx $HNX_REF is on homelab-next main"
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:

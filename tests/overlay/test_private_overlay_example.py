@@ -41,6 +41,9 @@ SKELETON = ROOT / "examples" / "private-overlay"
 TEMPLATES = sorted((SKELETON / ".github" / "workflows").glob("*.yml"))
 OWN = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 CLIENT = SKELETON / "bin" / "vault-pass-client.py"
+#: the ref every checks.yml job but hnx-pin checks homelab-next out at: the commit hnx-pin read
+#: from locks/hnx-ref and proved to be on homelab-next's main
+PINNED_SHA = "${{ needs.hnx-pin.outputs.sha }}"
 
 # the sdist and the wheel leave the template out (setup.py NOT_PACKAGED, MANIFEST.in)
 pytestmark = pytest.mark.skipif(
@@ -325,7 +328,7 @@ def test_the_loader_also_runs_on_every_pull_request():
         for s in job["steps"]
         if s.get("with", {}).get("repository") == "homelab-next/homelab-next"
     ]
-    assert hnx and hnx[0]["with"]["ref"] == "${{ vars.HNX_REF }}"
+    assert hnx and hnx[0]["with"]["ref"] == PINNED_SHA
     assert all(s.get("with", {}).get("persist-credentials") is False
                for s in job["steps"] if "actions/checkout" in s.get("uses", ""))  # fmt: skip
 
@@ -353,7 +356,7 @@ def test_the_site_review_tier_runs_on_every_pull_request():
     (own,) = [s for s in checkouts if "repository" not in s["with"]]
     assert own["with"]["fetch-depth"] == 0
     (hnx,) = [s for s in checkouts if s["with"].get("repository") == "homelab-next/homelab-next"]
-    assert hnx["with"]["ref"] == "${{ vars.HNX_REF }}"
+    assert hnx["with"]["ref"] == PINNED_SHA
 
 
 def _loader_step(tmp_path: Path, hnx_exit: int, *lab_files: str) -> tuple[int, str]:
@@ -409,6 +412,347 @@ def test_zizmor_accepts_the_templates():
         text=True,
     )
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ---- HNX_REF: the tracked pin, proved to be on homelab-next main -------------------------------
+
+HNX_REF_FILE = SKELETON / "locks" / "hnx-ref"
+READ_PIN = "refuse an unpinned hnx"
+ANCESTRY = "refuse an hnx commit that is not on homelab-next main"
+
+
+def _workflow(name: str) -> dict:
+    return yaml.safe_load((SKELETON / ".github" / "workflows" / name).read_text())
+
+
+def _pin_job(name: str) -> dict:
+    """The job that reads locks/hnx-ref and proves it: deploy.yml's one job, checks.yml's
+    ``hnx-pin``."""
+    doc = _workflow(name)
+    return doc["jobs"]["hnx-pin"] if name == "checks.yml" else next(iter(doc["jobs"].values()))
+
+
+def _bash() -> str:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is not installed")
+    return bash
+
+
+@pytest.mark.parametrize("workflow", ["checks.yml", "deploy.yml"])
+def test_hnx_ref_is_the_tracked_file_never_a_variable(workflow):
+    """HNX_REF lives in locks/hnx-ref (under CODEOWNERS), so it moves only by a reviewed pull
+    request: no workflow reads an Actions variable for it, every hnx/ checkout takes the commit
+    the pin step read, and the ancestry check runs right after the checkout, before anything from
+    hnx/ is installed or run."""
+    text = (SKELETON / ".github" / "workflows" / workflow).read_text()
+    assert "vars.HNX_REF" not in text
+    job = _pin_job(workflow)
+    i_pin, pin = _step(job, READ_PIN)
+    assert pin["id"] == "hnx-ref" and "locks/hnx-ref" in pin["run"]
+    i_hnx, hnx = next(
+        (i, s) for i, s in enumerate(job["steps"]) if (s.get("with") or {}).get("path") == "hnx"
+    )
+    assert i_pin < i_hnx
+    assert hnx["with"]["ref"] == "${{ steps.hnx-ref.outputs.sha }}"
+    assert hnx["with"]["fetch-depth"] == 0  # the history the ancestry check walks
+    i_anc, anc = _step(job, ANCESTRY)
+    assert i_anc == i_hnx + 1
+    assert anc["env"] == {"HNX_REF": "${{ steps.hnx-ref.outputs.sha }}"}
+    assert "continue-on-error" not in anc and "if" not in anc
+    for step in job["steps"][:i_anc]:  # nothing installs or runs what hnx/ holds before it
+        run = str(step.get("run", ""))
+        assert not re.search(r"pip install|python hnx|\./hnx|^\s*hnx ", run, re.M), step.get("name")
+
+
+def test_the_pin_and_ancestry_scripts_are_the_same_in_both_workflows():
+    for name in (READ_PIN, ANCESTRY):
+        runs = {wf: _step(_pin_job(wf), name)[1]["run"] for wf in ("checks.yml", "deploy.yml")}
+        assert runs["checks.yml"] == runs["deploy.yml"], name
+
+
+def test_every_checks_job_uses_the_proved_pin():
+    """Each job that checks out homelab-next needs hnx-pin and takes its output, so a commit not on
+    main never reaches a job that installs or runs it; ``checks`` needs hnx-pin too."""
+    jobs = _workflow("checks.yml")["jobs"]
+    pin = jobs["hnx-pin"]
+    assert pin["outputs"] == {"sha": "${{ steps.hnx-ref.outputs.sha }}"}
+    users = 0
+    for name, job in jobs.items():
+        if name == "hnx-pin":
+            continue
+        assert "hnx-pin" in ([job["needs"]] if isinstance(job["needs"], str) else job["needs"])
+        for step in job["steps"]:
+            if (step.get("with") or {}).get("path") == "hnx":
+                users += 1
+                assert step["with"]["ref"] == PINNED_SHA, name
+    assert users == len(jobs) - 2
+
+
+def _read_pin(tmp_path: Path, content: str | None, *, link: bool = False) -> tuple[int, str, str]:
+    """Run the pin step in an overlay whose locks/hnx-ref holds ``content``.  Returns (exit,
+    output, what it wrote to GITHUB_OUTPUT)."""
+    bash = _bash()
+    _, step = _step(_pin_job("deploy.yml"), READ_PIN)
+    work = tmp_path / "overlay"
+    (work / "locks").mkdir(parents=True)
+    if content is not None:
+        target = work / ("elsewhere" if link else "locks/hnx-ref")
+        target.write_text(content)
+        if link:
+            (work / "locks" / "hnx-ref").symlink_to(target)
+    out = tmp_path / "github_output"
+    out.write_text("")
+    r = subprocess.run(
+        [bash, "-c", step["run"]],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(out)},
+    )
+    return r.returncode, r.stdout + r.stderr, out.read_text()
+
+
+SHA_A = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_the_pin_step_reads_one_full_sha_and_comments(tmp_path):
+    code, said, out = _read_pin(tmp_path, f"# SPDX-License-Identifier: Apache-2.0\n\n{SHA_A}\n")
+    assert code == 0, said
+    assert out == f"sha={SHA_A}\n"
+
+
+@pytest.mark.parametrize(
+    "content, why",
+    [
+        (None, "is missing"),
+        ("", "one full commit SHA"),
+        ("# only a comment\n", "one full commit SHA"),
+        (SHA_A[:12] + "\n", "one full commit SHA"),
+        (SHA_A.upper() + "\n", "one full commit SHA"),
+        (f"{SHA_A} \n", "one full commit SHA"),
+        (f"{SHA_A}\r\n", "one full commit SHA"),
+        (f"{SHA_A}\n{SHA_A}\n", "one full commit SHA"),
+        ("main\n", "one full commit SHA"),
+        ("0" * 40 + "\n", "placeholder"),
+    ],
+)
+def test_the_pin_step_refuses_anything_else(tmp_path, content, why):
+    code, said, out = _read_pin(tmp_path, content)
+    assert code == 1 and why in said and out == ""
+
+
+def test_the_pin_step_refuses_a_link(tmp_path):
+    code, said, out = _read_pin(tmp_path, f"{SHA_A}\n", link=True)
+    assert code == 1 and "is missing" in said and out == ""
+
+
+def test_the_template_ships_the_placeholder_the_pin_step_refuses(tmp_path):
+    """A fresh copy of the template fails until the operator pins a commit they reviewed."""
+    code, said, _ = _read_pin(tmp_path, HNX_REF_FILE.read_text())
+    assert code == 1 and "placeholder" in said
+    rules = rt.parse_codeowners((SKELETON / ".github" / "CODEOWNERS").read_text())
+    assert rt.codeowners_for(rules, "locks/hnx-ref")
+
+
+def _git(cwd: Path, *args: str) -> str:
+    r = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+         "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", *args],
+        cwd=cwd, capture_output=True, text=True, check=True,
+        env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull},
+    )  # fmt: skip
+    return r.stdout.strip()
+
+
+@pytest.fixture
+def upstream(tmp_path) -> dict[str, str | Path]:
+    """A stand-in for homelab-next: main (c1, c2) and an unmerged pull request's commit (pr,
+    branched from c1).  GitHub would serve ``pr`` under the parent's name too."""
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    up = tmp_path / "upstream"
+    up.mkdir()
+    _git(up, "init", "-q")
+    shas: dict[str, str | Path] = {"path": up}
+    for n in ("c1", "c2"):
+        (up / n).write_text(n)
+        _git(up, "add", n)
+        _git(up, "commit", "-q", "-m", n)
+        shas[n] = _git(up, "rev-parse", "HEAD")
+    _git(up, "checkout", "-q", "-b", "pr", str(shas["c1"]))
+    (up / "pr").write_text("pr")
+    _git(up, "add", "pr")
+    _git(up, "commit", "-q", "-m", "pr")
+    shas["pr"] = _git(up, "rev-parse", "HEAD")
+    _git(up, "checkout", "-q", "main")
+    return shas
+
+
+def _ancestry(tmp_path: Path, upstream: dict, at: str, ref: str, *, shallow: bool = False,
+              local_main: str | None = None) -> tuple[int, str]:  # fmt: skip
+    """Check homelab-next out at ``at`` into overlay/hnx (as actions/checkout does: origin is
+    homelab-next, HEAD detached) and run the ancestry step with HNX_REF ``ref``."""
+    bash = _bash()
+    _, step = _step(_pin_job("deploy.yml"), ANCESTRY)
+    work = tmp_path / "overlay"
+    work.mkdir(parents=True)
+    clone = ["clone", "-q", "--no-checkout"]
+    if shallow:
+        clone += ["--depth", "1", "--branch", "main", f"file://{upstream['path']}"]
+    else:
+        clone += [str(upstream["path"])]
+    _git(work, *clone, "hnx")
+    if not shallow:
+        _git(work / "hnx", "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
+    _git(work / "hnx", "checkout", "-q", "--detach", at)
+    if local_main:  # a branch the clone carries that only looks like main
+        _git(work / "hnx", "update-ref", "refs/heads/main", local_main)
+        _git(work / "hnx", "update-ref", "refs/hnx-pin/main", local_main)
+    r = subprocess.run(
+        [bash, "-c", step["run"]],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "HNX_REF": ref, "GIT_CONFIG_NOSYSTEM": "1",
+             "GIT_CONFIG_GLOBAL": os.devnull},
+    )  # fmt: skip
+    return r.returncode, r.stdout + r.stderr
+
+
+def test_a_commit_on_main_passes(tmp_path, upstream):
+    for sha in (upstream["c1"], upstream["c2"]):  # the tip, and an older commit of main
+        code, said = _ancestry(tmp_path / sha, upstream, sha, sha)
+        assert code == 0 and "is on homelab-next main" in said, said
+
+
+def test_a_commit_main_does_not_contain_is_refused(tmp_path, upstream):
+    """F03: an unmerged pull request's (or a fork's) commit, a full SHA GitHub serves under the
+    parent's name, never reaches the job's later steps."""
+    code, said = _ancestry(tmp_path, upstream, upstream["pr"], upstream["pr"])
+    assert code == 1 and "is not on homelab-next main" in said, said
+
+
+def test_a_local_ref_named_main_does_not_vouch(tmp_path, upstream):
+    """The check compares against main as fetched from origin, not a ref the clone has."""
+    code, said = _ancestry(
+        tmp_path, upstream, upstream["pr"], upstream["pr"], local_main=upstream["pr"]
+    )
+    assert code == 1 and "is not on homelab-next main" in said, said
+
+
+def test_a_checkout_at_another_commit_is_refused(tmp_path, upstream):
+    code, said = _ancestry(tmp_path, upstream, upstream["c2"], upstream["c1"])
+    assert code == 1 and "not the pinned" in said, said
+
+
+def test_a_shallow_checkout_is_refused(tmp_path, upstream):
+    code, said = _ancestry(tmp_path, upstream, upstream["c2"], upstream["c2"], shallow=True)
+    assert code == 1 and "shallow" in said, said
+
+
+def test_the_docs_give_one_home_for_hnx_ref():
+    """ADR-0021, ADR-0028, docs/private-overlay.md, the operator's to-do list and the first-deploy
+    runbook agree: HNX_REF is the tracked file locks/hnx-ref, moved by a reviewed pull request,
+    and none of them still calls it an Actions variable."""
+    docs = {
+        p: (ROOT / p).read_text()
+        for p in (
+            "docs/adr/0021-public-and-private-repositories.md",
+            "docs/adr/0028-veritas-single-source-of-truth.md",
+            "docs/private-overlay.md",
+            "examples/registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.md",
+        )
+    }
+    stale = re.compile(r"HNX_REF`?,? [^.\n]{0,40}\b(?:Environment|repository|Actions) variable")
+    for path, text in docs.items():
+        assert "locks/hnx-ref" in text, path
+        assert not stale.search(text), path
+        assert not re.search(r"variables[^.\n]{0,40}\bHNX_REF\b", text), path
+    overlay = docs["docs/private-overlay.md"]
+    assert "merge-base --is-ancestor" in overlay
+    todo = (ROOT / "TODO.md").read_text()
+    assert "locks/hnx-ref" in todo
+    assert not re.search(r"Variables: `HNX_REF`", todo)
+
+
+# ---- the specs the operator applies by hand, checked on every pull request ---------------------
+
+
+def test_the_deploy_certificate_outlives_the_deploy_job():
+    """lab/ssh-ca.yml says the deploy certificate must outlive the run: its ttl is at least the
+    deploy job's timeout, or a connection opened late in a long run fails."""
+    from homelabnext import sshca
+
+    spec = sshca.load(SKELETON / "lab" / "ssh-ca.yml")
+    (job,) = _workflow("deploy.yml")["jobs"].values()
+    deploy_roles = [r for r in spec.roles if r.kind == "deploy"]
+    assert deploy_roles
+    for role in deploy_roles:
+        assert sshca.seconds("ttl", role.ttl) >= job["timeout-minutes"] * 60, role.name
+
+
+SPECS = "the SSH certificate roles and the seeding spec validate"
+
+
+def _specs_step(tmp_path: Path, files: dict[str, str]) -> tuple[int, str]:
+    """Run checks.yml's spec step in an overlay holding ``files`` (under lab/), with ``hnx`` the
+    real command line of this tree."""
+    bash = _bash()
+    _, step = _step(_workflow("checks.yml")["jobs"]["lab-specs"], SPECS)
+    work = tmp_path / "overlay"
+    (work / "lab").mkdir(parents=True)
+    for name, text in files.items():
+        (work / "lab" / name).write_text(text)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "hnx"
+    shim.write_text(
+        f'#!/bin/sh\necho "hnx $*" >> {tmp_path}/calls\n'
+        f'exec "{sys.executable}" -m homelabnext.cli "$@"\n'
+    )
+    shim.chmod(0o755)
+    r = subprocess.run(
+        [bash, "-c", step["run"]],
+        cwd=work,
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "PYTHONPATH": str(ROOT)},
+    )
+    calls = (tmp_path / "calls").read_text() if (tmp_path / "calls").exists() else ""
+    return r.returncode, calls + r.stdout + r.stderr
+
+
+def test_checks_validate_the_template_specs(tmp_path):
+    files = {n: (SKELETON / "lab" / n).read_text() for n in ("ssh-ca.yml", "secrets.yml")}
+    code, said = _specs_step(tmp_path, files)
+    assert code == 0, said
+    assert "hnx ssh-ca check lab/ssh-ca.yml" in said
+    assert "hnx secrets plan lab --spec lab/secrets.yml" in said
+
+
+@pytest.mark.parametrize(
+    "name, old, new",
+    [
+        (
+            "ssh-ca.yml",
+            "    max_ttl: 1h\n    extensions: []",
+            "    max_ttl: 2h\n    extensions: []",
+        ),
+        ("secrets.yml", "secrets_version: 1", "secrets_version: 2"),
+    ],
+)
+def test_checks_fail_on_a_broken_spec(tmp_path, name, old, new):
+    files = {n: (SKELETON / "lab" / n).read_text() for n in ("ssh-ca.yml", "secrets.yml")}
+    assert old in files[name]
+    files[name] = files[name].replace(old, new)
+    code, said = _specs_step(tmp_path, files)
+    assert code != 0, said
+
+
+def test_a_lab_without_the_specs_passes(tmp_path):
+    code, said = _specs_step(tmp_path, {})
+    assert code == 0 and "hnx " not in said, said
 
 
 # ---- the self-hosted runner's job-started hook -------------------------------------------------
@@ -567,7 +911,7 @@ def test_the_swap_gate_runs_on_every_pull_request():
     assert any(s["with"].get("fetch-depth") == 0 for s in checkouts)
     (pinned,) = [s for s in checkouts if s["with"].get("path") == "hnx"]
     assert pinned["with"]["repository"] == "homelab-next/homelab-next"
-    assert pinned["with"]["ref"] == "${{ vars.HNX_REF }}"
+    assert pinned["with"]["ref"] == PINNED_SHA
     assert "--root" not in step["run"]  # the overlay is the checkout; hnx is only the code
 
 
