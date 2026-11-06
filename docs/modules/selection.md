@@ -72,7 +72,9 @@ and with lake readers selected, it notes that no row is filtered by its label.
   passes file-based access control's own check; the query engine refuses it on a table with a
   row filter. Every rule below `red` has one, so only a `red` reader (whose rule has no filter)
   could run one, which is why an analyzer with `writes` must be below `red`;
-- `queries`: everyone may run queries; seeing or stopping another's is not granted.
+- `queries`: everyone may run queries; seeing or stopping another's is not granted;
+- `impersonation`: nobody may act as another user, so a signed-in reader cannot name a `red`
+  reader as its session user ([engine sign-in](tlp.md#engine-sign-in)).
 
 A principal matching several rules (a user in a group) gets the first, so user rules come before
 group rules and each tier runs from the lowest ceiling up: the most restrictive applies, whatever

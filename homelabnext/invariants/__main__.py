@@ -4,9 +4,11 @@
 [--notify-ceiling LABEL] [--baseline]
 
 A page is a notification channel, an egress point (ADR-0033 decision 13): every page goes through
-``homelabnext.notify.CeilingSender`` at ``--notify-ceiling`` (default ``red``).  A page carries
-criterion evidence, lab data that is ``red`` by default (decision 2), so on a channel below
-``red`` it arrives as the fixed withheld notice.
+``homelabnext.notify.CeilingSender`` at ``--notify-ceiling``.  ``--notify-cmd`` is
+refused (a usage error) without one; the stdout pager, read by whoever runs the command, stays
+``red``.  A page carries criterion evidence, lab data that is ``red`` by default (decision 2), so
+on a channel below ``red`` it arrives as the fixed withheld notice.  Only the flag declares the
+ceiling: ``run`` takes no registry, so a registry notify row is not consulted.
 """
 
 import argparse
@@ -83,10 +85,16 @@ def main(argv=None) -> int:
         type=ceiling_arg,
         default=None,
         metavar="LABEL",
-        help="the page channel's TLP ceiling (default red); a page above it is withheld",
+        help="the page channel's TLP ceiling; required with --notify-cmd (the stdout pager stays red); a page above it is withheld",
     )
     r.add_argument("--baseline", action="store_true", help="record state without paging")
     ns = ap.parse_args(argv)
+    if ns.notify_cmd and not ns.no_notify and ns.notify_ceiling is None:
+        # ADR-0033 decision 6: a channel with no declared ceiling is refused; only stdout is red
+        ap.error(
+            "--notify-cmd needs a declared TLP ceiling: --notify-ceiling LABEL "
+            "(red only for a channel only the operators read)"
+        )
     reg_path = pathlib.Path(ns.register)
     # a register that is missing or does not parse is bad input (2), never a failed fleet (1)
     try:
