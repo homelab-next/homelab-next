@@ -2085,7 +2085,7 @@ def test_lynis_files_the_run_through_the_broker_when_a_socket_is_set(first):
     run_scan(tmp_path)
     assert (tmp_path / "argv").read_text() == "broker call finding.write --socket"
     filed = json.loads((tmp_path / "filed.json").read_text())
-    assert filed["name"].startswith("lynis-") and "Hardening index: 70" in filed["content"]
+    assert "-lynis-" in filed["name"] and "Hardening index: 70" in filed["content"]
     assert "- X-1|w|" in filed["content"]
 
 
@@ -2918,3 +2918,115 @@ def test_dpkg_verify_still_reports_a_missing_file_dpkg_was_told_to_keep(first):
     assert run_sweep(tmp_path).returncode == 0
     doc = json.loads((tmp_path / "state" / "dpkg-verify.json").read_text())
     assert [f["path"] for f in doc["findings"]] == ["/usr/share/doc/sudo/copyright"]
+
+
+# ---------------------------------------------------------------- lynis and clamav: health that can fail
+def _lynis_exiting(tmp_path, rc, report="hardening_index=70\n", **kw):
+    body = LYNIS.replace("REPORT", repr(report)) + f"sys.exit({rc})\n"
+    cli = fake(tmp_path / "lynis-cli", body)
+    return scanner_vars(
+        tmp_path,
+        "lynis",
+        lynis_min_hardening_index=60,
+        lynis_dpkg_verify=False,
+        lynis_cli=cli,
+        **kw,
+    )
+
+
+def test_lynis_health_fails_when_the_audit_exited_non_zero(tmp_path):
+    v = _lynis_exiting(tmp_path, 1)  # a good-looking report, but the scanner reported an error
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    run_scan(tmp_path)
+    assert (tmp_path / "state" / "last-run").read_text().strip() == "1"
+    r = run_role(tmp_path, "lynis", "health", v)
+    assert r.returncode != 0 and "the last audit exited 1" in r.stdout.replace("\n", " ")
+    v = _lynis_exiting(tmp_path, 0)
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    run_scan(tmp_path)
+    assert run_role(tmp_path, "lynis", "health", v).returncode == 0
+
+
+def test_lynis_health_fails_on_a_report_or_sweep_older_than_the_run(tmp_path):
+    import os
+
+    v, _ = sweep_setup(tmp_path, "")
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    run_scan(tmp_path)
+    assert run_sweep(tmp_path).returncode == 0
+    assert run_role(tmp_path, "lynis", "health", v).returncode == 0
+    state = tmp_path / "state"
+    last = (state / "last-run").stat().st_mtime
+    # a leftover report: older than the run by more than the run's allowed duration
+    os.utime(state / "report.dat", (last - 7200, last - 7200))
+    r = run_role(tmp_path, "lynis", "health", v)
+    assert r.returncode != 0 and "report.dat is missing or older" in r.stdout.replace("\n", " ")
+    os.utime(state / "report.dat", (last, last))
+    # a sweep result left by an earlier run
+    os.utime(state / "dpkg-verify.json", (last - 60, last - 60))
+    r = run_role(tmp_path, "lynis", "health", v)
+    assert r.returncode != 0 and "dpkg-verify.json is missing or older" in r.stdout.replace(
+        "\n", " "
+    )
+    (
+        state / "dpkg-verify.json"
+    ).unlink()  # the sweep never wrote one: a clean failure, not a traceback
+    r = run_role(tmp_path, "lynis", "health", v)
+    assert r.returncode != 0 and "dpkg-verify.json is missing or older" in r.stdout.replace(
+        "\n", " "
+    )
+
+
+def test_lynis_scan_never_leaves_an_earlier_report_in_place(tmp_path):
+    v = _lynis_exiting(tmp_path, 1)
+    v["lynis_cli"] = fake(
+        tmp_path / "lynis-cli", "import sys\nsys.exit(1)\n"
+    )  # fails before a report
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    (tmp_path / "state").mkdir(exist_ok=True)
+    (tmp_path / "state" / "report.dat").write_text("hardening_index=99\n")
+    run_scan(tmp_path)
+    assert not (tmp_path / "state" / "report.dat").exists()
+    assert run_role(tmp_path, "lynis", "health", v).returncode != 0
+
+
+def test_lynis_broker_filing_name_is_one_the_example_findings_lanes_accept(tmp_path):
+    import re
+
+    import yaml
+
+    cli = fake(tmp_path / "lynis-cli", LYNIS.replace("REPORT", repr("hardening_index=70\n")))
+    filed = tmp_path / "filed.json"
+    hnx = fake(
+        tmp_path / "hnx",
+        "import shutil, sys\n"
+        f"shutil.copy(sys.argv[sys.argv.index('--params-file') + 1], {str(filed)!r})\n",
+    )
+    v = scanner_vars(tmp_path, "lynis", lynis_min_hardening_index=60, lynis_dpkg_verify=False, lynis_cli=cli,
+                     lynis_hnx_cli=hnx, lynis_broker_socket="/run/hnx-broker/broker.sock")  # fmt: skip
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0
+    run_scan(tmp_path)
+    name = json.loads(filed.read_text())["name"]
+    root = Path(__file__).resolve().parents[2] / "examples" / "broker"
+    for manifest in ("manifest.yml", "manifest.production.yml"):
+        lanes = yaml.safe_load((root / manifest).read_text())["lanes"]
+        (lane,) = [x for x in lanes if x["name"] == "findings"]
+        assert re.fullmatch(lane["filename_pattern"], name), (manifest, name)
+
+
+def test_clamav_clearing_the_private_mirror_removes_the_line_and_restarts_freshclam(tmp_path):
+    conf = tmp_path / "freshclam.conf"
+    conf.write_text("DatabaseMirror database.clamav.net\n")
+    v = scanner_vars(tmp_path, "clamav", clamav_paths=["/srv"], clamav_freshclam_config=str(conf),
+                     clamav_private_mirror="clamav-mirror.example.internal")  # fmt: skip
+    restart = "systemctl restart clamav-freshclam"
+    assert run_role(tmp_path, "clamav", "config", v).returncode == 0
+    assert "PrivateMirror clamav-mirror.example.internal\n" in conf.read_text()
+    assert calls(tmp_path).count(restart) == 1
+    assert run_role(tmp_path, "clamav", "config", v).returncode == 0  # unchanged: no restart
+    assert calls(tmp_path).count(restart) == 1
+    assert (
+        run_role(tmp_path, "clamav", "config", {**v, "clamav_private_mirror": ""}).returncode == 0
+    )
+    assert "PrivateMirror" not in conf.read_text() and "DatabaseMirror" in conf.read_text()
+    assert calls(tmp_path).count(restart) == 2

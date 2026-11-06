@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# freshclam reads its configuration only at start, so a changed PrivateMirror line needs a restart
+# (a started service alone, as in tasks/main.yml, never picks it up).
+- name: Restart freshclam
+  ansible.builtin.command:
+    argv: ["{{ clamav_systemctl_cli }}", "restart", "clamav-freshclam"]
+  changed_when: true

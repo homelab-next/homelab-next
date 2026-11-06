@@ -17,22 +17,27 @@
 set -u
 STATE={{ lynis_state_dir | quote }}
 mkdir -p "$STATE"
+# a report left by an earlier run must never stand in for this one
+rm -f "$STATE/report.dat"
 {{ lynis_cli | quote }} audit system --cronjob --quiet --no-colors \
   --report-file "$STATE/report.dat" --log-file "$STATE/lynis.log"
 rc=$?
 {% if lynis_broker_socket %}
 # file the summary through the broker (finding.write); a failure here never fails the audit
 python3 - "$STATE/report.dat" "$STATE/finding.json" "$(hostname)" <<'PY'
-import json, sys
+import datetime, json, re, sys
 report, out, host = sys.argv[1:4]
 lines = open(report).read().splitlines()
 index = next((l.split("=", 1)[1] for l in lines if l.startswith("hardening_index=")), "?")
 warnings = [l.split("=", 1)[1] for l in lines if l.startswith("warning[]=")]
 body = f"# Lynis audit of {host}\n\nHardening index: {index}\n\nWarnings ({len(warnings)}):\n"
 body += "".join(f"- {w}\n" for w in warnings)
-json.dump({"name": f"lynis-{host}.md", "content": body}, open(out, "w"))
+# the findings lane takes <YYYY-MM-DD>-<slug>.md (examples/broker/manifest.yml, filename_pattern)
+slug = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-")[:40] or "host"
+day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+json.dump({"name": f"{day}-lynis-{slug}.md", "content": body}, open(out, "w"))
 PY
-{{ lynis_hnx_cli | quote }} broker call finding.write --socket {{ lynis_broker_socket | quote }} --params-file "$STATE/finding.json" || true
+{{ lynis_hnx_cli | quote }} broker call finding.write --socket {{ lynis_broker_socket | quote }} --params-file "$STATE/finding.json" || echo "lynis: the broker refused or could not take the finding" >&2
 {% endif %}
 echo "$rc" > "$STATE/last-run.tmp" && mv "$STATE/last-run.tmp" "$STATE/last-run"
 exit 0
