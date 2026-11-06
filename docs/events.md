@@ -88,7 +88,13 @@ collision (permanent), `408/425/429/5xx` retry, `401/403/404/421` retry after a 
 
 The CLI sends a credential with `--auth secret:<name>` (value from `HNX_SECRET_<NAME>` or a file in
 `--secrets-dir`; the value is the whole `Authorization` header value) on `deploy-changed` and
-`flush`.
+`flush`. The secret must hold the full `Authorization` value, scheme included (for example
+`Bearer ...`); a value with a control character is refused without being printed, and the event
+stays pending. `--auth` takes only `secret:<name>` (letters, digits, `.`, `_`, `-`).
+
+`requeue` works only within `--retain-hours` of the refusal (rejected records are then pruned, and
+they hold the only stored copy of the event). Pending records are never pruned, so a forwarder
+that stays misconfigured grows the state file by one record per deploy until it is fixed.
 
 ## Testing
 

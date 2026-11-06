@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -41,6 +42,9 @@ class MisconfiguredError(TransientError):
     """The forwarder answered 401/403/404/421: the URL or the credential is wrong, not the event.
     Retrying at once cannot help (the publisher stops its loop), but the event stays pending so a
     rerun, ``flush`` or ``requeue`` delivers it once the configuration is fixed."""
+
+
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class PermanentError(Exception):
@@ -204,6 +208,8 @@ class HttpForwarder:
         headers = {"Content-Type": CONTENT_TYPE, IDEMPOTENCY_HEADER: event["id"]}
         token = self._auth() if self._auth is not None else None
         if token:
+            if _CONTROL.search(token):  # http.client would echo the value in its error: never
+                raise MisconfiguredError("authorization value is not a valid header value")
             headers["Authorization"] = token
         return urllib.request.Request(
             self.url, data=canonical_body(event), headers=headers, method="POST"

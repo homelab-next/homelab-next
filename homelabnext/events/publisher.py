@@ -210,9 +210,31 @@ class Publisher:
 
     def requeue(self) -> list[str]:
         """Make every ``rejected`` record ``pending`` again (after the forwarder or the event
-        source was fixed); returns their ids.  The next ``publish`` or :meth:`flush` sends them."""
-        ids = []
-        for eid, rec in sorted(self._records().items()):
+        source was fixed); returns their ids.  The next ``publish`` or :meth:`flush` sends them.
+
+        On a store with ``rewrite`` the records are selected and flipped under one lock, each
+        re-checked there, so a concurrent :meth:`prune` or publish cannot be undone by it.  Only
+        a record still held can be requeued: a rejected one is pruned after ``retain_s``."""
+        pre = f"{self.namespace}/"
+        ids: list[str] = []
+
+        def flip(data: dict[str, Any]) -> bool:
+            for k, r in sorted(data.items()):
+                if (
+                    k.startswith(pre)
+                    and isinstance(r, dict)
+                    and r.get("status") == "rejected"
+                    and isinstance(r.get("event"), dict)
+                ):
+                    data[k] = {**r, "status": "pending", "error": ""}
+                    ids.append(k[len(pre) :])
+            return bool(ids)
+
+        rewrite = getattr(self.store, "rewrite", None)
+        if callable(rewrite):
+            rewrite(flip)
+            return ids
+        for eid, rec in sorted(self._records().items()):  # not atomic: one key at a time
             if rec.get("status") == "rejected" and isinstance(rec.get("event"), dict):
                 self.store.put(self._k(eid), {**rec, "status": "pending", "error": ""})
                 ids.append(eid)

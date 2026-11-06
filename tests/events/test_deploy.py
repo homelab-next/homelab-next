@@ -242,3 +242,52 @@ def test_cli_requeue_makes_a_rejected_event_pending(tmp_path):
     assert pub.publish(ev).status == "rejected"
     assert main(["requeue", "--state", str(st)]) == 0
     assert Publisher(fwd, StateStore(st)).pending_ids() == [ev["id"]]
+
+
+def _cl_args(tmp_path):
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text(CHANGELOG)
+    return ["--component", "pkg:homelabnext", "--to", "0.2.0", "--from", "0.1.0",
+            "--changelog", str(cl), "--source", "svc:release-pipeline", "--time", T]  # fmt: skip
+
+
+@pytest.mark.parametrize("cmd", ["flush", "deploy-changed"])
+def test_cli_never_prints_a_secret_that_is_not_a_valid_header_value(
+    tmp_path, monkeypatch, capsys, cmd
+):
+    """A secret holding a newline must neither reach http.client (whose error echoes the value)
+    nor appear in the output; the event stays pending."""
+    monkeypatch.setenv("HNX_SECRET_EVENTS_TOKEN", "Bearer good\nSUPERSECRET-123")
+    st = str(tmp_path / "st.json")
+    with FakeForwarderServer() as srv:
+        first = ["deploy-changed", *_cl_args(tmp_path), "--forwarder", srv.url, "--state", st]
+        assert main([*first, "--auth", "secret:events-token"]) == 1
+        if cmd == "flush":
+            flush = ["flush", "--forwarder", srv.url, "--state", st]
+            assert main([*flush, "--auth", "secret:events-token"]) == 1
+        assert srv.fake.ids == []
+    out = capsys.readouterr()
+    assert "SUPERSECRET" not in out.err + out.out
+    assert len(Publisher(FakeForwarder(), StateStore(st)).pending_ids()) == 1
+
+
+@pytest.mark.parametrize("ref", ["secret:/etc/hostname", "secret:../x", "events-token", "secret:"])
+def test_cli_auth_accepts_only_a_plain_secret_reference(tmp_path, ref, capsys):
+    with FakeForwarderServer() as srv:
+        args = ["flush", "--forwarder", srv.url, "--state", str(tmp_path / "s.json")]
+        assert main([*args, "--auth", ref]) == 1
+    assert "--auth must be secret:<name>" in capsys.readouterr().err
+
+
+def test_secret_lookup_refuses_an_absolute_or_nested_name(tmp_path):
+    from homelabnext.status.agents.config import secret_lookup
+
+    other = tmp_path / "elsewhere"
+    other.write_text("leak")
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "ok").write_text("v\n")
+    lookup = secret_lookup(env={}, secrets_dir=d)
+    assert lookup("secret:ok") == "v"
+    assert lookup(f"secret:{other}") is None
+    assert lookup("secret:sub/ok") is None

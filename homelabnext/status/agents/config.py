@@ -56,7 +56,7 @@ def secret_lookup(
         if not value and secrets_dir is not None:
             name = ref.removeprefix("secret:")
             p = Path(secrets_dir) / name
-            if ".." not in Path(name).parts and p.is_file():
+            if "/" not in name and ".." not in Path(name).parts and p.is_file():
                 value = p.read_text(encoding="utf-8").strip()
         return value or None
 

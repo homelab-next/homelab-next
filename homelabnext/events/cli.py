@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ from typing import Any
 from .deploy import ChangelogError, changes_from_changelog, deploy_changed_event
 from .enrich import DEFAULT_THRESHOLD, AssetInventory, enrich_event, enrichment_coverage
 from .envelope import EventError
+
+_AUTH_REF = re.compile(r"secret:[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _forwarder(a: argparse.Namespace) -> Any:
@@ -31,8 +34,11 @@ def _forwarder(a: argparse.Namespace) -> Any:
 
     if not getattr(a, "auth", None):
         return HttpForwarder(a.forwarder)
+    # secret_lookup lives with the status agents' config, the one reader of secret references
     from homelabnext.status.agents.config import secret_lookup
 
+    if not _AUTH_REF.fullmatch(a.auth):
+        raise ValueError("--auth must be secret:<name> (letters, digits, '.', '_' and '-')")
     lookup = secret_lookup(secrets_dir=a.secrets_dir)
     ref = a.auth
 
@@ -161,8 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         default=24.0,
         help="keep sent ids this long for de-duplication (at least the bus's duplicate window)",
     )
-    for sp in (d,):
-        _add_auth(sp)
+    _add_auth(d)
     for name, text in (
         ("flush", "resend the pending events of a state file"),
         ("requeue", "make the rejected events of a state file pending again"),
