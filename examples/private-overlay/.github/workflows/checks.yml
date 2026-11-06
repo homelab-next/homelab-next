@@ -78,7 +78,7 @@ jobs:
           [ "$head" = "$HNX_REF" ] || { echo "::error::hnx/ is at $head, not the pinned $HNX_REF"; exit 1; }
           [ "$(git -C hnx rev-parse --is-shallow-repository)" = false ] || { echo "::error::hnx/ is a shallow clone: its ancestry cannot be checked"; exit 1; }
           git -C hnx fetch --quiet --no-tags origin +refs/heads/main:refs/hnx-pin/main
-          git -C hnx merge-base --is-ancestor "$HNX_REF" refs/hnx-pin/main || { echo "::error::HNX_REF $HNX_REF is not on homelab-next main: only merged, reviewed code runs"; exit 1; }
+          git -C hnx merge-base --is-ancestor "$HNX_REF" refs/hnx-pin/main || { echo "::error::HNX_REF $HNX_REF is not on homelab-next main: only code merged to homelab-next main runs"; exit 1; }
           echo "hnx $HNX_REF is on homelab-next main"
 
   private-leak-check:
@@ -130,9 +130,7 @@ jobs:
   # check deploy.yml runs before it changes a host, run here first so a problem shows on the pull
   # request and not only when the operator dispatches the deploy.  hnx is the pinned commit; the
   # overlay is read as data, with a read-only token and no secret.  The census and the check of
-  # what runs stay in deploy.yml: they need the hosts.  The same job checks the specs the
-  # operator applies by hand (the SSH certificate roles, how each credential is seeded), so a
-  # broken one shows on the pull request and not on the day it is applied.
+  # what runs stay in deploy.yml: they need the hosts.
   module-loader:
     name: module loader
     needs: hnx-pin

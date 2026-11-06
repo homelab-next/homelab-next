@@ -28,6 +28,9 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
   `HNX_REF` variable (repository and `production` Environment), so nothing outside review can
   change what runs. Branch protection needs no change: the required `checks` job already needs
   the new `hnx-pin` and `lab-specs` jobs ([docs/private-overlay.md](docs/private-overlay.md), "The pinned homelab-next commit").
+  In the same pull request, change the overlay's own `CLAUDE.md` ("Validate lab data") to read
+  the pin from `locks/hnx-ref` instead of `gh variable get HNX_REF`, so agents stop reading the
+  variable you delete.
 
 ## 2. Secrets and the deploy path (before the first deploy)
 

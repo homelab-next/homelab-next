@@ -119,7 +119,7 @@ jobs:
           [ "$head" = "$HNX_REF" ] || { echo "::error::hnx/ is at $head, not the pinned $HNX_REF"; exit 1; }
           [ "$(git -C hnx rev-parse --is-shallow-repository)" = false ] || { echo "::error::hnx/ is a shallow clone: its ancestry cannot be checked"; exit 1; }
           git -C hnx fetch --quiet --no-tags origin +refs/heads/main:refs/hnx-pin/main
-          git -C hnx merge-base --is-ancestor "$HNX_REF" refs/hnx-pin/main || { echo "::error::HNX_REF $HNX_REF is not on homelab-next main: only merged, reviewed code runs"; exit 1; }
+          git -C hnx merge-base --is-ancestor "$HNX_REF" refs/hnx-pin/main || { echo "::error::HNX_REF $HNX_REF is not on homelab-next main: only code merged to homelab-next main runs"; exit 1; }
           echo "hnx $HNX_REF is on homelab-next main"
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0

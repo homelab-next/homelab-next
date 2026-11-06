@@ -632,6 +632,11 @@ Both workflows read it the same way and refuse, before anything from `./hnx` is 
   reviewed; ancestry proves it was merged. A shallow checkout is refused too, since its ancestry
   cannot be walked.
 
+Ancestry proves *merged to `main`*, not *reviewed by the operator*: admin bypass is on in
+homelab-next and agents act with the operator's token, so a commit on `main` may not have had an
+owner's review. Read what a new pin brings before you merge it; homelab-next's own branch
+protection (or a signed release tag, if that is wanted later) is what would close that gap.
+
 To move it: pick a commit on homelab-next's `main` (a release, or a `main` commit you have read),
 open a pull request in the private repository that changes only `locks/hnx-ref` (and whatever
 that release's notes say the overlay must change with it), let `checks` run against the new pin,
@@ -657,7 +662,8 @@ The identity provider (Keycloak) has no LDAP outpost, so SSH sign-on does not go
 user CA: a person logs in to OpenBao with OIDC against the identity provider and gets a
 certificate for their own public key valid for hours; the deploy job gets one for a key it
 generates per job, valid no longer than the deploy job may run (an hour). Hosts trust the CA's
-public key and map each local account to the principals it accepts. Nothing a host trusts is a standing private key.
+public key and map each local account to the principals it accepts. Nothing a host trusts is a
+standing private key.
 
 **The OpenBao side** is `lab/ssh-ca.yml` (start from `examples/private-overlay/lab/ssh-ca.yml`):
 one entry per signing role, `for: deploy` or `for: human`, its principals, TTLs (capped: deploy 1 h,
@@ -668,8 +674,8 @@ role, the identity provider's groups that may use it. A deploy role's `ttl` must
 deploy job's `timeout-minutes` (the template: 1 h for 60 minutes): a connection opened after the
 certificate expires fails. `hnx ssh-ca check lab/ssh-ca.yml` validates it (`checks.yml`'s
 `lab-specs` job runs it on every pull request); `hnx ssh-ca render lab/ssh-ca.yml --format sh`
-prints the writes: an ACL policy per role that may only `update` `ssh/sign/<role>`, the SSH role (user certificates only, no host certificates,
-no client-chosen key ids, key id `<role>-<token display name>` so the audit log names the
+prints the writes: an ACL policy per role that may only `update` `ssh/sign/<role>`, the SSH
+role (user certificates only, no host certificates, no client-chosen key ids, key id `<role>-<token display name>` so the audit log names the
 holder), and an OIDC login role bound to the groups claim whose token lives 10 minutes (it only
 signs a key). Once, as an admin:
 

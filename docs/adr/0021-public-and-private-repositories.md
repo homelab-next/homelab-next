@@ -91,4 +91,6 @@ One private repository with everything (code included): forfeits public review a
 reason for ADR-0011. Secrets encrypted in git as the main store: every clone carries them forever
 and rotation cannot recall old commits. Deploying from the workstation: the fleet then depends on
 the laptop (F-16). A self-hosted runner on the public repository: any fork's pull request could
-run code inside the lab.
+run code inside the lab. A signed homelab-next release tag as the proof that `HNX_REF` is safe
+to run (decision 7): ancestry on `main` was chosen instead, because it needs no signing-key
+management and also covers a pin between releases.

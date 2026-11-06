@@ -661,6 +661,7 @@ def test_the_docs_give_one_home_for_hnx_ref():
             "docs/adr/0021-public-and-private-repositories.md",
             "docs/adr/0028-veritas-single-source-of-truth.md",
             "docs/private-overlay.md",
+            "docs/modules/swap-flow.md",
             "examples/registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.md",
         )
     }
@@ -671,6 +672,7 @@ def test_the_docs_give_one_home_for_hnx_ref():
         assert not re.search(r"variables[^.\n]{0,40}\bHNX_REF\b", text), path
     overlay = docs["docs/private-overlay.md"]
     assert "merge-base --is-ancestor" in overlay
+    assert "refused unless a full SHA" not in docs["docs/modules/swap-flow.md"]
     todo = (ROOT / "TODO.md").read_text()
     assert "locks/hnx-ref" in todo
     assert not re.search(r"Variables: `HNX_REF`", todo)
