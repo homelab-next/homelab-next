@@ -589,3 +589,26 @@ def test_the_ratchet_runs_from_the_command_line(repo, capsys):
     assert "B-01" in capsys.readouterr().out
     _write(root, BASE_LIST)
     assert ex.main(["ratchet", "--base", base, str(root)]) == 0
+
+
+def test_ci_passes_the_operator_s_label_to_both_copies_of_the_ratchet():
+    ci = yaml.safe_load(CI.read_text(encoding="utf-8"))
+    on = ci.get("on") or ci.get(True)
+    # the label is read from the event, which a re-run does not refresh: labelling runs CI again
+    assert {"labeled", "unlabeled", "synchronize"} <= set(on["pull_request"]["types"])
+    steps = [
+        s
+        for job in ci["jobs"].values()
+        for s in job.get("steps") or []
+        if 'tools/experimental.py" ratchet' in s.get("run", "")
+        or "tools/experimental.py ratchet" in s.get("run", "")
+    ]
+    assert len(steps) == 2
+    # growth passes only on the run that applying the label triggered: the label approves that
+    # head, and a later push (a synchronize event still carrying the label) checks without it
+    want = (
+        "${{ github.event_name == 'push' && 'push' || (github.event.action == 'labeled'"
+        f" && github.event.label.name == '{ex.GROWTH_LABEL}' && 'label' || 'none') }}}}"
+    )
+    for step in steps:
+        assert step["env"][ex.GROWTH_ENV] == want, step["name"]

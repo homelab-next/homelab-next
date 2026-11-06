@@ -5,7 +5,7 @@
 #   kind: tool
 #   purpose: Run the gates and tests of the experimental and frozen components listed in tools/experimental.yml, outside the blocking set.
 #   owner: maintainers
-#   trigger: [make:experimental]
+#   trigger: [make:experimental, ci:ci/schemas, ci:ci/trusted-gates]
 #   inputs: tools/experimental.yml (or --file); the base commit's list (ratchet --base, --ci-base)
 #   outputs: one line per gate and the pytest run of the components' tests; `list` prints the components; `ratchet` one line per growth
 #   exit:
