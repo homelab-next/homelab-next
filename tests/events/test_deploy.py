@@ -326,3 +326,50 @@ def test_secret_lookup_reads_a_nested_name_and_refuses_one_that_escapes(tmp_path
     assert lookup(_ref("out")) is None  # a symlink that resolves outside the directory
     assert lookup(_ref("sub")) is None  # a directory is not a secret
     assert lookup(_ref("")) is None
+    (d / "inside").symlink_to(d / "sub" / "ok")
+    assert lookup(_ref("inside")) == "w"  # a symlink that stays inside is followed
+
+
+def test_secret_lookup_never_follows_a_symlink_swapped_in_after_the_check(tmp_path, monkeypatch):
+    """The resolved path is opened component by component with O_NOFOLLOW: a swap between the
+    containment check and the open makes the read fail closed, not read the swapped-in target."""
+    import os
+
+    from homelabnext.status.agents import config
+
+    other = tmp_path / "elsewhere"
+    other.write_text("leak")
+    d = tmp_path / "d"
+    (d / "sub").mkdir(parents=True)
+    (d / "sub" / "ok").write_text("w\n")
+    real_open = os.open
+
+    def swap_then_open(path, flags, *a, **k):
+        if path == "ok" and k.get("dir_fd") is not None:
+            (d / "sub" / "ok").unlink()
+            (d / "sub" / "ok").symlink_to(other)
+        return real_open(path, flags, *a, **k)
+
+    monkeypatch.setattr(config.os, "open", swap_then_open)
+    assert config.secret_lookup(env={}, secrets_dir=d)(_ref("sub/ok")) is None
+
+
+def test_cli_auth_secret_that_cannot_be_decoded_keeps_the_event_pending(tmp_path, capsys):
+    from homelabnext.events.publisher import Publisher
+    from homelabnext.state import StateStore
+
+    st = tmp_path / "s.json"
+    sec = tmp_path / "secrets"
+    sec.mkdir()
+    (sec / "events-token").write_bytes(b"Bearer \xff\xfe")
+    with FakeForwarderServer() as srv:
+        args = ["--forwarder", srv.url, "--state", str(st), "--secrets-dir", str(sec)]
+        first = ["deploy-changed", *_cl_args(tmp_path), *args]
+        assert main([*first, "--auth", _ref("events-token")]) == 1
+        assert srv.fake.ids == []
+    assert "pending" in capsys.readouterr().err
+    recs = StateStore(st).items().values()
+    (rec,) = [r for r in recs if isinstance(r, dict) and "status" in r]
+    assert rec["status"] == "pending"
+    assert "cannot be read (UnicodeDecodeError)" in rec["error"]
+    assert len(Publisher(FakeForwarder(), StateStore(st)).pending_ids()) == 1

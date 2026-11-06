@@ -47,7 +47,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from .state import is_id, write_exclusive, write_temp
+from .state import is_id, replace_temp, write_exclusive
 
 __all__ = ["BEARER_PREFIX", "MAX_BEARER_BYTES", "TokenStore", "execution_key", "secret_digest"]
 
@@ -134,15 +134,7 @@ class TokenStore:
     def _replace(self, path: Path, doc: Any) -> None:
         dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            tmp = write_temp(path.name, _dumps(doc), dir_fd=dir_fd)
-            try:
-                os.rename(tmp, path.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-            except BaseException:
-                with contextlib.suppress(OSError):
-                    os.unlink(tmp, dir_fd=dir_fd)
-                raise
-            with contextlib.suppress(OSError):
-                os.fsync(dir_fd)
+            replace_temp(path.name, _dumps(doc), dir_fd=dir_fd)
         finally:
             os.close(dir_fd)
 

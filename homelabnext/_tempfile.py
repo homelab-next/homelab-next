@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """The one temporary-file writer behind every exclusive or atomic create relative to a directory
 file descriptor: the broker's state and lane files (:mod:`homelabnext.broker.state`) and the
-records inbox (:mod:`homelabnext.records.inbox`).  Standard library only."""
+records inbox (:mod:`homelabnext.records.inbox`), and the atomic replace of the broker's tokens and
+the Code Mode journal (:func:`replace_temp`).  Standard library only."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import contextlib
 import os
 import secrets
 
-__all__ = ["write_temp"]
+__all__ = ["replace_temp", "write_temp"]
 
 
 def write_temp(name: str, data: bytes, *, dir_fd: int, mode: int = 0o600) -> str:
@@ -33,3 +34,18 @@ def write_temp(name: str, data: bytes, *, dir_fd: int, mode: int = 0o600) -> str
             os.unlink(tmp, dir_fd=dir_fd)
         raise
     return tmp
+
+
+def replace_temp(name: str, data: bytes, *, dir_fd: int, mode: int = 0o600) -> None:
+    """Atomically replace ``name`` in the directory ``dir_fd`` with ``data``: :func:`write_temp`,
+    then rename over ``name``.  If the rename fails the temporary file is removed before the error
+    propagates; the directory is then fsynced (best effort, so the rename survives a crash)."""
+    tmp = write_temp(name, data, dir_fd=dir_fd, mode=mode)
+    try:
+        os.rename(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp, dir_fd=dir_fd)
+        raise
+    with contextlib.suppress(OSError):
+        os.fsync(dir_fd)

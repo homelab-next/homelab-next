@@ -92,10 +92,14 @@ The CLI sends a credential with `--auth secret:<name>` (value from `HNX_SECRET_<
 `Bearer ...`); a value with a control character is refused without being printed, and the event
 stays pending. `--auth` takes only a canonical secret reference (`secret:<name>`, lowercase
 segments of letters, digits, `_` and `-` joined by `/`, as in `secret:events/broker`); a nested
-name is a subdirectory of `--secrets-dir`.
+name is a subdirectory of `--secrets-dir`, and a name that resolves outside it (absolute, `..`, or a
+symlink pointing out) is not read. A secret file that cannot be read or is not UTF-8 is a
+misconfiguration like a missing one: the event stays pending and only the error's class is
+reported.
 
 `requeue` works only within `--retain-hours` of the refusal (rejected records are then pruned, and
-they hold the only stored copy of the event). Pending records are never pruned, so a forwarder
+they hold the only stored copy of the event); `requeue` itself sends and prunes nothing, so it takes
+no `--retain-hours`. Pending records are never pruned, so a forwarder
 that stays misconfigured grows the state file by one record per deploy until it is fixed.
 
 ## Testing

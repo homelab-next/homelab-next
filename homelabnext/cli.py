@@ -218,7 +218,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.scripts.cli").main(a),
     ),
     "events": (
-        "event seam: deploy-changed (what-changed event, F-15)|enrich-coverage (T-04)",
+        "event seam: deploy-changed (what-changed event, F-15)|flush|requeue|enrich-coverage (T-04)",
         lambda a: importlib.import_module("homelabnext.events.cli").main(a),
     ),
     "status": (

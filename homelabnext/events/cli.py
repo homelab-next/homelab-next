@@ -45,7 +45,12 @@ def _forwarder(a: argparse.Namespace) -> Any:
     ref = a.auth
 
     def auth() -> str:
-        value = lookup(ref)
+        try:
+            value = lookup(ref)
+        except (OSError, UnicodeError) as exc:  # the class only: never the path's content
+            raise MisconfiguredError(
+                f"secret {ref!r} cannot be read ({type(exc).__name__})"
+            ) from None
         if not value:
             raise MisconfiguredError(f"secret {ref!r} is not set")
         return value
@@ -176,8 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     ):
         f = sub.add_parser(name, help=text)
         f.add_argument("--state", required=True, help="publisher state file")
-        f.add_argument("--retain-hours", type=retain_hours, default=24.0)
-        if name == "flush":
+        if name == "flush":  # requeue sends nothing and prunes nothing: no retention to set
+            f.add_argument("--retain-hours", type=retain_hours, default=24.0)
             f.add_argument("--forwarder", required=True, help="forwarder URL")
             _add_auth(f)
     c = sub.add_parser("enrich-coverage", help="owner/criticality coverage of an event stream")

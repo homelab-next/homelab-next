@@ -620,6 +620,51 @@ def test_requeue_does_not_resurrect_a_record_pruned_under_it(store, monkeypatch)
     assert p.status_of(r.id) is None
 
 
+class _DictStore:
+    """A store with no ``rewrite``: requeue takes its one-key-at-a-time path."""
+
+    def __init__(self):
+        self.d = {}
+
+    def get(self, k, default=None):
+        return self.d.get(k, default)
+
+    def put(self, k, v):
+        self.d[k] = v
+
+    def keys(self):
+        return list(self.d)
+
+
+class _Misconfigured:
+    def forward(self, event):
+        raise MisconfiguredError("forwarder said 401")
+
+
+@pytest.mark.parametrize("kind", ["state-store", "dict"])
+def test_requeue_flips_only_the_rejected_record(tmp_path, kind):
+    s = StateStore(tmp_path / "s.json") if kind == "state-store" else _DictStore()
+    pending = pub(_Misconfigured(), s).publish(task_event("p"))
+    assert pending.status == "pending"
+    error = _record(s, pending.id)["error"]
+    assert error
+    fwd = FakeForwarder()
+    fwd.reject_next = 1
+    p = pub(fwd, s)
+    rejected = p.publish(task_event("r"))
+    assert rejected.status == "rejected"
+    assert p.requeue() == [rejected.id]
+    assert p.status_of(rejected.id) == "pending"
+    assert _record(s, pending.id)["status"] == "pending"
+    assert _record(s, pending.id)["error"] == error  # untouched
+
+
+def _record(store, event_id):
+    keys = store.keys()
+    (rec,) = [store.get(k) for k in keys if k.endswith(event_id)]
+    return rec
+
+
 def test_requeue_makes_rejected_events_pending_and_prune_expires_them(store):
     fwd = FakeForwarder()
     fwd.reject_next = 1
