@@ -206,3 +206,39 @@ def test_status_ingest_refuses_the_same_retentions(tmp_path, capsys, bad):
 
     rc = status_main(["ingest", "--agents", str(tmp_path / "agents.yml"), f"--publish-retain-hours={bad}"])  # fmt: skip
     assert rc == 2 and "--publish-retain-hours" in capsys.readouterr().err
+
+
+def test_cli_auth_flush_and_requeue_recover_from_a_401(tmp_path, monkeypatch):
+    """A forwarder that wants a credential: the first run stays pending (exit 1), the same
+    state flushed with ``--auth`` delivers."""
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text(CHANGELOG)
+    st = str(tmp_path / "st.json")
+    base = ["--component", "pkg:homelabnext", "--to", "0.2.0", "--from", "0.1.0",
+            "--changelog", str(cl), "--source", "svc:release-pipeline", "--time", T]  # fmt: skip
+    monkeypatch.setenv("HNX_SECRET_EVENTS_TOKEN", "Bearer good")
+    with FakeForwarderServer(require_auth="Bearer good") as srv:
+        args = ["deploy-changed", *base, "--forwarder", srv.url, "--state", st]
+        assert main(args) == 1
+        assert srv.fake.ids == []
+        flush = ["flush", "--forwarder", srv.url, "--state", st]
+        assert main(flush) == 1  # still no credential
+        assert main([*flush, "--auth", "secret:events-token"]) == 0
+        assert len(srv.fake.ids) == 1
+        assert main([*args, "--auth", "secret:events-token"]) == 0  # already sent: no new call
+        assert len(srv.fake.ids) == 1
+
+
+def test_cli_requeue_makes_a_rejected_event_pending(tmp_path):
+    from homelabnext.events import build_event
+
+    fwd = FakeForwarder()
+    fwd.reject_next = 1
+    from tests.events.test_events import TASK
+
+    ev = build_event("homelabnext.task.queued", "svc:siem", TASK, dedupe_key="k", time=T)
+    st = tmp_path / "s.json"
+    pub = Publisher(fwd, StateStore(st), sleep=lambda s: None)
+    assert pub.publish(ev).status == "rejected"
+    assert main(["requeue", "--state", str(st)]) == 0
+    assert Publisher(fwd, StateStore(st)).pending_ids() == [ev["id"]]

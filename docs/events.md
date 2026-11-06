@@ -65,8 +65,12 @@ pub.flush()  # resend anything still pending (after an outage or a crash)
 1. validate (an invalid event is refused before any I/O);
 2. write the event to the state file as `pending` (write-ahead);
 3. send; transient failures (network, 5xx, 429, timeout) back off exponentially, bounded by
-   `RetryPolicy(max_attempts, base_s, factor, max_s)`; a permanent failure (other 4xx, id
-   collision) marks the event `rejected` and is never retried;
+   `RetryPolicy(max_attempts, base_s, factor, max_s)`; a forwarder answer that blames the
+   configuration (401/403/404/421, `MisconfiguredError`) stops the loop at once but leaves the event
+   `pending`, so a rerun, `flush` or `hnx events flush` delivers it once the URL or credential is
+   fixed; a permanent failure (other 4xx, id collision) marks the event `rejected`. A rejected
+   record is kept for the retention (`--retain-hours`, then removed) and `hnx events requeue
+   --state FILE` makes the rejected ones pending again;
 4. only an acknowledgement moves it to `sent`.
 
 If the process dies between "the forwarder stored it" and "the publisher recorded the ack", the
@@ -79,7 +83,12 @@ content is refused.
 
 `POST` with `Content-Type: application/cloudevents+json` and `Idempotency-Key: <id>`.
 `200/201/202/204` accepted (`{"duplicate": true}` in the body when already held), `409` id
-collision (permanent), `408/425/429/5xx` retry, other `4xx` permanent.
+collision (permanent), `408/425/429/5xx` retry, `401/403/404/421` retry after a configuration fix
+(the event stays pending), other `4xx` permanent.
+
+The CLI sends a credential with `--auth secret:<name>` (value from `HNX_SECRET_<NAME>` or a file in
+`--secrets-dir`; the value is the whole `Authorization` header value) on `deploy-changed` and
+`flush`.
 
 ## Testing
 

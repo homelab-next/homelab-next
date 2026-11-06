@@ -13,6 +13,7 @@ from homelabnext.events import (
     FakeForwarder,
     FakeForwarderServer,
     HttpForwarder,
+    MisconfiguredError,
     PermanentError,
     Publisher,
     RetryPolicy,
@@ -365,7 +366,10 @@ def test_http_status_mapping():
     for code in (429, 500, 503):
         with pytest.raises(TransientError):
             hf(http_err(code)).forward(ev)
-    for code in (400, 401, 404, 409):
+    for code in (401, 403, 404, 421):
+        with pytest.raises(MisconfiguredError):
+            hf(http_err(code)).forward(ev)
+    for code in (400, 409, 410):
         with pytest.raises(PermanentError):
             hf(http_err(code)).forward(ev)
     with pytest.raises(TransientError):
@@ -560,3 +564,34 @@ def test_state_store_rewrite_is_one_locked_write(tmp_path):
     before = (tmp_path / "s.json").stat().st_mtime_ns
     s.rewrite(lambda d: False)  # no change: no write
     assert (tmp_path / "s.json").stat().st_mtime_ns == before
+
+
+# ------------------------------------------------ misconfiguration is retryable (F31)
+def test_a_401_keeps_the_event_pending_and_a_rerun_delivers_it(store):
+    with FakeForwarderServer(require_auth="Bearer good") as srv:
+        p = pub(HttpForwarder(srv.url), store, policy=RetryPolicy(max_attempts=3, base_s=0))
+        r = p.publish(task_event())
+        assert (r.status, r.attempts) == ("pending", 1)  # no point retrying a bad credential
+        assert p.pending_ids() == [r.id]
+        fixed = pub(HttpForwarder(srv.url, auth=lambda: "Bearer good"), store)
+        assert [x.status for x in fixed.flush()] == ["sent"]
+        assert srv.fake.ids == [r.id]
+
+
+def test_requeue_makes_rejected_events_pending_and_prune_expires_them(store):
+    fwd = FakeForwarder()
+    fwd.reject_next = 1
+    now = [1000.0]
+    p = pub(fwd, store, retain_s=3600, clock=lambda: now[0])
+    r = p.publish(task_event())
+    assert r.status == "rejected" and p.publish(task_event()).attempts == 0
+    assert p.requeue() == [r.id]
+    assert p.pending_ids() == [r.id]
+    assert [x.status for x in p.flush()] == ["sent"]
+    # a rejected record is removed once it is older than the retention
+    other = task_event("job-rej")
+    fwd.reject_next = 1
+    assert p.publish(other).status == "rejected"
+    now[0] += 3601
+    assert p.prune() >= 1
+    assert p.status_of(other["id"]) is None

@@ -374,7 +374,12 @@ class Journal:
             dir_fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 tmp = write_temp("meta.json", _dumps(meta), dir_fd=dir_fd)
-                os.rename(tmp, "meta.json", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                try:
+                    os.rename(tmp, "meta.json", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp, dir_fd=dir_fd)
+                    raise
                 with contextlib.suppress(OSError):
                     os.fsync(dir_fd)
             finally:
