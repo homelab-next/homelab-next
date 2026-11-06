@@ -158,8 +158,11 @@ hnx novelty corroborate --since 2026-03-10T00:00:00Z --until 2026-03-11T00:00:00
 to the selection's schema and the access rules' own refusals. `--fixture` loads a YAML or JSON
 mapping of table name to rows into the in-memory fake lake (`examples/novelty/lake.yml`: the first
 command above finds a new port, a new host and a new sign-in source); `--domain`, `--namespace`
-and `--warehouse` reach the lab's `lake-query` and `lake-catalog` endpoints, signing in as
-`analyzer:novelty`. The analyzer's insert grant is pinned to the core's `ocsf` namespace, so with
+and `--warehouse` reach the lab's `lake-query` and `lake-catalog` endpoints, signing in to the
+engine as `analyzer:novelty` (login `analyzer.novelty`) with the password in the secret
+`--credential` names (default `secret:lake-query/readers/analyzer.novelty`, delivered in
+`HNX_SECRET_LAKE_QUERY_READERS_ANALYZER_NOVELTY`; `--catalog-credential` and `--ca-file` as
+needed; [TLP](modules/tlp.md#engine-sign-in)). The analyzer's insert grant is pinned to the core's `ocsf` namespace, so with
 any other `--namespace` its writes are refused by design (a dry run still reads). `--as-of` is
 required (there is no clock). The run prints a JSON summary;
 exit 1 when a profile failed, 2 on a usage, spec, site or lake error.

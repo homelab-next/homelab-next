@@ -44,6 +44,26 @@ exports declare their TLP ceilings, and its public view and exports serve only w
 transforms keep ([status](../status.md#tlp-ceilings-and-release-transforms)). Model roles, model
 requests, agent profiles and MCP servers carry their ceilings and labels (below).
 
+### Engine sign-in
+
+The engine's row filters are keyed on the session user, so they hold only when that user is
+authenticated: a reader named by a bare `X-Trino-User` header would let any process that reaches
+the port read as a `red` reader. Every reader therefore signs in to the engine with its own
+password (the engine's password authenticator, one entry per reader in its password file).
+`homelabnext.conform.adapters.lake.make_lake(..., credential=)` takes the reader's password as a
+secret reference (`secret:<name>`, conventionally the secret `lake-query/readers/<login>`, delivered
+in `HNX_SECRET_LAKE_QUERY_READERS_<LOGIN>`) and sends it as HTTP Basic on every request, with no
+redirect followed and no proxy used (`catalog_credential=` does the same for the catalog's bearer
+token, `ca_file=` names a private CA). A `lake-query` endpoint that is not loopback is refused
+without a credential, with no override; only the loopback-bound lab-in-a-box runs without one.
+
+HTTP Basic cannot carry a colon in the user part, so a reader signs in with its id's first `:`
+written as `.` (`analyzer:novelty` signs in as `analyzer.novelty`;
+`homelabnext.lake.trino_http.engine_login`), and the engine maps the login back to the reader id
+with one user-mapping rule, pattern `(profile|module|analyzer|user)\.(.+)`, user `$1:$2`, so the
+session user `lake-access.json` names is the whole reader id. `hnx novelty` signs in as
+`analyzer:novelty` this way.
+
 ### Model-role ceilings (ADR-0033 decision 10)
 
 Every model role has a TLP ceiling, `homelabnext.modules.rules.role_ceiling(roles, role)` (and

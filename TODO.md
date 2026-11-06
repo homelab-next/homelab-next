@@ -78,10 +78,18 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
   1. declare `tlp_readers` (including `analyzer:novelty`) in the overlay;
   2. render `lake-access.json` (`hnx modules render`) and load it into the query engine, and
      again after every change to `tlp_readers`;
-  3. have the lake-query adapter sign each reader in to the engine as the user named by its whole
-     reader id (`analyzer:novelty`, `profile:x`, ...), and each `group:` reader as the engine
-     group of that name;
-  4. confirm a reader below `red` sees only rows at or below its ceiling.
+  3. **make the engine authenticate each reader id** (it must never accept a bare user header):
+     turn on its password authenticator (over https) with a password file holding one entry per
+     reader login, the reader id with its first `:` written as `.` (`analyzer.novelty`,
+     `profile.x`, ...), and the user-mapping rule pattern `(profile|module|analyzer|user)\.(.+)`,
+     user `$1:$2`, so each session user is the whole reader id again; map each `group:` reader to
+     the engine group of that name;
+  4. put each reader's password in the secrets store as `lake-query/readers/<login>` (for the
+     novelty analyzer `lake-query/readers/analyzer.novelty`, delivered to `hnx novelty` as
+     `HNX_SECRET_LAKE_QUERY_READERS_ANALYZER_NOVELTY`); the client refuses a non-loopback lake
+     without one;
+  5. confirm a reader with no password, or a wrong one, is refused, and a reader below `red` sees
+     only rows at or below its ceiling.
 
   The lake starts fresh, so there is nothing to backfill. `hnx modules tlp-backfill` is only for
   a table created before it had a `tlp` column.

@@ -97,7 +97,14 @@ author: unknown
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:access -->
-> TODO(human): secret-store NAMES only (never values), who may use it.
+Every lake reader signs in to the engine as itself: the engine's password authenticator, with
+one password-file entry per reader login (the reader id with its first `:` written as `.`,
+mapped back to the reader id by the engine's user-mapping rule), so the row filters of
+`lake-access.json` apply to an authenticated user, never to a bare user header. Each reader's
+password is the secret `lake-query/readers/<login>` (the novelty analyzer's is
+`lake-query/readers/analyzer.novelty`), usable only by the process that runs as that reader. The
+lake client refuses a non-loopback `lake-query` without a credential
+([TLP: engine sign-in](../modules/tlp.md#engine-sign-in)).
 <!-- /hnx:todo -->
 
 ## Source of truth
