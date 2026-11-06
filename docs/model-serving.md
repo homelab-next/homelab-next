@@ -164,9 +164,15 @@ against fakes.
    replaced by a rename; a `gguf` file over its path). One bad file and nothing moves, so an
    interrupted or tampered download never reaches the store. The live entry is then verified by
    sha256 again, and a snapshot file that links out of its repository's `blobs/` fails;
-5. verifies each promoted export (in the manifest, on disk) by sha256 and takes it out of the
-   trainers' hands: owned `models:models`, `u=rwX,g=rX,o=`. Studio writes exports into a
-   trainer-writable directory, so an export becomes served bytes only once it is store-owned;
+5. takes each promoted export (in the manifest, on disk) out of the trainers' hands and verifies
+   it. Studio writes exports into a trainer-writable directory, so the role first walks
+   `exports/<run>/` without following links and refuses, before any chown or chmod, a link, a
+   special file, a file the manifest does not list, a listed file with another hard link, or an
+   `exports/<run>` that is itself a link (a followed recursive chown would apply to whatever a
+   planted link names). It then makes the export `models:models`, `u=rwX,g=rX,o=` (never
+   following links), and only then checks every file by sha256, so the bytes cannot change between
+   the check and the lock. An export becomes served bytes only once it is store-owned and matches;
+   one that fails after the lock stays store-owned, and the operator removes it;
 6. writes each entry's `sha256sum` listing to `manifests/listings/<id>.sha256`, the file every vLLM
    unit checks before it starts.
 
@@ -294,7 +300,9 @@ Studio is the GUI: it chats, compares models side by side, trains, and exports (
 2. To compare against production, point Studio at the gateway (its OpenAI-compatible connection),
    with its own key. Do not point it at vLLM directly.
 3. To serve an export, **promote** it: add a manifest entry (`format: export`, the run id, `base`,
-   `layout`, every file's sha256, which `hnx models store list` and `sha256sum` give you). Then pin
+   `layout`, every file's sha256, which `hnx models store list` and `sha256sum` give you). List
+   every file in `exports/<run-id>/` or remove the ones not to serve: promotion refuses an export
+   holding anything the manifest does not list, and any link. Then pin
    a binding to its digest, run `hnx models serving render`, and deploy `model_store` and
    `vllm_server`. Nothing is served from `exports/` without its hashes in git.
 

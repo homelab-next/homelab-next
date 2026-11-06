@@ -375,6 +375,99 @@ def test_model_store_refuses_a_snapshot_link_out_of_its_blobs(tmp_path, fetched_
     assert run_role(tmp_path, "model_store", "health", v).returncode != 0
 
 
+EXPORT_RUN = "2026-10-01-triage"  # example-4b-triage's run (examples/model-serving)
+
+
+def trainer_export(tmp_path: Path) -> tuple[dict, Path]:
+    """The example's promoted export as a trainer left it: group- and world-writable, so a run of
+    the role's chown/chmod (``u=rwX,g=rX,o=``) shows on every file it touched; vars without a
+    fetch (the export is promoted on its own)."""
+    store = manifest()
+    v = store_vars(tmp_path, store, model_store_fetch=False)
+    write_export(tmp_path / "srv", store)
+    run = tmp_path / "srv" / "exports" / EXPORT_RUN
+    for f in [run, *run.rglob("*")]:
+        f.chmod(0o777 if f.is_dir() else 0o666)
+    return v, run
+
+
+def untouched(*paths: Path) -> bool:
+    """Nothing took ownership: every path still has the trainer's world-writable mode."""
+    return all(p.lstat().st_mode & 0o002 for p in paths)
+
+
+def test_model_store_refuses_a_link_in_an_export_before_taking_ownership(tmp_path):
+    """exports/<run>/x -> a host file: the root-run chown/chmod would follow it and make that file
+    store-owned (/etc/passwd in the attack; a stand-in here, never a real host file).  The walk
+    refuses the link before anything is chowned."""
+    v, run = trainer_export(tmp_path)
+    target = tmp_path / "host-passwd"
+    target.write_text("root:x:0:0::/root:/bin/sh\n")
+    target.chmod(0o666)
+    (run / "x").symlink_to(target)
+    r = run_role(tmp_path, "model_store", "main", v)
+    assert r.returncode != 0 and "x (a link)" in r.stdout, r.stdout
+    assert untouched(target, run, *run.iterdir()), oct(target.stat().st_mode)
+
+
+def test_model_store_refuses_an_unlisted_file_in_an_export(tmp_path):
+    v, run = trainer_export(tmp_path)
+    (run / "sub").mkdir()
+    (run / "sub" / "extra.bin").write_bytes(b"not in the manifest\n")
+    (run / "sub").chmod(0o777)
+    (run / "sub" / "extra.bin").chmod(0o666)
+    r = run_role(tmp_path, "model_store", "main", v)
+    assert r.returncode != 0 and "sub/extra.bin (not in the manifest)" in r.stdout, r.stdout
+    assert untouched(run, *run.rglob("*"))
+    (run / "sub" / "extra.bin").unlink()
+    (run / "sub").rmdir()
+    ok = run_role(tmp_path, "model_store", "main", v)
+    assert ok.returncode == 0, ok.stdout
+    assert not untouched(run) and run.stat().st_mode & 0o027 == 0  # now taken out of their hands
+
+
+def test_model_store_refuses_an_export_directory_that_is_a_link(tmp_path):
+    """exports/<run> itself a link (to a tree with the right bytes): a followed chown would take
+    ownership of wherever it points."""
+    v, run = trainer_export(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    run.rename(elsewhere)
+    run.symlink_to(elsewhere)
+    r = run_role(tmp_path, "model_store", "main", v)
+    assert r.returncode != 0 and ". (the entry directory is a link)" in r.stdout, r.stdout
+    assert untouched(elsewhere, *elsewhere.iterdir())
+
+
+def test_model_store_takes_an_export_before_hashing_it(tmp_path):
+    """Hashing first left a window in which a trainer could swap the bytes after the check and
+    before the chown; the role now takes ownership first, so the bytes it hashes are the ones it
+    serves (a mismatch then stays store-owned, out of the trainers' reach, and fails)."""
+    v, run = trainer_export(tmp_path)
+    weights = run / "model.safetensors"
+    weights.write_bytes(weights.read_bytes().upper())  # same size, other bytes
+    weights.chmod(0o666)
+    r = run_role(tmp_path, "model_store", "main", v)
+    assert r.returncode != 0 and "model.safetensors (sha256 differs)" in r.stdout, r.stdout
+    assert weights.stat().st_mode & 0o027 == 0, oct(weights.stat().st_mode)
+
+
+def test_every_recursive_file_task_in_model_store_never_follows_links():
+    """ansible.builtin.file follows links by default, and recurse applies owner and mode to each
+    link's target (and recurses into a linked directory)."""
+    found = 0
+    for path in sorted((ROOT / "ansible/roles/model_store/tasks").glob("*.yml")):
+        stack = list(yaml.safe_load(path.read_text()) or [])
+        while stack:
+            task = stack.pop()
+            for key in ("block", "rescue", "always"):
+                stack.extend(task.get(key) or [])
+            args = task.get("ansible.builtin.file") or task.get("file")
+            if isinstance(args, dict) and args.get("recurse"):
+                found += 1
+                assert args.get("follow") is False, (path.name, task.get("name"))
+    assert found >= 2
+
+
 def test_model_store_backup_and_export_hooks(tmp_path):
     store = manifest()
     # codepoint order (sha256sum's, and Entry.listing's): LICENSE, README.md, config.json; a

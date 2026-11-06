@@ -1,29 +1,44 @@
 # SPDX-License-Identifier: Apache-2.0
 # A promoted export (model_store_entry, format export): Unsloth Studio wrote it into exports/, a
 # directory the trainers' group may write. Once it is in the manifest it is served, so it must
-# match its hashes and leave that group: owned by the store, readable by the engines' group only.
+# hold its listed files and nothing else, leave that group (owned by the store, readable by the
+# engines' group only) and then match its hashes.
 # An export not on disk yet (written later, or restored from backup) is skipped; vllm_server
 # refuses an instance whose model is missing.
 - name: Locate the entry
   ansible.builtin.include_tasks: entry_paths.yml
 
+# Not followed: an export directory that is a link is refused below, never chased.
 - name: Look for {{ model_store_entry.key }}
   ansible.builtin.stat:
     path: "{{ model_store_entry_dir }}"
+    follow: false
+    get_checksum: false
   register: model_store_export_dir_stat
 
-- name: Verify and lock {{ model_store_entry.key }}
+# Order matters, because everything in exports/<run> is the trainers' until this block ends:
+# 1. walk it without following links and refuse a link, a special file or a file the manifest
+#    does not list (and an entry directory that is a link) BEFORE any chown or chmod, which would
+#    otherwise be applied as root to whatever a planted link names;
+# 2. take ownership without following links, so its bytes can no longer change under the check;
+# 3. only then verify every file by sha256, walking again (nothing may appear during step 2).
+- name: Check, lock and verify {{ model_store_entry.key }}
   when: model_store_export_dir_stat.stat.exists
   block:
-    - name: Verify every file by sha256
+    - name: Refuse links, special files and unlisted files before taking ownership
       ansible.builtin.include_tasks: verify_entry.yml
       vars:
-        model_store_sizes_only: false
+        model_store_sizes_only: true
     - name: Give the export to the store owner, read-only for the engines' group
       ansible.builtin.file:
         path: "{{ model_store_entry_dir }}"
         state: directory
         recurse: true
+        follow: false
         owner: "{{ model_store_owner }}"
         group: "{{ model_store_group }}"
         mode: "u=rwX,g=rX,o="
+    - name: Verify every file by sha256, now that the trainers can no longer change it
+      ansible.builtin.include_tasks: verify_entry.yml
+      vars:
+        model_store_sizes_only: false

@@ -6,6 +6,7 @@ with the meaning of ``ansible.builtin.stat`` followed (exists, size, sha256) and
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -123,6 +124,58 @@ def test_an_absolute_path_never_replaces_the_entry_dir(mod, tmp_path):
     _, snap = entry(tmp_path)
     (r,) = mod.read_entry(str(snap), [{"path": str(snap / "model.safetensors")}], False)
     assert r["stat"] == {"exists": False}  # <dir>//abs/path, as the template joined it
+
+
+def export(tmp_path: Path) -> tuple[Path, list[dict]]:
+    """A trainer-written export: two listed files, one in a subdirectory."""
+    run = tmp_path / "exports" / "2026-10-01-run"
+    (run / "sub").mkdir(parents=True)
+    (run / "config.json").write_bytes(b"{}\n")
+    (run / "sub" / "model.safetensors").write_bytes(b"weights\n")
+    return run, [{"path": "config.json"}, {"path": "sub/model.safetensors"}]
+
+
+def test_a_clean_export_has_no_strays(mod, tmp_path):
+    run, files = export(tmp_path)
+    assert mod.walk_entry(str(run), files) == []
+    assert mod.walk_entry(str(tmp_path / "absent"), files) == []  # skipped, as the role does
+
+
+def test_the_walk_reports_links_special_and_unlisted_files_without_following(mod, tmp_path):
+    run, files = export(tmp_path)
+    outside = tmp_path / "outside"
+    (outside / "deep").mkdir(parents=True)
+    (outside / "deep" / "secret").write_text("x\n")
+    (run / "x").symlink_to(tmp_path / "host-passwd")  # dangling or not, a link is a link
+    (run / "linked-dir").symlink_to(outside)  # a link to a directory: listed, never entered
+    os.mkfifo(run / "sub" / "pipe")
+    (run / "notes.txt").write_text("unlisted\n")
+    os.link(run / "config.json", tmp_path / "second-name")  # a listed file with another name
+    assert mod.walk_entry(str(run), files) == [
+        "config.json (hard-linked: 2 links)",
+        "linked-dir (a link)",
+        "notes.txt (not in the manifest)",
+        "sub/pipe (a special file)",
+        "x (a link)",
+    ]
+
+
+def test_the_walk_refuses_an_entry_directory_that_is_a_link(mod, tmp_path):
+    run, files = export(tmp_path)
+    (tmp_path / "exports" / "linked").symlink_to(run)
+    assert mod.walk_entry(str(tmp_path / "exports" / "linked"), files) == [
+        ". (the entry directory is a link)"
+    ]
+    assert mod.walk_entry(str(run / "config.json"), files) == [". (the entry is not a directory)"]
+
+
+def test_the_module_walks_only_when_asked(tmp_path):
+    run, files = export(tmp_path)
+    (run / "x").symlink_to("/nonexistent-target")
+    rc, out = run_module(tmp_path, {"dir": str(run), "files": files, "checksum": False})
+    assert rc == 0 and "strays" not in out
+    rc, out = run_module(tmp_path, {"dir": str(run), "files": files, "walk": True})
+    assert rc == 0 and out["strays"] == ["x (a link)"]
 
 
 def run_module(tmp_path: Path, args: dict) -> tuple[int, dict]:

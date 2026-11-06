@@ -2,11 +2,11 @@
 # hnx-script:
 #   id: model-store-files
 #   kind: tool
-#   purpose: Read every file of one model-store entry (exists, size, sha256, where a link resolves) in one module call.
+#   purpose: Read every file of one model-store entry (exists, size, sha256, where a link resolves) in one module call, and list what else the entry holds.
 #   owner: platform
 #   trigger: [role:model_store]
-#   inputs: the entry's directory, its manifest files, whether to hash them
-#   outputs: one result per file, in manifest order (JSON, as an Ansible module)
+#   inputs: the entry's directory, its manifest files, whether to hash them, whether to walk it
+#   outputs: one result per file, in manifest order, and the strays a walk found (JSON, as an Ansible module)
 #   exit:
 #     "0": every file was read (a missing file is a result, not a failure)
 #     "1": a file could not be read (permission, a link loop); the role stops
@@ -36,6 +36,11 @@ description:
     meaning as M(ansible.builtin.stat) with C(follow=true) and C(follow=false).
   - C(stat.checksum) is the sha256 of a readable regular file when I(checksum) is true, else
     null.  Files are hashed in blocks, never read whole into memory.
+  - With I(walk), also C(strays), from a walk of the entry that never follows a link: the entry
+    directory itself when it is a link or not a directory, and below it every link, every special
+    file (device, FIFO, socket), every regular file the manifest does not list and every listed
+    file with another hard link. An export is written by the trainers' group, so before the role
+    takes ownership of one it refuses anything it would otherwise chown or chmod on their behalf.
   - Read-only; supports check mode.
 options:
   dir:
@@ -51,6 +56,10 @@ options:
     description: Compute each file's sha256.
     type: bool
     default: true
+  walk:
+    description: Walk the entry (links never followed) and return C(strays).
+    type: bool
+    default: false
 """
 
 EXAMPLES = r"""
@@ -72,6 +81,13 @@ results:
     item: {description: The input file dict., type: dict}
     stat: {description: "Followed: exists, and when it exists size and checksum (sha256 or null).", type: dict}
     link: {description: "Unfollowed: exists, and when it exists islnk and lnk_source (realpath, links only).", type: dict}
+strays:
+  description: >-
+    With walk, what the entry holds besides its listed regular files and their directories, each
+    "<path> (<why>)", sorted; empty when the entry directory is absent.
+  returned: when walk is true
+  type: list
+  elements: str
 """
 
 BLOCK = 8 << 20
@@ -124,12 +140,50 @@ def read_entry(directory: str, files: list[dict], checksum: bool) -> list[dict]:
     return [{"item": f, **read_file(f"{directory}/{f['path']}", checksum)} for f in files]
 
 
+def walk_entry(directory: str, files: list[dict]) -> list[str]:
+    """Everything under ``directory`` that is not a listed regular file or a directory.
+
+    Nothing is followed (``os.walk`` lists a link to a directory but never enters it, and every
+    name is read with ``lstat``), so a link planted beside an export is reported, never chased.
+    """
+    top = _stat(directory, follow=False)
+    if top is None:
+        return []
+    if stat.S_ISLNK(top.st_mode):
+        return [". (the entry directory is a link)"]
+    if not stat.S_ISDIR(top.st_mode):
+        return [". (the entry is not a directory)"]
+    listed = {f["path"] for f in files}
+    strays: list[str] = []
+
+    def unreadable(exc: OSError) -> None:
+        raise exc
+
+    for root, dirs, names in os.walk(directory, onerror=unreadable):
+        rel_root = os.path.relpath(root, directory)
+        for name in dirs + names:
+            rel = name if rel_root == "." else f"{rel_root}/{name}"
+            st = os.lstat(os.path.join(root, name))
+            if stat.S_ISLNK(st.st_mode):
+                strays.append(f"{rel} (a link)")
+            elif stat.S_ISDIR(st.st_mode):
+                continue
+            elif not stat.S_ISREG(st.st_mode):
+                strays.append(f"{rel} (a special file)")
+            elif rel not in listed:
+                strays.append(f"{rel} (not in the manifest)")
+            elif st.st_nlink > 1:
+                strays.append(f"{rel} (hard-linked: {st.st_nlink} links)")
+    return sorted(strays)
+
+
 def main() -> None:
     module = AnsibleModule(
         argument_spec={
             "dir": {"type": "str", "required": True},
             "files": {"type": "list", "elements": "dict", "required": True},
             "checksum": {"type": "bool", "default": True},
+            "walk": {"type": "bool", "default": False},
         },
         supports_check_mode=True,
     )
@@ -139,9 +193,10 @@ def main() -> None:
         module.fail_json(msg=f"model_store_files: a file without a path: {bad[0]!r}")
     try:
         results = read_entry(p["dir"], p["files"], p["checksum"])
+        extra = {"strays": walk_entry(p["dir"], p["files"])} if p["walk"] else {}
     except OSError as exc:
         module.fail_json(msg=f"model_store_files: {exc.filename}: {exc.strerror}")
-    module.exit_json(changed=False, results=results)
+    module.exit_json(changed=False, results=results, **extra)
 
 
 if __name__ == "__main__":
