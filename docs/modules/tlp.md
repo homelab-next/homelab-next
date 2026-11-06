@@ -60,9 +60,21 @@ without a credential, with no override; only the loopback-bound lab-in-a-box run
 HTTP Basic cannot carry a colon in the user part, so a reader signs in with its id's first `:`
 written as `.` (`analyzer:novelty` signs in as `analyzer.novelty`;
 `homelabnext.lake.trino_http.engine_login`), and the engine maps the login back to the reader id
-with one user-mapping rule, pattern `(profile|module|analyzer|user)\.(.+)`, user `$1:$2`, so the
-session user `lake-access.json` names is the whole reader id. `hnx novelty` signs in as
-`analyzer:novelty` this way.
+with a user-mapping rules file (the engine's single-pattern setting keeps only the first group, so
+it cannot rebuild the id): first the pattern `(profile|module|analyzer|user)\.(.+)`, user `$1:$2`,
+so the session user `lake-access.json` names is the whole reader id, then the pattern `(.*)`,
+user `$1`, so a login with no prefix stays itself (a login no rule matches is refused). The
+conformance and swap-rehearsal runs sign in as such a login, `hnx-conform` by default (the
+rehearsal's `--user`), with the secret `lake-query/readers/hnx-conform` (`--credential`). `hnx
+novelty` signs in as `analyzer:novelty`.
+
+Signing in is not enough on its own: the client still names its session user in a header, and a
+signed-in reader that names another (a `red` reader) would get that reader's row filters. So
+`lake-access.json` denies impersonation to everyone (`impersonation`: nobody may act as another
+user), and the operator adds no rule that allows it. A credential goes over https only (except to
+loopback), whatever `allow_plaintext` says. The catalog is a second way to the rows: one reachable
+off loopback must require its token and hand storage credentials to the engine alone, or a reader
+reads the data files and skips every filter (an operator step, `TODO.md` §4).
 
 ### Model-role ceilings (ADR-0033 decision 10)
 

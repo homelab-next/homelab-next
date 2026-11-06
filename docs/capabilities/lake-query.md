@@ -319,7 +319,9 @@ HTTP Basic for the reader's login (`homelabnext.lake.trino_http.engine_login`;
 `reader_secret` is the conventional name).  `catalog_credential` is a second secret
 reference, the catalog's bearer token, when the catalog asks for one.  With a credential, both
 clients send through `homelabnext._http.credential_opener` (`ca_file` for a private CA):
-no redirect is followed and no proxy is used, so the credential reaches only the endpoint.
+no redirect is followed and no proxy is used, so the credential reaches only the endpoint.  A
+credential goes over https only, `allow_plaintext` or not, except to loopback; a catalog token
+a header cannot carry (a stray newline) is refused naming its secret, never quoting it.
 
 **A `lake-query` endpoint that is not loopback is refused without a credential**, outright:
 there is no flag that reads a lab's lake unauthenticated.  Only the lab-in-a-box, bound to

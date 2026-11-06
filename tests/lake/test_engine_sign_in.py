@@ -146,3 +146,46 @@ def test_a_loopback_lab_without_a_credential_sends_none(lab):
         engine.execute("SELECT 1")
     assert catalog.prefix
     assert lab.auth and {a for _, _, a in lab.auth} == {None}
+
+
+def test_every_engine_request_goes_through_the_injected_opener(lab):
+    """The opener is not just held: the statement and every nextUri read are sent through it, so
+    the credential opener's no-redirect, no-proxy rule covers the engine's requests."""
+    import urllib.request
+
+    opened = []
+
+    class Spy(urllib.request.OpenerDirector):
+        def open(self, req, *a, **kw):
+            opened.append(req.full_url)
+            return real.open(req, *a, **kw)
+
+    real = adapter.credential_opener(None)
+    engine, _ = _clients()
+    engine._opener = Spy()
+    with pytest.raises(LakeError):
+        engine.execute("SELECT 1")
+    statements = [p for _, p, _ in lab.auth if p.startswith("/v1/statement")]
+    assert len(statements) >= 2 and len(opened) == len(statements)
+
+
+# ---------------------------------------------------------------- what never goes out
+def test_a_credential_never_goes_over_plaintext_to_another_host(monkeypatch):
+    plain = "http://192.0.2.9:8080"  # no-raw-endpoint: allow RFC 5737 documentation address
+    monkeypatch.setenv("HNX_ENDPOINT_LAKE_QUERY", plain)
+    monkeypatch.setenv("HNX_ENDPOINT_LAKE_CATALOG", plain)
+    monkeypatch.setenv(PASSWORD_VAR, "pw")
+    with pytest.raises(LakeError, match="https only"):
+        _clients(credential=SECRET, allow_plaintext=True)
+
+
+@pytest.mark.parametrize("token", ["s3cret\n", "s3 cret", "s3cret\x7f"])
+def test_a_catalog_token_a_header_cannot_carry_is_refused_without_quoting_it(
+    lab, monkeypatch, token
+):
+    _, catalog = _clients(credential=SECRET, catalog_credential="secret:lake-catalog/token")
+    monkeypatch.setenv(TOKEN_VAR, token)
+    with pytest.raises(LakeError, match="cannot carry") as got:
+        catalog._auth()
+    assert TOKEN_VAR in str(got.value)
+    assert "s3" not in str(got.value)

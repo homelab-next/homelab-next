@@ -103,8 +103,10 @@ mapped back to the reader id by the engine's user-mapping rule), so the row filt
 `lake-access.json` apply to an authenticated user, never to a bare user header. Each reader's
 password is the secret `lake-query/readers/<login>` (the novelty analyzer's is
 `lake-query/readers/analyzer.novelty`), usable only by the process that runs as that reader. The
-lake client refuses a non-loopback `lake-query` without a credential
-([TLP: engine sign-in](../modules/tlp.md#engine-sign-in)).
+lake client refuses a non-loopback `lake-query` without a credential, and `lake-access.json`
+denies impersonation, so a signed-in reader cannot name another as its session user
+([TLP: engine sign-in](../modules/tlp.md#engine-sign-in)). The `idp` above is how people sign
+in; the engine runs its password authenticator beside it for the readers.
 <!-- /hnx:todo -->
 
 ## Source of truth

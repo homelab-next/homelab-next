@@ -334,8 +334,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--domain", default="example.internal")
     ap.add_argument("--namespace", default="auto", help="candidate scratch namespace")
     ap.add_argument(
+        "--user",
+        default="hnx-conform",
+        help="the engine login the candidate lake is read and written as (default hnx-conform)",
+    )
+    ap.add_argument(
         "--credential",
-        help="the secret holding the engine password (needed when lake-query is not loopback)",
+        help="the secret holding --user's engine password, needed when lake-query is not "
+        "loopback (conventionally the secret lake-query/readers/<login>)",
     )
     args = ap.parse_args(argv)
     from homelabnext.conform.adapters._env import run_token
@@ -344,7 +350,9 @@ def main(argv: list[str] | None = None) -> int:
 
     ns = f"hnx_rehearsal_{run_token()}" if args.namespace == "auto" else args.namespace
     try:
-        candidate = make_lake(domain=args.domain, namespace=ns, credential=args.credential)
+        candidate = make_lake(
+            domain=args.domain, namespace=ns, user=args.user, credential=args.credential
+        )
     except Exception as exc:  # cannot build the candidate: not a rehearsal result
         print(f"rehearsal: cannot reach the candidate lake: {type(exc).__name__}: {exc}")
         return 2

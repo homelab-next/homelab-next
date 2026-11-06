@@ -20,7 +20,9 @@ HTTP Basic for the reader's login (:func:`homelabnext.lake.trino_http.engine_log
 :func:`reader_secret` is the conventional name).  ``catalog_credential`` is a second secret
 reference, the catalog's bearer token, when the catalog asks for one.  With a credential, both
 clients send through :func:`homelabnext._http.credential_opener` (``ca_file`` for a private CA):
-no redirect is followed and no proxy is used, so the credential reaches only the endpoint.
+no redirect is followed and no proxy is used, so the credential reaches only the endpoint.  A
+credential goes over https only, ``allow_plaintext`` or not, except to loopback; a catalog token
+a header cannot carry (a stray newline) is refused naming its secret, never quoting it.
 
 **A ``lake-query`` endpoint that is not loopback is refused without a credential**, outright:
 there is no flag that reads a lab's lake unauthenticated.  Only the lab-in-a-box, bound to
@@ -49,6 +51,8 @@ __all__ = ["READERS", "engine_login", "make_clients", "make_lake", "password_aut
 
 #: the secret-store area holding each reader's engine password (:func:`reader_secret`)
 READERS = "lake-query/readers"
+# Not homelabnext.mcp.credentials.SECRET_REF: a reader's secret is named after its login, and a
+# login may hold '.' and start with a digit (lake_access.READER_RE), which that shape refuses.
 _SECRET_REF = re.compile(r"secret:[a-z0-9][a-z0-9/_.-]{0,127}")
 
 
@@ -64,6 +68,17 @@ def _secret(ref: Any, what: str) -> Callable[[], str]:
     if not (isinstance(ref, str) and _SECRET_REF.fullmatch(ref)):
         raise AdapterConfigError(f"{what} is a secret name (secret:<name>), never a value")
     return env_secret(secret_env_name(ref))  # checked now, read again at every request
+
+
+def _header_safe(value: str, ref: str) -> str:
+    """``value`` when a header can carry it; otherwise an error naming the secret, never the
+    value (urllib's own "Invalid header value" error quotes the whole header, token included)."""
+    if any(ord(c) < 0x21 or ord(c) == 0x7F for c in value):
+        raise LakeError(
+            f"the secret {ref} ({secret_env_name(ref)}) holds a character a header "
+            "cannot carry (whitespace or a control character)"
+        )
+    return value
 
 
 def _url(capability: str, resolver: Any, domain: str | None, allow_plaintext: bool) -> str:
@@ -95,23 +110,30 @@ def make_clients(
     if not wh:
         raise LookupError(f"no warehouse: pass warehouse= or set {warehouse_env}")
     query_url = _url("lake-query", resolver, domain, allow_plaintext)
+    catalog_url = _url("lake-catalog", resolver, domain, allow_plaintext)
     if credential is None and not is_loopback(urllib.parse.urlsplit(query_url).hostname):
         raise LakeError(
             f"lake-query endpoint is not loopback, so {user!r} must sign in to the engine: pass "
             f"credential= (a secret reference, conventionally {reader_secret(user)})"
         )
     signed_in = credential is not None or catalog_credential is not None
+    for capability, url in (("lake-query", query_url), ("lake-catalog", catalog_url)):
+        parts = urllib.parse.urlsplit(url)
+        if signed_in and parts.scheme != "https" and not is_loopback(parts.hostname):
+            # allow_plaintext cannot send a password in clear to another host (the engine's
+            # password authenticator takes it over https only anyway)
+            raise LakeError(f"{capability} endpoint: a credential goes over https only")
     opener = credential_opener(ca_file) if signed_in else None
     auth = None
     if credential is not None:
         auth = password_auth(user, _secret(credential, "credential"))
     bearer = None
     if catalog_credential is not None:
-        token = _secret(catalog_credential, "catalog_credential")
-        bearer = lambda: f"Bearer {token()}"  # noqa: E731
+        token, ref = _secret(catalog_credential, "catalog_credential"), catalog_credential
+        bearer = lambda: f"Bearer {_header_safe(token(), ref)}"  # noqa: E731
     engine = TrinoHTTP(query_url, user=user, auth=auth, opener=opener)
     catalog = RestCatalog(
-        _url("lake-catalog", resolver, domain, allow_plaintext),
+        catalog_url,
         warehouse=wh,
         api_root=api_root,
         auth=bearer,
