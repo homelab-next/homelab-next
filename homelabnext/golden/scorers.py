@@ -24,6 +24,7 @@ every action or tool it attempted), and scores 0 or 1:
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable
 from typing import Any
@@ -138,9 +139,14 @@ def json_schema(out: str, e: dict) -> tuple[float, str]:
         doc = _parse_json(out)
     except ValueError:
         return 0.0, "output is not valid JSON"
-    errs = sorted(
-        jsonschema.Draft202012Validator(e["schema"]).iter_errors(doc), key=lambda x: x.message
-    )
+    try:
+        errs = sorted(
+            jsonschema.Draft202012Validator(e["schema"]).iter_errors(doc), key=lambda x: x.message
+        )
+    except RecursionError:  # deep output against a recursive schema: fail closed
+        return 0.0, "output nested too deeply"
+    except Exception as exc:  # e.g. an unresolvable $ref: fail closed, do not abort the run
+        return 0.0, f"schema could not be applied: {type(exc).__name__}"
     return (1.0, "schema valid") if not errs else (0.0, errs[0].message)
 
 
@@ -206,10 +212,12 @@ def _check_types(name: str, e: dict) -> None:
                 if "one_of" in want and not isinstance(want["one_of"], list):
                     raise ScoreError(f"scorer 'json_fields': fields.{key}.one_of must be a list")
                 for bound in ("min", "max"):
-                    if bound in want and not _is_num(want[bound]):
+                    if bound in want and not (_is_num(want[bound]) and math.isfinite(want[bound])):
                         raise ScoreError(
-                            f"scorer 'json_fields': fields.{key}.{bound} must be a number"
+                            f"scorer 'json_fields': fields.{key}.{bound} must be a finite number"
                         )
+                if "min" in want and "max" in want and want["min"] > want["max"]:
+                    raise ScoreError(f"scorer 'json_fields': fields.{key}.min exceeds max")
     elif name == "json_schema":
         if not isinstance(e["schema"], (dict, bool)):
             raise ScoreError("scorer 'json_schema': expect.schema must be a mapping")

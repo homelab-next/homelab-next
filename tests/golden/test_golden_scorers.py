@@ -83,8 +83,14 @@ def test_malformed_suites_are_refused(mutate, needle):
         ({"scorer": "regex", "pattern": "("}, "does not compile"),
         ({"scorer": "contains", "all": "alpha"}, "list of strings"),
         ({"scorer": "max_length", "max_chars": "10"}, "non-negative integer"),
-        ({"scorer": "json_fields", "fields": {"n": {"min": "1"}}}, "must be a number"),
+        ({"scorer": "json_fields", "fields": {"n": {"min": "1"}}}, "finite number"),
         ({"scorer": "json_schema", "schema": {"type": "nope"}}, "invalid"),
+        ({"scorer": "json_fields", "fields": {"n": {"min": float("nan")}}}, "finite number"),
+        ({"scorer": "json_fields", "fields": {"n": {"min": 5, "max": 1}}}, "exceeds max"),
+        ({"scorer": "json_fields", "fields": {"n": {"one_of": "ab"}}}, "must be a list"),
+        ({"scorer": "json_fields", "fields": [1]}, "must be a mapping"),
+        ({"scorer": "contains", "none": "x"}, "list of strings"),
+        ({"scorer": "exact", "value": "a", "strip": "yes"}, "must be a boolean"),
     ],
 )
 def test_malformed_expect_fails_at_load_with_the_task_id(expect, needle):
@@ -96,3 +102,14 @@ def test_malformed_expect_fails_at_load_with_the_task_id(expect, needle):
 def test_deeply_nested_json_scores_zero_not_a_crash():
     out = "[" * 100000 + "]" * 100000
     assert score(out, {"scorer": "json_fields", "fields": {"a": 1}})[0] == 0.0
+
+
+def test_recursive_schema_on_deep_output_scores_zero_not_a_crash():
+    out = "[" * 600 + "]" * 600
+    e = {"scorer": "json_schema", "schema": {"type": "array", "items": {"$ref": "#"}}}
+    assert score(out, e)[0] == 0.0
+
+
+def test_unresolvable_ref_scores_zero_not_a_crash():
+    e = {"scorer": "json_schema", "schema": {"$ref": "other.json#/x"}}
+    assert score("{}", e)[0] == 0.0
