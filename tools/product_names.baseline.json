@@ -24,9 +24,6 @@
   "ansible/roles/needrestart/tasks/validate.yml": {
    "ntfy": 1
   },
-  "ansible/roles/open_webui/tasks/validate.yml": {
-   "ollama": 1
-  },
   "ansible/roles/open_webui/vars/main.yml": {
    "ollama": 4,
    "vllm": 1

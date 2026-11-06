@@ -15,8 +15,11 @@ open_webui_dir: /opt/compose/open-webui
 open_webui_owner: root
 open_webui_group: root
 open_webui_mem_limit: 2g
-# extra, non-secret Open WebUI settings; nothing here may re-point the backends or turn Ollama on
+# extra, non-secret Open WebUI settings, from the allowlist in vars/ (open_webui_allowed_env)
 open_webui_extra_env: {}
+# the address users reach it at through the front door (https://host[:port], no path), optional:
+# when set it is WEBUI_URL and the only CORS origin; empty leaves upstream's CORS default ('*')
+open_webui_public_url: ""
 open_webui_export_dir: /var/backups/compose/open-webui/export
 open_webui_start: true
 open_webui_validate_with_docker: true
