@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -41,7 +40,8 @@ def _stale(entries: list[str], today: dt.date) -> list[str]:
 
 # Failing here once an exemption passes 14 days is the intended expiry, not a regression: delete it.
 def test_exemptions_are_dated_and_none_is_older_than_the_cooldown():
-    stale = _stale(_fresh(MAKEFILE), dt.datetime.now(dt.UTC).date())
+    today = dt.datetime.now(dt.UTC).date()  # hermetic: allow expiry is relative to the real date
+    stale = _stale(_fresh(MAKEFILE), today)
     assert not stale, (
         f"drop exemptions older than {COOLDOWN_DAYS} days (the cutoff covers them) or dated in the future: {stale}"
     )
@@ -67,7 +67,7 @@ def test_makefile_cutoff_and_dependabot_cooldown_agree():
     assert days == {int(m.group(1))} == {COOLDOWN_DAYS}
 
 
-@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+@pytest.mark.requires_tool("make")
 def test_empty_cutoff_fails_loudly():
     r = subprocess.run(
         ["make", "-n", "constraints", "CONSTRAINTS_CUTOFF="],
@@ -79,7 +79,7 @@ def test_empty_cutoff_fails_loudly():
     assert "CONSTRAINTS_CUTOFF is empty" in r.stderr
 
 
-@pytest.mark.skipif(shutil.which("make") is None, reason="make not installed")
+@pytest.mark.requires_tool("make")
 def test_recipe_passes_each_entrys_own_date_not_today():
     r = subprocess.run(
         [
