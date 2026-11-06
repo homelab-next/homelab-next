@@ -147,12 +147,18 @@ class Adapters:
     proxy: SnapshotList | None = None
     dhcp: SnapshotList | None = None
     claimed: set[str] = field(default_factory=set)  # paths already reported by a dedicated plane
+    # names of other guests known to exist (snapshot ``guests``; host_vars stems are added by the
+    # secret-names plane), so a sibling's secrets are never listed for deletion
+    known_guests: frozenset[str] = frozenset()
 
     @classmethod
     def from_snapshot(cls, doc: Mapping[str, Any], tree: Tree | None = None) -> Adapters:
         def lst(sec: str, key: str) -> SnapshotList | None:
             return SnapshotList(doc[sec], key) if sec in doc else None
 
+        guests = doc.get("guests") or []
+        if not isinstance(guests, (list, tuple)) or not all(isinstance(g, str) for g in guests):
+            raise ValueError("snapshot 'guests' must be a list of guest-name strings")
         return cls(
             tree=tree,
             hypervisor=SnapshotHypervisor(doc["hypervisor"]) if "hypervisor" in doc else None,
@@ -162,6 +168,7 @@ class Adapters:
             dns=lst("dns", "records"),
             proxy=lst("proxy", "routes"),
             dhcp=lst("dhcp", "reservations"),
+            known_guests=frozenset(guests),
         )
 
     @classmethod

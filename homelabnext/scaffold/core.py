@@ -22,8 +22,8 @@ from pathlib import Path
 import yaml
 
 SPDX = "SPDX-License-Identifier: Apache-2.0"
-ROLE_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
-SLUG_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
+ROLE_NAME = re.compile(r"[a-z][a-z0-9_]*")
+SLUG_NAME = re.compile(r"[a-z][a-z0-9-]*")
 HOOKS = ("health", "readiness", "backup", "restore", "upgrade", "export")
 
 
@@ -58,10 +58,11 @@ def _fresh(path: Path) -> None:
 
 # ---------------------------------------------------------------- role
 def new_role(name: str, dest: Path) -> Path:
-    if not ROLE_NAME.match(name):
+    if not ROLE_NAME.fullmatch(name):
         raise ScaffoldError("role name must match ^[a-z][a-z0-9_]*$")
     root = Path(dest) / "roles" / name
     _fresh(root)
+    _role_lint()  # fail before writing anything when the linter (a checkout) is unavailable
     h = f"# {SPDX}\n"
     opt = lambda t, d, **k: {"type": t, "description": d, **k}  # noqa: E731
     main_opts = {
@@ -139,13 +140,13 @@ def verify_role(path: Path) -> list[str]:
 
 # ---------------------------------------------------------------- schema
 def new_schema(name: str, dest: Path) -> Path:
-    if not SLUG_NAME.match(name):
+    if not SLUG_NAME.fullmatch(name):
         raise ScaffoldError("schema name must match ^[a-z][a-z0-9-]*$")
     root = Path(dest) / "schemas" / name
     _fresh(root)
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": f"https://schemas.example.internal/{name}/1.0.0.json",
+        "$id": f"https://schemas.example.internal/{name}/1.0.0",
         "title": name,
         "type": "object",
         "required": ["id", "schema_version"],
@@ -159,15 +160,17 @@ def new_schema(name: str, dest: Path) -> Path:
     _write(root, f"{name}.schema.json", json.dumps(schema, indent=2) + "\n")
     _write(
         root,
-        "examples/valid.json",
+        f"examples/{name}.valid.json",
         json.dumps({"id": "example-one", "schema_version": "1.0.0"}, indent=2) + "\n",
     )
     _write(
-        root, "negatives/missing-id.json", json.dumps({"schema_version": "1.0.0"}, indent=2) + "\n"
+        root,
+        f"negative/{name}.missing-id.json",
+        json.dumps({"schema_version": "1.0.0"}, indent=2) + "\n",
     )
     _write(
         root,
-        "negatives/unknown-field.json",
+        f"negative/{name}.unknown-field.json",
         json.dumps({"id": "x", "schema_version": "1.0.0", "extra": 1}, indent=2) + "\n",
     )
     return root
@@ -188,7 +191,7 @@ def verify_schema(path: Path) -> list[str]:
         return [f"{schemas[0]}: invalid schema: {exc.message}"]
     v = jsonschema.Draft202012Validator(schema)
     ex = sorted((path / "examples").glob("*.json"))
-    neg = sorted((path / "negatives").glob("*.json"))
+    neg = sorted((path / "negative").glob("*.json"))
     if not ex:
         errs.append(f"{path}: needs at least one example")
     if not neg:
@@ -199,12 +202,25 @@ def verify_schema(path: Path) -> list[str]:
     for f in neg:
         if not list(v.iter_errors(json.loads(f.read_text()))):
             errs.append(f"{f}: negative was accepted")
+    errs += _x03_problems(path)
     return errs
+
+
+def _x03_problems(path: Path) -> list[str]:
+    """The repository's X-03 layout check (version-pinned ``$id``, ``examples/<name>.*``,
+    ``negative/<name>.*``) on a scaffold laid out as ``<root>/schemas/<name>/``."""
+    from homelabnext.invariants.api import PASS, Context
+    from homelabnext.invariants.plugins.pillar_x import _x03_generic
+
+    if path.parent.name != "schemas":
+        return []
+    res = _x03_generic(Context(path.parent.parent))
+    return [] if res.status == PASS else [f"X-03: {res.evidence}"]
 
 
 # ---------------------------------------------------------------- capability
 def new_capability(name: str, dest: Path) -> Path:
-    if not SLUG_NAME.match(name):
+    if not SLUG_NAME.fullmatch(name):
         raise ScaffoldError("capability name must match ^[a-z][a-z0-9-]*$")
     root = Path(dest) / "conformance" / name
     _fresh(root)
@@ -293,7 +309,7 @@ def verify_capability(path: Path) -> list[str]:
 
 # ---------------------------------------------------------------- detection
 def new_detection(name: str, dest: Path) -> Path:
-    if not SLUG_NAME.match(name):
+    if not SLUG_NAME.fullmatch(name):
         raise ScaffoldError("detection name must match ^[a-z][a-z0-9-]*$")
     root = Path(dest) / "detections" / name
     _fresh(root)
@@ -378,7 +394,11 @@ def main(argv: list[str] | None = None) -> int:
     except ScaffoldError as exc:
         print(f"hnx new: {exc}", file=sys.stderr)
         return 1
-    problems = verify(args.kind, out)
+    try:
+        problems = verify(args.kind, out)
+    except ScaffoldError as exc:
+        print(f"hnx new: {exc}", file=sys.stderr)
+        return 1
     if problems:
         print("\n".join(problems), file=sys.stderr)
         return 3

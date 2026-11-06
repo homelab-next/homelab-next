@@ -1260,3 +1260,20 @@ def test_the_deploy_check_refuses_another_slot_registry(tmp_path, capsys):
     )  # fmt: skip
     assert code == 2
     assert "--deploy refuses --slots" in capsys.readouterr().err
+
+
+def test_an_unknown_remove_audit_plane_fails_loading(tmp_path):
+    examples(tmp_path, without=("publishing",))
+
+    def typo(doc):
+        doc["lifecycle"]["remove"]["audit"] = ["inventory", "secret-name", "contributions"]
+
+    overlay, _ = overlay_module(tmp_path, "publishing", typo)
+    tree, _ = ld.discover(fixtures=tmp_path / "fixtures", overlay=overlay)
+    got = messages(check(tree, (tmp_path / "fixtures",), site=SITES["small-lab"]))
+    assert any(
+        m.startswith(
+            "publishing: lifecycle.remove.audit: unknown decommission plane(s) secret-name"
+        )
+        for m in got
+    )

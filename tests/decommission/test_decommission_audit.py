@@ -10,6 +10,7 @@ from labdata import SNAPSHOT
 
 from homelabnext.cli import COMMANDS
 from homelabnext.decommission import (
+    ACTIONS,
     PLANES,
     Adapters,
     DirTree,
@@ -233,3 +234,64 @@ def test_cli_positive_control(lab, capsys):
 
 def test_hnx_dispatch_registered():
     assert "decommission" in COMMANDS
+
+
+def test_secret_plane_marks_a_known_sibling_guests_names_ambiguous(files):
+    """Key `app` matches `app_core_*`; with app-core a known guest, those are not for deletion."""
+    names = ["app_core_db_password", "app_token"]
+    snap = {"secrets": {"names": names}, "guests": ["app-core"]}
+    r = by_plane(run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"]))
+    res = r["secret-names"]
+    assert res.status is Status.REMNANT
+    assert res.items[0] == "app_token"
+    assert res.items[1].startswith("AMBIGUOUS app_core_db_password")
+
+
+def test_secret_plane_derives_known_guests_from_host_vars(files):
+    snap = {"secrets": {"names": ["app_core_db_password"]}}
+    r = by_plane(run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"]))
+    assert r["secret-names"].status is Status.REVIEW
+
+
+def test_target_keeps_its_own_secrets_when_a_shorter_named_sibling_exists(files):
+    """Target `app-core`, sibling guest `app`: `app_core_*` is the target's, a firm remnant."""
+    snap = {"secrets": {"names": ["app_core_db_password"]}, "guests": ["app"]}
+    r = by_plane(
+        run(Target("app-core"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"])
+    )
+    assert r["secret-names"].status is Status.REMNANT
+    assert r["secret-names"].items == ["app_core_db_password"]
+
+
+def test_host_vars_directory_form_names_a_known_guest():
+    tree = MemTree({"inventory/host_vars/app-core/main.yml": "x: 1\n"})
+    snap = {"secrets": {"names": ["app_core_db_password"]}}
+    r = by_plane(run(Target("app"), Adapters.from_snapshot(snap, tree), ["secret-names"]))
+    assert r["secret-names"].status is Status.REVIEW
+
+
+def test_snapshot_guests_must_be_a_list_of_strings():
+    with pytest.raises(ValueError):
+        Adapters.from_snapshot({"guests": "app-core"})
+
+
+def test_plan_lists_ambiguous_secrets_apart_from_the_ones_to_delete(files):
+    """Mixed REMNANT: `app_db` is the target's; `app_core_db` may be sibling `app-core`'s."""
+    snap = {"secrets": {"names": ["app_db", "app_core_db"]}, "guests": ["app-core"]}
+    rep = run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"])
+    assert rep.results[0].status is Status.REMNANT
+    lines = plan(rep).splitlines()
+    start = lines.index("1. secret-names: " + ACTIONS["secret-names"]) + 1
+    marker = lines.index("     review, do not delete:")
+    delete = [ln.strip() for ln in lines[start:marker]]
+    assert delete == ["app_db"]
+    review = [ln.strip() for ln in lines[marker + 1 : -1]]
+    assert len(review) == 1 and review[0].startswith("AMBIGUOUS app_core_db")
+
+
+def test_plan_has_nothing_to_delete_when_every_secret_is_ambiguous(files):
+    snap = {"secrets": {"names": ["app_core_db"]}, "guests": ["app-core"]}
+    rep = run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"])
+    p = plan(rep)
+    step = next(ln for ln in p.splitlines() if ln.startswith("1. secret-names"))
+    assert step.endswith(" review") and "delete" not in step
