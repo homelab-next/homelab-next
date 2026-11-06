@@ -6,10 +6,8 @@ Secrets are referenced by their secret-store name (``secret:status/ingest/cloud-
 the file.  At run time a reference is read from the environment variable
 :func:`homelabnext.registry.model.secret_env_name` derives from it (``HNX_SECRET_STATUS_INGEST_CLOUD_TOKEN``,
 what a systemd ``LoadCredential``/env file or the secret-store agent provides) or from a file of
-that name under ``secrets_dir`` (a nested name is a subdirectory).  A name that resolves outside
-the directory (absolute, ``..``, or a symlink pointing out) is not read.  An unresolvable reference
-**disables what it guards** -- the private tier, or that one sender -- and says so; it never falls
-back to "open".
+that name under ``secrets_dir``.  An unresolvable reference **disables what it guards** -- the
+private tier, or that one sender -- and says so; it never falls back to "open".
 """
 
 from __future__ import annotations
@@ -17,7 +15,6 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
-import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
@@ -48,50 +45,6 @@ class AgentsConfigError(ValueError):
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
-def _read_secret(secrets_dir: Path, name: str) -> str | None:
-    """The value of secret ``name`` under ``secrets_dir``, or None when there is none or the name
-    escapes the directory: an absolute name, a ``..`` part, or a path (symlinks followed) that
-    resolves outside it.  A nested name (``status/front-door-secret``) is a subdirectory.
-
-    The resolved path is then opened one component at a time from a descriptor of the directory,
-    each with ``O_NOFOLLOW``: a symlink swapped in after the check makes the open fail instead of
-    reading the file it points to (no check-then-open race).  A file that is not UTF-8, or that
-    cannot be read, raises (``UnicodeDecodeError``, ``OSError``)."""
-    rel = Path(name)
-    if not name or rel.is_absolute() or ".." in rel.parts:
-        return None
-    base = secrets_dir.resolve()
-    target = (base / rel).resolve()
-    if target == base or not target.is_relative_to(base):
-        return None
-    parts = target.relative_to(base).parts
-    nofollow = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
-    try:
-        fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    except OSError:
-        return None
-    try:
-        for part in parts[:-1]:
-            try:
-                nxt = os.open(part, nofollow | os.O_DIRECTORY, dir_fd=fd)
-            except OSError:  # gone, not a directory, or a symlink swapped in (ELOOP)
-                return None
-            os.close(fd)
-            fd = nxt
-        try:  # O_NONBLOCK: a FIFO planted here must not hang the reader
-            ffd = os.open(parts[-1], nofollow | os.O_NONBLOCK, dir_fd=fd)
-        except OSError:
-            return None
-        if not stat.S_ISREG(os.fstat(ffd).st_mode):  # a directory, a FIFO, a device
-            os.close(ffd)
-            return None
-        with os.fdopen(ffd, "rb") as f:
-            data = f.read()
-    finally:
-        os.close(fd)
-    return data.decode("utf-8").strip()
-
-
 def secret_lookup(
     env: Mapping[str, str] | None = None, secrets_dir: str | Path | None = None
 ) -> SecretLookup:
@@ -101,7 +54,10 @@ def secret_lookup(
     def lookup(ref: str) -> str | None:
         value = environ.get(secret_env_name(ref), "")
         if not value and secrets_dir is not None:
-            value = _read_secret(Path(secrets_dir), ref.removeprefix("secret:")) or ""
+            name = ref.removeprefix("secret:")
+            p = Path(secrets_dir) / name
+            if ".." not in Path(name).parts and p.is_file():
+                value = p.read_text(encoding="utf-8").strip()
         return value or None
 
     return lookup

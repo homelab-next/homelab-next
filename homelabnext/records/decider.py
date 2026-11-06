@@ -121,15 +121,25 @@ class Decider:
         self.decided_by = decided_by
         self.clock = clock
         self.mode = mode
-        # (lane, name) -> the validated bytes, the O_NOFOLLOW descriptor they were read through
-        # (held open until the move ends, so the inode is not freed and its number cannot be
-        # reused) and the note parsed from them; _move files exactly these bytes
-        self._loaded: dict[tuple[str, str], tuple[bytes, int, Note]] = {}
+        # (lane, name) -> the note last loaded there, for a move that follows read()
+        self._loaded: dict[tuple[str, str], Note] = {}
+        # id(note) -> the validated bytes, the O_NOFOLLOW descriptor they were read through and
+        # the note.  One record per load, owned by that load: a move takes its record out (an
+        # atomic dict pop) and closes its descriptor when it ends, so a second load or move of
+        # the same name on this Decider (another thread) never closes or files another's.  The
+        # descriptor is held so the inode is not freed and its number cannot be reused.
+        self._held: dict[int, tuple[bytes, int, Note]] = {}
 
     def close(self) -> None:
         """Release the descriptors of notes loaded (:meth:`read`) but never moved."""
-        for key in list(self._loaded):
-            self._forget(key)
+        self._loaded.clear()
+        while self._held:
+            try:
+                _, (_, fd, _) = self._held.popitem()
+            except KeyError:  # emptied meanwhile by a move on another thread
+                break
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
     def __enter__(self) -> Decider:
         return self
@@ -140,12 +150,6 @@ class Decider:
     def __del__(self) -> None:
         with contextlib.suppress(Exception):
             self.close()
-
-    def _forget(self, key: tuple[str, str]) -> None:
-        hit = self._loaded.pop(key, None)
-        if hit is not None:
-            with contextlib.suppress(OSError):
-                os.close(hit[1])
 
     # ---------------------------------------------------------------- public movers
     def read(self, lane: str, name: str) -> Note:
@@ -218,10 +222,9 @@ class Decider:
     def _note(self, lane: str, name: str) -> Note:
         """The note :meth:`read` kept for ``lane/name``, its file name checked; else a fresh
         load."""
-        hit = self._loaded.get((lane, name))
-        if hit is None:
+        note = self._loaded.get((lane, name))
+        if note is None:
             return self._load(lane, name)
-        note = hit[2]
         problems = check_filename(name, note.frontmatter)
         if problems:
             raise NoteError("; ".join(problems))
@@ -270,23 +273,34 @@ class Decider:
             problems = check_filename(name, note.frontmatter)
             if problems:
                 raise NoteError("; ".join(problems))
-        self._forget((lane, name))
-        self._loaded[(lane, name)] = (data, fd, note)
+        self._held[id(note)] = (data, fd, note)
+        self._loaded[(lane, name)] = note
         return note
 
     def _move(
         self, note: Note, dest_lane: str, decision: str, reason: str | None, via: str | None = None
     ) -> Path:
-        key = (note.lane, note.name)
-        if key not in self._loaded:
+        rec = self._held.pop(id(note), None)
+        if rec is None or rec[2] is not note:
             raise NoteError(f"{note.lane}/{note.name} was not loaded by this decider")
+        key = (note.lane, note.name)
+        if self._loaded.get(key) is note:
+            self._loaded.pop(key, None)
+        data, held, _ = rec
         try:
-            return self._move_held(note, dest_lane, decision, reason, via)
+            return self._move_held(note, dest_lane, decision, reason, via, data, held)
         finally:
-            self._forget(key)
+            os.close(held)
 
     def _move_held(
-        self, note: Note, dest_lane: str, decision: str, reason: str | None, via: str | None
+        self,
+        note: Note,
+        dest_lane: str,
+        decision: str,
+        reason: str | None,
+        via: str | None,
+        data: bytes,
+        held: int,
     ) -> Path:
         dest_dir = self.root / dest_lane
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -305,15 +319,31 @@ class Decider:
                 f"(or by one that crashed: see {CLAIMS}/{lock.name})"
             ) from None
         try:
-            return self._move_locked(note, dest_lane, decision, reason, via)
+            return self._move_locked(note, dest_lane, decision, reason, via, data, held)
         finally:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(lock)
 
     def _move_locked(
-        self, note: Note, dest_lane: str, decision: str, reason: str | None, via: str | None
+        self,
+        note: Note,
+        dest_lane: str,
+        decision: str,
+        reason: str | None,
+        via: str | None,
+        data: bytes,
+        held: int,
     ) -> Path:
-        data, held, _ = self._loaded[(note.lane, note.name)]
+        side: dict[str, Any] = {
+            "decision": decision,
+            "decided_by": self.decided_by,
+            "decided_at": self.clock().astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "from_lane": note.lane,
+        }
+        if reason:
+            side["reason"] = reason
+        if via:
+            side["via"] = via
         src = self.root / note.lane / note.name
         dest_dir = self.root / dest_lane
         claim: Path | None = self.root / CLAIMS / f"{note.name}.{secrets.token_hex(8)}"
@@ -332,35 +362,26 @@ class Decider:
                     errno.EXDEV, f"{note.lane}/ and decided/ must be on one mount", str(src)
                 ) from ex
             raise
-        # the descriptor held since the read keeps that inode alive, so no new file can reuse
-        # its number: another (st_dev, st_ino) is another file
-        was, cur = os.fstat(held), os.lstat(claim)
-        if (cur.st_dev, cur.st_ino) != (was.st_dev, was.st_ino):
-            # swapped after the read: put the replacement back where the agent left it.  The name
-            # lock is held, so no other move is filing this name now: a decided lane holding it
-            # means another decider filed the inode that was read, and this move lost.
-            _unclaim(claim, src)
-            claim = None
-            taken = [
-                lane for lane in DECIDED_LANES if os.path.lexists(self.root / lane / note.name)
-            ]
-            if taken:
-                raise FileNotFoundError(
-                    f"{note.lane}/{note.name} was decided meanwhile (in {', '.join(taken)})"
-                )
-        side: dict[str, Any] = {
-            "decision": decision,
-            "decided_by": self.decided_by,
-            "decided_at": self.clock().astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "from_lane": note.lane,
-        }
-        if reason:
-            side["reason"] = reason
-        if via:
-            side["via"] = via
         sidecar = f"{note.name}.decision.json"
         made: list[str] = []  # only what this move created is ever removed again
-        try:
+        try:  # from here on, any failure puts the claimed entry back
+            # the descriptor held since the read keeps that inode alive, so no new file can reuse
+            # its number: another (st_dev, st_ino) is another file
+            was, cur = os.fstat(held), os.lstat(claim)
+            if (cur.st_dev, cur.st_ino) != (was.st_dev, was.st_ino):
+                # swapped after the read: put the replacement back where the agent left it.
+                # The name lock is held, so no other move is filing this name now: a decided
+                # lane holding it means another decider filed the inode that was read, and this
+                # move lost.
+                _unclaim(claim, src)
+                claim = None
+                taken = [
+                    lane for lane in DECIDED_LANES if os.path.lexists(self.root / lane / note.name)
+                ]
+                if taken:
+                    raise FileNotFoundError(
+                        f"{note.lane}/{note.name} was decided meanwhile (in {', '.join(taken)})"
+                    )
             # 3. the copy, then the sidecar: each a new file that never replaces a name
             _create(dest_dir, note.name, data, self.mode)
             made.append(note.name)

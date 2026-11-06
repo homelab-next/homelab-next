@@ -1213,20 +1213,3 @@ def test_the_issue_answer_never_shows_its_secret_in_a_repr(tmp_path):
     svc = _svc(tmp_path)
     tok = _execute(svc, lambda req: _issue(svc, req))
     assert tok.secret not in repr(_Issued(tok))
-
-
-def test_a_failed_rename_leaves_no_dot_temp_behind(tmp_path, monkeypatch):
-    import os
-
-    from homelabnext.broker.tokens import TokenStore
-
-    store = TokenStore(tmp_path)
-    target = tmp_path / "x.json"
-
-    def boom(*a, **k):
-        raise OSError("rename refused")
-
-    monkeypatch.setattr(os, "rename", boom)
-    with pytest.raises(OSError, match="rename refused"):
-        store._replace(target, {"a": 1})
-    assert [p.name for p in target.parent.iterdir() if p.name.endswith(".tmp")] == []

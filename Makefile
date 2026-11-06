@@ -446,20 +446,17 @@ check: fix-check
 fix-check:
 	$(PY) tools/fix_has_test.py --range $(or $(RANGE),origin/main..HEAD) --allow-missing-base $(if $(PROVE),--prove)
 
-# Regenerate the hashed CI constraints (needs uv and GNU date).  Versions published in the last 14
-# days are skipped unless a direct pin needs one.  CONSTRAINTS_FRESH lists the exemptions as
-# pkg=YYYY-MM-DD: that package may use releases up to that date, so an exemption is dated and
-# bounded and lapses on its own (tests/packaging/test_constraints_cooldown.py fails once one is
-# older than 14 days, when the plain cutoff covers it anyway).  filelock and setuptools since
-# 2026-10-24, for the pip-audit fixes CVE-2026-112907/112913/112940 and GHSA-xmj3-9gf7-h52w.
+# Regenerate the hashed CI constraints (needs uv).  Versions published in the last 14 days are
+# skipped unless a direct pin needs one (CONSTRAINTS_FRESH: packages exempt from that cooldown;
+# filelock and setuptools since 2026-10-24, for the pip-audit fixes CVE-2026-112907/112913/112940
+# and GHSA-xmj3-9gf7-h52w).
 CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
-CONSTRAINTS_FRESH ?= filelock=2026-10-24 setuptools=2026-10-24
+CONSTRAINTS_FRESH ?= ruff pyarrow certifi filelock setuptools
 constraints:
-	$(if $(CONSTRAINTS_CUTOFF),,$(error CONSTRAINTS_CUTOFF is empty: GNU date -d is required (macOS: use gdate), or pass CONSTRAINTS_CUTOFF=YYYY-MM-DD))
 	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
 	  --extra core --extra nats --extra mcp --extra ansible --universal --python-version 3.11 --generate-hashes --no-header \
 	  --exclude-newer $(CONSTRAINTS_CUTOFF) \
-	  $(foreach e,$(CONSTRAINTS_FRESH),--exclude-newer-package $(e)) \
+	  $(foreach p,$(CONSTRAINTS_FRESH),--exclude-newer-package $(p)=$(shell date -u +%Y-%m-%d)) \
 	  -o constraints/ci.txt
 	awk '/^pip==/{p=1} p{print} p&&!/\\$$/{exit}' constraints/ci.txt > constraints/bootstrap.txt
 

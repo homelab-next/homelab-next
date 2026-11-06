@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import re
 import threading
 import urllib.error
 import urllib.request
@@ -36,15 +35,6 @@ LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test-fixture server binds loopb
 
 class TransientError(Exception):
     """Delivery failed in a way worth retrying (network, 5xx, 429, lost ack)."""
-
-
-class MisconfiguredError(TransientError):
-    """The forwarder answered 401/403/404/421: the URL or the credential is wrong, not the event.
-    Retrying at once cannot help (the publisher stops its loop), but the event stays pending so a
-    rerun, ``flush`` or ``requeue`` delivers it once the configuration is fixed."""
-
-
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class PermanentError(Exception):
@@ -112,16 +102,13 @@ class FakeForwarderServer:
     """A loopback HTTP server in front of a :class:`FakeForwarder` (use as a context manager).
 
     Answers 202 for a new id, 200 with ``{"duplicate": true}`` for a repeated one, 409 for an id
-    collision, 503 when the fake is told to fail, 401 without the ``require_auth`` header value.
+    collision, 503 when the fake is told to fail.
     """
 
-    def __init__(
-        self, fake: FakeForwarder | None = None, *, require_auth: str | None = None
-    ) -> None:
+    def __init__(self, fake: FakeForwarder | None = None) -> None:
         self.fake = fake or FakeForwarder()
-        self.require_auth = require_auth  # when set, any other Authorization value gets a 401
         self.headers_seen: list[dict[str, str]] = []
-        fake_ref, seen, owner = self.fake, self.headers_seen, self
+        fake_ref, seen = self.fake, self.headers_seen
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
@@ -129,15 +116,9 @@ class FakeForwarderServer:
                 raw = self.rfile.read(n)
                 seen.append({k.lower(): v for k, v in self.headers.items()})
                 try:
-                    if owner.require_auth is not None and (
-                        self.headers.get("Authorization") != owner.require_auth
-                    ):
-                        raise PermissionError("unauthorized")
                     event = json.loads(raw)
                     ack = fake_ref.forward(event)
                     code, body = (200 if ack.duplicate else 202), {"duplicate": ack.duplicate}
-                except PermissionError:
-                    code, body = 401, {"error": "unauthorized"}
                 except PermanentError as exc:
                     code, body = 409, {"error": str(exc)}
                 except TransientError as exc:
@@ -175,8 +156,7 @@ class HttpForwarder:
 
     Status mapping: 200/201/202/204 accepted (a body of ``{"duplicate": true}`` is reported as
     duplicate), 409 -> :class:`PermanentError` (id collision),
-    408/425/429 and 5xx -> :class:`TransientError`, 401/403/404/421 -> :class:`MisconfiguredError`
-    (retryable after the URL or credential is fixed), any other 4xx -> :class:`PermanentError`.
+    408/425/429 and 5xx -> :class:`TransientError`, any other 4xx -> :class:`PermanentError`.
     Connection errors and timeouts are transient.  The id travels in ``Idempotency-Key`` too.
 
     Redirects are followed only within the same origin, and a reply body over ``max_reply_bytes``
@@ -208,8 +188,6 @@ class HttpForwarder:
         headers = {"Content-Type": CONTENT_TYPE, IDEMPOTENCY_HEADER: event["id"]}
         token = self._auth() if self._auth is not None else None
         if token:
-            if _CONTROL.search(token):  # http.client would echo the value in its error: never
-                raise MisconfiguredError("authorization value is not a valid header value")
             headers["Authorization"] = token
         return urllib.request.Request(
             self.url, data=canonical_body(event), headers=headers, method="POST"
@@ -245,8 +223,4 @@ class HttpForwarder:
     def _raise_for(code: int) -> None:
         if code in (408, 425, 429) or code >= 500:
             raise TransientError(f"forwarder answered HTTP {code}")
-        if code in (401, 403, 404, 421):
-            raise MisconfiguredError(
-                f"forwarder answered HTTP {code} (check the URL and credential)"
-            )
         raise PermanentError(f"forwarder answered HTTP {code}")

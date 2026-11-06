@@ -64,10 +64,6 @@ class StateVersionError(StateError):
     """The file was written by a newer schema version than this code understands."""
 
 
-class StateLockBusy(StateError):
-    """The store's lock stayed held past ``lock_timeout``; nothing was read or written."""
-
-
 class StateCorruptError(StateError):
     """The file is unusable and the store was built with ``quarantine=False``."""
 
@@ -89,40 +85,16 @@ def quarantined_files(path: str | os.PathLike) -> list[Path]:
 
 
 @contextlib.contextmanager
-def file_lock(lock_path: str | os.PathLike, *, timeout: float | None = None) -> Iterator[None]:
-    """Hold an exclusive ``flock`` on ``lock_path`` (created if missing) for the ``with`` body.
-
-    With ``timeout`` (seconds), the lock is taken without blocking and retried until it has
-    passed, then :class:`StateLockBusy` is raised: a process holding the lock forever gets a
-    refusal, not a hang.  Without, it blocks until the lock is free."""
+def file_lock(lock_path: str | os.PathLike) -> Iterator[None]:
+    """Hold an exclusive ``flock`` on ``lock_path`` (created if missing) for the ``with`` body."""
     with open(lock_path, "a+b") as fh:
         if fcntl is not None:
-            if timeout is None:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-            else:
-                _bounded_flock(fh.fileno(), lock_path, timeout)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
             yield
         finally:
             if fcntl is not None:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-
-
-def _bounded_flock(fd: int, lock_path: str | os.PathLike, timeout: float) -> None:
-    step = 0.05
-    waited = 0.0
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return
-        except BlockingIOError:
-            if waited >= timeout:
-                raise StateLockBusy(
-                    f"{lock_path} is locked by another process for more than {timeout:.1f}s; "
-                    "nothing was done"
-                ) from None
-            time.sleep(step)
-            waited += step
 
 
 def _fsync_dir(d: Path) -> None:
@@ -187,11 +159,8 @@ class StateStore:
         clock: Callable[[], float] = time.time,
         quarantine: bool = True,
         legacy: Callable[[Any], dict[str, Any] | None] | None = None,
-        lock_timeout: float | None = None,
     ):
         self.path = Path(path)
-        #: seconds to wait for the lock before :class:`StateLockBusy` (None: block)
-        self.lock_timeout = lock_timeout
         self.schema_version = schema_version
         # migrations[n] upgrades data from version n to n + 1
         self.migrations = dict(migrations or {})
@@ -263,7 +232,7 @@ class StateStore:
 
     # ---------------------------------------------------------------- internals
     def _locked(self) -> contextlib.AbstractContextManager[None]:
-        return file_lock(self._lock_path, timeout=self.lock_timeout)
+        return file_lock(self._lock_path)
 
     @property
     def _is_yaml(self) -> bool:

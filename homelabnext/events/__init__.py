@@ -21,7 +21,6 @@ from .forwarder import (
     FakeForwarderServer,
     Forwarder,
     HttpForwarder,
-    MisconfiguredError,
     PermanentError,
     TransientError,
 )
@@ -36,7 +35,6 @@ __all__ = [
     "FakeForwarderServer",
     "Forwarder",
     "HttpForwarder",
-    "MisconfiguredError",
     "PermanentError",
     "PublishResult",
     "Publisher",

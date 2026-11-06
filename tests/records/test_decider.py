@@ -366,12 +366,57 @@ def test_a_stale_decider_cannot_take_a_resubmission_on_a_reused_inode_number(rec
 def test_close_releases_the_descriptors_of_notes_never_moved(rec, tree):
     p = _propose(rec)
     with _decider(tree) as d:
-        d.read("inbox", p.name)
-        (_, fd, _) = d._loaded[("inbox", p.name)]
+        note = d.read("inbox", p.name)
+        (_, fd, _) = d._held[id(note)]
         os.fstat(fd)  # held open
     with pytest.raises(OSError):
         os.fstat(fd)
-    assert d._loaded == {}
+    assert d._loaded == {} and d._held == {}
+
+
+def test_one_decider_raced_with_itself_still_files_exactly_one_decision(rec, tree, monkeypatch):
+    """The conform fake drives approve and deny through ONE Decider from two threads.  A deny
+    run whole while the approve is inside its claim must neither close nor take the approve's
+    held descriptor (that left the claimed note stranded in decided/.claims/ with both
+    decisions failed), and exactly one decision is filed."""
+    p = _propose(rec)
+    d = _decider(tree)
+    real_rename, out = os.rename, {}
+
+    def rename(src, dst, *a, **kw):
+        if str(src) == str(p) and "deny" not in out:
+            try:
+                out["deny"] = d.deny(p.name, "raced")
+            except Exception as ex:  # judged below
+                out["deny"] = ex
+        return real_rename(src, dst, *a, **kw)
+
+    monkeypatch.setattr(os, "rename", rename)
+    dest = d.approve(p.name)
+    assert isinstance(out["deny"], (FileNotFoundError, NoteError)), out
+    assert _lanes_of(tree, p.name) == ["decided/approved"]
+    assert dest.read_bytes()
+    assert os.listdir(tree / "decided" / ".claims") == []
+    assert d._held == {}
+
+
+def test_a_failure_after_the_claim_anywhere_puts_the_note_back(rec, tree, monkeypatch):
+    """Even a failure before filing starts (the identity check) puts the claimed entry back."""
+    p = _propose(rec)
+    d = _decider(tree)
+    real_lstat = os.lstat
+
+    def lstat(path, *a, **kw):
+        if ".claims" in str(path) and not str(path).endswith(".lock"):
+            raise OSError(errno.EIO, "Input/output error", str(path))
+        return real_lstat(path, *a, **kw)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    with pytest.raises(OSError, match="Input/output"):
+        d.approve(p.name)
+    monkeypatch.undo()
+    assert _lanes_of(tree, p.name) == ["inbox"]
+    assert os.listdir(tree / "decided" / ".claims") == []
 
 
 def test_a_move_paused_while_filing_makes_a_second_decider_lose(rec, tree, monkeypatch):

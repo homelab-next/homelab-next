@@ -26,11 +26,6 @@ Candidates are found on the graph with ungranted access-bearing nodes removed (n
 is reached *through* one), but subjects are read on the full graph, so removing a node can never
 make a candidate look clean.
 
-Retraction (ADR-0037 decision 14).  ``retracted=`` takes the active
-:class:`~homelabnext.agent.deny.DenySet`, which the caller reads from the memory store's deny log
-(this function reads no store): a node whose graph id, record uid, content digest or file digest
-is denied is excluded with reason ``retracted``, whatever rule chose it.
-
 Also excluded, with the reason recorded: inactive records (retired, superseded, incorporated;
 never included), records missing a review tier the rule requires (``require_reviews`` applies to
 the reviewable kinds, lessons, runbooks and criteria; other kinds are code reviewed in git), a
@@ -70,10 +65,9 @@ from homelabnext import tlp
 from homelabnext.graph import Edge, Graph, dumps, is_active, related, seeds_for
 
 from .compiler import VerifiedProfile, require_verified
-from .deny import DenySet
 from .digest import canonical_json, sha256_text
 from .include import normalise_include
-from .pack import KNOWLEDGE_PREFIX, node_uid
+from .pack import KNOWLEDGE_PREFIX
 
 ACCESS_KINDS = frozenset({"action", "cap", "mcp", "svc"})
 REVIEWABLE_KINDS = frozenset({"inv", "lesson", "runbook"})
@@ -360,20 +354,13 @@ def select_knowledge(
     task_paths: Iterable[str] = (),
     task_text: str = "",
     graph_digest: str | None = None,
-    retracted: DenySet | None = None,
 ) -> Selection:
     """Run ``profile``'s (a :class:`~homelabnext.agent.compiler.VerifiedProfile`) ``include`` rules over ``graph`` (built from the checkout at ``root``).
 
     The rules are re-checked against the profile's grants here (the compiler's check is not
     trusted), so an edited profile that seeds from an ungranted thing raises
-    :class:`~homelabnext.agent.errors.IncludeViolation`.  ``retracted``: the active
-    :class:`~homelabnext.agent.deny.DenySet`; a denied node is excluded with reason
-    ``retracted``.  Wherever a memory store is wired in, pass
-    ``homelabnext.agent.memory.denied(backend)``; when that raises ``DenyFileProblem``, the
-    session must not assemble a pack (omitting ``retracted`` would serve retracted content)."""
+    :class:`~homelabnext.agent.errors.IncludeViolation`."""
     require_verified(profile, "select_knowledge")
-    if retracted is not None and type(retracted) is not DenySet:
-        raise TypeError("retracted must be a DenySet (homelabnext.agent.deny.deny_set)")
     grants = profile.get("grants") or {}
     rules = normalise_include(profile.get("include"), grants)
     root = Path(root).resolve()
@@ -518,14 +505,6 @@ def select_knowledge(
     for nid, ri in unreadable.items():  # a rule asking for the whole thing cannot have it
         best.pop(nid, None)
         exclude(nid, f"content unreadable: {graph.nodes[nid].path}", ri)
-    if retracted:  # a retracted source never enters a new pack (ADR-0037 decision 14)
-        for nid in sorted(best):
-            item = best[nid]
-            names = [nid, item["digest"], item.get("file_digest"), node_uid(nid)]
-            if retracted.denies([n for n in names if n]):
-                del best[nid]
-                excluded.pop(nid, None)
-                exclude(nid, "retracted", item["rules"][0])
     order = sorted(best.values(), key=lambda i: (i["distance"], -i["score"], i["id"]))
     included = []
     for rank, item in enumerate(order, 1):

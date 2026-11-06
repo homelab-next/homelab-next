@@ -801,13 +801,13 @@
         "1": "a file could not be read (permission, a link loop); the role stops"
       },
       "id": "model-store-files",
-      "inputs": "the entry's directory, its manifest files, the paths listed for that directory, whether to hash, walk or lock it",
+      "inputs": "the entry's directory, its manifest files, whether to hash them",
       "kind": "tool",
       "language": "python",
-      "outputs": "one result per file, in manifest order, and the strays a walk found (JSON, as an Ansible module)",
+      "outputs": "one result per file, in manifest order (JSON, as an Ansible module)",
       "owner": "platform",
       "path": "ansible/roles/model_store/library/model_store_files.py",
-      "purpose": "Read every file of one model-store entry (exists, size, sha256, where a link resolves) in one module call, and list what else the entry holds.",
+      "purpose": "Read every file of one model-store entry (exists, size, sha256, where a link resolves) in one module call.",
       "status": "active",
       "trigger": [
         "role:model_store"

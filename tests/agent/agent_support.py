@@ -216,26 +216,14 @@ def resolved(stored: dict, items=()):
 
 
 def labelled_pack(
-    findings=(),
-    memory=(),
-    *,
-    static="green",
-    stored=None,
-    profile=None,
-    text=None,
-    memory_block=None,
-    **kw,
+    findings=(), memory=(), *, static="green", stored=None, profile=None, text=None, **kw
 ) -> tuple:
     """``(pack, hash)`` of :func:`labelled_manifest` with input items, bound to ``profile`` (by
     default :func:`reader_profile`): ``findings`` and ``memory`` are lists of items
     (:func:`item`).  ``stored`` maps uid to its stored label or row (by default each item's own
-    label, or red): the resolved uid map the assembler checks (:func:`resolved`).
-    ``memory_block`` is the assembler's ``memory=`` (the pack's memory block, ADR-0037 decision
-    11); ``memory`` names the input items of the manifest's ``memory`` section."""
+    label, or red): the resolved uid map the assembler checks (:func:`resolved`)."""
     from homelabnext.agent import assemble_pack
 
-    if memory_block is not None:
-        kw["memory"] = memory_block
     items = {"findings": list(findings), "memory": list(memory)}
     every = [it for group in items.values() for it in group]
     if stored is None:

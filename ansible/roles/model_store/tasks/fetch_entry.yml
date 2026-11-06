@@ -78,13 +78,11 @@
   vars:
     model_store_sizes_only: false
 
-# Not followed: a snapshot file is a link into blobs/, which the walk reaches on its own.
 - name: Give the entry to the store owner, readable by the engines' group only
   ansible.builtin.file:
     path: "{{ model_store_entry_top }}"
     state: directory
     recurse: true
-    follow: false
     owner: "{{ model_store_owner }}"
     group: "{{ model_store_group }}"
     mode: "u=rwX,g=rX,o="

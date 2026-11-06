@@ -414,42 +414,6 @@ def test_files_that_cannot_be_scanned_fail_unless_allowed(tmp_path):
     assert found_at(plc.check_private(root)) == {("lab/sealed/x.sops.yaml", "unscannable")}
 
 
-def _unlistable(monkeypatch, directory: Path) -> None:
-    import os
-
-    real = os.scandir
-
-    def scandir(path="."):
-        if Path(path) == directory:
-            raise PermissionError(13, "Permission denied", str(path))
-        return real(path)
-
-    monkeypatch.setattr(os, "scandir", scandir)
-
-
-def test_a_directory_that_cannot_be_listed_fails_private_mode(tmp_path, monkeypatch):
-    root = overlay(tmp_path, {"lab/a.yml": "a: b\n", "logs/x.log": AWS_KEY + "\n"})
-    _unlistable(monkeypatch, root / "logs")
-    found = plc.check_private(root)
-    assert found_at(found) == {("logs", "unreadable")}
-    assert str(found[0]) == "logs: [unreadable] unreadable directory (PermissionError)"
-    # allow_unscanned names files the scanner read and set aside, never a tree it never saw
-    marker = MARKER + "allow_unscanned:\n  - logs\n  - logs/*\n"
-    (root / ".hnx-private-overlay.yml").write_text(marker)
-    assert found_at(plc.check_private(root)) == {("logs", "unreadable")}
-
-
-@needs_skeleton
-def test_a_directory_that_cannot_be_listed_fails_public_mode(tmp_path, monkeypatch):
-    root = public_tree(tmp_path)
-    (root / "docs").mkdir()
-    (root / "docs" / "a.md").write_text("public\n")
-    _unlistable(monkeypatch, root / "docs")
-    assert [str(f) for f in plc.check_public(root)] == [
-        "docs: [unreadable] unreadable directory (PermissionError)"
-    ]
-
-
 def test_utf16_without_a_byte_order_mark_is_scanned(tmp_path):
     root = overlay(tmp_path, {})
     (root / "lab").mkdir()

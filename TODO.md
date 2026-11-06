@@ -95,14 +95,6 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
   - scope the analyzer's catalog credential to the `novelty_finding` table.
 
   Profiles stay warming, with no findings, until they hold `min_history_days` of data.
-- [ ] **Agent memory retraction** (ADR-0037 decision 12; only if agents run with memory):
-  create `/etc/homelabnext/memory-operators.yml` (owned by root, mode 0644) listing
-  `operators`, the agent runtime's and broker's users, and `deny_file`: an absolute path in a
-  directory root owns and the runtime cannot write (create that directory root-owned, mode
-  0755; the deny file appears there on the first retraction, root's, mode 0644). Point the
-  runtime's `FileBackend(..., deny_path=)` at the same path (`memory.deny_path_from`). Keep the
-  memory state file owned by the runtime user, which must not be root; run `hnx agent memory`
-  via sudo.
 
 ## 5. Decisions waiting on you (not blocking stand-up)
 

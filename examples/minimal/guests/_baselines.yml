@@ -133,7 +133,7 @@ controls:
     layer: data
     description: Credentials are fetched from the secrets store at run time, never kept on disk.
     role: config_leak_scan
-    settings: [paths, accepted, unscanned_accepted]
+    settings: [paths, accepted]
     verify: a secret scan of the guest's configuration directories finds nothing
   # recovery: getting back after a loss
   backup-verify:

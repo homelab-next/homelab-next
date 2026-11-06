@@ -157,12 +157,8 @@ def test_reports_update_only_their_own_agents_memory(reader, other):
 
 def test_file_backend_persists_through_the_state_library(reader, tmp_path):
     path = tmp_path / "memory.json"
-    write(
-        MemoryStore(FileBackend(path, deny_path=tmp_path / "memory-deny.json")),
-        reader,
-        [up("add", "k", "v")],
-    )
-    again = MemoryStore(FileBackend(path, deny_path=tmp_path / "memory-deny.json"))
+    write(MemoryStore(FileBackend(path)), reader, [up("add", "k", "v")])
+    again = MemoryStore(FileBackend(path))
     assert again.read(reader, "analyst")["entries"] == {"k": "v"}
     with pytest.raises(MemoryUpdateError):
         write(again, reader, [up("add", "k", "v2")])

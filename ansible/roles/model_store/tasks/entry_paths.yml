@@ -18,12 +18,4 @@
            '/gguf/' ~ model_store_entry.value.source.repo
          if model_store_entry.value.format == 'gguf' else
            '/exports/' ~ model_store_entry.value.source.run) }}
-    # What a walk of an export allows: the files of every export entry of the same run (the key
-    # is (source, run, quant), so two quants may share a directory), as check_disk unions them.
-    model_store_entry_listed: >-
-      {{ (model_store_manifest.models.values() | selectattr('format', 'eq', 'export')
-          | selectattr('source.run', 'eq', model_store_entry.value.source.run)
-          | map(attribute='files') | flatten(levels=1) | map(attribute='path') | unique | list)
-         if model_store_entry.value.format == 'export'
-         else (model_store_entry.value.files | map(attribute='path') | list) }}
   tags: [health, verify]

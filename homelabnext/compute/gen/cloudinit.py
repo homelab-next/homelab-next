@@ -2,9 +2,7 @@
 """cloud-init NoCloud seed files per VM: user-data, meta-data and network-config (v2).
 
 Key names resolve through ``Fleet.keys``; an unresolved name renders as ``<ssh-key:NAME>`` so a
-stdout render is still reviewable and can never carry key material by accident.  The placeholder
-is a review aid only: ``hnx guests render --out`` refuses it, since a seed carrying it boots a VM
-nobody can log in to.
+dry render is still reviewable and can never carry key material by accident.
 
 Sudo is per guest (``cloudinit.sudo``) and off unless asked for: ``none`` writes no sudo rule,
 ``password`` writes ``ALL=(ALL) ALL`` (usable once a password is set out of band, since the

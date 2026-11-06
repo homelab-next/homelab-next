@@ -90,8 +90,8 @@ from homelabnext.broker import validation
 from homelabnext.broker.state import (
     _instance_held,
     hold_instance_lock,
-    replace_temp,
     write_exclusive,
+    write_temp,
 )
 from homelabnext.broker.tokens import execution_key
 
@@ -373,7 +373,10 @@ class Journal:
             meta.update(fields, updated=_stamp(now), version=meta.get("version", 0) + 1)
             dir_fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
-                replace_temp("meta.json", _dumps(meta), dir_fd=dir_fd)
+                tmp = write_temp("meta.json", _dumps(meta), dir_fd=dir_fd)
+                os.rename(tmp, "meta.json", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                with contextlib.suppress(OSError):
+                    os.fsync(dir_fd)
             finally:
                 os.close(dir_fd)
         return True

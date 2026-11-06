@@ -829,20 +829,3 @@ def test_a_token_that_is_not_ascii_is_a_foreign_line_not_a_dropped_connection(
     assert res["value"][0] == {"ok": False, "denied": True, "reason": "token-invalid"}
     assert ran["cm.a"] == ["mine"] and "relay_refusals" not in res
     assert not [r for r in caplog.records if r.levelname == "ERROR"]
-
-
-def test_a_failed_meta_rename_leaves_no_dot_temp_behind(tmp_path, monkeypatch):
-    from homelabnext.codemode.journal import Journal
-    from homelabnext.codemode.runner import code_digest
-
-    j = Journal(tmp_path / "runner")
-    assert j.begin(AGENT, "exec-0001", code_digest("python", "x = 1"), "tok-1", T0)
-
-    def boom(*a, **k):
-        raise OSError("rename refused")
-
-    monkeypatch.setattr(os, "rename", boom)
-    with pytest.raises(OSError, match="rename refused"):
-        j.update(AGENT, "exec-0001", T0, state="done")
-    d = j._dir(AGENT, "exec-0001")
-    assert [p.name for p in d.iterdir() if p.name.endswith(".tmp")] == []

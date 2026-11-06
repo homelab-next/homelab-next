@@ -65,7 +65,7 @@ def reader():
 def backend(request, tmp_path):
     if request.param == "memory":
         return InMemoryBackend()
-    return FileBackend(tmp_path / "memory.json", deny_path=tmp_path / "memory-deny.json")
+    return FileBackend(tmp_path / "memory.json")
 
 
 def seed(backend, owner, value):
@@ -305,10 +305,10 @@ class _Flagged:
         return self.inner.load(owner)
 
     def transact(self, owner, fn):
-        def wrapped(cur, deny):
+        def wrapped(cur):
             self.inside = True
             try:
-                return fn(cur, deny)
+                return fn(cur)
             finally:
                 self.inside = False
 

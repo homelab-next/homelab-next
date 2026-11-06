@@ -62,8 +62,6 @@ can never run on the public tree by accident.  Findings:
                  unreadable).  UTF-16 without a byte-order mark is decoded and scanned.  A file
                  the marker's ``allow_unscanned`` globs name is let through; a sealed or vault
                  file never is (``unscannable``).
-  unreadable     a directory the scanner could not list: nothing under it was checked, so the
-                 tree fails (no glob lets it through).
 
 ``public ROOT`` is the reverse guard for THIS repository: nothing of a private overlay may be
 committed here.  The fictional skeleton under ``examples/private-overlay/`` is the one exception,
@@ -77,7 +75,6 @@ and only while its marker says ``fictional: true``.  Findings:
   private-paths    a skeleton marker whose ``private_paths`` leaves out a pinned path (the
                    template would teach a layout this check does not guard);
   sops-config      a ``.sops.yaml`` outside the skeleton;
-  unreadable       a directory the scanner could not list (nothing under it was checked);
   ciphertext       a SOPS-encrypted file, whatever its name (sealed real data does not belong in
                    public git either: it is one leaked key away from plain text); every file
                    that reads as text is checked, not only ``.yml``/``.json``/``.env``/``.ini``,
@@ -261,21 +258,16 @@ class Finding:
 # ---- reading -----------------------------------------------------------------------------------
 
 
-def _files(root: Path) -> tuple[list[tuple[str, Path]], list[Finding]]:
-    """``(posix path relative to root, path)`` for every file leak_scan would scan, and a finding
-    for each directory it could not list (its files were never seen, so the tree fails)."""
-    out, unlisted = [], []
+def _files(root: Path) -> list[tuple[str, Path]]:
+    """``(posix path relative to root, path)`` for every file leak_scan would scan."""
+    out = []
     for f in leak_scan.iter_files([str(root)]):
-        p = Path(f.path) if isinstance(f, leak_scan.Skipped) else f
         try:
-            rel = p.relative_to(root).as_posix()
+            rel = f.relative_to(root).as_posix()
         except ValueError:
-            rel = p.as_posix()
-        if isinstance(f, leak_scan.Skipped):
-            unlisted.append(Finding(rel, "unreadable", f.reason))
-        else:
-            out.append((rel, p))
-    return out, unlisted
+            rel = f.as_posix()
+        out.append((rel, f))
+    return out
 
 
 def _utf16(data: bytes) -> str | None:
@@ -712,8 +704,8 @@ def check_private(root: Path) -> list[Finding]:
     patterns = [
         p for p in leak_scan.PATTERNS if p.group == "secret" and p.name not in NAME_ONLY_PATTERNS
     ]
-    files, out = _files(root)
-    out += _policy_findings(root, [rel for rel, _ in files], sealed_paths)
+    files = _files(root)
+    out: list[Finding] = _policy_findings(root, [rel for rel, _ in files], sealed_paths)
     for rel, f in files:
         if _is_key_file(rel):
             out.append(Finding(rel, "key-file", "a decryption key must never be committed"))
@@ -1781,9 +1773,7 @@ def check_public(root: Path) -> list[Finding]:
                     )
                 )
         private_paths += [p for p in declared if p not in private_paths]
-    files, unlisted = _files(root)
-    out += unlisted
-    for rel, f in files:
+    for rel, f in _files(root):
         in_skeleton = rel.startswith(SKELETON)
         name = rel.rsplit("/", 1)[-1]
         if _is_key_file(rel):

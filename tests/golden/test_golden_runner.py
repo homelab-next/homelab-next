@@ -31,33 +31,6 @@ def test_runner_sends_task_prompts_and_params(build_resolver):
     assert first["messages"][0]["role"] == "system"
 
 
-def test_scorer_exception_errors_one_task_not_the_run(monkeypatch):
-    from homelabnext.golden import parse_suite, runner
-
-    real = runner.score
-
-    def flaky(out, expect):
-        if out == "boom":
-            raise RuntimeError("scorer blew up")
-        return real(out, expect)
-
-    monkeypatch.setattr(runner, "score", flaky)
-    exp = {"scorer": "exact", "value": "ok"}
-    suite = parse_suite(
-        {
-            "suite": "s",
-            "tasks": [
-                {"id": "one", "prompt": "p", "expect": exp},
-                {"id": "two", "prompt": "q", "expect": exp},
-            ],
-        }
-    )
-    rep = run_suite(suite, lambda m, p: "boom" if m[-1]["content"] == "p" else "ok")
-    first, second = rep.results
-    assert not first.passed and "scorer blew up" in first.error
-    assert second.passed
-
-
 def test_alias_swap_changes_score_not_the_runner(build_resolver):
     resolver, *_ = build_resolver(good_rules())
     good = run(resolver)

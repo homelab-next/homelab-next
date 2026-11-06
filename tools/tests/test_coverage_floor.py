@@ -26,8 +26,6 @@ def _report(**overrides):
         "homelabnext/agent/handoff.py": _file(10, 9),
         "homelabnext/agent/memory.py": _file(10, 9),
         "homelabnext/agent/screen.py": _file(10, 9),
-        "homelabnext/memory_admin/admin.py": _file(10, 9),
-        "homelabnext/agent/deny.py": _file(10, 9),
         "homelabnext/workflows/runner.py": _file(10, 9),
         "homelabnext/registry/limits.py": _file(10, 9),
         "homelabnext/context/store.py": _file(10, 9),

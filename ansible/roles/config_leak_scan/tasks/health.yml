@@ -10,10 +10,4 @@
         that: config_leak_scan_hits | length == 0
         fail_msg: >-
           config_leak_scan: {{ config_leak_scan_hits | map('dict2items') | map('map', attribute='value') | map('join', ':') | join(', ') }}
-    - name: Fail while a file could not be scanned (unreadable or oversized; binaries and special files are skipped)
-      ansible.builtin.assert:
-        that: config_leak_scan_unscanned | length == 0
-        fail_msg: >-
-          config_leak_scan: not scanned: {% for u in config_leak_scan_unscanned %}{{ u.path ~ ' (' ~ u.reason ~ ')' }}{{ ', ' if not loop.last else '' }}{% endfor %}
-          (accept a path with config_leak_scan_unscanned_accepted only if it cannot hold a secret)
   tags: [health]

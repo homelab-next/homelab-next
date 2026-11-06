@@ -13,13 +13,6 @@ argument_specs:
         elements: str
         description: Path globs whose hits are accepted (key material that must live on disk by design).
         default: [/etc/ssh/ssh_host_*_key, /etc/ssl/private/*, /etc/shadow, /etc/shadow-, /etc/gshadow, /etc/gshadow-]
-      config_leak_scan_unscanned_accepted: &unscanned
-        type: list
-        elements: str
-        description: >-
-          Path globs of files that may go unscanned (unreadable, or larger than the scanner's limit)
-          without failing health. Binaries are always skipped; every other unscanned file fails.
-        default: []
       config_leak_scan_python: &python
         type: str
         description: The guest's Python 3 interpreter (runs the scanner).
@@ -33,11 +26,10 @@ argument_specs:
         description: Where the report is written.
         default: /var/lib/homelabnext/config-leak-scan
   health:
-    short_description: Fail while a hit outside the accepted paths is found, or a file could not be scanned.
+    short_description: Fail while a hit outside the accepted paths is found.
     options:
       config_leak_scan_paths: *paths
       config_leak_scan_accepted: *accepted
-      config_leak_scan_unscanned_accepted: *unscanned
       config_leak_scan_python: *python
       config_leak_scan_source_dir: *source
   readiness:

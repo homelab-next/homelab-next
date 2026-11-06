@@ -40,7 +40,7 @@
     label: "{{ model_store_entry.key }}"
   when: model_store_fetch | bool
 
-- name: Take each promoted export out of the trainers' hands, then verify it by sha256
+- name: Verify each promoted export by sha256 and take it out of the trainers' hands
   ansible.builtin.include_tasks: promote_export.yml
   loop: "{{ model_store_manifest.models | dict2items | selectattr('value.format', 'eq', 'export') | list }}"
   loop_control:
