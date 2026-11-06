@@ -532,8 +532,9 @@ was shown, never from what the model says about its sources.
       one with a value. `validate_report` refuses the malformed ones too.
     - The store asks its `Verifier` (`MemoryStore(verifier=)`) about every `add`, `replace` and
       `verify` of a batch once the batch is accepted, inside the transaction; it is never asked
-      about a refused batch, whose values must not leave the store. The request carries the
-      record's label, and a verifier must not send the value past that label's egress ceiling
+      about a refused batch, whose values must not leave the store (the record cap, the byte cap,
+      with the bytes its stamps can add reserved, and the exposure budget are checked before
+      it is asked). The request carries the record's label, and a verifier must not send the value past that label's egress ceiling
       (ADR-0033). Only `True` stamps the record's `verified_at` (the record's own time). A
       `replace` the verifier does not confirm clears the entry's `verified_at`, since the value
       changed. A `verify` it answers `False` is a statement that the fact does not hold: the

@@ -15,10 +15,12 @@ from homelabnext.agent import SpecError, compile_profile, validate_report
 from homelabnext.agent.memory import (
     FileBackend,
     InMemoryBackend,
+    MemoryLimitError,
     MemoryStore,
     MemoryUpdateError,
     Verifier,
     VerifyRequest,
+    _size,
     fold,
     memory_block_input,
 )
@@ -269,6 +271,66 @@ def test_the_verifier_is_asked_only_about_an_accepted_batch_and_gets_the_label(r
     put(store, reader, [up("add", "b", "B")], [item(1, "green")])
     assert [ask.tlp for ask in stub.asked] == ["amber", "green"]
     assert [entry(backend, reader, k)["tlp"] for k in "ab"] == ["amber", "green"]
+
+
+def test_a_batch_refused_by_the_record_cap_never_reaches_the_verifier(backend):
+    p = _profile(memory_limits={"records": {"analyst": 1}})
+    stub = StubVerifier()
+    clock = Clock()
+    store = MemoryStore(backend, now=clock, verifier=stub)
+    put(store, p, [up("add", "a", "A")])
+    before = backend.load(p["id"])
+    clock.tick()
+    with pytest.raises(MemoryLimitError) as exc:
+        put(store, p, [up("add", "b", "SECRET")])
+    assert exc.value.unit == "records"
+    assert [r.value for r in stub.asked] == ["A"]  # never the refused batch's value
+    assert backend.load(p["id"]) == before
+
+
+def test_a_batch_refused_by_the_byte_cap_never_reaches_the_verifier(backend):
+    p = _profile(memory_limits={"bytes": {"analyst": 1024}})
+    stub = StubVerifier()
+    store = MemoryStore(backend, now=Clock(), verifier=stub)
+    with pytest.raises(MemoryLimitError) as exc:
+        put(store, p, [up("add", "a", "SECRET" + "x" * 1100)])
+    assert exc.value.unit == "bytes" and stub.asked == []
+    assert not backend.load(p["id"]).get("log")
+
+
+def test_the_byte_cap_reserves_the_stamp_the_verifier_may_add(tmp_path):
+    """A batch that fits only without its ``verified_at`` stamp is refused before the verifier
+    is asked (the trial run reserves the stamp); the same batch with no verifier fits."""
+    cap = 1024
+    p = _profile(memory_limits={"bytes": {"analyst": cap}})
+    probe = InMemoryBackend()
+    put(MemoryStore(probe, now=Clock()), p, [up("add", "a", "v")])
+    (rec,) = probe.load(p["id"])["log"]
+    fill = "v" + "x" * (cap - _size(rec))  # exactly the cap, unstamped
+    plain = InMemoryBackend()
+    put(MemoryStore(plain, now=Clock()), p, [up("add", "a", fill)])
+    assert _size(plain.load(p["id"])["log"][0]) == cap
+    stub = StubVerifier()
+    with pytest.raises(MemoryLimitError, match="byte cap"):
+        put(MemoryStore(InMemoryBackend(), now=Clock(), verifier=stub), p, [up("add", "a", fill)])
+    assert stub.asked == []
+
+
+def test_a_batch_refused_by_the_exposure_budget_never_reaches_the_verifier(backend):
+    p = _profile(memory_limits={"exposure_bytes": 65536})
+    first, h1 = labelled_pack([item(n, "clear") for n in range(1, 300)], [item(900)], profile=p)
+    second, h2 = labelled_pack(
+        [item(n, "clear") for n in range(1000, 1300)], [item(1900)], profile=p
+    )
+    stub = StubVerifier()
+    clock = Clock()
+    store = MemoryStore(backend, now=clock, verifier=stub)
+    store.apply_updates(p, [up("add", "a", "A")], pack=first, pack_hash=h1)
+    clock.tick()
+    with pytest.raises(MemoryLimitError) as exc:
+        store.apply_updates(p, [up("add", "b", "SECRET")], pack=second, pack_hash=h2)
+    assert exc.value.unit == "exposure"
+    assert [r.value for r in stub.asked] == ["A"]
 
 
 def test_a_verify_in_the_same_batch_as_its_add_keeps_the_adds_stamp(reader, backend):

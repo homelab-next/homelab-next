@@ -157,8 +157,9 @@ Staleness (ADR-0037 decision 15, PR 4):
   :func:`~homelabnext.agent.report.verify_problems`) takes no value, bumps ``rev``, adds its
   sources to the entry's, and leaves the value unchanged.
 * **``verified_at``** is absent until a :class:`Verifier` (``MemoryStore(verifier=...)``) sets
-  it.  Once a batch is accepted (never for a refused one), the store asks the verifier about
-  every ``add``, ``replace`` and ``verify`` in it, inside the transaction, with a
+  it.  Once a batch is accepted (never for a refused one: the record and byte caps and the
+  exposure budget are checked first, with the bytes a stamp adds reserved), the store asks the
+  verifier about every ``add``, ``replace`` and ``verify`` in it, inside the transaction, with a
   :class:`VerifyRequest` (which carries the record's label, so a verifier can keep to its egress
   ceiling); only ``True`` stamps the record's ``verified_at`` (its own ``at``).  A ``replace`` the
   verifier does not confirm clears the entry's ``verified_at`` (the value changed); a ``verify``
@@ -1466,8 +1467,10 @@ def _apply(
 
     ``verifier`` (ADR-0037 decision 15) is asked about every ``add``, ``replace`` and ``verify``
     the batch appends, once the batch is accepted (never about a refused one, whose values must
-    not leave the store); ``True`` stamps the record's ``verified_at`` and ``False`` marks a
-    ``verify`` record ``refuted``."""
+    not leave the store): after every check, the record cap, the byte cap and the exposure
+    budget included, which a trial run of :func:`_settle` makes with the bytes the answers can
+    add reserved; ``True`` stamps the record's ``verified_at`` and ``False`` marks a ``verify``
+    record ``refuted``."""
     entries: Memory = stored["entries"]
     records: list[Record] = stored["log"]
     exposure: dict[str, Any] = dict(stored.get("exposure") or {})
@@ -1599,15 +1602,6 @@ def _apply(
             touched[k] = None
     if problems:
         raise MemoryUpdateError(problems)
-    # the verifier is asked only now, about an accepted batch; its answer goes on the record
-    # alone, because every touched key is refolded from the log below (so the cache, and the
-    # range records compaction builds, see the stamp)
-    for rec, request in ask:
-        answer = _verified(verifier, request)  # type: ignore[arg-type]
-        if answer is True:
-            rec["verified_at"] = at
-        elif answer is False and rec["op"] == "verify":
-            rec["refuted"] = True
     new_exposure = (
         check.rendered is not None
         and bool(check.pack_id)
@@ -1623,7 +1617,54 @@ def _apply(
             # each item's platform-issued names: indexes into rendered, a graph id as itself
             "pairs": [[at_index.get(x, x) for x in group] for group in check.pairs],
         }
+    if ask:
+        # the record cap, the byte cap and the exposure budget are checked BEFORE the verifier
+        # is asked, so it never sees a value from a batch a limit refuses.  Its answers must be
+        # on the records before compaction (a range record carries the folded stamp), so this
+        # trial run, on copies, reserves the most they can add: every asked record stamped
+        # ``verified_at`` (longer than ``refuted``, and on every range record any answers could
+        # leave one on).  Record counts and exposures do not depend on the answers.
+        asked = {id(rec) for rec, _ in ask}
+        _settle(
+            {s: dict(v) for s, v in entries.items()},
+            [{**r, "verified_at": at} if id(r) in asked else r for r in records],
+            exposure,
+            touched,
+            new_exposure,
+            profile,
+        )
+        # accepted: each answer goes on its record alone, because every touched key is
+        # refolded from the log in _settle (so the cache, and the range records compaction
+        # builds, see the stamp)
+        for rec, request in ask:
+            answer = _verified(verifier, request)  # type: ignore[arg-type]
+            if answer is True:
+                rec["verified_at"] = at
+            elif answer is False and rec["op"] == "verify":
+                rec["refuted"] = True
+    # with the answers on the records this cannot refuse: they add no more than the trial
+    # reserved (the limit checks stay, as a backstop)
+    entries, records, exposure = _settle(entries, records, exposure, touched, new_exposure, profile)
+    if result is not None:
+        result["dropped"] = dropped
+        result["dropped_in"] = dropped_in
+        result["touched"] = list(touched)
+    return {"entries": entries, "log": records, "exposure": exposure}
 
+
+def _settle(
+    entries: Memory,
+    records: list[Record],
+    exposure: dict[str, Any],
+    touched: Mapping[tuple[str, str], None],
+    new_exposure: bool,
+    profile: VerifiedProfile,
+) -> tuple[Memory, list[Record], dict[str, Any]]:
+    """The second half of :func:`_apply`: compact the touched platform keys, refold the touched
+    keys, drop exposures nothing points at, and check the record and byte caps and the owner's
+    exposure budget, raising :class:`MemoryLimitError`.  ``entries`` is updated in place (copy
+    it for a trial run); ``records`` and ``exposure`` are not, and their new versions are
+    returned."""
     platform = _platform_scopes(profile)
     hot = {k for k in touched if k[0] in platform}
     if hot:  # compaction: one pass to index the touched keys, one to rebuild the log
@@ -1691,11 +1732,7 @@ def _apply(
         raise MemoryLimitError(
             profile["id"], {"*": (None, exposure_budget(profile))}, (), unit="exposure"
         )
-    if result is not None:
-        result["dropped"] = dropped
-        result["dropped_in"] = dropped_in
-        result["touched"] = list(touched)
-    return {"entries": entries, "log": records, "exposure": exposure}
+    return entries, records, exposure
 
 
 def _verified(verifier: Verifier, request: VerifyRequest) -> bool | None:
@@ -1872,9 +1909,9 @@ def memory_block_input(
     ``read`` and passes this beside them (ADR-0037 decision 11).
 
     With ``stale_after`` each entry also carries ``stale`` (ADR-0037 decision 15: no
-    ``verified_at``, or one older than the budget) and ``reasserted_at`` (and ``verified_at``
-    when a verifier set one), which the pack's memory block records: staleness is reported, and
-    the renderer decides its rank."""
+    ``verified_at``, or one older than the budget or later than now) and ``reasserted_at`` (and
+    ``verified_at`` when a verifier set one), which the pack's memory block records: staleness
+    is reported, and the renderer decides its rank."""
     out: list[dict[str, Any]] = []
     ceiling = read_ceiling(profile)
     cutoff = _cutoff(store._now(), stale_after) if stale_after is not None else None
@@ -2224,8 +2261,9 @@ class MemoryStore:
 
         With ``stale_after`` (a non-negative ``timedelta``) the result also has ``stale``:
         ``{key: {"reasserted_at", "verified_at"?}}`` for each returned entry whose
-        ``verified_at`` is absent or older than ``stale_after`` before now (ADR-0037 decision
-        15).  Until a :class:`Verifier` ships, that is every entry, under any budget.
+        ``verified_at`` is absent, older than ``stale_after`` before now, or later than now
+        (ADR-0037 decision 15).  Until a :class:`Verifier` ships, that is every entry, under any
+        budget.
 
         ``owner`` other than the caller's own profile id is a cross-agent read and is refused.
         """

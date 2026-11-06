@@ -929,8 +929,10 @@ decision 15). A model can reassert a fact; only a verifier verifies one.
 - **`verified_at`** is absent until a `Verifier` sets it. `homelabnext.agent.memory.Verifier` is
   a protocol with one method, `verify(request: VerifyRequest) -> bool`; **none ships**.
   `MemoryStore(verifier=...)` asks it about every `add`, `replace` and `verify` in a batch once
-  the batch is accepted (never about a refused one, whose values must not leave the store),
-  inside the transaction (so it should be quick and never write or call back into the store),
+  the batch is accepted (never about a refused one, whose values must not leave the store: the
+  record cap, the byte cap, with the bytes its stamps can add reserved, and the exposure budget
+  are checked before it is asked), inside the transaction (so it should be quick and never
+  write or call back into the store),
   with the owner, scope, key, op, rev, the value the entry will hold, its digest, the effective
   sources, the pack id, whether the write was checked and the record's label (`tlp`): a verifier
   must not send the value or its sources past that label's egress ceiling (ADR-0033). Only
