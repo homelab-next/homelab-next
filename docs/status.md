@@ -770,16 +770,16 @@ do not leave an account with a password and no enrolled factor (ADR-0034 decisio
 
 Anything missing, repeated or malformed is `403`. Run the hub with `hnx status serve --agents
 examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example`.
-**Check your edge** once: a request to the site with a forged
-`X-Auth-Request-Preferred-Username` and no login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1 keep a
-client-sent header the auth proxy omits) with the generated snippet, which deletes every
+**Check your edge** once: a request to the site with a forged `X-Auth-Request-Preferred-Username`
+and no login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1
+keep a client-sent header the auth proxy omits) with the generated snippet, which deletes every
 client-sent header whose name contains `auth-request` (any case, `-` or `_` at each separator)
-twice: first in the site, so no
-path of the site reaches the hub with one, and again inside the `route` before `forward_auth`;
-`tools/caddy_lint.py` fails CI on a pin or a config that does not. Every private view is
-appended to the access log (`private.access_log`, JSONL, mode 0600: `at`, `user`, `view`,
-`session`, `event`), which is itself a private page. Detail content is rendered as escaped text
-only (never HTML or markdown) and nothing in this code feeds it back into an agent's context.
+twice: first in the site, so no path of the site reaches the hub with one, and again inside the
+`route` before `forward_auth`; `tools/caddy_lint.py` fails CI on a pin or a config that does not.
+Every private view is appended to the access log (`private.access_log`, JSONL, mode 0600: `at`,
+`user`, `view`, `session`, `event`), which is itself a private page. Detail content is rendered as
+escaped text only (never HTML or markdown) and nothing in this code feeds it back into an agent's
+context.
 
 ### The Approvals page (broker stage 2b)
 
@@ -1173,3 +1173,9 @@ fixtures only.
   `StatusHub.ingest` (the keep-newer guard is not atomic, and nor is the history update in
   `_put`). An ignored older event still refreshes the source's `last_ok`; consider recording an
   ignored count so a replaying publisher is visible.
+* **Restate `private.identity_header` at the next `status-agents` schema version.** The frozen
+  1.4 description of `identity_header` (`schemas/status/agents.schema.json`) still names
+  `X-Auth-Request-User` as the value it must equal. Since ADR-0034 decision 4 was amended
+  (2026-11-06) the hub reads `X-Auth-Request-Preferred-Username` and takes the old value with a
+  warning only; the next schema version should say the key is ignored and name the username
+  header, so the description stops telling an overlay author to set a value that is not obeyed.

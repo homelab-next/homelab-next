@@ -1029,18 +1029,18 @@ short:
 - the page reuses the private tier's front door (trusted proxy, shared secret header, identity
   header), then requires an approver group (none of them a viewer group) to decide;
 - the approver sent to the broker is `{issuer: <configured>, subject: <the front door's
-  username>}`, never a form field. The username is the IdP's `preferred_username` claim, which
-  the reference auth proxy (oauth2-proxy, `--set-xauthrequest`) sends as
+  username>}`, never a form field. The username is the IdP's `preferred_username` claim, which the
+  reference auth proxy (oauth2-proxy, `--set-xauthrequest`) sends as
   `X-Auth-Request-Preferred-Username` and the generated edge snippet copies; it is **not**
   `X-Auth-Request-User`, which carries the proxy's user-id claim (an email by default, or `sub`)
   that no allowlist names. It is the same claim the SSH CA signs a person's certificate from, so
-  the allowlist entry and the certificate name one person once. The username is sent **unchanged**: an IdP's usernames may be
-  case-sensitive (`Bob` and `bob` may be two accounts), so the hub does not lower-case them, and a
-  username that is not already canonical (lower-case, as the approver allowlist names it) cannot
-  decide. Name approvers in the IdP in lower case (the default IdP stores them lower case). A
-  username can be renamed by an IdP admin; pinning the approver to the IdP's immutable id (the
-  token's `sub` claim, which the auth proxy could pass next to the username) is a recommended
-  follow-up: the hub does not receive it today;
+  the allowlist entry and the certificate name one person once. The username is sent **unchanged**:
+  an IdP's usernames may be case-sensitive (`Bob` and `bob` may be two accounts), so the hub does
+  not lower-case them, and a username that is not already canonical (lower-case, as the approver
+  allowlist names it) cannot decide. Name approvers in the IdP in lower case (the default IdP
+  stores them lower case). A username can be renamed by an IdP admin; pinning the approver to the
+  IdP's immutable id (the token's `sub` claim, which the auth proxy could pass next to the
+  username) is a recommended follow-up: the hub does not receive it today;
 - the form carries the request id **and the digest shown**; the hub refuses (`409`) when the
   broker's current digest differs, so a person approves exactly what they read, and the broker
   binds the approval to that digest again;
