@@ -53,7 +53,19 @@ author: unknown
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:outputs -->
-> TODO(human): what it produces, each with its format and where it lands.
+The answer to the edge's `forward_auth` check (`/oauth2/auth`): 2xx for a signed-in user in one
+of the site's allowed groups, 401 for no session, 403 for a signed-in user in none. Run with
+`--set-xauthrequest` (and `--reverse-proxy`), a 2xx carries the identity headers the edge copies
+onto the request (`homelabnext.edge_identity`, ADR-0034): `X-Auth-Request-Preferred-Username`
+(the IdP's `preferred_username`: the name the platform knows a person by, the status hub's
+identity and approver subject, the same claim the SSH CA signs from), `X-Auth-Request-Groups`
+(one value per group, joined with `,` by the edge), `X-Auth-Request-Email`, and
+`X-Auth-Request-User` (the proxy's user-id claim, an email by default or `sub`; copied for apps
+that want it, never used as a person's name by the platform). The generated realm maps
+`preferred_username` onto this client's tokens whatever scopes it asks for; a token without it
+gives the hub no identity, and the hub answers 403. Do not enable self-registration or an
+identity-brokering provider that lets a user choose their username: that name is what the
+approver allowlists list (ADR-0034 decision 4).
 <!-- /hnx:todo -->
 
 ## How to use it

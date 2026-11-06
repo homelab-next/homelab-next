@@ -26,8 +26,9 @@ REPO = Path(__file__).resolve().parents[2]
 #: Its mark is one word, so one contains-wildcard strips every spelling; the platform's own set
 #: (a two-word mark, two strips) has its own tests at the end of this file.
 TEST_IDENTITY = IdentityHeaders(
-    user="X-Hnxid-Username", groups="X-Hnxid-Groups", email="X-Hnxid-Email", mark="hnxid"
-)
+    user="X-Hnxid-Username", groups="X-Hnxid-Groups", email="X-Hnxid-Email",
+    username="X-Hnxid-Name", mark="hnxid",
+)  # fmt: skip
 
 
 def _judge_with(identity, monkeypatch):
@@ -625,8 +626,9 @@ def test_generated_configs_are_checked(tmp_path, monkeypatch):
 
     # the generator's mark narrowed to a prefix: both strips (site and route) miss spellings
     narrow = IdentityHeaders(
-        user="X-Hnxid-Username", groups="X-Hnxid-Groups", email="X-Hnxid-Email", mark="x-hnxid"
-    )
+        user="X-Hnxid-Username", groups="X-Hnxid-Groups", email="X-Hnxid-Email",
+        username="X-Hnxid-Name", mark="x-hnxid",
+    )  # fmt: skip
     monkeypatch.setattr(builtin, "IDENTITY_HEADERS", narrow)
     findings, _ = lint.scan(tmp_path)
     assert {f.path for f in findings} == {"services.yml (caddy generator)"}
@@ -2286,7 +2288,7 @@ def test_one_spelling_of_a_two_word_mark_is_not_enough(platform_identity):
     assert site and "deleting *auth_request*:" in site[0]
     assert "request_header -*auth-request* and request_header -*auth_request*" in site[0]
     route = [f.detail for f in found if not f.detail.startswith("site ")]
-    assert len(route) == 3 and "X-Auth_Request-User" in route[0]
+    assert len(route) == 4 and "X-Auth_Request-User" in route[0]  # one per copied header
     assert "X-Auth-Request_User" not in route[0]  # the strip after the mark covers that one
 
 
@@ -2322,7 +2324,7 @@ def test_a_non_default_identity_set_is_enforced(platform_identity, monkeypatch):
     assert lint.lint_caddy(text) == []
     other = IdentityHeaders(
         user="X-Remote-Ident-User", groups="X-Remote-Ident-Groups",
-        email="X-Remote-Ident-Email", mark="remote-ident",
+        email="X-Remote-Ident-Email", username="X-Remote-Ident-Username", mark="remote-ident",
     )  # fmt: skip
     _judge_with(other, monkeypatch)
     assert {f.rule for f in lint.lint_caddy(text)} == {"strip"}

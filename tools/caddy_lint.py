@@ -21,14 +21,15 @@ answer omits it, and every Caddy up to 2.11.1 passes the underscore and mixed sp
 (``X_Auth_Request_Groups``, ``X-Auth_Request-Groups``), which a CGI-style upstream folds into the
 real header.
 
-The identity headers are the platform's one declared set (``homelabnext.edge_identity``,
-ADR-0034; by default ``X-Auth-Request-User``, ``-Groups`` and ``-Email``): every header whose name
-carries its **mark** (``auth-request``, in any case, with ``-`` or ``_`` at each separator), and
-every header a ``copy_headers`` sets. "The strip" below is one contains-wildcard delete per
-spelling of the mark (``request_header -*auth-request*`` and ``request_header -*auth_request*``),
-which the generator writes; :func:`use_identity` judges another set. (2.11.2's fix deletes only the exact name it copies; 2.11.7's ``reverse_proxy`` was
-observed dropping every header with an ``_``, which is not a documented guarantee, so the strip
-is what covers those spellings.)
+The identity headers are the platform's one declared set (``homelabnext.edge_identity``, ADR-0034;
+by default ``X-Auth-Request-User``, ``-Groups``, ``-Email`` and ``-Preferred-Username``, see
+``IDENTITY_HEADERS.headers``): every header whose name carries its **mark** (``auth-request``, in
+any case, with ``-`` or ``_`` at each separator), and every header a ``copy_headers`` sets. "The
+strip" below is one contains-wildcard delete per spelling of the mark (``request_header
+-*auth-request*`` and ``request_header -*auth_request*``), which the generator writes;
+:func:`use_identity` judges another set. (2.11.2's fix deletes only the exact name it copies;
+2.11.7's ``reverse_proxy`` was observed dropping every header with an ``_``, which is not a
+documented guarantee, so the strip is what covers those spellings.)
 
 Threat model. The lint stops ACCIDENTAL misconfiguration that lets a client set its own identity:
 a config, in the Caddyfiles and Caddy JSON/YAML of the tree, that Caddy accepts and that delivers

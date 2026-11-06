@@ -64,7 +64,7 @@ def front_door(tmp_path: Path, trusted: str = LOOPBACK) -> FrontDoor:
         trusted=frozenset({trusted}),
         header="X-Hnx-Front-Door",
         secret=FAKE_SECRET,
-        identity_header="X-Auth-Request-User",
+        identity_header="X-Auth-Request-Preferred-Username",
         groups_header="X-Auth-Request-Groups",
         viewer_groups=frozenset({"hub-private-viewers"}),
         access_log=tmp_path / "access.jsonl",
@@ -73,7 +73,7 @@ def front_door(tmp_path: Path, trusted: str = LOOPBACK) -> FrontDoor:
 
 AUTHORIZED = {
     "X-Hnx-Front-Door": FAKE_SECRET,
-    "X-Auth-Request-User": "operator",
+    "X-Auth-Request-Preferred-Username": "operator",
     "X-Auth-Request-Groups": "staff,hub-private-viewers",
 }
 
