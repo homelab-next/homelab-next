@@ -293,4 +293,5 @@ def test_plan_has_nothing_to_delete_when_every_secret_is_ambiguous(files):
     snap = {"secrets": {"names": ["app_core_db"]}, "guests": ["app-core"]}
     rep = run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"])
     p = plan(rep)
-    assert "1. secret-names: review\n" in p and "delete the secret" not in p
+    step = next(ln for ln in p.splitlines() if ln.startswith("1. secret-names"))
+    assert step.endswith(" review") and "delete" not in step
