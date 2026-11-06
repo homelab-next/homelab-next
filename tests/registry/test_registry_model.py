@@ -120,6 +120,33 @@ NEGATIVES = {
         lambda d: d["services"]["metrics"].update(env_var="HNX_ENDPOINT_NOTIFY"),
         "env var",
     ),
+    # a public route needs auth (the same rule and message as a module's rows, rules.py)
+    "public-route-without-auth": (
+        lambda d: d["services"]["inference"].update(public_hostname="inference.lab.example"),
+        "service inference: a public route needs auth",
+    ),
+    "public-route-auth-none": (
+        lambda d: d["services"]["inference"].update(
+            public_hostname="inference.lab.example", auth="none"
+        ),
+        "service inference: a public route needs auth",
+    ),
+    "public-route-auth-mtls": (
+        lambda d: d["services"]["inference"].update(
+            public_hostname="inference.lab.example", auth="mtls"
+        ),
+        "mtls is never checked",
+    ),
+    "overlapping-zone-cidrs": (
+        lambda d: d["zones"]["data"].update(cidr=d["zones"]["mgmt"]["cidr"]),
+        "overlaps zone",
+    ),
+    "zone-cidr-inside-another": (
+        lambda d: d["zones"]["edge"].update(
+            cidr=str(next(ipaddress.ip_network(d["zones"]["mgmt"]["cidr"]).subnets(new_prefix=28)))
+        ),
+        "overlaps zone",
+    ),
 }
 
 
@@ -171,3 +198,48 @@ def test_two_secret_references_with_one_env_name_are_refused():
     hub["front_door"]["secret"] = "secret:nifi/status_token"
     with pytest.raises(RegistryError, match="HNX_SECRET_NIFI_STATUS_TOKEN"):
         loads(yaml.safe_dump(doc))
+
+
+@pytest.mark.parametrize("auth", ["own", "idp"])
+def test_a_public_route_with_its_own_login_or_the_idp_is_accepted(auth):
+    from homelabnext.registry.model import build_registry
+
+    pub = {"public_hostname": "inference.lab.example", "auth": auth}
+    reg = build_registry(mutate(lambda d: d["services"]["inference"].update(pub)))
+    assert reg.services["inference"].public_hostname == "inference.lab.example"
+
+
+def test_two_spellings_of_one_ipv6_host_address_are_one_address():
+    from homelabnext.registry.model import semantic_problems
+
+    def v6(d):
+        d["zones"]["v6"] = {"cidr": "2001:db8::/64"}
+        d["hosts"]["a6"] = {"address": "2001:db8::10", "zone": "v6"}
+        d["hosts"]["b6"] = {"address": "2001:db8:0:0::10", "zone": "v6"}
+
+    problems = semantic_problems(mutate(v6))
+    assert "host b6: address 2001:db8:0:0::10 already used by a6" in problems
+
+
+def test_an_ipv4_and_an_ipv6_zone_never_overlap():
+    from homelabnext.registry.model import semantic_problems
+
+    doc = mutate(lambda d: d["zones"].update(v6={"cidr": "2001:db8::/64"}))
+    assert not [p for p in semantic_problems(doc) if "overlaps" in p]
+
+
+@pytest.mark.parametrize(
+    "path", [ROOT / "examples" / "services.yml", ROOT / "examples" / "minimal" / "services.yml"]
+)
+def test_every_public_site_of_the_examples_has_a_login(path):
+    from homelabnext.generators import flatten, generate
+
+    reg = load(path)
+    # every generator's output: the edge's site file is the one with a "<host> {" block
+    out = "".join(flatten(generate(reg)).values())
+    for s in reg.sorted_services():
+        if s.public_hostname:
+            assert s.auth in ("idp", "own"), s.name
+            if s.auth == "idp":
+                site = out.split(s.public_hostname + " {", 1)[1].split("\n}\n", 1)[0]
+                assert "import hnx_forward_auth" in site, s.name
