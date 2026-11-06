@@ -1,6 +1,6 @@
 ---
-summary: 'Module manifest reference: declared egress as network policy, the publishing gate and the enumerated egress points of ADR-0033.'
-summary_of: outline:sha256:7662493a74d1992e
+summary: 'Module egress reference: declared egress as network policy, the publishing gate, ADR-0033 egress points and follow-ups for labelled requests.'
+summary_of: outline:sha256:49ac3dda76b6b1ef
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Modules: egress and publishing
