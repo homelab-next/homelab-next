@@ -424,6 +424,117 @@ def test_walk_applies_to_path_scans_only():
     assert run_scan("--walk", "--stdin", stdin="x\n").returncode == 2
 
 
+def test_walk_prunes_nothing_but_dot_git(tmp_path: Path):
+    for d in ("venv", "build", "node_modules", "__pycache__"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "creds").write_text(PLANTED["aws-access-key"] + "\n")
+    assert run_scan("--groups", "secret", str(tmp_path)).returncode == 0  # pruned without --walk
+    r = run_scan("--groups", "secret", "--walk", str(tmp_path))
+    for d in ("venv", "build", "node_modules", "__pycache__"):
+        assert f"{d}/creds:1: [aws-access-key]" in r.stdout, r.stdout
+
+
+def _socket(path: Path):
+    import socket
+
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.bind(str(path))
+    return s
+
+
+def test_special_files_are_reported_never_opened(tmp_path: Path):
+    import os
+
+    os.mkfifo(tmp_path / "pipe")  # a read of it would block the scan forever
+    sock = _socket(tmp_path / "app.sock")
+    try:
+        r = subprocess.run(
+            [sys.executable, str(SCAN), "--groups", "secret", "--walk", str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        sock.close()
+    for name in ("pipe", "app.sock"):
+        assert f"{name}: [not-scanned] {leak_scan.SPECIAL_FILE}" in r.stdout, r.stdout
+    assert r.returncode == 1 and "unreadable" not in r.stdout
+
+
+def test_read_text_file_refuses_a_file_swapped_for_a_fifo(tmp_path: Path, monkeypatch):
+    import os
+    import signal
+
+    os.mkfifo(tmp_path / "pipe")
+    real = os.lstat
+    monkeypatch.setattr(os, "lstat", lambda p: real(tmp_path / "regular"))
+    (tmp_path / "regular").write_text("x\n")
+
+    def hung(*_):
+        raise TimeoutError("read_text_file blocked on a FIFO")
+
+    old = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(10)  # a blocking open or read fails the test instead of hanging the run
+    try:
+        got = leak_scan.read_text_file(tmp_path / "pipe")  # O_NONBLOCK: the open does not block
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+    assert got == leak_scan.Skipped(str(tmp_path / "pipe"), leak_scan.SPECIAL_FILE)
+
+
+@pytest.mark.parametrize("walk", [True, False])
+def test_an_unlistable_directory_is_reported_not_skipped(tmp_path: Path, monkeypatch, walk):
+    import os
+
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "c").write_text(PLANTED["aws-access-key"] + "\n")
+    real = os.scandir
+
+    def scandir(path="."):
+        if Path(path) == tmp_path / "sub":
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    monkeypatch.setattr(leak_scan, "_git_files", lambda _d: None)
+    skipped: list = []
+    hits = leak_scan.scan_paths([str(tmp_path)], skipped=skipped, walk=walk)
+    assert hits == []
+    assert skipped == [
+        leak_scan.Skipped(str(tmp_path / "sub"), "unreadable directory (PermissionError)")
+    ]
+
+
+def test_an_unlistable_scan_root_is_reported(tmp_path: Path, monkeypatch):
+    import os
+
+    real = os.scandir
+
+    def scandir(path="."):
+        if Path(path) == tmp_path:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    skipped: list = []
+    leak_scan.scan_paths([str(tmp_path)], skipped=skipped, walk=True)
+    assert [s.path for s in skipped] == [str(tmp_path)]
+
+
+def test_a_control_character_in_a_path_cannot_forge_an_output_line(tmp_path: Path):
+    forged = tmp_path / "x\n" / "etc" / "ssh"
+    forged.mkdir(parents=True)
+    (forged / "ssh_host_rsa_key").write_text(PLANTED["aws-access-key"] + "\n")
+    (tmp_path / "y\r\x01").mkdir()
+    (tmp_path / "y\r\x01" / "z").write_bytes(b"\x00bin")
+    r = run_scan("--groups", "secret", "--walk", str(tmp_path))
+    assert r.returncode == 1
+    assert f"{tmp_path}/x\\n/etc/ssh/ssh_host_rsa_key:1: [aws-access-key]" in r.stdout
+    assert f"{tmp_path}/y\\r\\x01/z: [not-scanned] binary" in r.stdout
+    assert len(r.stdout.splitlines()) == 2
+
+
 def test_symlink_is_not_followed(tmp_path: Path):
     outside = tmp_path / "outside.txt"
     outside.write_text(PLANTED["private-ipv4"] + "\n")

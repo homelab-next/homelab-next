@@ -4,8 +4,13 @@
 # {path, reason} per file the scanner could not read as text.
 # --walk: the scanner walks the directories itself instead of asking git, so a git work tree (an
 # etckeeper /etc) cannot hide its ignored files (*.dpkg-old, *.dpkg-dist, ...) from the scan.
+# --walk prunes nothing but .git (no venv/build/node_modules skips), and a directory it cannot list
+# comes back as a [not-scanned] line rather than being passed over.
 # No --allow-skip: every file the scanner could not scan comes back as a [not-scanned] line, and
-# only binaries are dropped here; an unreadable or oversized file is a gap health reports.
+# only binaries and special files (sockets, FIFOs, devices: never opened, cannot hold a secret at
+# rest) are dropped here; an unreadable or oversized file or directory is a gap health reports.
+# The scanner escapes control characters in the paths it prints, and the parse below is checked
+# against the scanner's own counts, so a crafted file name cannot forge or hide a line.
 - name: Validate the paths and accepted globs
   ansible.builtin.assert:
     that:
@@ -42,6 +47,18 @@
       changed_when: false
       failed_when: config_leak_scan_run.rc not in [0, 1] or (config_leak_scan_run.rc == 1 and 'hit(s)' not in config_leak_scan_run.stderr)
       no_log: true
+    - name: Read the scanner's own hit and unscanned-file counts
+      ansible.builtin.set_fact:
+        config_leak_scan_counts: >-
+          {{ (config_leak_scan_run.stderr | regex_findall('([0-9]+) hit\(s\), ([0-9]+) unscanned') + [['0', '0']]) | first }}
+    - name: Check every hit and unscanned line was parsed (one output line per finding)
+      ansible.builtin.assert:
+        that:
+          - >-
+            config_leak_scan_run.stdout | regex_findall('(?m)^.+?:[0-9]+: \[[a-z0-9-]+\]') | length == config_leak_scan_counts[0] | int
+          - >-
+            config_leak_scan_run.stdout | regex_findall('(?m)^.+?: \[not-scanned\] ') | length == config_leak_scan_counts[1] | int
+        fail_msg: "config_leak_scan: the scanner's output does not parse into its own counts; refusing to report clean"
     - name: Keep path, line and pattern of each hit outside the accepted paths
       ansible.builtin.set_fact:
         config_leak_scan_hits: >-
@@ -59,12 +76,12 @@
           {%- endfor -%}
           {{ out }}
       no_log: true
-    - name: Keep path and reason of each file that could not be scanned (binaries aside)
+    - name: Keep path and reason of each file that could not be scanned (binaries and special files aside)
       ansible.builtin.set_fact:
         config_leak_scan_unscanned: >-
           {%- set out = [] -%}
           {%- for m in config_leak_scan_run.stdout | regex_findall('(?m)^(.+?): \[not-scanned\] (.+?) \(allow it with --allow-skip if intended\)$') -%}
-          {%- set ns = namespace(accepted=m[1] is match('binary ')) -%}
+          {%- set ns = namespace(accepted=m[1] is match('binary |special file ')) -%}
           {%- for glob in config_leak_scan_unscanned_accepted -%}
           {%- if m[0] is match('^' ~ (glob | regex_escape | replace('\\*', '[^/]*') | replace('\\?', '[^/]')) ~ '$') -%}
           {%- set ns.accepted = true -%}

@@ -1586,6 +1586,8 @@ def test_config_leak_scan_walks_the_files_a_git_work_tree_ignores(first):
         {"path": f"{etc}/app/app.conf.dpkg-old", "line": 2, "pattern": "private-key-block"}
     ]
     assert report["unscanned"] == []  # the binary is skipped, not a gap
+    # Documents the argv; the asserts above already fail when --walk is dropped or --allow-skip
+    # comes back, so rewrap this check freely if the argv line is reformatted.
     scan = (ROOT / "ansible/roles/config_leak_scan/tasks/scan.yml").read_text()
     assert "'--walk'" in scan and "--allow-skip" not in scan.split("argv:")[1].split("\n")[0]
 
@@ -1607,10 +1609,71 @@ def test_config_leak_scan_health_fails_on_a_file_it_could_not_scan_unless_accept
     r, tmp_path = first
     etc = first.setup["etc"]
     assert r.returncode != 0, r.stdout + r.stderr
-    assert f"not scanned: {etc}/app/huge.conf larger than 5 MB" in r.stdout
+    assert f"not scanned: {etc}/app/huge.conf (larger than 5 MB)" in r.stdout
     v = dict(first.setup["v"], config_leak_scan_unscanned_accepted=[f"{etc}/app/*.conf"])
     ok = run_role(tmp_path, "config_leak_scan", "health", v)
     assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def _first(tmp_path):
+    import socket
+
+    # A socket only: a FIFO hung the old scanner with no timeout (tools/tests covers it, bounded)
+    etc = leak_tree(tmp_path)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(str(etc / "app" / "app.sock"))
+    sock.close()  # the socket file stays behind, as an app's does
+    (etc / "venv").mkdir()  # pruned by a plain leak_scan, scanned under --walk
+    (etc / "venv" / "creds").write_text(PEM)
+    v = leak_vars(etc, tmp_path)
+    return {
+        "role": "config_leak_scan",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"etc": etc},
+    }
+
+
+@first_run(_first)
+def test_config_leak_scan_skips_special_files_and_prunes_only_dot_git(first):
+    r, tmp_path = first
+    etc = first.setup["etc"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads((tmp_path / "state" / "report.json").read_text())
+    assert report["unscanned"] == []  # sockets and FIFOs cannot hold a secret at rest
+    assert report["hits"] == [
+        {"path": f"{etc}/venv/creds", "line": 1, "pattern": "private-key-block"}
+    ]
+
+
+def _first(tmp_path):
+    etc = leak_tree(tmp_path)
+    # a directory named "x<newline>..." whose next printed line would read as the accepted host key
+    forged = Path(f"{etc}/x\n{etc}/ssh")
+    forged.mkdir(parents=True)
+    (forged / "ssh_host_ed25519_key").write_text(PEM)
+    v = leak_vars(etc, tmp_path)
+    return {
+        "role": "config_leak_scan",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"etc": etc},
+    }
+
+
+@first_run(_first)
+def test_config_leak_scan_a_crafted_file_name_cannot_pass_as_an_accepted_path(first):
+    r, tmp_path = first
+    etc = first.setup["etc"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads((tmp_path / "state" / "report.json").read_text())
+    assert report["hits"] == [
+        {
+            "path": f"{etc}/x\\n{etc}/ssh/ssh_host_ed25519_key",
+            "line": 1,
+            "pattern": "private-key-block",
+        }
+    ]
 
 
 # ---------------------------------------------------------------- restore_drill
