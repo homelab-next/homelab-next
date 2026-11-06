@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: Apache-2.0
+# The memory replay's fixture history (ADR-0037 decision 16).  test_agent_memory_replay.py
+# replays it, step by step, into a fresh store on both backends and compares every answer with
+# golden.yml.  A later change to the memory design is judged by re-running it: change a golden
+# answer only for a change of behaviour that is meant, and say so in that change.
+#
+# Identifiers are written symbolically and expanded by the test: `uid:N` is a canonical record
+# uid (UUIDv7) numbered N, `digest:N` a content digest numbered N, and
+# `mem:<who>/<scope>/<key>@<rev>` a memory revision of the profile named <who> below.  Input item
+# N renders as uid:N and digest:N; `lesson:uid:N` is a knowledge item (a lesson) of record
+# uid:N and content digest:N.  The answers are written back the same way.
+#
+# The story: uid:1 is a poisoned feed item.  `a` cites it; `b` cites a@1 (one hop through
+# memory, cited); `d` was written from a pack whose memory block showed a@1 (exposed through
+# memory, one hop); `e` from a pack that rendered uid:1 (exposed); `other`'s `x` and the
+# ledger's unchecked `item-1` cite it too.  At 10:00 an operator retracts it, after a dry run,
+# and later reports that cite or render it are refused, and a later unchecked platform write
+# citing it is dropped by the closure check.  `l` cites a knowledge item, lesson:uid:20, which an
+# operator retracts by its graph id at 10:01; a later pack that renders it (a knowledge name,
+# not an input uid) is refused.
+start: "2026-11-06T09:00:00Z"
+
+profiles:
+  reader: {id: "profile:reader"}
+  # the same profile after its ceiling was lowered to green (a fact read after the ceiling fell)
+  reader-green: {id: "profile:reader", tlp_ceiling: green, mcp: []}
+  other: {id: "profile:other-reader"}
+  ledger:
+    id: "profile:ledger"
+    memory_scopes: [analyst, fleet-ledger]
+    platform_scopes: [fleet-ledger]
+
+# Each step happens at `at` (a time on the start's day).  A step with `updates` is a report
+# applied with its pack (apply_report), or with `platform: true` an unchecked platform write
+# (apply_updates(unchecked=True)).  A pack lists its findings items as [N, label] (its static
+# sections are green), its memory block as keys of the profile's own memory
+# (memory_block_input) and its `knowledge` as lessons N (lesson:uid:N, rendered as a selected
+# knowledge item).  `verifier: true` applies the report through a store whose test
+# Verifier confirms every fact; `refused: true` expects the report to be refused, changing
+# nothing.  `retract` is an operator's dry run (dependents) then retract, through MemoryAdmin.
+# `ask` names a golden question, answered in golden.yml under the same name.
+steps:
+  - name: p1-a
+    at: "09:00"
+    as: reader
+    pack: {findings: [[1, clear]]}
+    updates: [{op: add, key: a, value: A1, sources: ["uid:1"]}]
+  - name: p2-g-n
+    at: "09:01"
+    as: reader
+    pack: {findings: [[2, clear]]}
+    updates:
+      - {op: add, key: g, value: G1, sources: ["uid:2"]}
+      - {op: add, key: n, value: N}  # no sources: unsourced
+  - name: p3-x
+    at: "09:02"
+    as: other
+    pack: {findings: [[1, clear]]}
+    updates: [{op: add, key: x, value: X, sources: ["uid:1"]}]
+  - name: ledger-1
+    at: "09:03"
+    as: ledger
+    platform: true
+    updates:
+      - {scope: fleet-ledger, op: add, key: item-1, value: open, sources: ["uid:1"]}
+      - {scope: fleet-ledger, op: add, key: cursor-0, value: "42"}
+  - name: p4-b
+    at: "09:10"
+    as: reader
+    pack: {findings: [[3, clear]], memory_block: [a]}
+    updates: [{op: add, key: b, value: B, sources: ["mem:reader/analyst/a@1"]}]
+  - name: p5-d
+    at: "09:11"
+    as: reader
+    pack: {findings: [[4, clear]], memory_block: [a]}
+    updates: [{op: add, key: d, value: D, sources: ["uid:4"]}]
+  - name: p6-e
+    at: "09:12"
+    as: reader
+    pack: {findings: [[1, clear], [5, clear]]}
+    updates: [{op: add, key: e, value: E, sources: ["uid:5"]}]
+  - {ask: as-of-0915, at: "09:15", kind: as_of, as: reader, t: "09:15"}
+  - name: p7-h
+    at: "09:20"
+    as: reader
+    pack: {findings: [[6, amber]]}
+    updates: [{op: add, key: h, value: H, sources: ["uid:6"]}]
+  - name: p8-replace
+    at: "09:30"
+    as: reader
+    pack: {findings: [[2, clear], [7, clear]]}
+    updates:
+      - {op: replace, key: a, value: A2}
+      - {op: replace, key: g, value: G2, sources: ["uid:2"]}
+  - name: p9-verify-g
+    at: "09:40"
+    as: reader
+    verifier: true
+    pack: {findings: [[2, clear], [9, clear]]}
+    updates: [{op: verify, key: g, sources: ["uid:2"]}]
+  - {ask: history-a, at: "09:45", kind: history, as: reader, key: a}
+  - {ask: history-g, at: "09:45", kind: history, as: reader, key: g}
+  - {ask: as-of-0925, at: "09:45", kind: as_of, as: reader, t: "09:25"}
+  - {ask: as-of-0925-green, at: "09:45", kind: as_of, as: reader-green, t: "09:25"}
+  - {ask: audit-reader, at: "09:45", kind: audit, as: reader, stale_after_min: 60}
+  - {ask: audit-ledger, at: "09:45", kind: audit, as: ledger, scope: fleet-ledger,
+     stale_after_min: 60}
+  - {ask: withheld-green, at: "09:45", kind: read, as: reader-green}
+  - name: p-lesson
+    at: "09:46"
+    as: reader
+    pack: {findings: [[10, clear]], knowledge: [20]}
+    updates: [{op: add, key: l, value: L, sources: ["digest:20"]}]
+  - {ask: dependents-uid-1, at: "09:50", kind: dependents, source: "uid:1"}
+  - name: retract-uid-1
+    at: "10:00"
+    retract: {source: "uid:1", reason: poisoned feed item}
+  # a retraction by name: the graph id, which closes to its uid and digest (decision 14)
+  - name: retract-lesson-20
+    at: "10:01"
+    retract: {source: "lesson:uid:20", reason: withdrawn lesson}
+  - {ask: live-after, at: "10:05", kind: live}
+  - {ask: history-b, at: "10:05", kind: history, as: reader, key: b}
+  - {ask: as-of-0950-after, at: "10:05", kind: as_of, as: reader, t: "09:50"}
+  # a citation has to be rendered, so a report citing uid:1 is refused by the same check as one
+  # that only renders it (the pack's input names): the two steps pin one control from both
+  # sides, a cited and an uncited retracted input.  The closure check is reached by ledger-2
+  # (a write with no pack), the knowledge-name check by renders-retracted-lesson.
+  - name: cites-retracted
+    at: "10:10"
+    as: reader
+    refused: true
+    pack: {findings: [[1, clear]]}
+    updates: [{op: add, key: y, value: Y, sources: ["uid:1"]}]
+  - name: renders-retracted
+    at: "10:10"
+    as: reader
+    refused: true
+    pack: {findings: [[1, clear], [8, clear]]}
+    updates: [{op: add, key: y, value: Y, sources: ["uid:8"]}]
+  # the pack renders lesson:uid:20 as a knowledge item only (no input carries its uid): refused
+  # by the pack's knowledge names, the name-based deny check
+  - name: renders-retracted-lesson
+    at: "10:10"
+    as: reader
+    refused: true
+    pack: {findings: [[8, clear]], knowledge: [20]}
+    updates: [{op: add, key: y, value: Y, sources: ["uid:8"]}]
+  # an unchecked platform write has no pack to refuse: its update citing uid:1 reaches the
+  # retraction through its closure and is dropped (reported), and the rest of the batch applies
+  - name: ledger-2
+    at: "10:10"
+    as: ledger
+    platform: true
+    updates:
+      - {scope: fleet-ledger, op: add, key: item-2, value: open, sources: ["uid:1"]}
+      - {scope: fleet-ledger, op: replace, key: cursor-0, value: "43"}
+  # d is still live (it was only exposed), but the retraction marked d@1: a pack whose memory
+  # block shows it, and a report citing it, reach the poisoned item one hop through memory
+  - name: cites-through-memory
+    at: "10:11"
+    as: reader
+    refused: true
+    pack: {findings: [[8, clear]], memory_block: [d]}
+    updates: [{op: add, key: y, value: Y, sources: ["mem:reader/analyst/d@1"]}]
+  - name: p10-clean
+    at: "10:12"
+    as: reader
+    pack: {findings: [[8, clear]]}
+    updates: [{op: add, key: k, value: K, sources: ["uid:8"]}]
+  - {ask: audit-reader-after, at: "10:15", kind: audit, as: reader, stale_after_min: 60}
+  # the same audit with a budget g's 09:40 stamp has outlived: g is stale by age
+  - {ask: audit-reader-short, at: "10:15", kind: audit, as: reader, stale_after_min: 30}
+  - {ask: dependents-uid-1-after, at: "10:15", kind: dependents, source: "uid:1"}

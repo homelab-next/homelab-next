@@ -957,6 +957,25 @@ decision 15). A model can reassert a fact; only a verifier verifies one.
   amends it). `fold`, compaction (a range record keeps its folded state's stamps), `history` and
   `as_of` carry both stamps on both backends.
 
+**The replay** ([ADR-0037](adr/0037-agent-memory-is-sourced-historied-and-retractable.md), PR 5,
+decision 16). Memory is judged by replaying a history, not by reading the code.
+`tests/agent/replay/fixture.yml` is a history of reports and their packs (times, sources,
+labels, a write through memory, an unchecked platform write, a test verifier's stamp and an
+operator's retraction through `MemoryAdmin` partway through) with golden questions placed in it;
+`tests/agent/replay/golden.yml` holds the exact answer to each: a scope `as_of` T, the history
+of a key, `dependents(S)` (cited and exposed, one hop through memory each way), what
+`retract(S)` retires (by a uid, and by a knowledge item's graph id) and that later reports citing
+or rendering S are refused (by the pack's inputs, its knowledge names and a marked revision in its
+memory block) and a later unchecked platform write citing S is dropped by its closure, which
+entries are unsourced (in the store's own sense: the last `add` or `replace` named no source),
+unchecked or stale (including a verified entry whose budget has passed), and what a reader at a
+lowered ceiling sees withheld. `tests/agent/test_agent_memory_replay.py` replays it into a fresh
+store on both backends and prints a unified diff per answer that differs, and shows on both
+backends that changing one behaviour (`dependents` not following `mem:` hops, staleness ignoring
+its budget, the name-based deny check off) fails it; it runs in `make test` (and so `make check`), and
+`make memory-replay` runs it alone. A change to the memory design changes a golden answer only
+when the change of behaviour is meant, and the diff is the review of it.
+
 Two stores are called memory, and only this one carries the M-09 guarantees. The broker's
 `memory.write` action (the `memory` lane of `examples/broker/manifest.yml`, [Broker](broker.md),
 [[broker]]) writes free-form per-agent note files under `<data-root>/memory/<profile>/`: no

@@ -652,7 +652,9 @@ was shown, never from what the model says about its sources.
   - **PR 4:** `verify`, `reasserted_at`, `verified_at` and the `Verifier` protocol (shipped:
     `MemoryStore(verifier=)`, `read`/`as_of(..., stale_after=)` and
     `memory_block_input(..., stale_after=)`; no `Verifier` implementation ships).
-  - **PR 5:** the replay fixture and its golden answers.
+  - **PR 5:** the replay fixture and its golden answers (shipped: `tests/agent/replay/fixture.yml`
+    and `golden.yml`, replayed on both backends by `tests/agent/test_agent_memory_replay.py`,
+    which prints a diff per answer that differs; `make memory-replay` runs it alone).
   - **Docs:** `docs/modules/egress.md`'s line on memory stores, once the withheld read ships.
 - **Follow-ups** (named here, decided later, each by amending this ADR):
   1. **Two meanings of "as of".** `as_of(T)` shows what was believed at T. A second mode that

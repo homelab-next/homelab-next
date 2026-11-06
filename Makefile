@@ -12,10 +12,10 @@ ROLES := $(wildcard ansible/roles/*)
 PLAYBOOKS := $(wildcard ansible/playbooks/*.yml)
 REGISTERS_OUT := build/registers
 
-.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval models-canary agent-lint prompts-lint injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
+.PHONY: help check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-eval models-canary agent-lint prompts-lint memory-replay injection-check injection-report injection-eval workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check constraints clean lab-up lab-down lab-smoke lab-broker
 
 help:
-	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-canary agent-lint prompts-lint injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check licence-check clean"
+	@echo "targets: check lint fmt test coverage component-tests hermetic-lint schemas gates decide-lint decide-safety models-check models-report models-canary agent-lint prompts-lint memory-replay injection-check injection-report workflows detections registers ids-check conform conform-check spdx leak-scan secret-scan leak-scan-history changelog-check licence-check clean"
 	@echo "experimental and frozen components (tools/experimental.yml; never in check): experimental"
 	@echo "Code Mode golden suites (CM-6; frozen, run by experimental): codemode-golden-report"
 	@echo "hygiene: helpers-lint dup-check tls-lint caddy-lint workstation-lint run-output-lint keyring-check keyring"
@@ -237,6 +237,11 @@ agent-lint:
 # slot outside the nonce-fenced, escaped untrusted-data delimiters
 prompts-lint:
 	$(PY) -m homelabnext.cli agent prompts lint
+
+# ADR-0037 decision 16: agent memory judged by replay -- the fixture history in tests/agent/replay/
+# replayed on both backends against its golden answers (also part of `test`, so of `check`)
+memory-replay:
+	$(PY) -m pytest -q tests/agent/test_agent_memory_replay.py
 
 # G-02: the injection corpus through every template against the deterministic fence-respecting
 # fake: 0 instruction-follows, and the committed report must be the one for the current templates
