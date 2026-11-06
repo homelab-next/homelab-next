@@ -396,6 +396,15 @@ was shown, never from what the model says about its sources.
       link, and it and the directories above it must be owned only by root or the runtime and
       writable by no group or other. A corrupt state file is refused, never quarantined and
       recreated by an operator run.
+    - **Second re-audit (2026-11-06).** Reads check what writes check: `load_deny` (what new
+      packs read through `denied`) refuses, and pages, a deny file the runtime could write or
+      one that does not match the stamp, so a runtime on the wrong path never reads an empty
+      deny set. The runtime's writability check walks every directory above the deny file. The
+      operator run waits for the state file's lock at most 5 s, then refuses (exit 2). It pins
+      the state file's uid and gid when it starts and refuses if they change, refuses a state
+      file with more than one hard link, and lets the runtime own only the state file and its
+      own directory: every directory above is root's. Each id change is undone in reverse in a
+      `finally` that covers the setup too, so a failure part-way never leaves root's ids changed.
     - The whole `memory.*` broker action namespace is refused, `memory.restamp` included, except
       the notes lane's `memory.write`; and no broker handler may name `homelabnext.memory_admin`
       (defence in depth only: the broker's uid is refused as an operator, which is the boundary).

@@ -45,6 +45,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from homelabnext.agent.memory import path_chain
+
 __all__ = [
     "DEFAULT_OPERATORS",
     "MemoryAdminError",
@@ -178,13 +180,9 @@ def _peers(entries: Any, where: str, lookup: Callable[[str], int], problems: lis
 
 
 def _chain(path: Path) -> list[Path]:
-    """``path`` and the directories above it, up to ``/`` (or to :data:`_TRUST_ABOVE`)."""
-    out = []
-    for p in (path, *path.parents):
-        out.append(p)
-        if _TRUST_ABOVE is not None and p == Path(os.path.abspath(_TRUST_ABOVE)):
-            break
-    return out
+    """``path`` and the directories above it, up to ``/`` (or to :data:`_TRUST_ABOVE`): the
+    walk the runtime's deny-file check uses too (:func:`homelabnext.agent.memory.path_chain`)."""
+    return path_chain(path, stop=_TRUST_ABOVE)
 
 
 def _mode_problems(p: Path, st: os.stat_result, owners: Iterable[int]) -> list[str]:
@@ -198,12 +196,16 @@ def _mode_problems(p: Path, st: os.stat_result, owners: Iterable[int]) -> list[s
     return problems
 
 
-def check_root_owned(path: str | os.PathLike[str], *, owners: Iterable[int] = ()) -> list[str]:
+def check_root_owned(
+    path: str | os.PathLike[str], *, owners: Iterable[int] = (), depth: int | None = None
+) -> list[str]:
     """Why ``path`` (which may not exist yet) and the directories above it are not trusted:
-    each existing one must be owned by root or one of ``owners``, be no symbolic link
-    and be writable by no group or other."""
+    each existing one must be owned by root (or, for the first ``depth`` names of the walk,
+    ``path`` itself and its parent with ``depth=2``, by one of ``owners``; every name, without
+    ``depth``), be no symbolic link and be writable by no group or other."""
     problems = []
-    for p in _chain(Path(os.path.abspath(path))):
+    for n, p in enumerate(_chain(Path(os.path.abspath(path)))):
+        allowed = set(owners) if depth is None or n < depth else set()
         try:
             st = os.lstat(p)
         except FileNotFoundError:
@@ -211,7 +213,7 @@ def check_root_owned(path: str | os.PathLike[str], *, owners: Iterable[int] = ()
         if stat.S_ISLNK(st.st_mode):
             problems.append(f"{p} is a symbolic link")
             continue
-        problems += _mode_problems(p, st, set(owners) | _ROOT_OWNERS)
+        problems += _mode_problems(p, st, allowed | _ROOT_OWNERS)
     return problems
 
 

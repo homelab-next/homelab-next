@@ -624,26 +624,58 @@ class DenyFile:
             return copy.deepcopy(new)
 
     def problem(self) -> str | None:
-        """Why the runtime must not trust this deny file: it (or its lock, or its directory)
-        is writable by this process, so a process running as the runtime could rewrite it."""
-        for p in (self.path, self.lock_path, self.path.parent):
-            if p.exists() and os.access(p, os.W_OK):
-                return (
-                    f"the deny file {self.path} is writable by this process (via {p}): it must "
-                    "be root's (or the operator's), mode 0644, in a directory the runtime cannot "
-                    "write"
-                )
+        """Why the runtime must not trust this deny file: it, its lock, or any directory above
+        it is writable by this process (or by its group or others, a sticky directory such as
+        ``/tmp`` excepted), so a process running as the runtime could rewrite or replace it."""
+        for p in [self.lock_path, *path_chain(self.path)]:
+            try:
+                st = os.lstat(p)
+            except FileNotFoundError:
+                continue
+            sticky = stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX
+            if os.access(p, os.W_OK, follow_symlinks=False) and not sticky:
+                why = "writable by this process"
+            elif st.st_mode & 0o022 and not sticky and not stat.S_ISLNK(st.st_mode):
+                why = "writable by its group or others"
+            else:
+                continue
+            return (
+                f"the deny file {self.path} cannot be trusted: {p} is {why}; the file must be "
+                "root's (or the operator's), mode 0644, in a directory the runtime cannot write"
+            )
         return None
 
 
+#: where :func:`path_chain` stops climbing (tests only; None climbs to ``/``)
+_CHAIN_STOP: Path | None = None
+
+
+def path_chain(path: str | Path, *, stop: str | Path | None = None) -> list[Path]:
+    """``path`` and every directory above it, up to ``/`` (or to ``stop``, by default
+    :data:`_CHAIN_STOP`): the names whose owners decide who can replace ``path``."""
+    path = Path(os.path.abspath(path))
+    stop = stop if stop is not None else _CHAIN_STOP
+    stop = Path(os.path.abspath(stop)) if stop is not None else None
+    out = []
+    for p in (path, *path.parents):
+        out.append(p)
+        if stop is not None and p == stop:
+            break
+    return out
+
+
 @contextlib.contextmanager
-def _as_owner(path: Path) -> Iterator[None]:
-    """Run the body with the effective uid and gid dropped to the owner of ``path`` (the
+def _as_owner(path: Path, expect: tuple[int, int] | None = None) -> Iterator[None]:
+    """Run the body with the effective uid, gid and groups dropped to the owner of ``path`` (the
     runtime's state file, else its directory) when this process is root (an operator under
     sudo): root then never opens, creates, locks, renames or quarantines a name the runtime
     controls, and everything it writes there is the runtime's (ADR-0037 decision 12, amended).
-    A symbolic link as the state file is refused.  Not thread-safe (the effective ids are the
-    process's): ``hnx agent memory`` is single-threaded."""
+
+    A symbolic link, or a state file with more than one hard link, is refused; with ``expect``
+    (the owner the operator pinned when it started), so is a state file whose owner changed.
+    Each id change is recorded as it applies and undone in reverse in a ``finally`` that also
+    covers the setup, so a failure part-way never leaves the process with changed ids.  Not
+    thread-safe (the effective ids are the process's): ``hnx agent memory`` is single-threaded."""
     if not hasattr(os, "seteuid") or os.geteuid() != 0:
         yield
         return
@@ -651,19 +683,29 @@ def _as_owner(path: Path) -> Iterator[None]:
     st = os.lstat(target)
     if stat.S_ISLNK(st.st_mode):
         raise MemoryAccessError(f"{target} is a symbolic link: an operator never follows one")
+    if target == path and st.st_nlink != 1:
+        raise MemoryAccessError(f"{path} has {st.st_nlink} hard links: the state file has one")
+    if expect is not None and (st.st_uid, st.st_gid) != tuple(expect):
+        raise MemoryAccessError(
+            f"{target} is now owned by {st.st_uid}:{st.st_gid}, not the {expect[0]}:{expect[1]} "
+            "the operator run started with: nothing was done"
+        )
     if st.st_uid == 0:  # root's own state (the runtime must not run as root): nothing to drop
         yield
         return
     groups, egid = os.getgroups(), os.getegid()
-    os.setgroups([st.st_gid])
-    os.setegid(st.st_gid)
-    os.seteuid(st.st_uid)
+    undo: list[Callable[[], None]] = []
     try:
+        os.setgroups([st.st_gid])
+        undo.append(lambda: os.setgroups(groups))
+        os.setegid(st.st_gid)
+        undo.append(lambda: os.setegid(egid))
+        os.seteuid(st.st_uid)
+        undo.append(lambda: os.seteuid(0))
         yield
     finally:
-        os.seteuid(0)
-        os.setegid(egid)
-        os.setgroups(groups)
+        for step in reversed(undo):  # euid first (back to root), then gid, then groups
+            step()
 
 
 class FileBackend:
@@ -672,29 +714,42 @@ class FileBackend:
     read it from one place, the operators file's ``deny_file``, so they cannot diverge).
 
     Run as root (an operator under sudo), every state-file operation runs with the effective
-    uid and gid of the state file's owner (:func:`_as_owner`), so root never resolves a name the
-    runtime controls.  Each ``transact`` reads the deny file under its shared lock first, then
-    takes the state file's lock (the lock order), and refuses (:class:`DenyFileProblem`) when
-    the deny file does not match the operator's stamp (:data:`DENY_STAMP`): missing, another
-    path, or shorter than what was stamped."""
+    uid and gid of the state file's owner (:func:`_as_owner`; ``owner`` pins the uid and gid the
+    operator started with), so root never resolves a name the runtime controls.  Each
+    ``transact`` reads the deny file under its shared lock first, then takes the state file's
+    lock (the lock order), and refuses (:class:`DenyFileProblem`) when the deny file does not
+    match the operator's stamp (:data:`DENY_STAMP`): missing, another path, or shorter than what
+    was stamped.  :meth:`load_deny` (what :func:`denied` reads for new packs) refuses the same
+    way, so a runtime pointed at the wrong deny file never reads an empty deny set."""
 
-    def __init__(self, path: str | Path, *, deny_path: str | Path, **state_kwargs: Any) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        deny_path: str | Path,
+        owner: tuple[int, int] | None = None,
+        **state_kwargs: Any,
+    ) -> None:
         from homelabnext.state import StateStore
 
         if not deny_path:
             raise TypeError("FileBackend needs deny_path=, the operators file's deny_file")
         self.path = Path(os.path.abspath(path))
-        with _as_owner(self.path):
+        self._owner = owner
+        with self._as_owner():
             self._store = StateStore(self.path, **state_kwargs)
         self.deny = DenyFile(deny_path)
 
+    def _as_owner(self) -> contextlib.AbstractContextManager[None]:
+        return _as_owner(self.path, self._owner)
+
     def load(self, owner: str) -> Any:
         owner_key(owner)
-        with _as_owner(self.path):
+        with self._as_owner():
             return self._store.get(owner, {}) or {}
 
     def owners(self) -> list[str]:
-        with _as_owner(self.path):
+        with self._as_owner():
             names = self._store.keys()  # StateStore.keys(): sorted, read under its lock
         return [k for k in names if not k.startswith(RESERVED_PREFIX)]
 
@@ -730,7 +785,7 @@ class FileBackend:
         # leaves the file as it was
         owner_key(owner)
         out: list[Any] = []
-        with self.deny.shared() as deny, _as_owner(self.path):
+        with self.deny.shared() as deny, self._as_owner():
 
             def change(data: dict[str, Any]) -> bool:
                 problem = self._stamp_problem(data, deny)
@@ -744,7 +799,17 @@ class FileBackend:
         return out[0]
 
     def load_deny(self) -> Deny:
-        return self.deny.read()
+        """The deny state, checked like a write: refused (:class:`DenyFileProblem`) when the
+        runtime could rewrite the deny file, or when it does not match the operator's stamp,
+        read under the state file's lock (deny, then state: the lock order)."""
+        problem = self.deny_problem()
+        if problem:
+            raise DenyFileProblem(problem)
+        with self.deny.shared() as deny, self._as_owner():
+            problem = self._stamp_problem({DENY_STAMP: self._store.get(DENY_STAMP)}, deny)
+        if problem:
+            raise DenyFileProblem(problem)
+        return deny
 
     def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny:
         """Append to the deny file and stamp the state file with its path and length, both under
@@ -762,7 +827,7 @@ class FileBackend:
                 data[DENY_STAMP] = stamp
                 return True
 
-            with _as_owner(self.path):
+            with self._as_owner():
                 self._store.rewrite(mark)
             return copy.deepcopy(new)
 
@@ -783,11 +848,43 @@ def deny_path_from(operators: str | Path) -> Path:
     return Path(path)
 
 
-def denied(backend: MemoryBackend) -> DenySet:
+def denied(
+    backend: MemoryBackend, *, notifier: Any | None = None, topic: str | None = None
+) -> DenySet:
     """The active :class:`~homelabnext.agent.deny.DenySet` of ``backend``'s deny log: what a
-    caller passes as ``retracted=`` to ``select_knowledge`` and ``assemble_pack``."""
-    deny = backend.load_deny()
+    caller passes as ``retracted=`` to ``select_knowledge`` and ``assemble_pack``.
+
+    A deny file the backend cannot trust (:class:`DenyFileProblem`: writable by the runtime,
+    another path than the operator stamped, missing or shorter) is never read as an empty set:
+    it raises, and with ``notifier`` it pages (pair ``AGENT_MEMORY_DENY``, state-diffed, with
+    the recovery on the next good read)."""
+    key = "agent-memory-deny-read"
+    try:
+        deny = backend.load_deny()
+    except DenyFileProblem as exc:
+        _deny_read_page(notifier, topic, key, str(exc))
+        raise
+    _deny_read_page(notifier, topic, key, None)
     return deny_set(deny["log"], deny["reach"])
+
+
+def _deny_read_page(notifier: Any, topic: str | None, key: str, problem: str | None) -> None:
+    if notifier is None:
+        if problem is not None:
+            log.warning("deny file refused: %s", problem)
+        return
+    from homelabnext.notify import Message
+
+    notifier.register_pair(DENY_TITLE, DENY_CLEARED)
+    try:
+        if problem is None:
+            notifier.report(key, "ok", Message(key, DENY_CLEARED, "the deny file is trusted"))
+        else:
+            msg = Message(key, DENY_TITLE, f"new packs refuse to read retractions: {problem}.",
+                          level="warn", topic=topic, tags=("agent", "memory"))  # fmt: skip
+            notifier.report(key, "deny-file", msg)
+    except Exception:  # the refusal stands; a failed page is retried next time
+        log.exception("deny-file page %s not sent", key)
 
 
 # ---------------------------------------------------------------- identity and limits

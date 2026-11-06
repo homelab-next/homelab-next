@@ -797,8 +797,13 @@ everything built on it, by an operator, never by a profile.
   (load, rewrite, lock, quarantine, temporary files) runs with the effective uid, gid and groups
   of the state file's owner, restored afterwards: a lock the runtime planted as a link to a root
   file is opened as the runtime and refused, and what the operator writes stays the runtime's.
-  The state file must be no link, and its path owned only by root or the runtime; a corrupt
-  state file is refused, never quarantined and recreated by an operator run.
+  The state file must be no link and have one hard link; the runtime may own it and its own
+  directory, and every directory above is root's; its uid and gid are pinned when the run starts
+  and a change is refused; the state file's lock is waited on for at most 5 s (exit 2). A corrupt
+  state file is refused, never quarantined and recreated by an operator run. `denied()` (and
+  `load_deny`) refuse, and page with `notifier=`, a deny file the runtime could write (the
+  whole directory chain is checked) or one that does not match the stamp: new packs never read
+  an empty deny set from the wrong path.
 - **`dependents(source, by=, revision=, include_exposed=, include_alias=)` is the dry run.** The
   alias set comes only from the exposures' `pairs` (`{rendered, memory, pairs}`, counted in
   `exposure_bytes`) and closes narrowly: a graph id to its uid, a uid to its own digests and

@@ -810,3 +810,46 @@ def test_a_memory_state_copy_is_left_as_it_was_by_a_dry_run(reader, backend, clo
     assert admin.purge(reader["id"], "analyst/k@9", "r", by=op)["purged"] == []
     admin.lift(uid(1), "r", by=op, dry_run=True)
     assert state(backend) == before
+
+
+def test_r1_r4_the_cli_refuses_a_held_lock_and_a_hard_linked_state(
+    reader, tmp_path, capsys, monkeypatch
+):
+    import fcntl
+
+    from homelabnext.memory_admin import cli
+
+    _cli_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "LOCK_TIMEOUT", 0.1)
+    state_file = tmp_path / "memory.json"
+    store = MemoryStore(
+        FileBackend(state_file, deny_path=tmp_path / "memory-deny.json"),
+        now=Clock(datetime(2026, 1, 1, tzinfo=UTC)),
+    )
+    put(store, reader, [up("add", "a", "A")], [item(1, "clear")])
+    common = ["--state", str(state_file), "--operators", str(operators_file(tmp_path))]
+    fd = os.open(tmp_path / "memory.json.lock", os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)  # the runtime holds the state file's lock forever
+        code, _, err = _cli(["dependents", uid(1), *common], capsys)
+    finally:
+        os.close(fd)
+    assert code == 2 and "locked by another process" in err
+    os.link(state_file, tmp_path / "second-name.json")
+    code, _, err = _cli(["dependents", uid(1), *common], capsys)
+    assert code == 1 and "2 hard links" in err
+
+
+@ROOT_ONLY
+def test_r4_only_the_state_files_own_directory_may_be_the_runtimes(
+    reader, tmp_path, capsys, monkeypatch
+):
+    rt, _state_file, common = _deployment(reader, tmp_path, monkeypatch)
+    nested = rt / "deeper"
+    nested.mkdir()
+    os.chown(nested, RUNTIME_UID, RUNTIME_UID)
+    moved = nested / "memory.json"
+    (rt / "memory.json").rename(moved)
+    common[1] = str(moved)
+    code, _, err = _cli(["dependents", uid(1), *common], capsys)
+    assert code == 1 and f"{rt} is owned by uid {RUNTIME_UID}, not root" in err

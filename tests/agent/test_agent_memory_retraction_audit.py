@@ -498,3 +498,127 @@ def test_a_deny_lock_held_forever_is_refused_not_waited_on(tmp_path, monkeypatch
             backend.transact("profile:reader", lambda cur, deny: cur)
     finally:
         os.close(fd)
+
+
+# ---------------------------------------------------------------- second re-audit R1 to R5
+def test_r2_a_runtime_on_the_wrong_deny_path_never_reads_an_empty_deny_set(reader, tmp_path, op):
+    """The auditor's probe: the operator retracts through one deny path; a runtime pointed at
+    another reads its deny set for new packs.  It must refuse and page, not return nothing."""
+    from homelabnext.agent.memory import DenyFileProblem
+    from homelabnext.notify import FakeSender, Notifier
+    from homelabnext.notify.core_pairs import AGENT_MEMORY_DENY
+    from homelabnext.state import StateStore
+
+    operator_side = _file(tmp_path)
+    store = MemoryStore(operator_side, now=Clock())
+    put(store, reader, [up("add", "a", "A", sources=[uid(1)])], [item(1)])
+    retract(MemoryAdmin(operator_side, now=Clock()), uid(1), op)
+    assert len(denied(operator_side).names) == 2
+    runtime = _file(tmp_path, deny="wrong-deny.json")
+    sender = FakeSender()
+    notifier = Notifier(sender, StateStore(tmp_path / "n.json"))
+    with pytest.raises(DenyFileProblem, match="one deny path"):
+        denied(runtime, notifier=notifier)
+    assert [m.title for m in sender.sent] == [AGENT_MEMORY_DENY[0]]
+    with pytest.raises(DenyFileProblem):
+        runtime.load_deny()
+    denied(operator_side, notifier=notifier)  # the recovery, on a good read
+    assert [m.title for m in sender.sent] == list(AGENT_MEMORY_DENY)
+
+
+def test_r2_a_read_refuses_a_deny_file_the_runtime_can_write(tmp_path, monkeypatch):
+    from homelabnext.agent import memory
+    from homelabnext.agent.memory import DenyFileProblem
+
+    monkeypatch.setattr(memory, "_CHECK_DENY_WRITABLE", True)
+    monkeypatch.setattr(memory.os, "geteuid", lambda: 4242)
+    with pytest.raises(DenyFileProblem, match="writable by this process"):
+        denied(_file(tmp_path))
+
+
+def test_r5_the_runtime_walks_the_whole_chain_above_the_deny_file(tmp_path, monkeypatch):
+    """A directory two levels up that anyone can write lets the deny file be replaced."""
+    import os
+
+    from homelabnext.agent import memory
+
+    top = tmp_path / "top"
+    (top / "mid").mkdir(parents=True)
+    top.chmod(0o777)
+    deny = memory.DenyFile(top / "mid" / "deny.json")
+    monkeypatch.setattr(memory, "_CHAIN_STOP", tmp_path)
+    monkeypatch.setattr(memory.os, "access", lambda *a, **k: False)  # not writable by us
+    assert f"{top} is writable by its group or others" in (deny.problem() or "")
+    top.chmod(0o755)
+    assert deny.problem() is None
+    assert os.stat(top).st_mode & 0o777 == 0o755
+
+
+def test_r1_a_held_state_lock_is_refused_not_waited_on(tmp_path, monkeypatch):
+    import fcntl
+    import os
+
+    from homelabnext.state import StateLockBusy
+
+    backend = FileBackend(
+        tmp_path / "memory.json", deny_path=tmp_path / "memory-deny.json", lock_timeout=0.1
+    )
+    backend.transact("profile:reader", lambda cur, deny: {"entries": {}, "log": []})
+    fd = os.open(tmp_path / "memory.json.lock", os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)  # the runtime mid-write, forever
+        with pytest.raises(StateLockBusy, match="locked by another process"):
+            backend.owners()
+    finally:
+        os.close(fd)
+    assert backend.owners() == ["profile:reader"]
+
+
+ROOT = pytest.mark.skipif(
+    not hasattr(__import__("os"), "geteuid") or __import__("os").geteuid() != 0,
+    reason="changing a file's owner (root) is not available",
+)
+
+
+@ROOT
+def test_r3_a_failed_id_change_never_leaves_the_ids_changed(tmp_path, monkeypatch):
+    import os
+
+    from homelabnext.agent import memory
+
+    state = tmp_path / "memory.json"
+    state.write_text("{}", encoding="utf-8")
+    os.chown(state, 4242, 4242)
+    groups, egid = os.getgroups(), os.getegid()
+    real = os.seteuid
+
+    def failing(uid):
+        if uid != 0:
+            raise PermissionError("simulated")
+        real(uid)
+
+    monkeypatch.setattr(memory.os, "seteuid", failing)
+    with pytest.raises(PermissionError, match="simulated"), memory._as_owner(state):
+        pass  # never reached
+    assert (os.geteuid(), os.getegid(), os.getgroups()) == (0, egid, groups)
+
+
+@ROOT
+def test_r4_an_owner_change_or_a_second_hard_link_is_refused(tmp_path):
+    import os
+
+    from homelabnext.agent import memory
+    from homelabnext.agent.memory import MemoryAccessError
+
+    state = tmp_path / "memory.json"
+    state.write_text("{}", encoding="utf-8")
+    os.chown(state, 4242, 4242)
+    with memory._as_owner(state, (4242, 4242)):
+        assert os.geteuid() == 4242
+    started = pytest.raises(MemoryAccessError, match="the operator run started with")
+    with started, memory._as_owner(state, (4343, 4343)):
+        pass
+    os.link(state, tmp_path / "other")
+    with pytest.raises(MemoryAccessError, match="2 hard links"), memory._as_owner(state):
+        pass
+    assert os.geteuid() == 0

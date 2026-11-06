@@ -47,7 +47,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from homelabnext.agent.memory import FileBackend, MemoryAccessError, MemoryClockError
-from homelabnext.state import StateCorruptError
+from homelabnext.state import StateCorruptError, StateLockBusy
 
 from .admin import MemoryAdmin
 from .principal import (
@@ -62,6 +62,10 @@ from .principal import (
 
 class _Unreadable(Exception):
     pass
+
+
+#: seconds the command waits for the state file's lock before it refuses (exit 2)
+LOCK_TIMEOUT = 5.0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -119,10 +123,18 @@ def _euid() -> int:
 def _owner(path: str) -> int:
     """The uid owning the state file: the agent runtime's, which is refused as an operator.  A
     symbolic link is refused (an operator never follows a name the runtime controls)."""
+    return _pinned(path)[0]
+
+
+def _pinned(path: str) -> tuple[int, int]:
+    """``(uid, gid)`` of the state file, read once when the run starts; every later access is
+    refused if it changed.  A symbolic link, or a file with another hard link, is refused."""
     st = os.lstat(path)
     if stat.S_ISLNK(st.st_mode):
         raise MemoryAdminError(f"{path} is a symbolic link: the state file is a real file")
-    return st.st_uid
+    if st.st_nlink != 1:
+        raise MemoryAdminError(f"{path} has {st.st_nlink} hard links: the state file has one")
+    return st.st_uid, st.st_gid
 
 
 def _run(args: argparse.Namespace) -> dict[str, Any]:
@@ -138,17 +150,25 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         raise _Unreadable(f"no memory state file at {args.state} ({exc.strerror})") from None
     # the runtime owns the state file, and the operators file cannot forge that
     by = invoking_operator(config.refusing([state_owner]))
-    # the state file and the directories above it: no links, owned only by root or the runtime
-    chain = check_root_owned(args.state, owners=(state_owner,))
+    # the state file and its own directory may be the runtime's; every directory above them is
+    # root's; no links anywhere
+    chain = check_root_owned(args.state, owners=(state_owner,), depth=2)
     if chain:
         raise MemoryAdminError("the state file's path is not trusted: " + "; ".join(chain))
     # the one deny file: the operators file's, which the runtime reads too; a corrupt state file
     # is refused, never quarantined and recreated by an operator run
-    backend = FileBackend(args.state, deny_path=config.deny_file, quarantine=False)
+    pinned = _pinned(args.state) if _euid() == 0 else None
+    backend = FileBackend(
+        args.state,
+        deny_path=config.deny_file,
+        owner=pinned,
+        quarantine=False,
+        lock_timeout=LOCK_TIMEOUT,
+    )
     unsafe = [
         p
         for path in (backend.deny.path, backend.deny.lock_path)
-        for p in check_root_owned(path, owners=(0, by.uid))
+        for p in check_root_owned(path, owners=(0, by.uid), depth=2)
     ]
     if unsafe:
         raise MemoryAdminError(
@@ -186,7 +206,7 @@ def main(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
     try:
         out = _run(args)
-    except (OperatorsUnreadable, _Unreadable, OSError, StateCorruptError) as exc:
+    except (OperatorsUnreadable, _Unreadable, OSError, StateCorruptError, StateLockBusy) as exc:
         print(f"hnx agent memory {args.cmd}: {exc}", file=sys.stderr)
         return 2
     except (MemoryAdminError, MemoryAccessError, MemoryClockError) as exc:
