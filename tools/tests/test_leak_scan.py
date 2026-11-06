@@ -989,3 +989,23 @@ def test_vault_prefixed_names_are_findings_whatever_product_uses_them():
         assert "secret-name" in _secret_hits(line), line
     for line in ("notes_root: /srv/notes", "notes_scope: [findings]", "tools: [notes_write]"):
         assert _secret_hits(line) == set(), line
+
+
+def test_credential_shapes_shared_with_agent_memory_come_from_one_module():
+    """Agent memory refuses what the scanner calls a secret (ADR-0037 decision 4): both read
+    these shapes from ``homelabnext.shapes``, so neither can drift from the other."""
+    from homelabnext import shapes
+
+    by_name = {p.name: p.regex.pattern for p in leak_scan.PATTERNS}
+    for name, rx in (
+        ("aws-access-key", shapes.AWS_ACCESS_KEY),
+        ("aws-secret-key", shapes.AWS_SECRET_KEY),
+        ("private-key-block", shapes.PRIVATE_KEY_HEADER),
+        ("github-token", shapes.GITHUB_TOKEN),
+        ("slack-token", shapes.SLACK_TOKEN),
+        ("google-api-key", shapes.GOOGLE_KEY),
+        ("jwt", shapes.JWT),
+        ("age-secret-key", shapes.AGE_SECRET_KEY),
+        ("vault-blob", shapes.VAULT_BLOB),
+    ):
+        assert by_name[name] == rx, name

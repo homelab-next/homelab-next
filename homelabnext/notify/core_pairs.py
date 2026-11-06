@@ -2,10 +2,10 @@
 """The core's own notify pairs: every problem title the core registers with
 :meth:`homelabnext.notify.core.Notifier.register_pair`, and its recovery title.
 
-This is the one place they are written.  The components that page (the broker, the status hub,
-the power monitor, the model-call budget, the serving-config check) take their titles from here,
-so the list is what they register, not a copy of it; ``tests/notify/test_core_pairs.py`` runs
-each registration and fails on a title missing here.  The module loader reads it
+This is the one place they are written.  The components that page (agent memory, the broker,
+the status hub, the power monitor, the model-call budget, the serving-config check) take their
+titles from here, so the list is what they register, not a copy of it;
+``tests/notify/test_core_pairs.py`` runs each registration and fails on a title missing here.  The module loader reads it
 (:class:`homelabnext.modules.loader.CoreNames`) so that no module declares one of these titles:
 the notifier keys its pairs by problem title, so a module that took one would change the
 recovery the core's own alert clears with.
@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
+AGENT_MEMORY_CAP = ("Agent memory scope at its record cap", "Agent memory scope accepts writes")
+AGENT_MEMORY_CLOCK = ("Agent memory clock behind its log", "Agent memory clock caught up")
 BROKER_APPROVAL = ("Broker approval needed", "Broker approval settled")
 BROKER_LANE_QUOTA = ("Broker lane quota reached", "Broker lane quota cleared")
 MODEL_CALL_BUDGET = ("Model call budget exceeded", "Model call budget back within limits")
@@ -28,6 +30,8 @@ UPS_ON_BATTERY = ("UPS on battery", "UPS back on line power")
 CORE_PAIRS = MappingProxyType(
     dict(
         (
+            AGENT_MEMORY_CAP,
+            AGENT_MEMORY_CLOCK,
             BROKER_APPROVAL,
             BROKER_LANE_QUOTA,
             MODEL_CALL_BUDGET,
@@ -41,6 +45,8 @@ CORE_PAIRS = MappingProxyType(
 )
 
 __all__ = [
+    "AGENT_MEMORY_CAP",
+    "AGENT_MEMORY_CLOCK",
     "BROKER_APPROVAL",
     "BROKER_LANE_QUOTA",
     "CORE_PAIRS",

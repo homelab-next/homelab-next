@@ -40,7 +40,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-All are versioned 1.0 except `agent/profile` (1.5), `agent/report_result` (1.1),
+All are versioned 1.0 except `agent/profile` (1.6), `agent/report_result` (1.1),
 `agent/context_manifest` (1.2), `agent/golden_task` (1.1), `broker/manifest` (1.8),
 `broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
 additive, and each schema's `description` says what each minor added. Every version is
@@ -552,6 +552,90 @@ access. The caller is platform code, not the model: it loads the profile with
 `load_verified_profile(path, policy, lock)`.
 Backends store data only: `InMemoryBackend` (the fake) and `FileBackend` (one
 `homelabnext.state` file keyed by profile id).
+
+**History** ([ADR-0037](adr/0037-agent-memory-is-sourced-historied-and-retractable.md), PR 1,
+decision 6 as amended). Per owner the stored value is `{entries, log}`. Every applied update
+appends one change record (`at`, `scope`, `key`, `op`, `rev`, `value`, `value_digest`, `pack_id`,
+`sources`, `checked`, `tlp`, `closure`; `value` is absent on `retire`) in the same backend
+transaction as the entry. A refused batch writes neither, on both backends. `entries` is a cache
+of the log (`fold(log)` rebuilds it). Each entry carries `rev`, `updated_at` and `reasserted_at`,
+which `add` and `replace` set. `rev` starts at 1 on a key's first `add` and rises by one on every
+record of the key. It is never restarted or reused, through `retire`, a later `add` and the
+compaction below. Until sources and labels ship (PR 2), every record is `sources: []`,
+`checked: false`, `tlp: red`, with an empty closure. Memory stored before the log migrates once,
+on its owner's next write, to one `migrated: true` record per entry (`rev: 1`). A legacy key or
+value that holds a secret migrates as a `purged: true` marker only, with no value and no digest
+(an unsalted digest of a low-entropy secret confirms a guess offline); a secret key is renamed
+`purged-<its position>`. Folding keeps the marker. The migration logs the position, never the
+value.
+
+The clock is injected: `MemoryStore(now=...)` takes an aware UTC `datetime`, read once per batch
+inside the transaction. The log's time never goes backwards. When the clock is up to 5 minutes
+behind the log's latest record, the batch is stamped at the log's time. Beyond that the batch is
+refused (`MemoryClockError`): nothing is written, and the operator is paged "clock behind log by
+X" once (pair `AGENT_MEMORY_CLOCK`), with the recovery on the next accepted write. A batch holds
+at most 64 updates.
+
+No secret enters the log, or an error message. Every string of the batch is screened first, at
+any depth and property names included; for `apply_report`, that is every string of the whole
+report. The screen uses the screen's secret types (`homelabnext.agent.screen.SECRET_TYPES`) and
+the leak scanner's credential shapes (`homelabnext.shapes`, which `tools/leak_scan.py` reads too).
+A match refuses the whole batch, naming the position and the type. Schema refusals name a path and
+a keyword (`memory_updates/0/value: fails maxLength`), never the validator's message, which
+quotes values; a property name the schema does not define shows as `#<i>`, its position. An
+access refusal shows a scope or owner name only when it is a plain name that passes the screen.
+**`apply_report` refuses the whole report when any field holds a credential shape**, not just
+its `memory_updates`. For example, an intelligence summary that quotes a leaked key has all of
+its memory updates refused; the platform must redact the key before the report is applied. **The screen is shape-based.** A secret that is encoded (base64, hex),
+disguised with confusable characters, or split across keys or updates passes it. Purge (PR 3) is
+how such a value leaves the store.
+
+`history(profile, scope, key)` returns `{records, withheld}`, the key's records in order.
+`as_of(profile, scope, t)` returns `{at, entries, compacted, aged_out, withheld}`: the scope's live
+entries as they stood at `t`, rebuilt from the log. A key whose state at `t` lies in folded records
+(a range, a tombstone, or before a migration) is listed under `compacted` and never given a value.
+`aged_out` is true when `t` falls in the time range of keys whose tombstones aged out (below);
+their names are gone, so any key not listed must then be read as compacted. Both reads are
+owner-scoped exactly like `read`. `withheld` is 0 until records carry labels (PR 2 applies the
+reader's TLP ceiling there). Every read (`read` included) loads the owner's whole stored value,
+log included; the file backend reads its whole file on every call anyway. The public API is
+exactly `apply_updates`, `apply_report`, `read`, `history` and `as_of`.
+
+The log is bounded per scope. A profile's `memory_limits.records` caps each scope (profile schema
+1.6, at most 1,000,000). Without an entry, a scope gets 10,000 records, or 100,000 if it is one of
+the profile's `platform_scopes`. A batch that would take a scope past its cap is refused whole
+(`MemoryLimitError`). The refusal pages the operator through the state-diffed notifier
+(`MemoryStore(notifier=..., topic=...)`, pair `AGENT_MEMORY_CAP` in
+`homelabnext.notify.core_pairs`), once per crossing. The page is keyed by a digest of the owner
+and scope, so no two pairs share it. Its recovery goes out when a write to the scope is accepted
+again. Without a notifier, the crossing is logged once.
+- **A model-written scope only grows.** Its advice is to raise the cap in the reviewed profile,
+  or an operator purge (PR 3).
+- **A platform scope compacts.** `memory_limits.keep_last: {<scope>: {<key glob>: N}}` (the
+  largest N of the matching globs) folds a key's records beyond its last N into one range record.
+  The range record keeps the rev range, value digests, the union of sources, closures and
+  `pack_ids`, and the strictest label. The bound covers only keys a pattern matches: a key
+  replaced without end (ADR-0035's `cursor-*`) needs one, or it reaches the cap.
+- **A retired key folds whole** into one tombstone.
+- **Tombstones age out.** Tombstones beyond the scope's budget (`memory_limits.tombstones`, below
+  the cap, by default a tenth of it) age out oldest first into the scope's one `aged` record.
+  Only a retired key's tombstone ages: a key retired and added again keeps its old tombstone as
+  an earlier record, and it stays. The `aged` record keeps the scope's high-water `rev`. A key's
+  next `rev` is one above the larger of its own and that high-water `rev`, so none is reused.
+
+An aged-out key leaves `dependents` for good. It was already retired, so a retraction loses
+nothing live.
+
+There is no byte cap beside the record cap. Every field of a PR 1 record is bounded by the report
+schema: a value is at most 2,000 characters, a key 64, and sources and closures are empty. So the
+record cap bounds the bytes. PR 2, which fills closures, adds a byte cap.
+
+The compiler copies `platform_scopes` and `memory_limits` from the spec only when they are set
+(empty ones normalise away). It refuses a platform or capped scope that is not a memory scope, and
+`keep_last` or `tombstones` on a scope that is not a platform scope. `apply_report` refuses any
+update that names a platform scope; only platform code writes one, through `apply_updates`.
+Until `MemoryAdmin` ships (PR 3), nothing can erase history: a report cannot reach a platform
+scope, so it cannot cause compaction.
 
 
 Two stores are called memory, and only this one carries the M-09 guarantees. The broker's

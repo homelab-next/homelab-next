@@ -452,7 +452,7 @@ change until its ADR is accepted):
 | `agent/handoff` | 1.0 | `schemas/agent/handoff.schema.json` | stable |
 | `agent/injection_corpus` | 1.0 | `schemas/agent/injection_corpus.schema.json` | stable |
 | `agent/pregate_output` | 1.0 | `schemas/agent/pregate_output.schema.json` | stable |
-| `agent/profile` | 1.5 | `schemas/agent/profile.schema.json` | stable |
+| `agent/profile` | 1.6 | `schemas/agent/profile.schema.json` | stable |
 | `agent/prompt_template` | 1.0 | `schemas/agent/prompt_template.schema.json` | stable |
 | `agent/report_result` | 1.1 | `schemas/agent/report_result.schema.json` | stable |
 | `broker/approval` | 1.0 | `schemas/broker/approval.schema.json` | stable |

@@ -160,5 +160,5 @@ def test_file_backend_persists_through_the_state_library(reader, tmp_path):
 
 def test_the_store_has_no_unvalidated_write_path():
     public = {n for n in dir(MemoryStore) if not n.startswith("_")}
-    assert public == {"apply_updates", "apply_report", "read"}
+    assert public == {"apply_updates", "apply_report", "read", "history", "as_of"}
     assert isinstance(MemoryStore()._backend, InMemoryBackend)
