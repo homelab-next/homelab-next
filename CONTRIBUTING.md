@@ -193,6 +193,13 @@ and an entry that no longer excuses anything fails the lint.
   "<tool> is not installed", and fails instead where `HNX_REQUIRE_TOOLS=<tool>,...` (or the older
   `HNX_REQUIRE_GO=1`, for `go`) says the tool must be there; CI sets it where it installs tools.
   A genuinely new legitimate cause is a reviewed one-line addition to `skip_reasons`.
+  A test must not probe for its tool itself (`shutil.which` then `pytest.skip` or `return False`, or
+  a `skipif` on the euid): `HNX_REQUIRE_TOOLS` could never fail it, and the check would skip in CI
+  forever. Use `require_nft_check()` (nft in a user and network namespace), `require_dnsmasq()` or
+  `require_root_setpriv()`; CI's `real-tools` job installs nft and dnsmasq, runs as root where
+  needed and requires them (it feeds no aggregate check: the operator requires `real-tools`
+  on `main` themselves, see TODO.md). `tests/gates/test_suite_policy.py` fails on a new probe (its
+  baseline of older ones only shrinks).
 - **Quarantine, not deletion, for a flaky test:**
   `@pytest.mark.quarantine(owner="<team-or-handle>", until="YYYY-MM-DD", reason="<what is flaky>")`.
   The test still runs but cannot break the build; all three fields are required, the date may be at

@@ -1861,7 +1861,7 @@
    "trino": 2
   },
   "tools/tests/test_caddy_lint.py": {
-   "caddy": 291
+   "caddy": 289
   },
   "tools/tests/test_generated_files_have_checks.py": {
    "litellm": 1,

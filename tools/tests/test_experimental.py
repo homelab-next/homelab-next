@@ -312,7 +312,8 @@ def blocking_selection_problems(ci_doc: dict, paths) -> list[str]:
         words = shlex.split(without_network(line)) if "pytest" in line else []
         if words[:3] != ["python", "-m", "pytest"]:
             continue
-        if "-m" in words and words[words.index("-m") + 1] == ex.BLOCKING_SELECT:
+        # the marker option, not the "-m pytest" before it
+        if "-m" in words[3:] and words[words.index("-m", 3) + 1] == ex.BLOCKING_SELECT:
             continue
         named = [w for w in words[3:] if w.startswith(("tests/", "tools/tests/", "conformance/"))]
         inside = [p for w in named for p in paths if p.startswith(w.rstrip("/") + "/")]

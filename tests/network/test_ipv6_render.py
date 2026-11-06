@@ -11,7 +11,6 @@ from __future__ import annotations
 import copy
 import ipaddress
 import json
-import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +22,7 @@ from homelabnext.network import adapters, build_ir, load_site, validate
 from homelabnext.network.ir import Rule, Selector, ipv6_form, router_address6
 from homelabnext.network.loader import load_registry
 from homelabnext.network.plan import write_rendered
+from tests.suite_policy import require_nft_check
 
 MINIMAL = Path(__file__).resolve().parents[2] / "examples" / "minimal"
 
@@ -239,23 +239,11 @@ def test_the_example_lab_renders_with_every_ready_adapter():
     assert "ipv6_subnet" in render(CONTROLLER, ir)["networks.json"]
 
 
-def _nft_can_check(tmp_path) -> bool:
-    if not (shutil.which("nft") and shutil.which("unshare")):
-        return False
-    probe = tmp_path / "probe.nft"
-    probe.write_text("table inet probe {\n}\n")
-    r = subprocess.run(["unshare", "-rn", "nft", "-c", "-f", str(probe)], capture_output=True)
-    return r.returncode == 0
-
-
 def test_the_ipv6_nftables_file_passes_nft_check(ir6, tmp_path):
-    if not _nft_can_check(tmp_path):
-        pytest.skip("nft with an unprivileged network namespace is not available")
+    nft = require_nft_check()
     write_rendered(render("linux", ir6), tmp_path / "root")
     f = tmp_path / "root/etc/nftables.d/50-hnx-site.nft"
-    r = subprocess.run(
-        ["unshare", "-rn", "nft", "-c", "-f", str(f)], capture_output=True, text=True
-    )
+    r = subprocess.run(["unshare", "-rn", nft, "-c", "-f", str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
 

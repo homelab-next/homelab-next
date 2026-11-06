@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.suite_policy import require_tool
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import caddy_lint as lint
 
@@ -1725,9 +1727,17 @@ def test_a_global_order_option_fails_closed():
 
 
 CADDY_BIN = os.environ.get("HNX_CADDY") or shutil.which("caddy")
-live = pytest.mark.skipif(
-    CADDY_BIN is None, reason="caddy not installed (set HNX_CADDY or put caddy on PATH)"
-)
+
+
+@pytest.fixture
+def _live_adapter():
+    """The real adapter, or a skip (a failure under HNX_REQUIRE_TOOLS=caddy) without it; HNX_CADDY
+    names one off PATH."""
+    if not os.environ.get("HNX_CADDY"):
+        require_tool("caddy")
+
+
+live = pytest.mark.usefixtures("_live_adapter")
 
 
 @live

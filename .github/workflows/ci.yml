@@ -230,6 +230,53 @@ jobs:
           python -m pytest -q -m "not live" -rs
           tests/overlay/test_private_overlay_example.py tests/compose/test_lab_in_a_box.py
 
+  # The tests that call the real nft (`nft -c` on the rendered firewall, the nftables_host role's
+  # refusal of a ruleset nft rejects) and dnsmasq (`dnsmasq --test`), and the one that needs root
+  # (the telemetry store read as two other users, with setpriv).  The test job above runs
+  # unprivileged and offline, where these tools are absent or unusable, so there they skip; here
+  # they are installed, and HNX_REQUIRE_TOOLS makes a missing or unusable one a failure
+  # (tests/suite_policy.py: require_nft_check, require_dnsmasq, require_root_setpriv), so the
+  # checks cannot go on skipping unseen.  The apt packages are the runner image's own archive: a
+  # moving version, but a rendered file nft or dnsmasq rejects is a finding at any version.
+  # -rs prints the skips, which must be none of nft, dnsmasq, unshare or setpriv.
+  real-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/python-deps
+        with:
+          python-version: "3.12"
+          extras: test,ansible  # the nftables_host role test runs a playbook
+      - name: install nftables and dnsmasq; allow unprivileged user namespaces (nft -c runs in one)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nftables dnsmasq-base
+          # Ubuntu 24.04 confines unprivileged user namespaces with AppArmor; the key is absent
+          # on an image without that restriction
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          nft --version
+          dnsmasq --version | head -1
+      - name: the nft and dnsmasq checks, and the root-only user-switching test; none may skip
+        env:
+          HNX_REQUIRE_TOOLS: nft,dnsmasq,unshare,setpriv,ansible-playbook
+          # test ids, not scripts: scripts reality reads a path at the start of a run line as one
+          REAL_TOOL_TESTS: >-
+            tests/network/test_external_tools.py tests/network/test_wan6.py
+            tests/network/test_ipv6_render.py
+            tests/roles/test_control_roles.py::test_nftables_host_never_installs_a_ruleset_nft_rejects
+          ROOT_TESTS: tests/orchestration/test_orchestration_readonly.py
+        run: |
+          set -euo pipefail
+          read -ra real_tool_tests <<< "$REAL_TOOL_TESTS"
+          python -m pytest -q -rs -m "not live and not experimental" "${real_tool_tests[@]}"
+          sudo -E env "PATH=$PATH" "HOME=$HOME" python -m pytest -q -rs -m "not experimental" "$ROOT_TESTS"
+
   # The security-critical units (tools/coverage_floor.py UNITS, the one list): each keeps >= 80%
   # line coverage from its own tests (pytest-cov from the test extra).
   coverage:
