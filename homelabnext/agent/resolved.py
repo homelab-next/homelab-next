@@ -46,6 +46,10 @@ class ResolvedUids(Mapping[str, Mapping[str, str]]):
 
     __slots__ = ("_map", "source")
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        # a subclass could override the reads the assembler relies on, so there is none
+        raise TypeError("ResolvedUids is sealed: it cannot be subclassed")
+
     def __init__(self, entries: Mapping[str, Mapping[str, str]], source: str, token: object = None):
         if token is not _SEALED:
             raise TypeError(

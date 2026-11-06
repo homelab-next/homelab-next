@@ -149,7 +149,7 @@ def _input_items(
         return {}
     if not isinstance(raw, Mapping):
         raise SpecError("inputs.items must map input section names to lists of items")
-    if not isinstance(resolved, ResolvedUids):
+    if type(resolved) is not ResolvedUids:  # the exact sealed type, never a subclass
         raise SpecError(
             "input items need resolved_uids, a ResolvedUids made by resolve_input_uids from the "
             f"rows a records or lake reader stored (not a {type(resolved).__name__})"
@@ -162,7 +162,6 @@ def _input_items(
         if uid:
             pairs[uid] = {d for d in (k.get("digest"), k.get("file_digest")) if d}
             owner.update(dict.fromkeys(pairs[uid], uid))
-    seen: dict[str, str] = {}
     out: dict[str, list[dict[str, str]]] = {}
     for name in sorted(raw):
         if kinds.get(name) != "input":
@@ -195,8 +194,6 @@ def _input_items(
                     f"{where}: uid {uid} is also a knowledge item's uid with a different digest; "
                     "a uid names one content (ADR-0037 decision 13)"
                 )
-            if seen.setdefault(uid, digest) != digest:
-                raise SpecError(f"{where}: uid {uid} is paired with two digests in one pack")
             if owner.setdefault(digest, uid) != uid:
                 raise SpecError(f"{where}: digest {digest} is paired with two uids in one pack")
             labels = [tlp.read_stored(resolved[uid].get("tlp"))]

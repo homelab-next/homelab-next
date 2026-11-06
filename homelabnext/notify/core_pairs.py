@@ -17,6 +17,10 @@ from types import MappingProxyType
 
 AGENT_MEMORY_CAP = ("Agent memory scope at its record cap", "Agent memory scope accepts writes")
 AGENT_MEMORY_CLOCK = ("Agent memory clock behind its log", "Agent memory clock caught up")
+AGENT_MEMORY_DROPPED = (
+    "Agent memory platform updates dropped",
+    "Agent memory platform updates applied again",
+)
 BROKER_APPROVAL = ("Broker approval needed", "Broker approval settled")
 BROKER_LANE_QUOTA = ("Broker lane quota reached", "Broker lane quota cleared")
 MODEL_CALL_BUDGET = ("Model call budget exceeded", "Model call budget back within limits")
@@ -32,6 +36,7 @@ CORE_PAIRS = MappingProxyType(
         (
             AGENT_MEMORY_CAP,
             AGENT_MEMORY_CLOCK,
+            AGENT_MEMORY_DROPPED,
             BROKER_APPROVAL,
             BROKER_LANE_QUOTA,
             MODEL_CALL_BUDGET,
@@ -47,6 +52,7 @@ CORE_PAIRS = MappingProxyType(
 __all__ = [
     "AGENT_MEMORY_CAP",
     "AGENT_MEMORY_CLOCK",
+    "AGENT_MEMORY_DROPPED",
     "BROKER_APPROVAL",
     "BROKER_LANE_QUOTA",
     "CORE_PAIRS",

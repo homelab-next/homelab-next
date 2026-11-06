@@ -1003,3 +1003,66 @@ def test_the_store_refuses_a_deferred_pack(reader, backend):
         MemoryStore(backend).apply_report(
             reader, report(reader, h, [up("add", "k", "v")]), pack=pack, pack_hash=h
         )
+
+
+def test_resolved_uids_cannot_be_subclassed():
+    with pytest.raises(TypeError, match="sealed"):
+
+        class Loose(ResolvedUids):  # a subclass could override the reads the assembler trusts
+            pass
+
+
+# ---------------------------------------------------------------- a dropped cursor pages
+def test_a_dropped_platform_update_pages_once_per_crossing_and_recovers(backend, tmp_path):
+    """The reviewer's probe: a cursor key replaced with 16 new sources per fold reaches the
+    closure cap after 15 folds; every later fold drops it.  That pages once (by scope and count,
+    never the key), and recovers on the scope's next batch with no drop."""
+    from homelabnext.notify import FakeSender, Notifier
+    from homelabnext.notify.core_pairs import AGENT_MEMORY_DROPPED
+    from homelabnext.state import StateStore
+
+    p = _profile(
+        memory_scopes=["analyst", FL], platform_scopes=[FL],
+        memory_limits={"keep_last": {FL: {"cursor-*": 2}}},
+    )  # fmt: skip
+    sender = FakeSender()
+    clock = Clock()
+    store = MemoryStore(
+        backend, now=clock, notifier=Notifier(sender, StateStore(tmp_path / "n.json"))
+    )
+    ids = [digest(n) for n in range(1, 1000)]
+    store.apply_updates(p, [up("add", "cursor-a", "0", scope=FL, sources=ids[:16])], unchecked=True)
+    dropped = []
+    for n in range(1, 40):
+        clock.tick()
+        got = store.apply_updates(
+            p, [up("replace", "cursor-a", str(n), scope=FL, sources=ids[16 * n : 16 * n + 16])],
+            unchecked=True,
+        )  # fmt: skip
+        dropped.append(len(got["dropped"]))
+    assert dropped[:15] == [0] * 15 and set(dropped[15:]) == {1}  # frozen after 15 folds
+    title, cleared = AGENT_MEMORY_DROPPED
+    pages = [m for m in sender.sent if m.title == title]
+    assert len(pages) == 1  # once per crossing, not once per fold
+    assert FL in pages[0].body and "1 update" in pages[0].body and "cursor-a" not in pages[0].body
+    clock.tick()
+    store.apply_updates(p, [up("retire", "cursor-a", scope=FL)], unchecked=True)  # no drop
+    assert [m.title for m in sender.sent if m.title in (title, cleared)] == [title, cleared]
+
+
+def test_a_cursor_without_sources_never_drops(backend):
+    """A cursor is position, not provenance: the fold writes its cursor-* keys with no sources
+    (ADR-0037 decisions 10 and 17), so replacing one without end never reaches the closure cap,
+    and keep_last keeps its records bounded."""
+    p = _profile(
+        memory_scopes=["analyst", FL], platform_scopes=[FL],
+        memory_limits={"keep_last": {FL: {"cursor-*": 2}}},
+    )  # fmt: skip
+    store = MemoryStore(backend, now=Clock())
+    store.apply_updates(p, [up("add", "cursor-a", "0", scope=FL)], unchecked=True)
+    for n in range(1, 1001):
+        got = store.apply_updates(p, [up("replace", "cursor-a", str(n), scope=FL)], unchecked=True)
+        assert got["dropped"] == []
+    recs = store.history(p, FL, "cursor-a")["records"]
+    assert len(recs) == 3 and recs[-1]["rev"] == 1001 and recs[-1]["closure"] == []
+    assert store.read(p, FL)["entries"] == {"cursor-a": "1000"}

@@ -131,7 +131,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from homelabnext import shapes, tlp
-from homelabnext.notify.core_pairs import AGENT_MEMORY_CAP, AGENT_MEMORY_CLOCK
+from homelabnext.notify.core_pairs import (
+    AGENT_MEMORY_CAP,
+    AGENT_MEMORY_CLOCK,
+    AGENT_MEMORY_DROPPED,
+)
 from homelabnext.registry.model_tlp import receive_ceiling
 
 from .compiler import VerifiedProfile, require_verified
@@ -204,6 +208,7 @@ UNLABELLED = "red"
 #: the notifier pair the record cap pages with (its titles live in ``core_pairs``)
 CAP_TITLE, CAP_CLEARED = AGENT_MEMORY_CAP
 CLOCK_TITLE, CLOCK_CLEARED = AGENT_MEMORY_CLOCK
+DROPPED_TITLE, DROPPED_CLEARED = AGENT_MEMORY_DROPPED
 #: how far behind its log's latest record the clock may be: within it the batch is stamped at
 #: the log's time; beyond it the batch is refused and the operator paged
 CLOCK_SKEW = timedelta(minutes=5)
@@ -873,6 +878,7 @@ def _apply(
     at = max(now, latest)
     problems: list[str] = []
     dropped: list[str] = []
+    dropped_in: dict[str, int] = {}  # scope -> updates dropped at the closure cap
     touched: dict[tuple[str, str], None] = {}
     for n, u in enumerate(updates):
         where = f"memory_updates/{n}"
@@ -909,6 +915,7 @@ def _apply(
                     problems.append(why)
                 else:
                     dropped.append(why + " (dropped; the rest of the batch applies)")
+                    dropped_in[u["scope"]] = dropped_in.get(u["scope"], 0) + 1
                 continue
             rec["closure"] = list(entry["sources"])  # no mem: closures or aliases yet (PR 3)
             records.append(rec)
@@ -994,6 +1001,7 @@ def _apply(
         )
     if result is not None:
         result["dropped"] = dropped
+        result["dropped_in"] = dropped_in
         result["touched"] = list(touched)
     return {"entries": entries, "log": records, "exposure": exposure}
 
@@ -1031,6 +1039,7 @@ class MemoryStore:
         if notifier is not None:
             notifier.register_pair(CAP_TITLE, CAP_CLEARED)
             notifier.register_pair(CLOCK_TITLE, CLOCK_CLEARED)
+            notifier.register_pair(DROPPED_TITLE, DROPPED_CLEARED)
 
     def apply_updates(
         self,
@@ -1112,6 +1121,10 @@ class MemoryStore:
             self._page(owner, scope, None, False)
         if check.checked:
             self._page(owner, "*", None, False, "exposure")
+        else:  # a dropped platform update pages once per crossing, by scope and count
+            dropped_in = result.get("dropped_in") or {}
+            for scope in sorted({u["scope"] for u in updates}):
+                self._dropped_page(owner, scope, dropped_in.get(scope, 0))
         ceiling = read_ceiling(profile)
         revs: dict[str, int] = {}
         withheld = 0
@@ -1320,6 +1333,7 @@ class MemoryStore:
         from before the migration) is listed in ``compacted``, never given a value.
         ``aged_out`` is true when ``t`` falls in the time range of keys whose tombstones aged
         out: their names are gone, so any key not listed must then be read as compacted.
+        ``aged_out`` is false whenever the aged record is above the reader's ceiling.
 
         The reader's ceiling applies to the state at ``t``: a key whose label then (or, for a
         compacted key, its folded record's label) is above it is counted in ``withheld`` and
@@ -1413,6 +1427,25 @@ class MemoryStore:
             if problem is None
             else f"{owner}'s {what} refuses writes: {problem}. {advice[0].upper()}{advice[1:]}.",
             f"{owner}'s {what} accepts writes again",
+        )
+
+    def _dropped_page(self, owner: str, scope: str, count: int) -> None:
+        """Report that an unchecked batch dropped ``count`` updates of ``owner/scope`` at the
+        closure cap (ADR-0037 decision 10, amended), or none (the recovery), state-diffed.  The
+        key is a digest of owner and scope; the page names the scope and the count, never a key,
+        so a platform key that stopped advancing is seen instead of stalling silently."""
+        pair = hashlib.sha256(f"{owner}\0{scope}".encode()).hexdigest()[:16]
+        self._report(
+            f"agent-memory-dropped-{pair}",
+            owner,
+            "dropped",
+            DROPPED_TITLE if count else DROPPED_CLEARED,
+            None
+            if not count
+            else f"{owner}'s platform memory scope {scope} dropped {count} update(s) at the "
+            f"closure cap of {MAX_CLOSURE} sources: those keys stopped advancing. Retire and "
+            "re-add them, or write a key that carries position (a cursor) without sources.",
+            f"{owner}'s platform memory scope {scope} applies its updates again",
         )
 
     def _clock_page(self, owner: str, behind: timedelta | None) -> None:

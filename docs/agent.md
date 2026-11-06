@@ -726,6 +726,10 @@ never from what the model says.
   most 256. A checked update past that refuses its batch: retire the key and add it again. An
   unchecked platform update past it is dropped and reported in the result's `dropped`, and the
   rest of the batch applies, so a key the platform replaces without end cannot stall its writer.
+  A drop pages once per crossing (pair `AGENT_MEMORY_DROPPED`, keyed by owner and scope, naming
+  the scope and the count, never a key) and recovers on the scope's next batch with no drop. A
+  cursor is position, not provenance: ADR-0035's fold writes its `cursor-*` keys with no
+  `sources`, so a cursor never reaches the cap.
   Compaction unions closures into range records and tombstones.
 
 

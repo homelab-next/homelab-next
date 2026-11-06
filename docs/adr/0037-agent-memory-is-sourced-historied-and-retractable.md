@@ -150,6 +150,10 @@ was shown, never from what the model says about its sources.
      schema 1.7, additive), counts the scope's **records only**: by default 2,000 bytes per record
      of the record cap (20 MB for a 10,000-record scope), so ordinary memory meets its record cap
      first and the byte cap binds only once closures grow fat.
+   - A model can reach a scope's byte cap on purpose: about 65 to 75 maximal reports (64
+     updates each, every one a 2,000-character value with 16 sources, about 4.8 kB a record) fill
+     the default 20 MB of a 10,000-record scope. That is a refusal the operator is paged for, not a loss: the cap holds
+     and nothing already stored is touched.
    - **Exposures are charged once per owner**, against `memory_limits.exposure_bytes` (profile
      1.7, additive), by default 50,000,000 bytes: about 33,000 ordinary packs or 660 full ones.
      Only a batch that stores a new exposure can cross it. Past it, every checked write from a
@@ -163,7 +167,9 @@ was shown, never from what the model says about its sources.
      scope's byte total, which would count records the reader may not see.
    - **A range record keeps at most 256 value digests and 256 pack ids**, the newest, and is
      marked `truncated: true` past that, so a key replaced without end has a bounded range
-     record. Its sources and closures stay whole. A retraction treats a truncated range
+     record. Its sources and closures stay whole, and they are bounded only for a key that is
+     never re-added: each add starts a closure of up to 256 afresh, and the range unions them
+     all. A retraction treats a truncated range
      conservatively: as exposed to everything its sources reach, since the packs it no longer
      lists cannot be checked one by one.
    - A range record also stores `effective`, the folded state's own effective sources (those
@@ -282,7 +288,11 @@ was shown, never from what the model says about its sources.
     closure cap is dropped and reported (its position, in the result's `dropped`), and the rest
     of the batch applies, as a denied update is (decision 14): a key ADR-0035's fold replaces
     without end must not stall the fold. A checked batch with such an update is still refused
-    whole.
+    whole. A drop pages the operator once per crossing (pair `AGENT_MEMORY_DROPPED`, keyed by a
+    digest of owner and scope, naming the scope and the count, never a key), and recovers on the
+    scope's next batch with no drop, so a key that stopped advancing is seen, not silent. The
+    fold's `cursor-*` writes carry no `sources`: a cursor is position, not provenance, so a cursor
+    replaced without end never reaches the cap.
 
 ### Memory citing memory (PR 3)
 
@@ -408,7 +418,9 @@ was shown, never from what the model says about its sources.
       `unchecked=True` and its `sources=`. Its records are `red`, which is never below a ledger
       value's own `tlp` field. A denied update is dropped, not fatal (decision 14). The ledger's
       profile gives its `cursor-*` keys a `keep_last` pattern (decision 6, amended); a key no
-      pattern matches is not bounded by it.
+      pattern matches is not bounded by it. The fold's `cursor-*` writes carry no `sources`: a
+      cursor is position, not provenance, so it never reaches the closure cap (decision 10,
+      amended); an update dropped there pages (`AGENT_MEMORY_DROPPED`).
     - **Decision 5 (value fields):** `tlp` inside a ledger value stays for the coordinator's own
       reading. The renderer writes the store's label into what it renders, not the value's field.
     - **Decision 7 (pack fill order):** stale entries (decision 15) and withheld counts are
