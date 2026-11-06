@@ -762,7 +762,7 @@ def _defs() -> dict[str, Any]:
                 ),
                 "services": arr(
                     file_entry(
-                        "platform/service rows; names start with the module id (a provider's row is keyed by its slot and renamed to the instance). A public_hostname needs auth other than none and an overlay grant."
+                        "platform/service rows; names start with the module id (a provider's row is keyed by its slot and renamed to the instance). A public_hostname needs auth: idp or own (never none or mtls: the edge terminates TLS) and an overlay grant."
                     )
                 ),
                 "status_sources": arr(ref("status_ref")),
