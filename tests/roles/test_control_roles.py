@@ -17,7 +17,7 @@ import pytest
 import yaml
 from rolerun import calls, fake, first_run, last_run_vars, logging_fake, run_cases, run_role
 
-from tests.suite_policy import require_nft_check
+from tests.suite_policy import find_nft_check, require_nft_check
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -747,23 +747,7 @@ def test_ssh_hardening_refuses_bad_certificate_inputs(first):
 # ---------------------------------------------------------------- nftables_host
 
 
-def _real_nft_check() -> str | None:
-    """The real nft, when it can check a ruleset unprivileged (in a user and network namespace,
-    as tests/network does); None where it cannot (not installed, or no unprivileged namespaces)."""
-    import subprocess
-    import tempfile
-
-    nft = shutil.which("nft", path="/usr/sbin:/sbin:/usr/bin")
-    if not (nft and shutil.which("unshare")):
-        return None
-    with tempfile.NamedTemporaryFile("w", suffix=".nft") as probe:
-        probe.write("table inet probe {\n}\n")
-        probe.flush()
-        r = subprocess.run(["unshare", "-rn", nft, "-c", "-f", probe.name], capture_output=True)
-    return nft if r.returncode == 0 else None
-
-
-REAL_NFT = _real_nft_check()
+REAL_NFT = find_nft_check()
 
 # nft -c goes to the real nft when it can check unprivileged (it never touches the kernel's
 # ruleset), else to a stand-in that refuses the word "bogus"; everything else is logged, so a

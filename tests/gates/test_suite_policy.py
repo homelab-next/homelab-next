@@ -269,6 +269,7 @@ LOCAL_PROBE_BASELINE = {
     "tests/overlay/test_private_overlay_example.py::hook",
     "tests/packaging/pkgbuild.py::export_tree",
     "tests/roles/test_role_render.py::docker_compose_ok",
+    "tools/tests/test_caddy_lint.py::<module>",
     "tests/workflows/test_workflows_validate.py::test_r01_untracked_pack_fails_in_git",
 }
 #: root-only tests that skip on the euid themselves (module level); the agent memory retraction
@@ -286,34 +287,86 @@ def _test_sources():
                 yield f.relative_to(ROOT).as_posix(), ast.parse(f.read_text(encoding="utf-8"))
 
 
-def local_probes(tree: ast.AST) -> list[str]:
-    """Names of the functions in ``tree`` that look a tool up with ``shutil.which`` and then
-    skip (``pytest.skip``) or answer False: a probe of the function's own."""
-    found = []
+def _scopes(tree: ast.AST):
+    """(name, nodes) for each function (decorators and nested code included) and for the
+    module-level statements outside any function (name ``<module>``)."""
+    body = getattr(tree, "body", [])
+    top = [n for n in body if not isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)]
+    decorators = [
+        d
+        for n in body
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+        for d in n.decorator_list
+    ]
+    yield "<module>", [m for n in [*top, *decorators] for m in ast.walk(n)]
     for fn in ast.walk(tree):
-        if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        nodes = list(ast.walk(fn))
-        calls = [ast.unparse(n.func) for n in nodes if isinstance(n, ast.Call)]
-        answers_false = any(
+        if isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+            yield fn.name, list(ast.walk(fn))
+
+
+def _skip_names(tree: ast.AST) -> set[str]:
+    """Names a call can skip through: ``pytest.skip``, ``pytest.mark.skipif`` and any alias
+    (``skip = pytest.skip``, ``from pytest import skip``)."""
+    names = {"pytest.skip", "pytest.skipif", "pytest.mark.skipif", "skipif", "skip"}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and ast.unparse(n.value) in names:
+            names |= {ast.unparse(t) for t in n.targets}
+    return names
+
+
+def _calls(nodes: list[ast.AST]) -> list[str]:
+    return [ast.unparse(n.func) for n in nodes if isinstance(n, ast.Call)]
+
+
+def _is_which(call: str) -> bool:
+    return call == "which" or call.endswith(".which")
+
+
+def local_probes(tree: ast.AST) -> list[str]:
+    """Names of the scopes of ``tree`` that look a tool up with ``which`` (``shutil.which`` or
+    ``from shutil import which``) and then decide a skip themselves: a skip call or ``skipif``
+    (aliases included), or an answer of False, None or a bare ``return``."""
+    skips = _skip_names(tree)
+    found = []
+    for name, nodes in _scopes(tree):
+        calls = _calls(nodes)
+        answers_no = any(
             isinstance(n, ast.Return)
-            and isinstance(n.value, ast.Constant)
-            and n.value.value is False
+            and (n.value is None or (isinstance(n.value, ast.Constant) and not n.value.value))
             for n in nodes
         )
-        if "shutil.which" in calls and ("pytest.skip" in calls or answers_false):
-            found.append(fn.name)
+        if any(map(_is_which, calls)) and (answers_no or any(c in skips for c in calls)):
+            found.append(name)
     return found
 
 
-def root_skips(tree: ast.AST) -> bool:
-    """Whether ``tree`` has a ``skipif`` that reads the process's euid."""
-    return any(
-        isinstance(n, ast.Call)
-        and ast.unparse(n.func).endswith("skipif")
-        and "geteuid" in ast.unparse(n)
-        for n in ast.walk(tree)
-    )
+def root_skips(tree: ast.AST) -> list[str]:
+    """Names of the scopes of ``tree`` that skip on the process's uid or euid: a skip call or
+    ``skipif`` (aliases included) that itself reads ``geteuid``/``getuid``, or an ``if`` on one
+    whose body skips."""
+
+    def reads_uid(node: ast.AST) -> bool:
+        return any(
+            ast.unparse(c.func).rsplit(".", 1)[-1] in ("geteuid", "getuid")
+            for c in ast.walk(node)
+            if isinstance(c, ast.Call)
+        )
+
+    skips = _skip_names(tree)
+    found = []
+    for name, nodes in _scopes(tree):
+        for n in nodes:
+            skip_call = isinstance(n, ast.Call) and ast.unparse(n.func) in skips
+            if (skip_call and reads_uid(n)) or (
+                isinstance(n, ast.If)
+                and reads_uid(n.test)
+                and any(
+                    ast.unparse(c.func) in skips for c in ast.walk(n) if isinstance(c, ast.Call)
+                )
+            ):
+                found.append(name)
+                break
+    return found
 
 
 def test_no_new_local_probe_and_skip():
@@ -348,6 +401,27 @@ def test_the_policy_catches_a_local_probe_and_a_root_skip():
     assert root_skips(ast.parse("import os, pytest\nR = pytest.mark.skipif(os.geteuid() != 0)"))
     assert not root_skips(ast.parse("import os\nx = os.geteuid()"))
     assert local_probes(ast.parse("def test_y():\n    assert True\n")) == []
+    # the shapes a first version missed
+    for src in (
+        "import shutil\ndef _p():\n    if not shutil.which('nft'):\n        return None\n",
+        "import shutil\ndef _p():\n    if not shutil.which('nft'):\n        return\n",
+        "from shutil import which\nimport pytest\n"
+        "def test_x():\n    if not which('nft'):\n        pytest.skip('gone')\n",
+        "import shutil, pytest\nX = shutil.which('nft')\n"
+        "@pytest.mark.skipif(X is None, reason='checker is not available')\ndef test_x(): ...\n",
+        "import shutil, pytest\nskip = pytest.skip\n"
+        "def test_x():\n    if not shutil.which('nft'):\n        skip('gone')\n",
+    ):
+        assert local_probes(ast.parse(src)), src
+    assert not local_probes(ast.parse("import shutil\ndef _node():\n    return shutil.which('n')"))
+    for src in (
+        "import os, pytest\ndef test_x():\n    if os.geteuid() != 0:\n"
+        "        pytest.skip('root is not available')\n",
+        "import os, pytest\nR = pytest.mark.skipif(os.getuid() != 0, reason='x')\n",
+        "import os, pytest\nskip = pytest.skip\ndef test_x():\n    if os.geteuid():\n"
+        "        skip('x')\n",
+    ):
+        assert root_skips(ast.parse(src)), src
 
 
 def test_the_real_tool_checks_go_through_the_required_tools():
@@ -382,7 +456,9 @@ def test_a_required_nft_that_cannot_check_fails_instead_of_skipping(monkeypatch)
     monkeypatch.setattr(sp.shutil, "which", lambda name, path=None: f"/usr/sbin/{name}")
     monkeypatch.setattr(sp, "_userns_can_check", lambda nft: False)
     monkeypatch.delenv("HNX_REQUIRE_TOOLS", raising=False)
-    with pytest.raises(pytest.skip.Exception, match="unshare is not installed"):
+    with pytest.raises(
+        pytest.skip.Exception, match="unshare cannot create a user and network namespace"
+    ):
         sp.require_nft_check()
     monkeypatch.setenv("HNX_REQUIRE_TOOLS", "nft,dnsmasq,unshare")
     with pytest.raises(pytest.fail.Exception, match="HNX_REQUIRE_TOOLS requires it"):
@@ -396,7 +472,7 @@ def test_setpriv_as_a_normal_user_is_a_failure_where_it_is_required(monkeypatch)
     monkeypatch.setattr(sp.shutil, "which", lambda name, path=None: "/usr/bin/setpriv")
     monkeypatch.setattr(sp.os, "geteuid", lambda: 1000)
     monkeypatch.setenv("HNX_REQUIRE_TOOLS", "setpriv")
-    with pytest.raises(pytest.fail.Exception, match="setpriv is not on PATH"):
+    with pytest.raises(pytest.fail.Exception, match="setpriv needs root"):
         sp.require_root_setpriv()
     monkeypatch.setattr(sp.os, "geteuid", lambda: 0)
     assert sp.require_root_setpriv() == "/usr/bin/setpriv"

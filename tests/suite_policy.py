@@ -218,11 +218,15 @@ def required_module_skipped(reason: str, required: set[str]) -> str | None:
 
 
 def require_tool(
-    name: str, available: Callable[[], bool] | None = None, search_path: str | None = None
+    name: str,
+    available: Callable[[], bool] | None = None,
+    search_path: str | None = None,
+    unusable: str | None = None,
 ) -> str:
     """The path of the external tool ``name`` (or ``name`` when ``available`` decides instead of
     PATH; ``search_path`` replaces PATH for the lookup, for a tool in an sbin directory an
-    unprivileged user's PATH lacks).  Missing: skip with ``"<name> is not installed"``, or fail
+    unprivileged user's PATH lacks; ``unusable`` words the problem when the tool is found but
+    ``available`` says no, and must still name a registered skip cause).  Missing: skip with ``"<name> is not installed"``, or fail
     when the environment requires the tool (:func:`required_tools`)."""
     path = shutil.which(name, path=search_path)
     ok = (path is not None) if available is None else bool(path and available())
@@ -235,9 +239,10 @@ def require_tool(
             else "HNX_REQUIRE_TOOLS"
         )
         pytest.fail(
-            f"{name} is not on PATH (or not usable), and {switch} requires it", pytrace=False
+            f"{unusable or f'{name} is not on PATH (or not usable)'}, and {switch} requires it",
+            pytrace=False,
         )
-    pytest.skip(f"{name} is not installed")
+    pytest.skip(unusable if unusable and path else f"{name} is not installed")
 
 
 #: where nft and dnsmasq live on a distribution whose unprivileged PATH omits the sbin directories
@@ -257,13 +262,28 @@ def _userns_can_check(nft: str) -> bool:
     return r.returncode == 0
 
 
+def find_nft_check() -> str | None:
+    """The path of an nft that can check a ruleset unprivileged inside ``unshare -rn``, or None.
+    Never skips or fails (a module-level stand-in decision); :func:`require_nft_check` is the
+    gate for a test."""
+    nft = shutil.which("nft", path=SBIN_PATH)
+    if not (nft and shutil.which("unshare", path=SBIN_PATH) and _userns_can_check(nft)):
+        return None
+    return nft
+
+
 def require_nft_check() -> str:
     """The path of an nft that can check a ruleset (``nft -c``) unprivileged inside
     ``unshare -rn``.  A missing nft, a missing unshare, or an unshare that cannot make the user
     and network namespace are each a skip, or a failure where HNX_REQUIRE_TOOLS names ``nft`` or
     ``unshare``.  Never applies anything: ``-c`` only checks."""
     nft = require_tool("nft", search_path=SBIN_PATH)
-    require_tool("unshare", available=lambda: _userns_can_check(nft))
+    require_tool(
+        "unshare",
+        available=lambda: _userns_can_check(nft),
+        search_path=SBIN_PATH,
+        unusable="unshare cannot create a user and network namespace (not available)",
+    )
     return nft
 
 
@@ -276,7 +296,11 @@ def require_root_setpriv() -> str:
     """setpriv, in a process running as root: the tests that switch between two other users need
     both.  Not root counts as the tool being unusable: a skip, or a failure where
     HNX_REQUIRE_TOOLS names ``setpriv``."""
-    return require_tool("setpriv", available=lambda: hasattr(os, "geteuid") and os.geteuid() == 0)
+    return require_tool(
+        "setpriv",
+        available=lambda: hasattr(os, "geteuid") and os.geteuid() == 0,
+        unusable="setpriv needs root, and this process is not root (not available)",
+    )
 
 
 def _silent_skip(config: pytest.Config, rep) -> None:

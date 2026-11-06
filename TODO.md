@@ -10,6 +10,9 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
 - [ ] **Require `lab-ok` on `main`.** It is the one stable check over the real lab-in-a-box stack
   that CI runs on every pull request. Until it is required, a pull request can merge with the
   real stack failing.
+- [ ] **Require `real-tools` on `main`.** It runs the `nft -c`, `dnsmasq --test` and root-only
+  user-switching tests with the tools installed and required (`HNX_REQUIRE_TOOLS`); it feeds no
+  aggregate check, so until it is required a red run does not block a merge.
 - [ ] **Never require the `experimental` job.** It runs the tests of components listed in
   `tools/experimental.yml` and is allowed to fail. Before any experimental component is enabled
   anywhere, return it to the blocking set: delete its `tools/experimental.yml` entry and restore
