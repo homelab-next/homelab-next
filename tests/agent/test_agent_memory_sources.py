@@ -358,7 +358,9 @@ def test_a_rendered_source_is_accepted_and_labels_the_record(reader, backend):
     applied = store.apply_report(reader, rep, pack=pack, pack_hash=h)
     assert applied == {"revs": {"analyst/k": 1}, "unsourced": [], "withheld": 0, "dropped": []}
     (rec,) = store.history(reader, "analyst", "k")["records"]
-    assert rec["sources"] == [uid(1), lesson, uid(7)] and rec["closure"] == rec["sources"]
+    assert rec["sources"] == [uid(1), lesson, uid(7)]
+    # the closure adds each source's platform-issued aliases (ADR-0037 decision 13)
+    assert rec["closure"] == [*rec["sources"], digest(1), f"lesson:{uid(7)}"]
     assert rec["checked"] is True and rec["pack_id"] == h
     assert rec["tlp"] == "green"  # the pack's label (the green lesson)
 
@@ -574,7 +576,10 @@ def test_a_label_is_never_lowered_across_replace_retire_and_re_add(reader, backe
     recs = store.history(reader, "analyst", "k")["records"]
     assert [r["tlp"] for r in recs] == ["amber"] * 4
     # sources accumulate since the last add, and restart at the next one
-    assert [r["closure"] for r in recs] == [[uid(1)], [uid(1), uid(3)], [uid(1), uid(3)], [uid(3)]]
+    one, three = [uid(1), digest(1)], [uid(3), digest(3)]  # each uid with its alias
+    assert [r["closure"] for r in recs] == [
+        one, [*one, *three], [*one, *three], three
+    ]  # fmt: skip
     entry = backend.load(reader["id"])["entries"]["analyst"]["k"]
     assert entry["tlp"] == "amber" and entry["sources"] == [uid(3)]
 
@@ -659,7 +664,9 @@ def test_exposure_is_stored_once_per_pack(reader, backend):
     clock.tick()
     store.apply_updates(reader, [up("replace", "a", "2")], pack=pack, pack_hash=h)
     stored = backend.load(reader["id"])
-    assert stored["exposure"] == {h: {"rendered": sorted(rendered_identifiers(pack)), "memory": []}}
+    rendered = sorted(rendered_identifiers(pack))
+    pairs = [[rendered.index(uid(n)), rendered.index(digest(n))] for n in (2, 1)]  # by section
+    assert stored["exposure"] == {h: {"rendered": rendered, "memory": [], "pairs": pairs}}
     assert {r["pack_id"] for r in stored["log"]} == {h}
     clock.tick()
     store.apply_updates(reader, [up("add", "c", "1")], pack=other, pack_hash=ho)
@@ -715,12 +722,14 @@ def test_an_exposure_no_record_points_at_is_dropped(backend):
 
 # ---------------------------------------------------------------- decision 10: the closure
 def test_the_closure_is_capped(reader, backend):
+    """The closure counts each source with its aliases (decision 13): a uid source brings its
+    digest, so 16 uids add 32 identifiers and the cap of 256 is reached after 8 batches."""
     items = [item(n, "clear") for n in range(1, 140)]
     pack, h = labelled_pack(items, [item(500, "clear")])
-    ids = sorted(i for i in rendered_identifiers(pack))
+    ids = [uid(n) for n in range(1, 140)] + [uid(500)]  # each closes over {uid, digest}
     store = MemoryStore(backend, now=Clock())
     store.apply_updates(reader, [up("add", "k", "v", sources=ids[:16])], pack=pack, pack_hash=h)
-    for n in range(1, MAX_CLOSURE // 16):
+    for n in range(1, MAX_CLOSURE // 32):
         store.apply_updates(
             reader, [up("replace", "k", f"v{n}", sources=ids[16 * n : 16 * n + 16])],
             pack=pack, pack_hash=h,
@@ -729,7 +738,7 @@ def test_the_closure_is_capped(reader, backend):
     before = backend.load(reader["id"])
     with pytest.raises(MemoryUpdateError, match="over the closure cap of 256; retire the key"):
         store.apply_updates(
-            reader, [up("replace", "k", "past", sources=ids[256:257])], pack=pack, pack_hash=h
+            reader, [up("replace", "k", "past", sources=ids[128:129])], pack=pack, pack_hash=h
         )
     assert backend.load(reader["id"]) == before
     # a source already in the closure adds nothing, so it is still accepted
@@ -739,9 +748,12 @@ def test_the_closure_is_capped(reader, backend):
     # retired and added again, the key starts a new closure
     store.apply_updates(reader, [up("retire", "k")], pack=pack, pack_hash=h)
     store.apply_updates(
-        reader, [up("add", "k", "new", sources=ids[256:257])], pack=pack, pack_hash=h
+        reader, [up("add", "k", "new", sources=ids[128:129])], pack=pack, pack_hash=h
     )
-    assert store.history(reader, "analyst", "k")["records"][-1]["closure"] == ids[256:257]
+    assert store.history(reader, "analyst", "k")["records"][-1]["closure"] == [
+        uid(129),
+        digest(129),
+    ]
 
 
 # ---------------------------------------------------------------- the byte cap

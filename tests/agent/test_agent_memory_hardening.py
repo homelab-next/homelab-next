@@ -305,10 +305,10 @@ class _Flagged:
         return self.inner.load(owner)
 
     def transact(self, owner, fn):
-        def wrapped(cur):
+        def wrapped(cur, deny):
             self.inside = True
             try:
-                return fn(cur)
+                return fn(cur, deny)
             finally:
                 self.inside = False
 

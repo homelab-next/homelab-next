@@ -326,6 +326,13 @@ def _inside(base: Path, rel: str) -> Path | None:
     return p if p.is_relative_to(base.resolve()) else None
 
 
+#: action names refused in any manifest: the operator's memory tools are not broker actions, and
+#: are never answered to a profile (ADR-0037 decision 12)
+MEMORY_ADMIN_ACTIONS = frozenset(
+    {"memory.retract", "memory.lift", "memory.purge", "memory.dependents"}
+)
+
+
 def validate_manifest(
     manifest: Mapping[str, Any], base_dir: str | os.PathLike[str]
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -334,13 +341,20 @@ def validate_manifest(
     Checks: the manifest schema; each handler document's schema, path containment and that its
     handler file exists and matches ``handler_digest``; manifest/handler consistency
     (:func:`homelabnext.broker.check_manifest_handlers`, lane actions excluded); every lane action
-    names a declared lane with ``handler: builtin/lane`` at tier ``write``; lane configuration.
+    names a declared lane with ``handler: builtin/lane`` at tier ``write``; lane configuration;
+    no action is one of :data:`MEMORY_ADMIN_ACTIONS`.
     """
     base = Path(base_dir)
     problems = [f"manifest: {e}" for e in schema_errors("broker", "manifest", manifest)]
     if problems:
         return [], problems
     problems += _control_problems("manifest", _manifest_names(manifest))
+    problems += [
+        f"actions: {a['action']} is an operator memory tool, never a broker action (ADR-0037 "
+        "decision 12: MemoryAdmin is run by an operator through hnx agent memory)"
+        for a in manifest.get("actions", [])
+        if a.get("action") in MEMORY_ADMIN_ACTIONS
+    ]
     docs: list[dict[str, Any]] = []
     for rel in manifest.get("handler_docs", []):
         p = _inside(base, rel)
@@ -356,6 +370,8 @@ def validate_manifest(
         errs += _control_problems(
             "handler", [("action", doc.get("action")), ("handler", doc.get("handler"))]
         )
+        if doc.get("action") in MEMORY_ADMIN_ACTIONS:
+            errs.append(f"action {doc['action']} is an operator memory tool, never a broker action")
         if errs:
             problems += [f"{rel}: {e}" for e in errs]
             continue

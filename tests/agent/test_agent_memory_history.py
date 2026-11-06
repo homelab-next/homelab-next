@@ -364,6 +364,7 @@ def test_as_of_rebuilds_what_was_believed_at_each_time(reader, backend):
         "at": "2026-11-05T09:30:00.000000Z",
         "entries": {"a": "a2", "b": "b2"},
         "compacted": [],
+        "purged": [],
         "aged_out": False,
         "withheld": 0,
     }
@@ -510,6 +511,7 @@ def test_a_retired_platform_key_compacts_whole_to_one_tombstone(ledger, backend)
         "at": "2026-11-05T09:25:00.000000Z",
         "entries": {},
         "compacted": [],
+        "purged": [],
         "aged_out": False,
         "withheld": 0,
     }

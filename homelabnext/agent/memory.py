@@ -86,8 +86,8 @@ Sources and labels (ADR-0037 decisions 7 to 10, PR 2):
   refused.  The runner passes the session's own pack, never one looked up by a report's
   ``pack_id``.  Every source of every update must equal an
   identifier the pack assembler recorded for something the pack rendered
-  (:func:`~homelabnext.agent.report.source_problems`); text never is one, and every ``mem:``
-  source is refused until packs carry a memory block (PR 3).  Records written so are
+  (:func:`~homelabnext.agent.report.source_problems`); text never is one, and a ``mem:``
+  source must name a revision of the pack's memory block (PR 3, below).  Records written so are
   ``checked: true``.  An update without sources is stored with ``sources: []`` and reported in
   the result's ``unsourced``.  A write returns only what it touched, filtered by the writer's own
   ceiling (``{revs, unsourced, withheld, dropped}``), and a refusal names an update's position,
@@ -107,13 +107,41 @@ Sources and labels (ADR-0037 decisions 7 to 10, PR 2):
   key with no visible record answers like a missing key, and ``as_of`` says ``aged_out`` only
   when the aged record is within the ceiling.
 * **Exposure.**  A checked batch stores its pack's exposure once per owner, keyed by the pack id,
-  as ``{rendered: [identifiers], memory: []}``; records point at it by ``pack_id`` (and a folded
-  record by its ``pack_ids``), and an exposure no record points at any longer is dropped.
+  as ``{rendered: [identifiers], memory: [mem: refs], pairs}`` (PR 3, below); records point at
+  it by ``pack_id`` (and a folded record by its ``pack_ids``), and an exposure no record points
+  at any longer is dropped.
 * **Closure.**  An entry's effective sources are the union of its records' sources since its
-  last ``add``; each record stores them as its ``closure`` (no ``mem:`` revisions or aliases
-  yet), at most :data:`MAX_CLOSURE`.  A checked update past that refuses its batch (retire the
-  key and add it again); an unchecked platform update past it is dropped and reported in
-  ``dropped`` (decision 10, amended), so it cannot stall the platform's fold.
+  last ``add``.  Each record stores its ``closure``: the previous record's closure (none after an
+  ``add``), each new source, that source's aliases in its pack (the platform-issued pairings of
+  :func:`~homelabnext.agent.pack.pack_pairs`) and, for a ``mem:`` source, the closure of the
+  revision it names (PR 3), at most :data:`MAX_CLOSURE`.  A checked update past that refuses its
+  batch (retire the key and add it again); an unchecked platform update past it is dropped and
+  reported in ``dropped`` (decision 10, amended), so it cannot stall the platform's fold.
+
+Memory citing memory and retraction (ADR-0037 decisions 11 to 14, PR 3):
+
+* **The memory block.**  Platform code that renders memory into a pack passes
+  :func:`memory_block_input` to :func:`~homelabnext.agent.pack.assemble_pack` (``memory=``); the
+  pack's ``memory`` block is what a ``mem:`` source may name (:func:`~homelabnext.agent.report.
+  mem_problems`).  The source's label is the stricter of the block's and the stored record's, and
+  the pack's exposure lists the block's revisions as ``memory`` references.
+* **Exposure** is ``{rendered, memory, pairs}``: ``pairs`` holds each rendered item's
+  platform-issued names (a group per item, indexes into ``rendered`` and graph ids as strings),
+  the only alias source ``MemoryAdmin`` uses.
+* **The deny log.**  The backend keeps the deny log and the denied-reach index under reserved
+  keys (:data:`~homelabnext.agent.deny.DENY_KEY`, :data:`~homelabnext.agent.deny.REACH_KEY`)
+  that no profile id can take, both append-only, written only by ``MemoryAdmin``
+  (``homelabnext.memory_admin``).  ``transact`` hands them to every write, read under the same
+  lock (:class:`FileBackend` through ``StateStore.rewrite``), and the write re-checks inside it:
+  a checked write whose pack rendered a denied name, or whose memory block shows a revision with
+  an active mark, is refused whole, and so is a checked batch with an update whose closure
+  reaches a denied name; an unchecked platform batch drops such an update, reports it in
+  ``dropped`` and pages (``AGENT_MEMORY_DROPPED``), so a retraction cannot stall the fold.
+  :func:`denied` reads the active :class:`~homelabnext.agent.deny.DenySet` for a caller to pass
+  as ``retracted=``.
+* **Operator records.**  ``MemoryAdmin`` writes ``retire`` records with ``reason`` and ``by``,
+  ``purge`` records, and ``restamp`` records through the same fold; ``purge`` and ``restamp`` (like
+  ``aged``) change no entry by themselves.
 """
 
 from __future__ import annotations
@@ -125,7 +153,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -139,9 +167,19 @@ from homelabnext.notify.core_pairs import (
 from homelabnext.registry.model_tlp import receive_ceiling
 
 from .compiler import VerifiedProfile, require_verified
+from .deny import DENY_KEY, REACH_KEY, RESERVED_PREFIX, DenySet, deny_set, mem_ref, parse_mem_ref
 from .digest import digest_of
 from .errors import AgentError
-from .pack import MAX_RENDERED, pack_label, pack_profile, rendered_identifiers
+from .pack import (
+    MAX_RENDERED,
+    memory_refs,
+    pack_label,
+    pack_memory,
+    pack_names,
+    pack_pairs,
+    pack_profile,
+    rendered_identifiers,
+)
 from .report import (
     MAX_MEMORY_UPDATES,
     MEM_PREFIX,
@@ -184,8 +222,11 @@ DEFAULT_PLATFORM_RECORDS = 100_000
 #: a platform scope's default tombstone budget: this share of its record cap (decision 6, amended)
 TOMBSTONE_SHARE = 0.1
 
+#: records that change no entry by themselves: a scope's ``aged`` record, and the operator's
+#: ``purge`` and ``restamp`` records (ADR-0037 decision 14 and decision 3)
+EVENT_OPS = frozenset({"aged", "purge", "restamp"})
 #: the fields of a change record (ADR-0037 decision 1); ``value`` is absent on ``retire`` and on
-#: a compacted record, ``reason`` only on a record an operator causes (none yet)
+#: a compacted record, ``reason`` and ``by`` only on a record an operator causes
 RECORD_FIELDS = (
     "at",
     "scope",
@@ -200,6 +241,7 @@ RECORD_FIELDS = (
     "tlp",
     "closure",
     "reason",
+    "by",
 )
 #: the label of a record with nothing to lower it: a migrated or unchecked record, and every
 #: record while packs carry no labels (ADR-0037 decision 8)
@@ -331,7 +373,8 @@ class MemoryClockError(MemoryUpdateError):
             [
                 f"the clock is behind {owner}'s memory log by {behind} (more than {CLOCK_SKEW}); "
                 "fix the host clock, or, if it is right, the log holds a record stamped in the "
-                "future (an operator re-stamp, ADR-0037 PR 3): the log's time never goes backwards"
+                "future (an operator re-stamp: hnx agent memory restamp): the log's time never "
+                "goes backwards"
             ]
         )
 
@@ -344,19 +387,64 @@ Record = dict[str, Any]
 @dataclass(frozen=True)
 class _Check:
     """How a batch was checked: ``checked`` (against ``pack_id``'s pack), the pack's label, each
-    rendered identifier's label, and the exposure to store (None for an unchecked write)."""
+    rendered identifier's (and memory-block revision's) label, and the exposure to store (None
+    for an unchecked write); with a pack, also every name it rendered (``names``), each name's
+    platform-issued aliases, its ``pairs`` and the ``(scope, key, rev)`` its memory block shows."""
 
     checked: bool
     pack_id: str | None
     pack_tlp: str
     labels: Mapping[str, str]
     rendered: tuple[str, ...] | None
+    names: frozenset[str] = frozenset()
+    aliases: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    pairs: tuple[tuple[str, ...], ...] = ()
+    memory: tuple[tuple[str, str, int], ...] = ()
+
+
+Deny = dict[str, list[dict[str, Any]]]  # {"log": [deny records], "reach": [marks]}
 
 
 class MemoryBackend(Protocol):
+    """Where memory lives.  ``transact(owner, fn)`` calls ``fn(current, deny)`` under one lock,
+    ``deny`` being ``{"log", "reach"}`` (the deny log and the denied-reach index, read under that
+    same lock), and stores what it returns; a raising ``fn`` stores nothing.  ``owners()`` lists
+    the owners holding memory.  ``load_deny``/``transact_deny`` read and append the deny log and
+    the index, kept under reserved keys no profile id can take; only ``MemoryAdmin`` calls
+    ``transact_deny``, and the backend refuses a change that is not an append."""
+
     def load(self, owner: str) -> Any: ...
 
-    def transact(self, owner: str, fn: Callable[[Any], Any]) -> Any: ...
+    def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any: ...
+
+    def owners(self) -> list[str]: ...
+
+    def load_deny(self) -> Deny: ...
+
+    def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny: ...
+
+
+def _owner_key(owner: Any) -> str:
+    if not isinstance(owner, str) or not owner or owner.startswith(RESERVED_PREFIX):
+        raise MemoryAccessError(
+            f"{_name(owner)} is not an owner: keys starting {RESERVED_PREFIX!r} are reserved"
+        )
+    return owner
+
+
+def _deny_of(data: Mapping[str, Any]) -> Deny:
+    return {"log": list(data.get(DENY_KEY) or []), "reach": list(data.get(REACH_KEY) or [])}
+
+
+def _appended(old: Deny, new: Any) -> Deny:
+    """``new`` when it only appends to ``old`` (both lists), else :class:`MemoryAccessError`."""
+    if not isinstance(new, Mapping) or set(new) != {"log", "reach"}:
+        raise MemoryAccessError("the deny state is {log, reach}")
+    for name in ("log", "reach"):
+        got = new[name]
+        if not isinstance(got, list) or got[: len(old[name])] != old[name]:
+            raise MemoryAccessError(f"the deny {name} is append-only: a change may only append")
+    return {"log": list(new["log"]), "reach": list(new["reach"])}
 
 
 class InMemoryBackend:
@@ -370,18 +458,43 @@ class InMemoryBackend:
         self._lock = threading.Lock()
 
     def load(self, owner: str) -> Any:
+        _owner_key(owner)
         with self._lock:
             return self._copy(self._data.get(owner, {}))
 
-    def transact(self, owner: str, fn: Callable[[Any], Any]) -> Any:
+    def owners(self) -> list[str]:
         with self._lock:
-            new = fn(self._copy(self._data.get(owner, {})))  # raises before anything is stored
+            return sorted(k for k in self._data if not k.startswith(RESERVED_PREFIX))
+
+    def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any:
+        _owner_key(owner)
+        with self._lock:
+            deny = self._copy(_deny_of(self._data))
+            new = fn(
+                self._copy(self._data.get(owner, {})), deny
+            )  # raises before anything is stored
             self._data[owner] = self._copy(new)
             return new
 
+    def load_deny(self) -> Deny:
+        with self._lock:
+            return self._copy(_deny_of(self._data))
+
+    def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny:
+        with self._lock:
+            old = _deny_of(self._data)
+            new = _appended(old, fn(self._copy(old)))
+            self._data[DENY_KEY], self._data[REACH_KEY] = (
+                self._copy(new["log"]),
+                self._copy(new["reach"]),
+            )
+            return self._copy(new)
+
 
 class FileBackend:
-    """Durable backend: one ``homelabnext.state`` file, one key per owning profile."""
+    """Durable backend: one ``homelabnext.state`` file, one key per owning profile, and the deny
+    log and denied-reach index under their reserved keys in the same file, so one lock covers
+    an owner's write and the deny state it re-checks."""
 
     def __init__(self, path: str | Path, **state_kwargs: Any) -> None:
         from homelabnext.state import StateStore
@@ -389,12 +502,49 @@ class FileBackend:
         self._store = StateStore(path, **state_kwargs)
 
     def load(self, owner: str) -> Any:
-        return self._store.get(owner, {}) or {}
+        return self._store.get(_owner_key(owner), {}) or {}
 
-    def transact(self, owner: str, fn: Callable[[Any], Any]) -> Any:
-        # StateStore.update loads a fresh copy under its lock and writes only after fn returns,
-        # so a raising fn leaves the file as it was
-        return self._store.update(owner, lambda cur: fn(cur or {}), default={})
+    def owners(self) -> list[str]:
+        names = self._store.keys()  # StateStore.keys(): sorted, read under its lock
+        return [k for k in names if not k.startswith(RESERVED_PREFIX)]
+
+    def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any:
+        # StateStore.rewrite loads the whole map under its lock and writes only after fn returns,
+        # so a raising fn leaves the file as it was, and the deny state is read under that lock
+        _owner_key(owner)
+        out: list[Any] = []
+
+        def change(data: dict[str, Any]) -> bool:
+            out.append(fn(data.get(owner) or {}, _deny_of(data)))
+            data[owner] = out[0]
+            return True
+
+        self._store.rewrite(change)
+        return out[0]
+
+    def load_deny(self) -> Deny:
+        return _deny_of(self._store.items())
+
+    def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny:
+        out: list[Deny] = []
+
+        def change(data: dict[str, Any]) -> bool:
+            import copy
+
+            old = _deny_of(data)
+            out.append(_appended(old, fn(copy.deepcopy(old))))
+            data[DENY_KEY], data[REACH_KEY] = out[0]["log"], out[0]["reach"]
+            return True
+
+        self._store.rewrite(change)
+        return out[0]
+
+
+def denied(backend: MemoryBackend) -> DenySet:
+    """The active :class:`~homelabnext.agent.deny.DenySet` of ``backend``'s deny log: what a
+    caller passes as ``retracted=`` to ``select_knowledge`` and ``assemble_pack``."""
+    deny = backend.load_deny()
+    return deny_set(deny["log"], deny["reach"])
 
 
 # ---------------------------------------------------------------- identity and limits
@@ -695,7 +845,7 @@ def fold(records: Iterable[Mapping[str, Any]]) -> Memory:
     ``aged`` record names no key and adds no entry."""
     entries: Memory = {}
     for rec in records:
-        if rec["op"] == "aged":
+        if rec["op"] in EVENT_OPS:
             continue
         scope = entries.setdefault(rec["scope"], {})
         scope[rec["key"]] = _step(scope.get(rec["key"]), rec)
@@ -785,7 +935,7 @@ def _age(records: list[Record], scope: str, budget: int, entries: Memory) -> lis
     its old tombstone as an earlier record, and that key is live, so it never ages out."""
     last: dict[str, int] = {}
     for i, r in enumerate(records):
-        if r["scope"] == scope and r["op"] != "aged":
+        if r["scope"] == scope and r["op"] not in EVENT_OPS:
             last[r["key"]] = i
     live = entries.get(scope, {})
     tombs = [
@@ -843,6 +993,15 @@ def _label(check: _Check, sources: Iterable[str], cur: Mapping[str, Any] | None)
     return str(tlp.strictest(labels))
 
 
+def _find(recs: list[Record] | None, rev: int) -> Record | None:
+    """The record of ``recs`` (one key's, in order) that holds ``rev`` (a folded record holds
+    its whole rev range)."""
+    for r in recs or ():
+        if r.get("rev_from", r["rev"]) <= rev <= r["rev"]:
+            return r
+    return None
+
+
 def _apply(
     stored: Stored,
     updates: Iterable[Mapping[str, Any]],
@@ -850,6 +1009,7 @@ def _apply(
     now: str,
     profile: VerifiedProfile,
     result: dict[str, Any] | None = None,
+    deny: DenySet | None = None,
 ) -> Stored:
     """Apply ``updates`` stamped no earlier than ``now`` or the log's latest record: append
     their records (sources, label and closure set from ``check``), store the pack's exposure,
@@ -861,21 +1021,43 @@ def _apply(
     An unchecked (platform) update whose closure would pass :data:`MAX_CLOSURE` is dropped, not
     fatal, and named in ``result["dropped"]``, so a long-lived platform key cannot stall its
     writer's fold (ADR-0037 decision 10, amended); in a checked batch it refuses the batch.
-    ``result["touched"]`` gets each applied ``(scope, key)``."""
+    ``result["touched"]`` gets each applied ``(scope, key)``.
+
+    ``deny`` (the active deny set, read under the backend's lock) is re-checked here (ADR-0037
+    decision 14): a checked batch whose pack rendered a denied name, or whose memory block shows
+    a marked revision, is refused whole; an update whose closure reaches a denied name refuses a
+    checked batch and is dropped (and reported) from an unchecked one.  (``MemoryAdmin`` writes
+    its own records, outside this function.)"""
     entries: Memory = stored["entries"]
     records: list[Record] = stored["log"]
     exposure: dict[str, Any] = dict(stored.get("exposure") or {})
+    deny = deny if deny is not None else DenySet()
+    owner = profile["id"]
     high: dict[str, int] = {}  # scope -> high-water rev of its aged-out keys
+    by_key: dict[tuple[str, str], list[Record]] = {}  # a key's state records, in order
     latest = ""
     for r in records:
         latest = max(latest, r["at"])
         if r["op"] == "aged":
             high[r["scope"]] = r["rev"]
+        elif r["op"] not in EVENT_OPS:
+            by_key.setdefault((r["scope"], r["key"]), []).append(r)
     if latest > now:  # the log's time never goes backwards
         behind = _parse(latest) - _parse(now)
         if behind > CLOCK_SKEW:
-            raise MemoryClockError(profile["id"], behind)
+            raise MemoryClockError(owner, behind)
     at = max(now, latest)
+    if check.checked and deny:
+        if deny.denies(check.names):
+            raise MemoryUpdateError(
+                ["the pack rendered a retracted source: a write from it is refused whatever it "
+                 "cites (an operator retraction, ADR-0037 decision 14); nothing was applied"]
+            )  # fmt: skip
+        if any(deny.marked(owner, *m) for m in check.memory):
+            raise MemoryUpdateError(
+                ["the pack's memory block shows a revision a retraction reached; nothing was "
+                 "applied"]
+            )  # fmt: skip
     problems: list[str] = []
     dropped: list[str] = []
     dropped_in: dict[str, int] = {}  # scope -> updates dropped at the closure cap
@@ -897,30 +1079,61 @@ def _apply(
         elif u["op"] == "retire" and has_value:
             problems.append(f"{where}: retire takes no value")
         else:
+            k = (u["scope"], u["key"])
             rev = max(cur["rev"] if cur else 0, high.get(u["scope"], 0)) + 1
             value = u["value"] if has_value else (cur or {}).get("value")
             rec = _record(
                 at, u["scope"], u["key"], u["op"], rev, value, check.pack_id, keep_value=has_value
             )
             sources = list(u.get("sources") or ())
-            rec.update(sources=sources, checked=check.checked, tlp=_label(check, sources, cur))
-            entry = _step(cur, rec)
-            if len(entry["sources"]) > MAX_CLOSURE:
-                why = (
-                    f"{where}: its sources since the key's last add would number "
-                    f"{len(entry['sources'])}, over the closure cap of {MAX_CLOSURE}; retire the "
-                    "key and add it again"
+            label = _label(check, sources, cur)
+            # the closure: the key's own since its last add, each source with its aliases in
+            # the pack, and each mem: source's own closure (decision 10)
+            prior = by_key.get(k) or []
+            parts: list[Iterable[str]] = [
+                prior[-1]["closure"] if prior and u["op"] != "add" else []
+            ]
+            missing = False
+            for src in sources:
+                parts.append([src, *sorted(check.aliases.get(src, ()))])
+                ref = parse_mem_ref(src)
+                if ref is not None:
+                    held = _find(by_key.get((ref[1], ref[2])), ref[3])
+                    if held is None:
+                        missing = True
+                        continue
+                    parts.append(held["closure"])
+                    label = str(tlp.strictest([label, held["tlp"]]))
+            if missing:
+                problems.append(
+                    f"{where}: a mem: source names a revision that is no longer in the log"
                 )
+                continue
+            rec.update(sources=sources, checked=check.checked, tlp=label)
+            entry = _step(cur, rec)
+            # the effective sources always belong to the closure, after what it already held
+            closure = _union(parts[0], entry["sources"], *parts[1:])
+            why = None
+            if deny and deny.denies(closure):
+                why = f"{where}: its closure reaches a retracted source (ADR-0037 decision 14)"
+            elif len(closure) > MAX_CLOSURE:
+                why = (
+                    f"{where}: its closure (sources since the key's last add, their aliases and "
+                    f"the closures of the mem: revisions it cites) would number {len(closure)}, "
+                    f"over the closure cap of {MAX_CLOSURE}; retire the key and add it again"
+                )
+            if why is not None:
                 if check.checked:
                     problems.append(why)
                 else:
                     dropped.append(why + " (dropped; the rest of the batch applies)")
                     dropped_in[u["scope"]] = dropped_in.get(u["scope"], 0) + 1
                 continue
-            rec["closure"] = list(entry["sources"])  # no mem: closures or aliases yet (PR 3)
+            rec["closure"] = closure
             records.append(rec)
+            by_key.setdefault(k, []).append(rec)
             scope[u["key"]] = entry
-            touched[(u["scope"], u["key"])] = None
+            touched[k] = None
     if problems:
         raise MemoryUpdateError(problems)
     new_exposure = (
@@ -930,7 +1143,14 @@ def _apply(
         and check.pack_id not in exposure
     )
     if new_exposure:
-        exposure[check.pack_id] = {"rendered": list(check.rendered), "memory": []}
+        rendered = list(check.rendered or ())
+        at_index = {x: i for i, x in enumerate(rendered)}
+        exposure[check.pack_id] = {
+            "rendered": rendered,
+            "memory": [mem_ref(owner, *m) for m in check.memory],
+            # each item's platform-issued names: indexes into rendered, a graph id as itself
+            "pairs": [[at_index.get(x, x) for x in group] for group in check.pairs],
+        }
 
     platform = _platform_scopes(profile)
     hot = {k for k in touched if k[0] in platform}
@@ -938,7 +1158,7 @@ def _apply(
         where_at: dict[tuple[str, str], list[int]] = {k: [] for k in hot}
         for i, r in enumerate(records):
             k = (r["scope"], r["key"])
-            if k in where_at:
+            if k in where_at and r["op"] not in EVENT_OPS:
                 where_at[k].append(i)
         swap: dict[int, list[Record]] = {}
         drop: set[int] = set()
@@ -973,7 +1193,7 @@ def _apply(
         if r["scope"] in hot_scopes:  # a scope's byte cap counts its records only
             sizes[r["scope"]] = sizes.get(r["scope"], 0) + _size(r)
         k = (r["scope"], r["key"])
-        if k in refolded:
+        if k in refolded and r["op"] not in EVENT_OPS:
             refolded[k] = _step(refolded[k], r)
     for (scope, key), entry in refolded.items():
         entries[scope][key] = entry  # type: ignore[assignment]
@@ -1013,6 +1233,49 @@ def _readable(profile: VerifiedProfile, records: list[Record]) -> tuple[list[Rec
     ceiling = read_ceiling(profile)
     shown = [r for r in records if tlp.allows(ceiling, r.get("tlp"))]
     return shown, len(records) - len(shown)
+
+
+def last_records(stored: Mapping[str, Any]) -> dict[tuple[str, str], Record]:
+    """Each key's last state record (its current rev, value digest, closure and label)."""
+    out: dict[tuple[str, str], Record] = {}
+    for r in stored.get("log") or ():
+        if r["op"] not in EVENT_OPS:
+            out[(r["scope"], r["key"])] = r
+    return out
+
+
+def memory_block_input(
+    store: MemoryStore, profile: VerifiedProfile, scopes: Iterable[str]
+) -> list[dict[str, Any]]:
+    """The entries platform code renders into ``profile``'s pack from its own memory, as
+    :func:`~homelabnext.agent.pack.assemble_pack` takes them (``memory=``): each live entry of
+    ``scopes`` within the profile's ceiling, ``{scope, key, rev, value_digest, tlp, closure}``.
+    Owner-scoped like :meth:`MemoryStore.read`; the renderer renders the values it reads with
+    ``read`` and passes this beside them (ADR-0037 decision 11)."""
+    out: list[dict[str, Any]] = []
+    ceiling = read_ceiling(profile)
+    for scope in sorted(set(scopes)):
+        me = store._reader(profile, scope, None)
+        stored = store._load(me)
+        last = last_records(stored)
+        for key, e in sorted(stored["entries"].get(scope, {}).items()):
+            rec = last.get((scope, key))
+            if e.get("status") != "live" or rec is None or not tlp.allows(ceiling, e.get("tlp")):
+                continue
+            digests = rec.get("value_digests") or [rec.get("value_digest")]
+            if not digests[-1]:  # a purged or migrated marker with no digest: nothing to cite
+                continue
+            out.append(
+                {
+                    "scope": scope,
+                    "key": key,
+                    "rev": e["rev"],
+                    "value_digest": digests[-1],
+                    "tlp": e["tlp"],
+                    "closure": list(rec.get("closure") or ()),
+                }
+            )
+    return out
 
 
 # ---------------------------------------------------------------- the store
@@ -1093,12 +1356,15 @@ class MemoryStore:
             return {"revs": {}, "unsourced": [], "withheld": 0, "dropped": []}
         result: dict[str, Any] = {}
 
-        def fn(raw: Any) -> Stored:
+        def fn(raw: Any, deny: Deny) -> Stored:
             now = _stamp(self._now())  # read under the backend's lock, inside the transaction
             stored, purged = _stored(raw, now)
             self._purged(owner, purged)
             result.clear()
-            return _apply(stored, updates, check, now, profile, result)
+            # the deny state is read under the same lock: a retraction that landed after the
+            # report was validated still refuses it (ADR-0037 decision 14)
+            denies = deny_set(deny.get("log") or (), deny.get("reach") or ())
+            return _apply(stored, updates, check, now, profile, result, denies)
 
         try:
             new = self._backend.transact(owner, fn)
@@ -1221,7 +1487,25 @@ class MemoryStore:
         problems = source_problems(updates, pack)
         if problems:
             raise MemoryUpdateError([*problems, "nothing was applied"])
-        return _Check(True, pack_hash, pack_label(pack), labels, tuple(sorted(labels)))
+        block = pack_memory(pack)
+        shown = dict(zip(memory_refs(pack), block, strict=True))
+        labels = {**labels, **{ref: str(tlp.read_stored(e["tlp"])) for ref, e in shown.items()}}
+        pairs = tuple(tuple(g) for g in pack_pairs(pack))
+        aliases: dict[str, set[str]] = {}
+        for group in pairs:
+            for name in group:
+                aliases.setdefault(name, set()).update(x for x in group if x != name)
+        return _Check(
+            True,
+            pack_hash,
+            pack_label(pack),
+            labels,
+            tuple(sorted(rendered_identifiers(pack))),
+            names=pack_names(pack),
+            aliases={k: frozenset(v) for k, v in aliases.items()},
+            pairs=pairs,
+            memory=tuple((e["scope"], e["key"], int(e["rev"])) for e in block),
+        )
 
     def apply_report(
         self,
@@ -1316,7 +1600,11 @@ class MemoryStore:
         withheld count, whether the key exists or not, so ``history`` is no existence oracle for
         a withheld key (ADR-0037 decision 8)."""
         me = self._reader(profile, scope, owner)
-        log_ = [r for r in self._load(me)["log"] if r["scope"] == scope and r["op"] != "aged"]
+        log_ = [
+            r
+            for r in self._load(me)["log"]
+            if r["scope"] == scope and r["op"] not in ("aged", "restamp")
+        ]
         shown, withheld = _readable(profile, [r for r in log_ if r["key"] == key])
         if not shown:
             return {"records": [], "withheld": _readable(profile, log_)[1]}
@@ -1326,8 +1614,9 @@ class MemoryStore:
         self, profile: VerifiedProfile, scope: str, t: datetime, *, owner: str | None = None
     ) -> dict[str, Any]:
         """What ``profile`` believed in ``scope`` at ``t`` (an aware datetime), rebuilt from the
-        log: ``{"at", "entries": {key: value}, "compacted": [keys], "aged_out": bool,
-        "withheld": n}``.
+        log: ``{"at", "entries": {key: value}, "compacted": [keys], "purged": [keys],
+        "aged_out": bool, "withheld": n}``.  A key whose value at ``t`` an operator purged is
+        listed in ``purged`` (ADR-0037 decision 14), never given a value.
 
         A key whose state at ``t`` lies in folded records (a range, a tombstone, or history
         from before the migration) is listed in ``compacted``, never given a value.
@@ -1345,9 +1634,12 @@ class MemoryStore:
         mine = [r for r in self._load(me)["log"] if r["scope"] == scope]
         state: dict[str, dict[str, Any]] = {}
         held: dict[str, bool] = {}  # key -> the value in effect at t is not in the log
+        blanked: dict[str, bool] = {}  # key -> that value was purged (ADR-0037 decision 14)
         unknown: dict[str, str] = {}  # key -> the label of the folded record that hides it
         aged_out = False
         for rec in mine:
+            if rec["op"] in ("purge", "restamp"):
+                continue
             if rec["op"] == "aged":  # said only when the reader may see the aged record
                 since = rec.get("since")
                 aged_out = (
@@ -1366,16 +1658,23 @@ class MemoryStore:
             state[k] = _step(state.get(k), rec)
             if rec.get("compacted") or rec["op"] in ("add", "replace") or rec.get("migrated"):
                 held[k] = bool(rec.get("compacted")) or "value" not in rec
+                blanked[k] = bool(rec.get("purged")) and not rec.get("compacted")
         live = {k for k, e in state.items() if e["status"] == "live"}
         label = {k: state[k]["tlp"] for k in live} | {
             k: v for k, v in unknown.items() if k not in live
         }
         hidden = {k for k, v in label.items() if not tlp.allows(ceiling, v)}
-        compacted = sorted((set(unknown) | {k for k in live if held.get(k)}) - hidden)
+        purged = sorted({k for k in live if blanked.get(k)} - hidden)
+        compacted = sorted((set(unknown) | {k for k in live if held.get(k)}) - hidden - set(purged))
         return {
             "at": when,
-            "entries": {k: state[k]["value"] for k in sorted(live - hidden) if k not in compacted},
+            "entries": {
+                k: state[k]["value"]
+                for k in sorted(live - hidden)
+                if k not in compacted and k not in purged
+            },
             "compacted": compacted,
+            "purged": purged,
             "aged_out": aged_out,
             "withheld": len(hidden),
         }
@@ -1431,7 +1730,8 @@ class MemoryStore:
 
     def _dropped_page(self, owner: str, scope: str, count: int) -> None:
         """Report that an unchecked batch dropped ``count`` updates of ``owner/scope`` at the
-        closure cap (ADR-0037 decision 10, amended), or none (the recovery), state-diffed.  The
+        closure cap (ADR-0037 decision 10, amended) or for citing a retracted source (decision
+        14), or none (the recovery), state-diffed.  The
         key is a digest of owner and scope; the page names the scope and the count, never a key,
         so a platform key that stopped advancing is seen instead of stalling silently."""
         pair = hashlib.sha256(f"{owner}\0{scope}".encode()).hexdigest()[:16]
@@ -1443,8 +1743,9 @@ class MemoryStore:
             None
             if not count
             else f"{owner}'s platform memory scope {scope} dropped {count} update(s) at the "
-            f"closure cap of {MAX_CLOSURE} sources: those keys stopped advancing. Retire and "
-            "re-add them, or write a key that carries position (a cursor) without sources.",
+            f"closure cap of {MAX_CLOSURE} sources, or citing a source an operator retracted: "
+            "those keys stopped advancing. Retire and re-add them, write a key that carries "
+            "position (a cursor) without sources, or stop citing the retracted source.",
             f"{owner}'s platform memory scope {scope} applies its updates again",
         )
 
@@ -1460,8 +1761,8 @@ class MemoryStore:
             if behind is None
             else f"{owner}'s memory refuses writes: the clock is behind its log by {behind}. "
             "Fix the host clock; if it is already right, the log holds a record stamped in the "
-            "future and needs an operator re-stamp (ADR-0037 PR 3). Nothing is written until the "
-            f"clock is within {CLOCK_SKEW} of the log.",
+            "future and needs an operator re-stamp (hnx agent memory restamp). Nothing is "
+            f"written until the clock is within {CLOCK_SKEW} of the log.",
             f"{owner}'s memory clock is within {CLOCK_SKEW} of its log again",
         )
 

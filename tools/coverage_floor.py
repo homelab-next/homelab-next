@@ -29,7 +29,7 @@ reviewed change to this file.
 
 ``UNITS`` below is the one list of the units and the tests that measure each: the broker, its
 tiers and grant lookup, the scope guard, the records lifecycle, the decide cascade, the agent's
-grant ceiling, reader rule, handoff, memory and screen, workflow runs, model budgets and TLP labels, context retrieval, the
+grant ceiling, reader rule, handoff, memory, its deny set, the operator's memory admin and screen, workflow runs, model budgets and TLP labels, context retrieval, the
 MCP server, the status hub's front door, ingest and approval paths, the generators' backstop, the
 TLP label type, egress and reader ceilings, the SSH certificate authority, and the leak
 scan.  Nothing else lists them in full.
@@ -71,6 +71,9 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/agent/handoff.py": ("tests/agent",),
     "homelabnext/agent/memory.py": ("tests/agent",),
     "homelabnext/agent/screen.py": ("tests/agent",),
+    # the operator's retraction tool (ADR-0037 decision 12) and the deny set it writes
+    "homelabnext/memory_admin": ("tests/memory_admin", "tests/agent"),
+    "homelabnext/agent/deny.py": ("tests/agent",),
     "homelabnext/workflows": ("tests/workflows",),
     "homelabnext/registry/limits.py": ("tests/models",),
     "homelabnext/registry/model_tlp.py": ("tests/models",),

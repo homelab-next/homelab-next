@@ -75,6 +75,24 @@ is refused at assembly (decision 13).  A pack may render at most :data:`MAX_REND
 (decision 9); :func:`rendered_count` lets a caller check before it assembles, and the assembler
 refuses a pack over it.
 
+Memory (ADR-0037 decisions 9, 11 and 14).  ``memory=`` takes the entries platform code renders
+into the pack from the profile's own store (``homelabnext.agent.memory.memory_block_input``):
+each ``{scope, key, rev, value_digest, tlp, closure}``.  It needs ``profile=``, every scope must
+be one of the profile's ``memory_scopes``, and the pack records them as its ``memory`` block,
+``{scope, key, rev, value_digest, tlp}`` each (the closure is not recorded).  The block is what a
+``mem:`` source may name, and each entry's label counts toward the pack's.  A pack assembled
+without ``memory=`` has no block (and its hash is what it was).
+
+Retraction (ADR-0037 decision 14).  ``retracted=`` takes the active
+:class:`~homelabnext.agent.deny.DenySet` (the caller reads it from the store's deny log; the
+assembler does no I/O).  A memory entry whose closure reaches a denied name, or that carries an
+active ``denied_reach`` mark, is left out of the block.  An input section that declares a denied
+item is left out whole, listed in ``omitted`` (a required one defers the pack): the assembler
+cannot cut one item's text out of a section, so it errs toward leaving more out.  A knowledge item
+naming a denied identifier is dropped too (``select_knowledge(..., retracted=)`` already excludes
+it).  What was left out is listed in the pack's ``retracted`` block (input items by section and
+uid, knowledge by id, memory entries by count only), present only when something was.
+
 ``inputs`` shape::
 
     {"sections": {<section name>: <text>}, "pregates": {<gate id>: <pregate_output dict>},
@@ -91,6 +109,7 @@ from typing import Any
 from homelabnext import tlp
 
 from .compiler import VerifiedProfile, require_verified
+from .deny import DenySet, mem_ref
 from .digest import canonical_json, digest_of, sha256_text
 from .errors import SpecError
 from .resolved import DIGEST, UID, ResolvedUids
@@ -204,6 +223,58 @@ def _input_items(
     return out
 
 
+_SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+_MEMORY_FIELDS = frozenset({"scope", "key", "rev", "value_digest", "tlp", "closure"})
+
+
+def _memory_block(
+    memory: Any, profile: VerifiedProfile | None, retracted: DenySet
+) -> tuple[list[dict[str, Any]], int]:
+    """The pack's ``memory`` block from the caller's entries (see the module doc), and how many
+    entries the deny set left out.  Raises :class:`SpecError` for a malformed entry, a scope the
+    profile lacks, a key listed twice, and a block without ``profile=``."""
+    if profile is None:
+        raise SpecError(
+            "memory= needs profile=: a memory block shows the bound profile's own revisions"
+        )
+    if not isinstance(memory, (list, tuple)):
+        raise SpecError("memory must be a list of {scope, key, rev, value_digest, tlp, closure}")
+    scopes = set(profile.get("memory_scopes") or ())
+    owner = profile["id"]
+    block: dict[tuple[str, str], dict[str, Any]] = {}
+    left_out = 0
+    for n, e in enumerate(memory):
+        where = f"memory[{n}]"
+        if not isinstance(e, Mapping) or set(e) != _MEMORY_FIELDS:
+            raise SpecError(f"{where}: an entry is {{scope, key, rev, value_digest, tlp, closure}}")
+        scope, key, rev = e["scope"], e["key"], e["rev"]
+        if not (isinstance(scope, str) and _SLUG.fullmatch(scope) and scope in scopes):
+            raise SpecError(f"{where}: scope is not one of the profile's memory_scopes")
+        if not (isinstance(key, str) and _SLUG.fullmatch(key)):
+            raise SpecError(f"{where}: key must be a slug")
+        if type(rev) is not int or rev < 1:
+            raise SpecError(f"{where}: rev must be a positive integer")
+        if not (isinstance(e["value_digest"], str) and DIGEST.fullmatch(e["value_digest"])):
+            raise SpecError(f"{where}: value_digest must be sha256:<64 hex>")
+        closure = e["closure"]
+        if not isinstance(closure, (list, tuple)) or not all(isinstance(c, str) for c in closure):
+            raise SpecError(f"{where}: closure must be a list of identifiers")
+        if (scope, key) in block:
+            raise SpecError(f"{where}: a key appears in the memory block once")
+        if retracted.denies(closure) or retracted.marked(owner, scope, key, rev):
+            left_out += 1
+            continue
+        block[(scope, key)] = {
+            "scope": scope,
+            "key": key,
+            "rev": rev,
+            "value_digest": e["value_digest"],
+            # the store's label, read as stored data (a non-canonical one is red)
+            "tlp": str(tlp.read_stored(e["tlp"])),
+        }
+    return [block[k] for k in sorted(block)], left_out
+
+
 def _static_label(section: Mapping[str, Any]) -> str:
     """The declared label of a manifest section: a static section's ``tlp``, else ``red``."""
     if "tlp" not in section:
@@ -289,6 +360,8 @@ def assemble_pack(
     screener: Screener | None = None,
     resolved_uids: ResolvedUids | None = None,
     profile: VerifiedProfile | None = None,
+    memory: Any = None,
+    retracted: DenySet | None = None,
 ) -> tuple[dict, str]:
     """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments.
 
@@ -304,7 +377,14 @@ def assemble_pack(
     caller across packs so its labels stay stable over them (the same value, the same label,
     the screener's own contract); by default each pack gets a fresh one, built from the
     manifest's ``screen`` block and ``denylist`` (which a passed screener already carries).
+    ``memory``: the memory entries platform code renders into the pack (see the module doc);
+    the pack gains a ``memory`` block.  Needs ``profile``.
+    ``retracted``: the active :class:`~homelabnext.agent.deny.DenySet`; denied input sections,
+    knowledge items and memory entries are left out (see the module doc).
     """
+    if retracted is not None and type(retracted) is not DenySet:
+        raise SpecError("retracted must be a DenySet (homelabnext.agent.deny.deny_set)")
+    denyset = retracted if retracted is not None else DenySet()
     if not isinstance(manifest, Mapping) or not manifest.get("sections"):
         raise SpecError("manifest must be a mapping with a non-empty 'sections' list")
     names = [s.get("name") for s in manifest["sections"]]
@@ -329,6 +409,16 @@ def assemble_pack(
             "(ADR-0037 decision 9): select fewer knowledge or input items"
         )
     input_items = _input_items(manifest, inputs, resolved_uids, knowledge)
+    block, memory_left_out = (None, 0)
+    if memory is not None:
+        block, memory_left_out = _memory_block(memory, profile, denyset)
+    denied_inputs = [
+        {"section": name, "uid": it["uid"]}
+        for name, group in sorted(input_items.items())
+        for it in group
+        if denyset.denies((it["uid"], it["digest"]))
+    ]
+    denied_sections = {d["section"] for d in denied_inputs}
     try:
         screen_cfg = screen_config(manifest)
         deny = list(denylist or [])
@@ -371,6 +461,12 @@ def assemble_pack(
     items: list[dict] = list(gate_sections)
     for s in manifest["sections"]:
         text = s.get("text") if s["source"] == "static" else supplied.get(s["name"])
+        if s["name"] in denied_sections:  # one item's text cannot be cut out: leave it all out
+            if s["required"]:
+                deferred.append(f"required section {s['name']!r} carries a retracted input item")
+            else:
+                omitted.append(s["name"])
+            continue
         if text is None:
             if s["required"]:
                 deferred.append(f"required section {s['name']!r} has no input")
@@ -379,8 +475,15 @@ def assemble_pack(
             continue
         keep = ("name", "tier", "max_chars", "required", "source")
         items.append({**{k: s[k] for k in keep}, "text": text})
+    denied_knowledge: list[str] = []
     if knowledge is not None:
-        items += [dict(k) for k in knowledge.sections()]
+        dropped = {
+            k["section"]: k["id"]
+            for k in knowledge.included
+            if denyset.denies([k["id"], *_knowledge_ids(k)])
+        }
+        denied_knowledge = sorted(dropped.values())
+        items += [dict(k) for k in knowledge.sections() if k["name"] not in dropped]
     items.sort(key=lambda i: (_RANK[i["tier"]], i["name"]))
 
     # screening: untrusted input only, in pack order so label numbers follow first appearance
@@ -474,6 +577,8 @@ def assemble_pack(
     rendered = "".join(fence(s) for s in sections)
     stable_prefix = "".join(fence(s) for s in sections if s["tier"] == "stable")
     provenance = _provenance(items, static_labels, input_items, knowledge, supplied)
+    if block:  # what the block shows is rendered into the pack: its labels count (decision 8)
+        provenance["tlp"] = str(tlp.strictest([provenance["tlp"], *(e["tlp"] for e in block)]))
     pack = {
         "manifest": manifest["id"],
         "persona": manifest["persona"],
@@ -494,6 +599,14 @@ def assemble_pack(
     }
     if knowledge is not None:
         pack["knowledge"] = knowledge.record()
+    if block is not None:
+        pack["memory"] = block
+    if denied_inputs or denied_knowledge or memory_left_out:
+        pack["retracted"] = {
+            "inputs": denied_inputs,
+            "knowledge": denied_knowledge,
+            "memory": memory_left_out,
+        }
     return pack, digest_of(pack)
 
 
@@ -578,3 +691,44 @@ def pack_profile(pack: Mapping[str, Any]) -> tuple[str, str] | None:
     if isinstance(bound, Mapping) and isinstance(bound.get("id"), str):
         return bound["id"], str(bound.get("digest"))
     return None
+
+
+def pack_pairs(pack: Mapping[str, Any]) -> list[list[str]]:
+    """The platform-issued pairings of what ``pack`` rendered (ADR-0037 decision 13), one group
+    per item: a knowledge item's graph id, record uid and digests, and an input item's uid and
+    digest.  These, and nothing a model or a feed wrote, are what ``retract`` calls aliases."""
+    prov = pack.get("provenance")
+    out: list[list[str]] = []
+    if not isinstance(prov, Mapping):
+        return out
+    for group, keys in (
+        ("knowledge", ("id", "uid", "digest", "file_digest")),
+        ("inputs", ("uid", "digest")),
+    ):
+        for item in prov.get(group) or ():
+            names = [item[k] for k in keys if isinstance(item.get(k), str) and item.get(k)]
+            if names:
+                out.append(names)
+    return out
+
+
+def pack_names(pack: Mapping[str, Any]) -> frozenset[str]:
+    """Every name of what ``pack`` rendered: its rendered identifiers and its knowledge items'
+    graph ids.  A write whose pack names a denied one is refused (ADR-0037 decision 14)."""
+    named = {x for group in pack_pairs(pack) for x in group}
+    return frozenset(named | set(rendered_identifiers(pack)))
+
+
+def pack_memory(pack: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The pack's ``memory`` block (empty for a pack without one)."""
+    block = pack.get("memory")
+    return [dict(e) for e in block if isinstance(e, Mapping)] if isinstance(block, list) else []
+
+
+def memory_refs(pack: Mapping[str, Any]) -> list[str]:
+    """``mem:<owner>/<scope>/<key>@<rev>`` of each entry of the pack's ``memory`` block, the
+    owner being the profile the pack is bound to (none without one)."""
+    bound = pack_profile(pack)
+    if bound is None:
+        return []
+    return [mem_ref(bound[0], e["scope"], e["key"], e["rev"]) for e in pack_memory(pack)]
