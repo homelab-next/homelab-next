@@ -224,6 +224,8 @@ class FakeLab:
         self.tables: dict[tuple[str, str], dict[str, Any]] = {}
         self.statements: list[str] = []
         self.client_tags: list[str | None] = []  # each statement's client tags header
+        # every request's method, path and Authorization header (None when it sent none)
+        self.auth: list[tuple[str, str, str | None]] = []
         self.conflicts = 0  # answer the next N commits with 409
         # A proxy in front of the coordinator: the next statements holding a key followed by a
         # space (``INSERT``, ``SELECT``) or the next page reads (``GET``) are answered with these HTTP
@@ -274,6 +276,7 @@ class FakeLab:
     def _dispatch(self, h, body):
         with self._lock:
             path = urllib.parse.urlsplit(h.path)
+            self.auth.append((h.command, path.path, h.headers.get("Authorization")))
             if path.path == "/v1/statement" and body is not None:
                 text = body.decode("utf-8")
                 hit = [k for k in self.proxy_errors if k != "GET" and f"{k} " in text]
