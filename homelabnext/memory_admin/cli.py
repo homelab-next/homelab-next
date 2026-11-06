@@ -25,11 +25,13 @@ that owner.
                                                 run lists from -> to); ``--expect-now`` is the
                                                 UTC time you believe it is (ISO 8601).
 
-Every command takes ``--state FILE`` (the runtime's memory state file), ``--deny FILE`` (its deny
-file, default ``<state>.deny.json``) and ``--operators FILE`` (honoured only for root; default
-``/etc/homelabnext/memory-operators.yml``, see :mod:`homelabnext.memory_admin.principal`).  The
-owner of the state file is refused as an operator, and the deny file must be owned by root or the
-operator, writable by no one else.  Output is JSON on stdout.  Exit codes: 0 done (or a dry run),
+Every command takes ``--state FILE`` (the runtime's memory state file) and ``--operators FILE``
+(honoured only for root; default ``/etc/homelabnext/memory-operators.yml``, see
+:mod:`homelabnext.memory_admin.principal`), whose ``deny_file`` names the one deny file the runtime
+reads too.  The owner of the state file is refused as an operator; the state file's path must hold
+no link and be owned only by root or that owner, and a corrupt state file is refused (never
+quarantined by an operator run); the deny file must be owned by root or the operator, writable by
+no one else.  Run as root, every state-file operation runs as the state file's owner.  Output is JSON on stdout.  Exit codes: 0 done (or a dry run),
 1 refused (who ran it, the operators file's ownership or content, a stale ``--confirm``, a bad
 argument), 2 a usage error or a file that cannot be read.
 """
@@ -39,11 +41,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import sys
 from datetime import UTC, datetime
 from typing import Any
 
 from homelabnext.agent.memory import FileBackend, MemoryAccessError, MemoryClockError
+from homelabnext.state import StateCorruptError
 
 from .admin import MemoryAdmin
 from .principal import (
@@ -68,7 +72,6 @@ def _parser() -> argparse.ArgumentParser:
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--state", required=True, help="the runtime's memory state file")
-        p.add_argument("--deny", help="the deny file (default <state>.deny.json)")
         p.add_argument("--operators", help=f"the operators file (root only; {DEFAULT_OPERATORS})")
 
     def scope(p: argparse.ArgumentParser) -> None:
@@ -114,8 +117,12 @@ def _euid() -> int:
 
 
 def _owner(path: str) -> int:
-    """The uid owning the state file: the agent runtime's, which is refused as an operator."""
-    return os.stat(path).st_uid
+    """The uid owning the state file: the agent runtime's, which is refused as an operator.  A
+    symbolic link is refused (an operator never follows a name the runtime controls)."""
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode):
+        raise MemoryAdminError(f"{path} is a symbolic link: the state file is a real file")
+    return st.st_uid
 
 
 def _run(args: argparse.Namespace) -> dict[str, Any]:
@@ -131,7 +138,13 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         raise _Unreadable(f"no memory state file at {args.state} ({exc.strerror})") from None
     # the runtime owns the state file, and the operators file cannot forge that
     by = invoking_operator(config.refusing([state_owner]))
-    backend = FileBackend(args.state, deny_path=args.deny)
+    # the state file and the directories above it: no links, owned only by root or the runtime
+    chain = check_root_owned(args.state, owners=(state_owner,))
+    if chain:
+        raise MemoryAdminError("the state file's path is not trusted: " + "; ".join(chain))
+    # the one deny file: the operators file's, which the runtime reads too; a corrupt state file
+    # is refused, never quarantined and recreated by an operator run
+    backend = FileBackend(args.state, deny_path=config.deny_file, quarantine=False)
     unsafe = [
         p
         for path in (backend.deny.path, backend.deny.lock_path)
@@ -173,7 +186,7 @@ def main(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
     try:
         out = _run(args)
-    except (OperatorsUnreadable, _Unreadable, OSError) as exc:
+    except (OperatorsUnreadable, _Unreadable, OSError, StateCorruptError) as exc:
         print(f"hnx agent memory {args.cmd}: {exc}", file=sys.stderr)
         return 2
     except (MemoryAdminError, MemoryAccessError, MemoryClockError) as exc:

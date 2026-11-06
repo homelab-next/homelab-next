@@ -156,7 +156,9 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -172,6 +174,7 @@ except ImportError:  # pragma: no cover - not POSIX
 from homelabnext.notify.core_pairs import (
     AGENT_MEMORY_CAP,
     AGENT_MEMORY_CLOCK,
+    AGENT_MEMORY_DENY,
     AGENT_MEMORY_DROPPED,
 )
 from homelabnext.registry.model_tlp import receive_ceiling
@@ -262,6 +265,7 @@ UNLABELLED = "red"
 CAP_TITLE, CAP_CLEARED = AGENT_MEMORY_CAP
 CLOCK_TITLE, CLOCK_CLEARED = AGENT_MEMORY_CLOCK
 DROPPED_TITLE, DROPPED_CLEARED = AGENT_MEMORY_DROPPED
+DENY_TITLE, DENY_CLEARED = AGENT_MEMORY_DENY
 #: how far behind its log's latest record the clock may be: within it the batch is stamped at
 #: the log's time; beyond it the batch is refused and the operator paged
 CLOCK_SKEW = timedelta(minutes=5)
@@ -507,18 +511,54 @@ class InMemoryBackend:
             return self._copy(new)
 
 
+class DenyFileProblem(MemoryAccessError):
+    """The deny file cannot be trusted or does not match what the operator stamped (missing,
+    another path, shorter, writable by the runtime, or its lock held too long): the write is
+    refused, and ``MemoryStore`` pages (pair ``AGENT_MEMORY_DENY``)."""
+
+
+#: the state-file key ``MemoryAdmin`` stamps with the deny path and how much it wrote (a reserved
+#: key: no owner can take it)
+DENY_STAMP = RESERVED_PREFIX + "deny-stamp"
+#: the runtime's own writability check of the deny file (tests only turn it off: the test
+#: process plays the operator and the runtime with one uid)
+_CHECK_DENY_WRITABLE = True
+
+
+def _flock(fd: int, kind: int, what: object, tries: int, wait: float) -> None:
+    """``flock`` without blocking, retried ``tries`` times ``wait`` seconds apart: a lock held
+    for longer is refused (:class:`DenyFileProblem`), never waited on forever."""
+    if fcntl is None:  # pragma: no cover - not POSIX
+        return
+    for n in range(tries):
+        try:
+            fcntl.flock(fd, kind | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if n + 1 < tries:
+                time.sleep(wait)
+    raise DenyFileProblem(
+        f"{what} is locked by another process for more than {tries * wait:.1f}s; nothing was "
+        "done (a process holding the deny lock blocks retraction: find and stop it)"
+    )
+
+
 class DenyFile:
     """The deny log and the denied-reach index in their own JSON file, beside a ``.lock``
-    file (ADR-0037 decisions 12 and 14, amended 2026-11-06).  The deployment makes it root's
+    file (ADR-0037 decisions 12 and 14, amended 2026-11-06).  The deployment makes both root's
     (or the operator's), mode 0644, in a directory the runtime cannot write: the runtime only
     ever reads it, under a shared ``flock`` on the lock file (opened read-only), and only
-    ``MemoryAdmin`` appends to it, under the exclusive lock.  A missing file is an empty deny
-    state."""
+    ``MemoryAdmin`` appends to it, under the exclusive lock.  Locks are taken without blocking
+    and retried for at most ``LOCK_TRIES * LOCK_WAIT`` seconds, so a process that holds one
+    forever gets a refusal, not a hang.  A missing file is an empty deny state; a file without
+    its lock is still read (an atomic replace never leaves a torn file), never ignored."""
 
     MODE = 0o644
+    LOCK_TRIES = 50
+    LOCK_WAIT = 0.1
 
     def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
+        self.path = Path(os.path.abspath(path))
         self.lock_path = self.path.with_name(self.path.name + ".lock")
 
     def _read(self) -> Deny:
@@ -529,20 +569,24 @@ class DenyFile:
         if not isinstance(doc, Mapping) or not all(
             isinstance(doc.get(k), list) for k in ("log", "reach")
         ):
-            raise MemoryAccessError(f"{self.path} is not a deny file ({{log, reach}})")
+            raise DenyFileProblem(f"{self.path} is not a deny file ({{log, reach}})")
         return {"log": list(doc["log"]), "reach": list(doc["reach"])}
+
+    def exists(self) -> bool:
+        return self.path.exists()
 
     @contextlib.contextmanager
     def shared(self) -> Iterator[Deny]:
         """The deny state, read and held under the shared lock for the ``with`` body."""
         try:
             fd = os.open(self.lock_path, os.O_RDONLY)
-        except FileNotFoundError:  # never written: nothing is denied yet
-            yield _empty_deny()
+        except FileNotFoundError:  # no lock: read the file all the same (fail closed)
+            yield copy.deepcopy(self._read())
             return
         try:
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_SH)
+            _flock(
+                fd, fcntl.LOCK_SH if fcntl else 0, self.lock_path, self.LOCK_TRIES, self.LOCK_WAIT
+            )
             yield copy.deepcopy(self._read())
         finally:
             os.close(fd)  # closing drops the lock
@@ -551,46 +595,134 @@ class DenyFile:
         with self.shared() as deny:
             return deny
 
-    def transact(self, fn: Callable[[Deny], Deny]) -> Deny:
-        """Append to the deny state under the exclusive lock (only ``MemoryAdmin`` calls it)."""
-        from homelabnext.state import atomic_write_text
-
-        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, self.MODE)
+    @contextlib.contextmanager
+    def exclusive(self) -> Iterator[Deny]:
+        """The deny state under the exclusive lock (only ``MemoryAdmin``)."""
+        fd = os.open(
+            self.lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), self.MODE
+        )
         try:
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            old = self._read()
-            new = _appended(old, fn(copy.deepcopy(old)))
-            text = json.dumps(new, sort_keys=True, separators=(",", ":"))
-            atomic_write_text(self.path, text, mode=self.MODE, keep_owner=True)
-            return copy.deepcopy(new)
+            _flock(
+                fd, fcntl.LOCK_EX if fcntl else 0, self.lock_path, self.LOCK_TRIES, self.LOCK_WAIT
+            )
+            yield self._read()
         finally:
             os.close(fd)
 
+    def write(self, new: Deny) -> None:
+        """Replace the deny file (call inside :meth:`exclusive`)."""
+        from homelabnext.state import atomic_write_text
+
+        text = json.dumps(new, sort_keys=True, separators=(",", ":"))
+        atomic_write_text(self.path, text, mode=self.MODE)
+
+    def transact(self, fn: Callable[[Deny], Deny]) -> Deny:
+        """Append to the deny state under the exclusive lock (only ``MemoryAdmin`` calls it)."""
+        with self.exclusive() as old:
+            new = _appended(old, fn(copy.deepcopy(old)))
+            self.write(new)
+            return copy.deepcopy(new)
+
+    def problem(self) -> str | None:
+        """Why the runtime must not trust this deny file: it (or its lock, or its directory)
+        is writable by this process, so a process running as the runtime could rewrite it."""
+        for p in (self.path, self.lock_path, self.path.parent):
+            if p.exists() and os.access(p, os.W_OK):
+                return (
+                    f"the deny file {self.path} is writable by this process (via {p}): it must "
+                    "be root's (or the operator's), mode 0644, in a directory the runtime cannot "
+                    "write"
+                )
+        return None
+
+
+@contextlib.contextmanager
+def _as_owner(path: Path) -> Iterator[None]:
+    """Run the body with the effective uid and gid dropped to the owner of ``path`` (the
+    runtime's state file, else its directory) when this process is root (an operator under
+    sudo): root then never opens, creates, locks, renames or quarantines a name the runtime
+    controls, and everything it writes there is the runtime's (ADR-0037 decision 12, amended).
+    A symbolic link as the state file is refused.  Not thread-safe (the effective ids are the
+    process's): ``hnx agent memory`` is single-threaded."""
+    if not hasattr(os, "seteuid") or os.geteuid() != 0:
+        yield
+        return
+    target = path if os.path.lexists(path) else path.parent
+    st = os.lstat(target)
+    if stat.S_ISLNK(st.st_mode):
+        raise MemoryAccessError(f"{target} is a symbolic link: an operator never follows one")
+    if st.st_uid == 0:  # root's own state (the runtime must not run as root): nothing to drop
+        yield
+        return
+    groups, egid = os.getgroups(), os.getegid()
+    os.setgroups([st.st_gid])
+    os.setegid(st.st_gid)
+    os.seteuid(st.st_uid)
+    try:
+        yield
+    finally:
+        os.seteuid(0)
+        os.setegid(egid)
+        os.setgroups(groups)
+
 
 class FileBackend:
-    """Durable backend: one ``homelabnext.state`` file, one key per owning profile, and the
-    deny state in its own :class:`DenyFile` (``deny_path``; by default ``<path>.deny.json``).
-    A write keeps the state file's owner (``keep_owner``), so an operator's write as root leaves
-    a file the runtime still owns.  Each ``transact`` reads the deny file under its shared lock
-    first, then takes the state file's lock (the lock order)."""
+    """Durable backend: one ``homelabnext.state`` file, one key per owning profile, and the deny
+    state in its own :class:`DenyFile` (``deny_path``, required: the runtime and the operator
+    read it from one place, the operators file's ``deny_file``, so they cannot diverge).
 
-    def __init__(
-        self, path: str | Path, *, deny_path: str | Path | None = None, **state_kwargs: Any
-    ) -> None:
+    Run as root (an operator under sudo), every state-file operation runs with the effective
+    uid and gid of the state file's owner (:func:`_as_owner`), so root never resolves a name the
+    runtime controls.  Each ``transact`` reads the deny file under its shared lock first, then
+    takes the state file's lock (the lock order), and refuses (:class:`DenyFileProblem`) when
+    the deny file does not match the operator's stamp (:data:`DENY_STAMP`): missing, another
+    path, or shorter than what was stamped."""
+
+    def __init__(self, path: str | Path, *, deny_path: str | Path, **state_kwargs: Any) -> None:
         from homelabnext.state import StateStore
 
-        state_kwargs.setdefault("keep_owner", True)
-        self._store = StateStore(path, **state_kwargs)
-        self.path = Path(path)
-        self.deny = DenyFile(deny_path or self.path.with_name(self.path.name + ".deny.json"))
+        if not deny_path:
+            raise TypeError("FileBackend needs deny_path=, the operators file's deny_file")
+        self.path = Path(os.path.abspath(path))
+        with _as_owner(self.path):
+            self._store = StateStore(self.path, **state_kwargs)
+        self.deny = DenyFile(deny_path)
 
     def load(self, owner: str) -> Any:
-        return self._store.get(owner_key(owner), {}) or {}
+        owner_key(owner)
+        with _as_owner(self.path):
+            return self._store.get(owner, {}) or {}
 
     def owners(self) -> list[str]:
-        names = self._store.keys()  # StateStore.keys(): sorted, read under its lock
+        with _as_owner(self.path):
+            names = self._store.keys()  # StateStore.keys(): sorted, read under its lock
         return [k for k in names if not k.startswith(RESERVED_PREFIX)]
+
+    def deny_problem(self) -> str | None:
+        """Why the runtime must refuse to write now (see :meth:`DenyFile.problem`), or None."""
+        if not _CHECK_DENY_WRITABLE or os.geteuid() == 0:
+            return None
+        return self.deny.problem()
+
+    def _stamp_problem(self, data: Mapping[str, Any], deny: Deny) -> str | None:
+        stamp = data.get(DENY_STAMP)
+        if not isinstance(stamp, Mapping):
+            return None
+        if stamp.get("path") != str(self.deny.path):
+            return (
+                f"the operator wrote the deny file {stamp.get('path')}, but this store reads "
+                f"{self.deny.path}: one deny path must serve both (the operators file's deny_file)"
+            )
+        if (
+            not self.deny.exists()
+            or len(deny["log"]) < int(stamp.get("log", 0))
+            or len(deny["reach"]) < int(stamp.get("reach", 0))
+        ):
+            return (
+                f"the deny file {self.deny.path} is missing or shorter than the operator stamped "
+                "it: a retraction may be lost, so nothing is written"
+            )
+        return None
 
     def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any:
         # the deny file under its shared lock first, then the state file: StateStore.rewrite
@@ -598,9 +730,12 @@ class FileBackend:
         # leaves the file as it was
         owner_key(owner)
         out: list[Any] = []
-        with self.deny.shared() as deny:
+        with self.deny.shared() as deny, _as_owner(self.path):
 
             def change(data: dict[str, Any]) -> bool:
+                problem = self._stamp_problem(data, deny)
+                if problem:
+                    raise DenyFileProblem(problem)
                 out.append(fn(data.get(owner) or {}, copy.deepcopy(deny)))
                 data[owner] = out[0]
                 return True
@@ -612,7 +747,40 @@ class FileBackend:
         return self.deny.read()
 
     def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny:
-        return self.deny.transact(fn)
+        """Append to the deny file and stamp the state file with its path and length, both under
+        the deny file's exclusive lock (deny, then state: the lock order)."""
+        with self.deny.exclusive() as old:
+            new = _appended(old, fn(copy.deepcopy(old)))
+            self.deny.write(new)
+            stamp = {
+                "path": str(self.deny.path),
+                "log": len(new["log"]),
+                "reach": len(new["reach"]),
+            }
+
+            def mark(data: dict[str, Any]) -> bool:
+                data[DENY_STAMP] = stamp
+                return True
+
+            with _as_owner(self.path):
+                self._store.rewrite(mark)
+            return copy.deepcopy(new)
+
+
+def deny_path_from(operators: str | Path) -> Path:
+    """The deny file the operators file names (``deny_file``): the one path the runtime and the
+    operator both use.  Raises :class:`DenyFileProblem` when it names none."""
+    import yaml
+
+    try:
+        text = Path(operators).read_text(encoding="utf-8")
+        doc = json.loads(text) if str(operators).endswith(".json") else yaml.safe_load(text)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise DenyFileProblem(f"cannot read the operators file {operators}: {exc}") from None
+    path = doc.get("deny_file") if isinstance(doc, Mapping) else None
+    if not isinstance(path, str) or not os.path.isabs(path):
+        raise DenyFileProblem(f"{operators}: deny_file must be an absolute path")
+    return Path(path)
 
 
 def denied(backend: MemoryBackend) -> DenySet:
@@ -1210,7 +1378,8 @@ def _apply(
             rec["closure"] = closure
             # platform scopes are written unchecked only, so their records (and the range records
             # they fold into) never point at an exposure (ADR-0037 decision 9, amended)
-            assert not (check.checked and u["scope"] in _platform_scopes(profile))
+            if check.checked and u["scope"] in _platform_scopes(profile):  # never: _check refuses
+                raise MemoryUpdateError([f"{where}: a platform scope is written unchecked only"])
             records.append(rec)
             by_key.setdefault(k, []).append(rec)
             scope[u["key"]] = entry
@@ -1473,6 +1642,7 @@ class MemoryStore:
             notifier.register_pair(CAP_TITLE, CAP_CLEARED)
             notifier.register_pair(CLOCK_TITLE, CLOCK_CLEARED)
             notifier.register_pair(DROPPED_TITLE, DROPPED_CLEARED)
+            notifier.register_pair(DENY_TITLE, DENY_CLEARED)
 
     def apply_updates(
         self,
@@ -1536,8 +1706,16 @@ class MemoryStore:
             denies = deny_set(deny.get("log") or (), deny.get("reach") or ())
             return _apply(stored, updates, check, now, profile, result, denies)
 
+        unsafe = getattr(self._backend, "deny_problem", None)
+        problem = unsafe() if callable(unsafe) else None
+        if problem:  # a deny file the runtime could rewrite is no retraction at all
+            self._deny_page(owner, problem)
+            raise DenyFileProblem(problem)
         try:
             new = self._backend.transact(owner, fn)
+        except DenyFileProblem as exc:
+            self._deny_page(owner, str(exc))
+            raise
         except MemoryClockError as exc:
             self._clock_page(owner, exc.behind)
             raise
@@ -1553,6 +1731,7 @@ class MemoryStore:
                 )
             raise
         self._clock_page(owner, None)
+        self._deny_page(owner, None)
         for scope in sorted({u["scope"] for u in updates}):
             self._page(owner, scope, None, False)
         if check.checked:
@@ -1922,6 +2101,19 @@ class MemoryStore:
             "those keys stopped advancing. Retire and re-add them, write a key that carries "
             "position (a cursor) without sources, or stop citing the retracted source.",
             f"{owner}'s platform memory scope {scope} applies its updates again",
+        )
+
+    def _deny_page(self, owner: str, problem: str | None) -> None:
+        """Report that ``owner``'s writes are refused because the deny file cannot be trusted
+        (``problem``), or not (None), state-diffed (pair ``AGENT_MEMORY_DENY``)."""
+        key = "agent-memory-deny-" + hashlib.sha256(owner.encode()).hexdigest()[:16]
+        self._report(
+            key,
+            owner,
+            "deny-file",
+            DENY_TITLE if problem is not None else DENY_CLEARED,
+            None if problem is None else f"{owner}'s memory refuses writes: {problem}.",
+            f"{owner}'s memory trusts its deny file again",
         )
 
     def _clock_page(self, owner: str, behind: timedelta | None) -> None:

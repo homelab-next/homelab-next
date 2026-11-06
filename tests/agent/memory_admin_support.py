@@ -37,6 +37,7 @@ def operators_file(directory, users=None, **extra):
         "operators": users or [me],
         "agent_runtime": [{"uid": RUNTIME_UID}],
         "broker": [{"uid": BROKER_UID}],
+        "deny_file": str(directory / "memory-deny.json"),
         **extra,
     }
     path = directory / "memory-operators.json"

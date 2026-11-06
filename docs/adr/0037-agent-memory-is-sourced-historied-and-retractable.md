@@ -280,8 +280,8 @@ was shown, never from what the model says about its sources.
      writes are unchecked and store no exposure. An unchecked record's `pack_id` is provenance
      (the pack the platform acted for), never exposure: the walk reads exposure only through
      checked records. So the pack ids a range record drops at 256 point at no exposure, and
-     nothing is lost. `dependents` still lists a truncated record that a retraction's sources
-     reach under `exposed`, flagged `truncated`.
+     nothing is lost. A truncated record a retraction's sources reach is cited (its closure
+     holds them) and `dependents` lists it once, under `cited`, flagged `truncated`.
 
    *Amendment to decisions 7 and 8 (2026-11-06, PR 2):*
    - **A pack is bound to its profile.** The assembler records the `VerifiedProfile` it was
@@ -355,17 +355,18 @@ was shown, never from what the model says about its sources.
     change its uid or write root's files.
     - **The operators file** is `/etc/homelabnext/memory-operators.yml` (`--operators` names
       another only when the effective uid is 0), shaped `{operators: [users], agent_runtime:
-      [{user}|{uid}], broker: [{user}|{uid}], broker_manifest?: path}`. It is trusted only
+      [{user}|{uid}], broker: [{user}|{uid}], broker_manifest?: path, deny_file: path}`. It is trusted only
       through root ownership: the file and every directory above it are owned by uid 0 and
-      writable by no group or other, and a file owned by the invoking (sudo) user is refused. It
+      writable by no group or other. It
       is opened with `O_NOFOLLOW`, and the descriptor that is `fstat`-ed is the one parsed.
     - **Refused uids**, whatever `operators` says: `agent_runtime`, `broker`, the broker
       manifest's `callers`, `approval_relays`, 1.8 `operators` peers and Code Mode `runners` and
       `sandboxes`, and always the owner of the memory state file, which the runtime owns and the
       operators file cannot forge. **The runtime must not run as root**: a state file owned by
       uid 0 refuses every operator. The deployment runs `hnx agent memory` through `sudo`, so
-      the principal's user is `root` (listed in `operators`), and `SUDO_USER` is recorded as
-      advisory `by_sudo` on what the operator writes.
+      the principal's user is `root` (listed in `operators`), and `by` on every record reads
+      `root`: **attribution comes from sudo's own log**. `SUDO_USER` is recorded as `by_sudo`,
+      an environment value the invoker sets, advisory only.
     - **Every method re-checks the process**: `require_operator` compares `os.getuid()` and
       `os.geteuid()` with the principal's uids and the refused set, so a principal forged or
       carried into another process does not act. The seal on `OperatorPrincipal` guards against
@@ -373,17 +374,31 @@ was shown, never from what the model says about its sources.
     - **The deny state lives in its own file**, not under reserved keys of the runtime's state
       file: the deny log and the `denied_reach` index in one JSON file beside a `.lock` file,
       owned by root (or the operator), mode 0644, in a directory the runtime cannot write.
-      The runtime only reads it, under a shared `flock` taken inside its own `transact`; only
-      `MemoryAdmin` appends, under the exclusive lock. Lock order: the deny file, then the state
-      file. `hnx agent memory` refuses a deny file (or a directory above it) the runtime could
-      write. `FileBackend(path, deny_path=)` takes it (by default `<path>.deny.json`, which the
-      command refuses unless its directory is root's); `InMemoryBackend` keeps the equivalent in
-      process, under its own lock. Owners starting `@` stay refused.
-    - **The runtime keeps its state file.** An operator's write as root gives the replacement file
-      (and a lock file it creates) the replaced file's uid and gid (`fchown` before anything is
-      written), and refuses to write when it cannot.
+      **One path serves both**: the operators file's required `deny_file`, which `hnx agent
+      memory` uses and the runtime reads (`deny_path_from`); `FileBackend(path, deny_path=)`
+      requires it (no default). The runtime only reads the file, under a shared `flock` taken
+      inside its own `transact`; only `MemoryAdmin` appends, under the exclusive lock. Lock order:
+      the deny file, then the state file. Every lock is taken without blocking and retried for a
+      bounded time (5 s by default), so a process that holds one forever gets a refusal, not a
+      hang. A deny file whose lock is missing is still read (fail closed). `hnx agent memory`
+      refuses a deny file (or a directory above it) the runtime could write; the runtime refuses
+      one it can write itself, and pages (`AGENT_MEMORY_DENY`). `InMemoryBackend` keeps the
+      equivalent in process, under its own lock. Owners starting `@` stay refused.
+    - **The operator stamps the state file.** After each append, `MemoryAdmin` writes the deny
+      path and how many records it wrote into the runtime's state file (reserved key
+      `@deny-stamp`); the runtime refuses writes, and pages, when its deny file is missing, is
+      another path, or is shorter than the stamp, so a retraction cannot silently not apply.
+    - **Root never touches a name the runtime controls.** Run as root, every state-file operation
+      (load, rewrite, lock, quarantine, temporary files) runs with the effective uid and gid (and
+      groups) of the state file's owner, restored afterwards, so a lock planted as a link to a
+      root file, or a dangling link into a root directory, is opened as the runtime and refused.
+      What the operator writes there is the runtime's by construction. The state file must be no
+      link, and it and the directories above it must be owned only by root or the runtime and
+      writable by no group or other. A corrupt state file is refused, never quarantined and
+      recreated by an operator run.
     - The whole `memory.*` broker action namespace is refused, `memory.restamp` included, except
-      the notes lane's `memory.write`; and no broker handler may name `homelabnext.memory_admin`.
+      the notes lane's `memory.write`; and no broker handler may name `homelabnext.memory_admin`
+      (defence in depth only: the broker's uid is refused as an operator, which is the boundary).
 13. **`retract` denies every platform-issued name of a source, first.**
     - **Aliases come only from platform-issued pairings:**
       - a knowledge node's graph id, record uid and repository digests;
@@ -412,8 +427,8 @@ was shown, never from what the model says about its sources.
       - The retirements are idempotent, so re-running `retract` completes one that crashed
         part-way.
     - The deny list is an append-only log of `retract` and `lift` records, kept by the backend
-      under a reserved key that no profile id can take. Retracting twice changes nothing the
-      second time.
+      under a reserved key that no profile id can take (amended under decision 12: in its own
+      deny file). Retracting twice changes nothing the second time.
 
     *Amendment (2026-11-06, PR 3 review):*
     - **Alias closure never crosses from a digest to another uid.** A graph id closes to its uid
@@ -440,7 +455,8 @@ was shown, never from what the model says about its sources.
     - **Writes re-check the deny list.**
       - `MemoryBackend` gains `owners()`.
       - `transact(owner, fn)` passes the deny log, read under the same lock: `FileBackend` uses
-        `StateStore.rewrite`, and `InMemoryBackend` gains a lock.
+        `StateStore.rewrite`, and `InMemoryBackend` gains a lock (amended under decision 12: the
+        deny file's own shared lock, taken first).
       - Every apply re-checks each record's closure, its pack's `rendered` identifiers and the
         `denied_reach` marks in its `memory` block against the deny log
         inside its transaction, so a report validated before a retraction cannot land after it.
@@ -480,8 +496,12 @@ was shown, never from what the model says about its sources.
     - **A section declaring a denied item is left out whole**: the assembler cannot cut one item's
       text from a section. A required one is quarantined (listed in `omitted` and in the pack's
       `retracted.quarantined`, and paged by the caller with `quarantine_page`, pair
-      `AGENT_PACK_QUARANTINED`), never deferred silently. Callers should filter denied items
-      before they render a section's text, so a whole section is not lost for one item.
+      `AGENT_PACK_QUARANTINED`), and the pack goes ahead without it. (As first built, the pack was
+      deferred, with the reason in `deferred_reasons`.) No caller reads an empty `deferred`
+      as "every required section is present": the agent CLI and the handoff look only at
+      `status`, and a report that must cite the missing section fails `must_cite`. Callers
+      should filter denied items before they render a section's text, so a whole section is not
+      lost for one item.
 
 ### Staleness (PR 4)
 

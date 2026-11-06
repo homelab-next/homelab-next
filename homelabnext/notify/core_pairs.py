@@ -17,6 +17,10 @@ from types import MappingProxyType
 
 AGENT_MEMORY_CAP = ("Agent memory scope at its record cap", "Agent memory scope accepts writes")
 AGENT_MEMORY_CLOCK = ("Agent memory clock behind its log", "Agent memory clock caught up")
+AGENT_MEMORY_DENY = (
+    "Agent memory deny file untrusted",
+    "Agent memory deny file trusted again",
+)
 AGENT_MEMORY_DROPPED = (
     "Agent memory platform updates dropped",
     "Agent memory platform updates applied again",
@@ -40,6 +44,7 @@ CORE_PAIRS = MappingProxyType(
         (
             AGENT_MEMORY_CAP,
             AGENT_MEMORY_CLOCK,
+            AGENT_MEMORY_DENY,
             AGENT_MEMORY_DROPPED,
             AGENT_PACK_QUARANTINED,
             BROKER_APPROVAL,
@@ -57,6 +62,7 @@ CORE_PAIRS = MappingProxyType(
 __all__ = [
     "AGENT_MEMORY_CAP",
     "AGENT_MEMORY_CLOCK",
+    "AGENT_MEMORY_DENY",
     "AGENT_MEMORY_DROPPED",
     "AGENT_PACK_QUARANTINED",
     "BROKER_APPROVAL",

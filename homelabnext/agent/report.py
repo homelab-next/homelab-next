@@ -97,16 +97,25 @@ def mem_problems(
     return []
 
 
-def served_report(report: Mapping[str, Any], *, reader: VerifiedProfile) -> dict[str, Any]:
+def served_report(
+    report: Mapping[str, Any], *, reader: VerifiedProfile, author: str
+) -> dict[str, Any]:
     """``report`` as it may be served to ``reader`` (ADR-0037 decision 18): unchanged for its own
     author, and with ``memory_updates`` replaced by ``{"count": n}`` for any other profile, so no
-    key, value or source of the author's memory reaches it.  The result is a served view, not a
-    ``report_result`` (it does not validate as one).  Call it wherever a report is handed to a
-    profile other than its author: the ADR-0035 renderer, and the context store's level reads by
-    digest once they serve reports."""
+    key, value or source of the author's memory reaches it.
+
+    ``author`` is the author the caller validated (the profile the report's pack was bound to,
+    :func:`validate_report`), never the report's own ``profile`` field, which the model wrote; a
+    report whose ``profile`` is not ``author`` is refused (``ValueError``), since it was not
+    validated as that author's.  The result is a served view, not a ``report_result`` (it does
+    not validate as one).  Call it wherever a report is handed to a profile other than its
+    author: the ADR-0035 renderer, and the context store's level reads by digest once they serve
+    reports."""
     require_verified(reader, "served_report")
+    if not isinstance(author, str) or report.get("profile") != author:
+        raise ValueError("served_report serves only a report validated as author's own")
     out = copy.deepcopy(dict(report))
-    if out.get("profile") != reader["id"]:
+    if author != reader["id"]:
         updates = out.get("memory_updates")
         out["memory_updates"] = {"count": len(updates) if isinstance(updates, list) else 0}
     return out

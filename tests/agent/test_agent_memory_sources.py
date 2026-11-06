@@ -88,7 +88,7 @@ def ledger():
 def backend(request, tmp_path):
     if request.param == "memory":
         return InMemoryBackend()
-    return FileBackend(tmp_path / "memory.json")
+    return FileBackend(tmp_path / "memory.json", deny_path=tmp_path / "memory-deny.json")
 
 
 def up(op, key, value=None, scope="analyst", sources=None):
@@ -843,7 +843,10 @@ def test_both_backends_hold_the_same_sourced_history(tmp_path):
     pack, h = labelled_pack([item(1, "green")], [item(2, "clear")], static="clear")
     reader = _profile()
     outs = []
-    for backend in (InMemoryBackend(), FileBackend(tmp_path / "m.json")):
+    for backend in (
+        InMemoryBackend(),
+        FileBackend(tmp_path / "m.json", deny_path=tmp_path / "m-deny.json"),
+    ):
         store = MemoryStore(backend, now=Clock())
         store.apply_updates(reader, [up("add", "k", "v", sources=[uid(1)])], pack=pack, pack_hash=h)
         outs.append(backend.load(reader["id"]))

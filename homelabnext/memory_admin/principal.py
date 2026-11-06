@@ -17,6 +17,7 @@ uid, or write files root owns.  So:
       agent_runtime: [{user: hnx-agent}]  # users (or {uid: n}) the agent runtime runs as
       broker: [{user: hnx-broker}]     # users (or uids) the broker runs as
       broker_manifest: broker.yml      # optional, relative to this file
+      deny_file: /var/lib/homelabnext-deny/memory-deny.json  # the one deny file, root's
 
 * **Refused uids**, whatever ``operators`` says: ``agent_runtime``, ``broker``, the broker
   manifest's ``callers``, ``approval_relays``, ``operators`` (manifest 1.8 peers) and Code Mode
@@ -144,10 +145,14 @@ class OperatorConfig:
     operators: frozenset[str]
     refused: frozenset[int]
     source: str
+    #: the one deny file the runtime and the operator both use
+    deny_file: str = ""
 
     def refusing(self, uids: Iterable[int]) -> OperatorConfig:
         """This configuration with ``uids`` refused too (the state file's owner)."""
-        return OperatorConfig(self.operators, self.refused | frozenset(uids), self.source)
+        return OperatorConfig(
+            self.operators, self.refused | frozenset(uids), self.source, self.deny_file
+        )
 
 
 def _peers(entries: Any, where: str, lookup: Callable[[str], int], problems: list[str]) -> set[int]:
@@ -239,9 +244,6 @@ def _open_trusted(path: Path) -> tuple[Any, os.stat_result]:
 def _trusted(path: Path, what: str) -> Any:
     doc, st = _open_trusted(path)
     problems = _mode_problems(path, st, _ROOT_OWNERS) + check_root_owned(path.parent)
-    sudo_uid = os.environ.get("SUDO_UID", "")
-    if sudo_uid.isdigit() and int(sudo_uid) and st.st_uid == int(sudo_uid):
-        problems.append(f"{path} is owned by the invoking user (uid {sudo_uid})")
     if problems:
         raise MemoryAdminError(
             f"the {what} must be reviewed configuration owned by root that the runtime cannot "
@@ -260,7 +262,8 @@ def load_operators(
     doc = _trusted(where, "operators file")
     if not isinstance(doc, Mapping):
         raise MemoryAdminError(f"{path}: expected a mapping with operators, agent_runtime, broker")
-    unknown = sorted(set(doc) - {"operators", "agent_runtime", "broker", "broker_manifest"})
+    known = {"operators", "agent_runtime", "broker", "broker_manifest", "deny_file"}
+    unknown = sorted(set(doc) - known)
     problems = [f"{path}: unknown keys {unknown}"] if unknown else []
     ops = doc.get("operators")
     if not (
@@ -303,9 +306,13 @@ def load_operators(
             continue  # an operator absent from this host simply never matches
         if uid in refused:
             problems.append(f"{path}: operator {o!r} is a user the agent runtime or broker runs as")
+    deny = doc.get("deny_file")
+    if not isinstance(deny, str) or not os.path.isabs(deny):
+        problems.append(f"{path}: deny_file must be the absolute path of the deny file")
+        deny = ""
     if problems:
         raise MemoryAdminError("; ".join(problems))
-    return OperatorConfig(frozenset(ops), frozenset(refused), str(where))
+    return OperatorConfig(frozenset(ops), frozenset(refused), str(where), deny)
 
 
 def invoking_operator(config: OperatorConfig) -> OperatorPrincipal:

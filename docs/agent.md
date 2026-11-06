@@ -773,20 +773,32 @@ everything built on it, by an operator, never by a profile.
   agent_runtime: [{user: hnx-agent}]  # users (or {uid: n}) the agent runtime runs as
   broker: [{user: hnx-broker}]        # users (or uids) the broker runs as
   broker_manifest: broker.yml         # optional: its callers, approval relays, operators and Code Mode peers
+  deny_file: /var/lib/homelabnext-deny/memory-deny.json  # the one deny file (absolute)
   ```
 
   Those uids are refused, and so, always, is the owner of the `--state` file: the runtime owns
-  it. **The runtime must not run as root.** Run the command through `sudo`; `SUDO_USER` is
-  recorded as advisory `by_sudo` on what the operator writes.
+  it. **The runtime must not run as root.** Run the command through `sudo`: `by` then reads
+  `root`, and attribution comes from sudo's own log; `SUDO_USER` is recorded as `by_sudo`, an
+  environment value, advisory only.
 - **The deny state is its own file.** The deny log and the `denied_reach` index live in a JSON
-  file beside a `.lock` file (`FileBackend(path, deny_path=)`, `--deny`, by default
-  `<state>.deny.json`), owned by root or the operator, mode 0644, in a directory the runtime
-  cannot write (the command refuses one it could). The runtime only reads it, under a shared
-  `flock` taken inside its own `transact`; `MemoryAdmin` appends under the exclusive lock (lock
-  order: the deny file, then the state file). `InMemoryBackend` keeps the equivalent in process.
-  Owners starting `@` are refused. An operator's write as root keeps the state file's and its
-  lock's uid and gid (`StateStore(keep_owner=True)`, `atomic_write_text(keep_owner=)`), and
-  refuses to write when it cannot.
+  file beside a `.lock` file, owned by root or the operator, mode 0644, in a directory the
+  runtime cannot write. One path serves both sides: the operators file's `deny_file`, which the
+  command uses and the runtime reads (`memory.deny_path_from(operators_file)`), passed as
+  `FileBackend(path, deny_path=)` (required). The runtime only reads it, under a shared `flock`
+  taken inside its own `transact`; `MemoryAdmin` appends under the exclusive lock (lock order:
+  the deny file, then the state file). Locks are taken without blocking and retried for at most
+  5 s, then refused. A deny file without its lock is still read (fail closed). The command
+  refuses a deny file the runtime could write; the runtime refuses one it can write itself, and
+  pages (`AGENT_MEMORY_DENY`). After each append the operator stamps the state file with the
+  deny path and its length (`@deny-stamp`), and the runtime refuses writes, and pages, when its
+  deny file is missing, another path, or shorter. `InMemoryBackend` keeps the equivalent in
+  process. Owners starting `@` are refused.
+- **Root never touches a name the runtime controls.** Run as root, every state-file operation
+  (load, rewrite, lock, quarantine, temporary files) runs with the effective uid, gid and groups
+  of the state file's owner, restored afterwards: a lock the runtime planted as a link to a root
+  file is opened as the runtime and refused, and what the operator writes stays the runtime's.
+  The state file must be no link, and its path owned only by root or the runtime; a corrupt
+  state file is refused, never quarantined and recreated by an operator run.
 - **`dependents(source, by=, revision=, include_exposed=, include_alias=)` is the dry run.** The
   alias set comes only from the exposures' `pairs` (`{rendered, memory, pairs}`, counted in
   `exposure_bytes`) and closes narrowly: a graph id to its uid, a uid to its own digests and
@@ -822,7 +834,8 @@ everything built on it, by an operator, never by a profile.
   its digest only under a `revision=this` retraction. The assembler leaves out an input section
   that declares a denied item, whole (one item's text cannot be cut out of a section): a
   required one is quarantined, listed in `omitted` and `retracted.quarantined`, and the caller
-  pages it with `quarantine_page` (pair `AGENT_PACK_QUARANTINED`); it is never deferred silently.
+  pages it with `quarantine_page` (pair `AGENT_PACK_QUARANTINED`), and the pack goes ahead (it
+  is no longer deferred).
   **Callers should filter denied items before rendering section text.** It also drops a knowledge
   item naming a denied identifier (and stops listing it as included) and a memory-block entry
   whose closure reaches a denied name or cites a marked revision, or that is marked itself.
@@ -839,13 +852,14 @@ everything built on it, by an operator, never by a profile.
   clock that ran ahead was corrected (decision 3): the dry run lists each from -> to; applying it
   needs `expect_now` (the time the operator believes it is) within 5 minutes of the clock. Each
   such stamp becomes now, the old one kept as `restamped_from`, with a `restamp` record.
-- **`hnx agent memory {dependents,retract,lift,purge,restamp} --state FILE [--deny FILE]
+- **`hnx agent memory {dependents,retract,lift,purge,restamp} --state FILE
   [--operators FILE]`** is the command: operator only, a dry run unless `--apply` (`retract
   --apply` needs the dry run's `--confirm`, except to complete one already denied with the same
   settings; `restamp --apply` needs `--expect-now`). Output is JSON; exit 0 done or a dry run, 1
   refused, 2 a usage error or an unreadable file (the operators file included).
 - **A report served to another profile carries its `memory_updates` as `{count: n}`**
-  (`homelabnext.agent.report.served_report(report, reader=)`), so it is no cross-agent read of
+  (`homelabnext.agent.report.served_report(report, reader=, author=)`, `author` being the
+  validated author, never the report's own field), so it is no cross-agent read of
   memory. Nothing serves reports to other profiles yet (the reader-to-actor handoff passes only
   `output`); ADR-0035's renderer, and the context store's level reads by digest once they serve
   reports, must call it.

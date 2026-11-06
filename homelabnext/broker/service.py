@@ -343,7 +343,8 @@ def memory_admin_action(name: Any) -> bool:
 
 def _imports_memory_admin(path: Path) -> bool:
     """True when a handler file names the operator's memory admin (a handler runs as the
-    broker's user, which may never reach it)."""
+    broker's user, which may never reach it).  Defence in depth only: the boundary is the uid
+    (the broker's user is refused as an operator), not this text match."""
     try:
         return b"memory_admin" in path.read_bytes()
     except OSError:

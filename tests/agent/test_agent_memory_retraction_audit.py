@@ -56,7 +56,7 @@ def reader():
 def backend(request, tmp_path):
     if request.param == "memory":
         return InMemoryBackend()
-    return FileBackend(tmp_path / "memory.json")
+    return FileBackend(tmp_path / "memory.json", deny_path=tmp_path / "memory-deny.json")
 
 
 @pytest.fixture
@@ -232,7 +232,7 @@ def test_a_platform_record_never_points_at_an_exposure(backend, clock, op):
     assert [r["key"] for r in plan["exposed"]] == []  # cursor-a's pack id is not exposure
 
 
-def test_a_truncated_range_its_sources_reach_is_listed_as_exposed(clock, op):
+def test_a_truncated_range_its_sources_reach_is_listed_once_flagged(clock, op):
     backend = InMemoryBackend()
     p = _profile(memory_scopes=["analyst", FL], platform_scopes=[FL])
     rng = {"at": "2026-11-06T08:00:00.000000Z", "scope": FL, "key": "k", "op": "replace",
@@ -242,7 +242,7 @@ def test_a_truncated_range_its_sources_reach_is_listed_as_exposed(clock, op):
            "reasserted_at": None, "truncated": True}  # fmt: skip
     backend._data[p["id"]] = {"entries": fold([rng]), "log": [rng], "exposure": {}}
     plan = MemoryAdmin(backend, now=clock).dependents(uid(1), by=op)
-    assert [r.get("truncated") for r in plan["exposed"]] == [True]
+    assert [r.get("truncated") for r in plan["cited"]] == [True] and plan["exposed"] == []
 
 
 # ---------------------------------------------------------------- audit M4: censorship lever
@@ -404,3 +404,97 @@ def test_a_walk_that_needs_a_second_pass(clock, op):
     backend._data[owner] = {"entries": fold(log), "log": log, "exposure": exposure}
     plan = MemoryAdmin(backend, now=clock).dependents(uid(1), by=op)
     assert [r["key"] for r in plan["exposed"]] == ["k", "x"]
+
+
+# ---------------------------------------------------------------- re-audit M-A, M-B; design #1
+def _file(tmp_path, deny="memory-deny.json"):
+    return FileBackend(tmp_path / "memory.json", deny_path=tmp_path / deny)
+
+
+def test_a_file_backend_needs_its_deny_path(tmp_path):
+    with pytest.raises(TypeError):
+        FileBackend(tmp_path / "memory.json")  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="deny_path"):
+        FileBackend(tmp_path / "memory.json", deny_path="")
+
+
+def test_the_deny_file_is_read_even_without_its_lock(tmp_path):
+    """Fail closed: a deny file whose lock is missing is still the deny state."""
+    backend = _file(tmp_path)
+    backend.transact_deny(lambda d: {"log": [{"op": "retract", "deny_id": "d", "name": "n"}],
+                                     "reach": []})  # fmt: skip
+    backend.deny.lock_path.unlink()
+    assert denied(backend).names == {"n"}
+
+
+def _store(backend, tmp_path):
+    from homelabnext.notify import FakeSender, Notifier
+    from homelabnext.state import StateStore
+
+    sender = FakeSender()
+    notifier = Notifier(sender, StateStore(tmp_path / "n.json"))
+    return MemoryStore(backend, now=Clock(), notifier=notifier), sender
+
+
+@pytest.mark.parametrize("damage", ["missing", "shorter", "other path"])
+def test_the_runtime_refuses_a_deny_file_that_does_not_match_the_stamp(
+    reader, tmp_path, damage, op
+):
+    from homelabnext.agent.memory import DenyFileProblem
+    from homelabnext.notify.core_pairs import AGENT_MEMORY_DENY
+
+    backend = _file(tmp_path)
+    store, sender = _store(backend, tmp_path)
+    put(store, reader, [up("add", "a", "A", sources=[uid(1)])], [item(1)])
+    retract(MemoryAdmin(backend, now=Clock()), uid(1), op)  # stamps the state file
+    if damage == "missing":
+        backend.deny.path.unlink()
+        runtime = backend
+    elif damage == "shorter":
+        backend.deny.path.write_text('{"log": [], "reach": []}', encoding="utf-8")
+        runtime = backend
+    else:  # the runtime pointed at another (empty) deny file: split brain
+        runtime = _file(tmp_path, deny="elsewhere.json")
+    store, sender = _store(runtime, tmp_path)
+    with pytest.raises(DenyFileProblem, match=r"stamped|one deny path"):
+        put(store, reader, [up("add", "b", "B")], [item(2)])
+    assert any(m.title == AGENT_MEMORY_DENY[0] for m in sender.sent)
+
+
+def test_the_runtime_refuses_a_deny_file_it_can_write(reader, tmp_path, monkeypatch):
+    from homelabnext.agent import memory
+    from homelabnext.agent.memory import DenyFileProblem
+    from homelabnext.notify.core_pairs import AGENT_MEMORY_DENY
+
+    monkeypatch.setattr(memory, "_CHECK_DENY_WRITABLE", True)
+    monkeypatch.setattr(memory.os, "geteuid", lambda: 4242)  # a runtime, not root
+    store, sender = _store(_file(tmp_path), tmp_path)
+    with pytest.raises(DenyFileProblem, match="writable by this process"):
+        put(store, reader, [up("add", "a", "A")], [item(1)])
+    assert [m.title for m in sender.sent] == [AGENT_MEMORY_DENY[0]]
+
+
+def test_a_deny_lock_held_forever_is_refused_not_waited_on(tmp_path, monkeypatch):
+    import fcntl
+    import os
+
+    from homelabnext.agent.memory import DenyFile, DenyFileProblem
+
+    backend = _file(tmp_path)
+    backend.transact_deny(lambda d: d)  # creates the lock
+    monkeypatch.setattr(DenyFile, "LOCK_TRIES", 3)
+    monkeypatch.setattr(DenyFile, "LOCK_WAIT", 0.01)
+    fd = os.open(backend.deny.lock_path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)  # the runtime's lock, never released
+        with pytest.raises(DenyFileProblem, match="locked by another process"):
+            backend.transact_deny(lambda d: d)
+    finally:
+        os.close(fd)
+    fd = os.open(backend.deny.lock_path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)  # an operator's lock, never released
+        with pytest.raises(DenyFileProblem, match="locked by another process"):
+            backend.transact("profile:reader", lambda cur, deny: cur)
+    finally:
+        os.close(fd)

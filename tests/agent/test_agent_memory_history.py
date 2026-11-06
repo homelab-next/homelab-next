@@ -71,7 +71,7 @@ def ledger():
 def backend(request, tmp_path):
     if request.param == "memory":
         return InMemoryBackend()
-    return FileBackend(tmp_path / "memory.json")
+    return FileBackend(tmp_path / "memory.json", deny_path=tmp_path / "memory-deny.json")
 
 
 def raw(backend, owner=OWNER):

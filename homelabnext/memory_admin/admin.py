@@ -21,8 +21,8 @@ agent memory`` builds and that is re-checked against this process's uids on ever
   holding that revision.  **Exposed**: records that did not cite one, but whose checked pack
   rendered one, whose pack's memory block showed a revision already reached, or that cite such a
   revision; repeated until a pass finds nothing new.  A ``truncated`` range record its sources
-  reach is listed as exposed too.  ``confirm`` is a digest of the whole listing, settings
-  included.
+  reach is cited (its closure holds them) and listed once, flagged.  ``confirm`` is a digest
+  of the whole listing, settings included.
 * :meth:`MemoryAdmin.retract` refuses a ``confirm`` that no longer matches the dry run, then
   appends one deny record per alias (with the retraction's ``revision``, ``include_exposed`` and
   ``include_alias``) in its own transaction, **before anything else**; walks, appending each
@@ -288,7 +288,6 @@ class MemoryAdmin:
         reached.update((o, s, k, r, r) for o, s, k, r in own)
         cited: list[tuple[str, Record]] = []
         rest: list[tuple[str, Record]] = []
-        truncated: list[tuple[str, Record]] = []
         for owner, st in snap.items():
             for r in state_records(st):
                 holds = any(
@@ -298,15 +297,13 @@ class MemoryAdmin:
                 if holds or denied & set(r.get("closure") or ()):
                     cited.append((owner, r))
                     reached.update(_marks(owner, r))
-                    if r.get("truncated") and denied & set(r.get("sources") or ()):
-                        truncated.append((owner, r))
                 else:
                     rest.append((owner, r))
         shown: dict[tuple[str, str], tuple[set[str], list[str]]] = {}
         for owner, st in snap.items():
             for pid, ex in st["exposure"].items():
                 shown[(owner, pid)] = (_exposure_names(ex)[0], list(ex.get("memory") or ()))
-        exposed: list[tuple[str, Record]] = list(truncated)
+        exposed: list[tuple[str, Record]] = []
         found = True
         while found:  # until a pass finds nothing new
             found = False

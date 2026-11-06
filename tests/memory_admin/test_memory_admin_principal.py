@@ -44,6 +44,7 @@ def operators_file(directory, users=None, name="memory-operators.json", **extra)
         "operators": users or [me],
         "agent_runtime": [{"uid": RUNTIME_UID}],
         "broker": [{"uid": BROKER_UID}],
+        "deny_file": str(directory / "memory-deny.json"),
         **extra,
     }
     path = directory / name
@@ -77,6 +78,13 @@ def test_an_operator_principal_is_sealed_and_re_checked(tmp_path, monkeypatch):
     runtime = OperatorPrincipal("x", RUNTIME_UID, "x", principal._SEALED, refused={RUNTIME_UID})
     with pytest.raises(MemoryAdminError, match="not this process's operator"):
         require_operator(runtime)
+
+
+def test_load_operators_needs_a_deny_file(tmp_path):
+    path = operators_file(tmp_path, deny_file="relative.json")
+    with pytest.raises(MemoryAdminError, match="deny_file must be the absolute path"):
+        load_operators(path)
+    assert load_operators(operators_file(tmp_path)).deny_file == str(tmp_path / "memory-deny.json")
 
 
 def test_sudo_user_is_recorded_as_advisory(tmp_path, monkeypatch):
@@ -201,16 +209,20 @@ def test_the_operators_file_is_trusted_only_through_root_ownership(tmp_path, mon
     with pytest.raises(MemoryAdminError, match="writable by its group or others"):
         load_operators(path)
     tmp_path.chmod(0o755)
+    # a file not owned by root is refused (the design re-review's surviving mutant): as root,
+    # hand it to another user; as an ordinary user it is already the invoker's
     monkeypatch.setattr(principal, "_ROOT_OWNERS", frozenset({0}))
-    if os.getuid() != 0:  # owned by the (non-root) invoking user: not root's
-        with pytest.raises(MemoryAdminError, match="not root"):
-            load_operators(path)
+    if os.getuid() == 0:
+        os.chown(path, RUNTIME_UID, RUNTIME_UID)
+    with pytest.raises(
+        MemoryAdminError, match=r"memory-operators\.json is owned by uid \d+, not root"
+    ):
+        load_operators(path)
+    if os.getuid() == 0:
+        os.chown(path, 0, 0)
     monkeypatch.setattr(principal, "_ROOT_OWNERS", frozenset({0, os.getuid()}))
-    monkeypatch.setenv("SUDO_UID", str(os.stat(path).st_uid or 1))
-    if os.stat(path).st_uid:
-        with pytest.raises(MemoryAdminError, match="owned by the invoking user"):
-            load_operators(path)
-    monkeypatch.delenv("SUDO_UID")
+    monkeypatch.setenv("SUDO_UID", str(os.getuid()))  # sudo's variable decides nothing
+    assert load_operators(path).operators
     link = tmp_path / "link.json"
     link.symlink_to(path)
     with pytest.raises(OperatorsUnreadable, match="cannot open"):  # O_NOFOLLOW

@@ -82,7 +82,7 @@ def ledger():
 def backend(request, tmp_path):
     if request.param == "memory":
         return InMemoryBackend()
-    return FileBackend(tmp_path / "memory.json")
+    return FileBackend(tmp_path / "memory.json", deny_path=tmp_path / "memory-deny.json")
 
 
 @pytest.fixture
@@ -505,7 +505,10 @@ def test_the_deny_state_is_append_only_and_apart_from_memory(backend, tmp_path):
             backend.transact(key, lambda cur, deny: cur)
     assert backend.owners() == []
     if isinstance(backend, FileBackend):  # its own file, never the runtime's state file
-        assert backend.deny.path.exists() and not (tmp_path / "memory.json").exists()
+        assert backend.deny.path.exists()
+        # the state file holds only the operator's stamp: the deny path and how much it wrote
+        data = json.loads((tmp_path / "memory.json").read_text())["data"]
+        assert data == {"@deny-stamp": {"path": str(backend.deny.path), "log": 1, "reach": 0}}
         assert oct(backend.deny.path.stat().st_mode & 0o777) == "0o644"
     assert deny_set([{"op": "retract", "deny_id": "d1", "name": "n"}]).names == {"n"}
 
@@ -604,14 +607,17 @@ def test_a_report_served_to_another_profile_carries_only_a_count(reader, other):
     from homelabnext.agent.digest import digest_of
 
     shelf = {digest_of(rep): rep}  # reports by digest, as a level read serves them
-    served = served_report(shelf[digest_of(rep)], reader=other)
+    served = served_report(shelf[digest_of(rep)], reader=other, author=reader["id"])
     assert served["memory_updates"] == {"count": 1}
     text = json.dumps(served)
     assert "hunch-key" not in text and "the hunch" not in text and uid(9) not in text
-    assert served_report(rep, reader=reader) == rep  # its author reads it whole
+    assert served_report(rep, reader=reader, author=reader["id"]) == rep  # its author: whole
+    # the author is the validated one, never the report's own field
+    with pytest.raises(ValueError, match="validated as author"):
+        served_report({**rep, "profile": other["id"]}, reader=other, author=reader["id"])
     assert rep["memory_updates"][0]["key"] == "hunch-key"  # the stored report is untouched
     with pytest.raises(Exception, match="VerifiedProfile"):
-        served_report(rep, reader=other["id"])
+        served_report(rep, reader=other["id"], author=reader["id"])
 
 
 # ---------------------------------------------------------------- the CLI
@@ -640,7 +646,10 @@ def test_the_cli_is_operator_only_and_a_dry_run_by_default(reader, tmp_path, cap
 
     _cli_env(monkeypatch, tmp_path)
     state_file = tmp_path / "memory.json"
-    store = MemoryStore(FileBackend(state_file), now=Clock(datetime(2026, 1, 1, tzinfo=UTC)))
+    store = MemoryStore(
+        FileBackend(state_file, deny_path=tmp_path / "memory-deny.json"),
+        now=Clock(datetime(2026, 1, 1, tzinfo=UTC)),
+    )
     put(store, reader, [up("add", "a", "A", sources=[uid(1)])], [item(1, "clear")])
     ops = str(operators_file(tmp_path))
     common = ["--state", str(state_file), "--operators", ops]
@@ -680,7 +689,7 @@ def test_the_cli_is_operator_only_and_a_dry_run_by_default(reader, tmp_path, cap
     assert code == 1 and "owns the memory state file" in err
     monkeypatch.setattr(cli, "_owner", lambda path: RUNTIME_UID)
     # a deny file the runtime could rewrite is refused
-    deny = tmp_path / "memory.json.deny.json"
+    deny = tmp_path / "memory-deny.json"
     deny.chmod(0o666)
     code, _, err = _cli(["dependents", uid(1), *common], capsys)
     assert code == 1 and "the deny file must be owned by root" in err
@@ -691,29 +700,98 @@ def test_the_cli_is_operator_only_and_a_dry_run_by_default(reader, tmp_path, cap
 
 
 CHOWN = "changing a file's owner (root) is not available"
+ROOT_ONLY = pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0, reason=CHOWN)
 
 
-@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0, reason=CHOWN)
-def test_an_operator_write_keeps_the_runtimes_ownership(reader, tmp_path, capsys, monkeypatch):
-    """The deployment: the runtime (4242:4242) owns its state file and its lock; the operator
-    writes as root through sudo; both keep their owner (audit H1)."""
+def _deployment(reader, tmp_path, monkeypatch):
+    """The deployment, for real: the runtime (4242:4242) owns its directory, state file and lock;
+    root owns the operators file and the deny directory; the operator runs as root."""
     _cli_env(monkeypatch, tmp_path, owner=None)  # the real owner, read from the file
-    state_file = tmp_path / "memory.json"
-    store = MemoryStore(FileBackend(state_file), now=Clock(datetime(2026, 1, 1, tzinfo=UTC)))
+    for d in (tmp_path, *tmp_path.parents[:2]):  # the runtime must reach its own directory
+        d.chmod(d.stat().st_mode & 0o7777 | 0o711)
+    rt = tmp_path / "rt"
+    rt.mkdir()
+    state_file = rt / "memory.json"
+    store = MemoryStore(
+        FileBackend(state_file, deny_path=tmp_path / "memory-deny.json"),
+        now=Clock(datetime(2026, 1, 1, tzinfo=UTC)),
+    )
     put(store, reader, [up("add", "a", "A", sources=[uid(1)])], [item(1, "clear")])
-    lock = tmp_path / "memory.json.lock"
-    for f in (state_file, lock):
+    for f in (rt, state_file, rt / "memory.json.lock"):
         os.chown(f, RUNTIME_UID, RUNTIME_UID)
-    lock.unlink()  # a lock the operator creates gets the state file's owner too
     common = ["--state", str(state_file), "--operators", str(operators_file(tmp_path))]
-    code, out, _ = _cli(["dependents", uid(1), *common], capsys)
+    return rt, state_file, common
+
+
+@ROOT_ONLY
+def test_an_operator_write_keeps_the_runtimes_ownership(reader, tmp_path, capsys, monkeypatch):
+    """Every state-file operation of an operator run as root runs as the state file's owner, so
+    what it writes stays the runtime's (audit C1, H1)."""
+    rt, state_file, common = _deployment(reader, tmp_path, monkeypatch)
+    lock = rt / "memory.json.lock"
+    lock.unlink()  # a lock the operator run creates is the runtime's too
+    code, out, err = _cli(["dependents", uid(1), *common], capsys)
+    assert code == 0, err
     code, out, _ = _cli(["retract", uid(1), "--reason", "bad", "--apply", "--confirm",
                          json.loads(out)["confirm"], *common], capsys)  # fmt: skip
     assert code == 0 and json.loads(out)["retired"][0]["key"] == "a"
     for f in (state_file, lock):
         assert (f.stat().st_uid, f.stat().st_gid) == (RUNTIME_UID, RUNTIME_UID)
-    deny = tmp_path / "memory.json.deny.json"
+    deny = tmp_path / "memory-deny.json"
     assert deny.stat().st_uid == 0 and deny.stat().st_mode & 0o777 == 0o644
+    assert os.geteuid() == 0 and os.getegid() == 0  # the ids came back
+
+
+@ROOT_ONLY
+@pytest.mark.parametrize("dangling", [False, True])
+def test_a_planted_lock_link_never_hands_root_a_file(
+    reader, tmp_path, capsys, monkeypatch, dangling
+):
+    """The re-audit's C1 probe: the runtime plants ``memory.json.lock`` as a link to a root
+    file (or a dangling one into a root directory).  Even a dry run is refused, and the target is
+    left exactly as it was (or never created)."""
+    rt, _state_file, common = _deployment(reader, tmp_path, monkeypatch)
+    rootdir = tmp_path / "etc"
+    rootdir.mkdir(mode=0o755)
+    target = rootdir / ("cron-x" if dangling else "shadow")
+    if not dangling:
+        target.write_text("root:secret\n", encoding="utf-8")
+        target.chmod(0o600)
+    lock = rt / "memory.json.lock"
+    lock.unlink()
+    lock.symlink_to(target)
+    os.lchown(lock, RUNTIME_UID, RUNTIME_UID)
+    code, _, err = _cli(["dependents", uid(1), *common], capsys)
+    assert code != 0, err
+    assert "Permission denied" in err, err  # opened as the runtime, which may not
+    if dangling:
+        assert not os.path.lexists(target)
+    else:
+        st = target.stat()
+        assert (st.st_uid, st.st_gid, st.st_mode & 0o777) == (0, 0, 0o600)
+        assert target.read_text(encoding="utf-8") == "root:secret\n"
+    assert os.geteuid() == 0  # the ids came back after the refusal
+
+
+@ROOT_ONLY
+def test_a_linked_state_file_or_path_is_refused(reader, tmp_path, capsys, monkeypatch):
+    rt, state_file, common = _deployment(reader, tmp_path, monkeypatch)
+    real = rt / "real.json"
+    state_file.rename(real)
+    state_file.symlink_to(real)
+    code, _, err = _cli(["dependents", uid(1), *common], capsys)
+    assert code == 1 and "symbolic link" in err
+
+
+def test_a_corrupt_state_file_is_refused_not_quarantined(reader, tmp_path, capsys, monkeypatch):
+    """An operator run never quarantines (and recreates) the runtime's state file."""
+    _cli_env(monkeypatch, tmp_path)
+    state_file = tmp_path / "memory.json"
+    state_file.write_text("{not json", encoding="utf-8")
+    common = ["--state", str(state_file), "--operators", str(operators_file(tmp_path))]
+    code, _, _err = _cli(["dependents", uid(1), *common], capsys)
+    assert code == 2 and state_file.read_text(encoding="utf-8") == "{not json"
+    assert not list(tmp_path.glob("memory.json.corrupt-*"))
 
 
 def test_a_skip_names_a_registered_cause(request):
