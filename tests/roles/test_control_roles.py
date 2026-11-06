@@ -17,6 +17,8 @@ import pytest
 import yaml
 from rolerun import calls, fake, first_run, last_run_vars, logging_fake, run_cases, run_role
 
+from tests.suite_policy import require_nft_check
+
 ROOT = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.requires_tool("ansible-playbook")
@@ -1162,11 +1164,9 @@ def _first(tmp_path):
     return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
 
 
-@pytest.mark.skipif(
-    REAL_NFT is None, reason="nft with an unprivileged network namespace is not available"
-)
 @first_run(_first)
 def test_nftables_host_never_installs_a_ruleset_nft_rejects(first):
+    require_nft_check()  # a skip, or a failure where HNX_REQUIRE_TOOLS names nft or unshare
     r, tmp_path = first
     v = first.setup["v"]
     assert r.returncode == 0, r.stdout + r.stderr

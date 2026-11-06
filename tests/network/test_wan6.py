@@ -12,7 +12,6 @@ from __future__ import annotations
 import copy
 import io
 import ipaddress
-import shutil
 import subprocess
 
 import pytest
@@ -23,6 +22,7 @@ from homelabnext.network import adapters, build_ir, cli, validate
 from homelabnext.network.adapters.linux import wan_network
 from homelabnext.network.plan import write_rendered
 from homelabnext.network.validate import schema_problems, wan6_problems
+from tests.suite_policy import require_nft_check
 
 PREFIXES = {
     "mgmt": "2001:db8:0:10::/64",
@@ -233,24 +233,12 @@ def test_a_wan_named_with_a_dot_gets_a_slash_sysctl_key(doc6, registry):
     assert sysctl.endswith("net/ipv6/conf/eth1.7/accept_ra = 2\n")
 
 
-def _nft_can_check(tmp_path) -> bool:
-    if not (shutil.which("nft") and shutil.which("unshare")):
-        return False
-    probe = tmp_path / "probe.nft"
-    probe.write_text("table inet probe {\n}\n")
-    r = subprocess.run(["unshare", "-rn", "nft", "-c", "-f", str(probe)], capture_output=True)
-    return r.returncode == 0
-
-
 @pytest.mark.parametrize("wan6", [{"ra": True}, {"static": DOC_STATIC}], ids=["ra", "static"])
 def test_the_wan6_nftables_file_passes_nft_check(doc6, registry, wan6, tmp_path):
-    if not _nft_can_check(tmp_path):
-        pytest.skip("nft with an unprivileged network namespace is not available")
+    nft = require_nft_check()
     write_rendered(render("linux", _ir(doc6, registry, wan6)), tmp_path / "root")
     f = tmp_path / f"root/{NFT}"
-    r = subprocess.run(
-        ["unshare", "-rn", "nft", "-c", "-f", str(f)], capture_output=True, text=True
-    )
+    r = subprocess.run(["unshare", "-rn", nft, "-c", "-f", str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
 

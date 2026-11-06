@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -227,7 +228,9 @@ def test_the_job_with_the_extras_requires_them():
     assert run["env"]["HNX_REQUIRE_TOOLS"] == "${{ matrix.python.require-tools }}"
 
 
-CI_REQUIRED = ("actionlint", "zizmor", "nats-server", "docker", "go")
+CI_REQUIRED = (
+    "actionlint", "zizmor", "nats-server", "docker", "go", "nft", "dnsmasq", "unshare", "setpriv",
+)  # fmt: skip
 
 
 def test_the_tools_ci_requires_are_only_skipped_through_the_helper():
@@ -247,6 +250,156 @@ def test_the_tools_ci_requires_are_only_skipped_through_the_helper():
                 if own.search(line):
                     offenders.append(f"{f.relative_to(ROOT)}:{n}: {line.strip()}")
     assert offenders == []
+
+
+#: Probes that predate the rule, shrink-only: a function that looks a tool up with shutil.which and
+#: then skips or returns False decides the skip itself, so HNX_REQUIRE_TOOLS cannot make a missing
+#: tool a failure.  Move one to require_tool (or the requires_tool marker) and delete its line;
+#: a line whose probe is gone fails the test below.
+LOCAL_PROBE_BASELINE = {
+    "tests/browser/test_maps_browser.py::_node",
+    "tests/compose/test_lab_in_a_box.py::docker_compose_available",
+    "tests/decide/test_decide_lint.py::test_the_repository_specs_pass",
+    "tests/decide/test_decide_lint.py::test_untracked_spec_fails_in_git",
+    "tests/decide/test_decide_lint.py::test_frozen_and_negative_dirs_are_not_discovered",
+    "tests/decide/test_decide_lint.py::test_not_a_git_tree_cannot_be_measured",
+    "tests/overlay/test_private_overlay_example.py::_loader_step",
+    "tests/overlay/test_private_overlay_example.py::_bash",
+    "tests/overlay/test_private_overlay_example.py::upstream",
+    "tests/overlay/test_private_overlay_example.py::hook",
+    "tests/packaging/pkgbuild.py::export_tree",
+    "tests/roles/test_role_render.py::docker_compose_ok",
+    "tests/workflows/test_workflows_validate.py::test_r01_untracked_pack_fails_in_git",
+}
+#: root-only tests that skip on the euid themselves (module level); the agent memory retraction
+#: tests are in another change's files
+ROOT_SKIP_BASELINE = {
+    "tests/agent/test_agent_memory_retraction.py",
+    "tests/agent/test_agent_memory_retraction_audit.py",
+}
+
+
+def _test_sources():
+    for base in ("tests", "tools/tests", "conformance"):
+        for f in sorted((Path(ROOT) / base).rglob("*.py")):
+            if f.name not in ("suite_policy.py", "test_suite_policy.py"):
+                yield f.relative_to(ROOT).as_posix(), ast.parse(f.read_text(encoding="utf-8"))
+
+
+def local_probes(tree: ast.AST) -> list[str]:
+    """Names of the functions in ``tree`` that look a tool up with ``shutil.which`` and then
+    skip (``pytest.skip``) or answer False: a probe of the function's own."""
+    found = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        nodes = list(ast.walk(fn))
+        calls = [ast.unparse(n.func) for n in nodes if isinstance(n, ast.Call)]
+        answers_false = any(
+            isinstance(n, ast.Return)
+            and isinstance(n.value, ast.Constant)
+            and n.value.value is False
+            for n in nodes
+        )
+        if "shutil.which" in calls and ("pytest.skip" in calls or answers_false):
+            found.append(fn.name)
+    return found
+
+
+def root_skips(tree: ast.AST) -> bool:
+    """Whether ``tree`` has a ``skipif`` that reads the process's euid."""
+    return any(
+        isinstance(n, ast.Call)
+        and ast.unparse(n.func).endswith("skipif")
+        and "geteuid" in ast.unparse(n)
+        for n in ast.walk(tree)
+    )
+
+
+def test_no_new_local_probe_and_skip():
+    """A function of a test file that finds a tool with shutil.which and then skips or returns
+    False, or a skipif on the euid, decides the skip itself: HNX_REQUIRE_TOOLS can never turn it
+    into a failure (the nft -c and dnsmasq --test checks skipped for good in CI that way).  New
+    ones go through tests.suite_policy: require_tool, require_nft_check, require_dnsmasq,
+    require_root_setpriv or the requires_tool marker."""
+    probes, roots = set(), set()
+    for rel, tree in _test_sources():
+        probes |= {f"{rel}::{name}" for name in local_probes(tree)}
+        if root_skips(tree):
+            roots.add(rel)
+    assert sorted(probes - LOCAL_PROBE_BASELINE) == []
+    assert sorted(roots - ROOT_SKIP_BASELINE) == []
+    assert sorted(LOCAL_PROBE_BASELINE - probes) == [], "delete the baseline lines already fixed"
+    assert sorted(ROOT_SKIP_BASELINE - roots) == [], "delete the baseline lines already fixed"
+
+
+def test_the_policy_catches_a_local_probe_and_a_root_skip():
+    probe = ast.parse(
+        "import shutil, pytest\n"
+        "def _can(tmp):\n"
+        "    if not shutil.which('nft'):\n"
+        "        return False\n"
+        "    return True\n"
+        "def test_x():\n"
+        "    if shutil.which('dnsmasq') is None:\n"
+        "        pytest.skip('dnsmasq is not installed')\n"
+    )
+    assert local_probes(probe) == ["_can", "test_x"]
+    assert root_skips(ast.parse("import os, pytest\nR = pytest.mark.skipif(os.geteuid() != 0)"))
+    assert not root_skips(ast.parse("import os\nx = os.geteuid()"))
+    assert local_probes(ast.parse("def test_y():\n    assert True\n")) == []
+
+
+def test_the_real_tool_checks_go_through_the_required_tools():
+    """The nft -c, dnsmasq --test and setpriv tests ask for their tools through the helpers (so
+    HNX_REQUIRE_TOOLS makes a missing one a failure), and the CI job that installs the tools
+    requires every one of them and runs those files."""
+    import yaml
+
+    wanted = {
+        "tests/network/test_external_tools.py": ("require_nft_check", "require_dnsmasq"),
+        "tests/network/test_wan6.py": ("require_nft_check",),
+        "tests/network/test_ipv6_render.py": ("require_nft_check",),
+        "tests/roles/test_control_roles.py": ("require_nft_check",),
+        "tests/orchestration/test_orchestration_readonly.py": ("require_root_setpriv",),
+    }
+    for rel, helpers in wanted.items():
+        text = (Path(ROOT) / rel).read_text(encoding="utf-8")
+        assert all(f"{h}()" in text for h in helpers), rel
+    ci = yaml.safe_load((Path(ROOT) / ".github" / "workflows" / "ci.yml").read_text())
+    steps = ci["jobs"]["real-tools"]["steps"]
+    (run,) = [s for s in steps if "pytest" in s.get("run", "")]
+    assert set(run["env"]["HNX_REQUIRE_TOOLS"].split(",")) >= {
+        "nft", "dnsmasq", "unshare", "setpriv",
+    }  # fmt: skip
+    for rel in wanted:
+        assert rel in run["run"], rel
+
+
+def test_a_required_nft_that_cannot_check_fails_instead_of_skipping(monkeypatch):
+    """nft is on PATH but the user and network namespace cannot be made (the runner's AppArmor
+    restriction): a skip by default, a failure where HNX_REQUIRE_TOOLS names unshare."""
+    monkeypatch.setattr(sp.shutil, "which", lambda name, path=None: f"/usr/sbin/{name}")
+    monkeypatch.setattr(sp, "_userns_can_check", lambda nft: False)
+    monkeypatch.delenv("HNX_REQUIRE_TOOLS", raising=False)
+    with pytest.raises(pytest.skip.Exception, match="unshare is not installed"):
+        sp.require_nft_check()
+    monkeypatch.setenv("HNX_REQUIRE_TOOLS", "nft,dnsmasq,unshare")
+    with pytest.raises(pytest.fail.Exception, match="HNX_REQUIRE_TOOLS requires it"):
+        sp.require_nft_check()
+    monkeypatch.setattr(sp.shutil, "which", lambda name, path=None: None)
+    with pytest.raises(pytest.fail.Exception, match="dnsmasq is not on PATH"):
+        sp.require_dnsmasq()
+
+
+def test_setpriv_as_a_normal_user_is_a_failure_where_it_is_required(monkeypatch):
+    monkeypatch.setattr(sp.shutil, "which", lambda name, path=None: "/usr/bin/setpriv")
+    monkeypatch.setattr(sp.os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("HNX_REQUIRE_TOOLS", "setpriv")
+    with pytest.raises(pytest.fail.Exception, match="setpriv is not on PATH"):
+        sp.require_root_setpriv()
+    monkeypatch.setattr(sp.os, "geteuid", lambda: 0)
+    assert sp.require_root_setpriv() == "/usr/bin/setpriv"
 
 
 def _project(tmp_path, ini_budgets="", **files):

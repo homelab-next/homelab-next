@@ -29,7 +29,11 @@ name, not by reading the wording of a skip afterwards: a test that skips for a t
 (its own ``skipif``, an early return) is outside the contract, so every such test goes through
 the helper, or through the ``@pytest.mark.requires_tool("name", ...)`` marker, which calls it
 before any fixture is set up (``tests/gates/test_suite_policy.py`` checks the tools CI requires,
-and that no test skips through ``skipif(shutil.which(...))``).
+and that no test skips through ``skipif(shutil.which(...))`` or a probe of its own).  The
+firewall and dnsmasq checks of the rendered files use :func:`require_nft_check` and
+:func:`require_dnsmasq` (tools ``nft``, ``unshare``, ``dnsmasq``), the root-only user-switching
+test :func:`require_root_setpriv` (tool ``setpriv``); CI's ``real-tools`` job installs them and
+requires all four.
 
 **Required modules.**  ``HNX_REQUIRE_MODULES`` (comma-separated module names, e.g.
 ``duckdb,pyiceberg,mcp,ansible``) names the optional extras that must import: an
@@ -213,11 +217,14 @@ def required_module_skipped(reason: str, required: set[str]) -> str | None:
     )
 
 
-def require_tool(name: str, available: Callable[[], bool] | None = None) -> str:
+def require_tool(
+    name: str, available: Callable[[], bool] | None = None, search_path: str | None = None
+) -> str:
     """The path of the external tool ``name`` (or ``name`` when ``available`` decides instead of
-    PATH).  Missing: skip with ``"<name> is not installed"``, or fail when the environment
-    requires the tool (:func:`required_tools`)."""
-    path = shutil.which(name)
+    PATH; ``search_path`` replaces PATH for the lookup, for a tool in an sbin directory an
+    unprivileged user's PATH lacks).  Missing: skip with ``"<name> is not installed"``, or fail
+    when the environment requires the tool (:func:`required_tools`)."""
+    path = shutil.which(name, path=search_path)
     ok = (path is not None) if available is None else bool(path and available())
     if ok:
         return path or name
@@ -231,6 +238,45 @@ def require_tool(name: str, available: Callable[[], bool] | None = None) -> str:
             f"{name} is not on PATH (or not usable), and {switch} requires it", pytrace=False
         )
     pytest.skip(f"{name} is not installed")
+
+
+#: where nft and dnsmasq live on a distribution whose unprivileged PATH omits the sbin directories
+SBIN_PATH = "/usr/sbin:/sbin:/usr/bin:/bin"
+
+
+def _userns_can_check(nft: str) -> bool:
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".nft") as probe:
+        probe.write("table inet probe {\n}\n")
+        probe.flush()
+        r = subprocess.run(
+            ["unshare", "-rn", nft, "-c", "-f", probe.name], capture_output=True, check=False
+        )
+    return r.returncode == 0
+
+
+def require_nft_check() -> str:
+    """The path of an nft that can check a ruleset (``nft -c``) unprivileged inside
+    ``unshare -rn``.  A missing nft, a missing unshare, or an unshare that cannot make the user
+    and network namespace are each a skip, or a failure where HNX_REQUIRE_TOOLS names ``nft`` or
+    ``unshare``.  Never applies anything: ``-c`` only checks."""
+    nft = require_tool("nft", search_path=SBIN_PATH)
+    require_tool("unshare", available=lambda: _userns_can_check(nft))
+    return nft
+
+
+def require_dnsmasq() -> str:
+    """The path of dnsmasq (for ``--test``), found in the sbin directories too."""
+    return require_tool("dnsmasq", search_path=SBIN_PATH)
+
+
+def require_root_setpriv() -> str:
+    """setpriv, in a process running as root: the tests that switch between two other users need
+    both.  Not root counts as the tool being unusable: a skip, or a failure where
+    HNX_REQUIRE_TOOLS names ``setpriv``."""
+    return require_tool("setpriv", available=lambda: hasattr(os, "geteuid") and os.geteuid() == 0)
 
 
 def _silent_skip(config: pytest.Config, rep) -> None:
