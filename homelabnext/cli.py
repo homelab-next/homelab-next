@@ -204,8 +204,16 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.sop.cli").main(a),
     ),
     "agent": (
-        "agent profiles, packs, prompts: compile|verify|lint|pack|terms|keyring|prompts|injection",
-        lambda a: importlib.import_module("homelabnext.agent.cli").main(a),
+        "agent profiles, packs, prompts: compile|verify|lint|pack|terms|keyring|prompts|injection"
+        "|memory (the operator's retraction tools)",
+        # `agent memory` is the operator's MemoryAdmin, which homelabnext.agent never imports
+        # (ADR-0037 decision 12), so it is routed here rather than by the agent CLI (the agent
+        # CLI first: the graph reads this command's package from the first import here)
+        lambda a: (
+            importlib.import_module("homelabnext.agent.cli").main(a)
+            if a[:1] != ["memory"]
+            else importlib.import_module("homelabnext.memory_admin.cli").main(a[1:])
+        ),
     ),
     "workflows": (
         (
@@ -219,7 +227,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.scripts.cli").main(a),
     ),
     "events": (
-        "event seam: deploy-changed (what-changed event, F-15)|enrich-coverage (T-04)",
+        "event seam: deploy-changed (what-changed event, F-15)|flush|requeue|enrich-coverage (T-04)",
         lambda a: importlib.import_module("homelabnext.events.cli").main(a),
     ),
     "status": (

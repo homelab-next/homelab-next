@@ -8,6 +8,10 @@
 # Only path, line and pattern name are ever reported, never the matched text.
 # Files that must hold key material on disk by design (host keys, TLS private keys, password
 # hashes) are accepted by path; files the scanner cannot read as text (binaries) are skipped.
+# The scanner walks the directories itself (--walk), so files a git work tree ignores (etckeeper's
+# /etc/.gitignore hides *.dpkg-old, *.dpkg-dist, ...) are scanned too; .git is never scanned.
+# A file that is unreadable or larger than the scanner's limit fails health unless a glob in
+# config_leak_scan_unscanned_accepted names it.
 config_leak_scan_accepted:
   - /etc/ssh/ssh_host_*_key
   - /etc/ssl/private/*
@@ -15,6 +19,7 @@ config_leak_scan_accepted:
   - /etc/shadow-
   - /etc/gshadow
   - /etc/gshadow-
+config_leak_scan_unscanned_accepted: []
 config_leak_scan_python: python3
 # The checkout the scanner is copied from, on the controller.
 config_leak_scan_source_dir: "{{ role_path }}/../../.."

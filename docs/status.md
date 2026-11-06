@@ -67,7 +67,8 @@ Every HTTP kind (`poll-http-json` and the product kinds) takes an optional **`au
 credential by secret-store name, `{secret: "secret:<name>", header: St2-Api-Key}` (no `header`:
 `Authorization: Bearer <value>`). `hnx status collect` reads the value at run time from
 `HNX_SECRET_<NAME>` or the file `<name>` under `--secrets-dir`, the same lookup as the agents
-configuration. A reference that does not resolve is that source's error: it is never polled
+configuration (a nested name is a subdirectory; a name that resolves outside the directory
+(absolute, `..`, or a symlink pointing out) is not read). A reference that does not resolve is that source's error: it is never polled
 without its credential, and the value never appears in an error, the state file or the page.
 
 ### Mappings
@@ -421,7 +422,9 @@ runtime's, which beats the default) or `working`.
 Approvals page; agents 1.1, `approvals.csrf_key` 1.2, `approvals.public_origin` 1.3). Schema:
 `schemas/status/agents.schema.json`. Secrets are secret-store references (`secret:a/b`), never
 values; at run time `secret:a/b-token` is read from `HNX_SECRET_A_B_TOKEN` (or the file `a/b-token` under
-`--secrets-dir`). A reference that does not resolve **disables** what it guards (the private
+`--secrets-dir`; a name that resolves outside the directory (absolute, `..`, or a symlink
+pointing out) is not read, while the Ansible `hnx_secret` lookup's `hnx_secrets_dir` still follows
+symlinks). A reference that does not resolve **disables** what it guards (the private
 tier, or that one sender) with a warning; nothing falls back to open. Since every character
 but a letter or digit becomes `_`, two different references that land in one variable
 (`a/b-token`, `a/b_token`) are refused, by the registry and by the agents config, and so are two

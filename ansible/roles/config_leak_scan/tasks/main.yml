@@ -12,10 +12,15 @@
 - name: Write the report (path, line, pattern; never the value)
   ansible.builtin.copy:
     dest: "{{ config_leak_scan_state_dir }}/report.json"
-    content: "{{ {'scanned': config_leak_scan_paths, 'hits': config_leak_scan_hits} | to_nice_json }}\n"
+    content: "{{ {'scanned': config_leak_scan_paths, 'hits': config_leak_scan_hits, 'unscanned': config_leak_scan_unscanned} | to_nice_json }}\n"
     mode: "0600"
 
 - name: Report the hits (the health hook fails on them)
   ansible.builtin.debug:
     msg: "config_leak_scan: {{ config_leak_scan_hits | map(attribute='path') | unique | join(', ') }} hold secret-looking values; fetch them from the secrets store at run time instead"
   when: config_leak_scan_hits | length > 0
+
+- name: Report the files that could not be scanned (the health hook fails on them)
+  ansible.builtin.debug:
+    msg: "config_leak_scan: {{ config_leak_scan_unscanned | map(attribute='path') | join(', ') }} could not be scanned (unreadable or oversized)"
+  when: config_leak_scan_unscanned | length > 0
