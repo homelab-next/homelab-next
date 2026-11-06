@@ -23,6 +23,9 @@ summary_of: outline:sha256:cc0b15786d3b8d62
   the amendments under each)
 - **Amended:** 2026-11-06 (PR 4: decision 15, how a verifier is asked and what clears
   `verified_at`; see the amendment under it)
+- **Amended:** 2026-11-06 (review 2: decision 17 covers the ledger's decisions 3 and 7 as well,
+  whose warm and cold tiers are now live keys, so decision 6 needs no opt-out; see the amendment
+  under it)
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
@@ -587,6 +590,19 @@ was shown, never from what the model says about its sources.
     - **Decision 10 (sole writer):** `MemoryAdmin.retract` and `purge` may also write
       `fleet-ledger`, as operator actions.
     - **Consequences ("the store's tiers are capped"):** true with decision 6.
+
+    *Amendment (2026-11-06, review 2):* as first written, this list left out ADR-0035's decisions
+    3 and 7, which built the warm tier from retired keys. A retired key here keeps value digests,
+    not values, and its tombstone ages out oldest first whatever its retention class, so those
+    decisions could not be built on this store. ADR-0035 now defines every tier as live keys
+    (`warm-*`, `rollup-*`, `exc-*`; its decisions 3, 7 and 8, amended), and its fold and renderer
+    read no tombstone. So:
+    - **Decision 3 (keys):** a closed item's history is its `warm-*` key, not its tombstone.
+    - **Decision 7 (pack fill order):** levels 4 and 5 render live keys only.
+    - **Decision 8 (tiers):** the line above holds for every key leaving a tier. Whole compaction
+      and oldest-first age-out (decision 6) stay as built, with no per-scope opt-out, because no
+      tier lives in a tombstone. The ledger's profile gives its replaced keys (`cursor-*`,
+      `rollup-*`) `keep_last` patterns.
 18. **A report served to another profile carries its `memory_updates` as a count only.**
     Wherever a report is served to a profile other than its author, `memory_updates` is replaced
     by `{count: n}`: in ADR-0035's renderer, and in the context store's level reads by digest once

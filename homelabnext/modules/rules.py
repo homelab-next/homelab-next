@@ -602,8 +602,16 @@ def module_problems(
                 )
             if row["host"] not in hosts:
                 out.append(f"service {name}: host is one of the module's host roles")
-            if row.get("public_hostname") and row.get("auth", "none") == "none":
-                out.append(f"service {name}: a public route needs auth")
+            # the core registry's rule and messages (registry/model.py, ADR-0034): the edge
+            # terminates TLS and checks no client certificate, so a public row is idp or own
+            if row.get("public_hostname"):
+                if row.get("auth", "none") == "none":
+                    out.append(f"service {name}: a public route needs auth")
+                elif row["auth"] == "mtls":
+                    out.append(
+                        f"service {name}: a public route needs auth: idp or own "
+                        "(the edge terminates TLS, so mtls is never checked)"
+                    )
             for u in row.get("upstreams", []):
                 if u == "secrets":
                     out.append(

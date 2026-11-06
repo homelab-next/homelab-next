@@ -9,10 +9,17 @@ version: 1
 description: >-
   A user-reported e-mail is triaged; a phishing verdict opens a case and requests an approved
   DNS block of the domains found in the message.
+# A user report is not a detection rule, so the trigger pins the producer (the mail gateway)
+# instead of a det: id; the det: id on the event is whatever rule the gateway attached. alert.created
+# has no field that tells a user report from another gateway alert, so the pack acts only when the
+# reported-message lookup finds the alert (open-case and triage are guarded on it); tighten the
+# trigger when the mail gateway module defines such a field.
+# The det: ids in the fixtures are placeholders (the event schema requires one and the det map has
+# no mail rule); they are not a mapping.
 trigger:
   event: homelabnext.alert.created
   where:
-    - {ref: $event.data.detection, equals: det:user-reported-phish}
+    - {ref: $event.source, equals: svc:mail-gateway}
 actor: profile:workflow-soc
 broker_manifest: workflows/broker.manifest.json
 steps:
@@ -38,6 +45,8 @@ steps:
     kind: action
     action: case.open
     target: svc:cases
+    when:
+      - {ref: $steps.message.found, equals: true}
     params:
       alert_id: $event.data.alert_id
       title: $event.data.title
@@ -64,7 +73,7 @@ fixtures:
       time: "2026-01-01T09:00:00Z"
       data:
         alert_id: ALT-0201
-        detection: det:user-reported-phish
+        detection: det:suspicious-encoded-powershell
         title: Reported e-mail - Action required, confirm your account
         severity: medium
         observed_at: "2026-01-01T09:00:00Z"
@@ -147,7 +156,7 @@ fixtures:
       time: "2026-01-02T09:00:00Z"
       data:
         alert_id: ALT-0202
-        detection: det:user-reported-phish
+        detection: det:suspicious-encoded-powershell
         title: Reported e-mail - Team lunch on Friday
         severity: low
         observed_at: "2026-01-02T09:00:00Z"
@@ -176,8 +185,8 @@ fixtures:
       time: "2026-01-02T10:00:00Z"
       data:
         alert_id: ALT-0203
-        detection: det:auth-failure-burst
-        title: Burst of failed logins
+        detection: det:new-service-creation
+        title: New service created
         severity: medium
         observed_at: "2026-01-02T10:00:00Z"
     expect:

@@ -21,12 +21,13 @@ oidc:
 roles:
   # the deploy job: signs a key it generates per job, with its AppRole token (attach the policy
   # hnx-ssh-hnx-deploy to the AppRole); no terminal, no forwarding. The certificate must outlive
-  # the deploy run (a new SSH connection after it expires fails), so size ttl to the longest run.
+  # the deploy run (a new SSH connection after it expires fails), so ttl is at least the deploy
+  # job's timeout-minutes (60 in the template's deploy.yml; a test holds the two together).
   # source_addresses: the range the deploy connects from (the tailnet range or the runner subnet)
   - name: hnx-deploy
     for: deploy
     principals: [hnx-deploy]
-    ttl: 30m
+    ttl: 1h
     max_ttl: 1h
     extensions: []
     source_addresses: ["198.51.100.0/24"]
