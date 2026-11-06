@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext import paths, sops
+from homelabnext import paths, shapes, sops
 from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyStrDateLoader
 from homelabnext.generators.safe import control_char_paths
@@ -220,6 +220,14 @@ def _mirror(p: Path, name: Any, raw: Any) -> dict[str, Any]:
     return {"to": to, "bridges": list(bridges)}
 
 
+#: one OpenSSH public key line: a known key type, base64 material, an optional comment
+PUBLIC_KEY_LINE = re.compile(
+    r"(?:ssh-(?:ed25519|rsa|dss)|ecdsa-sha2-nistp(?:256|384|521)"
+    r"|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)"
+    r" [A-Za-z0-9+/]+={0,2}(?: [^\r\n]*)?"
+)
+
+
 def load_keys(path: str | Path) -> dict[str, str]:
     """Read ``{keys: {name: public-key-line}}`` (public keys only; never private material)."""
     p = Path(path)
@@ -230,7 +238,19 @@ def load_keys(path: str | Path) -> dict[str, str]:
     keys = (doc or {}).get("keys") if isinstance(doc, dict) else None
     if not isinstance(keys, dict):
         raise ComputeError(f"{p}: expected a mapping with a 'keys' mapping")
-    return {str(k): str(v) for k, v in keys.items()}
+    out: dict[str, str] = {}
+    for k, v in keys.items():
+        name = str(k)
+        # never echo the value: a refused value may be private key material
+        if not isinstance(v, str) or re.search(shapes.PRIVATE_KEY_HEADER, v):
+            raise ComputeError(
+                f"{p}: keys.{name} is not an OpenSSH public key line"
+                + (" (private key material is refused)" if isinstance(v, str) else "")
+            )
+        if not PUBLIC_KEY_LINE.fullmatch(v.strip()):
+            raise ComputeError(f"{p}: keys.{name} is not a single-line OpenSSH public key")
+        out[name] = v.strip()
+    return out
 
 
 def load_fleet(

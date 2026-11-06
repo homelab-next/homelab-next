@@ -304,6 +304,48 @@ def test_unresolved_key_renders_placeholder_never_material():
     assert "<ssh-key:operator>" in ud and "AAAA" not in ud
 
 
+def test_load_keys_refuses_private_key_without_echo(tmp_path):
+    from homelabnext.compute import ComputeError, load_keys
+
+    secret = "SUPERSECRETBYTES"
+    p = tmp_path / "k.yml"
+    dashes = "-" * 5
+    pem = f"{dashes}BEGIN OPENSSH PRIVATE KEY{dashes}\n{secret}\n{dashes}END OPENSSH PRIVATE KEY{dashes}\n"
+    p.write_text(yaml.safe_dump({"keys": {"op": pem}}))
+    with pytest.raises(ComputeError) as e:
+        load_keys(p)
+    assert secret not in str(e.value) and "BEGIN" not in str(e.value) and "op" in str(e.value)
+
+
+@pytest.mark.parametrize("val", ["hunter2", "ssh-ed25519", "ssh-ed25519 AAAA\nssh-rsa BBBB", "42"])
+def test_load_keys_refuses_non_public_key_values(tmp_path, val):
+    from homelabnext.compute import ComputeError, load_keys
+
+    p = tmp_path / "k.yml"
+    p.write_text(yaml.safe_dump({"keys": {"op": val}}))
+    with pytest.raises(ComputeError) as e:
+        load_keys(p)
+    assert val.split()[0] not in str(e.value) or val == "ssh-ed25519"
+
+
+def test_render_out_refuses_unresolved_key_names(tmp_path, capsys):
+    out = tmp_path / "o"
+    assert run_cli("render", *BASE, "--target", "cloudinit", "--out", str(out)) == 1
+    err = capsys.readouterr().err
+    assert "operator" in err and not out.exists()
+    # stdout render keeps the placeholder
+    assert run_cli("render", *BASE, "--target", "cloudinit") == 0
+    assert "<ssh-key:operator>" in capsys.readouterr().out
+
+
+def test_validate_checks_key_names_when_keys_given(tmp_path, capsys):
+    k = tmp_path / "k.yml"
+    k.write_text(yaml.safe_dump({"keys": {"other": "ssh-ed25519 AAAAEXAMPLE x"}}))
+    assert run_cli("validate", *BASE, "--keys", str(k)) == 1
+    assert "operator" in capsys.readouterr().err
+    assert run_cli("validate", *BASE, "--keys", str(KEYS)) == 0
+
+
 def test_terraform_shapes(good):
     tf = render(good, "terraform-proxmox")
     vm = tf["vm-infer-core.tf"]

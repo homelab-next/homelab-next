@@ -163,11 +163,22 @@ def _registry_problems(args: argparse.Namespace, fleet) -> list[str]:
     return registry_problems(fleet, reg.hosts)
 
 
+def _key_problems(fleet) -> list[str]:
+    from .validate import unresolved_keys
+
+    return [
+        f"{gid}: cloudinit.ssh_authorized_keys names not in the keys file: {', '.join(names)}"
+        for gid, names in unresolved_keys(fleet).items()
+    ]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     try:
         fleet = _fleet(args)
         problems = _registry_problems(args, fleet) if args.cmd == "validate" else []
+        if args.cmd == "validate" and args.keys:
+            problems += _key_problems(fleet)
     except ComputeUnreadable as exc:  # docs/interfaces.md: bad input is 2, a failed check 1
         print(f"hnx guests: {exc}", file=sys.stderr)
         return 2
@@ -192,6 +203,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "render":
         if args.out:
             from pathlib import Path
+
+            if args.target == "cloudinit" and (missing := _key_problems(fleet)):
+                # a placeholder in written user-data boots a VM nobody can log in to
+                print("\n".join(f"error: {m}" for m in missing), file=sys.stderr)
+                print(
+                    "hnx guests: refusing --out with unresolved ssh key names "
+                    "(pass --keys with every name; stdout render keeps the placeholder)",
+                    file=sys.stderr,
+                )
+                return 1
 
             from homelabnext.network.plan import stale, write_rendered
 
