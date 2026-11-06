@@ -40,8 +40,9 @@ time the reaction layer (alert in, workflow out) benefits from decoupling.
      writes its events to an outbox, and a separate relay publishes them through an `EventBus`
      client. The one such relay is the broker's (`hnx broker relay`,
      `homelabnext/broker/relay.py`), so a bus outage delays a decision event and never blocks or
-     fails a decision. An embedded broker handed an `EventBus` (a test or a single-process setup,
-     `homelabnext/broker/service.py`) publishes through it directly.
+     fails a decision. An embedded broker handed an `EventBus` (a test or a single-process setup;
+     `BrokerService`'s approvals part, `homelabnext/broker/approvals.py`) publishes through it
+     directly.
 
    Both paths make the event id the idempotency key. The forwarder answers *duplicate* for an id
    it already stored; the protocol's `publish(..., msg_id=id)` returns the existing sequence for

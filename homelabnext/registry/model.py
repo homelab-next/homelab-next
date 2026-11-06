@@ -81,6 +81,8 @@ class Service:
     description: str = ""  # 2.4: one line, informational (the generated maps)
     #: 2.7: the group-to-role table of single sign-on (ADR-0034): role -> the IdP groups holding it
     roles: dict = field(default_factory=dict)
+    #: 2.8: the TLP ceiling of what an egress service receives (ADR-0033), or None (undeclared)
+    tlp_ceiling: str | None = None
 
     @property
     def scheme(self) -> str:
@@ -96,6 +98,11 @@ class Service:
     @property
     def endpoint_env_var(self) -> str:
         return self.env_var or env_var_name(self.capability)
+
+
+#: the capabilities whose row may declare a ``tlp_ceiling`` (2.8): a service data leaves the lab's
+#: stores to, so what it receives has a ceiling (ADR-0033 decisions 6 and 13)
+EGRESS_CAPABILITIES = frozenset({"notify", "events", "backup", "webhook"})
 
 
 def env_var_name(capability: str) -> str:
@@ -222,6 +229,11 @@ def semantic_problems(doc: dict) -> list[str]:
         if s.get("roles") and s.get("auth") != "idp":
             problems.append(
                 f"service {sname}: roles needs auth: idp (the IdP grants them at sign-in)"
+            )
+        if s.get("tlp_ceiling") and s["capability"] not in EGRESS_CAPABILITIES:
+            problems.append(
+                f"service {sname}: tlp_ceiling is for an egress capability "
+                f"({', '.join(sorted(EGRESS_CAPABILITIES))}), not {s['capability']}"
             )
         if s.get("front_door") and (s.get("auth") != "idp" or not pub):
             problems.append(
@@ -492,6 +504,7 @@ def build_registry(doc: dict) -> Registry:
             front_door=s.get("front_door"),
             description=s.get("description", ""),
             roles={r: tuple(g) for r, g in sorted((s.get("roles") or {}).items())},
+            tlp_ceiling=s.get("tlp_ceiling"),
         )
     return Registry(
         lab_name=lab["name"],

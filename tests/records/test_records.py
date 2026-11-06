@@ -55,6 +55,19 @@ def test_propose_writes_valid_note_in_inbox_with_convention_filename(rec, tree):
     assert check_filename(p.name, fm) == []
 
 
+def test_a_note_is_owner_only_whatever_the_umask(rec):
+    # the broker's records lane writes notes 0600; the library must not leave one group- or
+    # world-writable when the caller's umask is 0
+    import os
+
+    old = os.umask(0)
+    try:
+        path = rec.propose(proposal())
+    finally:
+        os.umask(old)
+    assert path.stat().st_mode & 0o077 == 0
+
+
 def test_slug_override_and_no_overwrite(rec):
     p = rec.propose(proposal(), slug="auth-burst")
     assert p.name == "2026-01-01-triage-auth-burst.md"

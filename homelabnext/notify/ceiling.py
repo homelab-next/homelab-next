@@ -15,8 +15,10 @@ still holds the problem as sent, and the recovery, labelled at least as strictly
 (:meth:`Notifier._recover`), goes through the same check.
 
 A channel has no default ceiling (decision 6: a reader with no declared TLP ceiling is refused):
-a command that pages declares it (``--notify-ceiling``), ``red`` for a channel only the lab's
-operators read, and is refused without one.  No producer in this repository
+its ceiling is declared once, as the ``tlp_ceiling`` of the registry's ``notify`` row (service
+schema 2.8), or by the command that pages (``--notify-ceiling``), ``red`` for a channel only the
+lab's operators read; a command is refused without either, and when both are given they must
+agree (:func:`channel_ceiling`).  No producer in this repository
 labels its messages yet, so on a channel below ``red`` every one of their pages arrives as the
 notice: safe, and only useful once producers claim labels.
 """
@@ -31,7 +33,13 @@ from homelabnext.tlp_egress import NO_RECORD, egress_check
 
 from .core import Message, Sender
 
-__all__ = ["WITHHELD_TITLE", "CeilingSender", "ceiling_arg", "ceiling_from_flag"]
+__all__ = [
+    "WITHHELD_TITLE",
+    "CeilingSender",
+    "ceiling_arg",
+    "ceiling_from_flag",
+    "channel_ceiling",
+]
 
 WITHHELD_TITLE = "Notification withheld (TLP)"
 
@@ -102,6 +110,26 @@ def ceiling_from_flag(value: object) -> tlp.Label:
         return tlp.parse(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"--notify-ceiling: {exc}") from None
+
+
+def channel_ceiling(
+    declared: object, registry: object = None, *, capability: str = "notify"
+) -> tlp.Label:
+    """The ceiling of the channel the ``capability`` row of ``registry`` names: the row's
+    ``tlp_ceiling`` (declared once, per receiver) or ``declared`` (``--notify-ceiling``, parsed or
+    None).  Both given and different is refused (``ValueError``), so two commands paging one
+    channel cannot disagree; neither given is refused as :func:`ceiling_from_flag` refuses it."""
+    row = registry.by_capability(capability) if registry is not None else None
+    stated = getattr(row, "tlp_ceiling", None)
+    if stated is None:
+        return ceiling_from_flag(declared)
+    from_row = tlp.parse(stated)
+    if declared is not None and ceiling_from_flag(declared) != from_row:
+        raise ValueError(
+            f"--notify-ceiling {ceiling_from_flag(declared)} disagrees with the registry's "
+            f"{capability} row ({row.name}: tlp_ceiling {from_row}); drop the flag or change the row"
+        )
+    return from_row
 
 
 def ceiling_arg(value: str) -> tlp.Label:
