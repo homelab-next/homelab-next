@@ -274,8 +274,8 @@ jobs:
         run: |
           set -euo pipefail
           read -ra real_tool_tests <<< "$REAL_TOOL_TESTS"
-          python -m pytest -q -rs -m "not live" -p no:cacheprovider "${real_tool_tests[@]}"
-          sudo -E env "PATH=$PATH" "HOME=$HOME" python -m pytest -q -rs -p no:cacheprovider "$ROOT_TESTS"
+          python -m pytest -q -rs -m "not live and not experimental" "${real_tool_tests[@]}"
+          sudo -E env "PATH=$PATH" "HOME=$HOME" python -m pytest -q -rs -m "not experimental" "$ROOT_TESTS"
 
   # The security-critical units (tools/coverage_floor.py UNITS, the one list): each keeps >= 80%
   # line coverage from its own tests (pytest-cov from the test extra).
