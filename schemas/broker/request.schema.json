@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/broker/request/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/broker/request/1.1",
   "title": "Broker request",
-  "description": "A request for one allowlisted action. digest is the sha256 of the canonical JSON of {action, actor, target, params}; approvals bind to it, so any change after approval is detectable (homelabnext.broker.request_digest).",
+  "description": "A request for one allowlisted action. digest is the sha256 of the canonical JSON of {action, actor, target, params, tlp} (tlp only when present); approvals bind to it, so any change after approval is detectable (homelabnext.broker.request_digest). 1.1 adds tlp (additive, optional; ADR-0033 decisions 4 and 6): the label of the data the params were derived from, set by the reader-to-actor handoff (homelabnext.agent.handoff.build_request) from the reader's ceiling, the pack's label and any marker in the output; a request without it is unlabelled (read as red where a label is needed).",
   "type": "object",
   "properties": {
     "request_id": {
@@ -20,6 +20,16 @@
     },
     "params": {
       "type": "object"
+    },
+    "tlp": {
+      "enum": [
+        "clear",
+        "green",
+        "amber",
+        "amber+strict",
+        "red"
+      ],
+      "description": "The TLP label of the data the params were derived from (1.1). Canonical spelling only."
     },
     "created": {
       "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"

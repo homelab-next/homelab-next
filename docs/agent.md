@@ -39,7 +39,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `agent/injection_corpus` | versioned injection cases: payload, canary or forbidden tool, fake-model markers |
 | `broker/manifest` | the allowlist; `default` is the constant `deny`; `approvers` lists who may approve |
 | `broker/handler` | one handler implementation; execute and privileged handlers require approval; always audited |
-| `broker/request` | one call; `digest` binds `{action, actor, target, params}` |
+| `broker/request` | one call; `digest` binds `{action, actor, target, params}`, and `tlp` when present (1.1: the label of the data the params came from) |
 | `broker/decision` | `allow` / `deny` / `needs-approval` with a closed reason vocabulary; shadow mode records but does not enforce |
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
@@ -225,11 +225,29 @@ example `schemas/agent/examples/handoff.phish-block.json`) names the reader, the
 Schema the reader's `report_result.output` must satisfy, and the broker actions the actor may
 take, each with params that are literals or `$output.<path>` references (`$$` escapes a `$`).
 
-- **Structured input only.** `accept(handoff, report, pack=, pack_hash=, manifest=)` is the only
+- **Structured input only.** `accept(handoff, report, pack=, pack_hash=, reader_profile=,
+  actor_profile=, manifest=)` is the only
   way to get an `Accepted` output. Raw text is refused unparsed (even text that *is* a valid
   report); the report must pass `validate_report` against the pack it ran on, come from the
   declared reader, not be deferred, and carry an `output` that validates against
   `output_schema`. Anything else raises `HandoffRefused` with every reason.
+- **The output keeps its label** (ADR-0033 decisions 4 and 6). The reader's output carries the
+  strictest of what the reader may hold (`readers.held_label`: its receive ceiling, its declared
+  `tlp_ceiling` else what its `data_tier` lets it receive, `red` when it states neither, since its
+  context may hold MCP tool output as well as the pack), the pack's label and every TLP marker in
+  the output. `accept` refuses an output above the actor's receive ceiling (`readers.actor_ceiling`,
+  read so that a bad value grants the least: the lower of what the actor's `data_tier` lets it
+  receive and its declared `tlp_ceiling`, `clear` when that is not a canonical label), refuses a
+  reader or actor whose `tlp_ceiling` is not a canonical label agreeing with its `data_tier`
+  (`readers.tlp_ceiling_problems`, which `declaration_problems` also runs on both), and refuses
+  profiles whose ids are not the handoff's. A marker in the output can only raise its label:
+  untrusted input that steers the reader into writing `TLP:RED` in an output field (a constrained
+  enum or format field included) can stop a handoff to a lower-ceiling actor, never lower the
+  label. The `Accepted`
+  carries the label (`label`), and `build_request` puts it on the broker request as `tlp`
+  (`broker/request` 1.1), which the request digest binds, so an approval does not survive a
+  lowered label. There is no release transform (decision 7) at this seam: a handoff that would
+  lower a label is refused, never relabelled.
 - **Free text never becomes a parameter.** The actor does not choose params: `build_request`
   computes them from the declaration and the accepted output. A reference may name only a
   *constrained* field (`is_constrained`: `enum`/`const`, number, boolean, a checked `format` -
@@ -251,8 +269,10 @@ take, each with params that are literals or `$output.<path>` references (`$$` es
   risky one still needs its bound approval.
 - **Checked offline.** `declaration_problems(doc, reader_profile=, actor_profile=,
   broker_manifest=)`: schema, closed `output_schema`, every reference constrained, the reader
-  passes the G-03 rule, the actor has `reads_untrusted: false`, every action is in the broker
-  manifest and granted to the actor at its tier. Tests: `tests/agent/test_agent_handoff.py`.
+  passes the G-03 rule, the actor has `reads_untrusted: false`, the actor's receive ceiling is at
+  or above what the reader holds (a `red`-ceiling reader cannot hand off to a `clear` actor), every
+  action is in the broker manifest and granted to the actor at its tier. Tests:
+  `tests/agent/test_agent_handoff.py`.
 
 ### Actors act only through the broker (G-13)
 
