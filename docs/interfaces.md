@@ -255,6 +255,10 @@ Records(root, clock, *, agent=None).propose(note, *, body="", slug=None) -> Path
 #   The real enforcement of decided/ is filesystem ownership, not this library.
 Records.completion_request(related, body, *, agent=None, ...) -> Path   # related: decided/approved/<file>.md
 RecordsReader(root).list(lane) / .read(lane, name) / .iter_notes(lane)
+# homelabnext.records.decider (operator side; CLI: hnx records decide approve|deny|complete NAME --root DIR --by WHO)
+Decider(root, *, decided_by, clock).approve(name) / .deny(name, reason) / .complete(name, reason)
+#   each move reads the note O_NOFOLLOW (regular file, one link, else LaneViolation), validates it and
+#   writes those bytes to a NEW file in the destination lane before unlinking the source
 validate_note(note) / parse_note(text) / render_note(...)   # note schema: schemas/records/note.schema.json
 
 # homelabnext.decide
