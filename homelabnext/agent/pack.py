@@ -95,9 +95,13 @@ Memory (ADR-0037 decisions 9, 11 and 14).  ``memory=`` takes the entries platfor
 into the pack from the profile's own store (``homelabnext.agent.memory.memory_block_input``):
 each ``{scope, key, rev, value_digest, tlp, closure}``.  It needs ``profile=``, every scope must
 be one of the profile's ``memory_scopes``, and the pack records them as its ``memory`` block,
-``{scope, key, rev, value_digest, tlp}`` each (the closure is not recorded).  The block is what a
-``mem:`` source may name, and each entry's label counts toward the pack's.  A pack assembled
-without ``memory=`` has no block (and its hash is what it was).
+``{scope, key, rev, value_digest, tlp}`` each (the closure is not recorded).  An entry from
+``memory_block_input(..., stale_after=)`` also carries ``stale``, ``reasserted_at`` and, when a
+verifier set it, ``verified_at`` (decision 15), and the block records them (an entry with no
+``verified_at`` that says it is not stale is refused): staleness is reported in the pack, and
+the renderer decides how a stale entry ranks.  The block is what a ``mem:`` source may name,
+and each entry's label counts toward the pack's.  A pack assembled without ``memory=`` has no
+block (and its hash is what it was).
 
 Retraction (ADR-0037 decision 14).  ``retracted=`` takes the active
 :class:`~homelabnext.agent.deny.DenySet` (the caller reads it from the store's deny log; the
@@ -292,6 +296,10 @@ def _input_items(
 
 _SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 _MEMORY_FIELDS = frozenset({"scope", "key", "rev", "value_digest", "tlp", "closure"})
+#: the staleness fields a memory entry may carry (ADR-0037 decision 15), all or none of the
+#: first two: ``memory_block_input(..., stale_after=)`` adds them
+_STALE_FIELDS = frozenset({"stale", "reasserted_at"})
+_STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z")
 
 
 def _memory_block(
@@ -312,8 +320,17 @@ def _memory_block(
     left_out = 0
     for n, e in enumerate(memory):
         where = f"memory[{n}]"
-        if not isinstance(e, Mapping) or set(e) != _MEMORY_FIELDS:
-            raise SpecError(f"{where}: an entry is {{scope, key, rev, value_digest, tlp, closure}}")
+        extra = set(e) - _MEMORY_FIELDS if isinstance(e, Mapping) else set()
+        if (
+            not isinstance(e, Mapping)
+            or not set(e) >= _MEMORY_FIELDS
+            or not extra <= _STALE_FIELDS | {"verified_at"}
+            or (extra and not extra >= _STALE_FIELDS)
+        ):
+            raise SpecError(
+                f"{where}: an entry is {{scope, key, rev, value_digest, tlp, closure}}, with "
+                "{stale, reasserted_at, verified_at?} when staleness is reported"
+            )
         scope, key, rev = e["scope"], e["key"], e["rev"]
         if not (isinstance(scope, str) and _SLUG.fullmatch(scope) and scope in scopes):
             raise SpecError(f"{where}: scope is not one of the profile's memory_scopes")
@@ -326,6 +343,19 @@ def _memory_block(
         closure = e["closure"]
         if not isinstance(closure, (list, tuple)) or not all(isinstance(c, str) for c in closure):
             raise SpecError(f"{where}: closure must be a list of identifiers")
+        if extra and (
+            type(e["stale"]) is not bool
+            or not (e["reasserted_at"] is None or _is_stamp(e["reasserted_at"]))
+            or not _is_stamp(e.get("verified_at", "1970-01-01T00:00:00.000000Z"))
+        ):
+            raise SpecError(
+                f"{where}: stale is a boolean, reasserted_at a memory stamp or null, verified_at "
+                "a memory stamp"
+            )
+        if extra and e["stale"] is False and "verified_at" not in e:
+            raise SpecError(
+                f"{where}: an entry with no verified_at is stale (ADR-0037 decision 15)"
+            )
         if (scope, key) in block:
             raise SpecError(f"{where}: a key appears in the memory block once")
         # its closure reaches a denied name or cites a marked revision (the cited lineage), or
@@ -341,7 +371,13 @@ def _memory_block(
             # the store's label, read as stored data (a non-canonical one is red)
             "tlp": str(tlp.read_stored(e["tlp"])),
         }
+        if extra:  # reported, not ranked (ADR-0037 decision 15; the renderer decides rank)
+            block[(scope, key)].update({f: e[f] for f in sorted(extra)})
     return [block[k] for k in sorted(block)], left_out
+
+
+def _is_stamp(value: Any) -> bool:
+    return isinstance(value, str) and _STAMP.fullmatch(value) is not None
 
 
 def _static_label(section: Mapping[str, Any]) -> str:

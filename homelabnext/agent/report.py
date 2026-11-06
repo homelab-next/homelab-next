@@ -12,6 +12,11 @@ another owner is refused first, before anything is looked up, with the same mess
 block does not show, so the check is no existence oracle.  No update may cite any revision of its
 own key.
 
+Verify (decision 15).  An update with ``op: verify`` reasserts a live fact: it takes no ``value``
+and must cite at least one source that is not a ``mem:`` revision (:func:`verify_problems`), and
+that source, like every other, must be one the pack rendered.  A model's ``verify`` sets the
+entry's ``reasserted_at``, never its ``verified_at`` (only a ``Verifier`` does).
+
 Served reports (decision 18).  A report served to a profile other than its author carries its
 ``memory_updates`` as ``{"count": n}`` only (:func:`served_report`): otherwise the report would be
 a cross-agent read of memory.  Every place that hands a report to another profile calls it: the
@@ -76,6 +81,27 @@ def source_problems(updates: Any, pack: Mapping[str, Any]) -> list[str]:
     return problems
 
 
+def verify_problems(updates: Any) -> list[str]:
+    """Why each ``op: verify`` of ``updates`` is malformed, by position only (ADR-0037 decision
+    15): a verify takes no ``value``, and it cites at least one source that is not a ``mem:``
+    revision (whether the pack rendered it is :func:`source_problems`' check).  ``updates`` is
+    assumed schema-valid."""
+    problems = []
+    for n, u in enumerate(updates if isinstance(updates, list) else []):
+        if not isinstance(u, Mapping) or u.get("op") != "verify":
+            continue
+        where = f"memory_updates/{n}"
+        if "value" in u:
+            problems.append(f"{where}: verify takes no value (it reasserts the live value)")
+        sources = [s for s in u.get("sources") or () if isinstance(s, str)]
+        if not any(not s.startswith(MEM_PREFIX) for s in sources):
+            problems.append(
+                f"{where}: verify must cite at least one source the pack rendered that is not a "
+                "mem: revision (memory cannot vouch for memory)"
+            )
+    return problems
+
+
 def mem_problems(
     src: str,
     update: Mapping[str, Any],
@@ -136,6 +162,7 @@ def validate_report(
     * ``profile`` is the profile the pack was assembled for, when it is bound to one;
     * every cite names a source present in the pack;
     * every memory update's source is an identifier the pack rendered (:func:`source_problems`);
+    * every ``verify`` takes no value and cites a non-``mem:`` source (:func:`verify_problems`);
     * for an ``ok`` report, every ``must_cite`` source of the manifest is cited.
     """
     problems = limit_problems(report)
@@ -158,6 +185,7 @@ def validate_report(
     unknown = sorted(cited - known)
     if unknown:
         problems.append(f"cites sources that are not in the pack: {unknown}")
+    problems += verify_problems(report["memory_updates"])
     problems += source_problems(report["memory_updates"], pack)
     if manifest and report["status"] == "ok":
         missing = sorted(set(manifest.get("must_cite", [])) - cited)
