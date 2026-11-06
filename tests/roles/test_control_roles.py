@@ -1676,6 +1676,29 @@ def test_config_leak_scan_a_crafted_file_name_cannot_pass_as_an_accepted_path(fi
     ]
 
 
+def _first(tmp_path):
+    etc = leak_tree(tmp_path)
+    # "<path>: [not-scanned] ..." for a file named "name:12" reads as "<path>:<line>: [...]"
+    (etc / "app" / "name:12").write_text("x" * (5 * 1024 * 1024 + 1))
+    v = leak_vars(etc, tmp_path)
+    return {
+        "role": "config_leak_scan",
+        "tasks_from": "main",
+        "extra_vars": v,
+        "setup": {"etc": etc},
+    }
+
+
+@first_run(_first)
+def test_config_leak_scan_an_unscanned_file_named_like_a_line_number_is_not_a_hit(first):
+    r, tmp_path = first
+    etc = first.setup["etc"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads((tmp_path / "state" / "report.json").read_text())
+    assert report["hits"] == []
+    assert report["unscanned"] == [{"path": f"{etc}/app/name:12", "reason": "larger than 5 MB"}]
+
+
 # ---------------------------------------------------------------- restore_drill
 DRILL = r"""
 import json, os, sys

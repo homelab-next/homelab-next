@@ -55,7 +55,7 @@
       ansible.builtin.assert:
         that:
           - >-
-            config_leak_scan_run.stdout | regex_findall('(?m)^.+?:[0-9]+: \[[a-z0-9-]+\]') | length == config_leak_scan_counts[0] | int
+            config_leak_scan_run.stdout | regex_findall('(?m)^.+?:[0-9]+: \[(?!not-scanned\])[a-z0-9-]+\]') | length == config_leak_scan_counts[0] | int
           - >-
             config_leak_scan_run.stdout | regex_findall('(?m)^.+?: \[not-scanned\] ') | length == config_leak_scan_counts[1] | int
         fail_msg: "config_leak_scan: the scanner's output does not parse into its own counts; refusing to report clean"
@@ -63,7 +63,7 @@
       ansible.builtin.set_fact:
         config_leak_scan_hits: >-
           {%- set out = [] -%}
-          {%- for m in config_leak_scan_run.stdout | regex_findall('(?m)^(.+?):([0-9]+): \[([a-z0-9-]+)\]') -%}
+          {%- for m in config_leak_scan_run.stdout | regex_findall('(?m)^(.+?):([0-9]+): \[(?!not-scanned\])([a-z0-9-]+)\]') -%}
           {%- set ns = namespace(accepted=false) -%}
           {%- for glob in config_leak_scan_accepted -%}
           {%- if m[0] is match('^' ~ (glob | regex_escape | replace('\\*', '[^/]*') | replace('\\?', '[^/]')) ~ '$') -%}
