@@ -719,6 +719,24 @@ def test_every_refusal_counts_for_the_limit_whatever_its_class(tmp_path):
     assert len(svc.audit_documents()) == before + 4, "three refusals and one rate-limit record"
 
 
+def test_a_loop_of_ok_calls_past_the_call_quota_is_refused_and_counted(tmp_path):
+    """Only refusals were limited: an agent looping a read action it is granted (every call ok)
+    left a run directory and two audit records per call, without bound, until the state disk
+    filled and every action of every agent, and every approval, was refused audit-unavailable."""
+    svc = _service(tmp_path, quotas={"calls_per_minute": 3})
+    peers = PeerMap(svc.manifest)
+    limiter = RefusalLimiter(2, 60, clock=_Clock())
+    body = {"action": "service.status", "params": {}, "target": "svc:queue"}
+    answers = [_ask(svc, peers, READER_UID, limiter, **body) for _ in range(8)]
+    assert [a["ok"] for a in answers[:3]] == [True] * 3, answers[0]
+    assert [a["error"] for a in answers[3:]] == ["call-rate-exceeded"] * 2 + ["rate-limited"] * 3
+    refused = svc.audit_documents(reason="call-rate-exceeded")
+    assert [(r["caller"], r["outcome"]) for r in refused] == [("profile:reader", "denied")] * 2
+    assert all(schema_errors("broker", "audit", r) == [] for r in refused)
+    # per actor: another agent's calls are its own
+    assert _ask(svc, peers, ME, RefusalLimiter(2, 60, clock=_Clock()), **body)["ok"]
+
+
 @pytest.mark.parametrize(
     "fault",
     [

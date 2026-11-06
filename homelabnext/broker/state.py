@@ -70,9 +70,11 @@ import json
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +124,8 @@ OUTBOX_SEQ = "outbox.seq"
 #: the relay's directory under the state directory, and its kinds of "done with this event"
 RELAY_DIR = "relay"
 RELAY_DONE = ("delivered", "undeliverable", "quarantine")
+#: the UTC stamp an audit record's file name starts with (``strftime``): sorts as it orders
+AUDIT_STAMP = "%Y%m%dT%H%M%S%fZ"
 #: how often (at most) the broker removes outbox files the relay is done with
 PRUNE_INTERVAL_S = 60.0
 
@@ -536,6 +540,61 @@ class StateDir:
             doc = _load(p)
             if doc is not None:
                 yield doc
+
+    # ---------------------------------------------------------------- retention
+    def _live_request(self, rid: Any) -> bool:
+        """Whether ``rid`` names a stored request that is still pending or running (its state
+        must not be pruned).  A direct ``call`` stores no request: it is finished when it
+        returns."""
+        if not (isinstance(rid, str) and is_id(rid)):
+            return False
+        if not (self._dir("requests") / f"{rid}.json").exists():
+            return False
+        return self.state_of(rid) in ("pending", "running")
+
+    def prune_retained(
+        self, now_s: float, *, runs_days: float | None, audit_days: float | None
+    ) -> dict[str, int]:
+        """Remove ``runs/<rid>/`` last written more than ``runs_days`` days before ``now_s``
+        (epoch seconds), and audit records (with their ``decisions/`` entries) stamped more than
+        ``audit_days`` days before it, skipping any whose request is still pending or running.
+        ``None`` keeps that kind for ever.  Symlinks are never followed.  Returns the counts."""
+        removed = {"runs": 0, "audit": 0}
+        if runs_days is not None:
+            cutoff = now_s - runs_days * 86400
+            with os.scandir(self._dir("runs")) as it:
+                entries = list(it)
+            for e in entries:
+                try:
+                    if not e.is_dir(follow_symlinks=False):
+                        continue
+                    if e.stat(follow_symlinks=False).st_mtime >= cutoff:
+                        continue
+                except FileNotFoundError:
+                    continue
+                if self._live_request(e.name):
+                    continue
+                shutil.rmtree(e.path, ignore_errors=True)
+                removed["runs"] += 1
+        if audit_days is not None:
+            then = datetime.fromtimestamp(now_s - audit_days * 86400, UTC)
+            stamp = then.strftime(AUDIT_STAMP)  # a record's name starts with its stamp
+            with os.scandir(self._dir("audit")) as it:
+                old = [
+                    e.name for e in it if e.name.endswith(".json") and e.name[: len(stamp)] < stamp
+                ]
+            for name in old:
+                try:
+                    doc = _load(self._dir("audit") / name)
+                except (OSError, ValueError):
+                    doc = None  # unreadable and past retention: nothing to keep it for
+                if isinstance(doc, dict) and self._live_request(doc.get("request_id")):
+                    continue
+                for where in ("decisions", "audit"):  # the index first: it is the derived copy
+                    with contextlib.suppress(FileNotFoundError):
+                        (self._dir(where) / name).unlink()
+                removed["audit"] += 1
+        return removed
 
     # ---------------------------------------------------------------- the digest key
     def digest_key(self) -> bytes:

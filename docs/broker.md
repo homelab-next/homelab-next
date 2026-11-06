@@ -203,7 +203,8 @@ set. The served manifest may leave out any action (default deny) and add its own
    `https://status.lab.example/approvals`) the event carries `link` = `URL?request=<id>` and the
    notification ends with `Review: <link>` (ntfy also gets it as `Click`).
 
-   Accepted work is bounded per agent (manifest 1.5 `quotas`): an actor may have at most
+   Accepted work is bounded per agent (manifest 1.5 `quotas`; 1.9 adds `calls_per_minute`, the
+   call rate, [below](#running-the-service)): an actor may have at most
    `pending_per_actor` requests pending at once (default 20; a `submit` past it is refused
    `too-many-pending`, audited, and counts as a refusal for the rate limit), and its approval
    requests page the approver only while the actor has no open page, and at most once per
@@ -273,6 +274,16 @@ read never walks the refusals; rebuilt once for an older state directory),
 `relay/` (the relay's own: `delivered/`, `undeliverable/`, `quarantine/`, `relay.lock`,
 `initialized`; [Publishing events](#publishing-events-the-outbox-relay)), `runs/<request>/` and
 `digest.key`.
+
+**Retention** (manifest 1.9 `retention`). A run's private copy of its handler is removed as soon as
+the handler has ended (the pinned digest names those bytes; the copy is not evidence). At start and
+at most once an hour after (on the next admitted operation) the broker removes a run directory
+(`runs/<request>/`: stdout, stderr, whatever the handler left) last written more than `runs_days`
+ago (default 30), and an audit record, with its `decisions/` entry, stamped more than `audit_days`
+ago (default 400: the trail is evidence, so keep it at least as long as anything that may ask for
+it, or ship it elsewhere first); neither is removed while its request is still pending or running.
+`audit_days: null` keeps the trail for ever. Requests, claims, results and approvals are not
+pruned (they are small, and `submit` is bounded by `pending_per_actor` and the call rate).
 
 **Audit before execute.** An action that executes (a `call`, an approved `run`) first writes an
 `outcome: started` record (audit 1.2), and the broker refuses to execute it, answering
@@ -498,7 +509,7 @@ whose fourteen mutants are each caught by their own check alone. Unit tests:
 
 `hnx broker serve` runs the broker on a Unix-domain socket. Who is calling is the **peer's uid**,
 read from the kernel (`SO_PEERCRED`, Linux), and mapped through the manifest
-(`schemas/broker/manifest` 1.8; example: `examples/broker/manifest.production.yml`):
+(`schemas/broker/manifest` 1.9; example: `examples/broker/manifest.production.yml`):
 
 ```yaml
 dev_identity: false                       # the CLI's asserted --as is refused (absent = false)
@@ -508,7 +519,8 @@ callers:                                  # an agent's system user -> the one pr
 approval_relays:                          # a process that authenticated a person, for one issuer
   - {user: hnx-hub, issuer: sso}
 refusal_limit: {max: 60, window_s: 60}    # refused requests per peer per window (the default)
-quotas: {pending_per_actor: 20, notify_window_s: 300}   # accepted work per agent (the defaults)
+quotas: {pending_per_actor: 20, notify_window_s: 300, calls_per_minute: 60}  # per agent (defaults)
+retention: {runs_days: 30, audit_days: 400}  # how long finished state stays on disk (the defaults)
 ```
 
 **Notifications from `serve`.** `hnx broker serve` pages approval requests (see
@@ -599,7 +611,14 @@ rate-limits a healthy agent) within `refusal_limit.window_s` seconds (manifest 1
 default 60 per 60 s) is answered `rate-limited` for the rest of the window, without its request
 being parsed. The limit is audited **once per peer and window** (`operation: connect`,
 `reason: rate-limited`) and the number of requests it suppressed is logged when the window ends,
-so a looping or hostile agent can fill neither the audit trail nor the disk. Approval relays and
+so refused requests cannot fill the audit trail. Successful ones are bounded separately: the
+per-actor call rate (`quotas.calls_per_minute`, manifest 1.9, default 60 admitted calls, submits
+and token operations per actor in any 60 s; one past it is refused `call-rate-exceeded`, audited,
+and counted here as a refusal, so a loop of granted calls ends rate-limited too) and retention
+([State](#state)). Together they bound how fast an agent can grow the state directory, not its
+size: a disk too small for what the rate and the retention allow can still fill, and then every
+action is refused `audit-unavailable`, so size the state filesystem for them (or lower them) and
+alert on its free space. Approval relays and
 the Code Mode runner are exempt (relays as they are from the connection cap). A sandbox's refusals
 before a token is admitted are counted per presented token, and requests presenting no known token
 count against a per-uid ceiling ten times the limit; refusals after a token was admitted are
