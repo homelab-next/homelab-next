@@ -11,3 +11,20 @@ def _one_uid_plays_both(monkeypatch):
     from homelabnext.agent import memory
 
     monkeypatch.setattr(memory, "_CHECK_DENY_WRITABLE", False)
+
+
+#: the clock the agent tests assemble packs at: five minutes after the fixtures' pre-gate output
+#: was observed (``agent_support.GATE_OK``), inside its ``max_age_s``
+FIXED_NOW = "2026-01-15T10:05:00+00:00"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _fixed_clock():
+    """Session-wide, so module-scoped fixtures that assemble a pack see it too."""
+    from datetime import datetime
+
+    from homelabnext.agent import pack
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(pack, "_now", lambda: datetime.fromisoformat(FIXED_NOW), raising=False)
+        yield

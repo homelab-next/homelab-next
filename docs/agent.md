@@ -17,7 +17,9 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 - A context pack is a **pure function** of a manifest and its inputs, so identical inputs give an
   identical pack and hash. A job log that records the hash can be replayed and audited.
 - An agent never runs blind: a required pre-gate that is missing, stale or failed **defers** the
-  job with a reason instead of letting the agent infer health from raw data.
+  job with a reason instead of letting the agent infer health from raw data. So does one whose
+  output does not match `agent/pregate_output`, names another gate, or is older than the gate's
+  `max_age_s`.
 - The broker is **default deny**, and an approval is bound to the digest of the exact request it
   approved, so a request changed after approval no longer matches.
 
@@ -319,6 +321,13 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
 - **Deferral**: a missing required section, or a required pre-gate that is missing, `stale` or
   `failed`, makes `status: deferred` with `deferred_reasons`. Pre-gate outputs are included in the
   pack as volatile sections so the agent sees the verdict itself.
+- **Pre-gate checks**: before an output is used it must match `agent/pregate_output` (so a status
+  outside `ok`/`degraded`/`stale`/`failed` fails), its `gate` must be the id it is filed under,
+  and when the manifest gives the gate a `max_age_s`, its `observed_at` must be no older than that
+  and no more than 300 s in the future. The clock is `assemble_pack(..., now=)`, a callable
+  returning an aware datetime (default: the current UTC time). An output that fails a check is
+  not rendered: a required gate's defers the pack with the reason, an optional gate's is listed in
+  `omitted`.
 - **Screening (A-03)**: before fencing, every `source: input` section is passed through the
   screener (`homelabnext/agent/screen.py`), which replaces secrets and PII with typed labels,
   `[REDACTED:<type>:<n>]`, stable across the pack (the same address is the same label in every
@@ -357,14 +366,18 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   leak 0 values into the rendered pack and keep redaction precision >= 0.95.
 - Section text is fenced with the manifest's delimiter and tier so untrusted input stays
   distinguishable from instructions. Stable sections (manifest text) open with
-  `<delim> <name> [stable] <delim>`. Session and volatile sections are input, so their fences
+  `<delim> <name> [stable] <delim>`; a `source: input` section may not be `tier: stable`
+  (`assemble_pack`, `start_session`'s `session_problems` and `hnx agent lint`'s `readers` rule
+  all refuse it), since a stable section is neither nonce-fenced nor escaped. Session and volatile sections are input, so their fences
   carry a per-pack nonce derived from the digest of that content
   (`<delim> <name> [<tier>] <nonce> <delim>` ... `<delim> end <name> <nonce> <delim>`), and any line
   of their text that starts with the delimiter is prefixed `[escaped] `. A line is what any line
   boundary ends (CR, VT, FF, NEL, U+2028 and U+2029 as well as LF), and the test reads the line
   as a reader sees it: NFKC-folded (a full-width delimiter reads as the ASCII one), with format characters, combining
   marks and blank fillers (U+3164, U+FFA0, U+115F, U+1160, U+2800) dropped wherever they are and
-  leading whitespace skipped; the template lint and the
+  leading whitespace skipped. The delimiters are folded the same way before they are compared, so
+  a full-width, space-led or zero-width-laced custom delimiter is matched by its plain-looking
+  forgery too; the template lint and the
   injection eval's fake model read lines the same way. Input therefore cannot
   open a section of its own, least of all a stable one. This is a structural guarantee about the
   text, not about the model: a model can still be persuaded by data it reads, so the broker, not

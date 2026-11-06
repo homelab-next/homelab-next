@@ -690,12 +690,28 @@ def manifest_problems(
     tools = {"mcp": doc.get("tools") or []}
     problems: list[str] = []
     if READERS in rules:
+        problems += stable_input_problems(doc)
         problems += grant_problems(tools, classes, who)
         if any(isinstance(s, Mapping) and s.get("source") == "input" for s in sections):
             problems += reader_problems(tools, classes, who)
     if BROKER in rules:
         problems += broker_problems(tools, classes, who)
     return problems
+
+
+def stable_input_problems(doc: Mapping[str, Any]) -> list[str]:
+    """A ``source: input`` section declared ``tier: stable``, one problem each.  A stable section
+    is fenced without the per-pack nonce and its text is not escaped, because stable text comes
+    from the manifest; untrusted input there could forge any section, ``instructions [stable]``
+    included.  :func:`manifest_problems` (rule ``readers``), ``session_problems`` and
+    ``assemble_pack`` all refuse it."""
+    sections = doc.get("sections") if isinstance(doc, Mapping) else None
+    return [
+        f"section {s.get('name')!r}: a source: input section cannot be tier: stable (stable "
+        "sections are not nonce-fenced or escaped; use session or volatile)"
+        for s in (sections if isinstance(sections, list) else ())
+        if isinstance(s, Mapping) and s.get("source") == "input" and s.get("tier") == "stable"
+    ]
 
 
 def doc_notes(doc: Mapping[str, Any], classes: ToolClasses | None = None) -> list[str]:

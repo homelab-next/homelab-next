@@ -33,7 +33,7 @@ from .compiler import VerifiedProfile, require_verified
 from .digest import digest_of
 from .errors import SpecError
 from .pack import assemble_pack
-from .readers import ToolClasses, default_classes
+from .readers import ToolClasses, default_classes, stable_input_problems
 from .resolved import ResolvedUids
 from .terms import TERMS_SECTION, terms_section
 
@@ -259,7 +259,9 @@ def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) ->
       content a reader exists to turn into validated structured output (G-03/G-04);
     * every manifest tool is an MCP server the profile is granted, so the pack never lists a tool
       its own access block denies;
-    * every manifest memory scope is one of the profile's own ``memory_scopes``.
+    * every manifest memory scope is one of the profile's own ``memory_scopes``;
+    * no ``source: input`` section is ``tier: stable`` (:func:`~homelabnext.agent.readers.
+      stable_input_problems`).
     """
     pid = profile.get("id")
     problems: list[str] = []
@@ -278,6 +280,7 @@ def session_problems(manifest: Mapping[str, Any], profile: Mapping[str, Any]) ->
                 f"{pid} declares reads_untrusted: false, but the manifest feeds it untrusted "
                 f"input sections {raw}: an actor gets a reader's validated output, not raw input"
             )
+    problems += stable_input_problems(manifest)
     granted = set((profile.get("grants") or {}).get("mcp") or [])
     extra = sorted(set(manifest.get("tools") or []) - granted)
     if extra:

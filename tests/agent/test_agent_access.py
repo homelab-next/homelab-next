@@ -306,3 +306,11 @@ def test_start_session_refuses_a_profile_the_manifest_does_not_name(profile, reg
         start_session(m, inputs(), profile, registry)
     m["profiles"] = ["profile:reader"]
     assert start_session(m, inputs(), profile, registry)[0]["status"] == "ready"
+
+
+def test_a_session_refuses_an_input_section_declared_stable(profile, registry):
+    m = manifest()
+    next(s for s in m["sections"] if s["name"] == "findings")["tier"] = "stable"
+    assert any("'findings'" in p and "tier: stable" in p for p in session_problems(m, profile))
+    with pytest.raises(SpecError, match="tier: stable"):
+        start_session(m, inputs(), profile, registry)
