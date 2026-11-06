@@ -112,6 +112,16 @@ def test_require_tool_returns_the_path_and_honours_its_availability_check(monkey
         sp.require_tool("hnx-fake-lint", lambda: False)
 
 
+def test_a_missing_required_tool_is_named_missing_not_unusable(monkeypatch, tmp_path):
+    """The unusable wording (needs root, no user namespace) was used for a tool that is not
+    installed at all, so the failure sent the reader after the wrong problem."""
+    monkeypatch.setenv("PATH", str(tmp_path))  # nothing here
+    monkeypatch.setenv("HNX_REQUIRE_TOOLS", "hnx-fake-lint")
+    with pytest.raises(pytest.fail.Exception, match="hnx-fake-lint is not on PATH") as info:
+        sp.require_tool("hnx-fake-lint", lambda: False, unusable="needs root (not available)")
+    assert "needs root" not in str(info.value)
+
+
 def test_a_required_tools_skip_is_a_failure_end_to_end(tmp_path):
     _project(
         tmp_path,

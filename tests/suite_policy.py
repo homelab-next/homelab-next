@@ -239,7 +239,8 @@ def require_tool(
             else "HNX_REQUIRE_TOOLS"
         )
         pytest.fail(
-            f"{unusable or f'{name} is not on PATH (or not usable)'}, and {switch} requires it",
+            f"{unusable if unusable and path else f'{name} is not on PATH (or not usable)'},"
+            f" and {switch} requires it",
             pytrace=False,
         )
     pytest.skip(unusable if unusable and path else f"{name} is not installed")
