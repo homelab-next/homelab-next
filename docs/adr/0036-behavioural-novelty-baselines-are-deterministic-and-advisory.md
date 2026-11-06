@@ -75,7 +75,12 @@ Three shapes of evidence argue for how to build it:
      scored, so one noisy entity cannot flood the output or the memory of a run. One with more
      than that many distinct values in the scoring window alone is reported once as **burst**,
      with its row count there and not scored; unlike a high-cardinality entity, a burst is new
-     behaviour (a scan on the scoring day, by an entity learned or not), so it is a signal. A
+     behaviour (a scan on the scoring day, by an entity with at most `max_values_per_entity`
+     learned values, including one never seen while learning), so it is a signal. An entity
+     noisy in both windows is high-cardinality, not burst: the learning-window reason takes
+     precedence, so it is reported once and is not a signal. A scan on the scoring day by an
+     entity already noisy while learning therefore raises no signal; such an entity is visible
+     only as a high-cardinality row. A
      burst or high-cardinality row stands in for all that entity's per-value rows: it names the
      entity and counts its rows, not its values, which an analyst looks up in the source
      table. A cardinality read of each window finds
