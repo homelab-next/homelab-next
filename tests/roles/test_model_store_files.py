@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -297,6 +298,53 @@ def test_the_lock_never_follows_a_swap_after_it_opened_the_entry(mod, tmp_path, 
     assert modes(root, root / "etc", root / "etc" / "shadow") == [0o755, 0o755, 0o600]
     assert {p.stat().st_uid for p in [root, *root.rglob("*")]} == {os.getuid()}
     assert modes(moved) == [0o700]  # the directory it opened is the one it closed
+
+
+def test_the_lock_leaves_a_listed_file_swapped_for_another_regular_file(mod, tmp_path, monkeypatch):
+    """Between the lstat and the open a listed file is replaced by a different regular file (not
+    a link, so O_NOFOLLOW does not refuse it): ``_open_at`` sees another inode than the walk saw,
+    reports it as changed while it was read and neither chowns nor chmods the stand-in."""
+    run, files = export(tmp_path)
+    trainer_written(run)
+    real_stat, swapped = os.stat, []
+
+    def stat_then_swap(name, *a, **kw):
+        st = real_stat(name, *a, **kw)
+        if name == "config.json" and not swapped:
+            swapped.append(True)
+            stand_in = run / "stand-in"
+            stand_in.write_text("not the file the walk listed\n")
+            stand_in.chmod(0o666)
+            stand_in.replace(run / "config.json")  # a new inode, still a regular file
+        return st
+
+    monkeypatch.setattr(mod.os, "stat", stat_then_swap)
+    strays, _ = mod.lock_entry(str(run), files, *OWNER)
+    assert swapped
+    assert strays == ["config.json (changed while it was read)"]
+    after = (run / "config.json").lstat()
+    assert stat.S_ISREG(after.st_mode) and after.st_nlink == 1
+    assert after.st_mode & 0o7777 == 0o666  # left as the swapper made it
+    assert (run / "config.json").read_text() == "not the file the walk listed\n"
+
+
+def test_the_top_directory_is_closed_and_the_stores_before_it_is_listed(mod, tmp_path, monkeypatch):
+    """Nobody else may add a name to a directory once it is listed, so the entry directory must
+    already be owned by the store and 0700 at the moment ``os.listdir`` reads it."""
+    run, files = export(tmp_path)
+    trainer_written(run)
+    assert modes(run) == [0o2777]  # the trainers' directory, open to everyone
+    real_listdir, seen = os.listdir, []
+
+    def listdir_and_look(fd):
+        if not seen:  # the first listing is the top directory's
+            st = os.fstat(fd)
+            seen.append((st.st_uid, st.st_gid, st.st_mode & 0o7777))
+        return real_listdir(fd)
+
+    monkeypatch.setattr(mod.os, "listdir", listdir_and_look)
+    assert mod.lock_entry(str(run), files, *OWNER) == ([], True)
+    assert seen == [(*OWNER, 0o700)]
 
 
 def test_the_lock_changes_nothing_in_check_mode(mod, tmp_path):

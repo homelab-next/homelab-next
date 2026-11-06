@@ -173,6 +173,19 @@ def _listed(files: list[dict], listed: list[str] | None) -> set[str]:
     return set(listed) if listed is not None else {f["path"] for f in files}
 
 
+def _stray(st: os.stat_result, rel: str, wanted: set[str]) -> str | None:
+    """Why a non-directory name (read with ``lstat``) may not stay in an export; None if it may."""
+    if stat.S_ISLNK(st.st_mode):
+        return f"{rel} (a link)"
+    if not stat.S_ISREG(st.st_mode):
+        return f"{rel} (a special file)"
+    if rel not in wanted:
+        return f"{rel} (not in the manifest)"
+    if st.st_nlink > 1:
+        return f"{rel} (hard-linked: {st.st_nlink} links)"
+    return None
+
+
 def walk_entry(directory: str, files: list[dict], listed: list[str] | None = None) -> list[str]:
     """Everything under ``directory`` that is not a listed regular file or a directory.
 
@@ -197,16 +210,11 @@ def walk_entry(directory: str, files: list[dict], listed: list[str] | None = Non
         for name in dirs + names:
             rel = name if rel_root == "." else f"{rel_root}/{name}"
             st = os.lstat(os.path.join(root, name))
-            if stat.S_ISLNK(st.st_mode):
-                strays.append(f"{rel} (a link)")
-            elif stat.S_ISDIR(st.st_mode):
+            if stat.S_ISDIR(st.st_mode):
                 continue
-            elif not stat.S_ISREG(st.st_mode):
-                strays.append(f"{rel} (a special file)")
-            elif rel not in wanted:
-                strays.append(f"{rel} (not in the manifest)")
-            elif st.st_nlink > 1:
-                strays.append(f"{rel} (hard-linked: {st.st_nlink} links)")
+            why = _stray(st, rel, wanted)
+            if why:
+                strays.append(why)
     return sorted(strays)
 
 
@@ -296,21 +304,17 @@ def lock_entry(
         for name in sorted(os.listdir(fd)):
             rel = f"{rel_root}{name}"
             st = os.stat(name, dir_fd=fd, follow_symlinks=False)
-            if stat.S_ISLNK(st.st_mode):
-                strays.append(f"{rel} (a link)")
-            elif stat.S_ISDIR(st.st_mode):
+            if stat.S_ISDIR(st.st_mode):
                 child = _open_at(name, DIR_FLAGS, fd, st)
                 if child is None:
                     strays.append(f"{rel} (changed while it was read)")
                     continue
                 close_dir(child)
                 visit(child, f"{rel}/")
-            elif not stat.S_ISREG(st.st_mode):
-                strays.append(f"{rel} (a special file)")
-            elif rel not in wanted:
-                strays.append(f"{rel} (not in the manifest)")
-            elif st.st_nlink > 1:
-                strays.append(f"{rel} (hard-linked: {st.st_nlink} links)")
+                continue
+            why = _stray(st, rel, wanted)
+            if why:
+                strays.append(why)
             else:
                 regular.append((fd, name, rel, st))
 
