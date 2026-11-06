@@ -18,41 +18,54 @@ Instead the decider reads the note once, through a descriptor opened without fol
 refuses anything that is not a regular file with exactly one link, validates those bytes, writes
 the same bytes to a **new file** in the destination lane (created by the decider's user, so owned
 by it) and only then removes the source (claimed first, see below).  What lands in ``decided/``
-is exactly what was validated, and nothing the agent holds refers to it.  The guarantee holds only when the decider
-runs as its own OS user: run as the agent's user it owns the copy too.  The command is
-``hnx records decide approve|deny|complete`` (:func:`main`).
+is exactly what was validated, and nothing the agent holds refers to it.  The guarantee holds
+only when the decider runs as its own OS user: run as the agent's user it owns the copy too.  The
+command is ``hnx records decide approve|deny|complete`` (:func:`main`).
 
 A caller that decides on a note's content (the register and strategy deciders) reads it with
 :meth:`Decider.read`, the same safe load, and the movers then file exactly the bytes that call
 read: a note an agent could rewrite, or one that is a symlink or hard-linked, is refused before
-anything is applied, and the bytes applied are the bytes filed.
+anything is applied, and the bytes applied are the bytes filed.  The descriptor of that read is
+held open until the move ends (:meth:`Decider.close`, or ``with Decider(...)``, releases those of
+notes read and never moved).
 
 A decided note (and its sidecar) is created mode ``0640`` less the decider's umask (``mode=``):
 agents read ``decided/`` through the group of the decider's directories, so give ``decided/`` the
 agents' group (setgid on the lane directories keeps it on new files).  A decider umask of ``077``
 leaves the copies unreadable to :class:`~homelabnext.records.RecordsReader`.
 
-Exactly one decision wins.  Before it files anything, a move claims the source: it renames the
-inbox entry into ``decided/.claims/`` (the decider's own directory) under a name no other move
-uses.  ``rename(2)`` is atomic, so of two movers raced on one note exactly one claims it; the
-other finds the name gone and fails with :class:`FileNotFoundError` having filed nothing.  Only
-then are the sidecar and the copy written, and the claimed entry is unlinked last.  A move that
-fails after its claim removes its copy and sidecar and renames the claimed entry back.  A crash
-between the claim and the end of the move leaves the claimed entry in ``decided/.claims/`` for the
-operator to look at; the note is no longer in the inbox, so it cannot be decided twice.
+Exactly one decision wins.  A move claims the note before it files anything, in two steps, both
+in ``decided/.claims/`` (the decider's own directory):
 
-The claimed entry is checked against the inode that was read.  An agent that swapped in another
-file after the read has its replacement put back at the inbox name, and the decision is on the
-bytes that were read, unless a decided lane or another move's claim now holds the name: then
-another decider took the inode that was read, and this move fails having filed nothing.  Putting an entry back never replaces a name that has reappeared meanwhile; it is
-then left in ``decided/.claims/`` and reported.
+1. the name: ``<name>.lock`` created ``O_CREAT|O_EXCL``, so one move per note name runs at a time
+   and any other move of that name fails with :class:`FileNotFoundError`, having touched nothing;
+2. the entry: an atomic rename of the source into the claims directory.  ``inbox/`` and
+   ``decided/`` must therefore be on **one mount**; across mounts the rename fails ``EXDEV`` and
+   the move is refused, saying so.
+
+Then the copy is written and its sidecar after it, each a new file that never replaces a name;
+the claimed entry is unlinked, and the lock last.  A move that fails after its claim removes only
+the files it created and renames the claimed entry back.  A crash mid-move leaves the lock (and
+perhaps the claimed entry) in ``decided/.claims/``: that name is refused until the operator looks
+at it and removes them, and the note is no longer in the inbox, so it cannot be decided twice.
+
+The claimed entry is compared with the descriptor held since the read (``fstat`` against
+``lstat``): the held descriptor keeps that inode alive, so its number cannot be reused by a new
+file.  An entry swapped in after the read is put back at the inbox name, and the decision is on
+the bytes that were read, unless a decided lane already holds the name: the lock rules out a
+move in flight, so another decider filed the inode that was read and this move fails having
+filed nothing.  Putting an entry back never replaces a name that has reappeared meanwhile
+(``renameat2(RENAME_NOREPLACE)`` on Linux; elsewhere a check then a rename, best effort): such an
+entry is left in ``decided/.claims/`` and reported.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import errno
+import functools
 import json
 import os
 import secrets
@@ -77,7 +90,7 @@ from .notes import (
 )
 
 APPROVED, DENIED, COMPLETED = DECIDED_LANES
-#: where a move claims its source (a rename, so exactly one of two raced moves gets it)
+#: where a move claims a note: an O_EXCL lock on its name, then a rename of the entry
 CLAIMS = "decided/.claims"
 
 #: what open(O_NOFOLLOW) fails with on a symlink: ELOOP (Linux, POSIX), EMLINK (FreeBSD),
@@ -108,9 +121,31 @@ class Decider:
         self.decided_by = decided_by
         self.clock = clock
         self.mode = mode
-        # (lane, name) -> the validated bytes, the (st_dev, st_ino) they were read from and the
-        # note parsed from them; _move writes exactly these bytes, never re-reading the source
-        self._loaded: dict[tuple[str, str], tuple[bytes, tuple[int, int], Note]] = {}
+        # (lane, name) -> the validated bytes, the O_NOFOLLOW descriptor they were read through
+        # (held open until the move ends, so the inode is not freed and its number cannot be
+        # reused) and the note parsed from them; _move files exactly these bytes
+        self._loaded: dict[tuple[str, str], tuple[bytes, int, Note]] = {}
+
+    def close(self) -> None:
+        """Release the descriptors of notes loaded (:meth:`read`) but never moved."""
+        for key in list(self._loaded):
+            self._forget(key)
+
+    def __enter__(self) -> Decider:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def _forget(self, key: tuple[str, str]) -> None:
+        hit = self._loaded.pop(key, None)
+        if hit is not None:
+            with contextlib.suppress(OSError):
+                os.close(hit[1])
 
     # ---------------------------------------------------------------- public movers
     def read(self, lane: str, name: str) -> Note:
@@ -215,9 +250,12 @@ class Decider:
             chunks = []
             while chunk := os.read(fd, 1 << 16):
                 chunks.append(chunk)
-        finally:
+            return self._keep(lane, name, b"".join(chunks), fd, validate_filename)
+        except BaseException:
             os.close(fd)
-        data = b"".join(chunks)
+            raise
+
+    def _keep(self, lane: str, name: str, data: bytes, fd: int, validate_filename: bool) -> Note:
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError as ex:
@@ -232,22 +270,84 @@ class Decider:
             problems = check_filename(name, note.frontmatter)
             if problems:
                 raise NoteError("; ".join(problems))
-        self._loaded[(lane, name)] = (data, (st.st_dev, st.st_ino), note)
+        self._forget((lane, name))
+        self._loaded[(lane, name)] = (data, fd, note)
         return note
 
     def _move(
         self, note: Note, dest_lane: str, decision: str, reason: str | None, via: str | None = None
     ) -> Path:
+        key = (note.lane, note.name)
+        if key not in self._loaded:
+            raise NoteError(f"{note.lane}/{note.name} was not loaded by this decider")
         try:
-            data, ident, _ = self._loaded[(note.lane, note.name)]
-        except KeyError:
-            raise NoteError(f"{note.lane}/{note.name} was not loaded by this decider") from None
-        src = self.root / note.lane / note.name
+            return self._move_held(note, dest_lane, decision, reason, via)
+        finally:
+            self._forget(key)
+
+    def _move_held(
+        self, note: Note, dest_lane: str, decision: str, reason: str | None, via: str | None
+    ) -> Path:
         dest_dir = self.root / dest_lane
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / note.name
-        if dest.exists():
+        if (dest_dir / note.name).exists():
             raise FileExistsError(f"{dest_lane}/{note.name} already exists")
+        claim_dir = self.root / CLAIMS
+        claim_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # 1. the name: one move per note name at a time, whatever its lanes.  Every other move of
+        #    this name fails here, before it has touched anything.
+        lock = claim_dir / f"{note.name}.lock"
+        try:
+            os.close(os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+        except FileExistsError:
+            raise FileNotFoundError(
+                f"{note.lane}/{note.name} is being decided by another move "
+                f"(or by one that crashed: see {CLAIMS}/{lock.name})"
+            ) from None
+        try:
+            return self._move_locked(note, dest_lane, decision, reason, via)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(lock)
+
+    def _move_locked(
+        self, note: Note, dest_lane: str, decision: str, reason: str | None, via: str | None
+    ) -> Path:
+        data, held, _ = self._loaded[(note.lane, note.name)]
+        src = self.root / note.lane / note.name
+        dest_dir = self.root / dest_lane
+        claim: Path | None = self.root / CLAIMS / f"{note.name}.{secrets.token_hex(8)}"
+        # 2. the entry: an atomic rename into the decider's own directory.  A source the decider
+        #    may not move (EACCES, EPERM: a sticky inbox it does not own) is refused here, before
+        #    anything is filed.
+        try:
+            os.rename(src, claim)
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"{note.lane}/{note.name} does not exist (already decided?)"
+            ) from None
+        except OSError as ex:
+            if ex.errno == errno.EXDEV:
+                raise OSError(
+                    errno.EXDEV, f"{note.lane}/ and decided/ must be on one mount", str(src)
+                ) from ex
+            raise
+        # the descriptor held since the read keeps that inode alive, so no new file can reuse
+        # its number: another (st_dev, st_ino) is another file
+        was, cur = os.fstat(held), os.lstat(claim)
+        if (cur.st_dev, cur.st_ino) != (was.st_dev, was.st_ino):
+            # swapped after the read: put the replacement back where the agent left it.  The name
+            # lock is held, so no other move is filing this name now: a decided lane holding it
+            # means another decider filed the inode that was read, and this move lost.
+            _unclaim(claim, src)
+            claim = None
+            taken = [
+                lane for lane in DECIDED_LANES if os.path.lexists(self.root / lane / note.name)
+            ]
+            if taken:
+                raise FileNotFoundError(
+                    f"{note.lane}/{note.name} was decided meanwhile (in {', '.join(taken)})"
+                )
         side: dict[str, Any] = {
             "decision": decision,
             "decided_by": self.decided_by,
@@ -258,53 +358,24 @@ class Decider:
             side["reason"] = reason
         if via:
             side["via"] = via
-        claim_dir = self.root / CLAIMS
-        claim_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        claim = claim_dir / f"{note.name}.{os.getpid()}.{secrets.token_hex(8)}"
-        # the claim: atomic, so of two moves raced on this note exactly one gets past here.  A
-        # source the decider may not move (EACCES, EPERM: a sticky inbox it does not own) is
-        # refused here, before anything is filed.
+        sidecar = f"{note.name}.decision.json"
+        made: list[str] = []  # only what this move created is ever removed again
         try:
-            os.rename(src, claim)
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"{note.lane}/{note.name} does not exist (already decided?)"
-            ) from None
-        cur = os.lstat(claim)
-        swapped = (cur.st_dev, cur.st_ino) != ident
-        if swapped:
-            # not the inode that was read: put the replacement back where the agent left it.  If
-            # the inode read is gone because another decider claimed or filed it, this move lost
-            _unclaim(claim, src)
-            taken = [
-                lane for lane in DECIDED_LANES if os.path.lexists(self.root / lane / note.name)
-            ]
-            if any(c.startswith(f"{note.name}.") for c in os.listdir(claim_dir)):
-                taken.append(CLAIMS)  # claimed by a move still in flight
-            if taken:
-                raise FileNotFoundError(
-                    f"{note.lane}/{note.name} was decided meanwhile (in {', '.join(taken)})"
-                )
-        sidecar = dest_dir / f"{note.name}.decision.json"
-        created = False
-        try:
-            tmp = dest_dir / f".{note.name}.{os.getpid()}.decision.tmp"
-            tmp.write_text(json.dumps(side, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-            os.chmod(tmp, self.mode & ~_umask())
-            os.replace(tmp, sidecar)
+            # 3. the copy, then the sidecar: each a new file that never replaces a name
             _create(dest_dir, note.name, data, self.mode)
-            created = True
+            made.append(note.name)
+            body = json.dumps(side, indent=1, sort_keys=True) + "\n"
+            _create(dest_dir, sidecar, body.encode("utf-8"), self.mode)
+            made.append(sidecar)
         except BaseException:
-            # all or nothing: no copy and no sidecar stay behind, and the note is back in its lane
-            if created:
+            for name in reversed(made):
                 with contextlib.suppress(FileNotFoundError):
-                    os.unlink(dest)
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(sidecar)
-            if not swapped:
+                    os.unlink(dest_dir / name)
+            if claim is not None:
                 _unclaim(claim, src)
             raise
-        if not swapped:
+        if claim is not None:
+            # 4. the claimed entry goes last (then the name lock, in _move_held)
             try:
                 os.unlink(claim)
             except OSError as ex:
@@ -314,34 +385,60 @@ class Decider:
                     file=sys.stderr,
                 )
         else:
-            # swapped after it was read: the decision is on the bytes that were read (now in
-            # dest_lane); the replacement is left where it is, for the operator to look at
+            # the decision is on the bytes that were read (now in dest_lane); the replacement is
+            # left where it is, for the operator to look at
             print(
                 f"[records] WARNING: {note.lane}/{note.name} changed after it was read; "
                 f"left in place, {dest_lane}/{note.name} holds the note that was decided",
                 file=sys.stderr,
             )
-        del self._loaded[(note.lane, note.name)]
-        return dest
-
-
-def _umask() -> int:
-    cur = os.umask(0)
-    os.umask(cur)
-    return cur
+        return dest_dir / note.name
 
 
 def _unclaim(claim: Path, src: Path) -> None:
-    """Put a claimed entry back at ``src``.  Never over a name that has reappeared meanwhile:
-    then the entry stays in the claims directory and that is reported."""
-    if not os.path.lexists(src):
-        with contextlib.suppress(OSError):
-            os.rename(claim, src)
+    """Put a claimed entry back at ``src``, never over a name that has reappeared meanwhile
+    (``renameat2(RENAME_NOREPLACE)`` on Linux; elsewhere a check then a rename, best effort).
+    An entry that cannot go back stays in the claims directory, and that is reported."""
+    try:
+        _rename_noreplace(claim, src)
+    except OSError as ex:
+        print(
+            f"[records] WARNING: could not put {claim.name} back at {src} ({ex}); "
+            f"it is left in {claim.parent}",
+            file=sys.stderr,
+        )
+
+
+_RENAME_NOREPLACE = 1
+_AT_FDCWD = -100
+
+
+@functools.cache
+def _renameat2() -> Any:
+    """libc's ``renameat2`` on Linux, else None."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        fn = ctypes.CDLL(None, use_errno=True).renameat2
+    except (OSError, AttributeError):
+        return None
+    fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    fn.restype = ctypes.c_int
+    return fn
+
+
+def _rename_noreplace(src: Path, dst: Path) -> None:
+    """Rename ``src`` to ``dst``; :class:`FileExistsError` if ``dst`` exists."""
+    fn = _renameat2()
+    if fn is not None:
+        if fn(_AT_FDCWD, os.fsencode(src), _AT_FDCWD, os.fsencode(dst), _RENAME_NOREPLACE) == 0:
             return
-    print(
-        f"[records] WARNING: could not put {claim.name} back at {src}; it is left in {claim.parent}",
-        file=sys.stderr,
-    )
+        err = ctypes.get_errno()
+        if err not in (errno.ENOSYS, errno.EINVAL):  # EINVAL: the filesystem lacks the flag
+            raise OSError(err, os.strerror(err), str(dst))
+    if os.path.lexists(dst):  # the fallback: a check, then a rename (best effort)
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(dst))
+    os.rename(src, dst)
 
 
 def _create(dest_dir: Path, name: str, data: bytes, mode: int) -> None:
