@@ -65,8 +65,8 @@ def inventory(t: Target, a: Adapters) -> Result:
     for rel, text in a.tree.files():
         if not _is_inventory(rel):
             continue
-        stem = PurePosixPath(rel).stem
-        if "host_vars" in _parts(rel) and stem.lower() == t.name.lower():
+        hv = _host_vars_guest(rel)
+        if hv is not None and hv.lower() == t.name.lower():
             hits.append(f"{rel}: host_vars file for the guest")
             a.claimed.add(rel)
             continue
@@ -334,20 +334,73 @@ def _fold(s: str) -> str:
     return s.lower().replace("-", "_").replace(".", "_")
 
 
+def _host_vars_guest(rel: str) -> str | None:
+    """The guest a host_vars path names: ``host_vars/app.yml`` and ``host_vars/app/main.yml``
+    both name ``app``."""
+    raw = PurePosixPath(rel).parts
+    low = [p.lower() for p in raw]
+    if "host_vars" not in low:
+        return None
+    i = low.index("host_vars")
+    if i + 1 >= len(raw):
+        return None
+    name = raw[i + 1]
+    return PurePosixPath(name).stem if i + 2 == len(raw) else name
+
+
+def _known_guests(t: Target, a: Adapters) -> set[str]:
+    """Other guests that exist: the snapshot's ``guests`` plus the tree's host_vars stems."""
+    known = set(a.known_guests)
+    if a.tree is not None:
+        for rel, _ in a.tree.files():
+            g = _host_vars_guest(rel)
+            if g:
+                known.add(g)
+    own = {_fold(k) for k in (t.name, *t.aliases) if k}
+    return {g for g in known if _fold(g) not in own}
+
+
+AMBIGUOUS = "AMBIGUOUS"  # item prefix: may belong to another guest, so review it, never delete
+
+
 @plane("secret-names")
 def secret_names(t: Target, a: Adapters) -> Result:
     """Secret-store variable NAMES only.  ``app-core`` (or an ``--alias``) also matches
-    ``app_core_password``, and is word-bounded like every other plane: the action is to
-    delete the entries, so a live sibling's secret must never be flagged."""
+    ``app_core_password``, and is word-bounded like every other plane.  The prefix is still
+    ambiguous (key ``app`` matches ``app_core_password``), so a name that also belongs to
+    another known guest is reported ``AMBIGUOUS`` (review), never as a name to delete."""
     if a.secrets is None:
         return _skip("secret-names", "no adapter configured")
     try:
         names = [str(n) for n in a.secrets.entries()]
     except Unreachable as exc:
         return _skip("secret-names", f"unreachable: {exc}")
-    pats = [_secret_key_pattern(k) for k in (t.name, *t.aliases) if k]
-    hits = [n for n in names if any(p.search(_fold(n)) for p in pats)]
-    return _verdict("secret-names", hits, "no secret named for it", "secret name(s) remain")
+    keys = [(_fold(k), _secret_key_pattern(k)) for k in (t.name, *t.aliases) if k]
+    others = {g: _secret_key_pattern(g) for g in _known_guests(t, a)}
+    hits: list[str] = []
+    ambiguous: list[str] = []
+    for n in names:
+        f = _fold(n)
+        matched = [len(k) for k, p in keys if p.search(f)]
+        if not matched:
+            continue
+        # a name belongs to the most specific key: another guest owns it only when its key is
+        # longer than every target key that matched (key `app` vs guest `app-core`), never when
+        # it is shorter (target `app-core` vs guest `app`: `app_core_*` is the target's own)
+        owners = sorted(
+            g for g, p in others.items() if p.search(f) and len(_fold(g)) > max(matched)
+        )
+        if owners:
+            ambiguous.append(f"{AMBIGUOUS} {n}: may belong to guest {', '.join(owners)}")
+        else:
+            hits.append(n)
+    if hits:
+        return Result("secret-names", Status.REMNANT, "secret name(s) remain", hits + ambiguous)
+    if ambiguous:
+        return Result(
+            "secret-names", Status.REVIEW, "ambiguous: name(s) may be another guest's", ambiguous
+        )
+    return _verdict("secret-names", [], "no secret named for it", "")
 
 
 @plane("dns")

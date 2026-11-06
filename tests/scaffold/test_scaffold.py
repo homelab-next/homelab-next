@@ -87,15 +87,15 @@ def test_role_checker_rejects_damage(tmp_path):
 
 def test_schema_checker_rejects_damage(tmp_path):
     out = scaffold.new("schema", "thing", tmp_path)
-    shutil.rmtree(out / "negatives")
+    shutil.rmtree(out / "negative")
     assert any("negative" in p for p in scaffold.verify("schema", out))
     out2 = scaffold.new("schema", "thing2", tmp_path)
-    (out2 / "examples" / "valid.json").write_text(
+    (out2 / "examples" / "thing2.valid.json").write_text(
         json.dumps({"id": "BAD ID", "schema_version": "1.0.0"})
     )
     assert any("example rejected" in p for p in scaffold.verify("schema", out2))
     out3 = scaffold.new("schema", "thing3", tmp_path)
-    (out3 / "negatives" / "missing-id.json").write_text(
+    (out3 / "negative" / "thing3.missing-id.json").write_text(
         json.dumps({"id": "ok", "schema_version": "1.0.0"})
     )
     assert any("negative was accepted" in p for p in scaffold.verify("schema", out3))
@@ -154,3 +154,24 @@ def test_every_scaffolded_file_has_spdx_where_commentable(tmp_path):
         for f in out.rglob("*"):
             if f.is_file() and f.suffix in (".py", ".yml", ".md"):
                 assert "SPDX-License-Identifier: Apache-2.0" in f.read_text(), f
+
+
+def test_fresh_schema_scaffold_passes_x03(tmp_path):
+    from homelabnext.invariants.api import PASS, Context
+    from homelabnext.invariants.plugins.pillar_x import _x03_generic
+
+    scaffold.new("schema", "widget", tmp_path)
+    res = _x03_generic(Context(tmp_path))
+    assert res.status == PASS, res.evidence
+
+
+def test_schema_verify_reports_an_x03_failure(tmp_path):
+    out = scaffold.new("schema", "widget", tmp_path)
+    (out / "examples" / "widget.valid.json").rename(out / "examples" / "valid.json")
+    assert any(p.startswith("X-03") for p in scaffold.verify("schema", out))
+
+
+def test_names_with_a_trailing_newline_are_refused(tmp_path):
+    for kind, name in (("schema", "abc\n"), ("role", "abc\n")):
+        with pytest.raises(core.ScaffoldError):
+            scaffold.new(kind, name, tmp_path)

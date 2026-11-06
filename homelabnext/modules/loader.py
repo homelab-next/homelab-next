@@ -548,11 +548,26 @@ def module_reader(tree: Tree, budget: Budget | None = None) -> ModuleReader:
     return ModuleReader(tree, budget)
 
 
+# ``contributions`` is the module-level plane (the swap flow audits what a module contributed);
+# every other name must be a registered ``hnx decommission`` plane.
+AUDIT_EXTRA_PLANES = frozenset({"contributions"})  # accepted; no plane audits it yet
+
+
 def _record_problems(doc: Doc, mod_dir: Path, load) -> list[str]:
     """Each contributed file of a :data:`VALIDATED_KINDS` kind validates against its record type;
     files the rules index into have the shape they index."""
     out: list[str] = []
     c, mid = doc.get("contributes", {}), doc["id"]
+    from homelabnext.decommission.planes import PLANES
+
+    known = set(PLANES) | AUDIT_EXTRA_PLANES
+    audit = doc.get("lifecycle", {}).get("remove", {}).get("audit", [])
+    unknown = sorted({a for a in audit if a not in known})
+    if unknown:
+        out.append(
+            f"lifecycle.remove.audit: unknown decommission plane(s) {', '.join(unknown)} "
+            f"(known: {', '.join(sorted(known))})"
+        )
 
     def read(rel: str) -> Any:
         try:

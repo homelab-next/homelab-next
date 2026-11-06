@@ -25,7 +25,8 @@ adapters or routes):
 5. **Cutover and rollback window**: flip the binding; the instance name stays.
 6. **Decommission**: the outgoing provider's issued credentials revoked, identifiers kept, released
    or tombstoned, `hnx decommission` plus the `contributions` plane (which takes a **module**
-   target, not only a guest) clean.
+   target, not only a guest) clean. The `contributions` plane is specified, not implemented:
+   `hnx decommission` has no such plane yet (see [follow-ups](follow-ups.md)).
 7. **Close** with an ADR reference.
 
 ### Swap record 1.2 (draft: `platform/module_swap` 1.0)

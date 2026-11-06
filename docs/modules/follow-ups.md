@@ -147,12 +147,14 @@ question 13 since; this draft applies those answers, and the operator may overri
 | 8 | Exclusive resources | **named on the site host** (`gpu0`), requested by kind with `exclusive: true` |
 | 9 | Status `module` field | renamed **`group`** in service 2.7 with a deprecated alias (spec only) |
 | 10 | Where modules live | **`modules/<id>/`** and overlay **`lab/modules/<id>/`**, `hnx_modules` namespace package, no shadowing |
-| 11 | Licence probes | **warn at 30 days, page the owner at 7, red on expiry** |
+| 11 | Licence probes | **warn at 30 days, page the owner at 7, red on expiry** (**specified, not implemented**: no probe reads `licence.expires` yet) |
 | 12 | Reviews | manifests **join the review policy**; human approval for credentials, control plane, data grants, egress and privileged slots |
 | 13 | Where the site's network scope lives | in the **private overlay's selection** (`scope:` in `lab/modules.yml`); the public repository holds the schema, documentation-range examples and the enforcement ([the network scope](network-scope.md#the-network-scope); decided 2026-10-23) |
 
 Still open:
 
+- **The licence-expiry probe** (decision 11): specified, not implemented. No invariant, rule or
+  timer reads `licence.expires`; build it as an invariant before relying on it.
 - **Downtime migrations and derived-data rebuilds.** Some swaps need ordered downtime, and some data
   is rebuilt rather than exported (an embedder swap invalidates every vector, which must be
   re-embedded from the source records). Candidate fields: `migration.downtime: true` and
@@ -167,3 +169,5 @@ Still open:
   exist no module can provide them, by the privileged-slot rule.
 - **The loader's own trust boundary**: whether module code runs in-process (as specified) or in a
   sandboxed worker for third-party origins.
+- The `contributions` decommission plane is specified, not implemented: the loader accepts it in
+  `lifecycle.remove.audit`, but `hnx decommission` has no such plane, so nothing audits it yet.

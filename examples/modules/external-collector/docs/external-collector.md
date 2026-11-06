@@ -7,5 +7,5 @@ offers the files to a sandbox through the `sample-handoff` interface, and keeps 
 `external-collector-analyst`, that reports on them in a real and a shadow lane.
 
 Everything it adds to the platform is listed under `contributes` in
-[module.yml](../module.yml); removing the module and running the decommission audit's
-`contributions` plane shows anything left behind.
+[module.yml](../module.yml); the decommission audit's `contributions` plane (specified, not implemented yet) is meant to
+show anything left behind after removal.

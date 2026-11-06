@@ -968,7 +968,7 @@ def _defs() -> dict[str, Any]:
                         ),
                         "audit": arr(
                             ref("slug"),
-                            "Decommission planes (homelabnext/decommission/planes.py's registry; the loader checks the names) plus the contributions plane.",
+                            "Decommission planes (homelabnext/decommission/planes.py's registry) plus the contributions plane (specified, not implemented: no decommission plane reads it yet); the loader refuses any other name.",
                             1,
                         ),
                     },
@@ -1033,7 +1033,7 @@ def _defs() -> dict[str, Any]:
                 "tier": text(80, "The feature tier the site relies on."),
                 "expires": {
                     "$ref": COMMON + "date",
-                    "description": "The licence probe warns 30 days ahead, pages the owner through notify at 7, and turns red on the day.",
+                    "description": "Specified, not implemented: a licence probe that warns 30 days ahead, pages the owner through notify at 7 and turns red on the day. Nothing reads this field yet.",
                 },
                 "renewal": text(200),
             },
@@ -1118,7 +1118,10 @@ def module_schema() -> dict[str, Any]:
             "kind": {"enum": ["provider", "feature", "core"]},
             "title": text(80),
             "description": text(500),
-            "owner": ref("slug", "Owning team; the licence probe pages it."),
+            "owner": ref(
+                "slug",
+                "Owning team; the specified (not yet implemented) licence probe would page it.",
+            ),
             "author": {
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_-]*:[A-Za-z0-9._@-]+" + G,

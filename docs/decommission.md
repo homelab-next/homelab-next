@@ -47,7 +47,10 @@ A plane is a function `(Target, Adapters) -> Result` registered with `@plane("na
 Word-bounded matching: `app-core` does not match `app-core-2` or `x.app-core`. `secret-names`
 compares names with `-` and `.` folded to `_`: `app-core` (or an `--alias`) matches `app_core`
 and `app_core_db_password`, never `myapp_core_token` or a numbered sibling's
-`app_core_2_db_password`, because its action is to delete the entries. A path already
+`app_core_2_db_password`, because its action is to delete the entries. The prefix is still ambiguous (the key `app` also
+matches `app_core_password`), so a hit that also matches another known guest (the snapshot's
+`guests` list, or a `host_vars/<guest>` file in the tree) is reported `AMBIGUOUS` for review and
+never as a name to delete. A path already
 reported by `inventory`, `playbooks` or `iac` is not repeated by `live-refs`.
 
 ## Adapters and fakes
