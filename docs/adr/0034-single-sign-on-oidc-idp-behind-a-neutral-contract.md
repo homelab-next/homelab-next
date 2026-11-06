@@ -74,6 +74,12 @@ one IdP product.
    2xx and redirects a 401 to `/oauth2/sign_in` (the return target `rd` query-escaped, so a
    query with `&` comes back whole). A public `auth: idp` service with no auth proxy in the
    registry fails generation rather than being published without a login.
+   *Note (2026-11-06):* the registry refuses any row with a `public_hostname` whose `auth` is
+   missing, `none` or `mtls` (`a public route needs auth`, as for a module's rows): a public
+   site is `auth: idp` (forward auth) or `auth: own` (the app's own login), since the edge
+   terminates TLS and checks no client certificate; the edge's own row has no public site.
+   `auth: own` is the row's own claim that the app has a login: the registry cannot check it,
+   so a reviewer checks it against the app before accepting a public `own` row.
    **The edge lets in only the service's own groups, not every realm user.** Each site imports
    the snippet with one argument, the sorted union of the groups of its `roles` (rule 5),
    URL-encoded and joined by `,`, and the check is `/oauth2/auth?allowed_groups=<them>`. The

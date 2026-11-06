@@ -784,6 +784,38 @@ def test_spec_ceiling_and_unit_and_criterion_and_record_rules(tmp_path):
         assert needle in probs, needle
 
 
+@pytest.mark.parametrize(
+    "auth,needle",
+    [
+        ("none", "a public route needs auth"),
+        ("mtls", "mtls is never checked"),
+        ("own", None),
+        ("idp", None),
+    ],
+)
+def test_a_public_module_row_needs_idp_or_own_like_a_core_row(tmp_path, auth, needle):
+    """The module rule matches the core registry's (registry/model.py): the edge terminates TLS
+    and checks no client certificate, so a public row with auth: mtls is refused as well as none."""
+    import shutil
+
+    mod = tmp_path / "external-collector"
+    shutil.copytree(MODULES_DIR / "external-collector", mod)
+    rows = load(mod / "registry/services.yml")
+    rows["services"]["external-collector-receiver"].update(
+        public_hostname="collector.example.org", auth=auth
+    )
+    (mod / "registry/services.yml").write_text(yaml.safe_dump(rows))
+    probs = [
+        p
+        for p in mr.module_problems(MODULES["external-collector"], mod, SLOTS, load, (tmp_path,))
+        if "public route" in p
+    ]
+    if needle is None:
+        assert probs == []
+    else:
+        assert any(needle in p for p in probs), probs
+
+
 def test_row_status_sources_equal_the_listed_ones(tmp_path):
     """Negative: a status source declared only on a row (not in contributes.status_sources) is
     refused, and with directories it joins name ownership (so a longer module id's name is caught)."""
