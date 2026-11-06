@@ -14,10 +14,14 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 - A profile is **compiled**, not hand-assembled, so "this agent can never do more than its
   ceiling" is a property of the compiler rather than a review habit. The ceiling comes from a
   policy file owned separately from the specs, so editing a spec cannot raise it.
-- A context pack is a **pure function** of a manifest and its inputs, so identical inputs give an
-  identical pack and hash. A job log that records the hash can be replayed and audited.
+- A context pack is a **pure function** of a manifest, its inputs and the assembly clock (`now=`,
+  read only to age pre-gate outputs whose gate sets `max_age_s`), so identical inputs at the same
+  clock give an identical pack and hash. A job log that records the hash can be replayed and
+  audited, at the same `now` (`hnx agent pack --now`): the same inputs assembled later can defer.
 - An agent never runs blind: a required pre-gate that is missing, stale or failed **defers** the
-  job with a reason instead of letting the agent infer health from raw data.
+  job with a reason instead of letting the agent infer health from raw data. So does one whose
+  output does not match `agent/pregate_output`, names another gate, or is older than the gate's
+  `max_age_s`.
 - The broker is **default deny**, and an approval is bound to the digest of the exact request it
   approved, so a request changed after approval no longer matches.
 
@@ -310,7 +314,8 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
 
 - **Order**: tier (`stable`, `session`, `volatile`), then section name. The stable prefix is
   identical across runs; `stable_prefix_digest` exposes it for caching.
-- **Pure**: no I/O, no clock, arguments untouched. The hash is the digest of the pack, so any
+- **Pure**: no I/O, arguments untouched, and the only clock is `now=` (default: the current UTC
+  time), read only for gates with `max_age_s`. The hash is the digest of the pack, so any
   changed byte of any input changes it; dict, list and process (`PYTHONHASHSEED`) ordering do not.
 - **No silent truncation**: a section over its `max_chars` is cut and listed; when the pack
   exceeds `budget_chars`, optional volatile then session sections are dropped and required ones
@@ -319,6 +324,15 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
 - **Deferral**: a missing required section, or a required pre-gate that is missing, `stale` or
   `failed`, makes `status: deferred` with `deferred_reasons`. Pre-gate outputs are included in the
   pack as volatile sections so the agent sees the verdict itself.
+- **Pre-gate checks**: before an output is used it must match `agent/pregate_output` (so a status
+  outside `ok`/`degraded`/`stale`/`failed` fails), its `gate` must be the id it is filed under,
+  and when the manifest gives the gate a `max_age_s`, its `observed_at` must be no older than that
+  and no more than 300 s in the future. The clock is `assemble_pack(..., now=)`, a callable
+  returning an aware datetime (default: the current UTC time; anything else raises `SpecError`);
+  `start_session(..., now=)` passes it through, and `hnx agent pack --now <RFC 3339 time>` sets
+  it (default: the real clock, so a stale pre-gate file exits 3). An output that fails a check is
+  not rendered: a required gate's defers the pack with the reason, an optional gate's is listed in
+  `omitted`.
 - **Screening (A-03)**: before fencing, every `source: input` section is passed through the
   screener (`homelabnext/agent/screen.py`), which replaces secrets and PII with typed labels,
   `[REDACTED:<type>:<n>]`, stable across the pack (the same address is the same label in every
@@ -357,15 +371,24 @@ pack, pack_hash = assemble_pack(manifest, {"sections": {...}, "pregates": {...}}
   leak 0 values into the rendered pack and keep redaction precision >= 0.95.
 - Section text is fenced with the manifest's delimiter and tier so untrusted input stays
   distinguishable from instructions. Stable sections (manifest text) open with
-  `<delim> <name> [stable] <delim>`. Session and volatile sections are input, so their fences
-  carry a per-pack nonce derived from the digest of that content
+  `<delim> <name> [stable] <delim>`; a `source: input` section may not be `tier: stable`
+  (`assemble_pack`, `start_session`'s `session_problems` and `hnx agent lint`'s `readers` rule
+  all refuse it, and the `sessions` rule again for each profile the manifest names), since a
+  stable section is neither nonce-fenced nor escaped. Session and volatile sections are input, so
+  their fences carry a per-pack nonce derived from the digest of that content
   (`<delim> <name> [<tier>] <nonce> <delim>` ... `<delim> end <name> <nonce> <delim>`), and any line
   of their text that starts with the delimiter is prefixed `[escaped] `. A line is what any line
   boundary ends (CR, VT, FF, NEL, U+2028 and U+2029 as well as LF), and the test reads the line
-  as a reader sees it: NFKC-folded (a full-width delimiter reads as the ASCII one), with format characters, combining
-  marks and blank fillers (U+3164, U+FFA0, U+115F, U+1160, U+2800) dropped wherever they are and
-  leading whitespace skipped; the template lint and the
-  injection eval's fake model read lines the same way. Input therefore cannot
+  as a reader sees it: NFKD-folded (a full-width delimiter reads as the ASCII one, and a
+  precomposed accented letter as its base letter), with format characters, combining marks and
+  blank fillers (U+3164, U+FFA0, U+115F, U+1160, U+2800) dropped wherever they are and leading
+  whitespace skipped. The delimiters are folded the same way, trailing whitespace dropped, before
+  they are compared, so a full-width, space-led, zero-width-laced or accented (precomposed or
+  decomposed) custom delimiter is matched by its plain-looking forgery too. A delimiter holding a
+  line break, or that reads as fewer than 4 visible characters, cannot fence input and is refused
+  wherever the others are (`assemble_pack`, `session_problems`, the `readers` lint rule) and by
+  the prompt-template lint. The template lint and the injection eval's fake model read lines the
+  same way. Input therefore cannot
   open a section of its own, least of all a stable one. This is a structural guarantee about the
   text, not about the model: a model can still be persuaded by data it reads, so the broker, not
   the pack, is what limits what an agent can do.
