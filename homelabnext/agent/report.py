@@ -6,17 +6,27 @@ pack assembler recorded for something the pack **rendered** (:func:`~homelabnext
 rendered_identifiers`): a knowledge item's ``digest``, ``file_digest`` or record uid, or an input
 item's ``digest`` or ``uid``.  Text is never a source: a digest written in a cite's ``ref``, a
 section body or the summary counts for nothing, and neither does an item the budget dropped.  A
-``mem:`` source names a revision of the pack's ``memory`` block, which no pack carries until
-ADR-0037 PR 3, so every ``mem:`` source is refused, with one message whoever's memory it names
-(decision 11: the check is no existence oracle).
+``mem:`` source must name a revision of the pack's ``memory`` block (decision 11): the block
+platform code rendered into the pack from the profile's own store.  A ``mem:`` source naming
+another owner is refused first, before anything is looked up, with the same message as one the
+block does not show, so the check is no existence oracle.  No update may cite any revision of its
+own key.
+
+Served reports (decision 18).  A report served to a profile other than its author carries its
+``memory_updates`` as ``{"count": n}`` only (:func:`served_report`): otherwise the report would be
+a cross-agent read of memory.  Every place that hands a report to another profile calls it: the
+ADR-0035 renderer and the context store's level reads by digest once they serve reports.
 """
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from typing import Any
 
-from .pack import PREGATE_PREFIX, rendered_identifiers
+from .compiler import VerifiedProfile, require_verified
+from .deny import parse_mem_ref
+from .pack import PREGATE_PREFIX, pack_memory, pack_profile, rendered_identifiers
 from .schemas import schema_errors
 
 #: list limits kept in code, not in the schema (tightening a list is not additive; ADR-0037
@@ -24,11 +34,14 @@ from .schemas import schema_errors
 MAX_MEMORY_UPDATES = 64
 MAX_CITES = 128
 MEM_PREFIX = "mem:"
-#: the one refusal of a ``mem:`` source, whoever's memory it names and whether or not it exists
+#: the one refusal of a ``mem:`` source the pack's memory block does not show: whoever's memory
+#: it names and whether or not the revision exists (ADR-0037 decision 11)
 MEM_REFUSAL = (
-    "a mem: source must name a revision in the pack's memory block, and this pack shows none "
-    "(memory blocks arrive with ADR-0037 PR 3)"
+    "a mem: source must name a revision of this profile's own memory that the pack's memory "
+    "block shows"
 )
+#: the refusal of an update citing a revision of the key it writes
+MEM_OWN_KEY = "an update may not cite any revision of its own key"
 
 
 def limit_problems(report: Mapping[str, Any]) -> list[str]:
@@ -46,12 +59,14 @@ def source_problems(updates: Any, pack: Mapping[str, Any]) -> list[str]:
     """Every source of ``updates`` that is not an identifier ``pack`` rendered, by position only
     (a source is never echoed).  ``updates`` is assumed schema-valid."""
     known = rendered_identifiers(pack)
+    bound = pack_profile(pack)
+    shown = {(e.get("scope"), e.get("key"), e.get("rev")) for e in pack_memory(pack)}
     problems = []
     for n, u in enumerate(updates if isinstance(updates, list) else []):
         for i, src in enumerate((u.get("sources") or ()) if isinstance(u, Mapping) else ()):
             where = f"memory_updates/{n}/sources/{i}"
             if isinstance(src, str) and src.startswith(MEM_PREFIX):
-                problems.append(f"{where}: {MEM_REFUSAL}")
+                problems += [f"{where}: {p}" for p in mem_problems(src, u, bound, shown)]
             elif src not in known:
                 problems.append(
                     f"{where}: not an identifier this pack rendered (a source is the digest or "
@@ -59,6 +74,51 @@ def source_problems(updates: Any, pack: Mapping[str, Any]) -> list[str]:
                     "text)"
                 )
     return problems
+
+
+def mem_problems(
+    src: str,
+    update: Mapping[str, Any],
+    bound: tuple[str, str] | None,
+    shown: set[tuple[Any, Any, Any]],
+) -> list[str]:
+    """Why the ``mem:`` source ``src`` of ``update`` may not be cited from a pack bound to
+    ``bound`` whose memory block shows ``shown`` (``(scope, key, rev)``).  The owner is checked
+    first and refused with the same message as an unshown revision, before anything is looked up
+    (ADR-0037 decision 11)."""
+    ref = parse_mem_ref(src)
+    if ref is None or bound is None or ref[0] != bound[0]:
+        return [MEM_REFUSAL]
+    _, scope, key, rev = ref
+    if (scope, key, rev) not in shown:
+        return [MEM_REFUSAL]
+    if (scope, key) == (update.get("scope"), update.get("key")):
+        return [MEM_OWN_KEY]
+    return []
+
+
+def served_report(
+    report: Mapping[str, Any], *, reader: VerifiedProfile, author: str
+) -> dict[str, Any]:
+    """``report`` as it may be served to ``reader`` (ADR-0037 decision 18): unchanged for its own
+    author, and with ``memory_updates`` replaced by ``{"count": n}`` for any other profile, so no
+    key, value or source of the author's memory reaches it.
+
+    ``author`` is the author the caller validated (the profile the report's pack was bound to,
+    :func:`validate_report`), never the report's own ``profile`` field, which the model wrote; a
+    report whose ``profile`` is not ``author`` is refused (``ValueError``), since it was not
+    validated as that author's.  The result is a served view, not a ``report_result`` (it does
+    not validate as one).  Call it wherever a report is handed to a profile other than its
+    author: the ADR-0035 renderer, and the context store's level reads by digest once they serve
+    reports."""
+    require_verified(reader, "served_report")
+    if not isinstance(author, str) or report.get("profile") != author:
+        raise ValueError("served_report serves only a report validated as author's own")
+    out = copy.deepcopy(dict(report))
+    if author != reader["id"]:
+        updates = out.get("memory_updates")
+        out["memory_updates"] = {"count": len(updates) if isinstance(updates, list) else 0}
+    return out
 
 
 def validate_report(
@@ -73,6 +133,7 @@ def validate_report(
     * at most :data:`MAX_MEMORY_UPDATES` memory updates and :data:`MAX_CITES` cites;
     * ``pack_id`` equals the pack hash, so a report cannot be attached to the wrong context;
     * a deferred pack can only produce a ``deferred`` report (no work on guessed context);
+    * ``profile`` is the profile the pack was assembled for, when it is bound to one;
     * every cite names a source present in the pack;
     * every memory update's source is an identifier the pack rendered (:func:`source_problems`);
     * for an ``ok`` report, every ``must_cite`` source of the manifest is cited.
@@ -85,6 +146,10 @@ def validate_report(
         return problems
     if report["pack_id"] != pack_hash:
         problems.append("pack_id does not equal the hash of the pack the agent was given")
+    bound = pack_profile(pack)
+    if bound is not None and report["profile"] != bound[0]:
+        # the author is the profile the pack was assembled for, never what the report claims
+        problems.append("profile is not the profile the pack was assembled for")
     if pack.get("status") == "deferred" and report["status"] != "deferred":
         problems.append("pack was deferred; the report must have status 'deferred'")
     known = {s["name"] for s in pack.get("sections", [])}
