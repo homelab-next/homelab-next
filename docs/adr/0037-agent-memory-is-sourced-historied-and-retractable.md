@@ -533,11 +533,12 @@ was shown, never from what the model says about its sources.
     - The store asks its `Verifier` (`MemoryStore(verifier=)`) about every `add`, `replace` and
       `verify` of a batch once the batch is accepted, inside the transaction; it is never asked
       about a refused batch, whose values must not leave the store (the record cap, the byte cap,
-      with the bytes its stamps can add reserved, and the exposure budget are checked before
-      it is asked). The request carries the record's label, and a verifier must not send the value past that label's egress ceiling
-      (ADR-0033). Only `True` stamps the record's `verified_at` (the record's own time). A
-      `replace` the verifier does not confirm clears the entry's `verified_at`, since the value
-      changed. A `verify` it answers `False` is a statement that the fact does not hold: the
+      with the bytes its stamps can add reserved, and the exposure budget are checked before it
+      is asked; a write that fails after the verifier was asked (I/O) is not a refusal). The
+      request carries the record's label, and a verifier must not send the value past that
+      label's egress ceiling (ADR-0033). Only `True` stamps the record's `verified_at` (the
+      record's own time). A `replace` the verifier does not confirm clears the entry's
+      `verified_at`, since the value changed. A `verify` it answers `False` is a statement that the fact does not hold: the
       record is marked `refuted` and the entry's `verified_at` is cleared. A verifier that cannot
       answer (it raises, or returns anything but a bool) verifies nothing and refuses nothing,
       and a `verify` it cannot answer keeps the earlier stamp.

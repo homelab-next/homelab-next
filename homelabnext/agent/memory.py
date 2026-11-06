@@ -158,7 +158,8 @@ Staleness (ADR-0037 decision 15, PR 4):
   sources to the entry's, and leaves the value unchanged.
 * **``verified_at``** is absent until a :class:`Verifier` (``MemoryStore(verifier=...)``) sets
   it.  Once a batch is accepted (never for a refused one: the record and byte caps and the
-  exposure budget are checked first, with the bytes a stamp adds reserved), the store asks the
+  exposure budget are checked first, with the bytes its stamps can add reserved; a write that
+  fails after the verifier was asked (I/O) is not a refusal), the store asks the
   verifier about every ``add``, ``replace`` and ``verify`` in it, inside the transaction, with a
   :class:`VerifyRequest` (which carries the record's label, so a verifier can keep to its egress
   ceiling); only ``True`` stamps the record's ``verified_at`` (its own ``at``).  A ``replace`` the
@@ -1468,7 +1469,7 @@ def _apply(
     ``verifier`` (ADR-0037 decision 15) is asked about every ``add``, ``replace`` and ``verify``
     the batch appends, once the batch is accepted (never about a refused one, whose values must
     not leave the store): after every check, the record cap, the byte cap and the exposure
-    budget included, which a trial run of :func:`_settle` makes with the bytes the answers can
+    budget included, which a trial run of :func:`_settle` makes with the bytes its stamps can
     add reserved; ``True`` stamps the record's ``verified_at`` and ``False`` marks a ``verify``
     record ``refuted``."""
     entries: Memory = stored["entries"]
@@ -1621,7 +1622,7 @@ def _apply(
         # the record cap, the byte cap and the exposure budget are checked BEFORE the verifier
         # is asked, so it never sees a value from a batch a limit refuses.  Its answers must be
         # on the records before compaction (a range record carries the folded stamp), so this
-        # trial run, on copies, reserves the most they can add: every asked record stamped
+        # trial run, on copies, reserves the bytes its stamps can add: every asked record stamped
         # ``verified_at`` (longer than ``refuted``, and on every range record any answers could
         # leave one on).  Record counts and exposures do not depend on the answers.
         asked = {id(rec) for rec, _ in ask}

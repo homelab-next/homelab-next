@@ -931,16 +931,16 @@ decision 15). A model can reassert a fact; only a verifier verifies one.
   `MemoryStore(verifier=...)` asks it about every `add`, `replace` and `verify` in a batch once
   the batch is accepted (never about a refused one, whose values must not leave the store: the
   record cap, the byte cap, with the bytes its stamps can add reserved, and the exposure budget
-  are checked before it is asked), inside the transaction (so it should be quick and never
-  write or call back into the store),
-  with the owner, scope, key, op, rev, the value the entry will hold, its digest, the effective
-  sources, the pack id, whether the write was checked and the record's label (`tlp`): a verifier
-  must not send the value or its sources past that label's egress ceiling (ADR-0033). Only
-  `True` stamps the record's `verified_at` (its own `at`). A `replace` the verifier does not
-  confirm clears the entry's `verified_at` (the value changed). A `verify` it answers `False`
-  (the fact does not hold) is recorded `refuted: true` and clears it too; one it cannot answer
-  (an exception, logged by type and never echoed, or anything but a bool) keeps the earlier
-  one.
+  are checked before it is asked; a write that fails after the verifier was asked (I/O) is not a
+  refusal), inside the transaction (so it should be quick and never write or call back into the
+  store), with the owner, scope, key, op, rev, the value the entry will hold, its digest, the
+  effective sources, the pack id, whether the write was checked and the record's label (`tlp`):
+  a verifier must not send the value or its sources past that label's egress ceiling
+  (ADR-0033). Only `True` stamps the record's `verified_at` (its own `at`). A `replace` the
+  verifier does not confirm clears the entry's `verified_at` (the value changed). A `verify` it
+  answers `False` (the fact does not hold) is recorded `refuted: true` and clears it too; one it
+  cannot answer (an exception, logged by type and never echoed, or anything but a bool) keeps
+  the earlier one.
 - **Stale reads.** `read(profile, scope, stale_after=timedelta)` adds `stale: {key:
   {reasserted_at, verified_at?}}` for each returned entry whose `verified_at` is absent, older
   than the budget or later than now (a stamp from a clock that ran ahead, which an operator

@@ -298,18 +298,21 @@ def test_a_batch_refused_by_the_byte_cap_never_reaches_the_verifier(backend):
     assert not backend.load(p["id"]).get("log")
 
 
-def test_the_byte_cap_reserves_the_stamp_the_verifier_may_add(tmp_path):
+@pytest.mark.parametrize("slack", [0, len(',"refuted":true')])
+def test_the_byte_cap_reserves_the_stamp_the_verifier_may_add(slack):
     """A batch that fits only without its ``verified_at`` stamp is refused before the verifier
-    is asked (the trial run reserves the stamp); the same batch with no verifier fits."""
+    is asked (the trial run reserves the stamp); the same batch with no verifier fits.  With
+    ``slack`` the record leaves room for ``refuted`` but not ``verified_at``, so reserving the
+    shorter stamp fails this test."""
     cap = 1024
     p = _profile(memory_limits={"bytes": {"analyst": cap}})
     probe = InMemoryBackend()
     put(MemoryStore(probe, now=Clock()), p, [up("add", "a", "v")])
     (rec,) = probe.load(p["id"])["log"]
-    fill = "v" + "x" * (cap - _size(rec))  # exactly the cap, unstamped
+    fill = "v" + "x" * (cap - slack - _size(rec))  # cap - slack bytes, unstamped
     plain = InMemoryBackend()
     put(MemoryStore(plain, now=Clock()), p, [up("add", "a", fill)])
-    assert _size(plain.load(p["id"])["log"][0]) == cap
+    assert _size(plain.load(p["id"])["log"][0]) == cap - slack
     stub = StubVerifier()
     with pytest.raises(MemoryLimitError, match="byte cap"):
         put(MemoryStore(InMemoryBackend(), now=Clock(), verifier=stub), p, [up("add", "a", fill)])
@@ -460,6 +463,31 @@ def test_compaction_keeps_the_stamps_of_what_it_folds(backend):
     )
     assert fold(stored["log"]) == stored["entries"]
     assert stored["entries"][FL]["cursor"]["verified_at"] == stamp(clock.t)
+
+
+def test_the_trial_run_ages_tombstones_on_a_copy_of_the_entries(backend):
+    """The limit trial run before the verifier is asked ages tombstones out of a copy of the
+    entries: aging out of the real ones would leave the real pass refolding a key it no longer
+    holds."""
+    ledger = _profile(
+        memory_scopes=["analyst", FL],
+        platform_scopes=[FL],
+        memory_limits={"tombstones": {FL: 1}, "records": {FL: 8}},
+    )
+    clock = Clock()
+    store = MemoryStore(backend, now=clock, verifier=StubVerifier())
+    store.apply_updates(
+        ledger, [up("add", "a", "A", scope=FL), up("add", "b", "B", scope=FL)], unchecked=True
+    )
+    clock.tick()
+    store.apply_updates(
+        ledger,
+        [up("retire", "a", scope=FL), up("retire", "b", scope=FL), up("add", "c", "C", scope=FL)],
+        unchecked=True,
+    )
+    stored = backend.load(ledger["id"])
+    assert set(stored["entries"][FL]) == {"b", "c"}
+    assert fold(stored["log"]) == stored["entries"]
 
 
 def test_a_folded_record_carries_verified_at_into_the_fold(backend):
