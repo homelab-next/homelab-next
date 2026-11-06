@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """A loopback HTTP stand-in for the ntfy publish and poll API the ``notify`` adapter uses.
 
-Shaped after ntfy 2.32 (``server/server.go``, ``message_cache.go``): ``POST /<topic>`` with the
+Shaped after ntfy 2.33 (``server/server.go``, ``message_cache.go``): ``POST /<topic>`` with the
 ``Title``/``Priority``/``Tags`` headers (``X-`` forms too) and the body as the message, trimmed
 (``strings.TrimSpace``) and ``triggered`` when empty; a title over 1024 bytes (HTTP 400, code
 40057) or tags over 512 bytes in all (40058) refused, as since 2.28;
