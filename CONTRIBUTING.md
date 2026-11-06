@@ -288,6 +288,21 @@ never passed. `make fix-check` runs the first half locally
 (`make fix-check PROVE=1` both). A fix that cannot have a test (a documentation typo, a CI setting)
 says why in a trailer, `No-regression-test: <reason>`; the gate lists every waiver.
 
+## Experimental and frozen components
+
+`tools/experimental.yml` lists the components taken out of the blocking set
+([docs/build-order.md](docs/build-order.md), "Experimental and frozen components"): their tests,
+gates, invariants and code block no merge. So the list only shrinks. CI's `trusted-gates` job runs
+the base commit's `tools/experimental.py ratchet --base` against the change, and fails when the
+list adds a component, a `tests:` or `code:` path not equal to or under one the base lists, a gate,
+an invariant, a conformance capability, or a key the base's rules refuse. Removing an entry (the
+way back into the blocking set), moving one between components, and editing `why`, `until`,
+`status` or `docs` are free. Growth is the operator's decision: they apply the `experimental-growth`
+label to the pull request, and CI reads it from the event (adding or removing the label runs CI
+again). Agents never apply that label; to take something out of the blocking set, open the pull
+request and ask for it. `python tools/experimental.py ratchet --base origin/main` runs the check
+locally.
+
 ## Adding a capability
 
 1. Contract: a schema (with example and negative) or a Python protocol, listed in `docs/interfaces.md`.

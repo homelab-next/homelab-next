@@ -12,8 +12,10 @@ and nothing marks a test ``experimental`` except the list.
 from __future__ import annotations
 
 import datetime as dt
+import io
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -341,3 +343,177 @@ def test_the_coverage_gate_selects_its_tests_like_the_blocking_jobs(tmp_path, mo
     coverage_floor.run_tests(tmp_path / "g.json", ("tests/workflows",), ["homelabnext/workflows"])
     (cmd,) = cmds
     assert cmd[cmd.index("-m", 3) + 1] == ex.BLOCKING_SELECT
+
+
+# --- the ratchet: the list only shrinks against the base ------------------------------------
+
+BASE_LIST = {
+    "components": {
+        "engine": {
+            "status": "experimental",
+            "decided": dt.date(2026, 10, 31),
+            "why": "x",
+            "until": "y",
+            "docs": ["docs/engine.md"],
+            "tests": ["tests/engine", "tests/other/test_engine.py"],
+            "gates": ["python -m homelabnext.cli engine check"],
+            "invariants": ["R-09"],
+            "code": ["homelabnext/engine.py"],
+        }
+    }
+}
+
+
+def _git(root: Path, *args: str) -> str:
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "HOME": str(root),
+        "PATH": "/usr/bin:/bin",
+    }
+    cmd = ["git", "-C", str(root), *args]
+    return subprocess.run(cmd, capture_output=True, text=True, env=env, check=True).stdout.strip()
+
+
+def _write(root: Path, doc: object) -> None:
+    (root / "tools").mkdir(exist_ok=True)
+    (root / "tools" / "experimental.yml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """A repository whose one commit (the base) holds BASE_LIST, with every path the tests name."""
+    for rel in (
+        "docs/engine.md",
+        "tests/engine/test_a.py",
+        "tests/other/test_engine.py",
+        "tests/broker/test_broker.py",
+        "homelabnext/engine.py",
+        "homelabnext/broker.py",
+    ):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("\n", encoding="utf-8")
+    _write(tmp_path, BASE_LIST)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    return tmp_path, _git(tmp_path, "rev-parse", "HEAD")
+
+
+def _head(**changes) -> dict:
+    doc = yaml.safe_load(yaml.safe_dump(BASE_LIST))
+    doc["components"]["engine"].update(changes)
+    return doc
+
+
+def _ratchet(repo, doc: object, growth: str = "none") -> tuple[int, str]:
+    root, base = repo
+    _write(root, doc)
+    out = io.StringIO()
+    return ex.ratchet(root, base, {ex.GROWTH_ENV: growth}, out), out.getvalue()
+
+
+def test_the_unchanged_list_passes_the_ratchet(repo):
+    assert _ratchet(repo, BASE_LIST)[0] == 0
+
+
+def test_a_new_frozen_component_fails_the_ratchet(repo):
+    doc = yaml.safe_load(yaml.safe_dump(BASE_LIST))
+    doc["components"]["broker"] = {
+        **doc["components"]["engine"],
+        "status": "frozen",
+        "tests": ["tests/broker"],
+        "invariants": [],
+        "code": ["homelabnext/broker.py"],
+    }
+    rc, out = _ratchet(repo, doc)
+    assert rc == 1, out
+    assert "components.broker: a component the base does not list" in out
+    assert "components.broker.tests: tests/broker is not out of the blocking set" in out
+    assert "components.broker.code: homelabnext/broker.py is not out of the blocking set" in out
+
+
+@pytest.mark.parametrize(
+    "changes, words",
+    [
+        ({"tests": ["tests/engine", "tests/other/test_engine.py", "tests/broker"]}, "tests/broker"),
+        ({"tests": ["tests/engine", "tests/other"]}, "tests/other is not"),
+        ({"code": ["homelabnext/engine.py", "homelabnext/broker.py"]}, "homelabnext/broker.py"),
+        ({"invariants": ["R-09", "B-01"]}, "B-01"),
+        (
+            {"gates": ["python -m homelabnext.cli engine check", "python -m homelabnext.cli x"]},
+            "python -m homelabnext.cli x",
+        ),
+        ({"owner": "someone"}, "the base's rules refuse the list"),
+    ],
+)
+def test_a_path_gate_or_criterion_added_fails_the_ratchet(repo, changes, words):
+    rc, out = _ratchet(repo, _head(**changes))
+    assert rc == 1 and words in out, out
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"tests": ["tests/engine"]},
+        {"tests": ["tests/engine/test_a.py", "tests/other/test_engine.py"]},  # under a listed dir
+        {"code": [], "invariants": []},
+        {"status": "frozen", "why": "changed"},
+    ],
+)
+def test_shrinking_or_editing_the_other_keys_passes_the_ratchet(repo, changes):
+    rc, out = _ratchet(repo, _head(**changes))
+    assert rc == 0, out
+
+
+def test_removing_every_component_passes_the_ratchet(repo):
+    assert _ratchet(repo, {"components": {}})[0] == 0
+
+
+def test_only_the_operator_s_label_or_a_push_to_main_allows_growth(repo):
+    grown = _head(invariants=["R-09", "B-01"])
+    assert _ratchet(repo, grown, "label")[0] == 0
+    assert _ratchet(repo, grown, "push")[0] == 0
+    for value in ("none", "", "true", ex.GROWTH_LABEL, "LABEL"):
+        assert _ratchet(repo, grown, value)[0] == 1, value
+
+
+def test_an_unreadable_base_or_list_fails_closed(repo):
+    root, _ = repo
+    assert ex.ratchet(root, "0" * 40, {}, io.StringIO()) == 2
+    assert ex.ratchet(root, " ", {}, io.StringIO()) == 2
+    assert _ratchet(repo, {"components": {"engine": {"tests": "tests/broker"}}})[0] == 2
+    assert _ratchet(repo, ["not", "a", "list"])[0] == 2
+
+
+def test_the_ratchet_runs_from_the_command_line(repo, capsys):
+    root, base = repo
+    _write(root, _head(invariants=["R-09", "B-01"]))
+    assert ex.main(["ratchet", "--base", base, str(root)]) == 1
+    assert "B-01" in capsys.readouterr().out
+    _write(root, BASE_LIST)
+    assert ex.main(["ratchet", "--base", base, str(root)]) == 0
+
+
+def test_ci_passes_the_operator_s_label_to_both_copies_of_the_ratchet():
+    ci = yaml.safe_load(CI.read_text(encoding="utf-8"))
+    on = ci.get("on") or ci.get(True)
+    # the label is read from the event, which a re-run does not refresh: labelling runs CI again
+    assert {"labeled", "unlabeled", "synchronize"} <= set(on["pull_request"]["types"])
+    steps = [
+        s
+        for job in ci["jobs"].values()
+        for s in job.get("steps") or []
+        if 'tools/experimental.py" ratchet' in s.get("run", "")
+        or "tools/experimental.py ratchet" in s.get("run", "")
+    ]
+    assert len(steps) == 2
+    want = (
+        "${{ github.event_name == 'push' && 'push' || (contains(github.event.pull_request.labels"
+        f".*.name, '{ex.GROWTH_LABEL}') && 'label' || 'none') }}}}"
+    )
+    for step in steps:
+        assert step["env"][ex.GROWTH_ENV] == want, step["name"]

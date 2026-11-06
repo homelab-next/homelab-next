@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # labeled/unlabeled: the operator's experimental-growth label (trusted-gates reads it from the
+    # event, which a re-run does not refresh), so adding or removing it runs CI again
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -285,6 +288,12 @@ jobs:
           HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
           HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: python tools/dup_check.py --ci-base .
+      - name: tools/experimental.yml only shrinks against the base, unless the operator's experimental-growth label allows it
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+          HNX_EXPERIMENTAL_GROWTH: ${{ github.event_name == 'push' && 'push' || (contains(github.event.pull_request.labels.*.name, 'experimental-growth') && 'label' || 'none') }}
+        run: python tools/experimental.py ratchet --ci-base .
       - name: TLS certificate verification never disabled (F-07)
         run: python tools/tls_verify_lint.py .
       - name: install caddy (pinned release, checksum verified) for the F-23 semantic check
@@ -495,6 +504,15 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           "$PY" -I "$RUNNER_TEMP/base/tools/register_ids.py" check-lost --base "$BASE"
+      # a listed component's tests, gates, invariants and code block no merge, so the list only
+      # shrinks; growth needs the operator's experimental-growth label on the pull request, read
+      # from the event (a push to main was gated at its pull request)
+      - name: tools/experimental.yml only shrinks against the base, unless the operator's experimental-growth label allows it, by the base's code
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+          PY: ${{ steps.python.outputs.python-path }}
+          HNX_EXPERIMENTAL_GROWTH: ${{ github.event_name == 'push' && 'push' || (contains(github.event.pull_request.labels.*.name, 'experimental-growth') && 'label' || 'none') }}
+        run: '"$PY" -I "$RUNNER_TEMP/base/tools/experimental.py" ratchet --base "$BASE" "$GITHUB_WORKSPACE"'
 
   # The example invariants register's fast criteria through the runner (the plugin-only rows X-04,
   # X-06, X-09 and X-10 run nowhere else); slow criteria are the gates of the other jobs.  No state

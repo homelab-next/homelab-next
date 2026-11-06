@@ -5,13 +5,13 @@
 #   kind: tool
 #   purpose: Run the gates and tests of the experimental and frozen components listed in tools/experimental.yml, outside the blocking set.
 #   owner: maintainers
-#   trigger: [make:experimental]
-#   inputs: tools/experimental.yml (or --file)
-#   outputs: one line per gate and the pytest run of the components' tests; `list` prints the components
+#   trigger: [make:experimental, ci:ci/schemas, ci:ci/trusted-gates]
+#   inputs: tools/experimental.yml (or --file); the base commit's list (ratchet --base, --ci-base)
+#   outputs: one line per gate and the pytest run of the components' tests; `list` prints the components; `ratchet` one line per growth
 #   exit:
-#     "0": every gate and test of every listed component passed (list and validate, the file is valid)
-#     "1": a gate or a test failed
-#     "2": the list is invalid or unreadable
+#     "0": every gate and test of every listed component passed (list and validate, the file is valid; ratchet, the list did not grow or the operator allowed it)
+#     "1": a gate or a test failed (ratchet, the list grew against the base)
+#     "2": the list is invalid or unreadable (ratchet, or the base is not a commit)
 """The one list of experimental and frozen components, and the runner of their checks.
 
 ``tools/experimental.yml`` names each component that the operator took out of the blocking set
@@ -24,14 +24,26 @@ gate plus ``pytest -m "experimental and not live"`` (:func:`run`), which is what
 a merge: ``tools/tests/test_experimental.py`` holds the Makefile, CI and the invariants register
 to the list.
 
+``ratchet`` holds the list to a base commit's (:func:`growth`): it may shrink freely, but a
+component, test or code path, gate, invariant or conformance capability that the base's list does
+not already take out of the blocking set is growth, and fails (exit 1) unless the operator allowed
+it.  CI's ``trusted-gates`` job runs the base's copy of this file, so a change cannot argue its way
+past a red test by listing it.  The operator allows growth with the pull-request label
+``experimental-growth`` (:data:`GROWTH_LABEL`), which the workflow passes in
+``HNX_EXPERIMENTAL_GROWTH`` (:data:`GROWTH_ENV`) as ``label``; a push to ``main`` passes ``push``,
+since its pull request was gated already.  Agents never apply the label.
+
 Usage: python tools/experimental.py {run,list,validate} [--file FILE]
-Exit: 0 passed (or valid), 1 a gate or a test failed, 2 the list is invalid.
+       python tools/experimental.py ratchet (--base REV | --ci-base) [ROOT]
+Exit: 0 passed (or valid, or no growth), 1 a gate or a test failed (or the list grew), 2 the list
+is invalid (or the base is not a commit).
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import re
 import shlex
 import subprocess
@@ -61,6 +73,17 @@ _KEYS = {
     "code",
 }
 _REQUIRED = _KEYS - {"invariants", "conform", "code"}
+#: the keys whose entries leave the blocking set: adding one (to any component) is growth
+RATCHETED = ("tests", "code", "gates", "invariants", "conform")
+#: the keys holding repository paths, matched by whole path segments (a path under a directory
+#: the base lists is already out of the blocking set, so listing it is not growth)
+_PATH_KEYS = ("tests", "code")
+#: the pull-request label by which the operator allows the list to grow, and how CI passes it
+GROWTH_LABEL = "experimental-growth"
+GROWTH_ENV = "HNX_EXPERIMENTAL_GROWTH"
+#: the values of GROWTH_ENV that allow growth: the operator's label, or a push to main (whose
+#: pull request the label gated)
+GROWTH_ALLOWED = {"label": f"the operator's {GROWTH_LABEL} label", "push": "a push to main"}
 _ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 _INVARIANT = re.compile(r"^[A-Z]-[0-9]{2}\Z")
 
@@ -240,7 +263,125 @@ def run(components: list[Component], python: str = sys.executable) -> int:
     return 0
 
 
+# ----------------------------------------------------------------------------- the ratchet
+
+
+def _listed(doc: object) -> dict[str, dict[str, tuple[str, ...]]]:
+    """Each component's ratcheted entries, read leniently (the base's list was valid at the base,
+    and its paths need not exist in the head's tree)."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("components"), dict):
+        raise ListError(["the list is a mapping with a components mapping"])
+    out: dict[str, dict[str, tuple[str, ...]]] = {}
+    for name, entry in doc["components"].items():
+        if not isinstance(entry, dict):
+            raise ListError([f"components.{name}: must be a mapping"])
+        out[str(name)] = {}
+        for k in RATCHETED:
+            value = entry.get(k) or []
+            if not isinstance(value, list):
+                raise ListError([f"components.{name}.{k}: must be a list"])
+            out[str(name)][k] = tuple(str(v) for v in value)
+    return out
+
+
+def growth(base_doc: object, head_doc: object) -> list[str]:
+    """What the head's list takes out of the blocking set that the base's did not: a component
+    the base does not list, a test or code path neither equal to nor under one the base lists (in
+    any component), and a gate, invariant or conformance capability the base does not list.
+    Removing anything, moving an entry between components, and the other keys are free."""
+    base, head = _listed(base_doc), _listed(head_doc)
+    had = {k: tuple(dict.fromkeys(v for c in base.values() for v in c[k])) for k in RATCHETED}
+    out = [f"components.{n}: a component the base does not list" for n in head if n not in base]
+    for name, entries in head.items():
+        for k in RATCHETED:
+            for v in entries[k]:
+                old = is_experimental(v, had[k]) if k in _PATH_KEYS else v in had[k]
+                if not old:
+                    out.append(
+                        f"components.{name}.{k}: {v} is not out of the blocking set at the base"
+                    )
+    return out
+
+
+def ratchet(root: Path, rev: str, environ=None, out=None) -> int:
+    """The list in the checkout at ``root`` (read as data) against the one at commit ``rev``."""
+    out = out or sys.stdout
+    environ = os.environ if environ is None else environ
+    rel = LIST.relative_to(ROOT).as_posix()
+
+    def git(*a: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(root), *a], capture_output=True, check=False)
+
+    if not rev.strip() or git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}").returncode:
+        print(f"experimental: --base {rev!r}: not a commit here", file=out)
+        return 2
+    shown = git("show", f"{rev}:{rel}")
+    if shown.returncode:
+        print(f"experimental: the base {rev[:12]} has no {rel}: nothing to ratchet", file=out)
+        return 0
+    try:
+        base_doc = yaml.safe_load(shown.stdout)
+        head_doc = yaml.safe_load((root / rel).read_text(encoding="utf-8"))
+        problems = growth(base_doc, head_doc)
+    except (OSError, yaml.YAMLError, ListError) as exc:
+        print(f"experimental: cannot compare the lists: {exc}", file=out)
+        return 2
+    try:
+        parse(head_doc, root)  # the head under the base's rules: a key they do not know is growth
+    except ListError as exc:
+        problems += [f"the base's rules refuse the list: {p}" for p in exc.problems]
+    if not problems:
+        print(f"experimental: {rel} did not grow against {rev[:12]}", file=out)
+        return 0
+    for p in problems:
+        print(f"experimental: grew: {p}", file=out)
+    allowed = GROWTH_ALLOWED.get(str(environ.get(GROWTH_ENV, "")).strip())
+    if allowed:
+        print(f"experimental: growth allowed by {allowed}", file=out)
+        return 0
+    print(
+        f"experimental: {rel} may only shrink against the base: listing a test, gate, invariant or"
+        " code path takes it out of what blocks a merge; growth needs the operator's"
+        f" {GROWTH_LABEL} label on the pull request (CONTRIBUTING.md)",
+        file=out,
+    )
+    return 1
+
+
+def _ratchet_main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="experimental.py ratchet")
+    ap.add_argument("root", nargs="?", default=".", type=Path, help="the checkout (read as data)")
+    which = ap.add_mutually_exclusive_group(required=True)
+    which.add_argument("--base", help="the commit whose list the checkout's may not grow past")
+    which.add_argument(
+        "--ci-base",
+        action="store_true",
+        help="pick --base by homelabnext.gitbase.ci_base "
+        "(GITHUB_EVENT_NAME, HNX_PR_BASE, HNX_PUSH_BEFORE)",
+    )
+    args = ap.parse_args(argv)
+    root = args.root.resolve()
+    rev = args.base
+    if args.ci_base:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from homelabnext.gitbase import ci_base_from_env  # the one --ci-base rule
+
+        try:
+            rev, why = ci_base_from_env(root)
+        except ValueError as exc:
+            print(f"experimental: {exc}", file=sys.stderr)
+            return 2
+        print(f"experimental: base {rev or '-'} ({why})")
+        if rev is None:
+            return 0  # a root commit has nothing to ratchet against
+    return ratchet(root, rev)
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["ratchet"]:
+        return _ratchet_main(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("command", choices=("run", "list", "validate"))
     ap.add_argument("--file", type=Path, default=LIST)

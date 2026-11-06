@@ -13,6 +13,11 @@
 # holds all of
 # that to this file, so "experimental" is decided here and nowhere else.
 #
+# The list only shrinks: CI's trusted-gates job runs the base's `tools/experimental.py ratchet`,
+# which fails a change that adds a component, a tests/code path, a gate, an invariant or a
+# conformance capability, unless the operator applied the pull-request label experimental-growth
+# (CONTRIBUTING.md, "Experimental and frozen components").  Removing an entry is always free.
+#
 #   status     experimental: kept and built on, out of the blocking set until its condition holds;
 #              frozen: kept as is, not built on, until its condition holds
 #   decided    the date of the decision
