@@ -7,6 +7,9 @@ summary_of: outline:sha256:cc0b15786d3b8d62
 - **Status:** accepted (2026-11-05, by the operator; defects found on the first real deploy are
   fixed as they come)
 - **Date:** 2026-11-05
+- **Amended:** 2026-11-05 (decision 6: `keep_last` folds a key's older records into one range
+  record, and tombstones in a platform scope age out past a budget, so platform scopes are
+  bounded; see the amendment under it)
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
@@ -68,6 +71,11 @@ was shown, never from what the model says about its sources.
    `sources: []`.
 3. **The clock is injected.** The store takes `now=` (a callable returning UTC). `_apply` reads no
    clock of its own.
+   A batch is stamped at the later of the clock and the log's newest record when the clock lags
+   by at most five minutes; a larger lag refuses the batch and pages once, so the log's time never
+   goes backwards. If the host clock was wrong forward and has been corrected, the log holds a
+   future-stamped record and refuses writes until real time passes it; recovering sooner is an
+   operator re-stamp in `MemoryAdmin` (PR 3).
 4. **No secret enters the log.** Before the transaction, every `key` and `value` is run through
    the platform's secret screen (`homelabnext.agent.screen`, secret types) and the leak-scan
    shapes. A match refuses the whole batch; the refusal names the key's position and the type,
@@ -100,6 +108,32 @@ was shown, never from what the model says about its sources.
 
    `platform_scopes` (decision 7) ships in this PR with `memory_limits`. This is what bounds
    ADR-0035's ledger, whose item keys are new every time.
+
+   *Amendment (2026-11-05):* as first written, decision 6 did not bound a platform scope.
+   `keep_last` kept every record and dropped only values, and every retired key left a tombstone
+   for good, so ADR-0035's ledger (a cursor replaced on every fold, item keys new every time)
+   would reach its record cap and stall. Decision 6 now reads, for platform scopes:
+   - `keep_last` folds a key's records beyond its last N into **one range record** per key. The
+     range record keeps the rev range (`rev_from` to `rev`), the value digests, the union of the
+     sources, closures and `pack_id`s, the strictest `tlp`, when the range starts (`since`) and
+     the state it leaves the entry in. It drops the values. A later fold merges into it, so a key
+     holds at most N + 1 records. **The bound covers only keys a `keep_last` pattern matches.** A
+     key replaced without end (ADR-0035's `cursor-*` keys) needs a pattern, or it reaches the
+     record cap.
+   - Whole-key tombstones in a platform scope **age out oldest first** once they exceed the
+     scope's tombstone budget: `memory_limits.tombstones: {<scope>: N}` (profile schema 1.6,
+     additive, below the scope's record cap), by default 10% of the record cap. Only a key whose
+     last record is its tombstone (a retired key) ages out. A key retired and added again keeps
+     its old tombstone as an earlier record, and it is live, so it stays. Aged-out tombstones fold
+     into the
+     scope's one `aged` record. It keeps the count, the time range they cover and the scope's
+     **high-water `rev`** (the largest it aged). A key's next `rev` is one above the larger of
+     its own last `rev` and that high-water `rev`, so `rev` is never restarted or reused. Once a key in a scope has aged out,
+     every key first added there starts above the high-water `rev`, because the scope no longer
+     knows which keys it has seen.
+   - `as_of` answers `compacted` for a key whose state at `t` lies in a range record or
+     tombstone. When `t` falls in the aged range, it says `aged_out: true`: the aged keys' names
+     are gone, so any key it does not list must be read as compacted.
 
 ### Sources and labels (PR 2)
 
@@ -310,7 +344,9 @@ was shown, never from what the model says about its sources.
 17. **Amendments to ADR-0035** (it lists this ADR as amending it):
     - **Decision 4 (the fold):** the fold writes `fleet-ledger`, a platform scope, with
       `unchecked=True` and its `sources=`. Its records are `red`, which is never below a ledger
-      value's own `tlp` field. A denied update is dropped, not fatal (decision 14).
+      value's own `tlp` field. A denied update is dropped, not fatal (decision 14). The ledger's
+      profile gives its `cursor-*` keys a `keep_last` pattern (decision 6, amended); a key no
+      pattern matches is not bounded by it.
     - **Decision 5 (value fields):** `tlp` inside a ledger value stays for the coordinator's own
       reading. The renderer writes the store's label into what it renders, not the value's field.
     - **Decision 7 (pack fill order):** stale entries (decision 15) and withheld counts are
@@ -356,6 +392,15 @@ was shown, never from what the model says about its sources.
     (granted without approval in the example manifest) can still carry the same fact. Routing or
     removing that lane is a precondition of relying on retraction fleet-wide.
   - A key whose closure reaches 256 identifiers must be retired and added again.
+  - A retired key whose tombstone ages out of a platform scope (decision 6, amended) leaves
+    `dependents` for good: its sources, closures and `pack_id`s go with it. It was already
+    retired, so a retraction loses nothing live. Its time range stays visible as `aged_out` in
+    `as_of`.
+  - Until `MemoryAdmin` ships (PR 3), nothing can erase history: a report cannot write a platform
+    scope, so it cannot cause compaction, and only platform code's own writes compact. The one
+    exception is migration: a legacy key or value holding a secret is kept only as a `purged`
+    marker, with no value and no digest, since an unsalted digest of a low-entropy secret
+    confirms a guess.
   - Purge cannot reach copies outside the store.
 - **Obliges us to maintain:**
   - **PR 1:**

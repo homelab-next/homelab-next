@@ -631,7 +631,7 @@ PATTERNS: tuple[Pattern, ...] = (
     _p(
         "aws-secret-key",
         "secret",
-        r"(?i)aws_?secret_?access_?key\W{1,4}[A-Za-z0-9/+=]{40}\b",
+        shapes.AWS_SECRET_KEY,
         "AWS secret access key",
         redact=True,
     ),
@@ -649,11 +649,11 @@ PATTERNS: tuple[Pattern, ...] = (
         "PEM private key",
         redact=True,
     ),
-    _p("vault-blob", "secret", r"[$]ANSIBLE_VAUL[T]", "encrypted vault blob", redact=True),
+    _p("vault-blob", "secret", shapes.VAULT_BLOB, "encrypted vault blob", redact=True),
     _p(
         "age-secret-key",
         "secret",
-        r"AGE-SECRET-KE[Y]-1[0-9A-Z]{58}",
+        shapes.AGE_SECRET_KEY,
         "age identity (private key): it decrypts every SOPS file sealed to it",
         redact=True,
     ),
