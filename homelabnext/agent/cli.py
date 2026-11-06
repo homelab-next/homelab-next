@@ -313,6 +313,14 @@ def main(argv: list[str]) -> int:
         deny = None
         if args.denylist:
             deny = Path(args.denylist).read_text(encoding="utf-8").splitlines()
+        pack_inputs = _load(args.inputs) or {}
+        if isinstance(pack_inputs, dict) and "items" in pack_inputs:
+            # an input item's uid must be resolved by a records or lake reader (ADR-0037
+            # decision 7), which this command does not run
+            raise AgentError(
+                "input items need a records/lake reader to resolve their uids; "
+                "not supported from the CLI (drop 'items' from the inputs file)"
+            )
         if args.profile or args.registry:
             if not (args.profile and args.registry):
                 raise AgentError("--profile and --registry go together")
@@ -338,7 +346,7 @@ def main(argv: list[str]) -> int:
                     sys.stdout.write(explain(knowledge))
             pack, digest = start_session(
                 manifest,
-                _load(args.inputs) or {},
+                pack_inputs,
                 profile,
                 load_registry(args.registry),
                 runs_on=args.runs_on,
@@ -351,7 +359,7 @@ def main(argv: list[str]) -> int:
                 raise AgentError("--explain needs --profile and --registry")
             if args.policy or args.lock:
                 raise AgentError("--policy and --lock go with --profile")
-            pack, digest = assemble_pack(manifest, _load(args.inputs) or {}, denylist=deny)
+            pack, digest = assemble_pack(manifest, pack_inputs, denylist=deny)
         if args.out or not args.explain:
             _emit({"hash": digest, "pack": pack}, args.out)
         print(f"pack {digest} status={pack['status']}", file=sys.stderr)

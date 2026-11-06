@@ -45,6 +45,8 @@ memory_limits:
       item-*: 3
   tombstones:
     fleet-ledger: 5000
+  bytes:
+    responder: 5000000
 model_role: mdl:main-reasoner
 parts:
   capabilities:

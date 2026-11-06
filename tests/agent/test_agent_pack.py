@@ -73,7 +73,7 @@ def test_pack_hash_is_stable_across_processes_golden():
     assert h == GOLDEN_HASH
 
 
-GOLDEN_HASH = "sha256:1c2e553016746e778a9f1c5b57107687927abe48eeffb413ec9ff0c8f66a0c9c"
+GOLDEN_HASH = "sha256:506ca1834f24afba7cedd4849a73ca7a9994a6de3af7117194ea7fa2659894ab"
 
 
 def test_hash_is_independent_of_python_hash_seed():

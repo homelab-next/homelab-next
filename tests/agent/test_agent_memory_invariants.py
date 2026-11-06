@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Agent memory's invariants under tombstone aging, re-adds and random histories (ADR-0037
 decision 6, amended; the re-audit's R1 and R3): the cache is the fold, no key's revs overlap or
-repeat, a live key never ages out, and what was believed now is what is read.  Store tests run
+repeat, a live key never ages out, and what was believed now is what is read.  With sources and
+labels (PR 2, decisions 7 to 10), the random histories also hold every checked source to its
+pack, every label to its floor, and exposure to what the log points at.  Store tests run
 on both backends."""
 
-import contextlib
 import json
 import random
 import threading
@@ -12,17 +13,21 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from agent_support import library, spec, verified
+from agent_support import digest, item, labelled_pack, library, spec, verified, write
 
 from homelabnext.agent import SpecError, compile_profile
 from homelabnext.agent.memory import (
+    MAX_CLOSURE,
     FileBackend,
     InMemoryBackend,
     MemoryClockError,
     MemoryLimitError,
     MemoryStore,
+    MemoryUpdateError,
     fold,
 )
+from homelabnext.agent.pack import pack_label, rendered_identifiers
+from homelabnext.tlp import LABELS
 
 T0 = datetime(2026, 11, 5, 9, 0, tzinfo=UTC)
 FL = "fleet-ledger"
@@ -82,32 +87,32 @@ def invariants(store, profile, backend, scopes, when):
         assert k not in top or lo > top[k], (k, lo, top.get(k))
         top[k] = r["rev"]
     for scope in scopes:
-        assert store.as_of(profile, scope, when)["entries"] == store.read(profile, scope)
+        assert store.as_of(profile, scope, when)["entries"] == store.read(profile, scope)["entries"]
 
 
 def test_a_re_added_key_never_ages_out_with_its_old_tombstone(backend):
     p = _ledger(tombstones={FL: 1})
     clock = Clock()
     store = MemoryStore(backend, now=clock)
-    store.apply_updates(p, [up("add", "x", "first"), up("retire", "x")])
-    store.apply_updates(p, [up("add", "x", "LIVE-FACT")])
+    write(store, p, [up("add", "x", "first"), up("retire", "x")])
+    write(store, p, [up("add", "x", "LIVE-FACT")])
     for k in ("y", "z", "w"):  # tombstones past the budget of 1
         clock.tick()
-        store.apply_updates(p, [up("add", k, "v"), up("retire", k)])
-        assert store.read(p, FL) == {"x": "LIVE-FACT"}
+        write(store, p, [up("add", k, "v"), up("retire", k)])
+        assert store.read(p, FL)["entries"] == {"x": "LIVE-FACT"}
         invariants(store, p, backend, [FL], clock.t + timedelta(days=1))
     clock.tick()
-    store.apply_updates(p, [up("replace", "x", "different")])
+    write(store, p, [up("replace", "x", "different")])
     recs = store.history(p, FL, "x")["records"]
     assert [(r.get("rev_from"), r["rev"]) for r in recs] == [(1, 2), (None, 3), (None, 4)]
     invariants(store, p, backend, [FL], clock.t + timedelta(days=1))
     # retired again, x's tombstone is its last record and ages like any other
-    store.apply_updates(p, [up("retire", "x")])
+    write(store, p, [up("retire", "x")])
     for k in ("v", "u"):
         clock.tick()
-        store.apply_updates(p, [up("add", k, "v"), up("retire", k)])
+        write(store, p, [up("add", k, "v"), up("retire", k)])
     assert store.history(p, FL, "x")["records"] == []
-    store.apply_updates(p, [up("add", "x", "back")])
+    write(store, p, [up("add", "x", "back")])
     assert store.history(p, FL, "x")["records"][0]["rev"] > 5
     invariants(store, p, backend, [FL], clock.t + timedelta(days=1))
 
@@ -116,17 +121,17 @@ def test_the_high_water_rev_is_the_largest_aged_not_the_latest(backend):
     p = _ledger(tombstones={FL: 1})
     clock = Clock()
     store = MemoryStore(backend, now=clock)
-    store.apply_updates(p, [up("add", "a", "0")])
+    write(store, p, [up("add", "a", "0")])
     for v in range(1, 8):
-        store.apply_updates(p, [up("replace", "a", str(v))])
-    store.apply_updates(p, [up("retire", "a")])  # a's tombstone: rev 9
+        write(store, p, [up("replace", "a", str(v))])
+    write(store, p, [up("retire", "a")])  # a's tombstone: rev 9
     clock.tick()
-    store.apply_updates(p, [up("add", "b", "v"), up("retire", "b")])  # b's: rev 2; a ages
+    write(store, p, [up("add", "b", "v"), up("retire", "b")])  # b's: rev 2; a ages
     clock.tick()
-    store.apply_updates(p, [up("add", "c", "v"), up("retire", "c")])  # b ages
+    write(store, p, [up("add", "c", "v"), up("retire", "c")])  # b ages
     (aged,) = [r for r in backend.load(p["id"])["log"] if r["op"] == "aged"]
     assert aged["count"] == 2 and aged["rev"] == 9
-    store.apply_updates(p, [up("add", "a", "again")])
+    write(store, p, [up("add", "a", "again")])
     assert store.history(p, FL, "a")["records"][0]["rev"] == 10
 
 
@@ -137,11 +142,11 @@ def test_a_folded_record_keeps_the_purged_marker(backend):
     store = MemoryStore(backend, now=clock)
     for v in ("1", "2"):
         clock.tick()
-        store.apply_updates(p, [up("replace", "item-a", v)])
+        write(store, p, [up("replace", "item-a", v)])
     rng = store.history(p, FL, "item-a")["records"][0]
     assert rng["compacted"] == "range" and rng["purged"] is True
     assert AWS not in json.dumps(backend.load(p["id"]))
-    store.apply_updates(p, [up("retire", "item-a")])
+    write(store, p, [up("retire", "item-a")])
     (tomb,) = store.history(p, FL, "item-a")["records"]
     assert tomb["purged"] is True and tomb["value_digests"] and "value" not in tomb
 
@@ -164,7 +169,7 @@ def test_writers_overlap_and_the_lock_serialises_them():
 
     store = MemoryStore(backend, now=slow_clock)
     threads = [
-        threading.Thread(target=store.apply_updates, args=(p, [up("add", f"k{i}", "v")]))
+        threading.Thread(target=write, args=(store, p, [up("add", f"k{i}", "v")]))
         for i in range(16)
     ]
     for t in threads:
@@ -175,26 +180,101 @@ def test_writers_overlap_and_the_lock_serialises_them():
     assert len(stored["log"]) == 16 and len(stored["entries"][FL]) == 16
 
 
+def _packs(profile):
+    """Packs of different labels to draw checked batches from: by hash, ``(pack, hash)``."""
+    out = {}
+    for static, items in (
+        ("clear", [item(1, "clear"), item(2, "green")]),
+        ("green", [item(3, "amber"), item(4, "green"), item(5, "clear")]),
+        ("clear", [item(6, "clear")]),
+        (None, [item(7, "green")]),  # an unlabelled static section: red
+    ):
+        # every input section declares its items: an input section without any is red
+        pack, h = labelled_pack(
+            items, [item(100 + len(out), "clear")], static=static, profile=profile
+        )
+        out[h] = (pack, h)
+    return out
+
+
+def label_invariants(backend, profile, packs):
+    """Sources and labels (ADR-0037 decisions 7 to 10): every checked record's sources are
+    identifiers its pack rendered and its label is no looser than its pack's or any source's; an
+    unchecked record is red; a key's label never falls; a record's closure holds its sources and
+    stays under the cap; and exposure is stored once per pack still pointed at, and no other."""
+    stored = backend.load(profile["id"])
+    rank = {label: i for i, label in enumerate(LABELS)}
+    last: dict = {}
+    pointed = set()
+    for r in stored["log"]:
+        if r["op"] == "aged":
+            continue
+        assert set(r["sources"]) <= set(r["closure"]) and len(r["closure"]) <= MAX_CLOSURE
+        k = (r["scope"], r["key"])
+        assert rank[r["tlp"]] >= last.get(k, 0), (k, r["tlp"])  # never lowered, op after op
+        last[k] = rank[r["tlp"]]
+        if r["scope"] == FL:
+            assert r["checked"] is False and r["tlp"] == "red"  # unchecked platform writes
+            continue
+        assert r["checked"] is True
+        pack, h = packs[r["pack_id"]]
+        known = rendered_identifiers(pack)
+        assert set(r["sources"]) <= set(known)
+        floor = [pack_label(pack), *(known[s] for s in r["sources"])]
+        assert rank[r["tlp"]] >= max(rank[x] for x in floor)
+        assert stored["exposure"][h] == {"rendered": sorted(known), "memory": []}
+        pointed.add(h)
+    for r in stored["log"]:
+        pointed.update(p for p in [r.get("pack_id"), *(r.get("pack_ids") or ())] if p)
+    assert set(stored["exposure"]) <= pointed
+
+
 @pytest.mark.parametrize("seed_", [1, 2, 3, 4])
 def test_random_histories_keep_the_invariants(backend, seed_):
+    """Random histories of checked model-scope batches (each against a labelled pack, citing what
+    it rendered, sometimes something it did not) and unchecked platform batches."""
     rnd = random.Random(seed_)
     p = _ledger(records={FL: 60}, tombstones={FL: 3}, keep_last={FL: {"c*": 2, "k1": 1}})
+    packs = _packs(p)
     clock = Clock()
     store = MemoryStore(backend, now=clock)
     keys = ["c1", "c2", "k1", "k2", "k3", "k4"]
     for _ in range(120):
         clock.t += timedelta(seconds=rnd.choice([-120, -1, 0, 1, 30, 600]))  # some lag past 5 min
+        scope = rnd.choice([FL, "analyst"])
+        pack, h = packs[rnd.choice(sorted(packs))]
+        ids = sorted(rendered_identifiers(pack))
+        forged = scope != FL and rnd.random() < 0.15
         batch, seen = [], set()
         for _ in range(rnd.randint(1, 4)):
-            scope, k = rnd.choice([FL, "analyst"]), rnd.choice(keys)
-            if (scope, k) in seen:
+            k = rnd.choice(keys)
+            if k in seen:
                 continue
-            seen.add((scope, k))
-            if k in store.read(p, scope):
+            seen.add(k)
+            if k in store.read(p, scope)["entries"]:
                 op = rnd.choice(["replace", "retire"])
-                batch.append(up(op, k, str(rnd.random()) if op == "replace" else None, scope))
+                u = up(op, k, str(rnd.random()) if op == "replace" else None, scope)
             else:
-                batch.append(up("add", k, str(rnd.random()), scope))
-        with contextlib.suppress(MemoryLimitError, MemoryClockError):  # refused: unchanged
-            store.apply_updates(p, batch)
+                u = up("add", k, str(rnd.random()), scope)
+            if scope == FL:  # the platform's own sources: unchecked, so anything well formed
+                u["sources"] = [digest(900 + rnd.randint(0, 3))] if rnd.random() < 0.5 else []
+            else:
+                u["sources"] = rnd.sample(ids, rnd.randint(0, min(3, len(ids))))
+            batch.append(u)
+        if forged:
+            batch[-1]["sources"] = [*batch[-1]["sources"][:2], digest(999)]
+        before = backend.load(p["id"])
+        refused = (MemoryLimitError, MemoryClockError) + ((MemoryUpdateError,) if forged else ())
+        try:
+            if scope == FL:
+                store.apply_updates(p, batch, unchecked=True)
+            else:
+                store.apply_updates(p, batch, pack=pack, pack_hash=h)
+            assert not forged, "a source the pack did not render was accepted"
+        except refused:
+            assert backend.load(p["id"]) == before  # refused: unchanged
         invariants(store, p, backend, [FL, "analyst"], clock.t + timedelta(days=1))
+        label_invariants(backend, p, packs)
+    log_ = backend.load(p["id"])["log"]
+    assert any(r["sources"] for r in log_ if r["checked"])  # the run exercised sources
+    assert len({r["tlp"] for r in log_ if r["scope"] == "analyst"}) > 1  # and labels below red

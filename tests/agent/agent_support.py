@@ -158,3 +158,104 @@ def write_policy_lock(directory, *profiles) -> tuple:
     policy.write_text(json.dumps({"ceilings": _ceilings(profiles)}), encoding="utf-8")
     lock.write_text(json.dumps({"profiles": lock_for(*profiles)}), encoding="utf-8")
     return policy, lock
+
+
+def reader_profile():
+    """The canonical spec compiled and verified: ``profile:reader``."""
+    from homelabnext.agent import compile_profile
+
+    return verified(compile_profile(spec(), library()))
+
+
+def canonical_pack(profile=None) -> tuple:
+    """``(pack, hash)`` of :func:`manifest` and :func:`inputs`, bound to ``profile`` (by default
+    :func:`reader_profile`): the pack a checked memory write that cites nothing passes (ADR-0037
+    decision 7)."""
+    from homelabnext.agent import assemble_pack
+
+    return assemble_pack(manifest(), inputs(), profile=profile or reader_profile())
+
+
+def uid(n: int) -> str:
+    """A canonical record uid (UUIDv7) numbered ``n``."""
+    return f"01900000-0000-7000-8000-{n:012x}"
+
+
+def digest(n: int) -> str:
+    """A content digest numbered ``n``."""
+    return f"sha256:{n:064x}"
+
+
+def item(n: int, label: str | None = None) -> dict:
+    """Input item ``n`` (``uid(n)``, ``digest(n)``) with the caller's ``label``."""
+    return {"uid": uid(n), "digest": digest(n), **({"tlp": label} if label else {})}
+
+
+def labelled_manifest(static: str | None = "green") -> dict:
+    """:func:`manifest` without its pre-gate (a pre-gate section is always red) and with its
+    static sections labelled ``static`` (absent: red)."""
+    m = manifest()
+    m["pregates"] = []
+    for s in m["sections"]:
+        if s["source"] == "static" and static is not None:
+            s["tlp"] = static
+    return m
+
+
+def resolved(stored: dict, items=()):
+    """A :class:`ResolvedUids` as a reader would build it: ``stored`` maps uid to its stored
+    label, or to a stored row ``{digest, tlp}``; a label's digest is the item's own."""
+    from homelabnext.agent import resolve_input_uids
+
+    digests = {it["uid"]: it["digest"] for it in items}
+    rows = []
+    for u, v in stored.items():
+        row = dict(v) if isinstance(v, dict) else {"digest": digests.get(u), "tlp": v}
+        rows.append({"uid": u, **row})
+    return resolve_input_uids(rows, source="test-reader")
+
+
+def labelled_pack(
+    findings=(), memory=(), *, static="green", stored=None, profile=None, text=None, **kw
+) -> tuple:
+    """``(pack, hash)`` of :func:`labelled_manifest` with input items, bound to ``profile`` (by
+    default :func:`reader_profile`): ``findings`` and ``memory`` are lists of items
+    (:func:`item`).  ``stored`` maps uid to its stored label or row (by default each item's own
+    label, or red): the resolved uid map the assembler checks (:func:`resolved`)."""
+    from homelabnext.agent import assemble_pack
+
+    items = {"findings": list(findings), "memory": list(memory)}
+    every = [it for group in items.values() for it in group]
+    if stored is None:
+        stored = {it["uid"]: it.get("tlp", "red") for it in every}
+    inp = {
+        "sections": text or {"findings": "f1: 3 failed logins", "memory": "no known scanners"},
+        "items": {k: v for k, v in items.items() if v},
+    }
+    return assemble_pack(
+        labelled_manifest(static),
+        inp,
+        resolved_uids=resolved(stored, every),
+        profile=profile or reader_profile(),
+        **kw,
+    )
+
+
+def write(store, profile, updates, **kw):
+    """A memory write as the history tests (ADR-0037 PR 1) make it, now that a write is checked
+    against its pack or is an unchecked platform write (PR 2): a batch naming only the profile's
+    platform scopes is written ``unchecked``; any other is checked against
+    :func:`canonical_pack`.  A caller that passes ``pack`` or ``unchecked`` itself is passed
+    through unchanged."""
+    if "pack" in kw or "unchecked" in kw:
+        return store.apply_updates(profile, updates, **kw)
+    platform = set(profile.get("platform_scopes") or ())
+    scopes = (
+        {u.get("scope") for u in updates if isinstance(u, dict)}
+        if isinstance(updates, list)
+        else set()
+    )
+    if scopes and scopes <= platform:
+        return store.apply_updates(profile, updates, unchecked=True, **kw)
+    pack, digest = canonical_pack(profile)
+    return store.apply_updates(profile, updates, pack=pack, pack_hash=digest, **kw)

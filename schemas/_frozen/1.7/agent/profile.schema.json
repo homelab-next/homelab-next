@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/agent/profile/1.7",
+  "title": "Compiled agent profile",
+  "description": "Output of the profile compiler: harvested parts by logical id, the grants the profile holds, the permission ceiling they were checked against, hard budgets, a deterministic digest and provenance for every part. grants must be a subset of ceiling (mcp, capabilities, tier rank and budgets); JSON Schema cannot express that, so homelabnext.agent.check_ceiling enforces it and the compiler refuses a violation. Model is a role alias, never a model id. 1.1 adds reads_untrusted (additive, optional): true when the profile reads raw or untrusted content; such a reader may hold no shell/exec, file-write, egress or credential grant (homelabnext.agent.readers, data: homelabnext/agent/tool_classes.yml). The compiler always writes it; a profile without it is treated as a reader (fail closed). 1.2 adds include (additive, optional): rules naming which related knowledge from the repository graph goes into the context pack's volatile tier; rules seed only from grants the profile holds and never add one (homelabnext.agent.include, homelabnext.agent.knowledge). The compiler writes it only when the spec has rules, with every default filled in. 1.3 adds, additively, the review tier `audit` to include.require_reviews; `challenge` is its deprecated spelling, accepted and normalised to `audit` by the compiler. 1.4 adds, additively, include.detail (`summary` or `outline`; ADR-0032): the level of each included node the context pack carries instead of its whole content. Absent means `full`, and the compiler never writes `full`, so a profile that does not use it keeps its digest. 1.5 adds, additively, tlp_ceiling (ADR-0033 decision 12): the TLP ceiling the ceiling policy attests for the profile, the most restrictive label it may receive and the least it sends a model at. It agrees with data_tier (local-only is above clear, cloud-allowed is clear). The compiler writes it when the spec or the policy states one; absent, the ceiling is read from data_tier (homelabnext.agent.readers.receive_ceiling, homelabnext.registry.model_tlp.send_ceiling). 1.6 adds, additively, platform_scopes and memory_limits (ADR-0037 decision 6): the memory scopes the platform writes, and per-scope record caps, keep_last compaction and a tombstone budget for the profile's memory, set by the compiler from the spec and never by a report. The compiler writes each only when the spec states it, so a profile that does not use them keeps its digest; every scope they name is one of memory_scopes, and keep_last names platform scopes only (homelabnext.agent.compiler.memory_limit_problems). 1.7 adds, additively, memory_limits.bytes and memory_limits.exposure_bytes (ADR-0037 PR 2, decision 6 as amended 2026-11-06): a per-scope cap on the bytes a scope's records hold, beside the record cap (default 2,000 bytes per record of the record cap), and an owner-wide budget for the pack exposures its records point at (default 50,000,000 bytes).",
+  "type": "object",
+  "properties": {
+    "id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "persona": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/persona_id"
+    },
+    "model_role": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/mdl_id"
+    },
+    "parts": {
+      "type": "object",
+      "properties": {
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/skill_id"
+          },
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "skills",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "grants": {
+      "type": "object",
+      "properties": {
+        "mcp": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+          },
+          "uniqueItems": true
+        },
+        "tier": {
+          "enum": [
+            "read",
+            "write",
+            "execute",
+            "privileged"
+          ]
+        }
+      },
+      "required": [
+        "mcp",
+        "capabilities",
+        "tier"
+      ],
+      "additionalProperties": false
+    },
+    "ceiling": {
+      "type": "object",
+      "properties": {
+        "mcp": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/cap_id"
+          },
+          "uniqueItems": true
+        },
+        "tier": {
+          "enum": [
+            "read",
+            "write",
+            "execute",
+            "privileged"
+          ]
+        },
+        "budgets": {
+          "type": "object",
+          "properties": {
+            "max_input_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_runtime_s": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_tool_calls": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "max_input_tokens",
+            "max_output_tokens",
+            "max_runtime_s",
+            "max_tool_calls"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "mcp",
+        "capabilities",
+        "tier"
+      ],
+      "additionalProperties": false
+    },
+    "memory_scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true
+    },
+    "platform_scopes": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true,
+      "description": "Memory scopes the platform writes rather than a report (ADR-0037 decisions 6 and 7), such as an orchestration ledger: each is one of memory_scopes, has its own record cap (default 100,000) and may be compacted."
+    },
+    "memory_limits": {
+      "type": "object",
+      "description": "Bounds on the profile's memory log (ADR-0037 decision 6, as amended). A scope without a records entry gets the code-constant default: 10,000 records, 100,000 for a platform scope; a platform scope without a tombstones entry keeps a tenth of its record cap. A scope without a bytes entry may hold 2,000 bytes per record of its record cap; without exposure_bytes the owner's pack exposures may hold 50,000,000 bytes.",
+      "properties": {
+        "records": {
+          "type": "object",
+          "description": "Record cap per memory scope: a batch that would take the scope past it is refused and the operator paged.",
+          "propertyNames": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          }
+        },
+        "keep_last": {
+          "type": "object",
+          "description": "Platform scopes only: per platform scope, per key pattern (a shell-style glob over keys; the largest N of the matching patterns applies), how many of a key's records stay whole; the older ones fold into one range record that keeps the rev range, value digests, sources, closures, pack ids and the strictest label, but no value.",
+          "propertyNames": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[a-z0-9*?-]+$",
+              "maxLength": 64
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "tombstones": {
+          "type": "object",
+          "description": "Platform scopes only: per platform scope, how many retired keys' tombstones it keeps (fewer than its record cap); beyond that the oldest age out into the scope's one aged record, which keeps its high-water rev.",
+          "propertyNames": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000
+          }
+        },
+        "bytes": {
+          "type": "object",
+          "description": "Byte cap per memory scope: the serialised size of the scope's records (pack exposures are charged to exposure_bytes instead). A batch that would take the scope past it is refused and the operator paged, as at the record cap.",
+          "propertyNames": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 4000000000
+          }
+        },
+        "exposure_bytes": {
+          "type": "integer",
+          "minimum": 65536,
+          "maximum": 4000000000,
+          "description": "The owner's budget for pack exposures (what each pack that changed its memory rendered), charged once per owner across scopes. A batch that would store a new exposure past it is refused and the operator paged; the profile then writes only from packs it already holds until the budget is raised (an intended, paged self-lockout)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "data_tier": {
+      "enum": [
+        "local-only",
+        "cloud-allowed"
+      ]
+    },
+    "tlp_ceiling": {
+      "enum": [
+        "clear",
+        "green",
+        "amber",
+        "amber+strict",
+        "red"
+      ],
+      "description": "The profile's TLP ceiling, attested by the ceiling policy (ADR-0033 decision 12): it is granted MCP servers whose tlp is at or below it, and a model request it sends to a role that leaves the lab is judged at least at it. Agrees with data_tier: local-only is a ceiling above clear, cloud-allowed is clear."
+    },
+    "budgets": {
+      "type": "object",
+      "properties": {
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_runtime_s": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_runtime_s",
+        "max_tool_calls"
+      ],
+      "additionalProperties": false
+    },
+    "budget_mode": {
+      "enum": [
+        "warn",
+        "enforce"
+      ]
+    },
+    "reads_untrusted": {
+      "type": "boolean",
+      "description": "The profile reads raw or untrusted content (feeds, alerts, mail, web pages). Absent means true."
+    },
+    "include": {
+      "type": "array",
+      "description": "Knowledge include rules, normalised: sorted, de-duplicated, defaults written.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "enum": [
+              "capabilities",
+              "mcp",
+              "services",
+              "task"
+            ]
+          },
+          "only": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "kinds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "adr",
+                "check",
+                "doc",
+                "inv",
+                "lesson",
+                "runbook",
+                "schema"
+              ]
+            }
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "budget": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 20000
+          },
+          "require_reviews": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "agent_check",
+                "audit",
+                "challenge",
+                "human"
+              ]
+            }
+          },
+          "detail": {
+            "enum": [
+              "summary",
+              "outline"
+            ],
+            "description": "How much of each included node the pack carries: its level-0 summary, or the summary and the heading outline. Absent means the whole content."
+          }
+        },
+        "required": [
+          "from",
+          "kinds",
+          "depth",
+          "budget",
+          "max_chars"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "provenance": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0"
+          },
+          "source": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "digest": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "digest"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "id",
+    "persona",
+    "model_role",
+    "parts",
+    "grants",
+    "ceiling",
+    "memory_scopes",
+    "data_tier",
+    "budgets",
+    "budget_mode",
+    "digest",
+    "provenance"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/agent/report_result/1.2",
+  "title": "Agent report result",
+  "description": "What an agent hands back after a job: which context pack it ran on, what it cites, what it could not establish and which memory it wants updated. status deferred means a required pre-gate was missing and no work was done; ok requires at least one cite. homelabnext.agent.validate_report adds the cross-checks JSON Schema cannot (pack_id equals the pack hash, every must-cite source is cited, cites reference sources present in the pack). 1.1 adds the optional output: the job's structured result, which an actor receiving the report through a handoff (agent/handoff) accepts only after it validates against that handoff's declared output_schema. 1.2 adds, additively, sources on a memory update (ADR-0037 decision 7): at most 16 unique identifiers, each a content digest (sha256:<hex>), a canonical record uid (a UUIDv7, never a legacy record code) or a memory revision (mem:<profile id>/<scope>/<key>@<rev>); the platform applies an update only when every source equals an identifier the pack assembler recorded for something the pack rendered (homelabnext.agent.report.source_problems). 1.2 also adds verify to op (decision 15), which the memory store refuses until ADR-0037 PR 4. The limits of 64 memory_updates and 128 cites are enforced in code (validate_report, MemoryStore), not here, since tightening an existing list is not additive.",
+  "type": "object",
+  "properties": {
+    "pack_id": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "profile": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/logical-id/1.0#/$defs/profile_id"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "partial",
+        "deferred"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "cites": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "source",
+          "ref"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "memory_updates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "op": {
+            "enum": [
+              "add",
+              "replace",
+              "retire",
+              "verify"
+            ]
+          },
+          "key": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "sources": {
+            "type": "array",
+            "description": "What the update rests on (ADR-0037 decision 7): identifiers the pack assembler wrote for what the pack rendered, never text. Absent or empty: the entry is stored unsourced.",
+            "maxItems": 16,
+            "uniqueItems": true,
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$(?!\\n)",
+                  "description": "A canonical record uid (UUIDv7)."
+                },
+                {
+                  "type": "string",
+                  "maxLength": 280,
+                  "pattern": "^mem:profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*/[a-z][a-z0-9]*(?:-[a-z0-9]+)*/[a-z][a-z0-9]*(?:-[a-z0-9]+)*@[1-9][0-9]{0,15}$(?!\\n)",
+                  "description": "A memory revision: mem:<profile id>/<scope>/<key>@<rev>."
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "scope",
+          "op",
+          "key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "Structured result for an actor (G-04): validated against the handoff's output_schema before an actor reads any of it; summary and unknowns are free text and never reach an action."
+    },
+    "finished_at": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+    }
+  },
+  "required": [
+    "pack_id",
+    "profile",
+    "status",
+    "summary",
+    "cites",
+    "unknowns",
+    "memory_updates"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "cites": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ]
+}

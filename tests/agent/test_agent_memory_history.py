@@ -7,7 +7,7 @@ backends."""
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from agent_support import inputs, library, manifest, spec, verified
+from agent_support import canonical_pack, inputs, library, manifest, spec, verified, write
 
 from homelabnext.agent import SpecError, assemble_pack, compile_profile
 from homelabnext.agent.memory import (
@@ -97,7 +97,8 @@ def up(op, key, value=None, scope="analyst"):
 def test_every_update_appends_one_record_with_the_decided_fields(reader, backend):
     clock = Clock()
     store = MemoryStore(backend, now=clock)
-    store.apply_updates(reader, [up("add", "burst", "seen once")], pack_id="sha256:" + "2" * 64)
+    pack, h = canonical_pack()
+    write(store, reader, [up("add", "burst", "seen once")], pack=pack, pack_hash=h)
     (rec,) = store.history(reader, "analyst", "burst")["records"]
     assert rec == {
         "at": "2026-11-05T09:00:00.000000Z",
@@ -107,17 +108,17 @@ def test_every_update_appends_one_record_with_the_decided_fields(reader, backend
         "rev": 1,
         "value": "seen once",
         "value_digest": "sha256:" + __import__("hashlib").sha256(b"seen once").hexdigest(),
-        "pack_id": "sha256:" + "2" * 64,
+        "pack_id": h,
         "sources": [],
-        "checked": False,
-        "tlp": "red",
+        "checked": True,  # checked against its pack (ADR-0037 decision 7), which cites nothing
+        "tlp": "red",  # the canonical pack has a pre-gate, so it is red (decision 8)
         "closure": [],
     }
     clock.tick()
-    store.apply_updates(reader, [up("retire", "burst")])
+    write(store, reader, [up("retire", "burst")])
     retire = store.history(reader, "analyst", "burst")["records"][1]
     assert "value" not in retire and retire["value_digest"] == rec["value_digest"]
-    assert retire["op"] == "retire" and retire["pack_id"] is None and "reason" not in retire
+    assert retire["op"] == "retire" and retire["pack_id"] == h and "reason" not in retire
 
 
 @pytest.mark.parametrize(
@@ -131,38 +132,38 @@ def test_every_update_appends_one_record_with_the_decided_fields(reader, backend
 )
 def test_a_failed_batch_writes_neither_entry_nor_record(reader, backend, batch):
     store = MemoryStore(backend, now=Clock())
-    store.apply_updates(reader, [up("add", "kept", "v")])
+    write(store, reader, [up("add", "kept", "v")])
     before = raw(backend)
     with pytest.raises(MemoryUpdateError):
-        store.apply_updates(reader, batch)
+        write(store, reader, batch)
     assert raw(backend) == before
-    assert len(before["log"]) == 1 and store.read(reader, "analyst") == {"kept": "v"}
+    assert len(before["log"]) == 1 and store.read(reader, "analyst")["entries"] == {"kept": "v"}
 
 
 def test_a_batch_over_the_cap_writes_neither_entry_nor_record(ledger, backend):
     store = MemoryStore(backend, now=Clock())
-    store.apply_updates(ledger, [up("add", "a", "1"), up("add", "b", "2")])
+    write(store, ledger, [up("add", "a", "1"), up("add", "b", "2")])
     before = raw(backend, ledger["id"])
     with pytest.raises(MemoryLimitError):
-        store.apply_updates(ledger, [up("add", "c", "3"), up("add", "d", "4")])
+        write(store, ledger, [up("add", "c", "3"), up("add", "d", "4")])
     assert raw(backend, ledger["id"]) == before
 
 
 def _workload(store, ledger, clock):
-    store.apply_updates(ledger, [up("add", "a", "1"), up("add", "b", "1")])
+    write(store, ledger, [up("add", "a", "1"), up("add", "b", "1")])
     clock.tick()
-    store.apply_updates(ledger, [up("replace", "a", "2"), up("retire", "b")])
+    write(store, ledger, [up("replace", "a", "2"), up("retire", "b")])
     clock.tick()
-    store.apply_updates(ledger, [up("add", "b", "again")], pack_id="sha256:" + "3" * 64)
+    write(store, ledger, [up("add", "b", "again")])
     clock.tick()
-    store.apply_updates(ledger, [up("add", "item-x", "1", scope="fleet-ledger")])
+    write(store, ledger, [up("add", "item-x", "1", scope="fleet-ledger")])
     for v in ("2", "3"):
         clock.tick()
-        store.apply_updates(ledger, [up("replace", "item-x", v, scope="fleet-ledger")])
+        write(store, ledger, [up("replace", "item-x", v, scope="fleet-ledger")])
     clock.tick()
-    store.apply_updates(ledger, [up("add", "item-y", "1", scope="fleet-ledger")])
+    write(store, ledger, [up("add", "item-y", "1", scope="fleet-ledger")])
     clock.tick()
-    store.apply_updates(ledger, [up("retire", "item-y", scope="fleet-ledger")])
+    write(store, ledger, [up("retire", "item-y", scope="fleet-ledger")])
 
 
 def test_folding_the_log_reproduces_the_entries(ledger, backend):
@@ -175,11 +176,11 @@ def test_folding_the_log_reproduces_the_entries(ledger, backend):
     store = MemoryStore(backend, now=clock)
     _workload(store, ledger, clock)
     stored = raw(backend, ledger["id"])
-    assert set(stored) == {"entries", "log"}
+    assert set(stored) == {"entries", "log", "exposure"}
     assert fold(stored["log"]) == stored["entries"]
-    assert stored["entries"]["analyst"]["b"]["pack_id"] == "sha256:" + "3" * 64
-    assert store.read(ledger, "fleet-ledger") == {"item-x": "3"}
-    assert store.read(ledger, "analyst") == {"a": "2", "b": "again"}
+    assert stored["entries"]["analyst"]["b"]["pack_id"] == canonical_pack(ledger)[1]
+    assert store.read(ledger, "fleet-ledger")["entries"] == {"item-x": "3"}
+    assert store.read(ledger, "analyst")["entries"] == {"a": "2", "b": "again"}
 
 
 def test_rev_never_restarts_through_retire_and_re_add(reader, backend):
@@ -191,22 +192,22 @@ def test_rev_never_restarts_through_retire_and_re_add(reader, backend):
         [up("retire", "k")],
         [up("add", "k", "three")],
     ):
-        store.apply_updates(reader, batch)
+        write(store, reader, batch)
         clock.tick()
     revs = [r["rev"] for r in store.history(reader, "analyst", "k")["records"]]
     assert revs == [1, 2, 3, 4]
     entry = raw(backend)["entries"]["analyst"]["k"]
     assert entry["rev"] == 4 and entry["status"] == "live" and entry["value"] == "three"
     assert entry["updated_at"] == entry["reasserted_at"] == "2026-11-05T09:03:00.000000Z"
-    assert (entry["checked"], entry["tlp"], entry["sources"]) == (False, "red", [])
+    assert (entry["checked"], entry["tlp"], entry["sources"]) == (True, "red", [])
 
 
 def test_retire_keeps_reasserted_at_and_updated_at_moves(reader, backend):
     clock = Clock()
     store = MemoryStore(backend, now=clock)
-    store.apply_updates(reader, [up("add", "k", "v")])
+    write(store, reader, [up("add", "k", "v")])
     clock.tick(5)
-    store.apply_updates(reader, [up("retire", "k")])
+    write(store, reader, [up("retire", "k")])
     entry = raw(backend)["entries"]["analyst"]["k"]
     assert entry["reasserted_at"] == "2026-11-05T09:00:00.000000Z"
     assert entry["updated_at"] == "2026-11-05T09:05:00.000000Z"
@@ -228,11 +229,11 @@ def test_pre_log_memory_migrates_once_on_the_next_write(reader, backend):
     clock = Clock()
     store = MemoryStore(backend, now=clock)
     # readable before the migration is written, as the migrated shape
-    assert store.read(reader, "analyst") == {"old-fact": "v"}
-    assert store.read(reader, "analyst", include_retired=True)["gone"] == "was"
+    assert store.read(reader, "analyst")["entries"] == {"old-fact": "v"}
+    assert store.read(reader, "analyst", include_retired=True)["entries"]["gone"] == "was"
     assert raw(backend) == legacy  # a read writes nothing
     clock.tick()
-    store.apply_updates(reader, [up("replace", "old-fact", "w")])
+    write(store, reader, [up("replace", "old-fact", "w")])
     stored = raw(backend)
     first = [r for r in stored["log"] if r.get("migrated")]
     assert {(r["key"], r["rev"], r["checked"], r["tlp"], len(r["sources"])) for r in first} == {
@@ -244,7 +245,7 @@ def test_pre_log_memory_migrates_once_on_the_next_write(reader, backend):
     assert stored["entries"]["analyst"]["gone"]["value"] == "was"
     assert fold(stored["log"]) == stored["entries"]
     clock.tick()
-    store.apply_updates(reader, [up("add", "new", "x")])
+    write(store, reader, [up("add", "new", "x")])
     assert len([r for r in raw(backend)["log"] if r.get("migrated")]) == 2  # once
     # before the migration its history is unknown: compacted, never a value
     before = store.as_of(reader, "analyst", T0)
@@ -254,11 +255,11 @@ def test_pre_log_memory_migrates_once_on_the_next_write(reader, backend):
 # ---------------------------------------------------------------- decision 3
 def test_the_clock_is_injected_and_must_be_aware(reader, backend):
     store = MemoryStore(backend, now=lambda: datetime(2030, 1, 2, 3, 4, 5, tzinfo=UTC))
-    store.apply_updates(reader, [up("add", "k", "v")])
+    write(store, reader, [up("add", "k", "v")])
     assert raw(backend)["log"][0]["at"] == "2030-01-02T03:04:05.000000Z"
     naive = MemoryStore(backend, now=lambda: datetime(2030, 1, 2))
     with pytest.raises(ValueError, match="aware UTC"):
-        naive.apply_updates(reader, [up("add", "j", "v")])
+        write(naive, reader, [up("add", "j", "v")])
     assert len(raw(backend)["log"]) == 1
 
 
@@ -278,7 +279,7 @@ def test_a_secret_value_refuses_the_batch_naming_position_and_type_only(reader, 
     secret = _secrets()[kind]
     store = MemoryStore(backend, now=Clock())
     with pytest.raises(MemoryUpdateError) as exc:
-        store.apply_updates(reader, [up("add", "fine", "v"), up("add", "creds", secret)])
+        write(store, reader, [up("add", "fine", "v"), up("add", "creds", secret)])
     msg = str(exc.value)
     assert "memory_updates/1/value: holds a secret" in msg
     assert kind in msg or "token" in msg
@@ -289,12 +290,12 @@ def test_a_secret_value_refuses_the_batch_naming_position_and_type_only(reader, 
 def test_the_screen_runs_before_the_schema_check_so_no_message_quotes_a_secret(reader):
     secret = _secrets()["aws-access-key"]
     with pytest.raises(MemoryUpdateError) as exc:
-        MemoryStore().apply_updates(reader, [up("add", "k", secret + " " + "x" * 2001)])
+        write(MemoryStore(), reader, [up("add", "k", secret + " " + "x" * 2001)])
     assert "holds a secret" in str(exc.value) and "AKIA" not in str(exc.value)
 
 
 def test_a_report_carrying_a_secret_is_refused_before_validation(reader, backend):
-    pack, h = assemble_pack(manifest(), inputs())
+    pack, h = assemble_pack(manifest(), inputs(), profile=reader)
     report = {
         "pack_id": h,
         "profile": reader["id"],
@@ -315,8 +316,8 @@ def test_plain_facts_pass_the_screen(reader, backend):
         up("add", "scanner", "10 login failures from one scanner, tokens rotated on 2026-11-01"),
         up("add", "cve", "CVE-2026-12345 seen; sha256 of the dropper noted in the case"),
     ]
-    store.apply_updates(reader, facts)
-    assert len(store.read(reader, "analyst")) == 2
+    write(store, reader, facts)
+    assert len(store.read(reader, "analyst")["entries"]) == 2
 
 
 # ---------------------------------------------------------------- decision 5
@@ -325,7 +326,7 @@ def test_history_and_as_of_are_owner_scoped(reader, backend):
     s["id"] = "profile:other-reader"
     other = verified(compile_profile(s, library()))
     store = MemoryStore(backend, now=Clock())
-    store.apply_updates(reader, [up("add", "hunch", "v")])
+    write(store, reader, [up("add", "hunch", "v")])
     with pytest.raises(MemoryAccessError, match="cross-agent read"):
         store.history(other, "analyst", "hunch", owner=reader["id"])
     with pytest.raises(MemoryAccessError, match="cross-agent read"):
@@ -342,13 +343,13 @@ def test_history_and_as_of_are_owner_scoped(reader, backend):
 def test_as_of_rebuilds_what_was_believed_at_each_time(reader, backend):
     clock = Clock()
     store = MemoryStore(backend, now=clock)
-    store.apply_updates(reader, [up("add", "a", "a1"), up("add", "b", "b1")])  # 09:00
+    write(store, reader, [up("add", "a", "a1"), up("add", "b", "b1")])  # 09:00
     clock.tick(10)
-    store.apply_updates(reader, [up("replace", "a", "a2")])  # 09:10
+    write(store, reader, [up("replace", "a", "a2")])  # 09:10
     clock.tick(10)
-    store.apply_updates(reader, [up("retire", "b")])  # 09:20
+    write(store, reader, [up("retire", "b")])  # 09:20
     clock.tick(10)
-    store.apply_updates(reader, [up("add", "b", "b2")])  # 09:30
+    write(store, reader, [up("add", "b", "b2")])  # 09:30
 
     def at(minutes):
         return store.as_of(reader, "analyst", T0 + timedelta(minutes=minutes))
@@ -366,14 +367,14 @@ def test_as_of_rebuilds_what_was_believed_at_each_time(reader, backend):
         "aged_out": False,
         "withheld": 0,
     }
-    assert store.read(reader, "analyst") == at(60)["entries"]
+    assert store.read(reader, "analyst")["entries"] == at(60)["entries"]
     with pytest.raises(ValueError, match="aware UTC"):
         store.as_of(reader, "analyst", datetime(2026, 11, 5))
 
 
 def test_history_and_as_of_are_read_only(reader, backend):
     store = MemoryStore(backend, now=Clock())
-    store.apply_updates(reader, [up("add", "k", "v")])
+    write(store, reader, [up("add", "k", "v")])
     before = raw(backend)
     store.history(reader, "analyst", "k")["records"][0]["value"] = "changed"
     store.as_of(reader, "analyst", T0)["entries"]["k"] = "changed"
@@ -394,33 +395,33 @@ def test_a_scope_at_its_cap_refuses_writes_and_pages_once_per_crossing(ledger, b
     notifier = Notifier(sender, StateStore(tmp_path / "notify.json"))
     store = MemoryStore(backend, now=Clock(), notifier=notifier, topic="ops")
     fl = "fleet-ledger"
-    store.apply_updates(ledger, [up("add", "a", "1", scope=fl), up("add", "b", "1", scope=fl)])
-    store.apply_updates(ledger, [up("add", "c", "1", scope=fl), up("add", "d", "1", scope=fl)])
+    write(store, ledger, [up("add", "a", "1", scope=fl), up("add", "b", "1", scope=fl)])
+    write(store, ledger, [up("add", "c", "1", scope=fl), up("add", "d", "1", scope=fl)])
     for _ in range(3):  # three refusals, one page
         with pytest.raises(MemoryLimitError) as exc:
-            store.apply_updates(ledger, [up("add", "e", "1", scope=fl)])
+            write(store, ledger, [up("add", "e", "1", scope=fl)])
     assert exc.value.scopes == {fl: (5, 4)}
     assert sender.titles == [CAP_TITLE]
     page = sender.sent[0]
     assert page.topic == "ops" and fl in page.body and ledger["id"] in page.body
     # a model-written scope has its own cap: the ledger at its cap does not stop the analyst
-    store.apply_updates(ledger, [up("add", "note", "v")])
+    write(store, ledger, [up("add", "note", "v")])
     # retiring a platform key compacts it whole, which makes room: the write lands, recovery
-    store.apply_updates(ledger, [up("retire", "a", scope=fl)])
+    write(store, ledger, [up("retire", "a", scope=fl)])
     assert sender.titles == [CAP_TITLE, CAP_CLEARED]
-    store.apply_updates(ledger, [up("replace", "b", "2", scope=fl), up("retire", "b", scope=fl)])
+    write(store, ledger, [up("replace", "b", "2", scope=fl), up("retire", "b", scope=fl)])
     assert sender.titles == [CAP_TITLE, CAP_CLEARED]  # already clear: no page
     with pytest.raises(MemoryLimitError):  # a new crossing pages again
-        store.apply_updates(ledger, [up("add", "e", "1", scope=fl)])
+        write(store, ledger, [up("add", "e", "1", scope=fl)])
     assert sender.titles == [CAP_TITLE, CAP_CLEARED, CAP_TITLE]
 
 
 def test_a_crossing_without_a_notifier_is_logged_once(ledger, backend, caplog):
     store = MemoryStore(backend, now=Clock())
-    store.apply_updates(ledger, [up("add", k, "v") for k in ("a", "b", "c")])
+    write(store, ledger, [up("add", k, "v") for k in ("a", "b", "c")])
     for _ in range(2):
         with pytest.raises(MemoryLimitError, match="record cap"):
-            store.apply_updates(ledger, [up("add", "d", "v")])
+            write(store, ledger, [up("add", "d", "v")])
     said = (
         f"{ledger['id']}'s memory scope analyst refuses writes: 4 records would exceed the cap of 3"
     )
@@ -437,13 +438,13 @@ def test_keep_last_folds_records_beyond_the_last_n_into_one_range(ledger, backen
         platform_scopes=[fl],
         memory_limits={"keep_last": {fl: {"item-*": 2}}},
     )
-    store.apply_updates(
-        ledger, [up("add", "item-a", "v1", scope=fl), up("add", "other", "o", scope=fl)]
-    )
+    write(store, ledger, [up("add", "item-a", "v1", scope=fl), up("add", "other", "o", scope=fl)])
     for v in ("v2", "v3", "v4"):
         clock.tick(10)
-        store.apply_updates(
-            ledger, [up("replace", "item-a", v, scope=fl), up("replace", "other", v, scope=fl)]
+        write(
+            store,
+            ledger,
+            [up("replace", "item-a", v, scope=fl), up("replace", "other", v, scope=fl)],
         )
     recs = store.history(ledger, fl, "item-a")["records"]
     assert [r["rev"] for r in recs] == [2, 3, 4]
@@ -456,7 +457,7 @@ def test_keep_last_folds_records_beyond_the_last_n_into_one_range(ledger, backen
     assert {"sources", "closure", "tlp", "pack_ids", "checked"} <= set(rng)
     # it stays one range record however often the key is replaced
     clock.tick(10)
-    store.apply_updates(ledger, [up("replace", "item-a", "v5", scope=fl)])
+    write(store, ledger, [up("replace", "item-a", "v5", scope=fl)])
     recs = store.history(ledger, fl, "item-a")["records"]
     assert [(r.get("rev_from"), r["rev"]) for r in recs] == [(1, 3), (None, 4), (None, 5)]
     # a key no pattern matches keeps every value
@@ -491,13 +492,11 @@ def test_a_retired_platform_key_compacts_whole_to_one_tombstone(ledger, backend)
     store = MemoryStore(backend, now=clock)
     fl = "fleet-ledger"
     ledger = _profile(memory_scopes=["analyst", fl], platform_scopes=[fl])
-    store.apply_updates(ledger, [up("add", "item-a", "v1", scope=fl)], pack_id="sha256:" + "5" * 64)
+    write(store, ledger, [up("add", "item-a", "v1", scope=fl)], pack_id="sha256:" + "5" * 64)
     clock.tick(10)
-    store.apply_updates(
-        ledger, [up("replace", "item-a", "v2", scope=fl)], pack_id="sha256:" + "6" * 64
-    )
+    write(store, ledger, [up("replace", "item-a", "v2", scope=fl)], pack_id="sha256:" + "6" * 64)
     clock.tick(10)
-    store.apply_updates(ledger, [up("retire", "item-a", scope=fl)])
+    write(store, ledger, [up("retire", "item-a", scope=fl)])
     (tomb,) = store.history(ledger, fl, "item-a")["records"]
     assert tomb["compacted"] == "whole" and tomb["op"] == "retire" and tomb["rev"] == 3
     assert tomb["rev_from"] == 1 and tomb["status"] == "retired"
@@ -517,16 +516,16 @@ def test_a_retired_platform_key_compacts_whole_to_one_tombstone(ledger, backend)
     assert store.as_of(ledger, fl, T0 - timedelta(minutes=1))["compacted"] == []
     # the key comes back with the next rev, and a second compaction keeps the first's range
     clock.tick(10)
-    store.apply_updates(ledger, [up("add", "item-a", "v3", scope=fl)])
+    write(store, ledger, [up("add", "item-a", "v3", scope=fl)])
     assert store.history(ledger, fl, "item-a")["records"][-1]["rev"] == 4
     clock.tick(10)
-    store.apply_updates(ledger, [up("retire", "item-a", scope=fl)])
+    write(store, ledger, [up("retire", "item-a", scope=fl)])
     (tomb2,) = store.history(ledger, fl, "item-a")["records"]
     assert tomb2["rev"] == 5 and tomb2["since"] == tomb["since"]
     assert len(tomb2["value_digests"]) == 3
     stored = raw(backend, ledger["id"])
     assert fold(stored["log"]) == stored["entries"]
     # a model-written scope is never compacted
-    store.apply_updates(ledger, [up("add", "k", "v")])
-    store.apply_updates(ledger, [up("retire", "k")])
+    write(store, ledger, [up("add", "k", "v")])
+    write(store, ledger, [up("retire", "k")])
     assert len(store.history(ledger, "analyst", "k")["records"]) == 2

@@ -137,7 +137,7 @@ spelling of `amber+strict`, an unknown word or a dangling `+` is `red`.
 | backups and off-site copies | the backup target's reader ceiling | `grants.egress` for off site (`cap:backup` itself stays in the lab) | not yet |
 | the bus | its subscribers' ceilings | `cap:events` | not yet |
 | records and tickets (ADR-0010, ADR-0020) | their readers' ceilings | `cap:records`, `cap:cases` | not yet |
-| memory and embedding stores | their readers' ceilings | the agent's memory grants | not yet |
+| memory and embedding stores | their readers' ceilings | the agent's memory grants | the agent memory store (`MemoryStore`, ADR-0037): each record's label is the strictest of its pack's, its sources' and the entry's, and `read`, `history` and `as_of` withhold what is above the reader's ceiling (its attested `tlp_ceiling`, else its `data_tier`), as a count per scope, never by key; while packs carry no labels all memory is `red`. Embedding stores: not yet |
 | generated pages committed to a repository | `clear` for the public repository (ADR-0011) | not a module grant: the leak scans | the leak scans (no TLP check) |
 | logs and error text that reach a notification | the channel's ceiling | not a module grant: the screeners | what reaches a page in a message: `notify.CeilingSender` scans its title, body, tags, link, topic and email; no log screener applies the check |
 

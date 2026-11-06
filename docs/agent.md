@@ -40,8 +40,8 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/approval` | approver identity plus `request_digest` |
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
-All are versioned 1.0 except `agent/profile` (1.6), `agent/report_result` (1.1),
-`agent/context_manifest` (1.2), `agent/golden_task` (1.1), `broker/manifest` (1.8),
+All are versioned 1.0 except `agent/profile` (1.7), `agent/report_result` (1.2),
+`agent/context_manifest` (1.3), `agent/golden_task` (1.1), `broker/manifest` (1.8),
 `broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
 additive, and each schema's `description` says what each minor added. Every version is
 frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`
@@ -536,8 +536,9 @@ running platform.
 
 `homelabnext.agent.memory.MemoryStore` is the only way to change an agent's **structured**
 memory, the scoped, keyed facts this section describes, and it takes
-only the `memory_updates` of a `report_result` (`apply_report`, which validates the report and,
-given the pack, checks it with `validate_report`) or a list of them (`apply_updates`). Updates
+only the `memory_updates` of a `report_result` (`apply_report`, which validates the report and
+checks it against the pack it ran on with `validate_report`) or a list of them (`apply_updates`,
+checked against a pack too, or an unchecked platform write; see "Sources and labels"). Updates
 are validated exactly as inside a report, then applied all or nothing: `add` needs a value and a
 key that is not live, `replace` a live key and a value, `retire` a live key and no value (kept as
 a tombstone). A deferred report may not change memory, and a report updates only its own
@@ -561,8 +562,9 @@ transaction as the entry. A refused batch writes neither, on both backends. `ent
 of the log (`fold(log)` rebuilds it). Each entry carries `rev`, `updated_at` and `reasserted_at`,
 which `add` and `replace` set. `rev` starts at 1 on a key's first `add` and rises by one on every
 record of the key. It is never restarted or reused, through `retire`, a later `add` and the
-compaction below. Until sources and labels ship (PR 2), every record is `sources: []`,
-`checked: false`, `tlp: red`, with an empty closure. Memory stored before the log migrates once,
+compaction below. A record's `sources`, `checked`, `tlp` and `closure` are set as "Sources and
+labels" says; a migrated record is `sources: []`, `checked: false`, `tlp: red`, with an empty
+closure. Memory stored before the log migrates once,
 on its owner's next write, to one `migrated: true` record per entry (`rev: 1`). A legacy key or
 value that holds a secret migrates as a `purged: true` marker only, with no value and no digest
 (an unsalted digest of a low-entropy secret confirms a guess offline); a secret key is renamed
@@ -596,8 +598,8 @@ entries as they stood at `t`, rebuilt from the log. A key whose state at `t` lie
 (a range, a tombstone, or before a migration) is listed under `compacted` and never given a value.
 `aged_out` is true when `t` falls in the time range of keys whose tombstones aged out (below);
 their names are gone, so any key not listed must then be read as compacted. Both reads are
-owner-scoped exactly like `read`. `withheld` is 0 until records carry labels (PR 2 applies the
-reader's TLP ceiling there). Every read (`read` included) loads the owner's whole stored value,
+owner-scoped exactly like `read`, and all three withhold what is above the reader's ceiling
+(below). Every read (`read` included) loads the owner's whole stored value,
 log included; the file backend reads its whole file on every call anyway. The public API is
 exactly `apply_updates`, `apply_report`, `read`, `history` and `as_of`.
 
@@ -626,16 +628,109 @@ again. Without a notifier, the crossing is logged once.
 An aged-out key leaves `dependents` for good. It was already retired, so a retraction loses
 nothing live.
 
-There is no byte cap beside the record cap. Every field of a PR 1 record is bounded by the report
-schema: a value is at most 2,000 characters, a key 64, and sources and closures are empty. So the
-record cap bounds the bytes. PR 2, which fills closures, adds a byte cap.
+Each scope also has a **byte cap** beside its record cap (ADR-0037 decision 6, amended
+2026-11-06): `memory_limits.bytes` (profile schema 1.7), by default 2,000 bytes per record of the
+scope's record cap (20 MB for a 10,000-record scope). It counts the scope's **records only**,
+serialised. Measured: a typical record is about 1 kB, the largest model record (a 2,000-character
+value and a full 256-identifier closure) 22.5 kB, a capped range record about 95 kB. So ordinary
+memory meets the record cap first. Pack exposures are charged **once per owner** against
+`memory_limits.exposure_bytes` (default 50,000,000 bytes; one exposure is 1.5 kB at 20 rendered
+identifiers and 75.8 kB at 1,024). Only a batch that stores a new exposure can cross it; past it,
+every checked write from a new pack is refused and paged, while writes from packs the owner
+already holds go on. That self-lockout is intended and ends when the operator raises the budget
+or purges (PR 3). A refusal (`MemoryLimitError`, `unit` `records`, `bytes` or `exposure`) gives
+the advice that frees the cap: for a model-written scope, raise the cap in the reviewed profile
+or an operator purge (it never shrinks); for a platform scope, retire finished keys and set
+`keep_last`. A byte refusal reports the cap, never a byte total, which would count records the
+writer may not read. A range record keeps at most 256 value digests and 256 pack ids, the newest,
+and says `truncated: true` past that; a retraction treats a truncated range as exposed to
+everything its sources reach. It also keeps `effective`, the folded state's own effective
+sources, which the fold reads; `sources` keeps the union, which `dependents` reads.
 
 The compiler copies `platform_scopes` and `memory_limits` from the spec only when they are set
 (empty ones normalise away). It refuses a platform or capped scope that is not a memory scope, and
-`keep_last` or `tombstones` on a scope that is not a platform scope. `apply_report` refuses any
-update that names a platform scope; only platform code writes one, through `apply_updates`.
+`keep_last` or `tombstones` on a scope that is not a platform scope, and a `bytes` entry for a
+scope that is not a memory scope. `apply_report` refuses any update that names a platform scope;
+only platform code writes one, through `apply_updates(..., unchecked=True)`.
 Until `MemoryAdmin` ships (PR 3), nothing can erase history: a report cannot reach a platform
 scope, so it cannot cause compaction.
+
+
+**Sources and labels** ([ADR-0037](adr/0037-agent-memory-is-sourced-historied-and-retractable.md),
+PR 2, decisions 7 to 10). Provenance comes from what the platform knows the model was shown,
+never from what the model says.
+- **The pack records what it rendered.** Its `provenance` block lists, for the sections that
+  survived the budget only, each knowledge item (`id`, record `uid` when the node id carries one,
+  `digest`, `file_digest`, `tlp`) and each input item the caller declares in `inputs["items"]`
+  (`{uid, digest, tlp}` per input section), each section's `tlp`, and the pack's own `tlp`. An
+  input item's uid must be platform-issued: the caller resolves it through the records or lake
+  reader and passes `assemble_pack(..., resolved_uids=)`: a sealed `ResolvedUids`, made only by
+  `resolve_input_uids(rows, source=)` from the `{uid, digest, tlp}` rows the reader stored (a
+  plain mapping is refused). An item whose uid is not in it, or whose digest is not the stored
+  one, is refused (the assembler does no I/O); so is a uid paired with two digests or a digest
+  with two uids, knowledge items included. A pack renders at most 1,024 identifiers;
+  `rendered_count` lets the caller check before assembly, and the assembler refuses a pack over
+  it. A section the budget trimmed, but did not drop, counts all its items as rendered: the
+  assembler cannot tell which item a cut fell in, so it errs toward retracting more. `hnx agent
+  pack` runs no reader, so it refuses an inputs file with `items`.
+- **A pack is bound to its profile.** `assemble_pack(..., profile=)` (and `start_session`, which
+  passes it) records `profile: {id, digest}`; the store refuses a checked write whose pack names
+  another profile or none. The runner applies a report with the session's own pack, which it
+  holds; it never looks a pack up by the report's `pack_id`, which the model wrote.
+- **Labels in the pack.** A knowledge item takes its record's or page's declared `tlp`; an input
+  item the strictest of its stored label (read as stored data: a non-canonical label is `red`)
+  and the caller's, so a caller can raise a label but never lower it; a pre-gate section is `red`
+  (lab data); a static section takes the manifest's `tlp` (context manifest 1.3, which refuses
+  `tlp` on an input section), `red` when absent; an input section the strictest of its items and
+  of any TLP marker in its text (text only raises it), `red` with no items. The pack's label is the strictest of its rendered sections'. Until records,
+  pages and manifests declare labels, every pack is `red`, and so is the access block
+  `start_session` adds, so every session pack is `red` today (ADR-0037 follow-up 6 names the
+  work that changes that).
+- **A source is an identifier the assembler wrote.** A memory update may carry `sources`
+  (`report_result` 1.2: at most 16 unique; a content digest, a UUIDv7 record uid or
+  `mem:<profile id>/<scope>/<key>@<rev>`). Each must equal a rendered knowledge item's `digest`,
+  `file_digest` or uid, or a rendered input item's `digest` or uid. Text is never a source: not a
+  cite's `ref`, a section body or the summary, and not an item the budget dropped. Any other
+  source refuses the whole report, named by position only. Every `mem:` source is refused until
+  packs carry a memory block (PR 3), with one message whoever's memory it names. An update with
+  no sources is stored with `sources: []` and named in the result's `unsourced`. A refusal
+  names an update by its position, never its key. `verify` is in
+  the schema (decision 15) and refused by the store until PR 4. `validate_report` and the store
+  refuse more than 64 `memory_updates` or 128 `cites`.
+- **A checked write needs its pack.** `apply_report(profile, report, pack=, pack_hash=)` and
+  `apply_updates(profile, updates, pack=, pack_hash=)` refuse a write without them, a hash that is
+  not the pack's own and a deferred pack; their records are `checked: true`.
+  `apply_updates(..., unchecked=True)` takes no pack, writes the profile's `platform_scopes` and
+  nothing else, and its records are `checked: false` and `red`; `pack_id=`, if given, must be a
+  pack hash. A checked write may not name a platform scope. A write returns only what it touched,
+  filtered by the writer's own ceiling: `{revs: {"<scope>/<key>": rev}, unsourced: [...],
+  withheld: n, dropped: [...]}`, never the entries.
+- **The label has a floor.** A record's `tlp` is the strictest of the pack's label, each source's
+  label and the entry's current label, for every op, so it is never lowered (a `replace` from a
+  `clear` pack leaves an `amber` entry `amber`). The store takes no label from a caller.
+- **Withheld reads.** The reader's ceiling is its `VerifiedProfile`'s attested `tlp_ceiling`,
+  else what its `data_tier` receives (`receive_ceiling`); never an argument. `read` returns
+  `{entries, withheld}`: the entries at or below it and a count, the same plain-dict shape as
+  `history` (`{records, withheld}`) and `as_of`. A withheld entry's key is never returned: keys
+  are model-chosen and can carry content. `history` of a key with no visible record answers
+  `records: []` and the scope's withheld count, whether the key exists or not, and `as_of` says
+  `aged_out` only when the aged record is within the ceiling, so no read is an existence oracle.
+  While
+  memory is `red`, a profile whose ceiling is below `red` reads its whole memory as withheld,
+  by design.
+- **Exposure.** A checked batch that changes memory stores its pack's exposure once per owner,
+  keyed by pack id: `{rendered: [identifiers], memory: []}`. Records point at it by `pack_id`
+  (folded records by `pack_ids`), and an exposure no record points at any longer is dropped.
+- **Closure.** An entry's effective sources are the union of its records' sources since its last
+  `add`; each record stores them as its `closure` (no `mem:` revisions or aliases until PR 3), at
+  most 256. A checked update past that refuses its batch: retire the key and add it again. An
+  unchecked platform update past it is dropped and reported in the result's `dropped`, and the
+  rest of the batch applies, so a key the platform replaces without end cannot stall its writer.
+  A drop pages once per crossing (pair `AGENT_MEMORY_DROPPED`, keyed by owner and scope, naming
+  the scope and the count, never a key) and recovers on the scope's next batch with no drop. A
+  cursor is position, not provenance: ADR-0035's fold writes its `cursor-*` keys with no
+  `sources`, so a cursor never reaches the cap.
+  Compaction unions closures into range records and tombstones.
 
 
 Two stores are called memory, and only this one carries the M-09 guarantees. The broker's

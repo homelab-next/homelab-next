@@ -109,7 +109,7 @@ def test_profile_include_detail_is_checked_by_the_schema():
     """agent/profile 1.4: include.detail is `summary` or `outline` (absent means full); the
     compiler never writes `full`, and an unknown value is refused."""
     schema = json.loads((ROOT / "schemas/agent/profile.schema.json").read_text())
-    assert schema["$id"].endswith("/agent/profile/1.6")  # 1.5 tlp_ceiling; 1.6 memory_limits
+    assert schema["$id"].endswith("/agent/profile/1.7")  # 1.6 memory_limits; 1.7 bytes
     good = json.loads((ROOT / "schemas/agent/examples/profile.reader.json").read_text())
     assert {r["detail"] for r in good["include"]} == {"summary", "outline"}
     assert sc.errors_for(schema, good, REGISTRY) == []

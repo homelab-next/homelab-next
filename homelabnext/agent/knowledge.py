@@ -6,7 +6,10 @@ graph (:mod:`homelabnext.graph`), filtered by what the profile is granted.
 record or page text itself, not a pointer to it), ordered by :func:`homelabnext.graph.related`
 rank, and every exclusion with its reason.  :func:`~homelabnext.agent.pack.assemble_pack` turns it
 into volatile sections and records :meth:`Selection.record` in the pack, so a run says exactly
-which ids and which content digests it carried.
+which ids and which content digests it carried.  Each included node also carries ``tlp``: the
+record's or page's declared label (a ``tlp`` attribute of its graph node, never read from its
+text), ``red`` when it declares none; the pack's ``provenance`` block records it for each node it
+rendered (ADR-0037 decision 8).
 
 **Grant filtering is the security property.**  The access-bearing nodes are capabilities
 (``cap:``), services (``svc:``), MCP servers (``mcp:``) and broker actions (``action:``).  The
@@ -58,6 +61,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from homelabnext import tlp
 from homelabnext.graph import Edge, Graph, dumps, is_active, related, seeds_for
 
 from .compiler import VerifiedProfile, require_verified
@@ -493,6 +497,9 @@ def select_knowledge(
                 "_content": backed,
                 "_served": rule.get("detail", "full") != "full",
                 **({"file_digest": own} if own else {}),
+                # the record's or page's declared label, never one read from its text; a node
+                # that declares none is red (ADR-0037 decision 8)
+                "tlp": str(tlp.read_stored(node.attrs["tlp"])) if "tlp" in node.attrs else "red",
             }
 
     for nid, ri in unreadable.items():  # a rule asking for the whole thing cannot have it
