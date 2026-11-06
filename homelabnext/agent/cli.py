@@ -58,6 +58,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,18 @@ from .pack import assemble_pack
 from .prompts_cli import add_injection_parser, add_prompts_parser, run_injection, run_prompts
 from .readers import RULES, ToolClasses, lint_paths
 from .schemas import schema_errors
+
+
+def _clock_arg(value: str) -> Callable[[], datetime]:
+    """``--now``: an RFC 3339 time with an offset, as the zero-argument clock ``assemble_pack``
+    takes."""
+    try:
+        t = datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected an RFC 3339 time with an offset") from None
+    if t.tzinfo is None:
+        raise argparse.ArgumentTypeError("expected an RFC 3339 time with an offset")
+    return lambda: t
 
 
 class _Unreadable(Exception):
@@ -229,6 +243,13 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="print the included and excluded knowledge and why (the pack goes to --out only)",
     )
+    p.add_argument(
+        "--now",
+        type=_clock_arg,
+        help="RFC 3339 time with an offset to age pre-gate outputs against, to reproduce a "
+        "recorded pack (default: the current time; a pre-gate output older than its gate's "
+        "max_age_s defers the pack, exit 3)",
+    )
     t = sub.add_parser("terms", help="the project's terms: print, or check/write docs/terms.md")
     mode = t.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="fail when PATH has drifted")
@@ -357,13 +378,14 @@ def main(argv: list[str]) -> int:
                 broker=_load(args.broker) if args.broker else None,
                 denylist=deny,
                 knowledge=knowledge,
+                now=args.now,
             )
         else:
             if args.explain:
                 raise AgentError("--explain needs --profile and --registry")
             if args.policy or args.lock:
                 raise AgentError("--policy and --lock go with --profile")
-            pack, digest = assemble_pack(manifest, pack_inputs, denylist=deny)
+            pack, digest = assemble_pack(manifest, pack_inputs, denylist=deny, now=args.now)
         if args.out or not args.explain:
             _emit({"hash": digest, "pack": pack}, args.out)
         print(f"pack {digest} status={pack['status']}", file=sys.stderr)

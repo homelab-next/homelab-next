@@ -262,3 +262,11 @@ def test_a_screener_kept_across_renders_keeps_its_labels():
     assert "[REDACTED:ip:1]" in body(first, kept)
     assert '["[REDACTED:ip:2]", "[REDACTED:ip:1]"]' in body(second, kept)
     assert '["[REDACTED:ip:1]", "[REDACTED:ip:2]"]' in body(second)  # a fresh one per render
+
+
+@pytest.mark.parametrize(
+    "delim,reason",
+    [("ab\ncd", "line break"), ("\u200b" * 4, "fewer than 4 visible"), ("    ", "fewer than 4")],
+)
+def test_a_template_delimiter_that_cannot_fence_input_fails(delim, reason):
+    assert reason in problems_of(doc(delimiter=delim))

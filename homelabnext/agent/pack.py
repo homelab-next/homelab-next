@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Context-pack assembler: ``(manifest, inputs) -> (pack, hash)``, a pure function.
+"""Context-pack assembler: ``(manifest, inputs, now) -> (pack, hash)``, a pure function.
+
+The only clock is ``now=`` (default: the current UTC time), and it is read only to age a
+pre-gate output whose gate sets ``max_age_s``.  Replaying a pack by its hash therefore needs the
+same ``now`` as well as the same manifest and inputs: the same inputs assembled later can defer.
 
 Ordering is stable before volatile: sections are emitted by tier (``stable``, ``session``,
 ``volatile``) and, within a tier, by name, so the byte-identical prefix is as long as possible
@@ -11,18 +15,30 @@ There is no silent truncation.  A section over its own ``max_chars`` and a pack 
 tier it came from.  Volatile content is cut first, then session; stable content is never cut --
 if the stable tier alone does not fit, the pack is ``deferred``.
 
-A required pre-gate that is missing, ``stale`` or ``failed`` also yields a ``deferred`` pack with
-the reason, so the agent does not run on guessed context.
+Pre-gates.  Each output in ``inputs["pregates"]`` is checked before it is used: it must match
+``agent/pregate_output``, its ``gate`` must be the id it is filed under, and, when the manifest
+gives the gate a ``max_age_s``, its ``observed_at`` must be no older than that (and no more than
+:data:`MAX_CLOCK_SKEW_S` in the future) at ``now`` (default: the current UTC time; pass ``now=``
+to assemble against a fixed clock).  An output that fails a check is not rendered: a required
+gate's defers the pack with the reason, an optional gate's is listed in ``omitted``.  A required
+pre-gate that is missing, ``stale`` or ``failed`` also yields a ``deferred`` pack with the reason,
+so the agent does not run on guessed context; any status the schema does not list fails the
+schema check and so defers too.
 
 Fencing.  Stable sections are fenced ``<delim> <name> [stable] <delim>``; their text comes from
-the manifest.  Session and volatile sections carry untrusted input, so they are fenced with a
-per-pack nonce, ``<delim> <name> [<tier>] <nonce> <delim>`` ... ``<delim> end <name> <nonce>
-<delim>``, where the nonce is derived from the digest of the fenced content (deterministic, so the
+the manifest, so a ``source: input`` section may never be ``tier: stable``
+(:func:`~homelabnext.agent.readers.stable_input_problems`; refused at assembly).  Session and
+volatile sections carry untrusted input, so they are fenced with a per-pack nonce,
+``<delim> <name> [<tier>] <nonce> <delim>`` ... ``<delim> end <name> <nonce> <delim>``, where the nonce is derived from the digest of the fenced content (deterministic, so the
 pack stays a pure function, but not knowable to whoever wrote that content).  Any line of
 session or volatile text that starts with the delimiter (or the default one) is escaped with
 :data:`ESCAPE_PREFIX`, so input cannot open a fake section, stable or otherwise.  A line is what
 any Unicode line boundary ends (CR, VT, FF, NEL, LS and PS as well as LF), and leading
-whitespace and format characters (zero-width space, BOM) do not hide a delimiter.
+whitespace and format characters (zero-width space, BOM) do not hide a delimiter.  The
+delimiters are read the same way (:func:`fence_key`), so a full-width, space-led,
+zero-width-laced or accented (precomposed or decomposed) custom delimiter is matched as a reader
+sees it too.  A delimiter that holds a line break, or that a reader sees as fewer than
+:data:`MIN_VISIBLE_DELIMITER` characters, is refused (:func:`delimiter_problems`).
 
 Screening.  Before fencing, every section filled from input (``source: input``) is passed through
 :class:`~homelabnext.agent.screen.Screener`, which replaces secrets and PII with typed labels that
@@ -104,6 +120,8 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
 from homelabnext import tlp
@@ -113,7 +131,9 @@ from .compiler import VerifiedProfile, require_verified
 from .deny import DenySet, mem_ref
 from .digest import canonical_json, digest_of, sha256_text
 from .errors import SpecError
+from .readers import stable_input_problems
 from .resolved import DIGEST, UID, ResolvedUids
+from .schemas import schema_error_shapes
 from .screen import Screener, screen_config
 
 TIERS = ("stable", "session", "volatile")
@@ -127,7 +147,51 @@ ESCAPE_PREFIX = "[escaped] "
 QUARANTINE_TITLE, QUARANTINE_CLEARED = AGENT_PACK_QUARANTINED
 #: the most identifiers one pack may render (ADR-0037 decision 9)
 MAX_RENDERED = 1024
+#: how far in the future a pre-gate's ``observed_at`` may be before the output is refused
+MAX_CLOCK_SKEW_S = 300
+#: the fewest characters a custom delimiter must keep once read as a reader sees it
+#: (:func:`fence_key`): a fence a reader cannot see does not separate data from instructions
+MIN_VISIBLE_DELIMITER = 4
 _RED = str(tlp.Label.RED)
+
+
+def _now() -> datetime:
+    """The clock ``assemble_pack`` reads when no ``now=`` is passed (tests replace it)."""
+    return datetime.now(UTC)
+
+
+def _parse_time(value: str) -> datetime | None:
+    try:
+        t = datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo is not None else None
+
+
+def _gate_problem(gate: Mapping[str, Any], out: Any, now: Any) -> str | None:
+    """Why the output ``out`` filed for ``gate`` may not be used (None: it may).  Messages name
+    schema paths and keywords, never a value (:func:`~homelabnext.agent.schemas.
+    schema_error_shapes`)."""
+    shapes = schema_error_shapes("agent", "pregate_output", out)
+    if shapes:
+        return f"does not match agent/pregate_output ({'; '.join(shapes[:3])})"
+    if out["gate"] != gate["id"]:
+        return "is filed under this gate but names another gate"
+    max_age = gate.get("max_age_s")
+    if max_age is None:
+        return None
+    observed = _parse_time(out["observed_at"])
+    if observed is None:
+        return "has an observed_at that is not an RFC 3339 time with an offset"
+    clock = now() if now is not None else _now()
+    if not isinstance(clock, datetime) or clock.tzinfo is None:
+        raise SpecError("now must return a timezone-aware datetime")
+    age = (clock - observed).total_seconds()
+    if age > max_age:
+        return f"is {int(age)}s old, over max_age_s={max_age}"
+    if age < -MAX_CLOCK_SKEW_S:
+        return f"was observed {int(-age)}s in the future (over {MAX_CLOCK_SKEW_S}s of skew)"
+    return None
 
 
 def node_uid(node_id: str) -> str | None:
@@ -310,13 +374,15 @@ _BLANK_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
 
 def fence_key(line: str, width: int | None = None) -> str:
     """What a fence test must look at: ``line`` as a reader sees it.  Every character is
-    NFKC-folded (a full-width delimiter reads as the ASCII one), invisible characters are
-    dropped wherever they are (:data:`_INVISIBLE_CATEGORIES`, :data:`_BLANK_FILLERS`), and
-    leading whitespace is skipped.  With ``width``, folding stops once that many characters are kept, so a very long
-    line costs no more than its start."""
+    NFKD-folded (a full-width delimiter reads as the ASCII one, and a precomposed accented
+    letter decomposes, so it and its base letter plus a combining mark read the same), invisible
+    characters, combining marks included, are dropped wherever they are
+    (:data:`_INVISIBLE_CATEGORIES`, :data:`_BLANK_FILLERS`), and leading whitespace is skipped.
+    With ``width``, folding stops once that many characters are kept, so a very long line costs
+    no more than its start."""
     out: list[str] = []
     for ch in line:
-        for c in ch if ch.isascii() else unicodedata.normalize("NFKC", ch):
+        for c in ch if ch.isascii() else unicodedata.normalize("NFKD", ch):
             if not c.isascii() and (
                 c in _BLANK_FILLERS or unicodedata.category(c) in _INVISIBLE_CATEGORIES
             ):
@@ -329,11 +395,44 @@ def fence_key(line: str, width: int | None = None) -> str:
     return "".join(out)
 
 
-def looks_like_fence(line: str, delims: tuple[str, ...]) -> bool:
-    """True when ``line`` would read as a fence (or as the escape prefix) to a model."""
+def delimiter_problems(doc: Mapping[str, Any]) -> list[str]:
+    """Why the ``delimiter`` of a manifest or prompt template cannot fence untrusted input (empty
+    = it can, or none is set).  A delimiter holding a line break cannot be matched against any
+    one line of input, so input could forge a fence line by line; one a reader sees as fewer than
+    :data:`MIN_VISIBLE_DELIMITER` characters (:func:`fence_key`, trailing whitespace dropped) is
+    a fence nobody can see, and would make every input line look like one.  The messages never
+    quote the delimiter."""
+    delim = doc.get("delimiter") if isinstance(doc, Mapping) else None
+    if not isinstance(delim, str):
+        return []
+    if LINE_BREAK.search(delim):
+        return ["delimiter holds a line break, so a fence could be forged line by line"]
+    if len(fence_key(delim).rstrip()) < MIN_VISIBLE_DELIMITER:
+        return [
+            f"delimiter reads as fewer than {MIN_VISIBLE_DELIMITER} visible characters "
+            "(whitespace, invisible characters and combining marks do not count)"
+        ]
+    return []
+
+
+@lru_cache(maxsize=64)
+def _folded(delims: tuple[str, ...]) -> tuple[tuple[str, ...], int]:
+    """``delims`` read as a reader sees them (:func:`fence_key`, trailing whitespace dropped, so
+    a line that differs only in the spaces after the delimiter still matches), and how many
+    characters of a line a fence test must fold to compare them and the escape prefix."""
     escape = ESCAPE_PREFIX.rstrip()
-    key = fence_key(line, max([len(escape), *map(len, delims)]))
-    return key.startswith(delims) or key.startswith(escape)
+    keys = tuple(sorted({fence_key(d).rstrip() for d in delims}))
+    return keys, max([len(escape), *map(len, keys)])
+
+
+def looks_like_fence(line: str, delims: tuple[str, ...]) -> bool:
+    """True when ``line`` would read as a fence (or as the escape prefix) to a model.  The line
+    and the delimiters are both folded (:func:`fence_key`): a delimiter spelled with full-width
+    characters, a leading space, a zero-width space or an accent matches its plain-looking
+    forgery."""
+    keys, width = _folded(tuple(delims))
+    key = fence_key(line, width)
+    return key.startswith(keys) or key.startswith(ESCAPE_PREFIX.rstrip())
 
 
 def split_lines(text: str) -> list[str]:
@@ -367,8 +466,10 @@ def assemble_pack(
     profile: VerifiedProfile | None = None,
     memory: Any = None,
     retracted: DenySet | None = None,
+    now: Any = None,
 ) -> tuple[dict, str]:
-    """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments.
+    """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments; the only clock
+    is ``now`` (below).
 
     ``denylist``: deny-list lines whose terms are redacted from input sections (see module doc).
     ``knowledge``: a :class:`~homelabnext.agent.knowledge.Selection` to add (see module doc).
@@ -389,7 +490,13 @@ def assemble_pack(
     store is wired in, pass ``homelabnext.agent.memory.denied(backend)``; when that raises
     ``DenyFileProblem``, do not assemble a pack at all (omitting ``retracted`` would serve
     retracted content: the default is no deny set).
+    ``now``: a zero-argument callable returning a timezone-aware :class:`~datetime.datetime`,
+    the clock a pre-gate's ``max_age_s`` is checked against (default: the current UTC time).  It
+    is called only when a gate with ``max_age_s`` has an output; a value that is not an aware
+    datetime raises :class:`SpecError`.
     """
+    if now is not None and not callable(now):
+        raise SpecError("now must be a callable returning a timezone-aware datetime")
     if retracted is not None and type(retracted) is not DenySet:
         raise SpecError("retracted must be a DenySet (homelabnext.agent.deny.deny_set)")
     denyset = retracted if retracted is not None else DenySet()
@@ -405,6 +512,9 @@ def assemble_pack(
             )
         if s.get("tier") not in _RANK:
             raise SpecError(f"section {s.get('name')!r}: tier must be one of {list(TIERS)}")
+    unfenceable = stable_input_problems(manifest) + delimiter_problems(manifest)
+    if unfenceable:
+        raise SpecError("; ".join(unfenceable))
     bound = None
     if profile is not None:
         require_verified(profile, "assemble_pack")
@@ -453,7 +563,14 @@ def assemble_pack(
             if g["required"]:
                 deferred.append(f"required pre-gate {g['id']!r} has no output")
             continue
-        if g["required"] and out.get("status") in ("stale", "failed"):
+        problem = _gate_problem(g, out, now)
+        if problem is not None:
+            if g["required"]:
+                deferred.append(f"required pre-gate {g['id']!r} output {problem}")
+            else:
+                omitted.append(PREGATE_PREFIX + g["id"])
+            continue
+        if g["required"] and out["status"] in ("stale", "failed"):
             deferred.append(f"required pre-gate {g['id']!r} is {out.get('status')}")
         gate_sections.append(
             {
