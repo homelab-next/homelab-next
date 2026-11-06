@@ -78,6 +78,8 @@ one IdP product.
    missing, `none` or `mtls` (`a public route needs auth`, as for a module's rows): a public
    site is `auth: idp` (forward auth) or `auth: own` (the app's own login), since the edge
    terminates TLS and checks no client certificate; the edge's own row has no public site.
+   `auth: own` is the row's own claim that the app has a login: the registry cannot check it,
+   so a reviewer checks it against the app before accepting a public `own` row.
    **The edge lets in only the service's own groups, not every realm user.** Each site imports
    the snippet with one argument, the sorted union of the groups of its `roles` (rule 5),
    URL-encoded and joined by `,`, and the check is `/oauth2/auth?allowed_groups=<them>`. The

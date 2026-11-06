@@ -222,6 +222,8 @@ def test_two_spellings_of_one_ipv6_host_address_are_one_address():
 
 
 def test_an_ipv4_and_an_ipv6_zone_never_overlap():
+    # pins the stdlib behaviour the overlap loop relies on (no version guard): ipaddress never
+    # reports an IPv4 and an IPv6 network as overlapping
     from homelabnext.registry.model import semantic_problems
 
     doc = mutate(lambda d: d["zones"].update(v6={"cidr": "2001:db8::/64"}))
@@ -243,3 +245,20 @@ def test_every_public_site_of_the_examples_has_a_login(path):
             if s.auth == "idp":
                 site = out.split(s.public_hostname + " {", 1)[1].split("\n}\n", 1)[0]
                 assert "import hnx_forward_auth" in site, s.name
+
+
+def test_an_ipv4_mapped_zone_or_host_address_is_refused():
+    """An IPv4-mapped IPv6 zone or address names an IPv4 address a second time, so it would get
+    past the zone-overlap and duplicate-address checks next to the IPv4 zone it shadows."""
+    from homelabnext.registry.model import semantic_problems
+
+    def mapped(d):
+        v4 = ipaddress.ip_network(d["zones"]["mgmt"]["cidr"])
+        d["zones"]["m6"] = {"cidr": f"::ffff:{v4.network_address}/{96 + v4.prefixlen}"}
+        d["hosts"]["m6host"] = {"address": f"::ffff:{v4.network_address + 9}", "zone": "mgmt"}
+
+    problems = semantic_problems(mutate(mapped))
+    assert any(p.startswith("zone m6: cidr ") and "IPv4-mapped" in p for p in problems), problems
+    assert any(p.startswith("host m6host: address ") and "IPv4-mapped" in p for p in problems), (
+        problems
+    )
