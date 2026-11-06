@@ -2350,6 +2350,27 @@ def test_trivy_scans_the_root_filesystem_and_writes_an_sbom(first, vulns, ok):
         assert "1 finding(s) (at most 0):" in h.stdout and "CVE-2026-0001-FAKE" in h.stdout
 
 
+def _first_mirror(tmp_path):
+    cli = fake(
+        tmp_path / "trivy-cli",
+        TRIVY.replace("LOG", repr(str(tmp_path / "trivy.log"))).replace("VULNS", "[]"),
+    )
+    v = scanner_vars(tmp_path, "trivy", trivy_severity="HIGH", trivy_cli=cli,
+                     trivy_db_repository="mirror.example/trivy-db", trivy_scan_containers=False)  # fmt: skip
+    return {"role": "trivy", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first_mirror)
+def test_trivy_mirror_reaches_both_the_scan_and_the_sbom(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    run_scan(tmp_path)
+    runs = (tmp_path / "trivy.log").read_text().splitlines()
+    assert "--db-repository mirror.example/trivy-db" in runs[0]
+    assert "--db-repository mirror.example/trivy-db" in runs[1]
+    assert "--format cyclonedx" in runs[1]
+
+
 def _first(tmp_path):
     v = scanner_vars(tmp_path, "trivy", trivy_severity="HIGH")
     return {
