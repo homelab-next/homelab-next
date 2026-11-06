@@ -265,14 +265,17 @@ jobs:
       - name: the nft and dnsmasq checks, and the root-only user-switching test; none may skip
         env:
           HNX_REQUIRE_TOOLS: nft,dnsmasq,unshare,setpriv,ansible-playbook
+          # test ids, not scripts: scripts reality reads a path at the start of a run line as one
+          REAL_TOOL_TESTS: >-
+            tests/network/test_external_tools.py tests/network/test_wan6.py
+            tests/network/test_ipv6_render.py
+            tests/roles/test_control_roles.py::test_nftables_host_never_installs_a_ruleset_nft_rejects
+          ROOT_TESTS: tests/orchestration/test_orchestration_readonly.py
         run: |
           set -euo pipefail
-          python -m pytest -q -rs -m "not live" -p no:cacheprovider \
-            tests/network/test_external_tools.py tests/network/test_wan6.py \
-            tests/network/test_ipv6_render.py \
-            tests/roles/test_control_roles.py::test_nftables_host_never_installs_a_ruleset_nft_rejects
-          sudo -E env "PATH=$PATH" "HOME=$HOME" python -m pytest -q -rs -p no:cacheprovider \
-            tests/orchestration/test_orchestration_readonly.py
+          read -ra real_tool_tests <<< "$REAL_TOOL_TESTS"
+          python -m pytest -q -rs -m "not live" -p no:cacheprovider "${real_tool_tests[@]}"
+          sudo -E env "PATH=$PATH" "HOME=$HOME" python -m pytest -q -rs -p no:cacheprovider "$ROOT_TESTS"
 
   # The security-critical units (tools/coverage_floor.py UNITS, the one list): each keeps >= 80%
   # line coverage from its own tests (pytest-cov from the test extra).

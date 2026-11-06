@@ -455,8 +455,13 @@ def test_the_real_tool_checks_go_through_the_required_tools():
     assert set(run["env"]["HNX_REQUIRE_TOOLS"].split(",")) >= {
         "nft", "dnsmasq", "unshare", "setpriv",
     }  # fmt: skip
+    # the test ids sit in the step's env (scripts reality reads a path that starts a run line as a
+    # script it runs), and the run passes each variable to pytest
+    named = " ".join(str(v) for v in run["env"].values())
     for rel in wanted:
-        assert rel in run["run"], rel
+        assert rel in named, rel
+    for var in ("REAL_TOOL_TESTS", "ROOT_TESTS"):
+        assert f"${var}" in run["run"] and var in run["env"], var
 
 
 def test_a_required_nft_that_cannot_check_fails_instead_of_skipping(monkeypatch):
