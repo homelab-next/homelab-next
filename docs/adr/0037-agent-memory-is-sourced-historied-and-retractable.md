@@ -15,6 +15,12 @@ summary_of: outline:sha256:cc0b15786d3b8d62
   pack is bound to the profile it was assembled for, and input uids come only from a reader's
   sealed map; decision 10: an unchecked platform update past the closure cap is dropped, not
   fatal; follow-up 6: a path that takes a pack off `red`; see the amendments under each)
+- **Amended:** 2026-11-06 (PR 3 review: decision 9, the exposure's `pairs`, the write-time check
+  following cited lineage and truncated ranges; decision 12, operators trusted through root
+  ownership and the uid, the deny state in its own file, the state file's owner kept; decision
+  13, narrow alias closure, a `mem:` source's own revision, settings fixed on a rerun; decision
+  14, input items matched by uid, quarantined sections, purge leaving no guessable digest; see
+  the amendments under each)
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
@@ -255,6 +261,28 @@ was shown, never from what the model says about its sources.
    pack over it is refused. An exposure entry is dropped when no record points at it any longer.
    Citing is the model's claim; exposure is the platform's knowledge.
 
+   *Amendment (2026-11-06, PR 3 review):*
+   - **An exposure is `{rendered, memory, pairs}`.** `pairs` holds each rendered item's
+     platform-issued names, one group per item (indexes into `rendered`, a graph id as itself),
+     the only place `retract` takes aliases from (decision 13). Pairs count toward
+     `exposure_bytes` (decision 6, amended) like the rest of the exposure; as indexes they add
+     about 10 bytes an item.
+   - **The write-time check follows cited lineage.** Besides the pack's own `rendered` names and
+     the marks on its memory block's revisions, a write is refused (or, unchecked, dropped) when
+     any `mem:` revision in an update's closure carries an active mark, and the assembler leaves
+     out of a memory block an entry whose closure cites a marked revision. So a fact two hops from
+     a reached revision cannot be laundered through a replace.
+   - **"Constant-cost" is per pack, not per write.** The check reads the pack's names, its block's
+     marks (looked up per key) and each update's closure: its cost grows with the pack and the
+     closures (both capped), and with the number of marks on the keys it looks at, never with the
+     size of memory.
+   - **Truncated ranges.** A range record exists only in a platform scope (decision 6), whose
+     writes are unchecked and store no exposure. An unchecked record's `pack_id` is provenance
+     (the pack the platform acted for), never exposure: the walk reads exposure only through
+     checked records. So the pack ids a range record drops at 256 point at no exposure, and
+     nothing is lost. `dependents` still lists a truncated record that a retraction's sources
+     reach under `exposed`, flagged `truncated`.
+
    *Amendment to decisions 7 and 8 (2026-11-06, PR 2):*
    - **A pack is bound to its profile.** The assembler records the `VerifiedProfile` it was
      assembled for as `profile: {id, digest}`, and the store refuses a checked write whose pack
@@ -321,6 +349,41 @@ was shown, never from what the model says about its sources.
       not affected by `approvers` or `allow_agent_approvers`, and never answered to a profile.
     - `test_cross_agent_read_is_refused` keeps its assertions unchanged; only its setup passes a
       pack, as decision 7 requires of every checked write.
+
+    *Amendment (2026-11-06, PR 3 review):* **the boundary is the uid and file ownership, not the
+    Python type.** A runtime that runs arbitrary Python can construct any object; it cannot
+    change its uid or write root's files.
+    - **The operators file** is `/etc/homelabnext/memory-operators.yml` (`--operators` names
+      another only when the effective uid is 0), shaped `{operators: [users], agent_runtime:
+      [{user}|{uid}], broker: [{user}|{uid}], broker_manifest?: path}`. It is trusted only
+      through root ownership: the file and every directory above it are owned by uid 0 and
+      writable by no group or other, and a file owned by the invoking (sudo) user is refused. It
+      is opened with `O_NOFOLLOW`, and the descriptor that is `fstat`-ed is the one parsed.
+    - **Refused uids**, whatever `operators` says: `agent_runtime`, `broker`, the broker
+      manifest's `callers`, `approval_relays`, 1.8 `operators` peers and Code Mode `runners` and
+      `sandboxes`, and always the owner of the memory state file, which the runtime owns and the
+      operators file cannot forge. **The runtime must not run as root**: a state file owned by
+      uid 0 refuses every operator. The deployment runs `hnx agent memory` through `sudo`, so
+      the principal's user is `root` (listed in `operators`), and `SUDO_USER` is recorded as
+      advisory `by_sudo` on what the operator writes.
+    - **Every method re-checks the process**: `require_operator` compares `os.getuid()` and
+      `os.geteuid()` with the principal's uids and the refused set, so a principal forged or
+      carried into another process does not act. The seal on `OperatorPrincipal` guards against
+      accidents, not attacks.
+    - **The deny state lives in its own file**, not under reserved keys of the runtime's state
+      file: the deny log and the `denied_reach` index in one JSON file beside a `.lock` file,
+      owned by root (or the operator), mode 0644, in a directory the runtime cannot write.
+      The runtime only reads it, under a shared `flock` taken inside its own `transact`; only
+      `MemoryAdmin` appends, under the exclusive lock. Lock order: the deny file, then the state
+      file. `hnx agent memory` refuses a deny file (or a directory above it) the runtime could
+      write. `FileBackend(path, deny_path=)` takes it (by default `<path>.deny.json`, which the
+      command refuses unless its directory is root's); `InMemoryBackend` keeps the equivalent in
+      process, under its own lock. Owners starting `@` stay refused.
+    - **The runtime keeps its state file.** An operator's write as root gives the replacement file
+      (and a lock file it creates) the replaced file's uid and gid (`fchown` before anything is
+      written), and refuses to write when it cannot.
+    - The whole `memory.*` broker action namespace is refused, `memory.restamp` included, except
+      the notes lane's `memory.write`; and no broker handler may name `homelabnext.memory_admin`.
 13. **`retract` denies every platform-issued name of a source, first.**
     - **Aliases come only from platform-issued pairings:**
       - a knowledge node's graph id, record uid and repository digests;
@@ -351,6 +414,28 @@ was shown, never from what the model says about its sources.
     - The deny list is an append-only log of `retract` and `lift` records, kept by the backend
       under a reserved key that no profile id can take. Retracting twice changes nothing the
       second time.
+
+    *Amendment (2026-11-06, PR 3 review):*
+    - **Alias closure never crosses from a digest to another uid.** A graph id closes to its uid
+      (`node_uid`), a uid to its own digests and graph ids, a digest to the one uid it is paired
+      with. A digest paired with more than one uid anywhere in the store is listed under
+      `ambiguous` in `dependents` and joins only with an explicit `include_alias <uid>` per
+      foreign uid; a uid's digest that another uid shares is left out the same way. So an
+      attacker row that once carried a good record's digest cannot pull that record in. A digest
+      that resolves to no uid (a lone digest) is denied by name alone, with a warning. A node
+      without a uid is denied by its graph id under `revision=all`.
+    - **A `mem:` source reaches its own revision.** It seeds the reached set and the marks with
+      that revision, and its key is retired when that revision is current; memory blocks then
+      leave it out and a pack that shows it is refused.
+    - **A rerun cannot widen a retraction.** Each deny record carries the retraction's
+      `revision`, `include_exposed` and `include_alias`; a rerun with the same settings completes
+      it without `confirm`, and one asking for others needs a fresh `confirm` (a `settings`
+      record then holds them). A lift that lands during a retraction stops it: every step
+      re-checks that the deny id is still active, inside its transaction.
+    - **Retire records add no marks**: no memory block shows a retired revision, so a completed
+      retraction's own retirements leave the index as it was.
+    - **Admin retirements are not held to the caps**, and a platform key retired so compacts on
+      its scope's next platform write.
 14. **A retraction sticks.**
     - **Writes re-check the deny list.**
       - `MemoryBackend` gains `owners()`.
@@ -382,6 +467,21 @@ was shown, never from what the model says about its sources.
       `history` and `as_of` show `purged`. It is how a retracted poisoned value, or a secret the
       screen missed, leaves the store. Copies outside the store are not reached: backups,
       quarantined corrupt state files, and rendered packs kept in the activity detail tier.
+
+    *Amendment (2026-11-06, PR 3 review):*
+    - **Purge leaves no plaintext digest.** Every `value_digest`, range `value_digests` entry and
+      the purge record's digest of the purged value becomes one random `purged:<hex>` token per
+      purge (records of one value still share it), since an unsalted digest of a low-entropy
+      value is a guess away from the value. Only the operator's dry run shows the digest. A rerun
+      finds nothing and appends nothing.
+    - **Input items are matched by uid.** An input item is denied by a denied uid, or by its
+      digest only where a `revision=this` retraction denied that digest, so a feed item that
+      merely carries a denied digest under another uid is not censored by it.
+    - **A section declaring a denied item is left out whole**: the assembler cannot cut one item's
+      text from a section. A required one is quarantined (listed in `omitted` and in the pack's
+      `retracted.quarantined`, and paged by the caller with `quarantine_page`, pair
+      `AGENT_PACK_QUARANTINED`), never deferred silently. Callers should filter denied items
+      before they render a section's text, so a whole section is not lost for one item.
 
 ### Staleness (PR 4)
 

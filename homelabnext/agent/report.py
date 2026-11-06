@@ -124,6 +124,7 @@ def validate_report(
     * at most :data:`MAX_MEMORY_UPDATES` memory updates and :data:`MAX_CITES` cites;
     * ``pack_id`` equals the pack hash, so a report cannot be attached to the wrong context;
     * a deferred pack can only produce a ``deferred`` report (no work on guessed context);
+    * ``profile`` is the profile the pack was assembled for, when it is bound to one;
     * every cite names a source present in the pack;
     * every memory update's source is an identifier the pack rendered (:func:`source_problems`);
     * for an ``ok`` report, every ``must_cite`` source of the manifest is cited.
@@ -136,6 +137,10 @@ def validate_report(
         return problems
     if report["pack_id"] != pack_hash:
         problems.append("pack_id does not equal the hash of the pack the agent was given")
+    bound = pack_profile(pack)
+    if bound is not None and report["profile"] != bound[0]:
+        # the author is the profile the pack was assembled for, never what the report claims
+        problems.append("profile is not the profile the pack was assembled for")
     if pack.get("status") == "deferred" and report["status"] != "deferred":
         problems.append("pack was deferred; the report must have status 'deferred'")
     known = {s["name"] for s in pack.get("sections", [])}

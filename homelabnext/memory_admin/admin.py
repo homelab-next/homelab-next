@@ -1,42 +1,44 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``MemoryAdmin``: the operator's retraction tool over agent memory (ADR-0037 decisions 12 to 14).
+"""``MemoryAdmin``: the operator's retraction tool over agent memory (ADR-0037 decisions 12 to 14,
+amended 2026-11-06).
 
 It lives outside :mod:`homelabnext.agent`, and nothing in ``homelabnext.agent``,
 ``homelabnext.broker`` or ``homelabnext.orchestration`` imports it (a test holds that); no broker
-action reaches it (``hnx broker validate`` refuses the names ``memory.retract``, ``memory.lift``,
-``memory.purge`` and ``memory.dependents``).  Every method takes ``by=``, an
-:class:`~homelabnext.memory_admin.principal.OperatorPrincipal` that only ``hnx agent memory``
-builds; a ``VerifiedProfile`` or a string raises ``TypeError``.
+action reaches it (``hnx broker validate`` refuses the ``memory.*`` operator names).  Every method
+takes ``by=``, an :class:`~homelabnext.memory_admin.principal.OperatorPrincipal` that only ``hnx
+agent memory`` builds and that is re-checked against this process's uids on every call; a
+``VerifiedProfile`` or a string raises ``TypeError``.  It writes only through the operator seam of
+:mod:`homelabnext.agent.memory`.
 
-* :meth:`MemoryAdmin.dependents` is the dry run.  The **alias set** of a source comes only from
-  platform-issued pairings, the ``pairs`` of stored pack exposures (a knowledge node's graph id,
-  record uid and digests; an input item's uid and digest), closed transitively; never from
-  anything a model or a feed wrote.  **Cited**: records whose closure reaches a denied name.
-  **Exposed**: records that did not cite one, but whose pack rendered one, whose pack's memory
-  block showed a revision already reached, or that cite such a revision; the walk repeats until a
-  pass finds nothing new.  A truncated range record (its pack list cut at 256) is flagged, since
-  the packs it no longer lists cannot be checked one by one.  It lists the affected owners,
-  scopes and keys, and ``confirm``, a digest of the whole listing.
+* :meth:`MemoryAdmin.dependents` is the dry run.  The **alias set** comes only from
+  platform-issued pairings, the ``pairs`` of stored pack exposures, and closes narrowly: a graph
+  id to its uid (``node_uid``), a uid to its own digests (and its graph ids), a digest to the one
+  uid it is paired with.  It never crosses from a digest to another uid: a digest paired with
+  more than one uid anywhere in the store is listed under ``ambiguous`` and joins only with an
+  explicit ``include_alias`` of each foreign uid, and a uid's digest that another uid shares is
+  left out the same way.  A digest that resolves to no uid at all is a lone digest (``warnings``).
+  **Cited**: records whose closure reaches a denied name, and, for a ``mem:`` source, the record
+  holding that revision.  **Exposed**: records that did not cite one, but whose checked pack
+  rendered one, whose pack's memory block showed a revision already reached, or that cite such a
+  revision; repeated until a pass finds nothing new.  A ``truncated`` range record its sources
+  reach is listed as exposed too.  ``confirm`` is a digest of the whole listing, settings
+  included.
 * :meth:`MemoryAdmin.retract` refuses a ``confirm`` that no longer matches the dry run, then
-  appends one deny record per alias (``revision="all"``; ``"this"`` denies the one content
-  digest) in its own transaction, **before anything else**; walks the exposure references,
-  appending each reached revision to the denied-reach index until a pass adds nothing; then
-  retires every live cited entry (and, with ``include_exposed``, every live exposed one), owner by
-  owner, each with ``reason: retracted:<source>``.  A rerun finds the active retraction by source
-  and revision and completes it without ``confirm``; a retraction that is complete changes
-  nothing.
-* :meth:`MemoryAdmin.lift` appends a lift record: the retraction's names and marks stop counting
-  at once.  Nothing retired is restored.
+  appends one deny record per alias (with the retraction's ``revision``, ``include_exposed`` and
+  ``include_alias``) in its own transaction, **before anything else**; walks, appending each
+  reached revision to the denied-reach index until a pass adds nothing; then retires every live
+  cited entry (and, with ``include_exposed``, every live exposed one), owner by owner.  A rerun
+  with the same settings completes it without ``confirm``; one that asks for other settings
+  needs a fresh ``confirm``.  A lift that lands meanwhile stops it (:class:`MemoryAdminError`).
+* :meth:`MemoryAdmin.lift` appends a lift record: names and marks stop counting.  Nothing
+  retired is restored.
 * :meth:`MemoryAdmin.purge` retires the entry first if the purged revision is current, blanks the
-  value in every record holding that digest (keeping ``value_digest``, ``sources`` and ``tlp``)
-  and the cached entry, marks them ``purged``, and appends a ``purge`` record per key.
-* :meth:`MemoryAdmin.restamp` recovers a log stamped in the future (decision 3): records stamped
-  after now are re-stamped to now (the old stamp kept as ``restamped_from``), so writes resume.
-
-Operator records are written in any scope, a platform scope included (ADR-0035 decision 10, as
-ADR-0037 decision 17 amends it: ``fleet-ledger``'s sole writer is the fold, and the operator's
-``retract`` and ``purge``).  They are not held to the scope caps, and a platform key retired here
-compacts on its scope's next platform write.
+  value in every record holding it and in the cached entry, and replaces every digest of it
+  (``value_digest``, a range's ``value_digests``, the purge record's) with one random
+  ``purged:<hex>`` token, so no plaintext digest of a low-entropy value stays to be guessed; the
+  dry run alone shows the digest.  A rerun finds nothing and appends nothing.
+* :meth:`MemoryAdmin.restamp` recovers a log stamped in the future (decision 3); the dry run lists
+  each from -> to, and applying it needs ``expect_now`` within the clock skew allowance.
 """
 
 from __future__ import annotations
@@ -44,34 +46,40 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import re
+import secrets
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
 from homelabnext import tlp
-from homelabnext.agent.deny import MEM_REF, active_retractions, parse_mem_ref
+from homelabnext.agent.deny import (
+    MEM_REF,
+    Mark,
+    active_retractions,
+    parse_mem_ref,
+    retraction_settings,
+)
 from homelabnext.agent.digest import digest_of
 from homelabnext.agent.memory import (
     CLOCK_SKEW,
-    EVENT_OPS,
     MemoryBackend,
-    MemoryClockError,
     Record,
     Stored,
-    _owner_key,
-    _parse,
-    _record,
-    _stamp,
-    _step,
-    _stored,
-    _union,
-    _utcnow,
     fold,
+    last_record,
+    log_clock,
+    operator_retire,
+    owner_key,
     secret_types,
+    stamp,
+    state_records,
+    stored_of,
+    utcnow,
 )
+from homelabnext.agent.pack import node_uid
 from homelabnext.agent.resolved import DIGEST, UID
 
-from .principal import MemoryAdminError, require_operator
+from .principal import MemoryAdminError, OperatorPrincipal, require_operator
 
 __all__ = ["MemoryAdmin"]
 
@@ -81,7 +89,7 @@ _REV_TARGET = re.compile(
     r"([a-z][a-z0-9]*(?:-[a-z0-9]+)*)/([a-z][a-z0-9]*(?:-[a-z0-9]+)*)@([1-9][0-9]{0,15})"
 )
 _REVISIONS = ("all", "this")
-Mark = tuple[str, str, str, int, int]  # owner, scope, key, rev_from, rev
+_PURGED = "purged:"
 
 
 def _source(source: Any, revision: str) -> str:
@@ -101,6 +109,13 @@ def _source(source: Any, revision: str) -> str:
     return source
 
 
+def _uids(include_alias: Iterable[str] | None) -> list[str]:
+    out = sorted(set(include_alias or ()))
+    if any(not isinstance(u, str) or not UID.fullmatch(u) for u in out):
+        raise MemoryAdminError("include_alias takes record uids")
+    return out
+
+
 def _reason(reason: Any) -> str:
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
         raise MemoryAdminError("a reason is a non-empty line of at most 500 characters")
@@ -112,10 +127,6 @@ def _reason(reason: Any) -> str:
     return reason
 
 
-def _state(stored: Stored) -> list[Record]:
-    return [r for r in stored["log"] if r["op"] not in EVENT_OPS]
-
-
 def _mark(owner: str, rec: Mapping[str, Any]) -> Mark:
     return (owner, rec["scope"], rec["key"], int(rec.get("rev_from", rec["rev"])), int(rec["rev"]))
 
@@ -124,6 +135,14 @@ def _marks(owner: str, rec: Mapping[str, Any]) -> list[Mark]:
     """The ``denied_reach`` mark of a reached record: none for a ``retire`` (a retired revision
     is in no memory block), so a completed retraction's own retirements add nothing."""
     return [] if rec["op"] == "retire" and not rec.get("compacted") else [_mark(owner, rec)]
+
+
+def _tuple(m: Mapping[str, Any]) -> Mark:
+    return (m["owner"], m["scope"], m["key"], int(m.get("rev_from", m["rev"])), int(m["rev"]))
+
+
+def _holds(rec: Mapping[str, Any], rev: int) -> bool:
+    return int(rec.get("rev_from", rec["rev"])) <= rev <= int(rec["rev"])
 
 
 class _Reached:
@@ -156,6 +175,82 @@ def _exposure_names(ex: Mapping[str, Any]) -> tuple[set[str], list[set[str]]]:
     return set(rendered).union(*groups), groups
 
 
+def _is_graph_id(x: str) -> bool:
+    return bool(_GRAPH_ID.fullmatch(x)) and not DIGEST.fullmatch(x) and not x.startswith("mem:")
+
+
+class _Pairings:
+    """The store's platform-issued pairings: each item's anchor (its uid, else its graph id),
+    its digests and its graph ids (ADR-0037 decision 13, amended)."""
+
+    def __init__(self, snap: Mapping[str, Stored]) -> None:
+        self.digest_anchors: dict[str, set[str]] = {}
+        self.anchor_digests: dict[str, set[str]] = {}
+        self.anchor_gids: dict[str, set[str]] = {}
+        self.gid_anchor: dict[str, str] = {}
+        for st in snap.values():
+            for ex in st["exposure"].values():
+                for g in _exposure_names(ex)[1]:
+                    gids = {x for x in g if _is_graph_id(x)}
+                    uids = {x for x in g if UID.fullmatch(x)}
+                    uids |= {u for u in (node_uid(x) for x in gids) if u}
+                    digests = {x for x in g if DIGEST.fullmatch(x)}
+                    anchors = uids or gids
+                    for a in anchors:
+                        self.anchor_digests.setdefault(a, set()).update(digests)
+                        self.anchor_gids.setdefault(a, set()).update(gids)
+                    for d in digests:
+                        self.digest_anchors.setdefault(d, set()).update(anchors)
+                    for gid in gids:
+                        self.gid_anchor[gid] = node_uid(gid) or gid
+
+    def aliases(
+        self, source: str, include: Iterable[str]
+    ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+        """``(names, ambiguous, warnings)`` for ``source`` under ``revision="all"``."""
+        extra = set(include)
+        warnings: list[str] = []
+        ambiguous: list[dict[str, Any]] = []
+        if MEM_REF.fullmatch(source):
+            return [source], [], []
+        if DIGEST.fullmatch(source):
+            found = self.digest_anchors.get(source, set())
+            if len(found) > 1:
+                ambiguous.append({"digest": source, "uids": sorted(found)})
+                anchors = found & extra
+            else:
+                anchors = set(found)
+            if not found:
+                warnings.append(
+                    "revision='all' resolved this digest to no uid or graph id (a lone digest): "
+                    "only the digest itself is denied"
+                )
+        elif UID.fullmatch(source):
+            anchors = {source}
+        else:  # a graph id: its uid, else itself
+            anchors = {self.gid_anchor.get(source, node_uid(source) or source)}
+        anchors |= extra
+        names = {source, *anchors}
+        for a in sorted(anchors):
+            names |= self.anchor_gids.get(a, set())
+            for d in self.anchor_digests.get(a, set()):
+                foreign = self.digest_anchors.get(d, set()) - anchors
+                if foreign:  # shared with a uid not in the set: never crossed silently
+                    if not any(x["digest"] == d for x in ambiguous):
+                        ambiguous.append({"digest": d, "uids": sorted(foreign)})
+                else:
+                    names.add(d)
+        return sorted(names), sorted(ambiguous, key=lambda x: x["digest"]), warnings
+
+
+class _NoChange(Exception):
+    """Raised inside a transaction to leave the owner's memory as it was (a dry run)."""
+
+
+class _Lifted(Exception):
+    """The retraction was lifted while it ran."""
+
+
 class MemoryAdmin:
     """Operator retraction, lift, purge and re-stamp over a
     :class:`~homelabnext.agent.memory.MemoryBackend`, across owners.  ``now`` is the clock (an
@@ -165,52 +260,53 @@ class MemoryAdmin:
         self, backend: MemoryBackend, *, now: Callable[[], datetime] | None = None
     ) -> None:
         self._backend = backend
-        self._now = now if now is not None else _utcnow
+        self._now = now if now is not None else utcnow
 
     # ------------------------------------------------------------ reading
     def _snapshot(self) -> dict[str, Stored]:
-        at = _stamp(self._now())
-        return {o: _stored(self._backend.load(o), at)[0] for o in self._backend.owners()}
+        at = stamp(self._now())
+        return {o: stored_of(self._backend.load(o), at) for o in self._backend.owners()}
 
     @staticmethod
-    def _aliases(source: str, revision: str, snap: Mapping[str, Stored]) -> list[str]:
-        """The alias set of ``source``: platform-issued pairings only (decision 13)."""
-        names = {source}
+    def _aliases(
+        source: str, revision: str, snap: Mapping[str, Stored], include: Iterable[str] = ()
+    ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
         if revision == "this":
-            return [source]
-        groups = [g for st in snap.values() for ex in st["exposure"].values()
-                  for g in _exposure_names(ex)[1]]  # fmt: skip
-        grew = True
-        while grew:
-            grew = False
-            for g in groups:
-                if g & names and not g <= names:
-                    names |= g
-                    grew = True
-        return sorted(names)
+            return [source], [], []
+        return _Pairings(snap).aliases(source, include)
 
     @staticmethod
     def _walk(
         names: Iterable[str], snap: Mapping[str, Stored], marks: Iterable[Mark] = ()
     ) -> tuple[list[tuple[str, Record]], list[tuple[str, Record]]]:
         """``(cited, exposed)`` records across owners for the denied ``names``, walking exposure
-        and memory references until a pass finds nothing new (``marks`` seeds the reached set)."""
+        and memory references until a pass finds nothing new (``marks`` seeds the reached set;
+        a denied ``mem:`` revision seeds it too, and its own record is cited)."""
         denied = set(names)
-        cited: list[tuple[str, Record]] = []
+        own = [ref for ref in (parse_mem_ref(n) for n in denied) if ref]
         reached = _Reached(marks)
+        reached.update((o, s, k, r, r) for o, s, k, r in own)
+        cited: list[tuple[str, Record]] = []
         rest: list[tuple[str, Record]] = []
+        truncated: list[tuple[str, Record]] = []
         for owner, st in snap.items():
-            for r in _state(st):
-                if denied & set(r.get("closure") or ()):
+            for r in state_records(st):
+                holds = any(
+                    (o, s, k) == (owner, r["scope"], r["key"]) and _holds(r, rev)
+                    for o, s, k, rev in own
+                )
+                if holds or denied & set(r.get("closure") or ()):
                     cited.append((owner, r))
                     reached.update(_marks(owner, r))
+                    if r.get("truncated") and denied & set(r.get("sources") or ()):
+                        truncated.append((owner, r))
                 else:
                     rest.append((owner, r))
         shown: dict[tuple[str, str], tuple[set[str], list[str]]] = {}
         for owner, st in snap.items():
             for pid, ex in st["exposure"].items():
                 shown[(owner, pid)] = (_exposure_names(ex)[0], list(ex.get("memory") or ()))
-        exposed: list[tuple[str, Record]] = []
+        exposed: list[tuple[str, Record]] = list(truncated)
         found = True
         while found:  # until a pass finds nothing new
             found = False
@@ -218,7 +314,8 @@ class MemoryAdmin:
             for owner, r in rest:
                 refs = [parse_mem_ref(c) for c in r.get("closure") or () if c.startswith("mem:")]
                 hit = any(ref and reached.holds(*ref) for ref in refs)
-                for pid in [r.get("pack_id"), *(r.get("pack_ids") or ())]:
+                # an unchecked (platform) record exposes nothing: its pack ids are provenance
+                for pid in [r.get("pack_id"), *(r.get("pack_ids") or ())] if r["checked"] else ():
                     rendered, memory = shown.get((owner, pid), (set(), []))
                     hit = hit or bool(denied & rendered)
                     for m in memory if not hit else ():
@@ -246,19 +343,34 @@ class MemoryAdmin:
         if "rev_from" in r:
             row["rev_from"] = r["rev_from"]
         if r.get("truncated"):
-            row["truncated"] = True  # its unlisted packs could not be checked
+            row["truncated"] = True  # its unlisted pack ids could not be checked one by one
         return row
 
-    def dependents(self, source: str, *, by: Any, revision: str = "all") -> dict[str, Any]:
-        """The dry run of ``retract(source, revision=)`` (see the module doc)."""
+    def dependents(
+        self,
+        source: str,
+        *,
+        by: Any,
+        revision: str = "all",
+        include_exposed: bool = False,
+        include_alias: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
+        """The dry run of ``retract(source, revision=, include_exposed=, include_alias=)``."""
         require_operator(by)
         source = _source(source, revision)
+        include = _uids(include_alias)
         snap = self._snapshot()
-        return self._listing(source, revision, snap, self._aliases(source, revision, snap))
+        return self._listing(source, revision, snap, include_exposed, include)
 
     def _listing(
-        self, source: str, revision: str, snap: Mapping[str, Stored], names: list[str]
+        self,
+        source: str,
+        revision: str,
+        snap: Mapping[str, Stored],
+        include_exposed: bool,
+        include: list[str],
     ) -> dict[str, Any]:
+        names, ambiguous, warnings = self._aliases(source, revision, snap, include)
         cited, exposed = self._walk(names, snap)
         live = {
             (o, s, k): e["rev"]
@@ -269,21 +381,23 @@ class MemoryAdmin:
         }
         rows_c = [self._row(o, r, live) for o, r in cited]
         rows_e = [self._row(o, r, live) for o, r in exposed]
+
+        def affected(rows: list[dict]) -> list[dict[str, str]]:
+            keys = sorted({(r["owner"], r["scope"], r["key"]) for r in rows})
+            return [{"owner": o, "scope": s, "key": k} for o, s, k in keys]
+
         listing = {
             "source": source,
             "revision": revision,
+            "include_exposed": bool(include_exposed),
+            "include_alias": include,
             "aliases": names,
+            "ambiguous": ambiguous,
+            "warnings": warnings,
             "cited": rows_c,
             "exposed": rows_e,
             "owners": sorted({r["owner"] for r in rows_c + rows_e}),
-            "affected": {
-                "cited": sorted({(r["owner"], r["scope"], r["key"]) for r in rows_c}),
-                "exposed": sorted({(r["owner"], r["scope"], r["key"]) for r in rows_e}),
-            },
-        }
-        listing["affected"] = {
-            k: [{"owner": o, "scope": s, "key": key} for o, s, key in v]
-            for k, v in listing["affected"].items()
+            "affected": {"cited": affected(rows_c), "exposed": affected(rows_e)},
         }
         listing["confirm"] = digest_of(listing)
         return listing
@@ -298,14 +412,17 @@ class MemoryAdmin:
         confirm: str | None = None,
         revision: str = "all",
         include_exposed: bool = False,
+        include_alias: Iterable[str] | None = None,
     ) -> dict[str, Any]:
         """Retract ``source`` (see the module doc).  Returns ``{deny_id, aliases, marks,
         retired: [{owner, scope, key, rev}], resumed}``."""
         who = require_operator(by)
         source = _source(source, revision)
         reason = _reason(reason)
+        include = _uids(include_alias)
         if not isinstance(include_exposed, bool):
             raise TypeError("include_exposed must be True or False")
+        wanted = {"include_exposed": include_exposed, "include_alias": include}
 
         def active(log: list[dict]) -> str | None:
             for deny_id, recs in active_retractions(log).items():
@@ -313,42 +430,54 @@ class MemoryAdmin:
                     return deny_id
             return None
 
-        deny_id = active(self._backend.load_deny()["log"])
+        log = self._backend.load_deny()["log"]
+        deny_id = active(log)
         resumed = deny_id is not None
-        if deny_id is None:
+        if deny_id is None or retraction_settings(log, deny_id) != wanted:
             snap = self._snapshot()
-            names = self._aliases(source, revision, snap)
-            plan = self._listing(source, revision, snap, names)
+            plan = self._listing(source, revision, snap, include_exposed, include)
             if confirm != plan["confirm"]:
                 raise MemoryAdminError(
-                    "confirm does not match what dependents returns now: run the dry run again "
-                    "and pass its confirm digest; nothing was done"
+                    "confirm does not match what dependents returns now (with these settings): "
+                    "run the dry run again and pass its confirm digest; nothing was done"
                 )
-            at = _stamp(self._now())
+            at = stamp(self._now())
             got: list[str] = []
 
             def add(deny: dict[str, list[dict]]) -> dict[str, list[dict]]:
                 got.clear()
-                existing = active(deny["log"])  # a concurrent run got there first
-                if existing is not None:
-                    got.append(existing)
-                    return deny
-                seed = f"{source}\0{revision}\0{len(deny['log'])}\0{at}"
-                new_id = "deny:" + hashlib.sha256(seed.encode()).hexdigest()[:16]
-                got.append(new_id)
+                existing = active(deny["log"])
+                if existing is None:
+                    seed = f"{source}\0{revision}\0{len(deny['log'])}\0{at}"
+                    existing = "deny:" + hashlib.sha256(seed.encode()).hexdigest()[:16]
+                    have: set[str] = set()
+                else:
+                    have = {r["name"] for r in active_retractions(deny["log"])[existing]}
+                got.append(existing)
+                common = {"deny_id": existing, "at": at, "source": source, "reason": reason,
+                          "by": who.user, "by_sudo": who.by_sudo, **wanted}  # fmt: skip
                 deny["log"] += [
-                    {"op": "retract", "deny_id": new_id, "at": at, "source": source,
-                     "revision": revision, "name": name, "reason": reason, "by": who.user}
-                    for name in names
-                ]  # fmt: skip
+                    {"op": "retract", "revision": revision, "name": n, **common}
+                    for n in plan["aliases"]
+                    if n not in have
+                ]
+                if have:  # a rerun that changed the settings (with a fresh confirm)
+                    deny["log"].append({"op": "settings", **common})
                 return deny
 
             self._backend.transact_deny(add)  # the deny records first, in their own transaction
             deny_id = got[0]
-        records = active_retractions(self._backend.load_deny()["log"])[deny_id]
-        names = sorted({r["name"] for r in records})
-        marks = self._reach(deny_id, names)
-        retired = self._retire_all(deny_id, names, f"retracted:{source}", who.user, include_exposed)
+        try:
+            records = active_retractions(self._backend.load_deny()["log"]).get(deny_id)
+            if records is None:
+                raise _Lifted
+            names = sorted({r["name"] for r in records})
+            marks = self._reach(deny_id, names)
+            retired = self._retire_all(deny_id, names, f"retracted:{source}", who, include_exposed)
+        except _Lifted:
+            raise MemoryAdminError(
+                f"retraction {deny_id} was lifted while it ran: it stopped there"
+            ) from None
         return {
             "deny_id": deny_id,
             "aliases": names,
@@ -359,9 +488,12 @@ class MemoryAdmin:
 
     def _reach(self, deny_id: str, names: list[str]) -> int:
         """Record every revision the retraction reaches in the denied-reach index, until a pass
-        adds nothing new (a write that lands meanwhile is caught by the next pass)."""
+        adds nothing new (a write that lands meanwhile is caught by the next pass).  Each pass
+        reads every owner once."""
         while True:
             deny = self._backend.load_deny()
+            if deny_id not in active_retractions(deny["log"]):
+                raise _Lifted
             have = {_tuple(m) for m in deny["reach"] if m.get("deny_id") == deny_id}
             cited, exposed = self._walk(names, self._snapshot(), have)
             new = sorted({m for o, r in cited + exposed for m in _marks(o, r)} - have)
@@ -369,6 +501,8 @@ class MemoryAdmin:
                 return len(have)
 
             def add(d: dict[str, list[dict]], new: list[Mark] = new) -> dict[str, list[dict]]:
+                if deny_id not in active_retractions(d["log"]):
+                    raise _Lifted
                 there = {_tuple(m) for m in d["reach"] if m.get("deny_id") == deny_id}
                 d["reach"] += [
                     {"deny_id": deny_id, "owner": o, "scope": s, "key": k, "rev_from": lo,
@@ -381,20 +515,32 @@ class MemoryAdmin:
             self._backend.transact_deny(add)
 
     def _retire_all(
-        self, deny_id: str, names: list[str], reason: str, user: str, include_exposed: bool
+        self,
+        deny_id: str,
+        names: list[str],
+        reason: str,
+        who: OperatorPrincipal,
+        include_exposed: bool,
     ) -> list[dict[str, Any]]:
-        """Retire, owner by owner, every live entry built on the denied names (decision 13)."""
+        """Retire, owner by owner, every live entry built on the denied names (decision 13),
+        re-checking inside each transaction that the retraction is still active."""
         retired: list[dict[str, Any]] = []
+        own = [ref for ref in (parse_mem_ref(n) for n in names) if ref]
         for owner in self._backend.owners():
 
             def fn(raw: Any, deny: dict[str, list[dict]], owner: str = owner) -> Stored:
-                now = _stamp(self._now())
-                stored, _ = _stored(raw, now)
+                if deny_id not in active_retractions(deny["log"]):
+                    raise _Lifted
+                now = stamp(self._now())
+                stored = stored_of(raw, now)
                 marks = {_tuple(m) for m in deny["reach"] if m.get("deny_id") == deny_id}
                 cited, exposed = self._walk(names, {owner: stored}, marks)
                 hit = cited + (exposed if include_exposed else [])
-                targets = _since_add(stored, {(r["scope"], r["key"], id(r)) for _, r in hit})
-                out = _retire(stored, sorted(targets), now, reason, user, owner)
+                targets = _since_add(stored, {id(r) for _, r in hit}, owner, own)
+                out = operator_retire(
+                    stored, sorted(targets), now, reason=reason, by=who.user, owner=owner,
+                    by_sudo=who.by_sudo,
+                )  # fmt: skip
                 if not out:  # nothing live left to retire: leave the owner as it was
                     raise _NoChange
                 retired.extend({"owner": owner, **t} for t in out)
@@ -416,7 +562,7 @@ class MemoryAdmin:
                if recs[0].get("source") == source]  # fmt: skip
         if dry_run or not ids:
             return {"lifted": [], "active": ids, "dry_run": dry_run}
-        at = _stamp(self._now())
+        at = stamp(self._now())
         got: list[str] = []
 
         def add(deny: dict[str, list[dict]]) -> dict[str, list[dict]]:
@@ -424,7 +570,7 @@ class MemoryAdmin:
             got[:] = [d for d in ids if d in live]
             deny["log"] += [
                 {"op": "lift", "deny_id": d, "at": at, "source": source, "reason": reason,
-                 "by": who.user}
+                 "by": who.user, "by_sudo": who.by_sudo}
                 for d in got
             ]  # fmt: skip
             return deny
@@ -438,7 +584,7 @@ class MemoryAdmin:
     ) -> dict[str, Any]:
         """Purge a value from ``owner``'s memory (``"*"`` with a digest: every owner holding it).
         ``target`` is a ``value_digest`` or ``<scope>/<key>@<rev>``.  Returns ``{purged: [{owner,
-        scope, key, revs, retired}], dry_run}``."""
+        scope, key, revs, retired, digest?}], dry_run}`` (``digest`` only in a dry run)."""
         who = require_operator(by)
         reason = _reason(reason)
         rev_target = _REV_TARGET.fullmatch(target) if isinstance(target, str) else None
@@ -449,17 +595,18 @@ class MemoryAdmin:
                 raise MemoryAdminError('owner "*" takes a value digest, not <scope>/<key>@<rev>')
             owners = self._backend.owners()
         else:
-            _owner_key(owner)
+            owner_key(owner)
             if owner not in self._backend.owners():
                 raise MemoryAdminError(f"{owner} holds no memory")
             owners = [owner]
+        token = _PURGED + secrets.token_hex(16)  # one token per purged value, never its digest
         done: list[dict[str, Any]] = []
         for o in owners:
 
             def fn(raw: Any, deny: Any, o: str = o) -> Stored:
-                now = _stamp(self._now())
-                stored, _ = _stored(raw, now)
-                hits = _purge(stored, target, rev_target, now, reason, who.user, o, dry_run)
+                now = stamp(self._now())
+                stored = stored_of(raw, now)
+                hits = _purge(stored, target, rev_target, now, reason, who, o, dry_run, token)
                 done.extend({"owner": o, **h} for h in hits)
                 if dry_run or not hits:
                     raise _NoChange
@@ -470,109 +617,94 @@ class MemoryAdmin:
         return {"purged": done, "dry_run": dry_run}
 
     # ------------------------------------------------------------ restamp
-    def restamp(self, owner: str, reason: str, *, by: Any, dry_run: bool = False) -> dict[str, Any]:
+    def restamp(
+        self,
+        owner: str,
+        reason: str,
+        *,
+        by: Any,
+        dry_run: bool = False,
+        expect_now: datetime | None = None,
+    ) -> dict[str, Any]:
         """Re-stamp ``owner``'s records stamped after now (a host clock that was wrong forward
-        and has been corrected, ADR-0037 decision 3), so its writes resume: each such ``at`` (and
-        a folded record's ``since``) becomes now, the old stamp kept in ``restamped_from``, and a
-        ``restamp`` record says who did it and why.  Returns ``{restamped: n, dry_run}``."""
+        and has been corrected, ADR-0037 decision 3): each such ``at`` (and a folded record's
+        ``since``) becomes now, the old stamp kept in ``restamped_from``, with a ``restamp``
+        record.  The dry run lists ``{from, to}`` per record; applying it needs ``expect_now``
+        (what the operator believes the time is) within the clock skew allowance of the clock.
+        Returns ``{restamped: n, changes: [...], dry_run}``."""
         who = require_operator(by)
         reason = _reason(reason)
-        _owner_key(owner)
-        count: list[int] = []
+        owner_key(owner)
+        if not dry_run:
+            if not isinstance(expect_now, datetime) or expect_now.tzinfo is None:
+                raise MemoryAdminError("a restamp needs expect_now, the time you believe it is")
+            off = abs(self._now() - expect_now)
+            if off > CLOCK_SKEW:
+                raise MemoryAdminError(
+                    f"the clock is {off} away from expect_now (more than {CLOCK_SKEW}): fix the "
+                    "clock before re-stamping"
+                )
+        changes: list[dict[str, str]] = []
+        count: list[int] = [0]
 
         def fn(raw: Any, deny: Any) -> Stored:
-            now = _stamp(self._now())
-            stored, _ = _stored(raw, now)
-            n = 0
+            now = stamp(self._now())
+            stored = stored_of(raw, now)
+            changes.clear()
+            count[0] = 0
             for r in stored["log"]:
                 moved = {
                     f: r[f] for f in ("at", "since") if isinstance(r.get(f), str) and r[f] > now
                 }
                 if moved:
-                    n += 1
+                    count[0] += 1
+                    changes.extend({"field": f, "from": v, "to": now} for f, v in moved.items())
                     r.setdefault("restamped_from", {}).update(moved)
                     r.update(dict.fromkeys(moved, now))
-            count.append(n)
-            if dry_run or not n:
+            if dry_run or not changes:
                 raise _NoChange
             stored["log"].append(
-                {"at": now, "scope": None, "key": None, "op": "restamp", "rev": 0, "count": n,
-                 "reason": reason, "by": who.user, "pack_id": None, "sources": [],
-                 "checked": False, "tlp": "red", "closure": []}
+                {"at": now, "scope": None, "key": None, "op": "restamp", "rev": 0,
+                 "count": count[0], "reason": reason, "by": who.user, "by_sudo": who.by_sudo,
+                 "pack_id": None, "sources": [], "checked": False, "tlp": "red", "closure": []}
             )  # fmt: skip
             stored["entries"] = fold(stored["log"])
             return stored
 
         with contextlib.suppress(_NoChange):
             self._backend.transact(owner, fn)
-        return {"restamped": count[-1] if count else 0, "dry_run": dry_run}
+        return {
+            "restamped": count[0],
+            "changes": changes,
+            "dry_run": dry_run,
+        }
 
 
-class _NoChange(Exception):
-    """Raised inside a transaction to leave the owner's memory as it was (a dry run)."""
-
-
-def _tuple(m: Mapping[str, Any]) -> Mark:
-    return (m["owner"], m["scope"], m["key"], int(m.get("rev_from", m["rev"])), int(m["rev"]))
-
-
-def _since_add(stored: Stored, hit: set[tuple[str, str, int]]) -> set[tuple[str, str]]:
-    """The live keys of ``stored`` with a hit record since their last ``add``."""
+def _since_add(
+    stored: Stored, hit: set[int], owner: str, own: list[tuple[str, str, str, int]]
+) -> set[tuple[str, str]]:
+    """The live keys of ``stored`` with a hit record since their last ``add``; a key whose own
+    revision is a denied ``mem:`` source only when that revision is current."""
     out: set[tuple[str, str]] = set()
     seen: dict[tuple[str, str], bool] = {}
-    for r in _state(stored):
+    for r in state_records(stored):
         k = (r["scope"], r["key"])
         if r["op"] == "add" and not r.get("compacted"):
             seen[k] = False
-        if (r["scope"], r["key"], id(r)) in hit:
+        if id(r) in hit:
             seen[k] = True
     for (scope, key), was in seen.items():
-        if was and (stored["entries"].get(scope, {}).get(key) or {}).get("status") == "live":
+        entry = stored["entries"].get(scope, {}).get(key) or {}
+        if entry.get("status") != "live":
+            continue
+        last = last_record(stored, scope, key)
+        is_own = [rev for o, s, k, rev in own if (o, s, k) == (owner, scope, key)]
+        if is_own:  # the revision itself: retire it only while it is current
+            if last is not None and any(_holds(last, rev) for rev in is_own):
+                out.add((scope, key))
+            continue
+        if was:
             out.add((scope, key))
-    return out
-
-
-def _clock(stored: Stored, now: str, owner: str) -> tuple[str, dict[str, int]]:
-    latest, high = "", {}
-    for r in stored["log"]:
-        latest = max(latest, r["at"])
-        if r["op"] == "aged":
-            high[r["scope"]] = r["rev"]
-    if latest > now and _parse(latest) - _parse(now) > CLOCK_SKEW:
-        raise MemoryClockError(owner, _parse(latest) - _parse(now))
-    return max(now, latest), high
-
-
-def _last(stored: Stored, scope: str, key: str) -> Record | None:
-    found = None
-    for r in _state(stored):
-        if (r["scope"], r["key"]) == (scope, key):
-            found = r
-    return found
-
-
-def _retire(
-    stored: Stored, keys: list[tuple[str, str]], now: str, reason: str, user: str, owner: str
-) -> list[dict[str, Any]]:
-    """Append an operator ``retire`` record (``reason``, ``by``) for each live key; returns what
-    it retired.  The label stays the entry's, and the closure carries over."""
-    if not keys:
-        return []
-    at, high = _clock(stored, now, owner)
-    out = []
-    for scope, key in keys:
-        cur = stored["entries"][scope][key]
-        if cur.get("status") != "live":
-            continue  # idempotent: already retired
-        last = _last(stored, scope, key)
-        rev = max(cur["rev"], high.get(scope, 0)) + 1
-        rec = _record(at, scope, key, "retire", rev, cur.get("value"), None, keep_value=False)
-        rec.update(tlp=cur.get("tlp", "red"), reason=reason, by=user)
-        entry = _step(cur, rec)
-        rec["closure"] = _union((last or {}).get("closure") or (), entry["sources"])
-        stored["log"].append(rec)
-        stored["entries"][scope][key] = entry
-        out.append({"scope": scope, "key": key, "rev": rev})
     return out
 
 
@@ -582,56 +714,77 @@ def _purge(
     rev_target: re.Match[str] | None,
     now: str,
     reason: str,
-    user: str,
+    who: OperatorPrincipal,
     owner: str,
     dry_run: bool,
+    token: str,
 ) -> list[dict[str, Any]]:
     """Purge ``target`` from ``stored`` in place (see :meth:`MemoryAdmin.purge`)."""
-    state = _state(stored)
+
+    def matches(r: Mapping[str, Any], digest: str | None) -> bool:
+        return bool(digest) and (
+            r.get("value_digest") == digest or digest in (r.get("value_digests") or ())
+        )
+
+    state = state_records(stored)
     if rev_target:
         scope, key, rev = rev_target.group(1), rev_target.group(2), int(rev_target.group(3))
-        held = [r for r in state if (r["scope"], r["key"]) == (scope, key)
-                and r.get("rev_from", r["rev"]) <= rev <= r["rev"]]  # fmt: skip
-        if not held:
-            return []
+        held = [r for r in state if (r["scope"], r["key"]) == (scope, key) and _holds(r, rev)]
+        if not held or held[0].get("purged"):
+            return []  # nothing there, or already purged: a rerun appends nothing
         digest = held[0].get("value_digest") if not held[0].get("compacted") else None
-        match = [r for r in state if r is held[0] or (digest and r.get("value_digest") == digest)]
+        match = [r for r in state if r is held[0] or matches(r, digest)]
     else:
         digest = target
-        match = [r for r in state if r.get("value_digest") == digest
-                 or digest in (r.get("value_digests") or ())]  # fmt: skip
+        match = [r for r in state if matches(r, digest)]
     if not match:
         return []
     keys = sorted({(r["scope"], r["key"]) for r in match})
     hits = []
     for scope, key in keys:
         cur = stored["entries"].get(scope, {}).get(key) or {}
-        last = _last(stored, scope, key)
+        last = last_record(stored, scope, key)
         current = cur.get("status") == "live" and last is not None and any(r is last for r in match)
-        hits.append({
+        hit = {
             "scope": scope, "key": key,
             "revs": sorted(r["rev"] for r in match if (r["scope"], r["key"]) == (scope, key)),
             "retired": current,
-        })  # fmt: skip
+        }  # fmt: skip
+        if dry_run and digest:
+            hit["digest"] = digest  # the plaintext digest is shown to the operator only here
+        hits.append(hit)
     if dry_run:
         return hits
     for h in hits:  # a current revision is retired first
         if h["retired"]:
-            _retire(stored, [(h["scope"], h["key"])], now, f"purged:{reason}", user, owner)
-    at, _ = _clock(stored, now, owner)
-    for r in match:
-        r.pop("value", None)  # the value goes; value_digest, sources and tlp stay
-        r["purged"] = True
+            operator_retire(
+                stored, [(h["scope"], h["key"])], now, reason=f"purged:{reason}", by=who.user,
+                owner=owner, by_sudo=who.by_sudo,
+            )  # fmt: skip
+    at, _ = log_clock(stored, now, owner)
+    # the retire just written carries the value's digest too: blank every record holding it
+    for r in state_records(stored):
+        if any(r is m for m in match) or matches(r, digest):
+            r.pop("value", None)  # the value goes; sources and tlp stay
+            r["purged"] = True
+            if digest and r.get("value_digest") == digest:
+                r["value_digest"] = token
+            if r.get("value_digests"):
+                r["value_digests"] = [token if d == digest else d for d in r["value_digests"]]
+            if not digest and not r.get("value_digests"):
+                r.pop("value_digest", None)
     for h in hits:
-        recs = [r for r in match if (r["scope"], r["key"]) == (h["scope"], h["key"])]
+        recs = [
+            r for r in state_records(stored) if (r["scope"], r["key"]) == (h["scope"], h["key"])
+        ]
         rec: Record = {
             "at": at, "scope": h["scope"], "key": h["key"], "op": "purge", "rev": max(h["revs"]),
             "pack_id": None, "sources": [], "checked": False,
             "tlp": str(tlp.strictest(r["tlp"] for r in recs)), "closure": [],
-            "reason": reason, "by": user,
+            "reason": reason, "by": who.user, "value_digest": token,
         }  # fmt: skip
-        if digest:
-            rec["value_digest"] = digest
+        if who.by_sudo:
+            rec["by_sudo"] = who.by_sudo
         stored["log"].append(rec)
         key_log = [r for r in stored["log"] if (r["scope"], r["key"]) == (h["scope"], h["key"])]
         folded = fold(key_log).get(h["scope"], {}).get(h["key"])

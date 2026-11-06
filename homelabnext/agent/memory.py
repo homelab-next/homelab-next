@@ -128,37 +128,47 @@ Memory citing memory and retraction (ADR-0037 decisions 11 to 14, PR 3):
 * **Exposure** is ``{rendered, memory, pairs}``: ``pairs`` holds each rendered item's
   platform-issued names (a group per item, indexes into ``rendered`` and graph ids as strings),
   the only alias source ``MemoryAdmin`` uses.
-* **The deny log.**  The backend keeps the deny log and the denied-reach index under reserved
-  keys (:data:`~homelabnext.agent.deny.DENY_KEY`, :data:`~homelabnext.agent.deny.REACH_KEY`)
-  that no profile id can take, both append-only, written only by ``MemoryAdmin``
-  (``homelabnext.memory_admin``).  ``transact`` hands them to every write, read under the same
-  lock (:class:`FileBackend` through ``StateStore.rewrite``), and the write re-checks inside it:
-  a checked write whose pack rendered a denied name, or whose memory block shows a revision with
-  an active mark, is refused whole, and so is a checked batch with an update whose closure
-  reaches a denied name; an unchecked platform batch drops such an update, reports it in
-  ``dropped`` and pages (``AGENT_MEMORY_DROPPED``), so a retraction cannot stall the fold.
-  :func:`denied` reads the active :class:`~homelabnext.agent.deny.DenySet` for a caller to pass
-  as ``retracted=``.
-* **Operator records.**  ``MemoryAdmin`` writes ``retire`` records with ``reason`` and ``by``,
+* **The deny log.**  The backend keeps the deny log and the denied-reach index apart from the
+  owners' memory (:class:`FileBackend`: its own :class:`DenyFile`, which the runtime may only
+  read), both append-only, written only by ``MemoryAdmin`` (``homelabnext.memory_admin``).
+  ``transact`` hands a copy of them to every write, read under the deny state's lock, taken
+  before the owner's (lock order: deny, then memory), and the write re-checks inside it: a
+  checked write whose pack rendered a denied knowledge name or input item, or whose memory block
+  shows a revision with an active mark, is refused whole, and so is a checked batch with an
+  update whose closure reaches a denied name or cites a marked revision; an unchecked platform
+  batch drops such an update, reports it in ``dropped`` and pages (``AGENT_MEMORY_DROPPED``), so
+  a retraction cannot stall the fold.  :func:`denied` reads the active
+  :class:`~homelabnext.agent.deny.DenySet` for a caller to pass as ``retracted=``.  Owners
+  starting ``@`` are refused.
+* **Operator records.**  ``MemoryAdmin`` writes, through the operator seam below (and nothing
+  else of this module), ``retire`` records with ``reason``, ``by`` and ``by_sudo``,
   ``purge`` records, and ``restamp`` records through the same fold; ``purge`` and ``restamp`` (like
   ``aged``) change no entry by themselves.
 """
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import fnmatch
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
 from homelabnext import shapes, tlp
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - not POSIX
+    fcntl = None  # type: ignore[assignment]
 from homelabnext.notify.core_pairs import (
     AGENT_MEMORY_CAP,
     AGENT_MEMORY_CLOCK,
@@ -167,15 +177,15 @@ from homelabnext.notify.core_pairs import (
 from homelabnext.registry.model_tlp import receive_ceiling
 
 from .compiler import VerifiedProfile, require_verified
-from .deny import DENY_KEY, REACH_KEY, RESERVED_PREFIX, DenySet, deny_set, mem_ref, parse_mem_ref
+from .deny import RESERVED_PREFIX, DenySet, deny_set, mem_ref, parse_mem_ref
 from .digest import digest_of
 from .errors import AgentError
 from .pack import (
     MAX_RENDERED,
+    knowledge_names,
     memory_refs,
     pack_label,
     pack_memory,
-    pack_names,
     pack_pairs,
     pack_profile,
     rendered_identifiers,
@@ -242,6 +252,7 @@ RECORD_FIELDS = (
     "closure",
     "reason",
     "by",
+    "by_sudo",
 )
 #: the label of a record with nothing to lower it: a migrated or unchecked record, and every
 #: record while packs carry no labels (ADR-0037 decision 8)
@@ -397,6 +408,7 @@ class _Check:
     labels: Mapping[str, str]
     rendered: tuple[str, ...] | None
     names: frozenset[str] = frozenset()
+    inputs: tuple[tuple[str, str], ...] = ()
     aliases: Mapping[str, frozenset[str]] = field(default_factory=dict)
     pairs: tuple[tuple[str, ...], ...] = ()
     memory: tuple[tuple[str, str, int], ...] = ()
@@ -406,12 +418,14 @@ Deny = dict[str, list[dict[str, Any]]]  # {"log": [deny records], "reach": [mark
 
 
 class MemoryBackend(Protocol):
-    """Where memory lives.  ``transact(owner, fn)`` calls ``fn(current, deny)`` under one lock,
-    ``deny`` being ``{"log", "reach"}`` (the deny log and the denied-reach index, read under that
-    same lock), and stores what it returns; a raising ``fn`` stores nothing.  ``owners()`` lists
-    the owners holding memory.  ``load_deny``/``transact_deny`` read and append the deny log and
-    the index, kept under reserved keys no profile id can take; only ``MemoryAdmin`` calls
-    ``transact_deny``, and the backend refuses a change that is not an append."""
+    """Where memory lives.  ``transact(owner, fn)`` calls ``fn(current, deny)`` under the
+    owner's lock and stores what it returns (a raising ``fn`` stores nothing); ``deny`` is
+    ``{"log", "reach"}``, the deny log and the denied-reach index, read under the deny state's
+    own lock, which is taken first and held across the call (lock order: deny state, then
+    memory).  ``owners()`` lists the owners holding memory.  The deny state lives apart from
+    the owners' memory (for :class:`FileBackend`, in its own file the runtime may only read);
+    ``load_deny`` reads it and ``transact_deny`` appends to it, which only ``MemoryAdmin`` calls,
+    and a change that is not an append is refused."""
 
     def load(self, owner: str) -> Any: ...
 
@@ -424,7 +438,9 @@ class MemoryBackend(Protocol):
     def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny: ...
 
 
-def _owner_key(owner: Any) -> str:
+def owner_key(owner: Any) -> str:
+    """``owner`` when it can name an owner's memory; a key starting ``@`` (reserved) and
+    anything that is not a non-empty string raise :class:`MemoryAccessError`."""
     if not isinstance(owner, str) or not owner or owner.startswith(RESERVED_PREFIX):
         raise MemoryAccessError(
             f"{_name(owner)} is not an owner: keys starting {RESERVED_PREFIX!r} are reserved"
@@ -432,8 +448,11 @@ def _owner_key(owner: Any) -> str:
     return owner
 
 
-def _deny_of(data: Mapping[str, Any]) -> Deny:
-    return {"log": list(data.get(DENY_KEY) or []), "reach": list(data.get(REACH_KEY) or [])}
+_owner_key = owner_key
+
+
+def _empty_deny() -> Deny:
+    return {"log": [], "reach": []}
 
 
 def _appended(old: Deny, new: Any) -> Deny:
@@ -448,96 +467,152 @@ def _appended(old: Deny, new: Any) -> Deny:
 
 
 class InMemoryBackend:
-    """Process-local backend (the fake); one lock around every read and transaction."""
+    """Process-local backend (the fake): the owners' memory under one lock, and the deny state
+    apart from it under its own, taken first."""
 
     def __init__(self) -> None:
         import copy
 
         self._copy = copy.deepcopy
         self._data: dict[str, Any] = {}
+        self._deny: Deny = _empty_deny()
         self._lock = threading.Lock()
+        self._deny_lock = threading.Lock()
 
     def load(self, owner: str) -> Any:
-        _owner_key(owner)
+        owner_key(owner)
         with self._lock:
             return self._copy(self._data.get(owner, {}))
 
     def owners(self) -> list[str]:
         with self._lock:
-            return sorted(k for k in self._data if not k.startswith(RESERVED_PREFIX))
+            return sorted(self._data)
 
     def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any:
-        _owner_key(owner)
-        with self._lock:
-            deny = self._copy(_deny_of(self._data))
-            new = fn(
-                self._copy(self._data.get(owner, {})), deny
-            )  # raises before anything is stored
+        owner_key(owner)
+        with self._deny_lock, self._lock:
+            deny = self._copy(self._deny)
+            new = fn(self._copy(self._data.get(owner, {})), deny)  # raises: nothing stored
             self._data[owner] = self._copy(new)
             return new
 
     def load_deny(self) -> Deny:
-        with self._lock:
-            return self._copy(_deny_of(self._data))
+        with self._deny_lock:
+            return self._copy(self._deny)
 
     def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny:
-        with self._lock:
-            old = _deny_of(self._data)
-            new = _appended(old, fn(self._copy(old)))
-            self._data[DENY_KEY], self._data[REACH_KEY] = (
-                self._copy(new["log"]),
-                self._copy(new["reach"]),
-            )
+        with self._deny_lock:
+            new = _appended(self._deny, fn(self._copy(self._deny)))
+            self._deny = self._copy(new)
             return self._copy(new)
 
 
-class FileBackend:
-    """Durable backend: one ``homelabnext.state`` file, one key per owning profile, and the deny
-    log and denied-reach index under their reserved keys in the same file, so one lock covers
-    an owner's write and the deny state it re-checks."""
+class DenyFile:
+    """The deny log and the denied-reach index in their own JSON file, beside a ``.lock``
+    file (ADR-0037 decisions 12 and 14, amended 2026-11-06).  The deployment makes it root's
+    (or the operator's), mode 0644, in a directory the runtime cannot write: the runtime only
+    ever reads it, under a shared ``flock`` on the lock file (opened read-only), and only
+    ``MemoryAdmin`` appends to it, under the exclusive lock.  A missing file is an empty deny
+    state."""
 
-    def __init__(self, path: str | Path, **state_kwargs: Any) -> None:
+    MODE = 0o644
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self.lock_path = self.path.with_name(self.path.name + ".lock")
+
+    def _read(self) -> Deny:
+        try:
+            doc = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return _empty_deny()
+        if not isinstance(doc, Mapping) or not all(
+            isinstance(doc.get(k), list) for k in ("log", "reach")
+        ):
+            raise MemoryAccessError(f"{self.path} is not a deny file ({{log, reach}})")
+        return {"log": list(doc["log"]), "reach": list(doc["reach"])}
+
+    @contextlib.contextmanager
+    def shared(self) -> Iterator[Deny]:
+        """The deny state, read and held under the shared lock for the ``with`` body."""
+        try:
+            fd = os.open(self.lock_path, os.O_RDONLY)
+        except FileNotFoundError:  # never written: nothing is denied yet
+            yield _empty_deny()
+            return
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_SH)
+            yield copy.deepcopy(self._read())
+        finally:
+            os.close(fd)  # closing drops the lock
+
+    def read(self) -> Deny:
+        with self.shared() as deny:
+            return deny
+
+    def transact(self, fn: Callable[[Deny], Deny]) -> Deny:
+        """Append to the deny state under the exclusive lock (only ``MemoryAdmin`` calls it)."""
+        from homelabnext.state import atomic_write_text
+
+        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, self.MODE)
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            old = self._read()
+            new = _appended(old, fn(copy.deepcopy(old)))
+            text = json.dumps(new, sort_keys=True, separators=(",", ":"))
+            atomic_write_text(self.path, text, mode=self.MODE, keep_owner=True)
+            return copy.deepcopy(new)
+        finally:
+            os.close(fd)
+
+
+class FileBackend:
+    """Durable backend: one ``homelabnext.state`` file, one key per owning profile, and the
+    deny state in its own :class:`DenyFile` (``deny_path``; by default ``<path>.deny.json``).
+    A write keeps the state file's owner (``keep_owner``), so an operator's write as root leaves
+    a file the runtime still owns.  Each ``transact`` reads the deny file under its shared lock
+    first, then takes the state file's lock (the lock order)."""
+
+    def __init__(
+        self, path: str | Path, *, deny_path: str | Path | None = None, **state_kwargs: Any
+    ) -> None:
         from homelabnext.state import StateStore
 
+        state_kwargs.setdefault("keep_owner", True)
         self._store = StateStore(path, **state_kwargs)
+        self.path = Path(path)
+        self.deny = DenyFile(deny_path or self.path.with_name(self.path.name + ".deny.json"))
 
     def load(self, owner: str) -> Any:
-        return self._store.get(_owner_key(owner), {}) or {}
+        return self._store.get(owner_key(owner), {}) or {}
 
     def owners(self) -> list[str]:
         names = self._store.keys()  # StateStore.keys(): sorted, read under its lock
         return [k for k in names if not k.startswith(RESERVED_PREFIX)]
 
     def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any:
-        # StateStore.rewrite loads the whole map under its lock and writes only after fn returns,
-        # so a raising fn leaves the file as it was, and the deny state is read under that lock
-        _owner_key(owner)
+        # the deny file under its shared lock first, then the state file: StateStore.rewrite
+        # loads the whole map under its lock and writes only after fn returns, so a raising fn
+        # leaves the file as it was
+        owner_key(owner)
         out: list[Any] = []
+        with self.deny.shared() as deny:
 
-        def change(data: dict[str, Any]) -> bool:
-            out.append(fn(data.get(owner) or {}, _deny_of(data)))
-            data[owner] = out[0]
-            return True
+            def change(data: dict[str, Any]) -> bool:
+                out.append(fn(data.get(owner) or {}, copy.deepcopy(deny)))
+                data[owner] = out[0]
+                return True
 
-        self._store.rewrite(change)
+            self._store.rewrite(change)
         return out[0]
 
     def load_deny(self) -> Deny:
-        return _deny_of(self._store.items())
+        return self.deny.read()
 
     def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny:
-        out: list[Deny] = []
-
-        def change(data: dict[str, Any]) -> bool:
-            import copy
-
-            old = _deny_of(data)
-            out.append(_appended(old, fn(copy.deepcopy(old))))
-            data[DENY_KEY], data[REACH_KEY] = out[0]["log"], out[0]["reach"]
-            return True
-
-        self._store.rewrite(change)
-        return out[0]
+        return self.deny.transact(fn)
 
 
 def denied(backend: MemoryBackend) -> DenySet:
@@ -1048,7 +1123,7 @@ def _apply(
             raise MemoryClockError(owner, behind)
     at = max(now, latest)
     if check.checked and deny:
-        if deny.denies(check.names):
+        if deny.denies(check.names) or any(deny.denies_input(u, d) for u, d in check.inputs):
             raise MemoryUpdateError(
                 ["the pack rendered a retracted source: a write from it is refused whatever it "
                  "cites (an operator retraction, ADR-0037 decision 14); nothing was applied"]
@@ -1114,8 +1189,11 @@ def _apply(
             # the effective sources always belong to the closure, after what it already held
             closure = _union(parts[0], entry["sources"], *parts[1:])
             why = None
-            if deny and deny.denies(closure):
-                why = f"{where}: its closure reaches a retracted source (ADR-0037 decision 14)"
+            if deny and deny.reaches(closure):
+                why = (
+                    f"{where}: its closure reaches a retracted source, or cites a revision a "
+                    "retraction reached (ADR-0037 decision 14)"
+                )
             elif len(closure) > MAX_CLOSURE:
                 why = (
                     f"{where}: its closure (sources since the key's last add, their aliases and "
@@ -1130,6 +1208,9 @@ def _apply(
                     dropped_in[u["scope"]] = dropped_in.get(u["scope"], 0) + 1
                 continue
             rec["closure"] = closure
+            # platform scopes are written unchecked only, so their records (and the range records
+            # they fold into) never point at an exposure (ADR-0037 decision 9, amended)
+            assert not (check.checked and u["scope"] in _platform_scopes(profile))
             records.append(rec)
             by_key.setdefault(k, []).append(rec)
             scope[u["key"]] = entry
@@ -1244,6 +1325,95 @@ def last_records(stored: Mapping[str, Any]) -> dict[tuple[str, str], Record]:
     return out
 
 
+# ---------------------------------------------------------------- the operator's write seam
+# ``homelabnext.memory_admin`` (never imported from here) writes through these and nothing else
+# of this module's internals: the log's shape stays this module's business.
+def stamp(t: datetime) -> str:
+    """A log stamp of the aware datetime ``t``."""
+    return _stamp(t)
+
+
+def parse_stamp(text: str) -> datetime:
+    """The aware datetime of a log stamp."""
+    return _parse(text)
+
+
+def utcnow() -> datetime:
+    return _utcnow()
+
+
+def stored_of(raw: Any, at: str) -> Stored:
+    """An owner's stored value in the ``{entries, log, exposure}`` shape (legacy memory migrated
+    as of ``at``)."""
+    return _stored(raw, at)[0]
+
+
+def state_records(stored: Mapping[str, Any]) -> list[Record]:
+    """The records that change an entry (every record but the ``aged``, ``purge`` and
+    ``restamp`` events), in log order."""
+    return [r for r in stored.get("log") or () if r["op"] not in EVENT_OPS]
+
+
+def last_record(stored: Mapping[str, Any], scope: str, key: str) -> Record | None:
+    """The last state record of ``scope/key``, or None."""
+    found = None
+    for r in state_records(stored):
+        if (r["scope"], r["key"]) == (scope, key):
+            found = r
+    return found
+
+
+def log_clock(stored: Mapping[str, Any], now: str, owner: str) -> tuple[str, dict[str, int]]:
+    """``(stamp, high)``: when a write at ``now`` is stamped (never before the log's latest
+    record; :class:`MemoryClockError` beyond :data:`CLOCK_SKEW`) and each scope's high-water
+    ``rev`` of aged-out keys."""
+    latest, high = "", {}
+    for r in stored.get("log") or ():
+        latest = max(latest, r["at"])
+        if r["op"] == "aged":
+            high[r["scope"]] = r["rev"]
+    if latest > now and _parse(latest) - _parse(now) > CLOCK_SKEW:
+        raise MemoryClockError(owner, _parse(latest) - _parse(now))
+    return max(now, latest), high
+
+
+def operator_retire(
+    stored: Stored,
+    keys: Iterable[tuple[str, str]],
+    now: str,
+    *,
+    reason: str,
+    by: str,
+    owner: str,
+    by_sudo: str | None = None,
+) -> list[dict[str, Any]]:
+    """Append an operator ``retire`` record (``reason``, ``by``, ``by_sudo``) for each live key
+    of ``stored`` (in place) and return what it retired.  The label stays the entry's and the
+    closure carries over; the record is ``checked: false`` with no pack.  It is not held to the
+    scope caps, and a platform key retired so compacts on its scope's next platform write."""
+    out: list[dict[str, Any]] = []
+    keys = list(keys)
+    if not keys:
+        return out
+    at, high = log_clock(stored, now, owner)
+    for scope, key in keys:
+        cur = stored["entries"].get(scope, {}).get(key)
+        if not cur or cur.get("status") != "live":
+            continue  # idempotent: already retired
+        last = last_record(stored, scope, key)
+        rev = max(cur["rev"], high.get(scope, 0)) + 1
+        rec = _record(at, scope, key, "retire", rev, cur.get("value"), None, keep_value=False)
+        rec.update(tlp=cur.get("tlp", UNLABELLED), reason=reason, by=by)
+        if by_sudo:
+            rec["by_sudo"] = by_sudo
+        entry = _step(cur, rec)
+        rec["closure"] = _union((last or {}).get("closure") or (), entry["sources"])
+        stored["log"].append(rec)
+        stored["entries"][scope][key] = entry
+        out.append({"scope": scope, "key": key, "rev": rev})
+    return out
+
+
 def memory_block_input(
     store: MemoryStore, profile: VerifiedProfile, scopes: Iterable[str]
 ) -> list[dict[str, Any]]:
@@ -1263,7 +1433,7 @@ def memory_block_input(
             if e.get("status") != "live" or rec is None or not tlp.allows(ceiling, e.get("tlp")):
                 continue
             digests = rec.get("value_digests") or [rec.get("value_digest")]
-            if not digests[-1]:  # a purged or migrated marker with no digest: nothing to cite
+            if not str(digests[-1] or "").startswith("sha256:"):  # purged: nothing to cite
                 continue
             out.append(
                 {
@@ -1501,7 +1671,12 @@ class MemoryStore:
             pack_label(pack),
             labels,
             tuple(sorted(rendered_identifiers(pack))),
-            names=pack_names(pack),
+            names=knowledge_names(pack),
+            inputs=tuple(
+                (i["uid"], i["digest"])
+                for i in (pack.get("provenance") or {}).get("inputs") or ()
+                if isinstance(i, Mapping)
+            ),
             aliases={k: frozenset(v) for k, v in aliases.items()},
             pairs=pairs,
             memory=tuple((e["scope"], e["key"], int(e["rev"])) for e in block),

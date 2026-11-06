@@ -1,30 +1,35 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Who may run ``MemoryAdmin`` (ADR-0037 decision 12): an :class:`OperatorPrincipal`, built only
-by the ``hnx agent memory`` command, from the invoking operating-system user.
+"""Who may run ``MemoryAdmin`` (ADR-0037 decision 12, amended 2026-11-06): an
+:class:`OperatorPrincipal`, built only by the ``hnx agent memory`` command from the invoking
+operating-system user.
 
-The **operators file** is reviewed configuration, never the state file.  It is YAML or JSON::
+**The boundary is the uid and file ownership, not the Python type.**  An agent runtime that can
+run arbitrary Python can build anything this module builds; what it cannot do is change its own
+uid, or write files root owns.  So:
 
-    operators: [alice, bob]          # OS user names allowed to run hnx agent memory
-    agent_runtime:                   # the users (or uids) the agent runtime runs as
-      - {user: hnx-agent}
-    broker:                          # the users (or uids) the broker runs as
-      - {user: hnx-broker}
-    broker_manifest: broker.yml      # optional: also refuse its callers and Code Mode peers
+* The **operators file** (``/etc/homelabnext/memory-operators.yml``; ``--operators`` names another
+  only when the effective uid is 0) is trusted only through root ownership: the file and every
+  directory above it must be owned by uid 0 and writable by no group or other.  It is opened
+  with ``O_NOFOLLOW`` and the same descriptor is ``fstat``-ed and parsed, so it cannot be swapped
+  between the check and the read.  Its shape (YAML or JSON)::
 
-* ``agent_runtime`` and ``broker`` name the uids that are refused, whatever the operators list
-  says.  The broker manifest's ``callers`` (and ``codemode`` runners and sandboxes) are the agent
-  runtime's peers as the broker knows them, so ``broker_manifest`` (a path relative to this file)
-  adds them; the broker's own user is configured nowhere else, so ``broker`` must list it.  At
-  least one runtime user (``agent_runtime`` or the manifest's peers) and one broker user are
-  required, and an operator may not be one of them.
-* The file must be one the runtime cannot write: it and every directory above it are owned by
-  none of the refused uids and are writable by no group or other (a directory with the sticky
-  bit, such as ``/tmp``, excepted).  :func:`load_operators` refuses it otherwise.
+      operators: [root]                # the OS users the command may run as (root under sudo)
+      agent_runtime: [{user: hnx-agent}]  # users (or {uid: n}) the agent runtime runs as
+      broker: [{user: hnx-broker}]     # users (or uids) the broker runs as
+      broker_manifest: broker.yml      # optional, relative to this file
 
-:func:`invoking_operator` reads the real and effective uids of this process (``os.getuid``,
-``os.geteuid``); either being a refused uid is refused, and the real user's name must be in
-``operators``.  An :class:`OperatorPrincipal` cannot be constructed directly, subclassed or
-changed.
+* **Refused uids**, whatever ``operators`` says: ``agent_runtime``, ``broker``, the broker
+  manifest's ``callers``, ``approval_relays``, ``operators`` (manifest 1.8 peers) and Code Mode
+  ``runners`` and ``sandboxes``, and the owner of the memory state file (the runtime owns it,
+  and the operators file cannot forge that).  **The runtime must not run as root**: a state file
+  owned by uid 0 refuses every operator.
+* The deployment runs ``hnx agent memory`` through ``sudo``: the principal's ``user`` is then
+  ``root``, and ``by_sudo`` records ``SUDO_USER`` as advisory audit data (an environment
+  variable, so it proves nothing).
+* :func:`require_operator` re-checks the process's real and effective uids against the
+  principal's and the refused set on every call, so a principal built some other way (or
+  carried into another process) does not act.  ``_SEALED`` guards against accidents, not
+  attacks.
 """
 
 from __future__ import annotations
@@ -44,15 +49,21 @@ __all__ = [
     "MemoryAdminError",
     "OperatorConfig",
     "OperatorPrincipal",
+    "OperatorsUnreadable",
+    "check_root_owned",
     "invoking_operator",
     "load_operators",
     "require_operator",
 ]
 
-#: where ``hnx agent memory`` reads the operators file unless ``--operators`` names another
+#: where ``hnx agent memory`` reads the operators file
 DEFAULT_OPERATORS = "/etc/homelabnext/memory-operators.yml"
 _USER = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _SEALED = object()
+#: the directory above which ownership is not checked (tests only; None checks up to /)
+_TRUST_ABOVE: Path | None = None
+#: the owners a trusted file may have: root (tests only add their own uid)
+_ROOT_OWNERS: frozenset[int] = frozenset({0})
 
 
 class MemoryAdminError(Exception):
@@ -60,24 +71,45 @@ class MemoryAdminError(Exception):
     arguments); nothing was changed."""
 
 
-class OperatorPrincipal:
-    """The operator running ``hnx agent memory``: an OS ``user`` and ``uid`` from the operators
-    file at ``source``.  Made only by :func:`invoking_operator`."""
+class OperatorsUnreadable(MemoryAdminError):
+    """The operators file (or the broker manifest it names) cannot be read or parsed."""
 
-    __slots__ = ("source", "uid", "user")
+
+class OperatorPrincipal:
+    """The operator running ``hnx agent memory``: the OS ``user``, real ``uid`` and effective
+    ``euid``, the ``refused`` uids it was checked against, the operators file (``source``) and
+    the advisory ``by_sudo``.  Made only by :func:`invoking_operator`."""
+
+    __slots__ = ("by_sudo", "euid", "refused", "source", "uid", "user")
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         raise TypeError("OperatorPrincipal is sealed: it cannot be subclassed")
 
-    def __init__(self, user: str, uid: int, source: str, token: object = None) -> None:
+    def __init__(
+        self,
+        user: str,
+        uid: int,
+        source: str,
+        token: object = None,
+        *,
+        euid: int | None = None,
+        refused: Iterable[int] = (),
+        by_sudo: str | None = None,
+    ) -> None:
         if token is not _SEALED:
             raise TypeError(
                 "an OperatorPrincipal is built only by the hnx agent memory command, from the "
                 "invoking operating-system user"
             )
-        object.__setattr__(self, "user", user)
-        object.__setattr__(self, "uid", uid)
-        object.__setattr__(self, "source", source)
+        for name, value in (
+            ("user", user),
+            ("uid", uid),
+            ("euid", uid if euid is None else euid),
+            ("source", source),
+            ("refused", frozenset(refused)),
+            ("by_sudo", by_sudo),
+        ):
+            object.__setattr__(self, name, value)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("OperatorPrincipal is read-only")
@@ -87,12 +119,20 @@ class OperatorPrincipal:
 
 
 def require_operator(by: Any) -> OperatorPrincipal:
-    """``by`` when it is an :class:`OperatorPrincipal`; a ``VerifiedProfile``, a string or
-    anything else raises ``TypeError``."""
+    """``by`` when it is an :class:`OperatorPrincipal` of this very process: its uids are the
+    process's real and effective uids now, and neither is refused.  A ``VerifiedProfile``, a
+    string or anything else raises ``TypeError``; a principal that does not match the process
+    raises :class:`MemoryAdminError`."""
     if type(by) is not OperatorPrincipal:
         raise TypeError(
             f"MemoryAdmin needs by=<OperatorPrincipal> (from hnx agent memory), not a "
             f"{type(by).__name__}: a profile never reaches it"
+        )
+    uid, euid = os.getuid(), os.geteuid()
+    if (uid, euid) != (by.uid, by.euid) or uid in by.refused or euid in by.refused:
+        raise MemoryAdminError(
+            "this OperatorPrincipal is not this process's operator (its uids differ, or are "
+            "refused): nothing was done"
         )
     return by
 
@@ -105,12 +145,9 @@ class OperatorConfig:
     refused: frozenset[int]
     source: str
 
-
-def _read(path: Path) -> Any:
-    import yaml
-
-    text = path.read_text(encoding="utf-8")
-    return json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
+    def refusing(self, uids: Iterable[int]) -> OperatorConfig:
+        """This configuration with ``uids`` refused too (the state file's owner)."""
+        return OperatorConfig(self.operators, self.refused | frozenset(uids), self.source)
 
 
 def _peers(entries: Any, where: str, lookup: Callable[[str], int], problems: list[str]) -> set[int]:
@@ -121,49 +158,106 @@ def _peers(entries: Any, where: str, lookup: Callable[[str], int], problems: lis
         problems.append(f"{where}: expected a list of {{user}} or {{uid}}")
         return out
     for n, e in enumerate(entries):
-        if isinstance(e, Mapping) and isinstance(e.get("uid"), int) and e["uid"] >= 0:
-            out.add(int(e["uid"]))
-        elif (
-            isinstance(e, Mapping) and isinstance(e.get("user"), str) and _USER.fullmatch(e["user"])
-        ):
+        uid = e.get("uid") if isinstance(e, Mapping) else None
+        user = e.get("user") if isinstance(e, Mapping) else None
+        if type(uid) is int and uid >= 0:  # never a bool: True is not uid 1
+            out.add(uid)
+        elif isinstance(user, str) and _USER.fullmatch(user):
             try:
-                out.add(lookup(e["user"]))
+                out.add(lookup(user))
             except KeyError:
-                problems.append(f"{where}[{n}]: no such user {e['user']!r}")
+                problems.append(f"{where}[{n}]: no such user {user!r}")
         else:
             problems.append(f"{where}[{n}]: expected {{user: <name>}} or {{uid: <n>}}")
     return out
 
 
-def _unwritable(path: Path, refused: Iterable[int]) -> list[str]:
-    """Why the runtime could write ``path`` (empty: it cannot): the file or a directory above it
-    owned by a refused uid, or writable by a group or others (a sticky directory excepted)."""
-    bad = set(refused)
+def _chain(path: Path) -> list[Path]:
+    """``path`` and the directories above it, up to ``/`` (or to :data:`_TRUST_ABOVE`)."""
+    out = []
+    for p in (path, *path.parents):
+        out.append(p)
+        if _TRUST_ABOVE is not None and p == Path(os.path.abspath(_TRUST_ABOVE)):
+            break
+    return out
+
+
+def _mode_problems(p: Path, st: os.stat_result, owners: Iterable[int]) -> list[str]:
     problems = []
-    for p in [path, *path.parents]:
-        st = p.stat()
-        sticky = stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX
-        if st.st_uid in bad:
-            problems.append(f"{p} is owned by uid {st.st_uid}, which the runtime or broker runs as")
-        if st.st_mode & 0o022 and not sticky:
-            problems.append(
-                f"{p} is writable by its group or others (mode {stat.S_IMODE(st.st_mode):o})"
-            )
+    if st.st_uid not in set(owners):
+        problems.append(f"{p} is owned by uid {st.st_uid}, not root")
+    if st.st_mode & 0o022:
+        problems.append(
+            f"{p} is writable by its group or others (mode {stat.S_IMODE(st.st_mode):o})"
+        )
     return problems
+
+
+def check_root_owned(path: str | os.PathLike[str], *, owners: Iterable[int] = ()) -> list[str]:
+    """Why ``path`` (which may not exist yet) and the directories above it are not trusted:
+    each existing one must be owned by root or one of ``owners``, be no symbolic link
+    and be writable by no group or other."""
+    problems = []
+    for p in _chain(Path(os.path.abspath(path))):
+        try:
+            st = os.lstat(p)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            problems.append(f"{p} is a symbolic link")
+            continue
+        problems += _mode_problems(p, st, set(owners) | _ROOT_OWNERS)
+    return problems
+
+
+def _open_trusted(path: Path) -> tuple[Any, os.stat_result]:
+    """Open ``path`` with ``O_NOFOLLOW`` and return its parsed document and the ``fstat`` of the
+    descriptor that was read, so the checked file is the parsed one."""
+    import yaml
+
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise OperatorsUnreadable(f"cannot open {path}: {exc.strerror}") from None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OperatorsUnreadable(f"{path} is not a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            fd = -1
+            text = fh.read()
+    finally:
+        if fd != -1:
+            os.close(fd)
+    try:
+        doc = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
+    except (ValueError, yaml.YAMLError) as exc:
+        raise OperatorsUnreadable(f"cannot parse {path}: {exc}") from None
+    return doc, st
+
+
+def _trusted(path: Path, what: str) -> Any:
+    doc, st = _open_trusted(path)
+    problems = _mode_problems(path, st, _ROOT_OWNERS) + check_root_owned(path.parent)
+    sudo_uid = os.environ.get("SUDO_UID", "")
+    if sudo_uid.isdigit() and int(sudo_uid) and st.st_uid == int(sudo_uid):
+        problems.append(f"{path} is owned by the invoking user (uid {sudo_uid})")
+    if problems:
+        raise MemoryAdminError(
+            f"the {what} must be reviewed configuration owned by root that the runtime cannot "
+            "write: " + "; ".join(problems)
+        )
+    return doc
 
 
 def load_operators(
     path: str | os.PathLike[str], *, lookup: Callable[[str], int] | None = None
 ) -> OperatorConfig:
-    """The operators file at ``path`` (see the module doc), or :class:`MemoryAdminError`."""
+    """The operators file at ``path`` (see the module doc), or :class:`MemoryAdminError`
+    (:class:`OperatorsUnreadable` when it cannot be read or parsed)."""
     find = lookup or (lambda name: pwd.getpwnam(name).pw_uid)
-    where = Path(path).resolve()
-    try:
-        doc = _read(where)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise MemoryAdminError(f"cannot read the operators file {path}: {exc}") from None
-    except Exception as exc:  # a YAML error
-        raise MemoryAdminError(f"cannot parse the operators file {path}: {exc}") from None
+    where = Path(os.path.abspath(path))
+    doc = _trusted(where, "operators file")
     if not isinstance(doc, Mapping):
         raise MemoryAdminError(f"{path}: expected a mapping with operators, agent_runtime, broker")
     unknown = sorted(set(doc) - {"operators", "agent_runtime", "broker", "broker_manifest"})
@@ -183,14 +277,14 @@ def load_operators(
         if not isinstance(manifest, str):
             problems.append(f"{path}: broker_manifest must be a path")
         else:
-            mpath = (where.parent / manifest).resolve()
-            try:
-                m = _read(mpath) or {}
-            except Exception as exc:
-                raise MemoryAdminError(f"cannot read the broker manifest {mpath}: {exc}") from None
-            cm = m.get("codemode") or {} if isinstance(m, Mapping) else {}
+            mpath = Path(os.path.abspath(where.parent / manifest))
+            m = _trusted(mpath, "broker manifest") or {}
+            m = m if isinstance(m, Mapping) else {}
+            cm = m.get("codemode") if isinstance(m.get("codemode"), Mapping) else {}
             for name, entries in (
-                ("callers", m.get("callers") if isinstance(m, Mapping) else None),
+                ("callers", m.get("callers")),
+                ("approval_relays", m.get("approval_relays")),
+                ("operators", m.get("operators")),
                 ("codemode.runners", cm.get("runners")),
                 ("codemode.sandboxes", cm.get("sandboxes")),
             ):
@@ -210,15 +304,7 @@ def load_operators(
         if uid in refused:
             problems.append(f"{path}: operator {o!r} is a user the agent runtime or broker runs as")
     if problems:
-        raise MemoryAdminError(problems[0] if len(problems) == 1 else "; ".join(problems))
-    unsafe = _unwritable(where, refused)
-    if manifest is not None:
-        unsafe += _unwritable((where.parent / manifest).resolve(), refused)
-    if unsafe:
-        raise MemoryAdminError(
-            "the operators file must be reviewed configuration the runtime cannot write: "
-            + "; ".join(unsafe)
-        )
+        raise MemoryAdminError("; ".join(problems))
     return OperatorConfig(frozenset(ops), frozenset(refused), str(where))
 
 
@@ -232,7 +318,7 @@ def invoking_operator(config: OperatorConfig) -> OperatorPrincipal:
     if uid in config.refused or euid in config.refused:
         raise MemoryAdminError(
             f"uid {uid if uid in config.refused else euid} is a user the agent runtime or the "
-            "broker runs as: it may never run hnx agent memory"
+            "broker runs as (or owns the memory state file): it may never run hnx agent memory"
         )
     try:
         user = pwd.getpwuid(uid).pw_name
@@ -240,4 +326,7 @@ def invoking_operator(config: OperatorConfig) -> OperatorPrincipal:
         raise MemoryAdminError(f"uid {uid} has no user name") from None
     if user not in config.operators:
         raise MemoryAdminError(f"user {user!r} is not in the operators list of {config.source}")
-    return OperatorPrincipal(user, uid, config.source, _SEALED)
+    sudo = os.environ.get("SUDO_USER") or None
+    return OperatorPrincipal(
+        user, uid, config.source, _SEALED, euid=euid, refused=config.refused, by_sudo=sudo
+    )

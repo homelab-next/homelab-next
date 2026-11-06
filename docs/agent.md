@@ -741,8 +741,8 @@ never from what the model says.
 
 **Memory citing memory and retraction**
 ([ADR-0037](adr/0037-agent-memory-is-sourced-historied-and-retractable.md), PR 3, decisions 11 to
-14, 17 and 18). A fact from a bad source is found, and withdrawn with everything built on it, by
-an operator, never by a profile.
+14, 17 and 18, amended 2026-11-06). A fact from a bad source is found, and withdrawn with
+everything built on it, by an operator, never by a profile.
 - **The memory block.** Platform code that renders memory into a pack passes
   `memory_block_input(store, profile, scopes)` (the profile's own live entries within its
   ceiling, `{scope, key, rev, value_digest, tlp, closure}`) to `assemble_pack(..., memory=,
@@ -752,81 +752,98 @@ an operator, never by a profile.
   one naming another owner is refused first, before anything is looked up, with the same message
   as an unshown revision, so the check is no existence oracle. No update may cite any revision of
   its own key. The record's label takes the stricter of the block's and the stored revision's.
-- **`MemoryAdmin`** (`homelabnext.memory_admin`) holds `dependents`, `retract`, `lift`, `purge`
-  and `restamp`. Nothing in `homelabnext.agent`, `homelabnext.broker` or
-  `homelabnext.orchestration` imports it (`tests/memory_admin` holds the import graph), and `hnx
-  broker validate` refuses an action named `memory.retract`, `memory.lift`, `memory.purge` or
-  `memory.dependents`. Every method takes `by=`, an `OperatorPrincipal`, which only `hnx agent
-  memory` builds, from the invoking OS user; a `VerifiedProfile` or a string raises `TypeError`.
-- **The operators file** (`--operators`, default `/etc/homelabnext/memory-operators.yml`) is
-  reviewed configuration, never the state file:
+  `validate_report` also binds the report's `profile` to the profile its pack was assembled for.
+- **The boundary is the uid and file ownership, not the Python type.** `MemoryAdmin`
+  (`homelabnext.memory_admin`) holds `dependents`, `retract`, `lift`, `purge` and `restamp`.
+  Nothing in `homelabnext.agent`, `homelabnext.broker` or `homelabnext.orchestration` imports it
+  (`tests/memory_admin` resolves every import spelling and checks `sys.modules` in a
+  subprocess), and `hnx broker validate` refuses every `memory.*` action but the notes lane's
+  `memory.write`, and any handler naming `homelabnext.memory_admin`. Every method takes `by=`,
+  an `OperatorPrincipal`, which only `hnx agent memory` builds from the invoking OS user, and
+  which every call re-checks against `os.getuid()`/`os.geteuid()` and the refused uids; a
+  `VerifiedProfile` or a string raises `TypeError`. Its seal guards against accidents, not
+  attacks.
+- **The operators file** (`/etc/homelabnext/memory-operators.yml`; `--operators` names another
+  only for root) is trusted only through root ownership: it and every directory above it are
+  owned by uid 0 and writable by no group or other; it is opened with `O_NOFOLLOW` and the
+  `fstat`-ed descriptor is the one parsed:
 
   ```yaml
-  operators: [alice]               # OS users who may run hnx agent memory
+  operators: [root]                   # the users the command runs as (root, under sudo)
   agent_runtime: [{user: hnx-agent}]  # users (or {uid: n}) the agent runtime runs as
-  broker: [{user: hnx-broker}]     # users (or uids) the broker runs as
-  broker_manifest: broker.yml      # optional: its callers and Code Mode peers are runtime users too
+  broker: [{user: hnx-broker}]        # users (or uids) the broker runs as
+  broker_manifest: broker.yml         # optional: its callers, approval relays, operators and Code Mode peers
   ```
 
-  The uids of `agent_runtime`, `broker` and the broker manifest's `callers` and `codemode`
-  runners and sandboxes are refused, whatever `operators` says (the broker's own user is
-  configured nowhere else, so `broker` must list it); the invoking user's real and effective
-  uids are both checked, and the real user's name must be in `operators`. The file, and every
-  directory above it, must be owned by none of those uids and writable by no group or other (a
-  sticky directory excepted), or it is refused.
-- **`dependents(source, by=, revision=)` is the dry run.** The alias set comes only from the
-  exposures' `pairs`: a knowledge node's graph id, record uid and digests, and an input item's
-  uid and digest, closed transitively. A feed item's text naming a good record's uid adds
-  nothing. It returns the aliases, the **cited** records (whose closure reaches one), the
-  **exposed** records (that did not cite one, but whose pack rendered one or showed a revision
-  already reached in its memory block, or that cite such a revision; walked until a pass finds
-  nothing new; a truncated range record is flagged), the affected owners, scopes and keys, and
-  `confirm`, a digest of the listing.
-- **`retract(source, reason, by=, confirm=, revision="all", include_exposed=False)`** refuses a
-  `confirm` that no longer matches, then appends one deny record per alias (`revision="this"`
-  denies the one content digest) to the deny log, in its own transaction, before anything else.
-  It then walks exposure, appending each reached revision to the denied-reach index
-  (`{deny_id, owner, scope, key, rev_from, rev}`) until a pass adds nothing, and retires every
-  live cited entry (and exposed one, with `include_exposed`), owner by owner, with `reason:
-  retracted:<source>` and `by`. A rerun finds the active retraction by source and revision and
-  completes it without `confirm`; retracting twice changes nothing. The deny log and the index
-  are append-only (the backend refuses anything else) under reserved keys (`@memory-deny-log`,
-  `@memory-denied-reach`) no profile id can take. `MemoryAdmin` writes any scope, a platform scope
-  included (ADR-0035 decision 10 as ADR-0037 decision 17 amends it); its records are not held to
-  the caps, and a platform key it retires compacts on the scope's next platform write.
+  Those uids are refused, and so, always, is the owner of the `--state` file: the runtime owns
+  it. **The runtime must not run as root.** Run the command through `sudo`; `SUDO_USER` is
+  recorded as advisory `by_sudo` on what the operator writes.
+- **The deny state is its own file.** The deny log and the `denied_reach` index live in a JSON
+  file beside a `.lock` file (`FileBackend(path, deny_path=)`, `--deny`, by default
+  `<state>.deny.json`), owned by root or the operator, mode 0644, in a directory the runtime
+  cannot write (the command refuses one it could). The runtime only reads it, under a shared
+  `flock` taken inside its own `transact`; `MemoryAdmin` appends under the exclusive lock (lock
+  order: the deny file, then the state file). `InMemoryBackend` keeps the equivalent in process.
+  Owners starting `@` are refused. An operator's write as root keeps the state file's and its
+  lock's uid and gid (`StateStore(keep_owner=True)`, `atomic_write_text(keep_owner=)`), and
+  refuses to write when it cannot.
+- **`dependents(source, by=, revision=, include_exposed=, include_alias=)` is the dry run.** The
+  alias set comes only from the exposures' `pairs` (`{rendered, memory, pairs}`, counted in
+  `exposure_bytes`) and closes narrowly: a graph id to its uid, a uid to its own digests and
+  graph ids, a digest to the one uid it is paired with, never from a digest to another uid. A
+  digest paired with several uids is listed under `ambiguous` and joins only with
+  `include_alias <uid>` per foreign uid; a lone digest is denied by name, with a warning. It
+  lists the **cited** records (whose closure reaches a denied name, and a `mem:` source's own
+  revision), the **exposed** ones (that did not cite one, but whose checked pack rendered one or
+  showed a revision already reached, or that cite such a revision, walked until a pass finds
+  nothing new, and any truncated range its sources reach), the affected owners, scopes and keys,
+  and `confirm`, a digest of the listing and its settings.
+- **`retract(source, reason, by=, confirm=, revision="all", include_exposed=False,
+  include_alias=())`** refuses a `confirm` that no longer matches, then appends one deny record
+  per alias, with the settings, in its own transaction, before anything else; walks, appending
+  each reached revision (`{deny_id, owner, scope, key, rev_from, rev}`) until a pass adds
+  nothing; and retires every live cited entry (and exposed one, with `include_exposed`), owner
+  by owner, with `reason: retracted:<source>`, `by` and `by_sudo`. A rerun with the same
+  settings completes it without `confirm`; other settings need a fresh `confirm`; retracting
+  twice changes nothing, since retire records add no marks. A lift that lands meanwhile stops it
+  with `MemoryAdminError`. `MemoryAdmin` writes any scope, a platform scope included (ADR-0035
+  decision 10 as ADR-0037 decision 17 amends it); its records are not held to the caps, and a
+  platform key it retires compacts on the scope's next platform write.
 - **A retraction sticks.** `MemoryBackend` gains `owners()`, `load_deny()` and
-  `transact_deny(fn)`, and `transact(owner, fn)` now calls `fn(current, deny)` with the deny log
-  and index read under the same lock (`FileBackend` through `StateStore.rewrite`). Every write
-  re-checks inside its transaction: a checked write whose pack rendered a denied name, or whose
-  memory block shows a revision with an active mark, is refused whole, and so is a checked batch
-  with an update whose closure reaches a denied name; an unchecked platform batch drops such an
-  update, reports it in `dropped` and pages (`AGENT_MEMORY_DROPPED`). A later revision of a
-  record denied by uid is caught by its pack's own pairing (the uid is rendered beside the new
-  digest).
+  `transact_deny(fn)`, and `transact(owner, fn)` calls `fn(current, deny)` with a copy of the
+  deny state read under its lock. Every write re-checks inside its transaction: a checked write
+  whose pack rendered a denied knowledge name or a denied input item, or whose memory block shows
+  a marked revision, is refused whole, and so is a checked batch with an update whose closure
+  reaches a denied name or cites a marked revision; an unchecked platform batch drops such an
+  update, reports it in `dropped` and pages (`AGENT_MEMORY_DROPPED`).
 - **New packs leave denied items out.** `denied(backend)` gives the active `DenySet`
   (`homelabnext.agent.deny`), which the caller passes as `retracted=` to `select_knowledge`
-  (exclusion reason `retracted`) and `assemble_pack`. The assembler leaves out an input section
-  that declares a denied item (listed in `omitted`, or deferring the pack when required: one
-  item's text cannot be cut out of a section), a knowledge item naming a denied identifier, and a
-  memory-block entry whose closure reaches a denied name or that carries an active mark; the
-  pack's `retracted` block lists them (memory entries by count). Neither function reads the store.
+  (exclusion reason `retracted`) and `assemble_pack`. An input item is denied by its uid, or by
+  its digest only under a `revision=this` retraction. The assembler leaves out an input section
+  that declares a denied item, whole (one item's text cannot be cut out of a section): a
+  required one is quarantined, listed in `omitted` and `retracted.quarantined`, and the caller
+  pages it with `quarantine_page` (pair `AGENT_PACK_QUARANTINED`); it is never deferred silently.
+  **Callers should filter denied items before rendering section text.** It also drops a knowledge
+  item naming a denied identifier (and stops listing it as included) and a memory-block entry
+  whose closure reaches a denied name or cites a marked revision, or that is marked itself.
 - **`lift(source, reason, by=)`** appends a lift record per active retraction of the source: its
   names and marks stop counting at once. Nothing retired is restored.
 - **`purge(owner | "*", value_digest | "<scope>/<key>@<rev>", reason, by=)`** retires the entry
-  first when the purged revision is current, blanks the value in every record holding that
-  digest and in the cached entry (keeping `value_digest`, `sources` and `tlp`; a migrated purged
-  marker keeps none), marks them `purged: true`, and appends a `purge` record per key. `history`
-  shows both, and `as_of` lists a key whose value at `t` was purged under `purged`. `"*"` takes a
-  digest and finds every owner holding it. Copies outside the store (backups, quarantined state
-  files, rendered packs in the activity detail tier) are not reached.
-- **`restamp(owner, reason, by=)`** recovers a log stamped in the future after a host clock that
-  ran ahead was corrected (decision 3): each such stamp becomes now, the old one kept as
-  `restamped_from`, with a `restamp` record; writes resume at once instead of when real time
-  passes the log.
-- **`hnx agent memory {dependents,retract,lift,purge,restamp} --state FILE [--operators FILE]`**
-  is the command: operator only, a dry run unless `--apply` (`retract --apply` needs the dry
-  run's `--confirm`, except to complete a retraction already denied). Output is JSON; exit 0
-  done or a dry run, 1 refused, 2 a usage error or an unreadable file.
+  first when the purged revision is current, blanks the value in every record holding it and in
+  the cached entry, replaces every digest of it (`value_digest`, a range's `value_digests`, the
+  `purge` record's) with one random `purged:<hex>` token (an unsalted digest of a 4-digit value is
+  a guess away from it; only the dry run shows the digest), and appends a `purge` record per key.
+  `history` shows both, and `as_of` lists a key whose value at `t` was purged under `purged`. A
+  rerun appends nothing. Copies outside the store are not reached.
+- **`restamp(owner, reason, by=, expect_now=)`** recovers a log stamped in the future after a host
+  clock that ran ahead was corrected (decision 3): the dry run lists each from -> to; applying it
+  needs `expect_now` (the time the operator believes it is) within 5 minutes of the clock. Each
+  such stamp becomes now, the old one kept as `restamped_from`, with a `restamp` record.
+- **`hnx agent memory {dependents,retract,lift,purge,restamp} --state FILE [--deny FILE]
+  [--operators FILE]`** is the command: operator only, a dry run unless `--apply` (`retract
+  --apply` needs the dry run's `--confirm`, except to complete one already denied with the same
+  settings; `restamp --apply` needs `--expect-now`). Output is JSON; exit 0 done or a dry run, 1
+  refused, 2 a usage error or an unreadable file (the operators file included).
 - **A report served to another profile carries its `memory_updates` as `{count: n}`**
   (`homelabnext.agent.report.served_report(report, reader=)`), so it is no cross-agent read of
   memory. Nothing serves reports to other profiles yet (the reader-to-actor handoff passes only

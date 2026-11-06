@@ -25,7 +25,7 @@ from agent_support import (
 from memory_admin_support import RUNTIME_UID, operator, operators_file
 
 from homelabnext.agent import SpecError, compile_profile, validate_report
-from homelabnext.agent.deny import DENY_KEY, REACH_KEY, DenySet, deny_set
+from homelabnext.agent.deny import DenySet, deny_set
 from homelabnext.agent.knowledge import Selection
 from homelabnext.agent.memory import (
     FileBackend,
@@ -253,9 +253,15 @@ def test_retraction_reaches_two_levels_of_mem_and_exposure(reader, other, backen
     # one deny record per alias, written before anything else
     deny = backend.load_deny()
     assert sorted(r["name"] for r in deny["log"]) == dry["aliases"]
+    assert {(r["revision"], r["include_exposed"]) for r in deny["log"]} == {("all", False)}
     assert done["marks"] == len(deny["reach"]) == 6  # a, b, c, d, e and x were reached
-    # include_exposed retires the exposed set too (a rerun: no confirm needed)
-    again = admin.retract(uid(1), "poisoned feed item", by=op, include_exposed=True)
+    # a rerun asking to widen it (include_exposed) needs a fresh confirm (design M4)
+    with pytest.raises(MemoryAdminError, match="confirm does not match"):
+        admin.retract(uid(1), "poisoned feed item", by=op, include_exposed=True)
+    wide = admin.dependents(uid(1), by=op, include_exposed=True)
+    again = admin.retract(
+        uid(1), "poisoned feed item", by=op, include_exposed=True, confirm=wide["confirm"]
+    )
     assert again["resumed"] and {r["key"] for r in again["retired"]} == {"d", "e"}
     assert live(store, reader) == {"g"}
     stored = backend.load(reader["id"])
@@ -418,11 +424,11 @@ def test_new_packs_leave_denied_items_out(reader, backend, clock, op):
     admin.retract(uid(1), "r", by=op, confirm=admin.dependents(uid(1), by=op)["confirm"])
     deny = denied(backend)
     assert deny.names == {uid(1), digest(1)}
-    # an input section declaring a denied item is left out whole (its text cannot be split)
+    # an input section declaring a denied item is left out whole (its text cannot be split); a
+    # required one is quarantined (listed, and paged by the caller), not deferred silently
     pack, _ = labelled_pack([item(1, "clear")], [item(2, "clear")], retracted=deny)
-    assert pack["status"] == "deferred" and "carries a retracted input item" in str(
-        pack["deferred_reasons"]
-    )
+    assert pack["status"] == "ready" and "findings" in pack["omitted"]
+    assert pack["retracted"]["quarantined"] == ["findings"]
     assert pack["retracted"]["inputs"] == [{"section": "findings", "uid": uid(1)}]
     assert all(i["uid"] != uid(1) for i in pack["provenance"]["inputs"])
     # memory: an entry whose closure reaches a denied name is left out of the block
@@ -450,6 +456,9 @@ def test_assemble_pack_drops_a_retracted_knowledge_item():
     assert pack["provenance"]["knowledge"] == [] and pack["retracted"]["knowledge"] == [
         f"lesson:{uid(7)}"
     ]
+    # the pack's knowledge record no longer lists it as included (design nit)
+    assert pack["knowledge"]["included"] == []
+    assert {"id": f"lesson:{uid(7)}", "reason": "retracted"} in pack["knowledge"]["excluded"]
 
 
 # ---------------------------------------------------------------- lift
@@ -485,16 +494,19 @@ def test_lift_releases_marks_and_restores_nothing(reader, backend, clock, op):
     assert admin.lift(uid(1), "again", by=op)["lifted"] == []
 
 
-def test_the_deny_state_is_append_only_under_a_reserved_key(backend):
+def test_the_deny_state_is_append_only_and_apart_from_memory(backend, tmp_path):
     backend.transact_deny(lambda d: {"log": [*d["log"], {"op": "x"}], "reach": d["reach"]})
     with pytest.raises(MemoryAccessError, match="append-only"):
         backend.transact_deny(lambda d: {"log": [], "reach": d["reach"]})
-    for key in (DENY_KEY, REACH_KEY):
+    for key in ("@memory-deny-log", "@anything"):
         with pytest.raises(MemoryAccessError, match="reserved"):
             backend.load(key)
         with pytest.raises(MemoryAccessError, match="reserved"):
             backend.transact(key, lambda cur, deny: cur)
     assert backend.owners() == []
+    if isinstance(backend, FileBackend):  # its own file, never the runtime's state file
+        assert backend.deny.path.exists() and not (tmp_path / "memory.json").exists()
+        assert oct(backend.deny.path.stat().st_mode & 0o777) == "0o644"
     assert deny_set([{"op": "retract", "deny_id": "d1", "name": "n"}]).names == {"n"}
 
 
@@ -512,11 +524,13 @@ def test_purge_across_owners(reader, other, backend, clock, op):
     }  # fmt: skip
     t_before = clock.t
     done = admin.purge("*", vd, "a secret the screen missed", by=op)
-    assert done["purged"] == dry["purged"]
+    assert done["purged"] == [{k: v for k, v in p.items() if k != "digest"} for p in dry["purged"]]
     for o in (reader["id"], other["id"]):
         assert "leaked value" not in json.dumps(backend.load(o))
     recs = store.history(reader, "analyst", "k")["records"]
-    assert recs[0]["purged"] is True and recs[0]["value_digest"] == vd and "value" not in recs[0]
+    assert recs[0]["purged"] is True and "value" not in recs[0]
+    assert recs[0]["value_digest"].startswith("purged:")  # no plaintext digest stays (audit M5)
+    assert vd not in json.dumps(backend.load(reader["id"])) and dry["purged"][0]["digest"] == vd
     assert recs[-1]["op"] == "purge" and recs[-1]["by"] == op.user
     assert store.read(reader, "analyst")["entries"] == {"k": "fine now"}
     assert live(store, other) == set()  # its current revision was retired first
@@ -541,10 +555,15 @@ def test_an_operator_restamp_recovers_a_log_stamped_in_the_future(reader, backen
     with pytest.raises(MemoryClockError):
         put(MemoryStore(backend, now=back), reader, [up("add", "j", "v")], [item(1, "clear")])
     admin = MemoryAdmin(backend, now=back)
-    assert admin.restamp(reader["id"], "clock ran a day ahead", by=op, dry_run=True) == {
-        "restamped": 1, "dry_run": True
-    }  # fmt: skip
-    assert admin.restamp(reader["id"], "clock ran a day ahead", by=op)["restamped"] == 1
+    dry = admin.restamp(reader["id"], "clock ran a day ahead", by=op, dry_run=True)
+    assert dry["restamped"] == 1 and dry["changes"][0]["from"].startswith("2026-11-07")
+    assert dry["changes"][0]["to"].startswith("2026-11-06")
+    with pytest.raises(MemoryAdminError, match="needs expect_now"):
+        admin.restamp(reader["id"], "clock ran a day ahead", by=op)
+    with pytest.raises(MemoryAdminError, match="away from expect_now"):
+        admin.restamp(reader["id"], "r", by=op, expect_now=T0 + timedelta(hours=1))
+    done = admin.restamp(reader["id"], "clock ran a day ahead", by=op, expect_now=T0)
+    assert done["restamped"] == 1
     put(MemoryStore(backend, now=back), reader, [up("add", "j", "v")], [item(1, "clear")])
     (rec,) = store.history(reader, "analyst", "k")["records"]
     assert rec["restamped_from"]["at"].startswith("2026-11-07") and rec["at"] < "2026-11-07"
@@ -604,7 +623,22 @@ def _cli(args, capsys):
     return code, out.out, out.err
 
 
+def _cli_env(monkeypatch, tmp_path, owner=RUNTIME_UID):
+    """The CLI as the deployment runs it (through sudo, the runtime owning the state file), on
+    a host where the test's own uid stands in for root."""
+    from homelabnext.memory_admin import cli, principal
+
+    monkeypatch.setattr(principal, "_TRUST_ABOVE", tmp_path)
+    monkeypatch.setattr(principal, "_ROOT_OWNERS", frozenset({0, os.getuid()}))
+    monkeypatch.setattr(cli, "_euid", lambda: 0)
+    if owner is not None:
+        monkeypatch.setattr(cli, "_owner", lambda path: owner)
+
+
 def test_the_cli_is_operator_only_and_a_dry_run_by_default(reader, tmp_path, capsys, monkeypatch):
+    from homelabnext.memory_admin import cli
+
+    _cli_env(monkeypatch, tmp_path)
     state_file = tmp_path / "memory.json"
     store = MemoryStore(FileBackend(state_file), now=Clock(datetime(2026, 1, 1, tzinfo=UTC)))
     put(store, reader, [up("add", "a", "A", sources=[uid(1)])], [item(1, "clear")])
@@ -624,12 +658,68 @@ def test_the_cli_is_operator_only_and_a_dry_run_by_default(reader, tmp_path, cap
     for cmd in (["lift", uid(1)], ["purge", "*", digest(5)], ["restamp", reader["id"]]):
         code, out, _ = _cli([*cmd, "--reason", "r", *common], capsys)
         assert code == 0 and json.loads(out)["dry_run"] is True
+    code, _, err = _cli(["restamp", reader["id"], "--reason", "r", "--apply", "--expect-now",
+                         "yesterday", *common], capsys)  # fmt: skip
+    assert code == 1 and "ISO 8601" in err
+    monkeypatch.setattr(cli, "_owner", lambda path: os.stat(path).st_uid)
     code, _, err = _cli(["dependents", uid(1), "--state", str(tmp_path / "none.json"),
                          "--operators", ops], capsys)  # fmt: skip
     assert code == 2 and "no memory state file" in err
+    monkeypatch.setattr(cli, "_owner", lambda path: RUNTIME_UID)
+    (tmp_path / "bad.yml").write_text("operators: [", encoding="utf-8")
+    code, _, err = _cli(["dependents", uid(1), "--state", str(state_file), "--operators",
+                         str(tmp_path / "bad.yml")], capsys)  # fmt: skip
+    assert code == 2 and "cannot parse" in err  # an unreadable operators file is exit 2
+    monkeypatch.setattr(cli, "_euid", lambda: 1000)  # --operators is root's alone
+    code, _, err = _cli(["dependents", uid(1), *common], capsys)
+    assert code == 1 and "honoured only for root" in err
+    monkeypatch.setattr(cli, "_euid", lambda: 0)
+    # the state file's owner is refused even when the operators file lists that user
+    monkeypatch.setattr(cli, "_owner", lambda path: os.getuid())
+    code, _, err = _cli(["dependents", uid(1), *common], capsys)
+    assert code == 1 and "owns the memory state file" in err
+    monkeypatch.setattr(cli, "_owner", lambda path: RUNTIME_UID)
+    # a deny file the runtime could rewrite is refused
+    deny = tmp_path / "memory.json.deny.json"
+    deny.chmod(0o666)
+    code, _, err = _cli(["dependents", uid(1), *common], capsys)
+    assert code == 1 and "the deny file must be owned by root" in err
+    deny.chmod(0o644)
     monkeypatch.setattr(os, "getuid", lambda: RUNTIME_UID)
     code, _, err = _cli(["dependents", uid(1), *common], capsys)
     assert code == 1 and "refused" in err and "agent runtime or the broker" in err
+
+
+CHOWN = "changing a file's owner (root) is not available"
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() != 0, reason=CHOWN)
+def test_an_operator_write_keeps_the_runtimes_ownership(reader, tmp_path, capsys, monkeypatch):
+    """The deployment: the runtime (4242:4242) owns its state file and its lock; the operator
+    writes as root through sudo; both keep their owner (audit H1)."""
+    _cli_env(monkeypatch, tmp_path, owner=None)  # the real owner, read from the file
+    state_file = tmp_path / "memory.json"
+    store = MemoryStore(FileBackend(state_file), now=Clock(datetime(2026, 1, 1, tzinfo=UTC)))
+    put(store, reader, [up("add", "a", "A", sources=[uid(1)])], [item(1, "clear")])
+    lock = tmp_path / "memory.json.lock"
+    for f in (state_file, lock):
+        os.chown(f, RUNTIME_UID, RUNTIME_UID)
+    lock.unlink()  # a lock the operator creates gets the state file's owner too
+    common = ["--state", str(state_file), "--operators", str(operators_file(tmp_path))]
+    code, out, _ = _cli(["dependents", uid(1), *common], capsys)
+    code, out, _ = _cli(["retract", uid(1), "--reason", "bad", "--apply", "--confirm",
+                         json.loads(out)["confirm"], *common], capsys)  # fmt: skip
+    assert code == 0 and json.loads(out)["retired"][0]["key"] == "a"
+    for f in (state_file, lock):
+        assert (f.stat().st_uid, f.stat().st_gid) == (RUNTIME_UID, RUNTIME_UID)
+    deny = tmp_path / "memory.json.deny.json"
+    assert deny.stat().st_uid == 0 and deny.stat().st_mode & 0o777 == 0o644
+
+
+def test_a_skip_names_a_registered_cause(request):
+    from tests.suite_policy import skip_reason_allowed
+
+    assert skip_reason_allowed(CHOWN, request.config.getini("skip_reasons"))
 
 
 def test_a_memory_state_copy_is_left_as_it_was_by_a_dry_run(reader, backend, clock, op):
@@ -639,5 +729,6 @@ def test_a_memory_state_copy_is_left_as_it_was_by_a_dry_run(reader, backend, clo
     admin = MemoryAdmin(backend, now=clock)
     admin.purge(reader["id"], "analyst/k@1", "r", by=op, dry_run=True)
     admin.restamp(reader["id"], "r", by=op, dry_run=True)
+    assert admin.purge(reader["id"], "analyst/k@9", "r", by=op)["purged"] == []
     admin.lift(uid(1), "r", by=op, dry_run=True)
     assert state(backend) == before

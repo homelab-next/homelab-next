@@ -11,6 +11,7 @@ from .principal import (
     MemoryAdminError,
     OperatorConfig,
     OperatorPrincipal,
+    OperatorsUnreadable,
     load_operators,
     require_operator,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "MemoryAdminError",
     "OperatorConfig",
     "OperatorPrincipal",
+    "OperatorsUnreadable",
     "load_operators",
     "require_operator",
 ]

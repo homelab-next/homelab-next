@@ -326,11 +326,28 @@ def _inside(base: Path, rel: str) -> Path | None:
     return p if p.is_relative_to(base.resolve()) else None
 
 
-#: action names refused in any manifest: the operator's memory tools are not broker actions, and
-#: are never answered to a profile (ADR-0037 decision 12)
+#: the operator's memory tools (ADR-0037 decision 12): never broker actions, never answered to a
+#: profile.  The whole ``memory.*`` namespace is refused (:func:`memory_admin_action`) except the
+#: free-form notes lane's ``memory.write``, which is not one of them.
 MEMORY_ADMIN_ACTIONS = frozenset(
-    {"memory.retract", "memory.lift", "memory.purge", "memory.dependents"}
+    {"memory.retract", "memory.lift", "memory.purge", "memory.dependents", "memory.restamp"}
 )
+_MEMORY_LANE_ACTIONS = frozenset({"memory.write"})
+
+
+def memory_admin_action(name: Any) -> bool:
+    """True when ``name`` is in the operator's ``memory.*`` namespace (every ``memory.`` name but
+    the notes lane's ``memory.write``)."""
+    return isinstance(name, str) and name.startswith("memory.") and name not in _MEMORY_LANE_ACTIONS
+
+
+def _imports_memory_admin(path: Path) -> bool:
+    """True when a handler file names the operator's memory admin (a handler runs as the
+    broker's user, which may never reach it)."""
+    try:
+        return b"memory_admin" in path.read_bytes()
+    except OSError:
+        return False
 
 
 def validate_manifest(
@@ -342,7 +359,8 @@ def validate_manifest(
     handler file exists and matches ``handler_digest``; manifest/handler consistency
     (:func:`homelabnext.broker.check_manifest_handlers`, lane actions excluded); every lane action
     names a declared lane with ``handler: builtin/lane`` at tier ``write``; lane configuration;
-    no action is one of :data:`MEMORY_ADMIN_ACTIONS`.
+    no action is in the operator's ``memory.*`` namespace (:func:`memory_admin_action`) and no
+    handler names ``homelabnext.memory_admin``.
     """
     base = Path(base_dir)
     problems = [f"manifest: {e}" for e in schema_errors("broker", "manifest", manifest)]
@@ -353,7 +371,7 @@ def validate_manifest(
         f"actions: {a['action']} is an operator memory tool, never a broker action (ADR-0037 "
         "decision 12: MemoryAdmin is run by an operator through hnx agent memory)"
         for a in manifest.get("actions", [])
-        if a.get("action") in MEMORY_ADMIN_ACTIONS
+        if memory_admin_action(a.get("action"))
     ]
     docs: list[dict[str, Any]] = []
     for rel in manifest.get("handler_docs", []):
@@ -370,7 +388,7 @@ def validate_manifest(
         errs += _control_problems(
             "handler", [("action", doc.get("action")), ("handler", doc.get("handler"))]
         )
-        if doc.get("action") in MEMORY_ADMIN_ACTIONS:
+        if memory_admin_action(doc.get("action")):
             errs.append(f"action {doc['action']} is an operator memory tool, never a broker action")
         if errs:
             problems += [f"{rel}: {e}" for e in errs]
@@ -390,6 +408,11 @@ def validate_manifest(
         target = _inside(base, doc["handler"])
         if target is None or not target.is_file():
             problems.append(f"{rel}: handler {doc['handler']} is missing or outside {base}")
+        elif _imports_memory_admin(target):
+            problems.append(
+                f"{rel}: handler {doc['handler']} names homelabnext.memory_admin; a broker handler "
+                "never reaches the operator's memory tools (ADR-0037 decision 12)"
+            )
         elif _exec.file_digest(target) != doc["handler_digest"]:
             problems.append(
                 f"{rel}: handler_digest does not match {doc['handler']} "

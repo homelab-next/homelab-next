@@ -107,6 +107,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from homelabnext import tlp
+from homelabnext.notify.core_pairs import AGENT_PACK_QUARANTINED
 
 from .compiler import VerifiedProfile, require_verified
 from .deny import DenySet, mem_ref
@@ -122,6 +123,8 @@ PREGATE_PREFIX = "pregate-"
 KNOWLEDGE_PREFIX = "knowledge-"
 ESCAPE_PREFIX = "[escaped] "
 
+#: the pair a quarantined required section pages with (:func:`quarantine_page`)
+QUARANTINE_TITLE, QUARANTINE_CLEARED = AGENT_PACK_QUARANTINED
 #: the most identifiers one pack may render (ADR-0037 decision 9)
 MAX_RENDERED = 1024
 _RED = str(tlp.Label.RED)
@@ -261,7 +264,9 @@ def _memory_block(
             raise SpecError(f"{where}: closure must be a list of identifiers")
         if (scope, key) in block:
             raise SpecError(f"{where}: a key appears in the memory block once")
-        if retracted.denies(closure) or retracted.marked(owner, scope, key, rev):
+        # its closure reaches a denied name or cites a marked revision (the cited lineage), or
+        # the revision itself is marked
+        if retracted.reaches(closure) or retracted.marked(owner, scope, key, rev):
             left_out += 1
             continue
         block[(scope, key)] = {
@@ -416,9 +421,10 @@ def assemble_pack(
         {"section": name, "uid": it["uid"]}
         for name, group in sorted(input_items.items())
         for it in group
-        if denyset.denies((it["uid"], it["digest"]))
+        if denyset.denies_input(it["uid"], it["digest"])
     ]
     denied_sections = {d["section"] for d in denied_inputs}
+    quarantined: list[str] = []
     try:
         screen_cfg = screen_config(manifest)
         deny = list(denylist or [])
@@ -462,10 +468,9 @@ def assemble_pack(
     for s in manifest["sections"]:
         text = s.get("text") if s["source"] == "static" else supplied.get(s["name"])
         if s["name"] in denied_sections:  # one item's text cannot be cut out: leave it all out
-            if s["required"]:
-                deferred.append(f"required section {s['name']!r} carries a retracted input item")
-            else:
-                omitted.append(s["name"])
+            omitted.append(s["name"])
+            if s["required"]:  # quarantined: the caller pages (quarantine_page), not deferred
+                quarantined.append(s["name"])
             continue
         if text is None:
             if s["required"]:
@@ -598,7 +603,15 @@ def assemble_pack(
         "text": rendered,
     }
     if knowledge is not None:
-        pack["knowledge"] = knowledge.record()
+        record = knowledge.record()
+        if denied_knowledge:  # a dropped item is no longer listed as included
+            gone = set(denied_knowledge)
+            record["included"] = [i for i in record["included"] if i["id"] not in gone]
+            record["excluded"] = sorted(
+                [*record["excluded"], *({"id": i, "reason": "retracted"} for i in gone)],
+                key=lambda e: e["id"],
+            )
+        pack["knowledge"] = record
     if block is not None:
         pack["memory"] = block
     if denied_inputs or denied_knowledge or memory_left_out:
@@ -606,6 +619,7 @@ def assemble_pack(
             "inputs": denied_inputs,
             "knowledge": denied_knowledge,
             "memory": memory_left_out,
+            "quarantined": sorted(quarantined),
         }
     return pack, digest_of(pack)
 
@@ -712,11 +726,18 @@ def pack_pairs(pack: Mapping[str, Any]) -> list[list[str]]:
     return out
 
 
-def pack_names(pack: Mapping[str, Any]) -> frozenset[str]:
-    """Every name of what ``pack`` rendered: its rendered identifiers and its knowledge items'
-    graph ids.  A write whose pack names a denied one is refused (ADR-0037 decision 14)."""
-    named = {x for group in pack_pairs(pack) for x in group}
-    return frozenset(named | set(rendered_identifiers(pack)))
+def knowledge_names(pack: Mapping[str, Any]) -> frozenset[str]:
+    """Every name of the knowledge items ``pack`` rendered: graph id, record uid and digests.  A
+    write whose pack names a denied one is refused (ADR-0037 decision 14); input items are
+    matched by uid, or by digest under ``revision="this"`` only
+    (:meth:`~homelabnext.agent.deny.DenySet.denies_input`)."""
+    prov = pack.get("provenance")
+    out: set[str] = set()
+    for item in (prov.get("knowledge") or ()) if isinstance(prov, Mapping) else ():
+        out.update(
+            item[k] for k in ("id", "uid", "digest", "file_digest") if isinstance(item.get(k), str)
+        )
+    return frozenset(out)
 
 
 def pack_memory(pack: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -732,3 +753,38 @@ def memory_refs(pack: Mapping[str, Any]) -> list[str]:
     if bound is None:
         return []
     return [mem_ref(bound[0], e["scope"], e["key"], e["rev"]) for e in pack_memory(pack)]
+
+
+def quarantine_page(
+    notifier: Any, pack: Mapping[str, Any], owner: str, *, topic: Any = None
+) -> None:
+    """Page (state-diffed, pair ``AGENT_PACK_QUARANTINED``) that ``pack`` left out a required
+    section because it declared a retracted input item, or send the recovery when it left out
+    none.  The assembler is pure, so the caller that assembled the pack calls this (ADR-0037
+    decision 14, amended): a quarantined section is never left out silently."""
+    import hashlib
+
+    from homelabnext.notify import Message
+
+    title, cleared = QUARANTINE_TITLE, QUARANTINE_CLEARED
+    notifier.register_pair(QUARANTINE_TITLE, QUARANTINE_CLEARED)
+    key = (
+        "agent-pack-quarantined-"
+        + hashlib.sha256(f"{owner}\0{pack.get('manifest')}".encode()).hexdigest()[:16]
+    )
+    held = list((pack.get("retracted") or {}).get("quarantined") or ())
+    if not held:
+        notifier.report(
+            key,
+            "ok",
+            Message(key, cleared, f"{owner}'s packs render every required section"),
+            scope=owner,
+        )
+        return
+    body = (
+        f"{owner}'s pack of {pack.get('manifest')} left out required section(s) "
+        f"{', '.join(held)}: each declares an input item an operator retracted. Filter retracted "
+        "items before rendering the section text, or lift the retraction."
+    )
+    msg = Message(key, title, body, level="warn", topic=topic, tags=("agent", "memory"))
+    notifier.report(key, "quarantined", msg, scope=owner)

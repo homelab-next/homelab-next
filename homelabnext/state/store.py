@@ -84,10 +84,43 @@ def quarantined_files(path: str | os.PathLike) -> list[Path]:
     return sorted(p.parent.glob(p.name + ".corrupt-*"))
 
 
+class OwnerError(PermissionError):
+    """A write would change the owner of a file this process does not own, and cannot keep it."""
+
+
+def _owner_of(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return None
+    return st.st_uid, st.st_gid
+
+
+def _keep(fd: int, owner: tuple[int, int] | None, shown: object) -> None:
+    """Give the open file ``fd`` the ``owner`` (uid, gid) of the file it replaces, or raise
+    :class:`OwnerError` before anything is written when that is not possible."""
+    if owner is None or not hasattr(os, "fchown"):
+        return
+    st = os.fstat(fd)
+    if (st.st_uid, st.st_gid) == owner:
+        return
+    try:
+        os.fchown(fd, *owner)
+    except OSError as exc:
+        raise OwnerError(
+            f"{shown} is owned by {owner[0]}:{owner[1]}; this process ({os.geteuid()}) cannot "
+            f"keep that owner ({exc.strerror}), so nothing was written"
+        ) from None
+
+
 @contextlib.contextmanager
-def file_lock(lock_path: str | os.PathLike) -> Iterator[None]:
-    """Hold an exclusive ``flock`` on ``lock_path`` (created if missing) for the ``with`` body."""
+def file_lock(lock_path: str | os.PathLike, *, owner_of: Path | None = None) -> Iterator[None]:
+    """Hold an exclusive ``flock`` on ``lock_path`` (created if missing) for the ``with`` body.
+    With ``owner_of``, a lock file this call creates (or finds with another owner) is given
+    that file's owner, so a root operator's write never leaves a lock the owner cannot open."""
+    owner = _owner_of(owner_of) if owner_of is not None else None
     with open(lock_path, "a+b") as fh:
+        _keep(fh.fileno(), owner, lock_path)
         if fcntl is not None:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
@@ -111,7 +144,12 @@ def _fsync_dir(d: Path) -> None:
 
 
 def atomic_write_text(
-    path: str | os.PathLike, text: str, *, exclusive: bool = False, mode: int | None = None
+    path: str | os.PathLike,
+    text: str,
+    *,
+    exclusive: bool = False,
+    mode: int | None = None,
+    keep_owner: bool = False,
 ) -> Path:
     """Write ``text`` to ``path`` so a reader sees the whole old file or the whole new one.
 
@@ -119,9 +157,13 @@ def atomic_write_text(
     replace the target (``os.replace``).  With ``exclusive=True`` the temp file is hard-linked to
     the target instead, which fails with :class:`FileExistsError` when the name already exists:
     an exclusive create that never overwrites and never leaves a partial file under the name.
-    ``mode`` defaults to the replaced file's mode, else ``0600``.
+    ``mode`` defaults to the replaced file's mode, else ``0600``.  With ``keep_owner=True`` the
+    temp file is given the replaced file's uid and gid before anything is written, and
+    :class:`OwnerError` is raised (nothing written) when this process cannot do that: a root
+    operator's write keeps a state file the agent runtime owns (ADR-0037 decision 12).
     """
     p = Path(path)
+    owner = _owner_of(p) if keep_owner else None
     tmp = p.with_name(f".{p.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
     if mode is None:
         try:
@@ -130,6 +172,11 @@ def atomic_write_text(
             mode = NEW_FILE_MODE
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, NEW_FILE_MODE)
+        try:
+            _keep(fd, owner, p)
+        except OwnerError:
+            os.close(fd)
+            raise
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             if hasattr(os, "fchmod"):
                 os.fchmod(fh.fileno(), mode)  # not subject to the umask
@@ -159,6 +206,7 @@ class StateStore:
         clock: Callable[[], float] = time.time,
         quarantine: bool = True,
         legacy: Callable[[Any], dict[str, Any] | None] | None = None,
+        keep_owner: bool = False,
     ):
         self.path = Path(path)
         self.schema_version = schema_version
@@ -167,6 +215,8 @@ class StateStore:
         self.clock = clock
         self.quarantine = quarantine
         self.legacy = legacy
+        #: keep the file's (and its lock's) uid and gid across writes by another user
+        self.keep_owner = keep_owner
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock_path = self.path.with_name(self.path.name + ".lock")
 
@@ -232,6 +282,8 @@ class StateStore:
 
     # ---------------------------------------------------------------- internals
     def _locked(self) -> contextlib.AbstractContextManager[None]:
+        if self.keep_owner and self.path.exists():
+            return file_lock(self._lock_path, owner_of=self.path)
         return file_lock(self._lock_path)
 
     @property
@@ -322,4 +374,4 @@ class StateStore:
     def _write(self, data: dict[str, Any]) -> None:
         self._sweep_orphans()
         doc = {"schema_version": self.schema_version, "data": data}
-        atomic_write_text(self.path, self._encode(doc))
+        atomic_write_text(self.path, self._encode(doc), keep_owner=self.keep_owner)

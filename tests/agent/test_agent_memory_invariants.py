@@ -17,6 +17,7 @@ from agent_support import digest, item, labelled_pack, library, spec, verified, 
 from memory_admin_support import operator
 
 from homelabnext.agent import SpecError, compile_profile
+from homelabnext.agent.deny import active_retractions
 from homelabnext.agent.memory import (
     EVENT_OPS,
     MAX_CLOSURE,
@@ -264,7 +265,13 @@ def test_random_histories_keep_the_invariants(backend, seed_, tmp_path):
     """Random histories of checked model-scope batches (each against a labelled pack, citing what
     it rendered, sometimes something it did not) and unchecked platform batches, with operator
     retractions (of a rendered identifier, its dry run confirmed) and lifts in between."""
-    admin = MemoryAdmin(backend, now=lambda: clock.t)
+    admin_t = [T0]
+
+    def admin_now():  # the operator acts on a corrected clock: never behind the log
+        admin_t[0] = max(admin_t[0], clock.t)
+        return admin_t[0]
+
+    admin = MemoryAdmin(backend, now=admin_now)
     by = operator(tmp_path)
     grown = {"log": 0, "reach": 0}
     rnd = random.Random(seed_)
@@ -273,8 +280,12 @@ def test_random_histories_keep_the_invariants(backend, seed_, tmp_path):
     clock = Clock()
     store = MemoryStore(backend, now=clock)
     keys = ["c1", "c2", "k1", "k2", "k3", "k4"]
-    for _ in range(120):
+    # every step re-reads the deny state and the file backend rewrites its file: fewer steps (and
+    # fewer still on file, which the 4 seeds of each backend cover alike) keep tests/agent in its
+    # coverage budget
+    for _ in range(80 if isinstance(backend, InMemoryBackend) else 40):
         clock.t += timedelta(seconds=rnd.choice([-120, -1, 0, 1, 30, 600]))  # some lag past 5 min
+        admin_t[0] = max(admin_t[0], clock.t)  # the latest time any write was stamped at
         scope = rnd.choice([FL, "analyst"])
         pack, h = packs[rnd.choice(sorted(packs))]
         ids = sorted(rendered_identifiers(pack))
@@ -298,16 +309,14 @@ def test_random_histories_keep_the_invariants(backend, seed_, tmp_path):
         if forged:
             batch[-1]["sources"] = [*batch[-1]["sources"][:2], digest(999)]
         roll = rnd.random()
-        if roll < 0.06:  # an operator retracts something a pack rendered
+        if roll < 0.1:  # an operator retracts something a pack rendered
             src = rnd.choice(ids)
-            try:
-                plan = admin.dependents(src, by=by)
-                admin.retract(src, "fuzz", by=by, confirm=plan["confirm"],
-                              include_exposed=rnd.random() < 0.5)  # fmt: skip
-            except MemoryClockError:
-                pass
-        elif roll < 0.09:  # or lifts one
-            live_ids = sorted({r["source"] for r in backend.load_deny()["log"]})
+            wide = rnd.random() < 0.5
+            plan = admin.dependents(src, by=by, include_exposed=wide)
+            admin.retract(src, "fuzz", by=by, confirm=plan["confirm"], include_exposed=wide)
+        elif roll < 0.2:  # or lifts one
+            active = active_retractions(backend.load_deny()["log"]).values()
+            live_ids = sorted({recs[0]["source"] for recs in active})
             if live_ids:
                 admin.lift(rnd.choice(live_ids), "fuzz", by=by)
         deny_now = backend.load_deny()
@@ -332,6 +341,9 @@ def test_random_histories_keep_the_invariants(backend, seed_, tmp_path):
     log_ = backend.load(p["id"])["log"]
     assert any(r["sources"] for r in log_ if r["checked"])  # the run exercised sources
     assert len({r["tlp"] for r in log_ if r["scope"] == "analyst"}) > 1  # and labels below red
+    for recs in active_retractions(backend.load_deny()["log"]).values():  # lift what is left
+        admin.lift(recs[0]["source"], "fuzz", by=by)
+    assert denied(backend) == denied(InMemoryBackend())  # nothing denied once all is lifted
     deny_log = backend.load_deny()["log"]
-    assert {r["op"] for r in deny_log} == {"retract", "lift"}  # the run retracted and lifted
+    assert {"retract", "lift"} <= {r["op"] for r in deny_log}  # the run retracted and lifted
     assert any((r.get("reason") or "").startswith("retracted:") for r in log_)  # and retired
