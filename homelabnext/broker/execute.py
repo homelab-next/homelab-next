@@ -25,9 +25,10 @@ What :func:`run_handler` guarantees, in order:
    any other transformation (a substring, a hash, a different encoding) is not recognised.
 5. **Bounded.**  ``timeout_s`` is enforced; stdout and stderr are each captured up to
    ``max_output_bytes`` and the rest discarded, into ``stdout`` / ``stderr`` files in the run
-   directory.  When the handler exits, or at the timeout, its whole process group is killed
-   (anything it left running) *before* the handler is reaped: the unreaped leader keeps its
-   process-group id in use, so the kill cannot reach an unrelated group that reused the number.
+   directory; the handler's private copy is removed once it has ended.  When the handler
+   exits, or at the timeout, its whole process group is killed (anything it left running)
+   *before* the handler is reaped: the unreaped leader keeps its process-group id in use, so
+   the kill cannot reach an unrelated group that reused the number.
    A descendant that left the group (``setsid``) is out of reach; contain that with the service
    manager (a systemd unit's cgroup) where it matters.
 
@@ -305,10 +306,34 @@ def run_handler(
             fh.write(content)
         tmp.mkdir(mode=0o700, exist_ok=True)
     except OSError:
+        _drop_copy(exe)
         raise ExecError(
             "handler-io-error", "the handler's private copy cannot be written"
         ) from None
-    child_env = {"PATH": SAFE_PATH, "LANG": "C.UTF-8", "HOME": str(run), "TMPDIR": str(tmp)}
+    try:
+        return _run_copy(exe, run, argv, env, values, params, timeout_s, max_output)
+    finally:
+        _drop_copy(exe)  # the pinned digest names its bytes: the copy is not evidence
+
+
+def _drop_copy(exe: Path) -> None:
+    """Remove the handler's private copy once it has ended (or never started): every run
+    otherwise leaves one more copy of the handler on the state disk."""
+    with contextlib.suppress(OSError):
+        exe.unlink()
+
+
+def _run_copy(
+    exe: Path,
+    run: Path,
+    argv: Sequence[str],
+    env: Mapping[str, str] | None,
+    values: Mapping[str, str],
+    params: Mapping[str, Any],
+    timeout_s: float,
+    max_output: int,
+) -> ExecResult:
+    child_env = {"PATH": SAFE_PATH, "LANG": "C.UTF-8", "HOME": str(run), "TMPDIR": str(run / "tmp")}
     child_env.update(env or {})
     child_env.update(values)
     try:

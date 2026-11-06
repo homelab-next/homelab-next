@@ -734,6 +734,7 @@ def test_one_program_cannot_rate_limit_another_on_a_pool(tmp_path):
 
     manifest = _transport_manifest()
     manifest["codemode"]["max_calls"] = 200
+    manifest["quotas"] = {"calls_per_minute": 100000}  # the refusal limit is under test
     svc = _svc(tmp_path, manifest)
     svc.allow("profile:other", [CODEMODE_EXECUTE, "echo.one"])
     peers = PeerMap(svc.manifest)

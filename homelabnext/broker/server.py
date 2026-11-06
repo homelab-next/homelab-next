@@ -95,9 +95,13 @@ handler it could not start or that timed out, a disk error -- are not counted) w
 :data:`DEFAULT_REFUSAL_WINDOW_S` s) is answered ``rate-limited`` for the rest of that window
 without its request being looked at.  The
 limit is audited once per peer and window (operation ``connect``, reason ``rate-limited``), not
-once per request, so an agent probing the broker can fill neither the audit trail nor the disk;
+once per request, so an agent probing the broker cannot fill the audit trail with refusals;
 how many requests the window suppressed is logged when it ends.  Approval relays are exempt (a
 person's refused decisions must never lock the hub out), as they are from the connection cap.
+Successful operations are bounded by the service instead: the per-actor call rate (manifest 1.9
+``quotas.calls_per_minute``, over calls, submits, token operations and the owner operations
+``status``, ``run`` and ``cancel``; its refusal, ``call-rate-exceeded``, counts here, except a
+sandbox's after its token was admitted, which the token's ``max_calls`` bounds) and retention.
 
 Platforms: peer credentials are read with ``SO_PEERCRED``, which Linux provides.  macOS and the
 BSDs have ``getpeereid``/``LOCAL_PEERCRED`` instead, which Python does not expose portably; the

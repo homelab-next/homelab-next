@@ -30,6 +30,8 @@ from .state import (
 
 NOT_OWNER = "not-request-owner"
 TOO_MANY_PENDING = "too-many-pending"
+#: an actor had ``quotas.calls_per_minute`` operations admitted in the last 60 s (manifest 1.9)
+CALL_RATE_EXCEEDED = "call-rate-exceeded"
 #: an action was not run because its ``started`` record could not be written
 AUDIT_UNAVAILABLE = "audit-unavailable"
 #: an action ran and its outcome record could not be written (its ``started`` record stands)
@@ -41,6 +43,14 @@ log = logging.getLogger("homelabnext.broker.service")
 #: between two of its approval pages (s)
 DEFAULT_PENDING_PER_ACTOR = 20
 DEFAULT_NOTIFY_WINDOW_S = 300.0
+#: manifest 1.9 ``quotas.calls_per_minute`` default, and the window it counts over (s)
+DEFAULT_CALLS_PER_MINUTE = 60
+CALL_RATE_WINDOW_S = 60.0
+#: manifest 1.9 ``retention`` defaults (days): a finished run's directory, an audit record
+DEFAULT_RUNS_RETENTION_DAYS = 30
+DEFAULT_AUDIT_RETENTION_DAYS = 400
+#: the least time between two retention prunes in one process (s)
+RETENTION_PRUNE_INTERVAL_S = 3600.0
 #: request ids an approval page names before it says "and N more"
 _PAGE_IDS = 10
 #: how long after a page that could not be sent (a failed send, a spent budget) it is tried again

@@ -45,7 +45,7 @@ fakes. Contracts live in `schemas/agent/` and `schemas/broker/`; code in `homela
 | `broker/audit` | one audit record of the broker service: operation, outcome, machine reason, redacted args |
 
 All are versioned 1.0 except `agent/profile` (1.7), `agent/report_result` (1.2),
-`agent/context_manifest` (1.3), `agent/golden_task` (1.1), `broker/manifest` (1.8),
+`agent/context_manifest` (1.3), `agent/golden_task` (1.1), `broker/manifest` (1.9),
 `broker/handler` (1.3), `broker/audit` (1.4) and `broker/decision` (1.2); every later minor is
 additive, and each schema's `description` says what each minor added. Every version is
 frozen under `schemas/_frozen/`, and registered with `tools/schema_check.py`

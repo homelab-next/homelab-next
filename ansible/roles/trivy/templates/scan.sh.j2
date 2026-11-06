@@ -24,7 +24,8 @@ rm -rf "$STATE/images" && mkdir -p "$STATE/images"
 {{ trivy_cli | quote }} rootfs $OPTS --scanners vuln --format json --output "$STATE/rootfs.json" \
   --skip-dirs {{ trivy_skip_dirs | join(',') | quote }} / || rc=$?
 {% if trivy_sbom | bool %}
-{{ trivy_cli | quote }} rootfs --quiet --format cyclonedx --output "$STATE/sbom.cdx.json" \
+# shellcheck disable=SC2086
+{{ trivy_cli | quote }} rootfs $OPTS --format cyclonedx --output "$STATE/sbom.cdx.json" \
   --skip-dirs {{ trivy_skip_dirs | join(',') | quote }} / || rc=$?
 {% endif %}
 {% if trivy_scan_containers | bool %}
