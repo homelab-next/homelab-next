@@ -2337,11 +2337,38 @@ def test_trivy_scans_the_root_filesystem_and_writes_an_sbom(first, vulns, ok):
     assert runs[0].endswith(
         " --skip-dirs /proc,/sys,/dev,/run,/var/lib/docker,/var/lib/containers /"
     )
-    assert "--format cyclonedx" in runs[1] and (tmp_path / "state" / "sbom.cdx.json").exists()
+    # the SBOM run carries the same database options as the scan (offline guests, mirrors)
+    assert runs[1] == (
+        "rootfs --quiet --severity HIGH,CRITICAL --skip-db-update --format cyclonedx --output "
+        f"{tmp_path / 'state' / 'sbom.cdx.json'} "
+        "--skip-dirs /proc,/sys,/dev,/run,/var/lib/docker,/var/lib/containers /"
+    )
+    assert (tmp_path / "state" / "sbom.cdx.json").exists()
     h = run_role(tmp_path, "trivy", "health", v)
     assert (h.returncode == 0) is ok, h.stdout
     if not ok:
         assert "1 finding(s) (at most 0):" in h.stdout and "CVE-2026-0001-FAKE" in h.stdout
+
+
+def _first_mirror(tmp_path):
+    cli = fake(
+        tmp_path / "trivy-cli",
+        TRIVY.replace("LOG", repr(str(tmp_path / "trivy.log"))).replace("VULNS", "[]"),
+    )
+    v = scanner_vars(tmp_path, "trivy", trivy_severity="HIGH", trivy_cli=cli,
+                     trivy_db_repository="mirror.example/trivy-db", trivy_scan_containers=False)  # fmt: skip
+    return {"role": "trivy", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first_mirror)
+def test_trivy_mirror_reaches_both_the_scan_and_the_sbom(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    run_scan(tmp_path)
+    runs = (tmp_path / "trivy.log").read_text().splitlines()
+    assert "--db-repository mirror.example/trivy-db" in runs[0]
+    assert "--db-repository mirror.example/trivy-db" in runs[1]
+    assert "--format cyclonedx" in runs[1]
 
 
 def _first(tmp_path):
@@ -2354,6 +2381,8 @@ def _first(tmp_path):
         "overrides": [
             {"trivy_severity": "high"},
             {"trivy_version": "0.60"},
+            # pinned only: an empty version (the repository's newest) is refused for every profile
+            {"trivy_version": ""},
             {"trivy_db_repository": "mirror db"},
             {"trivy_repository": "http://mirror.example.internal/deb"},
             {"trivy_key_fingerprints": []},
@@ -2365,6 +2394,27 @@ def _first(tmp_path):
 def test_trivy_refuses_bad_inputs(first):
     results, _ = first
     assert all(f and "trivy: an OnCalendar schedule" in m for f, m in results), results
+
+
+def test_trivy_installs_the_pinned_version_and_holds_it():
+    import re
+
+    import yaml
+
+    role = Path(__file__).resolve().parents[2] / "ansible" / "roles" / "trivy"
+    tasks = yaml.safe_load((role / "tasks" / "main.yml").read_text(encoding="utf-8"))
+    installs = [t["ansible.builtin.apt"] for t in tasks if "ansible.builtin.apt" in t]
+    assert [i["name"] for i in installs if "trivy" in str(i.get("name"))] == [
+        "trivy={{ trivy_version }}"
+    ]
+    holds = [
+        t["ansible.builtin.dpkg_selections"]
+        for t in tasks
+        if "ansible.builtin.dpkg_selections" in t
+    ]
+    assert holds == [{"name": "trivy", "selection": "hold"}]
+    defaults = yaml.safe_load((role / "defaults" / "main.yml").read_text(encoding="utf-8"))
+    assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", defaults["trivy_version"])
 
 
 # ---------------------------------------------------------------- auditd

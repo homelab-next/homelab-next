@@ -3,7 +3,7 @@
 handlers, every outcome audited to disk.
 
 It implements the ``broker`` capability contract (``conformance.protocols.broker``) on top of
-:func:`homelabnext.broker.decide` and a manifest (``schemas/broker/manifest`` 1.8).  An action is
+:func:`homelabnext.broker.decide` and a manifest (``schemas/broker/manifest`` 1.9).  An action is
 one of three kinds:
 
 * a **lane** write (``handler: builtin/lane``, ``lane: <name>``): ``memory.write``,
@@ -118,6 +118,7 @@ import os
 import tempfile
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -137,6 +138,7 @@ from homelabnext.generators.safe import CONTROL_RE
 from . import (
     check_manifest_handlers,
     decide,
+    normalize_identity,
     request_digest,
     validation,
 )
@@ -175,10 +177,22 @@ from .common import (
     AUDIT_UNAVAILABLE as AUDIT_UNAVAILABLE,
 )
 from .common import (
+    CALL_RATE_EXCEEDED as CALL_RATE_EXCEEDED,
+)
+from .common import (
+    CALL_RATE_WINDOW_S as CALL_RATE_WINDOW_S,
+)
+from .common import (
     CALLABLE_HANDLER as CALLABLE_HANDLER,
 )
 from .common import (
     COALESCE_WINDOW_S as COALESCE_WINDOW_S,
+)
+from .common import (
+    DEFAULT_AUDIT_RETENTION_DAYS as DEFAULT_AUDIT_RETENTION_DAYS,
+)
+from .common import (
+    DEFAULT_CALLS_PER_MINUTE as DEFAULT_CALLS_PER_MINUTE,
 )
 from .common import (
     DEFAULT_CODEMODE_MAX_CALLS as DEFAULT_CODEMODE_MAX_CALLS,
@@ -194,6 +208,9 @@ from .common import (
 )
 from .common import (
     DEFAULT_PENDING_PER_ACTOR as DEFAULT_PENDING_PER_ACTOR,
+)
+from .common import (
+    DEFAULT_RUNS_RETENTION_DAYS as DEFAULT_RUNS_RETENTION_DAYS,
 )
 from .common import (
     DEFAULT_TOKEN_RETENTION_DAYS as DEFAULT_TOKEN_RETENTION_DAYS,
@@ -227,6 +244,9 @@ from .common import (
 )
 from .common import (
     REQUEST_DENIED as REQUEST_DENIED,
+)
+from .common import (
+    RETENTION_PRUNE_INTERVAL_S as RETENTION_PRUNE_INTERVAL_S,
 )
 from .common import (
     RUNNER_HANDLER as RUNNER_HANDLER,
@@ -283,9 +303,11 @@ from .paging import _PagingMixin, _takes_scope
 from .relay import BROKER_SOURCE
 from .requests import _RequestsMixin
 from .state import (
+    AUDIT_STAMP,
     DECISION_KINDS,
     FileApprovalStore,
     StateDir,
+    StateError,
     new_id,
 )
 from .tokens import TokenStore
@@ -620,6 +642,16 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
         self.pending_per_actor = int(quotas.get("pending_per_actor", DEFAULT_PENDING_PER_ACTOR))
         self._submit_lock = threading.Lock()  # the pending count and the new request, as one
         self.notify_window_s = float(quotas.get("notify_window_s", DEFAULT_NOTIFY_WINDOW_S))
+        self.calls_per_minute = int(quotas.get("calls_per_minute", DEFAULT_CALLS_PER_MINUTE))
+        self._calls: dict[str, deque[float]] = {}  # actor -> when its admitted operations were
+        self._calls_lock = threading.Lock()
+        retention = self.manifest.get("retention") or {}
+        self.runs_retention_days = float(retention.get("runs_days", DEFAULT_RUNS_RETENTION_DAYS))
+        audit_days = retention.get("audit_days", DEFAULT_AUDIT_RETENTION_DAYS)
+        self.audit_retention_days = None if audit_days is None else float(audit_days)
+        self._retention_pruned = float("-inf")
+        self._prune_lock = threading.Lock()  # one prune at a time, its pacing checked under it
+        self._prune_thread: threading.Thread | None = None  # the background prune, once started
         self.page_timers = page_timers
         self._paged: dict[str, str] = {}  # actor -> the request its open page is for
         self._paging: set[str] = set()  # actors a page is being sent for right now
@@ -641,6 +673,7 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
         self._lane_logged: set[str] = set()  # lane-quota keys logged (no notifier)
         self._lane_red: dict[str, tuple[str, str]] = {}  # lane-quota key -> (lane, actor)
         self._notify_warned = float("-inf")  # when a failed send was last logged
+        self.prune_retention(force=True)
         try:  # a crash's leftovers are settled before anything is issued
             self.sweep_tokens(force=True)
         except OSError:
@@ -803,7 +836,7 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
         via = TRANSPORT_PEER.get()
         if via is not None:
             rec["via"] = via
-        stamp = t.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        stamp = t.astimezone(UTC).strftime(AUDIT_STAMP)
         problems = validation.named_errors("broker/audit", rec)
         if problems:
             # a bug in the broker, never the caller's input: still leave a record of the
@@ -922,6 +955,7 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
     # ---------------------------------------------------------------- admission
     def _admit(self, caller: Any, action: Any, args: Any, operation: str, target: str | None):
         """(action, request, decision) or raise after auditing: the checks call and submit share."""
+        self._prune_soon()
         now = self._now()
         rid = new_id("req")
         act = self._action(action) if isinstance(action, str) else None
@@ -966,6 +1000,13 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
             if target is None and isinstance(doc, Mapping) and doc.get("target") == "required":
                 # handler 1.3: the handler reads its target; without one it reports on nothing
                 raise _Refused("invalid", "target-required", f"{action}: names no target")
+            if not self._take_call(request["actor"]):
+                raise _Refused(
+                    "denied",
+                    CALL_RATE_EXCEEDED,
+                    f"{request['actor']} made {self.calls_per_minute} calls in the last "
+                    f"{CALL_RATE_WINDOW_S:g} s: try again later",
+                )
         except _Refused as exc:
             self._audit(
                 caller,
@@ -979,6 +1020,74 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
             )
             raise _carry(_contract_error(exc), request) from None
         return act, request, decision
+
+    def _take_call(self, actor: str) -> bool:
+        """Count one admitted operation of ``actor`` (manifest 1.9 ``quotas.calls_per_minute``,
+        a sliding window on the monotonic clock); False, counting nothing, when it is over.
+        Keyed on the normalized identity, as ownership is compared, so one actor's spellings of
+        itself share one bucket."""
+        now = self._mono()
+        with self._calls_lock:
+            seen = self._calls.setdefault(normalize_identity(actor), deque())
+            while seen and seen[0] <= now - CALL_RATE_WINDOW_S:
+                seen.popleft()
+            if len(seen) >= self.calls_per_minute:
+                return False
+            seen.append(now)
+            return True
+
+    # ---------------------------------------------------------------- retention
+    def _prune_soon(self) -> None:
+        """Start :meth:`prune_retention` on a background thread when one is due.  An operation
+        starts it but never waits for it: a prune scans the whole trail, and a token operation
+        holds the token store's lock meanwhile.  Cheap when none is due."""
+        if self._mono() - self._retention_pruned < RETENTION_PRUNE_INTERVAL_S:
+            return
+        with self._calls_lock:
+            if self._prune_thread is not None and self._prune_thread.is_alive():
+                return
+            self._prune_thread = threading.Thread(
+                target=self._prune_quietly, name="broker-retention", daemon=True
+            )
+            self._prune_thread.start()
+
+    def _prune_quietly(self) -> None:
+        try:
+            self.prune_retention()
+        except Exception:  # a background thread: the next due prune tries again
+            log.exception("broker state could not be pruned")
+
+    def prune_retention(self, *, force: bool = False) -> dict[str, int]:
+        """Remove finished state past its retention (manifest 1.9 ``retention``): run
+        directories after ``runs_days``, audit records after ``audit_days``, never those of a
+        request still pending or running.  At start, then at most once per
+        :data:`RETENTION_PRUNE_INTERVAL_S` (on a background thread the next operation starts);
+        one prune at a time.  A failure is logged, never raised: pruning must not refuse work."""
+        with self._prune_lock:
+            mono = self._mono()
+            if not force and mono - self._retention_pruned < RETENTION_PRUNE_INTERVAL_S:
+                return {"runs": 0, "audit": 0}
+            self._retention_pruned = mono
+            return self._prune_now()
+
+    def _prune_now(self) -> dict[str, int]:
+        none = {"runs": 0, "audit": 0}
+        try:
+            removed = self.state.prune_retained(
+                self._now().timestamp(),
+                runs_days=self.runs_retention_days,
+                audit_days=self.audit_retention_days,
+            )
+        except (OSError, StateError):
+            log.exception("broker state could not be pruned")
+            return none
+        if any(removed.values()):
+            log.info(
+                "retention: removed %d run directories and %d audit records",
+                removed["runs"],
+                removed["audit"],
+            )
+        return removed
 
     def _keyed(self, value: Any) -> str:
         """``hmac-sha256:<hex>`` of a secret argument, keyed with the broker-held key."""
