@@ -137,7 +137,7 @@ def test_a_failed_batch_writes_neither_entry_nor_record(reader, backend, batch):
     with pytest.raises(MemoryUpdateError):
         write(store, reader, batch)
     assert raw(backend) == before
-    assert len(before["log"]) == 1 and store.read(reader, "analyst") == {"kept": "v"}
+    assert len(before["log"]) == 1 and store.read(reader, "analyst")["entries"] == {"kept": "v"}
 
 
 def test_a_batch_over_the_cap_writes_neither_entry_nor_record(ledger, backend):
@@ -178,9 +178,9 @@ def test_folding_the_log_reproduces_the_entries(ledger, backend):
     stored = raw(backend, ledger["id"])
     assert set(stored) == {"entries", "log", "exposure"}
     assert fold(stored["log"]) == stored["entries"]
-    assert stored["entries"]["analyst"]["b"]["pack_id"] == canonical_pack()[1]
-    assert store.read(ledger, "fleet-ledger") == {"item-x": "3"}
-    assert store.read(ledger, "analyst") == {"a": "2", "b": "again"}
+    assert stored["entries"]["analyst"]["b"]["pack_id"] == canonical_pack(ledger)[1]
+    assert store.read(ledger, "fleet-ledger")["entries"] == {"item-x": "3"}
+    assert store.read(ledger, "analyst")["entries"] == {"a": "2", "b": "again"}
 
 
 def test_rev_never_restarts_through_retire_and_re_add(reader, backend):
@@ -229,8 +229,8 @@ def test_pre_log_memory_migrates_once_on_the_next_write(reader, backend):
     clock = Clock()
     store = MemoryStore(backend, now=clock)
     # readable before the migration is written, as the migrated shape
-    assert store.read(reader, "analyst") == {"old-fact": "v"}
-    assert store.read(reader, "analyst", include_retired=True)["gone"] == "was"
+    assert store.read(reader, "analyst")["entries"] == {"old-fact": "v"}
+    assert store.read(reader, "analyst", include_retired=True)["entries"]["gone"] == "was"
     assert raw(backend) == legacy  # a read writes nothing
     clock.tick()
     write(store, reader, [up("replace", "old-fact", "w")])
@@ -295,7 +295,7 @@ def test_the_screen_runs_before_the_schema_check_so_no_message_quotes_a_secret(r
 
 
 def test_a_report_carrying_a_secret_is_refused_before_validation(reader, backend):
-    pack, h = assemble_pack(manifest(), inputs())
+    pack, h = assemble_pack(manifest(), inputs(), profile=reader)
     report = {
         "pack_id": h,
         "profile": reader["id"],
@@ -317,7 +317,7 @@ def test_plain_facts_pass_the_screen(reader, backend):
         up("add", "cve", "CVE-2026-12345 seen; sha256 of the dropper noted in the case"),
     ]
     write(store, reader, facts)
-    assert len(store.read(reader, "analyst")) == 2
+    assert len(store.read(reader, "analyst")["entries"]) == 2
 
 
 # ---------------------------------------------------------------- decision 5
@@ -367,7 +367,7 @@ def test_as_of_rebuilds_what_was_believed_at_each_time(reader, backend):
         "aged_out": False,
         "withheld": 0,
     }
-    assert store.read(reader, "analyst") == at(60)["entries"]
+    assert store.read(reader, "analyst")["entries"] == at(60)["entries"]
     with pytest.raises(ValueError, match="aware UTC"):
         store.as_of(reader, "analyst", datetime(2026, 11, 5))
 

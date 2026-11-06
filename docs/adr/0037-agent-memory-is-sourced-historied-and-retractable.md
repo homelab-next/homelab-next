@@ -10,6 +10,11 @@ summary_of: outline:sha256:cc0b15786d3b8d62
 - **Amended:** 2026-11-05 (decision 6: `keep_last` folds a key's older records into one range
   record, and tombstones in a platform scope age out past a budget, so platform scopes are
   bounded; see the amendment under it)
+- **Amended:** 2026-11-06 (decision 6: a per-scope byte cap over records only and an owner-wide
+  exposure budget, and range records capped at 256 value digests and pack ids; decision 7: a
+  pack is bound to the profile it was assembled for, and input uids come only from a reader's
+  sealed map; decision 10: an unchecked platform update past the closure cap is dropped, not
+  fatal; follow-up 6: a path that takes a pack off `red`; see the amendments under each)
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
@@ -135,6 +140,37 @@ was shown, never from what the model says about its sources.
      tombstone. When `t` falls in the aged range, it says `aged_out: true`: the aged keys' names
      are gone, so any key it does not list must be read as compacted.
 
+   *Amendment (2026-11-06, PR 2):* closures (up to 256 identifiers) and exposures (up to 1,024)
+   make the record cap alone no bound on bytes. Measured in compact JSON: a typical record (a
+   200-character value, three sources, a ten-identifier closure) is about 1 kB; the largest model
+   record (2,000 characters, 16 sources, a full closure) 22.5 kB in ASCII and 26.5 kB in CJK
+   text; a range record at its list caps about 95 kB; one exposure 1.5 kB at 20 rendered
+   identifiers and 75.8 kB at 1,024.
+   - **A per-scope byte cap** beside the record cap, `memory_limits.bytes: {<scope>: N}` (profile
+     schema 1.7, additive), counts the scope's **records only**: by default 2,000 bytes per record
+     of the record cap (20 MB for a 10,000-record scope), so ordinary memory meets its record cap
+     first and the byte cap binds only once closures grow fat.
+   - **Exposures are charged once per owner**, against `memory_limits.exposure_bytes` (profile
+     1.7, additive), by default 50,000,000 bytes: about 33,000 ordinary packs or 660 full ones.
+     Only a batch that stores a new exposure can cross it. Past it, every checked write from a
+     new pack is refused and paged; the profile keeps writing from packs it already holds. That
+     self-lockout is intended (an unbounded exposure index is the alternative), and it ends when
+     the operator raises the budget in the reviewed profile or purges (PR 3).
+   - A cap's refusal says what actually frees it. For a model-written scope that is raising the
+     cap in the reviewed profile or an operator purge (PR 3): such a scope never shrinks, so
+     retiring keys frees nothing. For a platform scope it is retiring finished keys and a
+     `keep_last` pattern, so the scope compacts. A byte refusal reports the cap, never the
+     scope's byte total, which would count records the reader may not see.
+   - **A range record keeps at most 256 value digests and 256 pack ids**, the newest, and is
+     marked `truncated: true` past that, so a key replaced without end has a bounded range
+     record. Its sources and closures stay whole. A retraction treats a truncated range
+     conservatively: as exposed to everything its sources reach, since the packs it no longer
+     lists cannot be checked one by one.
+   - A range record also stores `effective`, the folded state's own effective sources (those
+     since its last `add`), beside the union in `sources`. The fold reads `effective`;
+     `dependents` reads the union. A range that spans a `retire` and a later `add` would
+     otherwise hand the re-added key the retired value's sources.
+
 ### Sources and labels (PR 2)
 
 7. **An update names its sources, and only identifiers the platform wrote count.** A
@@ -212,6 +248,26 @@ was shown, never from what the model says about its sources.
    (1,024 identifiers) applies to `rendered` only, and the caller checks it before assembly; a
    pack over it is refused. An exposure entry is dropped when no record points at it any longer.
    Citing is the model's claim; exposure is the platform's knowledge.
+
+   *Amendment to decisions 7 and 8 (2026-11-06, PR 2):*
+   - **A pack is bound to its profile.** The assembler records the `VerifiedProfile` it was
+     assembled for as `profile: {id, digest}`, and the store refuses a checked write whose pack
+     names another profile, or none. The runner applies a report with the session's own pack,
+     which it holds; it never looks a pack up by the report's `pack_id`, which the model wrote.
+   - **Input uids come from a reader's sealed map.** `resolved_uids` is a `ResolvedUids`, built
+     only by `resolve_input_uids` from the rows a records or lake reader stored (`{uid, digest,
+     tlp}`, the label read as stored data, so a non-canonical label is `red`). An item whose
+     digest is not the stored one is refused, and so is a digest paired with two uids.
+   - **A section's label may rise from its text.** An input section's label is the strictest of
+     its items' and of any TLP marker in its text. Text never lowers a label.
+   - **A trimmed section counts as rendered.** A section the budget cut short, but did not drop,
+     counts every item declared for it as rendered: the assembler cannot tell which item a cut
+     fell in, so it errs toward retracting more.
+   - **Reads are no oracle.** A write returns only what it touched, filtered by the writer's own
+     ceiling; `history` of a key with no visible record answers `records: []` and the scope's
+     withheld count, as for a key that does not exist; a write refusal names the update's
+     position, never its key; `as_of` says `aged_out` only when the aged record is within the
+     ceiling.
 10. **Sources accumulate, and dependence is computed at write time.** An entry's **effective
     sources** are the union of the sources of every record since its last `add`: a `replace` or
     `verify` adds sources, never removes them. Each record stores its **base-source closure**: its
@@ -221,6 +277,12 @@ was shown, never from what the model says about its sources.
     revisions that already exist, so the memory graph has no cycles. Records carry no
     `derived_from` today (ADR-0033's consequences); when the records library exposes it, the
     closure includes it, cycles visited once.
+
+    *Amendment (2026-11-06, PR 2):* in an **unchecked** platform batch, an update past the
+    closure cap is dropped and reported (its position, in the result's `dropped`), and the rest
+    of the batch applies, as a denied update is (decision 14): a key ADR-0035's fold replaces
+    without end must not stall the fold. A checked batch with such an update is still refused
+    whole.
 
 ### Memory citing memory (PR 3)
 
@@ -434,6 +496,12 @@ was shown, never from what the model says about its sources.
   4. **Value scanning beyond secrets.** Personal data and other screen types on stored values.
   5. **Staleness by scope.** A default `stale_after` per scope (for example `ops` 7 days,
      `profile` 90 days), so callers do not each choose their own.
+  6. **A path off `red`.** Today no pack can be below `red`: `start_session`'s access and terms
+     sections declare no label, records and pages carry none, and a knowledge node's label
+     comes only from its graph node's attributes. The work, each a change of its own: give the
+     access and terms static sections a declared label; add `tlp` to the record schemas (lesson,
+     runbook and the rest, additive minors); and have the graph builder copy it into node
+     attributes. Until then all memory is `red`, as decision 8 says.
 - **Open:**
   - The broker's free-form `memory.write` lane (still an open decision in docs/agent.md).
   - Whether `MemoryAdmin` is ever reachable through the broker's operator peers.

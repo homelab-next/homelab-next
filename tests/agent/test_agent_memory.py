@@ -53,8 +53,8 @@ def test_add_replace_retire_through_validated_updates(reader):
     write(store, reader, [up("add", "login-burst", "seen once"), up("add", "scanner", "x")])
     write(store, reader, [up("replace", "login-burst", "seen twice")])
     write(store, reader, [up("retire", "scanner")])
-    assert store.read(reader, "analyst") == {"login-burst": "seen twice"}
-    assert store.read(reader, "analyst", include_retired=True)["scanner"] == "x"
+    assert store.read(reader, "analyst")["entries"] == {"login-burst": "seen twice"}
+    assert store.read(reader, "analyst", include_retired=True)["entries"]["scanner"] == "x"
 
 
 @pytest.mark.parametrize(
@@ -74,14 +74,14 @@ def test_invalid_updates_are_refused(reader, bad):
     store = MemoryStore()
     with pytest.raises(MemoryUpdateError):
         write(store, reader, bad)
-    assert store.read(reader, "analyst") == {}
+    assert store.read(reader, "analyst")["entries"] == {}
 
 
 def test_a_batch_is_all_or_nothing(reader):
     store = MemoryStore()
     with pytest.raises(MemoryUpdateError):
         write(store, reader, [up("add", "good", "v"), up("replace", "missing", "v")])
-    assert store.read(reader, "analyst") == {}
+    assert store.read(reader, "analyst")["entries"] == {}
 
 
 def test_writing_a_scope_the_profile_lacks_is_refused(reader):
@@ -93,15 +93,15 @@ def test_cross_agent_read_is_refused(reader, other):
     store = MemoryStore()
     write(store, reader, [up("add", "secret-hunch", "v")])
     with pytest.raises(MemoryAccessError, match="cross-agent read"):
-        store.read(other, "analyst", owner=reader["id"])
+        store.read(other, "analyst", owner=reader["id"])["entries"]
     # the same scope name on another profile is a different memory
-    assert store.read(other, "analyst") == {}
-    assert store.read(reader, "analyst", owner=reader["id"]) == {"secret-hunch": "v"}
+    assert store.read(other, "analyst")["entries"] == {}
+    assert store.read(reader, "analyst", owner=reader["id"])["entries"] == {"secret-hunch": "v"}
 
 
 def test_reading_a_scope_the_profile_lacks_is_refused(reader):
     with pytest.raises(MemoryAccessError):
-        MemoryStore().read(reader, "responder")
+        MemoryStore().read(reader, "responder")["entries"]
 
 
 @pytest.mark.parametrize("redigest", [False, True])
@@ -114,7 +114,7 @@ def test_a_profile_edited_after_compile_gets_no_access(reader, redigest):
         widened["digest"] = profile_digest(widened)
     store = MemoryStore()
     with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
-        store.read(widened, "responder")
+        store.read(widened, "responder")["entries"]
     with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
         write(store, widened, [up("add", "k", "v", scope="responder")])
     with pytest.raises(UnverifiedProfile, match="needs a VerifiedProfile"):
@@ -124,7 +124,7 @@ def test_a_profile_edited_after_compile_gets_no_access(reader, redigest):
         verified_profile(widened, policy=policy_for(reader), lock=lock_for(reader))
     unsigned = {k: v for k, v in reader.items() if k != "digest"}
     with pytest.raises(UnverifiedProfile):
-        store.read(unsigned, "analyst")
+        store.read(unsigned, "analyst")["entries"]
 
 
 def _report(profile, pack_hash, updates, status="ok"):
@@ -140,11 +140,11 @@ def _report(profile, pack_hash, updates, status="ok"):
 
 
 def test_reports_update_only_their_own_agents_memory(reader, other):
-    pack, h = assemble_pack(manifest(), inputs())
+    pack, h = assemble_pack(manifest(), inputs(), profile=reader)
     store = MemoryStore()
     rep = _report(reader, h, [up("add", "login-burst", "seen once")])
     store.apply_report(reader, rep, pack=pack, pack_hash=h, manifest=manifest())
-    assert store.read(reader, "analyst") == {"login-burst": "seen once"}
+    assert store.read(reader, "analyst")["entries"] == {"login-burst": "seen once"}
     with pytest.raises(MemoryAccessError, match="its own agent"):
         store.apply_report(other, rep, pack=pack, pack_hash=h)
     wrong_pack = dict(rep, pack_id="sha256:" + "1" * 64)
@@ -159,10 +159,10 @@ def test_file_backend_persists_through_the_state_library(reader, tmp_path):
     path = tmp_path / "memory.json"
     write(MemoryStore(FileBackend(path)), reader, [up("add", "k", "v")])
     again = MemoryStore(FileBackend(path))
-    assert again.read(reader, "analyst") == {"k": "v"}
+    assert again.read(reader, "analyst")["entries"] == {"k": "v"}
     with pytest.raises(MemoryUpdateError):
         write(again, reader, [up("add", "k", "v2")])
-    assert again.read(reader, "analyst") == {"k": "v"}
+    assert again.read(reader, "analyst")["entries"] == {"k": "v"}
 
 
 def test_the_store_has_no_unvalidated_write_path():

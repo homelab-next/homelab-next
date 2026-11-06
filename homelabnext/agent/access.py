@@ -34,6 +34,7 @@ from .digest import digest_of
 from .errors import SpecError
 from .pack import assemble_pack
 from .readers import ToolClasses, default_classes
+from .resolved import ResolvedUids
 from .terms import TERMS_SECTION, terms_section
 
 ACCESS_SECTION = "access"
@@ -299,7 +300,7 @@ def start_session(
     classes: ToolClasses | None = None,
     denylist: Iterable[str] | None = None,
     knowledge: Any = None,
-    resolved_uids: Mapping[str, Any] | None = None,
+    resolved_uids: ResolvedUids | None = None,
 ) -> tuple[dict, str]:
     """Assemble a session's context pack with the profile's access block and the project's terms
     (:mod:`homelabnext.agent.terms`) as stable sections.
@@ -309,9 +310,15 @@ def start_session(
 
     ``knowledge``: the profile's :class:`~homelabnext.agent.knowledge.Selection`; it must have
     been selected for this very profile (id and digest), and goes into the volatile tier.
-    ``resolved_uids``: the input items' platform-issued uids and their stored labels, passed to
-    :func:`~homelabnext.agent.pack.assemble_pack` (ADR-0037 decision 7).  The access and terms
-    sections declare no label, so a session pack is ``red`` (decision 8).
+    ``resolved_uids``: the input items' platform-issued uids with their stored digests and
+    labels (a :class:`~homelabnext.agent.resolved.ResolvedUids`), passed to
+    :func:`~homelabnext.agent.pack.assemble_pack` (ADR-0037 decision 7).  The pack is bound to
+    ``profile`` (``pack["profile"]``).  The access and terms sections declare no label, so a
+    session pack is ``red`` (decision 8).
+
+    The runner applies the agent's report with **this** pack, the one the session was given,
+    held by the runner itself; it never looks a pack up by the report's ``pack_id``, which the
+    model wrote.
 
     The sections are named ``access`` and ``terms`` and are reserved: a manifest that defines
     either is refused, so a manifest cannot replace or remove what the agent is told about its
@@ -355,4 +362,5 @@ def start_session(
         denylist=denylist,
         knowledge=knowledge,
         resolved_uids=resolved_uids,
+        profile=profile,
     )

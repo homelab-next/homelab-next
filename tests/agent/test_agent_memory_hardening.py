@@ -171,7 +171,7 @@ def _report(profile, pack_hash, updates, **fields):
 def test_a_secret_in_any_report_field_is_refused_and_never_quoted(
     reader, backend, field, value, secret
 ):
-    pack, h = assemble_pack(manifest(), inputs())
+    pack, h = assemble_pack(manifest(), inputs(), profile=reader)
     rep = _report(reader, h, [up("add", "k", "v")], **{field: value})
     for kwargs in ({}, {"pack": pack, "pack_hash": h}):
         with pytest.raises(MemoryUpdateError, match="holds a secret") as exc:
@@ -181,7 +181,7 @@ def test_a_secret_in_any_report_field_is_refused_and_never_quoted(
 
 
 def test_a_report_value_padded_past_the_schema_limit_never_quotes_its_secret(reader, backend):
-    pack, h = assemble_pack(manifest(), inputs())
+    pack, h = assemble_pack(manifest(), inputs(), profile=reader)
     secret = "pass" + "word=" + "Tr0ub4dor-horse-9-staple"
     for value in (secret + " " + "x" * 2100, "x" * 2100 + " " + secret):
         rep = _report(reader, h, [up("add", "k", value)])
@@ -192,7 +192,7 @@ def test_a_report_value_padded_past_the_schema_limit_never_quotes_its_secret(rea
 
 
 def test_a_non_secret_overlong_report_value_is_refused_by_path_only(reader):
-    pack, h = assemble_pack(manifest(), inputs())
+    pack, h = assemble_pack(manifest(), inputs(), profile=reader)
     rep = _report(reader, h, [up("add", "k", "zebracorn " * 300)])
     with pytest.raises(MemoryUpdateError) as exc:
         MemoryStore().apply_report(reader, rep, pack=pack, pack_hash=h)
@@ -203,16 +203,16 @@ def test_a_non_secret_overlong_report_value_is_refused_by_path_only(reader):
 def test_access_refusals_do_not_echo_an_unscreened_name(reader):
     store = MemoryStore()
     for call in (
-        lambda: store.read(reader, SLACK),
+        lambda: store.read(reader, SLACK)["entries"],
         lambda: store.history(reader, SLACK, "k"),
         lambda: store.as_of(reader, SLACK, T0),
-        lambda: store.read(reader, "analyst", owner=SLACK),
+        lambda: store.read(reader, "analyst", owner=SLACK)["entries"],
     ):
         with pytest.raises(MemoryAccessError) as exc:
             call()
         assert not _leaks(SLACK, str(exc.value)) and "not shown" in str(exc.value)
     with pytest.raises(MemoryAccessError, match="'responder' is not in its memory_scopes"):
-        store.read(reader, "responder")
+        store.read(reader, "responder")["entries"]
 
 
 def test_a_batch_holds_at_most_64_updates(reader, backend):
@@ -221,7 +221,7 @@ def test_a_batch_holds_at_most_64_updates(reader, backend):
     with pytest.raises(MemoryUpdateError, match=f"at most {MAX_UPDATES}"):
         write(store, reader, many)
     write(store, reader, many[:MAX_UPDATES])
-    assert len(store.read(reader, "analyst")) == MAX_UPDATES
+    assert len(store.read(reader, "analyst")["entries"]) == MAX_UPDATES
 
 
 # ---------------------------------------------------------------- F2: migration keeps no secret
@@ -243,7 +243,7 @@ def test_migration_keeps_only_the_purged_marker_for_legacy_secrets(
         write(store, reader, [up("add", "new", "n")])
         stored = backend.load("profile:reader")
         assert fold(stored["log"]) == stored["entries"]
-    seen = store.read(reader, "analyst", include_retired=True)
+    seen = store.read(reader, "analyst", include_retired=True)["entries"]
     log_text = json.dumps(store.history(reader, "analyst", "creds"))
     everything = json.dumps([seen, log_text, backend.load("profile:reader") if written else {}])
     assert not _leaks(AWS, everything) and not _leaks(SLACK, everything)
@@ -378,7 +378,7 @@ def test_cap_advice_depends_on_the_scope_kind(backend, tmp_path):
 # ---------------------------------------------------------------- platform scopes and reports
 def test_a_report_may_not_write_a_platform_scope(backend):
     p = _ledger()
-    pack, h = assemble_pack(manifest(), inputs())
+    pack, h = assemble_pack(manifest(), inputs(), profile=p)
     rep = _report(p, h, [up("add", "k", "v"), up("add", "item-a", "v", scope=FL)])
     with pytest.raises(
         MemoryUpdateError, match="memory_updates/1: scope 'fleet-ledger' is a platform"
@@ -410,7 +410,7 @@ def test_a_platform_scope_stays_bounded_under_ten_times_its_cap(backend):
         stored = backend.load(p["id"])
         assert len(stored["log"]) <= cap
     assert fold(stored["log"]) == stored["entries"]
-    assert store.read(p, FL) == {"cursor": str(10 * cap)}
+    assert store.read(p, FL)["entries"] == {"cursor": str(10 * cap)}
     tombs = [r for r in stored["log"] if r.get("compacted") == "whole"]
     (aged,) = [r for r in stored["log"] if r["op"] == "aged"]
     assert len(tombs) == 4 and aged["count"] == 10 * cap - 4 and aged["key"] is None

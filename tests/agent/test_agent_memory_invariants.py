@@ -87,7 +87,7 @@ def invariants(store, profile, backend, scopes, when):
         assert k not in top or lo > top[k], (k, lo, top.get(k))
         top[k] = r["rev"]
     for scope in scopes:
-        assert store.as_of(profile, scope, when)["entries"] == store.read(profile, scope)
+        assert store.as_of(profile, scope, when)["entries"] == store.read(profile, scope)["entries"]
 
 
 def test_a_re_added_key_never_ages_out_with_its_old_tombstone(backend):
@@ -99,7 +99,7 @@ def test_a_re_added_key_never_ages_out_with_its_old_tombstone(backend):
     for k in ("y", "z", "w"):  # tombstones past the budget of 1
         clock.tick()
         write(store, p, [up("add", k, "v"), up("retire", k)])
-        assert store.read(p, FL) == {"x": "LIVE-FACT"}
+        assert store.read(p, FL)["entries"] == {"x": "LIVE-FACT"}
         invariants(store, p, backend, [FL], clock.t + timedelta(days=1))
     clock.tick()
     write(store, p, [up("replace", "x", "different")])
@@ -180,7 +180,7 @@ def test_writers_overlap_and_the_lock_serialises_them():
     assert len(stored["log"]) == 16 and len(stored["entries"][FL]) == 16
 
 
-def _packs():
+def _packs(profile):
     """Packs of different labels to draw checked batches from: by hash, ``(pack, hash)``."""
     out = {}
     for static, items in (
@@ -190,7 +190,9 @@ def _packs():
         (None, [item(7, "green")]),  # an unlabelled static section: red
     ):
         # every input section declares its items: an input section without any is red
-        pack, h = labelled_pack(items, [item(100 + len(out), "clear")], static=static)
+        pack, h = labelled_pack(
+            items, [item(100 + len(out), "clear")], static=static, profile=profile
+        )
         out[h] = (pack, h)
     return out
 
@@ -233,7 +235,7 @@ def test_random_histories_keep_the_invariants(backend, seed_):
     it rendered, sometimes something it did not) and unchecked platform batches."""
     rnd = random.Random(seed_)
     p = _ledger(records={FL: 60}, tombstones={FL: 3}, keep_last={FL: {"c*": 2, "k1": 1}})
-    packs = _packs()
+    packs = _packs(p)
     clock = Clock()
     store = MemoryStore(backend, now=clock)
     keys = ["c1", "c2", "k1", "k2", "k3", "k4"]
@@ -249,7 +251,7 @@ def test_random_histories_keep_the_invariants(backend, seed_):
             if k in seen:
                 continue
             seen.add(k)
-            if k in store.read(p, scope):
+            if k in store.read(p, scope)["entries"]:
                 op = rnd.choice(["replace", "retire"])
                 u = up(op, k, str(rnd.random()) if op == "replace" else None, scope)
             else:

@@ -628,13 +628,24 @@ again. Without a notifier, the crossing is logged once.
 An aged-out key leaves `dependents` for good. It was already retired, so a retraction loses
 nothing live.
 
-Each scope also has a **byte cap** beside its record cap: `memory_limits.bytes` (profile schema
-1.7), by default 2,000 bytes per record of the scope's record cap (20 MB for a 10,000-record
-scope). It counts the scope's records serialised, plus every pack exposure they point at. The
-record cap alone no longer bounds the bytes: a record whose value is 2,000 characters and whose
-closure is full (256 identifiers) is about 27 kB, and one exposure (1,024 identifiers) about
-73 kB, so 10,000 records could otherwise hold hundreds of megabytes. A batch past the byte cap is
-refused and paged exactly as at the record cap (`MemoryLimitError` with `unit: bytes`).
+Each scope also has a **byte cap** beside its record cap (ADR-0037 decision 6, amended
+2026-11-06): `memory_limits.bytes` (profile schema 1.7), by default 2,000 bytes per record of the
+scope's record cap (20 MB for a 10,000-record scope). It counts the scope's **records only**,
+serialised. Measured: a typical record is about 1 kB, the largest model record (a 2,000-character
+value and a full 256-identifier closure) 22.5 kB, a capped range record about 95 kB. So ordinary
+memory meets the record cap first. Pack exposures are charged **once per owner** against
+`memory_limits.exposure_bytes` (default 50,000,000 bytes; one exposure is 1.5 kB at 20 rendered
+identifiers and 75.8 kB at 1,024). Only a batch that stores a new exposure can cross it; past it,
+every checked write from a new pack is refused and paged, while writes from packs the owner
+already holds go on. That self-lockout is intended and ends when the operator raises the budget
+or purges (PR 3). A refusal (`MemoryLimitError`, `unit` `records`, `bytes` or `exposure`) gives
+the advice that frees the cap: for a model-written scope, raise the cap in the reviewed profile
+or an operator purge (it never shrinks); for a platform scope, retire finished keys and set
+`keep_last`. A byte refusal reports the cap, never a byte total, which would count records the
+writer may not read. A range record keeps at most 256 value digests and 256 pack ids, the newest,
+and says `truncated: true` past that; a retraction treats a truncated range as exposed to
+everything its sources reach. It also keeps `effective`, the folded state's own effective
+sources, which the fold reads; `sources` keeps the union, which `dependents` reads.
 
 The compiler copies `platform_scopes` and `memory_limits` from the spec only when they are set
 (empty ones normalise away). It refuses a platform or capped scope that is not a memory scope, and
@@ -653,18 +664,28 @@ never from what the model says.
   `digest`, `file_digest`, `tlp`) and each input item the caller declares in `inputs["items"]`
   (`{uid, digest, tlp}` per input section), each section's `tlp`, and the pack's own `tlp`. An
   input item's uid must be platform-issued: the caller resolves it through the records or lake
-  reader and passes `assemble_pack(..., resolved_uids={uid: stored label})`, and an item whose
-  uid is not in the map is refused (the assembler does no I/O). A uid paired with a different
-  digest than a knowledge item's, or with two digests, is refused at assembly. A pack renders at
-  most 1,024 identifiers; `rendered_count` lets the caller check before assembly, and the
-  assembler refuses a pack over it.
+  reader and passes `assemble_pack(..., resolved_uids=)`: a sealed `ResolvedUids`, made only by
+  `resolve_input_uids(rows, source=)` from the `{uid, digest, tlp}` rows the reader stored (a
+  plain mapping is refused). An item whose uid is not in it, or whose digest is not the stored
+  one, is refused (the assembler does no I/O); so is a uid paired with two digests or a digest
+  with two uids, knowledge items included. A pack renders at most 1,024 identifiers;
+  `rendered_count` lets the caller check before assembly, and the assembler refuses a pack over
+  it. A section the budget trimmed, but did not drop, counts all its items as rendered: the
+  assembler cannot tell which item a cut fell in, so it errs toward retracting more. `hnx agent
+  pack` runs no reader, so it refuses an inputs file with `items`.
+- **A pack is bound to its profile.** `assemble_pack(..., profile=)` (and `start_session`, which
+  passes it) records `profile: {id, digest}`; the store refuses a checked write whose pack names
+  another profile or none. The runner applies a report with the session's own pack, which it
+  holds; it never looks a pack up by the report's `pack_id`, which the model wrote.
 - **Labels in the pack.** A knowledge item takes its record's or page's declared `tlp`; an input
-  item the strictest of its stored label and the caller's, so a caller can raise a label but
-  never lower it; a pre-gate section is `red` (lab data); a static section takes the manifest's
-  `tlp` (context manifest 1.3), `red` when absent; an input section the strictest of its items,
-  `red` with none. The pack's label is the strictest of its rendered sections'. Until records,
+  item the strictest of its stored label (read as stored data: a non-canonical label is `red`)
+  and the caller's, so a caller can raise a label but never lower it; a pre-gate section is `red`
+  (lab data); a static section takes the manifest's `tlp` (context manifest 1.3, which refuses
+  `tlp` on an input section), `red` when absent; an input section the strictest of its items and
+  of any TLP marker in its text (text only raises it), `red` with no items. The pack's label is the strictest of its rendered sections'. Until records,
   pages and manifests declare labels, every pack is `red`, and so is the access block
-  `start_session` adds, so every session pack is `red` today.
+  `start_session` adds, so every session pack is `red` today (ADR-0037 follow-up 6 names the
+  work that changes that).
 - **A source is an identifier the assembler wrote.** A memory update may carry `sources`
   (`report_result` 1.2: at most 16 unique; a content digest, a UUIDv7 record uid or
   `mem:<profile id>/<scope>/<key>@<rev>`). Each must equal a rendered knowledge item's `digest`,
@@ -672,22 +693,29 @@ never from what the model says.
   cite's `ref`, a section body or the summary, and not an item the budget dropped. Any other
   source refuses the whole report, named by position only. Every `mem:` source is refused until
   packs carry a memory block (PR 3), with one message whoever's memory it names. An update with
-  no sources is stored with `sources: []` and named in the result's `unsourced`. `verify` is in
+  no sources is stored with `sources: []` and named in the result's `unsourced`. A refusal
+  names an update by its position, never its key. `verify` is in
   the schema (decision 15) and refused by the store until PR 4. `validate_report` and the store
   refuse more than 64 `memory_updates` or 128 `cites`.
 - **A checked write needs its pack.** `apply_report(profile, report, pack=, pack_hash=)` and
   `apply_updates(profile, updates, pack=, pack_hash=)` refuse a write without them, a hash that is
   not the pack's own and a deferred pack; their records are `checked: true`.
   `apply_updates(..., unchecked=True)` takes no pack, writes the profile's `platform_scopes` and
-  nothing else, and its records are `checked: false` and `red`. A checked write may not name a
-  platform scope.
+  nothing else, and its records are `checked: false` and `red`; `pack_id=`, if given, must be a
+  pack hash. A checked write may not name a platform scope. A write returns only what it touched,
+  filtered by the writer's own ceiling: `{revs: {"<scope>/<key>": rev}, unsourced: [...],
+  withheld: n, dropped: [...]}`, never the entries.
 - **The label has a floor.** A record's `tlp` is the strictest of the pack's label, each source's
   label and the entry's current label, for every op, so it is never lowered (a `replace` from a
   `clear` pack leaves an `amber` entry `amber`). The store takes no label from a caller.
 - **Withheld reads.** The reader's ceiling is its `VerifiedProfile`'s attested `tlp_ceiling`,
-  else what its `data_tier` receives (`receive_ceiling`); never an argument. `read` returns the
-  entries at or below it and `withheld`, a count; `history` and `as_of` return `withheld` too. A
-  withheld entry's key is never returned: keys are model-chosen and can carry content. While
+  else what its `data_tier` receives (`receive_ceiling`); never an argument. `read` returns
+  `{entries, withheld}`: the entries at or below it and a count, the same plain-dict shape as
+  `history` (`{records, withheld}`) and `as_of`. A withheld entry's key is never returned: keys
+  are model-chosen and can carry content. `history` of a key with no visible record answers
+  `records: []` and the scope's withheld count, whether the key exists or not, and `as_of` says
+  `aged_out` only when the aged record is within the ceiling, so no read is an existence oracle.
+  While
   memory is `red`, a profile whose ceiling is below `red` reads its whole memory as withheld,
   by design.
 - **Exposure.** A checked batch that changes memory stores its pack's exposure once per owner,
@@ -695,8 +723,10 @@ never from what the model says.
   (folded records by `pack_ids`), and an exposure no record points at any longer is dropped.
 - **Closure.** An entry's effective sources are the union of its records' sources since its last
   `add`; each record stores them as its `closure` (no `mem:` revisions or aliases until PR 3), at
-  most 256. An update past that is refused: retire the key and add it again. Compaction unions
-  closures into range records and tombstones.
+  most 256. A checked update past that refuses its batch: retire the key and add it again. An
+  unchecked platform update past it is dropped and reported in the result's `dropped`, and the
+  rest of the batch applies, so a key the platform replaces without end cannot stall its writer.
+  Compaction unions closures into range records and tombstones.
 
 
 Two stores are called memory, and only this one carries the M-09 guarantees. The broker's

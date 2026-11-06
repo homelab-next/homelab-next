@@ -132,6 +132,28 @@ def reasons(sel):
 # ------------------------------------------------------------------ the compiler
 
 
+@pytest.mark.parametrize("declared", [None, "amber", "TLP:AMBER"])
+def test_a_selected_node_carries_its_declared_label_into_the_pack(root, declared):
+    """ADR-0037 decision 8: a knowledge node's ``tlp`` is its graph node's declared label, read
+    as stored data (a non-canonical spelling is red), ``red`` when it declares none; the pack's
+    provenance records it for the rendered node, and the pack's label is no looser."""
+    graph = fake_graph()
+    if declared is not None:
+        node = graph.nodes["lesson:LL-010"]
+        graph.nodes["lesson:LL-010"] = Node(
+            node.id, node.kind, node.title, node.path, {**node.attrs, "tlp": declared}
+        )
+    prof = profile_with({"from": "capabilities", "kinds": ["lesson"]})
+    sel = select_knowledge(prof, graph, root)
+    (entry,) = [i for i in sel.included if i["id"] == "lesson:LL-010"]
+    want = {None: "red", "amber": "amber", "TLP:AMBER": "red"}[declared]
+    assert entry["tlp"] == want
+    pack, _ = assemble_pack(manifest(), inputs(), knowledge=sel, profile=prof)
+    (known,) = [k for k in pack["provenance"]["knowledge"] if k["id"] == "lesson:LL-010"]
+    assert known["tlp"] == want and "uid" not in known  # LL-010 is no UUIDv7
+    assert pack["provenance"]["tlp"] == "red"  # the canonical pack's pre-gate is red anyway
+
+
 def test_no_include_means_no_include_key_and_no_knowledge():
     prof = verified(compile_profile(spec(), library()))
     assert "include" not in prof

@@ -66,25 +66,32 @@ History (ADR-0037 decisions 1 to 6, decision 6 as amended):
   beyond the scope's budget (``memory_limits.tombstones``, default a tenth of the record cap)
   age out oldest first into the scope's one ``aged`` record, which keeps the scope's high-water
   ``rev`` so a key added again later continues above it.
-* **A byte cap beside the record cap.**  Closures (up to :data:`MAX_CLOSURE` identifiers) and
-  pack exposures (up to :data:`~homelabnext.agent.pack.MAX_RENDERED` identifiers) make a record's
-  size depend on more than the report schema bounds: a record whose value is 2,000 characters
-  and whose closure is full is about 27 kB, and one exposure about 73 kB, so 10,000 records could
-  hold hundreds of megabytes.  Each scope therefore also has a byte cap
-  (``memory_limits.bytes``, default :data:`BYTES_PER_RECORD` times its record cap): the
-  serialised size of its records plus the exposures they point at.  Crossing it is refused and
-  paged exactly as the record cap is.
+* **Byte caps (decision 6, amended 2026-11-06).**  Closures (up to :data:`MAX_CLOSURE`
+  identifiers) and pack exposures (up to :data:`~homelabnext.agent.pack.MAX_RENDERED`) make the
+  record cap no bound on bytes (see :data:`BYTES_PER_RECORD` for the measured sizes).  Each
+  scope has a byte cap over its **records only** (``memory_limits.bytes``, default
+  :data:`BYTES_PER_RECORD` times its record cap), and the owner an exposure budget charged once
+  across scopes (``memory_limits.exposure_bytes``, default :data:`DEFAULT_EXPOSURE_BYTES`).
+  Crossing either is refused and paged as the record cap is; at the exposure budget the owner
+  writes only from packs it already holds (an intended, paged lockout).  A byte refusal reports
+  the cap, never a total, which would count records the writer may not read.  A range record
+  keeps at most :data:`MAX_RANGE_LIST` value digests and pack ids (``truncated`` past that) and
+  its folded state's own ``effective`` sources beside the union.
 
 Sources and labels (ADR-0037 decisions 7 to 10, PR 2):
 
 * **A checked write needs its pack.**  :meth:`MemoryStore.apply_report` and
   :meth:`MemoryStore.apply_updates` take ``pack=`` and ``pack_hash=`` (the hash must be the
-  pack's own); without them the write is refused.  Every source of every update must equal an
+  pack's own, and the pack bound to this profile: ``pack["profile"]``); without them the write is
+  refused.  The runner passes the session's own pack, never one looked up by a report's
+  ``pack_id``.  Every source of every update must equal an
   identifier the pack assembler recorded for something the pack rendered
   (:func:`~homelabnext.agent.report.source_problems`); text never is one, and every ``mem:``
   source is refused until packs carry a memory block (PR 3).  Records written so are
   ``checked: true``.  An update without sources is stored with ``sources: []`` and reported in
-  the result's ``unsourced``.
+  the result's ``unsourced``.  A write returns only what it touched, filtered by the writer's own
+  ceiling (``{revs, unsourced, withheld, dropped}``), and a refusal names an update's position,
+  never its key.
 * **Unchecked platform writes.**  ``apply_updates(..., unchecked=True)`` writes the profile's
   ``platform_scopes`` and nothing else, takes no pack, and its records are ``checked: false`` and
   ``red``.  A checked write, a report included, may not name a platform scope.
@@ -96,13 +103,17 @@ Sources and labels (ADR-0037 decisions 7 to 10, PR 2):
   ``tlp_ceiling``, else what its ``data_tier`` receives:
   :func:`~homelabnext.registry.model_tlp.receive_ceiling`).  An entry or record above it is never
   returned, nor is its key; the read says only how many it withheld (``withheld``).
+  ``read``, ``history`` and ``as_of`` all return plain dicts with ``withheld``; ``history`` of a
+  key with no visible record answers like a missing key, and ``as_of`` says ``aged_out`` only
+  when the aged record is within the ceiling.
 * **Exposure.**  A checked batch stores its pack's exposure once per owner, keyed by the pack id,
   as ``{rendered: [identifiers], memory: []}``; records point at it by ``pack_id`` (and a folded
   record by its ``pack_ids``), and an exposure no record points at any longer is dropped.
 * **Closure.**  An entry's effective sources are the union of its records' sources since its
   last ``add``; each record stores them as its ``closure`` (no ``mem:`` revisions or aliases
-  yet), at most :data:`MAX_CLOSURE`.  An update past that is refused: retire the key and add it
-  again.
+  yet), at most :data:`MAX_CLOSURE`.  A checked update past that refuses its batch (retire the
+  key and add it again); an unchecked platform update past it is dropped and reported in
+  ``dropped`` (decision 10, amended), so it cannot stall the platform's fold.
 """
 
 from __future__ import annotations
@@ -126,7 +137,7 @@ from homelabnext.registry.model_tlp import receive_ceiling
 from .compiler import VerifiedProfile, require_verified
 from .digest import digest_of
 from .errors import AgentError
-from .pack import MAX_RENDERED, pack_label, rendered_identifiers
+from .pack import MAX_RENDERED, pack_label, pack_profile, rendered_identifiers
 from .report import (
     MAX_MEMORY_UPDATES,
     MEM_PREFIX,
@@ -145,9 +156,22 @@ OPS = ("add", "replace", "retire")
 MAX_UPDATES = MAX_MEMORY_UPDATES
 #: identifiers in one record's base-source closure (ADR-0037 decision 10)
 MAX_CLOSURE = 256
-#: a scope's default byte cap per record of its record cap
+#: a scope's default byte cap per record of its record cap.  Measured (compact JSON): a typical
+#: record (a 200-character value, three sources, a ten-identifier closure) is about 1 kB; the
+#: largest model record (2,000 characters, 16 sources, a full 256-identifier closure) 22.5 kB in
+#: ASCII and 26.5 kB in CJK text; a range record at its list caps about 95 kB.  So the record cap
+#: binds first for ordinary memory, and the byte cap only once closures grow fat.
 BYTES_PER_RECORD = 2_000
+#: an owner's default exposure budget: every scope's pack exposures together.  One exposure is
+#: 1.5 kB at 20 rendered identifiers and 75.8 kB at the 1,024 cap, so 50 MB holds about 33,000
+#: ordinary packs or 660 full ones
+DEFAULT_EXPOSURE_BYTES = 50_000_000
+#: how many value digests and pack ids a range record keeps (the newest); past it the record is
+#: ``truncated`` (ADR-0037 decision 6, amended 2026-11-06)
+MAX_RANGE_LIST = 256
 _PLACEHOLDER_HASH = "sha256:" + "0" * 64
+#: a pack id: a pack's hash
+_PACK_ID = re.compile(r"sha256:[0-9a-f]{64}")
 log = logging.getLogger("homelabnext.agent.memory")
 
 #: record caps of a profile without ``memory_limits.records`` for the scope (ADR-0037 decision 6)
@@ -225,11 +249,22 @@ class MemoryUpdateError(AgentError):
 
 
 def _cap_advice(platform: bool, unit: str = "records") -> str:
-    if unit == "bytes":
+    """What actually frees a cap.  A model-written scope never shrinks (only an operator purge,
+    ADR-0037 PR 3, removes records), so its advice is the reviewed profile or a purge; a platform
+    scope compacts once its finished keys are retired."""
+    if unit == "exposure":
         return (
-            "raise memory_limits.bytes in the reviewed profile, or retire keys whose closures have "
-            "grown (a key's closure restarts when it is retired and added again)"
+            "raise memory_limits.exposure_bytes in the reviewed profile (or an operator purge, "
+            "ADR-0037 PR 3): until then every checked write of this profile is refused"
         )
+    name = "memory_limits.bytes" if unit == "bytes" else "memory_limits.records"
+    if platform and unit == "bytes":
+        return (
+            "retire finished keys and set memory_limits.keep_last so the scope compacts, or "
+            f"raise {name} in the reviewed profile"
+        )
+    if unit == "bytes":
+        return f"raise {name} in the reviewed profile (or an operator purge, ADR-0037 PR 3)"
     if platform:
         return (
             "set memory_limits.keep_last for keys that are replaced and retire finished keys so "
@@ -242,8 +277,10 @@ def _cap_advice(platform: bool, unit: str = "records") -> str:
 
 class MemoryLimitError(MemoryUpdateError):
     """A batch that would take a scope past its record cap (``unit`` ``records``) or its byte cap
-    (``bytes``); nothing from it was applied.  ``scopes`` maps each such scope to ``(what it would
-    hold, cap)``; ``platform`` names the ones that are platform scopes."""
+    (``bytes``), or the owner past its exposure budget (``exposure``, scope ``*``); nothing from
+    it was applied.  ``scopes`` maps each to ``(what it would hold, cap)``; for ``bytes`` and
+    ``exposure`` what it would hold is ``None``, since a byte total would count records the
+    reader may not see (ADR-0037 decision 8).  ``platform`` names the platform scopes."""
 
     def __init__(
         self,
@@ -256,14 +293,26 @@ class MemoryLimitError(MemoryUpdateError):
         self.scopes = dict(scopes)
         self.platform = frozenset(platform)
         self.unit = unit
-        cap_name = "record cap" if unit == "records" else "byte cap"
-        super().__init__(
-            [
-                f"scope {s!r} of {owner} is at its {cap_name} ({n} {unit} would exceed {cap}); "
-                f"its writes are refused: {_cap_advice(s in self.platform, unit)}"
-                for s, (n, cap) in sorted(self.scopes.items())
-            ]
+        super().__init__([_cap_line(owner, s, n, cap, unit, s in self.platform)
+                          for s, (n, cap) in sorted(self.scopes.items())])  # fmt: skip
+
+
+def _cap_line(owner: str, scope: str, n: int | None, cap: int, unit: str, platform: bool) -> str:
+    advice = _cap_advice(platform, unit)
+    if unit == "exposure":
+        return (
+            f"{owner}'s pack exposures would exceed its exposure budget of {cap} bytes; "
+            f"its checked writes are refused: {advice}"
         )
+    if unit == "bytes":
+        return (
+            f"scope {scope!r} of {owner} would exceed its byte cap of {cap} bytes; its writes "
+            f"are refused: {advice}"
+        )
+    return (
+        f"scope {scope!r} of {owner} is at its record cap ({n} records would exceed {cap}); "
+        f"its writes are refused: {advice}"
+    )
 
 
 class MemoryClockError(MemoryUpdateError):
@@ -285,24 +334,6 @@ class MemoryClockError(MemoryUpdateError):
 Memory = dict[str, dict[str, dict[str, Any]]]  # scope -> key -> entry
 Stored = dict[str, Any]  # {"entries": Memory, "log": [record, ...], "exposure": {pack_id: ...}}
 Record = dict[str, Any]
-
-
-class Applied(dict):
-    """What a write returns: the owner's entries (``{scope: {key: entry}}``), plus ``unsourced``,
-    the ``scope/key`` of each update of the batch that named no source (ADR-0037 decision 7)."""
-
-    def __init__(self, entries: Mapping[str, Any] = (), unsourced: Iterable[str] = ()) -> None:
-        super().__init__(entries)
-        self.unsourced = list(unsourced)
-
-
-class MemoryRead(dict):
-    """What :meth:`MemoryStore.read` returns: ``{key: value}`` of what the reader may see, plus
-    ``withheld``, how many entries it may not (ADR-0037 decision 8; never their keys)."""
-
-    def __init__(self, items: Mapping[str, Any] = (), withheld: int = 0) -> None:
-        super().__init__(items)
-        self.withheld = withheld
 
 
 @dataclass(frozen=True)
@@ -388,11 +419,19 @@ def record_cap(profile: VerifiedProfile, scope: str) -> int:
 
 def byte_cap(profile: VerifiedProfile, scope: str) -> int:
     """The byte cap of ``scope`` for ``profile``: its ``memory_limits.bytes`` entry, else
-    :data:`BYTES_PER_RECORD` times its record cap."""
+    :data:`BYTES_PER_RECORD` times its record cap.  It counts the scope's records only; pack
+    exposures are charged once per owner against :func:`exposure_budget`."""
     limits = _limits(profile, "bytes")
     if scope in limits:
         return int(limits[scope])
     return BYTES_PER_RECORD * record_cap(profile, scope)
+
+
+def exposure_budget(profile: VerifiedProfile) -> int:
+    """The bytes ``profile``'s pack exposures may take together, charged once per owner:
+    ``memory_limits.exposure_bytes``, else :data:`DEFAULT_EXPOSURE_BYTES`."""
+    value = (profile.get("memory_limits") or {}).get("exposure_bytes")
+    return int(value) if isinstance(value, int) else DEFAULT_EXPOSURE_BYTES
 
 
 def read_ceiling(profile: VerifiedProfile) -> tlp.Label:
@@ -614,7 +653,10 @@ def _step(entry: dict[str, Any] | None, rec: Mapping[str, Any]) -> dict[str, Any
     op = rec["op"]
     status = "retired" if op == "retire" else "live"
     if rec.get("compacted") in ("whole", "range"):  # folded records: their state, no value
-        value, sources, reasserted = None, list(rec["sources"]), rec.get("reasserted_at")
+        # the entry's effective sources are the folded state's own, not the union across the
+        # adds the range spans (``sources`` keeps that union, for dependents)
+        effective = rec.get("effective", rec["sources"])
+        value, sources, reasserted = None, list(effective), rec.get("reasserted_at")
         status = rec["status"]
     elif rec.get("migrated"):
         value, sources, reasserted = rec.get("value"), list(rec["sources"]), None
@@ -669,11 +711,24 @@ def _squash(recs: list[Record], kind: str) -> Record:
     """One record standing for ``recs`` (one key's, in order): ``whole`` (a retired key's
     tombstone) or ``range`` (records beyond ``keep_last``).  It keeps the rev range, the value
     digests, the union of sources, closures and pack ids, the strictest label, when the range
-    starts (``since``), and the state the records leave the entry in."""
+    starts (``since``), and the state the records leave the entry in: its status, and its own
+    effective sources (``effective``: those since its last add, which a range that spans a retire
+    and a later add must not take from the union).  It keeps at most :data:`MAX_RANGE_LIST`
+    value digests and pack ids, the newest; past that it is marked ``truncated``, and a retraction
+    treats it as exposed to everything its sources reach."""
     first, last = recs[0], recs[-1]
     starts = [_start(r) for r in recs]
     state = fold(recs)[last["scope"]][last["key"]]
-    return {
+    digests = [
+        d for d in _union(*(r.get("value_digests") or [r.get("value_digest")] for r in recs)) if d
+    ]
+    packs = [p for p in _union(*(r.get("pack_ids") or [r.get("pack_id")] for r in recs)) if p]
+    truncated = (
+        any(r.get("truncated") for r in recs)
+        or len(digests) > MAX_RANGE_LIST
+        or len(packs) > MAX_RANGE_LIST
+    )
+    out = {
         "at": last["at"],
         "scope": last["scope"],
         "key": last["key"],
@@ -683,21 +738,21 @@ def _squash(recs: list[Record], kind: str) -> Record:
         "compacted": kind,
         "status": "retired" if kind == "whole" else state["status"],
         "since": None if any(s is None for s in starts) else min(starts),  # type: ignore[type-var]
-        "value_digests": [
-            d
-            for d in _union(*(r.get("value_digests") or [r.get("value_digest")] for r in recs))
-            if d
-        ],
+        "value_digests": digests[-MAX_RANGE_LIST:],
         "pack_id": last.get("pack_id"),
-        "pack_ids": [
-            p for p in _union(*(r.get("pack_ids") or [r.get("pack_id")] for r in recs)) if p
-        ],
+        "pack_ids": packs[-MAX_RANGE_LIST:],
         "sources": _union(*(r["sources"] for r in recs)),
+        "effective": list(state["sources"]),
         "checked": all(r["checked"] for r in recs),
         "tlp": str(tlp.strictest(r["tlp"] for r in recs)),
         "closure": _union(*(r["closure"] for r in recs)),
         "reasserted_at": state["reasserted_at"],
-    } | ({"purged": True} if any(r.get("purged") for r in recs) else {})
+    }
+    if truncated:
+        out["truncated"] = True
+    if any(r.get("purged") for r in recs):
+        out["purged"] = True
+    return out
 
 
 def _compact_key(recs: list[Record], keep_last: int | None, whole: bool) -> list[Record] | None:
@@ -789,11 +844,19 @@ def _apply(
     check: _Check,
     now: str,
     profile: VerifiedProfile,
+    result: dict[str, Any] | None = None,
 ) -> Stored:
     """Apply ``updates`` stamped no earlier than ``now`` or the log's latest record: append
     their records (sources, label and closure set from ``check``), store the pack's exposure,
     compact, refold the touched keys, drop exposures nothing points at, and check the record and
-    byte caps.  Raises on any problem, so the backend stores nothing."""
+    byte caps and the owner's exposure budget.  Raises on any problem, so the backend stores
+    nothing.  Refusals name an update by its position only, never its key (keys are
+    model-chosen, and a refusal is read where the key's label may not allow it).
+
+    An unchecked (platform) update whose closure would pass :data:`MAX_CLOSURE` is dropped, not
+    fatal, and named in ``result["dropped"]``, so a long-lived platform key cannot stall its
+    writer's fold (ADR-0037 decision 10, amended); in a checked batch it refuses the batch.
+    ``result["touched"]`` gets each applied ``(scope, key)``."""
     entries: Memory = stored["entries"]
     records: list[Record] = stored["log"]
     exposure: dict[str, Any] = dict(stored.get("exposure") or {})
@@ -809,9 +872,10 @@ def _apply(
             raise MemoryClockError(profile["id"], behind)
     at = max(now, latest)
     problems: list[str] = []
+    dropped: list[str] = []
     touched: dict[tuple[str, str], None] = {}
     for n, u in enumerate(updates):
-        where = f"memory_updates/{n} ({u['scope']}/{u['key']})"
+        where = f"memory_updates/{n}"
         scope = entries.setdefault(u["scope"], {})
         cur = scope.get(u["key"])
         live = cur is not None and cur.get("status") == "live"
@@ -836,11 +900,15 @@ def _apply(
             rec.update(sources=sources, checked=check.checked, tlp=_label(check, sources, cur))
             entry = _step(cur, rec)
             if len(entry["sources"]) > MAX_CLOSURE:
-                problems.append(
+                why = (
                     f"{where}: its sources since the key's last add would number "
                     f"{len(entry['sources'])}, over the closure cap of {MAX_CLOSURE}; retire the "
                     "key and add it again"
                 )
+                if check.checked:
+                    problems.append(why)
+                else:
+                    dropped.append(why + " (dropped; the rest of the batch applies)")
                 continue
             rec["closure"] = list(entry["sources"])  # no mem: closures or aliases yet (PR 3)
             records.append(rec)
@@ -848,8 +916,14 @@ def _apply(
             touched[(u["scope"], u["key"])] = None
     if problems:
         raise MemoryUpdateError(problems)
-    if check.rendered is not None and check.pack_id and touched:
-        exposure.setdefault(check.pack_id, {"rendered": list(check.rendered), "memory": []})
+    new_exposure = (
+        check.rendered is not None
+        and bool(check.pack_id)
+        and bool(touched)
+        and check.pack_id not in exposure
+    )
+    if new_exposure:
+        exposure[check.pack_id] = {"rendered": list(check.rendered), "memory": []}
 
     platform = _platform_scopes(profile)
     hot = {k for k in touched if k[0] in platform}
@@ -877,11 +951,10 @@ def _apply(
 
     # refold the touched keys from the log (compaction may have dropped a value the cache held),
     # so the cache is the fold by construction; one pass, which also counts each scope's records
-    # and bytes and finds the exposures still pointed at
+    # and record bytes and finds the exposures still pointed at
     hot_scopes = {s for s, _ in touched}
     counts: dict[str, int] = {}
     sizes: dict[str, int] = {}
-    packs_of: dict[str, set[str]] = {}
     pointed: set[str] = set()
     refolded: dict[tuple[str, str], dict[str, Any] | None] = {
         k: None for k in touched if k[1] in entries.get(k[0], {})
@@ -890,9 +963,8 @@ def _apply(
         counts[r["scope"]] = counts.get(r["scope"], 0) + 1
         ids = _pack_ids(r)
         pointed.update(ids)
-        if r["scope"] in hot_scopes:
+        if r["scope"] in hot_scopes:  # a scope's byte cap counts its records only
             sizes[r["scope"]] = sizes.get(r["scope"], 0) + _size(r)
-            packs_of.setdefault(r["scope"], set()).update(ids)
         k = (r["scope"], r["key"])
         if k in refolded:
             refolded[k] = _step(refolded[k], r)
@@ -906,17 +978,23 @@ def _apply(
     }
     if over:
         raise MemoryLimitError(profile["id"], over, platform & set(over))
-    for s in hot_scopes:  # a scope is charged every exposure its records point at
-        sizes[s] = sizes.get(s, 0) + sum(
-            _size(exposure[p]) for p in packs_of.get(s, ()) if p in exposure
-        )
     heavy = {
-        s: (sizes[s], byte_cap(profile, s))
+        s: (None, byte_cap(profile, s))
         for s in sorted(hot_scopes)
-        if sizes[s] > byte_cap(profile, s)
+        if sizes.get(s, 0) > byte_cap(profile, s)
     }
     if heavy:
         raise MemoryLimitError(profile["id"], heavy, platform & set(heavy), unit="bytes")
+    # exposures are charged once per owner; only a batch that adds one can cross the budget, so
+    # an owner at it keeps writing from packs it already holds and is refused (and paged) for any
+    # new one: the self-lockout is intended, and ends when the operator raises the budget
+    if new_exposure and sum(_size(e) for e in exposure.values()) > exposure_budget(profile):
+        raise MemoryLimitError(
+            profile["id"], {"*": (None, exposure_budget(profile))}, (), unit="exposure"
+        )
+    if result is not None:
+        result["dropped"] = dropped
+        result["touched"] = list(touched)
     return {"entries": entries, "log": records, "exposure": exposure}
 
 
@@ -963,9 +1041,15 @@ class MemoryStore:
         pack_hash: str | None = None,
         pack_id: str | None = None,
         unchecked: bool = False,
-    ) -> Applied:
-        """Validate and apply ``updates`` for ``profile``; all or nothing.  Returns the new
-        entries, with ``unsourced`` naming the updates that cited nothing.
+    ) -> dict[str, Any]:
+        """Validate and apply ``updates`` for ``profile``; all or nothing (but see ``dropped``).
+
+        Returns only what the batch touched, filtered by the writer's own ceiling
+        (:func:`read_ceiling`), so a write result is never a way round a withheld read:
+        ``{"revs": {"<scope>/<key>": rev}, "unsourced": ["<scope>/<key>", ...], "withheld": n,
+        "dropped": [problem, ...]}``.  ``revs`` and ``unsourced`` name only keys whose new record
+        the writer may read; ``withheld`` counts the touched keys it may not.  ``dropped`` lists,
+        by position, the unchecked platform updates dropped at the closure cap.
 
         A **checked** write passes the ``pack`` the updates came from and its ``pack_hash`` (the
         pack's own hash; ``pack_id``, if given, must equal it), and every source must be an
@@ -995,15 +1079,17 @@ class MemoryStore:
         if verify:
             raise MemoryUpdateError([*verify, "nothing was applied"])
         check = self._check(profile, updates, pack, pack_hash, pack_id, unchecked)
-        unsourced = [f"{u['scope']}/{u['key']}" for u in updates if not u.get("sources")]
+        unsourced = {(u["scope"], u["key"]) for u in updates if not u.get("sources")}
         if not updates:
-            return Applied(self._load(owner)["entries"])
+            return {"revs": {}, "unsourced": [], "withheld": 0, "dropped": []}
+        result: dict[str, Any] = {}
 
         def fn(raw: Any) -> Stored:
             now = _stamp(self._now())  # read under the backend's lock, inside the transaction
             stored, purged = _stored(raw, now)
             self._purged(owner, purged)
-            return _apply(stored, updates, check, now, profile)
+            result.clear()
+            return _apply(stored, updates, check, now, profile, result)
 
         try:
             new = self._backend.transact(owner, fn)
@@ -1012,10 +1098,11 @@ class MemoryStore:
             raise
         except MemoryLimitError as exc:
             for scope, (n, cap) in exc.scopes.items():
+                held = f"{n} {exc.unit}" if n is not None else "its contents"
                 self._page(
                     owner,
                     scope,
-                    f"{n} {exc.unit} would exceed the cap of {cap}",
+                    f"{held} would exceed the cap of {cap}",
                     scope in exc.platform,
                     exc.unit,
                 )
@@ -1023,7 +1110,27 @@ class MemoryStore:
         self._clock_page(owner, None)
         for scope in sorted({u["scope"] for u in updates}):
             self._page(owner, scope, None, False)
-        return Applied(new["entries"], unsourced)
+        if check.checked:
+            self._page(owner, "*", None, False, "exposure")
+        ceiling = read_ceiling(profile)
+        revs: dict[str, int] = {}
+        withheld = 0
+        shown: set[tuple[str, str]] = set()
+        for scope, key in result.get("touched", ()):
+            entry = new["entries"].get(scope, {}).get(key)
+            if entry is None:
+                continue
+            if tlp.allows(ceiling, entry.get("tlp")):
+                revs[f"{scope}/{key}"] = entry["rev"]
+                shown.add((scope, key))
+            else:
+                withheld += 1
+        return {
+            "revs": revs,
+            "unsourced": sorted(f"{s}/{k}" for s, k in unsourced & shown),
+            "withheld": withheld,
+            "dropped": list(result.get("dropped", ())),
+        }
 
     def _check(
         self,
@@ -1058,6 +1165,10 @@ class MemoryStore:
                 )
             if mem:
                 raise MemoryUpdateError([*mem, "nothing was applied"])
+            if pack_id is not None and not (
+                isinstance(pack_id, str) and _PACK_ID.fullmatch(pack_id)
+            ):
+                raise MemoryUpdateError(["pack_id must be sha256:<64 hex>, a pack's hash"])
             return _Check(False, pack_id, UNLABELLED, {}, None)
         if unchecked is not False:
             raise TypeError("unchecked must be True or False")
@@ -1071,6 +1182,13 @@ class MemoryStore:
             raise MemoryUpdateError(["pack_hash is not the hash of the pack passed"])
         if pack_id is not None and pack_id != pack_hash:
             raise MemoryUpdateError(["pack_id does not equal the hash of the pack passed"])
+        if pack_profile(pack) != (owner, profile["digest"]):
+            # the runner passes the session's own pack, never one looked up by the report's
+            # pack_id; a pack assembled for another profile (or for none) is not that
+            raise MemoryUpdateError(
+                ["the pack was not assembled for this profile (assemble_pack(..., profile=) or "
+                 "start_session binds a pack to the verified profile it serves)"]
+            )  # fmt: skip
         if pack.get("status") == "deferred" and updates:
             raise MemoryUpdateError(["the pack was deferred: no work was done on it, so it may "
                                      "not update memory"])  # fmt: skip
@@ -1100,7 +1218,7 @@ class MemoryStore:
         pack: Mapping[str, Any] | None = None,
         pack_hash: str | None = None,
         manifest: Mapping[str, Any] | None = None,
-    ) -> Applied:
+    ) -> dict[str, Any]:
         """Apply a report's ``memory_updates`` after validating the report against its pack.
 
         A report is applied only with the ``pack`` it ran on and that pack's ``pack_hash``;
@@ -1152,10 +1270,11 @@ class MemoryStore:
         *,
         owner: str | None = None,
         include_retired: bool = False,
-    ) -> MemoryRead:
-        """Live ``{key: value}`` of one scope of the caller's own memory, and ``withheld``: how
-        many entries are labelled above the reader's ceiling (:func:`read_ceiling`).  A withheld
-        entry is never returned, and neither is its key.
+    ) -> dict[str, Any]:
+        """``{"entries": {key: value}, "withheld": n}``: the live entries of one scope of the
+        caller's own memory that its ceiling (:func:`read_ceiling`) allows, and how many it does
+        not.  A withheld entry is never returned, and neither is its key.  The shape matches
+        :meth:`history` and :meth:`as_of` (a plain dict, so no operation drops ``withheld``).
 
         ``owner`` other than the caller's own profile id is a cross-agent read and is refused.
         """
@@ -1170,7 +1289,7 @@ class MemoryStore:
                 shown[k] = e["value"]
             else:
                 withheld += 1
-        return MemoryRead(shown, withheld)
+        return {"entries": shown, "withheld": withheld}
 
     def history(
         self, profile: VerifiedProfile, scope: str, key: str, *, owner: str | None = None
@@ -1178,10 +1297,16 @@ class MemoryStore:
         """``{"records": [...], "withheld": n}``: the change records of ``scope/key`` in order
         that the reader's ceiling allows, and how many it does not (folded records have no
         ``value``; a key compacted whole is one tombstone record, and a key whose tombstone aged
-        out has none)."""
+        out has none).
+
+        A key with no record the reader may see answers ``records: []`` and the **scope's**
+        withheld count, whether the key exists or not, so ``history`` is no existence oracle for
+        a withheld key (ADR-0037 decision 8)."""
         me = self._reader(profile, scope, owner)
-        mine = [r for r in self._load(me)["log"] if r["scope"] == scope and r["key"] == key]
-        shown, withheld = _readable(profile, mine)
+        log_ = [r for r in self._load(me)["log"] if r["scope"] == scope and r["op"] != "aged"]
+        shown, withheld = _readable(profile, [r for r in log_ if r["key"] == key])
+        if not shown:
+            return {"records": [], "withheld": _readable(profile, log_)[1]}
         return {"records": shown, "withheld": withheld}
 
     def as_of(
@@ -1209,9 +1334,13 @@ class MemoryStore:
         unknown: dict[str, str] = {}  # key -> the label of the folded record that hides it
         aged_out = False
         for rec in mine:
-            if rec["op"] == "aged":
+            if rec["op"] == "aged":  # said only when the reader may see the aged record
                 since = rec.get("since")
-                aged_out = (since is None or since <= when) and when <= rec["at"]
+                aged_out = (
+                    (since is None or since <= when)
+                    and when <= rec["at"]
+                    and tlp.allows(ceiling, rec.get("tlp"))
+                )
                 continue
             k = rec["key"]
             if rec["at"] > when:
@@ -1274,6 +1403,7 @@ class MemoryStore:
         is a digest of the pair, so no two pairs share one."""
         pair = hashlib.sha256(f"{owner}\0{scope}".encode()).hexdigest()[:16]
         advice = _cap_advice(platform, unit)
+        what = "pack exposures" if scope == "*" else f"memory scope {scope}"
         self._report(
             f"agent-memory-cap-{pair}",
             owner,
@@ -1281,9 +1411,8 @@ class MemoryStore:
             CAP_TITLE if problem is not None else CAP_CLEARED,
             None
             if problem is None
-            else f"{owner}'s memory scope {scope} refuses writes: {problem}. "
-            f"{advice[0].upper()}{advice[1:]}.",
-            f"{owner}'s memory scope {scope} accepts writes again",
+            else f"{owner}'s {what} refuses writes: {problem}. {advice[0].upper()}{advice[1:]}.",
+            f"{owner}'s {what} accepts writes again",
         )
 
     def _clock_page(self, owner: str, behind: timedelta | None) -> None:

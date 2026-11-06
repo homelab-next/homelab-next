@@ -18,15 +18,26 @@ from agent_support import (
     labelled_pack,
     library,
     manifest,
+    resolved,
     spec,
     uid,
     verified,
 )
 
-from homelabnext.agent import SpecError, assemble_pack, compile_profile, validate_report
+from homelabnext.agent import (
+    ResolvedUids,
+    SpecError,
+    UnverifiedProfile,
+    assemble_pack,
+    compile_profile,
+    resolve_input_uids,
+    validate_report,
+)
+from homelabnext.agent.digest import digest_of
 from homelabnext.agent.knowledge import Selection
 from homelabnext.agent.memory import (
     MAX_CLOSURE,
+    MAX_RANGE_LIST,
     FileBackend,
     InMemoryBackend,
     MemoryAccessError,
@@ -34,6 +45,7 @@ from homelabnext.agent.memory import (
     MemoryStore,
     MemoryUpdateError,
     byte_cap,
+    exposure_budget,
     fold,
     record_cap,
 )
@@ -211,8 +223,81 @@ def test_an_input_uid_not_issued_by_the_platform_is_refused():
         assemble_pack(
             labelled_manifest(),
             {**inputs(), "items": {"charter": [item(1)]}},
-            resolved_uids={uid(1): "green"},
+            resolved_uids=resolved({uid(1): "green"}, [item(1)]),
         )
+
+
+def test_resolved_uids_is_a_sealed_type_built_by_a_reader_function():
+    """M4: a plain mapping is refused, the type cannot be built directly, and a stored label is
+    read as stored data (a non-canonical one is red)."""
+    with pytest.raises(SpecError, match="input items need resolved_uids, a ResolvedUids"):
+        assemble_pack(
+            labelled_manifest(),
+            {**inputs(), "items": {"findings": [item(1)]}},
+            resolved_uids={uid(1): {"digest": digest(1), "tlp": "clear"}},
+        )
+    with pytest.raises(TypeError, match="made only by resolve_input_uids"):
+        ResolvedUids({}, "forged")
+    got = resolve_input_uids(
+        [{"uid": uid(1), "digest": digest(1), "tlp": "TLP:CLEAR"}, {"uid": uid(2), "digest": digest(2)}],
+        source="lake",
+    )  # fmt: skip
+    assert dict(got[uid(1)]) == {"digest": digest(1), "tlp": "red"}  # not canonical: red
+    assert got[uid(2)]["tlp"] == "red" and got.source == "lake"
+    with pytest.raises(TypeError):
+        got[uid(1)]["tlp"] = "clear"  # read-only
+    with pytest.raises(SpecError, match="stored with two digests"):
+        resolve_input_uids([item(1), {"uid": uid(1), "digest": digest(2)}], source="lake")
+    with pytest.raises(SpecError, match="stored under two uids"):
+        resolve_input_uids([item(1), {"uid": uid(2), "digest": digest(1)}], source="lake")
+
+
+def test_an_items_digest_must_be_the_stored_one():
+    """M3: the caller's digest is checked against the reader's, not taken on trust."""
+    with pytest.raises(SpecError, match="digest is not the one test-reader stored"):
+        labelled_pack(
+            [{"uid": uid(1), "digest": digest(99), "tlp": "clear"}],
+            stored={uid(1): {"digest": digest(1), "tlp": "clear"}},
+        )
+
+
+def test_a_digest_paired_with_two_uids_is_refused():
+    stored = {uid(1): {"digest": digest(1)}, uid(2): {"digest": digest(2)}}
+    # the reader stored them apart; the caller claims one digest for both
+    with pytest.raises(SpecError):
+        labelled_pack(
+            [item(1), {"uid": uid(2), "digest": digest(1)}],
+            stored={**stored, uid(2): {"digest": digest(1)}},
+        )
+    sel = knowledge((f"lesson:{uid(7)}", "the lesson", "green"))
+    lesson = sel.included[0]["digest"]
+    with pytest.raises(SpecError, match="paired with two uids"):
+        labelled_pack(
+            [{"uid": uid(1), "digest": lesson}], stored={uid(1): {"digest": lesson}}, knowledge=sel
+        )
+
+
+def test_tlp_markers_in_an_input_sections_text_raise_its_label_never_lower_it():
+    raised, _ = labelled_pack(
+        [item(1, "clear")], [item(2, "clear")], static="clear",
+        text={"findings": "TLP:AMBER advisory follows", "memory": "m"},
+    )  # fmt: skip
+    labels = {s["name"]: s["tlp"] for s in raised["provenance"]["sections"]}
+    assert labels["findings"] == "amber" and pack_label(raised) == "amber"
+    lowered, _ = labelled_pack(
+        [item(1, "amber")], [item(2, "clear")], static="clear",
+        text={"findings": "TLP:CLEAR, honest", "memory": "m"},
+    )  # fmt: skip
+    assert pack_label(lowered) == "amber"
+
+
+def test_the_pack_records_the_profile_it_was_assembled_for(reader):
+    pack, _ = labelled_pack([item(1, "clear")], [item(2, "clear")], profile=reader)
+    assert pack["profile"] == {"id": reader["id"], "digest": reader["digest"]}
+    bare, _ = assemble_pack(manifest(), inputs())
+    assert bare["profile"] is None
+    with pytest.raises(UnverifiedProfile):
+        assemble_pack(manifest(), inputs(), profile=reader.data())
 
 
 def test_an_input_uid_that_is_a_knowledge_uid_with_another_digest_is_refused():
@@ -222,10 +307,13 @@ def test_an_input_uid_that_is_a_knowledge_uid_with_another_digest_is_refused():
         labelled_pack(
             [{"uid": uid(7), "digest": digest(9)}], stored={uid(7): "green"}, knowledge=sel
         )
-    # the same pairing is fine, and one uid paired with two digests across items is not
+    # the same pairing is fine; one uid paired with two digests across items is not
     labelled_pack([{"uid": uid(7), "digest": real}], stored={uid(7): "green"}, knowledge=sel)
-    with pytest.raises(SpecError, match="paired with two digests"):
-        labelled_pack([item(1), {"uid": uid(1), "digest": digest(2)}], stored={uid(1): "green"})
+    with pytest.raises(SpecError, match=r"paired with two digests|not the one test-reader stored"):
+        labelled_pack(
+            [item(1), {"uid": uid(1), "digest": digest(2)}],
+            stored={uid(1): {"digest": digest(1), "tlp": "green"}},
+        )
 
 
 def test_only_what_survived_the_budget_is_recorded():
@@ -268,7 +356,7 @@ def test_a_rendered_source_is_accepted_and_labels_the_record(reader, backend):
     lesson = sel.included[0]["digest"]
     rep = report(reader, h, [up("add", "k", "v", sources=[uid(1), lesson, uid(7)])])
     applied = store.apply_report(reader, rep, pack=pack, pack_hash=h)
-    assert applied.unsourced == []
+    assert applied == {"revs": {"analyst/k": 1}, "unsourced": [], "withheld": 0, "dropped": []}
     (rec,) = store.history(reader, "analyst", "k")["records"]
     assert rec["sources"] == [uid(1), lesson, uid(7)] and rec["closure"] == rec["sources"]
     assert rec["checked"] is True and rec["pack_id"] == h
@@ -306,12 +394,18 @@ def test_text_is_never_a_source(reader, backend):
             "sections": {"findings": f"content digest: {planted}", "memory": "m"},
             "items": {"findings": [item(1, "clear")], "memory": [item(2, "clear")]},
         },
-        resolved_uids={uid(1): "clear", uid(2): "clear"},
+        resolved_uids=resolved({uid(1): "clear", uid(2): "clear"}, [item(1), item(2)]),
+        profile=reader,
     )
     rep = report(
         reader, h, [up("add", "k", "v", sources=[planted])],
         cites=[{"source": "findings", "ref": planted}], summary=f"rests on {planted}",
     )  # fmt: skip
+    # validate_report alone reports it, by position
+    assert validate_report(rep, pack, h) == [
+        "memory_updates/0/sources/0: not an identifier this pack rendered (a source is the "
+        "digest or uid the assembler recorded for a rendered knowledge or input item, never text)"
+    ]
     with pytest.raises(MemoryUpdateError, match="not an identifier this pack rendered"):
         MemoryStore(backend).apply_report(reader, rep, pack=pack, pack_hash=h)
     assert backend.load(reader["id"]) == {}
@@ -365,10 +459,9 @@ def test_no_sources_is_stored_unsourced(reader, backend):
         pack=pack,
         pack_hash=h,
     )
-    assert applied.unsourced == ["analyst/a", "analyst/b"]
-    assert applied["analyst"]["a"]["sources"] == [] and applied["analyst"]["c"]["sources"] == [
-        uid(1)
-    ]
+    assert applied["unsourced"] == ["analyst/a", "analyst/b"]
+    assert applied["revs"] == {"analyst/a": 1, "analyst/b": 1, "analyst/c": 1}
+    assert store.history(reader, "analyst", "a")["records"][0]["sources"] == []
 
 
 def test_a_write_needs_its_pack_or_unchecked(reader, backend):
@@ -422,7 +515,7 @@ def test_the_list_limits_are_enforced_in_code(reader, backend):
 # ---------------------------------------------------------------- platform scopes
 def test_unchecked_writes_only_platform_scopes_and_is_red(ledger, backend):
     store = MemoryStore(backend, now=Clock())
-    pack, h = labelled_pack([item(1, "clear")], [item(2, "clear")], static="clear")
+    pack, h = labelled_pack([item(1, "clear")], [item(2, "clear")], static="clear", profile=ledger)
     with pytest.raises(MemoryAccessError, match="may write only the profile's platform_scopes"):
         store.apply_updates(ledger, [up("add", "k", "v")], unchecked=True)
     with pytest.raises(MemoryAccessError, match="platform_scopes"):
@@ -446,7 +539,9 @@ def test_unchecked_writes_only_platform_scopes_and_is_red(ledger, backend):
     )
     (rec,) = store.history(ledger, FL, "k")["records"]
     assert rec["checked"] is False and rec["tlp"] == "red" and rec["sources"] == [digest(5)]
-    assert rec["pack_id"] == h and applied.unsourced == []
+    assert rec["pack_id"] == h and applied["unsourced"] == []
+    with pytest.raises(MemoryUpdateError, match="pack_id must be sha256"):
+        store.apply_updates(ledger, [up("add", "j", "v", scope=FL)], unchecked=True, pack_id="x")
     assert backend.load(ledger["id"])["exposure"] == {}  # an unchecked write exposes nothing
 
 
@@ -501,14 +596,20 @@ def test_a_source_label_raises_the_record(reader, backend):
 # ---------------------------------------------------------------- withheld reads
 def test_reads_withhold_entries_above_the_ceiling_by_count_only(backend):
     green_reader = _profile(tlp_ceiling="green", mcp=[])
-    green, hg = labelled_pack([item(1, "green")], [item(2, "clear")], static="clear")
-    amber, ha = labelled_pack([item(3, "amber")], [item(4, "clear")], static="clear")
+    green, hg = labelled_pack(
+        [item(1, "green")], [item(2, "clear")], static="clear", profile=green_reader
+    )
+    amber, ha = labelled_pack(
+        [item(3, "amber")], [item(4, "clear")], static="clear", profile=green_reader
+    )
     clock = Clock()
     store = MemoryStore(backend, now=clock)
     store.apply_updates(green_reader, [up("add", "fine", "ok")], pack=green, pack_hash=hg)
-    store.apply_updates(
+    wrote = store.apply_updates(
         green_reader, [up("add", "secret-plan-x", "amber fact")], pack=amber, pack_hash=ha
     )
+    # M1: the write result is filtered by the writer's own ceiling
+    assert wrote == {"revs": {}, "unsourced": [], "withheld": 1, "dropped": []}
     clock.tick()
     store.apply_updates(
         green_reader, [up("replace", "fine", "now amber")], pack=amber, pack_hash=ha
@@ -516,16 +617,20 @@ def test_reads_withhold_entries_above_the_ceiling_by_count_only(backend):
     clock.tick()
     store.apply_updates(green_reader, [up("add", "other", "o")], pack=green, pack_hash=hg)
     seen = store.read(green_reader, "analyst")
-    assert seen == {"other": "o"} and seen.withheld == 2
-    assert store.read(green_reader, "analyst", include_retired=True).withheld == 2
+    assert seen == {"entries": {"other": "o"}, "withheld": 2}
+    assert store.read(green_reader, "analyst", include_retired=True)["withheld"] == 2
     hist = store.history(green_reader, "analyst", "fine")
     assert [r["value"] for r in hist["records"]] == ["ok"] and hist["withheld"] == 1
+    # M2: a withheld key and a missing key answer alike, with the scope's withheld count
+    hidden = store.history(green_reader, "analyst", "secret-plan-x")
+    missing = store.history(green_reader, "analyst", "no-such-key")
+    assert hidden == missing == {"records": [], "withheld": 2}
     now = store.as_of(green_reader, "analyst", clock.t)
     assert now["entries"] == {"other": "o"} and now["withheld"] == 2 and now["compacted"] == []
     # before "fine" was replaced, it was green and readable at this ceiling
     then = store.as_of(green_reader, "analyst", T0)
     assert then["entries"] == {"fine": "ok"} and then["withheld"] == 1
-    everything = json.dumps([seen, hist, now, then, store.history(green_reader, "analyst", "x")])
+    everything = json.dumps([seen, hist, now, then, hidden, wrote])
     assert "secret-plan-x" not in everything and "amber fact" not in everything
     assert "now amber" not in everything
 
@@ -533,15 +638,15 @@ def test_reads_withhold_entries_above_the_ceiling_by_count_only(backend):
 def test_while_memory_is_red_a_reader_below_red_sees_only_withheld_counts(backend):
     green_reader = _profile(tlp_ceiling="green", mcp=[])
     store = MemoryStore(backend, now=Clock())
-    pack, h = canonical_pack()  # red: a pre-gate and unlabelled static sections
-    store.apply_updates(
+    pack, h = canonical_pack(green_reader)  # red: a pre-gate and unlabelled static sections
+    wrote = store.apply_updates(
         green_reader, [up("add", "a", "1"), up("add", "b", "2")], pack=pack, pack_hash=h
     )
-    read = store.read(green_reader, "analyst")
-    assert read == {} and read.withheld == 2
+    assert wrote["revs"] == {} and wrote["withheld"] == 2 and wrote["unsourced"] == []
+    assert store.read(green_reader, "analyst") == {"entries": {}, "withheld": 2}
     # the same memory read by its local-only (red) profile in full
     red_reader = _profile()
-    assert store.read(red_reader, "analyst") == {"a": "1", "b": "2"}
+    assert store.read(red_reader, "analyst")["entries"] == {"a": "1", "b": "2"}
 
 
 # ---------------------------------------------------------------- decision 9: exposure
@@ -644,7 +749,7 @@ def test_a_scope_has_a_byte_cap_beside_its_record_cap(backend):
     p = _profile(memory_limits={"bytes": {"analyst": 4096}})
     assert byte_cap(p, "analyst") == 4096
     assert byte_cap(_profile(), "analyst") == 2_000 * record_cap(_profile(), "analyst")
-    pack, h = labelled_pack([item(1, "clear")], [item(2, "clear")])
+    pack, h = labelled_pack([item(1, "clear")], [item(2, "clear")], profile=p)
     clock = Clock()
     store = MemoryStore(backend, now=clock)
     refused = None
@@ -657,9 +762,64 @@ def test_a_scope_has_a_byte_cap_beside_its_record_cap(backend):
             refused = exc
             break
     assert refused is not None and refused.unit == "bytes" and 0 < n < 20
-    assert "byte cap" in str(refused) and "memory_limits.bytes" in str(refused)
-    assert refused.scopes["analyst"][1] == 4096 and refused.scopes["analyst"][0] > 4096
+    assert "byte cap of 4096 bytes" in str(refused)
+    # a model scope's advice is what works: the reviewed profile or a purge, never "retire"
+    assert "raise memory_limits.bytes in the reviewed profile" in str(refused)
+    assert "operator purge" in str(refused) and "retire" not in str(refused)
+    # no byte total is reported: it would count records the writer may not read
+    assert refused.scopes == {"analyst": (None, 4096)}
     assert backend.load(p["id"]) == before  # refused whole
+
+
+def test_the_scope_byte_count_excludes_exposure(backend):
+    """A scope's byte cap counts its records only: a pack that rendered many identifiers does
+    not push the scope over, however large its exposure."""
+    p = _profile(memory_limits={"bytes": {"analyst": 4096}})
+    big = [item(n, "clear") for n in range(1, 200)]  # ~400 identifiers, an exposure of ~29 kB
+    pack, h = labelled_pack(big, [item(500, "clear")], profile=p)
+    store = MemoryStore(backend, now=Clock())
+    store.apply_updates(p, [up("add", "k", "v")], pack=pack, pack_hash=h)
+    stored = backend.load(p["id"])
+    assert len(json.dumps(stored["exposure"])) > 4096  # the exposure alone is over the scope cap
+
+
+def test_exposure_alone_can_push_the_owner_over_its_budget(backend, tmp_path):
+    """Exposures are charged once per owner (memory_limits.exposure_bytes): a new pack whose
+    exposure would cross the budget is refused and paged, even though every scope is far under
+    its own caps; the owner keeps writing from packs it already holds (the intended lockout)."""
+    from homelabnext.notify import FakeSender, Notifier
+    from homelabnext.state import StateStore
+
+    p = _profile(memory_limits={"exposure_bytes": 65536})
+    assert exposure_budget(p) == 65536 and exposure_budget(_profile()) == 50_000_000
+    first, h1 = labelled_pack([item(n, "clear") for n in range(1, 300)], [item(900)], profile=p)
+    second, h2 = labelled_pack(
+        [item(n, "clear") for n in range(1000, 1300)], [item(1900)], profile=p
+    )
+    sender = FakeSender()
+    clock = Clock()
+    store = MemoryStore(
+        backend, now=clock, notifier=Notifier(sender, StateStore(tmp_path / "n.json"))
+    )
+    store.apply_updates(p, [up("add", "a", "v")], pack=first, pack_hash=h1)
+    before = backend.load(p["id"])
+    clock.tick()
+    with pytest.raises(MemoryLimitError, match="exposure budget of 65536 bytes") as exc:
+        store.apply_updates(p, [up("add", "b", "v")], pack=second, pack_hash=h2)
+    assert exc.value.unit == "exposure" and exc.value.scopes == {"*": (None, 65536)}
+    assert "memory_limits.exposure_bytes" in str(exc.value)
+    assert backend.load(p["id"]) == before
+    assert any("pack exposures refuses writes" in m.body for m in sender.sent)
+    clock.tick()
+    store.apply_updates(p, [up("add", "c", "v")], pack=first, pack_hash=h1)  # a held pack: fine
+    assert store.read(p, "analyst")["entries"] == {"a": "v", "c": "v"}
+
+
+def test_an_exposure_budget_is_additive_in_profile_1_7():
+    p = _profile(memory_limits={"exposure_bytes": 1_000_000, "bytes": {"analyst": 8192}})
+    assert p["memory_limits"]["exposure_bytes"] == 1_000_000
+    with pytest.raises(SpecError):
+        _profile(memory_limits={"exposure_bytes": 10})  # under the schema's minimum
 
 
 def test_a_byte_cap_on_a_scope_the_profile_lacks_is_refused():
@@ -681,3 +841,165 @@ def test_both_backends_hold_the_same_sourced_history(tmp_path):
 def test_the_canonical_manifest_still_assembles_without_items():
     pack, _ = assemble_pack(manifest(), inputs())
     assert pack["provenance"]["inputs"] == [] and pack["provenance"]["knowledge"] == []
+
+
+# ---------------------------------------------------------------- M5: a pack is bound to its profile
+def test_a_pack_assembled_for_another_profile_or_none_is_refused(reader, ledger, backend):
+    store = MemoryStore(backend, now=Clock())
+    theirs, ht = labelled_pack([item(1, "clear")], [item(2, "clear")], profile=ledger)
+    unbound, hu = assemble_pack(manifest(), inputs())
+    for pack, h in ((theirs, ht), (unbound, hu)):
+        with pytest.raises(MemoryUpdateError, match="not assembled for this profile"):
+            store.apply_updates(reader, [up("add", "k", "v")], pack=pack, pack_hash=h)
+        with pytest.raises(MemoryUpdateError, match="not assembled for this profile"):
+            store.apply_report(
+                reader, report(reader, h, [up("add", "k", "v")]), pack=pack, pack_hash=h
+            )
+    assert backend.load(reader["id"]) == {}
+
+
+# ---------------------------------------------------------------- M2: refusals name positions
+def test_a_write_refusal_names_the_position_never_the_key(reader, backend):
+    pack, h = labelled_pack([item(1, "clear")], [item(2, "clear")])
+    store = MemoryStore(backend, now=Clock())
+    store.apply_updates(reader, [up("add", "secret-plan-x", "v")], pack=pack, pack_hash=h)
+    for batch, words in (
+        (
+            [up("add", "secret-plan-x", "again")],
+            "memory_updates/0: add of a key that is already live",
+        ),
+        (
+            [up("replace", "missing-plan-y", "v")],
+            "memory_updates/0: replace of a key that is not live",
+        ),
+    ):
+        with pytest.raises(MemoryUpdateError, match=words) as exc:
+            store.apply_updates(reader, batch, pack=pack, pack_hash=h)
+        assert "plan" not in str(exc.value)
+
+
+# ---------------------------------------------------------------- L2: aged_out under the ceiling
+def test_aged_out_is_said_only_when_the_aged_record_is_within_the_ceiling(backend):
+    def ledger(**extra):
+        return _profile(
+            memory_scopes=["analyst", FL], platform_scopes=[FL], memory_limits={"tombstones": {FL: 1}},
+            **extra,
+        )  # fmt: skip
+
+    red, green = ledger(), ledger(tlp_ceiling="green", mcp=[])
+    clock = Clock()
+    store = MemoryStore(backend, now=clock)
+    for k in ("a", "b", "c"):  # tombstones past the budget of 1: one ages out (a red record)
+        clock.tick()
+        store.apply_updates(
+            red, [up("add", k, "v", scope=FL), up("retire", k, scope=FL)], unchecked=True
+        )
+    t = T0 + timedelta(minutes=1)  # when "a" was added and retired: its tombstone aged out
+    assert store.as_of(red, FL, t)["aged_out"] is True
+    assert store.as_of(green, FL, t)["aged_out"] is False
+
+
+# ---------------------------------------------------------------- design 1: a range over an add
+def test_a_range_across_retire_and_add_keeps_only_the_effective_sources(ledger, backend):
+    p = _profile(
+        memory_scopes=["analyst", FL],
+        platform_scopes=[FL],
+        memory_limits={"keep_last": {FL: {"k": 1}}},
+    )
+    clock = Clock()
+    store = MemoryStore(backend, now=clock)
+    s1, s2, s3, s4 = (digest(n) for n in (1, 2, 3, 4))
+    for u in (
+        up("add", "k", "v1", scope=FL, sources=[s1]),
+        up("retire", "k", scope=FL),
+        up("add", "k", "v2", scope=FL, sources=[s2]),
+        up("replace", "k", "v3", scope=FL, sources=[s3]),
+        up("replace", "k", "v4", scope=FL, sources=[s4]),
+    ):
+        clock.tick()
+        store.apply_updates(p, [u], unchecked=True)
+    recs = store.history(p, FL, "k")["records"]
+    assert recs[-1]["closure"] == [s2, s3, s4]  # s1 was retired with its value
+    assert recs[0]["compacted"] == "range" and s1 in recs[0]["sources"]  # dependents keep it
+    assert recs[0]["effective"] == [s2, s3]
+    stored = backend.load(p["id"])
+    assert fold(stored["log"]) == stored["entries"] and stored["entries"][FL]["k"]["sources"] == [
+        s2, s3, s4
+    ]  # fmt: skip
+
+
+def test_a_range_record_keeps_at_most_256_digests_and_pack_ids_and_says_so(backend):
+    p = _profile(
+        memory_scopes=["analyst", FL], platform_scopes=[FL],
+        memory_limits={"keep_last": {FL: {"cursor-*": 1}}, "records": {FL: 2000}},
+    )  # fmt: skip
+    store = MemoryStore(backend, now=Clock())
+    store.apply_updates(
+        p, [up("add", "cursor-a", "0", scope=FL)], unchecked=True, pack_id=digest(0)
+    )
+    for n in range(1, MAX_RANGE_LIST + 3):
+        store.apply_updates(
+            p, [up("replace", "cursor-a", str(n), scope=FL)], unchecked=True, pack_id=digest(n)
+        )
+    rng = store.history(p, FL, "cursor-a")["records"][0]
+    assert rng["compacted"] == "range" and rng["truncated"] is True
+    assert len(rng["value_digests"]) == MAX_RANGE_LIST and len(rng["pack_ids"]) == MAX_RANGE_LIST
+    assert rng["pack_ids"][-1] == digest(MAX_RANGE_LIST + 1)  # the newest are kept
+    assert digest(0) not in rng["pack_ids"]
+
+
+# ---------------------------------------------------------------- design 4: unchecked overflow
+def test_an_unchecked_update_past_the_closure_cap_is_dropped_not_fatal(backend):
+    p = _profile(
+        memory_scopes=["analyst", FL], platform_scopes=[FL],
+        memory_limits={"keep_last": {FL: {"cursor-*": 2}}},
+    )  # fmt: skip
+    store = MemoryStore(backend, now=Clock())
+    ids = [digest(n) for n in range(1, 300)]
+    store.apply_updates(p, [up("add", "cursor-a", "0", scope=FL, sources=ids[:16])], unchecked=True)
+    for n in range(1, MAX_CLOSURE // 16):
+        store.apply_updates(
+            p, [up("replace", "cursor-a", str(n), scope=FL, sources=ids[16 * n : 16 * n + 16])],
+            unchecked=True,
+        )  # fmt: skip
+    got = store.apply_updates(
+        p,
+        [
+            up("replace", "cursor-a", "past", scope=FL, sources=ids[256:258]),
+            up("add", "item-b", "kept", scope=FL),
+        ],
+        unchecked=True,
+    )
+    assert len(got["dropped"]) == 1 and got["dropped"][0].startswith("memory_updates/0: ")
+    assert "closure cap of 256" in got["dropped"][0] and "cursor" not in got["dropped"][0]
+    assert got["revs"] == {"fleet-ledger/item-b": 1}  # this local-only profile reads red
+    assert store.read(p, FL)["entries"] == {
+        "cursor-a": str(MAX_CLOSURE // 16 - 1),
+        "item-b": "kept",
+    }
+
+
+# ---------------------------------------------------------------- design 5: store-side checks
+def test_the_store_refuses_a_pack_over_the_rendered_cap(reader, backend):
+    """The assembler refuses such a pack, so a pack over the cap can only be built by hand; the
+    store refuses it too, rather than store an exposure past its bound."""
+    pack, _ = labelled_pack([item(1, "clear")], [item(2, "clear")], profile=reader)
+    many = [{"section": "findings", **item(n, "clear")} for n in range(MAX_RENDERED)]
+    forged = {**pack, "provenance": {**pack["provenance"], "inputs": many}}
+    with pytest.raises(MemoryUpdateError, match="over the cap of 1024"):
+        MemoryStore(backend).apply_updates(
+            reader, [up("add", "k", "v")], pack=forged, pack_hash=digest_of(forged)
+        )
+
+
+def test_the_store_refuses_a_deferred_pack(reader, backend):
+    bad = inputs()
+    bad["pregates"] = {}
+    pack, h = assemble_pack(manifest(), bad, profile=reader)
+    assert pack["status"] == "deferred"
+    with pytest.raises(MemoryUpdateError, match="the pack was deferred"):
+        MemoryStore(backend).apply_updates(reader, [up("add", "k", "v")], pack=pack, pack_hash=h)
+    with pytest.raises(MemoryUpdateError, match="deferred"):
+        MemoryStore(backend).apply_report(
+            reader, report(reader, h, [up("add", "k", "v")]), pack=pack, pack_hash=h
+        )

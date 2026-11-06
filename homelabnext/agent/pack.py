@@ -51,14 +51,22 @@ for what the pack **rendered** (a section that survived the budget) and nothing 
   declares none;
 * each input item the caller declares for an input section (``inputs["items"]``), with its
   ``uid``, ``digest`` and ``tlp``.  The uid must be platform-issued: the caller resolves every
-  input uid through the records or lake reader and passes ``resolved_uids`` (``{uid: stored
-  label}``), and an item whose uid is not in it is refused, so the assembler stays a pure function
-  with no I/O.  The item's label is the strictest of the stored label and the caller's, so a
+  input uid through the records or lake reader and passes ``resolved_uids`` (a sealed
+  :class:`~homelabnext.agent.resolved.ResolvedUids`, ``{uid: {digest, tlp}}`` as stored), and an
+  item whose uid is not in it, or whose digest is not the stored one, is refused, so the
+  assembler stays a pure function with no I/O.  The item's label is the strictest of the stored
+  label (read as stored data: a non-canonical one is ``red``) and the caller's, so a
   caller can raise a label and never lower it; an item with neither is ``red``;
 * each rendered section's ``tlp``: a static section's is the manifest's declared label (``red``
   when absent), a pre-gate section is ``red`` (lab data), an input section is the strictest of its
   items (``red`` with none), and a knowledge section is its item's;
 * and ``tlp``, the pack's own label: the strictest of every rendered section's.
+
+An input section's label is also raised by any TLP marker in its text (:func:`homelabnext.tlp.
+markers`): text can only raise a label, never lower one.  A section the budget **trimmed** (cut
+short, not dropped) still counts every item declared for it as rendered: the assembler cannot
+tell which item a cut fell in, and counting them errs toward retracting more, never less.  A
+pack assembled with ``profile=`` records ``profile: {id, digest}``; without, ``profile: null``.
 
 These identifiers are the only things a memory update may cite as a source
 (:func:`homelabnext.agent.report.source_problems`).  A pack in which an input item's uid is also
@@ -82,8 +90,10 @@ from typing import Any
 
 from homelabnext import tlp
 
+from .compiler import VerifiedProfile, require_verified
 from .digest import canonical_json, digest_of, sha256_text
 from .errors import SpecError
+from .resolved import DIGEST, UID, ResolvedUids
 from .screen import Screener, screen_config
 
 TIERS = ("stable", "session", "volatile")
@@ -95,9 +105,6 @@ ESCAPE_PREFIX = "[escaped] "
 
 #: the most identifiers one pack may render (ADR-0037 decision 9)
 MAX_RENDERED = 1024
-#: a canonical record uid (a UUIDv7), anchored as ``ids/common`` anchors its patterns
-UID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
-DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _RED = str(tlp.Label.RED)
 
 
@@ -130,23 +137,31 @@ def rendered_count(inputs: Mapping[str, Any], knowledge: Any = None) -> int:
 def _input_items(
     manifest: Mapping[str, Any],
     inputs: Mapping[str, Any],
-    resolved: Mapping[str, Any],
+    resolved: ResolvedUids | None,
     knowledge: Any,
 ) -> dict[str, list[dict[str, str]]]:
     """The caller's input items by section, each ``{uid, digest, tlp}`` with its label clamped to
     the stored one (see the module doc).  Raises :class:`SpecError` for a malformed item, one whose
-    uid the platform did not issue, and a uid paired with two digests."""
+    uid the platform did not issue or whose digest is not the stored one, and a uid paired with
+    two digests or a digest with two uids (knowledge items included)."""
     raw = inputs.get("items")
     if raw is None:
         return {}
     if not isinstance(raw, Mapping):
         raise SpecError("inputs.items must map input section names to lists of items")
+    if not isinstance(resolved, ResolvedUids):
+        raise SpecError(
+            "input items need resolved_uids, a ResolvedUids made by resolve_input_uids from the "
+            f"rows a records or lake reader stored (not a {type(resolved).__name__})"
+        )
     kinds = {s["name"]: s["source"] for s in manifest["sections"]}
     pairs: dict[str, set[str]] = {}
+    owner: dict[str, str] = {}  # digest -> the one uid it may be paired with
     for k in knowledge.included if knowledge is not None else ():
         uid = node_uid(str(k.get("id", "")))
         if uid:
             pairs[uid] = {d for d in (k.get("digest"), k.get("file_digest")) if d}
+            owner.update(dict.fromkeys(pairs[uid], uid))
     seen: dict[str, str] = {}
     out: dict[str, list[dict[str, str]]] = {}
     for name in sorted(raw):
@@ -171,6 +186,10 @@ def _input_items(
                     "must be platform-issued (resolved through the records or lake reader), "
                     "never taken from feed content"
                 )
+            if resolved[uid].get("digest") != digest:
+                raise SpecError(
+                    f"{where}: digest is not the one {resolved.source} stored for uid {uid}"
+                )
             if uid in pairs and digest not in pairs[uid]:
                 raise SpecError(
                     f"{where}: uid {uid} is also a knowledge item's uid with a different digest; "
@@ -178,8 +197,12 @@ def _input_items(
                 )
             if seen.setdefault(uid, digest) != digest:
                 raise SpecError(f"{where}: uid {uid} is paired with two digests in one pack")
-            labels = [resolved[uid]] + ([it["tlp"]] if "tlp" in it else [])
-            items.append({"uid": uid, "digest": digest, "tlp": str(tlp.strictest(labels))})
+            if owner.setdefault(digest, uid) != uid:
+                raise SpecError(f"{where}: digest {digest} is paired with two uids in one pack")
+            labels = [tlp.read_stored(resolved[uid].get("tlp"))]
+            if "tlp" in it:  # a caller's label may raise the stored one, never lower it
+                labels.append(tlp.read_stored(it["tlp"]))
+            items.append({"uid": uid, "digest": digest, "tlp": str(max(labels))})
         out[name] = items
     return out
 
@@ -267,14 +290,19 @@ def assemble_pack(
     denylist: Iterable[str] | None = None,
     knowledge: Any = None,
     screener: Screener | None = None,
-    resolved_uids: Mapping[str, Any] | None = None,
+    resolved_uids: ResolvedUids | None = None,
+    profile: VerifiedProfile | None = None,
 ) -> tuple[dict, str]:
     """Return ``(pack, hash)``.  Does no I/O and does not mutate its arguments.
 
     ``denylist``: deny-list lines whose terms are redacted from input sections (see module doc).
     ``knowledge``: a :class:`~homelabnext.agent.knowledge.Selection` to add (see module doc).
-    ``resolved_uids``: ``{uid: stored label}`` of the input items' uids the caller resolved
-    through the platform's readers; an input item whose uid is not in it is refused.
+    ``resolved_uids``: a :class:`~homelabnext.agent.resolved.ResolvedUids`, the stored
+    ``{digest, tlp}`` of each input item's uid as a records or lake reader resolved it; needed
+    whenever ``inputs`` declares ``items``.
+    ``profile``: the :class:`~homelabnext.agent.compiler.VerifiedProfile` the pack is assembled
+    for; the pack records its ``id`` and ``digest`` (``pack["profile"]``), and the memory store
+    applies a report only with a pack bound to the reporting profile.
     ``screener``: the :class:`~homelabnext.agent.screen.Screener` to redact with, kept by the
     caller across packs so its labels stay stable over them (the same value, the same label,
     the screener's own contract); by default each pack gets a fresh one, built from the
@@ -292,6 +320,10 @@ def assemble_pack(
             )
         if s.get("tier") not in _RANK:
             raise SpecError(f"section {s.get('name')!r}: tier must be one of {list(TIERS)}")
+    bound = None
+    if profile is not None:
+        require_verified(profile, "assemble_pack")
+        bound = {"id": profile["id"], "digest": profile["digest"]}
     static_labels = {s["name"]: _static_label(s) for s in manifest["sections"]}
     count = rendered_count(inputs, knowledge)
     if count > MAX_RENDERED:
@@ -299,7 +331,7 @@ def assemble_pack(
             f"the pack would render {count} identifiers, over the cap of {MAX_RENDERED} "
             "(ADR-0037 decision 9): select fewer knowledge or input items"
         )
-    input_items = _input_items(manifest, inputs, resolved_uids or {}, knowledge)
+    input_items = _input_items(manifest, inputs, resolved_uids, knowledge)
     try:
         screen_cfg = screen_config(manifest)
         deny = list(denylist or [])
@@ -444,7 +476,7 @@ def assemble_pack(
 
     rendered = "".join(fence(s) for s in sections)
     stable_prefix = "".join(fence(s) for s in sections if s["tier"] == "stable")
-    provenance = _provenance(items, static_labels, input_items, knowledge)
+    provenance = _provenance(items, static_labels, input_items, knowledge, supplied)
     pack = {
         "manifest": manifest["id"],
         "persona": manifest["persona"],
@@ -459,6 +491,7 @@ def assemble_pack(
         "budget": {"limit_chars": limit, "used_chars": total, "tiers_cut": touched},
         "stable_prefix_digest": sha256_text(stable_prefix),
         "screen": screen_record,
+        "profile": bound,
         "provenance": provenance,
         "text": rendered,
     }
@@ -472,15 +505,17 @@ def _provenance(
     static_labels: Mapping[str, str],
     input_items: Mapping[str, list[dict[str, str]]],
     knowledge: Any,
+    supplied: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """The pack's ``provenance`` block over the ``rendered`` sections only (see the module doc)."""
+    """The pack's ``provenance`` block over the ``rendered`` sections only (see the module doc).
+    An input section's label is raised, never lowered, by any TLP marker in its supplied text."""
     by_section = {k["section"]: k for k in (knowledge.included if knowledge is not None else ())}
     sections, known, inputs = [], [], []
     for i in rendered:
         name, source = i["name"], i["source"]
         if source == "knowledge":
             k = by_section[name]
-            label = str(tlp.read(k["tlp"])) if "tlp" in k else _RED
+            label = str(tlp.read_stored(k["tlp"])) if "tlp" in k else _RED
             entry = {"section": name, "id": k["id"]}
             uid = node_uid(str(k["id"]))
             if uid:
@@ -492,7 +527,10 @@ def _provenance(
         elif source == "input":
             items = input_items.get(name, [])
             inputs += [{"section": name, **it} for it in items]
-            label = str(tlp.strictest(it["tlp"] for it in items)) if items else _RED
+            found = [tlp.read_stored(it["tlp"]) for it in items]
+            if found:  # markers in the text can only raise it (decision 8)
+                found += tlp.markers(supplied.get(name) or "")
+            label = str(max(found)) if found else _RED
         elif source == "static":
             label = static_labels[name]
         else:  # a pre-gate verdict is lab data (ADR-0033 decision 2)
@@ -524,7 +562,7 @@ def rendered_identifiers(pack: Mapping[str, Any]) -> dict[str, str]:
                 ident = item.get(k)
                 if isinstance(ident, str) and ident:
                     prev = out.get(ident)
-                    label = str(tlp.read(item.get("tlp")))
+                    label = str(tlp.read_stored(item.get("tlp")))
                     out[ident] = label if prev is None else str(tlp.strictest([prev, label]))
     return out
 
@@ -532,4 +570,14 @@ def rendered_identifiers(pack: Mapping[str, Any]) -> dict[str, str]:
 def pack_label(pack: Mapping[str, Any]) -> str:
     """The pack's label (its ``provenance.tlp``); ``red`` for a pack that carries none."""
     prov = pack.get("provenance")
-    return str(tlp.read(prov.get("tlp"))) if isinstance(prov, Mapping) and "tlp" in prov else _RED
+    if isinstance(prov, Mapping) and "tlp" in prov:
+        return str(tlp.read_stored(prov.get("tlp")))
+    return _RED
+
+
+def pack_profile(pack: Mapping[str, Any]) -> tuple[str, str] | None:
+    """``(id, digest)`` of the profile ``pack`` was assembled for, or None when it names none."""
+    bound = pack.get("profile")
+    if isinstance(bound, Mapping) and isinstance(bound.get("id"), str):
+        return bound["id"], str(bound.get("digest"))
+    return None

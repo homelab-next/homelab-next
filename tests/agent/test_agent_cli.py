@@ -136,6 +136,24 @@ def test_pack_deferred_exit_3(work, capsys):
     assert "deferred: required pre-gate" in capsys.readouterr().err
 
 
+def test_pack_refuses_input_items(work, capsys):
+    """An input item's uid must be resolved by a records or lake reader (ADR-0037 decision 7);
+    the CLI runs none, so it refuses ``items`` outright rather than failing deep inside."""
+    with_items = inputs()
+    with_items["items"] = {
+        "findings": [
+            {"uid": "01900000-0000-7000-8000-000000000001", "digest": "sha256:" + "1" * 64}
+        ]
+    }
+    (work / "inputs.json").write_text(json.dumps(with_items))
+    rc = cli.main(
+        ["agent", "pack", str(work / "manifest.yml"), "--inputs", str(work / "inputs.json")]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "input items need a records/lake reader" in err and "not supported from the CLI" in err
+
+
 def test_pack_invalid_manifest_exit_1(work, capsys):
     m = manifest()
     m["sections"][0]["tier"] = "eternal"

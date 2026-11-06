@@ -49,6 +49,7 @@ from .memory import MemoryAccessError, MemoryStore, MemoryUpdateError
 from .pack import TIERS, assemble_pack
 from .readers import ToolClasses, broker_problems, grant_problems, lint_paths, reader_problems
 from .report import validate_report
+from .resolved import ResolvedUids, resolve_input_uids
 from .screen import Screener, screen_text
 from .terms import TERMS_SECTION, terms_text
 
@@ -76,6 +77,7 @@ __all__ = [
     "Part",
     "PartsLibrary",
     "ReaderViolation",
+    "ResolvedUids",
     "Screener",
     "SpecError",
     "ToolClasses",
@@ -96,6 +98,7 @@ __all__ = [
     "profile_digest",
     "reader_problems",
     "render_access_block",
+    "resolve_input_uids",
     "screen_text",
     "session_problems",
     "sha256_text",

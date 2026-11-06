@@ -499,7 +499,7 @@ def select_knowledge(
                 **({"file_digest": own} if own else {}),
                 # the record's or page's declared label, never one read from its text; a node
                 # that declares none is red (ADR-0037 decision 8)
-                "tlp": str(tlp.read(node.attrs["tlp"])) if "tlp" in node.attrs else "red",
+                "tlp": str(tlp.read_stored(node.attrs["tlp"])) if "tlp" in node.attrs else "red",
             }
 
     for nid, ri in unreadable.items():  # a rule asking for the whole thing cannot have it
