@@ -31,6 +31,8 @@
   ansible.builtin.apt:
     name: "trivy={{ trivy_version }}"
     allow_change_held_packages: true
+    # a guest that took the repository's newest before the pin may hold a newer package
+    allow_downgrade: true
     update_cache: true
 
 - name: Hold the pinned version
