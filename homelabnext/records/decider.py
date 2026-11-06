@@ -17,8 +17,8 @@ could rewrite a note after it was approved and :meth:`Decider.complete` would ac
 Instead the decider reads the note once, through a descriptor opened without following a symlink,
 refuses anything that is not a regular file with exactly one link, validates those bytes, writes
 the same bytes to a **new file** in the destination lane (created by the decider's user, so owned
-by it) and only then unlinks the source.  What lands in ``decided/`` is exactly what was
-validated, and nothing the agent holds refers to it.  The guarantee holds only when the decider
+by it) and only then removes the source (claimed first, see below).  What lands in ``decided/``
+is exactly what was validated, and nothing the agent holds refers to it.  The guarantee holds only when the decider
 runs as its own OS user: run as the agent's user it owns the copy too.  The command is
 ``hnx records decide approve|deny|complete`` (:func:`main`).
 
@@ -32,9 +32,20 @@ agents read ``decided/`` through the group of the decider's directories, so give
 agents' group (setgid on the lane directories keeps it on new files).  A decider umask of ``077``
 leaves the copies unreadable to :class:`~homelabnext.records.RecordsReader`.
 
-The source is unlinked only while its inode is still the one read.  Between that check and the
-unlink an agent can swap in another file at the same name, which the decider then deletes; only
-the agent's own replacement is lost, so this is documented rather than closed.
+Exactly one decision wins.  Before it files anything, a move claims the source: it renames the
+inbox entry into ``decided/.claims/`` (the decider's own directory) under a name no other move
+uses.  ``rename(2)`` is atomic, so of two movers raced on one note exactly one claims it; the
+other finds the name gone and fails with :class:`FileNotFoundError` having filed nothing.  Only
+then are the sidecar and the copy written, and the claimed entry is unlinked last.  A move that
+fails after its claim removes its copy and sidecar and renames the claimed entry back.  A crash
+between the claim and the end of the move leaves the claimed entry in ``decided/.claims/`` for the
+operator to look at; the note is no longer in the inbox, so it cannot be decided twice.
+
+The claimed entry is checked against the inode that was read.  An agent that swapped in another
+file after the read has its replacement put back at the inbox name, and the decision is on the
+bytes that were read, unless a decided lane or another move's claim now holds the name: then
+another decider took the inode that was read, and this move fails having filed nothing.  Putting an entry back never replaces a name that has reappeared meanwhile; it is
+then left in ``decided/.claims/`` and reported.
 """
 
 from __future__ import annotations
@@ -44,6 +55,7 @@ import contextlib
 import errno
 import json
 import os
+import secrets
 import stat
 import sys
 from collections.abc import Callable
@@ -65,6 +77,8 @@ from .notes import (
 )
 
 APPROVED, DENIED, COMPLETED = DECIDED_LANES
+#: where a move claims its source (a rename, so exactly one of two raced moves gets it)
+CLAIMS = "decided/.claims"
 
 #: what open(O_NOFOLLOW) fails with on a symlink: ELOOP (Linux, POSIX), EMLINK (FreeBSD),
 #: EFTYPE (NetBSD, macOS); any other error is reported as itself
@@ -244,31 +258,62 @@ class Decider:
             side["reason"] = reason
         if via:
             side["via"] = via
+        claim_dir = self.root / CLAIMS
+        claim_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        claim = claim_dir / f"{note.name}.{os.getpid()}.{secrets.token_hex(8)}"
+        # the claim: atomic, so of two moves raced on this note exactly one gets past here.  A
+        # source the decider may not move (EACCES, EPERM: a sticky inbox it does not own) is
+        # refused here, before anything is filed.
+        try:
+            os.rename(src, claim)
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"{note.lane}/{note.name} does not exist (already decided?)"
+            ) from None
+        cur = os.lstat(claim)
+        swapped = (cur.st_dev, cur.st_ino) != ident
+        if swapped:
+            # not the inode that was read: put the replacement back where the agent left it.  If
+            # the inode read is gone because another decider claimed or filed it, this move lost
+            _unclaim(claim, src)
+            taken = [
+                lane for lane in DECIDED_LANES if os.path.lexists(self.root / lane / note.name)
+            ]
+            if any(c.startswith(f"{note.name}.") for c in os.listdir(claim_dir)):
+                taken.append(CLAIMS)  # claimed by a move still in flight
+            if taken:
+                raise FileNotFoundError(
+                    f"{note.lane}/{note.name} was decided meanwhile (in {', '.join(taken)})"
+                )
         sidecar = dest_dir / f"{note.name}.decision.json"
-        tmp = dest_dir / f".{note.name}.{os.getpid()}.decision.tmp"
-        tmp.write_text(json.dumps(side, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-        os.chmod(tmp, self.mode & ~_umask())
-        os.replace(tmp, sidecar)
         created = False
         try:
+            tmp = dest_dir / f".{note.name}.{os.getpid()}.decision.tmp"
+            tmp.write_text(json.dumps(side, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+            os.chmod(tmp, self.mode & ~_umask())
+            os.replace(tmp, sidecar)
             _create(dest_dir, note.name, data, self.mode)
             created = True
-            try:
-                cur = os.lstat(src)
-            except FileNotFoundError:
-                cur = None
-            if cur is not None and (cur.st_dev, cur.st_ino) == ident:
-                os.unlink(src)
-        except OSError:
-            # all or nothing, as the rename was: a source the decider may not unlink (EACCES,
-            # EPERM: a sticky inbox it does not own) leaves no copy behind in dest_lane
+        except BaseException:
+            # all or nothing: no copy and no sidecar stay behind, and the note is back in its lane
             if created:
                 with contextlib.suppress(FileNotFoundError):
                     os.unlink(dest)
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(sidecar)
+            if not swapped:
+                _unclaim(claim, src)
             raise
-        if cur is not None and (cur.st_dev, cur.st_ino) != ident:
+        if not swapped:
+            try:
+                os.unlink(claim)
+            except OSError as ex:
+                print(
+                    f"[records] WARNING: {dest_lane}/{note.name} is filed but its claimed source "
+                    f"{claim.relative_to(self.root)} could not be removed: {ex}",
+                    file=sys.stderr,
+                )
+        else:
             # swapped after it was read: the decision is on the bytes that were read (now in
             # dest_lane); the replacement is left where it is, for the operator to look at
             print(
@@ -284,6 +329,19 @@ def _umask() -> int:
     cur = os.umask(0)
     os.umask(cur)
     return cur
+
+
+def _unclaim(claim: Path, src: Path) -> None:
+    """Put a claimed entry back at ``src``.  Never over a name that has reappeared meanwhile:
+    then the entry stays in the claims directory and that is reported."""
+    if not os.path.lexists(src):
+        with contextlib.suppress(OSError):
+            os.rename(claim, src)
+            return
+    print(
+        f"[records] WARNING: could not put {claim.name} back at {src}; it is left in {claim.parent}",
+        file=sys.stderr,
+    )
 
 
 def _create(dest_dir: Path, name: str, data: bytes, mode: int) -> None:

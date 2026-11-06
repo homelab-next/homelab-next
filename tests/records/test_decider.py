@@ -201,16 +201,21 @@ def test_read_then_approve_files_what_read_returned(rec, tree):
     assert d.approve(p.name).read_bytes() == original
 
 
-def test_a_failed_unlink_leaves_nothing_in_the_decided_lane(rec, tree, monkeypatch):
+def _refuse_moving(monkeypatch, p):
+    """The source may not be moved out of the inbox (a sticky inbox the decider does not own)."""
+    real_rename = os.rename
+
+    def refuse(src, *a, **kw):
+        if str(src) == str(p):
+            raise PermissionError(13, "Permission denied", str(src))
+        return real_rename(src, *a, **kw)
+
+    monkeypatch.setattr(os, "rename", refuse)
+
+
+def test_a_refused_claim_leaves_nothing_in_the_decided_lane(rec, tree, monkeypatch):
     p = _propose(rec)
-    real_unlink = os.unlink
-
-    def refuse(path, *a, **kw):
-        if str(path) == str(p):
-            raise PermissionError(13, "Permission denied", str(path))
-        return real_unlink(path, *a, **kw)
-
-    monkeypatch.setattr(os, "unlink", refuse)
+    _refuse_moving(monkeypatch, p)
     with pytest.raises(PermissionError):
         _decider(tree).approve(p.name)
     monkeypatch.undo()
@@ -266,13 +271,57 @@ def test_operator_command_reports_os_errors_and_an_empty_by(rec, tree, monkeypat
     root = str(tree)
     assert decide_main(["approve", p.name, "--root", root, "--by", ""]) == 2
     assert "decided_by" in capsys.readouterr().err
-    real_unlink = os.unlink
-
-    def refuse(path, *a, **kw):
-        if str(path) == str(p):
-            raise PermissionError(13, "Permission denied", str(path))
-        return real_unlink(path, *a, **kw)
-
-    monkeypatch.setattr(os, "unlink", refuse)
+    _refuse_moving(monkeypatch, p)
     assert decide_main(["approve", p.name, "--root", root, "--by", "op"]) == 1
     assert "refused" in capsys.readouterr().err
+
+
+def test_of_an_approve_and_a_deny_raced_on_one_note_exactly_one_wins(rec, tree):
+    """Both deciders load the note; the second to claim it finds it gone and files nothing."""
+    p = _propose(rec)
+    first, second = _decider(tree), _decider(tree)
+    first.read("inbox", p.name)
+    second.read("inbox", p.name)
+    dest = first.approve(p.name)
+    with pytest.raises(FileNotFoundError):
+        second.deny(p.name, "raced")
+    assert dest.exists()
+    assert os.listdir(tree / "decided" / "denied") == []
+    assert os.listdir(tree / "decided" / ".claims") == []
+
+
+def test_a_swap_after_another_decider_filed_the_note_is_refused(rec, tree, capsys):
+    """The inode read was taken by another decider and the agent wrote a new one at the name:
+    the claim gets the replacement, which is put back, and this move fails."""
+    p = _propose(rec)
+    original = p.read_bytes()
+    first, second = _decider(tree), _decider(tree)
+    second.read("inbox", p.name)
+    held = os.open(p, os.O_RDONLY)  # keeps the inode read alive, so the new one cannot reuse it
+    try:
+        first.approve(p.name)
+        p.write_bytes(original)  # a new inode at the decided name
+    finally:
+        os.close(held)
+    with pytest.raises(FileNotFoundError, match="decided meanwhile"):
+        second.deny(p.name, "raced")
+    assert p.read_bytes() == original
+    assert os.listdir(tree / "decided" / "denied") == []
+
+
+def test_a_move_failing_after_its_claim_puts_the_note_back(rec, tree, monkeypatch):
+    p = _propose(rec)
+    original = p.read_bytes()
+    import homelabnext.records.decider as decider
+
+    def fail(*a, **kw):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(decider, "_create", fail)
+    with pytest.raises(OSError, match="No space"):
+        _decider(tree).approve(p.name)
+    monkeypatch.undo()
+    assert p.read_bytes() == original
+    assert os.listdir(tree / "decided" / "approved") == []
+    assert os.listdir(tree / "decided" / ".claims") == []
+    assert _decider(tree).approve(p.name).read_bytes() == original
