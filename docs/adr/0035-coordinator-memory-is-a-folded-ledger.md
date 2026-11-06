@@ -1,5 +1,5 @@
 ---
-summary: The coordinator keeps a bounded ledger of fleet work, folded by code from outputs; no cross-agent memory reads, no memory kept in model state.
+summary: The coordinator keeps a bounded ledger of fleet work, folded by code from outputs; a reader keeps it, an actor acts on its handoff; no memory in model state.
 summary_of: outline:sha256:d1336261c3f7712e
 ---
 # ADR-0035: The coordinator remembers the fleet as a ledger folded from outputs
@@ -14,6 +14,11 @@ summary_of: outline:sha256:d1336261c3f7712e
 - **Amended:** 2026-11-05 by ADR-0037 (memory entries carry sources, history, a TLP label and
   revision, and an operator can retract a source and everything built on it; ADR-0037 decision 17
   lists what changes in decisions 4, 5, 7, 8 and 10)
+- **Amended:** 2026-11-06 (review 2, by the operator's decision: the warm and cold tiers are live
+  keys, which ADR-0037's compaction keeps whole, so ADR-0037 needs no opt-out; the coordinator is
+  two profiles, a reader that owns the ledger and an actor that acts through the broker, joined by
+  a G-04 handoff; see the amendments under decisions 1, 3, 5, 7, 8, 9, 11 and 13 and under
+  Consequences)
 - **Amended-by:** ADR-0037
 
 ## Context
@@ -63,6 +68,38 @@ The same objection applies here, more strongly.
 1. **The coordinator is a profile like any other.** It is compiled under the policy ceiling, verified
    against the lock, and acts only through the broker (ADR-0030). It is not the orchestration
    controller, which admits sessions, and not the component reserved as ADR-0026.
+
+   *Amendment (2026-11-06, review 2):* the coordinator is **two profiles joined by a G-04
+   handoff** ([Agent profiles](../agent.md), G-03 and G-04), not one. Opening another profile's
+   report text in levels (decision 5) reads free text that a reader of untrusted content may have
+   been talked into writing, so the profile that does it is a reader (G-03): it may hold no
+   `reader_forbidden` class, and `hnx-broker` is `record-write` and `exec`. The compiler cannot
+   infer that: it knows a reader only by the `reads_untrusted` flag (absent means `true`) and by a
+   context manifest's `source: input` sections, and a report opened by digest is neither. So each
+   spec declares it:
+   - **`coordinator`, the reader: `reads_untrusted: true`.** It owns `fleet-ledger` and
+     `coordinator-notes`, is the profile the fold writes as (decision 4), sees the ledger and
+     opens reports in levels (decisions 5 and 6). It holds no broker grant. What it wants done it
+     states in its `report_result.output`, which must satisfy the handoff's closed
+     `output_schema`.
+   - **`coordinator-actor`, the actor: `reads_untrusted: false`.** It holds the broker grants
+     that dispatching profiles and decisions 9 and 11 need, and nothing else: no `source: input`
+     section, no memory scope, no read of reports, the ledger or the context store. Its only input
+     is the reader's output that `homelabnext.agent.handoff.accept` accepted, and it acts only
+     through `act`, on params `build_request` computes from that output.
+   - **The handoff** (`schemas/agent/handoff`) binds every action's params with `$output.<path>`
+     references to constrained fields only: item ids, profile ids, ledger keys and report digests
+     as closed patterns; statuses and pattern kinds as enums; counts as integers. A `summary`, an
+     `unknowns` entry or any other unconstrained string never becomes a param.
+     `declaration_problems` checks it offline: the reader passes G-03, the actor is
+     `reads_untrusted: false`, the actor's receive ceiling is `red` like the reader's (decision
+     12), and every action is in the broker manifest and granted to the actor at its tier.
+   - **What this does not stop.** A poisoned report can still steer what the reader asks for,
+     within those enums and patterns: which item to dispatch, which keys to cite. It cannot put
+     words into a request, and a risky action still needs its bound approval (every record does,
+     decision 9). That residue is the G-04 bound, stated here so it is not read as a guarantee.
+
+   Elsewhere in this ADR, "the coordinator" is the reader unless a decision names the actor.
 2. **No cross-agent memory reads.** M-09 stays as built, and the coordinator is granted no read of
    another profile's `MemoryStore`. It learns what other profiles do only from their outputs:
    - the projects change feed;
@@ -74,6 +111,19 @@ The same objection applies here, more strongly.
    - one key per source cursor (`cursor-<source>`).
 
    An item's key is retired when the item closes. Its tombstone is the recent history.
+
+   *Amendment (2026-11-06, review 2):* a tombstone is **not** the recent history. ADR-0037
+   (decision 6) compacts a retired key in a platform scope whole, to one tombstone that keeps the
+   value digests but not the values, and ages tombstones out oldest first, whatever the item was.
+   A tombstone therefore has nothing to classify or render. When an item closes, the fold, in the
+   same `apply_updates` call, retires its hot key and **adds a warm key** holding the closed value
+   (decision 8, amended). The scope's keys are:
+   - hot: `task-<uid>`, `run-<id>` and `cursor-<source>`;
+   - warm: `warm-` and the hot key (`warm-task-<uid>`, `warm-run-<id>`);
+   - cold: `rollup-<profile>-<period>`, and `exc-` and the hot key (`exc-task-<uid>`).
+
+   Tombstones stay what ADR-0037 makes them: history for `history`, `as_of` and `dependents`. The
+   fold and the renderer never read them.
 4. **Code folds the ledger, not the model.** Each cycle, a library function:
    - reads every source from its stored cursor;
    - computes the updates;
@@ -96,6 +146,12 @@ The same objection applies here, more strongly.
    are free text that a reader of untrusted content can be talked into writing (G-04, the same
    rule as a handoff's parameters). The coordinator reaches a report's text through its digest and
    cite, in levels.
+
+   *Amendment (2026-11-06, review 2):* that reach is why the coordinator is a reader (decision 1,
+   amended). A warm value adds `class` (`keep` or `count`, decision 8) and `closed_at`; a hot
+   value adds `reopened`, how many times the item reopened. An exception key's value is the
+   one-line object of decision 8: id, status, `closed_at` and its last report's digest. All are
+   constrained fields; the rule above is unchanged.
 6. **The model sees the ledger in levels.** The coordinator's context pack carries a rendered
    summary of the ledger:
    - counts by status;
@@ -115,6 +171,11 @@ The same objection applies here, more strongly.
 
    Within a level, newer entries go first: age only breaks ties. When entries are left out, the
    pack says how many and at which level (M-08: never cut silently).
+
+   *Amendment (2026-11-06, review 2):* level 4 is the live `warm-*` keys of class `keep` and the
+   `exc-*` keys (decision 8, amended), and level 5 is the `rollup-*` keys and the `count` warm
+   keys, as counts. The renderer reads live keys only (`read` without `include_retired`), never a
+   tombstone.
 8. **What the ledger keeps is limited by size, removed by priority, and classified by code.**
    - **Retention class.** The fold gives every retired entry one class, computed from its
      constrained fields; the model never sets it:
@@ -134,6 +195,32 @@ The same objection applies here, more strongly.
    - **Model nominations.** The coordinator's model may nominate an item for `keep` by writing the
      item's key into `coordinator-notes` (decision 10). The fold reads only the key, never text,
      so a nomination cannot put free text into the ledger.
+
+   *Amendment (2026-11-06, review 2):* the tiers are defined on what ADR-0037 keeps. Every tier is
+   **live keys**, and "removes" means what ADR-0037 decision 17 says: the fold retires the key,
+   and ADR-0037 compacts it whole. No tier lives in a tombstone, so ADR-0037's whole compaction
+   and its oldest-first tombstone age-out need no opt-out, and the age-out order does not touch
+   what the tiers keep.
+   - **Hot tier.** Live `task-*` and `run-*` keys, as before, and the `cursor-*` keys, which have
+     a `keep_last` pattern (ADR-0037 decision 17).
+   - **Warm tier.** Live `warm-*` keys, added once when an item closes and never replaced, so they
+     need no `keep_last`. The fold computes the class at close from the closing value and the hot
+     value's `reopened` count; a nomination counts as at close. `drop` is no longer a class that
+     sits in warm: when an item with a warm key reopens, the fold retires that warm key in the
+     same call that adds the hot key again and raises `reopened`, so the item's next close is
+     `keep`. (That is "drop first" at its limit: a superseded state leaves at once.) Past the warm
+     cap the fold picks victims by class, `count` before `keep`, oldest `closed_at` first within a
+     class, and in the same call retires each and writes its cold form.
+   - **Cold tier.** Live `rollup-<profile>-<period>` keys, replaced on every count that lands, so
+     the profile gives `rollup-*` a `keep_last` pattern; and live `exc-*` keys, added once. Merging
+     rollups into a coarser period retires the finer keys and adds or replaces the coarser one in
+     one call. The fold never retires an `exc-*` key. An operator's `retract` or `purge` may
+     retire any of these keys; the fold does not add one back (ADR-0037 decision 14).
+   - **Sizing.** `fleet-ledger`'s record cap (ADR-0037 decision 6) must hold the work in flight,
+     the warm and cold caps, `keep_last` + 1 records for each replaced key, and the tombstone
+     budget. The profile sets `memory_limits.records`, `tombstones`, `bytes` and `keep_last` for
+     the scope beside the warm and cold caps, and a test checks that the caps fit under the record
+     and byte caps, so the fold meets its own caps before the store refuses a write.
 9. **Permanent memory is a record, and a human approves it.** The coordinator's memory is not
    where lasting knowledge lives. When the fold sees a pattern, such as the same kind of exception
    recurring past a threshold in the warm or cold tier, the coordinator files a proposal for a
@@ -142,6 +229,11 @@ The same objection applies here, more strongly.
    approves each one before it becomes a record.** The coordinator gets no grant that files a
    record without approval. Loosening this later is a change to the broker manifest's grants and
    tiers, recorded by amending this ADR.
+
+   *Amendment (2026-11-06, review 2):* the actor files the proposal (decision 1, amended), from
+   the reader's output: the pattern kind (an enum), the ledger keys and the report digests. Code
+   builds the proposal's text from those fields. The reader's reasoning reaches the human only by
+   the digest of the reader's report, which the proposal cites, never as text in the request.
 10. **Judgements are written apart from tracking.** The coordinator's model may keep its own notes
    (what to try next, what to watch) in a second scope, `coordinator-notes`, through the
    `memory_updates` of its own report, as M-09 already allows. It cannot write `fleet-ledger`: the
@@ -150,11 +242,20 @@ The same objection applies here, more strongly.
    the broker's finding lane. It carries a `summary:` line (ADR-0032 decision 6 rules) and names
    the ledger keys it acted on and the broker requests it filed. The ledger records *what* changed;
    the journal records *why*. A cycle that did nothing still files a note.
+
+   *Amendment (2026-11-06, review 2):* the actor files the journal note. Code builds it, its
+   `summary:` line included, from the accepted output's constrained fields and the broker
+   requests the actor filed, and it cites the digest of the reader's report that the handoff
+   accepted. The *why* is that report, opened in levels, not text copied into the note. A cycle
+   whose output asks for nothing still hands off, and the actor still files the note.
 12. **TLP.** The ledger and the journal take the strictest label among their inputs (ADR-0033
     decision 4). With the lab's own data that is `red`, so the coordinator's ceiling is `red`, and
     anything it passes on goes through the reader filters.
 13. **The coordinator has no `memory.write` grant.** Its durable state lives only in `MemoryStore`.
     The general decision on the `memory.write` lane stays open for other profiles.
+
+    *Amendment (2026-11-06, review 2):* neither profile has one. The reader holds no broker grant
+    at all, and the actor has broker grants but no memory.
 14. **Agent memory is never kept in model state.** Weights, recurrent state and a key-value cache
     saved between sessions are not memory backends. An engine feature that offers them is not used
     for agent memory. A `MemoryBackend` (`InMemoryBackend` or `FileBackend` today) is the only
@@ -199,6 +300,23 @@ The same objection applies here, more strongly.
   - Whether the context store indexes the broker's data root, so that journal notes are served in
     levels like files in the checkout.
   - The `memory.write` lane for other profiles.
+- *Amendment (2026-11-06, review 2):*
+  - **Easier:** the coordinator meets G-03 and G-04 as built. The profile that reads other
+    profiles' text holds no acting grant, and the profile that acts never reads it, so the
+    compiler, `verify_profile` and `hnx agent lint` check the split with the rules every profile
+    already passes. The tiers keep their values in live keys, so ADR-0037's compaction and
+    retraction apply to them unchanged. An auditor reads the ledger's history with ADR-0037's
+    `history` and `as_of`, not its tombstones, whose values are gone.
+  - **Harder:** two profiles, a handoff and its closed output schema to keep in step; each new
+    action the coordinator needs is a reviewed handoff change. A poisoned report can still choose
+    among the actions and values the schema allows (decision 1, amended). Each warm entry is a
+    live key, so the warm cap counts against the scope's record cap (decision 8, amended).
+  - **Obliges us to maintain, none of it built yet:** the two specs with `reads_untrusted`
+    declared; the handoff and its output schema; a test that the reader holds no
+    `reader_forbidden` class and that `declaration_problems` is empty for the handoff; the warm,
+    cold and reopen rules of decision 8 (amended), with tests that the renderer and the fold read
+    no tombstone, that a reopened item's warm key is retired in the same call, and that the caps
+    fit under the scope's record and byte caps.
 
 ## Alternatives
 
@@ -223,5 +341,14 @@ The same objection applies here, more strongly.
   nominate a key (decision 8).
 - **File lessons from patterns without approval.** It would be faster, but a lesson changes what
   every later session reads, so a wrong one spreads. Rejected for now (decision 9).
+- **Give ADR-0037 an opt-out** (review 2): a per-scope switch that keeps a retired key's values
+  through whole compaction, and a tombstone age-out that knows retention classes. The memory store
+  would learn a ledger's classes, and its bound would have a scope where it does not hold.
+  Rejected for live warm and cold keys (decision 8, amended).
+- **One coordinator profile** (review 2). As a reader it may hold no broker grant, so decisions 9
+  and 11 cannot be built. As an actor (`reads_untrusted: false`) it would open text a reader of
+  untrusted content wrote and act on what it read, which is the steering G-04 exists to stop, and
+  the compiler would not notice. Rejected for a reader and an actor joined by a handoff (decision
+  1, amended).
 - **A vector store over all fleet output.** This brings semantic recall over a corpus that is
   already structured by ids and status. ADR-0032's reasoning applies. Rejected.
