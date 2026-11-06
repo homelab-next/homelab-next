@@ -1,0 +1,567 @@
+# SPDX-License-Identifier: Apache-2.0
+# The memory replay's golden answers (ADR-0037 decision 16): one per step and question of
+# fixture.yml, under the same name, in fixture form (uid:N, digest:N, mem:<who>/..., times of
+# day; a record's pack is named by the fixture step that first assembled it, and an operator's
+# user is <operator>).  Each was checked by hand against the ADR when it was written:
+#
+# - as-of-*: what the profile believed at T, rebuilt from the log (decision 5); as-of-0950-after
+#   still shows a and b, retracted later, because as_of shows belief at T (follow-up 1).
+# - history-*: every record, in order: rev never restarts, a replace keeps the closure of the
+#   sources since the last add (decision 10), a verify takes no value, and only the verifier
+#   sets verified_at (decision 15); a retraction's retire record names its reason and operator.
+# - dependents-*: b is cited one hop through memory (its closure holds a@1's), d is exposed one
+#   hop through memory (its pack's memory block showed a@1), e is exposed by rendering uid:1,
+#   and the ledger's unchecked item-1 is cited with checked: false (decision 13).
+# - retract-uid-1: cited entries are retired across owners, exposed ones are not without
+#   include_exposed; cites-retracted, renders-retracted and cites-through-memory are refused
+#   and change nothing (decision 14).
+# - audit-*: every entry is stale except g, which the test verifier confirmed at 09:40 (no
+#   Verifier ships); n and cursor-0 are unsourced; the ledger's platform writes are unchecked.
+# - as-of-0925-green, withheld-green: the reader at a lowered ceiling (green) sees the amber h
+#   withheld, by count only (decision 8).
+p1-a:
+  revs:
+    analyst/a: 1
+  unsourced: []
+  withheld: 0
+  dropped: []
+p2-g-n:
+  revs:
+    analyst/g: 1
+    analyst/n: 1
+  unsourced:
+  - analyst/n
+  withheld: 0
+  dropped: []
+p3-x:
+  revs:
+    analyst/x: 1
+  unsourced: []
+  withheld: 0
+  dropped: []
+ledger-1:
+  revs:
+    fleet-ledger/item-1: 1
+    fleet-ledger/cursor-0: 1
+  unsourced:
+  - fleet-ledger/cursor-0
+  withheld: 0
+  dropped: []
+p4-b:
+  revs:
+    analyst/b: 1
+  unsourced: []
+  withheld: 0
+  dropped: []
+p5-d:
+  revs:
+    analyst/d: 1
+  unsourced: []
+  withheld: 0
+  dropped: []
+p6-e:
+  revs:
+    analyst/e: 1
+  unsourced: []
+  withheld: 0
+  dropped: []
+as-of-0915:
+  at: 09:15
+  entries:
+    a: A1
+    b: B
+    d: D
+    e: E
+    g: G1
+    n: N
+  compacted: []
+  purged: []
+  aged_out: false
+  withheld: 0
+p7-h:
+  revs:
+    analyst/h: 1
+  unsourced: []
+  withheld: 0
+  dropped: []
+p8-replace:
+  revs:
+    analyst/a: 2
+    analyst/g: 2
+  unsourced:
+  - analyst/a
+  withheld: 0
+  dropped: []
+p9-verify-g:
+  revs:
+    analyst/g: 3
+  unsourced: []
+  withheld: 0
+  dropped: []
+history-a:
+  records:
+  - at: 09:00
+    op: add
+    rev: 1
+    value: A1
+    sources:
+    - uid:1
+    closure:
+    - uid:1
+    - digest:1
+    checked: true
+    tlp: green
+    pack: pack:p1-a
+  - at: 09:30
+    op: replace
+    rev: 2
+    value: A2
+    sources: []
+    closure:
+    - uid:1
+    - digest:1
+    checked: true
+    tlp: green
+    pack: pack:p8-replace
+  withheld: 0
+history-g:
+  records:
+  - at: 09:01
+    op: add
+    rev: 1
+    value: G1
+    sources:
+    - uid:2
+    closure:
+    - uid:2
+    - digest:2
+    checked: true
+    tlp: green
+    pack: pack:p2-g-n
+  - at: 09:30
+    op: replace
+    rev: 2
+    value: G2
+    sources:
+    - uid:2
+    closure:
+    - uid:2
+    - digest:2
+    checked: true
+    tlp: green
+    pack: pack:p8-replace
+  - at: 09:40
+    op: verify
+    rev: 3
+    sources:
+    - uid:2
+    closure:
+    - uid:2
+    - digest:2
+    checked: true
+    tlp: green
+    verified_at: 09:40
+    pack: pack:p9-verify-g
+  withheld: 0
+as-of-0925:
+  at: 09:25
+  entries:
+    a: A1
+    b: B
+    d: D
+    e: E
+    g: G1
+    h: H
+    n: N
+  compacted: []
+  purged: []
+  aged_out: false
+  withheld: 0
+as-of-0925-green:
+  at: 09:25
+  entries:
+    a: A1
+    b: B
+    d: D
+    e: E
+    g: G1
+    n: N
+  compacted: []
+  purged: []
+  aged_out: false
+  withheld: 1
+audit-reader:
+  entries:
+    a: A2
+    b: B
+    d: D
+    e: E
+    g: G2
+    h: H
+    n: N
+  withheld: 0
+  stale:
+    a:
+      reasserted_at: 09:30
+    b:
+      reasserted_at: 09:10
+    d:
+      reasserted_at: 09:11
+    e:
+      reasserted_at: 09:12
+    h:
+      reasserted_at: 09:20
+    n:
+      reasserted_at: 09:01
+  unsourced:
+  - n
+  unchecked: []
+audit-ledger:
+  entries:
+    cursor-0: '42'
+    item-1: open
+  withheld: 0
+  stale:
+    cursor-0:
+      reasserted_at: 09:03
+    item-1:
+      reasserted_at: 09:03
+  unsourced:
+  - cursor-0
+  unchecked:
+  - cursor-0
+  - item-1
+withheld-green:
+  entries:
+    a: A2
+    b: B
+    d: D
+    e: E
+    g: G2
+    n: N
+  withheld: 1
+dependents-uid-1:
+  source: uid:1
+  revision: all
+  include_exposed: false
+  include_alias: []
+  aliases:
+  - uid:1
+  - digest:1
+  ambiguous: []
+  warnings: []
+  cited:
+  - owner: profile:ledger
+    scope: fleet-ledger
+    key: item-1
+    rev: 1
+    checked: false
+    live: true
+  - owner: profile:other-reader
+    scope: analyst
+    key: x
+    rev: 1
+    checked: true
+    live: true
+  - owner: profile:reader
+    scope: analyst
+    key: a
+    rev: 1
+    checked: true
+    live: false
+  - owner: profile:reader
+    scope: analyst
+    key: b
+    rev: 1
+    checked: true
+    live: true
+  - owner: profile:reader
+    scope: analyst
+    key: a
+    rev: 2
+    checked: true
+    live: true
+  exposed:
+  - owner: profile:reader
+    scope: analyst
+    key: d
+    rev: 1
+    checked: true
+    live: true
+  - owner: profile:reader
+    scope: analyst
+    key: e
+    rev: 1
+    checked: true
+    live: true
+  owners:
+  - profile:ledger
+  - profile:other-reader
+  - profile:reader
+  affected:
+    cited:
+    - owner: profile:ledger
+      scope: fleet-ledger
+      key: item-1
+    - owner: profile:other-reader
+      scope: analyst
+      key: x
+    - owner: profile:reader
+      scope: analyst
+      key: a
+    - owner: profile:reader
+      scope: analyst
+      key: b
+    exposed:
+    - owner: profile:reader
+      scope: analyst
+      key: d
+    - owner: profile:reader
+      scope: analyst
+      key: e
+retract-uid-1:
+  dry_run:
+    cited:
+    - owner: profile:ledger
+      scope: fleet-ledger
+      key: item-1
+    - owner: profile:other-reader
+      scope: analyst
+      key: x
+    - owner: profile:reader
+      scope: analyst
+      key: a
+    - owner: profile:reader
+      scope: analyst
+      key: b
+    exposed:
+    - owner: profile:reader
+      scope: analyst
+      key: d
+    - owner: profile:reader
+      scope: analyst
+      key: e
+  aliases:
+  - uid:1
+  - digest:1
+  marks: 7
+  retired:
+  - owner: profile:ledger
+    scope: fleet-ledger
+    key: item-1
+    rev: 2
+  - owner: profile:other-reader
+    scope: analyst
+    key: x
+    rev: 2
+  - owner: profile:reader
+    scope: analyst
+    key: a
+    rev: 3
+  - owner: profile:reader
+    scope: analyst
+    key: b
+    rev: 2
+  resumed: false
+live-after:
+  reader/analyst:
+    d: D
+    e: E
+    g: G2
+    h: H
+    n: N
+  other/analyst: {}
+  ledger/analyst: {}
+  ledger/fleet-ledger:
+    cursor-0: '42'
+history-b:
+  records:
+  - at: 09:10
+    op: add
+    rev: 1
+    value: B
+    sources:
+    - mem:reader/analyst/a@1
+    closure:
+    - mem:reader/analyst/a@1
+    - uid:1
+    - digest:1
+    checked: true
+    tlp: green
+    pack: pack:p4-b
+  - at: '10:00'
+    op: retire
+    rev: 2
+    sources: []
+    closure:
+    - mem:reader/analyst/a@1
+    - uid:1
+    - digest:1
+    checked: false
+    tlp: green
+    reason: retracted:uid:1
+    by: <operator>
+  withheld: 0
+as-of-0950-after:
+  at: 09:50
+  entries:
+    a: A2
+    b: B
+    d: D
+    e: E
+    g: G2
+    h: H
+    n: N
+  compacted: []
+  purged: []
+  aged_out: false
+  withheld: 0
+cites-retracted:
+  refused: MemoryUpdateError
+  problems:
+  - 'the pack rendered a retracted source: a write from it is refused whatever it cites (an operator retraction,
+    ADR-0037 decision 14); nothing was applied'
+  changed: false
+renders-retracted:
+  refused: MemoryUpdateError
+  problems:
+  - 'the pack rendered a retracted source: a write from it is refused whatever it cites (an operator retraction,
+    ADR-0037 decision 14); nothing was applied'
+  changed: false
+cites-through-memory:
+  refused: MemoryUpdateError
+  problems:
+  - the pack's memory block shows a revision a retraction reached; nothing was applied
+  changed: false
+p10-clean:
+  revs:
+    analyst/k: 1
+  unsourced: []
+  withheld: 0
+  dropped: []
+audit-reader-after:
+  entries:
+    d: D
+    e: E
+    g: G2
+    h: H
+    k: K
+    n: N
+  withheld: 0
+  stale:
+    d:
+      reasserted_at: 09:11
+    e:
+      reasserted_at: 09:12
+    h:
+      reasserted_at: 09:20
+    k:
+      reasserted_at: '10:12'
+    n:
+      reasserted_at: 09:01
+  unsourced:
+  - n
+  unchecked: []
+dependents-uid-1-after:
+  source: uid:1
+  revision: all
+  include_exposed: false
+  include_alias: []
+  aliases:
+  - uid:1
+  - digest:1
+  ambiguous: []
+  warnings: []
+  cited:
+  - owner: profile:ledger
+    scope: fleet-ledger
+    key: item-1
+    rev: 1
+    checked: false
+    live: false
+  - owner: profile:ledger
+    scope: fleet-ledger
+    key: item-1
+    rev: 2
+    checked: false
+    live: false
+  - owner: profile:other-reader
+    scope: analyst
+    key: x
+    rev: 1
+    checked: true
+    live: false
+  - owner: profile:other-reader
+    scope: analyst
+    key: x
+    rev: 2
+    checked: false
+    live: false
+  - owner: profile:reader
+    scope: analyst
+    key: a
+    rev: 1
+    checked: true
+    live: false
+  - owner: profile:reader
+    scope: analyst
+    key: b
+    rev: 1
+    checked: true
+    live: false
+  - owner: profile:reader
+    scope: analyst
+    key: a
+    rev: 2
+    checked: true
+    live: false
+  - owner: profile:reader
+    scope: analyst
+    key: a
+    rev: 3
+    checked: false
+    live: false
+  - owner: profile:reader
+    scope: analyst
+    key: b
+    rev: 2
+    checked: false
+    live: false
+  exposed:
+  - owner: profile:reader
+    scope: analyst
+    key: d
+    rev: 1
+    checked: true
+    live: true
+  - owner: profile:reader
+    scope: analyst
+    key: e
+    rev: 1
+    checked: true
+    live: true
+  owners:
+  - profile:ledger
+  - profile:other-reader
+  - profile:reader
+  affected:
+    cited:
+    - owner: profile:ledger
+      scope: fleet-ledger
+      key: item-1
+    - owner: profile:other-reader
+      scope: analyst
+      key: x
+    - owner: profile:reader
+      scope: analyst
+      key: a
+    - owner: profile:reader
+      scope: analyst
+      key: b
+    exposed:
+    - owner: profile:reader
+      scope: analyst
+      key: d
+    - owner: profile:reader
+      scope: analyst
+      key: e
