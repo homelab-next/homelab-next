@@ -325,7 +325,38 @@ def test_load_keys_refuses_non_public_key_values(tmp_path, val):
     p.write_text(yaml.safe_dump({"keys": {"op": val}}))
     with pytest.raises(ComputeError) as e:
         load_keys(p)
-    assert val.split()[0] not in str(e.value) or val == "ssh-ed25519"
+    msg = str(e.value).split(str(p), 1)[1]  # the path is not the message
+    assert "op" in msg and str(val) not in msg
+
+
+def test_load_keys_yaml_error_does_not_echo_key_body(tmp_path):
+    from homelabnext.compute import ComputeUnreadable, load_keys
+
+    p = tmp_path / "k.yml"
+    dashes = "-" * 5
+    p.write_text(
+        f"keys:\n  k: {dashes}BEGIN OPENSSH PRIVATE KEY{dashes}\nb3BlbnNzaFNFQ1JFVA\n  : x\n"
+    )
+    with pytest.raises(ComputeUnreadable) as e:
+        load_keys(p)
+    assert "b3BlbnNzaFNFQ1JFVA" not in str(e.value)
+
+
+def test_load_keys_refuses_odd_names_duplicates_and_loose_values(tmp_path):
+    from homelabnext.compute import ComputeError, load_keys
+
+    for text in (
+        yaml.safe_dump({"keys": {"b3BlbnNzaFNFQ1JFVA" * 6: "ssh-ed25519 AAAAEXAMPLE x"}}),
+        yaml.safe_dump({"keys": {"a\x1bb": "ssh-ed25519 AAAAEXAMPLE x"}}),
+        "keys:\n  k: ssh-ed25519 AAAAEXAMPLE a\n  k: ssh-ed25519 AAAAEXAMPLE b\n",
+        yaml.safe_dump({"keys": {"k": "ssh-ed25519 AAAAEXAMPLE x\x1b[31m"}}),
+        yaml.safe_dump({"keys": {"k": "ssh-ed25519 AAAA"}}),
+    ):
+        p = tmp_path / "k.yml"
+        p.write_text(text)
+        with pytest.raises(ComputeError) as e:
+            load_keys(p)
+        assert "b3BlbnNzaFNFQ1JFVA" not in str(e.value) and "\x1b" not in str(e.value)
 
 
 def test_render_out_refuses_unresolved_key_names(tmp_path, capsys):

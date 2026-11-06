@@ -190,7 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "validate":
         if problems:
             print("\n".join(f"error: {p}" for p in problems), file=sys.stderr)
-            print(f"hnx guests: the guests and the registry disagree ({len(problems)} errors)")
+            print(f"hnx guests: validation failed ({len(problems)} errors)")
             return 1
         iac = len(fleet.iac())
         print(f"ok: {len(fleet.guests)} guests ({iac} rendered, {len(fleet.manual())} manual)")

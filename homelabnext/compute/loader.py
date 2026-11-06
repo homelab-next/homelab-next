@@ -224,23 +224,39 @@ def _mirror(p: Path, name: Any, raw: Any) -> dict[str, Any]:
 PUBLIC_KEY_LINE = re.compile(
     r"(?:ssh-(?:ed25519|rsa|dss)|ecdsa-sha2-nistp(?:256|384|521)"
     r"|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)"
-    r" [A-Za-z0-9+/]+={0,2}(?: [^\r\n]*)?"
+    r" [A-Za-z0-9+/]{8,}={0,2}(?: [ -~]*)?"
 )
+
+
+_KEY_NAME = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+def _yaml_where(exc: Exception) -> str:
+    """Where a YAML error is, never the snippet: the keys file can hold private key material."""
+    mark = getattr(exc, "problem_mark", None)
+    what = str(getattr(exc, "problem", None) or "not valid YAML")[:80]
+    return f"{what} at line {mark.line + 1}, column {mark.column + 1}" if mark else what
 
 
 def load_keys(path: str | Path) -> dict[str, str]:
     """Read ``{keys: {name: public-key-line}}`` (public keys only; never private material)."""
     p = Path(path)
     try:
-        doc = yaml.safe_load(sops.read_text(p))
-    except (OSError, yaml.YAMLError, sops.SopsError) as exc:
+        doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
+    except yaml.YAMLError as exc:
+        # PyYAML's message quotes the offending source lines, which may be key material
+        raise ComputeUnreadable(f"cannot read keys {p}: {_yaml_where(exc)}") from exc
+    except (OSError, sops.SopsError) as exc:
         raise ComputeUnreadable(f"cannot read keys {p}: {exc}") from exc
     keys = (doc or {}).get("keys") if isinstance(doc, dict) else None
     if not isinstance(keys, dict):
         raise ComputeError(f"{p}: expected a mapping with a 'keys' mapping")
     out: dict[str, str] = {}
     for k, v in keys.items():
-        name = str(k)
+        if not isinstance(k, str) or not _KEY_NAME.fullmatch(k):
+            # a name can itself be pasted key material or carry control characters
+            raise ComputeError(f"{p}: a key name must match [A-Za-z0-9_.-]{{1,64}}")
+        name = k
         # never echo the value: a refused value may be private key material
         if not isinstance(v, str) or re.search(shapes.PRIVATE_KEY_HEADER, v):
             raise ComputeError(

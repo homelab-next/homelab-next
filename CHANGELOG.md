@@ -7,7 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
-- `hnx guests`: `load_keys` refuses a `--keys` value that holds private key material or is not a single-line OpenSSH public key (the message never echoes the value); `render --target cloudinit --out` refuses ssh key names the keys file does not resolve instead of writing `<ssh-key:NAME>` into user-data, and `validate --keys` checks the names. The stdout render keeps the placeholder. Breaking for overlay sites: a keys file with non-public-key values, or a cloud-init guest naming an absent key, now fails.
+- `hnx guests`: `load_keys` refuses a `--keys` value that holds private key material or is not a single-line OpenSSH public key (the message never echoes the value); `render --target cloudinit --out` refuses ssh key names the keys file does not resolve instead of writing `<ssh-key:NAME>` into user-data, and `validate --keys` checks the names. The stdout render keeps the placeholder. A keys-file YAML error reports only its position (PyYAML quotes the source, which may be a pasted key), key names must match `[A-Za-z0-9_.-]{1,64}` and are unique, the comment after a key is printable ASCII, and the name check covers only the VMs cloud-init renders. Breaking for overlay sites: a keys file with non-public-key values, or a cloud-init guest naming an absent key, now fails.
 
 ### Changed
 - `hnx status serve` reuses one built document while its input files (state file, activity store and its `-wal`) are unchanged, for at most 15 seconds (`status.serve.DocumentMemo`), instead of rebuilding it and loading every activity event on every request; a write or a retention purge rebuilds it.
