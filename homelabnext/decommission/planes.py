@@ -334,11 +334,23 @@ def _fold(s: str) -> str:
     return s.lower().replace("-", "_").replace(".", "_")
 
 
+def _known_guests(t: Target, a: Adapters) -> set[str]:
+    """Other guests that exist: the snapshot's ``guests`` plus the tree's host_vars stems."""
+    known = set(a.known_guests)
+    if a.tree is not None:
+        for rel, _ in a.tree.files():
+            if "host_vars" in _parts(rel):
+                known.add(PurePosixPath(rel).stem)
+    own = {_fold(k) for k in (t.name, *t.aliases) if k}
+    return {g for g in known if _fold(g) not in own}
+
+
 @plane("secret-names")
 def secret_names(t: Target, a: Adapters) -> Result:
     """Secret-store variable NAMES only.  ``app-core`` (or an ``--alias``) also matches
-    ``app_core_password``, and is word-bounded like every other plane: the action is to
-    delete the entries, so a live sibling's secret must never be flagged."""
+    ``app_core_password``, and is word-bounded like every other plane.  The prefix is still
+    ambiguous (key ``app`` matches ``app_core_password``), so a name that also belongs to
+    another known guest is reported ``AMBIGUOUS`` (review), never as a name to delete."""
     if a.secrets is None:
         return _skip("secret-names", "no adapter configured")
     try:
@@ -346,8 +358,25 @@ def secret_names(t: Target, a: Adapters) -> Result:
     except Unreachable as exc:
         return _skip("secret-names", f"unreachable: {exc}")
     pats = [_secret_key_pattern(k) for k in (t.name, *t.aliases) if k]
-    hits = [n for n in names if any(p.search(_fold(n)) for p in pats)]
-    return _verdict("secret-names", hits, "no secret named for it", "secret name(s) remain")
+    others = {g: _secret_key_pattern(g) for g in _known_guests(t, a)}
+    hits: list[str] = []
+    ambiguous: list[str] = []
+    for n in names:
+        f = _fold(n)
+        if not any(p.search(f) for p in pats):
+            continue
+        owners = sorted(g for g, p in others.items() if p.search(f))
+        if owners:
+            ambiguous.append(f"AMBIGUOUS {n}: may belong to guest {', '.join(owners)}")
+        else:
+            hits.append(n)
+    if hits:
+        return Result("secret-names", Status.REMNANT, "secret name(s) remain", hits + ambiguous)
+    if ambiguous:
+        return Result(
+            "secret-names", Status.REVIEW, "ambiguous: name(s) may be another guest's", ambiguous
+        )
+    return _verdict("secret-names", [], "no secret named for it", "")
 
 
 @plane("dns")

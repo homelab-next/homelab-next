@@ -155,8 +155,9 @@ example-log-pipeline, example-detonation; features
 | `migration` | `{formats, export, import}`: present **exactly** when the slot is stateful, in the slot's export formats |
 | `calibration` | per (decision spec x provider) thresholds and input limits |
 
-Provider-only fields: `licence` (the probe warns at 30 days, pages the module `owner` through
-`notify` at 7, and turns the criterion red on the day), `credentials` (below), `control_plane`
+Provider-only fields: `licence` (**specified, not implemented**: a probe that would warn at 30 days,
+page the module `owner` through `notify` at 7, and turn the criterion red on the day; nothing reads
+`expires` yet), `credentials` (below), `control_plane`
 (vendor-held configuration read by the module's own code for the conformance run). A hosted or
 config-only provider with no host needs no `lifecycle`; its service rows take `version` from
 `product.version` (never repeated).

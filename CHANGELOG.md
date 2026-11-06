@@ -6,6 +6,12 @@ has no section below.
 
 ## [Unreleased]
 
+### Fixed
+- **Breaking for overlay sites:** a module manifest whose `lifecycle.remove.audit` names a plane that is neither a registered `hnx decommission` plane nor `contributions` is now refused by the loader (it loaded and silently audited less than declared).
+- The module `licence` probe (warn at 30 days, page at 7, red on expiry) is marked "specified, not implemented" in `docs/modules.md`, the manifest schema and the follow-up list: nothing reads `licence.expires`.
+- `hnx new schema` writes the layout X-03 checks (`examples/<name>.valid.json`, `negative/<name>.*.json`, a version-pinned `$id`), and its verify runs the X-03 check. `hnx new` names are matched in full (a trailing newline is refused), and `hnx new role` outside a checkout fails cleanly before writing files.
+- The decommission `secret-names` plane no longer lists a sibling guest's secrets for deletion (key `app` matched `app_core_*`): a name that also belongs to another known guest (snapshot `guests`, or a `host_vars` file) is reported `AMBIGUOUS` for review.
+
 ### Changed
 - `hnx status serve` reuses one built document while its input files (state file, activity store and its `-wal`) are unchanged, for at most 15 seconds (`status.serve.DocumentMemo`), instead of rebuilding it and loading every activity event on every request; a write or a retention purge rebuilds it.
 - One writer of inbox notes, `homelabnext/records/inbox.py` (`stamp`, `decided_clash`, `write_inbox`): the agent library (`Records`) and the broker's `records-inbox` lanes both stamp and write a note through it, and `tools/shared_helpers_lint.py` has a `records` rule refusing a file write into an inbox elsewhere (ADR-0003, ADR-0010).

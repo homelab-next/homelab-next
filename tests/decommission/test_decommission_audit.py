@@ -233,3 +233,20 @@ def test_cli_positive_control(lab, capsys):
 
 def test_hnx_dispatch_registered():
     assert "decommission" in COMMANDS
+
+
+def test_secret_plane_marks_a_known_sibling_guests_names_ambiguous(files):
+    """Key `app` matches `app_core_*`; with app-core a known guest, those are not for deletion."""
+    names = ["app_core_db_password", "app_token"]
+    snap = {"secrets": {"names": names}, "guests": ["app-core"]}
+    r = by_plane(run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"]))
+    res = r["secret-names"]
+    assert res.status is Status.REMNANT
+    assert res.items[0] == "app_token"
+    assert res.items[1].startswith("AMBIGUOUS app_core_db_password")
+
+
+def test_secret_plane_derives_known_guests_from_host_vars(files):
+    snap = {"secrets": {"names": ["app_core_db_password"]}}
+    r = by_plane(run(Target("app"), Adapters.from_snapshot(snap, MemTree(files)), ["secret-names"]))
+    assert r["secret-names"].status is Status.REVIEW
