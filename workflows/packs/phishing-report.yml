@@ -10,7 +10,12 @@ description: >-
   A user-reported e-mail is triaged; a phishing verdict opens a case and requests an approved
   DNS block of the domains found in the message.
 # A user report is not a detection rule, so the trigger pins the producer (the mail gateway)
-# instead of a det: id; the det: id on the event is whatever rule the gateway attached.
+# instead of a det: id; the det: id on the event is whatever rule the gateway attached. alert.created
+# has no field that tells a user report from another gateway alert, so the pack acts only when the
+# reported-message lookup finds the alert (open-case and triage are guarded on it); tighten the
+# trigger when the mail gateway module defines such a field.
+# The det: ids in the fixtures are placeholders (the event schema requires one and the det map has
+# no mail rule); they are not a mapping.
 trigger:
   event: homelabnext.alert.created
   where:
@@ -40,6 +45,8 @@ steps:
     kind: action
     action: case.open
     target: svc:cases
+    when:
+      - {ref: $steps.message.found, equals: true}
     params:
       alert_id: $event.data.alert_id
       title: $event.data.title

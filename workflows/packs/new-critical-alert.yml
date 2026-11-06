@@ -145,7 +145,7 @@ fixtures:
       data:
         alert_id: ALT-0104
         detection: det:ssh-authorized-key-added
-        title: Burst of failed logins
+        title: Authorized key added
         severity: high
         observed_at: "2026-01-01T03:00:00Z"
     expect:
