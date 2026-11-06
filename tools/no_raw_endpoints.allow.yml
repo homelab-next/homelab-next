@@ -119,6 +119,8 @@ allow:
     reason: novelty test data; the addresses are entity values in synthetic lake rows or findings (documentation addresses only, RFC 5737), never endpoints
   - path: "tests/novelty/test_novelty_corroborate.py"
     reason: novelty test data; the addresses are entity values in synthetic lake rows or findings (documentation addresses only, RFC 5737), never endpoints
+  - path: "tests/novelty/test_engine.py"
+    reason: novelty test data; the addresses are entity values in synthetic lake rows or findings (documentation addresses only, RFC 5737), never endpoints
   - path: "tests/lake/test_count_by.py"
     reason: count_by test data; the addresses are grouped column values in synthetic rows (documentation addresses only, RFC 5737)
   - path: "schemas/ocsf/negative/novelty_finding.v1.*.json"
