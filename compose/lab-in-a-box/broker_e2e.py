@@ -211,11 +211,19 @@ class Setup:
 
 # ---------------------------------------------------------------- the edge's HTTP
 def edge_headers(secret: str | None, user: str = APPROVER) -> dict[str, str]:
-    """What the lab's edge adds after a login: the front-door secret and the identity."""
+    """What the lab's edge adds after a login: the front-door secret and the identity.
+
+    The names come from the platform's one declared set (``homelabnext.edge_identity``), so a
+    rename cannot drift from the hub. As the reference proxy (oauth2-proxy) does, the user-id
+    header carries an email-shaped id and the username header the IdP's ``preferred_username``:
+    the hub names the approver by the latter only (ADR-0034 decision 4)."""
+    from homelabnext.edge_identity import IDENTITY_HEADERS as ids
+
     out = {
         "Host": HUB_HOST,
-        "X-Auth-Request-User": user,
-        "X-Auth-Request-Groups": f"{VIEWER_GROUP},{APPROVER_GROUP}",
+        ids.user: f"{user}@lab.example",
+        ids.username: user,
+        ids.groups: ids.groups_separator.join((VIEWER_GROUP, APPROVER_GROUP)),
     }
     if secret is not None:
         out["X-Hnx-Front-Door"] = secret
