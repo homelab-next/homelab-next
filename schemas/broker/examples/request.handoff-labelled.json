@@ -1,0 +1,13 @@
+{
+  "action": "records.annotate",
+  "actor": "profile:responder",
+  "created": "2026-01-15T10:05:00Z",
+  "digest": "sha256:39f29685399e89283ec450bf6583ac9743c8ffaabf419e731ca18e0442837c9f",
+  "params": {
+    "verdict": "malicious",
+    "domain": "login.example.com"
+  },
+  "request_id": "r-1",
+  "target": "svc:records",
+  "tlp": "red"
+}

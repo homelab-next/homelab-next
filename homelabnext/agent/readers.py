@@ -364,6 +364,47 @@ def server_label(meta: Mapping[str, Any]) -> tlp.Label:
     return tier_label(meta.get("data_tier"))
 
 
+def profile_ceiling(doc: Mapping[str, Any]) -> tlp.Label:
+    """The TLP ceiling a profile *receives* data at (ADR-0033 decision 12): its declared
+    ``tlp_ceiling`` (read as data: a value that is not a label is ``red``), else what its
+    ``data_tier`` lets it receive (:func:`receive_ceiling`; ``clear`` for anything but
+    ``local-only``, the reading that grants least)."""
+    return receive_ceiling(doc.get("tlp_ceiling"), doc.get("data_tier"))
+
+
+def actor_ceiling(doc: Mapping[str, Any]) -> tlp.Label:
+    """The ceiling a profile receives data at when *granting* it data (a handoff's actor), read
+    so that a bad value grants the least: the lower of what its ``data_tier`` lets it receive
+    (``red`` for ``local-only``, ``clear`` for anything else, absent and unknown included) and its
+    declared ``tlp_ceiling`` read strictly (:func:`homelabnext.tlp.parse_stored`).  A declared
+    value that is not a canonical label is ``clear``.
+
+    :func:`profile_ceiling` reads a declared value as data (``red`` when it is not a label), the
+    most a profile can receive: right for *labelling* what it holds (:func:`held_label`), wrong
+    for deciding what it may be sent, where a ``cloud-allowed`` actor declaring ``red``,
+    ``TLP:RED`` or ``bogus`` would read as receiving ``red``."""
+    tier = receive_ceiling(None, doc.get("data_tier"))
+    raw = doc.get("tlp_ceiling")
+    if raw is None:
+        return tier
+    try:
+        declared = tlp.parse_stored(raw)
+    except ValueError:
+        return tlp.Label.CLEAR
+    return min(declared, tier)
+
+
+def held_label(doc: Mapping[str, Any]) -> tlp.Label:
+    """The label of what a profile may hold, and so of anything it derives (ADR-0033 decision 4:
+    derived data carries its strictest input): its receive ceiling (:func:`profile_ceiling`),
+    since its context may carry anything up to it (pack, MCP tool output, memory).  A profile
+    that declares neither a ``tlp_ceiling`` nor a known ``data_tier`` is ``red``: what it may
+    have seen is unknown, and unknown data is ``red``."""
+    if doc.get("tlp_ceiling") is None and doc.get("data_tier") not in DATA_TIERS:
+        return tlp.Label.RED
+    return profile_ceiling(doc)
+
+
 def tlp_ceiling_problems(doc: Mapping[str, Any], who: str = "profile") -> list[str]:
     """A profile's declared ``tlp_ceiling`` is a canonical label that agrees with its
     ``data_tier`` (decision 12: ``local-only`` is above ``clear``, ``cloud-allowed`` is

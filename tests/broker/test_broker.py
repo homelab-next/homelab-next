@@ -385,3 +385,16 @@ def test_hardening_decisions_validate():
         dec = decide(OPS, _ops_req(), appr, now="2026-01-01T00:00:00Z", store=MemoryApprovalStore())
         assert schema_errors("broker", "decision", dec) == []
     assert schema_errors("broker", "manifest", OPS) == []
+
+
+def test_request_digest_binds_tlp_only_when_present():
+    """broker/request 1.1: a request without ``tlp`` keeps its pre-1.1 digest; ``tlp`` changes it,
+    so an approval does not survive a lowered label."""
+    from homelabnext.agent.digest import digest_of
+
+    base = {"action": "records.annotate", "actor": "profile:a", "target": "svc:x", "params": {}}
+    assert request_digest(base) == digest_of(base)
+    red, clear = {**base, "tlp": "red"}, {**base, "tlp": "clear"}
+    assert len({request_digest(base), request_digest(red), request_digest(clear)}) == 3
+    # fields outside the bound set never move it
+    assert request_digest({**red, "request_id": "r-1"}) == request_digest(red)
