@@ -3,6 +3,7 @@
 
 import datetime as dt
 import hashlib
+import os
 import pathlib
 import shutil
 import threading
@@ -950,3 +951,24 @@ def test_an_intent_rewritten_after_the_decision_files_the_bytes_decided_on(lab, 
     [out] = _decider(lab, inbox).decide_all()
     assert out.result == "applied", out
     assert (inbox / "decided" / "completed" / name).read_bytes() == original
+
+
+def _open_fds():
+    for d in ("/proc/self/fd", "/dev/fd"):
+        if os.path.isdir(d):
+            return len(os.listdir(d))
+    pytest.skip("no /proc/self/fd or /dev/fd to count descriptors with")
+
+
+def test_a_run_releases_the_descriptors_of_intents_it_does_not_move(lab, inbox):
+    """Every intent is read through the movers' safe load, which holds the note's descriptor
+    until it is moved; a dry run (and an intent that waits, is gone or is refused) moves
+    nothing, so the decider releases each one when its intent is decided, not never."""
+    for i in range(12):
+        _intent(inbox, f"promote-{i}", record=U["LL-003"], **{"from": "open", "to": "partial"}, reason="x")  # fmt: skip
+    d = _decider(lab, inbox)
+    before = _open_fds()
+    out = d.decide_all(dry_run=True)
+    assert len(out) == 12
+    assert _open_fds() == before
+    assert d.movers._held == {}

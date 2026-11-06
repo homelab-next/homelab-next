@@ -27,7 +27,8 @@ A caller that decides on a note's content (the register and strategy deciders) r
 read: a note an agent could rewrite, or one that is a symlink or hard-linked, is refused before
 anything is applied, and the bytes applied are the bytes filed.  The descriptor of that read is
 held open until the move ends (:meth:`Decider.close`, or ``with Decider(...)``, releases those of
-notes read and never moved).
+notes read and never moved, and a re-read of a name releases the earlier read's).  A move of a
+note whose load was released, or taken by another move, fails with :class:`FileNotFoundError`.
 
 A decided note (and its sidecar) is created mode ``0640`` less the decider's umask (``mode=``):
 agents read ``decided/`` through the group of the decider's directories, so give ``decided/`` the
@@ -38,7 +39,9 @@ Exactly one decision wins.  A move claims the note before it files anything, in 
 in ``decided/.claims/`` (the decider's own directory):
 
 1. the name: ``<name>.lock`` created ``O_CREAT|O_EXCL``, so one move per note name runs at a time
-   and any other move of that name fails with :class:`FileNotFoundError`, having touched nothing;
+   and any other move of that name fails with :class:`FileNotFoundError`, having touched nothing.
+   The lock records the pid, host and UTC time of its move, and the refusal says whether that pid
+   still runs on this host (a lock whose process is gone was left by a crash);
 2. the entry: an atomic rename of the source into the claims directory.  ``inbox/`` and
    ``decided/`` must therefore be on **one mount**; across mounts the rename fails ``EXDEV`` and
    the move is refused, saying so.
@@ -69,8 +72,10 @@ import functools
 import json
 import os
 import secrets
+import socket
 import stat
 import sys
+import weakref
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -129,9 +134,14 @@ class Decider:
         # the same name on this Decider (another thread) never closes or files another's.  The
         # descriptor is held so the inode is not freed and its number cannot be reused.
         self._held: dict[int, tuple[bytes, int, Note]] = {}
+        # notes whose record a move took, or a later load of the same name released: a move of
+        # one of these is told so (FileNotFoundError), not that it was never loaded
+        self._spent: weakref.WeakValueDictionary[int, Note] = weakref.WeakValueDictionary()
 
     def close(self) -> None:
-        """Release the descriptors of notes loaded (:meth:`read`) but never moved."""
+        """Release the descriptors of notes loaded (:meth:`read`) but never moved.  The
+        register and strategy deciders call it after each intent; a caller of :meth:`read` that
+        may not move what it read should too (or use ``with Decider(...)``)."""
         self._loaded.clear()
         while self._held:
             try:
@@ -191,14 +201,22 @@ class Decider:
         missing = [r for r in related if not os.path.lexists(self.root / r)]
         if missing:
             raise NoteError(f"related: not in the approved lane: {', '.join(missing)}")
-        notes = [self._load(APPROVED, Path(rel).name, validate_filename=False) for rel in related]
-        names = [n.name for n in notes] + [req.name]
-        twice = sorted({n for n in names if names.count(n) > 1})
-        if twice:
-            raise NoteError(f"related: named more than once: {', '.join(twice)}")
-        taken = [n for n in names if (self.root / COMPLETED / n).exists()]
-        if taken:
-            raise FileExistsError(f"{COMPLETED}/ already holds: {', '.join(taken)}")
+        notes: list[Note] = []
+        try:
+            for rel in related:
+                notes.append(self._load(APPROVED, Path(rel).name, validate_filename=False))
+            names = [n.name for n in notes] + [req.name]
+            twice = sorted({n for n in names if names.count(n) > 1})
+            if twice:
+                raise NoteError(f"related: named more than once: {', '.join(twice)}")
+            taken = [n for n in names if (self.root / COMPLETED / n).exists()]
+            if taken:
+                raise FileExistsError(f"{COMPLETED}/ already holds: {', '.join(taken)}")
+        except BaseException:
+            # the preflight refused: nothing moves, so release what it loaded
+            for n in (*notes, req):
+                self._release(n)
+            raise
         moved = []
         for note in notes:
             moved.append(self._move(note, COMPLETED, "completed", reason, via=name))
@@ -274,15 +292,44 @@ class Decider:
             if problems:
                 raise NoteError("; ".join(problems))
         self._held[id(note)] = (data, fd, note)
+        prev = self._loaded.get((lane, name))
         self._loaded[(lane, name)] = note
+        if prev is not None and prev is not note:
+            # a re-read supersedes the earlier load of this name: release its descriptor unless
+            # a move already took it (the pop in _release is atomic, so exactly one of the two
+            # gets the record)
+            self._release(prev)
         return note
+
+    def _release(self, note: Note) -> None:
+        """Close the descriptor of ``note``'s load if no move has taken it."""
+        rec = self._held.pop(id(note), None)
+        if rec is None:
+            return
+        if rec[2] is not note:  # not this note's record: put it back
+            self._held[id(rec[2])] = rec
+            return
+        self._spent[id(note)] = note
+        key = (note.lane, note.name)
+        if self._loaded.get(key) is note:
+            self._loaded.pop(key, None)
+        with contextlib.suppress(OSError):
+            os.close(rec[1])
 
     def _move(
         self, note: Note, dest_lane: str, decision: str, reason: str | None, via: str | None = None
     ) -> Path:
         rec = self._held.pop(id(note), None)
         if rec is None or rec[2] is not note:
+            if rec is not None:
+                self._held[id(rec[2])] = rec
+            if self._spent.get(id(note)) is note:
+                raise FileNotFoundError(
+                    f"{note.lane}/{note.name} is being (or was) decided by another move, or was "
+                    "read again since: decide the note the later read returned"
+                )
             raise NoteError(f"{note.lane}/{note.name} was not loaded by this decider")
+        self._spent[id(note)] = note
         key = (note.lane, note.name)
         if self._loaded.get(key) is note:
             self._loaded.pop(key, None)
@@ -312,12 +359,17 @@ class Decider:
         #    this name fails here, before it has touched anything.
         lock = claim_dir / f"{note.name}.lock"
         try:
-            os.close(os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+            lfd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         except FileExistsError:
             raise FileNotFoundError(
-                f"{note.lane}/{note.name} is being decided by another move "
-                f"(or by one that crashed: see {CLAIMS}/{lock.name})"
+                f"{note.lane}/{note.name} is being decided by another move: {_lock_holder(lock)}"
             ) from None
+        try:
+            os.write(lfd, _lock_record().encode("utf-8"))
+        except OSError:
+            pass  # the lock is the name; its content only helps an operator with a stale one
+        finally:
+            os.close(lfd)
         try:
             return self._move_locked(note, dest_lane, decision, reason, via, data, held)
         finally:
@@ -416,6 +468,54 @@ class Decider:
         return dest_dir / note.name
 
 
+def _lock_record() -> str:
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"pid={os.getpid()} host={socket.gethostname()} since={now}\n"
+
+
+def _lock_holder(lock: Path) -> str:
+    """Who holds ``lock``, as its record says, and whether that pid still runs on this host."""
+    where = f"{CLAIMS}/{lock.name}"
+    try:
+        fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            text = os.read(fd, 512).decode("utf-8", "replace")
+        finally:
+            os.close(fd)
+    except OSError:
+        return f"{where} (released meanwhile)"
+    fields = dict(f.split("=", 1) for f in text.split() if "=" in f)
+    pid, host, since = fields.get("pid", ""), fields.get("host", ""), fields.get("since", "?")
+    if not pid.isdigit():
+        return f"{where} (being written, or not a lock this decider wrote)"
+    held = f"{where} held by pid {pid} on {host or '?'} since {since}"
+    if host != socket.gethostname():
+        return f"{held} (another host: its liveness is not checked from here)"
+    if _pid_alive(int(pid)):
+        return f"{held} (that process is running)"
+    return (
+        f"{held} (no such process: a move that crashed; check {CLAIMS}/ for its claimed entry, "
+        f"put it back or file it, then remove {where})"
+    )
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # it exists, under another user
+    return True
+
+
+def leftover_claims(root: str | os.PathLike) -> list[str]:
+    """The entries in ``decided/.claims/`` (locks and claimed notes); empty when no move is
+    running, so any listed then were left by a move that crashed."""
+    d = Path(root) / CLAIMS
+    return sorted(os.listdir(d)) if d.is_dir() else []
+
+
 def _unclaim(claim: Path, src: Path) -> None:
     """Put a claimed entry back at ``src``, never over a name that has reappeared meanwhile
     (``renameat2(RENAME_NOREPLACE)`` on Linux; elsewhere a check then a rename, best effort).
@@ -479,6 +579,15 @@ def _create(dest_dir: Path, name: str, data: bytes, mode: int) -> None:
         os.close(dfd)
 
 
+def _report_leftovers(root: str) -> None:
+    left = leftover_claims(root)
+    if left:
+        print(
+            f"[records] {CLAIMS}/ holds {', '.join(left)}: a move that is running or crashed",
+            file=sys.stderr,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     """``hnx records decide approve|deny|complete NAME``: the operator's movers for generic notes.
 
@@ -514,7 +623,10 @@ def main(argv: list[str] | None = None) -> int:
             moved = d.complete(ns.name, ns.reason)
     except (NoteError, OSError) as ex:  # LaneViolation, FileNotFoundError: OSErrors too
         print(f"[records] refused: {ex}", file=sys.stderr)
+        _report_leftovers(ns.root)
         return 1
+    finally:
+        d.close()
     root = Path(ns.root)
     for p in moved:
         print(p.relative_to(root).as_posix())

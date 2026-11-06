@@ -566,3 +566,99 @@ def test_a_note_file_name_has_a_length_cap():
 
     name = "2026-01-01-triage-" + "x" * MAX_FILENAME_BYTES + ".md"
     assert check_filename(name, {}) == [f"filename is longer than {MAX_FILENAME_BYTES} bytes"]
+
+
+def _open_fds():
+    """Descriptors this process holds: /proc/self/fd on Linux, else /dev/fd."""
+    for d in ("/proc/self/fd", "/dev/fd"):
+        if os.path.isdir(d):
+            return len(os.listdir(d))
+    pytest.skip("no /proc/self/fd or /dev/fd to count descriptors with")
+
+
+def test_rereading_a_note_releases_the_earlier_reads_descriptor(rec, tree):
+    p = _propose(rec)
+    d = _decider(tree)
+    before = _open_fds()
+    for _ in range(20):
+        last = d.read("inbox", p.name)
+    assert _open_fds() == before + 1  # only the last read is held
+    assert len(d._held) == 1
+    assert d.approve(p.name).exists()  # and it is the one a following approve files
+    assert _open_fds() == before
+    assert last.name == p.name
+
+
+def test_a_refused_complete_releases_what_its_preflight_loaded(rec, tree):
+    d = _decider(tree)
+    a, b = _propose(rec, slug="one"), _propose(rec, slug="two")
+    d.approve(a.name)
+    d.approve(b.name)
+    (tree / "decided" / "completed" / b.name).write_text("in the way\n")
+    req = rec.completion_request([a.name, b.name], "Done.", agent="triage")
+    before = _open_fds()
+    with pytest.raises(FileExistsError):
+        d.complete(req.name)
+    assert _open_fds() == before
+    assert d._held == {} and d._loaded == {}
+
+
+def test_moving_a_note_whose_load_was_superseded_says_another_read_took_it(rec, tree):
+    """D: a move that misses its record because a later read (or another move) took it gets
+    FileNotFoundError, not "was not loaded"; a note never loaded still gets NoteError."""
+    from homelabnext.records.notes import read_note
+
+    p = _propose(rec)
+    d = _decider(tree)
+    first = d.read("inbox", p.name)
+    d.read("inbox", p.name)
+    with pytest.raises(FileNotFoundError, match="another move, or was read again"):
+        d._move(first, "decided/approved", "approved", None)
+    with pytest.raises(NoteError, match="was not loaded"):
+        d._move(read_note(p, "inbox"), "decided/approved", "approved", None)
+    assert _lanes_of(tree, p.name) == ["inbox"]
+
+
+def test_a_lock_records_its_holder_and_a_dead_one_is_named_stale(rec, tree, monkeypatch):
+    import socket
+
+    import homelabnext.records.decider as decider
+
+    p = _propose(rec)
+    seen = {}
+    real_create = decider._create
+
+    def create(dest_dir, name, data, mode):
+        seen.setdefault("lock", (tree / "decided/.claims" / f"{p.name}.lock").read_text())
+        return real_create(dest_dir, name, data, mode)
+
+    monkeypatch.setattr(decider, "_create", create)
+    _decider(tree).approve(p.name)
+    monkeypatch.undo()
+    fields = dict(f.split("=", 1) for f in seen["lock"].split())
+    assert fields["pid"] == str(os.getpid()) and fields["host"] == socket.gethostname()
+    assert fields["since"].endswith("Z")
+
+    q = _propose(rec, slug="stale")
+    lock = tree / "decided/.claims" / f"{q.name}.lock"
+    host = socket.gethostname()
+    lock.write_text(f"pid={os.getpid()} host={host} since=2026-01-01T00:00:00Z\n")
+    with pytest.raises(FileNotFoundError, match="that process is running"):
+        _decider(tree).approve(q.name)
+    monkeypatch.setattr(decider, "_pid_alive", lambda pid: False)
+    with pytest.raises(FileNotFoundError, match="no such process: a move that crashed"):
+        _decider(tree).approve(q.name)
+    lock.write_text("pid=1 host=elsewhere since=2026-01-01T00:00:00Z\n")
+    with pytest.raises(FileNotFoundError, match="another host"):
+        _decider(tree).approve(q.name)
+    assert q.exists()
+
+
+def test_operator_command_names_leftover_claims(rec, tree, capsys):
+    p = _propose(rec)
+    lock = tree / "decided/.claims" / f"{p.name}.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("pid=999999999 host=elsewhere since=2026-01-01T00:00:00Z\n")
+    assert decide_main(["approve", p.name, "--root", str(tree), "--by", "op"]) == 1
+    err = capsys.readouterr().err
+    assert f"holds {p.name}.lock" in err
