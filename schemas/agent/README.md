@@ -4,10 +4,10 @@ Contracts for the agent layer (library: `homelabnext.agent`, guide: `docs/agent.
 
 | Schema | What it is |
 |---|---|
-| `profile` | a **compiled** profile: parts by logical id, grants, the permission ceiling they were checked against, hard budgets, `reads_untrusted` (1.1), `include` (1.2: rules for linked knowledge in the pack, seeded only from grants; 1.4: an optional `detail`, `summary` or `outline`, absent meaning the whole content), `tlp_ceiling` (1.5), `platform_scopes` and `memory_limits` (1.6: per-scope memory record caps and `keep_last` compaction, ADR-0037), digest, provenance |
-| `context_manifest` | what goes into one agent's context pack and in which tier order (stable, session, volatile); pre-gates; memory scopes; `screen` (1.1: redaction of untrusted sections, on by default); `profiles` (1.2: the profiles it feeds, checked by `start_session` and `hnx agent lint`) |
+| `profile` | a **compiled** profile: parts by logical id, grants, the permission ceiling they were checked against, hard budgets, `reads_untrusted` (1.1), `include` (1.2: rules for linked knowledge in the pack, seeded only from grants; 1.4: an optional `detail`, `summary` or `outline`, absent meaning the whole content), `tlp_ceiling` (1.5), `platform_scopes` and `memory_limits` (1.6: per-scope memory record caps and `keep_last` compaction, ADR-0037; 1.7: `memory_limits.bytes`, a per-scope byte cap), digest, provenance |
+| `context_manifest` | what goes into one agent's context pack and in which tier order (stable, session, volatile); pre-gates; memory scopes; `screen` (1.1: redaction of untrusted sections, on by default); `profiles` (1.2: the profiles it feeds, checked by `start_session` and `hnx agent lint`); a static section's `tlp` (1.3: its label in the pack's, ADR-0037 decision 8) |
 | `pregate_output` | the verdict of a mandatory pre-run check (`ok`, `degraded`, `stale`, `failed`) |
-| `report_result` | what an agent hands back: `pack_id`, cites, unknowns, memory updates; `output` (1.1: the structured result an actor may act on) |
+| `report_result` | what an agent hands back: `pack_id`, cites, unknowns, memory updates; `output` (1.1: the structured result an actor may act on); a memory update's `sources` and the `verify` op (1.2, ADR-0037 decisions 7 and 15) |
 | `handoff` | a reader -> actor handoff: the reader, the actor, the schema the reader's `output` must satisfy, and the broker actions the actor may take with params bound to constrained output fields (G-04) |
 | `golden_task` | the `homelabnext.golden` suite file format (the loader and this schema reject the same negatives); 1.1 adds the tool-using suites of the Code Mode golden harness: `modes`, `grant`, `max_turns`, a task's `fixtures`, `inject` and `checks` (`docs/codemode.md`, CM-6) |
 | `prompt_template` | a prompt: trusted `system`/`instructions` text plus slots, each declaring `trust: trusted\|untrusted`; untrusted slots render only fenced (G-01) |
@@ -21,6 +21,6 @@ Rules JSON Schema cannot express are enforced in code and tested: grants subset 
 exec, file-write, egress or credential grant: `homelabnext.agent.readers`; the ceiling that counts is the separately owned
 `CeilingPolicy`, not the `ceiling` copied into the profile), digest equals content and, with a
 reviewed lock, the pinned digest (`verify_profile`), unique task ids
-(the golden loader), `pack_id` equals the pack hash and must-cite coverage (`validate_report`), no untrusted
+(the golden loader), `pack_id` equals the pack hash, must-cite coverage, every memory source is an identifier the pack rendered and the 64 `memory_updates` / 128 `cites` limits (`validate_report`), no untrusted
 placeholder in trusted text and every trusted slot used (`lint_template`), and corpus cases whose
 markers are present and whose canary is absent in the decoded payload (`parse_corpus`).

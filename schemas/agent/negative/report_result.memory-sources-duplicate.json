@@ -1,0 +1,25 @@
+{
+  "cites": [
+    {
+      "ref": "f1",
+      "source": "findings"
+    }
+  ],
+  "memory_updates": [
+    {
+      "key": "login-burst",
+      "op": "add",
+      "scope": "analyst",
+      "sources": [
+        "01934f6e-8a2b-7c3d-9e4f-5a6b7c8d9e0f",
+        "01934f6e-8a2b-7c3d-9e4f-5a6b7c8d9e0f"
+      ],
+      "value": "seen once"
+    }
+  ],
+  "pack_id": "sha256:f7268317837fe1f75676e2e7601f2746a7b5de66f555beebfc544defe20b81f2",
+  "profile": "profile:reader",
+  "status": "ok",
+  "summary": "One burst of failed logins.",
+  "unknowns": []
+}

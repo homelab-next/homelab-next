@@ -310,8 +310,9 @@ compile_profile(spec, library: PartsLibrary) -> dict     # MissingPartError / Ce
 check_ceiling(grants, ceiling) -> list[str]; check_budgets(budgets, cap=None) -> list[str]; verify_profile(profile, *, policy=None, lock=None) -> list[str]
 verified_profile(profile, *, policy, lock) -> VerifiedProfile; load_verified_profile(path, policy, lock)  # UnverifiedProfile
 # start_session / access_block / MemoryStore / select_knowledge / build_keyring take only a VerifiedProfile
-assemble_pack(manifest, inputs) -> (pack, "sha256:...")  # pure; stable -> session -> volatile; status ready|deferred
-validate_report(report, pack, pack_hash, manifest=None) -> list[str]
+assemble_pack(manifest, inputs, *, resolved_uids=None, ...) -> (pack, "sha256:...")  # pure; stable -> session -> volatile; status ready|deferred; pack["provenance"]: rendered items, labels
+validate_report(report, pack, pack_hash, manifest=None) -> list[str]   # also every memory source is an identifier the pack rendered
+MemoryStore.apply_report(profile, report, *, pack, pack_hash) ; .apply_updates(profile, updates, *, pack=, pack_hash= | unchecked=True)  # ADR-0037
 digest_of(obj) -> "sha256:..."                           # canonical JSON digest used everywhere
 # homelabnext.grants  (core, dependency-free; the one definition of the broker tiers and the grant lookup)
 TIERS; TIER_RANK; grant_for(manifest, actor, action) -> grant | None; tier_exceeds(tier, max_tier) -> bool
@@ -447,14 +448,14 @@ change until its ADR is accepted):
 <!-- hnx:gen:fact:schema-versions -->
 | schema (`$id` name) | version | file | status |
 |---|---|---|---|
-| `agent/context_manifest` | 1.2 | `schemas/agent/context_manifest.schema.json` | stable |
+| `agent/context_manifest` | 1.3 | `schemas/agent/context_manifest.schema.json` | stable |
 | `agent/golden_task` | 1.1 | `schemas/agent/golden_task.schema.json` | stable |
 | `agent/handoff` | 1.0 | `schemas/agent/handoff.schema.json` | stable |
 | `agent/injection_corpus` | 1.0 | `schemas/agent/injection_corpus.schema.json` | stable |
 | `agent/pregate_output` | 1.0 | `schemas/agent/pregate_output.schema.json` | stable |
-| `agent/profile` | 1.6 | `schemas/agent/profile.schema.json` | stable |
+| `agent/profile` | 1.7 | `schemas/agent/profile.schema.json` | stable |
 | `agent/prompt_template` | 1.0 | `schemas/agent/prompt_template.schema.json` | stable |
-| `agent/report_result` | 1.1 | `schemas/agent/report_result.schema.json` | stable |
+| `agent/report_result` | 1.2 | `schemas/agent/report_result.schema.json` | stable |
 | `broker/approval` | 1.0 | `schemas/broker/approval.schema.json` | stable |
 | `broker/audit` | 1.4 | `schemas/broker/audit.schema.json` | stable |
 | `broker/decision` | 1.2 | `schemas/broker/decision.schema.json` | stable |

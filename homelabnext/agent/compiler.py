@@ -555,8 +555,8 @@ def compile_profile(
 
 def memory_limit_problems(profile: Mapping[str, Any]) -> list[str]:
     """Where a profile's ``platform_scopes`` and ``memory_limits`` name scopes they may not
-    (ADR-0037 decision 6): every platform scope and every capped scope is one of its
-    ``memory_scopes``, and ``keep_last`` and ``tombstones`` apply to platform scopes only."""
+    (ADR-0037 decision 6): every platform scope and every capped scope (records or bytes) is one
+    of its ``memory_scopes``, and ``keep_last`` and ``tombstones`` apply to platform scopes only."""
 
     def names(x: Any) -> set[str]:  # a malformed value is the schema's to report
         return set(x) if isinstance(x, (list, Mapping)) else set()
@@ -572,6 +572,10 @@ def memory_limit_problems(profile: Mapping[str, Any]) -> list[str]:
     problems += [
         f"memory_limits.records: {s!r} is not one of the profile's memory_scopes"
         for s in sorted(names(limits.get("records")) - scopes)
+    ]
+    problems += [
+        f"memory_limits.bytes: {s!r} is not one of the profile's memory_scopes"
+        for s in sorted(names(limits.get("bytes")) - scopes)
     ]
     problems += [
         f"memory_limits.keep_last: {s!r} is not a platform scope (keep_last compacts platform "

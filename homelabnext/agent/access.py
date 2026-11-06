@@ -299,6 +299,7 @@ def start_session(
     classes: ToolClasses | None = None,
     denylist: Iterable[str] | None = None,
     knowledge: Any = None,
+    resolved_uids: Mapping[str, Any] | None = None,
 ) -> tuple[dict, str]:
     """Assemble a session's context pack with the profile's access block and the project's terms
     (:mod:`homelabnext.agent.terms`) as stable sections.
@@ -308,6 +309,9 @@ def start_session(
 
     ``knowledge``: the profile's :class:`~homelabnext.agent.knowledge.Selection`; it must have
     been selected for this very profile (id and digest), and goes into the volatile tier.
+    ``resolved_uids``: the input items' platform-issued uids and their stored labels, passed to
+    :func:`~homelabnext.agent.pack.assemble_pack` (ADR-0037 decision 7).  The access and terms
+    sections declare no label, so a session pack is ``red`` (decision 8).
 
     The sections are named ``access`` and ``terms`` and are reserved: a manifest that defines
     either is refused, so a manifest cannot replace or remove what the agent is told about its
@@ -345,4 +349,10 @@ def start_session(
         "text": text,
     }
     session_manifest = {**manifest, "sections": [*manifest["sections"], section, terms_section()]}
-    return assemble_pack(session_manifest, inputs, denylist=denylist, knowledge=knowledge)
+    return assemble_pack(
+        session_manifest,
+        inputs,
+        denylist=denylist,
+        knowledge=knowledge,
+        resolved_uids=resolved_uids,
+    )
