@@ -487,14 +487,14 @@ def test_a_write_needs_its_pack_or_unchecked(reader, backend):
     assert backend.load(reader["id"]) == {}
 
 
-def test_verify_is_in_the_schema_but_refused_until_pr4(reader, backend):
+def test_verify_in_a_report_is_applied_from_pr4(reader, backend):
     pack, h = labelled_pack([item(1, "clear")], [item(2, "clear")])
     store = MemoryStore(backend, now=Clock())
     store.apply_updates(reader, [up("add", "k", "v")], pack=pack, pack_hash=h)
     rep = report(reader, h, [up("verify", "k", sources=[uid(1)])])
     assert validate_report(rep, pack, h) == []  # report_result 1.2 carries it
-    with pytest.raises(MemoryUpdateError, match="applies it only from ADR-0037 PR 4"):
-        store.apply_report(reader, rep, pack=pack, pack_hash=h)
+    # ADR-0037 PR 4 (decision 15): the store applies it; test_agent_memory_staleness has the rest
+    assert store.apply_report(reader, rep, pack=pack, pack_hash=h)["revs"] == {"analyst/k": 2}
 
 
 def test_the_list_limits_are_enforced_in_code(reader, backend):

@@ -600,10 +600,11 @@ Backends store data only: `InMemoryBackend` (the fake) and `FileBackend` (one
 **History** ([ADR-0037](adr/0037-agent-memory-is-sourced-historied-and-retractable.md), PR 1,
 decision 6 as amended). Per owner the stored value is `{entries, log}`. Every applied update
 appends one change record (`at`, `scope`, `key`, `op`, `rev`, `value`, `value_digest`, `pack_id`,
-`sources`, `checked`, `tlp`, `closure`; `value` is absent on `retire`) in the same backend
+`sources`, `checked`, `tlp`, `closure`, and `verified_at` once a verifier confirmed it;
+`value` is absent on `retire` and `verify`) in the same backend
 transaction as the entry. A refused batch writes neither, on both backends. `entries` is a cache
 of the log (`fold(log)` rebuilds it). Each entry carries `rev`, `updated_at` and `reasserted_at`,
-which `add` and `replace` set. `rev` starts at 1 on a key's first `add` and rises by one on every
+which `add`, `replace` and `verify` set (and `verified_at`, see "Staleness"). `rev` starts at 1 on a key's first `add` and rises by one on every
 record of the key. It is never restarted or reused, through `retire`, a later `add` and the
 compaction below. A record's `sources`, `checked`, `tlp` and `closure` are set as "Sources and
 labels" says; a migrated record is `sources: []`, `checked: false`, `tlp: red`, with an empty
@@ -737,8 +738,8 @@ never from what the model says.
   source refuses the whole report, named by position only. A `mem:` source must name a revision
   of the pack's memory block (below). An update with
   no sources is stored with `sources: []` and named in the result's `unsourced`. A refusal
-  names an update by its position, never its key. `verify` is in
-  the schema (decision 15) and refused by the store until PR 4. `validate_report` and the store
+  names an update by its position, never its key. A `verify` must also cite at least one
+  source that is not a `mem:` revision (see "Staleness"). `validate_report` and the store
   refuse more than 64 `memory_updates` or 128 `cites`.
 - **A checked write needs its pack.** `apply_report(profile, report, pack=, pack_hash=)` and
   `apply_updates(profile, updates, pack=, pack_hash=)` refuse a write without them, a hash that is
@@ -914,6 +915,37 @@ everything built on it, by an operator, never by a profile.
   memory. Nothing serves reports to other profiles yet (the reader-to-actor handoff passes only
   `output`); ADR-0035's renderer, and the context store's level reads by digest once they serve
   reports, must call it.
+
+**Staleness** ([ADR-0037](adr/0037-agent-memory-is-sourced-historied-and-retractable.md), PR 4,
+decision 15). A model can reassert a fact; only a verifier verifies one.
+- **`verify`** (`{scope, op: verify, key, sources}`) reasserts a live entry: it takes no `value`,
+  bumps `rev`, adds its sources to the entry's and leaves the value as it is. It must cite at
+  least one source the pack rendered that is not a `mem:` revision (memory cannot vouch for
+  memory): `validate_report` and the store refuse one with a value, with only `mem:` sources or
+  none, or citing anything the pack did not render, and a verify of a key that is not live. It
+  is a checked write only (`unchecked=True` refuses it). `add`, `replace` and `verify` set the
+  entry's `reasserted_at` to the record's time; `retire` keeps it.
+- **`verified_at`** is absent until a `Verifier` sets it. `homelabnext.agent.memory.Verifier` is
+  a protocol with one method, `verify(request: VerifyRequest) -> bool`; **none ships**.
+  `MemoryStore(verifier=...)` asks it about every `add`, `replace` and `verify` it applies, inside
+  the transaction (so it should be quick and never write or call back into the store), with the
+  owner, scope, key, op, rev, the value the entry will hold, its digest, the effective sources,
+  the pack id and whether the write was checked. Only `True` stamps the record's `verified_at`
+  (its own `at`); anything else, or an exception (logged by type, never echoed), leaves it unset.
+  A `replace` the verifier does not confirm clears the entry's `verified_at` (the value
+  changed); a `verify` it does not confirm keeps the earlier one.
+- **Stale reads.** `read(profile, scope, stale_after=timedelta)` adds `stale: {key:
+  {reasserted_at, verified_at?}}` for each returned entry whose `verified_at` is absent or older
+  than the budget; `as_of(..., stale_after=)` judges the same at `t`, from the stamps as they
+  stood then. Without `stale_after` neither result has `stale`. **Until a verifier ships, every
+  entry is stale under any `stale_after`**, by design. A default budget per scope is ADR-0037
+  follow-up 5.
+- **The pack's memory block reports it.** `memory_block_input(..., stale_after=)` gives each
+  entry `stale`, `reasserted_at` and, when set, `verified_at`, and `assemble_pack` records them in
+  the block (it refuses a malformed or partial set). Staleness is reported, not ranked: the
+  renderer decides where a stale entry goes (ADR-0035 decision 7 as ADR-0037 decision 17
+  amends it). `fold`, compaction (a range record keeps its folded state's stamps), `history` and
+  `as_of` carry both stamps on both backends.
 
 Two stores are called memory, and only this one carries the M-09 guarantees. The broker's
 `memory.write` action (the `memory` lane of `examples/broker/manifest.yml`, [Broker](broker.md),

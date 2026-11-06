@@ -21,6 +21,8 @@ summary_of: outline:sha256:cc0b15786d3b8d62
   13, narrow alias closure, a `mem:` source's own revision, settings fixed on a rerun; decision
   14, input items matched by uid, quarantined sections, purge leaving no guessable digest; see
   the amendments under each)
+- **Amended:** 2026-11-06 (PR 4: decision 15, how a verifier is asked and what clears
+  `verified_at`; see the amendment under it)
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
@@ -524,6 +526,21 @@ was shown, never from what the model says about its sources.
       than the budget, with `reasserted_at` beside it. So until a verifier ships, every entry is
       stale under any `stale_after`, by design.
 
+    *Amendment (2026-11-06, PR 4):*
+    - `verify` is a checked write only: an unchecked platform write has no pack, so it cannot
+      cite a source the pack rendered. A verify of a key that is not live is refused, and so is
+      one with a value. `validate_report` refuses the malformed ones too.
+    - The store asks its `Verifier` (`MemoryStore(verifier=)`) about every `add`, `replace` and
+      `verify` it applies, inside the transaction. Only `True` stamps the record's `verified_at`
+      (the record's own time); an exception verifies nothing and refuses nothing. A `replace` the
+      verifier does not confirm clears the entry's `verified_at`, since the value changed; a
+      `verify` it does not confirm keeps the earlier one.
+    - `as_of(..., stale_after=)` judges staleness at `t`, from the stamps as they stood then.
+      `memory_block_input(..., stale_after=)` marks each entry `stale` with its stamps, and the
+      pack's memory block records them; the renderer decides their rank (decision 17).
+    - A range record keeps its folded state's `reasserted_at` and `verified_at`, so the fold
+      reproduces both.
+
 ### Evals (PR 5)
 
 16. **Memory is judged by replay.** A fixture history of reports and packs, with timestamps,
@@ -622,7 +639,9 @@ was shown, never from what the model says about its sources.
     - `owners()` and the deny log passed into `transact`;
     - the `retracted=` arguments, the import-graph test and the broker-validate refusal;
     - decisions 17 and 18.
-  - **PR 4:** `verify`, `reasserted_at`, `verified_at` and the `Verifier` protocol.
+  - **PR 4:** `verify`, `reasserted_at`, `verified_at` and the `Verifier` protocol (shipped:
+    `MemoryStore(verifier=)`, `read`/`as_of(..., stale_after=)` and
+    `memory_block_input(..., stale_after=)`; no `Verifier` implementation ships).
   - **PR 5:** the replay fixture and its golden answers.
   - **Docs:** `docs/modules/egress.md`'s line on memory stores, once the withheld read ships.
 - **Follow-ups** (named here, decided later, each by amending this ADR):

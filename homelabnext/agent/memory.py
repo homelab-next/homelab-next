@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Agent memory (checklist M-09): written only through validated memory updates, read only by
-its owner, historied (ADR-0037 PR 1), and sourced and labelled (PR 2).
+its owner, historied (ADR-0037 PR 1), sourced and labelled (PR 2), retractable (PR 3), and
+stale until a verifier says otherwise (PR 4).
 
 An agent does not get a writable store.  It hands back ``memory_updates`` in its
-``report_result`` (``{scope, op: add|replace|retire, key, value, sources}``) and the platform
+``report_result`` (``{scope, op: add|replace|retire|verify, key, value, sources}``) and the platform
 applies them here, after validating them exactly as the report schema does.  Reads are scoped to the
 agent profile that owns the memory.
 
@@ -15,7 +16,9 @@ agent profile that owns the memory.
   is stored.  There is no ``put``.  A batch holds at most :data:`MAX_UPDATES` updates.
 * **Semantics.**  ``add`` needs a value and a key that is not live; ``replace`` needs a value and
   a live key; ``retire`` needs a live key and no value (the entry is kept as a tombstone, so a
-  retired fact cannot quietly come back as the same key without an ``add``).
+  retired fact cannot quietly come back as the same key without an ``add``); ``verify`` needs a
+  live key, no value, and at least one non-``mem:`` source its pack rendered (it bumps ``rev``
+  and leaves the value as it is; see Staleness below).
 * **Owner and scope.**  Memory belongs to a compiled profile's ``id`` and is partitioned by the
   profile's ``memory_scopes``.  A write or read in a scope the profile does not hold is refused,
   and so is a read of another profile's memory (``owner=``): two profiles that both list a scope
@@ -33,7 +36,8 @@ History (ADR-0037 decisions 1 to 6, decision 6 as amended):
   the entry, so a refused batch writes neither.  ``entries`` is a cache of the log:
   :func:`fold` rebuilds it, and the store refolds every key a batch touches.  An entry carries
   ``rev`` (1 on a key's first ``add``, one more on every record of the key, never restarted or
-  reused), ``updated_at`` and ``reasserted_at`` (set by ``add`` and ``replace``).  A record's
+  reused), ``updated_at``, ``reasserted_at`` (set by ``add``, ``replace`` and ``verify``) and,
+  only once a verifier confirmed it, ``verified_at``.  A record's
   ``sources``, ``checked``, ``tlp`` and ``closure`` are set as below (PR 2); per owner the stored
   value also holds ``exposure`` (decision 9).  Memory stored before the log existed migrates
   once, on its owner's next write, to one ``migrated`` record per entry (``rev: 1``); before that record's
@@ -144,6 +148,26 @@ Memory citing memory and retraction (ADR-0037 decisions 11 to 14, PR 3):
   else of this module), ``retire`` records with ``reason``, ``by`` and ``by_sudo``,
   ``purge`` records, and ``restamp`` records through the same fold; ``purge`` and ``restamp`` (like
   ``aged``) change no entry by themselves.
+
+Staleness (ADR-0037 decision 15, PR 4):
+
+* **A model reasserts; only a verifier verifies.**  ``add``, ``replace`` and ``verify`` set the
+  entry's ``reasserted_at`` to the record's time.  ``verify`` (a checked write only: it must cite
+  a source its pack rendered that is not a ``mem:`` revision,
+  :func:`~homelabnext.agent.report.verify_problems`) takes no value, bumps ``rev``, adds its
+  sources to the entry's, and leaves the value unchanged.
+* **``verified_at``** is absent until a :class:`Verifier` (``MemoryStore(verifier=...)``) sets
+  it.  The store asks the verifier about every ``add``, ``replace`` and ``verify`` it applies,
+  inside the transaction, with a :class:`VerifyRequest`; only ``True`` stamps the record's
+  ``verified_at`` (its own ``at``), and anything else, an exception included, leaves it unset.  A
+  ``replace`` the verifier does not confirm clears the entry's ``verified_at`` (the value
+  changed); a ``verify`` it does not confirm keeps the earlier one.  The protocol is defined and
+  no implementation ships, so today every entry is stale.
+* **Stale reads.**  ``read(..., stale_after=)`` reports, beside the entries, each shown entry
+  whose ``verified_at`` is absent or older than the budget, with its ``reasserted_at``;
+  :func:`memory_block_input` (``stale_after=``) marks such entries in the pack's memory block.
+  The renderer, not the store, decides how a stale entry ranks (decision 17, ADR-0035
+  decision 7).  ``fold``, compaction and :meth:`MemoryStore.as_of` carry both stamps.
 """
 
 from __future__ import annotations
@@ -200,13 +224,15 @@ from .report import (
     limit_problems,
     source_problems,
     validate_report,
+    verify_problems,
 )
 from .schemas import schema_error_shapes, schema_property_names
 from .screen import SECRET_TYPES, Screener
 
-#: the ops the store applies; ``verify`` is in report_result 1.2 but applied only from ADR-0037
-#: PR 4 (decision 15)
-OPS = ("add", "replace", "retire")
+#: the ops the store applies (``verify``: ADR-0037 decision 15)
+OPS = ("add", "replace", "retire", "verify")
+#: the ops that reassert a fact (set ``reasserted_at``) and that a :class:`Verifier` is asked about
+REASSERTING = frozenset({"add", "replace", "verify"})
 #: updates in one batch (ADR-0037 decision 7 keeps list limits in code)
 MAX_UPDATES = MAX_MEMORY_UPDATES
 #: identifiers in one record's base-source closure (ADR-0037 decision 10)
@@ -256,6 +282,7 @@ RECORD_FIELDS = (
     "reason",
     "by",
     "by_sudo",
+    "verified_at",
 )
 #: the label of a record with nothing to lower it: a migrated or unchecked record, and every
 #: record while packs carry no labels (ADR-0037 decision 8)
@@ -419,6 +446,36 @@ class _Check:
 
 
 Deny = dict[str, list[dict[str, Any]]]  # {"log": [deny records], "reach": [marks]}
+
+
+@dataclass(frozen=True)
+class VerifyRequest:
+    """What a :class:`Verifier` is asked about: the record the store is about to append for
+    ``owner``'s ``scope/key`` (``op`` one of :data:`REASSERTING`, its ``rev``), the value the
+    entry will hold (None when the log no longer holds it: compacted or purged) and its digest,
+    the entry's effective sources after the record, the pack it came from (None for an unchecked
+    platform write) and whether it was checked against that pack."""
+
+    owner: str
+    scope: str
+    key: str
+    op: str
+    rev: int
+    value: str | None
+    value_digest: str | None
+    sources: tuple[str, ...]
+    pack_id: str | None
+    checked: bool
+
+
+class Verifier(Protocol):
+    """Checks a fact against something other than the model that wrote it (ADR-0037 decision
+    15).  ``verify`` returns ``True`` only when the fact holds now; the store then stamps the
+    record's ``verified_at``.  It runs inside the backend's transaction (under the owner's lock),
+    so it should be quick, do no writes of its own and never call back into the store.  No
+    implementation ships: until one does, every entry is stale."""
+
+    def verify(self, request: VerifyRequest) -> bool: ...
 
 
 class MemoryBackend(Protocol):
@@ -1161,18 +1218,28 @@ def _step(entry: dict[str, Any] | None, rec: Mapping[str, Any]) -> dict[str, Any
         # adds the range spans (``sources`` keeps that union, for dependents)
         effective = rec.get("effective", rec["sources"])
         value, sources, reasserted = None, list(effective), rec.get("reasserted_at")
+        verified = rec.get("verified_at")
         status = rec["status"]
     elif rec.get("migrated"):
         value, sources, reasserted = rec.get("value"), list(rec["sources"]), None
+        verified = None
     elif op == "add":
         value, sources, reasserted = rec.get("value"), list(rec["sources"]), rec["at"]
+        verified = rec.get("verified_at")  # a new fact: verified only if this record was
     elif op == "replace":
         prior = entry["sources"] if entry else []
         value, sources, reasserted = rec.get("value"), _union(prior, rec["sources"]), rec["at"]
+        verified = rec.get("verified_at")  # a new value voids the old verification
+    elif op == "verify":  # reasserts the live value: no value of its own, sources accumulate
+        value = entry.get("value") if entry else None
+        sources = _union(entry["sources"] if entry else [], rec["sources"])
+        reasserted = rec["at"]
+        verified = rec.get("verified_at") or (entry.get("verified_at") if entry else None)
     else:  # retire keeps the value it retires (when its record still holds it)
         value = entry.get("value") if entry else None
         sources = _union(entry["sources"] if entry else [], rec["sources"])
         reasserted = entry.get("reasserted_at") if entry else None
+        verified = entry.get("verified_at") if entry else None
     out: dict[str, Any] = {
         "status": status,
         "op": op,
@@ -1184,6 +1251,8 @@ def _step(entry: dict[str, Any] | None, rec: Mapping[str, Any]) -> dict[str, Any
         "checked": rec["checked"],
         "tlp": rec["tlp"],
     }
+    if verified:  # absent until a Verifier set it (ADR-0037 decision 15)
+        out["verified_at"] = verified
     if rec.get("pack_id"):
         out["pack_id"] = rec["pack_id"]
     return out
@@ -1252,6 +1321,8 @@ def _squash(recs: list[Record], kind: str) -> Record:
         "closure": _union(*(r["closure"] for r in recs)),
         "reasserted_at": state["reasserted_at"],
     }
+    if state.get("verified_at"):
+        out["verified_at"] = state["verified_at"]
     if truncated:
         out["truncated"] = True
     if any(r.get("purged") for r in recs):
@@ -1359,6 +1430,7 @@ def _apply(
     profile: VerifiedProfile,
     result: dict[str, Any] | None = None,
     deny: DenySet | None = None,
+    verifier: Verifier | None = None,
 ) -> Stored:
     """Apply ``updates`` stamped no earlier than ``now`` or the log's latest record: append
     their records (sources, label and closure set from ``check``), store the pack's exposure,
@@ -1376,7 +1448,10 @@ def _apply(
     decision 14): a checked batch whose pack rendered a denied name, or whose memory block shows
     a marked revision, is refused whole; an update whose closure reaches a denied name refuses a
     checked batch and is dropped (and reported) from an unchecked one.  (``MemoryAdmin`` writes
-    its own records, outside this function.)"""
+    its own records, outside this function.)
+
+    ``verifier`` (ADR-0037 decision 15) is asked about every ``add``, ``replace`` and ``verify``
+    that is about to be appended; only ``True`` stamps the record's ``verified_at``."""
     entries: Memory = stored["entries"]
     records: list[Record] = stored["log"]
     exposure: dict[str, Any] = dict(stored.get("exposure") or {})
@@ -1421,12 +1496,12 @@ def _apply(
             problems.append(f"{where}: add of a key that is already live (use replace)")
         elif u["op"] == "replace" and not live:
             problems.append(f"{where}: replace of a key that is not live (use add)")
-        elif u["op"] == "retire" and not live:
-            problems.append(f"{where}: retire of a key that is not live")
+        elif u["op"] in ("retire", "verify") and not live:
+            problems.append(f"{where}: {u['op']} of a key that is not live")
         elif u["op"] in ("add", "replace") and not has_value:
             problems.append(f"{where}: {u['op']} needs a value")
-        elif u["op"] == "retire" and has_value:
-            problems.append(f"{where}: retire takes no value")
+        elif u["op"] in ("retire", "verify") and has_value:
+            problems.append(f"{where}: {u['op']} takes no value")
         else:
             k = (u["scope"], u["key"])
             rev = max(cur["rev"] if cur else 0, high.get(u["scope"], 0)) + 1
@@ -1482,6 +1557,22 @@ def _apply(
                     dropped_in[u["scope"]] = dropped_in.get(u["scope"], 0) + 1
                 continue
             rec["closure"] = closure
+            if verifier is not None and u["op"] in REASSERTING:
+                ask = VerifyRequest(
+                    owner=owner,
+                    scope=u["scope"],
+                    key=u["key"],
+                    op=u["op"],
+                    rev=rev,
+                    value=entry["value"],
+                    value_digest=rec.get("value_digest"),
+                    sources=tuple(entry["sources"]),
+                    pack_id=check.pack_id,
+                    checked=check.checked,
+                )
+                if _verified(verifier, ask):
+                    rec["verified_at"] = at
+                    entry = _step(cur, rec)
             # platform scopes are written unchecked only, so their records (and the range records
             # they fold into) never point at an exposure (ADR-0037 decision 9, amended)
             if check.checked and u["scope"] in _platform_scopes(profile):  # never: _check refuses
@@ -1580,6 +1671,42 @@ def _apply(
         result["dropped_in"] = dropped_in
         result["touched"] = list(touched)
     return {"entries": entries, "log": records, "exposure": exposure}
+
+
+def _verified(verifier: Verifier, request: VerifyRequest) -> bool:
+    """Whether ``verifier`` confirms ``request``: exactly ``True``.  A verifier that raises
+    confirms nothing (the entry stays stale) and is logged, never echoed into a refusal."""
+    try:
+        return verifier.verify(request) is True
+    except Exception as exc:  # a broken verifier must not refuse a write, nor verify one
+        log.warning(
+            "memory verifier %s raised %s for %s; the record is not verified",
+            type(verifier).__name__,
+            type(exc).__name__,
+            request.owner,
+        )
+        return False
+
+
+def _stale(entry: Mapping[str, Any], cutoff: str) -> bool:
+    """Whether ``entry`` is stale against ``cutoff`` (a log stamp): no ``verified_at``, or one
+    older than the cutoff (ADR-0037 decision 15)."""
+    verified = entry.get("verified_at")
+    return not verified or verified < cutoff
+
+
+def _stale_row(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """An entry's staleness stamps: when it was last reasserted and, if ever, verified."""
+    row = {"reasserted_at": entry.get("reasserted_at")}
+    if entry.get("verified_at"):
+        row["verified_at"] = entry["verified_at"]
+    return row
+
+
+def _budget(stale_after: Any) -> timedelta:
+    if not isinstance(stale_after, timedelta) or stale_after < timedelta(0):
+        raise ValueError("stale_after must be a non-negative timedelta")
+    return stale_after
 
 
 def _readable(profile: VerifiedProfile, records: list[Record]) -> tuple[list[Record], int]:
@@ -1690,15 +1817,25 @@ def operator_retire(
 
 
 def memory_block_input(
-    store: MemoryStore, profile: VerifiedProfile, scopes: Iterable[str]
+    store: MemoryStore,
+    profile: VerifiedProfile,
+    scopes: Iterable[str],
+    *,
+    stale_after: timedelta | None = None,
 ) -> list[dict[str, Any]]:
     """The entries platform code renders into ``profile``'s pack from its own memory, as
     :func:`~homelabnext.agent.pack.assemble_pack` takes them (``memory=``): each live entry of
     ``scopes`` within the profile's ceiling, ``{scope, key, rev, value_digest, tlp, closure}``.
     Owner-scoped like :meth:`MemoryStore.read`; the renderer renders the values it reads with
-    ``read`` and passes this beside them (ADR-0037 decision 11)."""
+    ``read`` and passes this beside them (ADR-0037 decision 11).
+
+    With ``stale_after`` each entry also carries ``stale`` (ADR-0037 decision 15: no
+    ``verified_at``, or one older than the budget) and ``reasserted_at`` (and ``verified_at``
+    when a verifier set one), which the pack's memory block records: staleness is reported, and
+    the renderer decides its rank."""
     out: list[dict[str, Any]] = []
     ceiling = read_ceiling(profile)
+    cutoff = _stamp(store._now() - _budget(stale_after)) if stale_after is not None else None
     for scope in sorted(set(scopes)):
         me = store._reader(profile, scope, None)
         stored = store._load(me)
@@ -1710,16 +1847,17 @@ def memory_block_input(
             digests = rec.get("value_digests") or [rec.get("value_digest")]
             if not str(digests[-1] or "").startswith("sha256:"):  # purged: nothing to cite
                 continue
-            out.append(
-                {
-                    "scope": scope,
-                    "key": key,
-                    "rev": e["rev"],
-                    "value_digest": digests[-1],
-                    "tlp": e["tlp"],
-                    "closure": list(rec.get("closure") or ()),
-                }
-            )
+            row = {
+                "scope": scope,
+                "key": key,
+                "rev": e["rev"],
+                "value_digest": digests[-1],
+                "tlp": e["tlp"],
+                "closure": list(rec.get("closure") or ()),
+            }
+            if cutoff is not None:
+                row.update(stale=_stale(e, cutoff), **_stale_row(e))
+            out.append(row)
     return out
 
 
@@ -1729,7 +1867,9 @@ class MemoryStore:
 
     ``now`` is the clock (an aware UTC ``datetime``); ``notifier`` (a
     :class:`~homelabnext.notify.Notifier`) pages a scope reaching its record cap, once per
-    crossing, on ``topic``.  Without a notifier the crossing is logged once per process."""
+    crossing, on ``topic``.  Without a notifier the crossing is logged once per process.
+    ``verifier`` (a :class:`Verifier`; none ships) is the only thing that sets ``verified_at``
+    (ADR-0037 decision 15)."""
 
     def __init__(
         self,
@@ -1738,7 +1878,11 @@ class MemoryStore:
         now: Callable[[], datetime] | None = None,
         notifier: Any | None = None,
         topic: str | None = None,
+        verifier: Verifier | None = None,
     ) -> None:
+        if verifier is not None and not callable(getattr(verifier, "verify", None)):
+            raise TypeError("verifier must implement Verifier (a verify(request) method)")
+        self._verifier = verifier
         self._backend = backend if backend is not None else InMemoryBackend()
         self._now = now if now is not None else _utcnow
         self._notifier = notifier
@@ -1788,12 +1932,14 @@ class MemoryStore:
                 f"{owner}: memory scopes {foreign} are not in the profile's memory_scopes "
                 f"{sorted(scopes)}"
             )
-        verify = [
-            f"memory_updates/{n}: op 'verify' is in report_result 1.2, but the store applies it "
-            "only from ADR-0037 PR 4 (decision 15: a verifier, not a model, verifies a fact)"
-            for n, u in enumerate(updates)
-            if u["op"] == "verify"
-        ]
+        verify = verify_problems(updates)
+        if unchecked is True:
+            verify += [
+                f"memory_updates/{n}: verify is a checked write only (it must cite a source its "
+                "pack rendered)"
+                for n, u in enumerate(updates)
+                if u["op"] == "verify"
+            ]
         if verify:
             raise MemoryUpdateError([*verify, "nothing was applied"])
         check = self._check(profile, updates, pack, pack_hash, pack_id, unchecked)
@@ -1810,7 +1956,7 @@ class MemoryStore:
             # the deny state is read under the same lock: a retraction that landed after the
             # report was validated still refuses it (ADR-0037 decision 14)
             denies = deny_set(deny.get("log") or (), deny.get("reach") or ())
-            return _apply(stored, updates, check, now, profile, result, denies)
+            return _apply(stored, updates, check, now, profile, result, denies, self._verifier)
 
         unsafe = getattr(self._backend, "deny_problem", None)
         problem = unsafe() if callable(unsafe) else None
@@ -2027,26 +2173,39 @@ class MemoryStore:
         *,
         owner: str | None = None,
         include_retired: bool = False,
+        stale_after: timedelta | None = None,
     ) -> dict[str, Any]:
         """``{"entries": {key: value}, "withheld": n}``: the live entries of one scope of the
         caller's own memory that its ceiling (:func:`read_ceiling`) allows, and how many it does
         not.  A withheld entry is never returned, and neither is its key.  The shape matches
         :meth:`history` and :meth:`as_of` (a plain dict, so no operation drops ``withheld``).
 
+        With ``stale_after`` (a non-negative ``timedelta``) the result also has ``stale``:
+        ``{key: {"reasserted_at", "verified_at"?}}`` for each returned entry whose
+        ``verified_at`` is absent or older than ``stale_after`` before now (ADR-0037 decision
+        15).  Until a :class:`Verifier` ships, that is every entry, under any budget.
+
         ``owner`` other than the caller's own profile id is a cross-agent read and is refused.
         """
         me = self._reader(profile, scope, owner)
+        cutoff = _stamp(self._now() - _budget(stale_after)) if stale_after is not None else None
         ceiling = read_ceiling(profile)
         entries = self._load(me)["entries"].get(scope, {})
         shown, withheld = {}, 0
+        stale: dict[str, dict[str, Any]] = {}
         for k, e in sorted(entries.items()):
             if e.get("status") != "live" and not include_retired:
                 continue
             if tlp.allows(ceiling, e.get("tlp")):
                 shown[k] = e["value"]
+                if cutoff is not None and _stale(e, cutoff):
+                    stale[k] = _stale_row(e)
             else:
                 withheld += 1
-        return {"entries": shown, "withheld": withheld}
+        out: dict[str, Any] = {"entries": shown, "withheld": withheld}
+        if cutoff is not None:
+            out["stale"] = stale
+        return out
 
     def history(
         self, profile: VerifiedProfile, scope: str, key: str, *, owner: str | None = None
@@ -2071,11 +2230,20 @@ class MemoryStore:
         return {"records": shown, "withheld": withheld}
 
     def as_of(
-        self, profile: VerifiedProfile, scope: str, t: datetime, *, owner: str | None = None
+        self,
+        profile: VerifiedProfile,
+        scope: str,
+        t: datetime,
+        *,
+        owner: str | None = None,
+        stale_after: timedelta | None = None,
     ) -> dict[str, Any]:
         """What ``profile`` believed in ``scope`` at ``t`` (an aware datetime), rebuilt from the
         log: ``{"at", "entries": {key: value}, "compacted": [keys], "purged": [keys],
-        "aged_out": bool, "withheld": n}``.  A key whose value at ``t`` an operator purged is
+        "aged_out": bool, "withheld": n}``.  With ``stale_after``, also ``stale`` as
+        :meth:`read` gives it, judged at ``t`` (an entry whose ``verified_at`` at ``t`` was absent
+        or older than ``t - stale_after``) with the stamps as they stood then (ADR-0037 decision
+        15).  A key whose value at ``t`` an operator purged is
         listed in ``purged`` (ADR-0037 decision 14), never given a value.
 
         A key whose state at ``t`` lies in folded records (a range, a tombstone, or history
@@ -2091,6 +2259,7 @@ class MemoryStore:
         me = self._reader(profile, scope, owner)
         ceiling = read_ceiling(profile)
         when = _stamp(t)
+        cutoff = _stamp(t - _budget(stale_after)) if stale_after is not None else None
         mine = [r for r in self._load(me)["log"] if r["scope"] == scope]
         state: dict[str, dict[str, Any]] = {}
         held: dict[str, bool] = {}  # key -> the value in effect at t is not in the log
@@ -2126,18 +2295,18 @@ class MemoryStore:
         hidden = {k for k, v in label.items() if not tlp.allows(ceiling, v)}
         purged = sorted({k for k in live if blanked.get(k)} - hidden)
         compacted = sorted((set(unknown) | {k for k in live if held.get(k)}) - hidden - set(purged))
-        return {
+        shown = [k for k in sorted(live - hidden) if k not in compacted and k not in purged]
+        out: dict[str, Any] = {
             "at": when,
-            "entries": {
-                k: state[k]["value"]
-                for k in sorted(live - hidden)
-                if k not in compacted and k not in purged
-            },
+            "entries": {k: state[k]["value"] for k in shown},
             "compacted": compacted,
             "purged": purged,
             "aged_out": aged_out,
             "withheld": len(hidden),
         }
+        if cutoff is not None:
+            out["stale"] = {k: _stale_row(state[k]) for k in shown if _stale(state[k], cutoff)}
+        return out
 
     # ------------------------------------------------------------ internals
     def _reader(self, profile: VerifiedProfile, scope: str, owner: str | None) -> str:
