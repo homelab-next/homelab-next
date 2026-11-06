@@ -1169,7 +1169,7 @@
       "outputs": "one line per private helper or stale allowlist entry",
       "owner": "maintainers",
       "path": "tools/shared_helpers_lint.py",
-      "purpose": "Fail when a private notify, state, lake-query or schema-registry helper is re-implemented outside the shared libraries (reviewed allowlist).",
+      "purpose": "Fail when a private notify, state, lake-query, schema-registry, broker-tier or records-inbox helper is re-implemented outside the shared libraries (reviewed allowlist).",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",

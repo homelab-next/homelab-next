@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: shared-helpers-lint
 #   kind: check
-#   purpose: Fail when a private notify, state, lake-query or schema-registry helper is re-implemented outside the shared libraries (reviewed allowlist).
+#   purpose: Fail when a private notify, state, lake-query, schema-registry, broker-tier or records-inbox helper is re-implemented outside the shared libraries (reviewed allowlist).
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:helpers-lint]
 #   invariant: [M-03]
@@ -15,7 +15,7 @@
 #     "2": usage error or a missing dependency
 """Gate (checklist M-03): helpers are shared, not copied.
 
-Four seams have one shared library each, with a fake (ADR-0003). Code outside the library that
+Each of these seams has one shared library, with a fake (ADR-0003). Code outside the library that
 re-implements the seam is a private helper: it drifts, it has no fake, and its failure modes are
 not the ones the library was tested for. This lint walks the AST of every runtime Python file and
 reports:
@@ -40,9 +40,15 @@ reports:
           ``referencing.Resource.from_contents`` or ``<specification>.create_resource``
           -> use ``homelabnext.schema_registry`` (``schema_registry``, ``registry_of``,
           ``validator``)
+  records a private writer of a records inbox: a function (or module body) that names the inbox
+          (a non-docstring string ``inbox`` or holding an ``inbox`` path segment, or the name
+          ``AGENT_LANE``) and writes a file (``open`` for writing, ``os.open`` with ``O_CREAT``,
+          ``write_text``/``write_bytes``, ``os.link``/``os.replace``/``os.rename``, a ``shutil``
+          copy or move, ``write_exclusive``/``write_temp``)
+          -> use ``homelabnext.records.inbox`` (``stamp`` + ``write_inbox``)
 
 The shared libraries own their seam (``homelabnext/notify``, ``homelabnext/state``,
-``homelabnext/lake``, ``homelabnext/grants.py``, ``homelabnext/schema_registry.py``). Test code is out of scope (tests exercise the seams on purpose). Every other
+``homelabnext/lake``, ``homelabnext/grants.py``, ``homelabnext/schema_registry.py``, ``homelabnext/records``). Test code is out of scope (tests exercise the seams on purpose). Every other
 exemption is an entry in ``tools/shared_helpers.allow.yml`` naming the path, the rule and the
 reason, so the list is reviewed in one place; an entry that no longer matches anything is
 reported as stale.
@@ -75,6 +81,7 @@ RULES = {
     "notify": "private notification sender; use homelabnext.notify (Notifier + Sender)",
     "state": "ad-hoc JSON state file; use homelabnext.state (StateStore / KeyedState)",
     "lake": "raw lake-query client; use homelabnext.lake (LakeClient and its adapters)",
+    "records": "private records-inbox writer; use homelabnext.records.inbox (stamp + write_inbox)",
     "tiers": "private broker tier ranking; use homelabnext.grants (TIER_RANK, grant_for)",
     "schema": "private schema registry; use homelabnext.schema_registry",
 }
@@ -82,6 +89,7 @@ OWNERS = {
     "notify": ("homelabnext/notify/",),
     "state": ("homelabnext/state/",),
     "lake": ("homelabnext/lake/",),
+    "records": ("homelabnext/records/",),
     "tiers": ("homelabnext/grants.py",),
     "schema": ("homelabnext/schema_registry.py",),
 }
@@ -114,6 +122,18 @@ HTTP_SEND = {
 NTFY_HEADERS = {"title", "priority", "tags", "x-title", "x-priority", "x-tags"}
 LAKE_MODULES = ("trino", "duckdb", "pyiceberg", "sqlite3")
 ATOMIC = {"os.replace", "os.rename"}
+#: calls that put a file (or a name for one) on disk, for the ``records`` rule
+FILE_WRITES = {
+    "os.link",
+    "os.replace",
+    "os.rename",
+    "shutil.copy",
+    "shutil.copy2",
+    "shutil.copyfile",
+    "shutil.move",
+}
+WRITER_HELPERS = ("write_exclusive", "write_temp")
+INBOX_SEGMENT = re.compile(r"(?:^|/)inbox(?:/|$)")
 BROKER_TIERS = frozenset({"read", "write", "execute", "privileged"})
 SCHEMA_BUILD = {"referencing.Registry", "referencing.Resource.from_contents"}
 STATE_WORD = re.compile(r"(?i)(?:^|[^a-z])state(?:s|_file|_path|_dir)?(?:[^a-z]|$)")
@@ -224,6 +244,44 @@ def _names_state(node: ast.AST, docs: set[int]) -> bool:
     return False
 
 
+def _names_inbox(nodes: list[ast.AST], docs: set[int]) -> bool:
+    for n in nodes:
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs:
+            if INBOX_SEGMENT.search(n.value):
+                return True
+        elif (isinstance(n, ast.Name) and n.id == "AGENT_LANE") or (
+            isinstance(n, ast.Attribute) and n.attr == "AGENT_LANE"
+        ):
+            return True
+    return False
+
+
+def _writes_file(call: ast.Call, aliases: dict[str, str]) -> bool:
+    name = _dotted(call.func, aliases)
+    if name in FILE_WRITES or name.rsplit(".", 1)[-1] in WRITER_HELPERS:
+        return True
+    if isinstance(call.func, ast.Attribute) and call.func.attr in ("write_text", "write_bytes"):
+        return True
+    if name == "os.open":
+        return any(
+            isinstance(sub, ast.Attribute | ast.Name)
+            and _dotted(sub, aliases).rsplit(".", 1)[-1] == "O_CREAT"
+            for arg in call.args[1:2]
+            for sub in ast.walk(arg)
+        )
+    if name in ("open", "io.open") or (
+        isinstance(call.func, ast.Attribute) and call.func.attr == "open"
+    ):
+        modes = [*call.args[1:2], *(k.value for k in call.keywords if k.arg == "mode")]
+        if isinstance(call.func, ast.Attribute) and name not in ("io.open", "os.open"):
+            modes = [*call.args[:1], *(k.value for k in call.keywords if k.arg == "mode")]
+        return any(
+            isinstance(m, ast.Constant) and isinstance(m.value, str) and set(m.value) & set("wxa")
+            for m in modes
+        )
+    return False
+
+
 def lint_source(source: str, rel: str = "<string>") -> list[Finding]:
     tree = ast.parse(source, filename=rel)
     aliases = _aliases(tree)
@@ -289,6 +347,16 @@ def lint_source(source: str, rel: str = "<string>") -> list[Finding]:
             found.append(
                 Finding(rel, sends[0].lineno, "notify", f"{where}: HTTP send to an ntfy target")
             )
+
+        if _names_inbox(nodes, docs):
+            inbox_writes = [c for c in calls if _writes_file(c, aliases)]
+            if inbox_writes:
+                where = getattr(scope, "name", "module body")
+                found.append(
+                    Finding(
+                        rel, inbox_writes[0].lineno, "records", f"{where}: writes into an inbox"
+                    )
+                )
 
         if scope is tree:
             continue  # state files are written by functions; module-level writes are scripts

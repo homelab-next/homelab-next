@@ -95,6 +95,16 @@ approval, and every submit, stores its request and pauses the token in that same
 execution resumes, and :meth:`token_run` then runs the request it paused on.  A sweep at start
 ends a run whose broker is gone as ``crashed`` and drops ended executions past
 ``codemode.retention_days``.
+
+**Where each part lives.**  :class:`BrokerService` is one facade built from one module per
+privilege boundary, so each can be reviewed on its own: this module keeps setup, the decision
+view, the audit trail, argument checks, admission and execution, and manifest loading;
+:mod:`~homelabnext.broker.requests` the request lifecycle (``call``, ``submit``, ``run``,
+``cancel``, what a caller may see); :mod:`~homelabnext.broker.approvals` the approver's verdicts
+and the pending listings; :mod:`~homelabnext.broker.paging` approval pages, lane-quota notices and
+the notifier; :mod:`~homelabnext.broker.codemode_tokens` Code Mode tokens.  What they share
+(refusal reasons, defaults, :data:`TRANSPORT_PEER`) is :mod:`~homelabnext.broker.common`, and every
+name of it is importable from here.
 """
 
 from __future__ import annotations
@@ -102,20 +112,13 @@ from __future__ import annotations
 import contextlib
 import copy
 import hashlib
-import heapq
 import hmac
 import json
-import logging
 import os
-import re
-import secrets
 import tempfile
 import threading
 import time
-import urllib.parse
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextvars import ContextVar
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -126,40 +129,166 @@ from conformance.protocols.broker import (
     AuditRecord,
     BrokerError,
     Denied,
-    InvalidArguments,
-    IssuedToken,
-    RequestStatus,
     arg_problems,
-    code_digest,
 )
 from homelabnext.agent.schemas import schema_errors
 from homelabnext.generators.safe import CONTROL_RE
-from homelabnext.notify.core_pairs import BROKER_APPROVAL, BROKER_LANE_QUOTA
 
 from . import (
-    DEFAULT_APPROVAL_TTL_S,
-    approval_note_max,
-    approver_kind,
-    approver_refusal,
     check_manifest_handlers,
     decide,
-    decide_access,
     request_digest,
     validation,
 )
 from . import execute as _exec
 from . import lanes as _lanes
+from .approvals import _ApprovalsMixin, check_approvals_url
+from .codemode_tokens import _CodemodeTokensMixin
+from .common import (
+    _APPROVAL_STATES as _APPROVAL_STATES,
+)
+from .common import (
+    _AUDIT_FAILURES as _AUDIT_FAILURES,
+)
+from .common import (
+    _PAGE_IDS as _PAGE_IDS,
+)
+from .common import (
+    _SUMMARY_BYTES as _SUMMARY_BYTES,
+)
+from .common import (
+    _SVC_RE as _SVC_RE,
+)
+from .common import (
+    _TOKEN as _TOKEN,
+)
+from .common import (
+    APPROVAL_CLEARED as APPROVAL_CLEARED,
+)
+from .common import (
+    APPROVAL_TITLE as APPROVAL_TITLE,
+)
+from .common import (
+    AUDIT_INCOMPLETE as AUDIT_INCOMPLETE,
+)
+from .common import (
+    AUDIT_UNAVAILABLE as AUDIT_UNAVAILABLE,
+)
+from .common import (
+    CALLABLE_HANDLER as CALLABLE_HANDLER,
+)
+from .common import (
+    COALESCE_WINDOW_S as COALESCE_WINDOW_S,
+)
+from .common import (
+    DEFAULT_CODEMODE_MAX_CALLS as DEFAULT_CODEMODE_MAX_CALLS,
+)
+from .common import (
+    DEFAULT_CODEMODE_WALL_S as DEFAULT_CODEMODE_WALL_S,
+)
+from .common import (
+    DEFAULT_LIVE_TOKENS_PER_ACTOR as DEFAULT_LIVE_TOKENS_PER_ACTOR,
+)
+from .common import (
+    DEFAULT_NOTIFY_WINDOW_S as DEFAULT_NOTIFY_WINDOW_S,
+)
+from .common import (
+    DEFAULT_PENDING_PER_ACTOR as DEFAULT_PENDING_PER_ACTOR,
+)
+from .common import (
+    DEFAULT_TOKEN_RETENTION_DAYS as DEFAULT_TOKEN_RETENTION_DAYS,
+)
+from .common import (
+    DEFAULT_TOKEN_TTL_MARGIN_S as DEFAULT_TOKEN_TTL_MARGIN_S,
+)
+from .common import (
+    EMPTY_MANIFEST as EMPTY_MANIFEST,
+)
+from .common import (
+    LANE_NOTICE_INTERVAL_S as LANE_NOTICE_INTERVAL_S,
+)
+from .common import (
+    LANE_QUOTA_CLEARED as LANE_QUOTA_CLEARED,
+)
+from .common import (
+    LANE_QUOTA_TITLE as LANE_QUOTA_TITLE,
+)
+from .common import (
+    NOT_A_RUNNER as NOT_A_RUNNER,
+)
+from .common import (
+    NOT_OWNER as NOT_OWNER,
+)
+from .common import (
+    NOTIFY_WARN_EVERY_S as NOTIFY_WARN_EVERY_S,
+)
+from .common import (
+    PAGE_RETRY_S as PAGE_RETRY_S,
+)
+from .common import (
+    REQUEST_DENIED as REQUEST_DENIED,
+)
+from .common import (
+    RUNNER_HANDLER as RUNNER_HANDLER,
+)
+from .common import (
+    SPEND_OUTCOMES as SPEND_OUTCOMES,
+)
+from .common import (
+    TOKEN_SWEEP_INTERVAL_S as TOKEN_SWEEP_INTERVAL_S,
+)
+from .common import (
+    TOO_MANY_PENDING as TOO_MANY_PENDING,
+)
+from .common import (
+    TRANSPORT_PEER as TRANSPORT_PEER,
+)
+from .common import (
+    UNKNOWN_TOKEN_CALLER as UNKNOWN_TOKEN_CALLER,
+)
+from .common import (
+    ManifestError as ManifestError,
+)
+from .common import (
+    _Action as _Action,
+)
+from .common import (
+    _carry as _carry,
+)
+from .common import (
+    _contract_error as _contract_error,
+)
+from .common import (
+    _hidden as _hidden,
+)
+from .common import (
+    _reasoned as _reasoned,
+)
+from .common import (
+    _reasoned_invalid as _reasoned_invalid,
+)
+from .common import (
+    _Refused as _Refused,
+)
+from .common import (
+    _stamp as _stamp,
+)
+from .common import (
+    _utcnow as _utcnow,
+)
+from .common import (
+    log as log,
+)
+from .paging import _PagingMixin, _takes_scope
 from .relay import BROKER_SOURCE
+from .requests import _RequestsMixin
 from .state import (
     DECISION_KINDS,
     FileApprovalStore,
     StateDir,
-    StateError,
-    is_id,
     new_id,
-    process_identity,
 )
-from .tokens import BEARER_PREFIX, TokenStore, execution_key, secret_digest
+from .tokens import TokenStore
 
 __all__ = [
     "DEFAULT_NOTIFY_WINDOW_S",
@@ -172,129 +301,6 @@ __all__ = [
     "make",
     "validate_manifest",
 ]
-
-NOT_OWNER = "not-request-owner"
-TOO_MANY_PENDING = "too-many-pending"
-#: an action was not run because its ``started`` record could not be written
-AUDIT_UNAVAILABLE = "audit-unavailable"
-#: an action ran and its outcome record could not be written (its ``started`` record stands)
-AUDIT_INCOMPLETE = "audit-incomplete"
-#: what writing an audit record can raise when the trail cannot take it
-_AUDIT_FAILURES = (OSError, StateError, BrokerError)
-log = logging.getLogger("homelabnext.broker.service")
-#: manifest ``quotas`` defaults: requests one actor may have pending at once, and the least time
-#: between two of its approval pages (s)
-DEFAULT_PENDING_PER_ACTOR = 20
-DEFAULT_NOTIFY_WINDOW_S = 300.0
-#: request ids an approval page names before it says "and N more"
-_PAGE_IDS = 10
-#: how long after a page that could not be sent (a failed send, a spent budget) it is tried again
-PAGE_RETRY_S = 60.0
-#: the least time between two log lines about failed notifications (s)
-NOTIFY_WARN_EVERY_S = 300.0
-CALLABLE_HANDLER = "builtin/callable"
-EMPTY_MANIFEST = {
-    "manifest_id": "in-process",
-    "default": "deny",
-    "mode": "enforce",
-    "actions": [],
-    "grants": [],
-}
-APPROVAL_TITLE, APPROVAL_CLEARED = BROKER_APPROVAL
-#: decide()'s reason for a request's latest approval -> the approval_state pending() reports
-_APPROVAL_STATES = {
-    "approved": "valid",
-    "approval-expired": "expired",
-    "approval-replayed": "consumed",
-    "approval-denied": "denied",
-}
-#: the operator's notice that an agent's writes into a lane are being refused for its quota
-LANE_QUOTA_TITLE, LANE_QUOTA_CLEARED = BROKER_LANE_QUOTA
-#: the least time between two lane-quota notices for one actor and lane (s)
-LANE_NOTICE_INTERVAL_S = 900.0
-_SUMMARY_BYTES = 1024
-_SVC_RE = re.compile(r"^svc:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
-#: manifest 1.7 ``codemode`` defaults: the most calls a token may carry, the seconds a token may
-#: outlive its run's wall budget, the wall budget of a request that names none, and how many
-#: live tokens one actor may hold at once
-DEFAULT_CODEMODE_MAX_CALLS = 50
-DEFAULT_TOKEN_TTL_MARGIN_S = 10
-DEFAULT_CODEMODE_WALL_S = 60
-DEFAULT_LIVE_TOKENS_PER_ACTOR = 4
-#: how long the tokens of an ended execution are kept, and how often the sweep runs at most
-DEFAULT_TOKEN_RETENTION_DAYS = 7
-TOKEN_SWEEP_INTERVAL_S = 60.0
-#: how a runner may end a token (``spend_token``)
-SPEND_OUTCOMES = ("finished", "paused")
-NOT_A_RUNNER = "not-a-codemode-runner"
-#: refused unknown secrets are audited once per transport peer and this many seconds
-COALESCE_WINDOW_S = 60.0
-#: token_run of a paused request an approver denied: the request was decided, so the refusal
-#: names it (request_id, request_digest), unlike the token refusals
-REQUEST_DENIED = "request-denied"
-#: the in-process handler kind of ``codemode.execute`` (:meth:`BrokerService.register_runner`)
-RUNNER_HANDLER = "builtin/codemode-runner"
-#: the caller of a token-authenticated call whose secret names no token
-UNKNOWN_TOKEN_CALLER = "token:unknown"
-#: the token a call is being made with: every audit record written meanwhile names it
-_TOKEN: ContextVar[Mapping[str, Any] | None] = ContextVar("hnx_broker_token", default=None)
-#: the authenticated transport peer (``uid:<n>``) of the request being served on this thread, set
-#: by :mod:`homelabnext.broker.server`; every audit record written meanwhile carries it as ``via``
-TRANSPORT_PEER: ContextVar[str | None] = ContextVar("hnx_broker_transport_peer", default=None)
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
-def _stamp(t: datetime) -> str:
-    return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-class ManifestError(ValueError):
-    """The manifest, a handler document or a lane is not usable; ``problems`` lists each."""
-
-    def __init__(self, problems: Sequence[str]) -> None:
-        self.problems = list(problems)
-        super().__init__("broker manifest invalid:\n  - " + "\n  - ".join(self.problems))
-
-
-class _Refused(Exception):
-    """Internal: a refusal to audit and turn into the contract's exception."""
-
-    def __init__(self, outcome: str, reason: str, message: str) -> None:
-        super().__init__(message)
-        self.outcome, self.reason = outcome, reason
-
-
-def _reasoned(message: str, reason: str) -> BrokerError:
-    err = BrokerError(message)
-    err.reason = reason  # type: ignore[attr-defined]
-    return err
-
-
-def _carry(err: BrokerError, request: Mapping[str, Any]) -> BrokerError:
-    """``err`` naming the request it refuses (``request_id``, ``request_digest``): a refusal
-    after the request was built says which one, as an answer does."""
-    err.request_id = request["request_id"]  # type: ignore[attr-defined]
-    err.request_digest = request["digest"]  # type: ignore[attr-defined]
-    return err
-
-
-def _reasoned_invalid(message: str, reason: str) -> InvalidArguments:
-    err = InvalidArguments(message)
-    err.reason = reason  # type: ignore[attr-defined]
-    return err
-
-
-def _contract_error(exc: _Refused) -> BrokerError:
-    if exc.outcome == "denied":
-        return Denied(str(exc), reason=exc.reason)
-    err: BrokerError = (
-        InvalidArguments(str(exc)) if exc.outcome == "invalid" else BrokerError(str(exc))
-    )
-    err.reason = exc.reason  # type: ignore[attr-defined]
-    return err
 
 
 # ---------------------------------------------------------------- manifest loading and validation
@@ -506,22 +512,7 @@ def load_manifest(path: str | os.PathLike[str]) -> tuple[dict[str, Any], list[di
 
 
 # ---------------------------------------------------------------- the service
-@dataclass(frozen=True)
-class _Action:
-    name: str
-    kind: str  # callable | exec | lane
-    handler: Any = None  # callable, handler document, or Lane
-    spec: Mapping[str, ArgSpec] | None = None
-
-
-def _hidden(spec: Mapping[str, ArgSpec], name: str) -> bool:
-    """Whether an argument's value is kept out of the audit trail and keyed in the request digest:
-    redaction is the default, so everything but an argument the schema names and does not mark
-    secret."""
-    return name not in spec or spec[name].secret
-
-
-class BrokerService:
+class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeTokensMixin):
     """See the module doc.  One instance per process.  Any number may share ``state_dir`` for
     the exactly-once guarantees (claims, approvals); the pending quota and the open-page state
     are per process, and the lane quotas' ``flock`` is per host: deploy one broker process, on
@@ -1157,1452 +1148,6 @@ class BrokerService:
             request_digest=request["digest"],
         )
         return {"shadow": True, "decision": decision}
-
-    # ---------------------------------------------------------------- the contract: calls
-    def call(self, caller, command, args, *, target: str | None = None):
-        args = dict(args) if isinstance(args, Mapping) else args  # check and run one snapshot
-        act, request, decision = self._admit(caller, command, args, "call", target)
-        if not decision["enforced"]:
-            return self._shadow(caller, act, request, decision, "call")
-        if decision["verdict"] == "needs-approval":
-            self._audit(
-                caller,
-                command,
-                "call",
-                "denied",
-                reason="approval-required",
-                args=args,
-                spec=act.spec,
-                request_id=request["request_id"],
-                request_digest=request["digest"],
-            )
-            raise Denied(f"{command!r} needs approval: submit it", reason="approval-required")
-        return self._run_audited(caller, act, request, args, "call")
-
-    def submit(self, caller, command, args, *, target: str | None = None):
-        # the copy that is checked is the copy that is kept: a caller's later change to its
-        # mapping never reaches the handler
-        args = dict(args) if isinstance(args, Mapping) else args
-        act, request, decision = self._admit(caller, command, args, "submit", target)
-        return self._store(caller, command, args, act, request, decision)
-
-    def _store(self, caller, command, args, act, request, decision, *, page=True) -> str:
-        """Keep an admitted request ``pending`` (the second half of ``submit``); ``page=False``
-        leaves its approval request to the caller (one that holds a lock)."""
-        rid = request["request_id"]
-        secret = {}
-        if act.kind == "callable":
-            secret = {k: v for k, v in args.items() if act.spec.get(k, ArgSpec("str")).secret}
-        record = {
-            "request": request,
-            "kind": act.kind,
-            "verdict": decision["verdict"],
-            "decision_reason": decision["reason"],
-        }
-        with self._submit_lock:
-            if len(self._pending_of(request["actor"])) >= self.pending_per_actor:
-                self._audit(
-                    caller,
-                    command,
-                    "submit",
-                    "denied",
-                    reason=TOO_MANY_PENDING,
-                    args=args,
-                    spec=act.spec,
-                    request_id=rid,
-                    request_digest=request["digest"],
-                )
-                err = Denied(
-                    f"{caller!r} has {self.pending_per_actor} requests pending: run, cancel or "
-                    "wait for a decision on one first",
-                    reason=TOO_MANY_PENDING,
-                )
-                raise _carry(err, request)
-            self.state.put_request(rid, record)
-        if secret:
-            self._secret_args[rid] = secret
-        self._audit(
-            caller,
-            command,
-            "submit",
-            "ok",
-            args=args,
-            spec=act.spec,
-            request_id=rid,
-            request_digest=request["digest"],
-            decision_reason=decision["reason"],
-        )
-        if page and decision["verdict"] == "needs-approval":
-            self._approval_requested(request)
-        return rid
-
-    def _pending_of(self, actor: str) -> list[dict[str, Any]]:
-        """The stored records of ``actor``'s pending requests (the open index: O(open))."""
-        out = []
-        for rid in self.state.open_request_ids():
-            rec = self.state.get_request(rid)
-            if rec and rec["request"]["actor"] == actor:
-                out.append(rec)
-        return out
-
-    def _awaiting(self, actor: str) -> list[dict[str, Any]]:
-        """``actor``'s requests waiting for an approver (no valid approval yet), oldest first."""
-        return [
-            rec["request"]
-            for rec in self._pending_of(actor)
-            if rec["verdict"] == "needs-approval"
-            and self.approval_state(rec["request"]["request_id"], rec["request"]) != "valid"
-        ]
-
-    def _owned(self, caller, request_id, operation):
-        """The stored record when ``caller`` owns ``request_id``; otherwise audit and refuse.
-
-        An unknown id and someone else's id get the same answer, so a foreign request's existence
-        is not disclosed."""
-        rec = self.state.get_request(request_id) if is_id(request_id) else None
-        if rec is not None:
-            op = "cancel" if operation == "cancel" else "read"
-            access = decide_access(
-                self.manifest, rec["request"], caller, op, now=_stamp(self._now())
-            )
-            if access["verdict"] == "allow":
-                return rec
-        action = rec["request"]["action"] if rec else ""
-        self._audit(
-            caller, action, operation, "denied", reason=NOT_OWNER, request_id=str(request_id)[:128]
-        )
-        raise Denied(f"no request {request_id!r} for {caller!r}", reason=NOT_OWNER)
-
-    def status(self, caller, request_id):
-        rec = self._owned(caller, request_id, "status")
-        req = rec["request"]
-        self._audit(caller, req["action"], "status", "ok", request_id=request_id)
-        return RequestStatus(
-            request_id, req["actor"], req["action"], self.state.state_of(request_id)
-        )
-
-    def detail(self, caller, request_id) -> dict[str, Any]:
-        """The owner's full view: request, state, approvals and result (``hnx broker status``).
-        Each approval carries ``approver_kind``: ``human``, ``agent`` or None (no longer an
-        allowlisted approver), judged now against the manifest -- the authoritative answer to
-        "did a person approve this", where an event's ``tier_used`` is only advisory."""
-        st = self.status(caller, request_id)
-        rec = self.state.get_request(request_id)
-        view = self._view()
-        approvals = [
-            {**a, "approver_kind": approver_kind(view, a.get("approver") or {})}
-            for a in self.state.approvals(request_id)
-        ]
-        return {
-            "request": rec["request"],
-            "state": st.state,
-            "verdict": rec["verdict"],
-            "approvals": approvals,
-            "result": self.state.get_result(request_id),
-        }
-
-    def run(self, caller, request_id):
-        rec = self._owned(caller, request_id, "run")
-        req = rec["request"]
-        extra = {"request_id": request_id, "request_digest": req["digest"]}
-        state = self.state.state_of(request_id)
-        if state != "pending":
-            self._audit(caller, req["action"], "run", "invalid", reason="not-pending", **extra)
-            raise _reasoned(f"request {request_id!r} is {state}, not pending", "not-pending")
-        act = self._action(req["action"])
-        args = {**req["params"], **self._secret_args.get(request_id, {})}
-        approval = self._latest_approval(request_id)
-        now = _stamp(self._now())
-        view = self._view()
-        # decide without consuming: the approval is consumed only once this run holds the
-        # request's claim, so a refusal on the way (arguments, a lost claim) never burns it
-        enforce = view.get("mode", "enforce") == "enforce"
-        decision = decide(
-            dict(view, mode="shadow") if enforce else view,
-            req,
-            approval,
-            now=now,
-            store=self.approvals,
-        )
-        if not enforce:
-            return self._shadow(caller, act, req, decision, "run")
-        if decision["verdict"] != "allow":
-            reason = decision["reason"]
-            self._audit(
-                caller,
-                req["action"],
-                "run",
-                "denied",
-                reason=reason,
-                args=req["params"],
-                spec=act.spec if act else None,
-                approval_id=decision.get("approval_id"),
-                **extra,
-            )
-            raise Denied(f"request {request_id!r} may not run: {reason}", reason=reason)
-        try:
-            held = self._secret_args.get(request_id, {})
-            if (
-                act
-                and act.kind == "callable"
-                and any(
-                    act.spec.get(k, ArgSpec("str")).secret and k not in held for k in req["params"]
-                )
-            ):
-                raise _Refused("error", "secret-args-lost", "a secret argument is not held here")
-            self._check_args(act, req["actor"], args, req["created"])
-        except _Refused as exc:
-            self._audit(
-                caller,
-                req["action"],
-                "run",
-                exc.outcome,
-                reason=exc.reason,
-                args=req["params"],
-                spec=act.spec,
-                **extra,
-            )
-            raise _contract_error(exc) from None
-        # the intent is on record before anything changes: when it cannot be written, the request
-        # stays pending and its approval unused, to run once the trail can take it
-        self._started(caller, act, req, args, "run")
-        claimed = self.state.claim(
-            request_id,
-            {
-                "op": "run",
-                "by": caller,
-                "at": now,
-                "instance": self.state.instance_id(),
-                **process_identity(),
-            },
-        )
-        if not claimed:
-            self._audit(caller, req["action"], "run", "invalid", reason="not-pending", **extra)
-            raise _reasoned(f"request {request_id!r} is no longer pending", "not-pending")
-        aid = decision.get("approval_id")
-        if decision["reason"] == "approved" and not self.approvals.consume(aid):
-            # only a run holding the claim consumes, so this means the approval was used
-            # outside this request's run: refuse, and end the claimed request as an error
-            self._secret_args.pop(request_id, None)
-            self._finish(request_id, {"state": "error", "at": now, "reason": "approval-replayed"})
-            self._audit(
-                caller,
-                req["action"],
-                "run",
-                "denied",
-                reason="approval-replayed",
-                approval_id=aid,
-                **extra,
-            )
-            raise Denied(
-                f"request {request_id!r}: approval already used", reason="approval-replayed"
-            )
-        try:
-            result = self._run_audited(caller, act, req, args, "run", started=True)
-        except Exception as exc:  # whatever ends the run, it ends: never "running" forever
-            reason = getattr(exc, "reason", "") or "internal-error"
-            self._finish(request_id, {"state": "error", "at": now, "reason": reason})
-            raise
-        finally:
-            self._secret_args.pop(request_id, None)
-        done = {"state": "done", "at": _stamp(self._now())}
-        if act.kind != "callable" and isinstance(result, Mapping):
-            done["result"] = json.loads(json.dumps(result, default=repr))
-        self._finish(request_id, done)
-        return result
-
-    def _finish(self, request_id: str, doc: dict[str, Any]) -> None:
-        """Record how a claimed run ended.  When the result cannot be written (a full disk), the
-        request reads ``interrupted`` rather than ``running`` forever; the audit trail holds what
-        happened."""
-        try:
-            self.state.put_result(request_id, doc)
-        except (OSError, StateError) as exc:
-            self.state.mark_unfinished(request_id)
-            log.error("request %s: its result cannot be written (%s)", request_id, exc)
-
-    def cancel(self, caller, request_id):
-        rec = self._owned(caller, request_id, "cancel")
-        req = rec["request"]
-        extra = {"request_id": request_id, "request_digest": req["digest"]}
-        claimed = self.state.claim(
-            request_id, {"op": "cancel", "by": caller, "at": _stamp(self._now())}
-        )
-        if not claimed:
-            state = self.state.state_of(request_id)
-            self._audit(caller, req["action"], "cancel", "invalid", reason="not-pending", **extra)
-            raise _reasoned(f"request {request_id!r} is {state}, not pending", "not-pending")
-        self._secret_args.pop(request_id, None)
-        self._audit(caller, req["action"], "cancel", "ok", **extra)
-        if rec["verdict"] == "needs-approval":  # withdrawn by its owner: closed without a message
-            self._notify_settled(request_id, "cancelled by its owner", req["actor"], quiet=True)
-
-    # ---------------------------------------------------------------- approvals
-    def _latest_approval(self, request_id: str) -> dict[str, Any] | None:
-        approved = [a for a in self.state.approvals(request_id) if a["decision"] == "approved"]
-        return approved[-1] if approved else None
-
-    def approval_state(self, request_id: str, request: Mapping[str, Any]) -> str:
-        """Where a request's latest approval stands, judged by :func:`decide` itself (shadow
-        mode: nothing consumed): ``none`` (no approval filed), ``valid`` (it would let the
-        request run now), ``expired`` (past its TTL: a fresh approval may be filed),
-        ``consumed`` (already used), ``denied`` or ``invalid`` (it no longer matches the request
-        or the manifest's approver rules)."""
-        docs = self.state.approvals(request_id)
-        if docs and docs[-1]["decision"] != "approved":
-            return "denied"
-        approval = self._latest_approval(request_id)
-        if approval is None:
-            return "none"
-        probe = decide(
-            dict(self._view(), mode="shadow"),
-            request,
-            approval,
-            now=_stamp(self._now()),
-            store=self.approvals,
-        )
-        return _APPROVAL_STATES.get(probe["reason"], "invalid")
-
-    def _open_rows(self, keep: Callable[[Mapping[str, Any]], bool]) -> list[dict[str, Any]]:
-        """One row per pending request whose stored record ``keep`` selects, oldest first.  Reads only the open-request index, so it costs O(open), not O(history)."""
-        out = []
-        for rid in self.state.open_request_ids():
-            rec = self.state.get_request(rid)
-            if not rec or not keep(rec):
-                continue
-            needs = rec["verdict"] == "needs-approval"
-            state = self.approval_state(rid, rec["request"]) if needs else "not-required"
-            req = rec["request"]
-            out.append(
-                {
-                    "request_id": rid,
-                    "action": req["action"],
-                    "actor": req["actor"],
-                    "target": req.get("target"),
-                    "params": req["params"],
-                    "created": req["created"],
-                    "digest": req["digest"],
-                    "approved": state == "valid",
-                    "approval_state": state,
-                    "awaiting_approval": needs and state != "valid",
-                }
-            )
-        return out
-
-    def pending(self) -> list[dict[str, Any]]:
-        """Requests waiting for an approver: needs-approval and still pending.  ``approved`` is
-        true while a valid, unconsumed approval is on file (it can run now); ``approval_state``
-        says why not otherwise, and an ``expired`` one takes a fresh approval."""
-        if self.notifier is not None:
-            try:  # the hub lists this every few seconds: a deferred page is sent on time
-                self.poll_pages()
-            except Exception:
-                log.exception("approval pages could not be polled")
-        fields = (
-            "request_id",
-            "action",
-            "actor",
-            "target",
-            "params",
-            "created",
-            "digest",
-            "approved",
-            "approval_state",
-        )
-        return [
-            {k: r[k] for k in fields}
-            for r in self._open_rows(lambda rec: rec["verdict"] == "needs-approval")
-        ]
-
-    def pending_for(self, caller: str) -> list[dict[str, Any]]:
-        """``caller``'s own requests still ``pending`` (awaiting approval, or approved and not yet
-        run, or allowed and not yet run): what an agent may still run or cancel."""
-        fields = (
-            "request_id",
-            "action",
-            "target",
-            "created",
-            "awaiting_approval",
-            "approved",
-            "approval_state",
-        )
-        return [
-            {k: r[k] for k in fields}
-            for r in self._open_rows(lambda rec: rec["request"]["actor"] == caller)
-        ]
-
-    def served_agents(self) -> list[str]:
-        """The agent keys this broker serves: each profile (``profile:<key>``) that the manifest
-        both maps a transport peer to (``callers``) and grants something (``grants``), as
-        ``<key>``, sorted.  Names only: no uid, grant, action or token (what an operator's
-        ``agents`` answers, for the deploy's census; :meth:`list_agents` is the audited ask)."""
-        peers = {c.get("profile") for c in self.manifest.get("callers", [])}
-        granted = {g.get("profile") for g in self.manifest.get("grants", [])}
-        return sorted(
-            p.removeprefix("profile:")
-            for p in peers & granted
-            if isinstance(p, str) and p.startswith("profile:")
-        )
-
-    def list_agents(self, operator: str) -> list[str]:
-        """:meth:`served_agents` for an operator over the socket (``uid:<n>``), audited as
-        operation ``agents``, outcome ``ok``; the record names no key."""
-        keys = self.served_agents()
-        self._audit(operator, "", "agents", "ok")
-        return keys
-
-    def actions_for(self, caller: str) -> list[dict[str, Any]]:
-        """What ``caller`` may ask for: every action a grant of its names that :func:`decide`
-        would admit (``allow`` or ``needs-approval``), with its tier, kind and parameters.
-        Derived by asking ``decide`` itself (shadow mode, nothing consumed), so it cannot
-        disagree with what a call would get."""
-        view = self._view()
-        names = sorted({a for g in view["grants"] if g["profile"] == caller for a in g["actions"]})
-        out = []
-        for name in names:
-            verdict = self._probe(view, caller, name)
-            if verdict not in ("allow", "needs-approval"):
-                continue
-            entry = next(a for a in view["actions"] if a["action"] == name)
-            act = self._action(name)
-            row: dict[str, Any] = {
-                "action": name,
-                "tier": entry["tier"],
-                "kind": act.kind,
-                "needs_approval": verdict == "needs-approval",
-            }
-            if act.kind == "lane" and act.handler is not None:
-                row["lane"] = act.handler.name
-                row["params"] = _lane_params(act.handler)
-            elif act.kind == "exec" and act.handler is not None:
-                row["params_schema"] = act.handler["params_schema"]
-                row["description"] = act.handler.get("description", "")
-            out.append(row)
-        return out
-
-    # ---------------------------------------------------------------- codemode tokens
-    def _execute_run(self, act: _Action, request: Mapping[str, Any], args: Mapping[str, Any]):
-        """Run ``codemode.execute``: in flight while its handler runs (only then can its runner be
-        issued a token), bound to the runner it belongs to; a token of it still live when the
-        handler returns is spent (outcome ``finished``)."""
-        rid = request["request_id"]
-        self.tokens.begin(
-            rid,
-            {
-                "request_id": rid,
-                "actor": request["actor"],
-                "params": json.loads(json.dumps(dict(args))),
-                "instance": self.state.instance_id(),
-                "runner": self._runner_of_execute(),
-                "started": _stamp(self._now()),
-            },
-        )
-        try:
-            return self._execute(act, request, args)
-        finally:
-            for tok in self.tokens.end(rid, _stamp(self._now())):
-                with contextlib.suppress(*_AUDIT_FAILURES):
-                    self._audit_token(
-                        BROKER_SOURCE,
-                        "token-spend",
-                        "ok",
-                        tok["claims"],
-                        rid,
-                        args={"outcome": "finished"},
-                    )
-
-    def _runner_of_execute(self) -> str | None:
-        """The runner ``codemode.execute``'s handler belongs to, and so the only one its runs
-        issue tokens to: the latest registered in process; else the one the manifest's action
-        names (``runner``); else the manifest's only runner.  None (several, none named, which
-        ``hnx broker validate`` refuses) issues to nobody."""
-        registered = [r for r, h in self._runners.items() if h is not None]
-        if registered:
-            return registered[-1]
-        entry = next((a for a in self.manifest["actions"] if a["action"] == CODEMODE_EXECUTE), {})
-        if entry.get("runner"):
-            return entry["runner"]
-        manifest = list(self._runners)
-        return manifest[0] if len(manifest) == 1 else None
-
-    def sweep_tokens(self, *, force: bool = False) -> dict[str, int]:
-        """Settle what a crash left (an in-flight run whose broker instance is gone is ended
-        ``crashed``), drop expired entries from the live index, and remove ended executions older
-        than ``codemode.retention_days``.  Runs at start and at most once a minute after."""
-        now = self._now()
-        if not force and (now - self._tokens_swept).total_seconds() < TOKEN_SWEEP_INTERVAL_S:
-            return {}
-        self._tokens_swept = now
-        self.flush_coalesced()  # a window that ended with refusals held back leaves its count
-        before = now - timedelta(days=self.token_retention_days)
-        counts = self.tokens.sweep(
-            _stamp(now), alive=self.state.instance_alive, retention_before=_stamp(before)
-        )
-        if counts.get("crashed"):
-            log.warning("codemode: %d run(s) whose broker is gone ended crashed", counts["crashed"])
-        return counts
-
-    def _audit_token(self, who, operation, outcome, claims, rid=None, *, reason="", args=None):
-        ids = {}
-        if claims is not None:
-            ids = {"token_id": claims["token_id"], "execution_id": claims["execution_id"]}
-        self._audit(
-            who,
-            CODEMODE_EXECUTE,
-            operation,
-            outcome,
-            reason=reason,
-            args=args,
-            request_id=rid,
-            **ids,
-        )
-
-    def _issue_refused(self, runner, rid, reason, message, *, eid=None, outcome="denied", args):
-        ids = {"execution_id": eid} if eid else {}
-        self._audit(
-            runner,
-            CODEMODE_EXECUTE,
-            "token-issue",
-            outcome,
-            reason=reason,
-            args=args,
-            request_id=str(rid)[:128],
-            **ids,
-        )
-        if outcome == "invalid":
-            err = InvalidArguments(message)
-            err.reason = reason  # type: ignore[attr-defined]
-            raise err
-        raise Denied(message, reason=reason)
-
-    def _probe(self, view: Mapping[str, Any], actor: str, action: str) -> str:
-        """:func:`decide`'s verdict on ``actor`` asking for ``action`` with no approval (shadow
-        mode: nothing is consumed): the one probe :meth:`actions_for` and :meth:`_admits` share."""
-        probe = {"request_id": "req-probe", "action": action, "actor": actor, "params": {}}
-        return decide(dict(view, mode="shadow"), probe, None, store=self.approvals)["verdict"]
-
-    def _admits(self, view: Mapping[str, Any], actor: str, action: str) -> bool:
-        """Whether :func:`decide` admits ``action`` for ``actor`` (allow or needs-approval)."""
-        return self._probe(view, actor, action) in ("allow", "needs-approval")
-
-    def issue_token(self, runner, request_id, *, sandbox_id, actions, max_calls=None, ttl_s=None):
-        """A capability token for the in-flight ``codemode.execute`` request ``request_id``, for
-        the runner that run belongs to only (see the module doc for every refusal).  Returns the
-        secret, once, and the claims; the broker keeps the claims and the secret's digest."""
-        who = runner if isinstance(runner, str) and runner else "<none>"
-        shown = {
-            "sandbox_id": sandbox_id if isinstance(sandbox_id, str) else repr(sandbox_id)[:64],
-            "actions": list(actions)[:200] if isinstance(actions, (list, tuple)) else [],
-            "max_calls": max_calls,
-            "ttl_s": ttl_s,
-        }
-        if who not in self._runners:
-            self._issue_refused(who, request_id, NOT_A_RUNNER, "not a runner", args=shown)
-        bad = not (isinstance(sandbox_id, str) and is_id(sandbox_id))
-        bad |= not (
-            isinstance(actions, (list, tuple))
-            and 0 < len(actions) <= 200
-            and all(isinstance(a, str) for a in actions)
-        )
-        for n in (max_calls, ttl_s):
-            bad |= n is not None and (not isinstance(n, int) or isinstance(n, bool) or n < 1)
-        if bad:
-            self._issue_refused(
-                who,
-                request_id,
-                "invalid-params",
-                "sandbox_id is a slug, actions a list of 1-200 "
-                "names, max_calls and ttl_s positive integers",
-                outcome="invalid",
-                args=shown,
-            )
-        self.sweep_tokens()
-        with self.tokens.locked():
-            run = self.tokens.inflight(request_id)
-            if (
-                run is None
-                or run.get("runner") != who  # another runner's run reads as no run at all
-                or not self.state.instance_alive(run.get("instance"))
-            ):
-                self._issue_refused(
-                    who,
-                    request_id,
-                    "execution-not-in-flight",
-                    "no codemode.execute of that id is running for this runner",
-                    args=shown,
-                )
-            return self._issue(who, run, sandbox_id, list(actions), max_calls, ttl_s, shown)
-
-    def _issue(self, runner, run, sandbox_id, actions, max_calls, ttl_s, shown) -> IssuedToken:
-        rid, actor, params = run["request_id"], run["actor"], run["params"]
-        eid, budget = params["execution_id"], params.get("budget", {})
-
-        def refuse(reason: str, message: str) -> None:
-            self._issue_refused(runner, rid, reason, message, eid=eid, args=shown)
-
-        if not _lanes.PROFILE_RE.match(actor):  # a token is an agent's: claims name a profile
-            refuse("token-actor-invalid", "only an agent profile's run is issued a token")
-        if self.tokens.token_of_request(rid) is not None:
-            refuse("request-has-token", "this run already has its token")
-        if any(a.startswith("codemode.") for a in actions):
-            refuse("token-action-codemode", "a program cannot start another program")
-        view = self._view()
-        if len(set(actions)) != len(actions) or not all(
-            self._admits(view, actor, a) for a in actions
-        ):
-            refuse("token-action-not-admitted", "a token lists only actions the actor may ask for")
-        key = execution_key(actor, eid)
-        known = self.tokens.execution(key)  # the actor's own: another's id is no answer at all
-        digest = code_digest(params["language"], params["code"])
-        if not params.get("resume"):
-            if known is not None:
-                refuse("execution-exists", "that execution id is taken: resume it or pick another")
-            cap = min(self.codemode_max_calls, budget.get("max_calls", self.codemode_max_calls))
-        else:
-            if known is None or known.get("state") != "paused":
-                refuse("execution-not-resumable", "no paused execution of that id")
-            if known["code_digest"] != digest:
-                refuse("resume-code-mismatch", "a resume runs the program that was paused")
-            # the cap is the execution's, in total: a resume inherits what is left of it
-            cap = min(
-                known["max_calls"] - self.tokens.calls_of(known), budget.get("max_calls", 1 << 30)
-            )
-            if cap < 1:
-                refuse("call-cap-reached", "the execution has made every call its cap allows")
-        want = cap if max_calls is None else max_calls
-        if want > cap:
-            refuse("token-max-calls-exceeded", f"at most {cap} calls")
-        limit = budget.get("wall_s", self.codemode_wall_s) + self.token_ttl_margin_s
-        ttl = limit if ttl_s is None else ttl_s
-        if ttl > limit:
-            refuse("token-ttl-exceeded", f"a token for this run lives at most {limit}s")
-        now = self._now().astimezone(UTC).replace(microsecond=0)
-        if len(self.tokens.live_of(actor, _stamp(now))) >= self.live_tokens_per_actor:
-            refuse("too-many-live-tokens", f"at most {self.live_tokens_per_actor} live tokens")
-        secret = BEARER_PREFIX + secrets.token_urlsafe(32)  # 256 bits; returned once, never kept
-        claims = {
-            "token_id": new_id("tok"),
-            "execution_id": eid,
-            "request_id": rid,
-            "code_digest": digest,
-            "sandbox_id": sandbox_id,
-            "actor": actor,
-            "issuer": BROKER_SOURCE,
-            "audience": BROKER_SOURCE,
-            "actions": actions,
-            "max_calls": want,
-            "issued_at": _stamp(now),
-            "expires_at": _stamp(now + timedelta(seconds=ttl)),
-        }
-        problems = validation.named_errors("codemode/token", claims)
-        if problems:  # a bug in the broker, never the runner's input: nothing is issued
-            raise BrokerError(f"token claims invalid: {problems[0]}")
-        tok = {
-            "claims": claims,
-            "secret_sha256": secret_digest(secret),
-            "runner": runner,
-            "exec_key": key,
-            "state": "live",
-            "calls": 0,
-        }
-        self.tokens.put(tok)
-        doc = known or {
-            "key": key,
-            "execution_id": eid,
-            "actor": actor,
-            "code_digest": digest,
-            "max_calls": want,
-            "tokens": [],
-        }
-        doc.update(
-            tokens=[*doc["tokens"], claims["token_id"]], state="running", updated=_stamp(now)
-        )
-        self.tokens.put_execution(doc)
-        self._audit_token(runner, "token-issue", "ok", claims, rid, args=shown)
-        return IssuedToken(secret, copy.deepcopy(claims))
-
-    def _token_problem(self, tok, action, sandbox_id) -> str:
-        """Why a call with ``tok`` is refused, in the contract's order, or ``""``.  ``sandbox_id``
-        is the calling sandbox's: None in process (not judged), ``""`` a pool peer (accepted only
-        for a token no dedicated sandbox is named for), else one dedicated sandbox."""
-        if tok is None:
-            return "token-invalid"
-        claims = tok["claims"]
-        if sandbox_id is not None:
-            dedicated = claims["sandbox_id"] in self._dedicated_sandboxes
-            if (sandbox_id == "" and dedicated) or (
-                sandbox_id != "" and sandbox_id != claims["sandbox_id"]
-            ):
-                return "token-sandbox-mismatch"
-        expires = datetime.fromisoformat(claims["expires_at"].replace("Z", "+00:00"))
-        if self._now() >= expires:
-            return "token-expired"
-        if tok["state"] in ("spent", "paused"):
-            return f"token-{tok['state']}"
-        if action is not None and action not in claims["actions"]:
-            return "token-action-not-allowed"
-        if tok["calls"] >= claims["max_calls"]:
-            return "call-cap-reached"
-        return ""
-
-    def _token_refused(self, tok, command, operation, reason, rid=None, *, request=None):
-        claims = tok["claims"] if tok else None
-        ids = {}
-        if claims:
-            ids = {"token_id": claims["token_id"], "execution_id": claims["execution_id"]}
-        if request is not None:
-            ids["request_digest"] = request["digest"]
-        args = None
-        if claims is None:  # a secret that names no token: one record per peer and window
-            coalesced = self._coalesce("token-invalid")
-            if coalesced is None:
-                raise Denied("the token does not allow this call", reason=reason)
-            args = {"coalesced": coalesced} if coalesced else None
-        self._audit(
-            claims["actor"] if claims else UNKNOWN_TOKEN_CALLER,
-            command,
-            operation,
-            "denied",
-            reason=reason,
-            request_id=rid,
-            args=args,
-            **ids,
-        )
-        err = Denied("the token does not allow this call", reason=reason)
-        raise _carry(err, request) if request is not None else err
-
-    def _coalesce(self, kind: str) -> int | None:
-        """Coalesce one kind of refusal record per transport peer (``token-invalid``: a secret
-        that names no token; ``sandbox-refused``: a sandbox's request refused by the transport
-        before any token was read): the first of a :data:`COALESCE_WINDOW_S` window is written
-        and returns how many the previous window held back (0 for none); every other one returns
-        None and is counted.  A window is judged on the monotonic clock, and an elapsed time
-        that is negative (a clock stepped back) ends it rather than extending it.  What a window
-        held back is written once it ends, by :meth:`flush_coalesced` (a timer, the token
-        sweep, or the next refusal), so a flood that stops still leaves its count."""
-        peer = TRANSPORT_PEER.get() or "in-process"
-        now = self._mono()
-        with self._coalesce_lock:
-            st = self._coalescing.get((kind, peer))
-            if st is not None and 0 <= now - st[0] < COALESCE_WINDOW_S:
-                st[1] += 1
-                if st[1] == 1:
-                    self._arm_flush(COALESCE_WINDOW_S - (now - st[0]))
-                return None
-            held = st[1] if st is not None else 0
-            self._coalescing[(kind, peer)] = [now, 0]
-            return held
-
-    def flush_coalesced(self) -> int:
-        """Write one record for every coalescing window that has ended with refusals held back
-        (``args.coalesced``: how many), and forget it.  Returns how many it wrote."""
-        now = self._mono()
-        due = []
-        with self._coalesce_lock:
-            for key, (start, held) in list(self._coalescing.items()):
-                if not 0 <= now - start < COALESCE_WINDOW_S:
-                    del self._coalescing[key]
-                    if held:
-                        due.append((key, held))
-        written = 0
-        for (kind, peer), held in due:
-            ctx = TRANSPORT_PEER.set(peer if peer.startswith("uid:") else None)
-            try:
-                caller = UNKNOWN_TOKEN_CALLER if kind == "token-invalid" else peer
-                self._audit(caller, "", "connect", "denied", reason=kind, args={"coalesced": held})
-                written += 1
-            except _AUDIT_FAILURES as exc:
-                # the trail cannot take it now: keep the count for the next flush, never lose it
-                log.warning("%d coalesced %s refusal(s) not yet recorded (%s)", held, kind, exc)
-                with self._coalesce_lock:
-                    st = self._coalescing.get((kind, peer))
-                    if st is None:  # still an ended window, so the next flush tries again
-                        self._coalescing[(kind, peer)] = [now - COALESCE_WINDOW_S, held]
-                    else:
-                        st[1] += held
-            finally:
-                TRANSPORT_PEER.reset(ctx)
-        return written
-
-    def _arm_flush(self, delay: float) -> None:
-        if not self.page_timers:
-            return
-        timer = threading.Timer(max(0.0, delay) + 0.05, self._flush_quietly)
-        timer.daemon = True
-        timer.start()
-
-    def _flush_quietly(self) -> None:
-        try:
-            self.flush_coalesced()
-        except Exception:  # a timer thread: the next sweep or refusal flushes again
-            log.exception("coalesced refusal counts could not be written")
-
-    def _count(self, tok: dict[str, Any]) -> None:
-        tok["calls"] += 1
-        self.tokens.save(tok)
-
-    @contextlib.contextmanager
-    def _as_token(self, tok: Mapping[str, Any]) -> Iterator[None]:
-        """Records written meanwhile name the token; a refusal raised after admission says so
-        (``admitted``: the cap bounds it, so the transport does not rate-limit it)."""
-        ctx = _TOKEN.set(tok["claims"])
-        try:
-            yield
-        except BrokerError as exc:
-            exc.admitted = True  # type: ignore[attr-defined]
-            raise
-        finally:
-            _TOKEN.reset(ctx)
-
-    def _token_op(self, token, command, args, operation, target, sandbox_id) -> dict[str, Any]:
-        """A call or submit made with a token, after the token checks and the count.  Both
-        decide under the store's lock: a request that needs approval (and every submit) is
-        stored and the token paused in that same step, so no call is admitted once the pause is
-        decided, and a crash cannot leave a submitted request beside a live token."""
-        args = dict(args) if isinstance(args, Mapping) else args
-        with self.tokens.locked():
-            tok = self.tokens.by_secret(token)
-            reason = self._token_problem(tok, command, sandbox_id)
-            if not reason:
-                self._count(tok)
-                actor = tok["claims"]["actor"]
-                with self._as_token(tok):
-                    act, request, decision = self._admit(actor, command, args, operation, target)
-                    pause = decision["enforced"] and (
-                        operation == "submit" or decision["verdict"] == "needs-approval"
-                    )
-                    if pause:  # the approval page (the notifier: a network send) goes out after
-                        rid = self._store(actor, command, args, act, request, decision, page=False)
-                        self.tokens.set_state(tok, "paused", paused_by=rid)
-                        self.tokens.settle(tok, _stamp(self._now()))
-                        self._audit_token(
-                            actor, "token-pause", "ok", tok["claims"], rid, args={"paused_by": rid}
-                        )
-        if reason:
-            self._token_refused(tok, command, operation, reason)
-        answer = {"request_id": request["request_id"], "request_digest": request["digest"]}
-        if target is not None:
-            answer["target"] = target
-        if pause:
-            if decision["verdict"] == "needs-approval":
-                self._approval_requested(request)
-            return {"state": "pending", **answer}
-        with self._as_token(tok):
-            if not decision["enforced"]:
-                return {"result": self._shadow(actor, act, request, decision, operation), **answer}
-            if decision["verdict"] != "allow":  # a submit-only path never gets here
-                raise _carry(Denied("needs approval", reason="approval-required"), request)
-            return {"result": self._run_audited(actor, act, request, args, "call"), **answer}
-
-    def token_call(self, token, command, args, *, target: str | None = None, sandbox_id=None):
-        """``call`` as the token's actor, after the token checks and the count: ``{result,
-        request_id, request_digest[, target]}``, or ``{state: pending, ...}`` when the call
-        needs approval, which pauses the token."""
-        return self._token_op(token, command, args, "call", target, sandbox_id)
-
-    def token_submit(self, token, command, args, *, target: str | None = None, sandbox_id=None):
-        """``submit`` as the token's actor: ``{state: pending, request_id, request_digest}``; the
-        token is paused (the request waits for an approval and a run)."""
-        return self._token_op(token, command, args, "submit", target, sandbox_id)
-
-    def token_run(self, token, request_id, *, sandbox_id=None):
-        """Run, as the token's actor, the request an earlier token of the same execution paused
-        on, once it may run (approved, or needing none): ``{result, request_id,
-        request_digest}``.  Past the binding check it counts against the cap, refused or not (so
-        polling a request not approved yet spends the cap).  Everything after the
-        binding check uses the broker's own record of that request id (``paused_by``), never the
-        id the caller sent, which arrived in the same request body as the token's secret."""
-        with self.tokens.locked():
-            tok = self.tokens.by_secret(token)
-            reason = self._token_problem(tok, None, sandbox_id)
-            rec, rid = None, None
-            if not reason:
-                ex = self.tokens.execution(tok["exec_key"]) or {"tokens": []}
-                paused_by = {
-                    (self.tokens.token(t) or {}).get("paused_by")
-                    for t in ex["tokens"]
-                    if t != tok["claims"]["token_id"]
-                }
-                rid = next((r for r in paused_by if r and r == request_id), None)
-                rec = self.state.get_request(rid) if rid is not None else None
-                if rec is None or rec["request"]["actor"] != tok["claims"]["actor"]:
-                    reason = "token-request-not-paused"
-                elif rec["request"]["action"] not in tok["claims"]["actions"]:
-                    reason = "token-action-not-allowed"
-            if not reason:
-                # past the binding, every token_run counts, a refused one too: a program polling
-                # a request that is not approved yet spends its cap, so the polling is bounded
-                self._count(tok)
-                state = self._paused_state(rid, rec)
-                if state == "denied":
-                    reason = REQUEST_DENIED  # decided: named like any decided request
-                elif state != "approved":
-                    reason = "request-not-approved"
-        action = rec["request"]["action"] if rec else ""
-        if reason:
-            decided = rec["request"] if reason == REQUEST_DENIED else None
-            self._token_refused(tok, action, "run", reason, rid if rec else None, request=decided)
-        req = rec["request"]
-        answer = {"request_id": rid, "request_digest": req["digest"]}
-        with self._as_token(tok):
-            try:
-                return {"result": self.run(req["actor"], rid), **answer}
-            except BrokerError as exc:
-                raise _carry(exc, req) from None
-
-    def _paused_state(self, request_id: str, rec: Mapping[str, Any]) -> str:
-        """A paused-on request as the runner needs it: ``pending``, ``approved`` (it may run now:
-        approved, or needing no approval), ``denied``, or how its run ended (``done``, ...)."""
-        state = self.state.state_of(request_id)
-        if state != "pending":
-            return state
-        if rec["verdict"] != "needs-approval":
-            return "approved"
-        verdict = self.approval_state(request_id, rec["request"])
-        # an approval that expired unused puts the request back to waiting (a fresh approval is
-        # accepted, and it is paged again): "expired" tells the runner it waits on a new one
-        return {"valid": "approved", "denied": "denied", "expired": "expired"}.get(
-            verdict, "pending"
-        )
-
-    def _runner_token(self, who, token_id):
-        """The token ``who`` holds (it issued it), or None: another runner's token reads as no
-        token at all."""
-        tok = self.tokens.token(token_id) if isinstance(token_id, str) else None
-        return tok if tok is not None and tok.get("runner") == who else None
-
-    def spend_token(self, runner, token_id, outcome: str = "finished") -> None:
-        """End a token as ``finished`` (the run is over; the execution never resumes) or ``paused``
-        (the run ended on its pause; the execution waits to be resumed).  Every later call on it
-        is refused ``token-spent``."""
-        who = runner if isinstance(runner, str) and runner else "<none>"
-        reason = NOT_A_RUNNER if who not in self._runners else ""
-        if outcome not in SPEND_OUTCOMES:
-            raise _reasoned_invalid("outcome is finished or paused", "invalid-params")
-        with self.tokens.locked():
-            tok = None if reason else self._runner_token(who, token_id)
-            if not reason and tok is None:
-                reason = "unknown-token"
-            elif (
-                not reason
-                and outcome == "paused"
-                and tok["state"] != "paused"
-                and tok.get("outcome") != "paused"
-            ):
-                reason = "token-not-paused"
-            elif not reason and tok["state"] != "spent":
-                self.tokens.set_state(tok, "spent", outcome=outcome)
-                self.tokens.settle(tok, _stamp(self._now()))
-        if reason:
-            self._audit(who, CODEMODE_EXECUTE, "token-spend", "denied", reason=reason)
-            raise Denied("no such token for this runner", reason=reason)
-        self._audit_token(
-            who,
-            "token-spend",
-            "ok",
-            tok["claims"],
-            tok["claims"]["request_id"],
-            args={"outcome": outcome},
-        )
-
-    def _decide_for_test(self, request_id: str, verdict: str) -> None:
-        """The conformance hook ``approval-control`` (:func:`make` only): an approver's verdict
-        on a pending request.  ``denied`` takes its one transition, as a denial filed through
-        :meth:`deny` would; an in-process command needs no approval, so ``approved`` changes
-        nothing."""
-        if verdict == "denied":
-            self.state.claim(
-                request_id, {"op": "deny", "by": "conformance", "at": _stamp(self._now())}
-            )
-
-    def token_status(self, runner, token_id) -> dict[str, Any]:
-        """A runner's view of its token: its claims, ``state`` (``live``, ``paused``, ``spent``;
-        ``expired`` when live past its expiry), ``outcome`` once spent, its calls, and the
-        request a pause waits on with that request's state (``paused_by_state``: ``pending``,
-        ``approved``, ``denied``, ``done``, ...) so the runner knows when to resume."""
-        who = runner if isinstance(runner, str) and runner else "<none>"
-        tok = self._runner_token(who, token_id) if who in self._runners else None
-        if tok is None:
-            reason = NOT_A_RUNNER if who not in self._runners else "unknown-token"
-            raise Denied("no such token for this runner", reason=reason)
-        state = tok["state"]
-        if state == "live" and self._token_problem(tok, None, None) == "token-expired":
-            state = "expired"
-        out = {"claims": tok["claims"], "state": state, "calls": tok["calls"]}
-        if tok.get("outcome"):
-            out["outcome"] = tok["outcome"]
-        if tok.get("paused_by"):
-            rec = self.state.get_request(tok["paused_by"])
-            out["paused_by"] = tok["paused_by"]
-            out["paused_by_state"] = self._paused_state(tok["paused_by"], rec) if rec else "unknown"
-        return out
-
-    def approve(self, request_id, approver: str, *, note: str | None = None) -> dict[str, Any]:
-        """File an approval of ``request_id`` by ``approver`` (``issuer:subject``)."""
-        return self._decide_request(request_id, approver, "approved", note)
-
-    def deny(self, request_id, approver: str, *, note: str | None = None) -> dict[str, Any]:
-        """File a denial: the request becomes ``denied`` and can never run."""
-        return self._decide_request(request_id, approver, "denied", note)
-
-    def _decide_request(self, request_id, approver, decision, note):
-        op = "approve" if decision == "approved" else "deny"
-        who = approver if isinstance(approver, str) else repr(approver)
-        rec = self.state.get_request(request_id) if is_id(request_id) else None
-        if rec is None:
-            self._audit(
-                who, "", op, "denied", reason="unknown-request", request_id=str(request_id)[:128]
-            )
-            raise Denied(f"no request {request_id!r}", reason="unknown-request")
-        req = rec["request"]
-        extra = {"request_id": request_id, "request_digest": req["digest"]}
-        state = self.state.state_of(request_id)
-        if rec["verdict"] != "needs-approval" or state != "pending":
-            self._audit(who, req["action"], op, "invalid", reason="not-awaiting-approval", **extra)
-            raise _reasoned(
-                f"request {request_id!r} is not awaiting approval ({state})",
-                "not-awaiting-approval",
-            )
-        issuer, sep, subject = who.partition(":")
-        now = self._now()
-        ttl = self.manifest.get("approval_ttl_s") or DEFAULT_APPROVAL_TTL_S
-        doc: dict[str, Any] = {
-            "approval_id": new_id("appr"),
-            "request_id": request_id,
-            "request_digest": req["digest"],
-            "decision": decision,
-            "approver": {"issuer": issuer, "subject": subject},
-            "approved_at": _stamp(now),
-            "expires_at": _stamp(now + timedelta(seconds=ttl)),
-        }
-        if note:
-            doc["note"] = note
-        limit = approval_note_max()
-        if not sep:
-            problems = ["approver is issuer:subject"]
-        elif isinstance(note, str) and len(note) > limit:
-            problems = [f"note is at most {limit} characters"]  # never echoed back
-        else:
-            problems = schema_errors("broker", "approval", doc)
-        if problems:
-            self._audit(who, req["action"], op, "invalid", reason="approval-invalid", **extra)
-            raise _reasoned_invalid(f"approval: {problems[0]}", "approval-invalid")
-        # an approval is judged by decide() itself: the approver rules (allowlist, self, agent)
-        # and whether the request could run now.  A denial by the approver rules alone, the same
-        # ones, so a stranger cannot deny someone's request either; but a request whose grant,
-        # tier or handler was withdrawn can still be denied (that is when one most wants to)
-        if decision == "approved":
-            refused = decide(
-                dict(self._view(), mode="shadow"),
-                req,
-                doc,
-                now=doc["approved_at"],
-                store=self.approvals,
-            )["reason"]
-            refused = None if refused == "approved" else refused
-        else:
-            refused = approver_refusal(self._view(), req, doc["approver"])
-        if refused:
-            self._audit(who, req["action"], op, "denied", reason=refused, **extra)
-            raise Denied(f"{who!r} may not {op} {request_id!r}", reason=refused)
-        if decision == "denied" and not self.state.claim(
-            request_id, {"op": "deny", "by": who, "at": doc["approved_at"]}
-        ):
-            self._audit(who, req["action"], op, "invalid", reason="not-awaiting-approval", **extra)
-            raise _reasoned(f"request {request_id!r} is no longer pending", "not-pending")
-        self.state.put_approval(doc)
-        self._audit(who, req["action"], op, "ok", approval_id=doc["approval_id"], **extra)
-        # who decided: a person (``human``), or an approver of kind agent the manifest admits
-        # (``allow_agent_approvers``): StackStorm's A03 acts on ``human`` only
-        tier = "agent" if approver_kind(self._view(), doc["approver"]) == "agent" else "human"
-        self._emit(
-            "homelabnext.decision.returned",
-            {
-                "decision_id": request_id,
-                "verdict": "accept" if decision == "approved" else "reject",
-                "confidence": 1.0,
-                "tier_used": tier,
-            },
-            request_id,
-            key=f"returned:{doc['approval_id']}",
-        )
-        self._notify_settled(request_id, f"{decision} by {who}", req["actor"])
-        if decision == "approved" and self.notifier is not None:
-            # if it is not run before the approval expires, it waits again: page it then
-            expires = datetime.fromisoformat(doc["expires_at"].replace("Z", "+00:00"))
-            left = (expires - self._now()).total_seconds()
-            self._wake_at(self._mono() + max(0.0, left) + 1.0)
-        return doc
-
-    # ---------------------------------------------------------------- events and notify
-    def _emit(self, event_type: str, data: Mapping[str, Any], rid: str, *, key: str) -> None:
-        from homelabnext.events.envelope import build_event, canonical_body
-
-        ev = build_event(
-            event_type, self.source, data, dedupe_key=key, subject=rid, time=_stamp(self._now())
-        )
-        if self.bus is None:
-            self.state.put_outbox(ev)
-        else:
-            self.bus.publish(event_type, canonical_body(ev), msg_id=ev["id"])
-
-    def approval_link(self, rid: str) -> str | None:
-        """The hub Approvals page for one request, when ``approvals_url`` is configured."""
-        if not self.approvals_url:
-            return None
-        return f"{self.approvals_url}?{urllib.parse.urlencode({'request': rid})}"
-
-    def _approval_requested(self, request: Mapping[str, Any]) -> None:
-        rid = request["request_id"]
-        link = self.approval_link(rid)
-        data = {
-            "decision_id": rid,
-            "spec": "broker-approval",
-            "subject": f"requests/{rid}.json",
-            "action": request["action"],
-            "actor": request["actor"],
-            "request_digest": request["digest"],
-        }
-        if link:
-            data["link"] = link
-        self._emit("homelabnext.decision.requested", data, rid, key=f"requested:{rid}")
-        if self.notifier is not None:
-            self.poll_pages()  # this actor's page among any other that is due
-
-    @staticmethod
-    def _page_key(rid: str) -> str:
-        return f"broker-approval-{rid}"
-
-    def _open_page(self, actor: str, waiting: Sequence[Mapping[str, Any]]) -> str | None:
-        """The request of ``actor``'s that has an open page: one still awaiting approval whose
-        page the notifier reports sent and not yet settled."""
-        rids = [r["request_id"] for r in waiting]
-        if self._paged.get(actor) in rids:
-            return self._paged[actor]
-        state_of = getattr(self.notifier, "state_of", None)
-        if state_of is not None:
-            return next((r for r in rids if state_of(self._page_key(r)) != "ok"), None)
-        return None
-
-    def _wake_at(self, when: float) -> None:
-        """Make sure a page check runs at ``when`` (monotonic): it is kept in a heap, and one
-        timer is armed for the earliest (best effort: :meth:`poll_pages` also runs at start and
-        on every submit, settle and pending listing, and derives what is due from state)."""
-        with self._paged_lock:
-            if when in self._wakeups:
-                return  # already queued (a retry, a floor): one entry per time
-            heapq.heappush(self._wakeups, when)
-        self._arm()
-
-    def _arm(self) -> None:
-        if not self.page_timers:
-            return
-        with self._paged_lock:
-            now = self._mono()
-            while self._wakeups and self._wakeups[0] <= now - 3600:
-                heapq.heappop(self._wakeups)  # long past and never polled: nothing to arm
-            future = [t for t in self._wakeups if t > now]
-            if not future:
-                return
-            nxt = min(future)
-            if self._timer is not None and self._timer[0] <= nxt and self._timer[1].is_alive():
-                return
-            if self._timer is not None:
-                self._timer[1].cancel()
-            timer = threading.Timer(nxt - now + 0.05, self._timer_fired)
-            timer.args = (timer,)
-            timer.daemon = True
-            self._timer = (nxt, timer)
-            timer.start()
-
-    def _timer_fired(self, timer: threading.Timer | None = None) -> None:
-        with self._paged_lock:
-            if self._timer is not None and self._timer[1] is timer:
-                self._timer = None  # only its own: a timer re-armed since stays armed
-        try:
-            self.poll_pages()
-        except Exception:  # a timer thread: log it, the next poll tries again
-            log.exception("approval pages could not be polled")
-
-    def poll_pages(self) -> int:
-        """Page every actor that has a request awaiting approval and no open page -- a page the
-        floor deferred, a page whose send failed, a request whose approval expired unused, one
-        filed before a restart -- each subject to the floor and the open-page gate, so this is
-        idempotent.  Also retries a lane-quota "cleared" notice that was held back, and re-arms
-        the timer for what is due next.  Returns how many actors were checked."""
-        if self.notifier is None:
-            return 0
-        now = self._mono()
-        with self._paged_lock:
-            while self._wakeups and self._wakeups[0] <= now:
-                heapq.heappop(self._wakeups)
-        actors = []
-        for rid in self.state.open_request_ids():
-            rec = self.state.get_request(rid)
-            if rec and rec["verdict"] == "needs-approval" and rec["request"]["actor"] not in actors:
-                actors.append(rec["request"]["actor"])
-        for actor in actors:
-            try:
-                self._page(actor)
-            except Exception:  # one actor's failure never stops the rest
-                log.exception("approval page for %s failed", actor)
-        for lane_name, actor in list(self._lane_red.values()):
-            lane = self._lanes.get(lane_name)
-            if lane is not None:
-                self._lane_quota(lane, {"actor": actor, "request_id": None}, None)
-        self._arm()
-        return len(actors)
-
-    def _page(self, actor: str) -> None:
-        """Page the approver about ``actor``'s oldest request awaiting approval, unless one of
-        its requests already has an open page, or its last page is less than
-        ``notify_window_s`` old, or its last attempt failed less than
-        :data:`PAGE_RETRY_S` ago (then a check is scheduled for when that passes).  The actor
-        counts as paged only once the notifier says the page went out."""
-        waiting = self._awaiting(actor)
-        if not waiting:
-            return
-        now = self._mono()
-        later = None
-        with self._paged_lock:
-            if actor in self._paging or self._open_page(actor, waiting) is not None:
-                return
-            last = self._last_page.get(actor)
-            retry = self._retry_at.get(actor)
-            if retry is not None and retry > now:
-                later = retry
-            elif last is not None and now - last < self.notify_window_s:
-                later = last + self.notify_window_s
-            else:
-                self._paging.add(actor)  # of racing requests, one pages
-        if later is not None:
-            self._wake_at(later)
-            return
-        request = waiting[0]
-        rid = request["request_id"]
-        key = self._page_key(rid)
-        sent = False
-        try:
-            from homelabnext.notify.core import Message
-
-            link = self.approval_link(rid)
-            body = f"{actor} asks to run {request['action']} ({rid})"
-            if len(waiting) > 1:
-                ids = [r["request_id"] for r in waiting]
-                named = ", ".join(ids[:_PAGE_IDS])
-                if len(ids) > _PAGE_IDS:
-                    named += f" and {len(ids) - _PAGE_IDS} more"
-                body += f"; {len(ids)} requests await approval from {actor}: {named}"
-            msg = Message(
-                key=key,
-                title=APPROVAL_TITLE,
-                body=body + (f"\nReview: {link}" if link else ""),
-                level="warn",
-                click=link,
-            )
-            sent = self._notify(key, "awaiting-approval", msg, actor=actor)
-        finally:
-            with self._paged_lock:
-                self._paging.discard(actor)
-                if sent:
-                    self._paged[actor] = rid
-                    self._last_page[actor] = now
-                    self._retry_at.pop(actor, None)
-                else:  # a failed send, or the actor's budget spent: try again shortly
-                    self._retry_at[actor] = now + PAGE_RETRY_S
-        if not sent:
-            self._wake_at(now + PAGE_RETRY_S)
-            return
-        if rid not in {r["request_id"] for r in self._awaiting(actor)}:
-            # it settled while the page was in flight: its settling saw no page to close
-            self._close_page(actor, rid, None)
-            self._page(actor)
-
-    def _close_page(self, actor: str, rid: str, body: str | None) -> bool:
-        """Close ``rid``'s page if it has one: with a settled message, or quietly (``body``
-        None: the owner withdrew it, which nobody needs paged about).  True when it had one."""
-        key = self._page_key(rid)
-        state_of = getattr(self.notifier, "state_of", None)
-        with self._paged_lock:
-            paged = self._paged.get(actor) == rid
-            if paged:
-                del self._paged[actor]
-        if state_of is not None:
-            paged = paged or state_of(key) != "ok"
-        if not paged:
-            return False
-        if body is None:
-            clear = getattr(self.notifier, "clear", None)
-            if clear is not None:
-                try:
-                    clear(key)
-                except Exception:
-                    log.exception("approval page %s could not be cleared", key)
-        else:
-            from homelabnext.notify.core import Message
-
-            msg = Message(key=key, title=APPROVAL_CLEARED, body=body)
-            self._notify(key, "ok", msg, actor=actor)
-        forget = getattr(self.notifier, "forget", None)
-        if forget is not None:  # a settled request's page is done with: the store stays small
-            with contextlib.suppress(Exception):
-                forget(key)
-        return True
-
-    def _notify_settled(
-        self, rid: str, how: str, actor: str | None = None, *, quiet: bool = False
-    ) -> None:
-        if self.notifier is None or actor is None:
-            return
-        waiting = self._awaiting(actor)
-        body = f"{rid} {how}"
-        if waiting:
-            body += f"; {len(waiting)} more from {actor} await approval"
-        self._close_page(actor, rid, None if quiet else body)
-        self.poll_pages()  # the page moves to the oldest still waiting, after the floor
-
-    def _lane_quota(self, lane: _lanes.Lane, request: Mapping[str, Any], refusal: str | None):
-        """Tell the operator that ``lane`` refuses an actor's writes for its quota (the agent
-        alone hears ``lane-quota-exceeded``, and a finding that is never written looks like a run
-        that never happened), and that it has room again -- but only once the directory is back
-        under :data:`homelabnext.broker.lanes.USAGE_WARN` of its quotas, not on the next small
-        write that fits, and never two notices for one actor and lane within
-        :data:`LANE_NOTICE_INTERVAL_S`.  State-diffed by the notifier, so a looping agent's
-        thousandth refusal sends nothing, and its notices draw on its own budget."""
-        actor = request["actor"]
-        key = f"broker-lane-quota-{lane.name}-{re.sub(r'[^a-z0-9-]+', '-', actor.lower())}"
-        if self.notifier is None:
-            if refusal is not None and key not in self._lane_logged:
-                self._lane_logged.add(key)  # no notifier: the log is the operator's signal
-                log.warning("%s: lane %s refuses its writes: %s", actor, lane.name, refusal)
-            return
-        from homelabnext.notify.core import Message
-
-        now = self._now()
-        last = self._lane_notice_at.get(key)
-        recent = last is not None and (now - last).total_seconds() < LANE_NOTICE_INTERVAL_S
-        if refusal is None:
-            state_of = getattr(self.notifier, "state_of", None)
-            if key not in self._lane_full and (state_of is None or state_of(key) == "ok"):
-                return  # nothing was reported: nothing to clear (the common case, one read)
-            if recent:
-                return
-            try:
-                used = _lanes.fill(
-                    lane, self.data_root, actor, key=self._name_key(), ledger=self._ledger()
-                )
-            except (OSError, _lanes.LaneError):
-                return
-            if used >= _lanes.USAGE_WARN:
-                return  # still nearly full: the next small write would only be refused again
-            body = f"{actor} writes to lane {lane.name} again; it is {used:.0%} full of its quota"
-            msg = Message(key=key, title=LANE_QUOTA_CLEARED, body=body)
-            if self._notify(key, "ok", msg, request_id=request["request_id"], actor=actor):
-                self._lane_full.discard(key)
-                self._lane_red.pop(key, None)
-                self._lane_notice_at[key] = now
-            return
-        if recent:
-            return
-        body = (
-            f"{actor}'s writes to lane {lane.name} are refused lane-quota-exceeded: {refusal}. "
-            "Raise the lane's quota in the manifest or clear the directory "
-            "(hnx broker validate --data-root shows its usage)."
-        )
-        msg = Message(key=key, title=LANE_QUOTA_TITLE, body=body, level="warn")
-        sent = self._notify(
-            key, "lane-quota-exceeded", msg, request_id=request["request_id"], actor=actor
-        )
-        if sent:
-            self._lane_full.add(key)
-            self._lane_red[key] = (lane.name, actor)  # a held "cleared" is retried on each poll
-            self._lane_notice_at[key] = now
-
-    def _ledger(self) -> Path:
-        return self.state.root / "lanes-ledger"
-
-    def lane_usage(self) -> list[dict[str, Any]]:
-        """Every lane directory's usage against its quotas, each actor's share of a shared lane
-        included (:func:`homelabnext.broker.lanes.usage`, with the broker's own key and ledger)."""
-        actors = tuple(sorted({g["profile"] for g in self._view()["grants"]}))
-        return [
-            row
-            for lane in self._lanes.values()
-            for row in _lanes.usage(
-                lane, self.data_root, actors=actors, key=self._name_key(), ledger=self._ledger()
-            )
-        ]
-
-    def _notify(
-        self, key, state, msg, *, request_id: str | None = None, actor: str | None = None
-    ) -> bool:
-        """Whether the notifier sent ``msg``.  A notification is a courtesy: the event and the
-        pending list already carry the request, so a failed send never fails the broker
-        operation that triggered it.  A message about ``actor`` draws on that actor's own
-        notifier budget (``scope``), so one agent cannot spend the pages of every other."""
-        try:
-            if actor is not None and self._scoped:
-                scope = "actor-" + re.sub(r"[^a-z0-9-]+", "-", actor.lower())
-                return bool(self.notifier.report(key, state, msg, scope=scope))
-            return bool(self.notifier.report(key, state, msg))
-        except Exception as exc:
-            now = self._mono()
-            if now - self._notify_warned >= NOTIFY_WARN_EVERY_S:  # logged, never a log flood
-                self._notify_warned = now
-                log.warning("a notification could not be sent: %s", type(exc).__name__)
-            rid = request_id or (
-                key.removeprefix("broker-approval-") if key.startswith("broker-approval-") else None
-            )
-            with contextlib.suppress(*_AUDIT_FAILURES):
-                self._audit(
-                    BROKER_SOURCE, "", "notify", "error", reason="notify-failed", request_id=rid
-                )
-            return False
-
-
-def _takes_scope(notifier: Any) -> bool:
-    """Whether ``notifier.report`` takes a ``scope`` (a per-actor budget)."""
-    import inspect
-
-    try:
-        return "scope" in inspect.signature(notifier.report).parameters
-    except (AttributeError, TypeError, ValueError):
-        return False
-
-
-def check_approvals_url(url: str | None) -> str | None:
-    """``url`` when it is an absolute http(s) URL of a page (no credentials, query or fragment),
-    else :class:`ValueError`; None and "" pass as None (no link)."""
-    if not url:
-        return None
-    parts = urllib.parse.urlsplit(url)
-    if (
-        parts.scheme not in ("http", "https")
-        or not parts.hostname
-        or parts.username
-        or parts.password
-        or parts.query
-        or parts.fragment
-        or any(c.isspace() for c in url)
-    ):
-        raise ValueError(f"approvals URL {url!r} is not an http(s) page URL")
-    return url
-
-
-def _lane_params(lane: _lanes.Lane) -> dict[str, str]:
-    """A caller's description of a lane action's params (``actions_for``)."""
-    if lane.kind == "records-inbox":
-        return {
-            "note": "records note frontmatter: title, risk, rollback, ...; requesting_agent is "
-            f"bound to the caller; type one of {', '.join(lane.note_types)}",
-            "body": "optional Markdown body",
-            "slug": "optional file name slug",
-        }
-    return {
-        "name": f"file name matching {lane.filename_pattern}",
-        "content": f"{lane.format}, at most {lane.max_bytes} bytes"
-        + ("" if lane.overwrite else "; an existing file is never replaced"),
-    }
 
 
 def _digest_text(text: str) -> str:

@@ -18,17 +18,16 @@ unbound instance takes ``requesting_agent`` from the caller, which any caller ca
 
 from __future__ import annotations
 
-import contextlib
 import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import inbox as _inbox
 from .notes import (
     AGENT_LANE,
     ALL_LANES,
-    DECIDED_LANES,
     Note,
     NoteError,
     agent_slug,
@@ -160,9 +159,7 @@ class Records:
             if fm["type"] != expect:
                 raise NoteError(f"type: expected {expect!r}, got {fm['type']!r}")
         self._bind(fm)
-        fm.setdefault("created", self._now())
-        if fm["type"] == "proposal":
-            fm.setdefault("status", "proposed")
+        _inbox.stamp(fm, agent=self.agent, created=self._now())  # _bind checked the claim
         validate_note(fm)
         if not isinstance(body, str):
             raise NoteError("body must be a string")
@@ -181,26 +178,20 @@ class Records:
         if lane_dir.resolve().parent != real_root or lane_dir.is_symlink():
             raise LaneViolation("inbox/ resolves outside the records root")
         final = lane_dir / name
-        # a name already decided would collide when the decider moves this note, and an audit
-        # link to decided/<lane>/<name> would then name the other note
-        for decided in DECIDED_LANES:
-            if (self.root / decided / name).exists():
-                raise FileExistsError(
-                    f"{decided}/{name} already exists; choose another slug for this note"
-                )
-        tmp = lane_dir / f".{name}.{os.getpid()}.{os.urandom(4).hex()}.tmp"
+        root_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(text)
-                fh.flush()
-                os.fsync(fh.fileno())
-            try:
-                os.link(tmp, final)  # exclusive create: fails if the name exists
-            except FileExistsError:
-                raise FileExistsError(
-                    f"{AGENT_LANE}/{name} already exists; refusing to overwrite"
-                ) from None
+            clash = _inbox.decided_clash(root_fd, name)
         finally:
-            with contextlib.suppress(FileNotFoundError):
-                tmp.unlink()
+            os.close(root_fd)
+        if clash is not None:
+            raise FileExistsError(f"{clash} already exists; choose another slug for this note")
+        dir_fd = os.open(lane_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            _inbox.write_inbox(dir_fd, name, text.encode("utf-8"))  # owner-only, as the lane
+        except FileExistsError:
+            raise FileExistsError(
+                f"{AGENT_LANE}/{name} already exists; refusing to overwrite"
+            ) from None
+        finally:
+            os.close(dir_fd)
         return final

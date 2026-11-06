@@ -222,6 +222,8 @@ class Lane:
                 out.append(f"lane {self.name}: content_schema {self.content_schema!r} not found")
         if self.kind == "records-inbox" and self.per_actor:
             out.append(f"lane {self.name}: a records-inbox lane is shared (per_actor: false)")
+        if self.kind == "records-inbox" and self.overwrite:
+            out.append(f"lane {self.name}: a records-inbox lane never overwrites a note")
         if self.max_total_bytes < self.max_bytes:
             out.append(f"lane {self.name}: max_total_bytes is smaller than one file (max_bytes)")
         if self.per_actor and (self.max_files_per_actor or self.max_bytes_per_actor):
@@ -300,6 +302,7 @@ def name_tag(key: bytes, actor: str, date: str, slug: str) -> str:
 def _encode_note(
     lane: Lane, actor: str, params: Mapping[str, Any], now: str, key: bytes
 ) -> tuple[str, bytes]:
+    from homelabnext.records import inbox
     from homelabnext.records.notes import (
         MAX_SLUG,
         NoteError,
@@ -340,9 +343,7 @@ def _encode_note(
             f"note front matter holds the template marker {marker!r}",
             "invalid",
         )
-    fm["created"] = now
-    if fm["type"] == "proposal":
-        fm.setdefault("status", "proposed")
+    inbox.stamp(fm, agent=actor, created=now)  # the records rule for a filed note's front matter
     room = min(MAX_CALLER_SLUG, MAX_SLUG - TAG_CHARS - 1)  # the tag and its hyphen end it
     try:
         validate_note(fm)
@@ -438,7 +439,10 @@ def write(
             book.save("owners", owners)
         if writes is not None:
             book.save("writes", writes)
-        _write_in(fd, name, data, lane.overwrite)
+        if lane.kind == "records-inbox":
+            _file_note(fds[-2], fd, name, data)
+        else:
+            _write_in(fd, name, data, lane.overwrite)
     finally:
         for fd in fds:
             os.close(fd)
@@ -762,3 +766,19 @@ def _write_in(dir_fd: int, name: str, data: bytes, overwrite: bool) -> None:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp, dir_fd=dir_fd)
     os.fsync(dir_fd)
+
+
+def _file_note(records_fd: int, dir_fd: int, name: str, data: bytes) -> None:
+    """A records note into its inbox (``dir_fd``, under the records directory ``records_fd``),
+    through the records library's one inbox writer (:mod:`homelabnext.records.inbox`): never an
+    overwrite, and never a name a decided lane already holds (``lane-exists``)."""
+    from homelabnext.records import inbox
+
+    _check_target(dir_fd, name, False)
+    clash = inbox.decided_clash(records_fd, name)
+    if clash is not None:
+        raise LaneError("lane-exists", f"{clash} already exists; file the note under another slug")
+    try:
+        inbox.write_inbox(dir_fd, name, data)
+    except FileExistsError:
+        raise LaneError("lane-exists", f"{name!r} was created concurrently") from None
