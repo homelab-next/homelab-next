@@ -2337,7 +2337,13 @@ def test_trivy_scans_the_root_filesystem_and_writes_an_sbom(first, vulns, ok):
     assert runs[0].endswith(
         " --skip-dirs /proc,/sys,/dev,/run,/var/lib/docker,/var/lib/containers /"
     )
-    assert "--format cyclonedx" in runs[1] and (tmp_path / "state" / "sbom.cdx.json").exists()
+    # the SBOM run carries the same database options as the scan (offline guests, mirrors)
+    assert runs[1] == (
+        "rootfs --quiet --severity HIGH,CRITICAL --skip-db-update --format cyclonedx --output "
+        f"{tmp_path / 'state' / 'sbom.cdx.json'} "
+        "--skip-dirs /proc,/sys,/dev,/run,/var/lib/docker,/var/lib/containers /"
+    )
+    assert (tmp_path / "state" / "sbom.cdx.json").exists()
     h = run_role(tmp_path, "trivy", "health", v)
     assert (h.returncode == 0) is ok, h.stdout
     if not ok:
