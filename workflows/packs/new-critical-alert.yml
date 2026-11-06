@@ -65,7 +65,7 @@ fixtures:
       severity: critical
       data:
         alert_id: ALT-0101
-        detection: det:ransomware-file-rename-burst
+        detection: det:mass-file-rename-ransom-extension
         title: Mass file renames on app-01
         severity: critical
         observed_at: "2026-01-01T00:00:00Z"
@@ -95,7 +95,7 @@ fixtures:
       time: "2026-01-01T01:00:00Z"
       data:
         alert_id: ALT-0102
-        detection: det:ransomware-file-rename-burst
+        detection: det:mass-file-rename-ransom-extension
         title: Mass file renames on build-02
         severity: critical
         observed_at: "2026-01-01T01:00:00Z"
@@ -121,8 +121,8 @@ fixtures:
       time: "2026-01-01T02:00:00Z"
       data:
         alert_id: ALT-0103
-        detection: det:auth-failure-burst
-        title: Burst of failed logins on an unlisted host
+        detection: det:ssh-authorized-key-added
+        title: Authorized key added on an unlisted host
         severity: critical
         observed_at: "2026-01-01T02:00:00Z"
         entities:
@@ -133,7 +133,7 @@ fixtures:
       calls:
         - action: case.open
           target: svc:cases
-          params: {alert_id: ALT-0103, title: Burst of failed logins on an unlisted host, severity: critical, team: null}
+          params: {alert_id: ALT-0103, title: Authorized key added on an unlisted host, severity: critical, team: null}
           result: executed
   - name: high-severity-not-triggered
     event:
@@ -144,7 +144,7 @@ fixtures:
       time: "2026-01-01T03:00:00Z"
       data:
         alert_id: ALT-0104
-        detection: det:auth-failure-burst
+        detection: det:ssh-authorized-key-added
         title: Burst of failed logins
         severity: high
         observed_at: "2026-01-01T03:00:00Z"
