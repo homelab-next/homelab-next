@@ -45,6 +45,20 @@ class AgentsConfigError(ValueError):
         super().__init__(message + "".join(f"\n  - {p}" for p in self.problems))
 
 
+def _secret_file(secrets_dir: Path, name: str) -> Path | None:
+    """The file of secret ``name`` under ``secrets_dir``, or None when there is none or the name
+    escapes the directory: an absolute name, a ``..`` part, or a path (symlinks followed) that
+    resolves outside it.  A nested name (``status/front-door-secret``) is a subdirectory."""
+    rel = Path(name)
+    if not name or rel.is_absolute() or ".." in rel.parts:
+        return None
+    base = secrets_dir.resolve()
+    path = (base / rel).resolve()
+    if path == base or not path.is_relative_to(base) or not path.is_file():
+        return None
+    return path
+
+
 def secret_lookup(
     env: Mapping[str, str] | None = None, secrets_dir: str | Path | None = None
 ) -> SecretLookup:
@@ -54,10 +68,9 @@ def secret_lookup(
     def lookup(ref: str) -> str | None:
         value = environ.get(secret_env_name(ref), "")
         if not value and secrets_dir is not None:
-            name = ref.removeprefix("secret:")
-            p = Path(secrets_dir) / name
-            if "/" not in name and ".." not in Path(name).parts and p.is_file():
-                value = p.read_text(encoding="utf-8").strip()
+            path = _secret_file(Path(secrets_dir), ref.removeprefix("secret:"))
+            if path is not None:
+                value = path.read_text(encoding="utf-8").strip()
         return value or None
 
     return lookup

@@ -90,7 +90,9 @@ The CLI sends a credential with `--auth secret:<name>` (value from `HNX_SECRET_<
 `--secrets-dir`; the value is the whole `Authorization` header value) on `deploy-changed` and
 `flush`. The secret must hold the full `Authorization` value, scheme included (for example
 `Bearer ...`); a value with a control character is refused without being printed, and the event
-stays pending. `--auth` takes only `secret:<name>` (letters, digits, `.`, `_`, `-`).
+stays pending. `--auth` takes only a canonical secret reference (`secret:<name>`, lowercase
+segments of letters, digits, `_` and `-` joined by `/`, as in `secret:events/broker`); a nested
+name is a subdirectory of `--secrets-dir`.
 
 `requeue` works only within `--retain-hours` of the refusal (rejected records are then pruned, and
 they hold the only stored copy of the event). Pending records are never pruned, so a forwarder

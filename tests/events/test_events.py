@@ -578,6 +578,48 @@ def test_a_401_keeps_the_event_pending_and_a_rerun_delivers_it(store):
         assert srv.fake.ids == [r.id]
 
 
+def test_requeue_on_a_state_store_is_one_rewrite(store, monkeypatch):
+    """On a store with ``rewrite`` the flip is one locked rewrite, never a per-key ``put``."""
+    fwd = FakeForwarder()
+    fwd.reject_next = 2
+    p = pub(fwd, store)
+    ids = sorted(p.publish(task_event(k)).id for k in ("a", "b"))
+    calls = []
+    real = store.rewrite
+
+    def spy(fn):
+        calls.append(fn)
+        return real(fn)
+
+    def no_put(*a, **k):
+        raise AssertionError("requeue wrote a key outside rewrite")
+
+    monkeypatch.setattr(store, "rewrite", spy)
+    monkeypatch.setattr(store, "put", no_put)
+    assert sorted(p.requeue()) == ids
+    assert len(calls) == 1
+    monkeypatch.undo()
+    assert sorted(p.pending_ids()) == ids
+
+
+def test_requeue_does_not_resurrect_a_record_pruned_under_it(store, monkeypatch):
+    """The records are selected inside the rewrite: one removed before the lock is taken (a
+    concurrent prune) is not written back."""
+    fwd = FakeForwarder()
+    fwd.reject_next = 1
+    p = pub(fwd, store)
+    r = p.publish(task_event())
+    real = store.rewrite
+
+    def pruned_first(fn):
+        store.delete_many([k for k in store.items() if k.endswith(r.id)])
+        return real(fn)
+
+    monkeypatch.setattr(store, "rewrite", pruned_first)
+    assert p.requeue() == []
+    assert p.status_of(r.id) is None
+
+
 def test_requeue_makes_rejected_events_pending_and_prune_expires_them(store):
     fwd = FakeForwarder()
     fwd.reject_next = 1

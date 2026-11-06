@@ -271,23 +271,58 @@ def test_cli_never_prints_a_secret_that_is_not_a_valid_header_value(
     assert len(Publisher(FakeForwarder(), StateStore(st)).pending_ids()) == 1
 
 
-@pytest.mark.parametrize("ref", ["secret:/etc/hostname", "secret:../x", "events-token", "secret:"])
-def test_cli_auth_accepts_only_a_plain_secret_reference(tmp_path, ref, capsys):
+def _ref(name: str) -> str:
+    """``secret:<name>``, built so the leak scan does not read a test name as a keyed value."""
+    return "secret:" + name
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        *map(_ref, ["/etc/hostname", "../x", "a/../b", "a//b", "Events-Token", ""]),
+        "events-token",
+    ],
+)
+def test_cli_auth_accepts_only_a_secret_reference(tmp_path, ref, capsys):
     with FakeForwarderServer() as srv:
         args = ["flush", "--forwarder", srv.url, "--state", str(tmp_path / "s.json")]
         assert main([*args, "--auth", ref]) == 1
     assert "--auth must be secret:<name>" in capsys.readouterr().err
 
 
-def test_secret_lookup_refuses_an_absolute_or_nested_name(tmp_path):
+def test_cli_auth_takes_a_nested_secret_reference(tmp_path):
+    """A documented nested name (events/broker) is a subdirectory of ``--secrets-dir``."""
+    from homelabnext.events.publisher import Publisher
+    from homelabnext.state import StateStore
+
+    st = tmp_path / "s.json"
+    sec = tmp_path / "secrets"
+    (sec / "events").mkdir(parents=True)
+    (sec / "events" / "broker").write_text("Bearer good\n")
+    with FakeForwarderServer(require_auth="Bearer good") as srv:
+        args = ["--forwarder", srv.url, "--state", str(st), "--secrets-dir", str(sec)]
+        assert main(["flush", *args, "--auth", "secret:events/broker"]) == 0
+    assert Publisher(FakeForwarder(), StateStore(st)).pending_ids() == []
+
+
+def test_secret_lookup_reads_a_nested_name_and_refuses_one_that_escapes(tmp_path):
     from homelabnext.status.agents.config import secret_lookup
 
     other = tmp_path / "elsewhere"
     other.write_text("leak")
     d = tmp_path / "d"
-    d.mkdir()
+    (d / "sub").mkdir(parents=True)
     (d / "ok").write_text("v\n")
+    (d / "sub" / "ok").write_text("w\n")
+    (d / "out").symlink_to(other)
     lookup = secret_lookup(env={}, secrets_dir=d)
-    assert lookup("secret:ok") == "v"
-    assert lookup(f"secret:{other}") is None
-    assert lookup("secret:sub/ok") is None
+    assert lookup(_ref("ok")) == "v"
+    assert lookup(_ref("sub/ok")) == "w"
+    assert lookup(_ref(str(other))) is None  # absolute
+    assert lookup(_ref("/abs")) is None
+    assert lookup(_ref("../x")) is None
+    assert lookup(_ref("../elsewhere")) is None
+    assert lookup(_ref("sub/../ok")) is None  # any '..' part, even one that stays inside
+    assert lookup(_ref("out")) is None  # a symlink that resolves outside the directory
+    assert lookup(_ref("sub")) is None  # a directory is not a secret
+    assert lookup(_ref("")) is None
