@@ -320,7 +320,7 @@ SSH (22) to the zones the deploy configures, and the OpenBao port as a declared 
 nothing else: no subnet routes, no exit node, no access from any zone tag back to
 `tag:ci-deploy`.
 
-**Joining without a stored secret.** The pinned `tailscale/github-action` (v4.2.0) supports
+**Joining without a stored secret.** The pinned `tailscale/github-action` (v4.3.0) supports
 **workload identity federation**: with `oauth-client-id` and `audience` (no `oauth-secret`) and
 the job's `id-token` permission set to `write`, it exchanges the job's GitHub OIDC token for a
 pre-authorized, **ephemeral** node tagged `tag:ci-deploy`, which disappears when the job ends.
@@ -532,7 +532,7 @@ manual dispatch from `main` is the approval step. Merges and pull requests run `
 3. **Environment `production`**: its deployment-branch policy releases its secrets only to a run
    from `main` (and, on a plan with required reviewers, only after a reviewer approves).
 4. **Pins**: refuses to start unless `HNX_REF` is a 40-hex commit SHA, the sops version and
-   checksum are set, and `BAO_ADDR` is `https://` with a `BAO_ROLE_ID`. Actions are pinned to full commit SHAs (`tailscale/github-action` v4.2.0
+   checksum are set, and `BAO_ADDR` is `https://` with a `BAO_ROLE_ID`. Actions are pinned to full commit SHAs (`tailscale/github-action` v4.3.0
    included).
 5. **Checkouts**: the private repository, then homelab-next at `HNX_REF` into `./hnx`, both with
    `persist-credentials: false`.
