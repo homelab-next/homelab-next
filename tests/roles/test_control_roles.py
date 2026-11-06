@@ -3030,3 +3030,13 @@ def test_clamav_clearing_the_private_mirror_removes_the_line_and_restarts_freshc
     )
     assert "PrivateMirror" not in conf.read_text() and "DatabaseMirror" in conf.read_text()
     assert calls(tmp_path).count(restart) == 2
+
+
+def test_clamav_config_reads_the_guest_file_not_the_controller():
+    # controller == guest in the harness, so pin the structure: the guest stat is registered
+    # before the lineinfile and gates it, and the controller-side `is file` test is gone.
+    src = (ROOT / "ansible" / "roles" / "clamav" / "tasks" / "config.yml").read_text()
+    assert "ansible.builtin.stat" in src and "register: clamav_freshclam_stat" in src
+    assert src.index("ansible.builtin.stat") < src.index("ansible.builtin.lineinfile")
+    assert "clamav_freshclam_stat.stat.exists" in src
+    assert " is file" not in src
