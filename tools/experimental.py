@@ -30,8 +30,11 @@ not already take out of the blocking set is growth, and fails (exit 1) unless th
 it.  CI's ``trusted-gates`` job runs the base's copy of this file, so a change cannot argue its way
 past a red test by listing it.  The operator allows growth with the pull-request label
 ``experimental-growth`` (:data:`GROWTH_LABEL`), which the workflow passes in
-``HNX_EXPERIMENTAL_GROWTH`` (:data:`GROWTH_ENV`) as ``label``; a push to ``main`` passes ``push``,
-since its pull request was gated already.  Agents never apply the label.
+``HNX_EXPERIMENTAL_GROWTH`` (:data:`GROWTH_ENV`) as ``label`` only on the run that applying the
+label triggered, so it approves that head and no later push; a push to ``main`` passes ``push``,
+since its pull request was gated already.  Agents never apply the label.  The head's own
+``tools/experimental.py`` must still point :data:`LIST` and :data:`MARKER` where this one does
+(:func:`repointed`), or its marker plugin could read another list.
 
 Usage: python tools/experimental.py {run,list,validate} [--file FILE]
        python tools/experimental.py ratchet (--base REV | --ci-base) [ROOT]
@@ -42,6 +45,7 @@ is invalid (or the base is not a commit).
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime as dt
 import os
 import re
@@ -303,6 +307,48 @@ def growth(base_doc: object, head_doc: object) -> list[str]:
     return out
 
 
+#: the module-level names by which the head's own code (the marker plugin, coverage_floor) finds
+#: the list and marks its tests: pointing one elsewhere would take tests out of the blocking set
+#: without touching tools/experimental.yml, so the ratchet holds them to this file's own values
+PINNED = ("LIST", "MARKER")
+
+
+def _assignments(source: str) -> dict[str, list[str]]:
+    """The dumped value of every module-level assignment to a :data:`PINNED` name, in order."""
+    found: dict[str, list[str]] = {n: [] for n in PINNED}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for t in targets:
+            for name in (n.id for n in ast.walk(t) if isinstance(n, ast.Name)):
+                if name in found:
+                    found[name].append(ast.dump(value) if value is not None else "")
+    return found
+
+
+def repointed(root: Path) -> list[str]:
+    """Each :data:`PINNED` name the head's ``tools/experimental.py`` assigns other than this
+    file does (read as text, never run): like a new list entry, it is growth."""
+    rel = Path(__file__).resolve().relative_to(ROOT).as_posix()
+    mine = _assignments(Path(__file__).read_text(encoding="utf-8"))
+    try:
+        theirs = _assignments((root / rel).read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError) as exc:
+        return [
+            f"{rel}: the head's copy cannot be read ({type(exc).__name__}), so its list is unknown"
+        ]
+    return [
+        f"{rel}: the head assigns {name} other than the base does (it decides which list and"
+        " marker take tests out of the blocking set)"
+        for name in PINNED
+        if theirs[name] != mine[name]
+    ]
+
+
 def ratchet(root: Path, rev: str, environ=None, out=None) -> int:
     """The list in the checkout at ``root`` (read as data) against the one at commit ``rev``."""
     out = out or sys.stdout
@@ -315,17 +361,27 @@ def ratchet(root: Path, rev: str, environ=None, out=None) -> int:
     if not rev.strip() or git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}").returncode:
         print(f"experimental: --base {rev!r}: not a commit here", file=out)
         return 2
-    shown = git("show", f"{rev}:{rel}")
-    if shown.returncode:
-        print(f"experimental: the base {rev[:12]} has no {rel}: nothing to ratchet", file=out)
-        return 0
+    listed = git("ls-tree", "--name-only", rev, "--", rel)
+    if listed.returncode:
+        print(f"experimental: cannot read the base's tree at {rev[:12]}", file=out)
+        return 2
     try:
-        base_doc = yaml.safe_load(shown.stdout)
+        if listed.stdout.strip():
+            shown = git("show", f"{rev}:{rel}")
+            if shown.returncode:
+                raise OSError(f"cannot read {rel} at the base {rev[:12]}")
+            base_doc = yaml.safe_load(shown.stdout)
+        else:  # no list at the base: nothing was out of the blocking set, so every entry is growth
+            print(
+                f"experimental: the base {rev[:12]} has no {rel}: every entry is growth", file=out
+            )
+            base_doc = {"components": {}}
         head_doc = yaml.safe_load((root / rel).read_text(encoding="utf-8"))
         problems = growth(base_doc, head_doc)
     except (OSError, yaml.YAMLError, ListError) as exc:
         print(f"experimental: cannot compare the lists: {exc}", file=out)
         return 2
+    problems += repointed(root)
     try:
         parse(head_doc, root)  # the head under the base's rules: a key they do not know is growth
     except ListError as exc:

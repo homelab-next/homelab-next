@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 INVARIANTS = ROOT / "examples" / "registers" / "invariants.yml"
+TOOL = Path(ex.__file__)
 JOB = "experimental"
 
 
@@ -391,12 +392,15 @@ def repo(tmp_path):
         "tests/engine/test_a.py",
         "tests/other/test_engine.py",
         "tests/broker/test_broker.py",
+        "tests/engine2/test_x.py",
         "homelabnext/engine.py",
         "homelabnext/broker.py",
     ):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text("\n", encoding="utf-8")
     _write(tmp_path, BASE_LIST)
+    # the tool itself, whose LIST and MARKER the ratchet holds to its own
+    (tmp_path / "tools" / "experimental.py").write_text(TOOL.read_text(encoding="utf-8"))
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "base")
@@ -448,6 +452,21 @@ def test_a_new_frozen_component_fails_the_ratchet(repo):
             "python -m homelabnext.cli x",
         ),
         ({"owner": "someone"}, "the base's rules refuse the list"),
+        # a sibling sharing a prefix with a listed directory is not under it
+        (
+            {"tests": ["tests/engine", "tests/other/test_engine.py", "tests/engine2/test_x.py"]},
+            "components.engine.tests: tests/engine2/test_x.py is not",
+        ),
+        (
+            {
+                "gates": [
+                    "python -m homelabnext.cli engine check",
+                    "python -m homelabnext.cli conform report --capability projects",
+                ],
+                "conform": ["projects"],
+            },
+            "components.engine.conform: projects is not",
+        ),
     ],
 )
 def test_a_path_gate_or_criterion_added_fails_the_ratchet(repo, changes, words):
@@ -471,6 +490,80 @@ def test_shrinking_or_editing_the_other_keys_passes_the_ratchet(repo, changes):
 
 def test_removing_every_component_passes_the_ratchet(repo):
     assert _ratchet(repo, {"components": {}})[0] == 0
+
+
+def _commit_base(root: Path, doc: object | None) -> str:
+    """A new base commit holding ``doc`` as the list (none at all when ``doc`` is None)."""
+    if doc is None:
+        _git(root, "rm", "-q", "tools/experimental.yml")
+    else:
+        _write(root, doc)
+        _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "new base")
+    return _git(root, "rev-parse", "HEAD")
+
+
+def test_moving_an_entry_between_components_passes_the_ratchet(repo):
+    root, _ = repo
+    two = yaml.safe_load(yaml.safe_dump(BASE_LIST))
+    two["components"]["broker"] = {
+        **two["components"]["engine"],
+        "tests": ["tests/broker"],
+        "gates": ["python -m homelabnext.cli broker check"],
+        "invariants": ["B-01"],
+        "code": ["homelabnext/broker.py"],
+    }
+    base = _commit_base(root, two)
+    moved = yaml.safe_load(yaml.safe_dump(two))
+    engine, broker = moved["components"]["engine"], moved["components"]["broker"]
+    engine["tests"], broker["tests"] = (
+        ["tests/engine"],
+        ["tests/broker", "tests/other/test_engine.py"],
+    )
+    engine["invariants"], broker["invariants"] = ["R-09", "B-01"], []
+    engine["gates"], broker["gates"] = [*engine["gates"], *broker["gates"]], [broker["gates"][0]]
+    engine["code"], broker["code"] = [], ["homelabnext/broker.py", "homelabnext/engine.py"]
+    _write(root, moved)
+    out = io.StringIO()
+    assert ex.ratchet(root, base, {}, out) == 0, out.getvalue()
+
+
+def test_a_base_without_a_list_makes_every_entry_growth(repo):
+    root, _ = repo
+    base = _commit_base(root, None)
+    _write(root, BASE_LIST)
+    out = io.StringIO()
+    assert ex.ratchet(root, base, {}, out) == 1, out.getvalue()
+    assert "components.engine: a component the base does not list" in out.getvalue()
+    _write(root, {"components": {}})
+    assert ex.ratchet(root, base, {}, io.StringIO()) == 0
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ('LIST = ROOT / "tools" / "experimental.yml"', 'LIST = ROOT / "tools" / "other.yml"'),
+        ('MARKER = "experimental"', 'MARKER = "experimental_other"'),
+        # assigned twice: the later value is the one the plugin reads
+        ('MARKER = "experimental"\n', 'MARKER = "experimental"\nMARKER = "x"\n'),
+    ],
+)
+def test_the_head_repointing_the_list_or_the_marker_is_growth(repo, old, new):
+    root, _ = repo
+    tool = root / "tools" / "experimental.py"
+    text = tool.read_text(encoding="utf-8")
+    assert old in text
+    tool.write_text(text.replace(old, new, 1), encoding="utf-8")
+    rc, out = _ratchet(repo, BASE_LIST)
+    assert rc == 1 and "tools/experimental.py: the head assigns" in out, out
+    assert _ratchet(repo, BASE_LIST, "label")[0] == 0
+
+
+def test_the_head_without_its_tool_is_growth(repo):
+    root, _ = repo
+    (root / "tools" / "experimental.py").unlink()
+    rc, out = _ratchet(repo, BASE_LIST)
+    assert rc == 1 and "the head's copy cannot be read" in out, out
 
 
 def test_only_the_operator_s_label_or_a_push_to_main_allows_growth(repo):
@@ -511,9 +604,11 @@ def test_ci_passes_the_operator_s_label_to_both_copies_of_the_ratchet():
         or "tools/experimental.py ratchet" in s.get("run", "")
     ]
     assert len(steps) == 2
+    # growth passes only on the run that applying the label triggered: the label approves that
+    # head, and a later push (a synchronize event still carrying the label) checks without it
     want = (
-        "${{ github.event_name == 'push' && 'push' || (contains(github.event.pull_request.labels"
-        f".*.name, '{ex.GROWTH_LABEL}') && 'label' || 'none') }}}}"
+        "${{ github.event_name == 'push' && 'push' || (github.event.action == 'labeled'"
+        f" && github.event.label.name == '{ex.GROWTH_LABEL}' && 'label' || 'none') }}}}"
     )
     for step in steps:
         assert step["env"][ex.GROWTH_ENV] == want, step["name"]

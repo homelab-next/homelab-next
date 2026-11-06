@@ -295,13 +295,18 @@ says why in a trailer, `No-regression-test: <reason>`; the gate lists every waiv
 gates, invariants and code block no merge. So the list only shrinks. CI's `trusted-gates` job runs
 the base commit's `tools/experimental.py ratchet --base` against the change, and fails when the
 list adds a component, a `tests:` or `code:` path not equal to or under one the base lists, a gate,
-an invariant, a conformance capability, or a key the base's rules refuse. Removing an entry (the
-way back into the blocking set), moving one between components, and editing `why`, `until`,
-`status` or `docs` are free. Growth is the operator's decision: they apply the `experimental-growth`
-label to the pull request, and CI reads it from the event (adding or removing the label runs CI
-again). Agents never apply that label; to take something out of the blocking set, open the pull
-request and ask for it. `python tools/experimental.py ratchet --base origin/main` runs the check
-locally.
+an invariant, a conformance capability, or a key the base's rules refuse. It also fails when the
+change's own `tools/experimental.py` assigns `LIST` or `MARKER` other than the base's does (read as
+text): those decide which list the test marker reads. Removing an entry (the way back into the
+blocking set), moving one between components, and editing `why`, `until`, `status` or `docs` are
+free. Growth is the operator's decision: they apply the `experimental-growth` label to the pull
+request, and growth passes only on the CI run that applying the label triggers. The label approves
+the head it was applied to and no later one: a further push, or any other label change, runs the
+check again without it, so apply it on the final diff, and to approve a new head remove the label
+and apply it again. Agents never apply that label; to take something out of the blocking set, open
+the pull request and ask for it. A push to `main` is not checked (its pull request was), so the
+guarantee rests on branch protection requiring pull requests. `python tools/experimental.py ratchet
+--base origin/main` runs the check locally.
 
 ## Adding a capability
 
