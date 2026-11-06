@@ -128,6 +128,19 @@ RELAY_DONE = ("delivered", "undeliverable", "quarantine")
 #: the UTC stamp an audit record's file name starts with (``strftime``): sorts as it orders
 AUDIT_STAMP = "%Y%m%dT%H%M%S%fZ"
 
+
+def _audit_gap(newest_old: str, oldest_new: str | None, stamp: str) -> float:
+    """Days between two audit record names' leading stamps; infinite with no newer record (or a
+    name whose stamp does not parse, so a malformed name never makes the trail prunable)."""
+    if oldest_new is None:
+        return float("inf")
+    try:
+        a, b = (datetime.strptime(n[: len(stamp)], AUDIT_STAMP) for n in (newest_old, oldest_new))
+    except ValueError:
+        return float("inf")
+    return (b - a).total_seconds() / 86400
+
+
 log = logging.getLogger("homelabnext.broker.state")
 #: how often (at most) the broker removes outbox files the relay is done with
 PRUNE_INTERVAL_S = 60.0
@@ -585,15 +598,19 @@ class StateDir:
             with os.scandir(self._dir("audit")) as it:
                 names = [e.name for e in it if e.name.endswith(".json")]
             old = [n for n in names if n[: len(stamp)] < stamp]
-            if old and len(old) == len(names):
-                # every record past retention, the newest too: a clock stepped forward (or a
+            newer = [n for n in names if n[: len(stamp)] >= stamp]
+            if old and _audit_gap(max(old), min(newer) if newer else None, stamp) > audit_days:
+                # no record newer than the cutoff, or more than audit_days between the newest
+                # record past it and the oldest one inside it: a clock stepped forward (or a
                 # broker idle longer than audit_days).  The trail is evidence and deleting it
-                # cannot be undone, so it is kept until a record newer than the cutoff exists
+                # cannot be undone, so it is kept: one record written under a stepped clock does
+                # not make every earlier one prunable an hour later
                 log.warning(
-                    "retention: all %d audit records are older than %s; none removed "
-                    "(check the clock)",
-                    len(names),
+                    "retention: %d audit records are older than %s but separated from the rest "
+                    "by more than %s days; none removed (check the clock)",
+                    len(old),
                     then.isoformat(),
+                    audit_days,
                 )
                 old = []
             for name in old:

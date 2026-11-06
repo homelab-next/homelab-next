@@ -159,7 +159,9 @@ class _RequestsMixin:
                 # the call rate as an admitted call does, or a loop of ok status reads (the
                 # one owner operation that can succeed again and again) fills the trail
                 who = caller if isinstance(caller, str) else repr(caller)
-                if self._take_call(who):
+                # counted under the request's actor (the spelling admission counted the submit
+                # under), so one owner's spellings of itself share one bucket
+                if self._take_call(rec["request"]["actor"]):
                     return rec
                 self._audit(
                     caller,

@@ -283,9 +283,11 @@ for the scan; one prune at a time) the broker removes a run directory
 ago (default 30), and an audit record, with its `decisions/` entry, stamped more than `audit_days`
 ago (default 400: the trail is evidence, so keep it at least as long as anything that may ask for
 it, or ship it elsewhere first); neither is removed while its request is still pending or running.
-`audit_days: null` keeps the trail for ever. Audit age is read off the wall clock, so when *every*
-record is past `audit_days` (a clock stepped forward, or a broker idle that long) none is removed
-and a warning is logged: the trail is never deleted whole. Requests, claims, results and approvals
+`audit_days: null` keeps the trail for ever. Audit age is read off the wall clock, so when no record
+is newer than the cutoff, or more than `audit_days` separate the newest record past it from the
+oldest one inside it (a clock stepped forward, or a broker idle that long), none is removed and a
+warning is logged; a record written under a stepped clock does not make the earlier ones prunable.
+Requests, claims, results and approvals
 are not pruned (they are small, and `submit` is bounded by `pending_per_actor` and the call rate).
 
 **Audit before execute.** An action that executes (a `call`, an approved `run`) first writes an

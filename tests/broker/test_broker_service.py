@@ -654,6 +654,14 @@ def test_a_clock_jump_never_deletes_the_whole_audit_trail(tmp_path):
     # a restart under the stepped clock prunes at start: the trail still stands
     again = _svc(tmp_path, clock)
     assert len(again.audit_documents()) == trail
+    # one record written under the stepped clock does not make every earlier one prunable: the
+    # gap between them is longer than audit_days, so the trail stands an hour later and after
+    again.call(AGENT, "service.status", {}, target="svc:queue")
+    grown = len(again.audit_documents())
+    for _ in range(3):
+        clock.advance(3600)
+        assert again.prune_retention()["audit"] == 0
+    assert len(again.audit_documents()) == grown > trail
 
 
 def test_an_operation_starts_the_hourly_prune_in_the_background(tmp_path):
@@ -702,6 +710,19 @@ def test_a_loop_of_ok_status_reads_is_bounded_by_the_call_rate(tmp_path):
     svc.cancel(AGENT, rid)
     assert svc.state.state_of(rid) == "cancelled"
     _audit_ok(svc)
+
+
+def test_an_owner_s_spellings_of_itself_share_one_call_rate(tmp_path):
+    """Ownership compares normalized identities, but the rate was counted under the caller's raw
+    spelling, so each spelling of one owner had its own bucket."""
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, calls_per_minute=3)
+    rid = _restart(svc)  # the submit takes one place
+    assert svc.status("Profile:Triage", rid).state == "pending"
+    assert svc.status("PROFILE:TRIAGE", rid).state == "pending"
+    with pytest.raises(Denied) as info:
+        svc.status("profile:Triage", rid)
+    assert info.value.reason == "call-rate-exceeded"
 
 
 def test_audit_days_null_keeps_the_trail_for_ever(tmp_path):

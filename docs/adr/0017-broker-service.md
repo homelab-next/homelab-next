@@ -220,8 +220,9 @@ either, and once the state disk filled every action of every agent and every app
 - **Retention**: a run's handler copy is removed when the handler ends (the pinned digest makes
   it redundant); finished runs' directories go after `retention.runs_days` (default 30) and audit
   records after `retention.audit_days` (default 400, the trail being evidence; `null` keeps it),
-  never those of a request still pending or running, and never the whole trail at once (all
-  records past retention means the clock moved: none is removed). The hourly prune runs on a
+  never those of a request still pending or running, and none while more than `audit_days`
+  separate the records past retention from the rest, or nothing is newer than the cutoff (the
+  clock moved, or the broker sat idle: none is removed until an operator looks). The hourly prune runs on a
   background thread, never on a caller's request.
 
 These bound the *rate* at which an agent grows the state directory, not its size: the
