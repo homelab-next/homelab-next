@@ -562,10 +562,14 @@ class DenyFile:
         self.lock_path = self.path.with_name(self.path.name + ".lock")
 
     def _read(self) -> Deny:
+        """The deny state; a missing file is empty, and one that cannot be read or parsed is a
+        :class:`DenyFileProblem` (so :func:`denied` pages), never an empty set."""
         try:
             doc = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return _empty_deny()
+        except (OSError, UnicodeDecodeError, ValueError) as exc:  # ValueError: JSONDecodeError
+            raise DenyFileProblem(f"cannot read the deny file {self.path}: {exc}") from None
         if not isinstance(doc, Mapping) or not all(
             isinstance(doc.get(k), list) for k in ("log", "reach")
         ):
@@ -855,9 +859,14 @@ def denied(
     caller passes as ``retracted=`` to ``select_knowledge`` and ``assemble_pack``.
 
     A deny file the backend cannot trust (:class:`DenyFileProblem`: writable by the runtime,
-    another path than the operator stamped, missing or shorter) is never read as an empty set:
-    it raises, and with ``notifier`` it pages (pair ``AGENT_MEMORY_DENY``, state-diffed, with
-    the recovery on the next good read)."""
+    another path than the operator stamped, missing, shorter, unreadable or malformed) is never
+    read as an empty set: it raises, and with ``notifier`` it pages (pair ``AGENT_MEMORY_DENY``,
+    state-diffed, with the recovery on the next good read).
+
+    **On** :class:`DenyFileProblem` **the session must not assemble a pack.**  Passing no
+    ``retracted=`` (or an empty :class:`~homelabnext.agent.deny.DenySet`) to ``select_knowledge``
+    or ``assemble_pack`` instead would serve retracted content to the model: that is the fail-open
+    this refusal exists to prevent."""
     key = "agent-memory-deny-read"
     try:
         deny = backend.load_deny()

@@ -622,3 +622,35 @@ def test_r4_an_owner_change_or_a_second_hard_link_is_refused(tmp_path):
     with pytest.raises(MemoryAccessError, match="2 hard links"), memory._as_owner(state):
         pass
     assert os.geteuid() == 0
+
+
+# ---------------------------------------------------------------- final review
+def test_a_malformed_deny_file_is_refused_and_paged_never_read_empty(tmp_path):
+    from homelabnext.agent.memory import DenyFileProblem
+    from homelabnext.notify import FakeSender, Notifier
+    from homelabnext.notify.core_pairs import AGENT_MEMORY_DENY
+    from homelabnext.state import StateStore
+
+    backend = _file(tmp_path)
+    backend.deny.path.write_text("{not json", encoding="utf-8")
+    sender = FakeSender()
+    with pytest.raises(DenyFileProblem, match="cannot read the deny file"):
+        denied(backend, notifier=Notifier(sender, StateStore(tmp_path / "n.json")))
+    assert [m.title for m in sender.sent] == [AGENT_MEMORY_DENY[0]]
+
+
+def test_a_deny_file_shorter_but_not_empty_is_refused(reader, tmp_path, op):
+    from homelabnext.agent.memory import DenyFileProblem
+
+    backend = _file(tmp_path)
+    store = MemoryStore(backend, now=Clock())
+    put(store, reader, [up("add", "a", "A", sources=[uid(1)])], [item(1)])
+    retract(MemoryAdmin(backend, now=Clock()), uid(1), op)  # two deny records, stamped
+    doc = json.loads(backend.deny.path.read_text(encoding="utf-8"))
+    assert len(doc["log"]) == 2
+    doc["log"] = doc["log"][:1]  # one record lost: shorter than the stamp, not empty
+    backend.deny.path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(DenyFileProblem, match="shorter than the operator stamped"):
+        denied(backend)
+    with pytest.raises(DenyFileProblem, match="shorter than the operator stamped"):
+        put(store, reader, [up("add", "b", "B")], [item(2)])

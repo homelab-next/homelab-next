@@ -368,7 +368,9 @@ def select_knowledge(
     trusted), so an edited profile that seeds from an ungranted thing raises
     :class:`~homelabnext.agent.errors.IncludeViolation`.  ``retracted``: the active
     :class:`~homelabnext.agent.deny.DenySet`; a denied node is excluded with reason
-    ``retracted``."""
+    ``retracted``.  Wherever a memory store is wired in, pass
+    ``homelabnext.agent.memory.denied(backend)``; when that raises ``DenyFileProblem``, the
+    session must not assemble a pack (omitting ``retracted`` would serve retracted content)."""
     require_verified(profile, "select_knowledge")
     if retracted is not None and type(retracted) is not DenySet:
         raise TypeError("retracted must be a DenySet (homelabnext.agent.deny.deny_set)")

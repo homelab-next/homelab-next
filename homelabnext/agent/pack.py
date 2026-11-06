@@ -385,7 +385,10 @@ def assemble_pack(
     ``memory``: the memory entries platform code renders into the pack (see the module doc);
     the pack gains a ``memory`` block.  Needs ``profile``.
     ``retracted``: the active :class:`~homelabnext.agent.deny.DenySet`; denied input sections,
-    knowledge items and memory entries are left out (see the module doc).
+    knowledge items and memory entries are left out (see the module doc).  Wherever a memory
+    store is wired in, pass ``homelabnext.agent.memory.denied(backend)``; when that raises
+    ``DenyFileProblem``, do not assemble a pack at all (omitting ``retracted`` would serve
+    retracted content: the default is no deny set).
     """
     if retracted is not None and type(retracted) is not DenySet:
         raise SpecError("retracted must be a DenySet (homelabnext.agent.deny.deny_set)")

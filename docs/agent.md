@@ -803,7 +803,10 @@ everything built on it, by an operator, never by a profile.
   state file is refused, never quarantined and recreated by an operator run. `denied()` (and
   `load_deny`) refuse, and page with `notifier=`, a deny file the runtime could write (the
   whole directory chain is checked) or one that does not match the stamp: new packs never read
-  an empty deny set from the wrong path.
+  an empty deny set from the wrong path. **On `DenyFileProblem` the session must not assemble a
+  pack**: calling `select_knowledge` or `assemble_pack` without `retracted=` (its default is no
+  deny set) would serve retracted content. A deny file that cannot be read or parsed is refused
+  the same way.
 - **`dependents(source, by=, revision=, include_exposed=, include_alias=)` is the dry run.** The
   alias set comes only from the exposures' `pairs` (`{rendered, memory, pairs}`, counted in
   `exposure_bytes`) and closes narrowly: a graph id to its uid, a uid to its own digests and
