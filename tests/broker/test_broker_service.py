@@ -628,13 +628,80 @@ def test_finished_runs_and_old_audit_records_are_pruned_and_live_requests_kept(t
     clock.advance(400 * 86400 - 7200)  # the records are 400 days less an hour old
     svc.prune_retention()
     assert len(list((root / "audit").iterdir())) == trail, "400 days: nothing is old enough"
+    before = {r["request_id"] for r in svc.audit_documents()}
+    svc.call(AGENT, "service.status", {}, target="svc:queue")  # a record newer than the cutoff
+    fresh = {r["request_id"] for r in svc.audit_documents()} - before
+    trail = len(list((root / "audit").iterdir()))
     clock.advance(7200)
     removed = svc.prune_retention()
     left = svc.audit_documents()
     assert removed["audit"] == trail - len(left) > 0
-    assert {r["request_id"] for r in left} == {waiting}
+    assert {r["request_id"] for r in left} == {waiting, *fresh}
     assert svc.state.state_of(waiting) == "pending" and svc.state.state_of(decided) == "denied"
     assert list((root / "decisions").iterdir()) == [], "the index goes with its record"
+
+
+def test_a_clock_jump_never_deletes_the_whole_audit_trail(tmp_path):
+    """Audit pruning is keyed to the wall clock: a clock stepped years forward at start made
+    every record look past retention and deleted the trail, which is evidence, for good."""
+    clock = Clock()
+    svc = _svc(tmp_path, clock)
+    svc.call(AGENT, "service.status", {}, target="svc:queue")
+    trail = len(svc.audit_documents())
+    clock.advance(5 * 365 * 86400)
+    assert svc.prune_retention(force=True)["audit"] == 0
+    assert len(svc.audit_documents()) == trail
+    # a restart under the stepped clock prunes at start: the trail still stands
+    again = _svc(tmp_path, clock)
+    assert len(again.audit_documents()) == trail
+
+
+def test_an_operation_starts_the_hourly_prune_in_the_background(tmp_path):
+    """The hourly prune ran synchronously inside admission (for a token operation under the
+    token store's lock), so one caller's request paid for scanning the whole trail."""
+    import os
+
+    clock = Clock()
+    svc = _svc(tmp_path, clock)
+    svc.call(AGENT, "service.status", {}, target="svc:queue")
+    [rd] = (svc.state.root / "runs").iterdir()
+    old = clock().timestamp() - 31 * 86400
+    os.utime(rd, (old, old))
+    clock.advance(3600)
+    svc.call(AGENT, "service.status", {}, target="svc:queue")
+    assert svc._prune_thread is not None, "a due prune is started by the next operation"
+    svc._prune_thread.join(10)
+    assert not rd.exists()
+    assert len(list((svc.state.root / "runs").iterdir())) == 1, "only the new run is left"
+    started = svc._prune_thread
+    svc.call(AGENT, "service.status", {}, target="svc:queue")
+    assert svc._prune_thread is started, "paced: no second prune within the hour"
+
+
+def test_a_loop_of_ok_status_reads_is_bounded_by_the_call_rate(tmp_path):
+    """status is an owner operation: it never went through admission, so a loop of status reads
+    on one submitted request, every one ok, wrote one audit record per read without bound."""
+    clock = Clock()
+    svc = _quota_svc(tmp_path, clock, calls_per_minute=3)
+    rid = _restart(svc)
+    trail = len(svc.audit_documents())
+    answers = []
+    for _ in range(50):
+        try:
+            answers.append(svc.status(AGENT, rid).state)
+        except Denied as exc:
+            answers.append(exc.reason)
+    assert answers == ["pending"] * 2 + ["call-rate-exceeded"] * 48, "the submit took a place"
+    assert len(svc.audit_documents()) == trail + 50, "the refusals: what refusal_limit bounds"
+    for op in (svc.detail, svc.run, svc.cancel):  # every owner operation counts
+        with pytest.raises(Denied) as info:
+            op(AGENT, rid)
+        assert info.value.reason == "call-rate-exceeded"
+    assert svc.state.state_of(rid) == "pending", "a refused cancel changes nothing"
+    clock.advance(61)
+    svc.cancel(AGENT, rid)
+    assert svc.state.state_of(rid) == "cancelled"
+    _audit_ok(svc)
 
 
 def test_audit_days_null_keeps_the_trail_for_ever(tmp_path):

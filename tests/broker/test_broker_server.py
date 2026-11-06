@@ -737,6 +737,24 @@ def test_a_loop_of_ok_calls_past_the_call_quota_is_refused_and_counted(tmp_path)
     assert _ask(svc, peers, ME, RefusalLimiter(2, 60, clock=_Clock()), **body)["ok"]
 
 
+def test_a_loop_of_ok_status_reads_ends_rate_limited(tmp_path):
+    """status never went through admission: a loop of it on one submitted request, every read
+    ok, wrote an audit record per read that neither the call rate nor refusal_limit bounded."""
+    svc = _service(tmp_path, quotas={"calls_per_minute": 3})
+    peers = PeerMap(svc.manifest)
+    limiter = RefusalLimiter(2, 60, clock=_Clock())
+    submitted = _ask(
+        svc, peers, ME, limiter, op="submit", action="service.restart",
+        params={"grace_s": 30}, target="svc:queue",
+    )  # fmt: skip
+    rid = submitted["result"]["request_id"]
+    trail = len(svc.audit_documents())
+    answers = [_ask(svc, peers, ME, limiter, op="status", request_id=rid) for _ in range(40)]
+    assert [a["ok"] for a in answers[:2]] == [True] * 2, answers[0]
+    assert [a["error"] for a in answers[2:]] == ["call-rate-exceeded"] * 2 + ["rate-limited"] * 36
+    assert len(svc.audit_documents()) == trail + 5, "two reads, two refusals, one rate-limit"
+
+
 @pytest.mark.parametrize(
     "fault",
     [

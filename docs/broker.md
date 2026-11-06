@@ -277,13 +277,16 @@ read never walks the refusals; rebuilt once for an older state directory),
 
 **Retention** (manifest 1.9 `retention`). A run's private copy of its handler is removed as soon as
 the handler has ended (the pinned digest names those bytes; the copy is not evidence). At start and
-at most once an hour after (on the next admitted operation) the broker removes a run directory
+at most once an hour after (on a background thread the next operation starts, so no caller waits
+for the scan; one prune at a time) the broker removes a run directory
 (`runs/<request>/`: stdout, stderr, whatever the handler left) last written more than `runs_days`
 ago (default 30), and an audit record, with its `decisions/` entry, stamped more than `audit_days`
 ago (default 400: the trail is evidence, so keep it at least as long as anything that may ask for
 it, or ship it elsewhere first); neither is removed while its request is still pending or running.
-`audit_days: null` keeps the trail for ever. Requests, claims, results and approvals are not
-pruned (they are small, and `submit` is bounded by `pending_per_actor` and the call rate).
+`audit_days: null` keeps the trail for ever. Audit age is read off the wall clock, so when *every*
+record is past `audit_days` (a clock stepped forward, or a broker idle that long) none is removed
+and a warning is logged: the trail is never deleted whole. Requests, claims, results and approvals
+are not pruned (they are small, and `submit` is bounded by `pending_per_actor` and the call rate).
 
 **Audit before execute.** An action that executes (a `call`, an approved `run`) first writes an
 `outcome: started` record (audit 1.2), and the broker refuses to execute it, answering
@@ -612,13 +615,23 @@ default 60 per 60 s) is answered `rate-limited` for the rest of the window, with
 being parsed. The limit is audited **once per peer and window** (`operation: connect`,
 `reason: rate-limited`) and the number of requests it suppressed is logged when the window ends,
 so refused requests cannot fill the audit trail. Successful ones are bounded separately: the
-per-actor call rate (`quotas.calls_per_minute`, manifest 1.9, default 60 admitted calls, submits
-and token operations per actor in any 60 s; one past it is refused `call-rate-exceeded`, audited,
-and counted here as a refusal, so a loop of granted calls ends rate-limited too) and retention
-([State](#state)). Together they bound how fast an agent can grow the state directory, not its
-size: a disk too small for what the rate and the retention allow can still fill, and then every
-action is refused `audit-unavailable`, so size the state filesystem for them (or lower them) and
-alert on its free space. Approval relays and
+per-actor call rate (`quotas.calls_per_minute`, manifest 1.9, default 60 per actor in any 60 s)
+counts every operation that writes an audit record for an agent: admitted calls, submits and
+token operations, and the owner operations `status` (and `detail` through it), `run` and
+`cancel` once the request is found to be the caller's. One past it is refused
+`call-rate-exceeded`, audited, and counted here as a refusal, so a loop of granted calls, or of
+`ok` status reads, ends rate-limited too; a sandbox's token operation is the exception, its
+refusal being bounded by the token's `max_calls` instead (below). The count is conservative: an
+operation refused after it was counted (a submit refused `too-many-pending`) still took its
+place, and a token operation refused `call-rate-exceeded` still spent one of its execution's
+`max_calls`. Retention ([State](#state)) is the other half. Together they bound how fast an agent
+can grow the state directory, not its size: a disk too small for what the rate and the retention
+allow can still fill, and then every action is refused `audit-unavailable`, so size the state
+filesystem for them (or lower them) and alert on its free space. An agent that runs Code Mode may
+hold `codemode.max_live_tokens_per_actor` live tokens (4) of `codemode.max_calls` calls each (50)
+at once, every one counted against the same rate: give such an agent a `calls_per_minute` of at
+least their product (200 with the defaults), or its concurrent executions are refused
+`call-rate-exceeded` before their own caps. Approval relays and
 the Code Mode runner are exempt (relays as they are from the connection cap). A sandbox's refusals
 before a token is admitted are counted per presented token, and requests presenting no known token
 count against a per-uid ceiling ten times the limit; refusals after a token was admitted are

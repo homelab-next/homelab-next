@@ -67,6 +67,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import logging
 import os
 import re
 import secrets
@@ -126,6 +127,8 @@ RELAY_DIR = "relay"
 RELAY_DONE = ("delivered", "undeliverable", "quarantine")
 #: the UTC stamp an audit record's file name starts with (``strftime``): sorts as it orders
 AUDIT_STAMP = "%Y%m%dT%H%M%S%fZ"
+
+log = logging.getLogger("homelabnext.broker.state")
 #: how often (at most) the broker removes outbox files the relay is done with
 PRUNE_INTERVAL_S = 60.0
 
@@ -580,9 +583,19 @@ class StateDir:
             then = datetime.fromtimestamp(now_s - audit_days * 86400, UTC)
             stamp = then.strftime(AUDIT_STAMP)  # a record's name starts with its stamp
             with os.scandir(self._dir("audit")) as it:
-                old = [
-                    e.name for e in it if e.name.endswith(".json") and e.name[: len(stamp)] < stamp
-                ]
+                names = [e.name for e in it if e.name.endswith(".json")]
+            old = [n for n in names if n[: len(stamp)] < stamp]
+            if old and len(old) == len(names):
+                # every record past retention, the newest too: a clock stepped forward (or a
+                # broker idle longer than audit_days).  The trail is evidence and deleting it
+                # cannot be undone, so it is kept until a record newer than the cutoff exists
+                log.warning(
+                    "retention: all %d audit records are older than %s; none removed "
+                    "(check the clock)",
+                    len(names),
+                    then.isoformat(),
+                )
+                old = []
             for name in old:
                 try:
                     doc = _load(self._dir("audit") / name)

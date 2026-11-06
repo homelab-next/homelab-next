@@ -649,6 +649,8 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
         audit_days = retention.get("audit_days", DEFAULT_AUDIT_RETENTION_DAYS)
         self.audit_retention_days = None if audit_days is None else float(audit_days)
         self._retention_pruned = float("-inf")
+        self._prune_lock = threading.Lock()  # one prune at a time, its pacing checked under it
+        self._prune_thread: threading.Thread | None = None  # the background prune, once started
         self.page_timers = page_timers
         self._paged: dict[str, str] = {}  # actor -> the request its open page is for
         self._paging: set[str] = set()  # actors a page is being sent for right now
@@ -952,7 +954,7 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
     # ---------------------------------------------------------------- admission
     def _admit(self, caller: Any, action: Any, args: Any, operation: str, target: str | None):
         """(action, request, decision) or raise after auditing: the checks call and submit share."""
-        self.prune_retention()
+        self._prune_soon()
         now = self._now()
         rid = new_id("req")
         act = self._action(action) if isinstance(action, str) else None
@@ -1032,17 +1034,41 @@ class BrokerService(_RequestsMixin, _ApprovalsMixin, _PagingMixin, _CodemodeToke
             return True
 
     # ---------------------------------------------------------------- retention
+    def _prune_soon(self) -> None:
+        """Start :meth:`prune_retention` on a background thread when one is due.  An operation
+        starts it but never waits for it: a prune scans the whole trail, and a token operation
+        holds the token store's lock meanwhile.  Cheap when none is due."""
+        if self._mono() - self._retention_pruned < RETENTION_PRUNE_INTERVAL_S:
+            return
+        with self._calls_lock:
+            if self._prune_thread is not None and self._prune_thread.is_alive():
+                return
+            self._prune_thread = threading.Thread(
+                target=self._prune_quietly, name="broker-retention", daemon=True
+            )
+            self._prune_thread.start()
+
+    def _prune_quietly(self) -> None:
+        try:
+            self.prune_retention()
+        except Exception:  # a background thread: the next due prune tries again
+            log.exception("broker state could not be pruned")
+
     def prune_retention(self, *, force: bool = False) -> dict[str, int]:
         """Remove finished state past its retention (manifest 1.9 ``retention``): run
         directories after ``runs_days``, audit records after ``audit_days``, never those of a
         request still pending or running.  At start, then at most once per
-        :data:`RETENTION_PRUNE_INTERVAL_S` (on the next admitted operation); a failure is logged,
-        never raised: pruning must not refuse work."""
+        :data:`RETENTION_PRUNE_INTERVAL_S` (on a background thread the next operation starts);
+        one prune at a time.  A failure is logged, never raised: pruning must not refuse work."""
+        with self._prune_lock:
+            mono = self._mono()
+            if not force and mono - self._retention_pruned < RETENTION_PRUNE_INTERVAL_S:
+                return {"runs": 0, "audit": 0}
+            self._retention_pruned = mono
+            return self._prune_now()
+
+    def _prune_now(self) -> dict[str, int]:
         none = {"runs": 0, "audit": 0}
-        mono = self._mono()
-        if not force and mono - self._retention_pruned < RETENTION_PRUNE_INTERVAL_S:
-            return none
-        self._retention_pruned = mono
         try:
             removed = self.state.prune_retained(
                 self._now().timestamp(),

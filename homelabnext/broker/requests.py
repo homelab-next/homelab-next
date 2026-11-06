@@ -25,6 +25,8 @@ from . import (
 )
 from . import lanes as _lanes
 from .common import (
+    CALL_RATE_EXCEEDED,
+    CALL_RATE_WINDOW_S,
     NOT_OWNER,
     TOO_MANY_PENDING,
     _carry,
@@ -152,7 +154,26 @@ class _RequestsMixin:
                 self.manifest, rec["request"], caller, op, now=_stamp(self._now())
             )
             if access["verdict"] == "allow":
-                return rec
+                self._prune_soon()
+                # an owner operation writes its own audit record, ok or not: it counts against
+                # the call rate as an admitted call does, or a loop of ok status reads (the
+                # one owner operation that can succeed again and again) fills the trail
+                who = caller if isinstance(caller, str) else repr(caller)
+                if self._take_call(who):
+                    return rec
+                self._audit(
+                    caller,
+                    rec["request"]["action"],
+                    operation,
+                    "denied",
+                    reason=CALL_RATE_EXCEEDED,
+                    request_id=request_id,
+                )
+                raise Denied(
+                    f"{who} made {self.calls_per_minute} calls in the last "
+                    f"{CALL_RATE_WINDOW_S:g} s: try again later",
+                    reason=CALL_RATE_EXCEEDED,
+                )
         action = rec["request"]["action"] if rec else ""
         self._audit(
             caller, action, operation, "denied", reason=NOT_OWNER, request_id=str(request_id)[:128]

@@ -211,14 +211,18 @@ handler and up to 1 MiB each of stdout and stderr) and two audit records per cal
 either, and once the state disk filled every action of every agent and every approval was refused
 `audit-unavailable`. The operator decided (2026-11-06), as manifest 1.9, additively:
 
-- **A per-actor call rate**, `quotas.calls_per_minute`, on by default at 60: admitted calls,
-  submits and Code Mode token operations per actor in any 60 s, checked at admission; one past it
-  is refused `call-rate-exceeded`, audited, and counts against the peer's `refusal_limit`, so the
-  refusals of a loop are bounded as before.
+- **A per-actor call rate**, `quotas.calls_per_minute`, on by default at 60: every operation
+  that writes an audit record for an agent (admitted calls, submits and Code Mode token
+  operations, and the owner operations `status`, `run` and `cancel` on its own requests) counts,
+  per actor in any 60 s; one past it is refused `call-rate-exceeded`, audited, and counts against
+  the peer's `refusal_limit`, so the refusals of a loop are bounded as before. A sandbox's token
+  operation is the exception: its refusal is bounded by the token's `max_calls`.
 - **Retention**: a run's handler copy is removed when the handler ends (the pinned digest makes
   it redundant); finished runs' directories go after `retention.runs_days` (default 30) and audit
   records after `retention.audit_days` (default 400, the trail being evidence; `null` keeps it),
-  never those of a request still pending or running.
+  never those of a request still pending or running, and never the whole trail at once (all
+  records past retention means the clock moved: none is removed). The hourly prune runs on a
+  background thread, never on a caller's request.
 
 These bound the *rate* at which an agent grows the state directory, not its size: the
 deployment still sizes the state filesystem for them and alerts on its free space.
