@@ -77,6 +77,17 @@ def test_an_empty_password_is_an_error_not_an_anonymous_request():
 
 
 # ---------------------------------------------------------------- refusal without a credential
+def test_a_non_loopback_engine_is_refused_without_a_credential(off_host):
+    with pytest.raises(LakeError, match=r"not loopback.*must sign in") as got:
+        adapter.make_lake(domain="example.internal", warehouse="lab", user=READER)
+    assert SECRET in str(got.value)
+    # allow_plaintext is about the scheme, not about signing in: it is no way around this, and a
+    # catalog token alone does not sign the reader in to the engine
+    for extra in ({"allow_plaintext": True}, {"catalog_credential": "secret:lake-catalog/token"}):
+        with pytest.raises(LakeError, match="must sign in"):
+            _clients(credential=None, **extra)
+
+
 def test_a_non_loopback_engine_is_accepted_with_a_credential(off_host):
     engine, catalog = _clients(credential=SECRET)  # nothing is sent while they are built
     assert engine._auth() == _basic("analyzer.novelty", "pw")

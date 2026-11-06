@@ -22,7 +22,9 @@ reference, the catalog's bearer token, when the catalog asks for one.  With a cr
 clients send through :func:`homelabnext._http.credential_opener` (``ca_file`` for a private CA):
 no redirect is followed and no proxy is used, so the credential reaches only the endpoint.
 
-The value is read from its variable when the lake is built (a
+**A ``lake-query`` endpoint that is not loopback is refused without a credential**, outright:
+there is no flag that reads a lab's lake unauthenticated.  Only the lab-in-a-box, bound to
+loopback, runs without one.  The value is read from its variable when the lake is built (a
 missing one fails at once) and again at every request, so no object holds it.
 """
 
@@ -30,10 +32,11 @@ from __future__ import annotations
 
 import os
 import re
+import urllib.parse
 from collections.abc import Callable
 from typing import Any
 
-from homelabnext._http import check_plaintext, credential_opener
+from homelabnext._http import check_plaintext, credential_opener, is_loopback
 from homelabnext.lake.errors import LakeError
 from homelabnext.lake.rest_catalog import RestCatalog
 from homelabnext.lake.trino_http import TrinoHTTP, engine_login, password_auth
@@ -92,6 +95,11 @@ def make_clients(
     if not wh:
         raise LookupError(f"no warehouse: pass warehouse= or set {warehouse_env}")
     query_url = _url("lake-query", resolver, domain, allow_plaintext)
+    if credential is None and not is_loopback(urllib.parse.urlsplit(query_url).hostname):
+        raise LakeError(
+            f"lake-query endpoint is not loopback, so {user!r} must sign in to the engine: pass "
+            f"credential= (a secret reference, conventionally {reader_secret(user)})"
+        )
     signed_in = credential is not None or catalog_credential is not None
     opener = credential_opener(ca_file) if signed_in else None
     auth = None
