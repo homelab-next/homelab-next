@@ -31,16 +31,19 @@ the broker actions the actor may take, each with its parameters bound to literal
    :func:`~homelabnext.agent.readers.held_label` (its receive ceiling: its context may hold
    anything up to it, MCP tool output included), the pack's label and every TLP marker in the
    output itself.  :func:`accept` refuses an output labelled above the actor's receive ceiling
-   (:func:`~homelabnext.agent.readers.profile_ceiling`), the :class:`Accepted` carries the label,
+   (:func:`~homelabnext.agent.readers.actor_ceiling`, read so that a bad value grants the least)
+   and a handoff whose reader or actor declares a ``tlp_ceiling`` that is not a canonical label
+   agreeing with its ``data_tier``; the :class:`Accepted` carries the label,
    and :func:`build_request` puts it on the broker request (``tlp``, bound by the request digest)
    so the request's egress points can apply :func:`homelabnext.tlp_egress.egress_check`.  There
    is no release transform here (decision 7): a handoff that lowers a label is refused, never
    relabelled.
 
 :func:`declaration_problems` checks a handoff offline: schema; the reader cannot act and the
-actor does not read untrusted content (G-03); the actor's receive ceiling is at or above what the
-reader holds; the output schema is a closed object; every reference names a constrained field;
-every action is in the broker manifest and granted to the actor at its tier.
+actor does not read untrusted content (G-03); both profiles' ``tlp_ceiling`` declarations are
+sound; the actor's receive ceiling is at or above what the reader holds; the output schema is a
+closed object; every reference names a constrained field; every action is in the broker manifest
+and granted to the actor at its tier.
 """
 
 from __future__ import annotations
@@ -56,7 +59,13 @@ from homelabnext.grants import grant_for, tier_exceeds
 from .digest import digest_of
 from .errors import AgentError
 from .pack import pack_label
-from .readers import held_label, is_reader, profile_ceiling, profile_problems
+from .readers import (
+    actor_ceiling,
+    held_label,
+    is_reader,
+    profile_problems,
+    tlp_ceiling_problems,
+)
 from .report import validate_report
 from .schemas import schema_errors
 
@@ -426,6 +435,7 @@ def declaration_problems(
             f"actor {handoff.actor} reads untrusted content (reads_untrusted is not false); "
             "an actor receives only the reader's validated output"
         )
+    out += tlp_ceiling_problems(actor_profile, str(actor_profile.get("id", "profile")))
     out += _ceiling_problems(handoff, reader_profile, actor_profile)
     for act in handoff.actions:
         out += _grant_problems(broker_manifest, handoff.actor, act["action"])
@@ -436,7 +446,7 @@ def _ceiling_problems(
     handoff: Handoff, reader_profile: Mapping[str, Any], actor_profile: Mapping[str, Any]
 ) -> list[str]:
     """The actor must receive at least what the reader may hold (ADR-0033 decisions 4 and 6)."""
-    held, ceiling = held_label(reader_profile), profile_ceiling(actor_profile)
+    held, ceiling = held_label(reader_profile), actor_ceiling(actor_profile)
     if held <= ceiling:
         return []
     return [
@@ -517,13 +527,15 @@ def accept(
         if not isinstance(prof, Mapping) or prof.get("id") != want:
             got = prof.get("id") if isinstance(prof, Mapping) else type(prof).__name__
             problems.append(f"{role} profile is {got!r}, not {want!r}")
+        else:  # a ceiling that is not a canonical label agreeing with its tier is refused
+            problems += tlp_ceiling_problems(prof, f"{role} {want}")
     if problems:
         raise HandoffRefused(problems)
     output = copy.deepcopy(message["output"])
     label = max(
         [held_label(reader_profile), tlp.read_stored(pack_label(pack)), *tlp.markers(output)]
     )
-    ceiling = profile_ceiling(actor_profile)
+    ceiling = actor_ceiling(actor_profile)
     if label > ceiling:
         raise HandoffRefused(
             [

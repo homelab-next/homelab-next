@@ -235,8 +235,15 @@ take, each with params that are literals or `$output.<path>` references (`$$` es
   strictest of what the reader may hold (`readers.held_label`: its receive ceiling, its declared
   `tlp_ceiling` else what its `data_tier` lets it receive, `red` when it states neither, since its
   context may hold MCP tool output as well as the pack), the pack's label and every TLP marker in
-  the output. `accept` refuses an output above the actor's receive ceiling
-  (`readers.profile_ceiling`) and refuses profiles whose ids are not the handoff's; the `Accepted`
+  the output. `accept` refuses an output above the actor's receive ceiling (`readers.actor_ceiling`,
+  read so that a bad value grants the least: the lower of what the actor's `data_tier` lets it
+  receive and its declared `tlp_ceiling`, `clear` when that is not a canonical label), refuses a
+  reader or actor whose `tlp_ceiling` is not a canonical label agreeing with its `data_tier`
+  (`readers.tlp_ceiling_problems`, which `declaration_problems` also runs on both), and refuses
+  profiles whose ids are not the handoff's. A marker in the output can only raise its label:
+  untrusted input that steers the reader into writing `TLP:RED` in an output field (a constrained
+  enum or format field included) can stop a handoff to a lower-ceiling actor, never lower the
+  label. The `Accepted`
   carries the label (`label`), and `build_request` puts it on the broker request as `tlp`
   (`broker/request` 1.1), which the request digest binds, so an approval does not survive a
   lowered label. There is no release transform (decision 7) at this seam: a handoff that would

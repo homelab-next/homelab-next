@@ -179,5 +179,13 @@ tasks):
    (`pack_label`, ADR-0037 PR 2), but every session pack is `red` until records, pages and
    manifests declare labels (ADR-0037 follow-up 6), so until then a wired `admit` refuses every
    request to a role that leaves the lab, which key scope already does. Until it is wired, key
-   scope and the `--check` audit are the enforcement (`docs/llm-gateway.md`, "TLP labels on
-   requests").
+   scope and the `--check` audit are the enforcement
+   ([TLP labels on model requests](../llm-gateway.md#tlp-labels-on-model-requests)).
+2. **Broker requests' labels (ADR-0033 decision 6).** A handoff's broker request carries the
+   label of the data its params came from (`broker/request` 1.1 `tlp`, set by
+   `homelabnext.agent.handoff.build_request`), but nothing enforces it yet: `accept` and `act`
+   have no production caller, and the broker passes `tlp` through without reading it. A handler
+   that sends params out of the lab must apply `homelabnext.tlp_egress.egress_check` to
+   `request["tlp"]` and treat a request without `tlp` as `red`. Dependencies: the agent runner
+   that calls `accept`/`act` (out of tree, as for item 1) and the handler's egress point being
+   listed in this module's egress table.

@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
-from agent_support import inputs, manifest
+from agent_support import inputs, item, labelled_pack, manifest
 
 from homelabnext.agent import assemble_pack
 from homelabnext.agent.digest import digest_of
@@ -30,7 +30,7 @@ from homelabnext.agent.handoff import (
     is_closed_pattern,
     is_constrained,
 )
-from homelabnext.agent.readers import held_label, profile_ceiling
+from homelabnext.agent.readers import actor_ceiling, held_label, profile_ceiling
 from homelabnext.agent.schemas import schema_errors
 from homelabnext.broker import decide, request_digest
 from homelabnext.tlp import Label
@@ -273,7 +273,7 @@ def test_a_handoff_at_or_above_the_readers_ceiling_passes(reader, actor):
 
 def test_an_amber_reader_cannot_hand_off_to_a_green_actor():
     reader = _profile(READER, tlp_ceiling="amber")
-    actor = _profile(ACTOR, data_tier="cloud-allowed", tlp_ceiling="green")
+    actor = _profile(ACTOR, tlp_ceiling="green")  # local-only, declared green
     assert any("receives at most green" in p for p in _declaration(_decl(), reader, actor))
 
 
@@ -284,6 +284,94 @@ def test_what_a_profile_holds_and_receives():
     assert held_label({"tlp_ceiling": "AMBER-ish"}) == Label.RED  # not a label: red
     assert profile_ceiling({}) == Label.CLEAR  # receives the least
     assert profile_ceiling({"tlp_ceiling": "amber", "data_tier": "local-only"}) == Label.AMBER
+
+
+# an actor whose declared ceiling is wrong, malformed or not canonical must not read as red
+MISDECLARED = [
+    ("cloud-allowed", "red"),
+    ("cloud-allowed", "bogus"),
+    ("cloud-allowed", "TLP:RED"),
+    ("cloud-allowed", ["red"]),
+]
+
+
+@pytest.mark.parametrize(("tier", "ceiling"), MISDECLARED, ids=["red", "bogus", "TLP:RED", "list"])
+def test_a_misdeclared_actor_ceiling_grants_the_least(tier, ceiling, pack):
+    """A cloud-allowed actor declaring red (or a non-label) is refused at declaration and at the
+    runtime backstop: a bad ceiling grants the least, never the most."""
+    actor = _profile(ACTOR, data_tier=tier, tlp_ceiling=ceiling)
+    assert actor_ceiling(actor) == Label.CLEAR
+    problems = _declaration(_decl(), actor=actor)
+    assert any("tlp_ceiling" in p for p in problems), problems
+    assert any("receives at most clear" in p for p in problems), problems
+    p, h = pack
+    with pytest.raises(HandoffRefused, match="tlp_ceiling"):
+        accept(
+            Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h,
+            reader_profile=READER, actor_profile=actor,
+        )  # fmt: skip
+
+
+def test_the_actor_ceiling_reads_the_tier_and_the_declaration():
+    assert actor_ceiling({}) == Label.CLEAR  # absent tier: the least
+    assert actor_ceiling({"tlp_ceiling": "red"}) == Label.CLEAR  # no tier to back it
+    assert actor_ceiling({"data_tier": "local-only"}) == Label.RED
+    assert actor_ceiling({"data_tier": "local-only", "tlp_ceiling": "amber"}) == Label.AMBER
+    assert actor_ceiling({"data_tier": "local-only", "tlp_ceiling": "TLP:RED"}) == Label.CLEAR
+    assert actor_ceiling({"data_tier": "cloud-allowed", "tlp_ceiling": "clear"}) == Label.CLEAR
+
+
+def test_accept_refuses_a_reader_ceiling_that_disagrees_with_its_tier(pack):
+    """A local-only reader declaring clear would otherwise label its output clear."""
+    p, h = pack
+    reader = _profile(READER, tlp_ceiling="clear")
+    with pytest.raises(
+        HandoffRefused, match="reader profile:reader: data_tier local-only disagrees"
+    ):
+        accept(
+            Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h,
+            reader_profile=reader, actor_profile=CLEAR_ACTOR,
+        )  # fmt: skip
+
+
+def _low_pack(label):
+    """A pack labelled ``label`` (every section and item at it) for the reader's report."""
+    return labelled_pack([item(1, label)], [item(2, label)], static=label)
+
+
+def test_the_output_carries_the_readers_label_above_the_packs():
+    """The reader's held label raises the output over a lower pack label."""
+    p, h = _low_pack("green")
+    reader = _profile(READER, tlp_ceiling="amber")
+    actor = _profile(ACTOR, tlp_ceiling="amber")
+    acc = accept(
+        Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h,
+        reader_profile=reader, actor_profile=actor,
+    )  # fmt: skip
+    assert acc.label == Label.AMBER
+    # an actor between the pack's label and the reader's is refused
+    between = _profile(ACTOR, data_tier="cloud-allowed", tlp_ceiling="clear")
+    with pytest.raises(HandoffRefused, match="labelled amber, above"):
+        accept(
+            Handoff.from_mapping(_decl()), _report(h), pack=p, pack_hash=h,
+            reader_profile=reader, actor_profile=between,
+        )  # fmt: skip
+
+
+def test_a_marker_in_the_output_raises_the_label():
+    """A TLP marker the reader writes (or is steered into writing) raises the label; it can
+    deny a handoff, never lower one."""
+    p, h = _low_pack("clear")
+    reader = _profile(READER, data_tier="cloud-allowed", tlp_ceiling="clear")
+    actor = _profile(ACTOR, data_tier="cloud-allowed", tlp_ceiling="clear")
+    handoff = Handoff.from_mapping(_decl())
+    acc = accept(
+        handoff, _report(h), pack=p, pack_hash=h, reader_profile=reader, actor_profile=actor
+    )
+    assert acc.label == Label.CLEAR
+    marked = _report(h, output={"verdict": "malicious", "domain": "x.example", "note": "TLP:RED"})
+    with pytest.raises(HandoffRefused, match="labelled red, above"):
+        accept(handoff, marked, pack=p, pack_hash=h, reader_profile=reader, actor_profile=actor)
 
 
 def test_accept_labels_the_output_and_build_request_passes_it_on(pack):
