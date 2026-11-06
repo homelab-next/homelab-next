@@ -137,11 +137,13 @@ The standard for this already exists and the lab's threat-intel sources already 
    one `red`, and `hnx status serve` answers `404` for a route with no declared ceiling, whatever
    site offers it. A `views.yml` menu entry's `tlp` is a declaration checked against its tier,
    not the control that gates the route. The summary pages read only through one released
-   reader (`homelabnext.status.agents.pages.PublicActivity`). A notification channel with no
-   `--notify-ceiling` is `red`: an accepted exception to "refused by validation", kept because
-   the channel's topic is the registry's own `notify` service, read by the lab's operators, and
-   no producer labels its messages yet (below `red`, every page would arrive as the withheld
-   notice). Declaring a lower ceiling is the operator's step; docs/modules.md lists the channel
+   reader (`homelabnext.status.agents.pages.PublicActivity`). A notification channel has no default
+   ceiling (amended 2026-11-06: the 2026-10-31 text accepted a `red` default for a command
+   channel, which does not hold, since an arbitrary `--notify-cmd` reaches a reader nobody
+   declared). `hnx invariants run --notify-cmd` is refused as a usage error without
+   `--notify-ceiling`; only the stdout pager, read by whoever runs the command, keeps `red`.
+   Below `red`, every page arrives as the withheld notice while no producer labels its messages.
+   Declaring the ceiling is the operator's step; docs/modules.md lists the channel
    as an egress point.
 7. **Release transforms are the only declassification.** A wider-audience product derived from
    labelled data (a health badge, a count, a redacted summary, a public rollup) is produced by a
