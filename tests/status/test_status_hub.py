@@ -206,6 +206,20 @@ def test_a_future_observed_at_is_clamped_and_still_goes_stale(make_hub, clock):
     assert "clock_skew_s" not in hub.sources()[0]
 
 
+def test_a_late_or_replayed_push_does_not_replace_a_newer_reading(make_hub, clock):
+    hub = _push_hub(make_hub)
+    t = clock()
+    hub.ingest(_push_data(state="fail", observed_at=iso(t - 10)))
+    late = hub.ingest(_push_data(state="ok", observed_at=iso(t - 60)))  # older: delivered late
+    assert late.state == "fail" and late.observed_at == iso(t - 10)  # the stored reading
+    row = hub.observations()[0]
+    assert row["reported_state"] == "fail" and row["observed_at"] == iso(t - 10)
+    assert [h[1] for h in row["history"]] == ["fail"]
+    hub.ingest(_push_data(state="ok", observed_at=iso(t - 10)))  # equal: replaces
+    assert hub.observations()[0]["reported_state"] == "ok"
+    assert hub.sources()[0]["state"] == "ok"  # the source still counts as heard from
+
+
 def test_only_the_declaring_service_may_publish_a_push_source(make_hub, clock):
     # regression: the envelope source was ignored, so any publisher could feed any push source
     hub = _push_hub(make_hub)

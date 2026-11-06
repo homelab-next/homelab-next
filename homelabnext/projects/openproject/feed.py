@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import threading
 from collections.abc import Callable, Mapping, MutableSet
@@ -41,6 +42,8 @@ from homelabnext.registry.model import secret_env_name
 from ..events import change_event
 from ..model import Change
 from .backend import OpenProjectBackend, _link_id, wp_href
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "SIGNATURE_HEADER",
@@ -166,7 +169,8 @@ def make_webhook_server(
     """A receiver for OpenProject's webhook: ``POST path`` with a valid signature -> 204.
 
     401 without a valid signature (or with no secret configured: an unsigned webhook is never
-    accepted), 400 for a body that is not a JSON object, 413 over 1 MiB, 404/405 elsewhere."""
+    accepted), 500 when the feed fails on a delivery (the poll still catches the change), 400 for
+    a body that is not a JSON object, 413 over 1 MiB, 404/405 elsewhere."""
     if not secret.startswith("secret:"):
         raise ValueError("secret is a secret reference (secret:<name>), never a value")
     if not is_loopback(host) and not allow_remote:
@@ -215,7 +219,12 @@ def make_webhook_server(
             if not isinstance(payload, dict):
                 self._reply(400, "not a JSON object\n")
                 return
-            feed.on_webhook(payload)
+            try:
+                feed.on_webhook(payload)
+            except Exception:  # a failing hook must answer, not drop the connection
+                _log.exception("webhook handler failed")
+                self._reply(500, "handler failed\n")
+                return
             self._reply(204)
 
     return ThreadingHTTPServer((host, port), Handler)
