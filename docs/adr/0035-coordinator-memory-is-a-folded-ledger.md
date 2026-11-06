@@ -18,7 +18,7 @@ summary_of: outline:sha256:d1336261c3f7712e
   keys, which ADR-0037's compaction keeps whole, so ADR-0037 needs no opt-out; the coordinator is
   two profiles, a reader that owns the ledger and an actor that acts through the broker, joined by
   a G-04 handoff; see the amendments under decisions 1, 3, 5, 7, 8, 9, 11 and 13 and under
-  Consequences)
+  Consequences and Alternatives)
 - **Amended-by:** ADR-0037
 
 ## Context
@@ -94,6 +94,18 @@ The same objection applies here, more strongly.
      `declaration_problems` checks it offline: the reader passes G-03, the actor is
      `reads_untrusted: false`, the actor's receive ceiling is `red` like the reader's (decision
      12), and every action is in the broker manifest and granted to the actor at its tier.
+   - **Cited identifiers must exist.** A closed pattern says a ledger key or report digest is
+     well formed, not that it names anything. Before `build_request`, code checks that every
+     ledger key and report digest the output cites is among the identifiers rendered into the
+     reader's pack for that cycle, which the pack record holds as identifiers only; an output
+     citing one that is not is refused whole. So a poisoned report cannot send the human who
+     approves a proposal to some other report, or to nothing. This is code reading identifiers;
+     the actor still reads no text.
+   - **Replays file nothing new.** The actor derives each `request_id` from the accepted report's
+     digest (`Accepted.report_digest`) and the action name, never from a clock or a counter. A
+     handoff replayed after a crash between `accept` and `act` names `request_id`s the broker
+     already holds, and the actor files nothing for a `request_id` the broker has, so a proposal
+     or journal note is never filed twice for one report.
    - **What this does not stop.** A poisoned report can still steer what the reader asks for,
      within those enums and patterns: which item to dispatch, which keys to cite. It cannot put
      words into a request, and a risky action still needs its bound approval (every record does,
@@ -203,24 +215,44 @@ The same objection applies here, more strongly.
    what the tiers keep.
    - **Hot tier.** Live `task-*` and `run-*` keys, as before, and the `cursor-*` keys, which have
      a `keep_last` pattern (ADR-0037 decision 17).
-   - **Warm tier.** Live `warm-*` keys, added once when an item closes and never replaced, so they
-     need no `keep_last`. The fold computes the class at close from the closing value and the hot
-     value's `reopened` count; a nomination counts as at close. `drop` is no longer a class that
-     sits in warm: when an item with a warm key reopens, the fold retires that warm key in the
-     same call that adds the hot key again and raises `reopened`, so the item's next close is
-     `keep`. (That is "drop first" at its limit: a superseded state leaves at once.) Past the warm
-     cap the fold picks victims by class, `count` before `keep`, oldest `closed_at` first within a
-     class, and in the same call retires each and writes its cold form.
+   - **Warm tier.** Live `warm-*` keys, added at each close of an item and never replaced while
+     live, so they need no `keep_last`; a retired warm key is added again at the item's next
+     close (M-09 allows an `add` on a retired key). The fold computes the class at close from the
+     closing value and the hot value's `reopened` count; a nomination counts as at close. `drop`
+     is no longer a class that sits in warm. Past the warm cap the fold picks victims by class,
+     `count` before `keep`, oldest `closed_at` first within a class, and in the same call retires
+     each and writes its cold form.
+   - **Reopen.** When an item reopens, the fold, in the call that adds the hot key again and
+     raises `reopened`, retires the item's live `warm-<hot key>` and its live `exc-<hot key>`,
+     whichever exist, so the item's next close is `keep` and its next eviction adds its cold form
+     to a retired key, never to a live one. (That is "drop first" at its limit: a superseded state
+     leaves at once.) Without this, an item evicted, reopened, closed and evicted again would
+     `add` a live `exc-*` key; M-09 refuses that, the batch is refused whole with its cursors,
+     and because the fold is deterministic it would replay the same refusal every cycle. A rollup
+     counts **closes**, not items: an item that closes, rolls up, reopens and closes again is
+     counted at each close, which is what happened, so a reopen does not touch a rollup.
    - **Cold tier.** Live `rollup-<profile>-<period>` keys, replaced on every count that lands, so
-     the profile gives `rollup-*` a `keep_last` pattern; and live `exc-*` keys, added once. Merging
-     rollups into a coarser period retires the finer keys and adds or replaces the coarser one in
-     one call. The fold never retires an `exc-*` key. An operator's `retract` or `purge` may
-     retire any of these keys; the fold does not add one back (ADR-0037 decision 14).
+     the profile gives `rollup-*` a `keep_last` pattern; and live `exc-*` keys, added when a
+     `keep` item leaves warm. Both count against the cold entry cap. When the cap is reached the
+     fold first merges rollups into a coarser period (it retires the finer keys and adds or
+     replaces the coarser one in one call); exception keys are never merged. When no merge is
+     left and the cold tier still has no room, the fold retires the oldest `exc-*` key by
+     `closed_at` and adds it to its profile's rollup for that period as an `exceptions` count, in
+     the same call, and its cycle report and journal note say how many it folded (M-08: never cut
+     silently). So the cold tier stays within its cap however many `keep` items close, and the
+     fold never writes past the store's caps. Apart from a reopen and this overflow, the fold
+     never retires an `exc-*` key. An operator's `retract` or `purge` may retire any of these
+     keys; the fold does not add one back (ADR-0037 decision 14).
+   - **Nominations are bounded.** The fold honours at most a fixed number of nominations per
+     cycle (a profile budget), and only for items that close in that same fold; it ignores any
+     other nominated key. The reader, which opens untrusted text, therefore cannot turn the warm
+     and cold tiers into `keep` entries faster than items actually close.
    - **Sizing.** `fleet-ledger`'s record cap (ADR-0037 decision 6) must hold the work in flight,
      the warm and cold caps, `keep_last` + 1 records for each replaced key, and the tombstone
      budget. The profile sets `memory_limits.records`, `tombstones`, `bytes` and `keep_last` for
      the scope beside the warm and cold caps, and a test checks that the caps fit under the record
-     and byte caps, so the fold meets its own caps before the store refuses a write.
+     and byte caps. Because every tier is capped (the cold one by the overflow rule above), the
+     fold meets its own caps before the store refuses a write.
 9. **Permanent memory is a record, and a human approves it.** The coordinator's memory is not
    where lasting knowledge lives. When the fold sees a pattern, such as the same kind of exception
    recurring past a threshold in the warm or cold tier, the coordinator files a proposal for a
@@ -314,9 +346,14 @@ The same objection applies here, more strongly.
   - **Obliges us to maintain, none of it built yet:** the two specs with `reads_untrusted`
     declared; the handoff and its output schema; a test that the reader holds no
     `reader_forbidden` class and that `declaration_problems` is empty for the handoff; the warm,
-    cold and reopen rules of decision 8 (amended), with tests that the renderer and the fold read
-    no tombstone, that a reopened item's warm key is retired in the same call, and that the caps
-    fit under the scope's record and byte caps.
+    cold, reopen, overflow and nomination rules of decision 8 (amended), with tests that the
+    renderer and the fold read no tombstone, that a reopened item's warm and exception keys are
+    retired in the same call, that "evict, reopen, close, evict again" for one item is accepted by
+    the store, that a cold tier full of exception keys folds the oldest into a rollup count and
+    says so, and that the caps fit under the scope's record and byte caps; the membership check on
+    cited ledger keys and report digests (decision 1, amended), with a test that an output citing
+    a well-formed but absent key is refused; and a deterministic `request_id`, with a test that a
+    handoff replayed after a crash files nothing new.
 
 ## Alternatives
 
