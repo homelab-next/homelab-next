@@ -139,7 +139,7 @@ services:
     port: 8080
     health: {kind: http, path: /v1/health, expect_status: 200}
     owner: platform-team
-    version: "2.32"
+    version: "2.33"
     tls: none
     description: Pages the operator; every other service notifies through it.
   status-hub:
