@@ -82,7 +82,10 @@ def _parse_json(out: str) -> Any:
     m = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
     if m:
         text = m.group(1)
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except RecursionError as exc:  # deeply nested model output: not valid JSON for scoring
+        raise ValueError("JSON nested too deeply") from exc
 
 
 def json_fields(out: str, e: dict) -> tuple[float, str]:
@@ -165,6 +168,67 @@ _REQUIRED = {
 }
 
 
+def _is_num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _str_list(name: str, key: str, v: Any, *, non_empty: bool = False) -> None:
+    if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
+        raise ScoreError(f"scorer {name!r}: expect.{key} must be a list of strings")
+    if non_empty and not v:
+        raise ScoreError(f"scorer {name!r}: expect.{key} must not be empty")
+
+
+def _check_types(name: str, e: dict) -> None:
+    """Type-check the fields a scorer reads, so a malformed block fails at load, not at score."""
+    for flag in ("strip", "case_sensitive"):
+        if flag in e and not isinstance(e[flag], bool):
+            raise ScoreError(f"scorer {name!r}: expect.{flag} must be a boolean")
+    if name == "one_of":
+        _str_list(name, "values", e["values"], non_empty=True)
+    elif name == "contains":
+        for key in ("all", "none"):
+            if key in e:
+                _str_list(name, key, e[key])
+    elif name == "regex":
+        if not isinstance(e["pattern"], str):
+            raise ScoreError("scorer 'regex': expect.pattern must be a string")
+        try:
+            re.compile(e["pattern"])
+        except (re.error, RecursionError, OverflowError) as exc:
+            raise ScoreError(f"scorer 'regex': expect.pattern does not compile: {exc}") from exc
+    elif name == "json_fields":
+        fields = e.get("fields", {})
+        if not isinstance(fields, dict):
+            raise ScoreError("scorer 'json_fields': expect.fields must be a mapping")
+        for key, want in fields.items():
+            if isinstance(want, dict) and want and set(want) <= {"min", "max", "one_of"}:
+                if "one_of" in want and not isinstance(want["one_of"], list):
+                    raise ScoreError(f"scorer 'json_fields': fields.{key}.one_of must be a list")
+                for bound in ("min", "max"):
+                    if bound in want and not _is_num(want[bound]):
+                        raise ScoreError(
+                            f"scorer 'json_fields': fields.{key}.{bound} must be a number"
+                        )
+    elif name == "json_schema":
+        if not isinstance(e["schema"], (dict, bool)):
+            raise ScoreError("scorer 'json_schema': expect.schema must be a mapping")
+        try:
+            import jsonschema
+        except ModuleNotFoundError:  # pragma: no cover - optional dep
+            return
+        try:
+            jsonschema.Draft202012Validator.check_schema(e["schema"])
+        except jsonschema.SchemaError as exc:
+            raise ScoreError(
+                f"scorer 'json_schema': expect.schema is invalid: {exc.message}"
+            ) from exc
+    elif name == "max_length":
+        v = e["max_chars"]
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            raise ScoreError("scorer 'max_length': expect.max_chars must be a non-negative integer")
+
+
 def validate_expect(expect: dict) -> None:
     name = expect.get("scorer")
     if name not in SCORERS:
@@ -172,6 +236,7 @@ def validate_expect(expect: dict) -> None:
     for key in _REQUIRED.get(name, ()):
         if key not in expect:
             raise ScoreError(f"scorer {name!r} needs expect.{key}")
+    _check_types(name, expect)
 
 
 def score(output: str, expect: dict) -> tuple[float, str]:

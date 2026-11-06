@@ -74,3 +74,25 @@ def test_malformed_suites_are_refused(mutate, needle):
     mutate(doc)
     with pytest.raises(TaskError, match=needle):
         parse_suite(doc)
+
+
+@pytest.mark.parametrize(
+    ("expect", "needle"),
+    [
+        ({"scorer": "one_of", "values": "accept"}, "list of strings"),
+        ({"scorer": "regex", "pattern": "("}, "does not compile"),
+        ({"scorer": "contains", "all": "alpha"}, "list of strings"),
+        ({"scorer": "max_length", "max_chars": "10"}, "non-negative integer"),
+        ({"scorer": "json_fields", "fields": {"n": {"min": "1"}}}, "must be a number"),
+        ({"scorer": "json_schema", "schema": {"type": "nope"}}, "invalid"),
+    ],
+)
+def test_malformed_expect_fails_at_load_with_the_task_id(expect, needle):
+    doc = {"suite": "s", "tasks": [{"id": "bad-task", "prompt": "p", "expect": expect}]}
+    with pytest.raises(TaskError, match=rf"task bad-task: .*{needle}"):
+        parse_suite(doc)
+
+
+def test_deeply_nested_json_scores_zero_not_a_crash():
+    out = "[" * 100000 + "]" * 100000
+    assert score(out, {"scorer": "json_fields", "fields": {"a": 1}})[0] == 0.0

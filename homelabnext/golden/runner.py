@@ -40,9 +40,11 @@ def run_suite(
     for t in suite.tasks:
         t0 = clock()
         out, err = "", ""
+        s, detail = 0.0, "no output"
         try:
             out = completer(t.messages(), dict(t.params))
-        except Exception as exc:  # a backend failure is a failed task, not a crashed run
+            s, detail = score(out, t.expect)
+        except Exception as exc:  # a backend or scorer failure is a failed task, not a crashed run
             err = f"{type(exc).__name__}: {exc}"
         ms = (clock() - t0) * 1000
         if err:
@@ -50,7 +52,6 @@ def run_suite(
                 TaskResult(t.id, 0.0, False, "no output", error=err, latency_ms=ms, weight=t.weight)
             )
             continue
-        s, detail = score(out, t.expect)
         rep.results.append(
             TaskResult(t.id, s, s >= suite.pass_score, detail, out, "", ms, t.weight)
         )
