@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# The two keys of a module selection (lab/modules.yml) the novelty analyzer needs: the lake
+# catalog and its TLP reader entry, with the table-scoped insert grant for its findings.
+lake_catalog: lake
+tlp_readers:
+  - reader: analyzer:novelty
+    ceiling: amber
+    writes: [novelty_finding]
+    why: learns per-entity baselines from amber and below and appends its advisory findings

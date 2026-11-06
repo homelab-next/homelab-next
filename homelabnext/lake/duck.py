@@ -58,6 +58,8 @@ def run_duckdb(sql: str, params: Mapping[str, Any] | None, tables: Mapping[str, 
 class DuckDBLake(AdapterBase):
     """Read-only :class:`LakeClient` over in-memory Arrow tables (parity reference, tests)."""
 
+    sql_dialect = "struct"
+
     def __init__(
         self,
         tables: Mapping[str, Any],
@@ -93,6 +95,7 @@ class DuckDBLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         raise WriteNotSupported("DuckDBLake is read-only; write through IcebergLake or FakeLake")
 

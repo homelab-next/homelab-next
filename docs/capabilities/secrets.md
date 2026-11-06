@@ -248,7 +248,7 @@ Each is a deliberately broken fake (`hnx conform run secrets --target broken:<mu
 
 #### [`homelabnext.conform.adapters.openbao:make`](../../homelabnext/conform/adapters/openbao.py)
 
-The `secrets` contract on OpenBao (pinned: openbao 2.1, dev mode in the lab), stdlib HTTP.
+The `secrets` contract on OpenBao (pinned: openbao 2.7, dev mode in the lab), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/secrets.yml`](../../compose/lab-in-a-box/targets/secrets.yml) (target `lab-secrets`)
 - Factory: `make(*, token_env: str='LAB_SECRETS_DEV_TOKEN', mount: str='secret', namespace: str | None=None, scratch: bool=True, ensure_mount: bool=True, timeout: float=10.0, allow_plaintext: bool=False, capability: str='secrets') -> OpenBaoStore`
@@ -262,7 +262,7 @@ so a fractional `ttl` is rounded up (a lease never ends earlier than asked).
 
 <details><summary>Full adapter notes</summary>
 
-The `secrets` contract on OpenBao (pinned: openbao 2.1, dev mode in the lab), stdlib HTTP.
+The `secrets` contract on OpenBao (pinned: openbao 2.7, dev mode in the lab), stdlib HTTP.
 
 `make(**config)` builds an `OpenBaoStore` on `HNX_ENDPOINT_SECRETS` with the token in
 the environment variable `token_env` (the lab's throwaway `LAB_SECRETS_DEV_TOKEN`), read at

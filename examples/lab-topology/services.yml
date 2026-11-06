@@ -139,7 +139,7 @@ services:
     port: 8080
     health: {kind: http, path: /v1/health, expect_status: 200}
     owner: platform-team
-    version: "2.11"
+    version: "2.32"
     tls: none
     description: Pages the operator; every other service notifies through it.
   status-hub:
@@ -187,7 +187,7 @@ services:
     health: {kind: tcp}
     upstreams: [lake-catalog]
     owner: data-team
-    version: "460.0"
+    version: "484.0"
     tls: internal
     auth: idp
     description: SQL over the lake tables (planned).

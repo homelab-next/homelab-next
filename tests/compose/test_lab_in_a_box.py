@@ -5,11 +5,13 @@ config`` validation when docker is present, and the smoke checks against the pro
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
 import re
 import shutil
+import string
 import subprocess
 import sys
 import threading
@@ -209,22 +211,184 @@ def started(compose, names) -> set[str]:
     return seen
 
 
-def documented_gateway_path() -> tuple[list[str], int]:
+UP_GATEWAY = r"up -d --build --wait (?:--wait-timeout \d+ )?([\w -]+)\n"
+RUN_KEYS = r"run --rm --build (?:-T )?([\w -]+)\n"
+
+
+def documented_gateway_path() -> tuple[list[str], list[str], int]:
+    """The documented gateway-only path: what `up --wait` starts, what `run` runs in the foreground
+    afterwards (the one-shot, whose exit code `up --wait` does not report), and the stated total."""
     text = GATEWAY_DOC.read_text()
-    up = re.search(r"--profile gateway up -d --build --wait ([\w -]+)\n", text)
-    total = re.search(r"what it depends on \(postgres, the fake inference\): (\d+) MB", text)
-    assert up and total, "docs/llm-gateway.md no longer shows the gateway-only command and total"
-    return up[1].split(), int(total[1])
+    up = re.search(r"--profile gateway " + UP_GATEWAY, text)
+    run = re.search(r"--profile gateway " + RUN_KEYS, text)
+    total = re.search(r"then its keys one-shot:\n# (\d+) MB of mem_limit in all", text)
+    assert up and run and total, "docs/llm-gateway.md no longer shows the gateway-only path"
+    return up[1].split(), run[1].split(), int(total[1])
 
 
 def test_the_documented_gateway_only_path_fits_the_runner(compose):
-    names, stated = documented_gateway_path()
-    assert names == ["llm-gateway", "llm-gateway-keys"]
-    closure = started(compose, names)
+    up, run, stated = documented_gateway_path()
+    assert up == ["llm-gateway"] and run == ["llm-gateway-keys"]
+    closure = started(compose, up + run)
     assert closure == {"llm-gateway", "llm-gateway-keys", "postgres", "inference"}
     total = sum(mem_mb(compose["services"][n]["mem_limit"]) for n in closure)
     assert total == stated, f"docs say {stated} MB, the closure's mem_limit sum is {total} MB"
     assert total <= RUNNER_MB
+
+
+GATEWAY_TARGET = "compose/lab-in-a-box/targets/inference-gateway.yml"
+GATEWAY_CHECKS = (
+    "gateway-rejects-bad-key",
+    "gateway-limit-throttles",
+    "gateway-models-match-roles",
+)
+
+
+def gateway_job() -> dict:
+    return yaml.safe_load((WORKFLOW.parent / "ci.yml").read_text())["jobs"]["lab-gateway"]
+
+
+def gateway_step(name_part: str) -> dict:
+    (step,) = [s for s in gateway_job()["steps"] if name_part in s.get("name", "")]
+    return step
+
+
+def test_pull_requests_run_the_documented_gateway_only_path():
+    """ci.yml's lab-gateway job brings up exactly the documented gateway-only path (so the 1280 MB
+    it is budgeted at is what runs), provisions the keys in the foreground (their exit code fails
+    the job), runs the inference suite against the gateway target, and always collects, tears down
+    and uploads."""
+    job = gateway_job()
+    assert job["permissions"] == {"contents": "read"}
+    assert job["defaults"] == {"run": {"shell": "bash"}}  # bash -eo pipefail, not bash -e
+    assert job["env"] == {
+        "COMPOSE_FILE": "compose/lab-in-a-box/docker-compose.yml",
+        "COMPOSE_ENV_FILES": "compose/lab-in-a-box/.env.example",  # throwaway values, no secret
+        "COMPOSE_PROFILES": "gateway",
+    }
+    steps = job["steps"]
+    assert not any("shell" in s or "continue-on-error" in s for s in steps)
+    runs = [s.get("run", "") for s in steps]
+    up_doc, run_doc, _ = documented_gateway_path()
+    (up_i,) = [i for i, r in enumerate(runs) if "docker compose up " in r]
+    m = re.search(r"docker compose " + UP_GATEWAY, runs[up_i])
+    assert m and m[1].split() == up_doc, runs[up_i]
+    # the one-shot runs in the foreground as the whole step, so its exit code is the step's
+    (keys_i,) = [i for i, r in enumerate(runs) if "llm-gateway-keys" in r]
+    m = re.fullmatch(r"docker compose " + RUN_KEYS, runs[keys_i] + "\n")
+    assert m and m[1].split() == run_doc, runs[keys_i]
+    assert "if" not in steps[keys_i]
+    (conform_i,) = [i for i, r in enumerate(runs) if "conform run inference" in r]
+    assert f"--target {GATEWAY_TARGET}" in runs[conform_i]
+    assert "HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE" in runs[conform_i]
+    (verdict_i,) = [i for i, r in enumerate(runs) if all(c in r for c in GATEWAY_CHECKS)]
+    assert up_i < keys_i < conform_i < verdict_i
+    for i in (up_i, keys_i, conform_i, verdict_i):
+        assert "if" not in steps[i], steps[i]["name"]
+    suite = (ROOT / "conformance" / "suites" / "inference.py").read_text()
+    assert all(f'"{c}"' in suite for c in GATEWAY_CHECKS)  # the names CI asserts are the suite's
+    target = yaml.safe_load((ROOT / GATEWAY_TARGET).read_text())
+    assert "gateway" in target["capabilities"]["inference"]["features"]
+    # after the checks, whatever happened: collect, tear down (with volumes), upload
+    collect = gateway_step("collect")
+    down = gateway_step("tear")
+    upload = gateway_step("upload")
+    for step in (collect, down, upload):
+        assert step["if"] == "always()", step["name"]
+    assert "docker compose down --volumes" in down["run"]
+    assert upload["with"]["path"] == "build/lab-gateway/"
+    assert verdict_i < steps.index(collect) < steps.index(down) < steps.index(upload)
+
+
+def _run_step(step: dict, tmp_path: Path, env: dict[str, str]) -> int:
+    """Run a lab-gateway step's script the way the runner does under `shell: bash`."""
+    summary = tmp_path / "summary.md"
+    full = {**os.environ, **env, "GITHUB_STEP_SUMMARY": str(summary)}
+    return subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]],
+        cwd=tmp_path,
+        env=full,
+        capture_output=True,
+        check=False,
+    ).returncode
+
+
+def _python_on_path(tmp_path: Path, script: str | None = None) -> dict[str, str]:
+    """A PATH whose `python` is this interpreter (or a stand-in script)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    py = bin_dir / "python"
+    py.write_text(script or f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    py.chmod(0o755)
+    return {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def _result(**over) -> dict:
+    run = {
+        "verdict": "pass",
+        "counts": {"executed": 12, "skipped": 5},
+        "results": [{"check": c, "status": "pass"} for c in GATEWAY_CHECKS]
+        + [{"check": "turn-records-are-neutral", "status": "skip"}],
+    }
+    run.update(over)
+    return {"runs": [run]}
+
+
+def _skipped(check: str) -> dict:
+    res = _result()
+    for r in res["runs"][0]["results"]:
+        if r["check"] == check:
+            r["status"] = "skip"
+    return res
+
+
+def _missing(check: str) -> dict:
+    res = _result()
+    res["runs"][0]["results"] = [r for r in res["runs"][0]["results"] if r["check"] != check]
+    return res
+
+
+def _renamed() -> dict:
+    res = _result()
+    res["runs"][0]["checks"] = res["runs"][0].pop("results")
+    return res
+
+
+@pytest.mark.parametrize(
+    ("doc", "ok"),
+    [
+        (_result(), True),
+        (_skipped("gateway-limit-throttles"), False),
+        (_skipped("gateway-rejects-bad-key"), False),
+        (_missing("gateway-models-match-roles"), False),
+        (_result(verdict="fail"), False),
+        ({"runs": [_result()["runs"][0], _result()["runs"][0]]}, False),  # two runs
+        ({"runs": []}, False),
+        (_renamed(), False),  # a renamed `results` key is no result, not a pass
+        (None, False),  # no result file at all
+    ],
+)
+def test_the_gateway_verdict_step_fails_unless_the_gateway_checks_passed(tmp_path, doc, ok):
+    out = tmp_path / "build" / "lab-gateway"
+    out.mkdir(parents=True)
+    if doc is not None:
+        (out / "conform-inference.json").write_text(json.dumps(doc))
+    step = gateway_step("the gateway's own checks")
+    assert (_run_step(step, tmp_path, _python_on_path(tmp_path)) == 0) is ok
+    # the verdict (or the error) reaches the job summary either way
+    assert (tmp_path / "summary.md").read_text().strip()
+
+
+@pytest.mark.parametrize(("rc", "ok"), [(0, True), (1, False), (100, False)])
+def test_the_gateway_conform_step_carries_the_suite_s_exit_code(tmp_path, rc, ok):
+    (tmp_path / "build" / "lab-gateway").mkdir(parents=True)
+    env_file = tmp_path / "compose" / "lab-in-a-box" / ".env.example"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(ENV_EXAMPLE.read_text())
+    stand_in = f"#!/bin/sh\necho 'a stand-in suite'\nexit {rc}\n"
+    step = gateway_step("inference conformance")
+    assert (_run_step(step, tmp_path, _python_on_path(tmp_path, stand_in)) == 0) is ok
+    assert "stand-in suite" in (tmp_path / "build/lab-gateway/conform-inference.log").read_text()
 
 
 def test_negative_a_new_gateway_dependency_is_counted(compose):
@@ -232,7 +396,7 @@ def test_negative_a_new_gateway_dependency_is_counted(compose):
     broken["services"]["llm-gateway"]["depends_on"]["lake-query"] = {"condition": "service_healthy"}
     closure = started(broken, ["llm-gateway", "llm-gateway-keys"])
     assert {"lake-query", "lab-init", "object-store"} <= closure  # pulled in transitively
-    _, stated = documented_gateway_path()
+    _, _, stated = documented_gateway_path()
     assert sum(mem_mb(broken["services"][n]["mem_limit"]) for n in closure) != stated
 
 
@@ -296,9 +460,305 @@ def test_negative_the_gateway_on_the_lab_superuser_is_caught(compose):
     assert gateway_db_problems(compose, "") != []  # an init script that creates nothing
 
 
+def postgres_data_problems(compose) -> list[str]:
+    """From 18 the official image keeps PGDATA at ``/var/lib/postgresql/<major>/docker`` and its
+    VOLUME at ``/var/lib/postgresql``; its entrypoint refuses to start over a mount at the old
+    ``/var/lib/postgresql/data``, and a volume there would leave the data in an anonymous one."""
+    pg = compose["services"]["postgres"]
+    m = re.match(r"postgres:(\d+)\.\d+-alpine@sha256:[0-9a-f]{64}$", pg["image"])
+    if not m:
+        return [f"unexpected postgres image: {pg['image']}"]
+    major = int(m.group(1))
+    data = [v for v in pg.get("volumes", []) if v.startswith("postgres-data:")]
+    want = (
+        "postgres-data:/var/lib/postgresql"
+        if major >= 18
+        else "postgres-data:/var/lib/postgresql/data"
+    )
+    if data != [want]:
+        return [f"postgres {major} mounts its data volume as {data}, not [{want!r}]"]
+    if major >= 18 and pg.get("environment", {}).get("PGDATA"):
+        return ["PGDATA is overridden; the 18 image's default keeps pg_upgrade --link possible"]
+    return []
+
+
+def test_postgres_data_volume_matches_the_image_major(compose):
+    assert postgres_data_problems(compose) == []
+
+
+def test_negative_postgres_18_on_the_old_data_mount_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    vols = broken["services"]["postgres"]["volumes"]
+    vols[vols.index("postgres-data:/var/lib/postgresql")] = "postgres-data:/var/lib/postgresql/data"
+    assert postgres_data_problems(broken) == [
+        "postgres 18 mounts its data volume as ['postgres-data:/var/lib/postgresql/data'], "
+        "not ['postgres-data:/var/lib/postgresql']"
+    ]
+
+
+def test_negative_postgres_18_with_pgdata_overridden_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    broken["services"]["postgres"]["environment"]["PGDATA"] = "/var/lib/postgresql/data/pgdata"
+    assert postgres_data_problems(broken) == [
+        "PGDATA is overridden; the 18 image's default keeps pg_upgrade --link possible"
+    ]
+
+
+def test_postgres_is_healthy_only_over_tcp(compose):
+    """The entrypoint's temporary init server listens on the unix socket only; a socket probe
+    would mark postgres healthy (and start its dependants) while the init scripts still run."""
+    test = compose["services"]["postgres"]["healthcheck"]["test"]
+    assert test[0] == "CMD-SHELL" and f"pg_isready -h {LOOPBACK} " in test[1], test
+
+
+def off_lab_network(compose) -> list[str]:
+    """Services that would land on compose's implicit default network, where no lab alias
+    (``*.svc.example.internal``) resolves: each joins ``lab`` or has no network at all."""
+    return sorted(
+        name
+        for name, svc in compose["services"].items()
+        if svc.get("network_mode") != "none" and "lab" not in (svc.get("networks") or [])
+    )
+
+
+def test_every_service_is_on_the_lab_network(compose):
+    assert off_lab_network(compose) == []
+
+
+def test_negative_a_service_without_networks_is_caught(compose):
+    broken = json.loads(json.dumps(compose))
+    del broken["services"]["llm-gateway-keys"]["networks"]
+    assert off_lab_network(broken) == ["llm-gateway-keys"]
+
+
 def test_trino_heap_is_tiny():
     heap = re.search(r"^-Xmx(\d+)M$", (LAB / "config/trino/jvm.config").read_text(), re.M)
     assert heap and int(heap[1]) <= 1024
+
+
+# flags the metrics product's 3.0 removed and ones a later 3.x deprecated, whether given as
+# `--flag=value` or as `--flag value`.  `--enable-feature` itself stays: 3.x still uses it (e.g.
+# promql-experimental-functions for double_exponential_smoothing), so only its gone names count.
+METRICS_GONE_FLAGS = {
+    "--storage.tsdb.retention",
+    "--storage.tsdb.retention.time",
+    "--storage.tsdb.retention.size",
+    "--storage.tsdb.allow-overlapping-blocks",
+    "--alertmanager.timeout",
+    "--log.level",
+}
+# --enable-feature names 2.55.1 read and 3.15.1 does not (3.0 made them defaults, dedicated
+# flags or removed them), and ones a later 3.x made a no-op
+METRICS_GONE_FEATURES = {
+    "agent",
+    "auto-gomaxprocs",
+    "auto-gomemlimit",
+    "expand-external-labels",
+    "new-service-discovery-manager",
+    "no-default-scrape-port",
+    "otlp-write-receiver",
+    "promql-at-modifier",
+    "promql-negative-offset",
+    "remote-write-receiver",
+    "utf8-names",
+    "native-histograms",  # no-op since 3.9
+    "ooo-native-histograms",  # no-op
+    "promql-duration-expr",  # no-op since 3.14
+}
+# an integer le/quantile matcher (normalised to 1.0 on ingest), in any PromQL quoting ("", '',
+# ``) and as YAML writes a double-quoted one inside a double-quoted string (\"1\")
+INTEGER_BUCKET_MATCHER = re.compile(r"""\b(?:le|quantile)\s*(?:=~|!~|!=|=)\s*(\\?"|'|`)[0-9]+\1""")
+
+
+def gone_metrics_args(command: list[str]) -> list[str]:
+    """The removed or deprecated flags and feature names in a metrics service's command."""
+    out = []
+    for i, arg in enumerate(command):
+        name, eq, value = arg.partition("=")
+        if name in METRICS_GONE_FLAGS:
+            out.append(f"flag {name}")
+        elif name == "--enable-feature":
+            if not eq:
+                value = command[i + 1] if i + 1 < len(command) else ""
+            out += [f"feature {f}" for f in value.split(",") if f.strip() in METRICS_GONE_FEATURES]
+    return out
+
+
+def metrics_mounts(service: dict) -> dict[str, Path]:
+    """The metrics service's mounted config files, by in-container name (``rules.yml``, ...)."""
+    out = {}
+    for v in service.get("volumes", []):
+        src, dst = v.split(":")[:2]
+        out[Path(dst).name] = LAB / src
+    return out
+
+
+def metrics_v3_problems(service: dict, config: dict, rules: str) -> list[str]:
+    """What in the lab's metrics service would not run, or would read differently, on the 3.x
+    line it pins (the upstream migration guide, docs/migration.md)."""
+    out = []
+    tag = service.get("image", "").partition(":")[2]
+    if not tag.startswith("v3."):
+        out.append(f"the image tag {tag!r} is not the 3.x line")
+    out += gone_metrics_args(service.get("command", []))
+    if not config.get("storage", {}).get("tsdb", {}).get("retention", {}).get("time"):
+        out.append("no storage.tsdb.retention.time in the config file")
+    for job in config.get("scrape_configs", []):
+        if "scrape_classic_histograms" in job:  # renamed always_scrape_classic_histograms
+            out.append(f"job {job.get('job_name')}: scrape_classic_histograms")
+    for am in config.get("alerting", {}).get("alertmanagers", []):
+        if am.get("api_version") == "v1":
+            out.append("an Alertmanager on the v1 API")
+    if "holt_winters" in rules:  # double_exponential_smoothing, behind a feature flag
+        out.append("holt_winters in the rules")
+    if INTEGER_BUCKET_MATCHER.search(rules):
+        out.append("an integer le/quantile matcher in the rules")
+    return out
+
+
+def test_the_metrics_service_is_configured_for_its_3_x_line(compose):
+    service = compose["services"]["metrics"]
+    files = metrics_mounts(service)
+    config = yaml.safe_load(files[Path(service["command"][0].partition("=")[2]).name].read_text())
+    rules = "".join(files[Path(r).name].read_text() for r in config["rule_files"])
+    assert metrics_v3_problems(service, config, rules) == []
+
+
+def test_negative_2_x_metrics_settings_are_caught(compose):
+    service = {**compose["services"]["metrics"]}
+    service["image"] = service["image"].split(":")[0] + ":v2.55.1"
+    service["command"] = [*service["command"], "--storage.tsdb.retention.time=2h"]
+    config = {
+        "scrape_configs": [{"job_name": "j", "scrape_classic_histograms": True}],
+        "alerting": {"alertmanagers": [{"api_version": "v1"}]},
+    }
+    rules = 'expr: holt_winters(x[5m], 0.5, 0.5) > 1 or h_bucket{le="1"} > 0'
+    assert len(metrics_v3_problems(service, config, rules)) == 7
+
+
+@pytest.mark.parametrize(
+    "command, want",
+    [
+        (["--storage.tsdb.retention=15d"], ["flag --storage.tsdb.retention"]),
+        (["--storage.tsdb.retention", "15d"], ["flag --storage.tsdb.retention"]),
+        (["--storage.tsdb.retention.size", "1GB"], ["flag --storage.tsdb.retention.size"]),
+        (["--log.level=debug"], ["flag --log.level"]),
+        (["--enable-feature=promql-experimental-functions"], []),
+        (["--enable-feature", "exemplar-storage"], []),
+        (["--enable-feature=agent,promql-experimental-functions"], ["feature agent"]),
+        (
+            ["--enable-feature", "utf8-names,native-histograms"],
+            ["feature utf8-names", "feature native-histograms"],
+        ),
+        (["--storage.tsdb.path=/data", "--web.enable-lifecycle"], []),
+    ],
+)
+def test_gone_metrics_args_reads_both_flag_forms(command, want):
+    assert gone_metrics_args(command) == want
+
+
+@pytest.mark.parametrize(
+    "rules, hit",
+    [
+        ('h_bucket{le="1"}', True),
+        ("h_bucket{le='1'}", True),
+        ("h_bucket{le=`1`}", True),
+        ('expr: "h_bucket{le=\\"1\\"} > 0"', True),  # YAML double-quoted: le=\"1\"
+        ('s{quantile = "1"}', True),
+        ('h_bucket{le!="1"}', True),
+        ('h_bucket{le=~"1"}', True),
+        ('h_bucket{le!~"1"}', True),
+        ('h_bucket{le="1.0"}', False),
+        ('h_bucket{le="+Inf"}', False),
+        ("h_bucket{le='1\"}", False),  # mismatched quotes are no matcher
+        ('handle="1"', False),
+    ],
+)
+def test_the_integer_bucket_matcher_reads_every_quoting(rules, hit):
+    assert bool(INTEGER_BUCKET_MATCHER.search(rules)) is hit
+
+
+def _query_etc(compose) -> Path:
+    """The host directory the lake-query engine reads as its etc directory (one bind mount)."""
+    (src,) = [
+        v.split(":")[0] for v in compose["services"]["lake-query"]["volumes"] if v.startswith("./")
+    ]
+    return LAB / src
+
+
+def _properties(path: Path) -> dict[str, str]:
+    out = {}
+    for line in path.read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            key, _, value = line.partition("=")
+            out[key.strip()] = value.strip()
+    return out
+
+
+def test_lake_query_healthcheck_is_the_images_own_check(compose):
+    # since 484 the engine's image (a hardened runtime) has no grep, so a `curl | grep` shell check
+    # never passes and lake-query, with everything that waits for it, never becomes healthy
+    test = compose["services"]["lake-query"]["healthcheck"]["test"]
+    assert test[0] == "CMD" and len(test) == 2 and test[1].endswith("/bin/health-check"), test
+
+
+def test_lake_query_node_id_is_the_container_hostname(compose):
+    # 484 removed the image's wrapper script that passed -Dnode.id=$HOSTNAME when the mounted
+    # node.properties named none
+    node = _properties(_query_etc(compose) / "node.properties")
+    assert node.get("node.id") == "${ENV:HOSTNAME}"
+
+
+def test_lake_query_etc_holds_only_the_expected_files(compose):
+    # the directory is mounted as the whole /etc/trino, so any file in it is read: a stray
+    # secrets.toml, for one, replaces Airlift's environment-variable secrets resolver, and every
+    # ${ENV:...} the catalog and node.properties use stops resolving
+    etc = _query_etc(compose)
+    found = {p.relative_to(etc).as_posix() for p in etc.rglob("*") if p.is_file()}
+    catalogs = {f for f in found if f.startswith("catalog/")}
+    assert catalogs and all(f.count("/") == 1 and f.endswith(".properties") for f in catalogs), (
+        catalogs
+    )
+    assert found - catalogs == {"config.properties", "jvm.config", "node.properties"}, found
+
+
+def test_lake_query_http_port_is_the_one_the_health_check_reads(compose):
+    # the image's health check reads the literal `http-server.http.port=<n>` line of
+    # config.properties (bash prefix match: no spaces around `=`), defaulting to 8080
+    etc = _query_etc(compose)
+    lines = [
+        ln
+        for ln in (etc / "config.properties").read_text().splitlines()
+        if ln.strip().startswith("http-server.http")
+    ]
+    assert lines == ["http-server.http.port=8080"], lines
+    targets = {str(p).rsplit(":", 1)[-1] for p in compose["services"]["lake-query"]["ports"]}
+    assert targets == {"8080"}, targets
+
+
+def test_lake_query_config_names_no_removed_property(compose):
+    # properties releases 471-484 removed or made defunct (a defunct one stops the server at
+    # start), the legacy S3 file system removed in 481 (hive.s3.*), and fs.hadoop.enabled, which
+    # still exists in 484 but only for HDFS: unwanted in a lab with object storage only
+    removed = re.compile(
+        r"^(task\.statistics-cpu-timer-enabled|enable-large-dynamic-filters"
+        r"|dynamic-filtering\.(small|large-broadcast)|fs\.cache\.(directories|max-sizes"
+        r"|max-disk-usage-percentages|ttl|page-size)|fs\.hadoop\.enabled|hive\.s3\."
+        r"|[a-z]+\.extended-statistics\.enabled|[a-z]+\.equality-deletes-blocks-hash-enabled"
+        r"|s3\.use-web-identity-token-credentials-provider)"
+    )
+    etc = _query_etc(compose)
+    catalogs = sorted((etc / "catalog").glob("*.properties"))
+    assert catalogs, "no catalog"
+    for path in [etc / "config.properties", etc / "node.properties", *catalogs]:
+        props = _properties(path)
+        bad = [k for k in props if removed.match(k)]
+        assert bad == [], f"{path.name}: {bad}"
+    for path in catalogs:
+        props = _properties(path)
+        # the native S3 file system by its current name (fs.native-s3.enabled is a legacy alias)
+        assert props.get("fs.s3.enabled") == "true", path.name
+        assert not [k for k in props if k.startswith("fs.native-")], path.name
 
 
 def test_every_capability_has_a_registry_style_alias(compose):
@@ -444,9 +904,11 @@ def test_docker_compose_config_rejects_a_missing_required_variable(tmp_path):
 # --- smoke script --------------------------------------------------------------------------------
 
 
-# a fake Uptime Kuma 1.23 behind provision.js's client interface: the socket.io events it uses
+# a fake Uptime Kuma 2.x behind provision.js's client interface: the socket.io events it uses
 # (needSetup, setup, login, add, addStatusPage, saveStatusPage) and the lists Kuma sends after a
-# login; addStatusPage refuses a slug that exists, as Kuma's unique index does
+# login; addStatusPage refuses a slug that exists, as Kuma's unique index does, and add and
+# saveStatusPage refuse what a real 2.5.6 refused when the 1.23 provisioning ran against it
+# (monitor.conditions is NOT NULL; an analyticsType that is not null or a known type)
 _FAKE_KUMA = r"""
 const { provision } = require(process.argv[1]);
 const state = { setup: true, monitors: {}, pages: {}, next: 1, calls: [] };
@@ -458,6 +920,12 @@ const kuma = {
         case "setup": state.setup = false; return { ok: true };
         case "login": return { ok: !state.setup };
         case "add": {
+            if (!Array.isArray(args[0].conditions) || !Array.isArray(args[0].rabbitmqNodes)) {
+                return { ok: false, msg: "NOT NULL constraint failed: monitor.conditions" };
+            }
+            if (!args[0].accepted_statuscodes.every((c) => typeof c === "string")) {
+                return { ok: false, msg: "Accepted status codes are not all strings" };
+            }
             const id = state.next++;
             state.monitors[id] = { id, name: args[0].name, url: args[0].url };
             return { ok: true, monitorID: id };
@@ -468,7 +936,16 @@ const kuma = {
             }
             state.pages[state.next] = { id: state.next++, slug: args[1], title: args[0] };
             return { ok: true };
-        case "saveStatusPage": return { ok: true };
+        case "saveStatusPage": {
+            const c = args[1];
+            if (c.analyticsType !== null && !["google", "umami", "plausible", "matomo", "rybbit"].includes(c.analyticsType)) {
+                return { ok: false, msg: "Invalid analytics type" };
+            }
+            if (typeof c.showOnlyLastHeartbeat !== "boolean" || !Array.isArray(c.domainNameList)) {
+                return { ok: false, msg: "NOT NULL constraint failed: status_page.show_only_last_heartbeat" };
+            }
+            return { ok: true };
+        }
         default: return { ok: false, msg: `unknown event ${event}` };
         }
     },
@@ -492,12 +969,12 @@ const opts = { username: "lab", password: "fake-kuma-password", slug: "lab",
 
 
 @pytest.mark.requires_tool("node")
-def test_uptime_kuma_provisioning_is_idempotent():
+def test_uptime_provisioning_is_idempotent():
     """Regression: a re-run on a persisted volume added both monitors again and failed on the
     existing status-page slug.  Run twice against a fake Kuma, the second run creates nothing.
     (The real socket.io API -- that Kuma sends monitorList and statusPageList after a login --
     is only exercised by the nightly lab smoke.)"""
-    script = str(LAB / "config" / "uptime-kuma" / "provision.js")
+    script = str(LAB / "config" / "uptime" / "provision.js")
     res = subprocess.run(
         ["node", "-e", _FAKE_KUMA, script], capture_output=True, text=True, timeout=60, check=False
     )
@@ -509,6 +986,38 @@ def test_uptime_kuma_provisioning_is_idempotent():
     assert second["calls"][-1] == "saveStatusPage" and second["out"]["created"] == []
     assert second["out"]["monitors"] == first["out"]["monitors"]
     assert (out["monitors"], out["pages"]) == (2, 1)
+
+
+@pytest.mark.parametrize(
+    "ps, hint",
+    [
+        ("running healthy\n", False),
+        ("", False),  # never created: nothing to say
+        ("running unhealthy\n", True),
+        ("restarting starting\n", True),
+        ("exited \n", True),
+    ],
+)
+def test_smoke_hints_at_a_kept_root_owned_volume_when_uptime_is_unhealthy(ps, hint):
+    m = re.search(r"^uptime_hint\(\) \{\n.*?^\}\n", (LAB / "smoke.sh").read_text(), re.M | re.S)
+    assert m, "smoke.sh defines uptime_hint"
+    fake_dc = (
+        'dc() { [ "$*" = "ps -a --format {{.State}} {{.Health}} uptime" ] && printf "$PS"; }\n'
+    )
+    p = subprocess.run(
+        [shutil.which("bash"), "-c", fake_dc + m.group(0) + "uptime_hint\n"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={"PATH": "/usr/bin:/bin", "PS": ps},
+    )
+    assert p.stdout == ""
+    lines = p.stderr.splitlines()
+    if hint:
+        assert len(lines) == 1 and "make lab-down (docker compose down -v)" in lines[0]
+        assert lines[0].startswith(f"smoke.sh: hint: uptime is not healthy ({ps.rstrip(chr(10))})")
+    else:
+        assert lines == []
 
 
 def test_smoke_script_syntax_and_executable_bit():
@@ -568,8 +1077,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
     ROUTES: ClassVar[dict[str, str]] = {
         "/api/v1/alerts": "prometheus-alerts",
         "/api/v1/query": "prometheus-query-up",
-        "/api/status-page/lab": "uptime-kuma-status-page",
-        "/api/status-page/heartbeat/lab": "uptime-kuma-heartbeat",
+        "/api/status-page/lab": "kuma-2-status-page",  # the lab runs Uptime Kuma 2.x
+        "/api/status-page/heartbeat/lab": "kuma-2-heartbeat",
     }
 
     def do_GET(self):
@@ -760,6 +1269,18 @@ def test_nightly_is_scheduled_and_never_runs_on_pull_requests():
     assert "pull_request" not in triggers and "push" not in triggers
 
 
+def test_pull_requests_run_the_nightly_s_smoke_unchanged():
+    """ci.yml's lab-in-a-box job (on the pull requests tools/lab_paths.py picks) is the nightly's
+    job step for step, so a pull request's green lab means what a green nightly means."""
+    nightly = yaml.safe_load(WORKFLOW.read_text())["jobs"]["lab-in-a-box"]
+    ci = yaml.safe_load((WORKFLOW.parent / "ci.yml").read_text())["jobs"]["lab-in-a-box"]
+    for key in ("runs-on", "permissions", "timeout-minutes", "steps"):
+        assert ci[key] == nightly[key], key
+    assert set(ci) - set(nightly) == {"needs", "if"}
+    assert set(nightly) - set(ci) == set()  # nothing of the nightly's job is dropped
+    assert any("smoke.sh" in s.get("run", "") for s in ci["steps"])
+
+
 def test_nightly_pins_every_action_by_full_sha():
     uses = re.findall(r"uses:\s*(\S+)", WORKFLOW.read_text())
     assert uses
@@ -772,7 +1293,26 @@ def test_nightly_pins_every_action_by_full_sha():
 
 
 # --- hardening and the bind guard ---------------------------------------------------------------
-HARDENED_EXCEPTIONS = {"secrets"}  # OpenBao's entrypoint needs its default capabilities
+HARDENED_EXCEPTIONS: set[str] = set()  # none: OpenBao (2.6+) starts as its own user
+
+
+def test_the_secrets_service_adds_no_capability_back(compose):
+    # OpenBao dropped mlock in 2.0 and starts as its own user since 2.6: IPC_LOCK must not return.
+    assert "cap_add" not in compose["services"]["secrets"]
+
+
+def test_the_uptime_service_runs_its_rootless_image_and_adds_no_capability_back(compose):
+    # 1.x's entrypoint chowned /app/data and switched user (CHOWN, SETGID, SETUID); 2.x's
+    # *-slim-rootless image starts as `node` (uid 1000), which owns /app/data in the image
+    images = set()
+    for name in ("uptime", "uptime-init"):
+        svc = compose["services"][name]
+        assert "cap_add" not in svc and "user" not in svc, name
+        images.add(svc["image"])
+    (image,) = images  # one pin for both
+    assert re.fullmatch(r"[\w/-]+:2\.\d+\.\d+-slim-rootless@sha256:[0-9a-f]{64}", image), image
+    # SQLite by its environment variable, not the first-run "setup database" page (unauthenticated)
+    assert compose["services"]["uptime"]["environment"]["UPTIME_KUMA_DB_TYPE"] == "sqlite"
 
 
 def test_containers_drop_capabilities_and_forbid_new_privileges(compose):
@@ -1130,7 +1670,11 @@ def test_the_events_service_requires_a_user_and_reads_the_lab_config(compose, en
     conf = parse_nats_conf(NATS_CONF.read_text())
     assert "authorization" not in conf and "no_auth_user" not in str(conf)  # no anonymous user
     variables = nats_vars(NATS_CONF.read_text())
-    assert variables == set(events["environment"])
+    assert variables == set(events["environment"]) - {"GOMEMLIMIT"}
+    # the Go runtime's soft limit sits below the container's, so the server's caches (2.12+)
+    # are freed under GC pressure before the kernel kills it
+    soft = int(events["environment"]["GOMEMLIMIT"].removesuffix("MiB"))
+    assert 0 < soft < int(events["mem_limit"].removesuffix("m"))
     for var in variables:
         assert events["environment"][var] == f"${{{var}:?see .env.example}}"
         assert "fake" in env_vars[var]
@@ -1195,6 +1739,9 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     bridge = hnx["hnx-st2-bridge"]
     bridge_json = json.loads((ROOT / "workflows" / "stackstorm" / "bridge.json").read_text())
     prefix = e2e.LAB_EVENTS_PREFIX
+    # the bus-acl step reads and acks through the bridge's own durable on decision.returned
+    by_subject = {s["subject"]: s["durable"] for s in bridge_json["subscriptions"]}
+    assert by_subject["homelabnext.decision.returned"] == e2e.LAB_NOT_BROKER_DURABLE
     for sub in bridge_json["subscriptions"]:
         d = sub["durable"]
         for what in ("INFO", "MSG.NEXT"):
@@ -1205,9 +1752,71 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
         assert not nats_allowed(bridge, "publish", create)  # any filter, any shape
         assert not nats_allowed(bridge, "publish", f"{create}.{prefix}.homelabnext.other")
         assert nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.{d}.1.2.3.4.5")
+    assert not nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.other.1.2.3.4.5")
     assert not nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.CREATE.{stream}.other")
     assert not nats_allowed(bridge, "publish", f"$JS.API.STREAM.CREATE.{stream}")
     assert not nats_allowed(hnx["hnx-broker"], "publish", f"$JS.API.STREAM.CREATE.{stream}")
+
+
+def nats_account_hash(account: str) -> str:
+    """The account hash in a v2 ack subject, as nats-server computes it (``server/events.go``
+    ``getHash``/``getHashSize`` at v2.15.1, digits from ``server/accounts.go``): each of the first
+    8 bytes of sha256(name), mod 62, as a character of ``0-9A-Za-z``."""
+    digits = string.digits + string.ascii_uppercase + string.ascii_lowercase  # 0-9A-Za-z
+    return "".join(digits[b % 62] for b in hashlib.sha256(account.encode()).digest()[:8])
+
+
+def test_the_account_hash_is_the_servers():
+    # read off a 2.15.1 server with js_ack_fc_v2 on: $JS.ACK._.hKkTAyOX.HNXLAB_BROKER.<durable>...
+    assert nats_account_hash("HNX") == "hKkTAyOX"
+
+
+def test_acks_are_granted_token_exact_in_both_reply_subject_forms():
+    """ADR-15: v1 ``$JS.ACK.<stream>.<consumer>.<5 numbers>`` (what 2.15.1 sends) and v2
+    ``$JS.ACK.<domain>.<account hash>.<stream>.<consumer>.<5 numbers>[...]`` (upstream main
+    enables it in 2.16 and removes the flag in 2.17).  Each ack grant is exactly the consumer's
+    own subscription: no wildcard over the stream or consumer (``$JS.ACK.*.*.<s>.<d>.>`` would
+    also match another consumer's 9-token v1 subject, which takes ``+NXT``) and no ``>`` on v1."""
+    conf = parse_nats_conf(NATS_CONF.read_text())
+    # no JetStream domain anywhere, so the v2 domain token is the server's "_"
+    assert "domain" not in conf["jetstream"] and '"domain"' not in json.dumps(conf)
+    assert "js_ack_fc_v2" not in json.dumps(conf.get("feature_flags", {}))  # upstream's default
+    e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
+    stream = e2e.LAB_EVENTS_STREAM
+    ackers = 0
+    for user in nats_users().values():
+        allow = (user.get("permissions") or {}).get("publish", {}).get("allow", [])
+        acks = [s for s in allow if s.startswith("$JS.ACK.")]
+        if not acks:
+            continue
+        ackers += 1  # the bridge: the one user granted acks on the standing stream
+        h = nats_account_hash(user["account"])
+        durables = {s.split(".")[3] for s in acks if s.split(".")[2] == stream}
+        assert durables
+        assert sorted(acks) == sorted(
+            [f"$JS.ACK.{stream}.{d}.*.*.*.*.*" for d in durables]
+            + [f"$JS.ACK._.{h}.{stream}.{d}.*.*.*.*.>" for d in durables]
+        )
+        for d in durables:
+            v1, v2 = f"$JS.ACK.{stream}.{d}.1.2.3.4.5", f"$JS.ACK._.{h}.{stream}.{d}.1.2.3.4.5"
+            assert nats_allowed(user, "publish", v1) and nats_allowed(user, "publish", v2)
+            refused = [
+                f"$JS.ACK.Other.other.{stream}.{d}.1.2.3",  # another consumer's v1 subject
+                f"$JS.ACK.{stream}.other.1.2.3.4.5",  # another durable, v1
+                f"$JS.ACK._.{h}.{stream}.other.1.2.3.4.5",  # another durable, v2
+                f"$JS.ACK.dom.{h}.{stream}.{d}.1.2.3.4.5",  # another domain
+                f"$JS.ACK._.AAAAAAAA.{stream}.{d}.1.2.3.4.5",  # another account's hash
+                f"$JS.ACK.{stream}.{d}.1.2.3.4.5.6.7",  # v1 with extra tokens
+                f"$JS.ACK.{stream}.{d}.1.2.3.4",  # v1 short of a token
+            ]
+            for subject in refused:
+                assert not nats_allowed(user, "publish", subject), subject
+    assert ackers == 1
+
+
+def test_negative_a_wildcard_ack_grant_matches_another_consumers_v1_subject():
+    loose = {"user": "x", "permissions": {"publish": {"allow": ["$JS.ACK.*.*.S.d.>"]}}}
+    assert nats_allowed(loose, "publish", "$JS.ACK.Other.other.S.d.1.2.3")
 
 
 def test_negative_a_wildcard_grant_would_be_caught():

@@ -5,7 +5,7 @@
 # the mem_limit values sum to 3584 MB of the 3584 MB the test allows (4 GB less OS/docker headroom);
 # the broker end-to-end services took the last 256 MB.  Services under a compose profile (the LLM
 # gateway: `--profile gateway`) are not started by default and are
-# budgeted on their own: the gateway profiles' mem_limit values sum to 832 MB (tests/compose).  StackStorm (MongoDB, RabbitMQ and its own
+# budgeted on their own: the gateway profiles' mem_limit values sum to 960 MB (tests/compose).  StackStorm (MongoDB, RabbitMQ and its own
 # services) and NiFi (a 1 GB default heap) do not fit; the status hub tests them against
 # source-verified responses instead (tests/status/test_status_products.py).
 #
@@ -23,10 +23,9 @@ x-restart: &restart
   restart: "no"
   init: true
 
-# Least privilege for every container that still works with it (see tests/compose).  The
-# exceptions are spelled out where they occur: postgres and uptime add back the capabilities their
-# entrypoints need to chown the data directory and switch user, and secrets (OpenBao) keeps
-# docker's default set.
+# Least privilege for every container (see tests/compose).  The exceptions are spelled out where
+# they occur: postgres adds back the capabilities its entrypoint needs to chown the data directory
+# and switch user.
 x-hardened: &hardened
   security_opt: ["no-new-privileges:true"]
   cap_drop: [ALL]
@@ -55,7 +54,7 @@ services:
   # --- object-store: S3 API ---------------------------------------------------------------
   object-store:
     <<: [*restart, *hardened]
-    image: dxflrs/garage:v1.0.1@sha256:a5706cf1f3d7b349ac5133ec59ad8181b709270b75e5f2fa7b3e1a5c07d67137
+    image: dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5
     command: ["/garage", "server"]
     environment:
       GARAGE_RPC_SECRET: ${LAB_OBJECT_STORE_RPC_SECRET:?see .env.example}
@@ -81,7 +80,7 @@ services:
   # --- postgres: catalog metadata ---------------------------------------------------------
   postgres:
     <<: [*restart, *hardened]
-    image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
+    image: postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
     environment:
       POSTGRES_USER: lab
       POSTGRES_PASSWORD: ${LAB_POSTGRES_PASSWORD:?see .env.example}
@@ -91,11 +90,16 @@ services:
     # the entrypoint chowns the data directory, then drops to the postgres user
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=40", "-c", "fsync=off"]
+    # 18+: PGDATA is /var/lib/postgresql/18/docker and the image's VOLUME is /var/lib/postgresql,
+    # so the volume mounts there.  The 18 entrypoint exits on a mount at the old .../data, or on
+    # a volume a 16 server initialised: recreate it (`docker compose down -v`; CHANGELOG).
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
       - ./config/postgres/init:/docker-entrypoint-initdb.d:ro
+    # over TCP: the entrypoint's init server listens on the socket only, so a socket probe
+    # would call postgres healthy while /docker-entrypoint-initdb.d is still running
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U lab -d catalog"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U lab -d catalog"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -107,7 +111,7 @@ services:
   # --- lake-catalog: Iceberg REST catalog -------------------------------------------------
   catalog-migrate:
     <<: [*restart, *hardened]
-    image: quay.io/lakekeeper/catalog:v0.9.5@sha256:c3d6db91218a6115525ee05542925739a689938f3d116543a32bd8972f217c82
+    image: quay.io/lakekeeper/catalog:v0.14.1@sha256:7c5d6b178a1b5ae230bd7d3e7a09da4704ce58fafc66a8b90c3b6edb69ba9817
     command: ["migrate"]
     environment: &catalog-env
       LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://lab:${LAB_POSTGRES_PASSWORD}@postgres:5432/catalog
@@ -122,7 +126,7 @@ services:
 
   lake-catalog:
     <<: [*restart, *hardened]
-    image: quay.io/lakekeeper/catalog:v0.9.5@sha256:c3d6db91218a6115525ee05542925739a689938f3d116543a32bd8972f217c82
+    image: quay.io/lakekeeper/catalog:v0.14.1@sha256:7c5d6b178a1b5ae230bd7d3e7a09da4704ce58fafc66a8b90c3b6edb69ba9817
     command: ["serve"]
     environment: *catalog-env
     depends_on:
@@ -170,17 +174,16 @@ services:
   # --- lake-query: Trino, single node, tiny heap ------------------------------------------
   lake-query:
     <<: [*restart, *hardened]
-    image: trinodb/trino:470@sha256:a591436ddc20cef15a4424704423326828591727b0e7c40c6ea4165d4564df67
+    image: trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
     environment:
       LAB_WAREHOUSE: ${LAB_WAREHOUSE:?see .env.example}
       LAB_S3_REGION: ${LAB_S3_REGION:?see .env.example}
       LAB_S3_ACCESS_KEY: ${LAB_S3_ACCESS_KEY:?see .env.example}
       LAB_S3_SECRET_KEY: ${LAB_S3_SECRET_KEY:?see .env.example}
     volumes:
-      - ./config/trino/config.properties:/etc/trino/config.properties:ro
-      - ./config/trino/jvm.config:/etc/trino/jvm.config:ro
-      - ./config/trino/node.properties:/etc/trino/node.properties:ro
-      - ./config/trino/catalog:/etc/trino/catalog:ro
+      # the whole etc directory (config, jvm.config, node.properties, catalog/): nothing in the
+      # image's own etc is used
+      - ./config/trino:/etc/trino:ro
       - query-data:/data/trino
     depends_on:
       lab-init:
@@ -188,7 +191,10 @@ services:
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_QUERY:-8080}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info | grep -q '\"starting\":false'"]
+      # the image's own check (bash builtins and curl): since 484 the image has no grep to pipe
+      # /v1/info through. It reads the port from config.properties and passes once the server
+      # reports "starting":false.
+      test: ["CMD", "/usr/lib/trino/bin/health-check"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -200,16 +206,19 @@ services:
 
   # --- events: NATS JetStream -------------------------------------------------------------
   # Accounts and per-user permissions (config/nats/nats.conf): only the broker's user may publish
-  # the broker's subjects; no client connects without a user.
+  # the broker's subjects; no client connects without a user.  Since 2.12 the filestore's caches
+  # give memory back under GC pressure, which GOMEMLIMIT sets (Go does not derive it from the
+  # cgroup): below mem_limit, so the server frees caches before the kernel kills it.
   events:
     <<: [*restart, *hardened]
-    image: nats:2.10.22-alpine@sha256:73b0ba5fec5518c5f698597c58d2a3350a2b5ccae43e84c308f8d2da1242deca
+    image: nats:2.15.1-alpine@sha256:7ae34c25dfd6fe2e01c6483eabef20d796690fdcac6c4d94ca780a6cf9877fde
     command: ["-c", "/etc/nats/nats.conf"]
     environment:
       LAB_EVENTS_BROKER_PASSWORD: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}
       LAB_EVENTS_ST2_BRIDGE_PASSWORD: ${LAB_EVENTS_ST2_BRIDGE_PASSWORD:?see .env.example}
       LAB_EVENTS_ADMIN_PASSWORD: ${LAB_EVENTS_ADMIN_PASSWORD:?see .env.example}
       LAB_EVENTS_CONFORMANCE_PASSWORD: ${LAB_EVENTS_CONFORMANCE_PASSWORD:?see .env.example}
+      GOMEMLIMIT: 96MiB
     volumes:
       - events-data:/data
       - ./config/nats/nats.conf:/etc/nats/nats.conf:ro
@@ -237,18 +246,18 @@ services:
   # while the token is still the placeholder.  Production uses OpenBao in server mode instead:
   # integrated (raft) storage, TLS, real unseal keys or auto-unseal, and the root token revoked
   # after initialisation (docs/architecture.md, "The reference environment").
-  # It keeps docker's default capabilities and no no-new-privileges: its entrypoint chowns its
-  # directories, sets a file capability for mlock and drops to the openbao user, all of which
-  # cap_drop ALL and no-new-privileges would break.
+  # It runs hardened like the rest: since 2.6 the image starts as the openbao user, so its
+  # entrypoint neither chowns nor switches user, and OpenBao has not used mlock since 2.0 (no
+  # IPC_LOCK).
   # ==========================================================================================
   secrets:
-    <<: *restart
-    image: openbao/openbao:2.1.0@sha256:7de07aa6df3937d44c96c2d65c188b2d4a70546f2a764ad4510301305af6a223
-    command: ["server", "-dev"]
+    <<: [*restart, *hardened]
+    image: openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+    # the image's own default since 2.2: the root token is not written to ~/.vault-token
+    command: ["server", "-dev", "-dev-no-store-token"]
     environment:
       BAO_DEV_ROOT_TOKEN_ID: ${LAB_SECRETS_DEV_TOKEN:?see .env.example}
       BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-    cap_add: [IPC_LOCK]
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_SECRETS:-8200}:8200"
     healthcheck:
@@ -265,7 +274,7 @@ services:
   # --- notify: ntfy -----------------------------------------------------------------------
   notify:
     <<: [*restart, *hardened]
-    image: binwiederhier/ntfy:v2.11.0@sha256:4a7d0f0adc6d5d9fc36e64ab55ef676e76e124a2bdd50ce115b6d9c1c7430294
+    image: binwiederhier/ntfy:v2.32.0@sha256:59250e1d8be2ee2186c4560322f625faef22ace380331f05b63f8842dbd62602
     command: ["serve"]
     environment:
       NTFY_BASE_URL: http://notify.svc.example.internal
@@ -328,11 +337,12 @@ services:
   # sees a warning and a critical alert, the query mapping sees the self-scrape target up.
   metrics:
     <<: [*restart, *hardened]
-    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    # Prometheus 3: retention lives in prometheus.yml (`storage.tsdb.retention`); the
+    # --storage.tsdb.retention.time flag is deprecated and --storage.tsdb.retention is gone.
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=2h
     volumes:
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./config/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
@@ -349,18 +359,23 @@ services:
         aliases: [metrics.svc.example.internal]
 
   # --- uptime: Uptime Kuma, provisioned headlessly by uptime-init -------------------------
-  # Its entrypoint chowns /app/data to PUID:PGID (root here) and switches to them with setpriv,
-  # so it adds back exactly those capabilities.
+  # The slim rootless image: no embedded MariaDB or Chromium (the lab uses SQLite and HTTP
+  # monitors), and it runs as the image's own `node` user (uid 1000), which owns /app/data in the
+  # image and so in a fresh volume: no capability is added back.  UPTIME_KUMA_DB_TYPE picks
+  # SQLite without the first-run "setup database" page, which would otherwise hold the server
+  # (and answer /api/entry-page with type setup-database, hence the health check reads the type).
+  # Kuma tries `sudo service nscd start` and logs that it failed: no-new-privileges, by design.
   uptime:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:1.23.16@sha256:431fee3be822b04861cf0e35daf4beef6b7cb37391c5f26c3ad6e12ce280fe18
-    cap_add: [CHOWN, SETGID, SETUID]
+    image: louislam/uptime-kuma:2.5.6-slim-rootless@sha256:6eb4e96a7cbdb8a5d6779aa26dce2cb97dcea65b486856b9b2280f73a1d0adf4
+    environment:
+      UPTIME_KUMA_DB_TYPE: sqlite
     volumes:
       - uptime-data:/app/data
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_UPTIME:-3001}:3001"
     healthcheck: &kuma-health
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/api/entry-page', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/api/entry-page', r => { let b = ''; r.on('data', c => b += c); r.on('end', () => process.exit(r.statusCode === 200 && /\"type\":\"entryPage\"/.test(b) ? 0 : 1)); }).on('error', () => process.exit(1))"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -370,14 +385,14 @@ services:
       lab:
         aliases: [uptime.svc.example.internal]
 
-  # Uptime Kuma has no REST API for setup, monitors or status pages; this runs
-  # config/uptime-kuma/provision.js in the same image, with its own socket.io client (the API the
+  # Uptime Kuma (2.x as 1.x) has no REST API for setup, monitors or status pages; this runs
+  # config/uptime/provision.js in the same image, with its own socket.io client (the API the
   # UI uses): admin user, a monitor that answers (metrics) and one that cannot (a closed port),
   # their first heartbeats, then the public status page "lab".  It stays up once done and is
   # healthy only then, so `up --wait` returns with the page in place.
   uptime-init:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:1.23.16@sha256:431fee3be822b04861cf0e35daf4beef6b7cb37391c5f26c3ad6e12ce280fe18
+    image: louislam/uptime-kuma:2.5.6-slim-rootless@sha256:6eb4e96a7cbdb8a5d6779aa26dce2cb97dcea65b486856b9b2280f73a1d0adf4
     entrypoint: ["node", "/provision/provision.js"]
     working_dir: /app
     environment:
@@ -390,7 +405,7 @@ services:
       KUMA_DOWN_URL: http://metrics.svc.example.internal:9/
       KUMA_MARKER: /tmp/provisioned.json
     volumes:
-      - ./config/uptime-kuma/provision.js:/provision/provision.js:ro
+      - ./config/uptime/provision.js:/provision/provision.js:ro
     depends_on:
       uptime:
         condition: service_healthy
@@ -485,6 +500,7 @@ services:
       # the bus-relay and bus-acl steps: the broker's relay publishes its outbox to the events
       # service as hnx-broker (the relay's process gets only that password); the operator
       # (hnx-lab-admin) provisions the stream and reads it back; hnx-st2-bridge tries to forge
+      # one, then reads and acks through its own durable (its acks must take)
       HNX_ENDPOINT_EVENTS: nats://events.svc.example.internal:4222
       LAB_BROKER_EVENTS_TARGET: /src/compose/lab-in-a-box/broker/events-relay.yml
       HNX_SECRET_EVENTS_BROKER: ${LAB_EVENTS_BROKER_PASSWORD:?see .env.example}
@@ -522,7 +538,7 @@ services:
   llm-gateway:
     <<: [*restart, *hardened]
     profiles: [gateway]
-    image: litellm/litellm-database:v1.103.3@sha256:11f2537026988447f49c036bb692898b4ab697caa3b4a060bf6c668266b69659
+    image: litellm/litellm-database:v1.106.2@sha256:35f2cec3a14bb297e08bfab56c1fc377432bc4071aaf71978fdff043a5d91e79
     command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
     environment:
       HNX_SECRET_LLM_GATEWAY_MASTER_KEY: ${LAB_GATEWAY_MASTER_KEY:?see .env.example}
@@ -547,7 +563,7 @@ services:
       timeout: 5s
       retries: 30
       start_period: 30s
-    mem_limit: 768m  # measured 520-550 MB RSS (proxy + prisma engine), pip install of 1.103.3
+    mem_limit: 896m  # measured 1.106.2: 604 MB RSS, 692 MB cgroup peak (1.103.7: 528 and 621)
     networks:
       lab:
         aliases: [llm-gateway.svc.example.internal]
@@ -573,3 +589,4 @@ services:
       llm-gateway:
         condition: service_healthy
     mem_limit: 64m
+    networks: [lab]

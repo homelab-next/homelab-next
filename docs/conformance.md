@@ -329,8 +329,8 @@ passing test. The report leaves out the capabilities of frozen or experimental c
 adapter) unless one is named with `--capability`, and
 records them under `experimental_skipped`, so a frozen suite blocks neither the gate nor X-10;
 `make experimental` runs `hnx conform report --capability` for each; `make conform` runs every core suite against the built-in fakes (`hnx conform run all`; the
-extended suites run under pytest), and the nightly workflow runs
-`hnx conform run all` after the lab-in-a-box smoke.
+extended suites run under pytest), and the nightly workflow (and CI's `lab-in-a-box` job, on a
+pull request that can affect the stack) runs `hnx conform run all` after the lab-in-a-box smoke.
 
 `homelabnext/conform/plugins/x10_conformance.py` is the invariant plugin **X-10, "every
 capability has a passing conformance test"** (pillar X; X-04 only asks that a test file

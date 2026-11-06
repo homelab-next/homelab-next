@@ -13,12 +13,13 @@ SCHEMAS = load_schemas()
 NAMES = sorted(SCHEMAS)
 
 
-def test_five_classes_are_pinned():
+def test_the_tables_are_pinned():
     assert NAMES == [
         "authentication",
         "detection_finding",
         "dns_activity",
         "network_activity",
+        "novelty_finding",
         "vulnerability_finding",
     ]
     assert {s.ocsf_version for s in SCHEMAS.values()} == {"1.3.0"}

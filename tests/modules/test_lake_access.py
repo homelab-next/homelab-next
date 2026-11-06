@@ -27,6 +27,7 @@ def test_each_reader_gets_its_row_filter():
             _r("group:soc", "red"),
             _r("module:pipe", "red", write=True),
             _r("user:alice", "amber+strict"),
+            _r("analyzer:novelty", "amber"),
         )
     )
     every = {(r.get("user") or r.get("group")): r for r in doc["tables"] if r.get("table") == ".*"}
@@ -35,6 +36,9 @@ def test_each_reader_gets_its_row_filter():
     assert every["^module:pipe$"]["privileges"] == ["SELECT", "INSERT", "DELETE"]
     assert "'amber+strict'" in every["^user:alice$"]["filter"]
     assert "'red'" not in every["^user:alice$"]["filter"].split("IN")[1]
+    # a platform analyzer (ADR-0036) signs in as the engine user named by its reader id
+    assert "'amber+strict'" not in every["^analyzer:novelty$"]["filter"]
+    assert every["^analyzer:novelty$"]["privileges"] == ["SELECT"]
 
 
 def test_a_reader_name_is_matched_exactly():
@@ -49,6 +53,18 @@ def test_a_reader_name_is_matched_exactly():
         (_r("profile:x", "Red"), "not a TLP label"),
         (_r("profile:x", "green", write=True), "ceiling is red"),
         (_r("nobody", "green"), "not a reader id"),
+        (_r("module:x", "red", writes=["novelty_finding"]), "only an analyzer"),
+        (_r("analyzer:x", "red", write=True, writes=["t"]), "writes and write"),
+        (_r("analyzer:x", "red", writes=["novelty_finding"]), "writes at a red ceiling"),
+        (_r("analyzer:x", "amber", writes=[]), "distinct table names"),
+        (
+            _r("analyzer:x", "amber", writes=None),
+            "distinct table names",
+        ),  # null: refused, not absent
+        (_r("analyzer:x", "amber", writes=["t", "t"]), "distinct table names"),
+        (_r("analyzer:x", "amber", writes=["Bad Name"]), "distinct table names"),
+        (_r("analyzer:x", "amber", writes="novelty_finding"), "distinct table names"),
+        (_r("analyzer:x", "amber", writes=["authentication"]), "not an analyzer-output table"),
     ],
 )
 def test_render_refuses(entry, needle):
@@ -162,3 +178,63 @@ def test_a_prefers_only_reader_and_a_profileless_agent_are_found():
         }
     }
     assert set(rules.lake_readers(mods)) == {"module:m", "profile:m-a"}
+
+
+def test_an_analyzer_appends_to_its_own_tables_only():
+    doc = _rules(_r("analyzer:novelty", "amber", writes=["novelty_finding"]))
+    (cat, _) = doc["catalogs"]
+    assert cat["allow"] == "all"  # the engine refuses any insert into a read-only catalog
+    _, own, every = doc["tables"]
+    assert own["user"] == every["user"] == "^analyzer:novelty$"
+    # its own table first (first match wins): append, never delete or update
+    assert own["table"] == "^novelty_finding$" and own["privileges"] == ["SELECT", "INSERT"]
+    assert own["schema"] == "^ocsf$"  # pinned to the core's namespace, where the table lives
+    assert own["filter"] == every["filter"]
+    assert "'red'" not in own["filter"].split("IN")[1]
+    # every other table: read at the ceiling, no write
+    assert every["table"] == ".*" and every["privileges"] == ["SELECT"]
+
+
+def test_an_analyzer_without_writes_reads_only():
+    doc = _rules(_r("analyzer:novelty", "amber"))
+    assert doc["catalogs"][0]["allow"] == "read-only"
+    assert [r["privileges"] for r in doc["tables"]] == [["SELECT"], ["SELECT"]]
+
+
+def test_reader_problems_writes():
+    base = _site(_r("module:collector", "red"), _r("profile:collector-analyst", "green"))
+    ok = _site(*base["tlp_readers"], _r("analyzer:novelty", "amber", writes=["novelty_finding"]))
+    assert rules.tlp_reader_problems(ok, MODS) == []
+    bad = _site(*base["tlp_readers"], _r("module:pipe", "red", writes=["t"]))
+    assert "tlp_readers: module:pipe: only an analyzer: reader has writes (ADR-0036)" in (
+        rules.tlp_reader_problems(bad, MODS)
+    )
+    null = _site(*base["tlp_readers"], _r("analyzer:z", "amber", writes=None))
+    assert "tlp_readers: analyzer:z: writes is a list of table names" in (
+        rules.tlp_reader_problems(null, MODS)
+    )
+    red = _site(*base["tlp_readers"], _r("analyzer:r", "red", writes=["novelty_finding"]))
+    assert "tlp_readers: analyzer:r: writes at a red ceiling (it must read below red)" in (
+        rules.tlp_reader_problems(red, MODS)
+    )
+    both = _site(*base["tlp_readers"], _r("analyzer:a", "red", write=True, writes=["t"]))
+    assert "tlp_readers: analyzer:a: writes and write: true together" in (
+        rules.tlp_reader_problems(both, MODS)
+    )
+
+
+def test_no_one_may_run_a_procedure():
+    """No CALL procedure for anyone; a table procedure (ALTER TABLE ... EXECUTE) is refused by
+    the row filter every rule below red carries, an analyzer's own-table rule included."""
+    doc = _rules(_r("analyzer:novelty", "amber", writes=["novelty_finding"]), _r("user:a", "red"))
+    assert doc["procedures"] == [{"procedure": ".*", "privileges": []}]
+    own = [r for r in doc["tables"] if r.get("table") == "^novelty_finding$"]
+    assert own and all("filter" in r for r in own)
+
+
+def test_reader_problems_writes_only_analyzer_tables():
+    base = _site(_r("module:collector", "red"), _r("profile:collector-analyst", "green"))
+    bad = _site(*base["tlp_readers"], _r("analyzer:n", "amber", writes=["authentication"]))
+    assert "tlp_readers: analyzer:n: writes ['authentication']: not an analyzer-output table" in (
+        rules.tlp_reader_problems(bad, MODS)
+    )

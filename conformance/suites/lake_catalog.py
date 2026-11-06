@@ -122,6 +122,73 @@ def _(lake):
     assert (mark.batch_id, mark.high_water) == (key, "hw-42"), f"mark {mark}"
 
 
+@SUITE.check(
+    "batch-id-bound-to-its-source",
+    "a batch id committed by one source is refused, never replayed, for another",
+)
+def _(lake):
+    pre, key = uniq("c"), uniq("k")
+    lake.write_batch(TABLE, [auth_row(f"{pre}-0")], idempotency_key=key, source=uniq("src-a"))
+    other = [auth_row(f"{pre}-1")]
+    raises(
+        lambda: lake.write_batch(TABLE, other, idempotency_key=key, source=uniq("src-b")),
+        "another source's batch id",
+    )
+    assert _count(lake, pre) == 1, f"expected 1 row, found {_count(lake, pre)}"
+    # the other order: a batch id committed with no source does not replay for a sourced write
+    key2 = uniq("k")
+    lake.write_batch(TABLE, [auth_row(f"{pre}-2")], idempotency_key=key2)
+    raises(
+        lambda: lake.write_batch(
+            TABLE, [auth_row(f"{pre}-3")], idempotency_key=key2, source=uniq("src-c")
+        ),
+        "a sourced write of a batch id committed without a source",
+    )
+    # a write that names no source is not judged: it replays
+    assert lake.write_batch(
+        TABLE, [auth_row(f"{pre}-4")], idempotency_key=key, source=None
+    ).replayed
+    assert _count(lake, pre) == 2, f"expected 2 rows, found {_count(lake, pre)}"
+
+
+@SUITE.check(
+    "replay-judged-by-expect-source",
+    "a batch re-sent without its mark but with expect_source is judged as that source's",
+)
+def _(lake):
+    pre, key = uniq("c"), uniq("k")
+    src = uniq("src-a")
+    lake.write_batch(TABLE, [auth_row(f"{pre}-0")], idempotency_key=key, source=src)
+    again = lake.write_batch(
+        TABLE, [auth_row(f"{pre}-0")], idempotency_key=key, source=None, expect_source=src
+    )
+    assert again.replayed, f"its own batch, re-sent without the mark, did not replay: {again}"
+    raises(
+        lambda: lake.write_batch(
+            TABLE, [auth_row(f"{pre}-1")], idempotency_key=key, expect_source=uniq("src-b")
+        ),
+        "a re-send expecting another source",
+    )
+    # a batch committed with no source is not another's to replay, even when only expected
+    bare = uniq("k")
+    lake.write_batch(TABLE, [auth_row(f"{pre}-2")], idempotency_key=bare)
+    raises(
+        lambda: lake.write_batch(
+            TABLE, [auth_row(f"{pre}-3")], idempotency_key=bare, expect_source=src
+        ),
+        "a re-send expecting a source, of a batch committed with none",
+    )
+    # a write naming two different sources is refused outright
+    raises(
+        lambda: lake.write_batch(
+            TABLE, [auth_row(f"{pre}-4")], idempotency_key=uniq("k"), source=src,
+            expect_source=uniq("src-c"),
+        ),
+        "a write naming two sources",
+    )  # fmt: skip
+    assert _count(lake, pre) == 2, f"expected 2 rows, found {_count(lake, pre)}"
+
+
 def make_fake():
     return FakeLake()
 
@@ -130,14 +197,109 @@ class ReplayingLake(FakeLake):
     """Defect: the idempotency key is ignored; only the content key stops duplicates, and
     the 'replayed' flag is never raised, so a retry is indistinguishable from new data."""
 
-    def write_batch(self, table, rows, *, idempotency_key, source=None, high_water=None):
+    def write_batch(
+        self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None
+    ):
         res = super().write_batch(
             table, rows, idempotency_key=uniq("ignored"), source=source, high_water=high_water
         )
         return res
 
 
+class SourceBlindLake(FakeLake):
+    """Defect: a batch id replays whichever source committed it, so one writer can suppress
+    another's batch by using its id first."""
+
+    def write_batch(
+        self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None
+    ):
+        seen = self._db.execute(
+            "SELECT seq FROM _hnx_batches WHERE batch_id=?", (idempotency_key,)
+        ).fetchone()
+        if seen is not None:
+            from homelabnext.lake.protocol import WriteResult
+
+            return WriteResult(len(rows), 0, len(rows), True, str(seen[0]))
+        return super().write_batch(
+            table, rows, idempotency_key=idempotency_key, source=source, high_water=high_water
+        )
+
+
+class _ShortCircuitLake(FakeLake):
+    """Base of the mutants below: replays a committed batch whenever :meth:`_replays` says so,
+    without the lake's source judging."""
+
+    def _replays(self, stored_source, expect_source):  # pragma: no cover - overridden
+        return False
+
+    def write_batch(
+        self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None
+    ):
+        seen = self._db.execute(
+            "SELECT seq, source FROM _hnx_batches WHERE batch_id=?", (idempotency_key,)
+        ).fetchone()
+        if seen is not None and self._replays(seen[1], expect_source):
+            from homelabnext.lake.protocol import WriteResult
+
+            return WriteResult(len(rows), 0, len(rows), True, str(seen[0]))
+        return super().write_batch(
+            table,
+            rows,
+            idempotency_key=idempotency_key,
+            source=source,
+            high_water=high_water,
+            expect_source=expect_source,
+        )
+
+
+class StoredNoneUnjudgedLake(_ShortCircuitLake):
+    """Defect: a batch committed with no source replays for any write, so a writer that takes a
+    sourced writer's batch id without a source still suppresses it."""
+
+    def _replays(self, stored_source, expect_source):
+        return stored_source is None
+
+
+class ExpectedNoneUnjudgedLake(_ShortCircuitLake):
+    """Defect: expect_source is judged only against a recorded source, so a batch committed
+    with no source replays for a writer that only expects one."""
+
+    def _replays(self, stored_source, expect_source):
+        return stored_source is None and expect_source is not None
+
+
+class ExpectSourceIgnoredLake(FakeLake):
+    """Defect: expect_source is ignored, so a mark-less re-send is never judged."""
+
+    def write_batch(
+        self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None
+    ):
+        return super().write_batch(
+            table, rows, idempotency_key=idempotency_key, source=source, high_water=high_water
+        )
+
+
 MUTANTS = {
+    "stored-none-not-judged": Mutant(
+        StoredNoneUnjudgedLake,
+        "batch-id-bound-to-its-source",
+        "a batch committed with no source replays for a sourced write",
+    ),
+    "expected-none-not-judged": Mutant(
+        ExpectedNoneUnjudgedLake,
+        "replay-judged-by-expect-source",
+        "a batch committed with no source replays for a write that only expects a source",
+    ),
+    "expect-source-ignored": Mutant(
+        ExpectSourceIgnoredLake,
+        "replay-judged-by-expect-source",
+        "a re-send without its mark is never judged",
+    ),
+    "batch-source-ignored": Mutant(
+        SourceBlindLake,
+        "batch-id-bound-to-its-source",
+        "a batch id replays whichever source committed it",
+    ),
     "idempotency-key-ignored": Mutant(
         ReplayingLake, "replay-writes-nothing", "a retried batch key is treated as new"
     ),

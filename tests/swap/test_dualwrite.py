@@ -129,6 +129,68 @@ def test_a_late_replay_never_moves_a_components_source_mark_back():
     assert b.inner.describe("dns_activity").row_count == 2
 
 
+class LostAck(Flaky):
+    """Writes the next N batches, then raises as if the acknowledgement were lost."""
+
+    def write_batch(self, *a, **kw):
+        if self.fail:
+            self.fail -= 1
+            self.inner.write_batch(*a, **kw)
+            raise self.exc
+        return self.inner.write_batch(*a, **kw)
+
+
+def test_a_lost_ack_rerouted_and_replayed_without_the_mark_settles():
+    # B took b1 with source s, but its answer was lost, so b1 is parked; after the flip B takes
+    # b2 with the mark, and the replay of b1 (without the mark, being older) must settle as a
+    # replay of what B already holds: nothing parked, nothing blocking later batches
+    a, b = FakeLake(), LostAck(FakeLake(), fail=1)
+    w = DualWriter(a, b)
+    r = rows(2)
+    w.write_batch("dns_activity", [r[0]], idempotency_key="b1", source="s", high_water="100")
+    assert len(w.pending) == 1
+    w2 = w.rerouted(b, a)
+    w2.write_batch("dns_activity", [r[1]], idempotency_key="b2", source="s", high_water="200")
+    assert w2.replay_pending(owed_to=b) == 1
+    assert w2.pending == [] and w2.status()["unresolved"] == 0
+    assert b.inner.describe("dns_activity").row_count == 2
+    mark = b.inner.describe("dns_activity").committed["s"]
+    assert (mark.batch_id, mark.high_water) == ("b2", "200")
+
+
+def test_a_replay_without_the_mark_never_settles_on_another_writers_batch():
+    # the round-4 audit's sequence: b1 parked for B, the route flips, B takes b2 with the mark,
+    # then another writer commits b1 on B under its own source; the mark-less replay of b1 must
+    # not settle as "replayed" with its rows lost: it stays parked and is reported
+    a, b = FakeLake(), Flaky(FakeLake(), fail=1)
+    w = DualWriter(a, b)
+    r = rows(3)
+    w.write_batch("dns_activity", [r[0]], idempotency_key="b1", source="s", high_water="100")
+    w2 = w.rerouted(b, a)
+    w2.write_batch("dns_activity", [r[1]], idempotency_key="b2", source="s", high_water="200")
+    b.inner.write_batch("dns_activity", [r[2]], idempotency_key="b1", source="intruder")
+    assert w2.replay_pending(owed_to=b) == 0
+    assert [p.idempotency_key for p in w2.pending] == ["b1"]
+    assert w2.status()["unresolved"] == 1
+    failed = [d for d in w2.divergences if d.kind == "replay_failed"]
+    assert failed and "BatchSourceMismatch" in failed[-1].detail
+
+
+def test_expect_source_reaches_the_secondary_and_a_mismatch_there_is_a_divergence():
+    a, b = FakeLake(), FakeLake()
+    r = rows(2)
+    a.write_batch("dns_activity", [r[0]], idempotency_key="k", source="s")
+    b.write_batch("dns_activity", [r[1]], idempotency_key="k", source="intruder")
+    w = DualWriter(a, b)
+    res = w.write_batch("dns_activity", [r[0]], idempotency_key="k", expect_source="s")
+    assert res.replayed  # the primary holds k under s: its own batch
+    (d,) = w.divergences
+    assert d.kind == "secondary_error" and "BatchSourceMismatch" in d.detail
+    (p,) = w.pending
+    assert p.expect_source == "s" and p.to_dict()["expect_source"] == "s"
+    assert w.replay_pending() == 0 and w.status()["unresolved"] == 1  # still judged as s
+
+
 def test_discard_pending_needs_a_reason_and_returns_the_batches():
     a, b = FakeLake(), Flaky(FakeLake(), fail=1)
     w = DualWriter(a, b)

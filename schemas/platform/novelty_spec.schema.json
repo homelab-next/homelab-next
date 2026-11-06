@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/novelty_spec/1.0",
+  "x-draft": "ADR-0036 (proposed): read by homelabnext.novelty.spec (hnx novelty run); not frozen until ADR-0036 is accepted, so an overlay pins the core commit it is validated against",
+  "title": "Novelty spec",
+  "description": "What the behavioural novelty analyzer learns (ADR-0036 decision 2; docs/novelty.md): profiles, each one lake table, an entity column, one or more value columns (dotted paths validated against the table's schema), optional equality filters and the scoring parameters. The rules a schema cannot state (the table exists, every path is a scalar column of it, ids are unique, min_history_days <= learn_days) are in homelabnext.novelty.spec.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profiles"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/profile"
+      }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "table",
+        "entity_kind",
+        "entity",
+        "values",
+        "learn_days",
+        "half_life_days",
+        "score_hours",
+        "min_support",
+        "entity_min_samples",
+        "max_values_per_entity",
+        "emit_at",
+        "max_findings"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+          "description": "The profile's id, unique in the spec; written into every finding's profile column."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 400,
+          "description": "The question the profile asks, in words."
+        },
+        "table": {
+          "type": "string",
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9_]{0,62}$(?!\\n)",
+          "description": "The lake table read (a name load_schemas knows; checked by homelabnext.novelty.spec)."
+        },
+        "entity_kind": {
+          "type": "string",
+          "enum": [
+            "ip",
+            "host",
+            "user",
+            "domain",
+            "process",
+            "other"
+          ],
+          "description": "The shared entity namespace of the entity column (ADR-0036 decision 7), written into every finding's entity_kind so corroborate matches entities across sources."
+        },
+        "entity": {
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[a-z_][a-z0-9_]{0,62}(?:\\.[a-z_][a-z0-9_]{0,62}){0,3}$(?!\\n)",
+          "description": "The column path whose value is the entity (a top-level column or a dotted path into a struct, such as src_endpoint.ip): a scalar column that is not a timestamp."
+        },
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 255,
+            "pattern": "^[a-z_][a-z0-9_]{0,62}(?:\\.[a-z_][a-z0-9_]{0,62}){0,3}$(?!\\n)"
+          },
+          "description": "The column paths whose values the entity is learned to have (scalar, not timestamp)."
+        },
+        "where": {
+          "type": "object",
+          "maxProperties": 8,
+          "propertyNames": {
+            "maxLength": 255,
+            "pattern": "^[a-z_][a-z0-9_]{0,62}(?:\\.[a-z_][a-z0-9_]{0,62}){0,3}$(?!\\n)"
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024
+              },
+              {
+                "type": [
+                  "integer",
+                  "boolean"
+                ]
+              }
+            ]
+          },
+          "description": "Equality filters on scalar, non-timestamp column paths, bound as parameters; each value must have its column's type."
+        },
+        "time_column": {
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[a-z_][a-z0-9_]{0,62}(?:\\.[a-z_][a-z0-9_]{0,62}){0,3}$(?!\\n)",
+          "description": "The timestamp column windows are taken on (default time)."
+        },
+        "learn_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 366,
+          "description": "The UTC days of history before the scoring window that are learned from."
+        },
+        "half_life_days": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 366,
+          "description": "The age in days at which a day's count weighs half."
+        },
+        "score_hours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 168,
+          "description": "The scoring window [as_of - score_hours, as_of), never learned from in the same run."
+        },
+        "min_support": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Decayed support at or above which a value is normal for its entity."
+        },
+        "entity_min_samples": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Decayed entity total at which confidence reaches 1."
+        },
+        "max_values_per_entity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "Distinct values above which an entity is set aside and not scored: over it among learned values, it is reported once as high-cardinality (not a signal); over it in the scoring window alone, once as a burst (a signal)."
+        },
+        "emit_at": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "description": "The score at or above which a pair is a finding."
+        },
+        "max_findings": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "The most rows the profile emits per run; the number dropped is reported."
+        },
+        "min_history_days": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 366,
+          "description": "Days of history the table must hold in the learning window before the profile scores (default learn_days; at most learn_days); until then the profile is warming and emits nothing."
+        }
+      }
+    }
+  }
+}

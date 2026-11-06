@@ -10,7 +10,7 @@ argument_specs:
       open_webui_image: &image
         type: str
         description: "repository:tag@sha256:<digest> of the Open WebUI image."
-        default: "ghcr.io/open-webui/open-webui:v0.11.4@sha256:9591b13f13843c7721c2b8eaf7382846c81b3ffe126526d1888d1fed50c6a33f"
+        default: "ghcr.io/open-webui/open-webui:v0.12.3@sha256:a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def"
       open_webui_gateway_key_ref: &gwkey
         type: str
         description: "secret:<name> of this app's gateway key (a key of the gateway spec)."
@@ -45,8 +45,16 @@ argument_specs:
         default: 2g
       open_webui_extra_env:
         type: dict
-        description: "Extra non-secret Open WebUI settings; backend, Ollama and direct-connection settings are refused."
+        description: >-
+          Extra non-secret Open WebUI settings, each named in the role's allowlist
+          (open_webui_allowed_env); any other name is refused.
         default: {}
+      open_webui_public_url:
+        type: str
+        description: >-
+          https://host[:port] users reach it at (lower-case host, no path, not :443); sets
+          WEBUI_URL and makes it the only CORS origin. Empty keeps upstream's default.
+        default: ""
       open_webui_export_dir: &export
         type: path
         description: "Open-format export target."

@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `lake-query`
 - Contract: [lake-query capability reference](../capabilities/lake-query.md) ([[capabilities/lake-query|lake-query capability]]): operations, data shapes, conformance checks, adapters
-- Implementation: `trino` 450.0
+- Implementation: `trino` 484.0
 - Owner: data-team
 - Tags: data, query
 <!-- /hnx:gen -->
@@ -48,7 +48,7 @@ author: unknown
 ## Outputs
 
 <!-- hnx:gen:outputs -->
-- Metrics: `/metrics` on port 9091
+- Metrics: `/metrics`
 - MCP server `lake` (streamable-http, `/mcp`): read; owner data-team; active; catalog record `mcp/lake.yml`
 <!-- /hnx:gen -->
 

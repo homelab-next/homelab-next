@@ -1,0 +1,25 @@
+uid: string not null
+time: timestamp[us, tz=UTC] not null
+as_of: timestamp[us, tz=UTC] not null
+source: string not null
+source_kind: string not null
+profile: string not null
+entity_kind: string not null
+entity: string not null
+entity_column: string
+value: string
+value_columns: list<element: string>
+status: string not null
+score: float64
+confidence: float64
+support: float64
+entity_total: float64
+count: int64
+learn_since: timestamp[us, tz=UTC]
+learn_until: timestamp[us, tz=UTC]
+score_since: timestamp[us, tz=UTC]
+score_until: timestamp[us, tz=UTC]
+spec_digest: string
+message: string
+reasons: list<element: string>
+tlp: string

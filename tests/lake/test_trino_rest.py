@@ -250,7 +250,7 @@ def test_marks_and_ledger_survive_a_commit_conflict(lab):
     )
     mark = lake.describe("authentication").committed["s1"]
     assert (mark.batch_id, mark.high_water, mark.snapshot_id) == ("b1", "hw", res.snapshot_id)
-    again = lake.write_batch("authentication", [auth_row("c-1")], idempotency_key="b1")
+    again = lake.write_batch("authentication", [auth_row("c-1")], idempotency_key="b1", source="s1")
     assert again.replayed and again.snapshot_id == res.snapshot_id
 
 
@@ -348,7 +348,7 @@ def test_a_large_batch_is_split_into_inserts_under_the_query_length_limit():
         assert len(sent) > 1 and all(len(t) <= 250_000 for t in sent)
         assert lake.query("SELECT count(*) AS n FROM authentication") == [{"n": 1000}]
         assert lake.describe("authentication").committed["s"].batch_id == "big"
-        assert lake.write_batch("authentication", rows, idempotency_key="big").replayed
+        assert lake.write_batch("authentication", rows, idempotency_key="big", source="s").replayed
 
 
 def test_the_default_limit_is_below_trinos_default_max_length():
@@ -419,7 +419,9 @@ def test_the_batch_ledger_keeps_only_the_newest_entries(lab):
     for i in range(8):
         lake.write_batch("authentication", [auth_row(f"l-{i}")], idempotency_key=f"b{i}", source="s")  # fmt: skip
     assert len(_ledger_keys(lab)) == 3
-    assert lake.write_batch("authentication", [auth_row("l-7")], idempotency_key="b7").replayed
+    assert lake.write_batch(
+        "authentication", [auth_row("l-7")], idempotency_key="b7", source="s"
+    ).replayed
     old = lake.write_batch("authentication", [auth_row("l-0")], idempotency_key="b0")
     assert not old.replayed and old.rows_written == 0  # dropped entry: content-key dedup holds
     assert lake.describe("authentication").committed["s"].batch_id == "b7"  # the mark is kept

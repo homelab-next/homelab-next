@@ -225,6 +225,52 @@ and an entry that no longer excuses anything fails the lint.
   uses it, so the summed time can exceed a whole run's. Branch protection requires `test-ok`, the
   one stable check name. Locally, `make test` still runs the suite whole.
 
+## Keeping pins current
+
+Every third-party version is pinned exactly where it can be (the exceptions, such as uv and
+trivy, are reported as unpinned below): actions by commit SHA with a version comment,
+packages by hash (`constraints/ci.txt`), images by `tag@sha256`, downloaded tools by version and
+checksum. A release younger than 14 days is left alone (dependabot's `cooldown`, `make
+constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
+
+- **Dependabot** (`.github/dependabot.yml`) raises actions (this repository's workflows and the
+  example overlay's), the hashed constraints, the lab-in-a-box compose images and Dockerfiles,
+  and the pre-commit hook revisions. `tests/packaging/test_dependabot.py` fails on a listed
+  directory that does not exist and on a manifest no entry watches.
+- **The real stack on a bump**: a pull request that touches anything the lab-in-a-box reads (its
+  compose file, config and Dockerfiles, what the images copy in, `pyproject.toml`,
+  `constraints/`, the CI jobs that run it; the list is `LAB_PATHS` in `tools/lab_paths.py`, and
+  its test re-derives it from the compose file) runs CI's `lab-in-a-box` job, the nightly's smoke,
+  so an image or package bump, Dependabot's included, is green only once the stack has come up
+  and passed. It needs no secret, so a Dependabot run (read-only token, no Actions secrets) runs
+  it as is. The same decision starts `lab-gateway`, the optional LLM gateway profile (only the
+  gateway and what it depends on, 1280 MB; docs/llm-gateway.md) with the `inference` suite against
+  its target. `lab-ok` is the required check for both: it passes when both passed, or when nothing
+  they read changed and both were skipped. `make lab-smoke` runs the same locally. Most pull
+  requests run it, by design: the broker image copies nearly all of `homelabnext/`, `schemas/` and
+  `examples/`, so a change there changes the image under test. Do not narrow `LAB_PATHS` to save
+  runner time; a skipped stack is a green check that tested nothing. Step-level inputs (`setup.py`,
+  `capabilities.yml`, `registry/`) are listed by hand: a new step that reads another file adds it.
+- **Licences of images**: `make licence-check` needs a reviewed entry for every image a compose
+  stack runs or builds `FROM`, but a tag bump of a listed image passes it unread. A pull request
+  that moves an image (or a Dockerfile's base) to a new minor or major release re-reads that
+  release's licence and updates `tools/licences.yml` if it changed; say so in the pull request.
+- **One version, several places**: `tools/tests/test_pin_consistency.py` fails when copies
+  disagree (ruff in pre-commit and both constraints files, the lab NATS image and CI's
+  nats-server, an image pinned twice, CI's caddy and the example registries, an action at two
+  SHAs, a version a document names). A dependabot pull request that moves one copy fails it;
+  finish it in the same pull request.
+- **What dependabot cannot parse** (role `*_version`/`*_image` defaults, CI `*_VERSION` and
+  checksum pairs, `GO_VERSION`, the Terraform provider constraint, unpinned uv and trivy):
+  `tools/pin_freshness.py report` compares each with its upstream past the same cooldown, and the
+  weekly `pin-freshness` workflow keeps the result in one issue ("Pin freshness"). It never fails
+  a pull request. A new pin of that kind needs its upstream in `SOURCES` in that file
+  (`python3 tools/pin_freshness.py inventory --check`, also a unit test).
+- **Bumping by hand**: take an action's SHA from `git ls-remote https://github.com/OWNER/REPO
+  refs/tags/TAG^{} refs/tags/TAG` (the peeled `^{}` commit for an annotated tag), a binary's
+  checksum from the release's own checksums file, a Go tool's from `go mod download -json`
+  (its `Sum`, as hex), a wheel's from PyPI's file listing. Never type one in.
+
 ## Bug fixes carry a regression test
 
 A bug fix is a commit whose subject is a conventional-commit fix (`fix: ...`, `fix(scope): ...`) or

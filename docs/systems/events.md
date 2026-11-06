@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `events`
 - Contract: [events capability reference](../capabilities/events.md) ([[capabilities/events|events capability]]): operations, data shapes, conformance checks, adapters
-- Implementation: `nats` 2.10.20
+- Implementation: `nats` 2.15.1
 - Owner: data-team
 - Tags: bus, data
 <!-- /hnx:gen -->

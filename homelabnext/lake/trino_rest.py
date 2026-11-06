@@ -53,7 +53,7 @@ from typing import Any
 
 from .base import AdapterBase
 from .ddl import _trino_type, trino_ddl
-from .errors import LakeError, SchemaMismatch, UnknownTable
+from .errors import LakeError, SchemaMismatch, UnknownTable, check_replay_source, claimed_source
 from .protocol import Mark, TableInfo, WriteResult
 from .rest_catalog import CommitConflict, RestCatalog, current_schema_fields, current_snapshot
 from .sqlparams import check_params, to_qmark
@@ -129,6 +129,7 @@ def rest_schema_diffs(
 # ---------------------------------------------------------------- the lake
 class TrinoRestLake(AdapterBase):
     features: tuple[str, ...] = ()
+    sql_dialect = "struct"
 
     def __init__(
         self,
@@ -326,16 +327,24 @@ class TrinoRestLake(AdapterBase):
         idempotency_key: str,
         source: str | None = None,
         high_water: str | None = None,
+        expect_source: str | None = None,
     ) -> WriteResult:
         if not idempotency_key:
             raise LakeError("idempotency_key must be a non-empty string")
+        claimed = claimed_source(source, expect_source)  # refuses a contradictory pair
         s = self._schema(table)
         norm = normalize_rows(s, rows)  # the whole batch is validated before anything is sent
         meta = self._meta(s)
         prior = (meta.get("properties") or {}).get(PROP_BATCH + _digest(idempotency_key, 32))
         if prior is not None:
-            snap = json.loads(prior).get("snapshot_id")
-            return WriteResult(len(norm), 0, len(norm), True, snap)
+            entry = json.loads(prior)
+            check_replay_source(
+                s.name,
+                idempotency_key,
+                entry.get("source"),
+                claimed,
+            )
+            return WriteResult(len(norm), 0, len(norm), True, entry.get("snapshot_id"))
         fresh: list[dict[str, Any]] = []
         if norm:
             have = self._existing_keys(s, norm)
@@ -419,7 +428,8 @@ class TrinoRestLake(AdapterBase):
             seq = max((n for n, _ in ledger), default=0) + 1
             props = {
                 key: json.dumps(
-                    {"batch_id": batch_id, "snapshot_id": snap_id, "seq": seq}, sort_keys=True
+                    {"batch_id": batch_id, "snapshot_id": snap_id, "seq": seq, "source": source},
+                    sort_keys=True,
                 )
             }
             keep = self.ledger_size - 1  # the entry recorded now is the newest

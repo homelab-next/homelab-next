@@ -24,9 +24,6 @@
   "ansible/roles/needrestart/tasks/validate.yml": {
    "ntfy": 1
   },
-  "ansible/roles/open_webui/tasks/validate.yml": {
-   "ollama": 1
-  },
   "ansible/roles/open_webui/vars/main.yml": {
    "ollama": 4,
    "vllm": 1
@@ -219,9 +216,6 @@
    "example-4b": 1,
    "litellm": 3
   },
-  "compose/lab-in-a-box/config/nats/nats.conf": {
-   "stackstorm": 15
-  },
   "compose/lab-in-a-box/config/postgres/init/10-litellm.sh": {
    "litellm": 7
   },
@@ -241,9 +235,6 @@
   "compose/lab-in-a-box/config/trino/node.properties": {
    "trino": 1
   },
-  "compose/lab-in-a-box/config/uptime-kuma/": {
-   "uptime-kuma": 1
-  },
   "compose/lab-in-a-box/docker-compose.yml": {
    "example-27b": 1,
    "example-4b": 1,
@@ -252,7 +243,7 @@
    "openbao": 2,
    "prometheus": 10,
    "stackstorm": 4,
-   "trino": 10,
+   "trino": 5,
    "uptime-kuma": 3
   },
   "compose/lab-in-a-box/rehearsals/swap-lake-query.sh": {
@@ -1261,7 +1252,7 @@
    "prometheus": 3,
    "stackstorm": 7,
    "trino": 3,
-   "uptime-kuma": 5
+   "uptime-kuma": 2
   },
   "tests/compute/fixtures/bpg_proxmox_schema.json": {
    "proxmox": 4
@@ -1336,7 +1327,7 @@
    "proxmox": 5
   },
   "tests/conform/test_conform_lab_adapters.py": {
-   "ntfy": 26,
+   "ntfy": 25,
    "openbao": 35
   },
   "tests/conform/test_conform_lake_targets.py": {

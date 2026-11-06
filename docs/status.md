@@ -873,8 +873,8 @@ them from `tests/status/fixtures/`.
 
 | Product | How | Verified against | Where it runs in CI |
 |---|---|---|---|
-| Prometheus | kind `poll-prometheus` | `web/api/v1/api.go` (`QueryData`, `Alert`); a real 2.54.1 | fixtures (recorded) + lab-in-a-box nightly |
-| Uptime Kuma | kind `poll-uptime-kuma` | 1.23 `server/routers/status-page-router.js`, `model/{group,monitor,heartbeat,incident}.js`; a real 1.23.16 | fixtures (recorded) + lab-in-a-box nightly |
+| Prometheus | kind `poll-prometheus` | `web/api/v1/api.go` (`QueryData`, `Alert`) and `json_codec.go`, unchanged from 2.54.1 to 3.15.1 (the lab's); a real 2.54.1 | fixtures (recorded) + lab-in-a-box nightly |
+| Uptime Kuma | kind `poll-uptime-kuma` | `server/routers/status-page-router.js`, `model/{status_page,group,monitor,heartbeat,incident}.js` (1.23 and 2.5); a real 1.23.16 and 2.5.6 | fixtures (recorded) + lab-in-a-box nightly |
 | StackStorm | kind `poll-stackstorm` | `st2common/openapi.yaml` (`/api/v1/executions`), `ActionExecutionAPI`, `constants/action.py` | fixtures only: it needs MongoDB, RabbitMQ and a dozen st2 services, far over the 4 GB lab's remaining 256 MB |
 | Apache NiFi | kind `poll-nifi` | `FlowResource` (`/flow/status`, `/flow/bulletin-board`), `ControllerStatusDTO`, `BulletinBoardEntity`, `BulletinEntity`/`BulletinDTO` | fixtures only: its default JVM heap alone is 1 GB (`bootstrap.conf`), four times what the 4 GB lab has left |
 | LLM orchestrator | builtin `orchestrator-queue` | `internal/api/server.go` (routes), `internal/store` `QueueSummary` | fixtures only (the maintainer's own service, not in the lab) |
@@ -931,11 +931,15 @@ It reads the **public status page** API, which needs no login and no API key:
 `GET /api/status-page/heartbeat/<slug>` (each monitor's last heartbeats and its 24-hour uptime).
 Each monitor is an item named after it, from its newest heartbeat: up `ok`, down `fail`, pending
 `warn`, maintenance `unknown`, no heartbeat yet `unknown`; the summary carries the 24-hour uptime,
-the ping and the heartbeat's age. A pinned incident is one more item (`danger` fail, any other
-style warn). `states` overrides the four words (`{maintenance: ok}`). Publish only the monitors
-the hub should see on that page. Two things from the product itself: Kuma caches these answers
-(the page 5 minutes, the heartbeats 1 minute), so a reading can be that old; and Kuma 1.23 does
-not answer at all for an unknown slug, so a wrong slug reads as a timeout, not a 404.
+the ping and the heartbeat's age. Each pinned incident is one more item (`danger` fail, any other
+style warn) named `incident-<id>` after Kuma's incident id, from 1.x's single `incident` and 2.x's
+`incidents` list alike, so an incident keeps its item while others come and go and across the
+upgrade (`incident` only for one without an id). A monitor and an incident of the same item name
+are both kept, each suffixed with a digest of its labels, as are two monitors of one name. `states`
+overrides the four words (`{maintenance: ok}`). Publish only the monitors the hub should see on
+that page. Two things from the product itself: Kuma caches these answers (the page 5 minutes, the
+heartbeats 1 minute), so a reading can be that old; and an unknown slug is a 404 in Kuma 2.x
+(`Status Page Not Found`) but no answer at all in 1.23, where it reads as a timeout.
 
 ### StackStorm (`poll-stackstorm`)
 
@@ -1143,7 +1147,7 @@ service turns its tile red within 5 minutes, and with one source blackholed the 
 in under 2 seconds. Stage 1 proves the mechanisms with fakes (`pytest tests/status`). The
 lab-in-a-box runs **Prometheus** (scraping itself, with a warning and a critical rule that always
 fire) and **Uptime Kuma** (provisioned headlessly through its own socket.io API by
-`config/uptime-kuma/provision.js`: an admin user, a monitor that answers and one that cannot, the
+`config/uptime/provision.js`: an admin user, a monitor that answers and one that cannot, the
 public status page `lab`), and the nightly smoke (`smoke_checks.py`, checks `metrics` and
 `uptime`) polls both through the real `poll-prometheus` and `poll-uptime-kuma` collectors and
 expects exactly warn + fail alerts, the self-scrape target `ok`, and the two monitors `ok` and

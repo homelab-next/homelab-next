@@ -12,7 +12,7 @@ class LakeClient(Protocol):          # LakeQuery + LakeWriter + the rest
     def query(self, sql, params=None) -> list[dict]
     def named(self, name, params=None) -> list[dict]
     def describe(self, table) -> TableInfo            # columns, key, row_count, committed marks
-    def write_batch(self, table, rows, *, idempotency_key, source=None, high_water=None) -> WriteResult
+    def write_batch(self, table, rows, *, idempotency_key, source=None, high_water=None, expect_source=None) -> WriteResult
     def write(self, table, rows, *, batch_id) -> int  # interfaces.md alias
     def list_tables(self) -> list[str]
 ```
@@ -30,6 +30,12 @@ COALESCE, ROUND, LIKE, IN; timestamps compared with `'YYYY-MM-DD HH:MM:SS'` UTC 
 field access and engine-specific functions are outside it. Results are compared through
 `normalize_result_rows`.
 
+The two expressions library code needs beyond the subset, a struct field and the UTC date of a
+timestamp, come from `dialect.py`: each adapter that runs SQL declares `sql_dialect`
+(`json-text` for `FakeLake`, whose SQLite stores structs as JSON text; `struct` for every adapter
+over native struct columns), and only `CeilingReader.count_by` uses it. `CassetteLake` declares
+none, so a grouped read on it is refused rather than replayed in some other engine's SQL.
+
 ## Idempotent write: commit, then checkpoint (`checkpoint.py`)
 
 Encodes a real incident: a writer committed a batch, crashed before saving its read offset and,
@@ -44,6 +50,20 @@ restarted, replayed a rotated log tail from the stale offset, duplicating every 
    batch id, snapshot id and position. `Ingestor.start()` sees a lake mark newer than the checkpoint and fast-forwards.
 3. If the tail is read again anyway (lost checkpoint, expired snapshots, different batching),
    rows whose content key (`uid`) already exist are skipped. Replay is idempotent.
+
+A batch id is bound to the source that committed it (`errors.check_replay_source`, every
+adapter). A write is judged by the source it claims: its `expect_source` when given, else its
+`source`. It replays only a batch committed under exactly that source; one committed under
+another source, or under none (a legacy ledger entry without a source included), raises
+`BatchSourceMismatch` and writes nothing, so no writer can make a sourced writer's batch replay
+by committing its id first. A write naming both `source` and a different `expect_source` is refused
+(`errors.claimed_source`). `expect_source` separates judging from marking: the dual-write queue
+re-sends an older parked batch with `source=None` (so the mark never moves back) and
+`expect_source` set to its source, so another writer's batch under that id is a refusal it
+reports, not a silent replay. A fresh commit with `source=None` is recorded without a mark,
+whatever `expect_source` says; so if such a mark-less commit lands and the batch is later re-sent
+with its source, that re-send fails loudly by design. A write that claims no source at all is not
+judged and replays as before: such a writer can only drop its own rows.
 
 One writer per `(table, source)` is assumed.
 
@@ -77,7 +97,21 @@ One writer per `(table, source)` is assumed.
   its reader from `ceiling.reader_for(lake, reader, tlp_readers, schemas)`, at its declared
   ceiling (a reader with no declaration is refused); reading at `red` needs a `RedGrant` (who and
   why), and code outside this package runs raw SQL only through `raw_query`/`raw_named` with one
-  (the swap and parity tools hold theirs; `tests/lake/test_lake_read_boundary.py` enforces it). The query engine's
+  (the swap and parity tools hold theirs; `tests/lake/test_lake_read_boundary.py` enforces it).
+  `CeilingReader.count_by(table, entity, values, *, since, until, time_column="time", where=None,
+  limit=10000)` is the bounded grouped read (ADR-0036 decision 4): rows with
+  `since <= time_column < until`, counted per entity, values, UTC day and stored label, returned
+  as `GroupCount(entity, values, day, label, count)`. Column refs are dotted paths into the
+  table's schema (`dst_endpoint.port`); keys are scalars that are not timestamps; a row whose
+  entity or a value is null is not counted; `where` is equality with bound values. The ceiling's
+  filter is in the query and each group's label is checked again; more groups than `limit`
+  (at most 100,000) raise `TooManyGroups`, never a truncated answer. With no values it counts
+  per entity (or, with no entity either, per day: a table's history); `only_entities` and
+  `skip_entities` (at most 1,000 bound values) keep or drop entities; keys come back as their
+  column's type, whatever the engine returned. `CeilingReader.cardinality(table, entity, values,
+  *, since, until, above, ...)` names the entities with more than `above` distinct value tuples
+  (one row each, however many values), so a noisy entity can be set aside before a per-value
+  read. The query engine's
   own row filters for every other reader come from `hnx modules render` (`lake-access.json`).
 * An existing table that differs from the generated schema raises `SchemaMismatch`; nothing is written.
 * Endpoints come from `homelabnext.registry`; an unset endpoint raises `EndpointNotConfigured`.

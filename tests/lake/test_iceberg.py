@@ -90,6 +90,36 @@ def test_retried_batch_id_is_a_noop(make_lake):
     assert _count(lake) == {"n": 10, "d": 10}
 
 
+def test_a_batch_id_is_bound_to_the_source_that_committed_it(make_lake):
+    from homelabnext.lake import BatchSourceMismatch
+
+    lake = make_lake()
+    rows = synthetic.authentication(4)
+    lake.write_batch(TABLE, rows[:1], idempotency_key="b1", source="a")
+    with pytest.raises(BatchSourceMismatch):
+        make_lake().write_batch(TABLE, rows[1:2], idempotency_key="b1", source="b")
+    assert make_lake().write_batch(TABLE, rows[1:2], idempotency_key="b1").replayed  # no source
+    lake.write_batch(TABLE, rows[2:3], idempotency_key="b2")  # committed with no source
+    with pytest.raises(BatchSourceMismatch):
+        make_lake().write_batch(TABLE, rows[3:], idempotency_key="b2", source="a")
+    assert _count(lake) == {"n": 2, "d": 2}
+
+
+def test_a_write_naming_two_different_sources_is_refused(make_lake):
+    from homelabnext.lake import LakeError
+
+    lake = make_lake()
+    with pytest.raises(LakeError, match="cannot expect source"):
+        lake.write_batch(
+            TABLE, synthetic.authentication(1), idempotency_key="b1", source="a", expect_source="b"
+        )
+    assert _count(lake) == {"n": 0, "d": 0}
+    res = lake.write_batch(
+        TABLE, synthetic.authentication(1), idempotency_key="b1", source="a", expect_source="a"
+    )
+    assert res.rows_written == 1
+
+
 def test_content_key_dedupes_when_batch_id_differs_and_batching_changes(make_lake):
     lake = make_lake()
     lake.write_batch(TABLE, synthetic.authentication(10), idempotency_key="b1")

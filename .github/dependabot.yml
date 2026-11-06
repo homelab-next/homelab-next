@@ -1,16 +1,32 @@
 # SPDX-License-Identifier: Apache-2.0
 # Dependency updates.  Actions are pinned by commit SHA and dependabot keeps SHA and version
-# comment together.  The cooldown leaves a new release alone for two weeks before proposing it.
+# comment together.  The cooldown leaves a new release alone for two weeks before proposing it;
+# every entry keeps the same 14 days as `make constraints` (tests/packaging/test_dependabot.py).
 # A pip update edits the hashed constraints in place, hashes included, and that is enough; only
 # a bump of pip itself must land in both constraints/ci.txt and constraints/bootstrap.txt (the
 # pip block `make constraints` cuts from ci.txt), which tools/tests/test_constraints_bootstrap.py
 # checks.
+#
+# Some versions live in more than one place, and dependabot moves only the copy it can parse:
+# ruff (.pre-commit-config.yaml, constraints/ci-tools.in, constraints/ci.txt), the NATS image
+# and CI's NATS_SERVER_VERSION, one action at one SHA everywhere; and a Lakekeeper or Trino image
+# bump fails until METRICS_SERVED in that test lists the new version, read from its source.
+# tools/tests/test_pin_consistency.py fails such a one-sided pull request; finish it by hand
+# (`make constraints` for ruff).  What dependabot cannot parse at all (role defaults, CI version+checksum pairs,
+# GO_VERSION, the Terraform provider) is reported weekly by tools/pin_freshness.py.
+#
+# No gomod entry: there is no Go module yet.  tests/packaging/test_orchestrator_tree.py fails as
+# soon as one lands without its directories listed here.
 version: 2
 updates:
+  # One entry for every workflow tree, so a grouped update moves an action everywhere at once.
+  # Outside the root, dependabot reads the YAML files of the directory itself, so the example
+  # overlay is listed by its workflows directory.
   - package-ecosystem: github-actions
     directories:
       - "/"
       - "/.github/actions/python-deps"
+      - "/examples/private-overlay/.github/workflows"
     schedule:
       interval: weekly
     cooldown:
@@ -37,18 +53,56 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # The Go module and its pinned linters (orchestrator/tools/go.mod); it also raises the
-  # toolchain line that actions/setup-go reads.
-  - package-ecosystem: gomod
+  # The hook revisions in .pre-commit-config.yaml (SHA plus version comment, as for actions).
+  # Not ruff: its rev moves with constraints/ci-tools.in and ci.txt, through `make constraints`
+  # (and the pip entry); a hook-only bump would only fail tools/tests/test_pin_consistency.py.
+  - package-ecosystem: pre-commit
     directories:
-      - "/orchestrator"
-      - "/orchestrator/tools"
+      - "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      - dependency-name: "https://github.com/astral-sh/ruff-pre-commit"
+    commit-message:
+      prefix: "ci"
+
+  # The lab-in-a-box images (tag@sha256, updated in place).  Patch releases come as one pull
+  # request; a minor or major is its own, since each needs a lab rehearsal (`make lab-smoke`)
+  # and a fresh read of the image's licence: `make licence-check` passes a tag bump of a listed
+  # image unread, so the reviewer re-checks it and updates tools/licences.yml if it changed.
+  - package-ecosystem: docker-compose
+    directories:
+      - "/compose/lab-in-a-box"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      # built by the compose file itself, never pulled
+      - dependency-name: "hnx-lab-*"
+      # LiteLLM 1.107.0 was published with a credential stealer (2026-10-21); never propose it
+      - dependency-name: "litellm/litellm-database"
+        versions: ["1.107.0"]  # without the tag's leading "v", which dependabot refuses here
+    groups:
+      lab-patch:
+        update-types: ["patch"]
+    commit-message:
+      prefix: "deps"
+
+  # The base image of the lab's own two images: one group, so both keep the same pin.  A minor
+  # or major base bump (a new Python or Debian release) re-checks the licence as above.
+  - package-ecosystem: docker
+    directories:
+      - "/compose/lab-in-a-box/broker"
+      - "/compose/lab-in-a-box/fakes"
     schedule:
       interval: weekly
     cooldown:
       default-days: 14
     groups:
-      go:
+      lab-base:
         patterns: ["*"]
     commit-message:
       prefix: "deps"

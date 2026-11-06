@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `notify`
 - Contract: [notify capability reference](../capabilities/notify.md) ([[capabilities/notify|notify capability]]): operations, data shapes, conformance checks, adapters
-- Implementation: `ntfy` 2.11
+- Implementation: `ntfy` 2.32
 - Owner: platform-team
 - Tags: notify, ops
 <!-- /hnx:gen -->

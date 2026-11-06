@@ -840,15 +840,18 @@ client could read another's replies. The broker's relay and the bridge, verbatim
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
                          "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed.hnxlab.homelabnext.agent.job.failed",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
-                         "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.>",
+                         "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.*.*.*.*.*",
+                         "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-agent-job-failed.*.*.*.*.>",
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
                          "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned.hnxlab.homelabnext.decision.returned",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
-                         "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.>",
+                         "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.*.*.*.*.*",
+                         "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-decision-returned.*.*.*.*.>",
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
                          "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created.hnxlab.homelabnext.proposal.created",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
-                         "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.>"]},
+                         "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.*.*.*.*.*",
+                         "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-proposal-created.*.*.*.*.>"]},
    "subscribe": {"allow": ["_INBOX.hnx-st2-bridge.>"]}}}
 ]
 ```

@@ -119,3 +119,34 @@ def test_nested_and_list_values_roundtrip():
     r = f.query("SELECT src_endpoint, is_mfa FROM authentication ORDER BY uid LIMIT 1")[0]
     assert r["src_endpoint"]["ip"].startswith("198.51.100.") and r["is_mfa"] is True
     assert f.query("SELECT answers FROM dns_activity ORDER BY uid LIMIT 1") == [{"answers": []}]
+
+
+def test_a_batch_id_replays_only_for_the_source_that_committed_it():
+    """One writer must not suppress another's batch by committing its id first: the replay
+    is refused, never reported as the other's commit (the security re-audit's finding)."""
+    from homelabnext.lake import BatchSourceMismatch
+
+    lake = FakeLake()
+    rows = synthetic.authentication(2)
+    lake.write_batch("authentication", rows[:1], idempotency_key="b", source="a")
+    with pytest.raises(BatchSourceMismatch, match="committed by source 'a', not 'b'"):
+        lake.write_batch("authentication", rows[1:], idempotency_key="b", source="b")
+    assert lake.write_batch("authentication", rows[:1], idempotency_key="b", source="a").replayed
+    # a write that names no source is not judged: it replays (the dual-write queue re-sends a
+    # parked batch without its mark), and can only drop its own rows
+    assert lake.write_batch("authentication", rows[1:], idempotency_key="b").replayed
+    assert lake.describe("authentication").row_count == 1
+
+
+def test_a_batch_id_committed_without_a_source_does_not_replay_for_a_sourced_write():
+    """The other order: a writer that commits a sourced writer's batch id with no source must
+    not make that writer's batch replay silently (fail closed)."""
+    from homelabnext.lake import BatchSourceMismatch
+
+    lake = FakeLake()
+    rows = synthetic.authentication(2)
+    lake.write_batch("authentication", rows[:1], idempotency_key="b")
+    with pytest.raises(BatchSourceMismatch, match="committed by source None, not 'a'"):
+        lake.write_batch("authentication", rows[1:], idempotency_key="b", source="a")
+    assert lake.write_batch("authentication", rows[1:], idempotency_key="b").replayed
+    assert lake.describe("authentication").row_count == 1

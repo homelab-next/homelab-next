@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A standard-library client for the Iceberg REST catalog API (written against Lakekeeper 0.9).
+"""A standard-library client for the Iceberg REST catalog API (checked against Lakekeeper 0.14).
 
-Only what the lake adapter needs: the warehouse ``prefix`` from ``GET /v1/config``, listing a
+Only what the lake adapter needs: the warehouse ``prefix`` from ``GET /v1/config`` (under
+``overrides`` or ``defaults``; Lakekeeper 0.14 serves it under ``defaults``), listing a
 namespace's tables (with ``pageToken`` paging), loading a table's metadata, and committing
 ``set-properties`` / ``remove-properties`` updates guarded by ``assert-table-uuid``.  Errors use
 the spec's error model (``{"error": {"message", "type", "code"}}``): 404 becomes

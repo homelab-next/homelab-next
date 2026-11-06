@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `records-db`
 - Contract: none (`records-db` is not one of the conformance capabilities)
-- Implementation: `postgresql` 16.4
+- Implementation: `postgresql` 18.6
 - Owner: data-team
 - Tags: data, database
 <!-- /hnx:gen -->

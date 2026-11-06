@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """A loopback HTTP stand-in for the ntfy publish and poll API the ``notify`` adapter uses.
 
-Shaped after ntfy 2.11 (``server/server.go``, ``message_cache.go``): ``POST /<topic>`` with the
+Shaped after ntfy 2.32 (``server/server.go``, ``message_cache.go``): ``POST /<topic>`` with the
 ``Title``/``Priority``/``Tags`` headers (``X-`` forms too) and the body as the message, trimmed
-(``strings.TrimSpace``) and ``triggered`` when empty; ``GET /<topic>/json?poll=1&since=all``
-answering the cached messages as newline-delimited JSON in arrival order, with ``priority`` and
-``tags`` omitted when unset; ``GET /v1/health``.  Topics are ``[-_A-Za-z0-9]{1,64}``.
+(``strings.TrimSpace``) and ``triggered`` when empty; a title over 1024 bytes (HTTP 400, code
+40057) or tags over 512 bytes in all (40058) refused, as since 2.28;
+``GET /<topic>/json?poll=1&since=all`` answering the cached messages as newline-delimited JSON in
+arrival order, with ``priority`` and ``tags`` omitted when unset; ``GET /v1/health`` (with the
+node's ``role`` since 2.31).  Topics are ``[-_A-Za-z0-9]{1,64}``.
 
 ``duplicate=True`` stores every message twice (a defective channel); ``rewrite`` maps a stored
 body to another one (a lossy channel) - both for proving the suite sees the far side.
@@ -101,6 +103,8 @@ class FakeNtfy:
             "message": text.strip() or "triggered",
         }
         title = param("X-Title", "Title", "t")
+        if len(title) > 1024:  # header text is latin-1 decoded: one character per byte
+            return 400, {"code": 40057, "error": "invalid request: title is too large"}
         if title:
             msg["title"] = title
         prio = param("X-Priority", "Priority", "prio", "p")
@@ -109,6 +113,8 @@ class FakeNtfy:
                 return 400, {"code": 40007, "error": "invalid priority"}
             msg["priority"] = _PRIO[prio.lower()]
         tags = [t.strip() for t in param("X-Tags", "Tags", "tag", "ta").split(",") if t.strip()]
+        if sum(len(t) for t in tags) > 512:
+            return 400, {"code": 40058, "error": "invalid request: tags are too large"}
         if tags:
             msg["tags"] = tags
         if self.rewrite:
@@ -146,7 +152,7 @@ class FakeNtfy:
             def do_GET(self) -> None:
                 url = urllib.parse.urlsplit(self.path)
                 if url.path == "/v1/health":
-                    self._send(200, b'{"healthy":true}')
+                    self._send(200, b'{"healthy":true,"role":"active"}')
                     return
                 parts = url.path.strip("/").split("/")
                 q = dict(urllib.parse.parse_qsl(url.query))

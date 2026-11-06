@@ -200,8 +200,11 @@ writable export. That share is the file server's role, not this one.
   `Restart=on-failure` included, so a unit never serves bytes that changed after `model_store`
   verified them. It reads every byte: minutes per hundred GB, inside `TimeoutStartSec=1800`;
 - with `vllm_server_api_key_ref`, a `0600` environment file holding `VLLM_API_KEY`, so vLLM refuses
-  callers without the gateway's backend key. In the gateway spec, declare that backend with the
-  same `api_key` and port.
+  callers without the gateway's backend key on its `/v1` API. In the gateway spec, declare that
+  backend with the same `api_key` and port. The key does not guard every route: vLLM checks it
+  only under `/v1`, `/v2`, `/inference` and `/cohere`, so `/invocations`, `/tokenize`, `/pooling`,
+  `/score`, `/rerank` and `/classify` answer without it. The host firewall admitting only the
+  gateway is the control that keeps other callers out.
 
 `main` refuses a vLLM that is not `vllm_server_version`, and an instance whose model is not in the
 store. It also stops and removes every `hnx-vllm-*.service` the plan no longer lists, so the old
@@ -220,7 +223,7 @@ own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
 ### `open_webui`
 
 `open_webui` runs Open WebUI as a [compose_app](role-interface.md), pinned
-`ghcr.io/open-webui/open-webui:v0.11.4@sha256:9591b13f…`:
+`ghcr.io/open-webui/open-webui:v0.12.3@sha256:a537bbe1…`:
 
 - `OPENAI_API_BASE_URLS` is the gateway's registry URL plus `/v1` (`open_webui_gateway_id`,
   required). A backend id (`inference-*`, `vllm*`, `llama*`, `ollama*`) is refused, and the id is
@@ -231,12 +234,48 @@ own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
   `secret:llm-gateway/key-chat-ui`, the `chat-ui` key in `examples/model-serving/gateway.yml`).
   The gateway scopes it to the roles chat may use and limits it. The key goes only into compose's
   `0600` env file, never into `docker-compose.yml`.
-- Ollama, direct connections, sign-up, community sharing and the update check are off (fixed in
-  `vars/`), and `ENABLE_PERSISTENT_CONFIG=false`: the environment is the configuration on every
-  start, so a connection added in the admin UI does not outlive a restart. `open_webui_extra_env`
-  may not name any `*_BASE_URL*`, `*API_BASE*`, `*API_KEY*` or `*ENDPOINT*` variable,
-  `TOOL_SERVER_CONNECTIONS`, the web-search, RAG, image, audio and code-execution settings (each
-  calls an endpoint of its own), or any fixed setting; names are upper-case only.
+- Ollama, direct connections, sign-up, community sharing, the update check and external apps
+  (`ENABLE_APPS`, Open WebUI 0.12.1's channel bots that it keeps a live connection to) are off
+  (fixed in `vars/`), and `ENABLE_PERSISTENT_CONFIG=false`: the environment is the configuration
+  on every start, so a connection added in the admin UI, or external apps turned on there, does
+  not outlive a restart.
+- Tool servers (OpenAPI, MCP and terminal servers), workspace Tools and Functions are off:
+  `ENABLE_PLUGINS`, `ENABLE_TOOLS`, `ENABLE_FUNCTIONS` and `ENABLE_TOOL_SERVERS` are `false`, and
+  `ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS=false`. These are environment-only switches, so,
+  unlike external apps, an admin cannot turn them on in the UI even until the next restart. Tools
+  and Functions run admin-supplied Python in the container, and their requirements would be
+  pip-installed from the package index.
+- `open_webui_extra_env` is an allowlist: only the names in `open_webui_allowed_env` (in
+  `vars/`), which shape the UI and chat behaviour (`WEBUI_NAME`, `DEFAULT_MODELS`, banners,
+  `TASK_MODEL`, which generation tasks run, and a few more), are accepted; names are upper-case
+  only. Any name matching `open_webui_reserved_env_pattern` is refused as well, and a test holds
+  the two apart. The pattern covers every `*_BASE_URL*`, `*API_BASE*`, `*API_KEY*`, `*ENDPOINT*`
+  and `*_CLIENT_SECRET` variable, tool and terminal servers, plugins, pip, web search, RAG and
+  content extraction (Tika, Docling, MinerU), vector databases, file storage (S3, GCS, Azure),
+  webhooks, image, audio (Realtime voice included) and code execution, external apps (`APP_*`),
+  OAuth, OIDC, LDAP and SCIM, the database, MFA, `CUSTOM_NAME` (it fetches a logo from upstream
+  at start), sign-in and its cookies, CORS and `WEBUI_URL`; every fixed setting is refused by
+  name. Values are ordinary Ansible input and are templated like any other variable: the overlay
+  is trusted, and the role cannot see a value's text before Ansible renders it. Put no secret
+  lookup in `open_webui_extra_env`: a value there lands in `docker-compose.yml` and in the
+  unauthenticated `/api/config`. `GLOBAL_LOG_LEVEL` may be `INFO`, `WARNING`, `ERROR` or
+  `CRITICAL` only, since at `DEBUG` Open WebUI logs whole chat requests and replies. To use another harmless setting, read it in the pinned release and add it
+  to the allowlist.
+- Two admin-only routes still fetch any URL an admin gives them and return the body:
+  `POST /api/v1/tools/load/url` and `POST /api/v1/functions/load/url` (0.12.3
+  `routers/tools.py` and `routers/functions.py`). No setting gates them; with Tools and Functions
+  off, nothing fetched is ever run, but the fetch itself happens. The role cannot deny them (it
+  runs the container only, and the front door's routes for it are site configuration, not
+  generated here), so they are left open: the host egress rule below is what bounds where they
+  can reach. A site's front door may deny both paths.
+- `open_webui_public_url` (optional, `https://host[:port]`, no path) is the address users reach
+  it at through the front door. It sets `WEBUI_URL` and makes that the only `CORS_ALLOW_ORIGIN`.
+  Without it, upstream's default `*` applies, with credentials allowed, so any origin's script
+  could make credentialed requests a SameSite=lax cookie lets through (a sibling host on the
+  lab's parent domain is same-site). Set it. The host is lower case (punycode for a non-ASCII
+  name); an IPv6 literal, a path and the default port `:443` are refused (the websocket's origin
+  check is exact, and a browser never sends `:443`, so that URL would break the websocket). Once
+  it is set, any other origin, such as a tunnel or a second host name, loses the websocket too.
 - Egress: the role cannot restrict the container's network (`compose_app` has no networks
   setting, and the gateway runs on another host, so an internal-only compose network would cut it
   off too). Restrict it on the host firewall instead: in nftables' `DOCKER-USER` path, let the

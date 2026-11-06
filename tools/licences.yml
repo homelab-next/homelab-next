@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # The licence register (tools/licence_check.py; ADR-0011 decision 4): every Python package
-# constraints/*.txt pins and every image a compose/ stack runs, with its licence (an SPDX
+# constraints/*.txt pins and every image a compose/ stack runs or builds FROM, with its licence (an SPDX
 # expression: ids joined by AND or OR, no parentheses) and how this repository uses it. Owned in
 # CODEOWNERS with the rest of tools/: an entry here is a reviewed licence decision.
 #
@@ -9,14 +9,17 @@
 #                  anything homelabnext/ imports, any extra's dependency, and what they pull in.
 #          tool:   a program run as its own process that homelabnext/ never imports (the reason
 #                  says how it runs; NOTICE names a copyleft one).
-#          service: a container image a compose file runs (the reason says where its licence
-#                  is stated).
+#          service: a container image a compose file runs, or the base image of one it builds
+#                  (the reason says where its licence is stated).
 #   reason required for tool and service.
 #
 # The Python licences are the PyPI metadata of the pinned versions (License-Expression, else the
 # License field or classifier). A new pin or image fails `make licence-check` until it is listed
 # here, and an entry nothing pins any more fails it too; a version bump of a listed package is
 # left to CI's dependency review, which reads the licence of every changed dependency.
+# An image's tag bump passes this gate unread (nothing reviews an image's licence again), so a
+# minor or major image bump re-reads its licence in that pull request and updates the entry
+# (CONTRIBUTING.md, "Keeping pins current").
 python:
   annotated-types: {spdx: MIT, kind: linked}
   ansible-core: {spdx: GPL-3.0-or-later, kind: tool, reason: "run as ansible-playbook by the role tests and deploys; homelabnext/ never imports it (NOTICE, ADR-0011)"}
@@ -121,14 +124,15 @@ python:
   zstandard: {spdx: BSD-3-Clause, kind: linked}
 images:
   binwiederhier/ntfy: {spdx: Apache-2.0 OR GPL-2.0-only, kind: service, reason: "the notify service; the project is dual-licensed (its LICENSE and LICENSE.GPLv2)"}
-  dxflrs/garage: {spdx: AGPL-3.0-only, kind: service, reason: "the object store; run as its own service, nothing of it is shipped here (NOTICE)"}
+  dxflrs/garage: {spdx: AGPL-3.0-only, kind: service, reason: "the object store (v2.5.0: its LICENSE is still AGPL-3.0); run as its own service, nothing of it is shipped here (NOTICE)"}
   hnx-lab-broker: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
   hnx-lab-fakes: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
   litellm/litellm-database: {spdx: MIT, kind: service, reason: "the LLM gateway; MIT outside the project's enterprise/ directory, which has its own licence and is not used"}
   louislam/uptime-kuma: {spdx: MIT, kind: service, reason: "the uptime monitor; the project's LICENSE"}
-  nats: {spdx: Apache-2.0, kind: service, reason: "the event bus; the project's LICENSE"}
+  nats: {spdx: Apache-2.0, kind: service, reason: "the event bus; the project's LICENSE (v2.15.1: still Apache-2.0, unchanged since v2.10.29)"}
   openbao/openbao: {spdx: MPL-2.0, kind: service, reason: "the secrets store; the project's LICENSE"}
-  postgres: {spdx: PostgreSQL, kind: service, reason: "the catalog database; the PostgreSQL licence"}
+  postgres: {spdx: PostgreSQL, kind: service, reason: "the catalog database; the PostgreSQL licence (18.6: its COPYRIGHT is unchanged)"}
+  python: {spdx: PSF-2.0, kind: service, reason: "the base image the lab's broker and fakes images are built FROM (compose/lab-in-a-box/*/Dockerfile); the interpreter's licence, its Debian packages under their own"}
   prom/prometheus: {spdx: Apache-2.0, kind: service, reason: "the metrics service; the project's LICENSE"}
-  quay.io/lakekeeper/catalog: {spdx: Apache-2.0, kind: service, reason: "the lake catalog; the project's LICENSE"}
+  quay.io/lakekeeper/catalog: {spdx: Apache-2.0, kind: service, reason: "the lake catalog; the project's LICENSE (v0.14.1: still Apache-2.0, its LICENSE and Cargo.toml)"}
   trinodb/trino: {spdx: Apache-2.0, kind: service, reason: "the lake query engine; the project's LICENSE"}

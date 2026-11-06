@@ -184,12 +184,21 @@ Both backends point at the fake inference server, which serves `example-4b` and 
 under the aliases `inference-small` and `inference-large`.
 
 The gateway services are an optional compose profile. They are not part of `make lab-up` or the
-nightly:
+nightly. CI's `lab-gateway` job runs the sequence below (its compose settings in `COMPOSE_*`
+variables instead of `$lab`) on every pull request that can affect the
+lab (the same `tools/lab_paths.py` decision as `lab-in-a-box`, summed up by the same `lab-ok`
+check). It fails when the key provisioning exits non-zero, when the suite fails, or when any of
+the three `gateway-*` checks below did not pass (skipped or missing included), and it tears
+everything down whatever happened:
 
 ```bash
 lab="--env-file compose/lab-in-a-box/.env.example -f compose/lab-in-a-box/docker-compose.yml"
-# just the gateway and what it depends on (postgres, the fake inference): 1152 MB of mem_limit
-docker compose $lab --profile gateway up -d --build --wait llm-gateway llm-gateway-keys
+# the gateway and what it depends on (postgres, the fake inference), then its keys one-shot:
+# 1280 MB of mem_limit in all
+docker compose $lab --profile gateway up -d --build --wait llm-gateway
+# then the key provisioning one-shot in the foreground: its exit code is the provisioning's
+# (`up --wait` returns while a one-shot still runs, so it is not a verdict on the keys)
+docker compose $lab --profile gateway run --rm --build llm-gateway-keys
 set -a; . compose/lab-in-a-box/.env.example; set +a
 export HNX_ENDPOINT_LLM_GATEWAY=http://${LAB_BIND}:${LAB_PORT_GATEWAY}
 export HNX_SECRET_LLM_GATEWAY_MASTER_KEY=$LAB_GATEWAY_MASTER_KEY
@@ -199,15 +208,15 @@ hnx conform run inference --target compose/lab-in-a-box/targets/inference-gatewa
 
 | Profile | Services | mem_limit |
 |---|---|---|
-| `gateway` | `llm-gateway` (LiteLLM 1.103.3, `litellm-database` image, digest-pinned), on the lab's postgres as role `litellm`, which owns only schema `litellm` (created by `config/postgres/init/10-litellm.sh` when the volume is first initialised; password `LAB_GATEWAY_DB_PASSWORD`); `llm-gateway-keys` (one-shot `provision`) | 768 + 64 MB |
+| `gateway` | `llm-gateway` (LiteLLM 1.106.2, `litellm-database` image, digest-pinned), on the lab's postgres as role `litellm`, which owns only schema `litellm` (created by `config/postgres/init/10-litellm.sh` when the volume is first initialised; password `LAB_GATEWAY_DB_PASSWORD`); `llm-gateway-keys` (one-shot `provision`) | 896 + 64 MB |
 
 The default stack's 3584 MB budget does not include profile services, because `docker compose up`
-does not start them. `tests/compose` counts the profile's 832 MB separately and checks it against
+does not start them. `tests/compose` counts the profile's 960 MB separately and checks it against
 the total stated in the compose header. It allows only `llm-gateway*` services to use a profile,
 and it fails if a gateway service is moved out of its profile. The whole default stack plus
-`gateway` needs about 4.6 GB, more than the 4 GB nightly runner, so the profiles are not in the
+`gateway` needs about 4.5 GB, more than the 4 GB nightly runner, so the profiles are not in the
 nightly. Starting only the gateway services, as above, brings up just postgres and the fake
-inference with them: 1152 MB of `mem_limit` in all, inside the 4 GB runner (`tests/compose` sums
+inference with them: 1280 MB of `mem_limit` in all, inside the 4 GB runner (`tests/compose` sums
 that `depends_on` closure against the figure stated here).
 
 ## Conformance: the `gateway` feature
@@ -249,7 +258,7 @@ recommended:
   and virtual keys and per-key limits do not exist. `gateway-rejects-bad-key` catches this.
 - **The image is pinned by digest** (`litellm/litellm-database`), following one stable patch line
   and never `latest`. LiteLLM ships fast: 14 stable releases in the 14 days before the evidence
-  run. Pinning also blocks a repeat of the March 2026 PyPI compromise. Run the `inference` suite
+  run. Pinning also blocks a repeat of the March 2026 PyPI compromise and of 1.107.0 (October 2026, a credential stealer on PyPI and Docker Hub; `.github/dependabot.yml` ignores that version). Run the `inference` suite
   before every upgrade. A plain `pip install litellm[proxy]` does not include `prisma`, so a
   request with no key fails with a 500.
 - **`LITELLM_SALT_KEY` is set** and must not change once keys are stored.

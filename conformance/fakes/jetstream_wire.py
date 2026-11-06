@@ -2,8 +2,8 @@
 """An in-process stand-in for the NATS JetStream wire API, for the adapter's offline tests.
 
 It answers the requests :mod:`homelabnext.conform.adapters.nats_jetstream` sends, shaped as
-nats-server 2.10 shapes them (read from the server source, ``server/consumer.go``, ``stream.go``,
-``jetstream_api.go`` at v2.10.22):
+nats-server shapes them (read from the server source, ``server/consumer.go``, ``stream.go``,
+``jetstream_api.go``, at v2.10.22 and again at v2.15.1, the lab's version):
 
 * ``$JS.API.STREAM.{INFO,CREATE,DELETE,MSG.GET}`` (``seq``, ``next_by_subj``, ``last_by_subj``) and ``$JS.API.CONSUMER.{INFO,CREATE}`` (also the
   2.9+ ``CONSUMER.CREATE.<stream>.<durable>.<filter>`` form, whose filter must be the config's;
@@ -16,8 +16,19 @@ nats-server 2.10 shapes them (read from the server source, ``server/consumer.go`
 * pull requests (``CONSUMER.MSG.NEXT``, ``batch``/``no_wait``) with the redelivery queue served
   first, delivery counts, ``ack_wait`` expiry and ``max_deliver``: a message is dropped, with a
   ``MAX_DELIVERIES`` advisory, when the server next tries to deliver it past the limit;
-* ``$JS.ACK`` replies (9 tokens) taking ``+ACK``/``-NAK``/``+TERM`` (``+TERM`` publishes a
+* ``$JS.ACK`` replies taking ``+ACK``/``-NAK``/``+TERM`` (``+TERM`` publishes a
   ``MSG_TERMINATED`` advisory); advisories are stored by any stream capturing their subject.
+  Deliveries carry the v1 reply subject (9 tokens, ``$JS.ACK.<stream>.<consumer>.<delivered>.
+  <stream seq>.<consumer seq>.<timestamp>.<pending>``), or with ``ack_format="v2"`` the v2 one
+  (11 tokens, with ``<domain>.<account hash>`` after ``ACK``, the domain ``_`` when none is
+  set), which 2.14+ hands out with the ``js_ack_fc_v2`` feature flag; either form is accepted as
+  an ack, as 2.14+ accepts both (ADR-15);
+* strict API requests (2.12+, ``jetstream { strict: true }`` by default): a ``STREAM.CREATE``,
+  ``CONSUMER.CREATE`` or ``STREAM.MSG.GET`` body with a field the server's request type does not
+  have is refused (``invalid JSON`` 10025), where 2.10/2.11 only logged it.  ``strict=False`` is
+  the older behaviour.  Narrower than the server: only the top-level keys (and a consumer
+  request's ``config`` keys) are checked, and case-sensitively, where Go's decoder also refuses
+  an unknown nested field and matches field names case-insensitively.
 
 What it does not model: clustering, push consumers, flow control, limits other than the dedup
 window, and the server's lingering of a ``no_wait`` pull that cannot be filled (it simply ends the
@@ -39,6 +50,107 @@ from homelabnext.conform.adapters.nats_jetstream import WireError, WireMsg
 
 _MAX = "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES"
 _TERM = "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED"
+
+# The JSON fields of the request types nats-server 2.15.1 decodes strictly (``unmarshalRequest``,
+# DisallowUnknownFields): ``StreamConfig`` (stream.go), ``CreateConsumerRequest`` and
+# ``ConsumerConfig`` (consumer.go), ``JSApiMsgGetRequest`` (jetstream_api.go).  Pull requests
+# (``CONSUMER.MSG.NEXT``) are decoded leniently and are not checked.
+_STREAM_FIELDS = frozenset(
+    [
+        "name",
+        "description",
+        "subjects",
+        "retention",
+        "max_consumers",
+        "max_msgs",
+        "max_bytes",
+        "max_age",
+        "max_msgs_per_subject",
+        "max_msg_size",
+        "discard",
+        "storage",
+        "num_replicas",
+        "no_ack",
+        "duplicate_window",
+        "placement",
+        "mirror",
+        "sources",
+        "compression",
+        "first_seq",
+        "subject_transform",
+        "republish",
+        "allow_direct",
+        "mirror_direct",
+        "discard_new_per_subject",
+        "sealed",
+        "deny_delete",
+        "deny_purge",
+        "allow_rollup_hdrs",
+        "consumer_limits",
+        "allow_msg_ttl",
+        "subject_delete_marker_ttl",
+        "allow_msg_counter",
+        "allow_atomic",
+        "allow_msg_schedules",
+        "persist_mode",
+        "allow_batched",
+        "metadata",
+    ]
+)
+_CONSUMER_REQUEST_FIELDS = frozenset({"stream_name", "config", "action", "pedantic"})
+_CONSUMER_FIELDS = frozenset(
+    [
+        "durable_name",
+        "name",
+        "description",
+        "deliver_policy",
+        "opt_start_seq",
+        "opt_start_time",
+        "ack_policy",
+        "ack_wait",
+        "max_deliver",
+        "backoff",
+        "filter_subject",
+        "filter_subjects",
+        "replay_policy",
+        "rate_limit_bps",
+        "sample_freq",
+        "max_waiting",
+        "max_ack_pending",
+        "flow_control",
+        "headers_only",
+        "max_batch",
+        "max_expires",
+        "max_bytes",
+        "deliver_subject",
+        "deliver_group",
+        "idle_heartbeat",
+        "inactive_threshold",
+        "num_replicas",
+        "mem_storage",
+        "direct",
+        "sourcing",
+        "metadata",
+        "pause_until",
+        "priority_groups",
+        "priority_policy",
+        "priority_timeout",
+    ]
+)
+_MSG_GET_FIELDS = frozenset(
+    [
+        "seq",
+        "last_by_subj",
+        "next_by_subj",
+        "batch",
+        "max_bytes",
+        "start_time",
+        "multi_last",
+        "up_to_seq",
+        "up_to_time",
+        "no_hdr",
+    ]
+)
 
 
 def subject_matches(pattern: str, subject: str) -> bool:
@@ -108,13 +220,22 @@ class FakeJetStreamWire:
         *,
         drop_advisories=False,
         wall: Callable[[], float] = time.time,
+        ack_format: str = "v1",
+        domain: str = "",
+        strict: bool = True,
     ):
+        if ack_format not in ("v1", "v2"):
+            raise ValueError("ack_format is 'v1' or 'v2'")
         self._clock = clock
         self._wall = wall
         self._lock = threading.RLock()
         self.streams: dict[str, _Stream] = {}
         self.log: list[tuple[str, bytes, dict[str, str]]] = []
         self.drop_advisories = drop_advisories  # a defect, for proving the suite catches it
+        self.ack_format = ack_format
+        self.domain = domain or "_"  # the server's placeholder when no JetStream domain is set
+        self.account_hash = "hKkTAyOX"  # HNX's real hash on purpose: the lab ACL grants it
+        self.strict = strict
         self.closed = False
 
     # ---------------------------------------------------------------- Wire
@@ -170,6 +291,9 @@ class FakeJetStreamWire:
     def _api(self, what: str, payload: bytes) -> dict[str, Any]:
         body = json.loads(payload) if payload else {}
         t = what.split(".")
+        unknown = self._unknown_field(t, body)
+        if unknown is not None:
+            return _err(400, 10025, f'invalid JSON: json: unknown field "{unknown}"')
         if t[0] == "STREAM" and t[1] == "INFO":
             st = self.streams.get(t[2])
             if st is None:
@@ -207,6 +331,23 @@ class FakeJetStreamWire:
                 )
             return self._create_consumer(t[2], t[3], body)
         return _err(400, 10003, f"fake: unsupported API {what}")
+
+    def _unknown_field(self, t: list[str], body: dict[str, Any]) -> str | None:
+        """The first field of a strictly decoded request its server type does not have."""
+        if not self.strict or not isinstance(body, dict):
+            return None
+        checks: list[tuple[Any, frozenset[str]]] = []
+        if t[:2] == ["STREAM", "CREATE"]:
+            checks = [(body, _STREAM_FIELDS)]
+        elif t[:3] == ["STREAM", "MSG", "GET"]:
+            checks = [(body, _MSG_GET_FIELDS)]
+        elif t[:2] == ["CONSUMER", "CREATE"]:
+            checks = [(body, _CONSUMER_REQUEST_FIELDS), (body.get("config"), _CONSUMER_FIELDS)]
+        for doc, known in checks:
+            for key in doc if isinstance(doc, dict) else ():
+                if key not in known:
+                    return key
+        return None
 
     def _create_stream(self, name: str, cfg: dict[str, Any]) -> dict[str, Any]:
         if cfg.get("name") != name:
@@ -393,11 +534,18 @@ class FakeJetStreamWire:
         c.dseq += 1
         c.pending[sseq] = (c.dseq, now)
         m = st.msgs[sseq]
-        reply = f"$JS.ACK.{st.config['name']}.{c.name}.{dc}.{sseq}.{c.dseq}.0.0"
+        head = f"$JS.ACK.{st.config['name']}.{c.name}"
+        if self.ack_format == "v2":
+            head = f"$JS.ACK.{self.domain}.{self.account_hash}.{st.config['name']}.{c.name}"
+        reply = f"{head}.{dc}.{sseq}.{c.dseq}.0.0"
         return WireMsg(m.subject, m.data, dict(m.headers), reply)
 
     def _ack(self, reply: str, body: bytes) -> None:
         t = reply.split(".")
+        if len(t) >= 11:  # v2 (2.14+ accepts both forms): only this domain's and account's
+            if t[2:4] != [self.domain, self.account_hash]:
+                return
+            t = t[:2] + t[4:11]
         if len(t) != 9:
             return
         st = self.streams.get(t[2])

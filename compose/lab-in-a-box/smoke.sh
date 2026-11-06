@@ -18,7 +18,7 @@
 #   kind: tool
 #   purpose: Bring the lab-in-a-box up, check every service, run conformance where present, tear down.
 #   owner: lab-in-a-box
-#   trigger: [ci:nightly/lab-in-a-box, make:lab-smoke]
+#   trigger: [ci:nightly/lab-in-a-box, ci:ci/lab-in-a-box, make:lab-smoke]
 #   inputs: compose/lab-in-a-box settings (.env.example, .env, environment)
 #   outputs: build/lab-smoke/report.json (or --report-dir)
 #   exit:
@@ -92,6 +92,36 @@ conform_missing_suite() {
   grep -qE "^hnx conform: (suite for '$3' not found|unknown capability '$3')" "$2"
 }
 
+# conform_failure_summary LOG: what a failed `hnx conform run` said, for the job log (the full
+# log is only in the report directory): its verdict line and every failed, untested or erroring
+# check with its evidence, at most 20 lines of at most 300 characters; for output not in that
+# shape (a crash), its last 5 lines.  The value of every set variable whose name says it holds a
+# credential (SECRET, PASSWORD, TOKEN, _KEY) is masked, should an adapter ever echo one.
+conform_failure_summary() {
+  local out line name val
+  out="$(grep -E '^(FAIL|PASS|COULD NOT MEASURE|MISCONFIGURED)  |^  (\[(FAIL|UNTESTED)\] |ERROR |FAIL )' "$1" | head -n 20)"
+  [ -n "$out" ] || out="$(tail -n 5 "$1")"
+  while IFS= read -r line; do
+    for name in $(compgen -v); do
+      case "$name" in *SECRET*|*PASSWORD*|*TOKEN*|*_KEY) ;; *) continue ;; esac
+      val="${!name-}"
+      [ "${#val}" -ge 4 ] && line="${line//"$val"/***}"
+    done
+    printf 'smoke.sh:   %s\n' "${line:0:300}"
+  done <<<"$out"
+}
+
+# uptime_hint: after `up --wait` failed, one line when the uptime service is there but not
+# running healthy.  Its 2.x image is rootless (uid 1000); a volume kept from a 1.x lab (--keep,
+# make lab-up) is root-owned, so the server cannot write it and never turns healthy.
+uptime_hint() {
+  local state
+  state="$(dc ps -a --format '{{.State}} {{.Health}}' uptime 2>/dev/null | head -n 1)"
+  case "$state" in
+    ""|"running healthy") ;;
+    *) echo "smoke.sh: hint: uptime is not healthy ($state); if its uptime-data volume was kept from a 1.x lab it is root-owned and the rootless 2.x image cannot write it: make lab-down (docker compose down -v), then retry" >&2 ;;
+  esac
+}
 collect_logs() {
   dc ps -a >"$report_dir/ps.txt" 2>&1
   dc logs --no-color --tail 200 >"$report_dir/compose.log" 2>&1
@@ -132,6 +162,7 @@ up_args=(up -d --wait --wait-timeout 420)
 echo "smoke.sh: bringing the stack up"
 if ! dc "${up_args[@]}"; then
   echo "smoke.sh: the stack did not become healthy" >&2
+  uptime_hint
   status=1
   exit "$status"
 fi
@@ -190,6 +221,7 @@ if ${conform_cmd%% run*} --help >/dev/null 2>&1; then
         echo "$cap $subject no-suite" >>"$conform_caps_file"
       else
         echo "$cap $subject fail" >>"$conform_caps_file"
+        conform_failure_summary "$report_dir/conform-$cap.log"
         conform_note="$conform_note $cap:FAIL($rc)"
         conform_state="fail"
         status=1

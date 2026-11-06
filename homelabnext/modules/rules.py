@@ -1684,7 +1684,8 @@ def lake_readers(sel: dict[str, Doc]) -> dict[str, str]:
 
 def tlp_reader_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
     """The selection's ``tlp_readers`` (ADR-0033 decision 6): a reader listed twice, a label that
-    is not canonical, a writer below red, and, when the list is declared, a lake reader of the
+    is not canonical, a writer below red, a table-scoped ``writes`` on a reader that is not an
+    analyzer (ADR-0036), and, when the list is declared, a lake reader of the
     selected modules it leaves out (that reader would read nothing)."""
     if "tlp_readers" not in site:
         return []
@@ -1704,6 +1705,20 @@ def tlp_reader_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
             out.append(f"tlp_readers: {reader}: ceiling {entry.get('ceiling')!r} is not a label")
         elif entry.get("write") is True and entry["ceiling"] != "red":
             out.append(f"tlp_readers: {reader} writes rows, so its ceiling is red")
+        if "writes" in entry and not isinstance(entry["writes"], list):
+            out.append(f"tlp_readers: {reader}: writes is a list of table names")
+        elif "writes" in entry and not str(reader).startswith("analyzer:"):
+            out.append(f"tlp_readers: {reader}: only an analyzer: reader has writes (ADR-0036)")
+        elif "writes" in entry and entry.get("write") is True:
+            out.append(f"tlp_readers: {reader}: writes and write: true together")
+        elif "writes" in entry and entry.get("ceiling") == "red":
+            out.append(f"tlp_readers: {reader}: writes at a red ceiling (it must read below red)")
+        elif "writes" in entry:
+            from homelabnext.modules.lake_access import ANALYZER_TABLES
+
+            other = sorted(set(entry["writes"] or ()) - set(ANALYZER_TABLES))
+            if other:
+                out.append(f"tlp_readers: {reader}: writes {other}: not an analyzer-output table")
     for reader, what in sorted(lake_readers(sel).items()):
         if reader not in seen:
             out.append(

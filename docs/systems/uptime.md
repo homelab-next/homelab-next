@@ -24,7 +24,7 @@ author: unknown
 <!-- hnx:gen:what -->
 - Capability: `uptime`
 - Contract: none (`uptime` is not one of the conformance capabilities)
-- Implementation: `uptime-kuma` 1.23.16
+- Implementation: `uptime-kuma` 2.5.6
 - Owner: platform-team
 - Tags: monitoring, ops
 <!-- /hnx:gen -->
@@ -76,6 +76,22 @@ author: unknown
 
 <!-- hnx:todo:failure -->
 > TODO(human): symptom, likely cause, first check, fix: one row each.
+
+- **Healthy probe, but no UI, no login and no status page (Uptime Kuma 2.x).** Likely cause: the
+  data directory has neither `db-config.json` nor a 1.x `kuma.db`, so 2.x serves its first-run
+  "setup database" page and holds the server, and that page also answers the registry probe
+  (`/api/entry-page`, 200, `{"type": "setup-database"}`). First check: the probe's body, or
+  `/setup-database-info`. Fix: set `UPTIME_KUMA_DB_TYPE` (`sqlite`, or `mariadb` with
+  `UPTIME_KUMA_DB_HOSTNAME`, `..._PORT`, `..._NAME`, `..._USERNAME` and `..._PASSWORD`, each
+  `_FILE`-able) or ship `db-config.json` in the data directory before the first start. This is
+  a security requirement, not only an availability one: `/setup-database` takes no
+  authentication, so whoever reaches a fresh 2.x first chooses its database (one they control
+  included), a pre-auth takeover. The lab-in-a-box sets `UPTIME_KUMA_DB_TYPE: sqlite` and its
+  health check requires `type: entryPage`.
+- **A kept 1.x data volume does not start on the rootless image.** Likely cause: 1.x ran as root
+  here, so the volume is root-owned and the 2.x `-rootless` image (uid 1000) cannot write it;
+  2.x would also migrate it one way. Fix in the lab: `docker compose down -v`. Elsewhere: back
+  up `data/`, then follow the upstream v1 to v2 migration guide.
 <!-- /hnx:todo -->
 
 ## Depends on / depended on by

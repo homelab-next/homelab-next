@@ -37,10 +37,20 @@ lake_catalog: <name>                              # the catalog their rules reac
 
 `tlp_readers` (optional) gives every reader of the lake its TLP ceiling (ADR-0033 decision 6; see
 [TLP labels](tlp.md#tlp-labels-adr-0033)). A reader is `profile:<id>` (an agent), `module:<id>` (a
-module's query consumer), `user:<name>` or `group:<name>` (people signing in to the query engine);
+module's query consumer), `analyzer:<name>` (a platform analyzer), `user:<name>` or `group:<name>`
+(people signing in to the query engine);
 `ceiling` is a canonical label; `write: true` also lets it insert and delete, never update (an
 update could rewrite a stored label), and only a `red` reader may write: a deliberate choice, since
-a writer sees what it writes. `lake_catalog` (required with the list) is the engine's name for the
+a writer sees what it writes. The one exception is an `analyzer:<name>` reader (a platform
+analyzer such as the novelty analyzer, ADR-0036, which amends ADR-0033 decision 6), which may
+carry `writes: [<table>, ...]`: the declared analyzer-output tables it appends its own derived
+rows to (today `novelty_finding`, in the core's `ocsf` namespace), `INSERT` only (no `DELETE` or
+`UPDATE`), at any ceiling. The engine applies the row filter to an insert too, so it refuses a row
+labelled above the analyzer's ceiling; a label set lower than the row's inputs it cannot see, so
+the analyzer's code labels each row with the strictest label it read, and the grant is bounded to
+appending to the named tables. No other kind may have `writes`, nor an
+analyzer `writes` and `write: true` together, nor `writes` at a `red` ceiling, so its own-table
+rule always carries a row filter (schema, loader and renderer). `lake_catalog` (required with the list) is the engine's name for the
 lake catalog. With the list, the loader requires every selected module that requires or prefers
 `cap:lake-query`, and every selected agent with a `cap:lake-query` need, to be listed (an unlisted
 one would read nothing), and refuses a reader listed twice or a writer below `red`; without it,
@@ -48,24 +58,31 @@ and with lake readers selected, it notes that no row is filtered by its label.
 `hnx modules render` writes `lake-access.json`, the query engine's file-based access rules
 (`homelabnext.modules.lake_access`, first match wins):
 
-- `catalogs`: each reader reaches `lake_catalog` only (read-only, a writer all); every other
+- `catalogs`: each reader reaches `lake_catalog` only (read-only; a writer, or an analyzer with
+  `writes`, all, which the table rules then narrow); every other
   catalog, the engine's own system catalog included, is `none`;
 - `schemas`: nobody owns a schema through these rules; schema changes (a table created, the
   `tlp` column added) run under the lake's own administrator, outside this file;
 - `tables`: per reader, the catalog's `information_schema` (metadata the engine narrows to what
   the reader may see), then every table, `SELECT` with the row filter
   `coalesce(tlp, 'red') IN (<labels at or below the ceiling>)` below `red` and no filter at `red`;
-  a table without a `tlp` column cannot be read below `red` (the filter fails the query);
+  a table without a `tlp` column cannot be read below `red` (the filter fails the query); an
+  analyzer's `writes` tables come first, each `SELECT` and `INSERT` with the same filter;
+- `procedures`: no `CALL` procedure for anyone. A table procedure (`ALTER TABLE ... EXECUTE`)
+  passes file-based access control's own check; the query engine refuses it on a table with a
+  row filter. Every rule below `red` has one, so only a `red` reader (whose rule has no filter)
+  could run one, which is why an analyzer with `writes` must be below `red`;
 - `queries`: everyone may run queries; seeing or stopping another's is not granted.
 
 A principal matching several rules (a user in a group) gets the first, so user rules come before
 group rules and each tier runs from the lowest ceiling up: the most restrictive applies, whatever
 order the list was written in. One exception to "most restrictive": a principal that has an entry
-of its own (`user:`, `profile:` or `module:`) is judged by that entry, even when it is also in a
+of its own (`user:`, `profile:`, `module:` or `analyzer:`) is judged by that entry, even when it is also in a
 group with a stricter one, because user rules come before group rules; give such a principal the
 ceiling it should have in its own entry. A principal no rule names reads nothing. An operator step: the
 lake-query adapter must sign each reader in to the engine as the user named by its whole reader id
-(`profile:x`, `module:y`, `user:alice`), and a `group:` reader is the engine group named after the
+(`profile:x`, `module:y`, `analyzer:novelty`, `user:alice`; an `analyzer:` is a platform
+analyzer such as the novelty analyzer, ADR-0036), and a `group:` reader is the engine group named after the
 colon. Any change to the list or the catalog is human-approve (`hnx site review-tier`).
 
 `lab_table_namespaces` (optional) lists the lake namespaces that are the lab's own, outside every
