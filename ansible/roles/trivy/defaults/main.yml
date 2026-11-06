@@ -6,7 +6,9 @@
 # running container where docker or podman runs. For an offline lab, trivy_skip_db_update keeps
 # the database as it is and trivy_db_repository points at a mirror. Health fails when the run is
 # stale or more than trivy_max_findings findings were reported.
-trivy_version: ""
+# pinned and held; v0.76.1 was tagged 2026-10-21 (past the 14-day cooldown); tools/pin_freshness.py
+# tracks it, and the upgrade entry point moves it
+trivy_version: "0.76.1"
 trivy_repository: "https://get.trivy.dev/deb"
 # The primary-key fingerprints the repository's signing key (<repository>/public.key) must carry:
 # "trivy-repo (Aqua Security)", as published in the vendor's aquasecurity/trivy-repo

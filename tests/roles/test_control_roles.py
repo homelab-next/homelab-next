@@ -2381,6 +2381,8 @@ def _first(tmp_path):
         "overrides": [
             {"trivy_severity": "high"},
             {"trivy_version": "0.60"},
+            # pinned only: an empty version (the repository's newest) is refused for every profile
+            {"trivy_version": ""},
             {"trivy_db_repository": "mirror db"},
             {"trivy_repository": "http://mirror.example.internal/deb"},
             {"trivy_key_fingerprints": []},
@@ -2392,6 +2394,27 @@ def _first(tmp_path):
 def test_trivy_refuses_bad_inputs(first):
     results, _ = first
     assert all(f and "trivy: an OnCalendar schedule" in m for f, m in results), results
+
+
+def test_trivy_installs_the_pinned_version_and_holds_it():
+    import re
+
+    import yaml
+
+    role = Path(__file__).resolve().parents[2] / "ansible" / "roles" / "trivy"
+    tasks = yaml.safe_load((role / "tasks" / "main.yml").read_text(encoding="utf-8"))
+    installs = [t["ansible.builtin.apt"] for t in tasks if "ansible.builtin.apt" in t]
+    assert [i["name"] for i in installs if "trivy" in str(i.get("name"))] == [
+        "trivy={{ trivy_version }}"
+    ]
+    holds = [
+        t["ansible.builtin.dpkg_selections"]
+        for t in tasks
+        if "ansible.builtin.dpkg_selections" in t
+    ]
+    assert holds == [{"name": "trivy", "selection": "hold"}]
+    defaults = yaml.safe_load((role / "defaults" / "main.yml").read_text(encoding="utf-8"))
+    assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", defaults["trivy_version"])
 
 
 # ---------------------------------------------------------------- auditd

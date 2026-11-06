@@ -27,16 +27,16 @@
     signed_by: "{{ trivy_keyring }}"
 
 # A pinned package is held; moving it to a new pin must be allowed to change that one package.
-- name: Install Trivy (the pinned version, or the repository's newest)
+- name: Install Trivy (the pinned version)
   ansible.builtin.apt:
-    name: "{{ 'trivy=' ~ trivy_version if trivy_version else 'trivy' }}"
+    name: "trivy={{ trivy_version }}"
     allow_change_held_packages: true
     update_cache: true
 
-- name: Hold a pinned version, release an unpinned one
+- name: Hold the pinned version
   ansible.builtin.dpkg_selections:
     name: trivy
-    selection: "{{ 'hold' if trivy_version else 'install' }}"
+    selection: hold
 
 - name: Write the configuration, the scan script and its timer
   ansible.builtin.include_tasks: config.yml

@@ -9,8 +9,8 @@ argument_specs:
         required: true
       trivy_version: &version
         type: str
-        description: "Pinned package version (held; the pinned install may move it); empty = the repository's newest, not held."
-        default: ""
+        description: "Pinned package version x.y.z, installed and held (the pinned install may move it); required, never empty."
+        default: "0.76.1"
       trivy_repository: &repo
         type: str
         description: "Vendor package repository root (https); a lab mirror may stand in for it."

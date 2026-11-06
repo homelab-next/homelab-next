@@ -3,6 +3,6 @@
   ansible.builtin.assert:
     that:
       - trivy_target_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
-      - trivy_version == '' or trivy_target_version is version(trivy_version, '>')
-    fail_msg: "target {{ trivy_target_version }} is not a newer x.y.z than {{ trivy_version or 'the unpinned install' }}"
+      - trivy_target_version is version(trivy_version, '>')
+    fail_msg: "target {{ trivy_target_version }} is not a newer x.y.z than {{ trivy_version }}"
   tags: [upgrade]
