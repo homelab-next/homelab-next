@@ -293,7 +293,7 @@ Each is a deliberately broken fake (`hnx conform run lake-query --target broken:
 Target-file factories for the lake capabilities on real products.
 
 - Target file: [`compose/lab-in-a-box/targets/lake-query.yml`](../../compose/lab-in-a-box/targets/lake-query.yml) (target `lab-in-a-box`)
-- Factory: `make_lake(*, domain: str | None=None, resolver: Any=None, namespace: str='auto', trino_catalog: str='iceberg', warehouse: str | None=None, warehouse_env: str='LAB_WAREHOUSE', user: str='hnx-conform', api_root: str='/catalog', allow_plaintext: bool=False) -> TrinoRestLake`
+- Factory: `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', **clients: Any) -> TrinoRestLake`
 - Config in the target: `{domain: example.internal, namespace: auto, trino_catalog: iceberg}`
 
 <details><summary>Full adapter notes</summary>
@@ -309,6 +309,24 @@ through `query`), so both targets use this one factory.
 Every subject of one run shares a scratch namespace `hnx_conform_<run>` (created with the pinned
 tables on first use), so a run never sees another run's rows.  Plain `http` is accepted only to
 a loopback address unless `allow_plaintext=True` (the same rule as `TrinoLake`).
+
+**Every reader signs in to the engine** (ADR-0033 decision 6: the row filters of
+`lake-access.json` are keyed on the session user, so a user named by a bare header would make
+every ceiling honour-system).  `credential` is a secret reference (`secret:<name>`, never a
+value), delivered in `HNX_SECRET_<NAME>` (`homelabnext.registry.model.secret_env_name`):
+the reader's password in the engine's per-reader password file.  The engine client sends it as
+HTTP Basic for the reader's login (`homelabnext.lake.trino_http.engine_login`;
+`reader_secret` is the conventional name).  `catalog_credential` is a second secret
+reference, the catalog's bearer token, when the catalog asks for one.  With a credential, both
+clients send through `homelabnext._http.credential_opener` (`ca_file` for a private CA):
+no redirect is followed and no proxy is used, so the credential reaches only the endpoint.  A
+credential goes over https only, `allow_plaintext` or not, except to loopback; a catalog token
+a header cannot carry (a stray newline) is refused naming its secret, never quoting it.
+
+**A `lake-query` endpoint that is not loopback is refused without a credential**, outright:
+there is no flag that reads a lab's lake unauthenticated.  Only the lab-in-a-box, bound to
+loopback, runs without one.  The value is read from its variable when the lake is built (a
+missing one fails at once) and again at every request, so no object holds it.
 
 </details>
 
@@ -347,7 +365,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    def make(**config) -> LakeClient: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.lake:make_lake` is `make_lake(*, domain: str | None=None, resolver: Any=None, namespace: str='auto', trino_catalog: str='iceberg', warehouse: str | None=None, warehouse_env: str='LAB_WAREHOUSE', user: str='hnx-conform', api_root: str='/catalog', allow_plaintext: bool=False) -> TrinoRestLake`.
+   The factory this repository ships: `homelabnext.conform.adapters.lake:make_lake` is `make_lake(*, namespace: str='auto', trino_catalog: str='iceberg', **clients: Any) -> TrinoRestLake`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

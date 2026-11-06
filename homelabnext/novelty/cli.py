@@ -16,8 +16,12 @@ to the rules ``lake-access.json`` is rendered under.  Writing needs the reader's
 name ``novelty_finding``.  The summary is labelled at the analyzer's ceiling (``tlp``).  ``LAKE`` is either ``--fixture FILE`` (a YAML or
 JSON mapping of table name to rows, loaded into the in-memory fake lake: examples and tests) or
 ``--domain D --namespace NS --warehouse WH`` (the lab's ``lake-query`` and ``lake-catalog``
-endpoints, resolved from the registry's domain, signing in as ``analyzer:novelty``).  There is
-no clock: ``--as-of`` is required, so a run is replayable.
+endpoints, resolved from the registry's domain).  Against a live lake the analyzer signs in to the
+engine as ``analyzer:novelty`` (login ``analyzer.novelty``) with its password from the secret
+``--credential`` names (default the secret ``lake-query/readers/analyzer.novelty``, delivered in
+``HNX_SECRET_LAKE_QUERY_READERS_ANALYZER_NOVELTY``; unset is a usage error before anything is
+sent); ``--catalog-credential SECRET`` adds the catalog's bearer token and ``--ca-file`` a private
+CA.  There is no clock: ``--as-of`` is required, so a run is replayable.
 
 Exit: 0 done, 1 a profile failed, 2 usage, spec, site or lake error.
 """
@@ -56,6 +60,15 @@ def _parser() -> argparse.ArgumentParser:
         src.add_argument("--domain", help="the registry domain the lake endpoints resolve under")
         p.add_argument("--namespace", help="with --domain: the lake namespace (default ocsf)")
         p.add_argument("--warehouse", help="with --domain: the catalog's warehouse")
+        p.add_argument(
+            "--credential",
+            help="with --domain: the secret holding the analyzer's engine password "
+            "(default secret:lake-query/readers/analyzer.novelty)",
+        )
+        p.add_argument(
+            "--catalog-credential", help="with --domain: the secret holding the catalog's token"
+        )
+        p.add_argument("--ca-file", help="with --domain: a private CA for the lake endpoints")
 
     run = sub.add_parser("run", help="score every profile of a spec for --as-of")
     run.add_argument("--spec", required=True, help="the novelty spec (YAML or JSON)")
@@ -103,13 +116,16 @@ def _lake(args: argparse.Namespace, schemas: Any) -> Any:
         return lake
     if not args.warehouse:
         raise _Usage("--domain needs --warehouse")
-    from homelabnext.conform.adapters.lake import make_lake
+    from homelabnext.conform.adapters.lake import make_lake, reader_secret
 
     return make_lake(
         domain=args.domain,
         namespace=args.namespace or "ocsf",
         warehouse=args.warehouse,
         user=READER,
+        credential=args.credential or reader_secret(READER),
+        catalog_credential=args.catalog_credential,
+        ca_file=args.ca_file,
     )
 
 

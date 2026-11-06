@@ -1,6 +1,6 @@
 ---
 summary: 'Module manifest reference: TLP labels on module data, model-role ceilings, labelled model requests and the ceilings of agent profiles and MCP servers.'
-summary_of: outline:sha256:ff3aa80e8d993379
+summary_of: outline:sha256:d3f95c56a1c68f08
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Modules: TLP labels
@@ -43,6 +43,38 @@ module outside `homelabnext/lake/` that imports the lake library and calls a cli
 exports declare their TLP ceilings, and its public view and exports serve only what its release
 transforms keep ([status](../status.md#tlp-ceilings-and-release-transforms)). Model roles, model
 requests, agent profiles and MCP servers carry their ceilings and labels (below).
+
+### Engine sign-in
+
+The engine's row filters are keyed on the session user, so they hold only when that user is
+authenticated: a reader named by a bare `X-Trino-User` header would let any process that reaches
+the port read as a `red` reader. Every reader therefore signs in to the engine with its own
+password (the engine's password authenticator, one entry per reader in its password file).
+`homelabnext.conform.adapters.lake.make_lake(..., credential=)` takes the reader's password as a
+secret reference (`secret:<name>`, conventionally the secret `lake-query/readers/<login>`, delivered
+in `HNX_SECRET_LAKE_QUERY_READERS_<LOGIN>`) and sends it as HTTP Basic on every request, with no
+redirect followed and no proxy used (`catalog_credential=` does the same for the catalog's bearer
+token, `ca_file=` names a private CA). A `lake-query` endpoint that is not loopback is refused
+without a credential, with no override; only the loopback-bound lab-in-a-box runs without one.
+
+HTTP Basic cannot carry a colon in the user part, so a reader signs in with its id's first `:`
+written as `.` (`analyzer:novelty` signs in as `analyzer.novelty`;
+`homelabnext.lake.trino_http.engine_login`), and the engine maps the login back to the reader id
+with a user-mapping rules file (the engine's single-pattern setting keeps only the first group, so
+it cannot rebuild the id): first the pattern `(profile|module|analyzer|user)\.(.+)`, user `$1:$2`,
+so the session user `lake-access.json` names is the whole reader id, then the pattern `(.*)`,
+user `$1`, so a login with no prefix stays itself (a login no rule matches is refused). The
+conformance and swap-rehearsal runs sign in as such a login, `hnx-conform` by default (the
+rehearsal's `--user`), with the secret `lake-query/readers/hnx-conform` (`--credential`). `hnx
+novelty` signs in as `analyzer:novelty`.
+
+Signing in is not enough on its own: the client still names its session user in a header, and a
+signed-in reader that names another (a `red` reader) would get that reader's row filters. So
+`lake-access.json` denies impersonation to everyone (`impersonation`: nobody may act as another
+user), and the operator adds no rule that allows it. A credential goes over https only (except to
+loopback), whatever `allow_plaintext` says. The catalog is a second way to the rows: one reachable
+off loopback must require its token and hand storage credentials to the engine alone, or a reader
+reads the data files and skips every filter (an operator step, `TODO.md` §4).
 
 ### Model-role ceilings (ADR-0033 decision 10)
 
