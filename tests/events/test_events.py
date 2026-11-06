@@ -13,6 +13,7 @@ from homelabnext.events import (
     FakeForwarder,
     FakeForwarderServer,
     HttpForwarder,
+    MisconfiguredError,
     PermanentError,
     Publisher,
     RetryPolicy,
@@ -365,7 +366,10 @@ def test_http_status_mapping():
     for code in (429, 500, 503):
         with pytest.raises(TransientError):
             hf(http_err(code)).forward(ev)
-    for code in (400, 401, 404, 409):
+    for code in (401, 403, 404, 421):
+        with pytest.raises(MisconfiguredError):
+            hf(http_err(code)).forward(ev)
+    for code in (400, 409, 410):
         with pytest.raises(PermanentError):
             hf(http_err(code)).forward(ev)
     with pytest.raises(TransientError):
@@ -560,3 +564,121 @@ def test_state_store_rewrite_is_one_locked_write(tmp_path):
     before = (tmp_path / "s.json").stat().st_mtime_ns
     s.rewrite(lambda d: False)  # no change: no write
     assert (tmp_path / "s.json").stat().st_mtime_ns == before
+
+
+# ------------------------------------------------ misconfiguration is retryable (F31)
+def test_a_401_keeps_the_event_pending_and_a_rerun_delivers_it(store):
+    with FakeForwarderServer(require_auth="Bearer good") as srv:
+        p = pub(HttpForwarder(srv.url), store, policy=RetryPolicy(max_attempts=3, base_s=0))
+        r = p.publish(task_event())
+        assert (r.status, r.attempts) == ("pending", 1)  # no point retrying a bad credential
+        assert p.pending_ids() == [r.id]
+        fixed = pub(HttpForwarder(srv.url, auth=lambda: "Bearer good"), store)
+        assert [x.status for x in fixed.flush()] == ["sent"]
+        assert srv.fake.ids == [r.id]
+
+
+def test_requeue_on_a_state_store_is_one_rewrite(store, monkeypatch):
+    """On a store with ``rewrite`` the flip is one locked rewrite, never a per-key ``put``."""
+    fwd = FakeForwarder()
+    fwd.reject_next = 2
+    p = pub(fwd, store)
+    ids = sorted(p.publish(task_event(k)).id for k in ("a", "b"))
+    calls = []
+    real = store.rewrite
+
+    def spy(fn):
+        calls.append(fn)
+        return real(fn)
+
+    def no_put(*a, **k):
+        raise AssertionError("requeue wrote a key outside rewrite")
+
+    monkeypatch.setattr(store, "rewrite", spy)
+    monkeypatch.setattr(store, "put", no_put)
+    assert sorted(p.requeue()) == ids
+    assert len(calls) == 1
+    monkeypatch.undo()
+    assert sorted(p.pending_ids()) == ids
+
+
+def test_requeue_does_not_resurrect_a_record_pruned_under_it(store, monkeypatch):
+    """The records are selected inside the rewrite: one removed before the lock is taken (a
+    concurrent prune) is not written back."""
+    fwd = FakeForwarder()
+    fwd.reject_next = 1
+    p = pub(fwd, store)
+    r = p.publish(task_event())
+    real = store.rewrite
+
+    def pruned_first(fn):
+        store.delete_many([k for k in store.items() if k.endswith(r.id)])
+        return real(fn)
+
+    monkeypatch.setattr(store, "rewrite", pruned_first)
+    assert p.requeue() == []
+    assert p.status_of(r.id) is None
+
+
+class _DictStore:
+    """A store with no ``rewrite``: requeue takes its one-key-at-a-time path."""
+
+    def __init__(self):
+        self.d = {}
+
+    def get(self, k, default=None):
+        return self.d.get(k, default)
+
+    def put(self, k, v):
+        self.d[k] = v
+
+    def keys(self):
+        return list(self.d)
+
+
+class _Misconfigured:
+    def forward(self, event):
+        raise MisconfiguredError("forwarder said 401")
+
+
+@pytest.mark.parametrize("kind", ["state-store", "dict"])
+def test_requeue_flips_only_the_rejected_record(tmp_path, kind):
+    s = StateStore(tmp_path / "s.json") if kind == "state-store" else _DictStore()
+    pending = pub(_Misconfigured(), s).publish(task_event("p"))
+    assert pending.status == "pending"
+    error = _record(s, pending.id)["error"]
+    assert error
+    fwd = FakeForwarder()
+    fwd.reject_next = 1
+    p = pub(fwd, s)
+    rejected = p.publish(task_event("r"))
+    assert rejected.status == "rejected"
+    assert p.requeue() == [rejected.id]
+    assert p.status_of(rejected.id) == "pending"
+    assert _record(s, pending.id)["status"] == "pending"
+    assert _record(s, pending.id)["error"] == error  # untouched
+
+
+def _record(store, event_id):
+    keys = store.keys()
+    (rec,) = [store.get(k) for k in keys if k.endswith(event_id)]
+    return rec
+
+
+def test_requeue_makes_rejected_events_pending_and_prune_expires_them(store):
+    fwd = FakeForwarder()
+    fwd.reject_next = 1
+    now = [1000.0]
+    p = pub(fwd, store, retain_s=3600, clock=lambda: now[0])
+    r = p.publish(task_event())
+    assert r.status == "rejected" and p.publish(task_event()).attempts == 0
+    assert p.requeue() == [r.id]
+    assert p.pending_ids() == [r.id]
+    assert [x.status for x in p.flush()] == ["sent"]
+    # a rejected record is removed once it is older than the retention
+    other = task_event("job-rej")
+    fwd.reject_next = 1
+    assert p.publish(other).status == "rejected"
+    now[0] += 3601
+    assert p.prune() >= 1
+    assert p.status_of(other["id"]) is None

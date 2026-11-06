@@ -27,7 +27,14 @@ Published again after that, the id is sent again, and the forwarder answers ``du
 within its own window.  A ``sent`` record without ``sent_at`` (written by an older release) is
 stamped with the current time when first seen, so it is kept for ``retain_s`` from then; one
 whose ``sent_at`` is not a finite number counts as expired.  A wall clock set far ahead keeps the
-records it stamps until real time passes them.  Pending and rejected records are never removed.
+records it stamps until real time passes them.  Pending records are never removed.  A ``rejected``
+record (the forwarder refused the event itself) is kept for ``retain_s`` from the refusal so the
+refusal stays visible, then removed; :meth:`Publisher.requeue` makes one pending again.
+
+A forwarder answer that says the *configuration* is wrong (401/403/404/421,
+:class:`~homelabnext.events.forwarder.MisconfiguredError`) is not a verdict on the event: it stays
+``pending`` with the error recorded, the retry loop stops at once (waiting cannot fix a URL or a
+credential), and a rerun, :meth:`Publisher.flush` or ``hnx events flush`` sends it after the fix.
 """
 
 from __future__ import annotations
@@ -39,7 +46,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .envelope import EventError, body_digest, validate_event
-from .forwarder import Forwarder, PermanentError, TransientError
+from .forwarder import Forwarder, MisconfiguredError, PermanentError, TransientError
 
 
 class _Store(Protocol):
@@ -128,7 +135,7 @@ class Publisher:
         return sorted(i for i, r in self._records().items() if r.get("status") == "pending")
 
     def prune(self) -> int:
-        """Remove the ``sent`` records older than ``retain_s``; returns how many.
+        """Remove the ``sent`` and ``rejected`` records older than ``retain_s``; returns how many.
 
         On a store with ``rewrite`` (a :class:`~homelabnext.state.StateStore`) the records are
         selected and deleted under one lock, each re-checked there, so a record another process
@@ -139,7 +146,11 @@ class Publisher:
         pre = f"{self.namespace}/"
 
         def sent(k: str, r: Any) -> bool:
-            return k.startswith(pre) and isinstance(r, dict) and r.get("status") == "sent"
+            return (
+                k.startswith(pre)
+                and isinstance(r, dict)
+                and r.get("status") in ("sent", "rejected")
+            )
 
         def expired(k: str, r: Any) -> bool:
             if not sent(k, r) or "sent_at" not in r:
@@ -197,6 +208,38 @@ class Publisher:
             )
         return self._deliver(event, digest)
 
+    def requeue(self) -> list[str]:
+        """Make every ``rejected`` record ``pending`` again (after the forwarder or the event
+        source was fixed); returns their ids.  The next ``publish`` or :meth:`flush` sends them.
+
+        On a store with ``rewrite`` the records are selected and flipped under one lock, each
+        re-checked there, so a concurrent :meth:`prune` or publish cannot be undone by it.  Only
+        a record still held can be requeued: a rejected one is pruned after ``retain_s``."""
+        pre = f"{self.namespace}/"
+        ids: list[str] = []
+
+        def flip(data: dict[str, Any]) -> bool:
+            for k, r in sorted(data.items()):
+                if (
+                    k.startswith(pre)
+                    and isinstance(r, dict)
+                    and r.get("status") == "rejected"
+                    and isinstance(r.get("event"), dict)
+                ):
+                    data[k] = {**r, "status": "pending", "error": ""}
+                    ids.append(k[len(pre) :])
+            return bool(ids)
+
+        rewrite = getattr(self.store, "rewrite", None)
+        if callable(rewrite):
+            rewrite(flip)
+            return ids
+        for eid, rec in sorted(self._records().items()):  # not atomic: one key at a time
+            if rec.get("status") == "rejected" and isinstance(rec.get("event"), dict):
+                self.store.put(self._k(eid), {**rec, "status": "pending", "error": ""})
+                ids.append(eid)
+        return ids
+
     def flush(self) -> list[PublishResult]:
         """Resend every pending event (after a crash or an outage).  Safe to call repeatedly."""
         out = []
@@ -215,6 +258,9 @@ class Publisher:
             except PermanentError as exc:
                 self._save(eid, event, digest, "rejected", error=str(exc))
                 return PublishResult(eid, "rejected", calls)
+            except MisconfiguredError as exc:  # before TransientError: waiting cannot fix it
+                self._save(eid, event, digest, "pending", error=str(exc), bump=1)
+                return PublishResult(eid, "pending", calls)
             except TransientError as exc:
                 self._save(eid, event, digest, "pending", error=str(exc), bump=1)
                 if attempt < self.policy.max_attempts:
@@ -242,10 +288,10 @@ class Publisher:
             "attempts": int(prev.get("attempts", 0)) + bump,
             "error": error,
         }
-        if status == "sent":
+        if status in ("sent", "rejected"):
             rec["sent_at"] = float(self.clock())  # its age decides when it is pruned
         self.store.put(self._k(eid), rec)
-        if status == "sent":
+        if status in ("sent", "rejected"):
             self._until_prune -= 1
             if self._until_prune <= 0:
                 self._until_prune = PRUNE_EVERY

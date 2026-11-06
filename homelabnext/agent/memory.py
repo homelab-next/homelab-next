@@ -86,8 +86,8 @@ Sources and labels (ADR-0037 decisions 7 to 10, PR 2):
   refused.  The runner passes the session's own pack, never one looked up by a report's
   ``pack_id``.  Every source of every update must equal an
   identifier the pack assembler recorded for something the pack rendered
-  (:func:`~homelabnext.agent.report.source_problems`); text never is one, and every ``mem:``
-  source is refused until packs carry a memory block (PR 3).  Records written so are
+  (:func:`~homelabnext.agent.report.source_problems`); text never is one, and a ``mem:``
+  source must name a revision of the pack's memory block (PR 3, below).  Records written so are
   ``checked: true``.  An update without sources is stored with ``sources: []`` and reported in
   the result's ``unsourced``.  A write returns only what it touched, filtered by the writer's own
   ceiling (``{revs, unsourced, withheld, dropped}``), and a refusal names an update's position,
@@ -107,41 +107,92 @@ Sources and labels (ADR-0037 decisions 7 to 10, PR 2):
   key with no visible record answers like a missing key, and ``as_of`` says ``aged_out`` only
   when the aged record is within the ceiling.
 * **Exposure.**  A checked batch stores its pack's exposure once per owner, keyed by the pack id,
-  as ``{rendered: [identifiers], memory: []}``; records point at it by ``pack_id`` (and a folded
-  record by its ``pack_ids``), and an exposure no record points at any longer is dropped.
+  as ``{rendered: [identifiers], memory: [mem: refs], pairs}`` (PR 3, below); records point at
+  it by ``pack_id`` (and a folded record by its ``pack_ids``), and an exposure no record points
+  at any longer is dropped.
 * **Closure.**  An entry's effective sources are the union of its records' sources since its
-  last ``add``; each record stores them as its ``closure`` (no ``mem:`` revisions or aliases
-  yet), at most :data:`MAX_CLOSURE`.  A checked update past that refuses its batch (retire the
-  key and add it again); an unchecked platform update past it is dropped and reported in
-  ``dropped`` (decision 10, amended), so it cannot stall the platform's fold.
+  last ``add``.  Each record stores its ``closure``: the previous record's closure (none after an
+  ``add``), each new source, that source's aliases in its pack (the platform-issued pairings of
+  :func:`~homelabnext.agent.pack.pack_pairs`) and, for a ``mem:`` source, the closure of the
+  revision it names (PR 3), at most :data:`MAX_CLOSURE`.  A checked update past that refuses its
+  batch (retire the key and add it again); an unchecked platform update past it is dropped and
+  reported in ``dropped`` (decision 10, amended), so it cannot stall the platform's fold.
+
+Memory citing memory and retraction (ADR-0037 decisions 11 to 14, PR 3):
+
+* **The memory block.**  Platform code that renders memory into a pack passes
+  :func:`memory_block_input` to :func:`~homelabnext.agent.pack.assemble_pack` (``memory=``); the
+  pack's ``memory`` block is what a ``mem:`` source may name (:func:`~homelabnext.agent.report.
+  mem_problems`).  The source's label is the stricter of the block's and the stored record's, and
+  the pack's exposure lists the block's revisions as ``memory`` references.
+* **Exposure** is ``{rendered, memory, pairs}``: ``pairs`` holds each rendered item's
+  platform-issued names (a group per item, indexes into ``rendered`` and graph ids as strings),
+  the only alias source ``MemoryAdmin`` uses.
+* **The deny log.**  The backend keeps the deny log and the denied-reach index apart from the
+  owners' memory (:class:`FileBackend`: its own :class:`DenyFile`, which the runtime may only
+  read), both append-only, written only by ``MemoryAdmin`` (``homelabnext.memory_admin``).
+  ``transact`` hands a copy of them to every write, read under the deny state's lock, taken
+  before the owner's (lock order: deny, then memory), and the write re-checks inside it: a
+  checked write whose pack rendered a denied knowledge name or input item, or whose memory block
+  shows a revision with an active mark, is refused whole, and so is a checked batch with an
+  update whose closure reaches a denied name or cites a marked revision; an unchecked platform
+  batch drops such an update, reports it in ``dropped`` and pages (``AGENT_MEMORY_DROPPED``), so
+  a retraction cannot stall the fold.  :func:`denied` reads the active
+  :class:`~homelabnext.agent.deny.DenySet` for a caller to pass as ``retracted=``.  Owners
+  starting ``@`` are refused.
+* **Operator records.**  ``MemoryAdmin`` writes, through the operator seam below (and nothing
+  else of this module), ``retire`` records with ``reason``, ``by`` and ``by_sudo``,
+  ``purge`` records, and ``restamp`` records through the same fold; ``purge`` and ``restamp`` (like
+  ``aged``) change no entry by themselves.
 """
 
 from __future__ import annotations
 
+import contextlib
+import copy
 import fnmatch
 import hashlib
 import json
 import logging
+import os
 import re
+import stat
 import threading
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
 from homelabnext import shapes, tlp
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - not POSIX
+    fcntl = None  # type: ignore[assignment]
 from homelabnext.notify.core_pairs import (
     AGENT_MEMORY_CAP,
     AGENT_MEMORY_CLOCK,
+    AGENT_MEMORY_DENY,
     AGENT_MEMORY_DROPPED,
 )
 from homelabnext.registry.model_tlp import receive_ceiling
 
 from .compiler import VerifiedProfile, require_verified
+from .deny import RESERVED_PREFIX, DenySet, deny_set, mem_ref, parse_mem_ref
 from .digest import digest_of
 from .errors import AgentError
-from .pack import MAX_RENDERED, pack_label, pack_profile, rendered_identifiers
+from .pack import (
+    MAX_RENDERED,
+    knowledge_names,
+    memory_refs,
+    pack_label,
+    pack_memory,
+    pack_pairs,
+    pack_profile,
+    rendered_identifiers,
+)
 from .report import (
     MAX_MEMORY_UPDATES,
     MEM_PREFIX,
@@ -184,8 +235,11 @@ DEFAULT_PLATFORM_RECORDS = 100_000
 #: a platform scope's default tombstone budget: this share of its record cap (decision 6, amended)
 TOMBSTONE_SHARE = 0.1
 
+#: records that change no entry by themselves: a scope's ``aged`` record, and the operator's
+#: ``purge`` and ``restamp`` records (ADR-0037 decision 14 and decision 3)
+EVENT_OPS = frozenset({"aged", "purge", "restamp"})
 #: the fields of a change record (ADR-0037 decision 1); ``value`` is absent on ``retire`` and on
-#: a compacted record, ``reason`` only on a record an operator causes (none yet)
+#: a compacted record, ``reason`` and ``by`` only on a record an operator causes
 RECORD_FIELDS = (
     "at",
     "scope",
@@ -200,6 +254,8 @@ RECORD_FIELDS = (
     "tlp",
     "closure",
     "reason",
+    "by",
+    "by_sudo",
 )
 #: the label of a record with nothing to lower it: a migrated or unchecked record, and every
 #: record while packs carry no labels (ADR-0037 decision 8)
@@ -209,6 +265,7 @@ UNLABELLED = "red"
 CAP_TITLE, CAP_CLEARED = AGENT_MEMORY_CAP
 CLOCK_TITLE, CLOCK_CLEARED = AGENT_MEMORY_CLOCK
 DROPPED_TITLE, DROPPED_CLEARED = AGENT_MEMORY_DROPPED
+DENY_TITLE, DENY_CLEARED = AGENT_MEMORY_DENY
 #: how far behind its log's latest record the clock may be: within it the batch is stamped at
 #: the log's time; beyond it the batch is refused and the operator paged
 CLOCK_SKEW = timedelta(minutes=5)
@@ -331,7 +388,8 @@ class MemoryClockError(MemoryUpdateError):
             [
                 f"the clock is behind {owner}'s memory log by {behind} (more than {CLOCK_SKEW}); "
                 "fix the host clock, or, if it is right, the log holds a record stamped in the "
-                "future (an operator re-stamp, ADR-0037 PR 3): the log's time never goes backwards"
+                "future (an operator re-stamp: hnx agent memory restamp): the log's time never "
+                "goes backwards"
             ]
         )
 
@@ -344,57 +402,498 @@ Record = dict[str, Any]
 @dataclass(frozen=True)
 class _Check:
     """How a batch was checked: ``checked`` (against ``pack_id``'s pack), the pack's label, each
-    rendered identifier's label, and the exposure to store (None for an unchecked write)."""
+    rendered identifier's (and memory-block revision's) label, and the exposure to store (None
+    for an unchecked write); with a pack, also every name it rendered (``names``), each name's
+    platform-issued aliases, its ``pairs`` and the ``(scope, key, rev)`` its memory block shows."""
 
     checked: bool
     pack_id: str | None
     pack_tlp: str
     labels: Mapping[str, str]
     rendered: tuple[str, ...] | None
+    names: frozenset[str] = frozenset()
+    inputs: tuple[tuple[str, str], ...] = ()
+    aliases: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    pairs: tuple[tuple[str, ...], ...] = ()
+    memory: tuple[tuple[str, str, int], ...] = ()
+
+
+Deny = dict[str, list[dict[str, Any]]]  # {"log": [deny records], "reach": [marks]}
 
 
 class MemoryBackend(Protocol):
+    """Where memory lives.  ``transact(owner, fn)`` calls ``fn(current, deny)`` under the
+    owner's lock and stores what it returns (a raising ``fn`` stores nothing); ``deny`` is
+    ``{"log", "reach"}``, the deny log and the denied-reach index, read under the deny state's
+    own lock, which is taken first and held across the call (lock order: deny state, then
+    memory).  ``owners()`` lists the owners holding memory.  The deny state lives apart from
+    the owners' memory (for :class:`FileBackend`, in its own file the runtime may only read);
+    ``load_deny`` reads it and ``transact_deny`` appends to it, which only ``MemoryAdmin`` calls,
+    and a change that is not an append is refused."""
+
     def load(self, owner: str) -> Any: ...
 
-    def transact(self, owner: str, fn: Callable[[Any], Any]) -> Any: ...
+    def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any: ...
+
+    def owners(self) -> list[str]: ...
+
+    def load_deny(self) -> Deny: ...
+
+    def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny: ...
+
+
+def owner_key(owner: Any) -> str:
+    """``owner`` when it can name an owner's memory; a key starting ``@`` (reserved) and
+    anything that is not a non-empty string raise :class:`MemoryAccessError`."""
+    if not isinstance(owner, str) or not owner or owner.startswith(RESERVED_PREFIX):
+        raise MemoryAccessError(
+            f"{_name(owner)} is not an owner: keys starting {RESERVED_PREFIX!r} are reserved"
+        )
+    return owner
+
+
+_owner_key = owner_key
+
+
+def _empty_deny() -> Deny:
+    return {"log": [], "reach": []}
+
+
+def _appended(old: Deny, new: Any) -> Deny:
+    """``new`` when it only appends to ``old`` (both lists), else :class:`MemoryAccessError`."""
+    if not isinstance(new, Mapping) or set(new) != {"log", "reach"}:
+        raise MemoryAccessError("the deny state is {log, reach}")
+    for name in ("log", "reach"):
+        got = new[name]
+        if not isinstance(got, list) or got[: len(old[name])] != old[name]:
+            raise MemoryAccessError(f"the deny {name} is append-only: a change may only append")
+    return {"log": list(new["log"]), "reach": list(new["reach"])}
 
 
 class InMemoryBackend:
-    """Process-local backend (the fake); one lock around every read and transaction."""
+    """Process-local backend (the fake): the owners' memory under one lock, and the deny state
+    apart from it under its own, taken first."""
 
     def __init__(self) -> None:
         import copy
 
         self._copy = copy.deepcopy
         self._data: dict[str, Any] = {}
+        self._deny: Deny = _empty_deny()
         self._lock = threading.Lock()
+        self._deny_lock = threading.Lock()
 
     def load(self, owner: str) -> Any:
+        owner_key(owner)
         with self._lock:
             return self._copy(self._data.get(owner, {}))
 
-    def transact(self, owner: str, fn: Callable[[Any], Any]) -> Any:
+    def owners(self) -> list[str]:
         with self._lock:
-            new = fn(self._copy(self._data.get(owner, {})))  # raises before anything is stored
+            return sorted(self._data)
+
+    def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any:
+        owner_key(owner)
+        with self._deny_lock, self._lock:
+            deny = self._copy(self._deny)
+            new = fn(self._copy(self._data.get(owner, {})), deny)  # raises: nothing stored
             self._data[owner] = self._copy(new)
             return new
 
+    def load_deny(self) -> Deny:
+        with self._deny_lock:
+            return self._copy(self._deny)
+
+    def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny:
+        with self._deny_lock:
+            new = _appended(self._deny, fn(self._copy(self._deny)))
+            self._deny = self._copy(new)
+            return self._copy(new)
+
+
+class DenyFileProblem(MemoryAccessError):
+    """The deny file cannot be trusted or does not match what the operator stamped (missing,
+    another path, shorter, writable by the runtime, or its lock held too long): the write is
+    refused, and ``MemoryStore`` pages (pair ``AGENT_MEMORY_DENY``)."""
+
+
+#: the state-file key ``MemoryAdmin`` stamps with the deny path and how much it wrote (a reserved
+#: key: no owner can take it)
+DENY_STAMP = RESERVED_PREFIX + "deny-stamp"
+#: the runtime's own writability check of the deny file (tests only turn it off: the test
+#: process plays the operator and the runtime with one uid)
+_CHECK_DENY_WRITABLE = True
+
+
+def _flock(fd: int, kind: int, what: object, tries: int, wait: float) -> None:
+    """``flock`` without blocking, retried ``tries`` times ``wait`` seconds apart: a lock held
+    for longer is refused (:class:`DenyFileProblem`), never waited on forever."""
+    if fcntl is None:  # pragma: no cover - not POSIX
+        return
+    for n in range(tries):
+        try:
+            fcntl.flock(fd, kind | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if n + 1 < tries:
+                time.sleep(wait)
+    raise DenyFileProblem(
+        f"{what} is locked by another process for more than {tries * wait:.1f}s; nothing was "
+        "done (a process holding the deny lock blocks retraction: find and stop it)"
+    )
+
+
+class DenyFile:
+    """The deny log and the denied-reach index in their own JSON file, beside a ``.lock``
+    file (ADR-0037 decisions 12 and 14, amended 2026-11-06).  The deployment makes both root's
+    (or the operator's), mode 0644, in a directory the runtime cannot write: the runtime only
+    ever reads it, under a shared ``flock`` on the lock file (opened read-only), and only
+    ``MemoryAdmin`` appends to it, under the exclusive lock.  Locks are taken without blocking
+    and retried for at most ``LOCK_TRIES * LOCK_WAIT`` seconds, so a process that holds one
+    forever gets a refusal, not a hang.  A missing file is an empty deny state; a file without
+    its lock is still read (an atomic replace never leaves a torn file), never ignored."""
+
+    MODE = 0o644
+    LOCK_TRIES = 50
+    LOCK_WAIT = 0.1
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(os.path.abspath(path))
+        self.lock_path = self.path.with_name(self.path.name + ".lock")
+
+    def _read(self) -> Deny:
+        """The deny state; a missing file is empty, and one that cannot be read or parsed is a
+        :class:`DenyFileProblem` (so :func:`denied` pages), never an empty set."""
+        try:
+            doc = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return _empty_deny()
+        except (OSError, UnicodeDecodeError, ValueError) as exc:  # ValueError: JSONDecodeError
+            raise DenyFileProblem(f"cannot read the deny file {self.path}: {exc}") from None
+        if not isinstance(doc, Mapping) or not all(
+            isinstance(doc.get(k), list) for k in ("log", "reach")
+        ):
+            raise DenyFileProblem(f"{self.path} is not a deny file ({{log, reach}})")
+        return {"log": list(doc["log"]), "reach": list(doc["reach"])}
+
+    def exists(self) -> bool:
+        return self.path.exists()
+
+    @contextlib.contextmanager
+    def shared(self) -> Iterator[Deny]:
+        """The deny state, read and held under the shared lock for the ``with`` body."""
+        try:
+            fd = os.open(self.lock_path, os.O_RDONLY)
+        except FileNotFoundError:  # no lock: read the file all the same (fail closed)
+            yield copy.deepcopy(self._read())
+            return
+        try:
+            _flock(
+                fd, fcntl.LOCK_SH if fcntl else 0, self.lock_path, self.LOCK_TRIES, self.LOCK_WAIT
+            )
+            yield copy.deepcopy(self._read())
+        finally:
+            os.close(fd)  # closing drops the lock
+
+    def read(self) -> Deny:
+        with self.shared() as deny:
+            return deny
+
+    @contextlib.contextmanager
+    def exclusive(self) -> Iterator[Deny]:
+        """The deny state under the exclusive lock (only ``MemoryAdmin``)."""
+        fd = os.open(
+            self.lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), self.MODE
+        )
+        try:
+            _flock(
+                fd, fcntl.LOCK_EX if fcntl else 0, self.lock_path, self.LOCK_TRIES, self.LOCK_WAIT
+            )
+            yield self._read()
+        finally:
+            os.close(fd)
+
+    def write(self, new: Deny) -> None:
+        """Replace the deny file (call inside :meth:`exclusive`)."""
+        from homelabnext.state import atomic_write_text
+
+        text = json.dumps(new, sort_keys=True, separators=(",", ":"))
+        atomic_write_text(self.path, text, mode=self.MODE)
+
+    def transact(self, fn: Callable[[Deny], Deny]) -> Deny:
+        """Append to the deny state under the exclusive lock (only ``MemoryAdmin`` calls it)."""
+        with self.exclusive() as old:
+            new = _appended(old, fn(copy.deepcopy(old)))
+            self.write(new)
+            return copy.deepcopy(new)
+
+    def problem(self) -> str | None:
+        """Why the runtime must not trust this deny file: it, its lock, or any directory above
+        it is writable by this process (or by its group or others, a sticky directory such as
+        ``/tmp`` excepted), so a process running as the runtime could rewrite or replace it."""
+        for p in [self.lock_path, *path_chain(self.path)]:
+            try:
+                st = os.lstat(p)
+            except FileNotFoundError:
+                continue
+            sticky = stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX
+            if os.access(p, os.W_OK, follow_symlinks=False) and not sticky:
+                why = "writable by this process"
+            elif st.st_mode & 0o022 and not sticky and not stat.S_ISLNK(st.st_mode):
+                why = "writable by its group or others"
+            else:
+                continue
+            return (
+                f"the deny file {self.path} cannot be trusted: {p} is {why}; the file must be "
+                "root's (or the operator's), mode 0644, in a directory the runtime cannot write"
+            )
+        return None
+
+
+#: where :func:`path_chain` stops climbing (tests only; None climbs to ``/``)
+_CHAIN_STOP: Path | None = None
+
+
+def path_chain(path: str | Path, *, stop: str | Path | None = None) -> list[Path]:
+    """``path`` and every directory above it, up to ``/`` (or to ``stop``, by default
+    :data:`_CHAIN_STOP`): the names whose owners decide who can replace ``path``."""
+    path = Path(os.path.abspath(path))
+    stop = stop if stop is not None else _CHAIN_STOP
+    stop = Path(os.path.abspath(stop)) if stop is not None else None
+    out = []
+    for p in (path, *path.parents):
+        out.append(p)
+        if stop is not None and p == stop:
+            break
+    return out
+
+
+@contextlib.contextmanager
+def _as_owner(path: Path, expect: tuple[int, int] | None = None) -> Iterator[None]:
+    """Run the body with the effective uid, gid and groups dropped to the owner of ``path`` (the
+    runtime's state file, else its directory) when this process is root (an operator under
+    sudo): root then never opens, creates, locks, renames or quarantines a name the runtime
+    controls, and everything it writes there is the runtime's (ADR-0037 decision 12, amended).
+
+    A symbolic link, or a state file with more than one hard link, is refused; with ``expect``
+    (the owner the operator pinned when it started), so is a state file whose owner changed.
+    Each id change is recorded as it applies and undone in reverse in a ``finally`` that also
+    covers the setup, so a failure part-way never leaves the process with changed ids.  Not
+    thread-safe (the effective ids are the process's): ``hnx agent memory`` is single-threaded."""
+    if not hasattr(os, "seteuid") or os.geteuid() != 0:
+        yield
+        return
+    target = path if os.path.lexists(path) else path.parent
+    st = os.lstat(target)
+    if stat.S_ISLNK(st.st_mode):
+        raise MemoryAccessError(f"{target} is a symbolic link: an operator never follows one")
+    if target == path and st.st_nlink != 1:
+        raise MemoryAccessError(f"{path} has {st.st_nlink} hard links: the state file has one")
+    if expect is not None and (st.st_uid, st.st_gid) != tuple(expect):
+        raise MemoryAccessError(
+            f"{target} is now owned by {st.st_uid}:{st.st_gid}, not the {expect[0]}:{expect[1]} "
+            "the operator run started with: nothing was done"
+        )
+    if st.st_uid == 0:  # root's own state (the runtime must not run as root): nothing to drop
+        yield
+        return
+    groups, egid = os.getgroups(), os.getegid()
+    undo: list[Callable[[], None]] = []
+    try:
+        os.setgroups([st.st_gid])
+        undo.append(lambda: os.setgroups(groups))
+        os.setegid(st.st_gid)
+        undo.append(lambda: os.setegid(egid))
+        os.seteuid(st.st_uid)
+        undo.append(lambda: os.seteuid(0))
+        yield
+    finally:
+        for step in reversed(undo):  # euid first (back to root), then gid, then groups
+            step()
+
 
 class FileBackend:
-    """Durable backend: one ``homelabnext.state`` file, one key per owning profile."""
+    """Durable backend: one ``homelabnext.state`` file, one key per owning profile, and the deny
+    state in its own :class:`DenyFile` (``deny_path``, required: the runtime and the operator
+    read it from one place, the operators file's ``deny_file``, so they cannot diverge).
 
-    def __init__(self, path: str | Path, **state_kwargs: Any) -> None:
+    Run as root (an operator under sudo), every state-file operation runs with the effective
+    uid and gid of the state file's owner (:func:`_as_owner`; ``owner`` pins the uid and gid the
+    operator started with), so root never resolves a name the runtime controls.  Each
+    ``transact`` reads the deny file under its shared lock first, then takes the state file's
+    lock (the lock order), and refuses (:class:`DenyFileProblem`) when the deny file does not
+    match the operator's stamp (:data:`DENY_STAMP`): missing, another path, or shorter than what
+    was stamped.  :meth:`load_deny` (what :func:`denied` reads for new packs) refuses the same
+    way, so a runtime pointed at the wrong deny file never reads an empty deny set."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        deny_path: str | Path,
+        owner: tuple[int, int] | None = None,
+        **state_kwargs: Any,
+    ) -> None:
         from homelabnext.state import StateStore
 
-        self._store = StateStore(path, **state_kwargs)
+        if not deny_path:
+            raise TypeError("FileBackend needs deny_path=, the operators file's deny_file")
+        self.path = Path(os.path.abspath(path))
+        self._owner = owner
+        with self._as_owner():
+            self._store = StateStore(self.path, **state_kwargs)
+        self.deny = DenyFile(deny_path)
+
+    def _as_owner(self) -> contextlib.AbstractContextManager[None]:
+        return _as_owner(self.path, self._owner)
 
     def load(self, owner: str) -> Any:
-        return self._store.get(owner, {}) or {}
+        owner_key(owner)
+        with self._as_owner():
+            return self._store.get(owner, {}) or {}
 
-    def transact(self, owner: str, fn: Callable[[Any], Any]) -> Any:
-        # StateStore.update loads a fresh copy under its lock and writes only after fn returns,
-        # so a raising fn leaves the file as it was
-        return self._store.update(owner, lambda cur: fn(cur or {}), default={})
+    def owners(self) -> list[str]:
+        with self._as_owner():
+            names = self._store.keys()  # StateStore.keys(): sorted, read under its lock
+        return [k for k in names if not k.startswith(RESERVED_PREFIX)]
+
+    def deny_problem(self) -> str | None:
+        """Why the runtime must refuse to write now (see :meth:`DenyFile.problem`), or None."""
+        if not _CHECK_DENY_WRITABLE or os.geteuid() == 0:
+            return None
+        return self.deny.problem()
+
+    def _stamp_problem(self, data: Mapping[str, Any], deny: Deny) -> str | None:
+        stamp = data.get(DENY_STAMP)
+        if not isinstance(stamp, Mapping):
+            return None
+        if stamp.get("path") != str(self.deny.path):
+            return (
+                f"the operator wrote the deny file {stamp.get('path')}, but this store reads "
+                f"{self.deny.path}: one deny path must serve both (the operators file's deny_file)"
+            )
+        if (
+            not self.deny.exists()
+            or len(deny["log"]) < int(stamp.get("log", 0))
+            or len(deny["reach"]) < int(stamp.get("reach", 0))
+        ):
+            return (
+                f"the deny file {self.deny.path} is missing or shorter than the operator stamped "
+                "it: a retraction may be lost, so nothing is written"
+            )
+        return None
+
+    def transact(self, owner: str, fn: Callable[[Any, Deny], Any]) -> Any:
+        # the deny file under its shared lock first, then the state file: StateStore.rewrite
+        # loads the whole map under its lock and writes only after fn returns, so a raising fn
+        # leaves the file as it was
+        owner_key(owner)
+        out: list[Any] = []
+        with self.deny.shared() as deny, self._as_owner():
+
+            def change(data: dict[str, Any]) -> bool:
+                problem = self._stamp_problem(data, deny)
+                if problem:
+                    raise DenyFileProblem(problem)
+                out.append(fn(data.get(owner) or {}, copy.deepcopy(deny)))
+                data[owner] = out[0]
+                return True
+
+            self._store.rewrite(change)
+        return out[0]
+
+    def load_deny(self) -> Deny:
+        """The deny state, checked like a write: refused (:class:`DenyFileProblem`) when the
+        runtime could rewrite the deny file, or when it does not match the operator's stamp,
+        read under the state file's lock (deny, then state: the lock order)."""
+        problem = self.deny_problem()
+        if problem:
+            raise DenyFileProblem(problem)
+        with self.deny.shared() as deny, self._as_owner():
+            problem = self._stamp_problem({DENY_STAMP: self._store.get(DENY_STAMP)}, deny)
+        if problem:
+            raise DenyFileProblem(problem)
+        return deny
+
+    def transact_deny(self, fn: Callable[[Deny], Deny]) -> Deny:
+        """Append to the deny file and stamp the state file with its path and length, both under
+        the deny file's exclusive lock (deny, then state: the lock order)."""
+        with self.deny.exclusive() as old:
+            new = _appended(old, fn(copy.deepcopy(old)))
+            self.deny.write(new)
+            stamp = {
+                "path": str(self.deny.path),
+                "log": len(new["log"]),
+                "reach": len(new["reach"]),
+            }
+
+            def mark(data: dict[str, Any]) -> bool:
+                data[DENY_STAMP] = stamp
+                return True
+
+            with self._as_owner():
+                self._store.rewrite(mark)
+            return copy.deepcopy(new)
+
+
+def deny_path_from(operators: str | Path) -> Path:
+    """The deny file the operators file names (``deny_file``): the one path the runtime and the
+    operator both use.  Raises :class:`DenyFileProblem` when it names none."""
+    import yaml
+
+    try:
+        text = Path(operators).read_text(encoding="utf-8")
+        doc = json.loads(text) if str(operators).endswith(".json") else yaml.safe_load(text)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise DenyFileProblem(f"cannot read the operators file {operators}: {exc}") from None
+    path = doc.get("deny_file") if isinstance(doc, Mapping) else None
+    if not isinstance(path, str) or not os.path.isabs(path):
+        raise DenyFileProblem(f"{operators}: deny_file must be an absolute path")
+    return Path(path)
+
+
+def denied(
+    backend: MemoryBackend, *, notifier: Any | None = None, topic: str | None = None
+) -> DenySet:
+    """The active :class:`~homelabnext.agent.deny.DenySet` of ``backend``'s deny log: what a
+    caller passes as ``retracted=`` to ``select_knowledge`` and ``assemble_pack``.
+
+    A deny file the backend cannot trust (:class:`DenyFileProblem`: writable by the runtime,
+    another path than the operator stamped, missing, shorter, unreadable or malformed) is never
+    read as an empty set: it raises, and with ``notifier`` it pages (pair ``AGENT_MEMORY_DENY``,
+    state-diffed, with the recovery on the next good read).
+
+    **On** :class:`DenyFileProblem` **the session must not assemble a pack.**  Passing no
+    ``retracted=`` (or an empty :class:`~homelabnext.agent.deny.DenySet`) to ``select_knowledge``
+    or ``assemble_pack`` instead would serve retracted content to the model: that is the fail-open
+    this refusal exists to prevent."""
+    key = "agent-memory-deny-read"
+    try:
+        deny = backend.load_deny()
+    except DenyFileProblem as exc:
+        _deny_read_page(notifier, topic, key, str(exc))
+        raise
+    _deny_read_page(notifier, topic, key, None)
+    return deny_set(deny["log"], deny["reach"])
+
+
+def _deny_read_page(notifier: Any, topic: str | None, key: str, problem: str | None) -> None:
+    if notifier is None:
+        if problem is not None:
+            log.warning("deny file refused: %s", problem)
+        return
+    from homelabnext.notify import Message
+
+    notifier.register_pair(DENY_TITLE, DENY_CLEARED)
+    try:
+        if problem is None:
+            notifier.report(key, "ok", Message(key, DENY_CLEARED, "the deny file is trusted"))
+        else:
+            msg = Message(key, DENY_TITLE, f"new packs refuse to read retractions: {problem}.",
+                          level="warn", topic=topic, tags=("agent", "memory"))  # fmt: skip
+            notifier.report(key, "deny-file", msg)
+    except Exception:  # the refusal stands; a failed page is retried next time
+        log.exception("deny-file page %s not sent", key)
 
 
 # ---------------------------------------------------------------- identity and limits
@@ -695,7 +1194,7 @@ def fold(records: Iterable[Mapping[str, Any]]) -> Memory:
     ``aged`` record names no key and adds no entry."""
     entries: Memory = {}
     for rec in records:
-        if rec["op"] == "aged":
+        if rec["op"] in EVENT_OPS:
             continue
         scope = entries.setdefault(rec["scope"], {})
         scope[rec["key"]] = _step(scope.get(rec["key"]), rec)
@@ -785,7 +1284,7 @@ def _age(records: list[Record], scope: str, budget: int, entries: Memory) -> lis
     its old tombstone as an earlier record, and that key is live, so it never ages out."""
     last: dict[str, int] = {}
     for i, r in enumerate(records):
-        if r["scope"] == scope and r["op"] != "aged":
+        if r["scope"] == scope and r["op"] not in EVENT_OPS:
             last[r["key"]] = i
     live = entries.get(scope, {})
     tombs = [
@@ -843,6 +1342,15 @@ def _label(check: _Check, sources: Iterable[str], cur: Mapping[str, Any] | None)
     return str(tlp.strictest(labels))
 
 
+def _find(recs: list[Record] | None, rev: int) -> Record | None:
+    """The record of ``recs`` (one key's, in order) that holds ``rev`` (a folded record holds
+    its whole rev range)."""
+    for r in recs or ():
+        if r.get("rev_from", r["rev"]) <= rev <= r["rev"]:
+            return r
+    return None
+
+
 def _apply(
     stored: Stored,
     updates: Iterable[Mapping[str, Any]],
@@ -850,6 +1358,7 @@ def _apply(
     now: str,
     profile: VerifiedProfile,
     result: dict[str, Any] | None = None,
+    deny: DenySet | None = None,
 ) -> Stored:
     """Apply ``updates`` stamped no earlier than ``now`` or the log's latest record: append
     their records (sources, label and closure set from ``check``), store the pack's exposure,
@@ -861,21 +1370,43 @@ def _apply(
     An unchecked (platform) update whose closure would pass :data:`MAX_CLOSURE` is dropped, not
     fatal, and named in ``result["dropped"]``, so a long-lived platform key cannot stall its
     writer's fold (ADR-0037 decision 10, amended); in a checked batch it refuses the batch.
-    ``result["touched"]`` gets each applied ``(scope, key)``."""
+    ``result["touched"]`` gets each applied ``(scope, key)``.
+
+    ``deny`` (the active deny set, read under the backend's lock) is re-checked here (ADR-0037
+    decision 14): a checked batch whose pack rendered a denied name, or whose memory block shows
+    a marked revision, is refused whole; an update whose closure reaches a denied name refuses a
+    checked batch and is dropped (and reported) from an unchecked one.  (``MemoryAdmin`` writes
+    its own records, outside this function.)"""
     entries: Memory = stored["entries"]
     records: list[Record] = stored["log"]
     exposure: dict[str, Any] = dict(stored.get("exposure") or {})
+    deny = deny if deny is not None else DenySet()
+    owner = profile["id"]
     high: dict[str, int] = {}  # scope -> high-water rev of its aged-out keys
+    by_key: dict[tuple[str, str], list[Record]] = {}  # a key's state records, in order
     latest = ""
     for r in records:
         latest = max(latest, r["at"])
         if r["op"] == "aged":
             high[r["scope"]] = r["rev"]
+        elif r["op"] not in EVENT_OPS:
+            by_key.setdefault((r["scope"], r["key"]), []).append(r)
     if latest > now:  # the log's time never goes backwards
         behind = _parse(latest) - _parse(now)
         if behind > CLOCK_SKEW:
-            raise MemoryClockError(profile["id"], behind)
+            raise MemoryClockError(owner, behind)
     at = max(now, latest)
+    if check.checked and deny:
+        if deny.denies(check.names) or any(deny.denies_input(u, d) for u, d in check.inputs):
+            raise MemoryUpdateError(
+                ["the pack rendered a retracted source: a write from it is refused whatever it "
+                 "cites (an operator retraction, ADR-0037 decision 14); nothing was applied"]
+            )  # fmt: skip
+        if any(deny.marked(owner, *m) for m in check.memory):
+            raise MemoryUpdateError(
+                ["the pack's memory block shows a revision a retraction reached; nothing was "
+                 "applied"]
+            )  # fmt: skip
     problems: list[str] = []
     dropped: list[str] = []
     dropped_in: dict[str, int] = {}  # scope -> updates dropped at the closure cap
@@ -897,30 +1428,68 @@ def _apply(
         elif u["op"] == "retire" and has_value:
             problems.append(f"{where}: retire takes no value")
         else:
+            k = (u["scope"], u["key"])
             rev = max(cur["rev"] if cur else 0, high.get(u["scope"], 0)) + 1
             value = u["value"] if has_value else (cur or {}).get("value")
             rec = _record(
                 at, u["scope"], u["key"], u["op"], rev, value, check.pack_id, keep_value=has_value
             )
             sources = list(u.get("sources") or ())
-            rec.update(sources=sources, checked=check.checked, tlp=_label(check, sources, cur))
-            entry = _step(cur, rec)
-            if len(entry["sources"]) > MAX_CLOSURE:
-                why = (
-                    f"{where}: its sources since the key's last add would number "
-                    f"{len(entry['sources'])}, over the closure cap of {MAX_CLOSURE}; retire the "
-                    "key and add it again"
+            label = _label(check, sources, cur)
+            # the closure: the key's own since its last add, each source with its aliases in
+            # the pack, and each mem: source's own closure (decision 10)
+            prior = by_key.get(k) or []
+            parts: list[Iterable[str]] = [
+                prior[-1]["closure"] if prior and u["op"] != "add" else []
+            ]
+            missing = False
+            for src in sources:
+                parts.append([src, *sorted(check.aliases.get(src, ()))])
+                ref = parse_mem_ref(src)
+                if ref is not None:
+                    held = _find(by_key.get((ref[1], ref[2])), ref[3])
+                    if held is None:
+                        missing = True
+                        continue
+                    parts.append(held["closure"])
+                    label = str(tlp.strictest([label, held["tlp"]]))
+            if missing:
+                problems.append(
+                    f"{where}: a mem: source names a revision that is no longer in the log"
                 )
+                continue
+            rec.update(sources=sources, checked=check.checked, tlp=label)
+            entry = _step(cur, rec)
+            # the effective sources always belong to the closure, after what it already held
+            closure = _union(parts[0], entry["sources"], *parts[1:])
+            why = None
+            if deny and deny.reaches(closure):
+                why = (
+                    f"{where}: its closure reaches a retracted source, or cites a revision a "
+                    "retraction reached (ADR-0037 decision 14)"
+                )
+            elif len(closure) > MAX_CLOSURE:
+                why = (
+                    f"{where}: its closure (sources since the key's last add, their aliases and "
+                    f"the closures of the mem: revisions it cites) would number {len(closure)}, "
+                    f"over the closure cap of {MAX_CLOSURE}; retire the key and add it again"
+                )
+            if why is not None:
                 if check.checked:
                     problems.append(why)
                 else:
                     dropped.append(why + " (dropped; the rest of the batch applies)")
                     dropped_in[u["scope"]] = dropped_in.get(u["scope"], 0) + 1
                 continue
-            rec["closure"] = list(entry["sources"])  # no mem: closures or aliases yet (PR 3)
+            rec["closure"] = closure
+            # platform scopes are written unchecked only, so their records (and the range records
+            # they fold into) never point at an exposure (ADR-0037 decision 9, amended)
+            if check.checked and u["scope"] in _platform_scopes(profile):  # never: _check refuses
+                raise MemoryUpdateError([f"{where}: a platform scope is written unchecked only"])
             records.append(rec)
+            by_key.setdefault(k, []).append(rec)
             scope[u["key"]] = entry
-            touched[(u["scope"], u["key"])] = None
+            touched[k] = None
     if problems:
         raise MemoryUpdateError(problems)
     new_exposure = (
@@ -930,7 +1499,14 @@ def _apply(
         and check.pack_id not in exposure
     )
     if new_exposure:
-        exposure[check.pack_id] = {"rendered": list(check.rendered), "memory": []}
+        rendered = list(check.rendered or ())
+        at_index = {x: i for i, x in enumerate(rendered)}
+        exposure[check.pack_id] = {
+            "rendered": rendered,
+            "memory": [mem_ref(owner, *m) for m in check.memory],
+            # each item's platform-issued names: indexes into rendered, a graph id as itself
+            "pairs": [[at_index.get(x, x) for x in group] for group in check.pairs],
+        }
 
     platform = _platform_scopes(profile)
     hot = {k for k in touched if k[0] in platform}
@@ -938,7 +1514,7 @@ def _apply(
         where_at: dict[tuple[str, str], list[int]] = {k: [] for k in hot}
         for i, r in enumerate(records):
             k = (r["scope"], r["key"])
-            if k in where_at:
+            if k in where_at and r["op"] not in EVENT_OPS:
                 where_at[k].append(i)
         swap: dict[int, list[Record]] = {}
         drop: set[int] = set()
@@ -973,7 +1549,7 @@ def _apply(
         if r["scope"] in hot_scopes:  # a scope's byte cap counts its records only
             sizes[r["scope"]] = sizes.get(r["scope"], 0) + _size(r)
         k = (r["scope"], r["key"])
-        if k in refolded:
+        if k in refolded and r["op"] not in EVENT_OPS:
             refolded[k] = _step(refolded[k], r)
     for (scope, key), entry in refolded.items():
         entries[scope][key] = entry  # type: ignore[assignment]
@@ -1015,6 +1591,138 @@ def _readable(profile: VerifiedProfile, records: list[Record]) -> tuple[list[Rec
     return shown, len(records) - len(shown)
 
 
+def last_records(stored: Mapping[str, Any]) -> dict[tuple[str, str], Record]:
+    """Each key's last state record (its current rev, value digest, closure and label)."""
+    out: dict[tuple[str, str], Record] = {}
+    for r in stored.get("log") or ():
+        if r["op"] not in EVENT_OPS:
+            out[(r["scope"], r["key"])] = r
+    return out
+
+
+# ---------------------------------------------------------------- the operator's write seam
+# ``homelabnext.memory_admin`` (never imported from here) writes through these and nothing else
+# of this module's internals: the log's shape stays this module's business.
+def stamp(t: datetime) -> str:
+    """A log stamp of the aware datetime ``t``."""
+    return _stamp(t)
+
+
+def parse_stamp(text: str) -> datetime:
+    """The aware datetime of a log stamp."""
+    return _parse(text)
+
+
+def utcnow() -> datetime:
+    return _utcnow()
+
+
+def stored_of(raw: Any, at: str) -> Stored:
+    """An owner's stored value in the ``{entries, log, exposure}`` shape (legacy memory migrated
+    as of ``at``)."""
+    return _stored(raw, at)[0]
+
+
+def state_records(stored: Mapping[str, Any]) -> list[Record]:
+    """The records that change an entry (every record but the ``aged``, ``purge`` and
+    ``restamp`` events), in log order."""
+    return [r for r in stored.get("log") or () if r["op"] not in EVENT_OPS]
+
+
+def last_record(stored: Mapping[str, Any], scope: str, key: str) -> Record | None:
+    """The last state record of ``scope/key``, or None."""
+    found = None
+    for r in state_records(stored):
+        if (r["scope"], r["key"]) == (scope, key):
+            found = r
+    return found
+
+
+def log_clock(stored: Mapping[str, Any], now: str, owner: str) -> tuple[str, dict[str, int]]:
+    """``(stamp, high)``: when a write at ``now`` is stamped (never before the log's latest
+    record; :class:`MemoryClockError` beyond :data:`CLOCK_SKEW`) and each scope's high-water
+    ``rev`` of aged-out keys."""
+    latest, high = "", {}
+    for r in stored.get("log") or ():
+        latest = max(latest, r["at"])
+        if r["op"] == "aged":
+            high[r["scope"]] = r["rev"]
+    if latest > now and _parse(latest) - _parse(now) > CLOCK_SKEW:
+        raise MemoryClockError(owner, _parse(latest) - _parse(now))
+    return max(now, latest), high
+
+
+def operator_retire(
+    stored: Stored,
+    keys: Iterable[tuple[str, str]],
+    now: str,
+    *,
+    reason: str,
+    by: str,
+    owner: str,
+    by_sudo: str | None = None,
+) -> list[dict[str, Any]]:
+    """Append an operator ``retire`` record (``reason``, ``by``, ``by_sudo``) for each live key
+    of ``stored`` (in place) and return what it retired.  The label stays the entry's and the
+    closure carries over; the record is ``checked: false`` with no pack.  It is not held to the
+    scope caps, and a platform key retired so compacts on its scope's next platform write."""
+    out: list[dict[str, Any]] = []
+    keys = list(keys)
+    if not keys:
+        return out
+    at, high = log_clock(stored, now, owner)
+    for scope, key in keys:
+        cur = stored["entries"].get(scope, {}).get(key)
+        if not cur or cur.get("status") != "live":
+            continue  # idempotent: already retired
+        last = last_record(stored, scope, key)
+        rev = max(cur["rev"], high.get(scope, 0)) + 1
+        rec = _record(at, scope, key, "retire", rev, cur.get("value"), None, keep_value=False)
+        rec.update(tlp=cur.get("tlp", UNLABELLED), reason=reason, by=by)
+        if by_sudo:
+            rec["by_sudo"] = by_sudo
+        entry = _step(cur, rec)
+        rec["closure"] = _union((last or {}).get("closure") or (), entry["sources"])
+        stored["log"].append(rec)
+        stored["entries"][scope][key] = entry
+        out.append({"scope": scope, "key": key, "rev": rev})
+    return out
+
+
+def memory_block_input(
+    store: MemoryStore, profile: VerifiedProfile, scopes: Iterable[str]
+) -> list[dict[str, Any]]:
+    """The entries platform code renders into ``profile``'s pack from its own memory, as
+    :func:`~homelabnext.agent.pack.assemble_pack` takes them (``memory=``): each live entry of
+    ``scopes`` within the profile's ceiling, ``{scope, key, rev, value_digest, tlp, closure}``.
+    Owner-scoped like :meth:`MemoryStore.read`; the renderer renders the values it reads with
+    ``read`` and passes this beside them (ADR-0037 decision 11)."""
+    out: list[dict[str, Any]] = []
+    ceiling = read_ceiling(profile)
+    for scope in sorted(set(scopes)):
+        me = store._reader(profile, scope, None)
+        stored = store._load(me)
+        last = last_records(stored)
+        for key, e in sorted(stored["entries"].get(scope, {}).items()):
+            rec = last.get((scope, key))
+            if e.get("status") != "live" or rec is None or not tlp.allows(ceiling, e.get("tlp")):
+                continue
+            digests = rec.get("value_digests") or [rec.get("value_digest")]
+            if not str(digests[-1] or "").startswith("sha256:"):  # purged: nothing to cite
+                continue
+            out.append(
+                {
+                    "scope": scope,
+                    "key": key,
+                    "rev": e["rev"],
+                    "value_digest": digests[-1],
+                    "tlp": e["tlp"],
+                    "closure": list(rec.get("closure") or ()),
+                }
+            )
+    return out
+
+
 # ---------------------------------------------------------------- the store
 class MemoryStore:
     """Validated writes and owner-scoped reads over a :class:`MemoryBackend`.
@@ -1040,6 +1748,7 @@ class MemoryStore:
             notifier.register_pair(CAP_TITLE, CAP_CLEARED)
             notifier.register_pair(CLOCK_TITLE, CLOCK_CLEARED)
             notifier.register_pair(DROPPED_TITLE, DROPPED_CLEARED)
+            notifier.register_pair(DENY_TITLE, DENY_CLEARED)
 
     def apply_updates(
         self,
@@ -1093,15 +1802,26 @@ class MemoryStore:
             return {"revs": {}, "unsourced": [], "withheld": 0, "dropped": []}
         result: dict[str, Any] = {}
 
-        def fn(raw: Any) -> Stored:
+        def fn(raw: Any, deny: Deny) -> Stored:
             now = _stamp(self._now())  # read under the backend's lock, inside the transaction
             stored, purged = _stored(raw, now)
             self._purged(owner, purged)
             result.clear()
-            return _apply(stored, updates, check, now, profile, result)
+            # the deny state is read under the same lock: a retraction that landed after the
+            # report was validated still refuses it (ADR-0037 decision 14)
+            denies = deny_set(deny.get("log") or (), deny.get("reach") or ())
+            return _apply(stored, updates, check, now, profile, result, denies)
 
+        unsafe = getattr(self._backend, "deny_problem", None)
+        problem = unsafe() if callable(unsafe) else None
+        if problem:  # a deny file the runtime could rewrite is no retraction at all
+            self._deny_page(owner, problem)
+            raise DenyFileProblem(problem)
         try:
             new = self._backend.transact(owner, fn)
+        except DenyFileProblem as exc:
+            self._deny_page(owner, str(exc))
+            raise
         except MemoryClockError as exc:
             self._clock_page(owner, exc.behind)
             raise
@@ -1117,6 +1837,7 @@ class MemoryStore:
                 )
             raise
         self._clock_page(owner, None)
+        self._deny_page(owner, None)
         for scope in sorted({u["scope"] for u in updates}):
             self._page(owner, scope, None, False)
         if check.checked:
@@ -1221,7 +1942,30 @@ class MemoryStore:
         problems = source_problems(updates, pack)
         if problems:
             raise MemoryUpdateError([*problems, "nothing was applied"])
-        return _Check(True, pack_hash, pack_label(pack), labels, tuple(sorted(labels)))
+        block = pack_memory(pack)
+        shown = dict(zip(memory_refs(pack), block, strict=True))
+        labels = {**labels, **{ref: str(tlp.read_stored(e["tlp"])) for ref, e in shown.items()}}
+        pairs = tuple(tuple(g) for g in pack_pairs(pack))
+        aliases: dict[str, set[str]] = {}
+        for group in pairs:
+            for name in group:
+                aliases.setdefault(name, set()).update(x for x in group if x != name)
+        return _Check(
+            True,
+            pack_hash,
+            pack_label(pack),
+            labels,
+            tuple(sorted(rendered_identifiers(pack))),
+            names=knowledge_names(pack),
+            inputs=tuple(
+                (i["uid"], i["digest"])
+                for i in (pack.get("provenance") or {}).get("inputs") or ()
+                if isinstance(i, Mapping)
+            ),
+            aliases={k: frozenset(v) for k, v in aliases.items()},
+            pairs=pairs,
+            memory=tuple((e["scope"], e["key"], int(e["rev"])) for e in block),
+        )
 
     def apply_report(
         self,
@@ -1316,7 +2060,11 @@ class MemoryStore:
         withheld count, whether the key exists or not, so ``history`` is no existence oracle for
         a withheld key (ADR-0037 decision 8)."""
         me = self._reader(profile, scope, owner)
-        log_ = [r for r in self._load(me)["log"] if r["scope"] == scope and r["op"] != "aged"]
+        log_ = [
+            r
+            for r in self._load(me)["log"]
+            if r["scope"] == scope and r["op"] not in ("aged", "restamp")
+        ]
         shown, withheld = _readable(profile, [r for r in log_ if r["key"] == key])
         if not shown:
             return {"records": [], "withheld": _readable(profile, log_)[1]}
@@ -1326,8 +2074,9 @@ class MemoryStore:
         self, profile: VerifiedProfile, scope: str, t: datetime, *, owner: str | None = None
     ) -> dict[str, Any]:
         """What ``profile`` believed in ``scope`` at ``t`` (an aware datetime), rebuilt from the
-        log: ``{"at", "entries": {key: value}, "compacted": [keys], "aged_out": bool,
-        "withheld": n}``.
+        log: ``{"at", "entries": {key: value}, "compacted": [keys], "purged": [keys],
+        "aged_out": bool, "withheld": n}``.  A key whose value at ``t`` an operator purged is
+        listed in ``purged`` (ADR-0037 decision 14), never given a value.
 
         A key whose state at ``t`` lies in folded records (a range, a tombstone, or history
         from before the migration) is listed in ``compacted``, never given a value.
@@ -1345,9 +2094,12 @@ class MemoryStore:
         mine = [r for r in self._load(me)["log"] if r["scope"] == scope]
         state: dict[str, dict[str, Any]] = {}
         held: dict[str, bool] = {}  # key -> the value in effect at t is not in the log
+        blanked: dict[str, bool] = {}  # key -> that value was purged (ADR-0037 decision 14)
         unknown: dict[str, str] = {}  # key -> the label of the folded record that hides it
         aged_out = False
         for rec in mine:
+            if rec["op"] in ("purge", "restamp"):
+                continue
             if rec["op"] == "aged":  # said only when the reader may see the aged record
                 since = rec.get("since")
                 aged_out = (
@@ -1366,16 +2118,23 @@ class MemoryStore:
             state[k] = _step(state.get(k), rec)
             if rec.get("compacted") or rec["op"] in ("add", "replace") or rec.get("migrated"):
                 held[k] = bool(rec.get("compacted")) or "value" not in rec
+                blanked[k] = bool(rec.get("purged")) and not rec.get("compacted")
         live = {k for k, e in state.items() if e["status"] == "live"}
         label = {k: state[k]["tlp"] for k in live} | {
             k: v for k, v in unknown.items() if k not in live
         }
         hidden = {k for k, v in label.items() if not tlp.allows(ceiling, v)}
-        compacted = sorted((set(unknown) | {k for k in live if held.get(k)}) - hidden)
+        purged = sorted({k for k in live if blanked.get(k)} - hidden)
+        compacted = sorted((set(unknown) | {k for k in live if held.get(k)}) - hidden - set(purged))
         return {
             "at": when,
-            "entries": {k: state[k]["value"] for k in sorted(live - hidden) if k not in compacted},
+            "entries": {
+                k: state[k]["value"]
+                for k in sorted(live - hidden)
+                if k not in compacted and k not in purged
+            },
             "compacted": compacted,
+            "purged": purged,
             "aged_out": aged_out,
             "withheld": len(hidden),
         }
@@ -1431,7 +2190,8 @@ class MemoryStore:
 
     def _dropped_page(self, owner: str, scope: str, count: int) -> None:
         """Report that an unchecked batch dropped ``count`` updates of ``owner/scope`` at the
-        closure cap (ADR-0037 decision 10, amended), or none (the recovery), state-diffed.  The
+        closure cap (ADR-0037 decision 10, amended) or for citing a retracted source (decision
+        14), or none (the recovery), state-diffed.  The
         key is a digest of owner and scope; the page names the scope and the count, never a key,
         so a platform key that stopped advancing is seen instead of stalling silently."""
         pair = hashlib.sha256(f"{owner}\0{scope}".encode()).hexdigest()[:16]
@@ -1443,9 +2203,23 @@ class MemoryStore:
             None
             if not count
             else f"{owner}'s platform memory scope {scope} dropped {count} update(s) at the "
-            f"closure cap of {MAX_CLOSURE} sources: those keys stopped advancing. Retire and "
-            "re-add them, or write a key that carries position (a cursor) without sources.",
+            f"closure cap of {MAX_CLOSURE} sources, or citing a source an operator retracted: "
+            "those keys stopped advancing. Retire and re-add them, write a key that carries "
+            "position (a cursor) without sources, or stop citing the retracted source.",
             f"{owner}'s platform memory scope {scope} applies its updates again",
+        )
+
+    def _deny_page(self, owner: str, problem: str | None) -> None:
+        """Report that ``owner``'s writes are refused because the deny file cannot be trusted
+        (``problem``), or not (None), state-diffed (pair ``AGENT_MEMORY_DENY``)."""
+        key = "agent-memory-deny-" + hashlib.sha256(owner.encode()).hexdigest()[:16]
+        self._report(
+            key,
+            owner,
+            "deny-file",
+            DENY_TITLE if problem is not None else DENY_CLEARED,
+            None if problem is None else f"{owner}'s memory refuses writes: {problem}.",
+            f"{owner}'s memory trusts its deny file again",
         )
 
     def _clock_page(self, owner: str, behind: timedelta | None) -> None:
@@ -1460,8 +2234,8 @@ class MemoryStore:
             if behind is None
             else f"{owner}'s memory refuses writes: the clock is behind its log by {behind}. "
             "Fix the host clock; if it is already right, the log holds a record stamped in the "
-            "future and needs an operator re-stamp (ADR-0037 PR 3). Nothing is written until the "
-            f"clock is within {CLOCK_SKEW} of the log.",
+            "future and needs an operator re-stamp (hnx agent memory restamp). Nothing is "
+            f"written until the clock is within {CLOCK_SKEW} of the log.",
             f"{owner}'s memory clock is within {CLOCK_SKEW} of its log again",
         )
 

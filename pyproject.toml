@@ -146,6 +146,11 @@ suite_budgets = [
   # fixtures; CI measured 61.1s on 3.12 (2026-10-27, after the guest 1.6 tests, over the 60 s
   # default); 90 is about 1.5x that
   "tests/schemas = 90",
+  # agent profiles, packs, prompts and memory: about 1,110 tests, 40.5 s on a local 4-core box
+  # (2026-11-06) after the memory retraction suites (ADR-0037 PR 3); the coverage job (budgets
+  # times 2) measured 126 s on CI before the fuzz was trimmed, against the 120 s it then had; 90
+  # gives the coverage run 180 s
+  "tests/agent = 90",
   # the module loader, review tier, swap gate and egress suites: about 1,000 tests, measured 60.7 s
   # on a local 4-core box (2026-10-28, over the 60 s default) after the swap gate's role-trust
   # cases, each of which builds two git commits; 90 is about 1.5x that

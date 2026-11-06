@@ -29,7 +29,7 @@ reviewed change to this file.
 
 ``UNITS`` below is the one list of the units and the tests that measure each: the broker, its
 tiers and grant lookup, the scope guard, the records lifecycle, the decide cascade, the agent's
-grant ceiling, reader rule, handoff, memory and screen, workflow runs, model budgets and TLP labels, context retrieval, the
+grant ceiling, reader rule, handoff, memory and its deny set and screen, the operator's memory admin, workflow runs, model budgets and TLP labels, context retrieval, the
 MCP server, the status hub's front door, ingest and approval paths, the generators' backstop, the
 TLP label type, egress and reader ceilings, the SSH certificate authority, and the leak
 scan.  Nothing else lists them in full.
@@ -58,6 +58,9 @@ from experimental import BLOCKING_SELECT  # noqa: E402 (the one marker expressio
 FLOOR = 80.0
 REPORT_DIR = REPO_ROOT / "build" / "coverage-security"
 
+#: the agent units and the memory admin share one run, so tests/agent is traced once
+_AGENT_TESTS = ("tests/agent", "tests/memory_admin")
+
 # unit (a package directory or one module) -> the tests that exercise it
 UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/broker": ("tests/broker", "conformance/broker"),
@@ -66,11 +69,14 @@ UNITS: dict[str, tuple[str, ...]] = {
     "homelabnext/scope": ("tests/scope",),
     "homelabnext/records": ("tests/records", "conformance/records"),
     "homelabnext/decide": ("tests/decide",),
-    "homelabnext/agent/compiler.py": ("tests/agent",),
-    "homelabnext/agent/readers.py": ("tests/agent",),
-    "homelabnext/agent/handoff.py": ("tests/agent",),
-    "homelabnext/agent/memory.py": ("tests/agent",),
-    "homelabnext/agent/screen.py": ("tests/agent",),
+    "homelabnext/agent/compiler.py": _AGENT_TESTS,
+    "homelabnext/agent/readers.py": _AGENT_TESTS,
+    "homelabnext/agent/handoff.py": _AGENT_TESTS,
+    "homelabnext/agent/memory.py": _AGENT_TESTS,
+    "homelabnext/agent/screen.py": _AGENT_TESTS,
+    # the operator's retraction tool (ADR-0037 decision 12) and the deny set it writes
+    "homelabnext/memory_admin": _AGENT_TESTS,
+    "homelabnext/agent/deny.py": _AGENT_TESTS,
     "homelabnext/workflows": ("tests/workflows",),
     "homelabnext/registry/limits.py": ("tests/models",),
     "homelabnext/registry/model_tlp.py": ("tests/models",),
