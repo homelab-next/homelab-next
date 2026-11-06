@@ -113,9 +113,8 @@ The `homelabnext.scope.denied` event (a writer tool was refused) is described in
 The `homelabnext.status.observed` event (one status observation, consumed by the status hub) is
 described in `docs/status.md`. Stage 2, library only: `StatusHub.ingest_event` accepts it, but
 no `hnx` command, collector or service publishes or consumes it yet, so a `push-event` source
-reads stale until that is wired (see the developer follow-up in `docs/status.md`). Also described
-there is
-`homelabnext.agent.activity` (an agent activity event, summary tier only). The
+reads stale until that is wired (see the developer follow-up in `docs/status.md`).
+`homelabnext.agent.activity` (an agent activity event, summary tier only) is described there too. The
 `homelabnext.agent.job.finished` event (the per-job usage record of the orchestration controller,
 consumed by the status hub) is described in `docs/orchestration-telemetry.md`.
 

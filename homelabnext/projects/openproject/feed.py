@@ -169,7 +169,8 @@ def make_webhook_server(
     """A receiver for OpenProject's webhook: ``POST path`` with a valid signature -> 204.
 
     401 without a valid signature (or with no secret configured: an unsigned webhook is never
-    accepted), 500 when the feed fails on a delivery (the poll still catches the change), 400 for a body that is not a JSON object, 413 over 1 MiB, 404/405 elsewhere."""
+    accepted), 500 when the feed fails on a delivery (the poll still catches the change), 400 for
+    a body that is not a JSON object, 413 over 1 MiB, 404/405 elsewhere."""
     if not secret.startswith("secret:"):
         raise ValueError("secret is a secret reference (secret:<name>), never a value")
     if not is_loopback(host) and not allow_remote:

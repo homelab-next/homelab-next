@@ -210,7 +210,8 @@ def test_a_late_or_replayed_push_does_not_replace_a_newer_reading(make_hub, cloc
     hub = _push_hub(make_hub)
     t = clock()
     hub.ingest(_push_data(state="fail", observed_at=iso(t - 10)))
-    hub.ingest(_push_data(state="ok", observed_at=iso(t - 60)))  # older: delivered late
+    late = hub.ingest(_push_data(state="ok", observed_at=iso(t - 60)))  # older: delivered late
+    assert late.state == "fail" and late.observed_at == iso(t - 10)  # the stored reading
     row = hub.observations()[0]
     assert row["reported_state"] == "fail" and row["observed_at"] == iso(t - 10)
     assert [h[1] for h in row["history"]] == ["fail"]

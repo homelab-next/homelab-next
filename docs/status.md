@@ -1161,4 +1161,8 @@ fixtures only.
 
 * **Wire push-event status sources.** Nothing in tree calls `StatusHub.ingest_event`: add a
   consumer (an `hnx status` command or a bus subscriber that feeds the hub) and a publisher for
-  `homelabnext.status.observed`. Until then a declared `push-event` source reads stale.
+  `homelabnext.status.observed`. Until then a declared `push-event` source reads stale. The
+  consumer must feed the hub from one thread, or hold a lock around the read-compare-write in
+  `StatusHub.ingest` (the keep-newer guard is not atomic, and nor is the history update in
+  `_put`). An ignored older event still refreshes the source's `last_ok`; consider recording an
+  ignored count so a replaying publisher is visible.
