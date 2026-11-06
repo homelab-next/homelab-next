@@ -194,6 +194,12 @@ def _realm(reg=REG):
     return json.loads(generate(reg, ["idp_realm"])["idp_realm"]["idp/realm.json"])
 
 
+def test_idp_realm_keeps_the_username_claim_fixed():
+    """The platform names a person by the IdP's preferred_username (the hub's approver subject,
+    the SSH CA's principal): a user may never rename themselves into another name."""
+    assert _realm()["editUsernameAllowed"] is False
+
+
 def test_idp_realm_has_a_confidential_client_per_idp_service_and_the_auth_proxy():
     realm = _realm()
     clients = {c["clientId"]: c for c in realm["clients"]}

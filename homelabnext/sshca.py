@@ -25,8 +25,10 @@ configuration (it holds the client secret) are one-time operator steps, not rend
 Refused (exit 1, before anything is printed): an unknown key, a duplicate role, a principal that is
 not a plain name or is ``root``, a TTL above its maximum or above the cap for its kind (deploy 1 h,
 person 24 h), an extension outside OpenSSH's set, forwarding or user-rc extensions on a deploy role,
-a person's role without groups or a deploy role with them, and a source address that is not a
-network. Exit 2 is a usage error.
+a person's role without groups or a deploy role with them, a source address that is not a
+network, and an ``oidc.user_claim`` other than :data:`homelabnext.edge_identity.USERNAME_CLAIM`
+(``preferred_username``: the claim the status hub's approver allowlist names people by too, so a
+person is one name on their certificate's key id and on the allowlist). Exit 2 is a usage error.
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from homelabnext.edge_identity import USERNAME_CLAIM
 
 #: role, mount and group names (also the policy's and login role's names)
 NAME = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?\Z")
@@ -224,10 +228,17 @@ def parse(doc: Any, where: str = "spec") -> Spec:
     ):
         raise SpecError(f"{where}: oidc.redirect_uris is a list of http(s) URLs")
     claims = {}
-    for key, default in (("user_claim", "preferred_username"), ("groups_claim", "groups")):
+    for key, default in (("user_claim", USERNAME_CLAIM), ("groups_claim", "groups")):
         claims[key] = oidc.get(key, default)
         if not isinstance(claims[key], str) or not CLAIM.match(claims[key]):
             raise SpecError(f"{where}: oidc.{key} is a claim name")
+    if claims["user_claim"] != USERNAME_CLAIM:
+        # one person, one name: the status hub's approver allowlist names people by this claim
+        # too (homelabnext.edge_identity), so a certificate keyed on another would not match it
+        raise SpecError(
+            f"{where}: oidc.user_claim is {USERNAME_CLAIM} (the platform's one username claim, "
+            "homelabnext.edge_identity); drop the key or set it to that"
+        )
     scopes = _names(f"{where}: oidc.scopes", oidc.get("scopes", ["openid"]), CLAIM, required=True)
     login_ttl = oidc.get("login_ttl", "10m")
     if seconds(f"{where}: oidc.login_ttl", login_ttl) > LOGIN_TTL_CAP:

@@ -975,7 +975,9 @@ approval can no longer be used: show the form again, a fresh approval is accepte
 `valid`; a relay written against the older field keeps working and stops hiding an expired one.
 
 `approver.issuer` must be the relay's own `issuer`, exactly (else `relay-issuer-mismatch`);
-`subject` is the person's SSO subject. The broker then applies the manifest's rules to that person:
+`subject` is the person's SSO username: the IdP's `preferred_username` claim, the one claim the
+platform names a person by (`homelabnext.edge_identity.USERNAME_CLAIM`; the SSH CA signs from it
+too, ADR-0034). The broker then applies the manifest's rules to that person:
 `approval-approver-not-allowed`, `approval-self-approved`, `approval-agent-approver`. A relay
 never runs, submits or reads a request for itself (`not-a-caller`).
 
@@ -1027,7 +1029,12 @@ short:
 - the page reuses the private tier's front door (trusted proxy, shared secret header, identity
   header), then requires an approver group (none of them a viewer group) to decide;
 - the approver sent to the broker is `{issuer: <configured>, subject: <the front door's
-  username>}`, never a form field. The username is sent **unchanged**: an IdP's usernames may be
+  username>}`, never a form field. The username is the IdP's `preferred_username` claim, which
+  the reference auth proxy (oauth2-proxy, `--set-xauthrequest`) sends as
+  `X-Auth-Request-Preferred-Username` and the generated edge snippet copies; it is **not**
+  `X-Auth-Request-User`, which carries the proxy's user-id claim (an email by default, or `sub`)
+  that no allowlist names. It is the same claim the SSH CA signs a person's certificate from, so
+  the allowlist entry and the certificate name one person once. The username is sent **unchanged**: an IdP's usernames may be
   case-sensitive (`Bob` and `bob` may be two accounts), so the hub does not lower-case them, and a
   username that is not already canonical (lower-case, as the approver allowlist names it) cannot
   decide. Name approvers in the IdP in lower case (the default IdP stores them lower case). A

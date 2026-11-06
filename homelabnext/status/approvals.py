@@ -19,7 +19,11 @@ approve / deny (``POST``)  an **approver group** only, none of them a viewer gro
 =========================  ==================================================================
 
 The approver sent to the broker is ``issuer`` = the configured SSO issuer and ``subject`` = the
-forward-auth username **unchanged** -- **never anything from the form body**, which may carry
+forward-auth username **unchanged**: the IdP's ``preferred_username`` claim
+(:data:`homelabnext.edge_identity.USERNAME_CLAIM`), which the reference auth proxy sends as
+``X-Auth-Request-Preferred-Username`` and the edge copies (never ``X-Auth-Request-User``: that is
+the proxy's user-id claim, an email or ``sub`` under its defaults, which no allowlist names; the
+SSH CA signs from the same claim, so a person is one name on both) -- **never anything from the form body**, which may carry
 only ``request_id``, ``digest``, ``decision``, ``token`` and ``note``.  The broker matches its
 approver allowlist exactly, and an IdP's usernames may be case-sensitive (in some IdPs ``Bob``
 and ``bob`` can be two accounts; the default IdP stores them lower case), so the hub never folds

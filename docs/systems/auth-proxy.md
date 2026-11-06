@@ -53,7 +53,17 @@ author: unknown
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:outputs -->
-> TODO(human): what it produces, each with its format and where it lands.
+The answer to the edge's `forward_auth` check (`/oauth2/auth`): 2xx for a signed-in user in one
+of the site's allowed groups, 401 for no session, 403 for a signed-in user in none. Run with
+`--set-xauthrequest` (and `--reverse-proxy`), a 2xx carries the identity headers the edge copies
+onto the request (`homelabnext.edge_identity`, ADR-0034): `X-Auth-Request-Preferred-Username`
+(the IdP's `preferred_username`: the name the platform knows a person by, the status hub's
+identity and approver subject, the same claim the SSH CA signs from), `X-Auth-Request-Groups`
+(one value per group, joined with `,` by the edge), `X-Auth-Request-Email`, and
+`X-Auth-Request-User` (the proxy's user-id claim, an email by default or `sub`; copied for apps
+that want it, never used as a person's name by the platform). Keep the `profile` scope in its
+scopes (the default) so the token carries `preferred_username`; without it the hub sees no
+identity and answers 403.
 <!-- /hnx:todo -->
 
 ## How to use it

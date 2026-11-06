@@ -593,6 +593,7 @@
   ],
   "directGrantFlow": "hnx-direct-grant-mfa",
   "displayName": "northwind",
+  "editUsernameAllowed": false,
   "enabled": true,
   "groups": [
     {

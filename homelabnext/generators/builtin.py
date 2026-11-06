@@ -664,7 +664,10 @@ def idp_realm(reg: Registry) -> dict[str, str]:
     """The IdP's realm as an importable realm document (ADR-0034): one confidential OIDC client
     per ``auth: idp`` service (redirects under its public hostname) and one for the auth proxy
     (its callback on every site it guards), the client roles each service's ``roles`` names, a
-    group per group named there holding exactly those roles, and the MFA browser flow.  No
+    group per group named there holding exactly those roles, and the MFA browser flow.  A user
+    cannot change their own username (``editUsernameAllowed: false``): it is the
+    ``preferred_username`` claim the platform names a person by (the status hub's approver
+    subject, the SSH CA's principal: :data:`homelabnext.edge_identity.USERNAME_CLAIM`).  No
     secret is in it: each client secret is a secret-store reference."""
     gated = [s for s in reg.sorted_services() if s.auth == "idp"]
     clients, roles = [], {}
@@ -698,6 +701,9 @@ def idp_realm(reg: Registry) -> dict[str, str]:
         "bruteForceProtected": True,
         "clients": clients,
         "displayName": reg.lab_name,
+        # the username is the platform's one name for a person (edge_identity.USERNAME_CLAIM):
+        # a user who could rename themselves could take a name an allowlist lists
+        "editUsernameAllowed": False,
         "enabled": True,
         "groups": groups,
         "realm": reg.lab_name,

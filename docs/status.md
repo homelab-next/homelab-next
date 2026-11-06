@@ -734,9 +734,14 @@ The private pages and the `private` menu group exist only for a request that pas
    ```
    Give the edge and the hub the same value in `HNX_SECRET_STATUS_FRONT_DOOR_SECRET` from the secret
    store;
-3. it carries the **identity** the forward-auth proxy sets (`X-Auth-Request-User`, copied by
-   the generated `hnx_forward_auth` snippet from the auth proxy's answer; the one identity-header
-   set is `homelabnext.edge_identity`, ADR-0034);
+3. it carries the **identity** the forward-auth proxy sets: the person's username, the IdP's
+   `preferred_username` claim, which the auth proxy sends as `X-Auth-Request-Preferred-Username`
+   and the generated `hnx_forward_auth` snippet copies from its answer (the one identity-header
+   set is `homelabnext.edge_identity`, ADR-0034). Not `X-Auth-Request-User`: under the auth
+   proxy's defaults that is its user-id claim, an email or the token's `sub`, which names nobody
+   the hub's groups or the broker's approver allowlist list. A token without `preferred_username`
+   gives no identity and is `403`; the generated realm does not let a user change their username
+   (`editUsernameAllowed: false`);
 4. that identity is in a **viewer group** (`X-Auth-Request-Groups`, `,`-separated): the groups
    the hub's registry row names under `roles.viewer` (the group-to-role table the IdP realm is
    generated from, so the generated realm creates the group; add the people who may read
@@ -765,8 +770,8 @@ do not leave an account with a password and no enrolled factor (ADR-0034 decisio
 
 Anything missing, repeated or malformed is `403`. Run the hub with `hnx status serve --agents
 examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example`.
-**Check your edge** once: a request to the site with a forged `X-Auth-Request-User` and no
-login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1 keep a
+**Check your edge** once: a request to the site with a forged
+`X-Auth-Request-Preferred-Username` and no login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1 keep a
 client-sent header the auth proxy omits) with the generated snippet, which deletes every
 client-sent header whose name contains `auth-request` (any case, `-` or `_` at each separator)
 twice: first in the site, so no
@@ -828,7 +833,9 @@ it; a person in only an approver group may also see the page). Both come from th
 group-to-role table (ADR-0034); a hub row without `roles` still reads the deprecated
 `private.viewer_group` and `approvals.approver_group`, and a row with `roles` refuses them.
 The approver the hub sends to the broker is `issuer` from the config and `subject` = the
-`X-Auth-Request-User` the front door passed, unchanged, never a form field. The broker matches
+username the front door passed (`X-Auth-Request-Preferred-Username`, the IdP's
+`preferred_username`, the claim the SSH CA signs certificates from too), unchanged, never a form
+field. The broker matches
 its approver allowlist exactly and an IdP's usernames may be case-sensitive, so the hub never
 folds one username into another: a username that is not already a canonical approver subject
 (lower-case: a letter, then letters, digits, `.`, `_` or `-`) is read only on this page and its
