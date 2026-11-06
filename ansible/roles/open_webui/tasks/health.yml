@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 - block:
-    - name: The container is running and healthy
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
       ansible.builtin.include_role:
         name: compose_app
         tasks_from: health
       vars:
         compose_app_name: open-webui
-        compose_app_dir: "{{ open_webui_dir }}"
+        compose_app_dir: "{{ open_webui_app.compose_app_dir }}"
+        compose_app_spec: "{{ open_webui_app.compose_app_spec }}"
     - name: Open WebUI answers on its published port
       ansible.builtin.uri:
         url: "http://{{ open_webui_bind }}:{{ open_webui_port | int }}/health"

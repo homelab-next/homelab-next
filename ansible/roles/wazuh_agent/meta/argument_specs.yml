@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 argument_specs:
   main:
-    short_description: Install the pinned Wazuh agent, enroll it with the manager and run it.
+    short_description: Install the pinned SIEM agent, enroll it with the manager and run it.
     options:
       wazuh_agent_manager_id: &manager
         type: str
-        description: Logical id of the Wazuh manager in the registry (host and agent port).
+        description: Logical id of the SIEM manager in the registry (host and agent port).
         required: true
       wazuh_agent_version: &version
         type: str
@@ -50,9 +50,10 @@ argument_specs:
         description: Where the backup and upgrade hooks write their records.
         default: /var/lib/homelabnext/wazuh-agent
   health:
-    short_description: Fail unless the agent reports itself connected to its manager.
+    short_description: Fail unless the agent reports itself connected to the manager the registry names for it (its configuration must name that manager).
     options:
       wazuh_agent_state_file: *state
+      wazuh_agent_manager_id: *manager
   readiness:
     short_description: Fail unless the manager's agent and enrollment ports answer.
     options:
