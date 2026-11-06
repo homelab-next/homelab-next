@@ -28,7 +28,11 @@ the first matching rule wins and a principal no rule matches is denied:
   below ``red`` carries one, so a reader below ``red`` cannot run one; that is why an analyzer
   with ``writes`` must be below ``red``.  A ``red`` reader's rule has no filter (an open point of
   ADR-0033, not of this file);
-* ``queries``: everyone may run queries; seeing or stopping another's is not granted.
+* ``queries``: everyone may run queries; seeing or stopping another's is not granted;
+* ``impersonation``: nobody may act as another user.  A reader signs in to the engine as itself
+  (docs/modules/tlp.md#engine-sign-in), and the row filters are keyed on the session user, so a
+  signed-in ``analyzer:novelty`` naming ``profile:<a red reader>`` in its user header would read
+  every row; the engine refuses that, whatever its default is when no rule is written.
 
 A principal can match several rules (a user in a group), and the first match wins.  Rules are
 ordered user rules (``profile:``, ``module:``, ``analyzer:``, ``user:``) before group rules, each
@@ -172,6 +176,8 @@ def render(site: dict[str, Any]) -> dict[str, Any] | None:
         # no CALL procedure for anyone (table procedures: refused by the row filters above)
         "procedures": [{"procedure": ".*", "privileges": []}],
         "queries": [{"allow": ["execute"]}],
+        # nobody acts as another user: the session user is the one that signed in
+        "impersonation": [{"original_user": ".*", "new_user": ".*", "allow": False}],
     }
 
 

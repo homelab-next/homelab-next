@@ -25,6 +25,12 @@ What it does, and what the tests pin without a server:
   (Trino string literals have no backslash escapes), ``datetime`` becomes ``TIMESTAMP '...
   UTC'``, lists ``ARRAY[...]``, :class:`Row` values ``ROW(...)``; anything else is refused.
 
+A client that signs in (``auth``) sends ``Authorization`` on every request, the ``nextUri`` reads
+included; :func:`password_auth` builds the HTTP Basic value the engine's password authenticator
+reads, for the login :func:`engine_login` names.  Such a client should pass ``opener=``
+:func:`homelabnext._http.credential_opener` (no redirect followed, no proxy), as
+:func:`homelabnext.conform.adapters.lake.make_lake` does.
+
 Errors from the server become :class:`~.errors.LakeError` (``UnknownTable`` for a missing table
 or schema) carrying Trino's ``errorName`` and message.
 """
@@ -49,7 +55,16 @@ from homelabnext._http import ResponseTooLarge, read_bounded, safe_urlopen
 
 from .errors import LakeError, UnknownTable
 
-__all__ = ["QueryResult", "Row", "TrinoError", "TrinoHTTP", "decode_value", "literal"]
+__all__ = [
+    "QueryResult",
+    "Row",
+    "TrinoError",
+    "TrinoHTTP",
+    "decode_value",
+    "engine_login",
+    "literal",
+    "password_auth",
+]
 
 INT64 = (-(2**63), 2**63 - 1)
 #: the prefix of the engine's request headers, and the one a statement's client tags travel in
@@ -188,6 +203,37 @@ def decode_value(value: Any, sig: Mapping[str, Any]) -> Any:
     return value
 
 
+# ---------------------------------------------------------------- signing in
+def engine_login(user: str) -> str:
+    """The name ``user`` signs in to the engine with: its first ``:`` written as ``.``.
+
+    A reader id (``analyzer:novelty``) holds a colon, which HTTP Basic credentials cannot carry
+    in the user part (RFC 7617: the first colon ends it) and a password file cannot hold in a
+    name.  The engine maps the login back to the reader id (a user-mapping rule
+    ``(profile|module|analyzer|user)\\.(.+)`` -> ``$1:$2``, docs/modules/tlp.md), so the session
+    user the row filters of ``lake-access.json`` name is the whole reader id again.  A name with a
+    second colon has no login and is refused."""
+    login = user.replace(":", ".", 1)
+    if not login or ":" in login or any(ord(c) < 0x21 or ord(c) == 0x7F for c in login):
+        raise LakeError(f"no engine login for user {user!r}")
+    return login
+
+
+def password_auth(user: str, password: Callable[[], str]) -> Callable[[], str]:
+    """An ``auth`` callable for :class:`TrinoHTTP`: HTTP Basic for :func:`engine_login` of
+    ``user`` and the password ``password()`` returns, read again at every request (the client
+    never holds it).  An empty password is an error, never a request without credentials."""
+    login = engine_login(user)
+
+    def header() -> str:
+        secret = password()
+        if not secret:
+            raise LakeError(f"no password for engine login {login!r}")
+        return "Basic " + base64.b64encode(f"{login}:{secret}".encode()).decode("ascii")
+
+    return header
+
+
 # ---------------------------------------------------------------- the client
 @dataclass
 class QueryResult:
@@ -214,6 +260,7 @@ class TrinoHTTP:
         max_bytes: int = 64 << 20,
         retries: int = 5,
         sleep: Callable[[float], None] = time.sleep,
+        opener: urllib.request.OpenerDirector | None = None,
     ):
         parts = urllib.parse.urlsplit(base_url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -226,6 +273,9 @@ class TrinoHTTP:
         self.max_bytes = max_bytes
         self._retries = retries
         self._sleep = sleep
+        #: how requests are sent: by default same-origin redirects only; a client that signs in
+        #: passes :func:`homelabnext._http.credential_opener` (no redirect, no proxy)
+        self._opener = opener
 
     def __repr__(self) -> str:
         return f"TrinoHTTP(<endpoint>, user={self.user!r})"
@@ -262,8 +312,9 @@ class TrinoHTTP:
             req = urllib.request.Request(
                 url, data=body, headers=headers, method="POST" if body is not None else "GET"
             )
+            send = self._opener.open if self._opener is not None else safe_urlopen
             try:
-                with safe_urlopen(req, timeout=self._timeout) as resp:
+                with send(req, timeout=self._timeout) as resp:
                     raw = read_bounded(resp, self.max_bytes)
                 break
             except urllib.error.HTTPError as exc:
