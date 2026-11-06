@@ -51,7 +51,8 @@ With `S = as_of - score_hours`:
      the entity, not scored and not a signal;
    - more than `max_values_per_entity` distinct values in the scoring window alone: one
      **burst** row for the entity with its row count there, not scored, and a signal (a scan on
-     the scoring day, by an entity learned or not);
+     the scoring day, by an entity that was quiet while learning, learned or not); an entity
+     noisy in both windows is high_cardinality instead, never a burst;
    - `T(e) == 0`: **unlearned**, reported with no score (never scored 0);
    - otherwise `surprise = 0` when `s >= min_support`, else `1 - s / min_support`;
      `confidence = min(1, T(e) / entity_min_samples)`; `score = surprise * confidence`; a
@@ -140,9 +141,10 @@ naming entities in the same `entity_kind` namespace.
 
 ## Corroboration
 
-`corroborate` is the one path from novelty to escalation: it groups `finding` and `unlearned`
-rows by `(entity_kind, entity)` within a window and returns only the entities flagged by at least
-two distinct sources, with the strictest label of the rows behind each. Two profiles of one
+`corroborate` is the one path from novelty to escalation: it groups `finding`, `unlearned` and
+`burst` rows by `(entity_kind, entity)` within a window and returns only the entities flagged by at
+least two distinct sources, with the strictest label of the rows behind each. A `high_cardinality`
+row is not a signal, so an entity noisy in both windows does not corroborate. Two profiles of one
 source are one source, and an address and a host of the same text are two entities.
 
 ## Command line
