@@ -2,7 +2,9 @@
 # Fail unless every file of model_store_entry is on disk with its size and (unless
 # model_store_sizes_only) its sha256.  A hub-cache snapshot file is a symlink to its blob: followed,
 # but only into its repository's blobs/ (an hf entry) or its own directory; a link anywhere else
-# would keep the digest while bytes nothing manages change behind it.
+# would keep the digest while bytes nothing manages change behind it.  An export (written by the
+# trainers' group) is also walked without following links: a link, a special file or a file no
+# export entry of its run lists anywhere in it fails, and so does an entry directory that is a link.
 - name: Locate the entry
   ansible.builtin.include_tasks: entry_paths.yml
   tags: [health, verify]
@@ -14,6 +16,8 @@
     dir: "{{ model_store_entry_dir }}"
     files: "{{ model_store_entry.value.files }}"
     checksum: "{{ not (model_store_sizes_only | default(false) | bool) }}"
+    walk: "{{ model_store_entry.value.format == 'export' }}"
+    listed: "{{ model_store_entry_listed }}"
   register: model_store_stats
   tags: [health, verify]
 
@@ -23,14 +27,14 @@
     fail_msg: >-
       model_store: {{ model_store_entry.key }} does not match its manifest in
       {{ model_store_entry_dir }}: {{ model_store_bad | from_json | join(', ') }}
-      (missing, a link out of place, wrong size or sha256 differs; never serve it: delete the
-      files and fetch again)
+      (missing, a link out of place, a file the manifest does not list, wrong size or sha256
+      differs; never serve it: delete the files and fetch or export again)
   vars:
     model_store_inside: >-
       {{ [model_store_entry_dir ~ '/']
          + ([model_store_entry_top ~ '/blobs/'] if model_store_entry.value.format == 'hf' else []) }}
     model_store_bad: >-
-      {%- set bad = [] -%}
+      {%- set bad = model_store_stats.strays | default([]) | list -%}
       {%- for r in model_store_stats.results -%}
       {%- set link = r.link -%}
       {%- set ns = namespace(inside=not (link.islnk | default(false))) -%}
