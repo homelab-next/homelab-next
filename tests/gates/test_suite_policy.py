@@ -279,7 +279,6 @@ LOCAL_PROBE_BASELINE = {
     "tests/overlay/test_private_overlay_example.py::hook",
     "tests/packaging/pkgbuild.py::export_tree",
     "tests/roles/test_role_render.py::docker_compose_ok",
-    "tools/tests/test_caddy_lint.py::<module>",
     "tests/workflows/test_workflows_validate.py::test_r01_untracked_pack_fails_in_git",
 }
 #: root-only tests that skip on the euid themselves (module level); the agent memory retraction
