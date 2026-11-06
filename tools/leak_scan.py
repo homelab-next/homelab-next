@@ -26,9 +26,14 @@ the file.
 
 What is scanned: inside a git work tree, the files ``git ls-files`` reports (tracked plus untracked
 files that are not ignored); elsewhere, a directory walk that skips ``build``, ``dist`` and virtual
-environments only at the top of the scanned directory.  A file that cannot be scanned (binary,
-larger than 5 MB, unreadable) is reported and fails the run unless ``--allow-skip GLOB`` names it.
-A symbolic link is never followed: its target path is scanned as text.
+environments only at the top of the scanned directory, and caches and ``node_modules`` at any
+depth.  ``--walk`` always walks, even inside a work tree, and prunes nothing but ``.git``, so
+git-ignored files are scanned too (a guest's ``/etc`` under etckeeper is a work tree whose
+``.gitignore`` hides ``*.dpkg-old`` and friends).  A file or directory that cannot be scanned
+(binary, larger than 5 MB, unreadable, or a socket, FIFO or device) is reported and fails the run
+unless ``--allow-skip GLOB`` names it.  A symbolic link is never followed: its target path is
+scanned as text.  A control character in a printed path is escaped (``\\n``, ``\\x01``), so one
+output line is always one hit.
 
 ``--history RANGE`` scans the lines each commit in ``RANGE`` added (``git log -p``), by default
 with the network and identity groups and the deny-list, so a value that was committed and later
@@ -49,6 +54,7 @@ Usage::
     python3 tools/leak_scan.py --history origin/main..HEAD
     python3 tools/leak_scan.py --list               # show the built-in patterns
     python3 tools/leak_scan.py --groups secret .    # only one group of patterns
+    python3 tools/leak_scan.py --walk /etc          # ignore git: scan git-ignored files too
 """
 
 from __future__ import annotations
@@ -60,6 +66,7 @@ import ipaddress
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Iterator
@@ -90,6 +97,9 @@ SKIP_DIRS_ANYWHERE = {
 # directory that happens to be called ``build`` deeper in the tree is still scanned.
 SKIP_DIRS_AT_ROOT = {".venv", "venv", "dist", "build", ".tox"}
 MAX_BYTES = 5 * 1024 * 1024
+SPECIAL_FILE = "special file (socket, FIFO or device)"
+# A control character in a printed path could start a forged output line, so it is escaped.
+_CONTROL = {c: f"\\x{c:02x}" for c in [*range(32), 127]} | {9: "\\t", 10: "\\n", 13: "\\r"}
 # The marker must end the line; the reason is a few plain words (so a value cannot hide in it).
 SUPPRESS_RE = re.compile(
     r"scrub-allow:[ \t]*(?P<reason>[A-Za-z][A-Za-z0-9 ,;()'_-]{2,79}?)[ \t]*(?:-->|\*/)?[ \t]*$"
@@ -825,7 +835,11 @@ def _git_files(directory: Path) -> list[Path] | None:
     return [directory / n for n in names]
 
 
-def iter_files(paths: Iterable[str]) -> Iterator[Path]:
+def iter_files(paths: Iterable[str], walk: bool = False) -> Iterator[Path | Skipped]:
+    """Files to scan under ``paths``, and each directory that could not be listed.
+
+    ``walk`` ignores git (and so its ignore rules) and prunes nothing but ``.git``.
+    """
     for raw in paths:
         p = Path(raw)
         if not p.exists() and not p.is_symlink():
@@ -833,23 +847,36 @@ def iter_files(paths: Iterable[str]) -> Iterator[Path]:
         if not p.is_dir() or p.is_symlink():
             yield p
             continue
-        tracked = _git_files(p)
+        tracked = None if walk else _git_files(p)
         if tracked is not None:
             for f in tracked:
                 if f.exists() or f.is_symlink():  # deleted-but-tracked files are skipped
                     yield f
             continue
-        for root, dirs, files in os.walk(p):
+        unlisted: list[Skipped] = []
+
+        def _unlisted(err: OSError, into: list[Skipped] = unlisted, top: Path = p) -> None:
+            name = str(err.filename) if err.filename is not None else str(top)
+            into.append(Skipped(name, f"unreadable directory ({err.__class__.__name__})"))
+
+        for root, dirs, files in os.walk(p, onerror=_unlisted):
+            yield from unlisted
+            unlisted.clear()
             at_root = Path(root) == p
             dirs[:] = sorted(
                 d
                 for d in dirs
-                if d not in SKIP_DIRS_ANYWHERE and not (at_root and d in SKIP_DIRS_AT_ROOT)
+                if d != ".git"
+                and (
+                    walk
+                    or (d not in SKIP_DIRS_ANYWHERE and not (at_root and d in SKIP_DIRS_AT_ROOT))
+                )
             )
             for name in sorted(files):
                 if name == ".git":  # worktree pointer file
                     continue
                 yield Path(root) / name
+        yield from unlisted
 
 
 def decode(data: bytes) -> str | None:
@@ -866,17 +893,31 @@ def decode(data: bytes) -> str | None:
 def read_text_file(path: Path) -> str | Skipped:
     """Text to scan, or why the file could not be scanned."""
     try:
-        if path.is_symlink():
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode):
             return os.readlink(path)  # never follow: the target path itself is the content
-        if path.stat().st_size > MAX_BYTES:
-            return Skipped(str(path), f"larger than {MAX_BYTES // (1024 * 1024)} MB")
-        data = path.read_bytes()
+        if not stat.S_ISREG(st.st_mode):  # never opened: a read of a FIFO blocks forever
+            return Skipped(str(path), SPECIAL_FILE)
+        # O_NONBLOCK and the fstat cover a file swapped for a FIFO or a link after the lstat
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(path, flags), "rb") as fh:
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                return Skipped(str(path), SPECIAL_FILE)
+            if st.st_size > MAX_BYTES:
+                return Skipped(str(path), f"larger than {MAX_BYTES // (1024 * 1024)} MB")
+            data = fh.read()
     except OSError as exc:
         return Skipped(str(path), f"unreadable ({exc.__class__.__name__})")
     text = decode(data)
     if text is None:
         return Skipped(str(path), "binary (NUL byte)")
     return text
+
+
+def printable_path(path: str) -> str:
+    """``path`` with its control characters escaped, so that it prints as one line."""
+    return path.translate(_CONTROL)
 
 
 def _allowed_skip(path: str, globs: Iterable[str]) -> bool:
@@ -891,17 +932,18 @@ def scan_paths(
     suppressed: list[str] | None = None,
     skipped: list[Skipped] | None = None,
     allow_skip: Iterable[str] = (),
+    walk: bool = False,
 ) -> list[Hit]:
     hits: list[Hit] = []
     pats = list(patterns)
     globs = list(allow_skip)
-    for f in iter_files(paths):
-        text = read_text_file(f)
+    for f in iter_files(paths, walk):
+        text = f if isinstance(f, Skipped) else read_text_file(f)
         if isinstance(text, Skipped):
             if skipped is not None and not _allowed_skip(text.path, globs):
                 skipped.append(text)
             continue
-        hits.extend(scan_text(text, str(f), pats, denylist, suppressed))
+        hits.extend(scan_text(text, printable_path(str(f)), pats, denylist, suppressed))
     return hits
 
 
@@ -993,8 +1035,16 @@ def main(argv: list[str] | None = None) -> int:
         metavar="GLOB",
         help="a file matching GLOB may be skipped (binary/large) without failing the run",
     )
+    ap.add_argument(
+        "--walk",
+        action="store_true",
+        help="walk directories even inside a git work tree, so git-ignored files are scanned too",
+    )
     ap.add_argument("--list", action="store_true", help="print the built-in patterns and exit")
     args = ap.parse_args(argv)
+    if args.walk and (args.stdin or args.history or args.check_authors):
+        print("leak_scan: --walk applies to path scans only", file=sys.stderr)
+        return EXIT_CONFIG
 
     if args.list:
         for p in PATTERNS:
@@ -1025,7 +1075,13 @@ def main(argv: list[str] | None = None) -> int:
             hits = scan_text(sys.stdin.read(), "<stdin>", patterns, denylist, suppressed)
         else:
             hits = scan_paths(
-                args.paths or ["."], patterns, denylist, suppressed, skipped, args.allow_skip
+                args.paths or ["."],
+                patterns,
+                denylist,
+                suppressed,
+                skipped,
+                args.allow_skip,
+                args.walk,
             )
     except ConfigError as exc:
         print(f"leak_scan: {exc}", file=sys.stderr)
@@ -1036,7 +1092,8 @@ def main(argv: list[str] | None = None) -> int:
     for h in hits:
         print(f"{h.path}:{h.line}: [{h.pattern}] {h.shown}")
     for sk in skipped:
-        print(f"{sk.path}: [not-scanned] {sk.reason} (allow it with --allow-skip if intended)")
+        shown = printable_path(sk.path)
+        print(f"{shown}: [not-scanned] {sk.reason} (allow it with --allow-skip if intended)")
     for msg in problems:
         print(msg)
     failures = len(hits) + len(skipped) + len(problems)

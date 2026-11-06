@@ -76,7 +76,10 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from homelabnext._tempfile import write_temp  # the broker writes file bytes only through it
+from homelabnext._tempfile import (  # the broker writes file bytes only through them
+    replace_temp,
+    write_temp,
+)
 
 __all__ = [
     "FileApprovalStore",
@@ -85,6 +88,7 @@ __all__ = [
     "is_id",
     "new_id",
     "process_identity",
+    "replace_temp",
     "write_exclusive",
     "write_temp",
 ]
