@@ -30,6 +30,8 @@ RATCHETS = {
     "product_name_lint": '--base "$BASE" "$GITHUB_WORKSPACE"',
     "dup_check": '--base "$BASE" "$GITHUB_WORKSPACE"',
     "register_ids": 'check-lost --base "$BASE"',
+    # the list of components out of the blocking set only shrinks, unless the operator's label
+    "experimental": 'ratchet --base "$BASE" "$GITHUB_WORKSPACE"',
 }
 BARE = re.compile(r"(?:^|[\s;|&(])(?:python3?|pip3?)(?:\s|$)")
 
