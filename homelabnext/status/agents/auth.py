@@ -10,8 +10,10 @@ configured with a trusted front door (``agents.yml`` ``private:`` naming a regis
 2. it carries the front door's **shared-secret header** with the right value (constant-time
    compare; the edge adds it with ``header_up`` from the secret store, so a process that can reach
    the listener cannot forge the identity header below without also holding the secret);
-3. it carries the **identity header** the forward-auth proxy sets (the platform's set,
-   :data:`homelabnext.edge_identity.IDENTITY_HEADERS`: ``X-Auth-Request-User``);
+3. it carries the **identity header** the forward-auth proxy sets: the person's username, the
+   IdP's ``preferred_username`` claim as the auth proxy copies it (the platform's set,
+   :data:`homelabnext.edge_identity.IDENTITY_HEADERS`: ``X-Auth-Request-Preferred-Username``;
+   never ``X-Auth-Request-User``, the proxy's user-id claim, an email or ``sub`` by default);
 4. that identity is in a **viewer group** (``X-Auth-Request-Groups``, ``,``-separated: the
    registry row's ``roles.viewer``, ADR-0034), or in one of the groups the caller names (the
    Approvals page's approver groups, :mod:`homelabnext.status.approvals`).

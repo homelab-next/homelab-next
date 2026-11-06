@@ -28,7 +28,7 @@ import yaml
 
 from homelabnext import paths
 from homelabnext._yaml import UniqueKeyLoader
-from homelabnext.edge_identity import IDENTITY_HEADERS
+from homelabnext.edge_identity import IDENTITY_HEADERS, USERNAME_CLAIM
 from homelabnext.registry.model import (
     Registry,
     secret_env_name,
@@ -261,22 +261,32 @@ def _csrf_key(
     return value.encode("utf-8")
 
 
-def _identity_headers(priv: Mapping[str, Any]) -> list[str]:
+def _identity_headers(priv: Mapping[str, Any], warnings: list[str]) -> list[str]:
     """``private.identity_header``/``groups_header`` (1.0-1.3) may only restate the platform's
     identity-header set (:data:`homelabnext.edge_identity.IDENTITY_HEADERS`): the edge strips
     and copies those and no other, so a hub reading another name would trust a header a
-    client can send."""
+    client can send.  The hub names a person by the username header (the IdP's
+    ``preferred_username``); the user header that 1.4 restated (the auth proxy's user-id claim,
+    an email or ``sub``) is still taken, with a warning, and the hub reads the username header
+    whatever the key says."""
     problems = []
-    for key, want in (
-        ("identity_header", IDENTITY_HEADERS.user),
-        ("groups_header", IDENTITY_HEADERS.groups),
+    for key, want, legacy in (
+        ("identity_header", IDENTITY_HEADERS.username, IDENTITY_HEADERS.user),
+        ("groups_header", IDENTITY_HEADERS.groups, None),
     ):
         got = priv.get(key)
-        if got is not None and got.lower() != want.lower():
-            problems.append(
-                f"private.{key} {got!r}: the edge strips and copies {want} (the platform's "
-                "identity-header set, homelabnext.edge_identity); drop the key"
+        if got is None or got.lower() == want.lower():
+            continue
+        if legacy and got.lower() == legacy.lower():
+            warnings.append(
+                f"private.{key} {got!r}: the hub names a person by {want} (the IdP's "
+                f"{USERNAME_CLAIM} claim, homelabnext.edge_identity), not {got}; drop the key"
             )
+            continue
+        problems.append(
+            f"private.{key} {got!r}: the edge strips and copies {want} (the platform's "
+            "identity-header set, homelabnext.edge_identity); drop the key"
+        )
     return problems
 
 
@@ -336,7 +346,7 @@ def build_config(
                 ],
             )
         viewers, probs = _role_groups(doc, svc, "viewer", "private", "viewer_group")
-        probs += _identity_headers(priv)
+        probs += _identity_headers(priv, cfg.warnings)
         if probs:
             raise AgentsConfigError("invalid agents config", probs)
         trusted, probs = _proxies(registry, priv.get("trusted_proxies"))
@@ -356,7 +366,7 @@ def build_config(
                 trusted=trusted,
                 header=svc.front_door["header"],
                 secret=secret,
-                identity_header=IDENTITY_HEADERS.user,
+                identity_header=IDENTITY_HEADERS.username,
                 groups_header=IDENTITY_HEADERS.groups,
                 viewer_groups=viewers,
                 access_log=base / priv["access_log"],

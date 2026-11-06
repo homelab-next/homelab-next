@@ -96,6 +96,9 @@ def _set(d, path, value):
         (("oidc", "login_ttl"), "2h", "at most 1h"),
         (("oidc", "redirect_uris"), ["javascript:alert(1)"], "http(s) URLs"),
         (("oidc", "groups_claim"), "groups claim", "claim name"),
+        # the approver allowlist names people by preferred_username: one claim for both
+        (("oidc", "user_claim"), "email", "oidc.user_claim is preferred_username"),
+        (("oidc", "user_claim"), "sub", "oidc.user_claim is preferred_username"),
         (("ssh_mount",), "ssh/../sys", "mount name"),
     ],
 )
@@ -165,3 +168,16 @@ def test_an_unreadable_or_duplicate_keyed_spec_is_a_spec_error(tmp_path):
     with pytest.raises(SpecError, match="duplicate key 'ssh_ca_version'") as err:
         load(dup)
     assert isinstance(err.value.__cause__, yaml.YAMLError)
+
+
+def test_the_ssh_ca_and_the_approver_allowlist_key_on_one_claim():
+    """A person is one name on their certificate and on the hub's approver allowlist: the SSH
+    CA's user claim (its default, and the only value it takes) is the claim whose copy the hub
+    reads as the approver subject."""
+    from homelabnext.edge_identity import IDENTITY_HEADERS, USERNAME_CLAIM
+
+    d = copy.deepcopy(doc())
+    d["oidc"].pop("user_claim", None)
+    assert parse(d).user_claim == USERNAME_CLAIM == "preferred_username"
+    # the reference auth proxy's copy of that claim, which the hub's front door reads
+    assert IDENTITY_HEADERS.username == "X-Auth-Request-Preferred-Username"

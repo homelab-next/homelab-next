@@ -199,7 +199,12 @@ def test_request_filter_and_an_unreachable_broker(served, broker):
     [
         (DOC_ADDR, APPROVER, 403, 403),  # not from the trusted proxy
         (LOOPBACK, {**APPROVER, "X-Hnx-Front-Door": "fake-wrong-secret"}, 403, 403),
-        (LOOPBACK, {k: v for k, v in APPROVER.items() if k != "X-Auth-Request-User"}, 403, 403),
+        (
+            LOOPBACK,
+            {k: v for k, v in APPROVER.items() if k != "X-Auth-Request-Preferred-Username"},
+            403,
+            403,
+        ),
         (LOOPBACK, {**APPROVER, "X-Auth-Request-Groups": "staff"}, 403, 403),  # neither group
         (LOOPBACK, VIEWER, 200, 403),  # viewer, not approver: reads, never decides
         (
@@ -416,7 +421,7 @@ def test_approve_files_the_front_door_identity_and_re_submits_are_idempotent(
     served, broker, tmp_path
 ):
     base, site = served()
-    headers = {**APPROVER, "X-Auth-Request-User": "operator.one"}
+    headers = {**APPROVER, "X-Auth-Request-Preferred-Username": "operator.one"}
     form = _form(site, user="operator.one", note="ok to restart")
     status, _, body = _post(base, form, headers)
     assert status == 200 and "approved" in body.decode()
@@ -435,7 +440,7 @@ def test_a_non_canonical_username_is_not_folded_and_cannot_decide(served, broker
     """The IdP's usernames are case-sensitive: ``Operator`` is not ``operator``, so the hub never
     lower-cases one into the other's allowlist entry; it refuses to decide for it."""
     base, site = served()
-    headers = {**APPROVER, "X-Auth-Request-User": user}
+    headers = {**APPROVER, "X-Auth-Request-Preferred-Username": user}
     status, _, body = _post(base, _form(site, user=user), headers)
     assert status == 403 and "canonical" in body.decode() and broker.calls == []
     assert _log(tmp_path)[-1]["reason"] == "username is not a canonical approver subject"
@@ -671,10 +676,70 @@ def test_the_identity_headers_are_the_platforms_only(tmp_path, registry):
         path.write_text(yaml.safe_dump(bad))
         with pytest.raises(AgentsConfigError, match=rf"private\.{key}"):
             load_config(path, registry, lambda ref: FAKE_SECRET)
+    secrets = lambda ref: CSRF_KEY if ref == CSRF_REF else FAKE_SECRET  # noqa: E731
+    doc["private"]["identity_header"] = "X-Auth-Request-Preferred-Username"
+    path.write_text(yaml.safe_dump(doc))
+    cfg = load_config(path, registry, secrets)
+    assert cfg.front_door.identity_header == "X-Auth-Request-Preferred-Username"
+    assert cfg.warnings == []
+    # the 1.4 restatement of the user header is still taken, with a warning, and not obeyed
     doc["private"]["identity_header"] = "X-Auth-Request-User"
     path.write_text(yaml.safe_dump(doc))
-    cfg = load_config(path, registry, lambda ref: CSRF_KEY if ref == CSRF_REF else FAKE_SECRET)
-    assert cfg.front_door.identity_header == "X-Auth-Request-User"
+    cfg = load_config(path, registry, secrets)
+    assert cfg.front_door.identity_header == "X-Auth-Request-Preferred-Username"
+    assert [w for w in cfg.warnings if "private.identity_header" in w and "drop the key" in w]
+
+
+#: what the reference auth proxy (oauth2-proxy, ``--set-xauthrequest``, its default user-id claim)
+#: answers ``/oauth2/auth`` with for a realm user, and the edge's ``copy_headers`` puts on the
+#: request: ``-User`` is the user-id claim (an email by default, or ``sub``), the person's name
+#: is ``-Preferred-Username``
+REFERENCE_PROXY = {
+    "X-Auth-Request-User": "operator.one@lab.example",
+    "X-Auth-Request-Email": "operator.one@lab.example",
+    "X-Auth-Request-Groups": "staff,hub-approvers",
+    "X-Auth-Request-Preferred-Username": "operator.one",
+}
+
+
+@pytest.mark.parametrize(
+    "user_id", ["operator.one@lab.example", "4f1c2b3a-0d9e-4c8b-a7f6-e5d4c3b2a190"]
+)
+def test_an_approve_with_the_reference_proxys_headers_succeeds(
+    tmp_path, clock, registry, broker, user_id
+):
+    """The hub as ``hnx status serve`` configures it, behind the documented proxy flags: the
+    approver is the realm user's ``preferred_username`` (``X-Auth-Request-Preferred-Username``),
+    never the user-id claim in ``X-Auth-Request-User``, which no approver allowlist names."""
+    cfg = _cfg(tmp_path, registry)
+    fd = dataclasses.replace(
+        cfg.front_door, trusted=frozenset({LOOPBACK}), access_log=tmp_path / "access.jsonl"
+    )
+    # served on loopback here, so the same-origin check takes the request's own host
+    settings = dataclasses.replace(cfg.approvals, public_origin=None)
+    site = ApprovalsSite(broker, settings, fd, clock=clock, key=KEY)
+    srv = make_server(lambda: _doc(registry, approvals=True), approvals=site)
+    threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+    base = "http://{}:{}".format(*srv.server_address[:2])
+    headers = {
+        "X-Hnx-Front-Door": FAKE_SECRET,
+        **REFERENCE_PROXY,
+        "X-Auth-Request-User": user_id,
+    }
+    try:
+        status, _, page = request(base, "/approvals", headers=headers)
+        assert status == 200 and "<form" in page.decode()
+        status, _, body = _post(base, _form(site, user="operator.one"), headers)
+        assert status == 200, body
+        assert broker.calls == [("approve", RID, "sso", "operator.one", None)]
+        assert _log(tmp_path)[-1]["user"] == "operator.one"
+        # a proxy that sent no preferred_username names nobody: the user-id claim is not a fallback
+        anonymous = {k: v for k, v in headers.items() if "Preferred" not in k}
+        anonymous["X-Auth-Request-User"] = "operator.one"
+        assert request(base, "/approvals", headers=anonymous)[0] == 403
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 # ---------------------------------------------------------------- the persistent CSRF key
@@ -840,7 +905,7 @@ def test_round_trip_through_a_real_broker_socket(tmp_path, clock, registry):
         threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
         base = "http://{}:{}".format(*srv.server_address[:2])
         try:
-            who = {**APPROVER, "X-Auth-Request-User": "operator-one"}
+            who = {**APPROVER, "X-Auth-Request-Preferred-Username": "operator-one"}
             status, _, body = request(base, "/approvals", headers=who)
             pending = svc.pending()[0]
             assert status == 200 and rid in body.decode() and pending["digest"] in body.decode()

@@ -81,8 +81,8 @@ def served(tmp_path, clock, store, registry):
         (LOOPBACK, {**AUTHORIZED, "X-Hnx-Front-Door": ""}, "secret header"),
         (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Hnx-Front-Door"}, "secret header"),
         (LOOPBACK, {**AUTHORIZED, "X-Hnx-Front-Door": "fake-wrong"}, "secret header"),
-        (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Auth-Request-User"}, "no identity"),
-        (LOOPBACK, {**AUTHORIZED, "X-Auth-Request-User": "a b<c>"}, "no identity"),
+        (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Auth-Request-Preferred-Username"}, "no identity"),
+        (LOOPBACK, {**AUTHORIZED, "X-Auth-Request-Preferred-Username": "a b<c>"}, "no identity"),
         (LOOPBACK, {**AUTHORIZED, "X-Auth-Request-Groups": "staff"}, "viewer group"),
         (LOOPBACK, {k: v for k, v in AUTHORIZED.items() if k != "X-Auth-Request-Groups"}, "viewer group"),
         (LOOPBACK, {**AUTHORIZED, "X-Auth-Request-Groups": "hub-private-viewers-not"}, "viewer group"),
@@ -105,7 +105,7 @@ def test_front_door_allows_with_every_piece(tmp_path):
 def test_a_repeated_header_fails_closed(tmp_path):
     twice = [*AUTHORIZED.items(), ("X-Hnx-Front-Door", FAKE_SECRET)]
     assert not authorize(front_door(tmp_path), LOOPBACK, Headers(twice)).allowed
-    spoof = [*AUTHORIZED.items(), ("X-Auth-Request-User", "someone-else")]
+    spoof = [*AUTHORIZED.items(), ("X-Auth-Request-Preferred-Username", "someone-else")]
     assert not authorize(front_door(tmp_path), LOOPBACK, Headers(spoof)).allowed
 
 
@@ -125,7 +125,8 @@ def test_main_listener_without_a_front_door_never_serves_private(served, path):
 
 
 @pytest.mark.parametrize(
-    "drop", ["proxy", "X-Hnx-Front-Door", "X-Auth-Request-User", "X-Auth-Request-Groups"]
+    "drop",
+    ["proxy", "X-Hnx-Front-Door", "X-Auth-Request-Preferred-Username", "X-Auth-Request-Groups"],
 )
 @pytest.mark.parametrize("path", PRIVATE)
 def test_private_view_is_403_without_each_piece(served, tmp_path, drop, path):

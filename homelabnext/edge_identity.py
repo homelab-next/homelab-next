@@ -10,13 +10,24 @@ every consumer has to agree on exactly which names they are:
 * the Caddy generator (:mod:`homelabnext.generators.builtin`) copies them and strips every
   client-sent copy first;
 * ``tools/caddy_lint.py`` (F-23) refuses any config that lets a client set one;
-* the status hub (:mod:`homelabnext.status.agents.auth`) reads the user and the groups.
+* the status hub (:mod:`homelabnext.status.agents.auth`) reads the username and the groups.
 
 They read :data:`IDENTITY_HEADERS` and nothing else.  The defaults are the names the reference
-auth proxy sets with ``--set-xauthrequest`` (``X-Auth-Request-User``, ``-Groups``, ``-Email``;
-it also sends ``-Preferred-Username``, and ``-Access-Token`` with ``--pass-access-token``, which
-are never copied but carry the mark, so they are stripped too).  It sends one value per group,
-and Caddy joins a copied header's values with ``,``: :attr:`IdentityHeaders.groups_separator`.
+auth proxy (oauth2-proxy) sets with ``--set-xauthrequest``: ``X-Auth-Request-User``, ``-Groups``,
+``-Email`` and ``-Preferred-Username``, all four copied (it also sends ``-Access-Token`` with
+``--pass-access-token``, which is never copied but carries the mark, so it is stripped too).  It
+sends one value per group, and Caddy joins a copied header's values with ``,``:
+:attr:`IdentityHeaders.groups_separator`.
+
+**A person's one name: the IdP's** :data:`USERNAME_CLAIM` **claim** (``preferred_username``).
+The reference proxy fills ``X-Auth-Request-User`` with its *user-id* claim (``email`` by default,
+or ``sub``: an address with ``@`` or an opaque id), so that header names nobody the platform's
+allowlists list.  The person is :attr:`IdentityHeaders.username` (``-Preferred-Username``, the
+proxy's copy of ``preferred_username``, sent only when the token holds the claim): the status
+hub's private tier and its approver subject read it, and the SSH CA
+(:mod:`homelabnext.sshca`) signs a principal from the same claim, so one person is one name on
+the approver allowlist and on their SSH certificate.  The IdP must not let a user change it
+(the generated realm sets ``editUsernameAllowed: false``).
 
 **The mark.**  Every identity header carries :attr:`IdentityHeaders.mark` (``auth-request``).
 The strip deletes, case-insensitively, every client-sent header whose name contains the mark in
@@ -44,6 +55,9 @@ AUTH_PROXY_CAPABILITY = "auth-proxy"
 AUTH_PROXY_CHECK = "/oauth2/auth"
 AUTH_PROXY_SIGN_IN = "/oauth2/sign_in"
 AUTH_PROXY_PREFIX = "/oauth2/*"
+#: the IdP claim that names a person to the platform: the status hub's identity and approver
+#: subject (through :attr:`IdentityHeaders.username`) and the SSH CA's principal
+USERNAME_CLAIM = "preferred_username"
 #: where the IdP sends a signed-in user back to the auth proxy (each guarded site's own host)
 AUTH_PROXY_CALLBACK = "/oauth2/callback"
 
@@ -58,11 +72,14 @@ def fold(name: str) -> str:
 
 @dataclass(frozen=True)
 class IdentityHeaders:
-    """One declared identity-header set (see the module docstring)."""
+    """One declared identity-header set (see the module docstring): ``user`` is the auth proxy's
+    user-id claim, ``username`` its copy of :data:`USERNAME_CLAIM` (the name the platform knows a
+    person by)."""
 
     user: str
     groups: str
     email: str
+    username: str
     mark: str
     groups_separator: str = ","
 
@@ -80,9 +97,9 @@ class IdentityHeaders:
             raise ValueError("the groups separator is one punctuation character")
 
     @property
-    def headers(self) -> tuple[str, str, str]:
+    def headers(self) -> tuple[str, str, str, str]:
         """The headers ``forward_auth`` copies from the auth proxy's answer, in order."""
-        return (self.user, self.groups, self.email)
+        return (self.user, self.groups, self.email, self.username)
 
     def carries_mark(self, name: str) -> bool:
         """Whether a header (or ``HTTP_<header>`` variable) name carries the mark, in any case
@@ -112,5 +129,6 @@ IDENTITY_HEADERS = IdentityHeaders(
     user="X-Auth-Request-User",
     groups="X-Auth-Request-Groups",
     email="X-Auth-Request-Email",
+    username="X-Auth-Request-Preferred-Username",
     mark="auth-request",
 )
