@@ -299,6 +299,7 @@ PARITY_FILES = {
     "workflows/decisions/page.yml": "when: rule 900300\n",
     "homelabnext/decide/examples/decision_spec.yml": "on: rule_id 900303\n",
     "schedules/s.yml": "watch: det:no-such-detection\n",
+    "workflows/packs/p.yml": "trigger: {where: [{ref: $event.data.detection, equals: det:no-such-pack-det}]}\n",
 }
 
 

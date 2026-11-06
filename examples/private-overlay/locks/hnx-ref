@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# HNX_REF: the homelab-next commit this overlay checks and deploys (docs/private-overlay.md, "The
+# pinned homelab-next commit").  One full commit SHA on homelab-next's main; checks.yml and
+# deploy.yml refuse anything else, including a commit that only a pull request or a fork has.
+# Change it only by a pull request (CODEOWNERS owns locks/).  The all-zero placeholder below is
+# refused: replace it with the commit you have reviewed.
+0000000000000000000000000000000000000000

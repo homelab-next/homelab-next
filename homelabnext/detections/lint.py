@@ -14,8 +14,8 @@ from pathlib import Path
 from .fixtures import FixtureError, load_fixtures
 from .sigma import ATTACK_TECH_RE, STATUSES, RuleError, load_rules
 
-# Agent-facing file kinds: charters, profiles, decision specs, schedules. Decision specs live in
-# decision packs (``workflows/decisions/``) and as ``decision_spec*`` files.
+# Agent-facing file kinds: charters, profiles, decision specs, schedules, workflow packs. Decision
+# specs live in decision packs (``workflows/decisions/``) and as ``decision_spec*`` files.
 AGENT_GLOBS = (
     "**/charters/**/*",
     "**/profiles/**/*",
@@ -23,6 +23,7 @@ AGENT_GLOBS = (
     "**/decision_specs/**/*",
     "**/decision_spec*",
     "**/schedules/**/*",
+    "**/workflows/packs/**/*",
     "**/*charter*",
 )
 # Never agent-facing: test fixtures (some are bad on purpose), build output, virtualenvs and

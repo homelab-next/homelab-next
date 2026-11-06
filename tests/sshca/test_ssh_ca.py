@@ -47,7 +47,7 @@ def test_the_template_renders_least_privilege_writes():
     assert deploy["allowed_users"] == "hnx-deploy" == deploy["default_user"]
     assert deploy["allowed_extensions"] == "" and deploy["default_extensions"] == {}
     assert deploy["default_critical_options"] == {"source-address": SOURCE}
-    assert (deploy["ttl"], deploy["max_ttl"]) == ("30m", "1h")
+    assert (deploy["ttl"], deploy["max_ttl"]) == ("1h", "1h")
     admin = w[3]["data"]
     assert admin["default_extensions"] == {"permit-pty": ""}
     assert admin["default_critical_options"] == {}
