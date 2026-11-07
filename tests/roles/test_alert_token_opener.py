@@ -199,16 +199,28 @@ elif "-S" in sys.argv:
 
 
 @pytest.mark.parametrize("role", sorted(TEMPLATES))
-def test_a_token_that_is_not_printable_ascii_is_refused_unquoted(tmp_path, servers, role):
+def test_an_empty_token_is_refused_naming_its_file(tmp_path, servers, role):
     target = servers()
+    script = alert_job(tmp_path, role, target.url, "")
+    run = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30)
+    assert target.seen == [], "an empty token was sent (Authorization: Bearer with no token)"
+    assert run.returncode == 2 and "alert not sent" in run.stderr  # owed, not lost
+    assert f"the token file {tmp_path / 'token'} is empty" in run.stderr
+
+
+def alert_job(tmp_path, role, url, token):
+    """The rendered script, with fake CLIs that report one finding, so a run owes an alert."""
     cli = tmp_path / "fake-cli"
     cli.write_text(f"#!{sys.executable}\n" + FAKE_CLI)
     cli.chmod(0o755)
     clis = {"needrestart": {"cli": str(cli)}, "lynis": {"dpkg_cli": str(cli)}}[role]
-    script = render(
-        tmp_path, role, target.url, token="tk-first\nSECRET-AFTER-THE-BREAK",
-        state_dir=str(tmp_path / "state"), **clis,
-    )  # fmt: skip
+    return render(tmp_path, role, url, token=token, state_dir=str(tmp_path / "state"), **clis)
+
+
+@pytest.mark.parametrize("role", sorted(TEMPLATES))
+def test_a_token_that_is_not_printable_ascii_is_refused_unquoted(tmp_path, servers, role):
+    target = servers()
+    script = alert_job(tmp_path, role, target.url, "tk-first\nSECRET-AFTER-THE-BREAK")
     run = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30)
     assert "SECRET-AFTER-THE-BREAK" not in run.stderr + run.stdout
     assert "tk-first" not in run.stderr + run.stdout

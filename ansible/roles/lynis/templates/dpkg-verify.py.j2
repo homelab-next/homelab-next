@@ -135,6 +135,8 @@ def send(title, body):
         if AUTH_FILE:
             with open(AUTH_FILE, encoding="utf-8") as fh:
                 token = fh.read().strip()
+            if not token:
+                raise ValueError(f"the token file {AUTH_FILE} is empty")
             if not (token.isascii() and token.isprintable()):
                 # never quoted: http.client's own refusal would print the whole header value
                 raise ValueError(f"the token in {AUTH_FILE} is not printable ASCII")
