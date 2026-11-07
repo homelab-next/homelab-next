@@ -16,6 +16,10 @@
       ansible.builtin.uri:
         url: "http://{{ vllm_server_health_host }}:{{ item.port | int }}/v1/models"
         headers: "{{ {'Authorization': 'Bearer ' ~ lookup('hnx_secret', vllm_server_api_key_ref)} if vllm_server_api_key_ref else {} }}"
+        # the key goes to this instance only: a 3xx is a failure, never followed, and no proxy
+        # from the environment (HTTP(S)_PROXY would receive the key, in clear for http)
+        follow_redirects: none
+        use_proxy: false
         return_content: true
         status_code: 200
         timeout: "{{ vllm_server_health_timeout | int }}"
