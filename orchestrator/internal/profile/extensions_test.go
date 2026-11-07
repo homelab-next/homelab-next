@@ -134,12 +134,13 @@ func TestExtensionSchemas(t *testing.T) {
 		"not a map":  {"query_scope: [a]\n", false},
 		"item type":  {"query_scope: {tables: [[a]]}\n", false},
 		// what is validated is what a tool decodes: no merge key, alias or custom tag
-		"merge key":    {"query_scope: {<<: {max_rows: 5}}\n", false},
-		"merge typo":   {"query_scope: {tables: [a], <<: {max_row: 5}}\n", false},
-		"alias":        {"x_anchor: &a [example.events]\nquery_scope: {tables: *a}\n", false},
-		"custom tag":   {"query_scope: !!binary aGVsbG8=\n", false},
-		"repeated key": {"query_scope: {max_rows: 1, max_rows: 2}\n", false},
-		"deep nesting": {"query_scope: {tables: " + strings.Repeat("[", 40) + strings.Repeat("]", 40) + "}\n", false},
+		"merge key":      {"query_scope: {<<: {max_rows: 5}}\n", false},
+		"merge typo":     {"query_scope: {tables: [a], <<: {max_row: 5}}\n", false},
+		"alias":          {"x_anchor: &a [example.events]\nquery_scope: {tables: *a}\n", false},
+		"custom tag":     {"query_scope: !!binary aGVsbG8=\n", false},
+		"repeated key":   {"query_scope: {max_rows: 1, max_rows: 2}\n", false},
+		"non-scalar key": {"query_scope: {? [tables] : [a]}\n", false},
+		"deep nesting":   {"query_scope: {tables: " + strings.Repeat("[", 40) + strings.Repeat("]", 40) + "}\n", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			body := "id: w-v1\nagent_key: w\n" + c.body

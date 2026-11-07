@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/grants"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
@@ -300,5 +301,43 @@ func TestTheRenderedExampleProfileLoads(t *testing.T) {
 	}
 	if err := reg.CheckGrants(cat); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A resolved profile's extension is the caller's own copy, down to its nodes.
+func TestResolve_DeepCopiesExtensions(t *testing.T) {
+	dir := t.TempDir()
+	writeProfileFile(t, dir, "w.yaml", "agent_key: w\nquery_scope: {tables: [a]}\n")
+	reg, err := LoadRegistry(dir, withExt(Extension{Name: "query_scope", Opaque: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := reg.Resolve("w")
+	n := p.Extensions["query_scope"]
+	n.Content[1].Content[0].Value = "mutated"
+	again, _ := reg.Resolve("w")
+	if again.Extensions["query_scope"].Content[1].Content[0].Value != "a" {
+		t.Fatal("changing a resolved extension's node changed the registry's")
+	}
+}
+
+// A profile file is read without following a symbolic link and within a size bound.
+func TestLoadRegistry_ReadsOnlyRegularBoundedFiles(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "p.yaml")
+	if err := os.WriteFile(src, []byte(testProfileYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Symlink(src, filepath.Join(dir, "p.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRegistry(dir, plainOptions()); err == nil {
+		t.Error("a profile behind a symbolic link loaded")
+	}
+	if _, err := loadOne(t, testProfileYAML+"#"+strings.Repeat("x", MaxProfileBytes)+"\n"); err == nil {
+		t.Error("an oversized profile loaded")
+	}
+	if got := clip(strings.Repeat("a", 79) + "éé"); !utf8.ValidString(got) {
+		t.Errorf("clip cut a rune: %q", got)
 	}
 }

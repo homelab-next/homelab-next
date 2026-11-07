@@ -4,6 +4,7 @@ package profile
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,6 +80,10 @@ func plainYAML(n *yaml.Node, where string, depth int, tags bool) error {
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			if isMergeKey(n.Content[i]) {
 				return fmt.Errorf("%s: YAML merge keys (<<) are not allowed", where)
+			}
+			// a key that is a mapping or a list has no one name to check against properties
+			if n.Content[i].Kind != yaml.ScalarNode {
+				return fmt.Errorf("%s: a mapping key must be a scalar", where)
 			}
 		}
 	}
@@ -167,7 +172,7 @@ func parseSchema(n *yaml.Node, at string, depth int) (*Schema, error) {
 				return nil, fmt.Errorf("%s: required must be a list", where)
 			}
 			for _, r := range val.Content {
-				if r.Kind != yaml.ScalarNode || r.ShortTag() != "!!str" || contains(s.required, r.Value) {
+				if r.Kind != yaml.ScalarNode || r.ShortTag() != "!!str" || slices.Contains(s.required, r.Value) {
 					return nil, fmt.Errorf("%s: required must list distinct property names", where)
 				}
 				s.required = append(s.required, r.Value)
@@ -305,15 +310,6 @@ func nodeType(n *yaml.Node) string {
 func typeAllowed(allowed []string, kind string) bool {
 	for _, t := range allowed {
 		if t == kind || (t == "number" && kind == "integer") {
-			return true
-		}
-	}
-	return false
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
 			return true
 		}
 	}

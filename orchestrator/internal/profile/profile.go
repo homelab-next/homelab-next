@@ -25,6 +25,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 
@@ -99,6 +100,9 @@ type Profile struct {
 
 	findingsRoot string // the zones' findings root, for FindingsPrefix
 }
+
+// MaxProfileBytes bounds one profile file (read without following a symbolic link).
+const MaxProfileBytes = 1 << 20
 
 // MaxAgentKeyLen bounds an agent key.
 const MaxAgentKeyLen = 64
@@ -240,7 +244,7 @@ func LoadRegistry(dir string, opts LoadOptions) (*Registry, error) {
 			continue
 		}
 		full := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(full)
+		data, err := grants.ReadConfigFile(full, MaxProfileBytes)
 		if err != nil {
 			return nil, fmt.Errorf("read profile file %s: %w", full, err)
 		}
@@ -376,7 +380,7 @@ func (r *Registry) Resolve(agentKey string) (*Profile, error) {
 	if p.Extensions != nil {
 		cp.Extensions = make(map[string]yaml.Node, len(p.Extensions))
 		for k, v := range p.Extensions {
-			cp.Extensions[k] = v
+			cp.Extensions[k] = *deepCopy(&v)
 		}
 	}
 	cp.PromptContext = p.PromptContext.clone()
@@ -414,10 +418,30 @@ func (r *Registry) CheckGrants(cat *grants.Catalog) error {
 	return errors.Join(errs...)
 }
 
-// clip bounds an untrusted string quoted in an error.
-func clip(s string) string {
-	if len(s) > 80 {
-		return s[:80] + "..."
+// deepCopy copies a YAML node and everything under it, so a caller changing a resolved profile's
+// extension never changes the registry's.
+func deepCopy(n *yaml.Node) *yaml.Node {
+	if n == nil {
+		return nil
 	}
-	return s
+	cp := *n
+	cp.Alias = deepCopy(n.Alias)
+	cp.Content = make([]*yaml.Node, len(n.Content))
+	for i, c := range n.Content {
+		cp.Content[i] = deepCopy(c)
+	}
+	return &cp
+}
+
+// clip bounds an untrusted string quoted in an error, never cutting a UTF-8 sequence.
+func clip(s string) string {
+	const max = 80
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }
