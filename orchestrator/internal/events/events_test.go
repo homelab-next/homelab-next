@@ -3,7 +3,6 @@
 package events
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -24,6 +23,7 @@ func TestDeriveID_MatchesThePythonDerivation(t *testing.T) {
 		{"homelabnext.task.queued", "svc:siem", "", "job-17", "evt-fc5dd6b1e9046c2df0131ba4949ca363"},
 		{"t.x", "svc:a", "s", "k<&>", "evt-2342b253dc5b8f54fcc9e95b7ec0db7c"},
 		{"t.x", "svc:a", "caf\u00e9", "k\u2028\U0001F600\n\x01", "evt-d201f3b562ba841cb6c9df1561a1b081"},
+		{"t.x", "svc:a", "s\x7f", "k\x7fz", "evt-3f03de4198cce1e61939ac19eb7ace4f"},
 	} {
 		if got := DeriveID(c.typ, c.src, c.subj, c.key); got != c.want {
 			t.Errorf("DeriveID(%q,%q,%q,%q) = %s, want %s", c.typ, c.src, c.subj, c.key, got, c.want)
@@ -32,8 +32,8 @@ func TestDeriveID_MatchesThePythonDerivation(t *testing.T) {
 }
 
 func TestAsciiJSON(t *testing.T) {
-	got := string(asciiJSON([]string{"caf\u00e9", "\U0001F600", "<&>", "\u2028", "a\"b\\"}))
-	want := `["caf\u00e9","\ud83d\ude00","<&>","\u2028","a\"b\\"]`
+	got := string(asciiJSON([]string{"caf\u00e9", "\U0001F600", "<&>", "\u2028", "a\"b\\", "\x7f"}))
+	want := `["caf\u00e9","\ud83d\ude00","<&>","\u2028","a\"b\\","\u007f"]`
 	if got != want {
 		t.Fatalf("asciiJSON = %s, want %s", got, want)
 	}
@@ -47,6 +47,26 @@ func TestValidSource(t *testing.T) {
 		if ValidSource(s) {
 			t.Errorf("ValidSource(%q) = true", s)
 		}
+	}
+}
+
+// A typed nil encodes as null, which the envelope refuses: New gives it an empty object too.
+func TestNew_TypedNilDataBecomesAnObject(t *testing.T) {
+	type payload struct{ X int }
+	for name, d := range map[string]any{
+		"nil":         nil,
+		"nil map":     map[string]any(nil),
+		"nil pointer": (*payload)(nil),
+		"nil slice":   []any(nil),
+	} {
+		b, _ := json.Marshal(New("homelabnext.agent.job.started", DefaultSource, "r", "k", time.Unix(0, 0), d))
+		if !strings.Contains(string(b), `"data":{}`) {
+			t.Errorf("%s: %s", name, b)
+		}
+	}
+	b, _ := json.Marshal(New("t.x", DefaultSource, "r", "k", time.Unix(0, 0), &payload{X: 1}))
+	if !strings.Contains(string(b), `"data":{"X":1}`) {
+		t.Errorf("a non-nil pointer was replaced: %s", b)
 	}
 }
 
@@ -86,111 +106,108 @@ func (f *fakeForwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(code)
 }
 
-func newPub(t *testing.T, url string, mod func(*Config)) *HTTPPublisher {
-	t.Helper()
-	cfg := Config{URL: url, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}
-	if mod != nil {
-		mod(&cfg)
+func TestNormalizeConfig_RefusesCredentialsOverPlainHTTP(t *testing.T) {
+	for _, c := range []Config{
+		{URL: "http://events.example.internal/ingest", BearerToken: "x"},
+		{URL: "http://user:secret@events.example.internal/ingest"},
+		{URL: "http://user@events.example.internal/ingest"},
+	} {
+		_, err := normalizeConfig(c)
+		if err == nil {
+			t.Errorf("%+v: accepted a credential over plain http to a remote host", c)
+		} else if strings.Contains(err.Error(), "secret") {
+			t.Errorf("the error shows the password: %v", err)
+		}
 	}
-	p, err := NewHTTPPublisher(cfg)
+	for _, u := range []string{
+		"http://127.0.0.1:1/ingest", // no-raw-endpoint: allow a loopback URL that is validated and never dialled
+		"https://user:pw@events.example.internal/ingest",
+	} {
+		if _, err := normalizeConfig(Config{URL: u, BearerToken: "x"}); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+}
+
+func TestNormalizeConfig_ErrorsNeverEchoQueryOrUserinfo(t *testing.T) {
+	for _, u := range []string{
+		"ftp://user:pw@x.example.internal/a?part=zzqq#frag",
+		"http://u:pw@events.example.internal/a?part=zzqq",
+		"/relative?part=zzqq",
+		"http://[::1%zz/x?part=zzqq",
+	} {
+		_, err := normalizeConfig(Config{URL: u, BearerToken: "t"})
+		if err == nil {
+			t.Fatalf("%s: accepted", u)
+		}
+		for _, leak := range []string{"zzqq", "pw@", "frag"} {
+			if strings.Contains(err.Error(), leak) {
+				t.Errorf("%s: error %q shows %q", u, err, leak)
+			}
+		}
+	}
+	if _, err := normalizeConfig(Config{URL: ""}); err == nil {
+		t.Error("accepted an empty URL")
+	}
+}
+
+func TestNormalizeConfig_Backoff(t *testing.T) {
+	ok := func(base, max time.Duration) error {
+		_, err := normalizeConfig(Config{URL: "https://events.example.internal/i", BaseBackoff: base, MaxBackoff: max})
+		return err
+	}
+	for _, c := range [][2]time.Duration{{0, 0}, {time.Second, time.Second}, {time.Millisecond, time.Hour}} {
+		if err := ok(c[0], c[1]); err != nil {
+			t.Errorf("base %v max %v: %v", c[0], c[1], err)
+		}
+	}
+	for _, c := range [][2]time.Duration{{-1, 0}, {0, -1}, {2 * time.Minute, 0}, {time.Second, time.Hour + 1}, {time.Minute, time.Second}} {
+		if err := ok(c[0], c[1]); err == nil {
+			t.Errorf("base %v max %v: accepted", c[0], c[1])
+		}
+	}
+	if _, err := normalizeConfig(Config{URL: "https://events.example.internal/i", Timeout: -1}); err == nil {
+		t.Error("accepted a negative timeout")
+	}
+}
+
+// A caller's client is copied, never trusted to refuse redirects or to time out.
+func TestNormalizeConfig_CopiesTheCallersClient(t *testing.T) {
+	followed := false
+	mine := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { followed = true; return nil }}
+	cfg, err := normalizeConfig(Config{URL: "https://events.example.internal/i", HTTP: mine, Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p
-}
-
-func closePub(p *HTTPPublisher) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	p.Close(ctx)
-}
-
-// The envelope goes out as application/cloudevents+json with Idempotency-Key = id; transient and
-// configuration answers are retried with the same id, a permanent refusal is not.
-func TestPublisher_ContractAndRetries(t *testing.T) {
-	f := &fakeForwarder{statuses: []int{503, 429, 401, 202, 400}}
-	srv := httptest.NewServer(f)
-	defer srv.Close()
-	p := newPub(t, srv.URL, func(c *Config) { c.BearerToken = "tok" })
-
-	e1 := New("homelabnext.agent.job.started", DefaultSource, "r1", "r1:started", time.Unix(0, 0), map[string]any{"run_id": "r1"})
-	e2 := New("homelabnext.agent.job.failed", DefaultSource, "r1", "r1:failed", time.Unix(0, 0), map[string]any{"run_id": "r1"})
-	p.Publish(e1) // 503, 429, 401, then 202
-	p.Publish(e2) // 400: permanent
-	waitFor(t, func() bool { st := p.Stats(); return st.Published+st.Rejected+st.Failed >= 2 })
-	closePub(p)
-
-	st := p.Stats()
-	if st.Published != 1 || st.Rejected != 1 || st.Failed != 0 || st.Dropped != 0 {
-		t.Fatalf("stats = %+v", st)
+	if cfg.HTTP == mine || mine.Timeout != 0 {
+		t.Fatal("the caller's client was used or changed in place")
 	}
-	if len(f.got) != 1 || f.got[0]["id"] != e1.ID || f.got[0]["specversion"] != "1.0" || f.got[0]["type"] != e1.Type {
-		t.Fatalf("forwarder got %v", f.got)
+	if cfg.HTTP.Timeout != 3*time.Second {
+		t.Errorf("copy timeout = %v, want the configured 3s", cfg.HTTP.Timeout)
 	}
-	h := f.headers[0]
-	if h.Get("Content-Type") != ContentType || h.Get(IdempotencyHdr) != e1.ID || h.Get("Authorization") != "Bearer tok" {
-		t.Errorf("headers = %v", h)
+	if err := cfg.HTTP.CheckRedirect(nil, nil); err != http.ErrUseLastResponse || followed {
+		t.Error("the copy would follow a redirect")
+	}
+	set := &http.Client{Timeout: time.Second}
+	if cfg, _ := normalizeConfig(Config{URL: "https://events.example.internal/i", HTTP: set}); cfg.HTTP.Timeout != time.Second {
+		t.Errorf("a client's own timeout was replaced: %v", cfg.HTTP.Timeout)
 	}
 }
 
-func TestPublisher_GivesUpAfterBudget(t *testing.T) {
-	var n atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n.Add(1)
-		w.WriteHeader(500)
+// A redirect is never followed: the sender reports it as a configuration fault.
+func TestPost_NeverFollowsARedirect(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
 	}))
 	defer srv.Close()
-	p := newPub(t, srv.URL, func(c *Config) { c.MaxAttempts = 3 })
-	p.Publish(New("homelabnext.agent.job.started", DefaultSource, "r", "k", time.Now(), nil))
-	// let the worker spend its budget before Close turns retries off
-	waitFor(t, func() bool { return p.Stats().Failed > 0 })
-	closePub(p)
-	if n.Load() != 3 || p.Stats().Failed != 1 {
-		t.Errorf("attempts = %d, stats = %+v; want 3 attempts and 1 failed", n.Load(), p.Stats())
-	}
-}
-
-// A full queue drops instead of blocking the job.
-func TestPublisher_NeverBlocks(t *testing.T) {
-	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		<-release
-		w.WriteHeader(202)
-	}))
-	defer srv.Close()
-	defer close(release)
-	p := newPub(t, srv.URL, func(c *Config) { c.QueueSize = 1 })
-	done := make(chan struct{})
-	go func() {
-		for i := 0; i < 10; i++ {
-			p.Publish(New("homelabnext.agent.job.started", DefaultSource, "r", string(rune('a'+i)), time.Now(), nil))
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Publish blocked on a full queue")
-	}
-	if p.Stats().Dropped == 0 {
-		t.Error("no drops counted for a full queue")
-	}
-}
-
-func TestNewHTTPPublisher_RefusesTokenOverPlainHTTP(t *testing.T) {
-	if _, err := NewHTTPPublisher(Config{URL: "http://events.example.internal/ingest", BearerToken: "x"}); err == nil {
-		t.Error("accepted a bearer token over plain http to a remote host")
-	}
-	for _, u := range []string{"ftp://x", "/ingest", "http://", ""} {
-		if _, err := NewHTTPPublisher(Config{URL: u}); err == nil {
-			t.Errorf("accepted %q", u)
-		}
-	}
-	p, err := NewHTTPPublisher(Config{URL: "http://127.0.0.1:1/ingest", BearerToken: "x"}) // no-raw-endpoint: allow a loopback URL that is validated and never dialled
+	cfg, err := normalizeConfig(Config{URL: srv.URL})
 	if err != nil {
-		t.Errorf("refused loopback http: %v", err)
-	} else {
-		closePub(p)
+		t.Fatal(err)
+	}
+	if res, _ := post(cfg, "evt-x", []byte(`{}`)); res != misconfigured || hits.Load() != 1 {
+		t.Fatalf("post = %d after %d requests, want misconfigured after one", res, hits.Load())
 	}
 }
 

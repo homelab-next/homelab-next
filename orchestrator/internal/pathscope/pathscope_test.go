@@ -9,11 +9,19 @@ import (
 
 // A fictional tree: owner/ holds an operator's decisions (readable, never writable),
 // notes/findings/ the agents' findings, inbox/ the pending work every lane writes.
-var testZones = Zones{
+var testZones = mustZones(Zones{
 	DeniedRoots:   []string{"owner"},
 	FindingsRoot:  "notes/findings/",
 	SharedWrite:   []string{"inbox/"},
 	ReservedNames: []string{"operator"},
+})
+
+func mustZones(z Zones) Zones {
+	v, err := NewZones(z)
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 var testScope = Scope{

@@ -59,8 +59,9 @@ func closeOutbox(s *OutboxSender) {
 }
 
 // The outbox sender delivers in order, holds the head of the line across transient failures and
-// configuration answers (it never gives up on a durable event, whatever MaxAttempts says), drops
-// a permanent refusal, and sends the event id as the Idempotency-Key.
+// configuration answers (it never gives up on a durable event), drops a permanent refusal, and
+// sends the envelope with its content type, the bearer token and the event id as the
+// Idempotency-Key.
 func TestOutboxSender_OrderRetriesAndRefusals(t *testing.T) {
 	f := &fakeForwarder{statuses: []int{503, 403, 307, 202, 400, 202}}
 	srv := httptest.NewServer(f)
@@ -69,7 +70,7 @@ func TestOutboxSender_OrderRetriesAndRefusals(t *testing.T) {
 	for i, id := range []string{"evt-a", "evt-b", "evt-c"} {
 		ob.recs = append(ob.recs, OutboxRecord{Seq: int64(i + 1), ID: id, Body: []byte(`{"id":"` + id + `"}`)})
 	}
-	s, err := NewOutboxSender(Config{URL: srv.URL, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, MaxAttempts: 1}, ob, 5*time.Millisecond)
+	s, err := NewOutboxSender(Config{URL: srv.URL, BearerToken: "tok", BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond}, ob, 5*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +81,8 @@ func TestOutboxSender_OrderRetriesAndRefusals(t *testing.T) {
 	if len(f.got) != 2 || f.got[0]["id"] != "evt-a" || f.got[1]["id"] != "evt-c" {
 		t.Fatalf("forwarder accepted %v, want evt-a then evt-c (evt-b refused)", f.got)
 	}
-	if h := f.headers[0].Get(IdempotencyHdr); h != "evt-a" {
-		t.Errorf("Idempotency-Key = %q", h)
+	if h := f.headers[0]; h.Get(IdempotencyHdr) != "evt-a" || h.Get("Content-Type") != ContentType || h.Get("Authorization") != "Bearer tok" {
+		t.Errorf("headers = %v", h)
 	}
 	st := s.Stats()
 	if st.Published != 2 || st.Rejected != 1 || st.Failed != 3 || st.Dropped != 7 {

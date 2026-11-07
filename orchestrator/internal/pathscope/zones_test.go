@@ -54,20 +54,72 @@ func TestValidatePrefix_RefusesHiddenSegmentsAndControls(t *testing.T) {
 	}
 }
 
-// With no denied roots, nothing is refused for its zone: the zones are the configuration's, the
-// package has none of its own.
-func TestZeroZonesDenyNoRoot(t *testing.T) {
-	var z Zones
+// A Zones with no denied roots is refused unless it says so on purpose, so a missing scope block
+// cannot make every root writable; with the opt-out, no root is refused for its zone.
+func TestZonesWithNoDeniedRootIsRefusedUnlessAllowed(t *testing.T) {
+	for _, z := range []Zones{{}, {FindingsRoot: "notes/findings/"}, {DeniedRoots: []string{}}} {
+		if _, err := NewZones(z); !errors.Is(err, ErrBadPrefix) || !strings.Contains(err.Error(), "allow_no_denied_roots") {
+			t.Errorf("NewZones(%+v) = %v, want a refusal naming allow_no_denied_roots", z, err)
+		}
+	}
+	z := mustZones(Zones{AllowNoDeniedRoots: true})
 	for _, p := range []string{"owner/", "decisions/", "anything/x/"} {
 		if err := z.ValidatePrefix(p, true); err != nil {
-			t.Errorf("zero Zones refused %q: %v", p, err)
+			t.Errorf("opted-out Zones refused %q: %v", p, err)
 		}
 	}
 	if err := z.ValidateVerdictPrefix("notes/findings/x/"); !errors.Is(err, ErrBadPrefix) {
 		t.Errorf("a verdict directory with no findings root configured = %v, want ErrBadPrefix", err)
 	}
 	if z.ReservedName("operator") {
-		t.Error("zero Zones reserve a name")
+		t.Error("a Zones with no reserved names reserves one")
+	}
+}
+
+// Every method of a Zones that did not come from NewZones refuses, so a value decoded from
+// configuration cannot be used without its checks.
+func TestUnvalidatedZonesRefuseEverything(t *testing.T) {
+	raw := Zones{DeniedRoots: []string{"owner"}, FindingsRoot: "notes/findings/"}
+	if err := raw.ValidatePrefix("inbox/", false); !errors.Is(err, ErrBadPrefix) {
+		t.Errorf("ValidatePrefix on raw Zones = %v", err)
+	}
+	if err := raw.ValidateDirPrefix("inbox/"); !errors.Is(err, ErrBadPrefix) {
+		t.Errorf("ValidateDirPrefix on raw Zones = %v", err)
+	}
+	if err := raw.ValidateVerdictPrefix("notes/findings/x/"); !errors.Is(err, ErrBadPrefix) {
+		t.Errorf("ValidateVerdictPrefix on raw Zones = %v", err)
+	}
+	if _, err := raw.NewScope([]string{"inbox/"}, nil); !errors.Is(err, ErrBadPrefix) {
+		t.Errorf("NewScope on raw Zones = %v", err)
+	}
+	if !raw.ReservedName("anyone") {
+		t.Error("raw Zones must reserve every name")
+	}
+}
+
+// The validated copy owns its lists.
+func TestValidatedZonesOwnTheirLists(t *testing.T) {
+	roots := []string{"owner"}
+	z := mustZones(Zones{DeniedRoots: roots})
+	roots[0] = "other"
+	if err := z.ValidatePrefix("owner/x/", true); !errors.Is(err, ErrBadPrefix) {
+		t.Errorf("changing the caller's slice changed the validated Zones: %v", err)
+	}
+}
+
+func TestNewScope(t *testing.T) {
+	s, err := testZones.NewScope([]string{"notes/findings/a/", "inbox/"}, []string{"owner/approved/"})
+	if err != nil || CheckWrite(s, "inbox/x.md") != nil || CheckRead(s, "owner/approved/x.md") != nil {
+		t.Fatalf("NewScope = %+v, %v", s, err)
+	}
+	for _, c := range []struct{ w, r []string }{
+		{[]string{"owner/approved/"}, nil},
+		{[]string{"inbox//x/"}, nil},
+		{nil, []string{"../etc/"}},
+	} {
+		if _, err := testZones.NewScope(c.w, c.r); !errors.Is(err, ErrBadPrefix) {
+			t.Errorf("NewScope(%v, %v) = %v, want ErrBadPrefix", c.w, c.r, err)
+		}
 	}
 }
 
@@ -96,8 +148,7 @@ func TestValidateVerdictPrefix(t *testing.T) {
 		}
 	}
 	// a shared prefix under the findings root is refused both ways round
-	z := testZones
-	z.SharedWrite = []string{"notes/findings/shared/x/"}
+	z := mustZones(Zones{DeniedRoots: []string{"owner"}, FindingsRoot: "notes/findings/", SharedWrite: []string{"notes/findings/shared/x/"}})
 	for _, p := range []string{"notes/findings/shared/", "notes/findings/shared/x/", "notes/findings/shared/x/y/"} {
 		if err := z.ValidateVerdictPrefix(p); !errors.Is(err, ErrBadPrefix) {
 			t.Errorf("ValidateVerdictPrefix(%q) overlapping a shared prefix = %v, want ErrBadPrefix", p, err)
@@ -106,7 +157,7 @@ func TestValidateVerdictPrefix(t *testing.T) {
 }
 
 func TestReservedName(t *testing.T) {
-	z := Zones{ReservedNames: []string{"operator", "Root-Session"}}
+	z := mustZones(Zones{AllowNoDeniedRoots: true, ReservedNames: []string{"operator", "Root-Session"}})
 	for _, n := range []string{"operator", "operator-review", "Operator", "OPERATOR-x", " operator ", "root-session", "root-session-2"} {
 		if !z.ReservedName(n) {
 			t.Errorf("%q must be reserved", n)
@@ -120,28 +171,27 @@ func TestReservedName(t *testing.T) {
 }
 
 func TestZonesValidate(t *testing.T) {
-	if err := testZones.Validate(); err != nil {
+	if _, err := testZones.Validate(); err != nil {
 		t.Fatalf("the test zones: %v", err)
-	}
-	if err := (Zones{}).Validate(); err != nil {
-		t.Fatalf("zero Zones: %v", err)
 	}
 	for _, c := range []struct {
 		name string
 		z    Zones
 		want string
 	}{
+		{"no denied roots", Zones{}, "allow_no_denied_roots"},
 		{"nested denied root", Zones{DeniedRoots: []string{"owner/approved"}}, "one top-level directory"},
+		{"nested denied root with slash", Zones{DeniedRoots: []string{"owner/approved/"}}, "one top-level directory"},
 		{"absolute denied root", Zones{DeniedRoots: []string{"/owner"}}, "plain relative path"},
 		{"denied root twice", Zones{DeniedRoots: []string{"owner", "Owner/"}}, "listed twice"},
-		{"findings root without slash", Zones{FindingsRoot: "notes/findings"}, "must end in"},
+		{"findings root without slash", Zones{AllowNoDeniedRoots: true, FindingsRoot: "notes/findings"}, "must end in"},
 		{"findings root in a denied root", Zones{DeniedRoots: []string{"owner"}, FindingsRoot: "owner/findings/"}, "never writable"},
 		{"shared prefix in a denied root", Zones{DeniedRoots: []string{"owner"}, SharedWrite: []string{"owner/inbox/"}}, "never writable"},
-		{"unclean shared prefix", Zones{SharedWrite: []string{"inbox//x/"}}, "not a clean path"},
-		{"empty reserved name", Zones{ReservedNames: []string{""}}, "plain non-empty name"},
-		{"spaced reserved name", Zones{ReservedNames: []string{" ops"}}, "plain non-empty name"},
+		{"unclean shared prefix", Zones{AllowNoDeniedRoots: true, SharedWrite: []string{"inbox//x/"}}, "not a clean path"},
+		{"empty reserved name", Zones{AllowNoDeniedRoots: true, ReservedNames: []string{""}}, "plain non-empty name"},
+		{"spaced reserved name", Zones{AllowNoDeniedRoots: true, ReservedNames: []string{" ops"}}, "plain non-empty name"},
 	} {
-		err := c.z.Validate()
+		_, err := c.z.Validate()
 		if !errors.Is(err, ErrBadPrefix) || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Validate = %v, want ErrBadPrefix mentioning %q", c.name, err, c.want)
 		}

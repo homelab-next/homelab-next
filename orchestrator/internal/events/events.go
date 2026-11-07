@@ -7,32 +7,29 @@
 // pure function of the event's identity (DeriveID), so a resend after a lost acknowledgement is a
 // harmless duplicate at the forwarder.
 //
-// Two senders share one wire contract. OutboxSender (outbox.go) drains a durable outbox that the
-// store fills in the same transaction as the job's state change, so an event survives a crash or
-// a restart; it is the one a controller runs. HTTPPublisher is an in-memory queue: Publish never
-// blocks, and events still queued when the process dies are lost. Both send in order and classify
-// the forwarder's answer as the contract does: a transient failure (network, 408, 425, 429, 5xx)
-// and an answer that blames the configuration (401, 403, 404, 421, or a redirect, which is never
-// followed) are retried with bounded exponential backoff, so a durable event stays pending until
-// the URL or the credential is fixed; a permanent refusal (any other 4xx, a 409 id collision
-// included) is logged and dropped, never retried into success.
+// The sender, OutboxSender (outbox.go), drains a durable outbox that the store fills in the same
+// transaction as the job's state change, so an event survives a crash or a restart. It sends in
+// order and classifies the forwarder's answer by the forwarder contract: a transient failure
+// (network, 408, 425, 429, 5xx) and an answer that blames the configuration (401, 403, 404, 421,
+// and a 3xx, since this sender follows no redirect) are retried with bounded exponential
+// backoff, so the event stays pending until the URL or the credential is fixed; a permanent
+// refusal (any other 4xx, a 409 id collision included) is logged and dropped, never retried into
+// success.
 package events
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
-	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -45,9 +42,7 @@ const (
 	IdempotencyHdr = "Idempotency-Key"
 	// DefaultSource is the controller's source when its configuration names none. It names no
 	// product (docs/orchestration-controller.md, "Neutral names").
-	DefaultSource   = "svc:orchestrator"
-	defaultQueue    = 1024
-	defaultAttempts = 8
+	DefaultSource = "svc:orchestrator"
 )
 
 // Event is the CloudEvents 1.0 structured-mode envelope.
@@ -71,8 +66,8 @@ func ValidSource(s string) bool { return svcID.MatchString(s) && len(s) <= 128 }
 
 // DeriveID is the Go side of homelabnext.events.envelope.derive_event_id: "evt-" and the first 32
 // hex characters of the SHA-256 of the JSON array [type, source, subject, dedupeKey], encoded
-// with compact separators and every non-ASCII character escaped (\uXXXX, a surrogate pair above
-// the BMP), as Python's json.dumps(ensure_ascii=True) writes it. Same inputs, same id, on every
+// with compact separators and DEL and every non-ASCII character escaped (\uXXXX, a surrogate pair
+// above the BMP), as Python's json.dumps(ensure_ascii=True) writes it. Same inputs, same id, on every
 // host, every resend and in both languages.
 func DeriveID(eventType, source, subject, dedupeKey string) string {
 	sum := sha256.Sum256(asciiJSON([]string{eventType, source, subject, dedupeKey}))
@@ -80,7 +75,7 @@ func DeriveID(eventType, source, subject, dedupeKey string) string {
 }
 
 // asciiJSON encodes v as compact JSON with no HTML escaping (Python does not escape <, > or &)
-// and with every non-ASCII rune escaped. encoding/json already escapes U+2028 and U+2029 and
+// and with DEL and every non-ASCII rune escaped. encoding/json already escapes U+2028 and U+2029 and
 // writes invalid UTF-8 as U+FFFD; the rest it leaves as UTF-8, which is escaped here.
 func asciiJSON(v any) []byte {
 	var buf bytes.Buffer
@@ -92,6 +87,8 @@ func asciiJSON(v any) []byte {
 	for len(raw) > 0 {
 		r, size := utf8.DecodeRune(raw)
 		switch {
+		case r == 0x7f:
+			out = append(out, `\u007f`...) // Python escapes DEL too; encoding/json does not
 		case r < utf8.RuneSelf:
 			out = append(out, raw[0])
 		case r > 0xffff:
@@ -105,10 +102,11 @@ func asciiJSON(v any) []byte {
 	return out
 }
 
-// New builds an envelope whose id is derived from (type, source, subject, dedupeKey). A nil data
-// becomes an empty object: the envelope requires data to be one.
+// New builds an envelope whose id is derived from (type, source, subject, dedupeKey). A nil data,
+// typed nils (a nil map, pointer, slice or interface) included, becomes an empty object: the
+// envelope requires data to be one.
 func New(eventType, source, subject, dedupeKey string, at time.Time, data any) Event {
-	if data == nil {
+	if isNil(data) {
 		data = map[string]any{}
 	}
 	return Event{
@@ -122,86 +120,93 @@ func New(eventType, source, subject, dedupeKey string, at time.Time, data any) E
 	}
 }
 
-// Stats are a sender's lifetime counters (exposed as metrics).
+// isNil reports whether v is nil or a typed nil that would encode as JSON null.
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Map, reflect.Pointer, reflect.Slice, reflect.Interface, reflect.Func, reflect.Chan:
+		return rv.IsNil()
+	}
+	return false
+}
+
+// Stats are the sender's lifetime counters (exposed as metrics).
 type Stats struct {
 	Published uint64 // acknowledged by the forwarder, duplicates included
 	Rejected  uint64 // refused for good by the forwarder
-	Failed    uint64 // given up after the retry budget (HTTPPublisher) or retried (OutboxSender)
-	Dropped   uint64 // never sent: the queue or the outbox was full
+	Failed    uint64 // delivery attempts that failed and will be retried
+	Dropped   uint64 // never sent: the outbox was full
 }
 
-// Config configures a sender.
+// maxBackoff bounds the configurable backoff: a sender that waits longer than this between
+// attempts leaves events pending for no reason an operator would choose.
+const maxBackoff = time.Hour
+
+// Config configures the sender.
 type Config struct {
 	URL         string
-	BearerToken string // optional; sent as Authorization: Bearer
-	QueueSize   int    // <= 0: 1024
-	MaxAttempts int    // <= 0: 8
-	BaseBackoff time.Duration
-	MaxBackoff  time.Duration
-	Timeout     time.Duration // per POST; <= 0: 5s
-	HTTP        *http.Client
+	BearerToken string        // optional; sent as Authorization: Bearer
+	BaseBackoff time.Duration // 0: 1s
+	MaxBackoff  time.Duration // 0: 1m; BaseBackoff <= MaxBackoff <= 1h
+	Timeout     time.Duration // per POST; 0: 5s
+	// HTTP, when set, is copied: the copy never follows a redirect and gets Timeout when it has
+	// none, whatever the caller's client says.
+	HTTP *http.Client
 }
 
-// HTTPPublisher sends events to a forwarder URL from one background worker.
-type HTTPPublisher struct {
-	cfg     Config
-	ch      chan Event
-	done    chan struct{}
-	stop    chan struct{}
-	once    sync.Once
-	closing atomic.Bool
-	// mu guards ch against a Publish racing Close's close(ch): Publish holds it shared, Close
-	// exclusively
-	mu sync.RWMutex
-
-	published, rejected, failed, dropped atomic.Uint64
-}
-
-// NewHTTPPublisher validates cfg and starts the worker. A bearer token over plain http to a host
-// that is not loopback is refused (the rule homelabnext.events.forwarder.HttpForwarder applies too), so a
-// credential never crosses the network in clear.
-func NewHTTPPublisher(cfg Config) (*HTTPPublisher, error) {
-	cfg, err := normalizeConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-	p := &HTTPPublisher{cfg: cfg, ch: make(chan Event, cfg.QueueSize), done: make(chan struct{}), stop: make(chan struct{})}
-	go p.run()
-	return p, nil
-}
-
-// normalizeConfig validates cfg and fills its defaults; both senders use it.
+// normalizeConfig validates cfg and fills its defaults. A credential (a bearer token, or userinfo
+// in the URL) over plain http to a host that is not loopback is refused (the rule
+// homelabnext.events.forwarder.HttpForwarder applies too), so it never crosses the network in
+// clear. Errors name the URL without its userinfo, query or fragment.
 func normalizeConfig(cfg Config) (Config, error) {
 	u, err := url.Parse(cfg.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return cfg, fmt.Errorf("events forwarder url %q must be an absolute http(s) URL", cfg.URL)
+	if err != nil {
+		return cfg, errors.New("events forwarder url is not a valid URL")
 	}
-	if cfg.BearerToken != "" && u.Scheme == "http" && !isLoopback(u.Hostname()) {
-		return cfg, fmt.Errorf("events forwarder url %q: refusing to send a bearer token over plain http to a non-loopback host", cfg.URL)
+	shown := redacted(u)
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return cfg, fmt.Errorf("events forwarder url %q must be an absolute http(s) URL", shown)
 	}
-	if cfg.QueueSize <= 0 {
-		cfg.QueueSize = defaultQueue
+	if (cfg.BearerToken != "" || u.User != nil) && u.Scheme == "http" && !isLoopback(u.Hostname()) {
+		return cfg, fmt.Errorf("events forwarder url %q: refusing to send a credential over plain http to a non-loopback host", shown)
 	}
-	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = defaultAttempts
-	}
-	if cfg.BaseBackoff <= 0 {
-		cfg.BaseBackoff = time.Second
-	}
-	if cfg.MaxBackoff <= 0 {
-		cfg.MaxBackoff = time.Minute
-	}
-	if cfg.Timeout <= 0 {
-		cfg.Timeout = 5 * time.Second
-	}
-	if cfg.HTTP == nil {
-		cfg.HTTP = &http.Client{
-			Timeout: cfg.Timeout,
-			// never follow a redirect: the body and the token are for this URL only
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	for _, d := range []time.Duration{cfg.BaseBackoff, cfg.MaxBackoff, cfg.Timeout} {
+		if d < 0 {
+			return cfg, fmt.Errorf("events forwarder: negative backoff or timeout %v", d)
 		}
 	}
+	if cfg.BaseBackoff == 0 {
+		cfg.BaseBackoff = time.Second
+	}
+	if cfg.MaxBackoff == 0 {
+		cfg.MaxBackoff = time.Minute
+	}
+	if cfg.BaseBackoff > cfg.MaxBackoff || cfg.MaxBackoff > maxBackoff {
+		return cfg, fmt.Errorf("events forwarder: backoff must satisfy 0 < base (%v) <= max (%v) <= %v", cfg.BaseBackoff, cfg.MaxBackoff, maxBackoff)
+	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 5 * time.Second
+	}
+	var c http.Client
+	if cfg.HTTP != nil {
+		c = *cfg.HTTP
+	}
+	// never follow a redirect: the body and the credential are for the configured URL only
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	if c.Timeout == 0 {
+		c.Timeout = cfg.Timeout
+	}
+	cfg.HTTP = &c
 	return cfg, nil
+}
+
+// redacted is u without its query and fragment, its password masked (url.URL.Redacted).
+func redacted(u *url.URL) string {
+	c := *u
+	c.RawQuery, c.ForceQuery, c.Fragment, c.RawFragment = "", false, "", ""
+	return c.Redacted()
 }
 
 func isLoopback(host string) bool {
@@ -210,51 +215,6 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// Publish queues e without blocking. A full queue drops e and counts it.
-func (p *HTTPPublisher) Publish(e Event) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if p.closing.Load() {
-		p.dropped.Add(1)
-		return
-	}
-	select {
-	case p.ch <- e:
-	default:
-		p.dropped.Add(1)
-		log.Printf("events: queue full (%d), dropped %s %s", p.cfg.QueueSize, e.Type, e.Subject)
-	}
-}
-
-// Close stops accepting events, gives each queued one a single attempt (no retries), and waits
-// until they are sent or ctx ends.
-func (p *HTTPPublisher) Close(ctx context.Context) {
-	p.once.Do(func() {
-		p.mu.Lock()
-		p.closing.Store(true)
-		close(p.stop)
-		close(p.ch)
-		p.mu.Unlock()
-	})
-	select {
-	case <-p.done:
-	case <-ctx.Done():
-		log.Printf("events: shutdown before every queued event was sent")
-	}
-}
-
-// Stats returns the lifetime counters.
-func (p *HTTPPublisher) Stats() Stats {
-	return Stats{Published: p.published.Load(), Rejected: p.rejected.Load(), Failed: p.failed.Load(), Dropped: p.dropped.Load()}
-}
-
-func (p *HTTPPublisher) run() {
-	defer close(p.done)
-	for e := range p.ch {
-		p.deliver(e)
-	}
 }
 
 type outcome int
@@ -267,38 +227,6 @@ const (
 	misconfigured
 	permanent
 )
-
-func (p *HTTPPublisher) deliver(e Event) {
-	body, err := json.Marshal(e)
-	if err != nil {
-		p.rejected.Add(1)
-		log.Printf("events: cannot encode %s %s: %v", e.Type, e.Subject, err)
-		return
-	}
-	backoff := p.cfg.BaseBackoff
-	for attempt := 1; ; attempt++ {
-		res, detail := post(p.cfg, e.ID, body)
-		switch res {
-		case accepted:
-			p.published.Add(1)
-			return
-		case permanent:
-			p.rejected.Add(1)
-			log.Printf("events: forwarder refused %s %s (id %s): %s", e.Type, e.Subject, e.ID, detail)
-			return
-		}
-		if attempt >= p.cfg.MaxAttempts || p.closing.Load() {
-			p.failed.Add(1)
-			log.Printf("events: giving up on %s %s (id %s) after %d attempt(s): %s", e.Type, e.Subject, e.ID, attempt, detail)
-			return
-		}
-		select {
-		case <-time.After(backoff):
-		case <-p.stop:
-		}
-		backoff = min(backoff*2, p.cfg.MaxBackoff)
-	}
-}
 
 // post sends one envelope and classifies the answer.
 func post(cfg Config, id string, body []byte) (outcome, string) {

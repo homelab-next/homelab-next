@@ -279,7 +279,7 @@ controller:
 | Package | What it does |
 |---|---|
 | `orchestrator/internal/safefs` | Reads, lists and writes under one fixed root so that the object reached is the one the relative path names: no symbolic link, hard link, mount crossing or swapped component redirects it, a write never opens an existing inode, and a root on a network or FUSE filesystem is refused (`SAFEFS_ALLOW_REMOTE_FS=1` accepts the risk). Its two bind-mount tests need root and are registered in `orchestrator/skips.yml`. |
-| `orchestrator/internal/pathscope` | Decides on path strings whether a path lies in a scope (writable and readable prefixes, segment by segment, no wildcard). A tree's zones are configuration (`pathscope.Zones`: `denied_roots`, `findings_root`, `shared_write`, `reserved_names`), with no defaults; the package names no zone of its own. |
+| `orchestrator/internal/pathscope` | Decides on path strings whether a path lies in a scope (writable and readable prefixes, segment by segment, no wildcard). A tree's zones are configuration (`pathscope.Zones`: `denied_roots`, `findings_root`, `shared_write`, `reserved_names`), with no defaults; the package names no zone of its own. Zones work only once validated (`NewZones`), and an empty `denied_roots` is refused unless `allow_no_denied_roots` is set. |
 | `orchestrator/internal/metrics` | The Prometheus text exposition writer, standard library only, and the metric name prefix. |
 | `orchestrator/internal/events` | The controller's CloudEvents envelope, its derived id (the same as `homelabnext.events.envelope.derive_event_id`, non-ASCII text included) and the durable outbox sender. Its tests validate what it builds against `schemas/events` in place, with a validator that is itself checked against the schemas' examples and negatives. |
 
@@ -287,10 +287,12 @@ The module now has third-party dependencies (`golang.org/x/sys` first) and a `go
 stays standard library only: `TestGatewayDependsOnlyOnTheStandardLibrary`
 (`orchestrator/cmd/gateway`) fails when `go list -deps -test` of its packages names anything else.
 
-The events sender classifies the forwarder's answer as the [forwarder contract](events.md) does:
-`401`, `403`, `404`, `421` and a redirect (never followed) blame the configuration, so a durable
+The events sender classifies the forwarder's answer by the [forwarder contract](events.md):
+`401`, `403`, `404` and `421` blame the configuration, and so does a `3xx`, because the sender follows
+no redirect (the contract's clause for a `3xx` the sender does not follow). Either way a durable
 event stays in the outbox and is retried until the URL or the credential is fixed, where the private
-controller dropped it as a permanent refusal.
+controller dropped it as a permanent refusal. Only the durable outbox sender is ported: the private
+copy's in-memory publisher, which lost queued events on a crash, has no use here.
 
 ### Neutral names
 
@@ -304,24 +306,43 @@ packages that hold them.
 | Default event source | `svc:llm-orchestrator` | `svc:orchestrator` (`events.DefaultSource`) |
 
 Nothing emits either name yet: the module has no controller binary until stage 2's last pull
-request. The overlap is a cutover concern, timed as the amendment says: the release the lab first
-deploys the controller from emits both metric names and an alias of the event source, and the old
-names are dropped no earlier than the release after that, once a check finds no consumer of them.
-The event id derives from the source, so an event sent under the alias is a second event with its
-own id. The telemetry store keys a job by its run id too and dead-letters a second record of a run
-under another event id as a conflict, so each consumer must receive exactly one of the two (or
-learn that the alias's record is the same job): how the alias is delivered is decided with the
-cutover's check, not here. The consumers of the old source in this repository, which the cutover
-moves before the old name goes:
+request. The two names overlap differently at the cutover (the ADR's amendment).
+
+**Metrics are dual-emitted.** The release the lab first deploys the controller from writes every
+sample under both prefixes. The old prefix goes no earlier than the release after that, once a
+check finds no consumer of it. No consumer of `llmorch_` is in this repository; the lab's
+dashboards and alert rules are the overlay's, and the check covers them there.
+
+**Events are never dual-emitted.** An event is an identity: its id derives from type, source,
+subject and dedupe key, the source included, so the same job sent under two sources is two events
+with two ids, and the telemetry store, which keys a job by its run id too, dead-letters the second
+as a run conflict. The overlap is on the consumer side instead:
+
+- in the release before the cutover, every consumer of the controller's events accepts both
+  `svc:llm-orchestrator` and `svc:orchestrator`: the telemetry store's sources, the StackStorm
+  bridge's allow-list and the rules' source patterns;
+- the controller emits each event once, under one configured source. The default is
+  `svc:orchestrator`; the lab may set the old value for the overlap release and switch afterwards;
+- the id derivation does not change (the source stays in it), and an outbox migrated from the
+  private controller drains as stored, envelopes and ids untouched;
+- two controllers never emit for the same runs into one store: the private controller stops before
+  this one starts on its database.
+
+PR 2.7 (the controller binary) adds the check that finds the consumers of the old names. The
+consumers of `svc:llm-orchestrator` in this repository, which move before the old name goes:
 
 - `homelabnext.orchestration.model.CONTROLLER_SOURCE`, the default of `hnx orchestration consume
-  --source` ([orchestration telemetry](orchestration-telemetry.md));
-- the StackStorm pack `workflows/packs/agent-job-retry.yml` and its rule
-  `workflows/stackstorm/homelabnext/rules/on_agent_job_retry.yaml` (A02, [StackStorm](stackstorm.md));
-- the event examples under `schemas/events/examples/` and the docs that quote the source.
-
-No consumer of the `llmorch_` metric names is in this repository; the lab's dashboards and alert
-rules are the overlay's, and the cutover's check covers them there.
+  --source` ([orchestration telemetry](orchestration-telemetry.md)), with the store and export
+  tests in `tests/orchestration/` and the export examples
+  `schemas/status/examples/orchestration_export.header.json` and `.job.json`;
+- the StackStorm bridge's allow-list (`workflows/stackstorm/bridge.json`), the pack
+  `workflows/packs/agent-job-retry.yml`, its rule
+  `workflows/stackstorm/homelabnext/rules/on_agent_job_retry.yaml` and the pinned render
+  `workflows/stackstorm/homelabnext/pinned/agent_job_retry.json` (A02, [StackStorm](stackstorm.md));
+- the event examples and negatives under `schemas/events/` and its README;
+- the docs that quote the source: [StackStorm](stackstorm.md),
+  [orchestration telemetry](orchestration-telemetry.md), `docs/checklist.md` (O-11) and
+  [ADR-0025](adr/0025-orchestration-telemetry.md).
 
 ## Additive `orchestration` contract features
 

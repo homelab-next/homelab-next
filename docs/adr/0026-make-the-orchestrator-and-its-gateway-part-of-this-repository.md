@@ -234,7 +234,9 @@ what stage 2 carries:
     after that, and only once the check below finds no consumer of it. A request that carries both names with different values is
     refused (400). A config that sets both an old key and its new key is refused.
   - The metric prefix and the event source get the same overlap, timed the same way: the controller emits
-    both metric names and an alias of the event source. Their consumers (dashboards, alert rules,
+    both metric names, and for the event source every consumer accepts both sources for one release
+    while the controller's source is configured (an event is emitted once: two sources would be two
+    event ids for one run). Their consumers (dashboards, alert rules,
     audit queries) are found by a check that stage 2's pull request adds, and moved, before the old
     names go.
   - A config migration and a database migration move the stored names. **Before every run of the

@@ -47,7 +47,7 @@ type OutboxSender struct {
 	published, rejected, failed atomic.Uint64
 }
 
-// NewOutboxSender validates cfg (the rules of NewHTTPPublisher) and starts the worker. poll <= 0
+// NewOutboxSender validates cfg (normalizeConfig) and starts the worker. poll <= 0
 // means 1s; Nudge wakes the worker sooner.
 func NewOutboxSender(cfg Config, ob Outbox, poll time.Duration) (*OutboxSender, error) {
 	cfg, err := normalizeConfig(cfg)
