@@ -279,7 +279,7 @@ hnx conform run inference --target compose/lab-in-a-box/targets/inference-gatewa
 
 | Profile | Services | mem_limit |
 |---|---|---|
-| `gateway` | `llm-gateway` (LiteLLM 1.106.2, `litellm-database` image, digest-pinned), on the lab's postgres as role `litellm`, which owns only schema `litellm` (created by `config/postgres/init/10-litellm.sh` when the volume is first initialised; password `LAB_GATEWAY_DB_PASSWORD`); `llm-gateway-keys` (one-shot `provision`) | 896 + 64 MB |
+| `gateway` | `llm-gateway` (LiteLLM 1.106.3, `litellm-database` image, digest-pinned), on the lab's postgres as role `litellm`, which owns only schema `litellm` (created by `config/postgres/init/10-litellm.sh` when the volume is first initialised; password `LAB_GATEWAY_DB_PASSWORD`); `llm-gateway-keys` (one-shot `provision`) | 896 + 64 MB |
 
 The default stack's 3584 MB budget does not include profile services, because `docker compose up`
 does not start them. `tests/compose` counts the profile's 960 MB separately and checks it against

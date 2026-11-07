@@ -540,7 +540,7 @@ services:
   llm-gateway:
     <<: [*restart, *hardened]
     profiles: [gateway]
-    image: litellm/litellm-database:v1.106.2@sha256:35f2cec3a14bb297e08bfab56c1fc377432bc4071aaf71978fdff043a5d91e79
+    image: litellm/litellm-database:v1.106.3@sha256:f631537bfc317970ceda5fac99b436161cb7a78d515d7037226de396a71b9bf9
     command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
     environment:
       HNX_SECRET_LLM_GATEWAY_MASTER_KEY: ${LAB_GATEWAY_MASTER_KEY:?see .env.example}
@@ -565,7 +565,7 @@ services:
       timeout: 5s
       retries: 30
       start_period: 30s
-    mem_limit: 896m  # measured 1.106.2: 604 MB RSS, 692 MB cgroup peak (1.103.7: 528 and 621)
+    mem_limit: 896m  # measured on 1.106.2: 604 MB RSS, 692 MB cgroup peak (1.103.7: 528 and 621)
     networks:
       lab:
         aliases: [llm-gateway.svc.example.internal]
