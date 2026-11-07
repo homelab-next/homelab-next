@@ -11,7 +11,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from homelabnext._http import check_plaintext, safe_urlopen
+from homelabnext._http import check_plaintext, no_redirect_urlopen
 
 from .core import Message, SendError
 
@@ -71,8 +71,9 @@ class NtfySender:
     else the ``HNX_ENDPOINT_NOTIFY`` override, else an error.
     ``auth`` is an optional callable returning an ``Authorization`` header value, read at send
     time so the secret never sits in this object's repr or logs.  A token is never sent over
-    plain ``http`` to a non-loopback host unless ``allow_plaintext=True``; redirects are followed
-    only within the same origin.  A title over the server's 1 KB limit is shortened (ending ``...``);
+    plain ``http`` to a non-loopback host unless ``allow_plaintext=True``; no redirect is followed
+    (urllib would resend the POST as a GET with no body and report its 2xx as delivered, so a
+    3xx is a ``SendError``).  A title over the server's 1 KB limit is shortened (ending ``...``);
     tags over its 512-byte limit are refused here, before anything is sent.
     """
 
@@ -93,7 +94,7 @@ class NtfySender:
         self._resolver = resolver
         self.default_topic = default_topic
         self._auth = auth
-        self._opener = opener if opener is not None else safe_urlopen
+        self._opener = opener if opener is not None else no_redirect_urlopen
         self.timeout = timeout
         self.capability = capability
 

@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import copy
+import threading
 import urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -394,6 +396,60 @@ def test_http_forwarder_refuses_credentials_over_plaintext():
     HttpForwarder("http://forwarder.example.invalid/e", auth=lambda: "t", allow_plaintext=True)
     f = HttpForwarder("https://forwarder.example.invalid/e", auth=lambda: "Bearer t")
     assert f.build_request(task_event()).get_header("Authorization") == "Bearer t"
+
+
+class _RedirectingForwarder:
+    """A loopback forwarder that answers ``POST /e`` with a same-origin 302 to ``/ok``, which
+    answers 200 to a GET; records ``(method, path)`` of every request."""
+
+    def __init__(self):
+        seen = self.seen = []
+
+        class H(BaseHTTPRequestHandler):
+            def _answer(self, status, headers):
+                seen.append((self.command, self.path))
+                self.send_response(status)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                self._answer(302, {"Location": "/ok"} if self.path == "/e" else {})
+
+            def do_GET(self):
+                self._answer(200 if self.path == "/ok" else 404, {})
+
+            def log_message(self, *a):
+                pass
+
+        loopback = "127.0.0.1"  # no-raw-endpoint: allow test server binds loopback only
+        self.httpd = ThreadingHTTPServer((loopback, 0), H)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.url = f"http://{loopback}:{self.httpd.server_address[1]}/e"
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def test_http_forwarder_follows_no_redirect_so_a_redirected_post_stays_pending(store):
+    """Regression: a same-origin 302 to the POST was followed as a GET with no body, and the
+    200 to that GET marked the event sent although the forwarder never received it."""
+    srv = _RedirectingForwarder()
+    try:
+        fwd = HttpForwarder(srv.url)
+        result = pub(fwd, store).publish(task_event())
+        assert result.status == "pending"
+        assert ("GET", "/ok") not in srv.seen
+        assert srv.seen == [("POST", "/e")]
+        assert "302" in _record(store, result.id)["error"]
+        with pytest.raises(MisconfiguredError, match="302"):
+            fwd.forward(task_event())
+        assert ("GET", "/ok") not in srv.seen
+    finally:
+        srv.close()
 
 
 def test_http_forwarder_requires_http_url():
