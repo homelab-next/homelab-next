@@ -258,3 +258,44 @@ def test_the_no_redirect_opener_never_hands_a_credential_to_an_environment_proxy
     assert proxy.seen == []
     assert failures == []
     assert home.seen == [("/e", "Bearer s3cret"), ("/ops", "Bearer s3cret")]
+
+
+def test_safe_urlopen_never_hands_a_credential_to_an_environment_proxy(servers, monkeypatch):
+    """Regression: ``safe_opener`` used ``build_opener``'s default ``ProxyHandler``, so
+    ``HTTP_PROXY`` in the environment received every request of its callers (the gateway key
+    writes, the OpenAI-compatible, OpenBao and notify conformance adapters, the status hub's
+    collectors, the OpenProject client) with its ``Authorization`` or ``X-Vault-Token``
+    header, in clear for http.  Lab endpoints are reached directly."""
+    from homelabnext._http import safe_opener
+
+    proxy = servers({})
+    home = servers({"/r": (200, {}, b"read"), "/w": (200, {}, b"wrote")})
+    for name in ("no_proxy", "NO_PROXY", "REQUEST_METHOD"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("http_proxy", "HTTP_PROXY"):
+        monkeypatch.setenv(name, proxy.url)
+    vault = dict.fromkeys(["X-Vault-Token"], "fake")  # the header the OpenBao adapter sends
+    sends = (
+        lambda: safe_urlopen(
+            urllib.request.Request(home.url + "/r", headers={"Authorization": "Bearer s3cret"}),
+            timeout=5,
+        ).read(),
+        lambda: (
+            safe_opener()
+            .open(
+                urllib.request.Request(home.url + "/w", data=b"{}", method="POST", headers=vault),
+                timeout=5,
+            )
+            .read()
+        ),
+    )
+    got, failures = [], []
+    for send in sends:
+        try:
+            got.append(send())
+        except Exception as exc:  # the proxy's 404: asserted on below, after what it saw
+            failures.append(exc)
+    assert proxy.seen == []
+    assert failures == []
+    assert got == [b"read", b"wrote"]
+    assert [path for path, _ in home.seen] == ["/r", "/w"]

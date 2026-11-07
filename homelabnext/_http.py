@@ -10,6 +10,10 @@
   POST answered 301/302/303 into a GET with no body).  A ``303`` after a write is therefore
   reported as an error even though the server processed the write; the events forwarder's
   retry of it is safe because every send carries an idempotency key.
+* No opener here uses a proxy from the environment: ``HTTP(S)_PROXY`` would receive each
+  request's ``Authorization`` (or ``X-Vault-Token``) header, in clear for http.  Lab endpoints
+  are reached directly; a deployment that needs an egress proxy configures it explicitly, not
+  via ``HTTP(S)_PROXY``.
 * :func:`no_redirect_urlopen` follows no redirect (a 3xx surfaces as an ``HTTPError``) and uses
   no proxy, for a POST whose 2xx answer is read as an acknowledgement and which may carry a
   credential (the events forwarder, notify).
@@ -127,7 +131,9 @@ def credential_opener(ca_file: str | None = None) -> urllib.request.OpenerDirect
 
 
 def safe_opener() -> urllib.request.OpenerDirector:
-    return urllib.request.build_opener(SameOriginRedirectHandler)
+    """An opener with :class:`SameOriginRedirectHandler` and no proxy (see the module
+    docstring: every caller reaches a lab endpoint, most with a credential)."""
+    return urllib.request.build_opener(SameOriginRedirectHandler, urllib.request.ProxyHandler({}))
 
 
 def safe_urlopen(req: Any, timeout: float | None = None) -> Any:
