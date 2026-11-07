@@ -66,9 +66,9 @@ pub.flush()  # resend anything still pending (after an outage or a crash)
 2. write the event to the state file as `pending` (write-ahead);
 3. send; transient failures (network, 5xx, 429, timeout) back off exponentially, bounded by
    `RetryPolicy(max_attempts, base_s, factor, max_s)`; a forwarder answer that blames the
-   configuration (401/403/404/421, `MisconfiguredError`) stops the loop at once but leaves the event
-   `pending`, so a rerun, `flush` or `hnx events flush` delivers it once the URL or credential is
-   fixed; a permanent failure (other 4xx, id collision) marks the event `rejected`. A rejected
+   configuration (401/403/404/421, or a 3xx, `MisconfiguredError`) stops the loop at once but
+   leaves the event `pending`, so a rerun, `flush` or `hnx events flush` delivers it once the URL
+   or credential is fixed; a permanent failure (other 4xx, id collision) marks the event `rejected`. A rejected
    record is kept for the retention (`--retain-hours`, then removed) and `hnx events requeue
    --state FILE` makes the rejected ones pending again;
 4. only an acknowledgement moves it to `sent`.
@@ -84,7 +84,10 @@ content is refused.
 `POST` with `Content-Type: application/cloudevents+json` and `Idempotency-Key: <id>`.
 `200/201/202/204` accepted (`{"duplicate": true}` in the body when already held), `409` id
 collision (permanent), `408/425/429/5xx` retry, `401/403/404/421` retry after a configuration fix
-(the event stays pending), other `4xx` permanent.
+(the event stays pending), other `4xx` permanent. A `3xx` is a configuration fault too: the
+event stays pending. No sender follows a redirect (`HttpForwarder` and the controller's sender
+follow none, and a write through `homelabnext._http.safe_urlopen` follows none either), because
+urllib would resend the POST as a GET with no body and a `2xx` to it would read as delivered.
 
 The CLI sends a credential with `--auth secret:<name>` (value from `HNX_SECRET_<NAME>` or a file in
 `--secrets-dir`; the value is the whole `Authorization` header value) on `deploy-changed` and

@@ -371,6 +371,13 @@ def test_http_status_mapping():
     for code in (401, 403, 404, 421):
         with pytest.raises(MisconfiguredError):
             hf(http_err(code)).forward(ev)
+    # a redirect that is not followed (cross-origin, or a POST urllib will not redirect) blames
+    # the URL: the event stays pending, it is never dropped as a permanent refusal
+    for code in (301, 302, 307, 308):
+        with pytest.raises(MisconfiguredError):
+            hf(http_err(code)).forward(ev)
+        with pytest.raises(MisconfiguredError):
+            hf(Resp(code)).forward(ev)
     for code in (400, 409, 410):
         with pytest.raises(PermanentError):
             hf(http_err(code)).forward(ev)

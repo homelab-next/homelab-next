@@ -180,15 +180,16 @@ class HttpForwarder:
 
     Status mapping: 200/201/202/204 accepted (a body of ``{"duplicate": true}`` is reported as
     duplicate), 409 -> :class:`PermanentError` (id collision),
-    408/425/429 and 5xx -> :class:`TransientError`, 401/403/404/421 -> :class:`MisconfiguredError`
-    (retryable after the URL or credential is fixed), any other 4xx -> :class:`PermanentError`.
+    408/425/429 and 5xx -> :class:`TransientError`, 401/403/404/421 and any 3xx (none is followed)
+    -> :class:`MisconfiguredError` (retryable after the URL or credential is fixed), any other 4xx
+    -> :class:`PermanentError`.
     Connection errors and timeouts are transient.  The id travels in ``Idempotency-Key`` too.
 
     No redirect is followed (urllib would resend the POST as a GET with no body, and a 2xx to it
     would mark an event sent that never arrived): a 3xx is :class:`MisconfiguredError`, the event
-    stays pending.  A reply body over ``max_reply_bytes`` is refused (the ack is tiny).  ``auth`` (a callable returning an ``Authorization`` value,
-    read per request) is refused over plain http to a non-loopback host unless
-    ``allow_plaintext=True``.
+    stays pending.  A reply body over ``max_reply_bytes`` is refused (the ack is tiny).  ``auth``
+    (a callable returning an ``Authorization`` value, read per request) is refused over plain
+    http to a non-loopback host unless ``allow_plaintext=True``.
     """
 
     def __init__(
