@@ -1,0 +1,1227 @@
+{
+ "description": "Test vectors for the per-request TLP admission rule (ADR-0033 decision 11, ADR-0038 decision 5), generated from homelabnext.registry.model_tlp.request_label and tlp.read. header null = the request carried no X-HNX-TLP header. The judged label is the header read as data (absent: red; not an accepted spelling: red), raised to sender_ceiling when the role leaves the lab; the request is allowed when that label is at or below role_ceiling; a refusal is unlabelled when there was no header, else above-ceiling. Labels least to most restrictive: clear, green, amber, amber+strict, red.",
+ "labels": [
+  "clear",
+  "green",
+  "amber",
+  "amber+strict",
+  "red"
+ ],
+ "vectors": [
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": null,
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "red",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "amber+strict",
+   "label": "amber+strict",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "amber",
+   "label": "amber",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "clear",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "white",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "TLP:GREEN",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": " tlp:Clear ",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "Green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "purple",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "rèd",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "red",
+   "header": "AMBER",
+   "label": "amber",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": null,
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "red",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "amber+strict",
+   "label": "amber+strict",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "amber",
+   "label": "amber",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "clear",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "white",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "TLP:GREEN",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": " tlp:Clear ",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "Green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "purple",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "rèd",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "clear",
+   "header": "AMBER",
+   "label": "amber",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": null,
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "red",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "amber+strict",
+   "label": "amber+strict",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "amber",
+   "label": "amber",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "clear",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "white",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "TLP:GREEN",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": " tlp:Clear ",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "Green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "purple",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "rèd",
+   "label": "red",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "red",
+   "role_leaves_lab": false,
+   "sender_ceiling": "green",
+   "header": "AMBER",
+   "label": "amber",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": null,
+   "label": "red",
+   "allowed": false,
+   "reason": "unlabelled"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "red",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "amber+strict",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "amber",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "green",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "clear",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "white",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "TLP:GREEN",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": " tlp:Clear ",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "Green",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "purple",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "rèd",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "AMBER",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": null,
+   "label": "red",
+   "allowed": false,
+   "reason": "unlabelled"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "red",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "amber+strict",
+   "label": "amber+strict",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "amber",
+   "label": "amber",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "green",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "clear",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "white",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "TLP:GREEN",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": " tlp:Clear ",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "Green",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "purple",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "rèd",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "AMBER",
+   "label": "amber",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": null,
+   "label": "red",
+   "allowed": false,
+   "reason": "unlabelled"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "red",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "amber+strict",
+   "label": "amber+strict",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "amber",
+   "label": "amber",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "green",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "clear",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "white",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "TLP:GREEN",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": " tlp:Clear ",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "Green",
+   "label": "green",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "purple",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "rèd",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "clear",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "AMBER",
+   "label": "amber",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": null,
+   "label": "red",
+   "allowed": false,
+   "reason": "unlabelled"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "red",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "amber+strict",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "amber",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "green",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "clear",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "white",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "TLP:GREEN",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": " tlp:Clear ",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "Green",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "purple",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "rèd",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "red",
+   "header": "AMBER",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": null,
+   "label": "red",
+   "allowed": false,
+   "reason": "unlabelled"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "red",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "amber+strict",
+   "label": "amber+strict",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "amber",
+   "label": "amber",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "clear",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "white",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "TLP:GREEN",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": " tlp:Clear ",
+   "label": "clear",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "Green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "purple",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "rèd",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "clear",
+   "header": "AMBER",
+   "label": "amber",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": null,
+   "label": "red",
+   "allowed": false,
+   "reason": "unlabelled"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "red",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "amber+strict",
+   "label": "amber+strict",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "amber",
+   "label": "amber",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "clear",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "white",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "TLP:GREEN",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": " tlp:Clear ",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "Green",
+   "label": "green",
+   "allowed": true,
+   "reason": "within-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "purple",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "tlp:",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "rèd",
+   "label": "red",
+   "allowed": false,
+   "reason": "above-ceiling"
+  },
+  {
+   "role_ceiling": "green",
+   "role_leaves_lab": true,
+   "sender_ceiling": "green",
+   "header": "AMBER",
+   "label": "amber",
+   "allowed": false,
+   "reason": "above-ceiling"
+  }
+ ]
+}

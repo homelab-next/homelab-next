@@ -84,14 +84,16 @@ here, and the implementation is tested against them from the private side.
    refuses a chain that would (ADR-0022 decision 3).
 5. **Per-request TLP admission.** A request may carry its label in an `X-HNX-TLP` header. The gateway
    applies the `admit` rule to it:
-   - The request is judged at the higher of its label and the key's sending ceiling.
-   - A missing label reads as `red`.
+   - The header is read as data: a missing header, or a value that is not an accepted spelling,
+     reads as `red`.
+   - For a role that leaves the lab, the request is judged at the higher of that label and the
+     key's sending ceiling. For a role that stays in the lab, it is judged at its own label.
    - The judged label is checked against the requested role's ceiling. Each role in its fallback
      chain is checked again before the call falls back to it.
    - A refusal is a 403 with the `Admission` reason (`above-ceiling`, `unlabelled`).
 
    The orchestrator's Go module and this repository's Python implement the same rule. This
-   repository gains the rule's test vectors (`schemas/platform/examples/tlp_admit_vectors.json`),
+   repository holds the rule's test vectors (`conformance/fixtures/tlp_admit_vectors.json`),
    and both implementations must pass them. This is a check on data, not admission in ADR-0022's
    sense: the gateway still does no scheduling, queuing or session admission (ADR-0022 decision 1,
    final bullet), which stay with the serving engine and the orchestrator.
