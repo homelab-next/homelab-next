@@ -1,11 +1,15 @@
 ---
 summary: The orchestrator joins this repository as the Go module orchestrator/, gateway first; lab data goes to the overlay, MCP servers become modules, in stages.
-summary_of: outline:sha256:55a2d2ccded19d6a
+summary_of: outline:sha256:dd8a0ee78f574512
 ---
 # ADR-0026: Make the orchestrator and its gateway part of this repository
 
 - **Status:** proposed
 - **Date:** 2026-11-07
+- **Amended:** 2026-11-07, with the operator's stage-2 decisions: the controller cuts over after
+  stage 3, behind a runner seam proven first in the private repository; neutral wire names with a
+  migration; no HTTP passthrough; the lessons reader on this repository's register format; the
+  module's first third-party dependency and its `go.sum` (see the amendment at the end of Decision)
 - **Related:** ADR-0005, ADR-0017, ADR-0021, ADR-0022, ADR-0024, ADR-0027, ADR-0030, ADR-0033,
   [LLM gateway](../llm-gateway.md), [the lab's own gateway](../gateway.md),
   [modules](../modules.md), [MCP catalog](../mcp-catalog.md),
@@ -66,12 +70,14 @@ private sources, so bringing that generic code in needs an amendment to it (deci
      with it, by hand, to a release past the 14-day cooldown (CONTRIBUTING.md, "Keeping pins
      current"). CI's `go` job installs that version (`GOTOOLCHAIN=local`) and runs with
      `GOFLAGS=-mod=readonly` and `GOWORK=off`.
-   - Standard library first. The gateway imports nothing else, so the module has no `go.sum`. A
-     third-party Go dependency follows ADR-0011 decision 4 and CONTRIBUTING.md rule 8 as a Python
-     one does: permissively licensed, justified in its pull request, and listed by module path in
-     the `go` section of `tools/licences.yml`, which `make licence-check` reads from every
-     `go.mod`'s requirements. Dependabot watches the module and its linters' module (`gomod`
-     entries; `tests/packaging/test_orchestrator_tree.py` fails on a discovered module it misses).
+   - Standard library first. The gateway imports nothing else; the controller's core adds the
+     module's first third-party dependencies in stage 2, and with them the module's `go.sum`
+     (see the amendment). A third-party Go dependency follows ADR-0011 decision 4 and
+     CONTRIBUTING.md rule 8 as a Python one does: permissively licensed, justified in its pull
+     request, and listed by module path in the `go` section of `tools/licences.yml`, which `make
+     licence-check` reads from every `go.mod`'s requirements. Dependabot watches the module and
+     its linters' module (`gomod` entries; `tests/packaging/test_orchestrator_tree.py` fails on a
+     discovered module it misses).
    - **Linters.** `orchestrator/tools/go.mod` is the module's linters' module (the
      `tools/go_modules.py` rule): staticcheck and govulncheck pinned as `tool` dependencies, with
      their `go.sum`, at releases past the 14-day cooldown, each module they pull in listed in
@@ -174,12 +180,13 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    **Each component cuts over as soon as it lands**, so the lab never runs a frozen copy for long:
    the lab's deployment then builds it from this repository at the commit the overlay pins
    (ADR-0021 decision 7). The gateway cuts over under ADR-0038's rules (its suite green here, a
-   period beside LiteLLM, the runtime sending labels); the controller cuts over right after its
-   stage. From this pull request on, this repository's gateway is the implementation ADR-0038 is
-   judged against, and the private copy is frozen. Until a component has cut over, a security fix
-   may be backported to its private copy, and each such backport is recorded in the pull request
-   here that carries the same fix. After cutover the private copy is removed there, with its own
-   conformance job, by an operator-merged pull request.
+   period beside LiteLLM, the runtime sending labels); the controller cuts over after stage 3, not
+   after its own stage (see the amendment). From this pull request on, this repository's gateway
+   is the implementation ADR-0038 is judged against, and the private copy is frozen. Until a
+   component has cut over, a security fix may be backported to its private copy, and each such
+   backport is recorded in the pull request here that carries the same fix. After cutover the
+   private copy is removed there, with its own conformance job, by an operator-merged pull
+   request.
 9. **ADR-0038 decision 7 changes: the conformance run is an in-repository CI job.** CI's
    `gateway-conformance` job builds `orchestrator/cmd/gateway`, renders the conformance gateway
    spec with `--conformance`, starts the fake inference server and the gateway on loopback with
@@ -192,6 +199,43 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    commit. ADR-0038's acceptance condition reads "green on this repository's `main`" where it read
    "green on the orchestrator's main branch"; the side-by-side period and the cutover rules are
    unchanged.
+
+### Amendment (2026-11-07): the controller's stage 2, decided
+
+The operator decided how the controller's core comes in before its pull request was written. The
+decisions change decision 8's cutover point and decision 2's statement about `go.sum`, and settle
+what stage 2 carries:
+
+- **The controller cuts over after stage 3, not after stage 2.** The controller in this
+  repository cannot run the lab's agents until it has a runner: the agent-runner contract and the
+  Hermes provider module (decision 5) arrive in stage 3. Stage 2 lands the controller's core with
+  an **internal runner seam**, the line along which decision 5 splits the private repository's
+  runner code, and nothing behind it that the lab's agents could use yet. The seam is proven first
+  where the code runs today: a refactor pull request in the private repository puts the
+  controller behind the seam and merges there, and only then does the code move here. Until the
+  controller cuts over after stage 3, decision 8's backport rule holds for its private copy.
+- **Wire names become neutral.** The session field named after the Hermes runtime becomes
+  `session_id`, and the config keys, the metric prefix and the event source take neutral names
+  too, so no product name sits in the controller's wire format (ADR-0027). The change is staged so
+  that no caller breaks at once: one release serves both API field names, the old and
+  `session_id`, and a config migration and a database migration move the stored names. At the
+  cutover the controller's database is backed up before the migration runs, so a failed migration
+  is a restore, not a repair.
+- **The controller's HTTP passthrough is not ported.** It does not come here with the core. A
+  caller that is not an agent uses the gateway (ADR-0038), which already authenticates, admits
+  and records every call.
+- **The lessons reader reads this repository's register format.** The controller's reader of
+  lessons is ported to the lessons register as this repository defines it, not to the private
+  format. The lessons schema gains `match` as an optional field for it; that schema change lands
+  with the code that reads it, in stage 2's pull request, not with this amendment.
+- **The YAML library is `go.yaml.in/yaml/v3`**, the maintained successor of the archived
+  `gopkg.in/yaml.v3`, at a release past the 14-day cooldown (CONTRIBUTING.md, "Keeping pins
+  current"). It is one of the module's first third-party dependencies and follows decision 2's
+  rule for one: justified in its pull request, listed in the `go` section of
+  `tools/licences.yml`, and watched by Dependabot.
+- **The module gets a `go.sum`.** Stage 2 adds third-party Go dependencies, so `orchestrator/`
+  stops being standard library only and its `go.sum` is committed with them, checked by CI's `go`
+  job under `GOFLAGS=-mod=readonly`. The gateway's package stays standard library only.
 
 ## Consequences
 
