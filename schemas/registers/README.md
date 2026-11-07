@@ -5,8 +5,8 @@ schema violation.
 
 | Schema | Core idea |
 |---|---|
-| `lesson.schema.json` (2.1) | `uid` (a UUIDv7) and `type: lesson` identify it (no stored number, ADR-0019); `contributing_factors` (what enabled it) vs `root_cause` (why the conditions existed), `preventive_control`, falsifiable `verification`; `control_installed_at` required once graded `controlled`/`partial`; `retired_by` required when `retired`; (2.1, additive) an optional `summary` |
-| `runbook.schema.json` (2.2) | `uid` and `type: runbook`; ordered `steps`, each with its own `verify`; (2.1, additive) `lessons` names lesson uids (a 2.0 document's `LL-NNN` codes still validate, so 2.0 stays readable; the record validation refuses one); (2.2, additive) an optional `summary` |
+| `lesson.schema.json` (2.2) | `uid` (a UUIDv7) and `type: lesson` identify it (no stored number, ADR-0019); `contributing_factors` (what enabled it) vs `root_cause` (why the conditions existed), `preventive_control`, falsifiable `verification`; `control_installed_at` required once graded `controlled`/`partial`; `retired_by` required when `retired`; (2.1, additive) an optional `summary`; (2.2, additive) an optional `match` |
+| `runbook.schema.json` (2.3) | `uid` and `type: runbook`; ordered `steps`, each with its own `verify`; (2.1, additive) `lessons` names lesson uids (a 2.0 document's `LL-NNN` codes still validate, so 2.0 stays readable; the record validation refuses one); (2.2, additive) an optional `summary`; (2.3, additive) an optional `match` |
 | `invariant.schema.json` | `statement`, `observable`, `expected`, `evidence: auto|manual`; auto needs `check` (exit 0 pass, non-zero fail, >=100 could not measure) |
 | `register_event.schema.json` | one append-only event in a record's `<id>.events/` sidecar: `review` (the review entry; role `check`, `audit` or `approve`, and since 1.2 `audit` replaces the deprecated `challenge`, still accepted), `recurrence`, `verified` (`outcome`, `result`), `transition` (`from`, `to`, `set`, the `intent` applied; decider only), and (1.1) `value` (one reading of a strategy measure: `value` or `finding`, `observed_at`, `sample`, `definition_digest`, `definition_version`, `evidence`); (1.3) `rekey` (`from` -> `to` digest, written only by `hnx:migrate`: the uid migration's identity rewrite carries the reviews of `from` to `to`); file name `<UTC stamp>-<event>-<actor>[-<n>].yml` checked by `homelabnext.registers.events` |
 | `kanban_item.schema.json` | columns `rfi blocked todo progress partial done`; project card (`PRJ-NNN`, `steps[]`, column `partial`) vs step card (`PRJ-NNN.M`) |
@@ -17,8 +17,18 @@ schema violation.
 ones; the lint and the record validation refuse every Cc, Cf, Zl, Zp and Cs character), which the MCP `context_for` serves instead of the content.
 It is part of the review digest. `hnx registers summaries` (run by `make registers`) fails a malformed
 one and counts a record or docs page without one as a warning; the record validation refuses a
-malformed one too. Baselines `_frozen/2.1/registers/lesson.schema.json` and
-`_frozen/2.2/registers/runbook.schema.json`.
+malformed one too.
+
+`match` (lesson 2.2, runbook 2.3; ADR-0026's amendment) is what the orchestrator matches a job's
+task against before it quotes the record into the job's prompt (`orchestrator/internal/lessons`):
+a bounded matcher, never a regular expression. `keywords` are literal, case-insensitive substrings
+of the task (3 to 80 characters, no control or format character); `paths` are clean relative
+prefixes of a path the job names (at most 200 characters); at most 16 of each, at least one in
+all. A record without `match` is never matched, and an inactive one never either; a matched
+record's text reaches the prompt as quoted data, never as instructions. The record validation
+(`homelabnext.registers.schema`) and the orchestrator's reader hold `match` to the same bounds as
+the schema, and refuse a key other than these two. Baselines
+`_frozen/2.2/registers/lesson.schema.json` and `_frozen/2.3/registers/runbook.schema.json`.
 
 Lessons and runbooks are identified by uids (ADR-0019): nothing is allocated, so there is no
 placeholder. The 1.0 baselines (numbered `LL-NNN` ids) stay in `schemas/_frozen/1.0/` (runbook 2.0 in

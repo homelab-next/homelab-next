@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// oldConfig is a fictional configuration in the private controller's keys: every key a
+// migration renames or removes.
+const oldConfig = scopeYAML + `# the controller's database
+db_path: /var/lib/orchestrator/controller.db
+hermes_local_home: /etc/orchestrator/runner/local # the primary engine
+hermes_local_fallback_home: /etc/orchestrator/runner/fallback
+hermes_cloud_home: /etc/orchestrator/runner/cloud
+hermes_agent_timeout_seconds: 3600
+hermes_agent_job_timeout_seconds: 7200
+hermes_agent_stall_timeout_seconds: 600
+hermes_agent_stall_poll_interval_seconds: 20
+hermes_agent_liveness: progress
+hermes_agent_max_turns: 80
+hermes_agent_run_dir_base: /var/lib/orchestrator/runs
+hermes_agent_env_allowlist: [LANG]
+hermes_agent_job_home_root: /var/lib/orchestrator/homes
+hermes_agent_interlock_wait_timeout_seconds: 600
+hermes_agent_grants_catalog: /etc/orchestrator/mcp_catalog.yaml
+backend_status_script: /usr/local/libexec/backend_status.py
+passthrough_enabled: false
+reject_unknown_agent_keys: true
+backends:
+  local:
+    name: engine-a
+    base_url: http://engine-a.example.internal:8000/v1
+    api_key_env: ENGINE_A_KEY
+  local_fallback:
+    name: engine-b
+    base_url: https://198.51.100.7
+  cloud:
+    name: cloud
+    base_url: https://cloud.example.internal
+    api_key_env: CLOUD_KEY
+    openai_compatible: false
+  additional:
+  - name: engine-c
+    base_url: http://engine-c.example.internal:8001
+    hermes_home: /etc/orchestrator/runner/c
+`
+
+func TestMigrate_RewritesEveryOldKey(t *testing.T) {
+	out, notes, err := Migrate([]byte(oldConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	for _, gone := range []string{"hermes", "passthrough", "reject_unknown", "api_key_env", "openai_compatible", "base_url", "backend_status_script"} {
+		if strings.Contains(text, gone) {
+			t.Errorf("the migrated configuration still holds %q:\n%s", gone, text)
+		}
+	}
+	for _, kept := range []string{"# the controller's database", "# the primary engine"} {
+		if !strings.Contains(text, kept) {
+			t.Errorf("comment %q lost:\n%s", kept, text)
+		}
+	}
+	cfg, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := cfg.Backends
+	if b.Local.Home != "/etc/orchestrator/runner/local" || b.LocalFallback.Home != "/etc/orchestrator/runner/fallback" || b.Cloud.Home != "/etc/orchestrator/runner/cloud" ||
+		b.Additional[0].Home != "/etc/orchestrator/runner/c" {
+		t.Errorf("homes = %+v", b)
+	}
+	if b.Local.Endpoint != "engine-a.example.internal:8000" || b.LocalFallback.Endpoint != "198.51.100.7:443" || b.Cloud.Endpoint != "cloud.example.internal:443" ||
+		b.Additional[0].Endpoint != "engine-c.example.internal:8001" {
+		t.Errorf("endpoints = %+v", b)
+	}
+	r := cfg.Runner
+	if r.TimeoutSeconds != 3600 || r.JobTimeoutSeconds != 7200 || r.StallTimeoutSeconds != 600 || r.StallPollIntervalSeconds != 20 || r.Liveness != "progress" ||
+		r.MaxTurns != 80 || r.RunDirBase == "" || len(r.EnvAllowlist) != 1 || r.JobHomeRoot == "" {
+		t.Errorf("runner = %+v", r)
+	}
+	if cfg.InterlockWaitTimeoutSeconds != 600 || cfg.GrantsCatalog == "" || !slices.Equal(cfg.BackendStatusCommand, []string{"python3", "/usr/local/libexec/backend_status.py", "--json"}) {
+		t.Errorf("config = %+v", cfg)
+	}
+	if len(cfg.Notices) != 0 {
+		t.Errorf("a migrated configuration loads without notices: %v", cfg.Notices)
+	}
+	// one note per change, deterministic
+	if len(notes) != 25 {
+		t.Errorf("%d notes: %v", len(notes), notes)
+	}
+	_, again, _ := Migrate([]byte(oldConfig))
+	if !slices.Equal(notes, again) {
+		t.Errorf("notes differ between runs:\n%v\n%v", notes, again)
+	}
+	// idempotent: a migrated configuration needs nothing
+	out2, notes2, err := Migrate(out)
+	if err != nil || len(notes2) != 0 || string(out2) != string(out) {
+		t.Errorf("a second migration changed something: %v %v", notes2, err)
+	}
+}
+
+// Loading reads an old key under its new name and says so; a dropped key is refused.
+func TestParse_ReadsOldKeysAndRefusesDroppedOnes(t *testing.T) {
+	cfg := mustParse(t, scopeYAML+"hermes_local_home: /etc/orchestrator/runner/local\nhermes_agent_max_turns: 5\nbackends: {local: {base_url: \"http://192.0.2.10:8000/v1\"}}\n")
+	if cfg.Backends.Local.Home != "/etc/orchestrator/runner/local" || cfg.Runner.MaxTurns != 5 || cfg.Backends.Local.Endpoint != "192.0.2.10:8000" {
+		t.Errorf("config = %+v", cfg)
+	}
+	if len(cfg.Notices) != 3 || !strings.Contains(strings.Join(cfg.Notices, "\n"), "read hermes_local_home as backends.local.home") { // scrub-allow: config key paths, not host names
+		t.Errorf("notices = %v", cfg.Notices)
+	}
+	for _, body := range []string{
+		"passthrough_enabled: false\n", "passthrough_enabled: true\n", "reject_unknown_agent_keys: true\n",
+		"backends: {local: {api_key_env: K}}\n", "backends: {cloud: {openai_compatible: true}}\n",
+		"backends: {additional: [{api_key_env: K}]}\n",
+	} {
+		if _, err := Parse([]byte(scopeYAML + body)); err == nil || !strings.Contains(err.Error(), "migration") {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+}
+
+// A configuration that sets an old key and its new key is refused, whichever way (two old
+// spellings of one setting included), and so is a value the conversion cannot read.
+func TestParse_RefusesAnOldAndANewKey(t *testing.T) {
+	for name, body := range map[string]string{
+		"top-level old and new":  "hermes_agent_max_turns: 5\nrunner: {max_turns: 6}\n",
+		"same value both ways":   "hermes_agent_liveness: cpu\nrunner: {liveness: cpu}\n",
+		"backend old and new":    "backends: {local: {hermes_home: /a, home: /b}}\n",
+		"two old spellings":      "hermes_local_home: /a\nbackends: {local: {hermes_home: /b}}\n",
+		"top-level into backend": "hermes_cloud_home: /a\nbackends: {cloud: {home: /b}}\n",
+		"base_url and endpoint":  "backends: {local: {base_url: \"http://192.0.2.10:8000\", endpoint: \"192.0.2.10:8000\"}}\n",
+		"script and command":     "backend_status_script: /x.py\nbackend_status_command: [/x]\n",
+		"base_url not a URL":     "backends: {local: {base_url: \"engine-a:8000\"}}\n",
+		"base_url other scheme":  "backends: {local: {base_url: \"ftp://engine-a:8000\"}}\n",
+	} {
+		_, err := Parse([]byte(scopeYAML + body))
+		if err == nil {
+			t.Errorf("%s: loaded", name)
+		}
+		if _, _, merr := Migrate([]byte(scopeYAML + body)); merr == nil {
+			t.Errorf("%s: migrated", name)
+		}
+	}
+}
+
+func TestMigrate_LeavesANeutralConfigurationAlone(t *testing.T) {
+	body := scopeYAML + "# kept as written\nrunner: {max_turns: 3}\n"
+	out, notes, err := Migrate([]byte(body))
+	if err != nil || len(notes) != 0 || string(out) != body {
+		t.Fatalf("Migrate = %q, %v, %v", out, notes, err)
+	}
+	if _, _, err := Migrate([]byte("db_path: /a\ndb_path: /b\n")); err == nil {
+		t.Error("a repeated key migrated")
+	}
+	// the result must load: a migration does not write a configuration this controller refuses
+	if _, _, err := Migrate([]byte("hermes_agent_max_turns: 3\n")); err == nil || !strings.Contains(err.Error(), "does not load") {
+		t.Errorf("a configuration without a scope block migrated: %v", err)
+	}
+}
+
+// docs/orchestration-controller.md prints the table of old and new keys; it is the table
+// Renames and Dropped hold.
+func TestTheDocsPrintTheMigrationTable(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "orchestration-controller.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := regexp.MustCompile("(?m)^\\| `([a-z_.*\\[\\]]+)` \\| (?:`([a-z_.*]+)`|not ported)")
+	var renames, dropped []string
+	for _, m := range row.FindAllStringSubmatch(string(raw), -1) {
+		if m[2] == "" {
+			dropped = append(dropped, m[1])
+		} else {
+			renames = append(renames, m[1]+" -> "+m[2])
+		}
+	}
+	var wantRenames, wantDropped []string
+	for _, r := range Renames {
+		wantRenames = append(wantRenames, r.Old+" -> "+r.New)
+	}
+	wantDropped = droppedKeys()
+	slices.Sort(dropped)
+	if !slices.Equal(renames, wantRenames) || !slices.Equal(dropped, wantDropped) {
+		t.Errorf("docs table:\n renames %v\n dropped %v\nwant\n renames %v\n dropped %v", renames, dropped, wantRenames, wantDropped)
+	}
+}
