@@ -98,7 +98,8 @@ here, and the implementation is tested against them from the private side.
 
    Upstream failures (a connection error, a timeout, a 429 or a 5xx) move to the next deployment,
    then down the role's rendered fallback chain and nothing else. An upstream 401 or 403 is the
-   gateway's own credentials failing, so the caller gets 502, never a 401 that reads as its own key
+   gateway's own credentials failing, so the gateway tries the next deployment and the caller
+   finally gets 502, never a 401 that reads as its own key
    failing. Any other upstream 4xx is returned with its status and the gateway's own error body,
    never the upstream body, which can name backend model ids. When every deployment and fallback
    has failed, the caller gets 502. The renderer refuses a chain that crosses locality for a
@@ -144,9 +145,10 @@ here, and the implementation is tested against them from the private side.
    - The `inference` suite gains a `tlp-admit` feature. Its checks send `X-HNX-TLP` over HTTP: no
      header to a role that leaves the lab is a 403 `unlabelled`; a label within the ceiling is
      served; a label below the key's ceiling is still refused; an empty header field differs from
-     no field; a refused fallback is skipped. It runs against a conformance gateway spec with a
+     no field; more than one field reads as `red`; a refused fallback is skipped. It runs against a conformance gateway spec with a
      test-only role that leaves the lab, pointed at the fake inference server, which only a
-     renderer test option allows.
+     renderer test option allows. A config rendered with that option is marked conformance-only,
+     and the gateway refuses to start on it outside an explicit conformance mode on loopback.
    - The orchestrator's CI builds `cmd/gateway`, checks out this repository at a pinned commit,
      renders that spec, and runs the `inference` suite with the `streaming`, `embeddings`,
      `gateway`, `tlp-ceiling`, `tlp-admit` and `turn-records` features against the binary and the
