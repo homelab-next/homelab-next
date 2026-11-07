@@ -22,6 +22,7 @@ func writeRaw(t *testing.T, path string, stmts ...string) {
 			t.Fatalf("%q: %v", s, err)
 		}
 	}
+	ownerOnly(t, path)
 }
 
 // oldDB is a database that needs a migration, with two rows.

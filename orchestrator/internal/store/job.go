@@ -74,9 +74,11 @@ type Job struct {
 	LocalFailedReason string
 	// SessionID is the runner's own id for the session it ran (column session_id).
 	SessionID string
-	// IdempotencyKey, when not empty, is unique across every job the database has ever held:
-	// a key is never released, whatever state its job reaches and however old it is, so a
-	// replayed submit always finds its first run (ErrDuplicateIdempotencyKey).
+	// IdempotencyKey, when not empty, is unique among the jobs of one submitter (SubmittedBy;
+	// "" with the API's auth off) across every job the database has ever held: a key is never
+	// released, whatever state its job reaches and however old it is, so a replayed submit
+	// always finds its first run (ErrDuplicateIdempotencyKey, FindByIdempotencyKey). Another
+	// submitter's key neither finds nor blocks it. At most MaxIdempotencyKeyLen bytes.
 	IdempotencyKey string
 	CreatedAt      time.Time
 	StartedAt      *time.Time

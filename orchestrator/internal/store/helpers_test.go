@@ -57,6 +57,18 @@ func fixtureDB(t *testing.T, path, schemaFile string, stmts ...string) {
 			t.Fatalf("fixture statement %q: %v", s, err)
 		}
 	}
+	ownerOnly(t, path)
+}
+
+// ownerOnly makes a database the plain driver created under the test's umask owner-only, as the
+// store requires.
+func ownerOnly(t *testing.T, path string) {
+	t.Helper()
+	for _, side := range []string{"", "-wal", "-shm", "-journal"} {
+		if err := os.Chmod(path+side, 0o600); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
 }
 
 func intp(n int) *int           { return &n }

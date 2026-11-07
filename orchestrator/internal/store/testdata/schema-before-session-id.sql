@@ -2,7 +2,8 @@
 -- The controller database's last schema before the session id column took its neutral name: every
 -- column an earlier controller added, in the order it added them (the passthrough's request_body
 -- among them), every table and index, and the session id still as hermes_session_id. Frozen: never
--- edit it (a later schema is a new fixture). migrate_test.go builds a database from it.
+-- edit it (a later schema is a new fixture; the sha256 is pinned in hardening_test.go).
+-- migrate_test.go builds a database from it.
 CREATE TABLE jobs (
 	run_id TEXT PRIMARY KEY,
 	agent_key TEXT NOT NULL,

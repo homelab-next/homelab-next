@@ -32,9 +32,21 @@ type outboxConfig struct {
 	onEnqueue func()
 }
 
-// notify wakes the sender after a commit that enqueued.
-func (ob *outboxConfig) notify(enqueued bool) {
-	if ob != nil && enqueued && ob.onEnqueue != nil {
+// txOutbox is what one transaction did to the outbox, acted on only once it has committed: a
+// rolled-back transaction neither woke the sender nor dropped anything.
+type txOutbox struct {
+	enqueued bool
+	dropped  int
+	maxRows  int
+}
+
+// committed counts and logs the transaction's drops and wakes the sender, after its commit.
+func (s *Store) committed(ob *outboxConfig, t *txOutbox) {
+	if t.dropped > 0 {
+		s.outboxDropped.Add(uint64(t.dropped))
+		log.Printf("events: outbox full (%d), dropped the %d oldest undelivered event(s)", t.maxRows, t.dropped)
+	}
+	if ob != nil && t.enqueued && ob.onEnqueue != nil {
 		ob.onEnqueue()
 	}
 }
@@ -106,14 +118,14 @@ func (s *Store) EmitDeferredFinished(runID string) error {
 		return fmt.Errorf("emit deferred finished %s: begin: %w", runID, err)
 	}
 	defer tx.Rollback()
-	enq, err := s.emitDeferredTx(tx, ob, runID)
-	if err != nil {
+	var t txOutbox
+	if err := s.emitDeferredTx(tx, ob, runID, &t); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("emit deferred finished %s: commit: %w", runID, err)
 	}
-	ob.notify(enq)
+	s.committed(ob, &t)
 	return nil
 }
 
@@ -127,15 +139,15 @@ func (s *Store) DeferredFinishedPending() ([]string, error) {
 	return ids, nil
 }
 
-func (s *Store) emitDeferredTx(tx *sql.Tx, ob *outboxConfig, runID string) (bool, error) {
+func (s *Store) emitDeferredTx(tx *sql.Tx, ob *outboxConfig, runID string, t *txOutbox) error {
 	res, err := tx.Exec(`UPDATE jobs SET finished_pending = 0 WHERE run_id = ? AND finished_pending = 1 AND state = ?`, runID, string(StateCancelled))
 	if err != nil {
-		return false, fmt.Errorf("emit deferred finished %s: %w", runID, err)
+		return fmt.Errorf("emit deferred finished %s: %w", runID, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return false, nil
+		return nil
 	}
-	return s.enqueueForJob(tx, ob, runID)
+	return s.enqueueForJob(tx, ob, runID, t)
 }
 
 func (s *Store) updateStateWithEvent(ob *outboxConfig, runID string, from, to State, class string) error {
@@ -153,18 +165,18 @@ func (s *Store) updateStateWithEvent(ob *outboxConfig, runID string, from, to St
 	} else if n == 0 {
 		return ErrStateConflict
 	}
-	enq := false
+	var t txOutbox
 	if deferFinished(from, to) {
 		if _, err := tx.Exec(`UPDATE jobs SET finished_pending = 1 WHERE run_id = ?`, runID); err != nil {
 			return fmt.Errorf("update state %s to %s: mark finished pending: %w", runID, to, err)
 		}
-	} else if enq, err = s.enqueueForJob(tx, ob, runID); err != nil {
+	} else if err := s.enqueueForJob(tx, ob, runID, &t); err != nil {
 		return fmt.Errorf("update state %s to %s: %w", runID, to, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("update state %s to %s: commit: %w", runID, to, err)
 	}
-	ob.notify(enq)
+	s.committed(ob, &t)
 	return nil
 }
 
@@ -197,16 +209,16 @@ func (s *Store) FailWithRetry(runID string, from State, class string, retry *Job
 		return false, rerr, s.UpdateStateClass(runID, from, StateFailed, class)
 	}
 	ob := s.outbox.Load()
-	enq := false
+	var t txOutbox
 	if ob != nil && emitsEvent(from, StateFailed) {
-		if enq, err = s.enqueueForJob(tx, ob, runID); err != nil {
+		if err := s.enqueueForJob(tx, ob, runID, &t); err != nil {
 			return false, nil, fmt.Errorf("update state %s to failed: %w", runID, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, nil, fmt.Errorf("update state %s to failed: commit: %w", runID, err)
 	}
-	ob.notify(enq)
+	s.committed(ob, &t)
 	return true, nil, nil
 }
 
@@ -220,13 +232,11 @@ func (s *Store) reconcileOrphansWithEvents(ob *outboxConfig) (requeued, failed i
 	if err != nil {
 		return 0, 0, err
 	}
-	enqueued := false
+	var t txOutbox
 	for _, id := range ids {
-		enq, err := s.enqueueForJob(tx, ob, id)
-		if err != nil {
+		if err := s.enqueueForJob(tx, ob, id, &t); err != nil {
 			return 0, 0, fmt.Errorf("reconcile: %w", err)
 		}
-		enqueued = enqueued || enq
 	}
 	// A run cancelled while running whose executor died before it emitted the deferred
 	// finished record: the row is as final as it will get.
@@ -235,36 +245,35 @@ func (s *Store) reconcileOrphansWithEvents(ob *outboxConfig) (requeued, failed i
 		return 0, 0, fmt.Errorf("reconcile deferred finished: %w", err)
 	}
 	for _, id := range pending {
-		enq, err := s.emitDeferredTx(tx, ob, id)
-		if err != nil {
+		if err := s.emitDeferredTx(tx, ob, id, &t); err != nil {
 			return 0, 0, fmt.Errorf("reconcile deferred finished: %w", err)
 		}
-		enqueued = enqueued || enq
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, 0, fmt.Errorf("reconcile: commit: %w", err)
 	}
-	ob.notify(enqueued)
+	s.committed(ob, &t)
 	return requeued, failed, nil
 }
 
 // enqueueForJob reads runID again inside tx, builds its events and inserts them in order (an
 // event id already in the outbox is a duplicate and ignored).
-func (s *Store) enqueueForJob(tx *sql.Tx, ob *outboxConfig, runID string) (bool, error) {
+func (s *Store) enqueueForJob(tx *sql.Tx, ob *outboxConfig, runID string, t *txOutbox) error {
 	j, err := scanJob(tx.QueryRow(`SELECT `+jobColumns+` FROM jobs WHERE run_id = ?`, runID))
 	if err != nil {
-		return false, fmt.Errorf("read job for event: %w", err)
+		return fmt.Errorf("read job for event: %w", err)
 	}
-	evs := ob.build(j)
-	for _, e := range evs {
-		if err := s.insertOutbox(tx, ob.maxRows, e.ID, e.Body); err != nil {
-			return false, err
+	for _, e := range ob.build(j) {
+		if err := insertOutbox(tx, ob.maxRows, e.ID, e.Body, t); err != nil {
+			return err
 		}
+		t.enqueued = true
 	}
-	return len(evs) > 0, nil
+	return nil
 }
 
-func (s *Store) insertOutbox(tx *sql.Tx, maxRows int, id string, body []byte) error {
+// insertOutbox adds one event in tx, trimming the oldest beyond maxRows into t.dropped.
+func insertOutbox(tx *sql.Tx, maxRows int, id string, body []byte, t *txOutbox) error {
 	res, err := tx.Exec(`INSERT OR IGNORE INTO event_outbox (event_id, body, created_at) VALUES (?, ?, ?)`,
 		id, string(body), time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
@@ -281,8 +290,8 @@ func (s *Store) insertOutbox(tx *sql.Tx, maxRows int, id string, body []byte) er
 		if _, err := tx.Exec(`DELETE FROM event_outbox WHERE seq IN (SELECT seq FROM event_outbox ORDER BY seq ASC LIMIT ?)`, over); err != nil {
 			return fmt.Errorf("trim outbox: %w", err)
 		}
-		s.outboxDropped.Add(uint64(over))
-		log.Printf("events: outbox full (%d), dropped the %d oldest undelivered event(s)", maxRows, over)
+		t.dropped += over
+		t.maxRows = maxRows
 	}
 	return nil
 }
@@ -298,13 +307,14 @@ func (s *Store) EnqueueEvent(id string, body []byte) error {
 		return err
 	}
 	defer tx.Rollback()
-	if err := s.insertOutbox(tx, ob.maxRows, id, body); err != nil {
+	t := txOutbox{enqueued: true}
+	if err := insertOutbox(tx, ob.maxRows, id, body, &t); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	ob.notify(true)
+	s.committed(ob, &t)
 	return nil
 }
 

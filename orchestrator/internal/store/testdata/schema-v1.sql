@@ -1,7 +1,9 @@
 -- SPDX-License-Identifier: Apache-2.0
 -- The controller database's first schema: the jobs table before any column was added, the session
--- id still under its old name, and neither the event outbox nor the drains table. Frozen: never
--- edit it (a later schema is a new fixture). migrate_test.go builds a database from it.
+-- id still under its old name, and neither the event outbox nor the drains table. It is a
+-- reconstruction (from the earlier controller's base table and its in-place additions), not a
+-- dump of a database of that age. Frozen: never edit it (a later schema is a new fixture; the
+-- sha256 is pinned in hardening_test.go). migrate_test.go builds a database from it.
 CREATE TABLE jobs (
 	run_id TEXT PRIMARY KEY,
 	agent_key TEXT NOT NULL,

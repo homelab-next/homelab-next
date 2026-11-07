@@ -269,3 +269,13 @@ func TestPost_UnreachableDetailRedactsTheURL(t *testing.T) {
 		})
 	}
 }
+
+// A short query is redacted where it stands in the URL and nowhere else: the rest of the
+// message keeps its text.
+func TestScrubURL_ShortQueryDoesNotGarbleTheMessage(t *testing.T) {
+	raw := "https://events.example.internal/i?a=1"
+	got := scrubURL(errors.New("proxy said a=1 is not allowed for https://events.example.internal/i?a=1"), raw)
+	if want := "proxy said a=1 is not allowed for https://events.example.internal/i"; got != want {
+		t.Errorf("scrubURL = %q, want %q", got, want)
+	}
+}

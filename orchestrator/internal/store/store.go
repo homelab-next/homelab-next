@@ -11,6 +11,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -37,6 +39,8 @@ var ErrStateConflict = errors.New("job state changed concurrently, transition ab
 // Store is the controller's database.
 type Store struct {
 	db *sql.DB
+	// unlock releases the instance lock OpenWith took; nil when the caller holds it.
+	unlock func() error
 	// outbox, once EnableOutbox has run, makes lifecycle transitions enqueue their events in
 	// the same transaction (outbox.go).
 	outbox atomic.Pointer[outboxConfig]
@@ -51,7 +55,19 @@ type Options struct {
 	// schema has to change; it verifies the backup then (VerifyBackup), inside the migration's
 	// own transaction, and ignores it otherwise.
 	MigrationBackup string
+	// InstanceLockHeld says the caller already holds LockInstance(dbPath), as it must while it
+	// takes the backup a migration needs and opens the database behind it. OpenWith then takes
+	// no lock of its own, and refuses when it finds the lock free (the caller does not hold it).
+	// Otherwise OpenWith takes the lock itself and Close releases it.
+	InstanceLockHeld bool
+	// AllowSharedPermissions accepts a database file that grants its group or others any
+	// permission. Without it such a file is refused: the database holds every job's task and
+	// output, and is protected like the service's other state (owner-only).
+	AllowSharedPermissions bool
 }
+
+// ErrDatabasePermissions: the database file grants its group or others a permission.
+var ErrDatabasePermissions = errors.New("store: the database file is readable or writable beyond its owner")
 
 // Open opens the database at dbPath with no options: a new database is created, a current one
 // opened, and one that needs a migration refused (ErrBackupRequired).
@@ -65,23 +81,85 @@ func Open(dbPath string) (*Store, error) {
 // it, so a failed migration leaves the database as it was and the backup as its copy. Opening
 // the same file again after a restart is how jobs survive one.
 //
+// It holds the instance lock (LockInstance) for the life of the Store, or checks the caller does
+// (opts.InstanceLockHeld). A new database file is created owner-only (0600) before SQLite opens
+// it, and SQLite gives its -wal and -shm files the same mode; an existing one that grants its
+// group or others anything is refused unless opts.AllowSharedPermissions.
+//
 // Every write transaction on the handle begins IMMEDIATE (_txlock=immediate): it takes the write
 // lock up front. A deferred transaction takes it only at its first write, and under concurrent
 // writers its read snapshot can go stale in between (SQLITE_BUSY_SNAPSHOT), which busy_timeout
 // does not retry; an IMMEDIATE one waits on the lock instead, which busy_timeout does.
-func OpenWith(dbPath string, opts Options) (*Store, error) {
+func OpenWith(dbPath string, opts Options) (s *Store, err error) {
 	if strings.ContainsAny(dbPath, "?#") {
 		return nil, fmt.Errorf("store: database path %q holds '?' or '#', which SQLite's file name parsing treats as special", dbPath)
 	}
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate")
+	abs, err := filepath.Abs(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	var unlock func() error
+	if opts.InstanceLockHeld {
+		if rel, lerr := LockInstance(abs); lerr == nil {
+			rel()
+			return nil, fmt.Errorf("store: InstanceLockHeld is set but the instance lock of %s is free: take LockInstance first", dbPath)
+		} else if !errors.Is(lerr, ErrInstanceLocked) {
+			return nil, lerr
+		}
+	} else {
+		if unlock, err = LockInstance(abs); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				unlock()
+			}
+		}()
+	}
+	if err := ensureDatabaseFile(abs, opts.AllowSharedPermissions); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", abs+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	if err := prepareSchema(db, dbPath, opts); err != nil {
+	if err := prepareSchema(db, abs, opts); err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, unlock: unlock}, nil
+}
+
+// ensureDatabaseFile creates a missing database file owner-only, so that SQLite never creates it
+// (or its -wal and -shm files, which take its mode) under the process umask, and refuses an
+// existing one, or an existing side file, that grants its group or others anything.
+func ensureDatabaseFile(path string, allowShared bool) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("store: create %s: %w", path, err)
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("store: create %s: %w", path, err)
+	}
+	if allowShared {
+		return nil
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		fi, err := os.Stat(p)
+		if errors.Is(err, os.ErrNotExist) && p != path {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("store: %w", err)
+		}
+		if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+			return fmt.Errorf("%w: %s is %v; chmod it 0600 (and run the service with UMask=0077), or set AllowSharedPermissions", ErrDatabasePermissions, p, perm)
+		}
+	}
+	return nil
 }
 
 func prepareSchema(db *sql.DB, dbPath string, opts Options) error {
@@ -110,10 +188,14 @@ func prepareSchema(db *sql.DB, dbPath string, opts Options) error {
 	if opts.MigrationBackup == "" {
 		return fmt.Errorf("%w: %s needs: %s", ErrBackupRequired, dbPath, describeSteps(steps))
 	}
-	if err := checkBackupPaths(dbPath, opts.MigrationBackup); err != nil {
+	backup, err := filepath.Abs(opts.MigrationBackup)
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	if err := checkBackupPaths(dbPath, backup); err != nil {
 		return err
 	}
-	if err := verifyBackupAgainst(tx, dbPath, opts.MigrationBackup); err != nil {
+	if err := verifyBackupAgainst(tx, dbPath, backup, nil); err != nil {
 		return err
 	}
 	if err := applyMigration(tx, steps); err != nil {
@@ -163,9 +245,16 @@ func describeSteps(steps []migrationStep) string {
 	return strings.Join(names, "; ")
 }
 
-// Close closes the database.
+// Close closes the database and releases the instance lock OpenWith took.
 func (s *Store) Close() error {
-	return s.db.Close()
+	err := s.db.Close()
+	if s.unlock != nil {
+		if uerr := s.unlock(); err == nil {
+			err = uerr
+		}
+		s.unlock = nil
+	}
+	return err
 }
 
 // CreateJob persists a new job and assigns its Seq inside the same write transaction, so Seq is
@@ -194,13 +283,17 @@ func (s *Store) createJob(j *Job, check *ResubmitCheck) error {
 
 // insertJobTx is createJob's checks and insert inside the caller's transaction.
 func insertJobTx(tx *sql.Tx, j *Job, check *ResubmitCheck) error {
+	if len(j.IdempotencyKey) > MaxIdempotencyKeyLen {
+		return ErrIdempotencyKeyTooLong
+	}
 	if j.IdempotencyKey != "" {
-		var existing string
-		err := tx.QueryRow(`SELECT run_id FROM jobs WHERE idempotency_key = ?`, j.IdempotencyKey).Scan(&existing)
-		if err == nil {
-			return ErrDuplicateIdempotencyKey
+		owner, err := keyOwner(tx, j, check)
+		if err != nil {
+			return err
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
+		if _, err := findByKey(tx, owner, j.IdempotencyKey); err == nil {
+			return ErrDuplicateIdempotencyKey
+		} else if !errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("check idempotency key: %w", err)
 		}
 	}
@@ -242,6 +335,9 @@ func insertJobTx(tx *sql.Tx, j *Job, check *ResubmitCheck) error {
 		nullIfEmpty(j.RetryOfRunID), nullIfEmpty(j.SubmittedBy), j.Resubmits, nullIfEmpty(j.ParentProfileRevision),
 	)
 	if err != nil {
+		if j.IdempotencyKey != "" && strings.Contains(err.Error(), "idempotency") {
+			return ErrDuplicateIdempotencyKey // the unique index, below the check above
+		}
 		if j.RetryOfRunID != "" && strings.Contains(err.Error(), "retry_of_run_id") {
 			// The unique index. Unreachable while every writer takes the write lock first, as
 			// above; kept as the last line of defence.
@@ -251,6 +347,51 @@ func insertJobTx(tx *sql.Tx, j *Job, check *ResubmitCheck) error {
 		return fmt.Errorf("insert job: %w", err)
 	}
 	return nil
+}
+
+// MaxIdempotencyKeyLen bounds an idempotency key, in bytes.
+const MaxIdempotencyKeyLen = 128
+
+// ErrIdempotencyKeyTooLong: the key is longer than MaxIdempotencyKeyLen.
+var ErrIdempotencyKeyTooLong = fmt.Errorf("idempotency key longer than %d bytes", MaxIdempotencyKeyLen)
+
+// keyOwner is the submitter j's idempotency key is scoped to: the submitter the row will be
+// stored with. A caller's resubmit is stored under its parent's owner (checkCallerResubmit), so
+// its key is looked up there too, once the caller may see the parent; when it may not, the
+// caller's own name is used and checkResubmit refuses the resubmit as an unknown run.
+func keyOwner(tx *sql.Tx, j *Job, check *ResubmitCheck) (string, error) {
+	if j.RetryOfRunID == "" || check == nil {
+		return j.SubmittedBy, nil
+	}
+	var owner sql.NullString
+	err := tx.QueryRow(`SELECT submitted_by FROM jobs WHERE run_id = ?`, j.RetryOfRunID).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return j.SubmittedBy, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read retry parent: %w", err)
+	}
+	if check.MayAccess != nil && !check.MayAccess(owner.String) {
+		return j.SubmittedBy, nil
+	}
+	return owner.String, nil
+}
+
+func findByKey(q queryer, submittedBy, key string) (*Job, error) {
+	j, err := scanJob(q.QueryRow(`SELECT `+jobColumns+` FROM jobs WHERE COALESCE(submitted_by, '') = ? AND idempotency_key = ?`, submittedBy, key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return j, err
+}
+
+// FindByIdempotencyKey returns the job submittedBy submitted with key ("" for a job submitted
+// with the API's auth off), or ErrNotFound: what a replayed submit should be answered with.
+func (s *Store) FindByIdempotencyKey(submittedBy, key string) (*Job, error) {
+	if key == "" {
+		return nil, ErrNotFound
+	}
+	return findByKey(s.db, submittedBy, key)
 }
 
 // GetJob returns the job runID, or ErrNotFound.
@@ -502,9 +643,11 @@ func (s *Store) QueueSummary() (*QueueSummary, error) {
 		}
 		out.ByState[state] = count
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("queue summary: by state: %w", err)
 	}
+	rows.Close()
 
 	rows, err = s.db.Query(`SELECT agent_key, state, count(*) FROM jobs WHERE state IN (?, ?) GROUP BY agent_key, state`,
 		string(StateQueued), string(StateRunning))
@@ -519,9 +662,11 @@ func (s *Store) QueueSummary() (*QueueSummary, error) {
 		}
 		out.Active = append(out.Active, e)
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("queue summary: active: %w", err)
 	}
+	rows.Close()
 
 	var runID, createdAt string
 	err = s.db.QueryRow(`SELECT run_id, created_at FROM jobs WHERE state = ? ORDER BY seq ASC LIMIT 1`,
@@ -810,16 +955,16 @@ func (s *Store) FailOrphan(runID string, from State, reason string) error {
 		return fmt.Errorf("fail orphan %s: reason: %w", runID, err)
 	}
 	ob := s.outbox.Load()
-	enq := false
+	var t txOutbox
 	if ob != nil && emitsEvent(from, StateFailed) {
-		if enq, err = s.enqueueForJob(tx, ob, runID); err != nil {
+		if err := s.enqueueForJob(tx, ob, runID, &t); err != nil {
 			return fmt.Errorf("fail orphan %s: %w", runID, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("fail orphan %s: commit: %w", runID, err)
 	}
-	ob.notify(enq)
+	s.committed(ob, &t)
 	return nil
 }
 

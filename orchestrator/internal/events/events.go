@@ -212,7 +212,10 @@ func redacted(u *url.URL) string {
 }
 
 // scrubURL is err's text with the configured URL shown redacted. net/http's errors quote the
-// request URL with its query, which can carry a credential, and the sender logs the detail.
+// request URL with its query, which can carry a credential, and the sender logs the detail. Only
+// the URL's own spellings are replaced, and its query, fragment and password only where they
+// still stand in URL position (after "?", "#", or between ":" and "@"), so the rest of the
+// message is never rewritten, however short the query.
 func scrubURL(err error, raw string) string {
 	msg := err.Error()
 	u, perr := url.Parse(raw)
@@ -224,18 +227,30 @@ func scrubURL(err error, raw string) string {
 	if errors.As(err, &ue) && ue.Err != nil {
 		msg = ue.Op + " " + strconv.Quote(shown) + ": " + ue.Err.Error()
 	}
-	// whatever else quotes the URL, its query, fragment or password never reaches the text
-	for _, whole := range []string{raw, u.Redacted()} {
+	bare := *u
+	bare.User = nil
+	for _, whole := range []string{raw, u.String(), u.Redacted(), bare.String()} {
 		msg = strings.ReplaceAll(msg, whole, shown)
 	}
-	parts := []string{u.RawQuery, u.Fragment, u.EscapedFragment()}
-	if pw, ok := u.User.Password(); ok {
-		parts = append(parts, pw)
+	var parts []string
+	if u.RawQuery != "" {
+		parts = append(parts, "?"+u.RawQuery)
+	}
+	if u.Fragment != "" {
+		parts = append(parts, "#"+u.EscapedFragment(), "#"+u.Fragment)
+	}
+	if pw, ok := u.User.Password(); ok && pw != "" {
+		parts = append(parts, ":"+pw+"@")
 	}
 	for _, p := range parts {
-		if p != "" {
-			msg = strings.ReplaceAll(msg, p, "[redacted]")
+		repl := "?[redacted]"
+		switch p[0] {
+		case '#':
+			repl = "#[redacted]"
+		case ':':
+			repl = ":***@"
 		}
+		msg = strings.ReplaceAll(msg, p, repl)
 	}
 	return msg
 }

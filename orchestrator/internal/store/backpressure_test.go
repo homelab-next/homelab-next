@@ -61,12 +61,17 @@ func TestShadowBackpressure_StatesAndIsolation(t *testing.T) {
 // replay of it still finds it, and finishing it frees the slot.
 func TestShadowBackpressure_ConcurrentConnectionsAndRelease(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "orch.db")
-	s1, err := Open(path)
+	release, err := LockInstance(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	s1, err := OpenWith(path, Options{InstanceLockHeld: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s1.Close()
-	s2, err := Open(path)
+	s2, err := OpenWith(path, Options{InstanceLockHeld: true})
 	if err != nil {
 		t.Fatal(err)
 	}

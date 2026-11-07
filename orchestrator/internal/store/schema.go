@@ -75,10 +75,10 @@ var addedColumns = []column{
 // database that has it is migrated by renaming it to session_id, every value kept.
 const legacySessionColumn = "hermes_session_id"
 
-// RetiredColumns are columns a database from an earlier controller may carry that this store
+// retiredColumns are columns a database from an earlier controller may carry that this store
 // neither reads nor writes (the request body of the HTTP passthrough, which is not ported). A
 // migration leaves them, and their values, where they are.
-var RetiredColumns = []string{"request_body"}
+func retiredColumns() []string { return []string{"request_body"} }
 
 type column struct{ name, decl string }
 
@@ -102,15 +102,22 @@ const (
 	retryOfFallbackIndexDDL = `CREATE INDEX IF NOT EXISTS idx_jobs_retry_of_nonunique ON jobs(retry_of_run_id)`
 )
 
+// idx_jobs_idempotency_owner scopes an idempotency key to its submitter: two callers may use the
+// same key, and one caller's key can neither find nor block another's run. It replaces the
+// earlier global idx_jobs_idempotency, which a migration drops (the old index was stricter, so
+// creating the new one over existing rows never fails).
 var plainIndexes = []struct{ name, ddl string }{
 	{"idx_jobs_state", `CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state)`},
 	{"idx_jobs_seq", `CREATE INDEX IF NOT EXISTS idx_jobs_seq ON jobs(seq)`},
-	{"idx_jobs_idempotency", `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency ON jobs(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != ''`},
+	{"idx_jobs_idempotency_owner", `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_owner ON jobs(COALESCE(submitted_by, ''), idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != ''`},
 }
+
+// globalIdempotencyIndex is the earlier, global key index.
+const globalIdempotencyIndex = "idx_jobs_idempotency"
 
 // jobsTableDDL is the jobs table as a new database creates it: the base columns, then the added
 // ones, so a new database and a migrated one have the same columns (a migrated one may carry
-// RetiredColumns too).
+// retiredColumns too).
 func jobsTableDDL() string {
 	var b strings.Builder
 	b.WriteString("CREATE TABLE jobs (\n")
@@ -166,9 +173,11 @@ func inspectSchema(q queryer) (schemaState, error) {
 			st.indexes[name] = true
 		}
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
+		rows.Close()
 		return st, fmt.Errorf("inspect schema: %w", err)
 	}
+	rows.Close()
 	if len(st.tables) == 0 {
 		st.empty = true
 		return st, nil
@@ -238,6 +247,9 @@ func planMigration(st schemaState) ([]migrationStep, error) {
 	if !st.tables["backend_drains"] {
 		steps = append(steps, migrationStep{describe: "create table backend_drains", stmt: drainsTableDDL})
 	}
+	if st.indexes[globalIdempotencyIndex] {
+		steps = append(steps, migrationStep{describe: "drop index " + globalIdempotencyIndex, stmt: `DROP INDEX ` + globalIdempotencyIndex})
+	}
 	for _, ix := range plainIndexes {
 		if !st.indexes[ix.name] {
 			steps = append(steps, migrationStep{describe: "create index " + ix.name, stmt: ix.ddl})
@@ -268,6 +280,10 @@ func createSchema(tx execer) error {
 	return ensureRetryOfIndex(tx)
 }
 
+// afterMigrationStep, when set (tests only), runs after each step; an error fails the migration
+// there, as a failing statement would.
+var afterMigrationStep func(describe string) error
+
 // applyMigration runs steps in tx.
 func applyMigration(tx execer, steps []migrationStep) error {
 	for _, s := range steps {
@@ -276,6 +292,9 @@ func applyMigration(tx execer, steps []migrationStep) error {
 			err = ensureRetryOfIndex(tx)
 		} else {
 			_, err = tx.Exec(s.stmt)
+		}
+		if err == nil && afterMigrationStep != nil {
+			err = afterMigrationStep(s.describe)
 		}
 		if err != nil {
 			return fmt.Errorf("migrate schema: %s: %w", s.describe, err)

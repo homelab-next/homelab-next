@@ -132,7 +132,7 @@ func TestMigrate_FromTheFirstSchema(t *testing.T) {
 }
 
 // The last schema before the rename (every column added, the passthrough's request_body among
-// them) migrates by the rename alone; request_body stays, with its values, and is never read.
+// them) migrates by the rename and the idempotency index's replacement alone; request_body stays, with its values, and is never read.
 func TestMigrate_FromTheLastSchemaBeforeTheRename(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "orch.db")
 	fixtureDB(t, path, "schema-before-session-id.sql",
@@ -141,8 +141,8 @@ func TestMigrate_FromTheLastSchemaBeforeTheRename(t *testing.T) {
 		`INSERT INTO event_outbox (event_id, body, created_at) VALUES ('evt-1', '{}', '2026-10-01T00:00:00Z')`,
 	)
 	steps, err := PendingMigrations(path)
-	if err != nil || fmt.Sprint(steps) != "[rename column jobs.hermes_session_id to session_id]" {
-		t.Fatalf("pending = %v, %v; want the rename alone", steps, err)
+	if want := "[rename column jobs.hermes_session_id to session_id drop index idx_jobs_idempotency create index idx_jobs_idempotency_owner]"; err != nil || fmt.Sprint(steps) != want {
+		t.Fatalf("pending = %v, %v; want the rename and the key index's replacement alone", steps, err)
 	}
 	s, _ := migrateWithBackup(t, path)
 	j, err := s.GetJob("r1")
@@ -160,8 +160,8 @@ func TestMigrate_FromTheLastSchemaBeforeTheRename(t *testing.T) {
 			extra = append(extra, c)
 		}
 	}
-	if fmt.Sprint(extra) != fmt.Sprint(RetiredColumns) {
-		t.Errorf("columns beyond a new database's: %v, want only %v", extra, RetiredColumns)
+	if fmt.Sprint(extra) != fmt.Sprint(retiredColumns()) {
+		t.Errorf("columns beyond a new database's: %v, want only %v", extra, retiredColumns())
 	}
 	if n, _ := s.OutboxLen(); n != 1 {
 		t.Errorf("the outbox lost its event: %d", n)
