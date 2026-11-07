@@ -15,6 +15,9 @@ What may be packaged is decided by one list, never by what happens to be on disk
 * in an unpacked sdist (no ``.git``), the sdist's own manifest (``*.egg-info/SOURCES.txt``), which
   was produced from the tracked list when the sdist was built.
 
+Under the data trees a dotfile (or anything in a dot-directory) is never packaged, from either
+list, so the git wheel and the sdist wheel are the same.
+
 A symbolic link is refused outright: following it could package a file from outside the tree.
 
 Everything else is declared in ``pyproject.toml``.
@@ -38,6 +41,14 @@ NOT_PACKAGED = (
     # a template for a separate private repository: dotfiles, a client script, workflows
     "examples/private-overlay/",
 )
+
+
+def _dotted(rel: str) -> bool:
+    """A dotfile or a path through a dot-directory: never packaged.  The sdist drops them
+    (MANIFEST.in ``global-exclude .*``), so a wheel built from the sdist would otherwise differ
+    from one built from git (a generator's ``.hnx-generated`` marker is one; hnx never reads it
+    from the package)."""
+    return any(part.startswith(".") for part in rel.split("/"))
 
 
 def _source_files() -> set[str]:
@@ -102,6 +113,7 @@ class BuildPyFromTracked(build_py):
                 if f.startswith(tree + "/")
                 and not f.startswith(NOT_PACKAGED)
                 and not SKIP_PARTS & set(f.split("/"))
+                and not _dotted(f)
             )
             for rel in chosen:
                 _check_not_symlink(rel)

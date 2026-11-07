@@ -56,6 +56,10 @@ DERIVED: tuple[tuple[str, str], ...] = (
         "compose/lab-in-a-box/config/llm-gateway/litellm/*",
         "test:tests/generators/test_llm_gateway.py",
     ),
+    (
+        "compose/lab-in-a-box/config/llm-gateway/gateway/*",
+        "test:tests/generators/test_llm_gateway.py",
+    ),
     ("examples/model-serving/gateway/*/*", "test:tests/models/test_serving_plan.py"),
     (
         "examples/llm-orchestrator-gateway/gateway/*/*",

@@ -57,6 +57,8 @@ allow:
     reason: negative fixture - an address as a status link must be rejected (documentation range)
   - path: "schemas/ids/negative/logical-id.ip-literal.json"
     reason: negative fixture - an IP literal in a logical id must be rejected
+  - path: "schemas/platform/negative/gateway_config.*.json"
+    reason: negative schema fixtures, each a copy of the gateway_config example (rendered example.internal backend aliases and ports, the gateway's upstream table) with one rule broken
   - path: "schemas/platform/negative/model_roles.backend-is-url.json"
     reason: negative fixture - a URL backend must be rejected
   - path: "tests/ids/test_ids_grammar.py"

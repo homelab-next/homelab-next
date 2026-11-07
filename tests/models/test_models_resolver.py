@@ -118,6 +118,10 @@ def test_schema_example_loads():
         ),
         (lambda d: d["roles"]["main-reasoner"].update(fallback="mdl:ghost"), "unknown role"),
         (lambda d: d["roles"]["fast-classifier"].update(fallback="mdl:main-reasoner"), "loops"),
+        (
+            lambda d: d["roles"]["embedder"].update(fallback="mdl:fast-classifier"),
+            "a fallback must be of its role's kind",
+        ),
         (lambda d: d["roles"]["embedder"].update(kind="image"), "kind"),
         (lambda d: d["roles"]["embedder"].update(bindings=[]), "at least one binding"),
         # these used to escape as AttributeError / TypeError tracebacks, not RoleTableError

@@ -1,0 +1,95 @@
+{
+  "admin_key_env": "HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
+  "keys": [
+    {
+      "alias": "agent-reader",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_READER",
+      "limits": null,
+      "owner": "profile:reader",
+      "roles": [
+        "fast-classifier"
+      ],
+      "tlp_ceiling": "red"
+    },
+    {
+      "alias": "agent-responder",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_RESPONDER",
+      "limits": null,
+      "owner": "profile:responder",
+      "roles": [
+        "fast-classifier",
+        "main-reasoner"
+      ],
+      "tlp_ceiling": "red"
+    },
+    {
+      "alias": "conformance-throttle",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE",
+      "limits": {
+        "max_requests": 3,
+        "max_tokens": null,
+        "window_s": 60
+      },
+      "owner": "conformance-throttle",
+      "roles": [
+        "fast-classifier"
+      ],
+      "tlp_ceiling": "red"
+    }
+  ],
+  "name": "lab-in-a-box",
+  "roles": {
+    "fast-classifier": {
+      "cost_per_1k_tokens": 0.002,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "inference-small",
+          "base_url": "http://inference-small.svc.example.internal:8000",
+          "id": "fast-classifier-1",
+          "locality": "local",
+          "model": "example-4b",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": {
+        "max_cost": 1.5,
+        "max_requests": 600,
+        "max_tokens": 200000,
+        "window_s": 60
+      },
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    },
+    "main-reasoner": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "inference-large",
+          "base_url": "http://inference-large.svc.example.internal:8000",
+          "id": "main-reasoner-1",
+          "locality": "local",
+          "model": "example-27b",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [
+        "fast-classifier"
+      ],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": 131072,
+      "tlp_ceiling": "red"
+    }
+  },
+  "telemetry_reader": null,
+  "version": "1.0"
+}

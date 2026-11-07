@@ -1,0 +1,38 @@
+{
+  "admin_key_env": "HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
+  "keys": [
+    {
+      "alias": "cloud-tool",
+      "data_tier": "cloud-allowed",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_CLOUD_TOOL",
+      "limits": {
+        "max_requests": 10,
+        "max_tokens": null,
+        "window_s": 60
+      },
+      "owner": "cloud-tool",
+      "roles": [
+        "cloud-reasoner"
+      ],
+      "tlp_ceiling": "clear"
+    },
+    {
+      "alias": "local-agent",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_LOCAL_AGENT",
+      "limits": null,
+      "owner": "local-agent",
+      "roles": [
+        "agent-local",
+        "small-local"
+      ],
+      "tlp_ceiling": "red"
+    }
+  ],
+  "name": "local-and-cloud",
+  "roles": {},
+  "telemetry_reader": {
+    "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER"
+  },
+  "version": "1.0"
+}

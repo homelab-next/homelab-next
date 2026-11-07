@@ -32,6 +32,7 @@ DRAFTS = {
     "platform/export_manifest.schema.json",
     "platform/module_inventory.schema.json",
     "platform/novelty_spec.schema.json",
+    "platform/gateway_config.schema.json",
     "ocsf/novelty_finding.v1.json",
     "codemode/execution_request.schema.json",
     "codemode/execution_result.schema.json",

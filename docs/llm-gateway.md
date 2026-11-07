@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM gateway, where a role becomes a backend and model id: generated config, the locality rule, TLP labels on requests, lab-in-a-box, conformance, LiteLLM.'
-summary_of: outline:sha256:5a47e561dbb9bf66
+summary_of: outline:sha256:0f06bc9ebbfefedc
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # LLM gateway
@@ -34,7 +34,7 @@ inputs:
 | optionally, a serving spec (`serving:`, [model-serving.md](model-serving.md)) | the store-served backends: each becomes `{locality: local, port}` from the serving plan, and every binding on it must resolve to a store entry its engine may serve; the plan's `exposure` must be `zone`, and a registry service for a backend must have the plan's port |
 
 ```bash
-hnx gen gateway render SPEC OUT_DIR            # writes litellm/ under OUT_DIR
+hnx gen gateway render SPEC OUT_DIR            # writes litellm/ and gateway/ under OUT_DIR
 hnx gen gateway render SPEC OUT_DIR --check    # drift check and locality audit (make gateway-check)
 hnx gen gateway provision OUT_DIR/litellm/keys.json   # create LiteLLM keys on a running proxy
 hnx gen gateway homes --roles ROLES HOME...    # no HERMES_HOME names an IP or an engine model id (A-14)
@@ -87,6 +87,59 @@ It writes:
   `managed_by` that differs from it, and an alias declared twice.
 Secrets are always `secret:<name>` and are delivered in `HNX_SECRET_<NAME>` (the registry's
 mapping). The renderer refuses a literal value.
+
+## The neutral gateway config, `gateway/gateway.json`
+
+Beside `litellm/`, `render` also writes `gateway/gateway.json`: the product-neutral config of
+[ADR-0038](adr/0038-the-llm-gateway-is-our-own-behind-the-same-contract.md) that the lab's own
+gateway reads (schema `schemas/platform/gateway_config.schema.json`, a draft until ADR-0038 is
+accepted). It comes from the same spec as the LiteLLM files and says the same things in one file:
+
+- each role's kind, context limit, TLP ceiling and `leaves_lab` (both chain-inclusive: the role
+  table's `role_ceiling` and `cloud_roles` over the role and its whole fallback chain, exactly what
+  `model_tlp.admit` reads), its deployments in binding order (`openai` protocol for a local
+  backend, its base URL without `/v1`; a cloud one on `https://api.openai.com` or
+  `https://api.anthropic.com`), its fallbacks (what LiteLLM's `fallbacks` gets) and its limits as
+  declared, one budget per role in its own window (not LiteLLM's per-minute, per-deployment
+  share);
+- each key's alias, environment name, owner, data tier, sending ceiling, the roles it may call
+  (its own and their fallback chains, what LiteLLM's `models` gets) and its limits;
+- the admin key's environment name (the master key; its ceiling is always `red`) and the
+  telemetry reader's (it may call `GET /v1/usage` only).
+
+Only environment names appear, never a value. JSON carries no comment, and the contract allows no
+extra key, so the generated-by line and the digest are in the sibling `gateway/.hnx-generated`,
+which also records `gateway.json`'s sha256.
+
+**Refusals.** The contract cannot express a cloud provider other than `openai` or `anthropic`, an
+embedding role on an `anthropic` deployment, or a role `max_cost` without `cost_per_1k_tokens`. For
+such a spec `render` still writes `litellm/` (LiteLLM stays the deployed gateway until the cutover,
+ADR-0038 decision 7), writes no `gateway/`, and says why in a `# note:` line of
+`litellm/config.yaml` and on stderr; a `gateway/gateway.json` left from an earlier render is
+removed (`--check` reports it stale), with or without its marker, so the lab's gateway never
+reads a config the spec no longer produces.
+
+**The audit** (`--check`, and every render) reads `gateway.json` itself: it must be schema-valid;
+no local-only or agent role may have a cloud deployment or fall back to a role with one (a
+deployment is local only when it says `local`, speaks `openai` and is on a declared local host); a
+cloud deployment's base URL is its provider's API; each role's `tlp_ceiling` and `leaves_lab` are
+the spec's; every key is the spec's, with its data tier and ceiling (a missing or unknown label
+reads as `red`) and no role beyond what the spec grants; no key reaches a role whose ceiling is
+below its own, and no `local-only` key reaches a role with a cloud deployment or `leaves_lab`; every
+key role is a role of the file, and a key that lists a role also lists that role's fallbacks (the
+contract's own invariant); and no environment name serves two credentials (admin, reader, keys,
+upstream keys). It also holds the file to the spec, field by field: the same roles (none added or
+missing); each role's kind, context limit, fallbacks, limits and cost, and each deployment's id,
+backend, locality, protocol, base URL, model and API key environment as its binding renders; each
+key's environment name, owner, roles and limits; the admin and telemetry-reader environment names.
+Counts are compared as JSON (`60.0` is not `60`: the gateway decodes them as integers). A file that
+is consistent on its own but is not the spec's (a fallback added, two key environments swapped, a
+local deployment moved to another declared host) is refused, even when its marker's sha256 was
+rewritten to match. The marker only says the file is generated; the comparison is what proves it.
+
+Packaged examples carry `gateway.json` but not its `.hnx-generated` marker: no dotfile goes into a
+wheel (the sdist drops them, and the two wheels must be identical); `hnx` never reads the marker
+from the package.
 
 ## The locality rule
 

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """LLM gateway config generator: render, the locality rule, the audit of rendered files, the CLI
-drift check and LiteLLM key provisioning (against a stdlib fake; no network)."""
+drift check, LiteLLM key provisioning (against a stdlib fake; no network) and the
+product-neutral config of ADR-0038 (``gateway/gateway.json``: shape, refusals, audit)."""
 
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import yaml
 
 from homelabnext.cli import main as hnx
 from homelabnext.generators import llm_gateway as gw
+from homelabnext.schema_registry import validator
 
 ROOT = Path(__file__).resolve().parents[2]
 LAB = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway"
@@ -99,7 +101,9 @@ def make_spec(tmp_path, roles=None, **over):
 
 def test_render_the_gateway_from_one_spec(tmp_path):
     files = gw.render_file(make_spec(tmp_path))
-    assert sorted(files) == [  # LiteLLM only: the second gateway was removed (ADR-0022, amended)
+    assert sorted(files) == [  # LiteLLM, and the neutral config of ADR-0038 beside it
+        "gateway/.hnx-generated",
+        "gateway/gateway.json",
         "litellm/config.yaml",
         "litellm/keys.json",
     ]
@@ -548,7 +552,7 @@ def test_render_writes_and_is_idempotent(tmp_path, capsys):
     out = tmp_path / "out"
     assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 0
     assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 0
-    assert "wrote 0, unchanged 2" in capsys.readouterr().out
+    assert "wrote 0, unchanged 4" in capsys.readouterr().out
 
 
 def test_bad_spec_exits_1(tmp_path, capsys):
@@ -1164,3 +1168,488 @@ def test_audit_follows_fallbacks_and_aliases_to_a_cloud_model(tmp_path, route):
         f"{KEYS}: key local-agent (metadata.tlp_ceiling read as red) reaches "
         "cloud-reasoner, which has a cloud deployment at TLP ceiling clear"
     ]
+
+
+# --- the product-neutral gateway config (ADR-0038 decision 1) -----------------------------------
+NEUTRAL = gw.NEUTRAL
+MARKER = gw.NEUTRAL_MARKER
+SCHEMA = validator("platform", "gateway_config.schema.json")
+
+#: local and cloud roles, a fallback, role and key limits, keys of both tiers and the reader
+RICH_ROLES = copy.deepcopy(ROLES)
+RICH_ROLES["roles"]["cloud-reasoner"]["max_context_tokens"] = 200000
+RICH_ROLES["roles"]["cloud-reasoner"]["limits"] = {
+    "window_s": 60,
+    "max_requests": 30,
+    "max_cost": 2.5,
+    "cost_per_1k_tokens": 0.01,
+}
+RICH_ROLES["roles"]["embedder"] = {
+    "tier": "fast",
+    "kind": "embedding",
+    "bindings": [{"backend": "svc:infer-b", "model_id": "example-embed"}],
+}
+
+
+def rich(tmp_path, roles=None, **over):
+    over.setdefault("telemetry_reader", {"key": "secret:llm-gateway/key-telemetry-reader"})
+    return gw.load_spec(make_spec(tmp_path, roles=roles or RICH_ROLES, **over))
+
+
+def neutral(spec) -> dict:
+    return json.loads(gw.render(spec)[NEUTRAL])
+
+
+def test_the_rendered_config_has_the_contracts_shape(tmp_path):
+    doc = neutral(rich(tmp_path))
+    assert list(SCHEMA.iter_errors(doc)) == []
+    assert set(doc) == {"version", "name", "admin_key_env", "roles", "keys", "telemetry_reader"}
+    assert doc["version"] == "1.0" and doc["name"] == ""
+    assert doc["admin_key_env"] == "HNX_SECRET_LLM_GATEWAY_MASTER_KEY"
+    assert doc["telemetry_reader"] == {"key_env": "HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER"}
+    roles = doc["roles"]
+    assert (
+        roles["agent-local"]
+        == {
+            "kind": "chat",
+            "max_context_tokens": None,
+            "tlp_ceiling": "red",
+            "leaves_lab": False,
+            "deployments": [
+                {
+                    "id": "agent-local-1",
+                    "backend": "infer-a",
+                    "locality": "local",
+                    "protocol": "openai",
+                    "base_url": "http://infer-a.svc.example.internal:8000",  # no-raw-endpoint: allow rendered alias
+                    "model": ROLES["roles"]["agent-local"]["bindings"][0]["model_id"],
+                    "api_key_env": None,
+                }
+            ],
+            "fallbacks": ["small-local"],
+            "limits": None,
+            "cost_per_1k_tokens": None,
+        }
+    )
+    # a role's limit is whole (one budget, its own window), not LiteLLM's per-minute share
+    assert roles["small-local"]["limits"] == {
+        "window_s": 3600,
+        "max_requests": 120,
+        "max_tokens": None,
+        "max_cost": None,
+    }
+    cloud = roles["cloud-reasoner"]
+    assert (cloud["tlp_ceiling"], cloud["leaves_lab"], cloud["max_context_tokens"]) == (
+        "clear",
+        True,
+        200000,
+    )
+    assert cloud["deployments"][0] | {"model": "-"} == {
+        "id": "cloud-reasoner-1",
+        "backend": "cloud",
+        "locality": "cloud",
+        "protocol": "anthropic",
+        "base_url": "https://api.anthropic.com",
+        "model": "-",
+        "api_key_env": gw.secret_env_name("secret:llm-gateway/anthropic-api-key"),
+    }
+    assert cloud["limits"]["max_cost"] == 2.5 and cloud["cost_per_1k_tokens"] == 0.01
+    assert roles["embedder"]["kind"] == "embedding"
+    keys = {k["alias"]: k for k in doc["keys"]}
+    assert [k["alias"] for k in doc["keys"]] == sorted(keys)
+    assert keys["local-agent"] == {
+        "alias": "local-agent",
+        "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_LOCAL_AGENT",
+        "owner": "local-agent",
+        "data_tier": "local-only",
+        "tlp_ceiling": "red",
+        "roles": ["agent-local", "small-local"],  # its role and the fallback chain
+        "limits": None,
+    }
+    assert keys["cloud-tool"]["tlp_ceiling"] == "clear"
+    assert keys["cloud-tool"]["limits"] == {"window_s": 60, "max_requests": 10, "max_tokens": None}
+
+
+def test_the_neutral_config_agrees_with_the_proxy_files(tmp_path):
+    """Fallbacks are LiteLLM's ``router_settings.fallbacks`` and key roles its ``models``."""
+    files = gw.render(rich(tmp_path))
+    doc = json.loads(files[NEUTRAL])
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    falls = {k: v for e in lt["router_settings"]["fallbacks"] for k, v in e.items()}
+    assert {r: v["fallbacks"] for r, v in doc["roles"].items() if v["fallbacks"]} == falls
+    models = {k["key_alias"]: k["models"] for k in json.loads(files[KEYS])["keys"]}
+    models.pop(gw.READER_ALIAS)
+    assert {k["alias"]: k["roles"] for k in doc["keys"]} == models
+
+
+def test_an_openai_cloud_backend_uses_the_openai_api(tmp_path):
+    backends = {
+        "svc:infer-a": {"locality": "local", "port": 8000},
+        "svc:infer-b": {"locality": "local", "port": 8000},
+        "svc:cloud": {"locality": "cloud", "provider": "openai", "api_key": "secret:x/openai"},
+    }
+    dep = neutral(rich(tmp_path, backends=backends))["roles"]["cloud-reasoner"]["deployments"][0]
+    assert (dep["protocol"], dep["base_url"]) == ("openai", "https://api.openai.com")
+
+
+def test_every_committed_rendered_config_is_schema_valid_and_marked():
+    examples = LAB.parents[3] / "examples"
+    for out in (
+        LAB,
+        examples / "model-serving" / "gateway",
+        examples / "llm-orchestrator-gateway" / "gateway",
+    ):
+        doc = json.loads((out / NEUTRAL).read_text())
+        assert list(SCHEMA.iter_errors(doc)) == [], out
+        assert (out / MARKER).read_text().startswith("# generated by hnx llm_gateway from")
+
+
+# --- refusals ------------------------------------------------------------------------------------
+def _refused(tmp_path, roles=None, **over):
+    spec = rich(tmp_path, roles=roles, **over)
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.render_neutral(spec)
+    files = gw.render(spec)  # LiteLLM is still rendered, and says why the neutral file is not
+    assert sorted(files) == sorted([PROXY_CONFIG, KEYS])
+    notes = [ln for ln in files[PROXY_CONFIG].splitlines() if NEUTRAL in ln]
+    assert notes and all(ln.startswith(f"# note: {NEUTRAL} is not rendered: ") for ln in notes)
+    return exc.value.problems
+
+
+def test_a_cloud_provider_without_a_protocol_is_refused(tmp_path):
+    backends = {
+        "svc:infer-a": {"locality": "local", "port": 8000},
+        "svc:infer-b": {"locality": "local", "port": 8000},
+        "svc:cloud": {"locality": "cloud", "provider": "gemini", "api_key": "secret:x/gemini"},
+    }
+    (p,) = _refused(tmp_path, backends=backends)
+    assert "cloud provider gemini has no protocol" in p
+
+
+def test_an_embedding_role_on_anthropic_is_refused(tmp_path):
+    roles = copy.deepcopy(RICH_ROLES)
+    roles["roles"]["cloud-reasoner"]["kind"] = "embedding"
+    (p,) = _refused(tmp_path, roles=roles)
+    assert "embedding role on an anthropic deployment" in p
+
+
+def test_max_cost_without_a_token_price_is_refused(tmp_path):
+    roles = copy.deepcopy(RICH_ROLES)
+    del roles["roles"]["cloud-reasoner"]["limits"]["cost_per_1k_tokens"]
+    (p,) = _refused(tmp_path, roles=roles)
+    assert p.startswith("mdl:cloud-reasoner: limits.max_cost without limits.cost_per_1k_tokens")
+
+
+def test_a_config_the_spec_stops_expressing_is_pruned_and_reported_stale(tmp_path, capsys):
+    path = make_spec(tmp_path, roles=RICH_ROLES)
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", str(path), str(out)]) == 0
+    assert (out / NEUTRAL).is_file()
+    roles = copy.deepcopy(RICH_ROLES)
+    del roles["roles"]["cloud-reasoner"]["limits"]["cost_per_1k_tokens"]
+    (tmp_path / "roles.json").write_text(json.dumps(roles))
+    assert hnx(["gen", "gateway", "render", str(path), str(out), "--check"]) == 1
+    assert f"stale: {NEUTRAL} (no longer rendered)" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(path), str(out)]) == 0
+    assert not (out / NEUTRAL).exists() and not (out / MARKER).exists()
+    assert f"{NEUTRAL} not rendered: mdl:cloud-reasoner" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(path), str(out), "--check"]) == 0
+
+
+# --- the audit of a hand-edited file -------------------------------------------------------------
+def _audit_edit(spec, edit):
+    files = dict(gw.render(spec))
+    doc = json.loads(files[NEUTRAL])
+    edit(doc)
+    files[NEUTRAL] = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+    return [p for p in gw.audit(files, spec) if p.startswith(f"{NEUTRAL}:")]
+
+
+def test_the_audit_passes_what_the_renderer_writes(tmp_path):
+    spec = rich(tmp_path)
+    assert gw.audit(gw.render(spec), spec) == []
+
+
+def test_the_audit_refuses_a_cloud_deployment_on_a_local_only_role(tmp_path):
+    def edit(doc):
+        cloud = doc["roles"]["cloud-reasoner"]["deployments"][0]
+        doc["roles"]["small-local"]["deployments"].append(cloud | {"id": "small-local-2"})
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    # the local-only role whose chain reaches it, and the local-only key that may call it (R13)
+    assert (
+        f"{NEUTRAL}: local-only/agent role agent-local (key local-agent is data_tier local-only) "
+        "falls back to non-local small-local" in problems
+    )
+    assert (
+        f"{NEUTRAL}: key local-agent is local-only but may call small-local, which has a cloud "
+        "deployment or leaves the lab" in problems
+    )
+
+
+def test_the_audit_refuses_a_deployment_that_only_calls_itself_local(tmp_path):
+    def edit(doc):
+        dep = doc["roles"]["small-local"]["deployments"][0]
+        dep["base_url"] = "https://api.anthropic.com"
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert any("small-local" in p and "has a cloud deployment" in p for p in problems)
+
+
+def test_the_audit_refuses_a_widened_key(tmp_path):
+    def edit(doc):
+        (k,) = [k for k in doc["keys"] if k["alias"] == "local-agent"]
+        k["roles"] = sorted(k["roles"] + ["cloud-reasoner"])
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert (
+        f"{NEUTRAL}: key local-agent: may call cloud-reasoner, which the spec does not "
+        "grant" in problems
+    )
+    assert (
+        f"{NEUTRAL}: key local-agent (tlp_ceiling red) may call cloud-reasoner, whose TLP "
+        "ceiling is clear (ADR-0033 decision 11)" in problems
+    )
+
+
+def test_the_audit_refuses_a_lowered_role_ceiling(tmp_path):
+    def edit(doc):
+        doc["roles"]["small-local"]["tlp_ceiling"] = "clear"
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert (
+        f"{NEUTRAL}: role small-local: tlp_ceiling read as clear, but the role's ceiling is "
+        "red" in problems
+    )
+    assert (
+        f"{NEUTRAL}: key local-agent (tlp_ceiling red) may call small-local, whose TLP "
+        "ceiling is clear (ADR-0033 decision 11)" in problems
+    )
+
+
+@pytest.mark.parametrize(
+    ("edit", "words"),
+    [
+        (lambda d: d["roles"]["cloud-reasoner"].update(tlp_ceiling="red"), "but the role's ceil"),
+        (lambda d: d["roles"]["cloud-reasoner"].update(leaves_lab=False), "leaves_lab must be"),
+        (lambda d: d["keys"][0].update(tlp_ceiling="red"), "the spec's is clear"),
+        (lambda d: d["keys"][0].pop("tlp_ceiling"), "read as red, the spec's is clear"),
+        (
+            lambda d: d["roles"]["small-local"].update(leaves_lab=True),
+            "key local-agent is local-only but may call small-local",
+        ),
+        (lambda d: d["keys"][1].update(tlp_ceiling="clear"), "the spec's is red"),
+        (lambda d: d["keys"][1].update(tlp_ceiling="white"), "tlp_ceiling read as clear"),
+        (lambda d: d["keys"][1].update(roles=["nope"]), "role nope is not a role here"),
+        (lambda d: d["keys"].reverse(), "keys are not sorted by alias"),
+        (lambda d: d["keys"].append(dict(d["keys"][1], alias="zz")), "not a key of the spec"),
+        (lambda d: d["keys"][0].update(key_env=d["admin_key_env"]), "share HNX_SECRET_LLM_"),
+        (
+            lambda d: d["telemetry_reader"].update(key_env=d["keys"][1]["key_env"]),
+            "and telemetry_reader share",
+        ),
+        (
+            lambda d: d["keys"][0].update(
+                key_env=d["roles"]["cloud-reasoner"]["deployments"][0]["api_key_env"]
+            ),
+            "is the upstream key of cloud-reasoner",
+        ),
+        (lambda d: d["roles"]["small-local"].update(fallbacks=["small-local"]), "itself"),
+        (lambda d: d.update(extra=1), "schema: (top): Additional properties"),
+        (lambda d: d.update(conformance_only=True), "conformance_only is set"),
+        (
+            lambda d: d["roles"]["agent-local"]["deployments"][0].update(
+                base_url="http://infer-a.svc.example.internal:8000/v1"  # no-raw-endpoint: allow rendered alias
+            ),
+            "schema: roles/agent-local/deployments/0/base_url",
+        ),
+    ],
+)
+def test_the_audit_refuses_other_hand_edits(tmp_path, edit, words):
+    # keys sorted: cloud-tool (clear), local-agent (red)
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert any(words in p for p in problems), problems
+
+
+#: RICH_ROLES and a local chat role no key calls (not held local-only by any key): the audit's
+#: locality rules leave it free, so only the comparison with the spec can catch an edit to it
+FREE_ROLES = copy.deepcopy(RICH_ROLES)
+FREE_ROLES["roles"]["free-local"] = {
+    "tier": "fast",
+    "bindings": [{"backend": "svc:infer-a", "model_id": "example-free"}],
+}
+
+
+def _swap_key_envs(d):
+    a, b = d["keys"]
+    a["key_env"], b["key_env"] = b["key_env"], a["key_env"]
+
+
+def _cloud_fallback(d):  # the role's TLP fields made to agree, so only the spec can refuse it
+    d["roles"]["free-local"].update(fallbacks=["cloud-reasoner"], leaves_lab=True)
+    d["roles"]["free-local"]["tlp_ceiling"] = "clear"
+
+
+def _extra_role(d):
+    d["roles"]["zz-extra"] = copy.deepcopy(d["roles"]["free-local"]) | {"tlp_ceiling": "clear"}
+    d["roles"]["zz-extra"]["deployments"][0]["id"] = "zz-extra-1"
+
+
+@pytest.mark.parametrize(
+    ("edit", "words"),
+    [
+        (_cloud_fallback, "role free-local: fallbacks must be [], the spec's"),
+        (_swap_key_envs, 'key cloud-tool: key_env must be "HNX_SECRET_LLM_GATEWAY_KEY_CLOUD_TOOL"'),
+        (
+            lambda d: d.update(admin_key_env="HNX_SECRET_OTHER_MASTER"),
+            'admin_key_env must be "HNX_SECRET_LLM_GATEWAY_MASTER_KEY", the spec\'s',
+        ),
+        (
+            lambda d: d.update(telemetry_reader={"key_env": "HNX_SECRET_OTHER_READER"}),
+            "telemetry_reader must be",
+        ),
+        (lambda d: d.update(telemetry_reader=None), "telemetry_reader must be"),
+        (lambda d: d["roles"]["small-local"].update(limits=None), "role small-local: limits must"),
+        (lambda d: d["keys"][0].update(limits=None), "key cloud-tool: limits must be"),
+        (
+            lambda d: d["roles"]["cloud-reasoner"].update(cost_per_1k_tokens=0.0),
+            "role cloud-reasoner: cost_per_1k_tokens must be 0.01",
+        ),
+        (
+            lambda d: d["roles"]["small-local"]["limits"].update(window_s=3600.0),
+            "role small-local: limits must be",
+        ),
+        (
+            lambda d: d["roles"]["cloud-reasoner"]["deployments"][0].update(model="other-model"),
+            'role cloud-reasoner deployments[0]: model must be "example-cloud-1"',
+        ),
+        (
+            lambda d: d["roles"]["cloud-reasoner"]["deployments"][0].update(
+                api_key_env="HNX_SECRET_SOMEONE_ELSES_KEY"
+            ),
+            "role cloud-reasoner deployments[0]: api_key_env must be",
+        ),
+        (
+            lambda d: d["roles"]["free-local"]["deployments"][0].update(
+                base_url=d["roles"]["small-local"]["deployments"][0]["base_url"]
+            ),
+            "role free-local deployments[0]: base_url must be",
+        ),
+        (
+            lambda d: d["roles"]["free-local"]["deployments"].append(
+                d["roles"]["free-local"]["deployments"][0] | {"id": "free-local-2"}
+            ),
+            "role free-local: 2 deployment(s), but the spec binds 1",
+        ),
+        (_extra_role, "role zz-extra is not a role of the spec"),
+        (lambda d: d["roles"].pop("embedder"), "role embedder of the spec is missing"),
+        (lambda d: d["keys"].pop(0), "key cloud-tool of the spec is missing"),
+        (lambda d: d["keys"][1].update(owner="someone-else"), "key local-agent: owner must be"),
+        (lambda d: d.update(name="other-lab"), 'name must be "", the spec\'s'),
+    ],
+)
+def test_the_audit_holds_the_file_to_the_spec(tmp_path, edit, words):
+    """A file that is internally consistent but says something the spec does not is refused."""
+    problems = _audit_edit(rich(tmp_path, roles=FREE_ROLES), edit)
+    assert any(words in p for p in problems), problems
+
+
+def test_a_keys_roles_hold_the_fallbacks_of_its_roles(tmp_path):
+    """The contract's own invariant (the Go loader refuses a key that breaks it)."""
+
+    def edit(doc):
+        (k,) = [k for k in doc["keys"] if k["alias"] == "local-agent"]
+        k["roles"] = ["agent-local"]
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert (
+        f"{NEUTRAL}: key local-agent may call agent-local but not its fallback small-local: a "
+        "key's roles hold the fallbacks of every role it lists" in problems
+    )
+
+
+def test_a_hand_edit_that_rewrites_the_marker_still_fails_the_audit(tmp_path):
+    spec = rich(tmp_path)
+    files = dict(gw.render(spec))
+    doc = json.loads(files[NEUTRAL])
+    _swap_key_envs(doc)
+    files[NEUTRAL] = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+    digest = hashlib.sha256(files[NEUTRAL].encode()).hexdigest()
+    files[MARKER] = re.sub(
+        r"gateway\.json sha256:[0-9a-f]+", f"gateway.json sha256:{digest}", files[MARKER]
+    )
+    problems = gw.audit(files, spec)
+    assert not [p for p in problems if p.startswith(MARKER)], problems
+    assert (
+        f'{NEUTRAL}: key cloud-tool: key_env must be "HNX_SECRET_LLM_GATEWAY_KEY_CLOUD_TOOL", '
+        "the spec's" in problems
+    )
+
+
+def test_counts_are_json_integers(tmp_path):
+    """The role table holds limits as floats and a spec may write ``60.0``; the Go loader decodes
+    ``window_s``, ``max_requests`` and ``max_tokens`` strictly, so they are written as integers."""
+    keys = spec_doc()["keys"]
+    keys[1]["limits"] = {"window_s": 60.0, "max_requests": 10.0, "max_tokens": 6000.0}
+    doc = neutral(rich(tmp_path, keys=keys))
+    limits = [r["limits"] for r in doc["roles"].values() if r["limits"]]
+    limits += [k["limits"] for k in doc["keys"] if k["limits"]]
+    assert len(limits) == 3
+    for lim in limits:
+        for name in ("window_s", "max_requests", "max_tokens"):
+            assert lim[name] is None or type(lim[name]) is int, (name, lim)
+    assert doc["keys"][0]["limits"] == {"window_s": 60, "max_requests": 10, "max_tokens": 6000}
+
+
+def test_a_gateway_json_without_its_marker_is_still_pruned(tmp_path, capsys):
+    """The reviewer's reproduction: render, lose the marker, make the spec non-expressible."""
+    path = make_spec(tmp_path, roles=RICH_ROLES)
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", str(path), str(out)]) == 0
+    (out / MARKER).unlink()
+    roles = copy.deepcopy(RICH_ROLES)
+    del roles["roles"]["cloud-reasoner"]["limits"]["cost_per_1k_tokens"]
+    (tmp_path / "roles.json").write_text(json.dumps(roles))
+    capsys.readouterr()
+    assert hnx(["gen", "gateway", "render", str(path), str(out), "--check"]) == 1
+    assert f"stale: {NEUTRAL} (no longer rendered)" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(path), str(out)]) == 0
+    assert not (out / NEUTRAL).exists()
+    assert hnx(["gen", "gateway", "render", str(path), str(out), "--check"]) == 0
+
+
+def test_the_audit_refuses_a_marker_whose_digest_no_longer_matches(tmp_path):
+    spec = rich(tmp_path)
+    files = dict(gw.render(spec))
+    files[NEUTRAL] = files[NEUTRAL].replace('"red"', '"red" ', 1)
+    assert gw.audit(files, spec) == [
+        f"{MARKER}: gateway.json does not have the sha256 this marker records (edited by hand?)"
+    ]
+
+
+def test_check_reads_the_neutral_config_on_disk(tmp_path, capsys):
+    out = tmp_path / "lab"
+    out.mkdir()
+    for rel in (*gw.render(gw.load_spec(LAB_SPEC)),):
+        (out / rel).parent.mkdir(parents=True, exist_ok=True)
+        (out / rel).write_text((LAB / rel).read_text())
+    doc = json.loads((out / NEUTRAL).read_text())
+    doc["keys"][0]["roles"].append("main-reasoner")
+    (out / NEUTRAL).write_text(json.dumps(doc))
+    assert hnx(["gen", "gateway", "render", str(LAB_SPEC), str(out), "--check"]) == 1
+    err = capsys.readouterr().err
+    assert f"differs: {NEUTRAL}" in err
+    assert "key agent-reader: may call main-reasoner, which the spec does not grant" in err
+
+
+def test_a_fallback_of_another_kind_is_refused_before_render(tmp_path):
+    """The gateway refuses at load a fallback whose kind differs from its role's, so the role
+    table refuses it first and the renderer can never emit one."""
+    roles = copy.deepcopy(RICH_ROLES)
+    roles["roles"]["embedder"]["fallback"] = "mdl:small-local"
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        rich(tmp_path, roles=roles)
+    assert (
+        "role embedder: fallback mdl:small-local is a chat role, but embedder is embedding: a "
+        "fallback must be of its role's kind" in exc.value.problems
+    )

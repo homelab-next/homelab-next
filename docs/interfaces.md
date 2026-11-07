@@ -508,6 +508,7 @@ change until its ADR is accepted):
 | `platform/capability` | 1.0 | `schemas/platform/capability.schema.json` | stable |
 | `platform/customization` | 1.2 | `schemas/platform/customization.schema.json` | stable |
 | `platform/export_manifest` | 1.0 | `schemas/platform/export_manifest.schema.json` | draft |
+| `platform/gateway_config` | 1.0 | `schemas/platform/gateway_config.schema.json` | draft |
 | `platform/guest` | 1.6 | `schemas/platform/guest.schema.json` | stable |
 | `platform/interface` | 1.0 | `schemas/platform/interface.schema.json` | draft |
 | `platform/lake_table` | 1.0 | `schemas/platform/lake_table.schema.json` | draft |

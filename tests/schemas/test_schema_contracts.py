@@ -69,6 +69,7 @@ EXPECTED = {
     "platform/module_inventory.schema.json",
     "platform/model_serving.schema.json",
     "platform/novelty_spec.schema.json",
+    "platform/gateway_config.schema.json",
     "ocsf/authentication.v1.json",
     "ocsf/detection_finding.v1.json",
     "ocsf/dns_activity.v1.json",
