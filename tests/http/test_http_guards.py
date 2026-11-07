@@ -223,3 +223,38 @@ def test_model_transport_follows_no_redirect_and_never_replays_the_key(servers):
     status, _ = send("POST", home.url + "/w", {"x": 1}, 5)
     assert status == 302
     assert [path for path, _ in home.seen] == ["/v1/models", "/w"]
+
+
+def test_the_no_redirect_opener_never_hands_a_credential_to_an_environment_proxy(
+    servers, monkeypatch
+):
+    """Regression: ``no_redirect_urlopen`` (the default opener of the events forwarder and the
+    notify sender) used ``build_opener``'s default ``ProxyHandler``, so ``HTTP_PROXY`` in the
+    environment received the request and its ``Authorization`` header (in clear for http)."""
+    from homelabnext._http import no_redirect_urlopen
+    from homelabnext.events.forwarder import HttpForwarder
+
+    proxy = servers({})
+    home = servers({"/e": (202, {}, b"{}"), "/ops": (200, {}, b"{}")})
+    for name in ("no_proxy", "NO_PROXY", "REQUEST_METHOD"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("http_proxy", "HTTP_PROXY"):
+        monkeypatch.setenv(name, proxy.url)
+    auth = {"Authorization": "Bearer s3cret"}
+    sends = (
+        lambda: HttpForwarder(home.url + "/e", auth=lambda: auth["Authorization"]).forward(
+            {"id": "e1"}
+        ),
+        lambda: no_redirect_urlopen(
+            urllib.request.Request(home.url + "/ops", data=b"b", headers=auth), timeout=5
+        ).close(),
+    )
+    failures = []
+    for send in sends:
+        try:
+            send()
+        except Exception as exc:  # the proxy's 404: asserted on below, after what it saw
+            failures.append(exc)
+    assert proxy.seen == []
+    assert failures == []
+    assert home.seen == [("/e", "Bearer s3cret"), ("/ops", "Bearer s3cret")]
