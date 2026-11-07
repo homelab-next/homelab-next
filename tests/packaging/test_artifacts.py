@@ -107,6 +107,20 @@ def test_sdist_contents_match_the_allowlist(artefacts):
     assert not any(r.endswith("scratch_notes.py") for r in rel)
 
 
+def _go_module_names(names):
+    """The names under the top-level Go module ``orchestrator/``: a path whose FIRST component is
+    ``orchestrator`` (``examples/mcp/clients/orchestrator/...``, an example of the orchestrator's
+    files, is not the module)."""
+    return [n for n in names if Path(n).parts[:1] == ("orchestrator",)]
+
+
+def test_only_the_top_level_go_module_counts():
+    names = ["orchestrator/go.mod", "orchestrator/internal/x.go",
+             "examples/mcp/clients/orchestrator/mcp_catalog.yaml",
+             "examples/mcp/clients/orchestrator.yml", "homelabnext/orchestration/model.py"]  # fmt: skip
+    assert _go_module_names(names) == ["orchestrator/go.mod", "orchestrator/internal/x.go"]
+
+
 def test_the_go_module_is_in_neither_artefact(artefacts):
     """orchestrator/ is a Go module with its own CI job; MANIFEST.in prunes it from the sdist and
     the wheel's package list never reaches it (docs: the migration plan, section 3.3)."""
@@ -116,7 +130,7 @@ def test_the_go_module_is_in_neither_artefact(artefacts):
         sdist_names = [m.name.split("/", 1)[1] for m in t.getmembers() if "/" in m.name]
     wheel_names = zipfile.ZipFile(wheel).namelist()
     for names in (sdist_names, wheel_names):
-        assert [n for n in names if "orchestrator" in Path(n).parts] == []
+        assert _go_module_names(names) == []
         assert not any(n.endswith((".go", "go.mod", "hnx_adapter/adapter.py")) for n in names)
 
 
