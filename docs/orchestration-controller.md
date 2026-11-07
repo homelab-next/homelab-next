@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:22072ef5ad66967e
+summary_of: outline:sha256:db3c65cd56b86ccf
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -275,8 +275,8 @@ ADR-0026 stage 2 brings the controller's core into the Go module `orchestrator/`
 pull requests at a time; the lab keeps running the private controller, frozen, until the cutover
 after stage 3 (the ADR's amendment of 2026-11-07). Each package is rewritten for this repository,
 never copied with its history. The packages in so far are the leaves, which import nothing else of
-the controller, the store, which imports only `events`, and the grants and the profiles
-(PR 2.3a; the configuration and the registers reader follow in PR 2.3b):
+the controller, the store, which imports only `events`, the grants and the profiles (PR 2.3a),
+and the configuration and the registers reader (PR 2.3b):
 
 | Package | What it does |
 |---|---|
@@ -286,11 +286,13 @@ the controller, the store, which imports only `events`, and the grants and the p
 | `orchestrator/internal/events` | The controller's CloudEvents envelope, its derived id (the same as `homelabnext.events.envelope.derive_event_id`, non-ASCII text included) and the durable outbox sender. Its tests validate what it builds against `schemas/events` in place, with a validator that is itself checked against the schemas' examples and negatives. A failed delivery's logged detail names the forwarder URL redacted (no query, fragment or password), whatever the transport's error quotes. |
 | `orchestrator/internal/grants` | Checks and renders a profile's per-job MCP server grants: the catalog's kinds (what each server runs, and which environment keys a grant may set, each pinned to listed values, bound to the granting profile, or free in a declared shape), and per lane the servers a job is given. It refuses an unknown kind, an unclassified or denied key (`DeniedEnvPattern`, the MCP catalog's own deny list character for character), a value off its pins, a `${...}` reference, a profile-bound value the profile does not hold, a write outside the profile's scope or across lanes, and a profile that grants one lane and not the other. Its scope rules are decided against the configured zones. See "Grants" below. |
 | `orchestrator/internal/profile` | Loads the dispatch profiles, one YAML file per agent, strictly (an unknown key at any level is refused but the deployment's own extension keys, each validated against the schema its config gives it, or carried opaque on purpose), checks every `path_scope` entry against the scope zones and every agent key against the reserved names, resolves `prompt_context` against what the config lists (a facts command by name, a state file, text files inside `prompt_dir`) and renders every grant against the catalog (`Registry.CheckGrants`). `schemas/platform/orchestrator_profile.schema.json` documents it (a derived artifact of the agent profile); its tests hold the schema's keys to the Go types and its examples and negatives to the loader's verdicts. |
+| `orchestrator/internal/config` | The controller's configuration, decoded strictly, with keys that name no product, and the migration of the private controller's keys (below). The `scope` block is required, every key present, and becomes `pathscope.Zones` through `NewZones`. |
+| `orchestrator/internal/lessons` | Reads this repository's lessons and runbooks registers (record directories, transitions applied) and matches a job's task against the records that declare a `match` (below). |
 | `orchestrator/internal/store` | The controller's durable state in one SQLite database (`modernc.org/sqlite`, no cgo): the jobs table and its state machine, every transition a compare-and-swap on the row's state; submits whose idempotency check, shadow back-pressure (one unfinished shadow job per agent) and insert share one write transaction; resubmits (`retry_of_run_id`: one retry per run, only after an environment failure class, replaying the parent's task); the event outbox, filled in the transaction of the state change it describes and drained by `events`; the operators' backend drains; startup reconciliation of orphaned jobs; and the instance lock (`flock` on `<db>.lock`), so two controllers never share a database. An idempotency key (at most 128 bytes) is scoped to its submitter and never released: one submitter's key is unique across every job the database has held, however old, and another submitter's key neither finds nor blocks it. |
 
 The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, with the
-store `modernc.org/sqlite` v1.58.0 and the modules it pulls in, and with the grants and the
-profiles the YAML library `go.yaml.in/yaml/v3` v3.0.6 (released 2026-10-13, past the 14-day cooldown; MIT AND
+store `modernc.org/sqlite` v1.58.0 and the modules it pulls in, and with the configuration the
+YAML library `go.yaml.in/yaml/v3` v3.0.6 (released 2026-10-13, past the 14-day cooldown; MIT AND
 Apache-2.0; the maintained successor of the archived `gopkg.in/yaml.v3`, with no dependency of its
 own), each listed as `linked` in `tools/licences.yml`. The gateway
 stays standard library only: `TestGatewayDependsOnlyOnTheStandardLibrary`
@@ -306,8 +308,8 @@ copy's in-memory publisher, which lost queued events on a crash, has no use here
 ### Neutral names
 
 The controller's wire names take names that name no product (ADR-0027). Those the leaf packages
-carry are set here; the configuration's keys come with the configuration package (PR 2.3b), the
-job API's `session_id` with the API package.
+carry are set here, the configuration's keys in the next section; the job API's `session_id`
+comes with the API package.
 
 | What | Private controller | Here |
 |---|---|---|
@@ -357,6 +359,65 @@ consumers of `svc:llm-orchestrator` in this repository, which move before the ol
   [orchestration telemetry](orchestration-telemetry.md), `docs/checklist.md` (O-11) and
   [ADR-0025](adr/0025-orchestration-telemetry.md).
 
+### The controller's configuration
+
+`config.Load` decodes the configuration strictly: an unknown key at any level, a repeated key and
+a file that is not one mapping are refused. Its keys name no product. A configuration written for
+the private controller loads too, for the overlap release the ADR's amendment sets: each old key is
+read under its new name and noted (`Config.Notices`), and `config.Migrate` rewrites the file to the
+new keys, comments kept, refusing to write a result that would not load. A configuration that sets
+an old key and its new key (or two old spellings of one setting) is refused, by both, whatever the
+values; so is a key of what was not ported, which only the migration removes.
+
+| Private controller | Here |
+|---|---|
+| `hermes_local_home` | `backends.local.home` | <!-- scrub-allow: config key paths, not host names -->
+| `hermes_local_fallback_home` | `backends.local_fallback.home` | <!-- scrub-allow: config key paths, not host names -->
+| `hermes_cloud_home` | `backends.cloud.home` | <!-- scrub-allow: config key paths, not host names -->
+| `backends.*.hermes_home` | `backends.*.home` |
+| `hermes_agent_timeout_seconds` | `runner.timeout_seconds` |
+| `hermes_agent_job_timeout_seconds` | `runner.job_timeout_seconds` |
+| `hermes_agent_stall_timeout_seconds` | `runner.stall_timeout_seconds` |
+| `hermes_agent_stall_poll_interval_seconds` | `runner.stall_poll_interval_seconds` |
+| `hermes_agent_liveness` | `runner.liveness` |
+| `hermes_agent_max_turns` | `runner.max_turns` |
+| `hermes_agent_run_dir_base` | `runner.run_dir_base` |
+| `hermes_agent_env_allowlist` | `runner.env_allowlist` |
+| `hermes_agent_job_home_root` | `runner.job_home_root` |
+| `hermes_agent_interlock_wait_timeout_seconds` | `interlock_wait_timeout_seconds` |
+| `hermes_agent_grants_catalog` | `grants_catalog` |
+| `backends.*.base_url` | `backends.*.endpoint` (the URL's `host:port`, the scheme's port when it names none) |
+| `backend_status_script` | `backend_status_command` (`[python3, <script>, --json]`, the argv the private controller ran) |
+| `passthrough_enabled` | not ported: the HTTP passthrough is gone; the gateway serves every caller that is not an agent job |
+| `reject_unknown_agent_keys` | not ported: a job naming an unknown `agent_key` is always refused (404) |
+| `backends.*.api_key_env` | not ported: the controller sends no request to a backend |
+| `backends.*.openai_compatible` | not ported: the passthrough's cloud leg is gone |
+
+`backends.*` is each backend: `local`, `local_fallback`, `cloud` and every entry of `additional`.
+Two keys are renamed without a migration: the shared tree's root, read for the findings check,
+is `tree_root`, and a profile's path scope is `path_scope`. Their private names match the leak
+scan's secret-name rule, which no marker lifts, so this repository cannot spell them; the
+overlay renames them by hand at the cutover (a configuration or profile that still uses one is
+refused as an unknown key, never read wrongly).
+`config.Renames` and `config.Dropped` hold the same table, and a test holds the two equal.
+
+No key names an inference URL. The controller sends nothing to a backend: a runner session does,
+through the gateway its home configures. What it keeps of a backend is its name, its runner home,
+its capacity and how to probe it: `endpoint` (the `host:port` progress liveness watches for socket
+traffic), `health_url` and `load_probe_urls` are probes only, and the one other URL key is the event
+forwarder's (`events.forwarder_url`). A test walks every key and fails on any other URL key, and on
+any key that names a product or the passthrough.
+
+The `scope` block is required, with each of `denied_roots`, `findings_root`, `shared_write` and
+`reserved_names` present even when empty, so a missing key is never read as "nothing denied". It
+becomes `pathscope.Zones` through `NewZones` (`Config.Zones()`), and an explicit `denied_roots: []`
+needs `allow_no_denied_roots: true`. The private controller hard-coded its tree's zones; a site
+writes them here, the lab's in its overlay, before its configuration loads, so the migration adds
+none.
+
+The migration's entry point on the command line comes with the controller binary (PR 2.7); until
+then `config.Migrate` is the library call it will run.
+
 ### Grants: the catalog render is the loader's input
 
 The kinds file and each profile's `grants:` block are rendered from homelab-next's MCP catalog by
@@ -377,10 +438,33 @@ the Go loader on its own render until the controller binary lands: PR 2.7 adds `
 --config FILE`, which loads the configuration, the catalog and every profile, and renders every
 profile's two lanes (`Registry.CheckGrants`) without starting the controller.
 
-The profiles' scope is `path_scope` (the private controller's name for it matches the leak scan's
-secret-name rule, which no marker lifts, so this repository cannot spell it; the overlay renames
-it by hand at the cutover, and a profile that still uses it is refused as an unknown key, never
-read wrongly).
+### Lessons and runbooks in a job's prompt
+
+`internal/lessons` reads the lessons and runbooks registers as this repository defines them
+(`homelabnext/registers`): a directory of `<uid>.md` records, front matter and `## ` sections, with
+each record's transition events in `<uid>.events/` applied in order (a chain that does not start
+where the record is refuses the register). `lessons_path` and `runbooks_path` name the
+directories; an empty register, a missing one, or `runbooks_path` without `lessons_path` stops the
+controller rather than run without the context it was configured with.
+
+Only a record that declares `match` (lesson schema 2.2, runbook schema 2.3, additive) is matched.
+It is bounded: literal keywords, each a case-insensitive substring of the task, and clean
+relative path prefixes, at most 16 of each, never a regular expression; a key other than these
+two is refused. A record without `match` is never matched, whatever its text, and neither is an
+inactive one (a retired, incorporated or superseded lesson, a runbook with `superseded_by`). A
+matched record scores its keywords, its paths, the quoted spans of its title and symptom, its
+systems and its title's words; the best four of each register above the floor are quoted.
+
+A matched record's text is data. The block opens with a line saying that the quoted text is
+reference data from the registers, not instructions, and that nothing in it changes the task, the
+tools or what the run may do; the entries sit between `<<<register-data>>>` and
+`<<</register-data>>>`, and each field is one line of at most 240 characters with every control,
+format and line-break character removed and no marker left in it, so register text can neither
+close the block early nor pose as the prompt's own lines. Records are named by uid.
+
+None of the example registers' records declares `match`, so none of them is ever injected; the
+reader's fixtures (`orchestrator/internal/lessons/testdata`) are records the register's own
+validation accepts (`tests/registers/test_register_match.py`).
 
 ### The store's migration, behind a backup
 

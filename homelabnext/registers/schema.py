@@ -70,7 +70,7 @@ LESSON_STATUSES = PITFALL_STATUSES + PRACTICE_STATUSES[:3]
 INACTIVE_STATUSES = frozenset({"retired", "incorporated", "superseded"})
 LESSON_COMMON = frozenset(
     {"uid", "type", "order", "title", "kind", "status", "date", "systems", "author", "reviews"}
-    | {"review_by", "related", "notes", "last_verified", "summary"}
+    | {"review_by", "related", "notes", "last_verified", "summary", "match"}
 )
 PITFALL_FIELDS = frozenset(
     {"recurrences", "symptom", "contributing_factor", "root_cause", "preventive_control"}
@@ -82,8 +82,11 @@ PRACTICE_FIELDS = frozenset(
 )
 RUNBOOK_FIELDS = frozenset(
     {"uid", "type", "order", "title", "purpose", "systems", "steps", "author", "reviews"}
-    | {"review_by", "superseded_by", "related", "lessons", "last_verified", "summary"}
+    | {"review_by", "superseded_by", "related", "lessons", "last_verified", "summary", "match"}
 )
+#: the bounds of ``match`` (lesson 2.2, runbook 2.3): the schemas' and the orchestrator's
+#: (orchestrator/internal/lessons), which tests hold equal
+MATCH_MAX_ITEMS, MATCH_KEYWORD_LEN, MATCH_PATH_LEN = 16, (3, 80), 200
 #: the record type each register holds (its entries' ``type``)
 RECORD_TYPE = {"lessons": "lesson", "runbooks": "runbook"}
 # criterion ids are docs/checklist.md row ids, chosen to match a row (never allocated)
@@ -203,6 +206,61 @@ def _summary(e, who, problems):
     why = check_summary(e["summary"])
     if why:
         problems.append(f"{who}: {why}")
+
+
+def _match(e, who, problems):
+    """Optional ``match:`` (lesson 2.2, runbook 2.3): what the orchestrator matches a job's task
+    against before it quotes the record into the job's prompt.  A bounded matcher, never a
+    regular expression: literal ``keywords`` (case-insensitive substrings of the task) and
+    ``paths`` (relative prefixes), at most 16 of each, at least one in all.  A record without
+    it is never matched."""
+    if "match" not in e:
+        return
+    m = e["match"]
+    if not isinstance(m, dict) or not m or set(m) - {"keywords", "paths"}:
+        problems.append(f"{who}: `match` is a mapping of `keywords` and/or `paths`")
+        return
+    lo, hi = MATCH_KEYWORD_LEN
+    for key, ok in (
+        ("keywords", lambda k: lo <= len(k) <= hi and k == k.strip() and not _controls(k)),
+        ("paths", _match_path),
+    ):
+        if key not in m:
+            continue
+        v = m[key]
+        if not (isinstance(v, list) and 0 < len(v) <= MATCH_MAX_ITEMS) or not all(
+            isinstance(x, str) and ok(x) for x in v
+        ):
+            what = (
+                f"{lo} to {hi} characters, no control character"
+                if key == "keywords"
+                else f"clean relative prefixes of at most {MATCH_PATH_LEN} characters"
+            )
+            problems.append(f"{who}: `match.{key}`: 1 to {MATCH_MAX_ITEMS} strings, {what}")
+        elif len({x.lower() if key == "keywords" else x for x in v}) != len(v):
+            problems.append(f"{who}: `match.{key}` lists one entry twice")
+
+
+def _controls(text: str) -> bool:
+    import unicodedata
+
+    return any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in text)
+
+
+def _match_path(p: str) -> bool:
+    import posixpath
+
+    clean = posixpath.normpath(p) if p else ""
+    return (
+        0 < len(p) <= MATCH_PATH_LEN
+        and not p.startswith("/")
+        and "\\" not in p
+        and not _controls(p)
+        and clean not in (".", "..")
+        and not clean.startswith("../")
+        and p.rstrip("/") == clean
+        and not p.endswith("//")
+    )
 
 
 def _related(e, who, problems):
@@ -608,6 +666,7 @@ def validate_lessons(data, policy=None, *, require_reviews: bool = True) -> list
             problems.append(f"{who}: unknown field(s) for a {kind} {sorted(extra)}")
         _text(e, "title", problems, who, 4)
         _summary(e, who, problems)
+        _match(e, who, problems)
         _related(e, who, problems)
         if not _date(e.get("date")):
             problems.append(f"{who}: `date` must be ISO YYYY-MM-DD")
@@ -637,6 +696,7 @@ def validate_runbooks(data, policy=None, *, require_reviews: bool = True) -> lis
             problems.append(f"{who}: unknown field(s) {sorted(extra)}")
         _text(e, "title", problems, who, 4)
         _summary(e, who, problems)
+        _match(e, who, problems)
         _related(e, who, problems)
         _lessons(e, who, problems)
         _text(e, "purpose", problems, who)
