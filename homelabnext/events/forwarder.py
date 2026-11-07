@@ -175,8 +175,9 @@ class HttpForwarder:
 
     Status mapping: 200/201/202/204 accepted (a body of ``{"duplicate": true}`` is reported as
     duplicate), 409 -> :class:`PermanentError` (id collision),
-    408/425/429 and 5xx -> :class:`TransientError`, 401/403/404/421 -> :class:`MisconfiguredError`
-    (retryable after the URL or credential is fixed), any other 4xx -> :class:`PermanentError`.
+    408/425/429 and 5xx -> :class:`TransientError`, 401/403/404/421 and a 3xx that is not followed
+    -> :class:`MisconfiguredError` (retryable after the URL or credential is fixed), any other 4xx
+    -> :class:`PermanentError`.
     Connection errors and timeouts are transient.  The id travels in ``Idempotency-Key`` too.
 
     Redirects are followed only within the same origin, and a reply body over ``max_reply_bytes``
@@ -245,7 +246,9 @@ class HttpForwarder:
     def _raise_for(code: int) -> None:
         if code in (408, 425, 429) or code >= 500:
             raise TransientError(f"forwarder answered HTTP {code}")
-        if code in (401, 403, 404, 421):
+        if code in (401, 403, 404, 421) or 300 <= code < 400:
+            # a 3xx that reaches here was not followed (cross-origin, or a method urllib will
+            # not redirect): the URL is wrong, so the event stays pending until it is fixed
             raise MisconfiguredError(
                 f"forwarder answered HTTP {code} (check the URL and credential)"
             )

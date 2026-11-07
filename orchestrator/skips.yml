@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# The module's test-skip policy, judged by tools/go_test_policy.py (CI's go job). A privileged test
+# needs root: it skips in the unprivileged run and must pass in the root run, which CI makes first.
+# A quarantine keeps a known-flaky test running for at most 90 days; there is none.
+quarantine: []
+privileged:
+  - {test: TestBindMountedDirectoryIsRefused, package: internal/safefs, reason: bind-mounts a directory inside the root (mount --bind needs root)}
+  - {test: TestBindMountedFileIsRefused, package: internal/safefs, reason: bind-mounts a file inside the root (mount --bind needs root)}

@@ -743,7 +743,9 @@ jobs:
             # which test2json does not see (a TestMain panic after PASS still reads as a pass)
             # only root writes the results (sudo tee); --no-new-privs, though root holds every
             # privilege already, keeps both runs from gaining any through an exec
-            (cd "$pkg" && status=0 && { /usr/bin/sudo unshare --net -- \
+            # --mount: a test's mounts (the bind-mount tests) live in a private mount namespace
+            # and vanish with it, never touching the runner's
+            (cd "$pkg" && status=0 && { /usr/bin/sudo unshare --net --mount -- \
               sh -c 'ip link set lo up && exec setpriv --no-new-privs -- "$@"' \
               sh "$bin" -test.run "$rx" -test.count=1 -test.v=test2json 2>&1 || status=$?; } \
               && echo "$imp $status" | /usr/bin/sudo tee -a "$exits" > /dev/null) \
@@ -838,7 +840,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: orchestrator/go.mod
-          cache: false  # standard library only: nothing to cache (the go job caches the module's)
+          cache: false  # the gateway's packages are standard library only: nothing of the module's deps is built here (the go job caches them)
       - id: python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
