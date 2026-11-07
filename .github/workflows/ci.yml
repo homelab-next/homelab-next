@@ -838,7 +838,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: orchestrator/go.mod
-          cache: false  # standard library only: nothing to cache (the go job caches the module's)
+          cache: false  # the gateway's packages are standard library only: nothing of the module's deps is built here (the go job caches them)
       - id: python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:

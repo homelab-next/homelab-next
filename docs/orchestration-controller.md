@@ -1,6 +1,6 @@
 ---
-summary: 'The LLM orchestrator measured as the orchestration capability: adapter, holds, result at a pinned commit, gateway model calls and checks, optional features.'
-summary_of: outline:sha256:1704986748a6fe5e
+summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
+summary_of: outline:sha256:7730f9b1fec1c96b
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -267,6 +267,61 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
   A-14 itself proves only that a home names no address; that each controller home's
   `model.base_url` *is* the gateway, and that its `model.context_length` fits its role, is the
   `--check` above (`make gateway-check`).
+
+## The controller's core in this repository
+
+ADR-0026 stage 2 brings the controller's core into the Go module `orchestrator/`, one series of
+pull requests at a time; the lab keeps running the private controller, frozen, until the cutover
+after stage 3 (the ADR's amendment of 2026-11-07). Each package is rewritten for this repository,
+never copied with its history. The packages in so far are leaves, which import nothing else of the
+controller:
+
+| Package | What it does |
+|---|---|
+| `orchestrator/internal/safefs` | Reads, lists and writes under one fixed root so that the object reached is the one the relative path names: no symbolic link, hard link, mount crossing or swapped component redirects it, a write never opens an existing inode, and a root on a network or FUSE filesystem is refused (`SAFEFS_ALLOW_REMOTE_FS=1` accepts the risk). Its two bind-mount tests need root and are registered in `orchestrator/skips.yml`. |
+| `orchestrator/internal/pathscope` | Decides on path strings whether a path lies in a scope (writable and readable prefixes, segment by segment, no wildcard). A tree's zones are configuration (`pathscope.Zones`: `denied_roots`, `findings_root`, `shared_write`, `reserved_names`), with no defaults; the package names no zone of its own. |
+| `orchestrator/internal/metrics` | The Prometheus text exposition writer, standard library only, and the metric name prefix. |
+| `orchestrator/internal/events` | The controller's CloudEvents envelope, its derived id (the same as `homelabnext.events.envelope.derive_event_id`, non-ASCII text included) and the durable outbox sender. Its tests validate what it builds against `schemas/events` in place, with a validator that is itself checked against the schemas' examples and negatives. |
+
+The module now has third-party dependencies (`golang.org/x/sys` first) and a `go.sum`. The gateway
+stays standard library only: `TestGatewayDependsOnlyOnTheStandardLibrary`
+(`orchestrator/cmd/gateway`) fails when `go list -deps -test` of its packages names anything else.
+
+The events sender classifies the forwarder's answer as the [forwarder contract](events.md) does:
+`401`, `403`, `404`, `421` and a redirect (never followed) blame the configuration, so a durable
+event stays in the outbox and is retried until the URL or the credential is fixed, where the private
+controller dropped it as a permanent refusal.
+
+### Neutral names
+
+The controller's wire names take names that name no product (ADR-0027). Those the leaf packages
+carry are set here; the job API's `session_id` and the runtime-neutral config keys come with the
+packages that hold them.
+
+| What | Private controller | Here |
+|---|---|---|
+| Metric name prefix | `llmorch_` | `hnx_orchestrator_` (`metrics.Prefix`) |
+| Default event source | `svc:llm-orchestrator` | `svc:orchestrator` (`events.DefaultSource`) |
+
+Nothing emits either name yet: the module has no controller binary until stage 2's last pull
+request. The overlap is a cutover concern, timed as the amendment says: the release the lab first
+deploys the controller from emits both metric names and an alias of the event source, and the old
+names are dropped no earlier than the release after that, once a check finds no consumer of them.
+The event id derives from the source, so an event sent under the alias is a second event with its
+own id. The telemetry store keys a job by its run id too and dead-letters a second record of a run
+under another event id as a conflict, so each consumer must receive exactly one of the two (or
+learn that the alias's record is the same job): how the alias is delivered is decided with the
+cutover's check, not here. The consumers of the old source in this repository, which the cutover
+moves before the old name goes:
+
+- `homelabnext.orchestration.model.CONTROLLER_SOURCE`, the default of `hnx orchestration consume
+  --source` ([orchestration telemetry](orchestration-telemetry.md));
+- the StackStorm pack `workflows/packs/agent-job-retry.yml` and its rule
+  `workflows/stackstorm/homelabnext/rules/on_agent_job_retry.yaml` (A02, [StackStorm](stackstorm.md));
+- the event examples under `schemas/events/examples/` and the docs that quote the source.
+
+No consumer of the `llmorch_` metric names is in this repository; the lab's dashboards and alert
+rules are the overlay's, and the cutover's check covers them there.
 
 ## Additive `orchestration` contract features
 
