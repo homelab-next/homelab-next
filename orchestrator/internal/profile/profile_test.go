@@ -5,10 +5,13 @@ package profile
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/grants"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
@@ -339,5 +342,43 @@ func TestLoadRegistry_ReadsOnlyRegularBoundedFiles(t *testing.T) {
 	}
 	if got := clip(strings.Repeat("a", 79) + "éé"); !utf8.ValidString(got) {
 		t.Errorf("clip cut a rune: %q", got)
+	}
+}
+
+// An opaque extension holds no anchor or alias: a recursive alias would make every Resolve
+// recurse without end (a stack overflow stops the controller), and an alias bomb would be
+// expanded by every copy.
+func TestLoadRegistry_OpaqueExtensionsHoldNoAliases(t *testing.T) {
+	for name, body := range map[string]string{
+		"recursive alias": "agent_key: w\nqx: &x [1, *x]\n",
+		"alias bomb":      "agent_key: w\nqx:\n  a: &a [x, x, x, x, x, x, x, x, x]\n  b: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a]\n  c: [*b, *b, *b, *b, *b, *b, *b, *b, *b]\n",
+		"anchor alone":    "agent_key: w\nqx: &x {a: 1}\n",
+		"merge key":       "agent_key: w\nqx: {<<: {a: 1}}\n",
+		"too deep":        "agent_key: w\nqx: " + strings.Repeat("[", 40) + strings.Repeat("]", 40) + "\n",
+	} {
+		dir := t.TempDir()
+		writeProfileFile(t, dir, "w.yaml", body)
+		if _, err := LoadRegistry(dir, withExt(Extension{Name: "qx", Opaque: true})); err == nil {
+			t.Errorf("%s: loaded", name)
+		}
+	}
+}
+
+// deepCopy copies a cyclic node graph without recursing into the cycle. It runs in a child
+// process, so a stack overflow (fatal, not a panic) fails this test instead of the whole run.
+func TestDeepCopy_IsAliasSafe(t *testing.T) {
+	if os.Getenv("PROFILE_DEEPCOPY_CHILD") == "1" {
+		seq := &yaml.Node{Kind: yaml.SequenceNode, Anchor: "x"}
+		seq.Content = []*yaml.Node{{Kind: yaml.ScalarNode, Value: "1"}, {Kind: yaml.AliasNode, Alias: seq}}
+		cp := deepCopy(seq)
+		if cp == seq || cp.Content[1].Alias != cp || cp.Content[0] == seq.Content[0] {
+			os.Exit(3)
+		}
+		os.Exit(0)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDeepCopy_IsAliasSafe$", "-test.count=1")
+	cmd.Env = append(os.Environ(), "PROFILE_DEEPCOPY_CHILD=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("deepCopy on a cyclic node did not return cleanly: %v\n%.400s", err, out)
 	}
 }

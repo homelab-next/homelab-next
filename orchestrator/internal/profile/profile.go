@@ -196,10 +196,16 @@ type Extension struct {
 }
 
 func (e Extension) check(p Profile) error {
+	node := p.Extensions[e.Name]
 	if e.Schema == nil {
+		// opaque: carried unchecked, but never as anchors and aliases (a recursive alias or an
+		// alias bomb would be expanded by every copy and every decode) and never past the depth
+		// bound
+		if err := plainYAML(&node, "profile extension "+e.Name, 0, false); err != nil {
+			return err
+		}
 		return nil
 	}
-	node := p.Extensions[e.Name]
 	if err := e.Schema.Validate(&node); err != nil {
 		return fmt.Errorf("profile extension %s: %w", e.Name, err)
 	}
@@ -420,17 +426,28 @@ func (r *Registry) CheckGrants(cat *grants.Catalog) error {
 
 // deepCopy copies a YAML node and everything under it, so a caller changing a resolved profile's
 // extension never changes the registry's.
-func deepCopy(n *yaml.Node) *yaml.Node {
+//
+// Each node is copied once: an alias points at the copy of its anchor, so a node graph with a
+// cycle (which the loader refuses, but a value built another way may hold) is copied without
+// recursing into it again.
+func deepCopy(n *yaml.Node) *yaml.Node { return copyNode(n, map[*yaml.Node]*yaml.Node{}) }
+
+func copyNode(n *yaml.Node, done map[*yaml.Node]*yaml.Node) *yaml.Node {
 	if n == nil {
 		return nil
 	}
-	cp := *n
-	cp.Alias = deepCopy(n.Alias)
+	if cp, ok := done[n]; ok {
+		return cp
+	}
+	cp := &yaml.Node{}
+	done[n] = cp
+	*cp = *n
+	cp.Alias = copyNode(n.Alias, done)
 	cp.Content = make([]*yaml.Node, len(n.Content))
 	for i, c := range n.Content {
-		cp.Content[i] = deepCopy(c)
+		cp.Content[i] = copyNode(c, done)
 	}
-	return &cp
+	return cp
 }
 
 // clip bounds an untrusted string quoted in an error, never cutting a UTF-8 sequence.
