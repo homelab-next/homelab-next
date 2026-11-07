@@ -159,10 +159,12 @@ class TlpAdmitGateway(GatewayClient, Protocol):
         whose ceiling is always ``red``)."""
         ...
 
-    def refused_fallback(self) -> tuple[InferenceClient, str] | None:
-        """``(client, role)``: every deployment of ``role`` fails with an error that moves on,
-        its first fallback is refused at admission (its own limit) and a later fallback serves,
-        so the call is served; or None when the target has no such role.  A TLP-refused
+    def refused_fallback(self) -> tuple[LabelledClient, str, str | None] | None:
+        """``(client, role, served_by)``: every deployment of ``role`` fails with an error that
+        moves on, its first fallback is refused at admission (its own limit) and a later fallback
+        serves, so the call is served; ``served_by`` is the turn record ``model`` (feature
+        ``turn-records``) of that call, the later fallback's deployment, or None when the target
+        reads back no turns.  None when the target has no such role.  A TLP-refused
         fallback cannot be built from a rendered config (a role's ceiling and ``leaves_lab``
         include its whole chain, so a fallback is never judged stricter than the role that was
         admitted): the gateway's own unit tests cover that one."""

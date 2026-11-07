@@ -33,5 +33,7 @@ capabilities:
       tlp_model: cloud-reasoner
       tlp_local_model: fast-classifier
       failover_model: failover
+      # read back over /v1/usage: what served it was fast-classifier, never spare
+      failover_served: fast-classifier-1
       # turn-records: tagged calls of this run, read back over GET /v1/usage
       telemetry_key: secret:llm-gateway/key-telemetry-reader

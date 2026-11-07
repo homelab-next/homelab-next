@@ -468,6 +468,8 @@ def test_the_own_gateway_target_agrees_with_the_conformance_gateway_config():
     failover = roles[cfg["failover_model"]]
     first, *later = failover["fallbacks"]
     assert later and roles[first]["limits"]["max_tokens"] == 1
+    # what must have served it, read back from the turn record: the later fallback's deployment
+    assert cfg["failover_served"] == roles[later[-1]]["deployments"][0]["id"]
     assert doc["telemetry_reader"]["key_env"] == secret_env_name(cfg["telemetry_key"])
     assert all(not str(v).startswith(("http://", "https://")) for v in cfg.values())
     assert "sk-" not in OWN_TARGET.read_text()
@@ -540,3 +542,41 @@ def test_a_non_ascii_look_alike_label_reaches_the_gateway_as_utf8():
         OpenAICompat(srv.url).chat_fields("m", PROMPT_MSG, [("X-HNX-TLP", "\uff43lear")])
     # http.server decodes header bytes as latin-1: the UTF-8 bytes arrive unchanged
     assert srv.seen == [("X-HNX-TLP", "\uff43lear".encode().decode("latin-1"))]
+
+
+class FallbackSubject:
+    """A subject whose failover call is answered under the alias and whose turn record for
+    that call names ``served`` as what served it."""
+
+    features = ("gateway", "tlp-admit")
+
+    def __init__(self, served):
+        self.served, self.tags = served, []
+
+    def refused_fallback(self):
+        return self, "failover", "fast-classifier-1"
+
+    def chat_fields(self, model, messages, fields, **kw):
+        from conformance.protocols.inference import ChatResult
+
+        self.tags.append(dict(fields)["X-HNX-Tag"])
+        return ChatResult("hello", "stop", model)
+
+    def turn_records(self):
+        subject = self
+
+        class Source:
+            def turns(self, start, end, tags):
+                return [{"model": subject.served} for t in subject.tags if t in tags]
+
+        return Source(), 0.0, 1.0, ["unused"]
+
+
+@pytest.mark.parametrize(
+    ("served", "status"), [("fast-classifier-1", "pass"), ("spare-1", "fail"), (None, "fail")]
+)
+def test_the_skipped_fallback_is_proved_by_what_served_the_call(served, status):
+    r = SUITE.bind("fallback-refused-at-admission-skipped")(FallbackSubject(served))
+    assert r.status == status, r
+    if status == "fail":
+        assert "the refused fallback was called" in r.evidence

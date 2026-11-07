@@ -136,9 +136,10 @@ class FakeInferenceClient(OpenAICompat):
     def tlp_admit(self) -> tuple[OpenAICompat, OpenAICompat, str, str]:
         return self.with_key(SENDER_KEY), self.with_key(GATEWAY_KEY), CLOUD_ROLE, MODEL
 
-    def refused_fallback(self) -> tuple[OpenAICompat, str]:
-        # the fake has no deployments to fail: it serves the role as its later fallback would
-        return self, FAILOVER_ROLE
+    def refused_fallback(self) -> tuple[OpenAICompat, str, None]:
+        # the fake has no deployments to fail: it serves the role as its later fallback would,
+        # and its turn log is canned, so there is no call to read back
+        return self, FAILOVER_ROLE, None
 
     def turn_records(self) -> tuple[FakeTurnSource, float, float, list[str]]:
         return FakeTurnSource(fake_turns()), *TURN_WINDOW, list(TURN_TAGS)

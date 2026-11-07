@@ -369,14 +369,16 @@ whose ceiling is always `red`).
 #### `TlpAdmitGateway.refused_fallback`
 
 ```python
-def refused_fallback() -> tuple[InferenceClient, str] | None
+def refused_fallback() -> tuple[LabelledClient, str, str | None] | None
 ```
 
-**Returns:** `tuple[InferenceClient, str] \| None`
+**Returns:** `tuple[LabelledClient, str, str \| None] \| None`
 
-`(client, role)`: every deployment of `role` fails with an error that moves on,
-its first fallback is refused at admission (its own limit) and a later fallback serves,
-so the call is served; or None when the target has no such role.  A TLP-refused
+`(client, role, served_by)`: every deployment of `role` fails with an error that
+moves on, its first fallback is refused at admission (its own limit) and a later fallback
+serves, so the call is served; `served_by` is the turn record `model` (feature
+`turn-records`) of that call, the later fallback's deployment, or None when the target
+reads back no turns.  None when the target has no such role.  A TLP-refused
 fallback cannot be built from a rendered config (a role's ceiling and `leaves_lab`
 include its whole chain, so a fallback is never judged stricter than the role that was
 admitted): the gateway's own unit tests cover that one.
@@ -723,7 +725,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `tlp-admit-judged-at-key-ceiling` | MUST | for a role that leaves the lab, a label below the key's sending ceiling is judged at that ceiling: a key whose ceiling is above the role's is refused (above-ceiling) whatever label it sends | `gateway`, `tlp-admit` |
 | `tlp-admit-empty-field-is-red` | MUST | an empty X-HNX-TLP field is a label that reads as red: refused as above-ceiling, not as unlabelled (one field differs from no field) | `gateway`, `tlp-admit` |
 | `tlp-admit-two-fields-are-red` | MUST | two X-HNX-TLP fields read as red, even when each is within the ceiling: refused as above-ceiling | `gateway`, `tlp-admit` |
-| `tlp-admit-refused-fallback-skipped` | MUST | when every deployment of a role fails, a fallback refused at admission is skipped, never called, and a later fallback serves the call under the requested alias | `gateway`, `tlp-admit` |
+| `fallback-refused-at-admission-skipped` | MUST | when every deployment of a role fails, a fallback refused at admission (by its own limit: no rendered config can make one TLP-refused) is skipped, never called, and a later fallback serves the call under the requested alias; with the target's turn records, the call's turn names the deployment that must have served it | `gateway`, `tlp-admit` |
 | `turn-records-are-neutral` | MUST | every turn of a window known to hold some is exactly the neutral turn record (15 fields, each of its kind): nothing else of the gateway's log | `turn-records` |
 | `turn-records-only-the-asked-tags` | MUST | every turn carries one of the tags asked for; a tag no request used gives no turns, and each tag alone gives exactly that tag's turns | `turn-records` |
 | `turn-records-in-the-window` | MUST | every turn started inside the window asked for (whole seconds), and a window before any gives none | `turn-records` |
@@ -734,9 +736,9 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | Feature | Kind | Checks that need it |
 |---|---|---|
 | `embeddings` | product feature (checks skip without it) | `embeddings-fixed-dimension`, `embeddings-deterministic-and-distinct` |
-| `gateway` | product feature (checks skip without it) | `gateway-rejects-bad-key`, `gateway-limit-throttles`, `gateway-models-match-roles`, `gateway-refuses-role-above-key-ceiling`, `tlp-admit-unlabelled-refused`, `tlp-admit-within-ceiling-served`, `tlp-admit-above-ceiling-refused`, `tlp-admit-judged-at-key-ceiling`, `tlp-admit-empty-field-is-red`, `tlp-admit-two-fields-are-red`, `tlp-admit-refused-fallback-skipped` |
+| `gateway` | product feature (checks skip without it) | `gateway-rejects-bad-key`, `gateway-limit-throttles`, `gateway-models-match-roles`, `gateway-refuses-role-above-key-ceiling`, `tlp-admit-unlabelled-refused`, `tlp-admit-within-ceiling-served`, `tlp-admit-above-ceiling-refused`, `tlp-admit-judged-at-key-ceiling`, `tlp-admit-empty-field-is-red`, `tlp-admit-two-fields-are-red`, `fallback-refused-at-admission-skipped` |
 | `streaming` | product feature (checks skip without it) | `stream-matches-completion` |
-| `tlp-admit` | product feature (checks skip without it) | `tlp-admit-unlabelled-refused`, `tlp-admit-within-ceiling-served`, `tlp-admit-above-ceiling-refused`, `tlp-admit-judged-at-key-ceiling`, `tlp-admit-empty-field-is-red`, `tlp-admit-two-fields-are-red`, `tlp-admit-refused-fallback-skipped` |
+| `tlp-admit` | product feature (checks skip without it) | `tlp-admit-unlabelled-refused`, `tlp-admit-within-ceiling-served`, `tlp-admit-above-ceiling-refused`, `tlp-admit-judged-at-key-ceiling`, `tlp-admit-empty-field-is-red`, `tlp-admit-two-fields-are-red`, `fallback-refused-at-admission-skipped` |
 | `tlp-ceiling` | product feature (checks skip without it) | `gateway-refuses-role-above-key-ceiling` |
 | `turn-records` | product feature (checks skip without it) | `turn-records-are-neutral`, `turn-records-only-the-asked-tags`, `turn-records-in-the-window`, `turn-records-stable-ids` |
 
@@ -768,7 +770,7 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 The `inference` contract through an LLM gateway (the LiteLLM proxy), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/inference-gateway.yml`](../../compose/lab-in-a-box/targets/inference-gateway.yml) (target `lab-inference-gateway`)
-- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`
+- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, failover_served: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`
 - Config in the target: `{roles: schemas/platform/examples/model_roles.valid.json, model: fast-classifier, embed_model: embedder, capability: llm-gateway, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3}`
 - Features declared: `streaming`, `embeddings`, `gateway`
 
@@ -795,7 +797,8 @@ admin key, plus the three methods of feature `gateway`
   `X-HNX-TLP` header, ADR-0038) - a client on a key whose sending ceiling is `clear`
   (`tlp_sender_key`), the admin key, a role that leaves the lab (`tlp_model`) and one that
   stays in it (`tlp_local_model`); and a role whose deployments fail and whose first fallback is
-  refused at admission (`failover_model`, optional);
+  refused at admission (`failover_model`, optional), with the deployment that must serve it
+  (`failover_served`, read back from the turn records when `telemetry_key` is set);
 * `turn_records()` (feature `turn-records`, the lab's own gateway) - sends a few calls tagged
   `X-HNX-Tag` (two tags of this run, two calls refused by TLP when `tlp_model` is set) on
   `turn_model` (default `model`), then reads them back through
@@ -815,8 +818,8 @@ swap (ADR-0022 names the documented exit) is a target file plus this suite (docs
 The `inference` contract through an LLM gateway (the LiteLLM proxy), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/inference-own-gateway.yml`](../../compose/lab-in-a-box/targets/inference-own-gateway.yml) (target `lab-inference-own-gateway`)
-- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`
-- Config in the target: `{roles: compose/lab-in-a-box/config/llm-gateway-conformance/model_roles.json, model: fast-classifier, embed_model: embedder, capability: llm-gateway, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3, over_ceiling_key: 'secret:llm-gateway/key-conformance-red', over_ceiling_model: cloud-reasoner, over_ceiling_served: fast-classifier, tlp_sender_key: 'secret:llm-gateway/key-conformance-clear', tlp_model: cloud-reasoner, tlp_local_model: fast-classifier, failover_model: failover, telemetry_key: 'secret:llm-gateway/key-telemetry-reader'}`
+- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, failover_served: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`
+- Config in the target: `{roles: compose/lab-in-a-box/config/llm-gateway-conformance/model_roles.json, model: fast-classifier, embed_model: embedder, capability: llm-gateway, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3, over_ceiling_key: 'secret:llm-gateway/key-conformance-red', over_ceiling_model: cloud-reasoner, over_ceiling_served: fast-classifier, tlp_sender_key: 'secret:llm-gateway/key-conformance-clear', tlp_model: cloud-reasoner, tlp_local_model: fast-classifier, failover_model: failover, failover_served: fast-classifier-1, telemetry_key: 'secret:llm-gateway/key-telemetry-reader'}`
 - Features declared: `streaming`, `embeddings`, `gateway`, `tlp-ceiling`, `tlp-admit`, `turn-records`
 
 <details><summary>Full adapter notes</summary>
@@ -842,7 +845,8 @@ admin key, plus the three methods of feature `gateway`
   `X-HNX-TLP` header, ADR-0038) - a client on a key whose sending ceiling is `clear`
   (`tlp_sender_key`), the admin key, a role that leaves the lab (`tlp_model`) and one that
   stays in it (`tlp_local_model`); and a role whose deployments fail and whose first fallback is
-  refused at admission (`failover_model`, optional);
+  refused at admission (`failover_model`, optional), with the deployment that must serve it
+  (`failover_served`, read back from the turn records when `telemetry_key` is set);
 * `turn_records()` (feature `turn-records`, the lab's own gateway) - sends a few calls tagged
   `X-HNX-Tag` (two tags of this run, two calls refused by TLP when `tlp_model` is set) on
   `turn_model` (default `model`), then reads them back through
@@ -909,7 +913,7 @@ Depended on by: [llm-gateway](../systems/llm-gateway.md) ([[systems/llm-gateway|
    def make(**config) -> InferenceClient: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.llm_gateway:make` is `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`.
+   The factory this repository ships: `homelabnext.conform.adapters.llm_gateway:make` is `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, failover_served: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

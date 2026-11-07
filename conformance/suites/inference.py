@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import secrets
 
 from conformance.fakes.inference_target import (
     CeilingIgnoredClient,
@@ -311,10 +312,16 @@ def _(c):
     assert reason == "above-ceiling", f"two fields: reason {reason!r}, not above-ceiling"
 
 
+#: a window that holds any call of this run (the tag, unique per call, does the selecting)
+_ALL_TIME = (0.0, 4102444800.0)
+
+
 @SUITE.check(
-    "tlp-admit-refused-fallback-skipped",
-    "when every deployment of a role fails, a fallback refused at admission is skipped, never "
-    "called, and a later fallback serves the call under the requested alias",
+    "fallback-refused-at-admission-skipped",
+    "when every deployment of a role fails, a fallback refused at admission (by its own limit: "
+    "no rendered config can make one TLP-refused) is skipped, never called, and a later fallback "
+    "serves the call under the requested alias; with the target's turn records, the call's turn "
+    "names the deployment that must have served it",
     requires=["gateway", "tlp-admit"],
     skippable=True,
 )
@@ -322,9 +329,10 @@ def _(c):
     got = c.refused_fallback()
     if got is None:
         raise Skip("the target names no role whose first fallback is refused")
-    client, role = got
+    client, role, served_by = got
+    tag = f"hnx-conform-fallback-{secrets.token_hex(4)}"
     try:
-        r = client.chat(role, PROMPT)
+        r = client.chat_fields(role, PROMPT, [("X-HNX-Tag", tag)])
     except InferenceError as exc:
         raise AssertionError(
             f"{role!r}: HTTP {exc.status} ({exc.detail[:160]!r}): the refused fallback was "
@@ -332,6 +340,14 @@ def _(c):
         ) from None
     assert r.content.strip(), f"{role!r}: empty reply"
     assert r.model == role, f"asked for {role!r}, answered by {r.model!r}"
+    if served_by is None:
+        return "served; the target reads back no turn to name what served it"
+    source, *_ = c.turn_records()
+    models = [t["model"] for t in source.turns(*_ALL_TIME, [tag])]
+    assert models == [served_by], (
+        f"{role!r}: the call's turn was served by {models}, not {served_by!r} (the refused "
+        "fallback was called)"
+    )
 
 
 # --- feature ``turn-records``: the gateway's per-call log as neutral turn records --------------

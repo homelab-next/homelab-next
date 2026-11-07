@@ -20,7 +20,8 @@ admin key, plus the three methods of feature ``gateway``
   ``X-HNX-TLP`` header, ADR-0038) - a client on a key whose sending ceiling is ``clear``
   (``tlp_sender_key``), the admin key, a role that leaves the lab (``tlp_model``) and one that
   stays in it (``tlp_local_model``); and a role whose deployments fail and whose first fallback is
-  refused at admission (``failover_model``, optional);
+  refused at admission (``failover_model``, optional), with the deployment that must serve it
+  (``failover_served``, read back from the turn records when ``telemetry_key`` is set);
 * ``turn_records()`` (feature ``turn-records``, the lab's own gateway) - sends a few calls tagged
   ``X-HNX-Tag`` (two tags of this run, two calls refused by TLP when ``tlp_model`` is set) on
   ``turn_model`` (default ``model``), then reads them back through
@@ -66,6 +67,7 @@ class GatewayTarget(OpenAICompat):
         embed_model: str | None = None,
         tlp_admit: tuple[str, str, str] | None = None,
         failover_model: str | None = None,
+        failover_served: str | None = None,
         telemetry_key: str | None = None,
         turn_model: str | None = None,
         clock: Callable[[], float] = time.time,
@@ -87,6 +89,7 @@ class GatewayTarget(OpenAICompat):
         self._key_env = key_env
         self._tlp = tlp_admit
         self._failover = failover_model
+        self._failover_served = failover_served
         self._telemetry = telemetry_key
         self._turn_model = turn_model or model
         self._turns: tuple | None = None
@@ -135,10 +138,11 @@ class GatewayTarget(OpenAICompat):
         env, leaving, local = self._tlp
         return self._keyed(env), self._keyed(self._key_env), leaving, local
 
-    def refused_fallback(self) -> tuple[OpenAICompat, str] | None:
+    def refused_fallback(self) -> tuple[OpenAICompat, str, str | None] | None:
         if self._failover is None:
             return None
-        return self._keyed(self._key_env), self._failover
+        served = self._failover_served if self._telemetry is not None else None
+        return self._keyed(self._key_env), self._failover, served
 
     def turn_records(self):
         """Tagged calls of this run, then the usage log's turn source over their window.  The
@@ -223,6 +227,7 @@ def make(
     tlp_model: str | None = None,
     tlp_local_model: str | None = None,
     failover_model: str | None = None,
+    failover_served: str | None = None,
     telemetry_key: str | None = None,
     turn_model: str | None = None,
 ) -> GatewayTarget:
@@ -274,6 +279,7 @@ def make(
         embed_model=embed_model,
         tlp_admit=tlp_admit,
         failover_model=failover_model,
+        failover_served=failover_served,
         telemetry_key=telemetry_key,
         turn_model=turn_model,
     )

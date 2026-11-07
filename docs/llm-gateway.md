@@ -333,12 +333,12 @@ gateway words it: `tlp refused (unlabelled): ...`).
 | Check | Fails when |
 |---|---|
 | `tlp-admit-unlabelled-refused` | no header to the leaving role is not a 403 `unlabelled` (a reply means the gateway served it or fell back to another role), or no header to the staying role is not served |
-| `tlp-admit-within-ceiling-served` | `clear`, ` TLP:CLEAR ` or `white` from the clear-ceiling key is not served by the leaving role under its alias |
-| `tlp-admit-above-ceiling-refused` | `amber` or `red` to the leaving role is not a 403 `above-ceiling` |
+| `tlp-admit-within-ceiling-served` | `clear`, ` TLP:CLEAR ` or `white` from the clear-ceiling key is not served by the leaving role under its alias (HTTP strips the spaces, so ` TLP:CLEAR ` tests case and prefix only) |
+| `tlp-admit-above-ceiling-refused` | `amber`, `red`, or a value that is no label (`bogus`, `tlp:clearx`, a non-ASCII look-alike of `clear`, `tlp:tlp:clear`) to the leaving role is not a 403 `above-ceiling` |
 | `tlp-admit-judged-at-key-ceiling` | the admin key's `clear` to the leaving role is served (it must be judged at the key's `red`), or its call to the staying role is not |
 | `tlp-admit-empty-field-is-red` | one empty field is not refused as `above-ceiling` (it is a label that reads `red`, not "no label") |
 | `tlp-admit-two-fields-are-red` | two `clear` fields are not refused as `above-ceiling` |
-| `tlp-admit-refused-fallback-skipped` | on `failover_model`, whose deployments fail and whose first fallback is refused at admission, the call is not served by the later fallback (skipped when the target names no such role) |
+| `fallback-refused-at-admission-skipped` | on `failover_model`, whose deployments fail and whose first fallback is refused at admission (by its own limit), the call is not served under its alias, or (with `failover_served` and the target's turn records) the call's turn, read back by its own `X-HNX-Tag`, names another deployment than `failover_served` (skipped when the target names no such role) |
 
 A TLP-refused fallback cannot be built from a rendered config (a role's ceiling and `leaves_lab`
 include its whole chain, so a fallback is never judged stricter than the role admitted), so the
