@@ -44,7 +44,7 @@ class _Server:
                 self.end_headers()
                 self.wfile.write(body)
 
-            do_GET = do_POST = _go
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _go
 
             def log_message(self, *a):
                 pass
@@ -108,6 +108,26 @@ def test_cross_origin_redirect_is_refused_and_auth_not_replayed(servers):
         assert resp.read() == b"fine"
 
 
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_a_write_is_never_redirected_but_a_read_still_follows_same_origin(servers, code, method):
+    """Regression: a POST answered with a same-origin 301/302/303 was resent by urllib as a GET
+    with no body, and the 2xx to that GET read as the write's result (the target answered, the
+    write never arrived)."""
+    home = servers({"/w": (code, {"Location": "/target"}, b""), "/target": (200, {}, b"fine")})
+    req = urllib.request.Request(home.url + "/w", data=b"{}", method=method)
+    refused = None
+    try:
+        safe_urlopen(req, timeout=5).close()
+    except urllib.error.HTTPError as exc:
+        refused = exc
+    assert refused is not None and refused.code == code
+    assert [path for path, _ in home.seen] == ["/w"]
+    with safe_urlopen(urllib.request.Request(home.url + "/w"), timeout=5) as resp:
+        assert resp.read() == b"fine"
+    assert [path for path, _ in home.seen] == ["/w", "/w", "/target"]
+
+
 def test_ntfy_refuses_token_over_plaintext_unless_allowed():
     calls = []
 
@@ -140,11 +160,26 @@ def test_ntfy_refuses_token_over_plaintext_unless_allowed():
 
 def test_ntfy_default_opener_refuses_cross_origin_redirect(servers):
     evil = servers({"/ops": (200, {}, b"")})
-    home = servers({"/ops": (307, {"Location": evil.url + "/ops"}, b"")})
+    home = servers(
+        {
+            "/ops": (307, {"Location": evil.url + "/ops"}, b""),
+            "/local": (302, {"Location": "/ok"}, b""),
+            "/ok": (200, {}, b"page"),
+        }
+    )
     s = NtfySender(lambda: home.url, default_topic="ops", auth=lambda: "Bearer s3cret")
     with pytest.raises(SendError):
         s.send(Message("k", "t", "b"))
     assert evil.seen == []
+    # Regression: a same-origin 302 to the POST was followed as a GET with no body, and the 200
+    # to that GET reported the message delivered although the server never received it.
+    raised = None
+    try:
+        s.send(Message("k", "t", "b", topic="local"))
+    except SendError as exc:
+        raised = exc
+    assert raised is not None
+    assert [path for path, _ in home.seen] == ["/ops", "/local"]
 
 
 def test_openai_compat_plaintext_redirect_and_size(servers):
