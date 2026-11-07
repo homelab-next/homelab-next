@@ -299,3 +299,20 @@ def test_safe_urlopen_never_hands_a_credential_to_an_environment_proxy(servers, 
     assert failures == []
     assert got == [b"read", b"wrote"]
     assert [path for path, _ in home.seen] == ["/r", "/w"]
+
+
+def test_model_key_with_a_control_character_is_refused_without_quoting_it(servers):
+    """Regression: a key holding a control character reached ``http.client``, whose
+    ``ValueError`` quoted the whole header value, key included (and escaped ``ModelError``, so a
+    probe crashed instead of reporting ``error``)."""
+    from homelabnext.registry.models import ModelError, authorized
+
+    home = servers({"/v1/models": (200, {}, b'{"data": []}')})
+    raised = None
+    try:
+        authorized("s3cret\nX-Injected: 1")("GET", home.url + "/v1/models", None, 5)
+    except Exception as exc:
+        raised = exc
+    assert isinstance(raised, ModelError) and raised.kind == "misconfigured"
+    assert "s3cret" not in str(raised) and "Injected" not in str(raised)
+    assert home.seen == []

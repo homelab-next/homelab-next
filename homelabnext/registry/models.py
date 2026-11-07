@@ -48,6 +48,8 @@ ROLE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 KINDS = ("chat", "completion", "embedding")
+#: a character no header value may hold (http.client would echo the value in its error)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
 LIMIT_KEYS = ("window_s", "max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
 #: keys an OpenAI-compatible ``/v1/models`` entry uses for the loaded context length, by engine
@@ -416,7 +418,8 @@ def _resolved(
 
 # ---------------------------------------------------------------- HTTP plumbing
 class ModelError(Exception):
-    """A backend call failed.  ``kind``: unreachable | timeout | http | malformed."""
+    """A backend call failed.  ``kind``: unreachable | timeout | http | malformed | misconfigured
+    (the call was refused before anything was sent)."""
 
     def __init__(self, kind: str, message: str, status: int | None = None):
         self.kind = kind
@@ -469,13 +472,19 @@ def urllib_transport(
 def authorized(api_key: str | None, transport: Transport | None = None) -> Transport:
     """``transport`` (default :func:`urllib_transport`) sending ``Authorization: Bearer
     <api_key>``; ``transport`` itself when there is no key.  A transport given here must take a
-    ``headers=`` keyword.  The key never appears in an error or a result."""
+    ``headers=`` keyword.  A key holding a control character (``\\x00``-``\\x1f``, ``\\x7f``) is
+    refused at send time with ``ModelError("misconfigured")``, which does not quote it
+    (``http.client`` would refuse the header with a ``ValueError`` that does).  No error this
+    module raises and no result quotes the key."""
     tr = transport or urllib_transport
     if not api_key:
         return tr
+    bad_key = _CONTROL.search(api_key) is not None
     auth = {"Authorization": f"Bearer {api_key}"}
 
     def send(method: str, url: str, body: dict | None, timeout: float):
+        if bad_key:
+            raise ModelError("misconfigured", "the API key is not a valid header value")
         return tr(method, url, body, timeout, headers=auth)  # type: ignore[call-arg]
 
     return send
