@@ -262,6 +262,9 @@ func parseNode(data []byte) (*yaml.Node, error) {
 	if err := noRepeatedKeys(doc.Content[0], ""); err != nil {
 		return nil, err
 	}
+	if err := noAliases(doc.Content[0]); err != nil {
+		return nil, err
+	}
 	return &doc, nil
 }
 
@@ -282,6 +285,27 @@ func noRepeatedKeys(n *yaml.Node, at string) error {
 			next = at + n.Content[i-1].Value + "."
 		}
 		if err := noRepeatedKeys(c, next); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// noAliases refuses anchors, aliases and merge keys: a migration moves keys by name, and one
+// reached through an alias would be moved in one place and left in the other.
+func noAliases(n *yaml.Node) error {
+	if n.Kind == yaml.AliasNode || n.Anchor != "" {
+		return fmt.Errorf("parse: YAML anchors and aliases are not allowed in the configuration")
+	}
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if k := n.Content[i]; k.Kind != yaml.ScalarNode || k.ShortTag() == "!!merge" || k.Value == "<<" {
+				return fmt.Errorf("parse: a configuration key must be a plain scalar (no merge key)")
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if err := noAliases(c); err != nil {
 			return err
 		}
 	}

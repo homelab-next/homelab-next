@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
 )
 
 // oldConfig is a fictional configuration in the private controller's keys: every key a
@@ -189,5 +191,85 @@ func TestTheDocsPrintTheMigrationTable(t *testing.T) {
 	slices.Sort(dropped)
 	if !slices.Equal(renames, wantRenames) || !slices.Equal(dropped, wantDropped) {
 		t.Errorf("docs table:\n renames %v\n dropped %v\nwant\n renames %v\n dropped %v", renames, dropped, wantRenames, wantDropped)
+	}
+}
+
+// The private controller hard-coded its tree's zones, so its configuration has no scope block:
+// the migration writes the one it is given, every key present, so the lab's file migrates in one
+// command; one that already has a block is refused.
+func TestMigrate_AddsTheScopeBlock(t *testing.T) {
+	old := strings.Replace(oldConfig, scopeYAML, "", 1)
+	if _, _, err := Migrate([]byte(old)); err == nil {
+		t.Fatal("a configuration without a scope block migrated without one")
+	}
+	z := pathscope.Zones{DeniedRoots: []string{"owner"}, FindingsRoot: "notes/findings/", ReservedNames: []string{"operator"}}
+	out, notes, err := MigrateWith([]byte(old), MigrateOptions{Scope: &z})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Parse(out)
+	if err != nil || cfg.Zones().FindingsRoot != "notes/findings/" || !cfg.Zones().ReservedName("operator") || notes[len(notes)-1] != "added the scope block" {
+		t.Fatalf("migrated = %v, %v, %v", cfg.Zones(), notes, err)
+	}
+	if !strings.Contains(string(out), "shared_write: []") {
+		t.Errorf("an empty key was left out:\n%s", out)
+	}
+	if _, _, err := MigrateWith([]byte(oldConfig), MigrateOptions{Scope: &z}); err == nil {
+		t.Error("a configuration with a scope block was given another")
+	}
+}
+
+// An empty base_url (a backend left unset) becomes no endpoint, with a note; an unreadable one is
+// refused without quoting it, since a URL may carry a password.
+func TestMigrate_BaseURLEdges(t *testing.T) {
+	out, notes, err := Migrate([]byte(scopeYAML + "backends: {local: {name: a, base_url: \"\"}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "endpoint") || len(notes) != 1 || !strings.Contains(notes[0], "empty") {
+		t.Errorf("out = %s notes = %v", out, notes)
+	}
+	_, _, err = Migrate([]byte(scopeYAML + "backends: {local: {base_url: \"engine-user:s3cretpw@\"}}\n"))
+	if err == nil || strings.Contains(err.Error(), "s3cretpw") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// A migration moves keys by name, so a configuration that reaches one through an anchor or a
+// merge key is refused; and an unchanged configuration is still held to loading.
+func TestMigrate_RefusesAliasesAndChecksAnUnchangedFile(t *testing.T) {
+	for _, body := range []string{
+		"base: &r {max_turns: 3}\nrunner: *r\n",
+		"base: &r {max_turns: 3}\nrunner: {<<: *r}\n",
+	} {
+		if _, _, err := Migrate([]byte(scopeYAML + body)); err == nil {
+			t.Errorf("%q migrated", body)
+		}
+		if _, err := Parse([]byte(scopeYAML + body)); err == nil {
+			t.Errorf("%q parsed", body)
+		}
+	}
+	if _, _, err := Migrate([]byte(scopeYAML + "runner: {liveness: sometimes}\n")); err == nil {
+		t.Error("an unchanged configuration that does not load migrated")
+	}
+}
+
+// A comment stays with its key: a line comment on an old key ends up on the line of its new key.
+func TestMigrate_KeepsCommentsWithTheirKeys(t *testing.T) {
+	out, _, err := Migrate([]byte(oldConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line string
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.Contains(l, "# the primary engine") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "home: /etc/orchestrator/runner/local") {
+		t.Errorf("the comment sits on %q:\n%s", line, out)
+	}
+	if !strings.Contains(string(out), "# the controller's database\ndb_path:") {
+		t.Errorf("a head comment moved:\n%s", out)
 	}
 }

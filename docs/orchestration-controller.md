@@ -365,7 +365,12 @@ consumers of `svc:llm-orchestrator` in this repository, which move before the ol
 a file that is not one mapping are refused. Its keys name no product. A configuration written for
 the private controller loads too, for the overlap release the ADR's amendment sets: each old key is
 read under its new name and noted (`Config.Notices`), and `config.Migrate` rewrites the file to the
-new keys, comments kept, refusing to write a result that would not load. A configuration that sets
+new keys, comments kept with their keys, refusing a result that would not load (an unchanged file
+is checked too). `config.MigrateWith` with `MigrateOptions.Scope` writes the scope block, every key present, into a file
+that has none, so the private controller's file migrates in one call; given to a file that has a
+block, it is refused. An empty `base_url` becomes no `endpoint` (a note says so), an error never
+quotes a URL (it may carry a password), and a file with anchors, aliases or merge keys is refused:
+the migration moves keys by name. A configuration that sets
 an old key and its new key (or two old spellings of one setting) is refused, by both, whatever the
 values; so is a key of what was not ported, which only the migration removes.
 
@@ -413,7 +418,7 @@ The `scope` block is required, with each of `denied_roots`, `findings_root`, `sh
 becomes `pathscope.Zones` through `NewZones` (`Config.Zones()`), and an explicit `denied_roots: []`
 needs `allow_no_denied_roots: true`. The private controller hard-coded its tree's zones; a site
 writes them here, the lab's in its overlay, before its configuration loads, so the migration adds
-none.
+none, unless it is given one (`MigrateOptions.Scope`).
 
 The migration's entry point on the command line comes with the controller binary (PR 2.7); until
 then `config.Migrate` is the library call it will run.
@@ -522,6 +527,12 @@ in-place additions, and the last one before the rename, with every added column.
 - PR 2.7 (`cmd/controller`): the startup path for a database with a pending migration. The
   controller refuses to start with `ErrBackupRequired` and its pending steps, and a flag (for
   example `--migrate-backup PATH`) takes the backup and migrates under the instance lock.
+- PR 2.5 (the backends): `Backend.InterlockRequired` defaults to true for every backend, as the
+  configuration states it; the private controller built its local backend with the interlock off
+  whatever the file said, so the lab's configuration must say `needs_interlock: false` on that
+  backend at the cutover. The cloud backend's `endpoint` is never watched by progress liveness: a
+  session on the cloud backend reaches it through the gateway, not a socket the controller can
+  attribute.
 - PR 2.6 (the API): an unknown agent key is a 404 before `CreateResubmit` runs; a replayed submit
   is answered with `FindByIdempotencyKey(submitter, key)`; and the API caps the task and response
   sizes it accepts and stores and sets a retention policy for finished jobs. The store has

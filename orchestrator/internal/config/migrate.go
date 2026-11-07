@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
 )
 
 // A Rename is one old key and the key that replaces it. Old and New are dotted paths from the top
@@ -67,10 +69,15 @@ func droppedKeys() []string {
 
 // baseURLToEndpoint keeps a base URL's host:port, with the scheme's default port when none is
 // written.
+// An empty base_url (a backend the private controller left unset) becomes no endpoint at all: nil.
+// An error never quotes the URL, which may carry a password.
 func baseURLToEndpoint(n *yaml.Node) (*yaml.Node, error) {
+	if n.Kind == yaml.ScalarNode && n.Value == "" {
+		return nil, nil
+	}
 	u, err := url.Parse(n.Value)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, fmt.Errorf("base_url %q: not an http(s) URL", n.Value)
+		return nil, fmt.Errorf("base_url: not an http(s) URL with a host")
 	}
 	host := u.Host
 	if u.Port() == "" {
@@ -95,11 +102,23 @@ func scriptToCommand(n *yaml.Node) (*yaml.Node, error) {
 	return seq, nil
 }
 
+// MigrateOptions add what a migration cannot read from the old configuration.
+type MigrateOptions struct {
+	// Scope is the tree's zones, written as the scope block when the configuration has none
+	// (the private controller hard-coded them, so an old configuration never does). A
+	// configuration that has a scope block and is given one is refused.
+	Scope *pathscope.Zones
+}
+
 // Migrate rewrites a configuration to the keys this controller reads: every old key under its
-// new name, every dropped key removed, comments kept. It returns the rewritten file and one note
-// per change. A configuration that sets an old key and its new key is refused, and so is one the
-// result would not load; a configuration that needs no change comes back unchanged.
-func Migrate(data []byte) ([]byte, []string, error) {
+// new name, every dropped key removed, the scope block added from opts, comments kept. It returns
+// the rewritten file and one note per change. A configuration that sets an old key and its new
+// key is refused, and so is one whose result would not load (checked whether or not anything
+// changed); a configuration that needs no change comes back unchanged.
+func Migrate(data []byte) ([]byte, []string, error) { return MigrateWith(data, MigrateOptions{}) }
+
+// MigrateWith is Migrate with what the old configuration cannot say (MigrateOptions).
+func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 	doc, err := parseNode(data)
 	if err != nil {
 		return nil, nil, err
@@ -108,7 +127,19 @@ func Migrate(data []byte) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if opts.Scope != nil {
+		if lookup(doc.Content[0], "scope") != nil {
+			return nil, nil, fmt.Errorf("scope: the configuration has a scope block; give the migration none")
+		}
+		if err := addScope(doc.Content[0], *opts.Scope); err != nil {
+			return nil, nil, err
+		}
+		notes = append(notes, "added the scope block")
+	}
 	if len(notes) == 0 {
+		if _, err := Parse(data); err != nil {
+			return nil, nil, fmt.Errorf("the configuration does not load: %w", err)
+		}
 		return data, nil, nil
 	}
 	var buf bytes.Buffer
@@ -124,6 +155,28 @@ func Migrate(data []byte) ([]byte, []string, error) {
 		return nil, notes, fmt.Errorf("the migrated configuration does not load: %w", err)
 	}
 	return buf.Bytes(), notes, nil
+}
+
+// addScope appends a scope block holding every key of z, so none is left to a default.
+func addScope(root *yaml.Node, z pathscope.Zones) error {
+	block := struct {
+		DeniedRoots        []string `yaml:"denied_roots"`
+		FindingsRoot       string   `yaml:"findings_root"`
+		SharedWrite        []string `yaml:"shared_write"`
+		ReservedNames      []string `yaml:"reserved_names"`
+		AllowNoDeniedRoots bool     `yaml:"allow_no_denied_roots,omitempty"`
+	}{z.DeniedRoots, z.FindingsRoot, z.SharedWrite, z.ReservedNames, z.AllowNoDeniedRoots}
+	for _, l := range []*[]string{&block.DeniedRoots, &block.SharedWrite, &block.ReservedNames} {
+		if *l == nil {
+			*l = []string{}
+		}
+	}
+	var n yaml.Node
+	if err := n.Encode(block); err != nil {
+		return err
+	}
+	root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "scope"}, &n)
+	return nil
 }
 
 // migrateNode applies Renames and Dropped to doc in place. Loading (rewrite false) refuses a
@@ -165,6 +218,11 @@ func migrateNode(doc *yaml.Node, rewrite bool) ([]string, error) {
 				conv, err := r.Convert(val)
 				if err != nil {
 					return nil, fmt.Errorf("%s: %w", at.path, err)
+				}
+				if conv == nil {
+					removeKey(at.node, at.key)
+					notes = append(notes, fmt.Sprintf("removed %s: empty, so no %s", at.path, newPath))
+					continue
 				}
 				conv.HeadComment, conv.LineComment = val.HeadComment, val.LineComment
 				val = conv
