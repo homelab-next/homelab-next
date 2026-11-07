@@ -39,6 +39,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from homelabnext._http import credential_opener
+
 from .model import Registry
 from .resolver import Endpoint, ResolutionError, Resolver
 
@@ -433,6 +435,10 @@ def urllib_transport(
     *,
     headers: Mapping[str, str] | None = None,
 ):
+    """One JSON request through :func:`homelabnext._http.credential_opener`: it may carry the
+    key :func:`authorized` adds, so no redirect is followed (a 3xx is the answer: a cross-origin
+    one would get the key, and urllib resends a POST answered 301/302/303 as a GET) and no proxy
+    from the environment is used (it would get the key, in clear for http)."""
     data = None if body is None else json.dumps(body).encode("utf-8")
     # the caller's headers go after Content-Type, so a caller may override it
     req = urllib.request.Request(
@@ -442,7 +448,7 @@ def urllib_transport(
         headers={"Content-Type": "application/json", **(headers or {})},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with credential_opener().open(req, timeout=timeout) as resp:
             raw, status = resp.read(), resp.status
     except urllib.error.HTTPError as exc:
         raw, status = exc.read(), exc.code

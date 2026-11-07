@@ -200,3 +200,26 @@ def test_openai_compat_plaintext_redirect_and_size(servers):
     with pytest.raises(InferenceError, match="larger than"):
         OpenAICompat(home.url + "/big", max_bytes=50).models()
     assert OpenAICompat(home.url + "/big").models() == ["m" * 100]
+
+
+def test_model_transport_follows_no_redirect_and_never_replays_the_key(servers):
+    """Regression: ``registry.models.urllib_transport`` used urllib's stock redirect handler
+    while :func:`authorized` added ``Authorization: Bearer <key>``, so a cross-origin redirect
+    handed the key to the second server, and a POST answered 302 was resent there as a GET."""
+    from homelabnext.registry.models import authorized
+
+    evil = servers({"/v1/models": (200, {}, b'{"data": []}'), "/c": (200, {}, b"{}")})
+    home = servers(
+        {
+            "/v1/models": (302, {"Location": evil.url + "/v1/models"}, b""),
+            "/w": (302, {"Location": "/c"}, b""),
+            "/c": (200, {}, b'{"choices": []}'),
+        }
+    )
+    send = authorized("s3cret")
+    status, _ = send("GET", home.url + "/v1/models", None, 5)
+    assert status == 302
+    assert evil.seen == []
+    status, _ = send("POST", home.url + "/w", {"x": 1}, 5)
+    assert status == 302
+    assert [path for path, _ in home.seen] == ["/v1/models", "/w"]
