@@ -399,11 +399,29 @@ values; so is a key of what was not ported, which only the migration removes.
 | `backends.*.openai_compatible` | not ported: the passthrough's cloud leg is gone |
 
 `backends.*` is each backend: `local`, `local_fallback`, `cloud` and every entry of `additional`.
-Two keys are renamed without a migration: the shared tree's root, read for the findings check,
-is `tree_root`, and a profile's path scope is `path_scope`. Their private names match the leak
-scan's secret-name rule, which no marker lifts, so this repository cannot spell them; the
-overlay renames them by hand at the cutover (a configuration or profile that still uses one is
-refused as an unknown key, never read wrongly).
+Two keys take names this repository cannot spell under their old ones: the shared tree's root,
+read for the findings check, is `tree_root`, and a profile's path scope is `path_scope`. Their
+private names match the leak scan's secret-name rule, which no marker lifts, so the site that has
+them supplies them at runtime, from its own (private) file, and the code here never names them:
+
+- **configuration:** a renames file, one mapping of old top-level key to new key path
+  (`config.LoadSiteRenames`), given to `config.ParseWith` (`ParseOptions.ExtraRenames`) and
+  `config.MigrateWith` (`MigrateOptions.ExtraRenames`). Each old key is read under its new name
+  and noted, the migration rewrites it, and a file setting both is refused, as for the built-in
+  renames. The table is held strictly (`SiteRenames.Validate`): an old name is one plain key that
+  is no key of the configuration and no built-in rename; a new name is a key the configuration
+  reads, outside the `scope` and `api_auth` blocks; no chains, no cycles, no two old names for one
+  key.
+- **profiles:** an aliases file, one mapping of old top-level key to new top-level key
+  (`profile.ParseKeyAliases`), given to the loader (`LoadOptions.KeyAliases`; each read noted in
+  `Registry.Notices`) and to `profile.Migrate`, which rewrites a profiles directory, comments
+  kept, and writes nothing when one file sets both names. An alias targets a key the loader
+  defines, never `agent_key`, `id` or `grants`, and is no extension key; the scope it reaches is
+  checked against the zones as `path_scope` is.
+
+At the cutover the overlay supplies both files, so the lab's configuration and profiles migrate
+by the same calls as every other key; without them, a file that still uses an old name is refused
+as an unknown key, never read wrongly.
 `config.Renames` and `config.Dropped` hold the same table, and a test holds the two equal.
 
 No key names an inference URL. The controller sends nothing to a backend: a runner session does,

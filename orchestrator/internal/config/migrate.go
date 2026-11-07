@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -104,6 +105,9 @@ func scriptToCommand(n *yaml.Node) (*yaml.Node, error) {
 
 // MigrateOptions add what a migration cannot read from the old configuration.
 type MigrateOptions struct {
+	// ExtraRenames are a site's own old key names and the keys they become (SiteRenames, from
+	// LoadSiteRenames), applied after Renames: names this repository does not spell.
+	ExtraRenames SiteRenames
 	// Scope is the tree's zones, written as the scope block when the configuration has none
 	// (the private controller hard-coded them, so an old configuration never does). A
 	// configuration that has a scope block and is given one is refused.
@@ -123,7 +127,11 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	notes, err := migrateNode(doc, true)
+	extra, err := opts.ExtraRenames.renames()
+	if err != nil {
+		return nil, nil, err
+	}
+	notes, err := migrateNode(doc, true, extra)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -137,7 +145,7 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 		notes = append(notes, "added the scope block")
 	}
 	if len(notes) == 0 {
-		if _, err := Parse(data); err != nil {
+		if _, err := ParseWith(data, ParseOptions{ExtraRenames: opts.ExtraRenames}); err != nil {
 			return nil, nil, fmt.Errorf("the configuration does not load: %w", err)
 		}
 		return data, nil, nil
@@ -151,7 +159,7 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 	if err := enc.Close(); err != nil {
 		return nil, nil, err
 	}
-	if _, err := Parse(buf.Bytes()); err != nil {
+	if _, err := ParseWith(buf.Bytes(), ParseOptions{ExtraRenames: opts.ExtraRenames}); err != nil {
 		return nil, notes, fmt.Errorf("the migrated configuration does not load: %w", err)
 	}
 	return buf.Bytes(), notes, nil
@@ -181,7 +189,7 @@ func addScope(root *yaml.Node, z pathscope.Zones) error {
 
 // migrateNode applies Renames and Dropped to doc in place. Loading (rewrite false) refuses a
 // dropped key; a migration removes it.
-func migrateNode(doc *yaml.Node, rewrite bool) ([]string, error) {
+func migrateNode(doc *yaml.Node, rewrite bool, extra []Rename) ([]string, error) {
 	root := doc.Content[0]
 	var notes []string
 	for _, at := range expand(root, "") {
@@ -200,7 +208,7 @@ func migrateNode(doc *yaml.Node, rewrite bool) ([]string, error) {
 			notes = append(notes, fmt.Sprintf("removed %s: %s", at.path, why))
 		}
 	}
-	for _, r := range Renames {
+	for _, r := range append(slices.Clone(Renames), extra...) {
 		for _, at := range expand(root, r.Old) {
 			val := lookup(at.node, at.key)
 			if val == nil {
