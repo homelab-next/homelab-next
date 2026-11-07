@@ -1283,7 +1283,9 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             if not key:
                 out.append(f"{where}: parameter {name}: binds needs env")
             elif IDENTITY_KEY.search(key) and binds not in ("agent_key", "agent_key_lane"):
-                out.append(f"{where}: parameter {name}: env {key} is an identity; binds agent_key or agent_key_lane")
+                out.append(
+                    f"{where}: parameter {name}: env {key} is an identity; binds agent_key or agent_key_lane"
+                )
             if binds in ROOTED_BINDS:
                 if p.get("root") not in settings:
                     out.append(
@@ -1291,7 +1293,9 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
                         "the tree the prefixes are under"
                     )
             elif p.get("root") is not None:
-                out.append(f"{where}: parameter {name}: root belongs to a writable, readable or prefix binding")
+                out.append(
+                    f"{where}: parameter {name}: root belongs to a writable, readable or prefix binding"
+                )
             if binds == "lane" and sorted(p.get("enum") or ()) != ["real", "shadow"]:
                 out.append(f"{where}: parameter {name}: binds lane needs enum [real, shadow]")
         pat = p.get("pattern")

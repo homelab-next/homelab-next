@@ -222,8 +222,11 @@ def test_orchestrator_catalog_and_grants_are_its_format():
         # an enum pinned to its values; the prefix bound to each granting profile's own scope
         # (binds: writable), never pinned to every profile's values at once
         "allowed_values": {"NOTES_MODE": ["read", "write"]},
-        "profile_scope": {"root_key": "NOTES_ROOT", "scope_roots": ["notes/"],
-                          "writable": ["NOTES_WRITABLE_PREFIX"]},
+        "profile_scope": {
+            "root_key": "NOTES_ROOT",
+            "scope_roots": ["notes/"],
+            "writable": ["NOTES_WRITABLE_PREFIX"],
+        },
         "args": ["--no-config", "--from", "example-notes-mcp==1.2.0", "notes-mcp"],
         "command": "uvx",
         "env": {"NOTES_ROOT": "notes/", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},
@@ -276,7 +279,9 @@ def test_a_scope_key_binds_to_the_profile_and_an_unbound_free_one_is_not_settabl
     assert kind["profile_scope"]["writable"] == ["NOTES_WRITABLE_PREFIX"]
     # a scope key that does not bind is refused, by the record check and by the render
     rec = _rec(binds=None, root=None)
-    rec["parameters"]["writable"] = {k: v for k, v in rec["parameters"]["writable"].items() if v is not None}
+    rec["parameters"]["writable"] = {
+        k: v for k, v in rec["parameters"]["writable"].items() if v is not None
+    }
     assert any("has no binds" in w for w in clients.orch_kind("notes", rec, CTX)[1])
     assert any("say how it binds" in p for p in servers._template_problems(rec, "notes"))
     # a free parameter that is not a scope key: pinned to the rendered values, else unsettable
@@ -299,7 +304,9 @@ def test_a_scope_key_binds_to_the_profile_and_an_unbound_free_one_is_not_settabl
 )
 def test_a_binding_is_well_formed(param, phrase):
     rec = _rec(**param)
-    rec["parameters"]["writable"] = {k: v for k, v in rec["parameters"]["writable"].items() if v is not None}
+    rec["parameters"]["writable"] = {
+        k: v for k, v in rec["parameters"]["writable"].items() if v is not None
+    }
     assert any(phrase in p for p in servers._template_problems(rec, "notes"))
 
 

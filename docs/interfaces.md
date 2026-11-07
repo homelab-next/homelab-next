@@ -522,6 +522,7 @@ change until its ADR is accepted):
 | `platform/module_selection` | 1.0 | `schemas/platform/module_selection.schema.json` | draft |
 | `platform/module_swap` | 1.0 | `schemas/platform/module_swap.schema.json` | draft |
 | `platform/novelty_spec` | 1.0 | `schemas/platform/novelty_spec.schema.json` | draft |
+| `platform/orchestrator_profile` | 1.0 | `schemas/platform/orchestrator_profile.schema.json` | draft |
 | `platform/role_interface` | 1.0 | `schemas/platform/role_interface.schema.json` | stable |
 | `platform/script_header` | 1.0 | `schemas/platform/script_header.schema.json` | stable |
 | `platform/service` | 2.8 | `schemas/platform/service.json` | stable |
