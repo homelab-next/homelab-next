@@ -136,13 +136,13 @@ go:
   github.com/mattn/go-isatty: {spdx: MIT, kind: linked, reason: "modernc.org/libc's dependency on some platforms (not in the linux build graph); listed as linked because a build for those platforms links it"}
   github.com/ncruces/go-strftime: {spdx: MIT, kind: linked, reason: "modernc.org/libc's dependency on some platforms (not in the linux build graph); listed as linked because a build for those platforms links it"}
   github.com/remyoudompheng/bigfft: {spdx: BSD-3-Clause, kind: linked, reason: "modernc.org/mathutil's dependency, linked into the controller with orchestrator/internal/store"}
+  go.yaml.in/yaml/v3: {spdx: MIT AND Apache-2.0, kind: linked, reason: "the controller's YAML library (config, profiles, grants, the registers reader), linked into the controller; the maintained successor of the archived gopkg.in/yaml.v3 (Apache-2.0, with libyaml's ported files under MIT in its LICENSE), no dependency of its own"}
   golang.org/x/exp/typeparams: {spdx: BSD-3-Clause, kind: tool, reason: "staticcheck's dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/mod: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/sync: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/sys: {spdx: BSD-3-Clause, kind: linked, reason: "orchestrator/internal/safefs's Linux system calls (statx mount ids, statfs, renameat2) and internal/store's instance lock (flock); also a dependency of the linters"}
   golang.org/x/telemetry: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/tools: {spdx: BSD-3-Clause, kind: tool, reason: "the analysis framework the linters run on; run as go tool, never linked into a shipped binary"}
-  go.yaml.in/yaml/v3: {spdx: MIT AND Apache-2.0, kind: linked, reason: "the controller's YAML library (config, profiles, grants, the registers reader), linked into the controller; the maintained successor of the archived gopkg.in/yaml.v3 (Apache-2.0, with libyaml's ported files under MIT in its LICENSE), no dependency of its own"}
   golang.org/x/vuln: {spdx: BSD-3-Clause, kind: tool, reason: "govulncheck, run as go tool by CI's go job; never linked into a shipped binary"}
   honnef.co/go/tools: {spdx: MIT AND BSD-3-Clause, kind: tool, reason: "staticcheck, run as go tool by CI's go job (MIT; its LICENSE-THIRD-PARTY carries BSD-3-Clause code); never linked into a shipped binary"}
   modernc.org/libc: {spdx: BSD-3-Clause AND MIT AND BSD-2-Clause, kind: linked, reason: "modernc.org/sqlite's C runtime in Go, linked into the controller (BSD-3-Clause; its LICENSE-3RD-PARTY.md carries musl's MIT and BSD-2-Clause parts and MIT-licensed Go ports)"}

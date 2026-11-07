@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -58,6 +59,10 @@ func TestThePythonRenderOfExamplesMCPLoads(t *testing.T) {
 		var p struct {
 			AgentKey string `yaml:"agent_key"`
 			Grants   Set    `yaml:"grants"`
+			Scope    struct {
+				Writable []string `yaml:"writable_prefixes"`
+				Readable []string `yaml:"readable_prefixes"`
+			} `yaml:"path_scope"`
 		}
 		if err := yaml.Unmarshal(data, &p); err != nil {
 			t.Fatalf("%s: %v", f, err)
@@ -66,7 +71,7 @@ func TestThePythonRenderOfExamplesMCPLoads(t *testing.T) {
 			t.Fatalf("%s: no grants block", f)
 		}
 		for _, shadow := range []bool{false, true} {
-			got, err := cat.Render(p.Grants.Lane(shadow), Owner{AgentKey: p.AgentKey, Shadow: shadow})
+			got, err := cat.Render(p.Grants.Lane(shadow), Owner{AgentKey: p.AgentKey, Shadow: shadow, WritablePrefixes: p.Scope.Writable, ReadablePrefixes: p.Scope.Readable})
 			if err != nil {
 				t.Errorf("%s (shadow=%v): %v", f, shadow, err)
 			}
@@ -74,13 +79,30 @@ func TestThePythonRenderOfExamplesMCPLoads(t *testing.T) {
 				t.Errorf("%s (shadow=%v): %d servers rendered for %d grants", f, shadow, len(got), len(p.Grants.Lane(shadow)))
 			}
 		}
-		// The render pins a parameter to the values it rendered: another value is refused.
+		// A key that picks an identity or a scope is bound to the granting profile, never pinned
+		// to every rendered profile's values at once.
+		for _, g := range append(append([]Grant{}, p.Grants.Real...), p.Grants.Shadow...) {
+			k := cat.Kinds[g.Kind]
+			for key := range g.Env {
+				if scopeEnvRe.MatchString(key) && (!slices.Contains(k.ProfileScope.keys(), key) || len(k.pins(key)) > 0) {
+					t.Errorf("%s: kind %s pins %s instead of binding it to the profile", f, g.Kind, key)
+				}
+			}
+		}
+		// The render pins a parameter to its values and binds a scope key to the profile: another
+		// agent's prefix, or the other lane's, is refused.
+		owner := Owner{AgentKey: p.AgentKey, WritablePrefixes: p.Scope.Writable, ReadablePrefixes: p.Scope.Readable}
 		for _, g := range p.Grants.Real {
 			for key := range g.Env {
-				bad := g
-				bad.Env = map[string]string{key: "agents/someone-else/"}
-				if _, err := cat.Render([]Grant{bad}, Owner{AgentKey: p.AgentKey}); !errors.Is(err, ErrInvalid) {
-					t.Errorf("%s: %s=%q off its pins rendered (err %v)", f, key, bad.Env[key], err)
+				for _, v := range []string{"agents/someone-else/", "agents/collector/inbox-shadow/"} {
+					bad := g
+					bad.Env = map[string]string{key: v}
+					if key == "NOTES_WRITABLE_PREFIX" {
+						bad.Env["NOTES_MODE"] = "write"
+					}
+					if _, err := cat.Render([]Grant{bad}, owner); !errors.Is(err, ErrInvalid) {
+						t.Errorf("%s: %s=%q rendered on the real lane (err %v)", f, key, v, err)
+					}
 				}
 			}
 		}

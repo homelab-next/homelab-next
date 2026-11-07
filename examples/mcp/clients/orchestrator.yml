@@ -13,7 +13,7 @@ profiles:
     grants_file: orchestrator/profiles/collector.yaml
     params:
       notes: {writable: agents/collector/inbox/}
-      notes@shadow: {mode: read}
+      notes@shadow: {mode: read, writable: agents/collector/inbox-shadow/}
 owns: [orchestrator/*.yaml, orchestrator/profiles/*.yaml]
 # every orchestrator profile with a grants: block must accept the rendered catalog, rendered here
 # or not (its controller refuses to start otherwise): read here as strict YAML, judged by the

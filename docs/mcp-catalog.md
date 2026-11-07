@@ -10,7 +10,7 @@ MCP servers is generated from it: the capability classes the agent compiler and 
 judge, the knowledge graph's `mcp:` nodes, the MCP line of the system pages, the status hub's
 **MCP servers** page, and every client configuration an agent runtime reads. The decision is
 [ADR-0024](adr/0024-mcp-catalog-single-source.md); the schema is
-`schemas/platform/mcp_server.schema.json` (1.3); the code is `homelabnext/mcp/servers.py` (records
+`schemas/platform/mcp_server.schema.json` (1.4); the code is `homelabnext/mcp/servers.py` (records
 and checks), `clients.py` (rendering), `importer.py` (import) and `catalog_cli.py`.
 
 ## What lives where now
@@ -416,13 +416,32 @@ when it is refused: the job would otherwise run silently without it; a server th
 than through the broker is left out unless a rendered profile is granted it, which only a
 policy's `direct_mcp` exception allows, so the controller refuses any other profile's grant of
 it), and per profile a `grants:` block whose instances set only their parameters' env keys.
-Every such key is pinned in the kind's `allowed_values`, as the loader requires of a key it
-cannot otherwise classify: an `enum` parameter to its values, any other to the values the
-rendered instances give it. A non-enum parameter no rendered profile sets is not grant-settable
-(a note says so): render a profile granted it. The Go loader is the one judge of the rest (names,
-known kinds, the deny list, one grant per server, both lanes or neither): its test loads this
-repository's committed render in place, and the render does not keep a copy of those rules. So
-render both lanes (`lanes: [real, shadow]`).
+How each key reaches the kind:
+
+- A parameter that picks an identity or a scope (its env key ends in `_PREFIX…`, `_SCOPE`,
+  `_LIST`, `_AGENT_KEY` or `_BY`) must say how it **binds** to the granting profile (record
+  schema 1.4, `binds`): `agent_key` or `agent_key_lane` (the profile's agent key, `-shadow` added
+  on the shadow lane), `lane` (`real` or `shadow`; enum `[real, shadow]`), or `writable`,
+  `readable` or `prefix`, prefixes of the profile's `path_scope` under the tree the `root` setting
+  names. The render writes it into the kind's `profile_scope` and never pins it: a pin collects
+  every rendered profile's value, so one profile could set another's prefix, or the real lane the
+  shadow lane's. The controller checks each grant against its own profile and lane, so the
+  orchestrator profile carries the `path_scope` the grants write within. A record whose
+  identity or scope parameter does not bind is refused (`hnx mcp catalog check`).
+- Any other parameter is pinned in the kind's `allowed_values`, as the loader requires of a key
+  it cannot otherwise classify: an `enum` parameter to its values, any other to the values the
+  rendered instances and the `check_profiles` profiles give it (each value held to the
+  parameter's pattern, or the render is refused). One that none of them sets is not
+  grant-settable (a note says so): render a profile granted it.
+
+The render then reads its own output back (`clients.orch_render_problems`, with every
+`check_profiles` profile): every grant names a kind, sets only its `allowed_env` keys, a pinned
+key to one of its values, one server name once per lane, and a profile grants both lanes or
+neither. That is what the render itself must have got right, not the controller's rules: the Go
+loader is the one judge of those (the deny list, the scope and lane rules, the profile's own
+fields), and its test loads this repository's committed render in place. A site has no command
+to run that loader on its own render yet; the controller's binary brings one
+(`controller check --config`, PR 2.7). So render both lanes (`lanes: [real, shadow]`).
 
 The block is spliced into the orchestrator's own profile file, which must exist: everything from
 the marker line `# Per-job MCP grants (ADR-022).` to the end of the file is the render's. A
@@ -431,7 +450,8 @@ splice would delete it) is refused. The rendered catalog replaces the orchestrat
 `configs/mcp_catalog.yaml`, so the spec's `check_profiles:` glob names every profile file the
 orchestrator loads: each one with a `grants:` block, rendered by this spec or not, must accept the
 new catalog (the controller would refuse to start otherwise). The render reads each as strict YAML;
-the controller's loader judges it (`Registry.CheckGrants`).
+the render's own check reads it with the rest, and the controller's loader judges it
+(`Registry.CheckGrants`).
 
 To switch an orchestrator checkout from a hand-written catalog to the rendered one:
 

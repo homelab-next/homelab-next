@@ -219,10 +219,11 @@ def test_orchestrator_catalog_and_grants_are_its_format():
     kinds = yaml.safe_load(catalog.text)["kinds"]
     assert kinds["notes"] == {
         "allowed_env": ["NOTES_MODE", "NOTES_WRITABLE_PREFIX"],
-        # every grant-settable key pinned: an enum to its values, any other parameter to the
-        # values the rendered instances give it (the controller pins what it cannot classify)
-        "allowed_values": {"NOTES_MODE": ["read", "write"],
-                           "NOTES_WRITABLE_PREFIX": ["agents/collector/inbox/"]},
+        # an enum pinned to its values; the prefix bound to each granting profile's own scope
+        # (binds: writable), never pinned to every profile's values at once
+        "allowed_values": {"NOTES_MODE": ["read", "write"]},
+        "profile_scope": {"root_key": "NOTES_ROOT", "scope_roots": ["notes/"],
+                          "writable": ["NOTES_WRITABLE_PREFIX"]},
         "args": ["--no-config", "--from", "example-notes-mcp==1.2.0", "notes-mcp"],
         "command": "uvx",
         "env": {"NOTES_ROOT": "notes/", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},
@@ -232,7 +233,7 @@ def test_orchestrator_catalog_and_grants_are_its_format():
     block = yaml.safe_load(grants.text)["grants"]
     assert list(block) == ["real", "shadow"]
     assert block["shadow"][0] == {"name": "notes-collector-shadow", "kind": "notes",
-                                  "env": {"NOTES_MODE": "read", "NOTES_WRITABLE_PREFIX": "agents/collector/inbox/"}}  # fmt: skip
+                                  "env": {"NOTES_MODE": "read", "NOTES_WRITABLE_PREFIX": "agents/collector/inbox-shadow/"}}  # fmt: skip
     # byte-stable: rendering twice gives the same bytes, and the profile's own fields survive
     again = clients.render_spec(SPECS / "orchestrator.yml")
     assert [o.expected() for o in again.outputs] == [o.expected() for o in r.outputs]
@@ -260,15 +261,64 @@ def test_the_old_client_name_still_renders():
     assert clients._spec_problems({**spec, "client": "llm-orchestrators"})
 
 
-def test_an_unrendered_free_parameter_is_not_grant_settable():
-    kind, said = clients.orch_kind("notes", CATALOG.servers["notes"], CTX)
-    assert kind["allowed_values"] == {"NOTES_MODE": ["read", "write"]}
-    assert kind["allowed_env"] == ["NOTES_MODE"]
-    assert any(w.startswith("note:notes: NOTES_WRITABLE_PREFIX has no enum") for w in said)
-    kind, _ = clients.orch_kind("notes", CATALOG.servers["notes"], CTX,
-                                {"NOTES_MODE": {"read"}, "NOTES_WRITABLE_PREFIX": {"b/", "a/"}})  # fmt: skip
-    assert kind["allowed_values"] == {"NOTES_MODE": ["read", "write"],
-                                      "NOTES_WRITABLE_PREFIX": ["a/", "b/"]}  # fmt: skip
+def _rec(**param):
+    rec = copy.deepcopy(CATALOG.servers["notes"])
+    rec["parameters"]["writable"] = {**rec["parameters"]["writable"], **param}
+    return rec
+
+
+def test_a_scope_key_binds_to_the_profile_and_an_unbound_free_one_is_not_settable():
+    kind, said = clients.orch_kind("notes", CATALOG.servers["notes"], CTX,
+                                   {"NOTES_WRITABLE_PREFIX": {"agents/a/", "agents/b/"}})  # fmt: skip
+    # another profile's value never becomes this kind's pin: the controller checks each grant
+    # against its own profile's path scope and lane
+    assert "NOTES_WRITABLE_PREFIX" not in kind["allowed_values"]
+    assert kind["profile_scope"]["writable"] == ["NOTES_WRITABLE_PREFIX"]
+    # a scope key that does not bind is refused, by the record check and by the render
+    rec = _rec(binds=None, root=None)
+    rec["parameters"]["writable"] = {k: v for k, v in rec["parameters"]["writable"].items() if v is not None}
+    assert any("has no binds" in w for w in clients.orch_kind("notes", rec, CTX)[1])
+    assert any("say how it binds" in p for p in servers._template_problems(rec, "notes"))
+    # a free parameter that is not a scope key: pinned to the rendered values, else unsettable
+    free = copy.deepcopy(CATALOG.servers["notes"])
+    free["parameters"]["label"] = {"env": "NOTES_LABEL", "pattern": "[a-z]+"}
+    kind, said = clients.orch_kind("notes", free, CTX)
+    assert "NOTES_LABEL" not in kind["allowed_env"]
+    assert any(w.startswith("note:notes: NOTES_LABEL has no enum") for w in said)
+    kind, _ = clients.orch_kind("notes", free, CTX, {"NOTES_LABEL": {"b", "a"}})
+    assert kind["allowed_values"]["NOTES_LABEL"] == ["a", "b"]
+
+
+@pytest.mark.parametrize(
+    ("param", "phrase"),
+    [
+        ({"binds": "writable", "root": "NOTES_NOPE"}, "needs root"),
+        ({"binds": "agent_key", "root": "NOTES_ROOT"}, "root belongs to"),
+        ({"binds": "lane", "root": None}, "binds lane needs enum"),
+    ],
+)
+def test_a_binding_is_well_formed(param, phrase):
+    rec = _rec(**param)
+    rec["parameters"]["writable"] = {k: v for k, v in rec["parameters"]["writable"].items() if v is not None}
+    assert any(phrase in p for p in servers._template_problems(rec, "notes"))
+
+
+def test_the_render_checks_its_own_output():
+    """A Python-only CI is not blind: the render reads its own catalog and blocks back."""
+    cat = {"kinds": {"notes": {"allowed_env": ["M", "P"], "allowed_values": {"M": ["read"]},
+                               "profile_scope": {"writable": ["P"]}}}}  # fmt: skip
+    ok = {"real": [{"name": "n", "kind": "notes", "env": {"M": "read", "P": "x/"}}],
+          "shadow": [{"name": "n", "kind": "notes"}]}  # fmt: skip
+    assert clients.orch_render_problems(cat, {"p": ok}) == []
+    for bad, phrase in (
+        ({"real": ok["real"]}, "one lane"),
+        ({**ok, "spare": []}, "unknown lane"),
+        ({**ok, "real": ok["real"] * 2}, "granted twice"),
+        ({**ok, "real": [{"name": "n", "kind": "other"}]}, "unknown kind"),
+        ({**ok, "real": [{"name": "n", "kind": "notes", "env": {"Q": "1"}}]}, "not an allowed_env"),
+        ({**ok, "real": [{"name": "n", "kind": "notes", "env": {"M": "write"}}]}, "allowed_values"),
+    ):
+        assert any(phrase in p for p in clients.orch_render_problems(cat, {"p": bad})), phrase
 
 
 def test_a_per_instance_argument_cannot_be_an_orchestrator_kind():
@@ -520,11 +570,10 @@ def test_the_orchestrator_refuses_a_granted_remote_server(tmp_path):
                  mcp_ceiling=["notes", "records", "lake"])  # fmt: skip
     with pytest.raises(clients.RenderError, match="a streamable-http server; orchestrator"):
         clients.render_profile(CATALOG, lake, "orchestrator", lanes=["real", "shadow"], policy=WIDE)
-    # one lane only renders: the controller's profile loader refuses a profile that grants one
-    # lane and not the other (orchestrator/internal/grants, Set.Validate), not a copy of it here
-    block, _ = clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"],
-                                      policy=WIDE, npm_prefix=NPM_PREFIX)  # fmt: skip
-    assert yaml.safe_load(block)["grants"]["shadow"] == []
+    # one lane only: the render's own check refuses it, as the controller's loader would
+    with pytest.raises(clients.RenderError, match="one lane and not the other"):
+        clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"],
+                               policy=WIDE, npm_prefix=NPM_PREFIX)  # fmt: skip
     block, _ = clients.render_profile(CATALOG, COLLECTOR, "orchestrator",
                                       lanes=["real", "shadow"], policy=WIDE,
                                       npm_prefix=NPM_PREFIX)  # fmt: skip
@@ -551,9 +600,18 @@ def test_a_spec_refuses_a_missing_grants_file_and_reads_every_orchestrator_profi
     other.write_text("agent_key: monitor\nagent_key: other\n")
     with pytest.raises(clients.RenderError, match="duplicate key 'agent_key'"):
         clients.render_spec(spec)
-    # what the controller accepts (a known kind, an allowed key) is its loader's to judge
+    # the render's own check reads every profile the controller loads
     other.write_text("agent_key: monitor\ngrants:\n  real: [{name: c, kind: collectormcp}]\n")
+    with pytest.raises(clients.RenderError, match="unknown kind 'collectormcp'"):
+        clients.render_spec(spec)
+    # its values for a pinned parameter join the pins; one off the parameter's type is refused
+    other.write_text("agent_key: monitor\ngrants:\n  real: [{name: n, kind: notes, env: {NOTES_MODE: read}}]\n"
+                     "  shadow: [{name: n, kind: notes, env: {NOTES_MODE: read}}]\n")  # fmt: skip
     assert clients.render_spec(spec).outputs
+    other.write_text("agent_key: monitor\ngrants:\n  real: [{name: n, kind: notes, env: {NOTES_MODE: append}}]\n"
+                     "  shadow: [{name: n, kind: notes, env: {NOTES_MODE: read}}]\n")  # fmt: skip
+    with pytest.raises(clients.RenderError, match="allowed_values"):
+        clients.render_spec(spec)
     other.unlink()
     (profiles / "collector.yaml").unlink()
     with pytest.raises(clients.RenderError, match="no such profile file"):

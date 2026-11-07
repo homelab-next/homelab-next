@@ -369,8 +369,13 @@ is gone, and `TestThePythonRenderOfExamplesMCPLoads` loads the committed render 
 `examples/mcp/clients/orchestrator.yml` in place (the catalog, and every profile its
 `check_profiles` names, both lanes), while `tests/mcp/test_mcp_clients.py` fails when that render is
 stale, so the two cannot drift. The render still refuses what it cannot write (a remote server, an
-argument that varies per instance) and reads every profile file as strict YAML; a site checks its
-own profiles with the controller's loader (`Registry.CheckGrants`, run at start by PR 2.7).
+argument that varies per instance), binds every identity or scope parameter in the kind's
+`profile_scope` rather than pinning it to every profile's values, and reads its own output back
+(`clients.orch_render_problems`: known kinds, allowed keys, pinned values, unique names, both
+lanes or neither), so a check that runs Python alone is not blind. A site has no command to run
+the Go loader on its own render until the controller binary lands: PR 2.7 adds `controller check
+--config FILE`, which loads the configuration, the catalog and every profile, and renders every
+profile's two lanes (`Registry.CheckGrants`) without starting the controller.
 
 The profiles' scope is `path_scope` (the private controller's name for it matches the leak scan's
 secret-name rule, which no marker lifts, so this repository cannot spell it; the overlay renames

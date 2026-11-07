@@ -26,6 +26,8 @@ parameters:
     description: the prefix this instance may write under
     env: NOTES_WRITABLE_PREFIX
     pattern: '[a-z0-9/_-]+/'
+    binds: writable
+    root: NOTES_ROOT
     default: agents/{profile}/
   mode:
     description: write in the real lane, read in the shadow lane
@@ -41,6 +43,6 @@ tools:
 - {name: write_note, classes: [record-write], approval: false}
 author: agent:example-builder
 reviews:
-- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:8ecda50375ad'}
-- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:8ecda50375ad'}
-- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:8ecda50375ad'}
+- {by: 'agent:example-checker', kind: agent, role: check, date: '2026-10-20', verdict: pass, digest: 'sha256:088c9c32faaa'}
+- {by: 'agent:example-auditor', kind: agent, role: audit, date: '2026-10-21', verdict: pass, digest: 'sha256:088c9c32faaa'}
+- {by: 'human:example-operator', kind: human, role: approve, date: '2026-10-21', verdict: pass, digest: 'sha256:088c9c32faaa'}

@@ -525,12 +525,15 @@ def orch_kind(
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """A record as an orchestrator catalog kind, or None (not a stdio server) and why not.
 
-    Every env parameter becomes an ``allowed_env`` key pinned in ``allowed_values``: an ``enum``
-    parameter to its values, any other to the values the rendered instances give it
-    (``values``, :func:`orch_values`), since the controller pins every grant-settable key it
-    cannot classify otherwise.  A non-enum parameter no rendered instance sets has nothing to pin
-    and is not grant-settable (a note says so).  Returns the kind and the problems, plus notes
-    prefixed ``note:``."""
+    Every env parameter becomes an ``allowed_env`` key.  One that ``binds`` to the granting profile
+    (its agent key, its lane, a prefix of its path scope under the ``root`` setting's tree) is
+    bound in ``profile_scope``, so the controller checks each grant against its own profile and
+    lane; a key that picks an identity or a scope and does not bind is refused (it would be
+    pinned to every profile's values at once).  Any other is pinned in ``allowed_values``: an
+    ``enum`` parameter to its values, else to the values the rendered instances and the spec's
+    other profiles give it (``values``, :func:`orch_values`).  A non-enum parameter none of them
+    sets has nothing to pin and is not grant-settable (a note says so).  Returns the kind and the
+    problems, plus notes prefixed ``note:``."""
     t = rec.get("transport") or {}
     if t.get("type") != "stdio":
         return None, [f"{sid}: orchestrator kinds start a command; {t.get('type')} is skipped"]
@@ -556,23 +559,48 @@ def orch_kind(
     if env:
         entry["env"] = dict(sorted(env.items()))
     pinned: dict[str, list[str]] = {}
+    scope: dict[str, Any] = {}
+    allowed: list[str] = []
     unset: list[str] = []
-    for p in (rec.get("parameters") or {}).values():
-        if not p.get("env"):
+    for name, p in (rec.get("parameters") or {}).items():
+        key = p.get("env")
+        if not key:
             continue
-        given = sorted({str(v) for v in (values or {}).get(p["env"], ())})
+        binds = p.get("binds")
+        if binds:
+            # the profile's own value: bound in profile_scope, never pinned across profiles
+            allowed.append(key)
+            field_ = {"lane": "lane_value"}.get(binds, binds)
+            scope.setdefault(field_, []).append(key)
+            if binds in servers.ROOTED_BINDS:
+                root = p.get("root")
+                if scope.setdefault("root_key", root) != root:
+                    problems.append(f"{sid}: parameters bind prefixes under two roots")
+                scope["scope_roots"] = [str(settings.get(root, ""))]
+            continue
+        if servers.SCOPE_KEY.search(key):
+            problems.append(
+                f"{sid}: parameter {name}: {key} picks an identity or a scope and has no binds"
+            )
+            continue
+        given = sorted({str(v) for v in (values or {}).get(key, ())})
         if p.get("enum"):
-            pinned[p["env"]] = sorted({*map(str, p["enum"]), *given})
+            pinned[key] = sorted(map(str, p["enum"]))
         elif given:
-            pinned[p["env"]] = given
+            pinned[key] = given
         else:
-            unset.append(p["env"])
+            unset.append(key)
+    allowed += list(pinned)
+    if allowed:
+        entry["allowed_env"] = sorted(allowed)
     if pinned:
-        entry["allowed_env"] = sorted(pinned)
         entry["allowed_values"] = dict(sorted(pinned.items()))
+    if scope:
+        entry["profile_scope"] = {k: (sorted(v) if isinstance(v, list) and k != "scope_roots" else v)
+                                  for k, v in sorted(scope.items())}  # fmt: skip
     notes = [
-        f"note:{sid}: {env} has no enum and no rendered instance sets it, so no grant may "
-        "(render a profile granted it)"
+        f"note:{sid}: {env} has no enum, no binding and no rendered value, so no grant may "
+        "set it (render a profile granted it)"
         for env in sorted(unset)
     ]
     return entry, problems + notes
@@ -646,6 +674,80 @@ def orch_grants(insts: list[Instance], lanes: Iterable[str]) -> str:
     if problems:
         raise RenderError(sorted(set(problems)))
     return ORCH_GRANTS_HEAD + yaml.safe_dump({"grants": out}, sort_keys=False, width=100)
+
+
+def _fold_values(
+    cat: servers.ServerCatalog, others: Mapping[str, Any], values: dict[str, dict[str, set[str]]]
+) -> list[str]:
+    """Add the values other profiles' grants give a pinned (non-enum, unbound) parameter to
+    ``values``, refusing one its parameter's pattern does not match."""
+    problems: list[str] = []
+    for who, lanes in others.items():
+        for lane, gs in (lanes or {}).items() if isinstance(lanes, Mapping) else ():
+            for g in gs or ():
+                rec = cat.servers.get(g.get("kind")) if isinstance(g, Mapping) else None
+                if rec is None:
+                    continue  # orch_render_problems names it
+                for p in (rec.get("parameters") or {}).values():
+                    key = p.get("env")
+                    if (
+                        not key
+                        or p.get("enum")
+                        or p.get("binds")
+                        or key not in (g.get("env") or {})
+                    ):
+                        continue
+                    v = str(g["env"][key])
+                    if p.get("pattern") and not re.fullmatch(p["pattern"], v):
+                        problems.append(
+                            f"{who}/{lane}: {_name(g.get('name'))}: {key}={_name(v)} does not match its parameter"
+                        )
+                    else:
+                        values.setdefault(g["kind"], {}).setdefault(key, set()).add(v)
+    return problems
+
+
+def orch_render_problems(catalog: Any, grants_by_profile: Mapping[str, Any]) -> list[str]:
+    """The render's own output read back: every grant names a kind of the catalog, sets only its
+    ``allowed_env`` keys, a pinned key to one of its ``allowed_values``, one server name once per
+    lane, and a profile grants both lanes or neither.  Not the controller's rules (its loader,
+    orchestrator/internal/grants, is the judge and is stricter), only what the render itself
+    must have got right, so a render checked by Python alone is not blind."""
+    kinds = (catalog or {}).get("kinds") or {}
+    out: list[str] = []
+    for who, lanes in grants_by_profile.items():
+        lanes = lanes if isinstance(lanes, Mapping) else {}
+        if set(lanes) - set(ORCH_LANES):
+            out.append(f"{who}: unknown lane(s) {sorted(set(lanes) - set(ORCH_LANES))}")
+        if bool(lanes.get("real")) != bool(lanes.get("shadow")):
+            out.append(f"{who}: grants one lane and not the other (the controller refuses it)")
+        for lane, gs in lanes.items():
+            seen: set[str] = set()
+            for g in gs or ():
+                name, k = str(g.get("name")), kinds.get(g.get("kind"))
+                if name in seen:
+                    out.append(f"{who}/{lane}: server {_name(name)} granted twice")
+                seen.add(name)
+                if k is None:
+                    out.append(f"{who}/{lane}: {_name(name)}: unknown kind {_name(g.get('kind'))}")
+                    continue
+                bound = {
+                    x
+                    for v in (k.get("profile_scope") or {}).values()
+                    if isinstance(v, list)
+                    for x in v
+                }
+                for key, v in (g.get("env") or {}).items():
+                    pins = (k.get("allowed_values") or {}).get(key)
+                    if key not in (k.get("allowed_env") or ()):
+                        out.append(
+                            f"{who}/{lane}: {_name(name)} sets {_name(key)}, not an allowed_env key"
+                        )
+                    elif key not in bound and (pins is None or str(v) not in pins):
+                        out.append(
+                            f"{who}/{lane}: {_name(name)}: {key}={_name(v)} is not one of its allowed_values"
+                        )
+    return out
 
 
 def load_strict(text: str, what: str) -> Any:
@@ -863,7 +965,12 @@ def render_profile(
         block = orch_grants(insts, lanes)
         # the catalog's own refusals (a granted server that cannot be a kind); what the
         # controller accepts is its loader's to judge
-        orch_catalog(cat, {i.server for i in insts}, ctx, orch_values(insts))
+        text, _ = orch_catalog(cat, {i.server for i in insts}, ctx, orch_values(insts))
+        bad = orch_render_problems(
+            load_strict(text, "catalog"), {prof["id"]: load_strict(block, "grants")["grants"]}
+        )
+        if bad:
+            raise RenderError(bad)
         return block, notes
     text, skipped = render_home(insts, client, cat, registry, prof["id"], ctx)
     return text, notes + [f"{client} cannot hold {n} (not a stdio server)" for n in skipped]
@@ -880,7 +987,9 @@ def _spec_problems(spec: Any) -> list[str]:
     if extra:
         out.append(f"unknown key(s) {sorted(extra)}")
     if client_name(spec.get("client")) not in CLIENTS:
-        out.append(f"client must be one of {list(CLIENTS)} (or an old name: {sorted(CLIENT_ALIASES)})")
+        out.append(
+            f"client must be one of {list(CLIENTS)} (or an old name: {sorted(CLIENT_ALIASES)})"
+        )
     if not isinstance(spec.get("profiles"), list) or not spec.get("profiles"):
         out.append("profiles must list at least one profile")
     outputs = spec.get("outputs")
@@ -993,23 +1102,33 @@ def render_spec(
             gf = _inside(out_root, entry["grants_file"], "grants_file")
             blocks[prof["id"]] = (gf, orch_grants(insts, lanes))
     if client == ORCHESTRATOR:
-        text, notes = orch_catalog(cat, {i.server for i in every}, ctx, orch_values(every))
+        # every profile the orchestrator loads must accept the catalog that replaces its own, not
+        # only the profiles this spec renders: their grants' values for a pinned parameter join
+        # its pins (each held to the parameter's type), and the render's own check reads them
+        spliced = {str(path) for path, _ in blocks.values()}
+        others: dict[str, Any] = {}
+        for f in _owned(out_root, spec.get("check_profiles")):
+            if str(f) not in spliced and f.is_file():
+                doc = load_strict(f.read_text(encoding="utf-8"), str(f))
+                if isinstance(doc, Mapping) and "grants" in doc:
+                    others[str(f)] = doc.get("grants")
+        values = orch_values(every)
+        problems = _fold_values(cat, others, values)
+        if problems:
+            raise RenderError(problems)
+        text, notes = orch_catalog(cat, {i.server for i in every}, ctx, values)
         res.notes += notes
         for out in spec["outputs"]:
             res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
-        spliced: set[str] = set()
+        mine: dict[str, Any] = {}
         for path, block in blocks.values():
             o = Output(path, block, splice=True)
             o.expected()  # the whole profile file, as the orchestrator reads it: strict YAML
-            spliced.add(str(path))
+            mine[str(path)] = load_strict(block, str(path)).get("grants")
             res.outputs.append(o)
-        # every profile the orchestrator loads must accept the catalog that replaces its own, not
-        # only the profiles this spec renders: each is read here as strict YAML, and the
-        # controller's loader judges the rest (orchestrator/internal/grants; this repository's
-        # example is loaded in place by its tests)
-        for f in _owned(out_root, spec.get("check_profiles")):
-            if str(f) not in spliced and f.is_file():
-                load_strict(f.read_text(encoding="utf-8"), str(f))
+        problems = orch_render_problems(load_strict(text, "catalog"), {**mine, **others})
+        if problems:
+            raise RenderError(problems)
     else:
         every_granted = {sid for _, prof, _ in loaded for sid in granted(prof)}
         for i, out in enumerate(spec["outputs"]):
