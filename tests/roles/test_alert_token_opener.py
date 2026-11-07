@@ -3,7 +3,8 @@
 lynis's `dpkg-verify`) follow no redirect and use no proxy from the environment.  They run on lab
 hosts and cannot import homelabnext, so each carries its own opener; this renders each template
 with test values, loads it as a module and calls its `send` against loopback servers.  Rendering
-is plain Jinja2 with the three filters the templates use (no playbook run), so it is fast."""
+is plain Jinja2 with Ansible's `to_json` and `bool` filters added (`int` is Jinja2's own), with no
+playbook run, so it is fast."""
 
 from __future__ import annotations
 
@@ -162,7 +163,14 @@ def test_the_alert_token_never_follows_a_redirect_to_another_origin(tmp_path, se
 @pytest.mark.parametrize("role", sorted(TEMPLATES))
 def test_the_alert_token_never_reaches_an_environment_proxy(tmp_path, servers, monkeypatch, role):
     target, proxy = servers(), servers()
-    for name in ("http_proxy", "HTTP_PROXY"):
+    for name in (
+        "http_proxy",
+        "HTTP_PROXY",
+        "https_proxy",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+    ):
         monkeypatch.setenv(name, proxy.url)
     mod = load(tmp_path, role, target.url)
     mod.send("t", "b")
