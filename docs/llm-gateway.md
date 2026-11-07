@@ -349,9 +349,11 @@ TLP case (ADR-0038, amendment).
 
 ## Running the suite against the lab's own gateway
 
-The lab's own gateway (ADR-0038) is the orchestrator's `cmd/gateway`, built from its private
-repository; building it is that repository's business (its `docs/gateway.md`). This repository
-gives it the conformance gateway spec, the test-only render and a target:
+The lab's own gateway (ADR-0038) is `orchestrator/cmd/gateway`, built in this repository's Go
+module (ADR-0039; [the lab's own gateway](gateway.md)). CI's `gateway-conformance` job builds it
+and runs this suite against it on every change, through `tools/gateway_conformance.sh`, which a
+workstation runs the same way ([the lab's own gateway](gateway.md#conformance-in-ci)). The run uses
+the conformance gateway spec, the test-only render and a target:
 
 - `compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml`, with its own test-only role
   table (`model_roles.json` beside it): `fast-classifier` and `embedder` on the fake,
@@ -368,9 +370,11 @@ gives it the conformance gateway spec, the test-only render and a target:
   `turn-records`. The plain client sends no `X-HNX-TLP`, so `model`, `embed_model` and
   `throttle_model` are roles that stay in the lab.
 
-On one machine (the fake, the gateway and the suite on loopback):
+By hand, on one machine (the fake, the gateway and the suite on loopback; the script does the
+same, generates the keys and holds every check to a pass):
 
 ```bash
+(cd orchestrator && go build -o ../build/bin/gateway ./cmd/gateway)
 spec=compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml
 lo=127.0.0.1  # no-raw-endpoint: allow the conformance mode serves loopback only
 hnx gen gateway render $spec "$scratch" --conformance --conformance-host $lo
@@ -380,7 +384,7 @@ python3 conformance/fakes/openai_server.py --port 8000 \
 # every *_env the rendered gateway.json names, each client key at least 32 bytes and distinct:
 # HNX_SECRET_LLM_GATEWAY_MASTER_KEY, ..._KEY_CONFORMANCE_THROTTLE, ..._KEY_CONFORMANCE_CLEAR,
 # ..._KEY_CONFORMANCE_RED, ..._KEY_TELEMETRY_READER, ..._CONFORMANCE_CLOUD_KEY (sent to the fake)
-llm-gateway -config "$scratch/gateway/gateway.json" -conformance -listen $lo:4100 \
+build/bin/gateway -config "$scratch/gateway/gateway.json" -conformance -listen $lo:4100 \
   -usage "$scratch/usage.jsonl" &
 export HNX_ENDPOINT_LLM_GATEWAY=http://$lo:4100
 hnx conform run inference --target compose/lab-in-a-box/targets/inference-own-gateway.yml

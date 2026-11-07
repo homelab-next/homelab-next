@@ -382,7 +382,8 @@
       "purpose": "Serve the deterministic fake OpenAI-compatible inference API.",
       "status": "active",
       "trigger": [
-        "compose:lab-in-a-box/inference"
+        "compose:lab-in-a-box/inference",
+        "script:gateway-conformance"
       ]
     },
     {
@@ -406,6 +407,24 @@
       "trigger": [
         "ci:ci/regression-tests",
         "make:fix-check"
+      ]
+    },
+    {
+      "exit": {
+        "0": "deps installed, or every check of the suite passed",
+        "1": "a setting is missing or wrong, a process did not come up, or a check did not pass"
+      },
+      "id": "gateway-conformance",
+      "inputs": "HNX_VENV, HNX_PYTHON, GATEWAY_BIN, WORK_DIR; the conformance gateway spec and the own-gateway target under compose/lab-in-a-box/",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "WORK_DIR (render, usage.jsonl, fake.log, gateway.log, conform-inference.json); a verdict line, also to $GITHUB_STEP_SUMMARY when set",
+      "owner": "maintainers",
+      "path": "tools/gateway_conformance.sh",
+      "purpose": "Run the inference conformance suite against the repository's own gateway binary and the fake inference server on loopback, holding every check to a pass.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/gateway-conformance"
       ]
     },
     {

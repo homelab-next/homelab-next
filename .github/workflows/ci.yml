@@ -808,21 +808,67 @@ jobs:
         run: |
           setpriv --no-new-privs -- go tool -modfile=tools/go.mod staticcheck ./...
           setpriv --no-new-privs -- go tool -modfile=tools/go.mod govulncheck ./...
+  # The gateway against its contract (ADR-0038 decision 7, as ADR-0039 amends it): build
+  # orchestrator/cmd/gateway, render the conformance gateway spec with --conformance, start the
+  # fake inference server and the gateway (-conformance) on loopback with generated keys, and run
+  # the inference suite on compose/lab-in-a-box/targets/inference-own-gateway.yml with every
+  # check held to a pass (none skipped or untested).  The steps are tools/gateway_conformance.sh,
+  # which runs the same way on a workstation; its venv is pip-by-hash plus the core extra under
+  # constraints/ci.txt, and refuses any installed distribution the constraints do not pin.  It
+  # runs on every change, unconditionally: the contract, the renderer, the spec and the binary all
+  # live here, so any of them can break it, and it costs a few minutes.  go-ok requires it.
+  gateway-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOFLAGS: -mod=readonly  # go.mod is an input: a build never rewrites it
+      GOTOOLCHAIN: local  # the go setup-go installed from go.mod, never a download
+      GOWORK: "off"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: orchestrator/go.mod
+          cache: false  # standard library only: nothing to cache (the go job caches the module's)
+      - id: python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: build orchestrator/cmd/gateway
+        working-directory: orchestrator
+        run: go build -o "$RUNNER_TEMP/gateway" ./cmd/gateway
+      - name: the suite's Python deps (venv, hash-pinned constraints, nothing unpinned)
+        env:
+          HNX_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: HNX_VENV="$RUNNER_TEMP/hnx-venv" tools/gateway_conformance.sh deps
+      - name: inference conformance against the gateway (fake upstream, loopback, every check a pass)
+        run: |
+          HNX_VENV="$RUNNER_TEMP/hnx-venv" GATEWAY_BIN="$RUNNER_TEMP/gateway" \
+            WORK_DIR="$RUNNER_TEMP/gateway-conformance" tools/gateway_conformance.sh run
+
   # One stable check name for branch protection, whatever the modules are called: the discovery
-  # passed, and every module's go job passed (or there was none to run).
+  # passed, every module's go job passed (or there was none to run), and the gateway passed its
+  # conformance suite (always run: the gateway is a module here, ADR-0039).
   go-ok:
-    needs: [go-modules, go]
+    needs: [go-modules, go, gateway-conformance]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: the Go modules were discovered and every one passed
+      - name: the Go modules were discovered and every one passed, and so did the gateway's conformance run
         env:
           MODULES: ${{ needs.go-modules.result }}
           GO: ${{ needs.go.result }}
+          GATEWAY: ${{ needs.gateway-conformance.result }}
         run: |
-          echo "go-modules: $MODULES, go: $GO"
-          [ "$MODULES" = success ] && { [ "$GO" = success ] || [ "$GO" = skipped ]; }
+          echo "go-modules: $MODULES, go: $GO, gateway-conformance: $GATEWAY"
+          [ "$MODULES" = success ] && { [ "$GO" = success ] || [ "$GO" = skipped ]; } \
+            && [ "$GATEWAY" = success ]
 
   # The lab-in-a-box: the real stack, brought up by the nightly's smoke, on every change that can
   # affect it.  lab-paths decides (tools/lab_paths.py: the stack's compose file, config, images and

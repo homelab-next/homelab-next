@@ -1,6 +1,6 @@
 ---
 summary: The lab's LLM gateway becomes its own Go binary that reads a product-neutral rendered config; LiteLLM stays deployed until that binary passes the gateway suite.
-summary_of: outline:sha256:1cd8cf01e525d760
+summary_of: outline:sha256:2ff377458fa4527f
 ---
 # ADR-0038: Make the LLM gateway our own, behind the same contract
 
@@ -9,11 +9,14 @@ summary_of: outline:sha256:1cd8cf01e525d760
 - **Amended:** 2026-11-07, after the gateway's security review: four deliberate departures from
   the contract (amendments R15 to R18: in-flight caps, token and cost reservations, aggregated
   refusal records, grouped writes of the usage file), the embeddings checks' own role, and how the
-  suite observes a skipped fallback (see the amendment at the end of Decision)
+  suite observes a skipped fallback (see the amendment at the end of Decision); and 2026-11-07 by
+  ADR-0039: the gateway is built in this repository's Go module `orchestrator/`, and decision 7's
+  acceptance run is an in-repository CI job with no cross-repository pin (see the second amendment)
 - **Related:** ADR-0005, ADR-0007, ADR-0022, ADR-0033, [LLM gateway](../llm-gateway.md),
   [orchestration telemetry](../orchestration-telemetry.md), `conformance/protocols/inference.py`
 - **Depends-on:** ADR-0033
 - **Amends:** ADR-0022, ADR-0033
+- **Amended-by:** ADR-0039
 
 ## Context
 
@@ -227,6 +230,33 @@ Two consequences for decision 7's acceptance run:
 - **The embeddings checks use their own role** (`embed_model`, decision 7 above), and the
   lab-in-a-box role table gains an `embedder` role served by the fake inference server, so the
   LiteLLM target checks embeddings on an embedding role too.
+
+### Amendment (2026-11-07, ADR-0039): the gateway is built here, and so is its acceptance run
+
+ADR-0039 makes the orchestrator a component of this repository, as the Go module `orchestrator/`
+(module path `github.com/homelab-next/homelab-next/orchestrator`). It changes this ADR in three
+places and leaves every rule of the contract as it is:
+
+- **Decision 2.** "The orchestrator's Go module" is this repository's `orchestrator/`: the binary is
+  `orchestrator/cmd/gateway` and its package `orchestrator/internal/gateway`, still a separate
+  command, process and unit from the controller, for the same two reasons. The departures R15 to
+  R18 are documented with it in [the lab's own gateway](../gateway.md), no longer in another
+  repository.
+- **Decision 5.** The Go package's test reads this repository's
+  `conformance/fixtures/tlp_admit_vectors.json` in place; there is no copy to keep equal.
+- **Decision 7, acceptance.** The orchestrator's CI no longer checks this repository out at a pinned
+  commit: CI's own `gateway-conformance` job (`tools/gateway_conformance.sh`) builds the binary,
+  renders the conformance spec with `--conformance`, starts the fake inference server and the
+  gateway on loopback with generated keys, and runs the `inference` suite on
+  `compose/lab-in-a-box/targets/inference-own-gateway.yml` with `--strict`, failing on any check
+  that did not pass. It runs on every pull request and every push to `main`, and `go-ok` requires
+  it. The cross-repository pin (`ci/homelab-next.ref`) goes away. The condition for the cutover is
+  that run green on this repository's `main` and the binary having served the lab beside LiteLLM;
+  the remaining cutover rules stand.
+
+The alternative this ADR rejected, "write the gateway in this repository", is in effect what
+ADR-0039 decides, for the reason that rejection did not weigh: the contract and its implementation
+changing in two repositories at once (ADR-0039, Context).
 
 ## Consequences
 

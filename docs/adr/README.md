@@ -19,7 +19,8 @@ test refuses a one-sided pair, an unknown id, and an accepted ADR that depends o
 accepted (the status values themselves are the operator's).
 
 A number held by planned work is reserved, and later ADRs skip it: **0026** (the orchestrator as a
-component of this repository; ADR-0027 relies on it for the `agent-runtime` slot) has no file yet.
+component of this repository: the agent-runner contract, which ADR-0039 decision 5 assigns to it;
+ADR-0027 relies on it for the `agent-runtime` slot) has no file yet.
 `RESERVED` in `tools/tests/test_adr_log.py` lists the reserved numbers, and the test refuses an
 index that does not name each one.
 
@@ -62,3 +63,4 @@ index that does not name each one.
 | [0036](0036-behavioural-novelty-baselines-are-deterministic-and-advisory.md) | behavioural-novelty-baselines-are-deterministic-and-advisory | <!-- hnx:gen:summary:0036-behavioural-novelty-baselines-are-deterministic-and-advisory.md -->A deterministic analyzer learns per-entity first-seen baselines from the lake over a decaying window; its findings are heuristic and never escalate alone.<!-- /hnx:gen --> |
 | [0037](0037-agent-memory-is-sourced-historied-and-retractable.md) | agent-memory-is-sourced-historied-and-retractable | <!-- hnx:gen:summary:0037-agent-memory-is-sourced-historied-and-retractable.md -->Every agent memory entry records its sources, TLP and revision history; an operator retracts a bad source and everything built on it.<!-- /hnx:gen --> |
 | [0038](0038-the-llm-gateway-is-our-own-behind-the-same-contract.md) | the-llm-gateway-is-our-own-behind-the-same-contract | <!-- hnx:gen:summary:0038-the-llm-gateway-is-our-own-behind-the-same-contract.md -->The lab's LLM gateway becomes its own Go binary that reads a product-neutral rendered config; LiteLLM stays deployed until that binary passes the gateway suite.<!-- /hnx:gen --> |
+| [0039](0039-make-the-orchestrator-and-its-gateway-part-of-this-repository.md) | make-the-orchestrator-and-its-gateway-part-of-this-repository | <!-- hnx:gen:summary:0039-make-the-orchestrator-and-its-gateway-part-of-this-repository.md -->The orchestrator joins this repository as the Go module orchestrator/, gateway first; lab data goes to the overlay, MCP servers become modules, in stages.<!-- /hnx:gen --> |
