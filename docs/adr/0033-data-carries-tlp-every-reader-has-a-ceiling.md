@@ -11,9 +11,11 @@ summary_of: outline:sha256:91c8e47d3eaaa755
 - **Amended:** 2026-11-01 (decision 11: where the request rule is enforced; see the amendment
   under it); 2026-11-04 by ADR-0036, a proposed amendment until ADR-0036 is accepted (decision 6:
   an `analyzer:` reader may append to the tables its `writes` names, at its own ceiling; see
-  ADR-0036 decision 4)
+  ADR-0036 decision 4); 2026-11-07 by ADR-0038, a proposed amendment until ADR-0038 is accepted
+  (decision 11: with the lab's own gateway the request rule is also enforced per request at the
+  gateway, from an `X-HNX-TLP` header; see ADR-0038 decision 5)
 - **Amends:** ADR-0013
-- **Amended-by:** ADR-0036
+- **Amended-by:** ADR-0036, ADR-0038
 - **Related:** ADR-0001 (additive schemas); ADR-0011 and ADR-0021, which classify repositories
   and files and are unchanged by this ADR (a file in the public repository is `clear` by
   ADR-0011); ADR-0022 (LLM gateway, role locality); ADR-0024 and ADR-0030 (the ceiling policy,

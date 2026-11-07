@@ -241,6 +241,9 @@ no state between calls, and is not tied to any product. It reads the endpoint fr
 come from the role table, not from the gateway itself. The lab ships one target file,
 `targets/inference-gateway.yml` (LiteLLM). Switching gateways means a renderer for the new
 product, a target file, and passing this suite.
+[ADR-0038](adr/0038-the-llm-gateway-is-our-own-behind-the-same-contract.md) (proposed) takes that
+exit with the lab's own gateway, which reads a product-neutral `gateway/gateway.json`; LiteLLM
+stays deployed until that gateway passes this suite.
 
 A target that also declares `tlp-ceiling` (`TlpCeilingGateway`) adds
 `gateway-refuses-role-above-key-ceiling`: on a key whose sending TLP ceiling is above a cloud
