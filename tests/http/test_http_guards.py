@@ -206,7 +206,7 @@ def test_model_transport_follows_no_redirect_and_never_replays_the_key(servers):
     """Regression: ``registry.models.urllib_transport`` used urllib's stock redirect handler
     while :func:`authorized` added ``Authorization: Bearer <key>``, so a cross-origin redirect
     handed the key to the second server, and a POST answered 302 was resent there as a GET."""
-    from homelabnext.registry.models import authorized
+    from homelabnext.registry.models import ModelError, authorized
 
     evil = servers({"/v1/models": (200, {}, b'{"data": []}'), "/c": (200, {}, b"{}")})
     home = servers(
@@ -217,12 +217,30 @@ def test_model_transport_follows_no_redirect_and_never_replays_the_key(servers):
         }
     )
     send = authorized("s3cret")
-    status, _ = send("GET", home.url + "/v1/models", None, 5)
-    assert status == 302
+    outcomes = []
+    for method, path, body in (("GET", "/v1/models", None), ("POST", "/w", {"x": 1})):
+        try:
+            outcomes.append(send(method, home.url + path, body, 5)[0])
+        except ModelError as exc:
+            outcomes.append((exc.kind, exc.status))
+    assert outcomes == [("http", 302), ("http", 302)]
     assert evil.seen == []
-    status, _ = send("POST", home.url + "/w", {"x": 1}, 5)
-    assert status == 302
     assert [path for path, _ in home.seen] == ["/v1/models", "/w"]
+
+
+def test_model_transport_reports_a_3xx_as_http_whatever_its_body(servers):
+    """Regression: a 3xx (not followed) went to the JSON parser, so the HTML page a server sends
+    with a 302 became ``ModelError("malformed")`` instead of the ``http`` error it is."""
+    from homelabnext.registry.models import ModelError, urllib_transport
+
+    html = b"<html><body>Moved</body></html>"
+    home = servers({"/v1/chat/completions": (302, {"Location": "/login"}, html)})
+    raised = None
+    try:
+        urllib_transport("POST", home.url + "/v1/chat/completions", {"model": "m"}, 5)
+    except ModelError as exc:
+        raised = exc
+    assert raised is not None and (raised.kind, raised.status) == ("http", 302)
 
 
 def test_the_no_redirect_opener_never_hands_a_credential_to_an_environment_proxy(

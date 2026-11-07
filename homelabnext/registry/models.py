@@ -441,7 +441,8 @@ def urllib_transport(
     """One JSON request through :func:`homelabnext._http.credential_opener`: it may carry the
     key :func:`authorized` adds, so no redirect is followed (a 3xx is the answer: a cross-origin
     one would get the key, and urllib resends a POST answered 301/302/303 as a GET) and no proxy
-    from the environment is used (it would get the key, in clear for http)."""
+    from the environment is used (it would get the key, in clear for http).  A 3xx is
+    ``ModelError("http")`` whatever its body."""
     data = None if body is None else json.dumps(body).encode("utf-8")
     # the caller's headers go after Content-Type, so a caller may override it
     req = urllib.request.Request(
@@ -463,6 +464,8 @@ def urllib_transport(
         raise ModelError("unreachable", str(exc.reason)) from exc
     except OSError as exc:
         raise ModelError("unreachable", str(exc)) from exc
+    if 300 <= status < 400:  # no redirect is followed; a 3xx's body (often HTML) is not the answer
+        raise ModelError("http", f"HTTP {status} (redirect not followed)", status)
     try:
         return status, (json.loads(raw.decode("utf-8")) if raw else None)
     except ValueError as exc:
