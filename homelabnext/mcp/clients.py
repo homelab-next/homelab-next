@@ -880,7 +880,9 @@ def _spec_problems(spec: Any) -> list[str]:
     if extra:
         out.append(f"unknown key(s) {sorted(extra)}")
     if client_name(spec.get("client")) not in CLIENTS:
-        out.append(f"client must be one of {list(CLIENTS)} (or an old name: {sorted(CLIENT_ALIASES)})")
+        out.append(
+            f"client must be one of {list(CLIENTS)} (or an old name: {sorted(CLIENT_ALIASES)})"
+        )
     if not isinstance(spec.get("profiles"), list) or not spec.get("profiles"):
         out.append("profiles must list at least one profile")
     outputs = spec.get("outputs")

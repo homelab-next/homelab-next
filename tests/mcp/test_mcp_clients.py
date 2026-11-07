@@ -221,8 +221,10 @@ def test_orchestrator_catalog_and_grants_are_its_format():
         "allowed_env": ["NOTES_MODE", "NOTES_WRITABLE_PREFIX"],
         # every grant-settable key pinned: an enum to its values, any other parameter to the
         # values the rendered instances give it (the controller pins what it cannot classify)
-        "allowed_values": {"NOTES_MODE": ["read", "write"],
-                           "NOTES_WRITABLE_PREFIX": ["agents/collector/inbox/"]},
+        "allowed_values": {
+            "NOTES_MODE": ["read", "write"],
+            "NOTES_WRITABLE_PREFIX": ["agents/collector/inbox/"],
+        },
         "args": ["--no-config", "--from", "example-notes-mcp==1.2.0", "notes-mcp"],
         "command": "uvx",
         "env": {"NOTES_ROOT": "notes/", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},

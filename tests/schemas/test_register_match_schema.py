@@ -13,7 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 REG = sc.build_registry(ROOT)
 
 
-@pytest.mark.parametrize(("name", "old", "new"), [("lesson", "2.1", "2.2"), ("runbook", "2.2", "2.3")])
+@pytest.mark.parametrize(
+    ("name", "old", "new"), [("lesson", "2.1", "2.2"), ("runbook", "2.2", "2.3")]
+)
 def test_match_is_additive_and_frozen(name, old, new):
     current = json.loads((ROOT / f"schemas/registers/{name}.schema.json").read_text())
     assert current["$id"].endswith(f"/registers/{name}/{new}")

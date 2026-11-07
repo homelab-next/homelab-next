@@ -34,7 +34,10 @@ def test_the_bounds_are_the_schemas(name):
     m = json.loads((REPO / "schemas" / "registers" / f"{name}.schema.json").read_text())
     m = m["properties"]["match"]["properties"]
     assert m["keywords"]["maxItems"] == m["paths"]["maxItems"] == MATCH_MAX_ITEMS
-    assert (m["keywords"]["items"]["minLength"], m["keywords"]["items"]["maxLength"]) == MATCH_KEYWORD_LEN
+    assert (
+        m["keywords"]["items"]["minLength"],
+        m["keywords"]["items"]["maxLength"],
+    ) == MATCH_KEYWORD_LEN
     assert m["paths"]["items"]["maxLength"] == MATCH_PATH_LEN
 
 
@@ -82,7 +85,9 @@ def test_a_match_outside_its_bounds_is_refused(kind, match):
 @pytest.mark.parametrize("kind", ["lessons", "runbooks"])
 def test_a_bounded_match_is_accepted(kind):
     validate = validate_lessons if kind == "lessons" else validate_runbooks
-    validate(_with_match(kind, {"keywords": ["tls handshake"], "paths": ["roles/proxy/", ".github/"]}))
+    validate(
+        _with_match(kind, {"keywords": ["tls handshake"], "paths": ["roles/proxy/", ".github/"]})
+    )
 
 
 def test_the_example_registers_declare_no_match():
