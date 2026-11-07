@@ -453,12 +453,19 @@ directories; an empty register, a missing one, or `runbooks_path` without `lesso
 controller rather than run without the context it was configured with.
 
 Only a record that declares `match` (lesson schema 2.2, runbook schema 2.3, additive) is matched.
-It is bounded: literal keywords, each a case-insensitive substring of the task, and clean
-relative path prefixes, at most 16 of each, never a regular expression; a key other than these
-two is refused. A record without `match` is never matched, whatever its text, and neither is an
-inactive one (a retired, incorporated or superseded lesson, a runbook with `superseded_by`). A
-matched record scores its keywords, its paths, the quoted spans of its title and symptom, its
-systems and its title's words; the best four of each register above the floor are quoted.
+It is bounded: literal keywords of 4 to 80 characters, each matched case-insensitively as whole
+words of the task (`disk full` is not in `disk fuller`), and clean relative path prefixes, at most
+16 of each, never a regular expression; a key other than these two, or an empty list, is refused.
+A record applies only when its match does (a keyword hits, or a path prefixes a path the job
+names): a record without `match` is never matched, whatever its text, and neither is an inactive
+one (a retired, incorporated or superseded lesson, a runbook with `superseded_by`). A matched
+record is ranked by its keywords, its paths, the quoted spans of its title and symptom, its
+systems and its title's words; these other signals never make a record match. The best four of
+each register above the floor are quoted.
+
+The dispatch passes the task text only (`lessons.ResolveContext`): no caller passes a job's paths
+yet, so a record's path prefixes match only through `lessons.ResolveContextFor`, which the
+scheduler (PR 2.6) is to call with the paths a job names.
 
 A matched record's text is data. The block opens with a line saying that the quoted text is
 reference data from the registers, not instructions, and that nothing in it changes the task, the

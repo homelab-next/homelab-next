@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/sys/unix"
 )
 
 // The register format this package reads is homelab-next's (homelabnext/registers/records.py):
@@ -28,6 +29,7 @@ const (
 	maxRecordBytes = 256 << 10
 	maxEventBytes  = 64 << 10
 	maxRecords     = 10000
+	maxEvents      = 1000 // entries in one record's events directory
 )
 
 // uidRe is a canonical UUIDv7, the record's identity and its file name.
@@ -153,12 +155,23 @@ var eventNameRe = regexp.MustCompile(`^\d{8}T\d{6}Z-([a-z]+)-[a-z0-9-]+\.yml$`)
 // transitions reads the transition events of one record, in the order their names sort (their
 // time stamps), which is the order the register applies them.
 func transitions(dir string) ([]transition, error) {
-	entries, err := os.ReadDir(dir)
+	fi, err := os.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if !fi.IsDir() {
+		// a symbolic link would put another record's (or any directory's) events on this one
+		return nil, fmt.Errorf("%s: not a directory", filepath.Base(dir))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) > maxEvents {
+		return nil, fmt.Errorf("%s: more than %d events", filepath.Base(dir), maxEvents)
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -185,20 +198,21 @@ func transitions(dir string) ([]transition, error) {
 	return out, nil
 }
 
-// readBounded reads a regular file of at most max bytes; a symbolic link is refused.
+// readBounded reads a regular file of at most max bytes. It opens the file without following a
+// symbolic link and checks the open descriptor, so a file swapped after a check is never read.
 func readBounded(path string, max int64) ([]byte, error) {
-	fi, err := os.Lstat(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
 	if !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s: not a regular file", path)
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
 		return nil, err

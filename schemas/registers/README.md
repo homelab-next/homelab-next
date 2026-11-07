@@ -21,8 +21,8 @@ malformed one too.
 
 `match` (lesson 2.2, runbook 2.3; ADR-0026's amendment) is what the orchestrator matches a job's
 task against before it quotes the record into the job's prompt (`orchestrator/internal/lessons`):
-a bounded matcher, never a regular expression. `keywords` are literal, case-insensitive substrings
-of the task (3 to 80 characters, no control or format character); `paths` are clean relative
+a bounded matcher, never a regular expression. `keywords` are literal, matched case-insensitively
+as whole words of the task (4 to 80 characters, no control or format character); `paths` are clean relative
 prefixes of a path the job names (at most 200 characters); at most 16 of each, at least one in
 all. A record without `match` is never matched, and an inactive one never either; a matched
 record's text reaches the prompt as quoted data, never as instructions. The record validation

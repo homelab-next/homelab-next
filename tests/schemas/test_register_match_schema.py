@@ -33,6 +33,7 @@ def test_match_is_additive_and_frozen(name, old, new):
         ({}, False),
         ({"regex": "stale.*"}, False),
         ({"keywords": ["ab"]}, False),
+        ({"keywords": ["abc"]}, False),
         ({"keywords": ["stale\ncache"]}, False),
         ({"keywords": ["a" * 81]}, False),
         ({"paths": ["/abs/"]}, False),
