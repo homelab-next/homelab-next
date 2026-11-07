@@ -248,12 +248,16 @@ def test_the_no_redirect_opener_never_hands_a_credential_to_an_environment_proxy
 ):
     """Regression: ``no_redirect_urlopen`` (the default opener of the events forwarder and the
     notify sender) used ``build_opener``'s default ``ProxyHandler``, so ``HTTP_PROXY`` in the
-    environment received the request and its ``Authorization`` header (in clear for http)."""
+    environment received the request and its ``Authorization`` header (in clear for http).
+    The model client's transport (``credential_opener``) is held to the same rule."""
     from homelabnext._http import no_redirect_urlopen
     from homelabnext.events.forwarder import HttpForwarder
+    from homelabnext.registry.models import authorized
 
     proxy = servers({})
-    home = servers({"/e": (202, {}, b"{}"), "/ops": (200, {}, b"{}")})
+    home = servers(
+        {"/e": (202, {}, b"{}"), "/ops": (200, {}, b"{}"), "/v1/models": (200, {}, b"{}")}
+    )
     for name in ("no_proxy", "NO_PROXY", "REQUEST_METHOD"):
         monkeypatch.delenv(name, raising=False)
     for name in ("http_proxy", "HTTP_PROXY"):
@@ -266,6 +270,7 @@ def test_the_no_redirect_opener_never_hands_a_credential_to_an_environment_proxy
         lambda: no_redirect_urlopen(
             urllib.request.Request(home.url + "/ops", data=b"b", headers=auth), timeout=5
         ).close(),
+        lambda: authorized("s3cret")("GET", home.url + "/v1/models", None, 5),
     )
     failures = []
     for send in sends:
@@ -275,7 +280,7 @@ def test_the_no_redirect_opener_never_hands_a_credential_to_an_environment_proxy
             failures.append(exc)
     assert proxy.seen == []
     assert failures == []
-    assert home.seen == [("/e", "Bearer s3cret"), ("/ops", "Bearer s3cret")]
+    assert home.seen == [(p, "Bearer s3cret") for p in ("/e", "/ops", "/v1/models")]
 
 
 def test_safe_urlopen_never_hands_a_credential_to_an_environment_proxy(servers, monkeypatch):
