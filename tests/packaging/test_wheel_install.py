@@ -86,7 +86,9 @@ def test_packaged_data_equals_the_source_of_truth(wheel_dir, tmp_path):
         source = {
             n[len(tree) + 1 :]
             for n in tracked
-            if n.startswith(tree + "/") and not n.startswith(NOT_PACKAGED)
+            if n.startswith(tree + "/")
+            and not n.startswith(NOT_PACKAGED)
+            and not any(part.startswith(".") for part in n.split("/"))  # setup.py _dotted
         }
         assert _tree_files(packaged) == source, tree
         _match, mismatch, errors = filecmp.cmpfiles(
