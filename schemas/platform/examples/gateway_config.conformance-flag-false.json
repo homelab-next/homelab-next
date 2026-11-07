@@ -1,0 +1,132 @@
+{
+  "admin_key_env": "HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
+  "conformance_only": false,
+  "keys": [
+    {
+      "alias": "cloud-tool",
+      "data_tier": "cloud-allowed",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_CLOUD_TOOL",
+      "limits": {
+        "max_requests": 10,
+        "max_tokens": null,
+        "window_s": 60
+      },
+      "owner": "cloud-tool",
+      "roles": [
+        "cloud-reasoner"
+      ],
+      "tlp_ceiling": "clear"
+    },
+    {
+      "alias": "local-agent",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_LOCAL_AGENT",
+      "limits": null,
+      "owner": "local-agent",
+      "roles": [
+        "agent-local",
+        "small-local"
+      ],
+      "tlp_ceiling": "red"
+    }
+  ],
+  "name": "local-and-cloud",
+  "roles": {
+    "agent-local": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "infer-a",
+          "base_url": "http://infer-a.svc.example.internal:8000",
+          "id": "agent-local-1",
+          "locality": "local",
+          "model": "large-model",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [
+        "small-local"
+      ],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    },
+    "cloud-reasoner": {
+      "cost_per_1k_tokens": 0.01,
+      "deployments": [
+        {
+          "api_key_env": "HNX_SECRET_LLM_GATEWAY_UPSTREAM_CLOUD",
+          "backend": "cloud",
+          "base_url": "https://api.anthropic.com",
+          "id": "cloud-reasoner-1",
+          "locality": "cloud",
+          "model": "example-cloud-1",
+          "protocol": "anthropic"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "chat",
+      "leaves_lab": true,
+      "limits": {
+        "max_cost": 2.5,
+        "max_requests": 30,
+        "max_tokens": null,
+        "window_s": 60
+      },
+      "max_context_tokens": 200000,
+      "tlp_ceiling": "clear"
+    },
+    "embedder": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "infer-b",
+          "base_url": "http://infer-b.svc.example.internal:8000",
+          "id": "embedder-1",
+          "locality": "local",
+          "model": "example-embed",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "embedding",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    },
+    "small-local": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "infer-b",
+          "base_url": "http://infer-b.svc.example.internal:8000",
+          "id": "small-local-1",
+          "locality": "local",
+          "model": "small-model",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": {
+        "max_cost": null,
+        "max_requests": 120,
+        "max_tokens": null,
+        "window_s": 3600
+      },
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    }
+  },
+  "telemetry_reader": {
+    "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER"
+  },
+  "version": "1.0"
+}

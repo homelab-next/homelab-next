@@ -88,6 +88,7 @@ __all__ = [
     "main",
     "render",
     "render_file",
+    "render_neutral",
 ]
 
 SECRET_RE = re.compile(r"^secret:[a-z0-9][a-z0-9/_.-]*\Z")
@@ -129,6 +130,18 @@ CLOUD_API_DOMAINS = (
     "perplexity.ai",
 )
 HEADER = f"# {MARKER} llm_gateway from {{spec}} - do not edit; sha256:{{digest}}\n"
+#: the product-neutral gateway config (ADR-0038 decision 1; schema platform/gateway_config, a
+#: draft) and the marker beside it: JSON carries no comment and the contract allows no extra key,
+#: so the generated-by line, the render digest and the file's own sha256 live in the sibling
+NEUTRAL = "gateway/gateway.json"
+NEUTRAL_MARKER = "gateway/.hnx-generated"
+NEUTRAL_VERSION = "1.0"
+NEUTRAL_SCHEMA = ("platform", "gateway_config.schema.json")
+#: the API base of each cloud provider the neutral config can express, and its wire protocol
+NEUTRAL_CLOUD = {
+    "openai": "https://api.openai.com",
+    "anthropic": "https://api.anthropic.com",
+}
 
 
 class GatewaySpecError(ProblemsError):
@@ -190,6 +203,8 @@ class Spec:
     #: role -> its TLP ceiling as the gateway holds it (:func:`role_ceilings`); a role absent here
     #: is read as clear (:func:`ceiling_of`)
     ceilings: dict[str, tlp.Label] = field(default_factory=dict)
+    #: the role table's roles as read (``leaves_lab`` of a role: :func:`leaves_lab_roles`)
+    raw_roles: dict[str, Any] = field(default_factory=dict)
 
     @property
     def reader_user(self) -> str:
@@ -607,6 +622,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         registry_hosts=frozenset(registry_hosts),
         controller=controller,
         telemetry_reader=reader,
+        raw_roles=dict(raw_roles) if isinstance(raw_roles, Mapping) else {},
     )
     if not problems:
         spec.ceilings = role_ceilings(spec, raw_roles)
@@ -986,17 +1002,167 @@ def _allowed(spec: Spec, key: Key) -> set[str]:
     return {r for role in key.roles for r in chain(spec.table, role)}
 
 
+def leaves_lab_roles(spec: Spec) -> set[str]:
+    """The roles a prompt can leave the lab through (bare names): the role table's
+    :func:`homelabnext.modules.rules.cloud_roles`, the same reading the TLP rules use."""
+    return {r.removeprefix("mdl:") for r in module_rules.cloud_roles(dict(spec.raw_roles))}
+
+
+def neutral_refusals(spec: Spec) -> list[str]:
+    """What in ``spec`` the gateway config contract (ADR-0038) cannot express; empty when
+    :func:`render_neutral` can render it.  The LiteLLM files do not depend on this."""
+    problems: list[str] = []
+    for rname, role in sorted(spec.table.roles.items()):
+        for i, b in enumerate(role.bindings):
+            be = spec.backends[b.backend]
+            where = f"mdl:{rname} bindings[{i}] (svc:{be.name})"
+            if be.locality == "cloud" and be.provider not in NEUTRAL_CLOUD:
+                problems.append(
+                    f"{where}: cloud provider {be.provider} has no protocol in the gateway "
+                    f"config (only {', '.join(sorted(NEUTRAL_CLOUD))}; ADR-0038 decision 3)"
+                )
+            elif role.kind == "embedding" and _protocol(be) == "anthropic":
+                problems.append(
+                    f"{where}: an embedding role on an anthropic deployment (the Messages API "
+                    "has no embeddings)"
+                )
+        lim = role.limits
+        if lim.get("max_cost") and lim.get("cost_per_1k_tokens") is None:
+            problems.append(
+                f"mdl:{rname}: limits.max_cost without limits.cost_per_1k_tokens: the gateway "
+                "counts cost from tokens and would have nothing to count"
+            )
+    return problems
+
+
+def _protocol(be: Backend) -> str:
+    """A deployment's wire protocol: a local backend is OpenAI-compatible, a cloud one speaks its
+    provider's (only the providers of :data:`NEUTRAL_CLOUD`)."""
+    return be.provider if be.locality == "cloud" else "openai"
+
+
+def _count(value: Any) -> int | None:
+    return int(value) if value else None
+
+
+def render_neutral(spec: Spec) -> str:
+    """``gateway/gateway.json``: the product-neutral gateway config of ADR-0038 (schema
+    ``platform/gateway_config``), from the same spec :func:`render_litellm` renders.
+
+    Each role's TLP ceiling is :func:`role_ceilings`' and ``leaves_lab`` is
+    :func:`leaves_lab_roles`' (what ``model_tlp.admit`` reads); deployments are the bindings in
+    order; ``fallbacks`` is :func:`_fallback_targets` and a key's ``roles`` :func:`_allowed`, as
+    LiteLLM gets them; limits are the declared ones, whole (one budget per role, never split per
+    deployment); every credential is the environment name its ``secret:`` reference maps to.
+    Raises :class:`GatewaySpecError` with :func:`neutral_refusals` when the contract cannot
+    express the spec."""
+    refused = neutral_refusals(spec)
+    if refused:
+        raise GatewaySpecError("the gateway config contract cannot express this spec", refused)
+    leaving = leaves_lab_roles(spec)
+    roles: dict[str, Any] = {}
+    for rname, role in sorted(spec.table.roles.items()):
+        deployments = []
+        for i, b in enumerate(role.bindings):
+            be = spec.backends[b.backend]
+            deployments.append(
+                {
+                    "id": f"{rname}-{i + 1}",
+                    "backend": be.name,
+                    "locality": be.locality,
+                    "protocol": _protocol(be),
+                    "base_url": NEUTRAL_CLOUD[be.provider]
+                    if be.locality == "cloud"
+                    else be.base_url,
+                    "model": b.model_id,
+                    "api_key_env": secret_env_name(be.api_key) if be.api_key else None,
+                }
+            )
+        lim = role.limits
+        roles[rname] = {
+            "kind": role.kind,
+            "max_context_tokens": role.max_context_tokens or None,
+            "tlp_ceiling": str(spec.ceilings.get(rname, module_rules.CLOUD_CEILING)),
+            "leaves_lab": rname in leaving,
+            "deployments": deployments,
+            "fallbacks": _fallback_targets(spec, rname),
+            "limits": {
+                "window_s": int(lim["window_s"]),
+                "max_requests": _count(lim.get("max_requests")),
+                "max_tokens": _count(lim.get("max_tokens")),
+                "max_cost": lim.get("max_cost") or None,
+            }
+            if lim
+            else None,
+            "cost_per_1k_tokens": lim.get("cost_per_1k_tokens"),
+        }
+    keys = [
+        {
+            "alias": k.name,
+            "key_env": secret_env_name(k.secret),
+            "owner": k.owner or k.name,
+            "data_tier": k.data_tier,
+            "tlp_ceiling": str(k.tlp_ceiling),
+            "roles": sorted(_allowed(spec, k)),
+            "limits": {
+                "window_s": k.window_s,
+                "max_requests": k.max_requests,
+                "max_tokens": k.max_tokens,
+            }
+            if k.window_s
+            else None,
+        }
+        for k in sorted(spec.keys, key=lambda k: k.name)
+    ]
+    doc = {
+        "version": NEUTRAL_VERSION,
+        "name": spec.name,
+        "admin_key_env": secret_env_name(spec.master_key),
+        "roles": roles,
+        "keys": keys,
+        "telemetry_reader": {"key_env": secret_env_name(spec.telemetry_reader)}
+        if spec.telemetry_reader is not None
+        else None,
+    }
+    return json.dumps(doc, indent=2, sort_keys=True) + "\n"
+
+
+def _neutral_marker(spec: Spec, digest: str, neutral: str) -> str:
+    """The generated-by marker beside ``gateway.json`` (which cannot carry one): the same header
+    line as ``litellm/config.yaml`` (same digest), then the file's own sha256."""
+    file_digest = hashlib.sha256(neutral.encode()).hexdigest()
+    return (
+        HEADER.format(spec=Path(spec.source).name, digest=digest)
+        + "# gateway.json is the ADR-0038 gateway config (schema platform/gateway_config); JSON\n"
+        + "# carries no comment, so this file marks it generated and holds its sha256\n"
+        + f"gateway.json sha256:{file_digest}\n"
+    )
+
+
 def render(spec: Spec) -> dict[str, str]:
-    """``{relative path: text}`` for the gateway; deterministic for a given spec."""
+    """``{relative path: text}`` for the gateway; deterministic for a given spec.
+
+    ``litellm/`` is always rendered.  ``gateway/gateway.json`` (and its marker) is rendered for
+    every spec the gateway config contract can express; for one it cannot, the LiteLLM files are
+    still written and ``litellm/config.yaml`` carries a ``# note:`` line per reason
+    (:func:`neutral_refusals`), so a LiteLLM-only spec keeps working until the cutover."""
     config, keys = render_litellm(spec)
+    refused = neutral_refusals(spec)
+    if refused:  # after the SPDX line, with the proxy config's other notes
+        notes = "".join(f"# note: {NEUTRAL} is not rendered: {p}\n" for p in refused)
+        config = config.replace("\n", "\n" + notes, 1)
     files = {
         "litellm/config.yaml": config,
         "litellm/keys.json": keys,
     }
+    if not refused:
+        files[NEUTRAL] = render_neutral(spec)
     digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()[:16]
     files["litellm/config.yaml"] = (
         HEADER.format(spec=Path(spec.source).name, digest=digest) + config
     )
+    if NEUTRAL in files:
+        files[NEUTRAL_MARKER] = _neutral_marker(spec, digest, files[NEUTRAL])
     problems = audit(files, spec)
     if problems:  # the renderer itself must never produce what the audit refuses
         raise GatewaySpecError("rendered gateway config fails its own audit", problems)
@@ -1044,7 +1210,202 @@ def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
         if lt is not None:
             found += _audit_key_ceilings(kj, lt, hosts, spec)
         problems += [f"litellm/keys.json: {p}" for p in found]
+    nj = files.get(NEUTRAL)
+    if nj is not None:
+        problems += [f"{NEUTRAL}: {p}" for p in _audit_neutral(nj, hosts, strict, spec)]
+        marker = files.get(NEUTRAL_MARKER)
+        if marker is not None:
+            problems += [f"{NEUTRAL_MARKER}: {p}" for p in _audit_neutral_marker(marker, nj)]
     return problems
+
+
+def _schema_problems(doc: Any) -> list[str]:
+    """``doc`` against ``platform/gateway_config`` (fail closed: no validator is a problem)."""
+    try:
+        from homelabnext.schema_registry import validator
+    except ImportError:  # pragma: no cover - the schema extra is part of every test install
+        return ["cannot validate: jsonschema is not installed (the schema extra)"]
+    try:
+        v = validator(*NEUTRAL_SCHEMA)
+    except (ImportError, OSError, ValueError) as exc:
+        return [f"cannot validate against platform/gateway_config: {exc}"]
+    return [
+        f"schema: {'/'.join(map(str, e.absolute_path)) or '(top)'}: {e.message}"
+        for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
+    ]
+
+
+def _neutral_local(dep: Any, hosts: set[str]) -> bool:
+    """A neutral deployment is local only when it says so, speaks OpenAI on a declared local
+    host and carries no path: anything else counts as cloud, whatever its ``locality`` says."""
+    if not isinstance(dep, Mapping) or dep.get("locality") != "local":
+        return False
+    return dep.get("protocol") == "openai" and _host(dep.get("base_url")) in hosts
+
+
+def _audit_neutral(text: str, hosts: set[str], strict: Mapping[str, str], spec: Spec) -> list[str]:
+    """Check a rendered (or on-disk) ``gateway/gateway.json``: schema-valid; no local-only or
+    agent role (``strict``) has a cloud deployment or a fallback that has one (locality read from
+    the file as :func:`_neutral_local` reads it); every role's ``tlp_ceiling`` and
+    ``leaves_lab`` are the spec's (a role the file sends to the cloud is held to the cloud
+    ceiling); every key is one the spec declares, with its data tier, sending ceiling and no
+    role beyond :func:`_allowed`, and none reaches a role whose ceiling is below its own; key
+    aliases sorted and unique; no ``conformance_only`` (R14: a test-only render is never a lab's);
+    no ``local-only`` key may call a role with a cloud deployment or
+    ``leaves_lab`` (amendment R13, which the gateway's loader also refuses); a cloud deployment's
+    ``base_url`` is its provider's API; a missing or unknown ceiling reads as ``red`` (R1); no
+    credential environment variable serves two purposes."""
+    try:
+        doc = json.loads(text)
+    except ValueError as exc:
+        return [f"not JSON ({exc})"]
+    problems = _schema_problems(doc)
+    if not isinstance(doc, Mapping):
+        return problems
+    if doc.get("conformance_only", False) is not False:  # contract R14: never in a lab render
+        problems.append(
+            "conformance_only is set: a config for a conformance run against a fake is never a "
+            "lab gateway's config"
+        )
+    roles = doc.get("roles") if isinstance(doc.get("roles"), Mapping) else {}
+    keys = [k for k in doc.get("keys") or [] if isinstance(k, Mapping)]
+
+    def deps(role: str) -> list[Any]:
+        r = roles.get(role)
+        return list(r.get("deployments") or []) if isinstance(r, Mapping) else []
+
+    def falls(role: str) -> list[str]:
+        r = roles.get(role)
+        return [str(f) for f in r.get("fallbacks") or []] if isinstance(r, Mapping) else []
+
+    def cloud(role: str) -> bool:
+        return any(not _neutral_local(d, hosts) for d in deps(role))
+
+    for role in sorted(roles):
+        for f in falls(role):
+            if f == role:
+                problems.append(f"role {role} lists itself as a fallback")
+            elif f not in roles:
+                problems.append(f"role {role} falls back to {f}, which is not a role here")
+    for role in sorted(roles):  # a cloud deployment calls its provider's real API, nothing else
+        for d in deps(role):
+            if not isinstance(d, Mapping) or d.get("locality") != "cloud":
+                continue
+            want_url = NEUTRAL_CLOUD.get(str(d.get("protocol")))
+            if d.get("base_url") != want_url:
+                problems.append(
+                    f"role {role} deployment {d.get('id')}: a cloud {d.get('protocol')} "
+                    f"deployment's base_url must be {want_url}"
+                )
+    for role, why in sorted(strict.items()):
+        if role not in roles:
+            continue
+        if cloud(role):
+            problems.append(f"local-only/agent role {role} ({why}) has a cloud deployment")
+        for f in falls(role):
+            if f in roles and cloud(f):
+                problems.append(f"local-only/agent role {role} ({why}) falls back to non-local {f}")
+
+    # each role's ceiling as the gateway must hold it: the spec's, never above the cloud
+    # ceiling when the file sends the role (or its chain) out while the spec reads it as local
+    held: dict[str, tlp.Label] = {}
+    for role in sorted(roles):
+        r = roles[role] if isinstance(roles[role], Mapping) else {}
+        out = cloud(role) or any(cloud(f) for f in falls(role) if f in roles)
+        want = spec.ceilings.get(role, module_rules.CLOUD_CEILING)
+        if out and want is tlp.Label.RED:
+            want = module_rules.CLOUD_CEILING
+        have = tlp.read(r.get("tlp_ceiling"))
+        if have != want:
+            problems.append(
+                f"role {role}: tlp_ceiling read as {have}, but the role's ceiling is {want}"
+            )
+        should_leave = out or role in leaves_lab_roles(spec)
+        if r.get("leaves_lab") is not should_leave:
+            problems.append(f"role {role}: leaves_lab must be {str(should_leave).lower()}")
+        held[role] = min(have, want)
+
+    declared = {k.name: k for k in spec.keys}
+    aliases = [str(k.get("alias")) for k in keys]
+    if aliases != sorted(aliases):
+        problems.append("keys are not sorted by alias")
+    for dup in sorted({a for a in aliases if aliases.count(a) > 1}):
+        problems.append(f"key {dup} is declared twice")
+    for k in keys:
+        alias = str(k.get("alias"))
+        mine = declared.get(alias)
+        if mine is None:
+            problems.append(f"key {alias} is not a key of the spec")
+            continue
+        sender = tlp.read(k.get("tlp_ceiling"))
+        if sender != mine.tlp_ceiling:
+            problems.append(
+                f"key {alias}: tlp_ceiling read as {sender}, the spec's is {mine.tlp_ceiling}"
+            )
+        sender = max(sender, mine.tlp_ceiling)
+        if k.get("data_tier") != mine.data_tier:
+            problems.append(f"key {alias}: data_tier must be {mine.data_tier}")
+        listed = [str(r) for r in k.get("roles") or []]
+        if "local-only" in (k.get("data_tier"), mine.data_tier):  # R13: what the loader refuses
+            for role in listed:
+                r = roles.get(role)
+                if isinstance(r, Mapping) and (cloud(role) or r.get("leaves_lab") is not False):
+                    problems.append(
+                        f"key {alias} is local-only but may call {role}, which has a cloud "
+                        "deployment or leaves the lab"
+                    )
+        wider = sorted(set(listed) - _allowed(spec, mine))
+        if wider:
+            problems.append(
+                f"key {alias}: may call {', '.join(wider)}, which the spec does not grant"
+            )
+        for role in listed:
+            if role not in roles:
+                problems.append(f"key {alias}: role {role} is not a role here")
+                continue
+            ceiling = held[role]
+            if sender > ceiling:
+                problems.append(
+                    f"key {alias} (tlp_ceiling {sender}) may call {role}, whose TLP ceiling "
+                    f"is {ceiling} (ADR-0033 decision 11)"
+                )
+
+    # one environment variable, one credential: no client key is the admin's, the reader's or
+    # another key's, and none is a deployment's upstream key
+    client: dict[str, list[str]] = {}
+    for who, env in [
+        ("admin_key_env", doc.get("admin_key_env")),
+        *[(f"key {k.get('alias')}", k.get("key_env")) for k in keys],
+        *(
+            [("telemetry_reader", doc["telemetry_reader"].get("key_env"))]
+            if isinstance(doc.get("telemetry_reader"), Mapping)
+            else []
+        ),
+    ]:
+        client.setdefault(str(env), []).append(who)
+    for env, whos in sorted(client.items()):
+        if len(whos) > 1:
+            problems.append(f"{' and '.join(whos)} share {env}: one value, several credentials")
+    upstream = {
+        str(d.get("api_key_env")): f"{role} deployment {d.get('id')}"
+        for role in sorted(roles)
+        for d in deps(role)
+        if isinstance(d, Mapping) and d.get("api_key_env")
+    }
+    for env, whos in sorted(client.items()):
+        if env in upstream:
+            problems.append(f"{', '.join(whos)} ({env}) is the upstream key of {upstream[env]}")
+    return problems
+
+
+def _audit_neutral_marker(marker: str, neutral: str) -> list[str]:
+    """The marker beside ``gateway.json`` is the generator's and names that file's sha256."""
+    if MARKER not in marker.split("\n", 1)[0]:
+        return [f"first line is not the {MARKER!r} header"]
+    want = f"gateway.json sha256:{hashlib.sha256(neutral.encode()).hexdigest()}"
+    if want not in marker.splitlines():
+        return ["gateway.json does not have the sha256 this marker records (edited by hand?)"]
+    return []
 
 
 def _audit_key_ceilings(keys_text: str, config_text: str, hosts: set[str], spec: Spec) -> list[str]:
@@ -1522,8 +1883,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"gateway: cannot read spec: {exc}", file=sys.stderr)
         return 2
     out = Path(args.out_dir)
+    refused = [] if NEUTRAL in files else neutral_refusals(spec)
+    for p in refused:
+        print(f"gateway: {NEUTRAL} not rendered: {p}", file=sys.stderr)
     if args.check:
         problems = check_tree(out, files)
+        problems += [f"stale: {rel} (no longer rendered)" for rel in _stale_neutral(out, files)]
         on_disk = {
             rel: (out / rel).read_text(encoding="utf-8") for rel in files if (out / rel).is_file()
         }
@@ -1537,8 +1902,25 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"gateway: {len(files)} files match {args.spec} and pass the locality audit{also}")
         return 0
     res = write_tree(out, files)
-    print(f"gateway: wrote {len(res.written)}, unchanged {len(res.unchanged)} in {out}")
+    for rel in _stale_neutral(out, files):  # never leave a config the gateway would still read
+        (out / rel).unlink()
+        res.pruned.append(rel)
+    pruned = f", pruned {len(res.pruned)}" if res.pruned else ""
+    print(f"gateway: wrote {len(res.written)}, unchanged {len(res.unchanged)}{pruned} in {out}")
     return 0
+
+
+def _stale_neutral(out: Path, files: Mapping[str, str]) -> list[str]:
+    """``gateway/gateway.json`` and its marker on disk when this render no longer produces them
+    (the spec stopped being expressible).  The JSON file carries no marker of its own, so
+    :func:`~homelabnext.generators.core.write_tree` cannot prune it; its marker is what makes it
+    this generator's to remove."""
+    if NEUTRAL in files:
+        return []
+    marker = out / NEUTRAL_MARKER
+    if not marker.is_file() or MARKER not in marker.read_text(encoding="utf-8")[:400]:
+        return []
+    return [rel for rel in (NEUTRAL, NEUTRAL_MARKER) if (out / rel).is_file()]
 
 
 if __name__ == "__main__":

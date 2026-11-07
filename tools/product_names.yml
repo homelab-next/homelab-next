@@ -65,5 +65,9 @@ allow:
     reason: "the lab bus's ACL: each grant names the subject it allows, so the automation bridge's grants name its durables (st2-*), token for token in both ack reply-subject forms; a lint must not push an ACL toward wildcards or one ack form when the other is due (nats-server 2.16 enables v2, 2.17 removes the flag)"
   - path: "tools/experimental.yml"
     reason: the reviewed list of experimental and frozen components names each component it takes out of the blocking set, and the paths of its tests and docs; the code those name is counted where it lives
+  - path: "compose/lab-in-a-box/config/llm-gateway/gateway/gateway.json"
+    reason: "generated (hnx gen gateway render, ADR-0038): the neutral gateway config is the gateway's upstream table, where each role's backend svc name and model id belong by design (as in the role table); it names only what the role table and the gateway spec name, and is counted where those live"
+  - path: "examples/*/gateway/gateway/gateway.json"
+    reason: "generated (hnx gen gateway render, ADR-0038) for the gateway examples: the upstream table of backend svc names and model ids, exactly what each example's role table and gateway spec name, counted where those live"
   - path: "tools/tests/test_product_name_lint.py"
     reason: the lint's own tests plant product names on purpose

@@ -42,8 +42,8 @@ here, and the implementation is tested against them from the private side.
 ## Decision
 
 1. **A product-neutral rendered config.** `hnx gen gateway render` also writes `gateway/gateway.json`
-   to a new schema, `schemas/platform/gateway_config.json`. It is a draft until this ADR is
-   accepted. The file holds:
+   to a new schema, `schemas/platform/gateway_config.schema.json`. It is a draft until this
+   ADR is accepted. The file holds:
    - the gateway's name;
    - the admin key's environment name;
    - each role's kind, context limit, TLP ceiling, whether it leaves the lab, its ordered
