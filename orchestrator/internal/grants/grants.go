@@ -24,8 +24,10 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/sys/unix"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
 )
@@ -331,7 +333,7 @@ var ErrInvalid = errors.New("invalid grant")
 
 // LoadCatalog reads and validates a catalog file (ParseCatalog).
 func LoadCatalog(file string, zones pathscope.Zones) (*Catalog, error) {
-	data, err := os.ReadFile(file)
+	data, err := ReadConfigFile(file, MaxCatalogBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read catalog: %w", err)
 	}
@@ -340,6 +342,38 @@ func LoadCatalog(file string, zones pathscope.Zones) (*Catalog, error) {
 		return nil, fmt.Errorf("catalog %s: %w", file, err)
 	}
 	return c, nil
+}
+
+// MaxCatalogBytes bounds a catalog file.
+const MaxCatalogBytes = 4 << 20
+
+// ReadConfigFile reads a configuration file the controller trusts: a regular file, opened without
+// following a symbolic link in its last component, of at most max bytes. The size is checked on
+// the open descriptor, so a file swapped after a check cannot be read instead.
+func ReadConfigFile(file string, max int64) ([]byte, error) {
+	f, err := os.OpenFile(file, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: not a regular file", file)
+	}
+	if fi.Size() > max {
+		return nil, fmt.Errorf("%s: larger than %d bytes", file, max)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("%s: larger than %d bytes", file, max)
+	}
+	return data, nil
 }
 
 // ParseCatalog decodes a catalog strictly (unknown fields refused, a repeated key refused) and
@@ -374,6 +408,9 @@ func (c *Catalog) checkKind(name string, k Kind) error {
 	}
 	if k.Command == "" {
 		return fmt.Errorf("kind %q: command is required", name)
+	}
+	if err := k.checkNames(); err != nil {
+		return fmt.Errorf("kind %q: %w", name, err)
 	}
 	for key := range k.AllowedValues {
 		if !slices.Contains(k.AllowedEnv, key) {
@@ -413,9 +450,93 @@ func (c *Catalog) checkKind(name string, k Kind) error {
 			return fmt.Errorf("kind %q: env key %s is free_env and also pinned or profile-bound", name, key)
 		case !pinned && !bound && !free:
 			return fmt.Errorf("kind %q: env key %s is not pinned (allowed_values/allowed_sets), bound (profile_scope) or free_env with a shape; a grant could set it to anything", name, key)
+		case identityKeyRe.MatchString(key) && !bound:
+			// a pinned identity would let every profile granted the kind act as that one agent
+			return fmt.Errorf("kind %q: env key %s is an identity; bind it in profile_scope (agent_key or agent_key_lane), never pin it", name, key)
+		}
+		if scopeEnvRe.MatchString(key) {
+			for _, v := range k.pins(key) {
+				if err := checkScopeValue(c.zones, key, v); err != nil {
+					return fmt.Errorf("kind %q: a pinned value of %s: %w", name, key, err)
+				}
+			}
 		}
 	}
 	return nil
+}
+
+// pins are every value the catalog pins key to, in allowed_values and in allowed_sets.
+func (k Kind) pins(key string) []string {
+	out := slices.Clone(k.AllowedValues[key])
+	for _, set := range k.AllowedSets {
+		if v, ok := set[key]; ok {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// checkScopeValue holds a scope-shaped key's value (a comma-separated prefix list) to the zones:
+// every entry a clean prefix, a writable one unless the key names a read scope.
+func checkScopeValue(zones pathscope.Zones, key, v string) error {
+	for _, e := range splitPrefixes(v) {
+		if err := zones.ValidatePrefix(e, !readScopeKeyRe.MatchString(key)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// envNameRe is an environment variable name: anything else could not be set as one, or would be
+// parsed differently by the program that receives it.
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// MaxTimeout bounds a kind's or a grant's timeout, in seconds (a day).
+const MaxTimeout = 86400
+
+// checkNames holds every env key a kind names to envNameRe, and its timeout to 0..MaxTimeout.
+func (k Kind) checkNames() error {
+	if k.Timeout < 0 || k.Timeout > MaxTimeout {
+		return fmt.Errorf("timeout %d: want 0 to %d seconds", k.Timeout, MaxTimeout)
+	}
+	names := slices.Clone(k.AllowedEnv)
+	for _, m := range []map[string]string{k.Env, k.FreeEnv} {
+		for key := range m {
+			names = append(names, key)
+		}
+	}
+	for key := range k.AllowedValues {
+		names = append(names, key)
+	}
+	for _, set := range k.AllowedSets {
+		for key := range set {
+			names = append(names, key)
+		}
+	}
+	names = append(names, k.ProfileScope.keys()...)
+	names = append(names, k.ProfileScope.laneKeys()...)
+	if k.ProfileScope != nil && k.ProfileScope.RootKey != "" {
+		names = append(names, k.ProfileScope.RootKey)
+	}
+	for _, key := range names {
+		if !envNameRe.MatchString(key) {
+			return fmt.Errorf("env key %q is not a variable name", clip(key))
+		}
+	}
+	return nil
+}
+
+// clip bounds an untrusted string quoted in an error, never cutting a UTF-8 sequence.
+func clip(s string) string {
+	const max = 80
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
 }
 
 // readScopeKeyRe names scope keys whose entries are read scopes; every other scope-shaped key (a
@@ -574,6 +695,11 @@ func (k Kind) checkProfileScope(zones pathscope.Zones) error {
 		}
 		if pathscope.ShadowMarked(e) {
 			return fmt.Errorf("profile_scope lane_shared %q is a shadow prefix", e)
+		}
+		// the verdict check knows the zones' shared prefixes only: a lane-shared prefix outside
+		// them would be writable by both lanes and yet not kept clear of verdict directories
+		if !pathscope.Within(e, zones.SharedWrite) {
+			return fmt.Errorf("profile_scope lane_shared %q is not within the scope zones' shared_write", e)
 		}
 	}
 	if len(ps.Writable)+len(ps.Readable) == 0 {
@@ -867,7 +993,25 @@ func (c *Catalog) Render(gs []Grant, o Owner) (map[string]Server, error) {
 		for key, v := range k.Env {
 			env[key] = v
 		}
+		if g.Timeout < 0 || g.Timeout > MaxTimeout {
+			return nil, fmt.Errorf("%w: server %q: timeout %d: want 0 to %d seconds", ErrInvalid, g.Name, g.Timeout, MaxTimeout)
+		}
+		if err := k.checkNames(); err != nil {
+			return nil, fmt.Errorf("%w: server %q (kind %s): %v", ErrInvalid, g.Name, g.Kind, err)
+		}
 		for key, v := range g.Env {
+			if !envNameRe.MatchString(key) {
+				return nil, fmt.Errorf("%w: server %q: env key %q is not a variable name", ErrInvalid, g.Name, clip(key))
+			}
+			bound := slices.Contains(k.ProfileScope.keys(), key)
+			if identityKeyRe.MatchString(key) && !bound {
+				return nil, fmt.Errorf("%w: server %q (kind %s): %s is an identity the catalog does not bind to the profile", ErrInvalid, g.Name, g.Kind, key)
+			}
+			if scopeEnvRe.MatchString(key) && !bound {
+				if err := checkScopeValue(c.zones, key, v); err != nil {
+					return nil, fmt.Errorf("%w: server %q (kind %s): %s: %v", ErrInvalid, g.Name, g.Kind, key, err)
+				}
+			}
 			if deniedEnv(key) || !slices.Contains(k.AllowedEnv, key) {
 				return nil, fmt.Errorf("%w: server %q (kind %s) may not set env %s", ErrInvalid, g.Name, g.Kind, key)
 			}

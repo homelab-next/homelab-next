@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 
@@ -386,5 +387,76 @@ func TestRender_AllowedSetsTieCallerArgumentsToOneScript(t *testing.T) {
 		if err := run(env); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: want ErrInvalid, got %v", name, err)
 		}
+	}
+}
+
+// A pinned value of a scope-shaped key is held to the zones as a fixed one is, and an identity is
+// always bound to the profile, never pinned: a pin would let every profile granted the kind write
+// outside the tree or act as one agent.
+func TestLoadCatalog_PinnedScopeAndIdentityValues(t *testing.T) {
+	refused(t, map[string]string{
+		"pinned traversal prefix":    "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_WRITABLE_PREFIXES]\n    allowed_values: {K_WRITABLE_PREFIXES: [\"../../etc/\"]}\n",
+		"pinned absolute prefix":     "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_WRITABLE_PREFIXES]\n    allowed_values: {K_WRITABLE_PREFIXES: [/abs/]}\n",
+		"pinned owner-zone prefix":   "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_FINDINGS_PREFIX]\n    allowed_values: {K_FINDINGS_PREFIX: [owner/x/]}\n",
+		"pinned in a set":            "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_SCRIPT_PATH, K_WRITE_SCOPE]\n    allowed_values: {K_SCRIPT_PATH: [/a]}\n    allowed_sets: [{K_SCRIPT_PATH: /a, K_WRITE_SCOPE: /etc}]\n",
+		"pinned readable dotfile":    "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_READABLE_PREFIXES]\n    allowed_values: {K_READABLE_PREFIXES: [\".git/\"]}\n",
+		"pinned agent key":           "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_AGENT_KEY]\n    allowed_values: {K_AGENT_KEY: [other-agent]}\n",
+		"pinned queue identity":      "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_QUEUE_BY]\n    allowed_values: {K_QUEUE_BY: [other-agent]}\n",
+		"identity pinned in a set":   "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_SCRIPT_PATH, K_AGENT_KEY]\n    allowed_values: {K_SCRIPT_PATH: [/a]}\n    allowed_sets: [{K_SCRIPT_PATH: /a, K_AGENT_KEY: other-agent}]\n",
+		"env key not a variable":     "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K-MODE]\n    allowed_values: {K-MODE: [a]}\n",
+		"fixed env not a variable":   "kinds:\n  k:\n    command: /bin/k\n    env: {\"K MODE\": a}\n",
+		"negative kind timeout":      "kinds:\n  k:\n    command: /bin/k\n    timeout: -1\n",
+		"kind timeout above the cap": "kinds:\n  k:\n    command: /bin/k\n    timeout: 86401\n",
+		"lane_shared outside shared_write": "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_WRITABLE_PREFIXES, K_ROOT]\n    allowed_values: {K_ROOT: [/a]}\n" +
+			"    profile_scope: {root_key: K_ROOT, scope_roots: [/a], writable: [K_WRITABLE_PREFIXES], lane_shared: [notes/drafts/]}\n",
+	})
+	parse(t, "kinds:\n  k:\n    command: /bin/k\n    allowed_env: [K_WRITABLE_PREFIXES]\n    allowed_values: {K_WRITABLE_PREFIXES: [\"inbox/,notes/findings/x/\"]}\n")
+	// a catalog built in code gets the same answers at render time
+	direct := &Catalog{zones: testZones, Kinds: map[string]Kind{"k": {Command: "/bin/k",
+		AllowedEnv:    []string{"K_WRITABLE_PREFIXES", "K_AGENT_KEY"},
+		AllowedValues: map[string][]string{"K_WRITABLE_PREFIXES": {"../../etc/"}, "K_AGENT_KEY": {"other-agent"}}}}}
+	for _, env := range []map[string]string{{"K_WRITABLE_PREFIXES": "../../etc/"}, {"K_AGENT_KEY": "other-agent"}, {"K-X": "a"}} {
+		if _, err := direct.Render([]Grant{{Name: "k", Kind: "k", Env: env}}, ownerA); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%v rendered: %v", env, err)
+		}
+	}
+	c := parse(t, testCatalogYAML)
+	for _, g := range []Grant{{Name: "c", Kind: "collector", Timeout: -5}, {Name: "c", Kind: "collector", Timeout: MaxTimeout + 1}} {
+		if _, err := c.Render([]Grant{g}, ownerA); !errors.Is(err, ErrInvalid) {
+			t.Errorf("timeout %d rendered: %v", g.Timeout, err)
+		}
+	}
+}
+
+// A catalog file is read without following a symbolic link and within a size bound.
+func TestLoadCatalog_ReadsOnlyARegularBoundedFile(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.yaml")
+	if err := os.WriteFile(real, []byte(testCatalogYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.yaml")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCatalog(link, testZones); err == nil {
+		t.Error("a catalog behind a symbolic link loaded")
+	}
+	big := filepath.Join(dir, "big.yaml")
+	if err := os.WriteFile(big, []byte(testCatalogYAML+"#"+strings.Repeat("x", MaxCatalogBytes)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCatalog(big, testZones); err == nil {
+		t.Error("an oversized catalog loaded")
+	}
+	if _, err := LoadCatalog(dir, testZones); err == nil {
+		t.Error("a directory loaded as a catalog")
+	}
+}
+
+func TestClipKeepsRunesWhole(t *testing.T) {
+	s := strings.Repeat("a", 79) + "é" + "tail"
+	if got := clip(s); !utf8.ValidString(got) || !strings.HasSuffix(got, "...") {
+		t.Errorf("clip = %q", got)
 	}
 }
