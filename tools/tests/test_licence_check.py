@@ -203,6 +203,28 @@ def test_every_module_a_go_mod_requires_needs_an_entry(tmp_path):
     ]
 
 
+def test_only_tracked_go_mods_count_and_first_party_modules_need_no_entry(tmp_path):
+    """An agent worktree or a scratch module under a checkout made the check demand licence entries
+    for modules no tracked file requires; a module of this repository is first-party."""
+    import subprocess
+
+    root = _tree(tmp_path)
+    (root / "mod").mkdir()
+    (root / "mod" / "go.mod").write_text(
+        "module m\n\nrequire (\n\texample.com/lint v1.0.0\n"
+        "\tgithub.com/homelab-next/homelab-next/orchestrator/mcpkit v0.0.0\n)\n"
+    )
+    (root / ".claude" / "worktrees" / "w").mkdir(parents=True)
+    (root / ".claude" / "worktrees" / "w" / "go.mod").write_text(
+        "module w\n\nrequire example.net/untracked v1.0.0\n"
+    )
+    (root / "mod" / "testdata").mkdir()
+    (root / "mod" / "testdata" / "go.mod").write_text("module t\n\nrequire example.org/td v1.0.0\n")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "mod/go.mod", "mod/testdata/go.mod"], check=True)
+    assert lc.go_requires(root) == {"example.com/lint": "mod/go.mod"}
+
+
 def test_a_linked_go_module_may_not_be_copyleft(tmp_path):
     root = _tree(tmp_path)
     (root / "go.mod").write_text("module m\n\ngo 1.27\n\nrequire example.com/gpl v1.0.0\n")

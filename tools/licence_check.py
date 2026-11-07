@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -62,15 +63,34 @@ def pins(root: Path) -> set[str]:
     }
 
 
-#: the directories never searched for a go.mod: version control, build output, caches
-_GO_SKIP = {".git", "build", "dist", "node_modules", ".venv", "venv", "__pycache__"}
+#: the directories never searched for a go.mod: version control, build output, caches, test data
+_GO_SKIP = {".git", "build", "dist", "node_modules", ".venv", "venv", "__pycache__", "testdata"}
+#: this repository's own modules: a requirement on one is first-party, never a licence entry
+_OWN_MODULE = "github.com/homelab-next/homelab-next/"
+
+
+def _go_mods(root: Path) -> list[Path]:
+    """The tree's go.mod files: in a git checkout only the tracked ones (an agent worktree or a
+    scratch module under the checkout is not part of the tree), else every one on disk."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", "go.mod", "**/go.mod"],
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout  # fmt: skip
+    except (OSError, subprocess.CalledProcessError):
+        return sorted(root.glob("**/go.mod"))
+    if not (root / ".git").exists():
+        return sorted(root.glob("**/go.mod"))
+    return sorted(root / p for p in out.split("\0") if p)
+
+
 _GO_REQUIRE = re.compile(r"^\s*(?:require\s+)?([A-Za-z0-9][\w.~/-]*\.[\w.~/-]+)\s+v\S+")
 
 
 def go_requires(root: Path) -> dict[str, str]:
     """Each module path a ``go.mod`` of the tree requires -> the first go.mod that names it."""
     out: dict[str, str] = {}
-    for f in sorted(root.glob("**/go.mod")):
+    for f in _go_mods(root):
         rel = f.relative_to(root)
         if any(part in _GO_SKIP for part in rel.parts[:-1]) or not f.is_file():
             continue
@@ -81,7 +101,11 @@ def go_requires(root: Path) -> dict[str, str]:
                 block = True
             elif block and line.strip() == ")":
                 block = False
-            elif (block or line.startswith("require ")) and (m := _GO_REQUIRE.match(line)):
+            elif (
+                (block or line.startswith("require "))
+                and (m := _GO_REQUIRE.match(line))
+                and not m[1].startswith(_OWN_MODULE)
+            ):
                 out.setdefault(m[1], rel.as_posix())
     return out
 
