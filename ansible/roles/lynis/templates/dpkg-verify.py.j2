@@ -47,6 +47,20 @@ LINE = re.compile(r"^(?P<flags>missing|\S{9})\s+(?:(?P<conf>c)\s+)?(?P<path>/.*)
 DEBSUMS_LINE = re.compile(r"^debsums: (?P<what>changed|missing) file (?P<path>/\S+)(?: \(from (?P<pkg>\S+) package\))?")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow no redirect: the 3xx is the HTTPError.  urllib's stock handler resends a POST
+    answered 301/302/303 as a GET with no body, to any origin, and copies the Authorization
+    header along with it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# the alert carries the access token: no redirect, and no proxy from the environment
+# (HTTP(S)_PROXY would receive the token, in clear for http)
+OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+
+
 def verify():
     """[(path, flags, conffile)] from dpkg --verify, else from debsums -s; None when neither ran."""
     try:
@@ -121,7 +135,7 @@ def send(title, body):
             with open(AUTH_FILE, encoding="utf-8") as fh:
                 headers["Authorization"] = "Bearer " + fh.read().strip()
         req = urllib.request.Request(f"{NOTIFY_URL}/{TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with OPENER.open(req, timeout=10) as resp:
             resp.read()
     elif MODE == "mail":
         mail = f"To: {MAIL_TO}\nSubject: {host}: {title}\n\n{body}\n"
