@@ -193,7 +193,9 @@ them as R15 to R18):
   context limit, plus its input estimated from the body), refuses a call whose reservation would
   take a key's or a role's window past its max (429), and settles the reservation against the
   reply's real usage. A reservation larger than a whole max can never be admitted: it is a 400
-  `reservation_exceeds_limit`, not a 429 that would read as "wait". A fallback role reserves on its
+  `reservation_exceeds_limit`, not a 429 that would read as "wait". In decision 4's order it sits
+  after the TLP step (4) and before the key limit (5): a call that is out of scope or TLP-refused
+  gets those answers first, and one that could fit gets the limits' 429. A fallback role reserves on its
   own window the same way, and is skipped when it cannot.
 - **R17, aggregated refusal records.** Decision 6's one record per decision holds for every
   admitted call. Refusals at admission (scope, TLP, limits) are merged: at most one record per

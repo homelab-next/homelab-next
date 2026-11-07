@@ -881,7 +881,9 @@ redirects are followed only within the same origin; replies are read up to `max_
 
 `OpenAICompat.chat_fields` sends a chat with extra request header fields, each sent as a
 field of its own even when a name repeats (`X-HNX-TLP` twice is two fields, which `urllib`
-cannot send): that request goes over `http.client` directly and follows no redirect.
+cannot send): that request goes over `http.client` directly, follows no redirect, and
+ignores `HTTP_PROXY`/`HTTPS_PROXY` (it connects to the gateway itself, so a header the test
+depends on is never rewritten or merged by a proxy).
 
 </details>
 

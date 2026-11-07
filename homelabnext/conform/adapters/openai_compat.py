@@ -10,7 +10,9 @@ redirects are followed only within the same origin; replies are read up to ``max
 
 :meth:`OpenAICompat.chat_fields` sends a chat with extra request header fields, each sent as a
 field of its own even when a name repeats (``X-HNX-TLP`` twice is two fields, which ``urllib``
-cannot send): that request goes over :mod:`http.client` directly and follows no redirect.
+cannot send): that request goes over :mod:`http.client` directly, follows no redirect, and
+ignores ``HTTP_PROXY``/``HTTPS_PROXY`` (it connects to the gateway itself, so a header the test
+depends on is never rewritten or merged by a proxy).
 """
 
 from __future__ import annotations
@@ -196,7 +198,9 @@ class OpenAICompat:
         max_tokens: int = 64,
     ) -> ChatResult:
         """A chat completion sent with the extra request header ``fields``, each a field of its
-        own (a repeated name is sent as several fields, and an empty value as an empty field)."""
+        own (a repeated name is sent as several fields, and an empty value as an empty field).
+        Sent over :mod:`http.client` straight to the endpoint: no redirect is followed and no
+        proxy from ``HTTP_PROXY``/``HTTPS_PROXY`` is used."""
         body = {"model": model, "messages": list(messages), "max_tokens": max_tokens}
         return _chat_result(self._fields_json("/v1/chat/completions", body, fields))
 
