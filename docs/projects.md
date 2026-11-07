@@ -155,10 +155,13 @@ strategy repository (for a real lab, the private overlay's `lab/strategy/`: part
 Pinned against OpenProject **17.9** (API v3, HAL+JSON). The adapter is a small stdlib client:
 the API token is named, never stored (`token: secret:openproject/api-token`, delivered as
 `HNX_SECRET_OPENPROJECT_API_TOKEN`), https with verification (plain http only to loopback or with
-`allow_plaintext`), same-origin redirects, `offset`/`pageSize` paging, a `lockVersion` on every
-`PATCH` (409 is a `Conflict`), retries with exponential backoff on timeouts, 429 and 5xx (a
-`POST` or a `PATCH` only when nothing reached the server: a retried `PATCH` that had been
-applied would quote a stale `lockVersion` and report the write as a conflict).
+`allow_plaintext`), same-origin redirects (and only for GET/HEAD; writes follow none),
+`offset`/`pageSize` paging, a `lockVersion` on every `PATCH` (409 is a `Conflict`), retries
+with exponential backoff on timeouts, 429 and 5xx (a `POST` or a `PATCH` only when nothing
+reached the server: a retried `PATCH` that had been applied would quote a stale `lockVersion`
+and report the write as a conflict). The client ignores `HTTP_PROXY`/`HTTPS_PROXY` and
+connects to OpenProject directly, as a lab service: a proxy from the environment would receive
+the API token. It has no proxy option.
 
 ```yaml
 # openproject.yml (every key but base_url optional)

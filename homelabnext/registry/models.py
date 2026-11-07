@@ -39,6 +39,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from homelabnext._http import check_plaintext, credential_opener
+
 from .model import Registry
 from .resolver import Endpoint, ResolutionError, Resolver
 
@@ -46,6 +48,8 @@ ROLE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 KINDS = ("chat", "completion", "embedding")
+#: a character no header value may hold (http.client would echo the value in its error)
+_CONTROL = re.compile(r"[^\x20-\x7e]")  # a bearer token is printable ASCII (RFC 6750)
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
 LIMIT_KEYS = ("window_s", "max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
 #: keys an OpenAI-compatible ``/v1/models`` entry uses for the loaded context length, by engine
@@ -414,7 +418,8 @@ def _resolved(
 
 # ---------------------------------------------------------------- HTTP plumbing
 class ModelError(Exception):
-    """A backend call failed.  ``kind``: unreachable | timeout | http | malformed."""
+    """A backend call failed.  ``kind``: unreachable | timeout | http | malformed | misconfigured
+    (the call was refused before anything was sent)."""
 
     def __init__(self, kind: str, message: str, status: int | None = None):
         self.kind = kind
@@ -433,6 +438,11 @@ def urllib_transport(
     *,
     headers: Mapping[str, str] | None = None,
 ):
+    """One JSON request through :func:`homelabnext._http.credential_opener`: it may carry the
+    key :func:`authorized` adds, so no redirect is followed (a 3xx is the answer: a cross-origin
+    one would get the key, and urllib resends a POST answered 301/302/303 as a GET) and no proxy
+    from the environment is used (it would get the key, in clear for http).  A 3xx is
+    ``ModelError("http")`` whatever its body."""
     data = None if body is None else json.dumps(body).encode("utf-8")
     # the caller's headers go after Content-Type, so a caller may override it
     req = urllib.request.Request(
@@ -442,7 +452,7 @@ def urllib_transport(
         headers={"Content-Type": "application/json", **(headers or {})},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with credential_opener().open(req, timeout=timeout) as resp:
             raw, status = resp.read(), resp.status
     except urllib.error.HTTPError as exc:
         raw, status = exc.read(), exc.code
@@ -454,22 +464,39 @@ def urllib_transport(
         raise ModelError("unreachable", str(exc.reason)) from exc
     except OSError as exc:
         raise ModelError("unreachable", str(exc)) from exc
+    if 300 <= status < 400:  # no redirect is followed; a 3xx's body (often HTML) is not the answer
+        raise ModelError("http", f"HTTP {status} (redirect not followed)", status)
     try:
         return status, (json.loads(raw.decode("utf-8")) if raw else None)
     except ValueError as exc:
         raise ModelError("malformed", f"non-JSON body (HTTP {status})", status) from exc
 
 
-def authorized(api_key: str | None, transport: Transport | None = None) -> Transport:
+def authorized(
+    api_key: str | None, transport: Transport | None = None, *, allow_plaintext: bool = False
+) -> Transport:
     """``transport`` (default :func:`urllib_transport`) sending ``Authorization: Bearer
     <api_key>``; ``transport`` itself when there is no key.  A transport given here must take a
-    ``headers=`` keyword.  The key never appears in an error or a result."""
+    ``headers=`` keyword.  A key holding a control character (``\\x00``-``\\x1f``, ``\\x7f``) is
+    refused at send time with ``ModelError("misconfigured")``, which does not quote it
+    (``http.client`` would refuse the header with a ``ValueError`` that does).  The key goes over
+    plain ``http`` only to a loopback host unless ``allow_plaintext=True``
+    (:func:`homelabnext._http.check_plaintext`, the rule every other credentialed client
+    follows); otherwise the send is refused the same way.  No error this module raises and no
+    result quotes the key."""
     tr = transport or urllib_transport
     if not api_key:
         return tr
+    bad_key = _CONTROL.search(api_key) is not None
     auth = {"Authorization": f"Bearer {api_key}"}
 
     def send(method: str, url: str, body: dict | None, timeout: float):
+        if bad_key:
+            raise ModelError("misconfigured", "the API key is not a valid header value")
+        try:
+            check_plaintext(url, credentials=True, allow_plaintext=allow_plaintext)
+        except ValueError as exc:
+            raise ModelError("misconfigured", str(exc)) from None
         return tr(method, url, body, timeout, headers=auth)  # type: ignore[call-arg]
 
     return send
@@ -501,12 +528,14 @@ class ModelClient:
         timeout: float = 30.0,
         transport: Transport | None = None,
         api_key: str | None = None,
+        allow_plaintext: bool = False,
     ):
         """``api_key``: the caller's gateway key (:class:`GatewayResolver`), or the backend's
-        own key for a direct call to a keyed backend (:class:`ModelResolver`)."""
+        own key for a direct call to a keyed backend (:class:`ModelResolver`).
+        ``allow_plaintext``: send the key over plain http to a non-loopback host."""
         self.model = model
         self.timeout = timeout
-        self.transport = authorized(api_key, transport)
+        self.transport = authorized(api_key, transport, allow_plaintext=allow_plaintext)
 
     def _call(self, path: str, body: dict) -> Any:
         status, doc = self.transport("POST", f"{self.model.base_url}{path}", body, self.timeout)
@@ -592,6 +621,7 @@ def probe(
     timeout: float = 5.0,
     transport: Transport | None = None,
     api_key: str | None = None,
+    allow_plaintext: bool = False,
 ) -> ProbeResult:
     """Compare the alias's bound model id (and declared context length) with what is served.
 
@@ -600,7 +630,7 @@ def probe(
     This is the host-side K-14 probe: it asks the backend itself (direct mode), so a keyed
     backend needs its own key as ``api_key`` (without it the answer is a 401, status ``error``).
     """
-    tr = authorized(api_key, transport)
+    tr = authorized(api_key, transport, allow_plaintext=allow_plaintext)
     want_ctx = model.max_context_tokens
     try:
         status, doc = tr("GET", f"{model.base_url}/v1/models", None, timeout)
@@ -636,6 +666,7 @@ def probe_all(
     timeout: float = 5.0,
     transport: Transport | None = None,
     api_key: str | None = None,
+    allow_plaintext: bool = False,
 ) -> list[ProbeResult]:
     out: list[ProbeResult] = []
     for name in sorted(resolver.table.roles):
@@ -644,5 +675,13 @@ def probe_all(
         except ResolutionError as exc:
             out.append(ProbeResult(name, "", "unreachable", detail=str(exc).splitlines()[0]))
             continue
-        out.append(probe(rm, timeout=timeout, transport=transport, api_key=api_key))
+        out.append(
+            probe(
+                rm,
+                timeout=timeout,
+                transport=transport,
+                api_key=api_key,
+                allow_plaintext=allow_plaintext,
+            )
+        )
     return out

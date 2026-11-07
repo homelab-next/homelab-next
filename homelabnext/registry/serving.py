@@ -54,9 +54,17 @@ def check_serving(
     transport: Transport | None = None,
     topic: str | None = None,
     api_key: str | None = None,
+    allow_plaintext: bool = False,
 ) -> list[ProbeResult]:
     """Probe every role, alert on what changed, and return the results.  The probe asks each
-    backend directly (host-side K-14); ``api_key`` is the backend key a keyed backend needs."""
-    results = probe_all(resolver, timeout=timeout, transport=transport, api_key=api_key)
+    backend directly (host-side K-14); ``api_key`` is the backend key a keyed backend needs, and
+    ``allow_plaintext`` lets it go over plain http to a non-loopback backend."""
+    results = probe_all(
+        resolver,
+        timeout=timeout,
+        transport=transport,
+        api_key=api_key,
+        allow_plaintext=allow_plaintext,
+    )
     report(results, notifier, topic=topic)
     return results

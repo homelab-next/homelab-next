@@ -200,3 +200,203 @@ def test_openai_compat_plaintext_redirect_and_size(servers):
     with pytest.raises(InferenceError, match="larger than"):
         OpenAICompat(home.url + "/big", max_bytes=50).models()
     assert OpenAICompat(home.url + "/big").models() == ["m" * 100]
+
+
+def test_model_transport_follows_no_redirect_and_never_replays_the_key(servers):
+    """Regression: ``registry.models.urllib_transport`` used urllib's stock redirect handler
+    while :func:`authorized` added ``Authorization: Bearer <key>``, so a cross-origin redirect
+    handed the key to the second server, and a POST answered 302 was resent there as a GET."""
+    from homelabnext.registry.models import ModelError, authorized
+
+    evil = servers({"/v1/models": (200, {}, b'{"data": []}'), "/c": (200, {}, b"{}")})
+    home = servers(
+        {
+            "/v1/models": (302, {"Location": evil.url + "/v1/models"}, b""),
+            "/w": (302, {"Location": "/c"}, b""),
+            "/c": (200, {}, b'{"choices": []}'),
+        }
+    )
+    send = authorized("s3cret")
+    outcomes = []
+    for method, path, body in (("GET", "/v1/models", None), ("POST", "/w", {"x": 1})):
+        try:
+            outcomes.append(send(method, home.url + path, body, 5)[0])
+        except ModelError as exc:
+            outcomes.append((exc.kind, exc.status))
+    assert outcomes == [("http", 302), ("http", 302)]
+    assert evil.seen == []
+    assert [path for path, _ in home.seen] == ["/v1/models", "/w"]
+
+
+def test_model_transport_reports_a_3xx_as_http_whatever_its_body(servers):
+    """Regression: a 3xx (not followed) went to the JSON parser, so the HTML page a server sends
+    with a 302 became ``ModelError("malformed")`` instead of the ``http`` error it is."""
+    from homelabnext.registry.models import ModelError, urllib_transport
+
+    html = b"<html><body>Moved</body></html>"
+    home = servers({"/v1/chat/completions": (302, {"Location": "/login"}, html)})
+    raised = None
+    try:
+        urllib_transport("POST", home.url + "/v1/chat/completions", {"model": "m"}, 5)
+    except ModelError as exc:
+        raised = exc
+    assert raised is not None and (raised.kind, raised.status) == ("http", 302)
+
+
+def test_the_no_redirect_opener_never_hands_a_credential_to_an_environment_proxy(
+    servers, monkeypatch
+):
+    """Regression: ``no_redirect_urlopen`` (the default opener of the events forwarder and the
+    notify sender) used ``build_opener``'s default ``ProxyHandler``, so ``HTTP_PROXY`` in the
+    environment received the request and its ``Authorization`` header (in clear for http).
+    The model client's transport (``credential_opener``) is held to the same rule."""
+    from homelabnext._http import no_redirect_urlopen
+    from homelabnext.events.forwarder import HttpForwarder
+    from homelabnext.registry.models import authorized
+
+    proxy = servers({})
+    home = servers(
+        {"/e": (202, {}, b"{}"), "/ops": (200, {}, b"{}"), "/v1/models": (200, {}, b"{}")}
+    )
+    for name in ("no_proxy", "NO_PROXY", "REQUEST_METHOD"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("http_proxy", "HTTP_PROXY"):
+        monkeypatch.setenv(name, proxy.url)
+    auth = {"Authorization": "Bearer s3cret"}
+    sends = (
+        lambda: HttpForwarder(home.url + "/e", auth=lambda: auth["Authorization"]).forward(
+            {"id": "e1"}
+        ),
+        lambda: no_redirect_urlopen(
+            urllib.request.Request(home.url + "/ops", data=b"b", headers=auth), timeout=5
+        ).close(),
+        lambda: authorized("s3cret")("GET", home.url + "/v1/models", None, 5),
+    )
+    failures = []
+    for send in sends:
+        try:
+            send()
+        except Exception as exc:  # the proxy's 404: asserted on below, after what it saw
+            failures.append(exc)
+    assert proxy.seen == []
+    assert failures == []
+    assert home.seen == [(p, "Bearer s3cret") for p in ("/e", "/ops", "/v1/models")]
+
+
+def test_safe_urlopen_never_hands_a_credential_to_an_environment_proxy(servers, monkeypatch):
+    """Regression: ``safe_opener`` used ``build_opener``'s default ``ProxyHandler``, so
+    ``HTTP_PROXY`` in the environment received every request of its callers (the gateway key
+    writes, the OpenAI-compatible, OpenBao and notify conformance adapters, the status hub's
+    collectors, the OpenProject client) with its ``Authorization`` or ``X-Vault-Token``
+    header, in clear for http.  Lab endpoints are reached directly."""
+    from homelabnext._http import safe_opener
+
+    proxy = servers({})
+    home = servers({"/r": (200, {}, b"read"), "/w": (200, {}, b"wrote")})
+    for name in ("no_proxy", "NO_PROXY", "REQUEST_METHOD"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("http_proxy", "HTTP_PROXY"):
+        monkeypatch.setenv(name, proxy.url)
+    vault = dict.fromkeys(["X-Vault-Token"], "fake")  # the header the OpenBao adapter sends
+    sends = (
+        lambda: safe_urlopen(
+            urllib.request.Request(home.url + "/r", headers={"Authorization": "Bearer s3cret"}),
+            timeout=5,
+        ).read(),
+        lambda: (
+            safe_opener()
+            .open(
+                urllib.request.Request(home.url + "/w", data=b"{}", method="POST", headers=vault),
+                timeout=5,
+            )
+            .read()
+        ),
+    )
+    got, failures = [], []
+    for send in sends:
+        try:
+            got.append(send())
+        except Exception as exc:  # the proxy's 404: asserted on below, after what it saw
+            failures.append(exc)
+    assert proxy.seen == []
+    assert failures == []
+    assert got == [b"read", b"wrote"]
+    assert [path for path, _ in home.seen] == ["/r", "/w"]
+
+
+def test_model_key_with_a_control_character_is_refused_without_quoting_it(servers):
+    """Regression: a key holding a control character reached ``http.client``, whose
+    ``ValueError`` quoted the whole header value, key included (and escaped ``ModelError``, so a
+    probe crashed instead of reporting ``error``)."""
+    from homelabnext.registry.models import ModelError, authorized
+
+    home = servers({"/v1/models": (200, {}, b'{"data": []}')})
+    # A control character, and a character outside printable ASCII (a pasted typographic
+    # quote or similar), which ``http.client`` refused with an uncaught UnicodeEncodeError.
+    for key in ("s3cret\nX-Injected: 1", "s3cr\u2603et Injected"):
+        raised = None
+        try:
+            authorized(key)("GET", home.url + "/v1/models", None, 5)
+        except Exception as exc:
+            raised = exc
+        assert isinstance(raised, ModelError) and raised.kind == "misconfigured", repr(raised)
+        assert "s3cr" not in str(raised) and "Injected" not in str(raised)
+    assert home.seen == []
+
+
+def test_a_redirect_to_an_ambiguous_or_invalid_authority_is_refused():
+    """Regression: a same-host ``Location`` with userinfo or a backslash passed the origin check
+    (urlsplit drops the userinfo) and was followed into a URL ``http.client`` reads as another
+    host, and a bad port made urlsplit raise ``ValueError`` out of the redirect handler instead
+    of the ``HTTPError`` every caller handles."""
+    from homelabnext._http import SameOriginRedirectHandler
+
+    here = f"http://{LOOPBACK}:8080"
+    targets = [
+        f"http://user@{LOOPBACK}:8080/ok",
+        f"http://{LOOPBACK}:8080\\@{LOOPBACK}:8080/ok",
+        f"http://{LOOPBACK}%2e:8080/ok",
+        f"http://{LOOPBACK}:99999/ok",
+        f"http://{LOOPBACK}:8080x/ok",
+        f"http://[{LOOPBACK}/ok",
+    ]
+    outcomes = []
+    for target in targets:
+        req = urllib.request.Request(here + "/r")
+        try:
+            SameOriginRedirectHandler().redirect_request(
+                req, io.BytesIO(), 302, "Found", {"Location": target}, target
+            )
+            outcomes.append(f"followed {target}")
+        except urllib.error.HTTPError as exc:
+            outcomes.append("refused" if exc.code == 302 and "refusing" in str(exc) else repr(exc))
+        except Exception as exc:
+            outcomes.append(repr(exc))
+    assert outcomes == ["refused"] * len(targets)
+
+
+def test_model_key_goes_over_plaintext_only_to_loopback_or_with_the_opt_in():
+    """Regression: the model client sent ``Authorization: Bearer <key>`` over plain http to any
+    host, without the ``allow_plaintext`` opt-in every other credentialed client requires."""
+    from homelabnext.registry.models import ModelError, authorized
+
+    sent = []
+
+    def transport(method, url, body, timeout, *, headers=None):
+        sent.append(url)
+        return 200, {"data": []}
+
+    remote = "http://inference.example.internal/v1/models"
+    raised = None
+    try:
+        authorized("s3cret", transport)("GET", remote, None, 5)
+    except Exception as exc:
+        raised = exc
+    assert isinstance(raised, ModelError) and raised.kind == "misconfigured"
+    assert "plaintext" in str(raised) and "s3cret" not in str(raised)
+    assert sent == []
+    authorized("s3cret", transport, allow_plaintext=True)("GET", remote, None, 5)
+    authorized("s3cret", transport)("GET", f"http://{LOOPBACK}:1/v1/models", None, 5)
+    authorized("s3cret", transport)("GET", "https://inference.example.internal/v1/models", None, 5)
+    authorized(None, transport)("GET", remote, None, 5)  # no key: plain http is allowed
+    assert len(sent) == 4
