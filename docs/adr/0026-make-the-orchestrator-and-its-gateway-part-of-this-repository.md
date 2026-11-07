@@ -181,8 +181,8 @@ private sources, so bringing that generic code in needs an amendment to it (deci
       read-only, never deleted, so its history stays readable.
 
    **Each component cuts over as soon as it can run the lab's work: the gateway as soon as it
-   lands, the controller after stage 3** (see the amendment), so the lab never runs a frozen copy
-   for long. The lab's deployment then builds it from this repository at the commit the overlay
+   lands, the controller after stage 3** (see the amendment), so the lab runs a frozen copy only
+   while its replacement cannot yet serve the lab's work. The lab's deployment then builds it from this repository at the commit the overlay
    pins (ADR-0021 decision 7). The gateway cuts over under ADR-0038's rules (its suite green here,
    a period beside LiteLLM, the runtime sending labels). From this pull request on, this
    repository's gateway is the implementation ADR-0038 is judged against, and the private copy is
@@ -228,13 +228,15 @@ what stage 2 carries:
   `hermes_local_fallback_home` and the `hermes_agent_*` keys) take neutral names; and the metric
   prefix (`llmorch_`) and the event source (`svc:llm-orchestrator`) do too, under names stage 2's
   pull request sets. The change is staged so that no caller breaks at once:
-  - **One release** is a release of this repository as `CHANGELOG.md` records it. The first
-    release that carries the controller accepts both field names on input and returns both; the
-    next release drops the old name. A request that carries both names with different values is
+  - **One release** is a release of this repository as `CHANGELOG.md` records it. The release at
+    which the controller cuts over (the first release the lab deploys it from) accepts both field
+    names on input and returns both; the old name is dropped no earlier than the next release
+    after that, and only once the check below finds no consumer of it. A request that carries both names with different values is
     refused (400). A config that sets both an old key and its new key is refused.
-  - The metric prefix and the event source get the same one-release overlap: the controller emits
+  - The metric prefix and the event source get the same overlap, timed the same way: the controller emits
     both metric names and an alias of the event source. Their consumers (dashboards, alert rules,
-    audit queries) are found by a check, and moved, before the old names go.
+    audit queries) are found by a check that stage 2's pull request adds, and moved, before the old
+    names go.
   - A config migration and a database migration move the stored names. **Before every run of the
     database migration against a live database**, wherever it runs, the private copy included,
     the database is backed up, the backup is checked restorable first, and it is protected like
