@@ -67,12 +67,6 @@ REMOTE = "remote"
 REGISTRY_TRANSPORT = {"http": "streamable-http", "sse": "sse", "stdio": "stdio"}
 #: the directory name of a catalog beside a registry file or under an examples tree
 CATALOG_DIR = "mcp"
-#: llm-orchestrator's own hard-denied grant keys (internal/grants/grants.go:71, deniedEnvRe),
-#: which :func:`homelabnext.mcp.clients.orch_accepts` mirrors
-ORCH_DENIED_ENV = re.compile(
-    r"^(LD_.*|DYLD_.*|PATH|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONINSPECT|HOME|SHELL|BASH_ENV"
-    r"|ENV|NODE_OPTIONS|HERMES_HOME)$"
-)
 #: environment keys no setting, env secret or parameter may ever set (any case): they change what
 #: code runs or how, not what a server is scoped to.  A record's settings and env become the
 #: environment of the launcher too (npx, uvx, docker), so its configuration is here as well: the
@@ -96,8 +90,9 @@ ORCH_DENIED_ENV = re.compile(
 #: HOSTALIASES, RES_OPTIONS, LOCALDOMAIN, GLIBC_TUNABLES, MALLOC_*, TZDIR), the other
 #: interpreters' option and library variables (JAVA_TOOL_OPTIONS, _JAVA_OPTIONS,
 #: JDK_JAVA_OPTIONS, PERL5OPT, PERL5LIB, PERLLIB, RUBYOPT, RUBYLIB) and the shell's
-#: (BASH_FUNC_* exported functions, SHELLOPTS, BASHOPTS, PS4).  A superset of
-#: :data:`ORCH_DENIED_ENV`.
+#: (BASH_FUNC_* exported functions, SHELLOPTS, BASHOPTS, PS4).  The orchestrator's grants loader
+#: denies the same keys (``orchestrator/internal/grants``, ``DeniedEnvPattern``: this pattern
+#: character for character, held equal by tests/mcp/test_mcp_clients.py).
 DENIED_ENV = re.compile(
     r"(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_"
     r"|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)"

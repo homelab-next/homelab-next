@@ -72,6 +72,10 @@ func NewZones(z Zones) (Zones, error) {
 	return z.Validate()
 }
 
+// Validated reports whether z came from NewZones (or Validate) and is unchanged since: whether its
+// methods decide anything. A package that keeps a Zones refuses one that is not.
+func (z Zones) Validated() bool { return z.set() != nil }
+
 // NewScope returns the Scope of these prefixes, each checked with ValidatePrefix (writable ones
 // against the denied roots).
 func (z Zones) NewScope(writable, readable []string) (Scope, error) {

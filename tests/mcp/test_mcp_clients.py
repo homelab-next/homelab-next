@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Client configurations rendered from the MCP catalog: only granted servers, secrets as
 placeholders, endpoints from the registry, instances per profile and lane with typed parameters,
-every home from one source, drift detection, and llm-orchestrator's format (its loader's rules
-encoded in :func:`homelabnext.mcp.clients.orch_accepts`)."""
+every home from one source, drift detection, and the orchestrator's format (its loader,
+``orchestrator/internal/grants``, loads the committed render in place: its Go tests)."""
 
 from __future__ import annotations
 
@@ -212,13 +212,17 @@ def test_the_broker_docs_show_the_rendered_entry():
     assert '{"mcpServers": {"hnx-broker": {"command": "hnx",' not in doc  # the old hand-written one
 
 
-# ----------------------------------------------------------------------- llm-orchestrator
-def test_llm_orchestrator_catalog_and_grants_are_its_format():
-    r = clients.render_spec(SPECS / "llm-orchestrator.yml")
+# ----------------------------------------------------------------------- orchestrator
+def test_orchestrator_catalog_and_grants_are_its_format():
+    r = clients.render_spec(SPECS / "orchestrator.yml")
     catalog, grants = r.outputs
     kinds = yaml.safe_load(catalog.text)["kinds"]
     assert kinds["notes"] == {
         "allowed_env": ["NOTES_MODE", "NOTES_WRITABLE_PREFIX"],
+        # every grant-settable key pinned: an enum to its values, any other parameter to the
+        # values the rendered instances give it (the controller pins what it cannot classify)
+        "allowed_values": {"NOTES_MODE": ["read", "write"],
+                           "NOTES_WRITABLE_PREFIX": ["agents/collector/inbox/"]},
         "args": ["--no-config", "--from", "example-notes-mcp==1.2.0", "notes-mcp"],
         "command": "uvx",
         "env": {"NOTES_ROOT": "notes/", "NOTES_TOKEN": "${HNX_SECRET_MCP_NOTES_TOKEN}"},
@@ -229,31 +233,42 @@ def test_llm_orchestrator_catalog_and_grants_are_its_format():
     assert list(block) == ["real", "shadow"]
     assert block["shadow"][0] == {"name": "notes-collector-shadow", "kind": "notes",
                                   "env": {"NOTES_MODE": "read", "NOTES_WRITABLE_PREFIX": "agents/collector/inbox/"}}  # fmt: skip
-    assert clients.orch_accepts(catalog.text, {"collector": grants.text}) == []
     # byte-stable: rendering twice gives the same bytes, and the profile's own fields survive
-    again = clients.render_spec(SPECS / "llm-orchestrator.yml")
+    again = clients.render_spec(SPECS / "orchestrator.yml")
     assert [o.expected() for o in again.outputs] == [o.expected() for o in r.outputs]
     assert (
         grants.expected().startswith("# SPDX-License-Identifier")
-        and "name: collector" in grants.expected()
+        and "agent_key: collector" in grants.expected()
     )
+    # the committed render is current: orchestrator/internal/grants loads it in place
+    assert clients.drift(r) == []
 
 
-@pytest.mark.parametrize(
-    ("catalog", "grants", "phrase"),
-    [
-        ("kinds: {Bad: {command: x}}", "grants: {real: []}", "bad name"),  # grants.go:90
-        ("kinds: {a: {args: []}}", "grants: {real: []}", "command is required"),  # :94
-        ("kinds: {a: {command: x, allowed_env: [PATH]}}", "grants: {}", "never be grant-settable"),  # :98
-        ("kinds: {a: {command: x, extra: 1}}", "grants: {}", "unknown field"),  # :85
-        ("kinds: {a: {command: x}}", "grants: {real: [{name: s, kind: a}, {name: s, kind: a}]}", "granted twice"),  # :115
-        ("kinds: {a: {command: x}}", "grants: {real: [{name: s, kind: b}]}", "unknown kind"),  # :119
-        ("kinds: {a: {command: x, allowed_env: [M]}}", "grants: {real: [{name: s, kind: a, env: {N: v}}]}", "may not set env N"),  # :127
-        ("kinds: {a: {command: x}}", "grants: {real: [{name: S!, kind: a}]}", "server name"),  # :111
-    ],
-)  # fmt: skip
-def test_orch_accepts_encodes_the_orchestrators_rules(catalog, grants, phrase):
-    assert any(phrase in p for p in clients.orch_accepts(catalog, {"p": grants}))
+def test_the_orchestrator_denies_the_catalogs_keys_character_for_character():
+    """One deny list: the Go grants loader's DeniedEnvPattern is :data:`servers.DENIED_ENV`."""
+    go = (ROOT / "orchestrator" / "internal" / "grants" / "grants.go").read_text()
+    m = re.search(r"^const DeniedEnvPattern = `([^`]*)`$", go, re.M)
+    assert m, "DeniedEnvPattern is no longer one raw string constant"
+    assert m.group(1) == servers.DENIED_ENV.pattern
+    assert servers.DENIED_ENV.flags & re.I  # Go compiles it (?i)
+
+
+def test_the_old_client_name_still_renders():
+    spec = yaml.safe_load((SPECS / "orchestrator.yml").read_text())
+    assert clients.client_name("llm-orchestrator") == clients.ORCHESTRATOR
+    assert clients._spec_problems({**spec, "client": "llm-orchestrator"}) == []
+    assert clients._spec_problems({**spec, "client": "llm-orchestrators"})
+
+
+def test_an_unrendered_free_parameter_is_not_grant_settable():
+    kind, said = clients.orch_kind("notes", CATALOG.servers["notes"], CTX)
+    assert kind["allowed_values"] == {"NOTES_MODE": ["read", "write"]}
+    assert kind["allowed_env"] == ["NOTES_MODE"]
+    assert any(w.startswith("note:notes: NOTES_WRITABLE_PREFIX has no enum") for w in said)
+    kind, _ = clients.orch_kind("notes", CATALOG.servers["notes"], CTX,
+                                {"NOTES_MODE": {"read"}, "NOTES_WRITABLE_PREFIX": {"b/", "a/"}})  # fmt: skip
+    assert kind["allowed_values"] == {"NOTES_MODE": ["read", "write"],
+                                      "NOTES_WRITABLE_PREFIX": ["a/", "b/"]}  # fmt: skip
 
 
 def test_a_per_instance_argument_cannot_be_an_orchestrator_kind():
@@ -491,27 +506,26 @@ def test_render_writes_only_under_its_root_never_through_a_link(tmp_path):
     assert not list((tmp_path / "out").glob(".*"))  # the temporary file was renamed into place
 
 
-# ---------------------------------------------- llm-orchestrator: what its loaders accept
+# ---------------------------------------------- orchestrator: what the render refuses itself
 def _orch_copy(tmp_path: Path) -> Path:
     dst = tmp_path / "mcp"
     shutil.copytree(ROOT / "examples" / "mcp", dst)
     _lax_review_policy(dst.parent)
     shutil.copy(ROOT / "examples" / "services.yml", dst.parent)  # the registry beside it
-    return dst / "clients" / "llm-orchestrator.yml"
+    return dst / "clients" / "orchestrator.yml"
 
 
-def test_llm_orchestrator_refuses_a_granted_remote_server_and_one_empty_lane(tmp_path):
+def test_the_orchestrator_refuses_a_granted_remote_server(tmp_path):
     lake = _lean(tmp_path, mcp=["notes", "records", "lake"],
                  mcp_ceiling=["notes", "records", "lake"])  # fmt: skip
-    with pytest.raises(clients.RenderError, match="a streamable-http server; llm-orchestrator"):
-        clients.render_profile(
-            CATALOG, lake, "llm-orchestrator", lanes=["real", "shadow"], policy=WIDE
-        )
-    # a real lane without a shadow lane: llm-orchestrator fails every shadow job
-    with pytest.raises(clients.RenderError, match="fails every shadow job"):
-        clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"], policy=WIDE,
-                               npm_prefix=NPM_PREFIX)  # fmt: skip
-    block, _ = clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator",
+    with pytest.raises(clients.RenderError, match="a streamable-http server; orchestrator"):
+        clients.render_profile(CATALOG, lake, "orchestrator", lanes=["real", "shadow"], policy=WIDE)
+    # one lane only renders: the controller's profile loader refuses a profile that grants one
+    # lane and not the other (orchestrator/internal/grants, Set.Validate), not a copy of it here
+    block, _ = clients.render_profile(CATALOG, COLLECTOR, "llm-orchestrator", lanes=["real"],
+                                      policy=WIDE, npm_prefix=NPM_PREFIX)  # fmt: skip
+    assert yaml.safe_load(block)["grants"]["shadow"] == []
+    block, _ = clients.render_profile(CATALOG, COLLECTOR, "orchestrator",
                                       lanes=["real", "shadow"], policy=WIDE,
                                       npm_prefix=NPM_PREFIX)  # fmt: skip
     assert block.startswith("\n" + clients.GRANTS_MARKER)
@@ -526,18 +540,20 @@ def test_the_splice_never_makes_a_second_grants_key_or_drops_keys():
         clients.splice_grants(after, block)
     # a new file: no leading blank lines; yaml.v3 refuses a duplicate key, and so does the check
     assert clients.splice_grants("", block).startswith(clients.GRANTS_MARKER)
-    bad = clients.orch_accepts("kinds: {}", {"p": "name: x\nname: y\n"})
-    assert bad and "duplicate key 'name'" in bad[0]
+    with pytest.raises(clients.RenderError, match="duplicate key 'name'"):
+        clients.load_strict("name: x\nname: y\n", "p")
 
 
-def test_a_spec_refuses_a_missing_grants_file_and_checks_every_orchestrator_profile(tmp_path):
+def test_a_spec_refuses_a_missing_grants_file_and_reads_every_orchestrator_profile(tmp_path):
     spec = _orch_copy(tmp_path)
-    profiles = spec.parent / "llm-orchestrator" / "profiles"
+    profiles = spec.parent / "orchestrator" / "profiles"
     other = profiles / "monitor.yaml"  # not in the spec, but loaded by the same controller
-    other.write_text("name: monitor\ngrants:\n  real: [{name: c, kind: collectormcp}]\n"
-                     "  shadow: [{name: c, kind: collectormcp}]\n")  # fmt: skip
-    with pytest.raises(clients.RenderError, match="unknown kind 'collectormcp'"):
+    other.write_text("agent_key: monitor\nagent_key: other\n")
+    with pytest.raises(clients.RenderError, match="duplicate key 'agent_key'"):
         clients.render_spec(spec)
+    # what the controller accepts (a known kind, an allowed key) is its loader's to judge
+    other.write_text("agent_key: monitor\ngrants:\n  real: [{name: c, kind: collectormcp}]\n")
+    assert clients.render_spec(spec).outputs
     other.unlink()
     (profiles / "collector.yaml").unlink()
     with pytest.raises(clients.RenderError, match="no such profile file"):
@@ -663,7 +679,7 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
         (d / "notes.yml").write_text(yaml.safe_dump(rec))
         with pytest.raises(clients.RenderError, match=re.escape(phrase)):
             clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
-    # llm-orchestrator's catalog holds every grantable stdio server, granted or not
+    # the orchestrator's catalog holds every grantable stdio server, granted or not
     (d / "notes.yml").write_text(pristine)
     rec = yaml.safe_load((d / "cases.yml").read_text())
     rec["transport"]["args"] = ["--api-key=fakeshort"]
@@ -671,11 +687,11 @@ def test_render_refuses_a_record_check_would_refuse(tmp_path):
     kw = {"lanes": ["real", "shadow"], "policy": WIDE}
     assert clients.render_profile(servers.load(d), COLLECTOR, "claude-code", policy=WIDE)
     with pytest.raises(clients.RenderError, match="--api-key takes a credential"):
-        clients.render_profile(servers.load(d), COLLECTOR, "llm-orchestrator", **kw)
+        clients.render_profile(servers.load(d), COLLECTOR, "orchestrator", **kw)
 
 
 def test_yaml_merge_keys_are_read_and_duplicates_still_refused():
-    """yaml.v3 (llm-orchestrator) reads merge keys; the strict loader used to fail on them."""
+    """The orchestrator's YAML library reads merge keys; the strict loader used to fail on them."""
     head = "defaults: &d {model: m, budget: 5}\nname: x\nlimits:\n  <<: *d\n  budget: 9\n"
     assert clients.load_strict(head, "p")["limits"] == {"model": "m", "budget": 9}
     text = clients.splice_grants(head, clients.ORCH_GRANTS_HEAD + "grants: {}\n")
@@ -748,5 +764,5 @@ def test_the_orchestrator_catalog_has_no_kind_for_a_server_that_acts_directly():
     assert any(n.startswith("shell: acts other than through the broker") for n in notes)
     text, _ = clients.orch_catalog(cat, {"shell"}, CTX)
     assert "shell" in yaml.safe_load(text)["kinds"]
-    shipped = yaml.safe_load((SPECS / "llm-orchestrator" / "mcp_catalog.yaml").read_text())
+    shipped = yaml.safe_load((SPECS / "orchestrator" / "mcp_catalog.yaml").read_text())
     assert not {"shell", "ssh", "ansible", "kubernetes", "vault"} & set(shipped["kinds"])

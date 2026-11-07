@@ -95,6 +95,14 @@ func TestUnvalidatedZonesRefuseEverything(t *testing.T) {
 	if !raw.ReservedName("anyone") {
 		t.Error("raw Zones must reserve every name")
 	}
+	if raw.Validated() || !testZones.Validated() {
+		t.Errorf("Validated: raw %v, validated %v", raw.Validated(), testZones.Validated())
+	}
+	changed := testZones
+	changed.SharedWrite = []string{"other/"}
+	if changed.Validated() {
+		t.Error("a validated Zones changed afterwards still reports Validated")
+	}
 }
 
 // The validated copy owns its lists.

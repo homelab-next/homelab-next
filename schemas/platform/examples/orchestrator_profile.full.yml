@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# A fictional dispatch profile using every key the loader defines.
+id: watcher-v3
+agent_key: watcher
+allowed_tools: [notes_query, notes_write]
+path_scope:
+  writable_prefixes: [notes/findings/watch/, notes/findings/watch-shadow/, inbox/]
+  readable_prefixes: [owner/priorities.md]
+toolsets: {real: notes-watcher, shadow: notes-watcher}
+default_task_description: Check the watch list and file one finding.
+prompt_context:
+  state_file: /srv/notes/state.json
+  state_label: notes/state.json
+  known_incidents_key: watcher
+  facts: example
+  facts_timeout_s: 30
+local_only: true
+backend_affinity: {require_tags: [general], exclude_backends: [engine-b], min_context: 32768, exclusive: false}
+max_attempts: 2
+grants:
+  real:
+  - {name: notes-watcher-real, kind: notes, env: {NOTES_MODE: write}, timeout: 60}
+  shadow:
+  - {name: notes-watcher-shadow, kind: notes, env: {NOTES_MODE: read}}

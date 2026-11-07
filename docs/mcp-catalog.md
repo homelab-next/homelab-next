@@ -1,6 +1,6 @@
 ---
 summary: 'The MCP catalog, one record per MCP server: the record, fatal rules, adding a server, instances, rendering client configs, importing a lab and reviews.'
-summary_of: outline:sha256:647464bd0bd26d9b
+summary_of: outline:sha256:fc70d24155aef793
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The MCP catalog: one list of MCP servers
@@ -25,7 +25,7 @@ and checks), `clients.py` (rendering), `importer.py` (import) and `catalog_cli.p
 | Graph `mcp:<id>` nodes, `served_by`, `reaches`, `fronts`, `implements`, `replaced_by` edges | `hnx graph` ([graph](graph.md)) | derived |
 | System page MCP line | `docs/systems/<service>.md` (`hnx docs systems generate`) | derived |
 | Status hub MCP servers page | `/mcp-servers` (directory menu group) | derived |
-| Client configs (`.mcp.json`, Claude Desktop, Hermes `mcp_servers`, llm-orchestrator catalog and `grants:` blocks) | wherever each runtime reads them | derived: `hnx mcp catalog render` |
+| Client configs (`.mcp.json`, Claude Desktop, Hermes `mcp_servers`, the orchestrator's catalog and `grants:` blocks) | wherever each runtime reads them | derived: `hnx mcp catalog render` |
 | The access block and keyring levels | `hnx agent pack`, `hnx agent keyring` | derived (through the classes) |
 
 ## A record
@@ -235,7 +235,8 @@ entry N)`.
   `HOSTALIASES`, `RES_OPTIONS`, `LOCALDOMAIN`, `GLIBC_TUNABLES`, `MALLOC_*`, `TZDIR`,
   `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`,
   `RUBYOPT`, `RUBYLIB`, `BASH_FUNC_*`, `SHELLOPTS`, `BASHOPTS` and `PS4` (`TZ` stays a setting).
-  A superset of llm-orchestrator's hard-denied list;
+  The orchestrator's grants loader denies the same keys (`orchestrator/internal/grants`,
+  `DeniedEnvPattern`, this list character for character, held equal by a test);
 - parameters: every parameter has an `enum` or a `pattern`; its env key never names a credential, never also a fixed setting or secret, never shared by
   two parameters; a default fits its enum and pattern and holds no `$` or `secret:`; templates
   name only `{id}`, `{profile}`, `{lane}`, `{home}`, the parameters, and in arguments
@@ -356,7 +357,7 @@ hnx mcp catalog render --profile build/profile.json --client claude-code \
 | `claude-desktop` | a **fragment**: the `mcpServers` to merge into `claude_desktop_config.json` (stdio only; a remote server is reported and left out). Claude Desktop does not expand `${VAR}` in that file, so a server that needs a secret is refused (start it through a wrapper that reads the secret store). Never point an output at the live file: it holds other settings the render would replace |
 | `generic` | `mcpServers` with an explicit `transport` and `timeout` |
 | `hermes` | Hermes Agent's `mcp_servers:` YAML block (`command`, `args`, `env`, `timeout`; remote: `url`, `headers`). An entry has no transport field, so a legacy `sse` server is refused rather than reached as streamable HTTP |
-| `llm-orchestrator` | its `configs/mcp_catalog.yaml` (`kinds:` with `command`, `args`, `timeout`, fixed `env`, `allowed_env` = the parameters' env keys) and each profile's `grants:` block (`real`/`shadow` lists of `name`, `kind`, `env`), spliced into the profile file |
+| `orchestrator` (old name `llm-orchestrator`) | the controller's catalog of kinds (`kinds:` with `command`, `args`, `timeout`, fixed `env`, `allowed_env` = the parameters' env keys, each pinned in `allowed_values`) and each profile's `grants:` block (`real`/`shadow` lists of `name`, `kind`, `env`), spliced into the profile file |
 
 Render trusts no profile the compiler would not have produced: a compiled profile must pass
 everything `hnx agent verify --policy [--lock]` checks (schema, a digest that is present and
@@ -378,7 +379,7 @@ granted no server that reaches the internet (a hosted one, or `egress: internet`
 context would go, unless its entry names that server in `internet_mcp`, an exception the policy
 owner makes per profile and server. The example
 specs share `examples/mcp/clients/policy/ceilings.yml`. Nor does render write a record check
-would refuse: every record it writes (the granted ones; for llm-orchestrator every grantable one,
+would refuse: every record it writes (the granted ones; for the orchestrator every grantable one,
 since its catalog holds them all) must pass check's **whole** record check (schema and id, pin and
 launch, tools and egress, a hosted server's URL, credentials, parameters and templates,
 capabilities, lifecycle, and the registry's cross-references: the spec's registry, else
@@ -393,7 +394,7 @@ place.
 
 Only the profile's granted servers are rendered. A credential is never a value: it is
 `${HNX_SECRET_<NAME>}` (the registry's `secret_env_name`), which Claude Code expands from its
-environment and the Hermes and llm-orchestrator deploys substitute when they install the file
+environment and the Hermes and orchestrator deploys substitute when they install the file
 (Claude Desktop expands nothing: see above). An HTTP server's URL is built from the registry
 (scheme, capability alias, port, path). Every rendered file carries a generated note (a JSON
 `_generated` key or a YAML comment) naming the digest of the records **it** holds, so editing a
@@ -404,21 +405,24 @@ or a home that lost an entry.
 The generated example that [broker](broker.md) shows is
 `examples/mcp/clients/claude-code/broker-agent.mcp.json`.
 
-### llm-orchestrator
+### orchestrator
 
-`--client llm-orchestrator` emits exactly the format llm-orchestrator's per-job grants read
-(`internal/grants`, ADR-022 there): one kind per grantable stdio server (a remote server, or one
-whose arguments or settings vary per instance, is reported and left out unless a rendered profile
-is granted it, when it is refused: the job would otherwise run silently without it; a server
-that acts other than through the broker is left out unless a rendered profile is granted it,
-which only a policy's `direct_mcp` exception allows, so the controller refuses any other profile's
-grant of it), and per profile a `grants:` block whose instances set only their parameters' env
-keys.
-`clients.orch_accepts` encodes that loader's rules (YAML without a duplicate key, as yaml.v3
-reads it; known fields only, names, a command, no hard-denied allowed key, no duplicate server, a
-known kind, only allowed env keys) and its scheduler's (a profile that grants one lane must grant
-the other, or every job of the empty lane fails), and the render refuses anything it would refuse,
-in `--profile` mode too. So render both lanes (`lanes: [real, shadow]`).
+`--client orchestrator` (`llm-orchestrator`, the client's old name, is still accepted) emits the
+controller's catalog of kinds and each profile's `grants:` block, the files
+`orchestrator/internal/grants` loads ([the controller's core](orchestration-controller.md),
+"Grants"): one kind per grantable stdio server (a remote server, or one whose arguments or
+settings vary per instance, is reported and left out unless a rendered profile is granted it,
+when it is refused: the job would otherwise run silently without it; a server that acts other
+than through the broker is left out unless a rendered profile is granted it, which only a
+policy's `direct_mcp` exception allows, so the controller refuses any other profile's grant of
+it), and per profile a `grants:` block whose instances set only their parameters' env keys.
+Every such key is pinned in the kind's `allowed_values`, as the loader requires of a key it
+cannot otherwise classify: an `enum` parameter to its values, any other to the values the
+rendered instances give it. A non-enum parameter no rendered profile sets is not grant-settable
+(a note says so): render a profile granted it. The Go loader is the one judge of the rest (names,
+known kinds, the deny list, one grant per server, both lanes or neither): its test loads this
+repository's committed render in place, and the render does not keep a copy of those rules. So
+render both lanes (`lanes: [real, shadow]`).
 
 The block is spliced into the orchestrator's own profile file, which must exist: everything from
 the marker line `# Per-job MCP grants (ADR-022).` to the end of the file is the render's. A
@@ -426,14 +430,15 @@ the marker line `# Per-job MCP grants (ADR-022).` to the end of the file is the 
 splice would delete it) is refused. The rendered catalog replaces the orchestrator's whole
 `configs/mcp_catalog.yaml`, so the spec's `check_profiles:` glob names every profile file the
 orchestrator loads: each one with a `grants:` block, rendered by this spec or not, must accept the
-new catalog, or the render is refused (the controller would refuse to start).
+new catalog (the controller would refuse to start otherwise). The render reads each as strict YAML;
+the controller's loader judges it (`Registry.CheckGrants`).
 
 To switch an orchestrator checkout from a hand-written catalog to the rendered one:
 
 1. import its servers (below), pin, classify and review them, and add `parameters` with `env`
    for every key its grants set per agent, and an `instance` template that reproduces the names
    its prompts use;
-2. write a render spec with `client: llm-orchestrator`, `lanes: [real, shadow]`, one `profiles`
+2. write a render spec with `client: orchestrator`, `lanes: [real, shadow]`, one `profiles`
    entry per orchestrator profile (`grants_file:` that profile's YAML, `params:` its values),
    one output for `configs/mcp_catalog.yaml` and `check_profiles: configs/profiles/*.yaml`;
 3. render, diff against the hand-written files (the server definitions must come out identical;

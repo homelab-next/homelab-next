@@ -13,21 +13,23 @@
 * **clients.**  ``claude-code`` (``.mcp.json``), ``claude-desktop`` (a fragment of stdio
   servers that need no secret: Desktop does not expand ``${VAR}``),
   ``generic`` (``mcpServers`` with an explicit transport), ``hermes`` (a ``mcp_servers:`` YAML
-  block, Hermes Agent's ``config.yaml`` shape; no sse, which it has no field for) and ``llm-orchestrator`` (its
-  ``configs/mcp_catalog.yaml`` kinds and each profile's ``grants:`` block, byte for byte the shape
-  its ``internal/grants`` package reads).
+  block, Hermes Agent's ``config.yaml`` shape; no sse, which it has no field for) and ``orchestrator``
+  (``llm-orchestrator`` is its old name, still accepted): the controller's catalog of kinds and
+  each profile's ``grants:`` block, which ``orchestrator/internal/grants`` loads.  That loader is
+  the one judge of what it accepts: the render does not re-check its rules, and a Go test loads
+  the committed render of ``examples/mcp`` in place.
 * **secrets** are never values: an ``env`` secret, a ``secret:`` argument or header becomes
   ``${HNX_SECRET_<NAME>}`` (:func:`homelabnext.registry.model.secret_env_name`), which Claude Code
-  expands from the environment at start and Hermes and llm-orchestrator get from the deploy that
+  expands from the environment at start and Hermes and the orchestrator get from the deploy that
   installs the file.  **Endpoints** are built from the registry (scheme, capability alias, port, path),
   never written in a record.
 
 A render *spec* (YAML, trusted input: review it like code) names the client, the catalog, the
 registry, the ceiling policy, the launch anchors (``npm_prefix``, ``checkout_root``), the lanes,
 the profiles with their grants' parameter values, and every output: one per runtime home (a primary and a fallback
-Hermes home from one source), or for llm-orchestrator the catalog file and each profile's file
+Hermes home from one source), or for the orchestrator the catalog file and each profile's file
 whose ``grants:`` block is spliced (``check_profiles``: every orchestrator profile that must
-accept the rendered catalog).  ``--check`` compares every output and fails on any drift, so a
+accept the rendered catalog, read here as strict YAML and judged by the controller's loader).  ``--check`` compares every output and fails on any drift, so a
 hand edit or a home that lost an entry is caught, and on any file under the spec's ``owns``
 globs that no output renders.
 """
@@ -53,13 +55,12 @@ from . import credentials, servers
 
 _name = credentials.name
 
-CLIENTS = ("claude-code", "claude-desktop", "generic", "hermes", "llm-orchestrator")
-#: llm-orchestrator's server-name rule (internal/grants/grants.go:68, nameRe)
-ORCH_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-#: the keys llm-orchestrator's catalog kinds and grants accept (grants.go:28-32, 44-47, read with
-#: KnownFields at grants.go:85): anything else would be refused
-ORCH_KIND_KEYS = ("command", "args", "timeout", "env", "allowed_env")
-ORCH_GRANT_KEYS = ("name", "kind", "env", "timeout")
+#: the clients a render writes for; ``CLIENT_ALIASES`` maps an old name to its client
+CLIENTS = ("claude-code", "claude-desktop", "generic", "hermes", "orchestrator")
+CLIENT_ALIASES = {"llm-orchestrator": "orchestrator"}
+ORCHESTRATOR = "orchestrator"
+#: an instance name, for every client: the orchestrator's grants loader reads server names so
+INSTANCE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 ORCH_LANES = ("real", "shadow")
 #: a lane or a runtime home: both are templated into names, arguments and settings ({lane},
 #: {home}), so they are plain names, never a value a client would expand or resolve
@@ -67,6 +68,11 @@ NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 #: the marker line a profile's spliced ``grants:`` block starts at (everything after it is ours)
 GRANTS_MARKER = "# Per-job MCP grants (ADR-022)."
 _SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*")
+
+
+def client_name(client: Any) -> Any:
+    """``client`` with an old name (``CLIENT_ALIASES``) replaced by the client's own."""
+    return CLIENT_ALIASES.get(client, client) if isinstance(client, str) else client
 
 
 def refuse_unsound_records(
@@ -286,7 +292,7 @@ def instances(
                     runtime_home=home,
                 )
                 inst.name = _fill(str(rec.get("instance") or "{id}"), inst.vars())
-                if not ORCH_NAME.fullmatch(inst.name):
+                if not INSTANCE_NAME.fullmatch(inst.name):
                     problems.append(
                         f"{pid}: {sid}: an instance name is not a valid name (its template "
                         "and parameter values)"
@@ -486,34 +492,53 @@ def render_home(
     return text, skipped
 
 
-# ------------------------------------------------------------------------- llm-orchestrator
+# ------------------------------------------------------------------------- orchestrator
 ORCH_CATALOG_HEAD = (
-    "# MCP server catalog (ADR-022). GENERATED by hnx mcp catalog render --client "
-    "llm-orchestrator\n"
+    "# MCP server catalog. GENERATED by hnx mcp catalog render --client orchestrator\n"
     "# from the homelab-next MCP catalog; edit the catalog, never this file. One entry per server "
     "KIND:\n"
-    "# command/args/fixed env are the catalog's; a profile's grant may set only allowed_env keys\n"
-    "# (internal/grants also hard-denies PATH, LD_*, PYTHON*, HOME, HERMES_HOME and friends).\n"
+    "# command/args/fixed env are the catalog's; a profile's grant may set only allowed_env keys,\n"
+    "# each to one of its allowed_values (orchestrator/internal/grants also denies PATH, LD_*,\n"
+    "# PYTHON*, HOME and friends).\n"
 )
 ORCH_GRANTS_HEAD = (
-    "\n" + GRANTS_MARKER + " Generated by hnx mcp catalog render --client llm-orchestrator\n"
+    "\n" + GRANTS_MARKER + " Generated by hnx mcp catalog render --client orchestrator\n"
     "# from the homelab-next MCP catalog and this profile's grants; edit those, never this "
     "block.\n"
 )
 
 
+def orch_values(insts: Iterable[Instance]) -> dict[str, dict[str, set[str]]]:
+    """``{server: {ENV: values}}``: every value a rendered instance gives an env parameter."""
+    out: dict[str, dict[str, set[str]]] = {}
+    for inst in insts:
+        for env, value in inst.param_env.items():
+            out.setdefault(inst.server, {}).setdefault(env, set()).add(value)
+    return out
+
+
 def orch_kind(
-    sid: str, rec: Mapping[str, Any], ctx: servers.LaunchContext | None = None
+    sid: str,
+    rec: Mapping[str, Any],
+    ctx: servers.LaunchContext | None = None,
+    values: Mapping[str, Iterable[str]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    """A record as an llm-orchestrator catalog kind, or None (not a stdio server) and why not."""
+    """A record as an orchestrator catalog kind, or None (not a stdio server) and why not.
+
+    Every env parameter becomes an ``allowed_env`` key pinned in ``allowed_values``: an ``enum``
+    parameter to its values, any other to the values the rendered instances give it
+    (``values``, :func:`orch_values`), since the controller pins every grant-settable key it
+    cannot classify otherwise.  A non-enum parameter no rendered instance sets has nothing to pin
+    and is not grant-settable (a note says so).  Returns the kind and the problems, plus notes
+    prefixed ``note:``."""
     t = rec.get("transport") or {}
     if t.get("type") != "stdio":
-        return None, [f"{sid}: llm-orchestrator kinds start a command; {t.get('type')} is skipped"]
+        return None, [f"{sid}: orchestrator kinds start a command; {t.get('type')} is skipped"]
     problems: list[str] = []
     args = [str(a) for a in t.get("args") or ()]
     if any(servers.TEMPLATE.search(a) for a in args):
         problems.append(
-            f"{sid}: an argument is per instance; llm-orchestrator kinds take per-instance "
+            f"{sid}: an argument is per instance; orchestrator kinds take per-instance "
             "values only through allowed_env (make it a parameter with env)"
         )
     settings = rec.get("settings") or {}
@@ -530,18 +555,37 @@ def orch_kind(
     env.update({k: _placeholder(str(v)) for k, v in (rec.get("env") or {}).items()})
     if env:
         entry["env"] = dict(sorted(env.items()))
-    allowed = sorted(p["env"] for p in (rec.get("parameters") or {}).values() if p.get("env"))
-    if allowed:
-        entry["allowed_env"] = allowed
-    return entry, problems
+    pinned: dict[str, list[str]] = {}
+    unset: list[str] = []
+    for p in (rec.get("parameters") or {}).values():
+        if not p.get("env"):
+            continue
+        given = sorted({str(v) for v in (values or {}).get(p["env"], ())})
+        if p.get("enum"):
+            pinned[p["env"]] = sorted({*map(str, p["enum"]), *given})
+        elif given:
+            pinned[p["env"]] = given
+        else:
+            unset.append(p["env"])
+    if pinned:
+        entry["allowed_env"] = sorted(pinned)
+        entry["allowed_values"] = dict(sorted(pinned.items()))
+    notes = [
+        f"note:{sid}: {env} has no enum and no rendered instance sets it, so no grant may "
+        "(render a profile granted it)"
+        for env in sorted(unset)
+    ]
+    return entry, problems + notes
 
 
 def orch_catalog(
     cat: servers.ServerCatalog,
     granted_ids: Iterable[str] = (),
     ctx: servers.LaunchContext | None = None,
+    values: Mapping[str, Mapping[str, Iterable[str]]] | None = None,
 ) -> tuple[str, list[str]]:
-    """``configs/mcp_catalog.yaml``: every grantable stdio server as a kind.  A server that
+    """The controller's catalog: every grantable stdio server as a kind (:func:`orch_kind`;
+    ``values``: :func:`orch_values` of the rendered instances).  A server that
     cannot be a kind is skipped with a note, or refused when a rendered profile is granted it.
     A server that acts other than through the broker (an acting tool, and not ``acts_via:
     broker``, ADR-0030) is a kind only when a rendered profile is granted it, which the broker
@@ -564,7 +608,9 @@ def orch_catalog(
                 "it; no kind (agents act only through the broker)"
             )
             continue
-        entry, why = orch_kind(sid, rec, ctx)
+        entry, said = orch_kind(sid, rec, ctx, (values or {}).get(sid))
+        why = [w for w in said if not w.startswith("note:")]
+        notes += [w.removeprefix("note:") for w in said if w.startswith("note:")]
         if entry is None or (why and sid not in granted_ids):
             notes += why
             continue
@@ -572,14 +618,14 @@ def orch_catalog(
         kinds[sid] = entry
     if problems:
         raise RenderError(problems)
-    note = generated_note(cat, "llm-orchestrator", {k: cat.servers[k] for k in kinds})
+    note = generated_note(cat, ORCHESTRATOR, {k: cat.servers[k] for k in kinds})
     head = ORCH_CATALOG_HEAD + f"# {note}\n"
     return head + yaml.safe_dump({"kinds": kinds}, sort_keys=True, width=100), notes
 
 
 def orch_grants(insts: list[Instance], lanes: Iterable[str]) -> str:
     """One profile's ``grants:`` block (``real`` and ``shadow`` lists, by instance name).  A
-    granted server llm-orchestrator cannot start (a remote one: its kinds start a command) is
+    granted server the orchestrator cannot start (a remote one: its kinds start a command) is
     refused, never dropped: the job would silently run without it."""
     out: dict[str, list[dict[str, Any]]] = {lane: [] for lane in ORCH_LANES}
     for lane in lanes:
@@ -589,7 +635,7 @@ def orch_grants(insts: list[Instance], lanes: Iterable[str]) -> str:
         kind = (inst.record.get("transport") or {}).get("type")
         if kind != "stdio":
             problems.append(
-                f"profile:{inst.profile}: granted {inst.server}, a {kind} server; llm-orchestrator "
+                f"profile:{inst.profile}: granted {inst.server}, a {kind} server; orchestrator "
                 "kinds start a command, so it cannot be granted there"
             )
             continue
@@ -603,7 +649,7 @@ def orch_grants(insts: list[Instance], lanes: Iterable[str]) -> str:
 
 
 def load_strict(text: str, what: str) -> Any:
-    """``text`` as YAML, refusing a duplicate key as llm-orchestrator's yaml.v3 does (PyYAML
+    """``text`` as YAML, refusing a duplicate key as the orchestrator's YAML library does (PyYAML
     keeps the last one silently); a :class:`RenderError` names ``what``."""
     try:
         return yaml.load(text, Loader=UniqueKeyLoader)  # a SafeLoader subclass
@@ -611,7 +657,7 @@ def load_strict(text: str, what: str) -> Any:
         mark = getattr(exc, "problem_mark", None)
         at = f" (line {mark.line + 1})" if mark is not None else ""
         why = getattr(exc, "problem", None) or exc
-        raise RenderError([f"{what}: not YAML llm-orchestrator can read{at}: {why}"]) from None
+        raise RenderError([f"{what}: not YAML the orchestrator can read{at}: {why}"]) from None
 
 
 def splice_grants(existing: str, block: str, what: str = "profile") -> str:
@@ -644,70 +690,6 @@ def splice_grants(existing: str, block: str, what: str = "profile") -> str:
     text = head.rstrip("\n") + "\n" + block if head.strip() else block.lstrip("\n")
     load_strict(text, what)
     return text
-
-
-def orch_accepts(catalog_text: str, grant_blocks: Mapping[str, str]) -> list[str]:
-    """What llm-orchestrator would refuse in these files (a catalog, and profile files or their
-    grants blocks), its rules encoded here (llm-orchestrator commit 68ffbcd): YAML without a
-    duplicate key (yaml.v3), and internal/grants/grants.go's known fields only (85, KnownFields),
-    kind and server names (68, 90, 111), a command (94), no hard-denied allowed_env key (71, 98), no
-    duplicate server (115), a known kind (119), only allowed, non-denied env keys (127); and
-    internal/queue/scheduler.go:626, which fails every job of a lane with no grants when the
-    other lane has some."""
-    problems: list[str] = []
-    try:
-        doc = load_strict(catalog_text, "catalog") or {}
-        docs = {who: load_strict(text, who) or {} for who, text in grant_blocks.items()}
-    except RenderError as exc:
-        return exc.problems
-    if set(doc) != {"kinds"}:
-        problems.append(f"catalog: top-level keys {sorted(doc)} (only kinds)")
-    kinds = doc.get("kinds") or {}
-    for name, k in kinds.items():
-        if not ORCH_NAME.fullmatch(name):
-            problems.append(f"kind {_name(name)}: bad name")
-        extra = set(k) - set(ORCH_KIND_KEYS)
-        if extra:
-            problems.append(f"kind {name}: unknown field(s) {sorted(extra)}")
-        if not k.get("command"):
-            problems.append(f"kind {name}: command is required")
-        for key in k.get("allowed_env") or ():
-            if servers.ORCH_DENIED_ENV.match(key) or servers.denied_env(key):
-                problems.append(f"kind {name}: env key {key} may never be grant-settable")
-    for who, doc in docs.items():
-        lanes = (doc.get("grants") if isinstance(doc, Mapping) else None) or {}
-        extra = set(lanes) - set(ORCH_LANES)
-        if extra:
-            problems.append(f"{who}: unknown lane(s) {sorted(extra)}")
-        empty = [lane for lane in ORCH_LANES if not lanes.get(lane)]
-        if len(empty) == 1:
-            problems.append(
-                f"{who}: grants the {ORCH_LANES[1 - ORCH_LANES.index(empty[0])]} lane but not "
-                f"{empty[0]}: llm-orchestrator fails every {empty[0]} job (render both lanes)"
-            )
-        for lane, gs in lanes.items():
-            seen: set[str] = set()
-            for g in gs or ():
-                if set(g) - set(ORCH_GRANT_KEYS):
-                    problems.append(
-                        f"{who}/{lane}: unknown grant field(s) {sorted(set(g) - set(ORCH_GRANT_KEYS))}"
-                    )
-                name = str(g.get("name"))
-                if not ORCH_NAME.fullmatch(name):
-                    problems.append(f"{who}/{lane}: server name {_name(name)} is not a valid name")
-                if name in seen:
-                    problems.append(f"{who}/{lane}: server {name} granted twice")
-                seen.add(name)
-                k = kinds.get(g.get("kind"))
-                if k is None:
-                    problems.append(
-                        f"{who}/{lane}: server {_name(name)}: unknown kind {_name(g.get('kind'))}"
-                    )
-                    continue
-                for key in g.get("env") or {}:
-                    if servers.denied_env(key) or key not in (k.get("allowed_env") or ()):
-                        problems.append(f"{who}/{lane}: server {name} may not set env {key}")
-    return problems
 
 
 # --------------------------------------------------------------------------------- the spec
@@ -877,12 +859,11 @@ def render_profile(
         cat, prof, lanes=lanes, params=params, profile_file=profile_file or str(p.resolve())
     )
     notes = deprecation_notes(cat, prof) + anchor_host_problems(ctx)[1]
-    if client == "llm-orchestrator":
+    if client_name(client) == ORCHESTRATOR:
         block = orch_grants(insts, lanes)
-        catalog_text, _ = orch_catalog(cat, {i.server for i in insts}, ctx)
-        bad = orch_accepts(catalog_text, {prof["id"]: block})
-        if bad:
-            raise RenderError(bad)
+        # the catalog's own refusals (a granted server that cannot be a kind); what the
+        # controller accepts is its loader's to judge
+        orch_catalog(cat, {i.server for i in insts}, ctx, orch_values(insts))
         return block, notes
     text, skipped = render_home(insts, client, cat, registry, prof["id"], ctx)
     return text, notes + [f"{client} cannot hold {n} (not a stdio server)" for n in skipped]
@@ -898,8 +879,8 @@ def _spec_problems(spec: Any) -> list[str]:
     }  # fmt: skip
     if extra:
         out.append(f"unknown key(s) {sorted(extra)}")
-    if spec.get("client") not in CLIENTS:
-        out.append(f"client must be one of {list(CLIENTS)}")
+    if client_name(spec.get("client")) not in CLIENTS:
+        out.append(f"client must be one of {list(CLIENTS)} (or an old name: {sorted(CLIENT_ALIASES)})")
     if not isinstance(spec.get("profiles"), list) or not spec.get("profiles"):
         out.append("profiles must list at least one profile")
     outputs = spec.get("outputs")
@@ -913,8 +894,8 @@ def _spec_problems(spec: Any) -> list[str]:
         extra = set(o) - {"path", "home", "params"}
         if extra:
             out.append(f"outputs[{i}]: unknown key(s) {sorted(extra)}")
-        if spec.get("client") == "llm-orchestrator" and ({"home", "params"} & set(o)):
-            out.append(f"outputs[{i}]: llm-orchestrator's catalog has no home or params")
+        if client_name(spec.get("client")) == ORCHESTRATOR and ({"home", "params"} & set(o)):
+            out.append(f"outputs[{i}]: the orchestrator's catalog has no home or params")
         if o.get("home") is not None and not (
             isinstance(o["home"], str) and NAME.fullmatch(o["home"])
         ):
@@ -980,7 +961,7 @@ def render_spec(
             raise RenderError([str(exc)]) from None
     policy = load_policy(base / str(spec["policy"])) if spec.get("policy") else None
     lock = load_lock(base / str(spec["lock"])) if spec.get("lock") else None
-    client = spec["client"]
+    client = client_name(spec["client"])
     lanes = [str(x) for x in spec.get("lanes") or ["real"]]
     every: list[Instance] = []
     blocks: dict[str, tuple[Path, str]] = {}
@@ -996,7 +977,7 @@ def render_spec(
     )
     for entry, prof, pf in loaded:
         res.notes += deprecation_notes(cat, prof)
-        if client != "llm-orchestrator":
+        if client != ORCHESTRATOR:
             continue
         insts = instances(
             cat,
@@ -1006,31 +987,29 @@ def render_spec(
             profile_file=str(entry.get("profile_file") or pf.resolve()),
         )
         every += insts
-        if client == "llm-orchestrator":
+        if client == ORCHESTRATOR:
             if not entry.get("grants_file"):
-                raise RenderError([f"{sp}: {prof['id']}: llm-orchestrator needs grants_file"])
+                raise RenderError([f"{sp}: {prof['id']}: the orchestrator needs grants_file"])
             gf = _inside(out_root, entry["grants_file"], "grants_file")
             blocks[prof["id"]] = (gf, orch_grants(insts, lanes))
-    if client == "llm-orchestrator":
-        text, notes = orch_catalog(cat, {i.server for i in every}, ctx)
+    if client == ORCHESTRATOR:
+        text, notes = orch_catalog(cat, {i.server for i in every}, ctx, orch_values(every))
         res.notes += notes
         for out in spec["outputs"]:
             res.outputs.append(Output(_inside(out_root, out["path"], "output"), text))
-        full: dict[str, str] = {}
+        spliced: set[str] = set()
         for path, block in blocks.values():
             o = Output(path, block, splice=True)
-            full[str(path)] = o.expected()  # the whole profile file, as the orchestrator reads it
+            o.expected()  # the whole profile file, as the orchestrator reads it: strict YAML
+            spliced.add(str(path))
             res.outputs.append(o)
-        # every profile the orchestrator loads must accept the catalog that replaces its own,
-        # not only the profiles this spec renders (its controller refuses to start otherwise)
+        # every profile the orchestrator loads must accept the catalog that replaces its own, not
+        # only the profiles this spec renders: each is read here as strict YAML, and the
+        # controller's loader judges the rest (orchestrator/internal/grants; this repository's
+        # example is loaded in place by its tests)
         for f in _owned(out_root, spec.get("check_profiles")):
-            if str(f) not in full and f.is_file():
-                other = f.read_text(encoding="utf-8")
-                if "grants" in (load_strict(other, str(f)) or {}):
-                    full[str(f)] = other
-        bad = orch_accepts(text, full)
-        if bad:
-            raise RenderError(bad)
+            if str(f) not in spliced and f.is_file():
+                load_strict(f.read_text(encoding="utf-8"), str(f))
     else:
         every_granted = {sid for _, prof, _ in loaded for sid in granted(prof)}
         for i, out in enumerate(spec["outputs"]):
@@ -1118,10 +1097,10 @@ def anchor_host_problems(ctx: servers.LaunchContext) -> tuple[list[str], list[st
 def _rendered_ids(
     cat: servers.ServerCatalog, client: str, profiles: Iterable[Mapping[str, Any]]
 ) -> set[str]:
-    """The records a render writes: the profiles' grants, and for llm-orchestrator every
+    """The records a render writes: the profiles' grants, and for the orchestrator every
     grantable record (its catalog holds a kind per grantable stdio server)."""
     out = {sid for prof in profiles for sid in granted(prof)}
-    if client == "llm-orchestrator":
+    if client_name(client) == ORCHESTRATOR:
         out |= {sid for sid, rec in cat if rec.get("status") in servers.GRANTABLE}
     return out
 
