@@ -1,11 +1,16 @@
 ---
 summary: The orchestrator joins this repository as the Go module orchestrator/, gateway first; lab data goes to the overlay, MCP servers become modules, in stages.
-summary_of: outline:sha256:55a2d2ccded19d6a
+summary_of: outline:sha256:dd8a0ee78f574512
 ---
 # ADR-0026: Make the orchestrator and its gateway part of this repository
 
 - **Status:** proposed
 - **Date:** 2026-11-07
+- **Amended:** 2026-11-07, with the operator's stage-2 decisions: the controller cuts over after
+  stage 3, behind a runner seam proven first in the private repository; neutral wire names with a
+  migration; no HTTP passthrough; the lessons and runbooks readers on this repository's register
+  formats; the module's first third-party dependencies, among them the YAML library, and its
+  `go.sum` (see the amendment at the end of Decision)
 - **Related:** ADR-0005, ADR-0017, ADR-0021, ADR-0022, ADR-0024, ADR-0027, ADR-0030, ADR-0033,
   [LLM gateway](../llm-gateway.md), [the lab's own gateway](../gateway.md),
   [modules](../modules.md), [MCP catalog](../mcp-catalog.md),
@@ -66,12 +71,14 @@ private sources, so bringing that generic code in needs an amendment to it (deci
      with it, by hand, to a release past the 14-day cooldown (CONTRIBUTING.md, "Keeping pins
      current"). CI's `go` job installs that version (`GOTOOLCHAIN=local`) and runs with
      `GOFLAGS=-mod=readonly` and `GOWORK=off`.
-   - Standard library first. The gateway imports nothing else, so the module has no `go.sum`. A
-     third-party Go dependency follows ADR-0011 decision 4 and CONTRIBUTING.md rule 8 as a Python
-     one does: permissively licensed, justified in its pull request, and listed by module path in
-     the `go` section of `tools/licences.yml`, which `make licence-check` reads from every
-     `go.mod`'s requirements. Dependabot watches the module and its linters' module (`gomod`
-     entries; `tests/packaging/test_orchestrator_tree.py` fails on a discovered module it misses).
+   - Standard library first. The gateway imports nothing else; the controller's core adds the
+     module's first third-party dependencies in stage 2, and with them the module's `go.sum`
+     (see the amendment). A third-party Go dependency follows ADR-0011 decision 4 and
+     CONTRIBUTING.md rule 8 as a Python one does: permissively licensed, justified in its pull
+     request, and listed by module path in the `go` section of `tools/licences.yml`, which `make
+     licence-check` reads from every `go.mod`'s requirements. Dependabot watches the module and
+     its linters' module (`gomod` entries; `tests/packaging/test_orchestrator_tree.py` fails on a
+     discovered module it misses).
    - **Linters.** `orchestrator/tools/go.mod` is the module's linters' module (the
      `tools/go_modules.py` rule): staticcheck and govulncheck pinned as `tool` dependencies, with
      their `go.sum`, at releases past the 14-day cooldown, each module they pull in listed in
@@ -161,7 +168,9 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    1. **The gateway** (this pull request): `orchestrator/cmd/gateway`, `orchestrator/internal/gateway`,
       its docs and its in-repository conformance job.
    2. **The controller's core**, after scrubbing: the generic packages (queue, admission,
-      scheduling, grant loading, telemetry), with fictional example configs.
+      scheduling, grant loading, telemetry), the lessons and runbooks readers on this repository's
+      registers, the internal runner seam, the config and database migrations to neutral names,
+      and no HTTP passthrough, with fictional example configs (see the amendment).
    3. **The agent-runner contract** (its own ADR) **and the Hermes provider module** (decision 5).
    4. **The MCP modules, one by one**: each its own module pull request, with its review tier
       (`hnx modules review-tier`), its catalog record and its conformance target where its slot
@@ -171,15 +180,16 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    6. **Archive**: once every component has cut over, the private repository is archived
       read-only, never deleted, so its history stays readable.
 
-   **Each component cuts over as soon as it lands**, so the lab never runs a frozen copy for long:
-   the lab's deployment then builds it from this repository at the commit the overlay pins
-   (ADR-0021 decision 7). The gateway cuts over under ADR-0038's rules (its suite green here, a
-   period beside LiteLLM, the runtime sending labels); the controller cuts over right after its
-   stage. From this pull request on, this repository's gateway is the implementation ADR-0038 is
-   judged against, and the private copy is frozen. Until a component has cut over, a security fix
-   may be backported to its private copy, and each such backport is recorded in the pull request
-   here that carries the same fix. After cutover the private copy is removed there, with its own
-   conformance job, by an operator-merged pull request.
+   **Each component cuts over as soon as it can run the lab's work: the gateway as soon as it
+   lands, the controller after stage 3** (see the amendment), so the lab runs a frozen copy only
+   while its replacement cannot yet serve the lab's work. The lab's deployment then builds it from this repository at the commit the overlay
+   pins (ADR-0021 decision 7). The gateway cuts over under ADR-0038's rules (its suite green here,
+   a period beside LiteLLM, the runtime sending labels). From this pull request on, this
+   repository's gateway is the implementation ADR-0038 is judged against, and the private copy is
+   frozen. Until a component has cut over, a security fix may be backported to its private copy,
+   and each such backport is recorded in the pull request here that carries the same fix. After
+   cutover the private copy is removed there, with its own conformance job, by an operator-merged
+   pull request.
 9. **ADR-0038 decision 7 changes: the conformance run is an in-repository CI job.** CI's
    `gateway-conformance` job builds `orchestrator/cmd/gateway`, renders the conformance gateway
    spec with `--conformance`, starts the fake inference server and the gateway on loopback with
@@ -193,6 +203,74 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    "green on the orchestrator's main branch"; the side-by-side period and the cutover rules are
    unchanged.
 
+### Amendment (2026-11-07): the controller's stage 2, decided
+
+The operator decided how the controller's core comes in before its pull request was written. The
+decisions change decision 8's cutover point and decision 2's statement about `go.sum`, and settle
+what stage 2 carries:
+
+- **The controller cuts over after stage 3, not after stage 2.** The controller in this
+  repository cannot run the lab's agents until it has a runner: the agent-runner contract and the
+  Hermes provider module (decision 5) arrive in stage 3. Stage 2 lands the controller's core with
+  an **internal runner seam**: an interface under `orchestrator/internal/`, the line along which
+  decision 5 splits the private repository's runner code. It is not the public agent-runner
+  contract; stage 3's ADR defines that contract and may reshape the seam. Behind the seam stage 2
+  ships only a test double, nothing the lab's agents could use. The seam is proven first where the
+  code runs today: a refactor pull request in the private repository puts the controller behind
+  the seam and merges there, and only then does the code move here.
+- **The private controller between stage 2 and stage 3.** From stage 2's merge the private
+  controller is frozen and keeps running the lab. Only a security fix is backported to it, and
+  each backport is recorded in the pull request here that carries the same fix (decision 8). Every
+  other fix is made here only, and reaches the lab at the cutover after stage 3.
+- **Wire names become neutral**, so no product name sits in the controller's wire format
+  (ADR-0027). The job API's `hermes_session_id` becomes `session_id`; the config keys named after
+  the runtime (`hermes_home`, `hermes_local_home`, `hermes_cloud_home`,
+  `hermes_local_fallback_home` and the `hermes_agent_*` keys) take neutral names; and the metric
+  prefix (`llmorch_`) and the event source (`svc:llm-orchestrator`) do too, under names stage 2's
+  pull request sets. The change is staged so that no caller breaks at once:
+  - **One release** is a release of this repository as `CHANGELOG.md` records it. The release at
+    which the controller cuts over (the first release the lab deploys it from) accepts both field
+    names on input and returns both; the old name is dropped no earlier than the next release
+    after that, and only once the check below finds no consumer of it. A request that carries both names with different values is
+    refused (400). A config that sets both an old key and its new key is refused.
+  - The metric prefix and the event source get the same overlap, timed the same way: the controller emits
+    both metric names and an alias of the event source. Their consumers (dashboards, alert rules,
+    audit queries) are found by a check that stage 2's pull request adds, and moved, before the old
+    names go.
+  - A config migration and a database migration move the stored names. **Before every run of the
+    database migration against a live database**, wherever it runs, the private copy included,
+    the database is backed up, the backup is checked restorable first, and it is protected like
+    the database itself. A failed migration is a restore of that backup and a return to the
+    previous controller, not a repair in place.
+  - This repository's controller doc and its conformance stand-in move to the new names in stage
+    2's pull request.
+- **The controller's HTTP passthrough is not ported.** Every remaining passthrough caller moves to
+  the gateway (ADR-0038), which authenticates, admits and records every call, before the
+  controller cuts over. With no passthrough, a job naming an unknown `agent_key` is always refused
+  (404), with no opt-in flag: `request_body` and `reject_unknown_agent_keys` are not ported. The
+  controller's config has no key naming an inference URL other than the gateway's; a probe or
+  health URL stays a probe only. [The controller doc](../orchestration-controller.md) is updated
+  in stage 2's pull request.
+- **The lessons and runbooks readers read this repository's registers.** The controller's lessons
+  reader is ported to the lessons register as this repository defines it
+  (`schemas/registers/lesson.schema.json`), not to the private format. That schema gains `match`
+  in an additive 2.2, as an optional field: a lesson without `match` is never matched, and `match`
+  is a bounded matcher, never an arbitrary regular expression. A matched lesson's text that reaches
+  a prompt is data, never instructions. The schema change lands with the code that reads it, in
+  stage 2's pull request, not with this amendment. The runbooks reader is ported the same way, to
+  this repository's runbook register, so the two readers stay consistent.
+- **The YAML library is `go.yaml.in/yaml/v3`**, the maintained successor of the archived
+  `gopkg.in/yaml.v3`, at a release past the 14-day cooldown (CONTRIBUTING.md, "Keeping pins
+  current"). It is one of the module's first third-party dependencies and follows decision 2's
+  rule for one: permissively licensed, justified in its pull request, recorded with its SPDX
+  expression as `kind: linked` in the `go` section of `tools/licences.yml`, and watched by
+  Dependabot.
+- **The module gets a `go.sum`.** Stage 2 adds third-party Go dependencies, so `orchestrator/`
+  stops being standard library only and its `go.sum` is committed with them, checked by CI's `go`
+  job under `GOFLAGS=-mod=readonly`. The gateway's packages stay standard library only, and stage
+  2 adds the test that holds them to it: `go list -deps` of the gateway's packages names only the
+  standard library and the module's own packages.
+
 ## Consequences
 
 - A contract change, its implementation and its conformance run are one pull request, reviewed and
@@ -205,8 +283,10 @@ private sources, so bringing that generic code in needs an amendment to it (deci
 - The operator owns the review of each move: every stage's pull request is read for identifiers
   before it ships, as CONTRIBUTING.md asks of every new top-level directory.
 - Until the archive, two repositories hold orchestrator code. A moved package is frozen in the
-  private one and its fixes are made here; a security fix is backported only until that component's
-  cutover, and recorded.
+  private one from the merge of its stage here, and its fixes are made here; a security fix is
+  backported only until that component's cutover, and recorded in the matching pull request here.
+  For the controller that window runs from stage 2's merge to its cutover after stage 3, and a
+  fix that is not a security fix reaches the lab only at that cutover.
 - MCP servers move as modules, so each needs a manifest, a catalog record and a review before it
   lands. That is slower than copying a directory, and it is the point: a tool that reaches a lab
   system is granted, classed and reviewed like every other.
