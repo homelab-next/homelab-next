@@ -1,0 +1,163 @@
+{
+  "admin_key_env": "HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
+  "conformance_only": true,
+  "keys": [
+    {
+      "alias": "conformance-clear",
+      "data_tier": "cloud-allowed",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_CLEAR",
+      "limits": null,
+      "owner": "conformance-clear",
+      "roles": [
+        "cloud-reasoner",
+        "fast-classifier"
+      ],
+      "tlp_ceiling": "clear"
+    },
+    {
+      "alias": "conformance-red",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_RED",
+      "limits": null,
+      "owner": "conformance-red",
+      "roles": [
+        "fast-classifier"
+      ],
+      "tlp_ceiling": "red"
+    },
+    {
+      "alias": "conformance-throttle",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE",
+      "limits": {
+        "max_requests": 3,
+        "max_tokens": null,
+        "window_s": 60
+      },
+      "owner": "conformance-throttle",
+      "roles": [
+        "fast-classifier"
+      ],
+      "tlp_ceiling": "red"
+    }
+  ],
+  "name": "conformance",
+  "roles": {
+    "cloud-reasoner": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": "HNX_SECRET_LLM_GATEWAY_CONFORMANCE_CLOUD_KEY",
+          "backend": "cloud-openai",
+          "base_url": "http://inference-small.svc.example.internal:8000",
+          "id": "cloud-reasoner-1",
+          "locality": "cloud",
+          "model": "example-cloud-chat",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [
+        "fast-classifier"
+      ],
+      "kind": "chat",
+      "leaves_lab": true,
+      "limits": null,
+      "max_context_tokens": null,
+      "tlp_ceiling": "clear"
+    },
+    "embedder": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "inference-small",
+          "base_url": "http://inference-small.svc.example.internal:8000",
+          "id": "embedder-1",
+          "locality": "local",
+          "model": "example-embed-8d",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "embedding",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    },
+    "failover": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "inference-down",
+          "base_url": "http://inference-down.svc.example.internal:1",
+          "id": "failover-1",
+          "locality": "local",
+          "model": "conformance-chat",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [
+        "spare",
+        "fast-classifier"
+      ],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    },
+    "fast-classifier": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "inference-small",
+          "base_url": "http://inference-small.svc.example.internal:8000",
+          "id": "fast-classifier-1",
+          "locality": "local",
+          "model": "conformance-chat",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    },
+    "spare": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "inference-small",
+          "base_url": "http://inference-small.svc.example.internal:8000",
+          "id": "spare-1",
+          "locality": "local",
+          "model": "conformance-spare",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [
+        "fast-classifier"
+      ],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": {
+        "max_cost": null,
+        "max_requests": null,
+        "max_tokens": 1,
+        "window_s": 60
+      },
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    }
+  },
+  "telemetry_reader": {
+    "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER"
+  },
+  "version": "1.0"
+}

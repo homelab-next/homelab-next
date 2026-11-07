@@ -1,11 +1,15 @@
 ---
 summary: The lab's LLM gateway becomes its own Go binary that reads a product-neutral rendered config; LiteLLM stays deployed until that binary passes the gateway suite.
-summary_of: outline:sha256:c8cb65aa8eb8766b
+summary_of: outline:sha256:1cd8cf01e525d760
 ---
 # ADR-0038: Make the LLM gateway our own, behind the same contract
 
 - **Status:** proposed
 - **Date:** 2026-11-07
+- **Amended:** 2026-11-07, after the gateway's security review: four deliberate departures from
+  the contract (amendments R15 to R18: in-flight caps, token and cost reservations, aggregated
+  refusal records, grouped writes of the usage file), the embeddings checks' own role, and how the
+  suite observes a skipped fallback (see the amendment at the end of Decision)
 - **Related:** ADR-0005, ADR-0007, ADR-0022, ADR-0033, [LLM gateway](../llm-gateway.md),
   [orchestration telemetry](../orchestration-telemetry.md), `conformance/protocols/inference.py`
 - **Depends-on:** ADR-0033
@@ -149,6 +153,9 @@ here, and the implementation is tested against them from the private side.
      test-only role that leaves the lab, pointed at the fake inference server, which only a
      renderer test option allows. A config rendered with that option is marked conformance-only,
      and the gateway refuses to start on it outside an explicit conformance mode on loopback.
+     The suite's embeddings checks call the target's own embedding role (`embed_model`, by
+     default the chat role the other checks call), so a gateway that serves chat and embeddings
+     from different roles, as every role table does, is checked on the role that embeds.
    - The orchestrator's CI builds `cmd/gateway`, checks out this repository at a pinned commit,
      renders that spec, and runs the `inference` suite with the `streaming`, `embeddings`,
      `gateway`, `tlp-ceiling`, `tlp-admit` and `turn-records` features against the binary and the
@@ -167,6 +174,59 @@ here, and the implementation is tested against them from the private side.
 9. **ADR-0033 is amended.** Decision 11's statements that the gateway cannot read a request's label
    and that no component calls `admit` hold only for LiteLLM. With this gateway, the rule is
    enforced per request at the gateway as well as by key scope (decision 5).
+
+### Amendment (2026-11-07): the gateway's departures after its security review
+
+The gateway's security review changed four of its behaviours, deliberately, so that a flood of
+calls or a slow disk cannot take the gateway down or let one key starve the others. They amend the
+contract the gateway is tested against (`docs/gateway.md` in the orchestrator's repository lists
+them as R15 to R18):
+
+- **R15, in-flight caps before the body.** Model calls in flight at once are capped, in all and
+  per caller key. A call over a cap gets a 429 `concurrency_limited` right after authentication,
+  before its body is read, so before decision 4's step 2. It consumes no limit and writes no usage
+  record (decision 6 records decisions past the key and `model` checks, and this one is before
+  them).
+- **R16, token and cost limits are reserved, then settled.** Decision 4's step 5 counted tokens
+  and cost from the reply and refused the next request once a window was over. The gateway instead
+  reserves an estimate at admission (the call's output bound, from `max_tokens` or the role's
+  context limit, plus its input estimated from the body), refuses a call whose reservation would
+  take a key's or a role's window past its max (429), and settles the reservation against the
+  reply's real usage. A reservation larger than a whole max can never be admitted: it is a 400
+  `reservation_exceeds_limit`, not a 429 that would read as "wait". In decision 4's order it sits
+  after the TLP step (4) and before the key limit (5): a call that is out of scope or TLP-refused
+  gets those answers first, and one that could fit gets the limits' 429. A fallback role reserves on its
+  own window the same way, and is skipped when it cannot.
+- **R17, aggregated refusal records.** Decision 6's one record per decision holds for every
+  admitted call. Refusals at admission (scope, TLP, limits) are merged: at most one record per
+  second for refusals that agree on every field but `ts`, `turn_id`, `duration_ms` and `count`,
+  with `count` saying how many refusals the record stands for. Past a bound of distinct held
+  records per key, further refusals of that key fold into one overflow record per error code,
+  without a tag and marked `aggregated_overflow`. The turn-records adapter
+  (`homelabnext.conform.adapters.gateway_usage`) expands a record of `count` *n* into *n* turns
+  (`<turn_id>`, `<turn_id>.2` ...), since the neutral turn record has no count and a consumer counts
+  turns; an overflow record carries no tag, so no job's turns include it.
+- **R18, grouped writes off the reply path.** The reply never waits on the usage file. Records go
+  through a bounded queue to one writer that fsyncs once per group of records, not once per line.
+  A record the queue cannot take, or a group the file cannot take, is dropped and serving goes on;
+  drops are counted, logged, and reported on `/healthz` (`usage_records_dropped`). A crash can lose
+  the records still queued.
+
+Two consequences for decision 7's acceptance run:
+
+- **A refused fallback is observed through a limit.** The renderer gives every role the
+  chain-inclusive TLP ceiling and `leaves_lab` (decision 1), so a fallback is never judged
+  stricter than the role that was admitted: no rendered config can make the gateway skip a
+  fallback for TLP. The conformance spec (`compose/lab-in-a-box/config/llm-gateway-conformance`)
+  therefore has a role whose deployment fails and whose first fallback is refused at admission by
+  its own token limit (R16), on a model the fake inference server does serve, so a gateway that
+  called it anyway would be answered by it; the suite's `fallback-refused-at-admission-skipped`
+  check passes only if the call is served and its usage record, read back by its tag, names the
+  next fallback's deployment, never the refused one's. The TLP-refused fallback is covered by the gateway's own unit tests and the shared
+  vectors.
+- **The embeddings checks use their own role** (`embed_model`, decision 7 above), and the
+  lab-in-a-box role table gains an `embedder` role served by the fake inference server, so the
+  LiteLLM target checks embeddings on an embedding role too.
 
 ## Consequences
 

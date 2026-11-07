@@ -1,6 +1,6 @@
 ---
 summary: 'Orchestration telemetry: the agent job finished event contract, the names-and-numbers privacy rule, data flow, turn sources, hub page, export, recommendations.'
-summary_of: outline:sha256:6a49c2a0d4c0c9f2
+summary_of: outline:sha256:ea6e1db80e5128a9
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Orchestration telemetry
@@ -212,10 +212,15 @@ a new adapter plus those checks, with no change to the hub.
 | Adapter (`--turn-source`) | Gateway | Read path |
 |---|---|---|
 | `homelabnext.conform.adapters.litellm_spend_log:make` | LiteLLM | `GET /spend/logs/v2` with a viewer key (below) |
+| `homelabnext.conform.adapters.gateway_usage:make` | the lab's own gateway (ADR-0038) | `GET /v1/usage` with the telemetry reader's key (below) |
 
-The adapter's checks run against a loopback fake of its API serving a recorded-shape fixture
-(`tests/conform/test_conform_litellm_turn_source.py`). The lab's gateway targets skip them for
-now: a lab run must first send a tagged call and name its window (a follow-up).
+Each adapter's checks run against a loopback fake of its API serving a recorded-shape fixture
+(`tests/conform/test_conform_litellm_turn_source.py`,
+`tests/conform/test_conform_gateway_usage_turn_source.py`). The LiteLLM lab target skips them for
+now: a lab run must first send a tagged call and name its window (a follow-up). The own gateway's
+target (`targets/inference-own-gateway.yml`) does that: it sends tagged calls of the run, served
+and refused, then reads them back ([LLM gateway](llm-gateway.md), "Running the suite against the
+lab's own gateway").
 
 #### LiteLLM: the spend-log API with a viewer key
 
@@ -262,6 +267,36 @@ a hand-widened role or model list back on the next run, and prunes the key like 
 the spec drops the reader; the user, which holds nothing once its key is gone, stays. The audit of
 `keys.json` (`--check`) applies the same rules. The operator only stores the key's value under the secret name. A reader created by hand
 under the earlier instructions is not found by alias: delete that key and user on the gateway.
+
+#### The lab's own gateway: `GET /v1/usage` with the telemetry reader's key
+
+The own gateway (ADR-0038 decision 6) writes one usage record per admission decision past the key
+and `model` checks, and serves them over `GET /v1/usage?start=<unix>&end=<unix>&tag=<tag>` to the
+telemetry reader's key (the rendered `gateway.json`'s `telemetry_reader`; default
+`secret:llm-gateway/key-telemetry-reader`, as for LiteLLM). The gateway also lets its admin key
+read the route, but the adapter refuses the master key by the variable it is delivered in, so the
+hub never holds a key that can call every model. Callers tag a request with one `X-HNX-Tag` header
+field (the turn record's `gateway_tag` pattern), never `x-litellm-tags`.
+
+- **One read per tag**, `[start, end]` in whole seconds, `end` included. The gateway returns the
+  earliest 10000 records by time and `truncated: true` when more matched; the adapter asks again
+  from the last record's second and drops the turn ids it has already seen. A truncated page that
+  ends in the second it began (more than 10000 records in one second) cannot be paged by time and
+  is an error, as is a window of more than `max_pages` (100) pages.
+- **The mapping.** `turn_id`, `gateway_tag`, `ts` (to whole seconds), `duration_ms`, `ttft_ms`,
+  `model_role`, `call_type` (`chat` or `embedding`), the token counts and `cost_usd` as recorded.
+  `model` is the **deployment** that served the call (`<role>-<n>`, which names one backend and
+  model id of `gateway.json`): the record's own `model` is always the requested alias, and the
+  backend id never leaves the gateway. A call no deployment served has a null `model`. `status` is
+  `success` for a 2xx, else `failure` with the HTTP status as `error_code` (`403`, `429`, `502`).
+  `cache_read_tokens` and `cache_hit` are null when the upstream reported no cache figure. The key
+  alias and owner, the served role, `stream`, `fallbacks`, `usage_estimated`, the TLP verdict and
+  the contract's error word are never read out.
+- **`count`.** Refusals are aggregated to at most one record per second per identical refusal,
+  with a `count` (ADR-0038 amendment, R17). The turn record has no count and the hub counts turns,
+  so a record of `count` *n* becomes *n* turns, `<turn_id>` then `<turn_id>.2` to `<turn_id>.<n>`
+  (stable across reads). A refusal has no tokens or cost, so this adds turns, never spend. A
+  key's overflow record (`aggregated_overflow: true`) carries no tag, so no job's turns include it.
 
 #### Enabling tagging on LiteLLM
 

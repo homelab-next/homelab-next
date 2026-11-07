@@ -7,12 +7,21 @@ resolver produced); there is no default.  An optional ``auth`` callable returns 
 ``Authorization`` header value at request time so a secret is never held in the object.  With
 ``auth`` set, plain ``http`` to a non-loopback host is refused unless ``allow_plaintext=True``;
 redirects are followed only within the same origin; replies are read up to ``max_bytes``.
+
+:meth:`OpenAICompat.chat_fields` sends a chat with extra request header fields, each sent as a
+field of its own even when a name repeats (``X-HNX-TLP`` twice is two fields, which ``urllib``
+cannot send): that request goes over :mod:`http.client` directly, follows no redirect, and
+ignores ``HTTP_PROXY``/``HTTPS_PROXY`` (it connects to the gateway itself, so a header the test
+depends on is never rewritten or merged by a proxy).
 """
 
 from __future__ import annotations
 
+import http.client
 import json
+import ssl
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -35,34 +44,50 @@ class InferenceError(Exception):
     ``status`` is the HTTP status of an error reply; ``detail`` the server's own error message
     (``error.message`` of an OpenAI-shaped error body, else the start of the body), so a check can
     tell an authentication error from, say, a database one; ``path`` the request path that failed
-    (``/v1/chat/completions``), so a check can tell which call was refused.
+    (``/v1/chat/completions``), so a check can tell which call was refused; ``code`` the error
+    envelope's ``error.code`` when it is a string (``tlp_refused``), else ``""``.
     """
 
-    def __init__(self, message: str, status: int | None = None, detail: str = "", path: str = ""):
+    def __init__(
+        self,
+        message: str,
+        status: int | None = None,
+        detail: str = "",
+        path: str = "",
+        code: str = "",
+    ):
         super().__init__(message)
         self.status = status
         self.detail = detail
         self.path = path
+        self.code = code
 
 
-def _error_detail(exc: urllib.error.HTTPError, limit: int = 4096) -> str:
-    """The server's error message from an error reply (at most ``limit`` bytes are read)."""
-    try:
-        raw = exc.read(limit)
-    except OSError:
-        return ""
+def _error_parts(raw: bytes) -> tuple[str, str]:
+    """``(detail, code)`` of an error reply body: the server's message (with its ``type`` or
+    ``code`` in brackets) and the envelope's ``error.code`` when it is a string."""
     text = raw.decode("utf-8", "replace")
     try:
         doc = json.loads(text)
     except ValueError:
-        return text[:300]
+        return text[:300], ""
     err = doc.get("error") if isinstance(doc, dict) else None
     if isinstance(err, dict) and err.get("message"):
         kind = err.get("type") or err.get("code") or ""
-        return f"{err['message']}" + (f" [{kind}]" if kind else "")
+        code = err.get("code") if isinstance(err.get("code"), str) else ""
+        return f"{err['message']}" + (f" [{kind}]" if kind else ""), code[:64]
     if isinstance(err, str):
-        return err[:300]
-    return text[:300]
+        return err[:300], ""
+    return text[:300], ""
+
+
+def _error_detail(exc: urllib.error.HTTPError, limit: int = 4096) -> tuple[str, str]:
+    """:func:`_error_parts` of an error reply (at most ``limit`` bytes are read)."""
+    try:
+        raw = exc.read(limit)
+    except OSError:
+        return "", ""
+    return _error_parts(raw)
 
 
 @dataclass(frozen=True)
@@ -118,12 +143,13 @@ class OpenAICompat:
         try:
             return safe_urlopen(req, timeout=self._timeout)
         except urllib.error.HTTPError as exc:
-            detail = _error_detail(exc)
+            detail, code = _error_detail(exc)
             raise InferenceError(
                 f"HTTP {exc.code} from {path}" + (f": {detail[:200]}" if detail else ""),
                 exc.code,
                 detail,
                 path,
+                code,
             ) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise InferenceError(f"transport error: {type(exc).__name__}", path=path) from exc
@@ -134,13 +160,7 @@ class OpenAICompat:
                 raw = read_bounded(resp, self.max_bytes)
             except ResponseTooLarge as exc:
                 raise InferenceError(f"{path}: {exc}") from None
-        try:
-            doc = json.loads(raw)
-        except ValueError as exc:
-            raise InferenceError(f"{path}: reply is not JSON") from exc
-        if not isinstance(doc, dict):
-            raise InferenceError(f"{path}: reply is not an object")
-        return doc
+        return _reply_doc(raw, path)
 
     # ------------------------------------------------------------------ contract
     def models(self) -> list[str]:
@@ -167,19 +187,81 @@ class OpenAICompat:
                 "temperature": temperature,
             },
         )
-        try:
-            choice = doc["choices"][0]
-            usage = doc.get("usage") or {}
-            return ChatResult(
-                content=str(choice["message"]["content"]),
-                finish_reason=str(choice.get("finish_reason")),
-                model=str(doc["model"]),
-                prompt_tokens=usage.get("prompt_tokens"),
-                completion_tokens=usage.get("completion_tokens"),
-                total_tokens=usage.get("total_tokens"),
+        return _chat_result(doc)
+
+    def chat_fields(
+        self,
+        model: str,
+        messages: Sequence[dict[str, str]],
+        fields: Sequence[tuple[str, str]],
+        *,
+        max_tokens: int = 64,
+    ) -> ChatResult:
+        """A chat completion sent with the extra request header ``fields``, each a field of its
+        own (a repeated name is sent as several fields, and an empty value as an empty field).
+        Sent over :mod:`http.client` straight to the endpoint: no redirect is followed and no
+        proxy from ``HTTP_PROXY``/``HTTPS_PROXY`` is used."""
+        body = {"model": model, "messages": list(messages), "max_tokens": max_tokens}
+        return _chat_result(self._fields_json("/v1/chat/completions", body, fields))
+
+    def _fields_json(
+        self, path: str, body: dict[str, Any], fields: Sequence[tuple[str, str]]
+    ) -> dict[str, Any]:
+        """POST ``body`` to ``path`` over :mod:`http.client` with ``fields`` added as header
+        fields; no redirect is followed (a 3xx is an error), the reply is read bounded."""
+        parts = urllib.parse.urlsplit(self._base + path)
+        for name, value in fields:
+            if not (name.isascii() and name.replace("-", "").isalnum()):
+                raise ValueError(f"header field name {name!r} is not a token")
+            if any(c in value for c in "\r\n\0"):
+                raise ValueError(f"header field {name} carries a line break")
+        conn: http.client.HTTPConnection
+        if parts.scheme == "https":
+            conn = http.client.HTTPSConnection(
+                parts.hostname or "",
+                parts.port,
+                timeout=self._timeout,
+                context=ssl.create_default_context(),
             )
-        except (KeyError, IndexError, TypeError) as exc:
-            raise InferenceError("chat completion: unexpected shape") from exc
+        else:
+            conn = http.client.HTTPConnection(
+                parts.hostname or "", parts.port, timeout=self._timeout
+            )
+        data = json.dumps(body).encode("utf-8")
+        try:
+            conn.putrequest("POST", parts.path, skip_accept_encoding=True)
+            head = [
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json"),
+                ("Content-Length", str(len(data))),
+            ]
+            token = self._auth() if self._auth is not None else None
+            if token:
+                head.append(("Authorization", token))
+            for name, value in [*head, *fields]:
+                # a non-ASCII value goes as its UTF-8 bytes (a look-alike label is data too)
+                conn.putheader(name, value if value.isascii() else value.encode("utf-8"))
+            conn.endheaders(data)
+            resp = conn.getresponse()
+            try:
+                raw = read_bounded(resp, self.max_bytes)
+            except ResponseTooLarge as exc:
+                raise InferenceError(f"{path}: {exc}", path=path) from None
+            status = resp.status
+        except (http.client.HTTPException, OSError) as exc:
+            raise InferenceError(f"transport error: {type(exc).__name__}", path=path) from exc
+        finally:
+            conn.close()
+        if status >= 300:
+            detail, code = _error_parts(raw[:4096])
+            raise InferenceError(
+                f"HTTP {status} from {path}" + (f": {detail[:200]}" if detail else ""),
+                status,
+                detail,
+                path,
+                code,
+            )
+        return _reply_doc(raw, path)
 
     def chat_stream(
         self, model: str, messages: Sequence[dict[str, str]], *, max_tokens: int = 64
@@ -220,3 +302,30 @@ class OpenAICompat:
             return [list(map(float, d["embedding"])) for d in doc["data"]]
         except (KeyError, TypeError, ValueError) as exc:
             raise InferenceError("embeddings: unexpected shape") from exc
+
+
+def _reply_doc(raw: bytes, path: str) -> dict[str, Any]:
+    """A reply body as the JSON object it must be."""
+    try:
+        doc = json.loads(raw)
+    except ValueError as exc:
+        raise InferenceError(f"{path}: reply is not JSON") from exc
+    if not isinstance(doc, dict):
+        raise InferenceError(f"{path}: reply is not an object")
+    return doc
+
+
+def _chat_result(doc: dict[str, Any]) -> ChatResult:
+    try:
+        choice = doc["choices"][0]
+        usage = doc.get("usage") or {}
+        return ChatResult(
+            content=str(choice["message"]["content"]),
+            finish_reason=str(choice.get("finish_reason")),
+            model=str(doc["model"]),
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            total_tokens=usage.get("total_tokens"),
+        )
+    except (KeyError, IndexError, TypeError) as exc:
+        raise InferenceError("chat completion: unexpected shape") from exc
