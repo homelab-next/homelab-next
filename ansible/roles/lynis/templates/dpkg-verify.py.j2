@@ -56,8 +56,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-# the alert carries the access token: no redirect, and no proxy from the environment
-# (HTTP(S)_PROXY would receive the token, in clear for http)
+# the alert carries the access token.  The role already refuses a token over plain http; as
+# defence in depth the post follows no redirect and takes no proxy from the environment
+# (HTTP(S)_PROXY would be handed the request)
 OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
 
 
@@ -133,7 +134,11 @@ def send(title, body):
                    "Tags": "homelabnext,package-integrity", "Content-Type": "text/plain; charset=utf-8"}
         if AUTH_FILE:
             with open(AUTH_FILE, encoding="utf-8") as fh:
-                headers["Authorization"] = "Bearer " + fh.read().strip()
+                token = fh.read().strip()
+            if not (token.isascii() and token.isprintable()):
+                # never quoted: http.client's own refusal would print the whole header value
+                raise ValueError(f"the token in {AUTH_FILE} is not printable ASCII")
+            headers["Authorization"] = "Bearer " + token
         req = urllib.request.Request(f"{NOTIFY_URL}/{TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
         with OPENER.open(req, timeout=10) as resp:
             resp.read()

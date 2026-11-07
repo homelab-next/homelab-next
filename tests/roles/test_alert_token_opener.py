@@ -12,6 +12,8 @@ import http.server
 import importlib.util
 import json
 import socketserver
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -57,16 +59,23 @@ TEMPLATES = {
 }
 
 
-def load(tmp_path, role, url):
-    """The role's alert script rendered for `url` with a token file, loaded as a module."""
+def render(tmp_path, role, url, token=TOKEN, **over):
+    """The role's alert script rendered for `url` with a token file holding `token`."""
     env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
     env.filters["to_json"] = json.dumps
     env.filters["bool"] = lambda v: v is True or str(v).lower() in ("yes", "true", "1", "on")
-    token = tmp_path / "token"
-    token.write_text(TOKEN + "\n")
-    text = env.from_string((ROOT / TEMPLATES[role]).read_text()).render(_vars(role, url, token))
+    token_file = tmp_path / "token"
+    token_file.write_text(token + "\n")
+    values = {**_vars(role, url, token_file), **{f"{role}_{k}": v for k, v in over.items()}}
+    text = env.from_string((ROOT / TEMPLATES[role]).read_text()).render(values)
     script = tmp_path / f"{role}_alert.py"
     script.write_text(text)
+    return script
+
+
+def load(tmp_path, role, url):
+    """The role's alert script rendered for `url` with a token file, loaded as a module."""
+    script = render(tmp_path, role, url)
     spec = importlib.util.spec_from_file_location(f"{role}_alert", script)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -176,3 +185,32 @@ def test_the_alert_token_never_reaches_an_environment_proxy(tmp_path, servers, m
     mod.send("t", "b")
     assert proxy.seen == [], "the environment's proxy received the request (and the token)"
     assert [(m, h.get("Authorization")) for m, _, h in target.seen] == [("POST", "Bearer " + TOKEN)]
+
+
+# a stand-in for `needrestart -b`, `dpkg --verify` and `dpkg -S`: one finding, so an alert is owed
+FAKE_CLI = """import sys
+if "-b" in sys.argv:
+    print("NEEDRESTART-SVC: ssh.service")
+elif "--verify" in sys.argv:
+    print("??5?????? /usr/bin/changed")
+elif "-S" in sys.argv:
+    print("pkg: /usr/bin/changed")
+"""
+
+
+@pytest.mark.parametrize("role", sorted(TEMPLATES))
+def test_a_token_that_is_not_printable_ascii_is_refused_unquoted(tmp_path, servers, role):
+    target = servers()
+    cli = tmp_path / "fake-cli"
+    cli.write_text(f"#!{sys.executable}\n" + FAKE_CLI)
+    cli.chmod(0o755)
+    clis = {"needrestart": {"cli": str(cli)}, "lynis": {"dpkg_cli": str(cli)}}[role]
+    script = render(
+        tmp_path, role, target.url, token="tk-first\nSECRET-AFTER-THE-BREAK",
+        state_dir=str(tmp_path / "state"), **clis,
+    )  # fmt: skip
+    run = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30)
+    assert "SECRET-AFTER-THE-BREAK" not in run.stderr + run.stdout
+    assert "tk-first" not in run.stderr + run.stdout
+    assert run.returncode == 2 and "alert not sent" in run.stderr  # owed, not lost
+    assert target.seen == []
