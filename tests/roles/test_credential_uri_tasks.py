@@ -45,6 +45,10 @@ def reviewed_headers():
     entries = yaml.safe_load(ALLOW_FILE.read_text())["allow"]
     for e in entries:
         assert {"path", "task", "headers", "reason"} <= set(e), e
+        # An empty or non-list ``headers`` would let a reviewed task skip the header rules.
+        assert isinstance(e["headers"], list) and e["headers"], e
+        assert all(isinstance(h, str) and h for h in e["headers"]), e
+        assert isinstance(e["reason"], str) and e["reason"].strip(), e
     return {(e["path"], e["task"]): tuple(e["headers"]) for e in entries}
 
 
