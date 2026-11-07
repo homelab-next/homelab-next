@@ -255,6 +255,11 @@ def test_the_orchestrator_denies_the_catalogs_keys_character_for_character():
     assert m, "DeniedEnvPattern is no longer one raw string constant"
     assert m.group(1) == servers.DENIED_ENV.pattern
     assert servers.DENIED_ENV.flags & re.I  # Go compiles it (?i)
+    # the keys that must bind rather than be pinned: the same two patterns as the loader's
+    for name, py in (("scopeEnvRe", servers.SCOPE_KEY), ("identityKeyRe", servers.IDENTITY_KEY)):
+        m = re.search(rf"^var {name} = regexp\.MustCompile\(`([^`]*)`\)$", go, re.M)
+        assert m, f"{name} is no longer one raw string"
+        assert m.group(1) == py.pattern, name
 
 
 def test_the_old_client_name_still_renders():
