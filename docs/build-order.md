@@ -84,9 +84,10 @@ Effort goes to these, in roughly this order, before anything outside them is bui
 - **the status hub** ([status.md](status.md); ADR-0013);
 - **SSO** through Keycloak (ADR-0034, in flight).
 
-The LLM gateway stays LiteLLM alone (ADR-0022, amended 2026-10-31: the Bifrost adapter is
-removed). The lessons, runbooks and invariants registers stay. Projects and tasks live in
-OpenProject only.
+The deployed LLM gateway is LiteLLM (ADR-0022, amended 2026-10-31: the Bifrost adapter is
+removed); the own gateway in `orchestrator/` (`orchestrator/cmd/gateway`, ADR-0038 and ADR-0026)
+replaces it at the gateway cutover. The lessons, runbooks and invariants registers stay. Projects
+and tasks live in OpenProject only.
 
 ## Experimental and frozen components
 
