@@ -80,6 +80,8 @@ func KeyAliasesCases() map[string]KeyAliases {
 		"identity target":       {"legacy_key": "agent_key"},
 		"id target":             {"legacy_id": "id"},
 		"permission target":     {"legacy_grants": "grants"},
+		"tools target":          {"legacy_tools": "allowed_tools"},
+		"prompt target":         {"legacy_prompt": "prompt_context"},
 		"not a plain name":      {"Legacy-Scope": "path_scope"},
 		"dotted":                {"legacy.scope": "path_scope"},
 		"a chain":               {"legacy_a": "legacy_b", "legacy_b": "path_scope"},
@@ -87,12 +89,12 @@ func KeyAliasesCases() map[string]KeyAliases {
 	}
 }
 
-func TestMigrate_RewritesAProfilesDirectory(t *testing.T) {
+func TestMigrateDir_RewritesAProfilesDirectory(t *testing.T) {
 	dir := t.TempDir()
 	writeProfileFile(t, dir, "a.yaml", "# watcher\nagent_key: watcher\nlegacy_scope: # the scope\n  writable_prefixes: [notes/findings/watch/]\n")
 	writeProfileFile(t, dir, "b.yaml", "agent_key: other\n")
 	before, _ := os.ReadFile(filepath.Join(dir, "b.yaml"))
-	notes, err := Migrate(dir, legacyAliases)
+	notes, err := MigrateDir(dir, migrateOpts(legacyAliases))
 	if err != nil || len(notes) != 1 || !strings.HasPrefix(notes[0], "a.yaml: ") {
 		t.Fatalf("Migrate = %v, %v", notes, err)
 	}
@@ -106,19 +108,85 @@ func TestMigrate_RewritesAProfilesDirectory(t *testing.T) {
 	if _, err := LoadRegistry(dir, plainOptions()); err != nil {
 		t.Errorf("the migrated directory does not load without aliases: %v", err)
 	}
-	if again, err := Migrate(dir, legacyAliases); err != nil || len(again) != 0 {
+	if again, err := MigrateDir(dir, migrateOpts(legacyAliases)); err != nil || len(again) != 0 {
 		t.Errorf("a second migration: %v, %v", again, err)
 	}
 	// one file setting both stops the migration before any file is written
 	writeProfileFile(t, dir, "c.yaml", "agent_key: c\nlegacy_scope: {}\n")
 	writeProfileFile(t, dir, "d.yaml", "agent_key: d\nlegacy_scope: {}\npath_scope: {}\n")
-	if _, err := Migrate(dir, legacyAliases); err == nil {
+	if _, err := MigrateDir(dir, migrateOpts(legacyAliases)); err == nil {
 		t.Fatal("a profile with both names migrated")
 	}
 	if c, _ := os.ReadFile(filepath.Join(dir, "c.yaml")); !strings.Contains(string(c), "legacy_scope") {
 		t.Error("a file was written before the refusal")
 	}
-	if _, err := Migrate(dir, KeyAliases{"legacy_key": "agent_key"}); err == nil {
+	if _, err := MigrateDir(dir, migrateOpts(KeyAliases{"legacy_key": "agent_key"})); err == nil {
 		t.Error("an invalid table migrated")
+	}
+}
+
+func migrateOpts(a KeyAliases) LoadOptions {
+	o := plainOptions()
+	o.KeyAliases = a
+	return o
+}
+
+// The rewrite never follows a symbolic link planted where a temporary file might go, keeps the
+// file's own mode, refuses a profile that is a symbolic link, and writes nothing unless the whole
+// migrated directory loads.
+func TestMigrateDir_WritesSafelyAllOrNothing(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(outside, []byte("untouched\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.yaml"), []byte("agent_key: a\nlegacy_scope: {writable_prefixes: [notes/a/]}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.yaml.migrate", ".a.yaml.tmp"} { // the old temp name, a plausible one
+		if err := os.Symlink(outside, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".a.yaml.0666"), nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateDir(dir, migrateOpts(legacyAliases)); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "untouched\n" {
+		t.Error("the migration wrote through a planted symbolic link")
+	}
+	fi, err := os.Stat(filepath.Join(dir, "a.yaml"))
+	if err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode after the migration = %v (%v), want 0640", fi.Mode().Perm(), err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".a.yaml.*")); len(left) != 2 {
+		t.Errorf("temporary files left or planted ones touched: %v", left)
+	}
+	// a profile that is a symbolic link is refused, and nothing is written
+	dir = t.TempDir()
+	src := filepath.Join(t.TempDir(), "p.yaml")
+	if err := os.WriteFile(src, []byte("agent_key: p\nlegacy_scope: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(src, filepath.Join(dir, "p.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateDir(dir, migrateOpts(legacyAliases)); err == nil {
+		t.Error("a profile behind a symbolic link migrated")
+	}
+	if b, _ := os.ReadFile(src); !strings.Contains(string(b), "legacy_scope") {
+		t.Error("the link's target was rewritten")
+	}
+	// one migrated profile that would not load stops the whole migration before any write
+	dir = t.TempDir()
+	writeProfileFile(t, dir, "a.yaml", "agent_key: a\nlegacy_scope: {writable_prefixes: [notes/a/]}\n")
+	writeProfileFile(t, dir, "b.yaml", "agent_key: b\nlegacy_scope: {writable_prefixes: [owner/x/]}\n")
+	if _, err := MigrateDir(dir, migrateOpts(legacyAliases)); err == nil || !strings.Contains(err.Error(), "nothing written") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "a.yaml")); !strings.Contains(string(b), "legacy_scope") {
+		t.Error("a file was written before the refusal")
 	}
 }

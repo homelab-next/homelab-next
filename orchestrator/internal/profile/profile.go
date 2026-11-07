@@ -226,6 +226,44 @@ func (e Extension) check(p Profile) error {
 // except top-level keys named in opts.Extensions. Two files with one agent_key is a configuration
 // error, never a silent override.
 func LoadRegistry(dir string, opts LoadOptions) (*Registry, error) {
+	files, err := readProfileDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	return buildRegistry(files, opts)
+}
+
+// profileFile is one profile file as read: its path, content and mode.
+type profileFile struct {
+	path string
+	data []byte
+	mode os.FileMode
+}
+
+// readProfileDir reads every *.yaml file of dir (grants.ReadConfigFileMode: no symbolic link
+// followed, a regular file, bounded), in name order.
+func readProfileDir(dir string) ([]profileFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read profile dir %s: %w", dir, err)
+	}
+	var out []profileFile
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			continue
+		}
+		full := filepath.Join(dir, entry.Name())
+		data, mode, err := grants.ReadConfigFileMode(full, MaxProfileBytes)
+		if err != nil {
+			return nil, fmt.Errorf("read profile file %s: %w", full, err)
+		}
+		out = append(out, profileFile{full, data, mode})
+	}
+	return out, nil
+}
+
+// buildRegistry is LoadRegistry over files already read.
+func buildRegistry(files []profileFile, opts LoadOptions) (*Registry, error) {
 	if !opts.Zones.Validated() {
 		return nil, fmt.Errorf("profiles: the scope zones were not validated (pathscope.NewZones)")
 	}
@@ -257,20 +295,9 @@ func LoadRegistry(dir string, opts LoadOptions) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read profile dir %s: %w", dir, err)
-	}
 	reg := &Registry{profiles: make(map[string]*Profile)}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
-			continue
-		}
-		full := filepath.Join(dir, entry.Name())
-		data, err := grants.ReadConfigFile(full, MaxProfileBytes)
-		if err != nil {
-			return nil, fmt.Errorf("read profile file %s: %w", full, err)
-		}
+	for _, f := range files {
+		full, data := f.path, f.data
 		decoded, renamed, err := opts.KeyAliases.apply(data)
 		if err != nil {
 			return nil, fmt.Errorf("parse profile file %s: %w", full, err)

@@ -23,9 +23,11 @@ type KeyAliases map[string]string
 // aliasNameRe is a top-level profile key.
 var aliasNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
-// unaliasable are the keys no alias may target: a profile's identity and its permissions are
-// read under their own names only. The scope (path_scope) may be, which is what aliases are for.
-var unaliasable = []string{"agent_key", "id", "grants"}
+// unaliasable are the keys no alias may target: a profile's identity and its permissions (its
+// grants, its tools, what its prompt may read) are read under their own names only. The one
+// permission key that may be aliased is path_scope: the private controller's name for it is the
+// reason aliases exist, and an aliased scope is checked against the zones as path_scope is.
+var unaliasable = []string{"agent_key", "id", "grants", "allowed_tools", "prompt_context"}
 
 // Validate refuses a table that is not a set of plain second names for existing keys: every name
 // a plain key; every new name a key the loader defines, never agent_key, id or grants; no old
@@ -119,45 +121,37 @@ func ParseKeyAliases(data []byte) (KeyAliases, error) {
 	return a, a.Validate()
 }
 
-// Migrate rewrites every profile file (*.yaml) in dir with each aliased key under its new name,
-// comments kept, and returns a note per rename; a file with nothing to rename is left as it is.
-// A file that sets an old key and its new key stops the migration before any file is written.
-func Migrate(dir string, aliases KeyAliases) ([]string, error) {
+// MigrateDir rewrites every profile file (*.yaml) in dir with each alias of opts.KeyAliases under
+// its new name, comments kept, and returns a note per rename; a file with nothing to rename is
+// left as it is. It is all or nothing: every file is read as the loader reads it (no symbolic link
+// followed, a regular file, bounded), and the whole rewritten directory must load with opts and
+// no aliases before any file is written. Each file is then replaced by a new, exclusively
+// created temporary file in dir (a random name, never one planted in advance), given the mode of
+// the file it replaces (read from the same descriptor), synced and renamed over it, and dir is
+// synced; a temporary file is removed on any error.
+func MigrateDir(dir string, opts LoadOptions) ([]string, error) {
+	aliases := opts.KeyAliases
 	if err := aliases.Validate(); err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(dir)
+	files, err := readProfileDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	type rewrite struct {
-		path string
-		data []byte
-		mode os.FileMode
-	}
-	var writes []rewrite
 	var notes []string
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".yaml" {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		if !e.Type().IsRegular() {
-			return nil, fmt.Errorf("%s: not a regular file", path)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
+	var writes []profileFile
+	rewritten := make([]profileFile, 0, len(files))
+	for _, f := range files {
 		var doc yaml.Node
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+		if err := yaml.Unmarshal(f.data, &doc); err != nil {
+			return nil, fmt.Errorf("%s: %w", f.path, err)
 		}
 		renamed, err := aliases.rename(&doc)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, fmt.Errorf("%s: %w", f.path, err)
 		}
 		if len(renamed) == 0 {
+			rewritten = append(rewritten, f)
 			continue
 		}
 		var buf bytes.Buffer
@@ -169,23 +163,63 @@ func Migrate(dir string, aliases KeyAliases) ([]string, error) {
 		if err := enc.Close(); err != nil {
 			return nil, err
 		}
-		fi, err := os.Stat(path)
-		if err != nil {
-			return nil, err
-		}
-		writes = append(writes, rewrite{path, buf.Bytes(), fi.Mode().Perm()})
+		out := profileFile{f.path, buf.Bytes(), f.mode}
+		rewritten = append(rewritten, out)
+		writes = append(writes, out)
 		for _, n := range renamed {
-			notes = append(notes, e.Name()+": "+n)
+			notes = append(notes, filepath.Base(f.path)+": "+n)
 		}
 	}
+	check := opts
+	check.KeyAliases = nil
+	if _, err := buildRegistry(rewritten, check); err != nil {
+		return nil, fmt.Errorf("the migrated profiles do not load (nothing written): %w", err)
+	}
 	for _, w := range writes {
-		tmp := w.path + ".migrate"
-		if err := os.WriteFile(tmp, w.data, w.mode); err != nil {
+		if err := replaceFile(dir, w); err != nil {
 			return nil, err
 		}
-		if err := os.Rename(tmp, w.path); err != nil {
+	}
+	if len(writes) > 0 {
+		if err := syncDir(dir); err != nil {
 			return nil, err
 		}
 	}
 	return notes, nil
+}
+
+// replaceFile writes w.data to a new temporary file in dir and renames it over w.path.
+func replaceFile(dir string, w profileFile) (err error) {
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(w.path)+".*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+		}
+	}()
+	if err = tmp.Chmod(w.mode); err != nil {
+		return err
+	}
+	if _, err = tmp.Write(w.data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), w.path)
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
