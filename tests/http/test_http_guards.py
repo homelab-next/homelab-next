@@ -140,11 +140,26 @@ def test_ntfy_refuses_token_over_plaintext_unless_allowed():
 
 def test_ntfy_default_opener_refuses_cross_origin_redirect(servers):
     evil = servers({"/ops": (200, {}, b"")})
-    home = servers({"/ops": (307, {"Location": evil.url + "/ops"}, b"")})
+    home = servers(
+        {
+            "/ops": (307, {"Location": evil.url + "/ops"}, b""),
+            "/local": (302, {"Location": "/ok"}, b""),
+            "/ok": (200, {}, b"page"),
+        }
+    )
     s = NtfySender(lambda: home.url, default_topic="ops", auth=lambda: "Bearer s3cret")
     with pytest.raises(SendError):
         s.send(Message("k", "t", "b"))
     assert evil.seen == []
+    # Regression: a same-origin 302 to the POST was followed as a GET with no body, and the 200
+    # to that GET reported the message delivered although the server never received it.
+    raised = None
+    try:
+        s.send(Message("k", "t", "b", topic="local"))
+    except SendError as exc:
+        raised = exc
+    assert raised is not None
+    assert [path for path, _ in home.seen] == ["/ops", "/local"]
 
 
 def test_openai_compat_plaintext_redirect_and_size(servers):

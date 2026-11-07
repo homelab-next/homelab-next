@@ -6,6 +6,9 @@
   :class:`homelabnext.lake.trino.TrinoLake`).
 * :func:`safe_opener` follows a redirect only to the same scheme, host and port, so an
   ``Authorization`` header is never replayed to another origin and https is never downgraded.
+  It is for reads: urllib turns a POST answered 301/302/303 into a GET with no body.
+* :func:`no_redirect_urlopen` follows no redirect (a 3xx surfaces as an ``HTTPError``), for a
+  POST whose 2xx answer is read as an acknowledgement (the events forwarder, notify).
 * :func:`credential_opener` follows no redirect and uses no proxy, for a request carrying a key
   (the st2 bridge's webhook, the gateway's spend-log reader).
 * :func:`read_bounded` reads at most ``limit`` bytes and refuses a longer reply instead of
@@ -115,6 +118,12 @@ def safe_opener() -> urllib.request.OpenerDirector:
 def safe_urlopen(req: Any, timeout: float | None = None) -> Any:
     """Drop-in for ``urllib.request.urlopen`` with :class:`SameOriginRedirectHandler`."""
     return safe_opener().open(req, timeout=timeout)
+
+
+def no_redirect_urlopen(req: Any, timeout: float | None = None) -> Any:
+    """Drop-in for ``urllib.request.urlopen`` that follows no redirect: a POST redirected by
+    urllib arrives as a GET with no body, and a 2xx to that GET would read as delivered."""
+    return urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout)
 
 
 def read_bounded(resp: Any, limit: int = DEFAULT_MAX_BYTES) -> bytes:
