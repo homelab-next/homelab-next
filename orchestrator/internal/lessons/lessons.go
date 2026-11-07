@@ -3,9 +3,13 @@
 // Package lessons matches a job's task against the lessons and runbooks registers, so the
 // prompt of a run carries the register entries that apply to it (ResolveContext).
 //
+// A record applies only when its match does: a keyword occurs in the task as whole words, or one
+// of its paths prefixes a path the job names. Its other signals (quoted spans, systems, title
+// words) rank matched records and never make one match.
+//
 // Only a record that declares a match (the optional `match` field: lesson schema 2.2, runbook
 // schema 2.3) is ever matched; a record without one is never injected, whatever its text. A
-// match is bounded: a few literal keywords (case-insensitive substrings of the task) and a few
+// match is bounded: a few literal keywords (matched case-insensitively as whole words of the task) and a few
 // path prefixes, never a regular expression. A record that matches is scored with its keywords
 // and paths, the quoted spans of its title and symptom, its systems and its title's words; the
 // best few above a floor are injected. Inactive records (a retired, incorporated or superseded
@@ -21,6 +25,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -40,7 +45,7 @@ const (
 // Match bounds (the `match` field of the lesson and runbook schemas, which a test holds equal).
 const (
 	MaxMatchItems    = 16
-	MinKeywordLength = 3
+	MinKeywordLength = 4
 	MaxKeywordLength = 80
 	MaxPathLength    = 200
 )
@@ -112,8 +117,8 @@ func (m *MatchDef) UnmarshalYAML(n *yaml.Node) error {
 		default:
 			return fmt.Errorf("match: unknown key %q (keywords and paths only; never a pattern)", clip(key))
 		}
-		if val.Kind != yaml.SequenceNode {
-			return fmt.Errorf("match.%s: a list of strings", key)
+		if val.Kind != yaml.SequenceNode || len(val.Content) == 0 {
+			return fmt.Errorf("match.%s: a non-empty list of strings (leave the key out instead)", key)
 		}
 		for _, e := range val.Content {
 			if e.Kind != yaml.ScalarNode || e.ShortTag() != "!!str" {
@@ -161,7 +166,7 @@ func (m *MatchDef) check() error {
 }
 
 func isControl(r rune) bool {
-	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == ' ' || r == ' '
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029'
 }
 
 // Lesson is what a lesson record holds that this package scores and quotes.
@@ -433,7 +438,7 @@ func (e entry) score(textL string, toks map[string]bool, paths []string) (int, [
 	score := 0
 	var why []string
 	for _, kw := range e.keywords {
-		if strings.Contains(textL, kw) {
+		if containsWord(textL, kw) {
 			score += wKeyword
 			why = append(why, "keyword:"+kw)
 		}
@@ -441,6 +446,10 @@ func (e entry) score(textL string, toks map[string]bool, paths []string) (int, [
 	ps, pwhy := pathScore(paths, e.paths)
 	score += ps
 	why = append(why, pwhy...)
+	if score == 0 {
+		// the record's match decides whether it applies; the other signals only rank
+		return 0, nil
+	}
 	for _, sp := range e.spans {
 		if strings.Contains(textL, sp) {
 			score += wSpan
@@ -467,6 +476,26 @@ func (e entry) score(textL string, toks map[string]bool, paths []string) (int, [
 	why = append(why, hits...)
 	return score, why
 }
+
+// containsWord reports whether kw occurs in text as whole words: not inside a longer word ("disk
+// full" is not in "disk fuller", "cache" is not in "cachet").
+func containsWord(text, kw string) bool {
+	for from := 0; ; {
+		i := strings.Index(text[from:], kw)
+		if i < 0 {
+			return false
+		}
+		start, end := from+i, from+i+len(kw)
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if (start == 0 || !isWordRune(before)) && (end == len(text) || !isWordRune(after)) {
+			return true
+		}
+		from = start + 1
+	}
+}
+
+func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' }
 
 func best(entries []entry, text string, paths []string) []Hit {
 	textL := strings.ToLower(text)

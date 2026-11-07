@@ -86,7 +86,7 @@ RUNBOOK_FIELDS = frozenset(
 )
 #: the bounds of ``match`` (lesson 2.2, runbook 2.3): the schemas' and the orchestrator's
 #: (orchestrator/internal/lessons), which tests hold equal
-MATCH_MAX_ITEMS, MATCH_KEYWORD_LEN, MATCH_PATH_LEN = 16, (3, 80), 200
+MATCH_MAX_ITEMS, MATCH_KEYWORD_LEN, MATCH_PATH_LEN = 16, (4, 80), 200
 #: the record type each register holds (its entries' ``type``)
 RECORD_TYPE = {"lessons": "lesson", "runbooks": "runbook"}
 # criterion ids are docs/checklist.md row ids, chosen to match a row (never allocated)
@@ -211,7 +211,7 @@ def _summary(e, who, problems):
 def _match(e, who, problems):
     """Optional ``match:`` (lesson 2.2, runbook 2.3): what the orchestrator matches a job's task
     against before it quotes the record into the job's prompt.  A bounded matcher, never a
-    regular expression: literal ``keywords`` (case-insensitive substrings of the task) and
+    regular expression: literal ``keywords`` (matched case-insensitively as whole words of the task) and
     ``paths`` (relative prefixes), at most 16 of each, at least one in all.  A record without
     it is never matched."""
     if "match" not in e:

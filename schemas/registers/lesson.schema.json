@@ -44,7 +44,7 @@
       "type": "object",
       "additionalProperties": false,
       "minProperties": 1,
-      "description": "Optional: what the orchestrator matches a job's task against before it quotes this record into the job's prompt, as data (orchestrator/internal/lessons). A bounded matcher, never a regular expression: literal keywords, each a case-insensitive substring of the task, and path prefixes. A record without `match` is never matched. The pattern refuses control characters and the common invisible format characters; the record validation (homelabnext.registers.schema) and the orchestrator's reader are authoritative: they refuse every Cc, Cf, Zl and Zp character, surrounding space and a path that is not a clean relative prefix, and a keyword listed twice in any case.",
+      "description": "Optional: what the orchestrator matches a job's task against before it quotes this record into the job's prompt, as data (orchestrator/internal/lessons). A bounded matcher, never a regular expression: literal keywords, each matched case-insensitively as whole words of the task, and path prefixes. A record without `match` is never matched. The pattern refuses control characters and the common invisible format characters; the record validation (homelabnext.registers.schema) and the orchestrator's reader are authoritative: they refuse every Cc, Cf, Zl and Zp character, surrounding space and a path that is not a clean relative prefix, and a keyword listed twice in any case.",
       "properties": {
         "keywords": {
           "type": "array",
@@ -53,7 +53,7 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "minLength": 3,
+            "minLength": 4,
             "maxLength": 80,
             "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u00ad\\u061c\\u180e\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff\\ufff9-\\ufffb]*$(?!\\n)"
           }

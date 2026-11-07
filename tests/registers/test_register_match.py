@@ -54,6 +54,7 @@ def _with_match(kind, match):
         {"keywords": []},
         {"keywords": "certificate expired"},
         {"keywords": ["ab"]},
+        {"keywords": ["abc"]},
         {"keywords": ["k" * 81]},
         {"keywords": [" leading space"]},
         {"keywords": ["zero​width"]},

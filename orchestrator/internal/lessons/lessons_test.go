@@ -4,6 +4,7 @@ package lessons
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -95,7 +96,7 @@ func TestMatch_ScoringAndDeterminism(t *testing.T) {
 	if len(p) != 1 || p[0].UID != certLesson || p[0].Why[0] != "path:roles/proxy/" {
 		t.Errorf("path hits = %+v", p)
 	}
-	// keywords are case-insensitive substrings, never patterns
+	// keywords match case-insensitively as whole words, never as patterns
 	if got := uids(ix.MatchLessons("CERTIFICATE EXPIRED", nil)); len(got) != 1 {
 		t.Errorf("case-insensitive keyword: %v", got)
 	}
@@ -177,11 +178,13 @@ func TestLoadIndex_RefusesWhatItCannotRead(t *testing.T) {
 		"wrong type":        strings.Replace(string(good), "type: lesson", "type: runbook", 1),
 		"section twice":     string(good) + "\n## Symptom\n\nagain\n",
 		"empty match":       strings.Replace(string(good), "  keywords: [certificate expired, tls handshake]\n  paths: [roles/proxy/]\n", "  {}\n", 1),
-		"short keyword":     strings.Replace(string(good), "[certificate expired, tls handshake]", "[ab]", 1),
+		"short keyword":     strings.Replace(string(good), "[certificate expired, tls handshake]", "[abc]", 1),
+		"empty keywords":    strings.Replace(string(good), "[certificate expired, tls handshake]", "[]", 1),
+		"empty paths":       strings.Replace(string(good), "[roles/proxy/]", "[]", 1),
 		"long keyword":      strings.Replace(string(good), "[certificate expired, tls handshake]", "["+strings.Repeat("k", MaxKeywordLength+1)+"]", 1),
 		"keyword control":   strings.Replace(string(good), "[certificate expired, tls handshake]", "[\"certificate\\u200bexpired\"]", 1),
 		"keyword twice":     strings.Replace(string(good), "[certificate expired, tls handshake]", "[TLS handshake, tls handshake]", 1),
-		"too many keywords": strings.Replace(string(good), "[certificate expired, tls handshake]", "["+strings.Repeat("abc, ", MaxMatchItems)+"abcd]", 1),
+		"too many keywords": strings.Replace(string(good), "[certificate expired, tls handshake]", "["+strings.Repeat("abcd, ", MaxMatchItems)+"abcde]", 1),
 		"absolute path":     strings.Replace(string(good), "[roles/proxy/]", "[/etc/proxy/]", 1),
 		"traversal path":    strings.Replace(string(good), "[roles/proxy/]", "[roles/../secrets/]", 1),
 		"unclean path":      strings.Replace(string(good), "[roles/proxy/]", "[roles//proxy/]", 1),
@@ -292,5 +295,54 @@ func TestMatchBoundsAreTheSchemas(t *testing.T) {
 			m.Keywords.Items.MaxLength != MaxKeywordLength || m.Paths.Items.MaxLength != MaxPathLength {
 			t.Errorf("%s schema match bounds %+v differ from the reader's", name, m)
 		}
+	}
+}
+
+// A record applies only when its match does: a keyword as whole words of the task, or a path
+// prefix of a path the job names. Its title, systems and quoted spans rank, never match.
+func TestMatch_TheMatchGatesTheHit(t *testing.T) {
+	ix := testIndex(t)
+	// the title's words, both systems and a quoted span of the symptom, and no keyword
+	if got := ix.MatchLessons("edge proxy certificate on tls: 'renewal failed' again", nil); len(got) != 0 {
+		t.Errorf("a record matched without its match: %+v", got)
+	}
+	for task, want := range map[string]int{
+		"the disk fuller than before":          0, // inside a longer word
+		"nodisk full":                          0,
+		"disk full.":                           1,
+		"(disk full)":                          1,
+		"Disk Full":                            1,
+		"certificate expiredness is a concept": 0,
+	} {
+		if got := ix.MatchLessons(task, nil); len(got) != want {
+			t.Errorf("%q: %d hits, want %d", task, len(got), want)
+		}
+	}
+	payload, ls, _ := ResolveContextFor(ix, "tidy the role", []string{"roles/proxy/tasks/main.yml"})
+	if len(ls) != 1 || ls[0] != certLesson || !strings.Contains(payload, "matched to this run's task by their keywords and paths") {
+		t.Errorf("ResolveContextFor = %v\n%s", ls, payload)
+	}
+	if got, _, _ := ResolveContextWithUIDs(ix, "tidy the role"); got != "" {
+		t.Errorf("a path match without the job's paths:\n%s", got)
+	}
+}
+
+// A record's events directory is its own: a symbolic link to another is refused, and so is one
+// with more events than the bound.
+func TestLoadIndex_EventsDirectoryIsTheRecordsOwn(t *testing.T) {
+	dir := copyRegister(t)
+	other := t.TempDir()
+	if err := os.Symlink(other, filepath.Join(dir, certLesson+".events")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadIndex(dir, ""); err == nil {
+		t.Error("a symbolic-linked events directory loaded")
+	}
+	dir = copyRegister(t)
+	for i := range maxEvents + 1 {
+		writeEvent(t, dir, certLesson, fmt.Sprintf("20261020T%06dZ-review-agent-x.yml", i), "event: review\n")
+	}
+	if _, err := LoadIndex(dir, ""); err == nil {
+		t.Error("a record with too many events loaded")
 	}
 }
