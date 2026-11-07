@@ -5,7 +5,6 @@ package config
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"reflect"
 	"regexp"
 	"sort"
@@ -13,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/homelab-next/homelab-next/orchestrator/internal/grants"
 )
 
 // SiteRenames are a site's own old configuration key names and the keys they become: old key
@@ -85,6 +86,9 @@ func (r SiteRenames) Validate() error {
 			return fmt.Errorf("site renames: %s is already a key or a built-in rename", old)
 		case !known[target]:
 			return fmt.Errorf("site renames: %s -> %s: not a key the configuration reads", old, target)
+		case strings.HasPrefix(target, "backends.additional."):
+			// a key inside a list entry: a top-level old key cannot say which entry it is
+			return fmt.Errorf("site renames: %s -> %s: a key of a list entry cannot be a rename's target", old, target)
 		case r[target] != "":
 			return fmt.Errorf("site renames: %s -> %s: %s is renamed itself (no chains)", old, target, target)
 		case targets[target] != "":
@@ -138,16 +142,9 @@ func ParseSiteRenames(data []byte) (SiteRenames, error) {
 
 // LoadSiteRenames reads and checks a site's renames file (ParseSiteRenames).
 func LoadSiteRenames(path string) (SiteRenames, error) {
-	fi, err := os.Lstat(path)
+	data, err := grants.ReadConfigFile(path, 64<<10)
 	if err != nil {
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() || fi.Size() > 64<<10 {
-		return nil, fmt.Errorf("site renames %s: not a regular file of at most 64 KiB", path)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("site renames: %w", err)
 	}
 	return ParseSiteRenames(data)
 }

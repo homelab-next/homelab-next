@@ -410,14 +410,18 @@ them supplies them at runtime, from its own (private) file, and the code here ne
   and noted, the migration rewrites it, and a file setting both is refused, as for the built-in
   renames. The table is held strictly (`SiteRenames.Validate`): an old name is one plain key that
   is no key of the configuration and no built-in rename; a new name is a key the configuration
-  reads, outside the `scope` and `api_auth` blocks; no chains, no cycles, no two old names for one
+  reads, outside the `scope` and `api_auth` blocks and outside a list entry
+  (`backends.additional`); no chains, no cycles, no two old names for one
   key.
 - **profiles:** an aliases file, one mapping of old top-level key to new top-level key
   (`profile.ParseKeyAliases`), given to the loader (`LoadOptions.KeyAliases`; each read noted in
-  `Registry.Notices`) and to `profile.Migrate`, which rewrites a profiles directory, comments
-  kept, and writes nothing when one file sets both names. An alias targets a key the loader
-  defines, never `agent_key`, `id` or `grants`, and is no extension key; the scope it reaches is
-  checked against the zones as `path_scope` is.
+  `Registry.Notices`) and to `profile.MigrateDir`, which rewrites a profiles directory, comments
+  kept, all or nothing: the whole rewritten directory must load first, and each file is replaced
+  through a new exclusive temporary file with the original's mode, synced and renamed. An alias
+  targets a key the loader defines, never `agent_key`, `id`, `grants`, `allowed_tools` or
+  `prompt_context` (permissions are read under their own names only), and is no extension key;
+  `path_scope` may be aliased, and the scope it reaches is checked against the zones as
+  `path_scope` is.
 
 At the cutover the overlay supplies both files, so the lab's configuration and profiles migrate
 by the same calls as every other key; without them, a file that still uses an old name is refused

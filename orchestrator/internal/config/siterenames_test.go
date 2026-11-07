@@ -55,6 +55,7 @@ func TestSiteRenames_Validate(t *testing.T) {
 		"a chain":                  {"legacy_a": "legacy_b", "legacy_b": "tree_root"},
 		"a cycle":                  {"legacy_a": "legacy_b", "legacy_b": "legacy_a"},
 		"two names for one key":    {"legacy_a": "tree_root", "legacy_b": "tree_root"},
+		"a key of a list entry":    {"legacy_home": "backends.additional.home"}, // scrub-allow: a config key path, not a host name
 	} {
 		if err := r.Validate(); err == nil {
 			t.Errorf("%s: validated", name)
@@ -73,6 +74,13 @@ func TestSiteRenames_Validate(t *testing.T) {
 	}
 	if r, err := LoadSiteRenames(p); err != nil || r["legacy_root"] != "tree_root" {
 		t.Fatalf("LoadSiteRenames = %v, %v", r, err)
+	}
+	link := filepath.Join(dir, "link.yaml")
+	if err := os.Symlink(p, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSiteRenames(link); err == nil {
+		t.Error("a renames file behind a symbolic link loaded")
 	}
 	for _, bad := range []string{"legacy_root: tree_root\nlegacy_root: grants_catalog\n", "- a\n", "legacy_root: tree_roots\n"} {
 		if _, err := ParseSiteRenames([]byte(bad)); err == nil {
