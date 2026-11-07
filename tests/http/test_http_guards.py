@@ -316,3 +316,34 @@ def test_model_key_with_a_control_character_is_refused_without_quoting_it(server
     assert isinstance(raised, ModelError) and raised.kind == "misconfigured"
     assert "s3cret" not in str(raised) and "Injected" not in str(raised)
     assert home.seen == []
+
+
+def test_a_redirect_to_an_ambiguous_or_invalid_authority_is_refused():
+    """Regression: a same-host ``Location`` with userinfo or a backslash passed the origin check
+    (urlsplit drops the userinfo) and was followed into a URL ``http.client`` reads as another
+    host, and a bad port made urlsplit raise ``ValueError`` out of the redirect handler instead
+    of the ``HTTPError`` every caller handles."""
+    from homelabnext._http import SameOriginRedirectHandler
+
+    here = f"http://{LOOPBACK}:8080"
+    targets = [
+        f"http://user@{LOOPBACK}:8080/ok",
+        f"http://{LOOPBACK}:8080\\@{LOOPBACK}:8080/ok",
+        f"http://{LOOPBACK}%2e:8080/ok",
+        f"http://{LOOPBACK}:99999/ok",
+        f"http://{LOOPBACK}:8080x/ok",
+        f"http://[{LOOPBACK}/ok",
+    ]
+    outcomes = []
+    for target in targets:
+        req = urllib.request.Request(here + "/r")
+        try:
+            SameOriginRedirectHandler().redirect_request(
+                req, io.BytesIO(), 302, "Found", {"Location": target}, target
+            )
+            outcomes.append(f"followed {target}")
+        except urllib.error.HTTPError as exc:
+            outcomes.append("refused" if exc.code == 302 and "refusing" in str(exc) else repr(exc))
+        except Exception as exc:
+            outcomes.append(repr(exc))
+    assert outcomes == ["refused"] * len(targets)

@@ -105,11 +105,20 @@ class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
                 headers,
                 fp,
             )
-        target = urllib.parse.urljoin(req.full_url, newurl)
-        if _origin(target) != _origin(req.full_url):
-            raise urllib.error.HTTPError(
-                req.full_url, code, f"refusing cross-origin redirect ({msg})", headers, fp
-            )
+        # userinfo, a backslash or a percent-escape in the authority is read differently by
+        # urlsplit and by http.client (which host is the origin?), and a bad port or bracket
+        # makes urlsplit raise: neither is followed, both are the HTTPError
+        why = None
+        try:
+            target = urllib.parse.urljoin(req.full_url, newurl)
+            if any(c in urllib.parse.urlsplit(target).netloc for c in "@\\%"):
+                why = "refusing redirect to an ambiguous authority"
+            elif _origin(target) != _origin(req.full_url):
+                why = "refusing cross-origin redirect"
+        except ValueError:
+            why = "refusing redirect to an invalid URL"
+        if why:
+            raise urllib.error.HTTPError(req.full_url, code, f"{why} ({msg})", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
