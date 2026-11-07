@@ -19,7 +19,8 @@
                            ``llm-gateway`` capability, the role as the model, the key in
                            ``--key-env``): what a consumer calls.  ``--direct`` resolves the
                            role's backend instead (host-side; ``--key-env`` then names the
-                           backend's key).  Exit 0 pass, 1 fail, 2 usage.
+                           backend's key; the key goes over plain http to a non-loopback host
+                           only with ``--allow-plaintext``).  Exit 0 pass, 1 fail, 2 usage.
 ``hnx golden canary``      the egress canary (docs/compute-model.md, "The egress canary"): live
                            against every binding of a role (``--registry`` and ``--roles``), or
                            against a scripted fake (``--fake benign|incident``).  Exit 0 pass,
@@ -31,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -100,10 +102,10 @@ def main(argv: list[str]) -> int:
     role = args.role or suite.role
     if not role:
         ap.error("no alias: pass --role or set 'role' in the suite")
-    api_key = _api_key(args)
+    client = _client(args)
     how = ModelResolver if args.direct else GatewayResolver
     resolver = how(load_registry(args.registry), RoleTable.load(args.roles))
-    completer, model_id = client_completer(resolver, role, api_key=api_key)
+    completer, model_id = client_completer(resolver, role, **client)
     rep = run_suite(suite, completer, role=role, model_id=model_id)
     if args.json:
         print(json.dumps(rep.to_dict(timing=True), indent=2, sort_keys=True))
@@ -114,6 +116,16 @@ def main(argv: list[str]) -> int:
 
 def _key_env(p: argparse.ArgumentParser, what: str) -> None:
     p.add_argument("--key-env", metavar="VAR", help=f"environment variable holding {what}")
+    p.add_argument(
+        "--allow-plaintext",
+        action="store_true",
+        help="send the key over plain http to a non-loopback host (lab only)",
+    )
+
+
+def _client(args: argparse.Namespace) -> dict[str, Any]:
+    """The ``ModelClient`` keywords the key options name: ``api_key``, ``allow_plaintext``."""
+    return {"api_key": _api_key(args), "allow_plaintext": args.allow_plaintext}
 
 
 def _api_key(args: argparse.Namespace) -> str | None:
@@ -138,7 +150,7 @@ def _pins(args: argparse.Namespace) -> int:
     suites = args.suite or list(pins.DEFAULT_SUITES)
     if args.action == "report":
         if args.registry:
-            factory, tiers, canary_for, name = _live(args.registry, table, _api_key(args))
+            factory, tiers, canary_for, name = _live(args.registry, table, _client(args))
             rep = pins.run_eval(
                 table,
                 suites,
@@ -193,7 +205,7 @@ def _canary(args: argparse.Namespace) -> int:
     else:  # pragma: no cover - needs a real model server
         table = RoleTable.load(args.roles)
         resolver = ModelResolver(load_registry(args.registry), table)
-        canary_for = _binding_completer(resolver, _api_key(args))
+        canary_for = _binding_completer(resolver, _client(args))
         for b in table.get(args.role).bindings:  # every binding, not the first that resolves
             runs.append((canary_for(args.role, b)[0], args.role, b.model_id))
     reports = []
@@ -217,14 +229,14 @@ def _canary(args: argparse.Namespace) -> int:
 
 
 def _binding_completer(
-    resolver: ModelResolver, api_key: str | None = None
+    resolver: ModelResolver, client_kwargs: Mapping[str, Any] | None = None
 ):  # pragma: no cover - needs a real model server
     """``(role, binding) -> (completer, "live")``: the canary's completer for one binding, which
     returns the whole ChatResult so the canary sees ``finish_reason``."""
     from homelabnext.registry.models import ModelClient
 
     def canary_for(role: str, binding: Any) -> tuple[Any, str]:
-        client = ModelClient(resolver.resolve_binding(role, binding), api_key=api_key)
+        client = ModelClient(resolver.resolve_binding(role, binding), **(client_kwargs or {}))
         return (lambda messages, params: client.chat(messages, **params)), "live"
 
     return canary_for
@@ -272,7 +284,7 @@ def _codemode(args: argparse.Namespace) -> int:
 
 
 def _live(
-    registry: str, table: RoleTable, api_key: str | None = None
+    registry: str, table: RoleTable, client_kwargs: Mapping[str, Any] | None = None
 ):  # pragma: no cover - needs a real model server
     from homelabnext.decide.evalset import EXAMPLES
     from homelabnext.decide.spec import load_spec
@@ -284,15 +296,15 @@ def _live(
     tiers = {}
     for t in spec.tiers:
         if t.model_role:
-            client = ModelClient(resolver.resolve(t.model_role), api_key=api_key)
+            client = ModelClient(resolver.resolve(t.model_role), **(client_kwargs or {}))
             tiers[t.name] = ModelTier(
                 t.name, lambda m, c=client: c.chat(m), spec.question_set, spec.answer_labels
             )
 
     def factory(role: str):
-        return client_completer(resolver, role, api_key=api_key)
+        return client_completer(resolver, role, **(client_kwargs or {}))
 
-    return factory, tiers, _binding_completer(resolver, api_key), "live"
+    return factory, tiers, _binding_completer(resolver, client_kwargs), "live"
 
 
 if __name__ == "__main__":

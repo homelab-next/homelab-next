@@ -347,3 +347,30 @@ def test_a_redirect_to_an_ambiguous_or_invalid_authority_is_refused():
         except Exception as exc:
             outcomes.append(repr(exc))
     assert outcomes == ["refused"] * len(targets)
+
+
+def test_model_key_goes_over_plaintext_only_to_loopback_or_with_the_opt_in():
+    """Regression: the model client sent ``Authorization: Bearer <key>`` over plain http to any
+    host, without the ``allow_plaintext`` opt-in every other credentialed client requires."""
+    from homelabnext.registry.models import ModelError, authorized
+
+    sent = []
+
+    def transport(method, url, body, timeout, *, headers=None):
+        sent.append(url)
+        return 200, {"data": []}
+
+    remote = "http://inference.example.internal/v1/models"
+    raised = None
+    try:
+        authorized("s3cret", transport)("GET", remote, None, 5)
+    except Exception as exc:
+        raised = exc
+    assert isinstance(raised, ModelError) and raised.kind == "misconfigured"
+    assert "plaintext" in str(raised) and "s3cret" not in str(raised)
+    assert sent == []
+    authorized("s3cret", transport, allow_plaintext=True)("GET", remote, None, 5)
+    authorized("s3cret", transport)("GET", f"http://{LOOPBACK}:1/v1/models", None, 5)
+    authorized("s3cret", transport)("GET", "https://inference.example.internal/v1/models", None, 5)
+    authorized(None, transport)("GET", remote, None, 5)  # no key: plain http is allowed
+    assert len(sent) == 4
