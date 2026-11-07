@@ -134,6 +134,7 @@ memory budget) and skips the parts that need a daemon. The architecture behind i
 | [docs/agent.md](docs/agent.md) | agent profile compiler, context packs and the broker contracts (`hnx agent`, `schemas/agent/`, `schemas/broker/`) |
 | [docs/swap.md](docs/swap.md) | the swap kit: record, gates, parity, flip, decommission |
 | [docs/projects.md](docs/projects.md) | project management: projects, steps and tasks under board rules (`hnx projects`), the Projects hub page, OpenProject setup, strategy sync and change feed |
+| `orchestrator/` | the Go module of the orchestrator (ADR-0026): today the lab's own LLM gateway, `cmd/gateway` ([docs/gateway.md](docs/gateway.md)); not shipped in the wheel |
 | `homelabnext/` | the Python package: registry, generators, ids, paths, lake, notify, state, records, decide, golden, network, compute, customization, conform, swap, parity, agent, broker, detections, registers, invariants, scaffolds, `cli.py` |
 | `profiles/` | shipped optional customization profiles (inert until enabled; see [docs/customization.md](docs/customization.md)) |
 | [docs/network-model.md](docs/network-model.md), [docs/compute-model.md](docs/compute-model.md) | the site/network and guest models |
@@ -160,7 +161,7 @@ fixed in [ADR-0005](docs/adr/0005-swap-procedure-and-conformance.md).
 
 ## Decisions
 
-37 architecture decision records live in [docs/adr/](docs/adr/README.md), whose index gives one
+38 architecture decision records live in [docs/adr/](docs/adr/README.md), whose index gives one
 line for each. The first twelve cover schemas in git, registry and DNS aliases, shared libraries,
 role interface, swap procedure, detections as code, model roles, export hooks, bus placement,
 records lifecycle, the public/private split, and the deliberately non-modular substrate. Where a real lab lives (a private overlay repository read by

@@ -179,7 +179,7 @@ file.
   counts as Veritas (decision 2) and that every other copy is derived from it or checked against it
   (decision 5). The examples inside those decisions, the tier lists (decisions 3 and 4), the table
   (decision 6) and the records (decision 7) are descriptive: they restate ADR-0001 to ADR-0025 and
-  ADR-0027 (0026 is reserved and does not exist yet), every one of them still proposed, and they
+  ADR-0027 (0026 was reserved when this was written), every one of them still proposed, and they
   follow those ADRs as they change; the module selection is a draft schema. ADR-0027 withholds its
   own acceptance until its loader and pilot have run; this ADR has no mechanism to run, and the
   enforcement it lacks is stated in decision 8 rather than waited for.

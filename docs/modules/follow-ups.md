@@ -137,7 +137,7 @@ question 13 since; this draft applies those answers, and the operator may overri
 
 | # | Question | Provisional answer, as applied |
 |---|---|---|
-| 1 | ADR number | **0027**: 0025 is orchestration telemetry (merged); 0026 (the orchestrator component) is held by planned work and the ADR log test lists it as reserved |
+| 1 | ADR number | **0027**: 0025 is orchestration telemetry (merged); 0026 (the orchestrator component) was held by planned work then; it has since been written |
 | 2 | Selection schema | its own **`platform/module_selection` 1.0** (specified above) |
 | 3 | Core components | **`kind: core`**, also the home of the staff agents and core consumers |
 | 4 | Module criterion ids | **`<module>/<slug>`**, registers/invariant 1.1; the examples no longer use placeholders |

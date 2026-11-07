@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # The licence register (tools/licence_check.py; ADR-0011 decision 4): every Python package
-# constraints/*.txt pins and every image a compose/ stack runs or builds FROM, with its licence (an SPDX
+# constraints/*.txt pins, every Go module a go.mod requires (by module path) and every image a
+# compose/ stack runs or builds FROM, with its licence (an SPDX
 # expression: ids joined by AND or OR, no parentheses) and how this repository uses it. Owned in
 # CODEOWNERS with the rest of tools/: an entry here is a reviewed licence decision.
 #
@@ -122,6 +123,20 @@ python:
   uvicorn: {spdx: BSD-3-Clause, kind: linked}
   webcolors: {spdx: BSD-3-Clause, kind: linked}
   zstandard: {spdx: BSD-3-Clause, kind: linked}
+# Go modules: today only the linters' module orchestrator/tools/go.mod (staticcheck, govulncheck and
+# what they pull in), each run as `go tool` by CI's go job and linked into nothing this repository
+# builds; the orchestrator module itself is standard library only (ADR-0026 decision 2). Licences
+# from each module's LICENSE (or COPYING) at the pinned version.
+go:
+  github.com/BurntSushi/toml: {spdx: MIT, kind: tool, reason: "staticcheck's config reader; part of the linters, run as go tool, never linked into a shipped binary"}
+  golang.org/x/exp/typeparams: {spdx: BSD-3-Clause, kind: tool, reason: "staticcheck's dependency; run as go tool, never linked into a shipped binary"}
+  golang.org/x/mod: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
+  golang.org/x/sync: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
+  golang.org/x/sys: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
+  golang.org/x/telemetry: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
+  golang.org/x/tools: {spdx: BSD-3-Clause, kind: tool, reason: "the analysis framework the linters run on; run as go tool, never linked into a shipped binary"}
+  golang.org/x/vuln: {spdx: BSD-3-Clause, kind: tool, reason: "govulncheck, run as go tool by CI's go job; never linked into a shipped binary"}
+  honnef.co/go/tools: {spdx: MIT AND BSD-3-Clause, kind: tool, reason: "staticcheck, run as go tool by CI's go job (MIT; its LICENSE-THIRD-PARTY carries BSD-3-Clause code); never linked into a shipped binary"}
 images:
   binwiederhier/ntfy: {spdx: Apache-2.0 OR GPL-2.0-only, kind: service, reason: "the notify service; the project is dual-licensed (its LICENSE and LICENSE.GPLv2)"}
   dxflrs/garage: {spdx: AGPL-3.0-only, kind: service, reason: "the object store (v2.5.0: its LICENSE is still AGPL-3.0); run as its own service, nothing of it is shipped here (NOTICE)"}

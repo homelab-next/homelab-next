@@ -4,7 +4,7 @@
 #   kind: service
 #   purpose: Serve the deterministic fake OpenAI-compatible inference API.
 #   owner: conformance
-#   trigger: [compose:lab-in-a-box/inference]
+#   trigger: [compose:lab-in-a-box/inference, script:gateway-conformance]
 #   inputs: --host, --port, --model, --allow-any-host
 #   outputs: the HTTP API; nothing on disk
 #   exit:
