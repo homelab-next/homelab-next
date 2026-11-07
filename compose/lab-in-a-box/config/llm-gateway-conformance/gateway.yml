@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# The conformance gateway spec (ADR-0038 decision 7): what the inference suite's own-gateway target
+# (targets/inference-own-gateway.yml) runs against, never a lab's gateway.  Rendered only by the
+# test-only option, which writes gateway/ alone with "conformance_only": true (the gateway serves
+# it only in its -conformance mode, on loopback):
+#   hnx gen gateway render compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml \
+#     compose/lab-in-a-box/config/llm-gateway-conformance --conformance
+# and `make gateway-check` fails on drift.  To run the suite on one machine, render it again into a
+# scratch directory with a loopback --conformance-host (docs/llm-gateway.md).
+#
+# Its role table (model_roles.json, beside this file) is test-only too:
+#   cloud-reasoner  leaves the lab (a cloud openai deployment, pointed at the fake by
+#                   conformance.cloud_base_url), ceiling clear, falls back to fast-classifier;
+#   failover        its one deployment is on a port nothing listens on; its fallbacks are spare
+#                   (refused at admission: a token limit below any reservation) and then
+#                   fast-classifier, which serves it;
+#   spare           never called: on the fake it names a model the fake does not serve, so a
+#                   gateway that tried it would answer 404.
+name: conformance
+roles: model_roles.json
+domain: example.internal
+master_key: secret:llm-gateway/master-key
+database_url: secret:llm-gateway/database-url
+backends:
+  # the fake inference server serves conformance-chat, example-embed-8d and example-cloud-chat
+  svc:inference-small: {locality: local, port: 8000}
+  # nothing listens here: a connection error, which moves on to the next deployment
+  svc:inference-down: {locality: local, port: 1}
+  svc:cloud-openai:
+    locality: cloud
+    provider: openai
+    api_key: secret:llm-gateway/conformance-cloud-key
+conformance:
+  cloud_base_url: http://inference-small.svc.example.internal:8000
+telemetry_reader:
+  key: secret:llm-gateway/key-telemetry-reader
+keys:
+  # gateway-limit-throttles: 429 after 3 a minute
+  - name: conformance-throttle
+    key: secret:llm-gateway/key-conformance-throttle
+    roles: [mdl:fast-classifier]
+    data_tier: local-only
+    limits: {window_s: 60, max_requests: 3}
+  # the tlp-admit sender: a clear sending ceiling, may call the role that leaves the lab
+  - name: conformance-clear
+    key: secret:llm-gateway/key-conformance-clear
+    roles: [mdl:cloud-reasoner, mdl:fast-classifier]
+    data_tier: cloud-allowed
+    tlp_ceiling: clear
+  # gateway-refuses-role-above-key-ceiling: a red ceiling, scoped away from cloud-reasoner
+  - name: conformance-red
+    key: secret:llm-gateway/key-conformance-red
+    roles: [mdl:fast-classifier]
+    data_tier: local-only
+    tlp_ceiling: red

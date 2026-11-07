@@ -49,6 +49,15 @@ its backends) ``--check`` also holds the controller's backend list to the spec a
 ``svc:`` of the spec, its home's ``model.default`` is a role bound to it, and its ``max_context``
 is that role's ``max_context_tokens``.  ``hnx gen gateway homes`` checks that a home names no IP
 address and no engine model id (invariant A-14).
+
+**The test-only render** (``render --conformance``, ADR-0038 decision 7): a spec's
+``conformance:`` block (honoured only with the flag, refused without it) points every cloud
+deployment at the fake inference server (``cloud_base_url``, a host under the lab's service
+domain) instead of its provider's API, and ``--conformance-host`` (loopback only) moves every
+deployment's host to the machine the suite runs on.  The render writes only ``gateway/``, its
+``gateway.json`` carries ``"conformance_only": true`` (the gateway refuses to start on it outside
+its conformance mode on loopback), and its audit requires exactly that, where a lab render's
+audit refuses it.
 """
 
 from __future__ import annotations
@@ -148,6 +157,29 @@ class GatewaySpecError(ProblemsError):
     """The gateway spec, the role table or the profiles break a rule.  ``problems`` lists all."""
 
 
+#: the hosts ``--conformance-host`` takes: the gateway's conformance mode serves loopback only,
+#: and the fake it calls runs beside it
+CONFORMANCE_HOSTS = ("127.0.0.1", "localhost")  # no-raw-endpoint: allow the loopback names
+
+
+@dataclass(frozen=True)
+class Conformance:
+    """The test-only render (``--conformance``): ``cloud_base_url`` replaces every cloud
+    deployment's provider API (the spec's ``conformance.cloud_base_url``, or None to keep the
+    provider's), and ``host`` every deployment's host (``--conformance-host``, or None)."""
+
+    cloud_base_url: str | None = None
+    host: str | None = None
+
+    def url(self, base_url: str) -> str:
+        """``base_url`` with its host moved to :attr:`host` (its scheme and port kept)."""
+        if self.host is None:
+            return base_url
+        parts = urlsplit(base_url)
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme}://{self.host}{port}"
+
+
 @dataclass(frozen=True)
 class Backend:
     name: str  # svc name without the prefix
@@ -205,6 +237,8 @@ class Spec:
     ceilings: dict[str, tlp.Label] = field(default_factory=dict)
     #: the role table's roles as read (``leaves_lab`` of a role: :func:`leaves_lab_roles`)
     raw_roles: dict[str, Any] = field(default_factory=dict)
+    #: the test-only render's options (``--conformance``), or None for a lab render
+    conformance: Conformance | None = None
 
     @property
     def reader_user(self) -> str:
@@ -358,14 +392,30 @@ def _profile_slug(pid: str) -> str:
     return pid.removeprefix("profile:")
 
 
-def load_spec(path: str | Path) -> Spec:
-    """Read and validate a gateway spec; relative paths in it resolve against its directory."""
+def load_spec(
+    path: str | Path, *, conformance: bool = False, conformance_host: str | None = None
+) -> Spec:
+    """Read and validate a gateway spec; relative paths in it resolve against its directory.
+    ``conformance`` (and ``conformance_host``) select the test-only render (module docstring)."""
     path = Path(path)
     doc = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
-    return spec_from_dict(doc, base=path.parent, source=path.as_posix())
+    return spec_from_dict(
+        doc,
+        base=path.parent,
+        source=path.as_posix(),
+        conformance=conformance,
+        conformance_host=conformance_host,
+    )
 
 
-def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
+def spec_from_dict(
+    doc: Any,
+    *,
+    base: Path,
+    source: str = "<spec>",
+    conformance: bool = False,
+    conformance_host: str | None = None,
+) -> Spec:
     problems: list[str] = []
     if not isinstance(doc, Mapping):
         raise GatewaySpecError(f"{source}: the gateway spec must be a mapping")
@@ -373,7 +423,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     known = {
         "roles", "profiles", "registry", "domain", "svc_label", "master_key", "database_url",
         "backends", "local_only", "keys", "serving", "name", "controller",
-        "telemetry_reader",
+        "telemetry_reader", "conformance",
     }  # fmt: skip
     spec_name = doc.get("name", "")
     if spec_name != "" and not (isinstance(spec_name, str) and SLUG_RE.match(spec_name)):
@@ -607,6 +657,9 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     if reader is not None:
         others["telemetry_reader.key"] = reader
     problems += _secret_collisions(keys, master_key, database_url, backends, others)
+    test_only = _conformance(
+        doc.get("conformance"), conformance, conformance_host, service_domain, problems
+    )
 
     spec = Spec(
         name=spec_name,
@@ -623,6 +676,7 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
         controller=controller,
         telemetry_reader=reader,
         raw_roles=dict(raw_roles) if isinstance(raw_roles, Mapping) else {},
+        conformance=test_only,
     )
     if not problems:
         spec.ceilings = role_ceilings(spec, raw_roles)
@@ -631,6 +685,61 @@ def spec_from_dict(doc: Any, *, base: Path, source: str = "<spec>") -> Spec:
     if problems:
         raise GatewaySpecError(f"{source}: invalid gateway spec", problems)
     return spec
+
+
+def _conformance(
+    raw: Any, enabled: bool, host: str | None, service_domain: str, problems: list[str]
+) -> Conformance | None:
+    """The test-only render's options, or None for a lab render.  The spec's ``conformance:``
+    block is refused without ``--conformance``, so no lab render can point a cloud deployment
+    anywhere but its provider; ``cloud_base_url`` must be an http(s) origin under the lab's
+    service domain (the fake inference server), and ``host`` a loopback name."""
+    if not enabled:
+        if raw is not None:
+            problems.append(
+                "conformance: is honoured only by the test-only render (render --conformance); "
+                "a lab spec never carries it"
+            )
+        if host is not None:
+            problems.append("--conformance-host needs --conformance")
+        return None
+    if host is not None and host not in CONFORMANCE_HOSTS:
+        problems.append(
+            f"--conformance-host {host!r}: the gateway's conformance mode serves loopback only, "
+            f"so the host is one of {', '.join(CONFORMANCE_HOSTS)}"
+        )
+        host = None
+    if raw is None:
+        return Conformance(host=host)
+    if not isinstance(raw, Mapping) or set(raw) - {"cloud_base_url"}:
+        problems.append("conformance takes cloud_base_url (the fake inference server's origin)")
+        return Conformance(host=host)
+    url = raw.get("cloud_base_url")
+    parts = urlsplit(url) if isinstance(url, str) else None
+    try:
+        port_ok = parts is not None and (parts.port is None or 0 < parts.port < 65536)
+    except ValueError:
+        port_ok = False
+    if (
+        parts is None
+        or not port_ok
+        or parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.path
+        or parts.query
+        or parts.fragment
+        or url != f"{parts.scheme}://{parts.netloc}"
+        or not parts.hostname.endswith("." + service_domain)
+        or _under_cloud_api(parts.hostname)
+    ):
+        problems.append(
+            f"conformance.cloud_base_url {url!r}: an http(s) origin (no path, no slash) under "
+            f"the lab's service domain {service_domain} (the fake inference server)"
+        )
+        return Conformance(host=host)
+    return Conformance(cloud_base_url=str(url), host=host)
 
 
 def _served_backends(
@@ -1079,9 +1188,7 @@ def _neutral_doc(spec: Spec) -> dict[str, Any]:
                     "backend": be.name,
                     "locality": be.locality,
                     "protocol": _protocol(be),
-                    "base_url": NEUTRAL_CLOUD[be.provider]
-                    if be.locality == "cloud"
-                    else be.base_url,
+                    "base_url": _base_url(spec, be),
                     "model": b.model_id,
                     "api_key_env": secret_env_name(be.api_key) if be.api_key else None,
                 }
@@ -1122,7 +1229,7 @@ def _neutral_doc(spec: Spec) -> dict[str, Any]:
         }
         for k in sorted(spec.keys, key=lambda k: k.name)
     ]
-    return {
+    doc = {
         "version": NEUTRAL_VERSION,
         "name": spec.name,
         "admin_key_env": secret_env_name(spec.master_key),
@@ -1132,16 +1239,38 @@ def _neutral_doc(spec: Spec) -> dict[str, Any]:
         if spec.telemetry_reader is not None
         else None,
     }
+    if spec.conformance is not None:  # contract R14: the one optional key
+        doc["conformance_only"] = True
+    return doc
+
+
+def _base_url(spec: Spec, be: Backend) -> str:
+    """A deployment's ``base_url``: its provider's API for a cloud backend, its own origin for a
+    local one; in the test-only render, the fake's origin for a cloud backend when the spec names
+    one, and every host moved to ``--conformance-host``."""
+    test = spec.conformance
+    if be.locality == "cloud":
+        url = test.cloud_base_url if test and test.cloud_base_url else NEUTRAL_CLOUD[be.provider]
+    else:
+        url = be.base_url
+    return test.url(url) if test else url
 
 
 def _neutral_marker(spec: Spec, digest: str, neutral: str) -> str:
     """The generated-by marker beside ``gateway.json`` (which cannot carry one): the same header
     line as ``litellm/config.yaml`` (same digest), then the file's own sha256."""
     file_digest = hashlib.sha256(neutral.encode()).hexdigest()
+    test_only = (
+        "# conformance_only: a test-only render (render --conformance) for a conformance run\n"
+        "# against the fake inference server; no lab gateway serves it\n"
+        if spec.conformance is not None
+        else ""
+    )
     return (
         HEADER.format(spec=Path(spec.source).name, digest=digest)
         + "# gateway.json is the ADR-0038 gateway config (schema platform/gateway_config); JSON\n"
         + "# carries no comment, so this file marks it generated and holds its sha256\n"
+        + test_only
         + f"gateway.json sha256:{file_digest}\n"
     )
 
@@ -1152,7 +1281,11 @@ def render(spec: Spec) -> dict[str, str]:
     ``litellm/`` is always rendered.  ``gateway/gateway.json`` (and its marker) is rendered for
     every spec the gateway config contract can express; for one it cannot, the LiteLLM files are
     still written and ``litellm/config.yaml`` carries a ``# note:`` line per reason
-    (:func:`neutral_refusals`), so a LiteLLM-only spec keeps working until the cutover."""
+    (:func:`neutral_refusals`), so a LiteLLM-only spec keeps working until the cutover.  The
+    test-only render (``spec.conformance``) writes ``gateway/`` alone: LiteLLM has no
+    conformance mode, and no lab gateway may read what it writes."""
+    if spec.conformance is not None:
+        return _render_conformance(spec)
     config, keys = render_litellm(spec)
     refused = neutral_refusals(spec)
     if refused:  # after the SPDX line, with the proxy config's other notes
@@ -1176,18 +1309,34 @@ def render(spec: Spec) -> dict[str, str]:
     return dict(sorted(files.items()))
 
 
+def _render_conformance(spec: Spec) -> dict[str, str]:
+    """``gateway/`` of the test-only render (``render --conformance``): the neutral config with
+    ``conformance_only`` and its marker; refused when the contract cannot express the spec."""
+    neutral = render_neutral(spec)
+    digest = hashlib.sha256(json.dumps({NEUTRAL: neutral}).encode()).hexdigest()[:16]
+    files = {NEUTRAL: neutral, NEUTRAL_MARKER: _neutral_marker(spec, digest, neutral)}
+    problems = audit(files, spec)
+    if problems:
+        raise GatewaySpecError("rendered gateway config fails its own audit", problems)
+    return files
+
+
 def render_file(path: str | Path) -> dict[str, str]:
     return render(load_spec(path))
 
 
 # ---------------------------------------------------------------------------- audit
 def _local_hosts(spec: Spec) -> set[str]:
-    """Hosts of local backends that really are internal (a self-declared one is not)."""
-    return {
+    """Hosts of local backends that really are internal (a self-declared one is not); in the
+    test-only render, the ``--conformance-host`` they were all moved to."""
+    hosts = {
         b.host.lower()
         for b in spec.backends.values()
         if b.locality == "local" and internal_host(spec, b.host)
     }
+    if spec.conformance is not None and spec.conformance.host is not None and hosts:
+        return {spec.conformance.host}
+    return hosts
 
 
 def audit(files: Mapping[str, str], spec: Spec) -> list[str]:
@@ -1271,7 +1420,10 @@ def _audit_neutral(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
     problems = _schema_problems(doc)
     if not isinstance(doc, Mapping):
         return problems
-    if doc.get("conformance_only", False) is not False:  # contract R14: never in a lab render
+    if spec.conformance is not None:  # the test-only render: marked, always
+        if doc.get("conformance_only") is not True:
+            problems.append("conformance_only must be true in a test-only render (--conformance)")
+    elif doc.get("conformance_only", False) is not False:  # contract R14: never in a lab render
         problems.append(
             "conformance_only is set: a config for a conformance run against a fake is never a "
             "lab gateway's config"
@@ -1310,6 +1462,9 @@ def _audit_neutral(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
             if not isinstance(d, Mapping) or d.get("locality") != "cloud":
                 continue
             want_url = NEUTRAL_CLOUD.get(str(d.get("protocol")))
+            test = spec.conformance
+            if test is not None and test.cloud_base_url and want_url:  # the fake, test-only
+                want_url = test.url(test.cloud_base_url)
             if d.get("base_url") != want_url:
                 problems.append(
                     f"role {role} deployment {d.get('id')}: a cloud {d.get('protocol')} "
@@ -1915,6 +2070,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     rd.add_argument("spec")
     rd.add_argument("out_dir")
     rd.add_argument("--check", action="store_true", help="fail on drift or an audit finding")
+    rd.add_argument(
+        "--conformance",
+        action="store_true",
+        help="the test-only render: gateway/ alone, conformance_only, cloud deployments on the "
+        "spec's conformance.cloud_base_url (ADR-0038 decision 7)",
+    )
+    rd.add_argument(
+        "--conformance-host",
+        metavar="HOST",
+        help=f"with --conformance: move every deployment to HOST ({', '.join(CONFORMANCE_HOSTS)})",
+    )
     hm = sub.add_parser("homes", help=agent_homes.HOMES_HELP, description=agent_homes.HOMES_HELP)
     agent_homes.add_arguments(hm)
     pv = sub.add_parser("provision", help="create the virtual keys of litellm/keys.json")
@@ -1957,7 +2123,9 @@ def main(argv: Iterable[str] | None = None) -> int:
             return 1
         return 0
     try:
-        spec = load_spec(args.spec)
+        spec = load_spec(
+            args.spec, conformance=args.conformance, conformance_host=args.conformance_host
+        )
         files = render(spec)
     except GatewaySpecError as exc:
         print(f"gateway: {exc}", file=sys.stderr)

@@ -8,6 +8,9 @@ Subject = :class:`homelabnext.conform.adapters.openai_compat.OpenAICompat`-shape
     chat_stream(model, messages, *, max_tokens) -> Iterator[str]     feature ``streaming``
     embed(model, texts) -> list[list[float]]                         feature ``embeddings``
 
+The embeddings checks call ``embed_model`` when the subject has one (an embedding role of the
+target's own, set in its config), else the model the chat checks call.
+
 A model *gateway* in front of the backends (LiteLLM; docs/llm-gateway.md) declares the
 feature ``gateway`` and adds :class:`GatewayClient`'s three methods, so the suite can prove what
 the gateway is for: a bad key is a clean 401, a configured limit is a 429, and ``/v1/models`` is
@@ -18,7 +21,14 @@ A gateway whose keys are scoped by TLP ceiling (ADR-0033 decisions 10 and 11) de
 ceiling is above the ceiling of a role whose prompts leave the lab is refused that role (a 401 or
 403 on the chat, never a reply) while it is still served on a role it may call.  The per-request
 half of the rule (a request's own label) is the caller's (:func:`homelabnext.registry.model_tlp.admit`):
-a gateway with no admission code of its own cannot read it.
+a gateway with no admission code of its own (LiteLLM) cannot read it.
+
+A gateway that applies that rule itself to the label a request carries in the ``X-HNX-TLP`` header
+(ADR-0038 decisions 5 and 7, the lab's own gateway) declares the feature ``tlp-admit`` and adds
+:class:`TlpAdmitGateway`'s two methods: clients that can send header fields
+(:class:`LabelledClient`), a role that leaves the lab, a role that stays in it, and a role whose
+deployments fail and whose first fallback is refused at admission.  A refusal is a 403 whose error
+names its reason (``unlabelled`` or ``above-ceiling``, :data:`TLP_REASONS`).
 
 A gateway that keeps a per-call log declares the feature ``turn-records`` as well: it offers a
 :class:`TurnSource`, ``turns(start, end, tags)``, that yields the calls (*turns*) started in a
@@ -45,11 +55,14 @@ from homelabnext.conform.adapters.openai_compat import ChatResult, InferenceErro
 from homelabnext.status.model import parse_iso
 
 __all__ = [
+    "TLP_REASONS",
     "TURN_FIELDS",
     "ChatResult",
     "GatewayClient",
     "InferenceClient",
     "InferenceError",
+    "LabelledClient",
+    "TlpAdmitGateway",
     "TlpCeilingGateway",
     "TurnRecordsGateway",
     "TurnSource",
@@ -105,6 +118,54 @@ class TlpCeilingGateway(GatewayClient, Protocol):
         """``(client, refused, served)``: ``client`` is a key whose sending TLP ceiling is above
         the ceiling of role ``refused`` (one whose prompts leave the lab), and that may call role
         ``served``."""
+        ...
+
+
+#: the refusal reasons of a TLP admission a gateway's 403 names (``model_tlp.admit``'s)
+TLP_REASONS = ("unlabelled", "above-ceiling")
+
+
+@runtime_checkable
+class LabelledClient(InferenceClient, Protocol):
+    """A client that can send a chat with extra request header fields."""
+
+    def chat_fields(
+        self,
+        model: str,
+        messages: Sequence[dict[str, str]],
+        fields: Sequence[tuple[str, str]],
+        *,
+        max_tokens: int = 64,
+    ) -> ChatResult:
+        """A chat with ``fields`` (``(name, value)`` pairs) as request header fields, each sent
+        as a field of its own: a repeated name is several fields, an empty value an empty field."""
+        ...
+
+
+@runtime_checkable
+class TlpAdmitGateway(GatewayClient, Protocol):
+    """Feature ``tlp-admit``: the gateway admits each request by the TLP label in its
+    ``X-HNX-TLP`` header (ADR-0038 decision 5): no field is ``red`` (reason ``unlabelled`` when
+    refused), one field is read with ``tlp.read`` (an empty or unknown value is ``red``), more
+    than one field is ``red``; a role that leaves the lab judges the request at the higher of its
+    label and the key's sending ceiling; a refusal of the requested role is a 403 at once, never a
+    fallback."""
+
+    def tlp_admit(self) -> tuple[LabelledClient, LabelledClient, str, str]:
+        """``(sender, above, leaving, local)``: ``leaving`` is a role that leaves the lab, whose
+        ceiling is ``clear`` or ``green``; ``local`` a role that stays in the lab; ``sender`` a
+        key whose sending ceiling is ``clear`` and that may call both; ``above`` a key whose
+        sending ceiling is above ``leaving``'s ceiling and that may still call it (the admin key,
+        whose ceiling is always ``red``)."""
+        ...
+
+    def refused_fallback(self) -> tuple[InferenceClient, str] | None:
+        """``(client, role)``: every deployment of ``role`` fails with an error that moves on,
+        its first fallback is refused at admission (its own limit) and a later fallback serves,
+        so the call is served; or None when the target has no such role.  A TLP-refused
+        fallback cannot be built from a rendered config (a role's ceiling and ``leaves_lab``
+        include its whole chain, so a fallback is never judged stricter than the role that was
+        admitted): the gateway's own unit tests cover that one."""
         ...
 
 

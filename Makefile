@@ -177,6 +177,8 @@ models-check:
 # the LLM gateway config (LiteLLM) is generated from the role table and the agent
 # profiles: no drift, and no local-only or agent role can reach a cloud model (docs/llm-gateway.md)
 GATEWAY_SPEC := compose/lab-in-a-box/config/llm-gateway/gateway.yml
+# the conformance gateway spec (ADR-0038 decision 7): rendered only with the test-only option
+CONFORMANCE_GATEWAY := compose/lab-in-a-box/config/llm-gateway-conformance
 # the gateway in front of the orchestration controller's engines: --check also holds the
 # controller's backend list and its HERMES_HOMEs to the spec (docs/orchestration-controller.md)
 ORCH_GATEWAY := examples/llm-orchestrator-gateway
@@ -184,6 +186,7 @@ ORCH_GATEWAY := examples/llm-orchestrator-gateway
 check: gateway-check
 gateway-check:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC)) --check
+	$(PY) -m homelabnext.cli gen gateway render $(CONFORMANCE_GATEWAY)/gateway.yml $(CONFORMANCE_GATEWAY) --conformance --check
 	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway --check
 
 # the MCP catalog (docs/mcp-catalog.md, ADR-0024): every record valid and reviewed, the registry's
@@ -203,6 +206,7 @@ mcp-render:
 # after changing the role table, a profile or the gateway spec: regenerate and commit
 gateway-render:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC))
+	$(PY) -m homelabnext.cli gen gateway render $(CONFORMANCE_GATEWAY)/gateway.yml $(CONFORMANCE_GATEWAY) --conformance
 	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway
 
 # after changing the example store, its role table or its serving spec: regenerate and commit

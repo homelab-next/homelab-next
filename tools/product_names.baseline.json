@@ -211,11 +211,6 @@
   "compose/lab-in-a-box/config/llm-gateway/litellm/": {
    "litellm": 1
   },
-  "compose/lab-in-a-box/config/llm-gateway/litellm/config.yaml": {
-   "example-27b": 1,
-   "example-4b": 1,
-   "litellm": 3
-  },
   "compose/lab-in-a-box/config/postgres/init/10-litellm.sh": {
    "litellm": 7
   },
@@ -1447,7 +1442,7 @@
   "tests/generators/test_llm_gateway.py": {
    "example-27b": 2,
    "example-4b": 1,
-   "litellm": 49,
+   "litellm": 46,
    "vllm": 1
   },
   "tests/golden/conftest.py": {

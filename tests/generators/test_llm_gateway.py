@@ -521,10 +521,11 @@ def test_audit_catches_a_hand_added_cloud_fallback_in_litellm():
 
 def test_audit_catches_a_cloud_deployment_and_a_default_fallback_in_litellm():
     spec, files = lab_files()
-    doc = yaml.safe_load(files["litellm/config.yaml"])
-    doc["model_list"][0]["litellm_params"]["api_base"] = "https://api.example.com/v1"
+    doc = yaml.safe_load(files[PROXY_CONFIG])
+    fast = next(m for m in doc["model_list"] if m["model_name"] == "fast-classifier")
+    fast[DEPLOY_PARAMS]["api_base"] = "https://api.example.com/v1"
     doc["router_settings"]["default_fallbacks"] = ["elsewhere"]
-    files["litellm/config.yaml"] = yaml.safe_dump(doc)
+    files[PROXY_CONFIG] = yaml.safe_dump(doc)
     problems = "\n".join(gw.audit(files, spec))
     assert (
         "fast-classifier (profile:reader is data_tier local-only) has a cloud deployment"
@@ -1653,3 +1654,141 @@ def test_a_fallback_of_another_kind_is_refused_before_render(tmp_path):
         "role embedder: fallback mdl:small-local is a chat role, but embedder is embedding: a "
         "fallback must be of its role's kind" in exc.value.problems
     )
+
+
+# --- the test-only render (render --conformance, ADR-0038 decision 7) ---------------------------
+CONFORMANCE = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway-conformance"
+FAKE_URL = "http://fake.svc.example.internal:8000"  # no-raw-endpoint: allow rendered alias
+OUTSIDE_URL = "http://fake.example.com:8000"  # no-raw-endpoint: allow a URL the render refuses
+
+
+def test_the_conformance_spec_and_its_committed_output_pass_only_with_the_flag(capsys):
+    spec = str(CONFORMANCE / "gateway.yml")
+    assert (
+        hnx(["gen", "gateway", "render", spec, str(CONFORMANCE), "--conformance", "--check"]) == 0
+    )
+    capsys.readouterr()
+    assert hnx(["gen", "gateway", "render", spec, str(CONFORMANCE), "--check"]) == 1
+    assert "honoured only by the test-only render" in capsys.readouterr().err
+    doc = json.loads((CONFORMANCE / NEUTRAL).read_text())
+    assert doc["conformance_only"] is True and list(SCHEMA.iter_errors(doc)) == []
+    assert sorted(p.name for p in (CONFORMANCE / "gateway").iterdir()) == [
+        ".hnx-generated",
+        "gateway.json",
+    ]  # gateway/ alone: the other gateway product has no conformance mode
+    assert sorted(p.name for p in CONFORMANCE.iterdir()) == [
+        "gateway",
+        "gateway.yml",
+        "model_roles.json",
+    ]
+
+
+def test_the_conformance_block_is_refused_without_the_flag(tmp_path):
+    with pytest.raises(gw.GatewaySpecError, match="honoured only by the test-only render"):
+        gw.load_spec(
+            make_spec(tmp_path, roles=RICH_ROLES, conformance={"cloud_base_url": FAKE_URL})
+        )
+
+
+def _conformance_spec(tmp_path, host=None, **conf):
+    path = make_spec(
+        tmp_path,
+        roles=RICH_ROLES,
+        telemetry_reader={"key": "secret:llm-gateway/key-telemetry-reader"},
+        conformance=conf or {"cloud_base_url": FAKE_URL},
+    )
+    return gw.load_spec(path, conformance=True, conformance_host=host)
+
+
+def test_the_test_only_render_writes_gateway_alone_marked_conformance_only(tmp_path):
+    spec = _conformance_spec(tmp_path)
+    files = gw.render(spec)
+    assert sorted(files) == [gw.NEUTRAL_MARKER, NEUTRAL]
+    doc = json.loads(files[NEUTRAL])
+    assert doc["conformance_only"] is True and list(SCHEMA.iter_errors(doc)) == []
+    cloud = doc["roles"]["cloud-reasoner"]["deployments"][0]
+    assert (cloud["locality"], cloud["protocol"], cloud["base_url"]) == (
+        "cloud",
+        "anthropic",
+        FAKE_URL,
+    )
+    local = doc["roles"]["agent-local"]["deployments"][0]["base_url"]
+    assert local == "http://infer-a.svc.example.internal:8000"  # no-raw-endpoint: allow alias
+    assert "conformance_only" in files[gw.NEUTRAL_MARKER]
+    assert gw.audit(files, spec) == []
+
+
+def test_conformance_host_moves_every_deployment_to_loopback(tmp_path):
+    spec = _conformance_spec(tmp_path, host=LOOPBACK)
+    doc = json.loads(gw.render(spec)[NEUTRAL])
+    urls = {d["base_url"] for r in doc["roles"].values() for d in r["deployments"]}
+    assert urls == {f"http://{LOOPBACK}:8000"}  # no-raw-endpoint: allow loopback test URL
+
+
+def test_without_a_conformance_block_cloud_deployments_keep_their_provider(tmp_path):
+    path = make_spec(tmp_path, roles=RICH_ROLES)
+    doc = json.loads(gw.render(gw.load_spec(path, conformance=True))[NEUTRAL])
+    assert doc["conformance_only"] is True
+    assert doc["roles"]["cloud-reasoner"]["deployments"][0]["base_url"] == (
+        "https://api.anthropic.com"
+    )
+
+
+@pytest.mark.parametrize(
+    ("conf", "host", "words"),
+    [
+        ({"cloud_base_url": "https://api.openai.com"}, None, "under the lab's service domain"),
+        ({"cloud_base_url": OUTSIDE_URL}, None, "under the lab's service domain"),
+        ({"cloud_base_url": FAKE_URL + "/v1"}, None, "no path"),
+        ({"cloud_base_url": FAKE_URL + "/"}, None, "no path"),
+        ({"cloud_base_url": "ftp://fake.svc.example.internal"}, None, "http(s) origin"),
+        ({"cloud_base_url": "http://u:p@fake.svc.example.internal"}, None, "http(s) origin"),
+        ({"cloud_base_url": 8000}, None, "http(s) origin"),
+        ({"cloud_base_url": FAKE_URL, "extra": 1}, None, "takes cloud_base_url"),
+        ({"cloud_base_url": FAKE_URL}, "0.0.0.0", "loopback only"),
+        ({"cloud_base_url": FAKE_URL}, "fake.svc.example.internal", "loopback only"),
+    ],
+)
+def test_the_test_only_render_refuses_a_fake_that_is_not_the_labs(tmp_path, conf, host, words):
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        _conformance_spec(tmp_path, host=host, **conf)
+    assert any(words in p for p in exc.value.problems), exc.value.problems
+
+
+def test_conformance_host_needs_the_flag(tmp_path, capsys):
+    out = tmp_path / "out"
+    spec = str(make_spec(tmp_path, roles=RICH_ROLES))
+    assert hnx(["gen", "gateway", "render", spec, str(out), "--conformance-host", LOOPBACK]) == 1
+    assert "--conformance-host needs --conformance" in capsys.readouterr().err
+
+
+def test_a_lab_check_refuses_a_test_only_render_and_the_reverse(tmp_path, capsys):
+    spec = str(make_spec(tmp_path, roles=RICH_ROLES))
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", spec, str(out), "--conformance"]) == 0
+    capsys.readouterr()
+    assert hnx(["gen", "gateway", "render", spec, str(out), "--check"]) == 1
+    assert "conformance_only is set" in capsys.readouterr().err
+    lab = tmp_path / "lab"
+    assert hnx(["gen", "gateway", "render", spec, str(lab)]) == 0
+    capsys.readouterr()
+    assert hnx(["gen", "gateway", "render", spec, str(lab), "--conformance", "--check"]) == 1
+    assert "conformance_only must be true" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("edit", "words"),
+    [
+        (lambda d: d.pop("conformance_only"), "conformance_only must be true"),
+        (lambda d: d.update(conformance_only=False), "conformance_only must be true"),
+        (
+            lambda d: d["roles"]["cloud-reasoner"]["deployments"][0].update(
+                base_url="http://other.svc.example.internal:8000"  # no-raw-endpoint: allow alias
+            ),
+            "deployment's base_url must be " + FAKE_URL,
+        ),
+    ],
+)
+def test_the_test_only_audit_refuses_hand_edits(tmp_path, edit, words):
+    problems = _audit_edit(_conformance_spec(tmp_path), edit)
+    assert any(words in p for p in problems), problems

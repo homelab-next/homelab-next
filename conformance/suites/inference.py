@@ -7,11 +7,14 @@ import re
 
 from conformance.fakes.inference_target import (
     CeilingIgnoredClient,
+    EmptyFieldUnlabelledClient,
     FakeInferenceClient,
+    LabelOnlyClient,
+    TlpSubstituteClient,
     WrongModelClient,
 )
-from conformance.protocols.inference import TURN_FIELDS, InferenceError, turn_problems
-from homelabnext.conform.core import Mutant, Suite
+from conformance.protocols.inference import TLP_REASONS, TURN_FIELDS, InferenceError, turn_problems
+from homelabnext.conform.core import Mutant, Skip, Suite
 from homelabnext.status.model import parse_iso
 
 from ._util import raises
@@ -27,6 +30,12 @@ PROMPT = [{"role": "user", "content": "Say hello in one short sentence."}]
 
 def _model(c):
     return getattr(c, "model", None) or c.models()[0]
+
+
+def _embed_model(c):
+    """The embedding role the embeddings checks call: the target's ``embed_model``, else the
+    model the chat checks call (a backend that serves both from one model)."""
+    return getattr(c, "embed_model", None) or _model(c)
 
 
 @SUITE.check("models-lists-the-served-model", "/v1/models lists the model the target serves")
@@ -87,7 +96,7 @@ def _(c):
     "embeddings-fixed-dimension", "every embedding has the same length", requires=["embeddings"]
 )
 def _(c):
-    vecs = c.embed(_model(c), ["alpha", "beta", "a much longer third input text"])
+    vecs = c.embed(_embed_model(c), ["alpha", "beta", "a much longer third input text"])
     assert len(vecs) == 3, f"{len(vecs)} vectors for 3 inputs"
     assert len({len(v) for v in vecs}) == 1 and len(vecs[0]) > 0, "dimensions differ"
 
@@ -98,7 +107,7 @@ def _(c):
     requires=["embeddings"],
 )
 def _(c):
-    a1, a2, b = c.embed(_model(c), ["alpha", "alpha", "beta"])
+    a1, a2, b = c.embed(_embed_model(c), ["alpha", "alpha", "beta"])
     assert a1 == a2, "same input gave different vectors"
     assert a1 != b, "different inputs gave the same vector"
 
@@ -190,6 +199,134 @@ def _(c):
     assert not NOT_AUTH.search(exc.detail), f"refused, but the reason is {exc.detail[:120]!r}"
 
 
+# --- feature ``tlp-admit``: the gateway admits each request by its X-HNX-TLP label --------------
+TLP = "X-HNX-TLP"
+_REASONS = "|".join(map(re.escape, TLP_REASONS))
+_REASON = re.compile(rf"\b({_REASONS})\b")
+_REASON_PAREN = re.compile(rf"\(({_REASONS})\)")
+
+
+def _tlp_refusal(call, label):
+    """The reason of the TLP refusal ``call`` must raise: a 403 from the chat itself whose error
+    is a TLP refusal (code ``tlp_refused``, or a message that names TLP) and names a reason.  The
+    reason in parentheses wins (``tlp refused (unlabelled): ...``), else the first one named."""
+    exc = raises(call, label, InferenceError)
+    assert exc.status == 403, f"{label}: HTTP {exc.status} ({exc.detail[:160]!r}), expected 403"
+    assert exc.path == CHAT, f"{label}: the 403 came from {exc.path or '?'}, not {CHAT}"
+    assert exc.code == "tlp_refused" or "tlp" in exc.detail.lower(), (
+        f"{label}: 403 but not a TLP refusal: {exc.code or '-'} {exc.detail[:160]!r}"
+    )
+    found = _REASON_PAREN.search(exc.detail) or _REASON.search(exc.detail)
+    assert found, f"{label}: the refusal names no reason ({exc.detail[:160]!r})"
+    return found.group(1)
+
+
+def _labelled(client, model, *labels):
+    return lambda: client.chat_fields(model, PROMPT, [(TLP, v) for v in labels])
+
+
+@SUITE.check(
+    "tlp-admit-unlabelled-refused",
+    "a request with no X-HNX-TLP field to a role that leaves the lab is a 403 unlabelled, never "
+    "served by a fallback; the same unlabelled request to a role that stays in the lab is served",
+    requires=["gateway", "tlp-admit"],
+)
+def _(c):
+    sender, _above, leaving, local = c.tlp_admit()
+    r = sender.chat_fields(local, PROMPT, [])
+    assert r.content.strip() and r.model == local, f"unlabelled to {local!r}: {r}"
+    reason = _tlp_refusal(_labelled(sender, leaving), f"unlabelled to {leaving!r}")
+    assert reason == "unlabelled", f"unlabelled to {leaving!r}: reason {reason!r}, not unlabelled"
+
+
+@SUITE.check(
+    "tlp-admit-within-ceiling-served",
+    "a label within the ceiling of a role that leaves the lab, from a key whose sending ceiling "
+    "is within it too, is served by that role; any accepted spelling of the label reads the same",
+    requires=["gateway", "tlp-admit"],
+)
+def _(c):
+    sender, _above, leaving, _local = c.tlp_admit()
+    for spelling in ("clear", " TLP:CLEAR ", "white"):
+        r = sender.chat_fields(leaving, PROMPT, [(TLP, spelling)])
+        assert r.content.strip(), f"{spelling!r} to {leaving!r}: empty reply"
+        assert r.model == leaving, f"{spelling!r}: asked for {leaving!r}, answered by {r.model!r}"
+
+
+@SUITE.check(
+    "tlp-admit-above-ceiling-refused",
+    "a label above the ceiling of a role that leaves the lab is a 403 above-ceiling",
+    requires=["gateway", "tlp-admit"],
+)
+def _(c):
+    sender, _above, leaving, _local = c.tlp_admit()
+    for label in ("amber", "red"):
+        reason = _tlp_refusal(_labelled(sender, leaving, label), f"{label} to {leaving!r}")
+        assert reason == "above-ceiling", f"{label}: reason {reason!r}, not above-ceiling"
+
+
+@SUITE.check(
+    "tlp-admit-judged-at-key-ceiling",
+    "for a role that leaves the lab, a label below the key's sending ceiling is judged at that "
+    "ceiling: a key whose ceiling is above the role's is refused (above-ceiling) whatever label "
+    "it sends",
+    requires=["gateway", "tlp-admit"],
+)
+def _(c):
+    _sender, above, leaving, local = c.tlp_admit()
+    r = above.chat_fields(local, PROMPT, [(TLP, "clear")])
+    assert r.content.strip(), f"the key was not served on {local!r}, a role that stays in the lab"
+    reason = _tlp_refusal(_labelled(above, leaving, "clear"), f"clear to {leaving!r}")
+    assert reason == "above-ceiling", f"reason {reason!r}, not above-ceiling"
+
+
+@SUITE.check(
+    "tlp-admit-empty-field-is-red",
+    "an empty X-HNX-TLP field is a label that reads as red: refused as above-ceiling, not as "
+    "unlabelled (one field differs from no field)",
+    requires=["gateway", "tlp-admit"],
+)
+def _(c):
+    sender, _above, leaving, _local = c.tlp_admit()
+    reason = _tlp_refusal(_labelled(sender, leaving, ""), f"an empty field to {leaving!r}")
+    assert reason == "above-ceiling", f"an empty field: reason {reason!r}, not above-ceiling"
+
+
+@SUITE.check(
+    "tlp-admit-two-fields-are-red",
+    "two X-HNX-TLP fields read as red, even when each is within the ceiling: refused as "
+    "above-ceiling",
+    requires=["gateway", "tlp-admit"],
+)
+def _(c):
+    sender, _above, leaving, _local = c.tlp_admit()
+    reason = _tlp_refusal(_labelled(sender, leaving, "clear", "clear"), f"two fields to {leaving}")
+    assert reason == "above-ceiling", f"two fields: reason {reason!r}, not above-ceiling"
+
+
+@SUITE.check(
+    "tlp-admit-refused-fallback-skipped",
+    "when every deployment of a role fails, a fallback refused at admission is skipped, never "
+    "called, and a later fallback serves the call under the requested alias",
+    requires=["gateway", "tlp-admit"],
+    skippable=True,
+)
+def _(c):
+    got = c.refused_fallback()
+    if got is None:
+        raise Skip("the target names no role whose first fallback is refused")
+    client, role = got
+    try:
+        r = client.chat(role, PROMPT)
+    except InferenceError as exc:
+        raise AssertionError(
+            f"{role!r}: HTTP {exc.status} ({exc.detail[:160]!r}): the refused fallback was "
+            "called, or no later fallback was tried"
+        ) from None
+    assert r.content.strip(), f"{role!r}: empty reply"
+    assert r.model == role, f"asked for {role!r}, answered by {r.model!r}"
+
+
 # --- feature ``turn-records``: the gateway's per-call log as neutral turn records --------------
 #: a tag no request carries
 NO_SUCH_TAG = "conformance-no-such-tag-zz"
@@ -273,5 +410,23 @@ MUTANTS = {
         "gateway-refuses-role-above-key-ceiling",
         "a key above a cloud role's TLP ceiling is scoped to it",
         features=frozenset({"gateway", "tlp-ceiling"}),
+    ),
+    "tlp-label-only": Mutant(
+        LabelOnlyClient,
+        "tlp-admit-judged-at-key-ceiling",
+        "a role that leaves the lab judges a request at its label alone, below the key's ceiling",
+        features=frozenset({"gateway", "tlp-admit"}),
+    ),
+    "tlp-empty-field-unlabelled": Mutant(
+        EmptyFieldUnlabelledClient,
+        "tlp-admit-empty-field-is-red",
+        "an empty X-HNX-TLP field is read as no field (unlabelled)",
+        features=frozenset({"gateway", "tlp-admit"}),
+    ),
+    "tlp-refusal-substitutes": Mutant(
+        TlpSubstituteClient,
+        "tlp-admit-unlabelled-refused",
+        "a TLP refusal of the requested role falls back to a role that stays in the lab",
+        features=frozenset({"gateway", "tlp-admit"}),
     ),
 }

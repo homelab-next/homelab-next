@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "roles": {
+    "cloud-reasoner": {
+      "tier": "large",
+      "bindings": [
+        {
+          "backend": "svc:cloud-openai",
+          "model_id": "example-cloud-chat",
+          "leaves_lab": true
+        }
+      ],
+      "fallback": "mdl:fast-classifier"
+    },
+    "embedder": {
+      "kind": "embedding",
+      "tier": "fast",
+      "dimensions": 8,
+      "bindings": [
+        {
+          "backend": "svc:inference-small",
+          "model_id": "example-embed-8d"
+        }
+      ]
+    },
+    "failover": {
+      "tier": "fast",
+      "bindings": [
+        {
+          "backend": "svc:inference-down",
+          "model_id": "conformance-chat"
+        }
+      ],
+      "fallback": "mdl:spare"
+    },
+    "fast-classifier": {
+      "tier": "fast",
+      "bindings": [
+        {
+          "backend": "svc:inference-small",
+          "model_id": "conformance-chat"
+        }
+      ]
+    },
+    "spare": {
+      "tier": "fast",
+      "bindings": [
+        {
+          "backend": "svc:inference-small",
+          "model_id": "example-not-served"
+        }
+      ],
+      "fallback": "mdl:fast-classifier",
+      "limits": {
+        "window_s": 60,
+        "max_tokens": 1
+      }
+    }
+  }
+}

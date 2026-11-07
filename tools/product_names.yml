@@ -67,6 +67,8 @@ allow:
     reason: the reviewed list of experimental and frozen components names each component it takes out of the blocking set, and the paths of its tests and docs; the code those name is counted where it lives
   - path: "compose/lab-in-a-box/config/llm-gateway/gateway/gateway.json"
     reason: "generated (hnx gen gateway render, ADR-0038): the neutral gateway config is the gateway's upstream table, where each role's backend svc name and model id belong by design (as in the role table); it names only what the role table and the gateway spec name, and is counted where those live"
+  - path: "compose/lab-in-a-box/config/llm-gateway/litellm/config.yaml"
+    reason: "generated (hnx gen gateway render): the reference gateway product's own config file, with one deployment-parameters key per role binding, so its count follows the role table (a role added to it adds one); the renderer writes those keys and is counted where it lives, homelabnext/generators/llm_gateway.py"
   - path: "examples/*/gateway/gateway/gateway.json"
     reason: "generated (hnx gen gateway render, ADR-0038) for the gateway examples: the upstream table of backend svc names and model ids, exactly what each example's role table and gateway spec name, counted where those live"
   - path: "tools/tests/test_product_name_lint.py"

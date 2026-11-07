@@ -22,7 +22,9 @@ With ``api_keys`` it behaves like a small model gateway: every ``/v1`` call need
 ``Authorization: Bearer <one of the keys>`` (else 401 ``auth_error``), and a key listed in
 ``key_limits`` is served that many calls, then answered 429 ``rate_limit_exceeded``.  A key
 listed in ``key_models`` may call only those models: any other is answered 403
-``key_model_access_denied`` (the scope a gateway gives each key).
+``key_model_access_denied`` (the scope a gateway gives each key).  A subclass may refuse a call
+on its request headers (:meth:`FakeOpenAIServer.gate`, a test's model of a gateway's own
+admission); the server itself admits everything.
 
 Conformance use: this is the fake for the ``inference`` capability.  It speaks only the
 protocol; nothing here is product specific.
@@ -213,6 +215,12 @@ class FakeOpenAIServer:
             return None
         return 403, f"key not allowed to access model {model!r}"
 
+    def gate(self, headers: Any, path: str, model: Any) -> tuple[int, str] | None:
+        """``None`` when the (admitted, in-scope) call to ``model`` may proceed, else ``(status,
+        message)``: a hook for a subclass that models a gateway's admission of a request by its
+        header fields (``headers.get_all(name)``).  The server itself admits everything."""
+        return None
+
     def _find_fault(self, path: str, model: str | None) -> Fault | None:
         with self._lock:
             for f in self.faults:
@@ -284,6 +292,13 @@ class FakeOpenAIServer:
                 self._error(*verdict, "key_model_access_denied")
                 return True
 
+            def _gated(self, path: str, model: Any) -> bool:
+                verdict = server.gate(self.headers, path, model)
+                if verdict is None:
+                    return False
+                self._error(*verdict, "gateway_admission")
+                return True
+
             def _apply_fault(self, fault: Fault) -> bool:
                 if fault.kind == "http_error":
                     self._error(fault.status, "injected fault", "fault")
@@ -328,7 +343,7 @@ class FakeOpenAIServer:
                 fault = server._find_fault(path, model)
                 if fault and self._apply_fault(fault):
                     return
-                if self._refused() or self._out_of_scope(model):
+                if self._refused() or self._out_of_scope(model) or self._gated(path, model):
                     return
                 if path not in (
                     "/v1/chat/completions",

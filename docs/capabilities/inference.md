@@ -15,7 +15,7 @@ generated_by: hnx docs capabilities generate
 **OpenAI-compatible /v1 chat, streaming and embeddings behind a role alias.**
 
 - Contract: [`conformance.protocols.inference`](../../conformance/protocols/inference.py) (`conformance.protocols.inference:InferenceClient`)
-- Conformance suite: [`conformance.suites.inference`](../../conformance/suites/inference.py) (17 checks: 15 MUST, 2 SHOULD)
+- Conformance suite: [`conformance.suites.inference`](../../conformance/suites/inference.py) (24 checks: 22 MUST, 2 SHOULD)
 - Index: [all capabilities](README.md) ([[capabilities/README|all capabilities]]) · [Conformance harness](../conformance.md) ([[conformance]]) · [Swap procedure](../swap.md) ([[swap]])
 
 ## What it does
@@ -29,6 +29,9 @@ Subject = `homelabnext.conform.adapters.openai_compat.OpenAICompat`-shaped clien
     chat_stream(model, messages, *, max_tokens) -> Iterator[str]     feature `streaming`
     embed(model, texts) -> list[list[float]]                         feature `embeddings`
 
+The embeddings checks call `embed_model` when the subject has one (an embedding role of the
+target's own, set in its config), else the model the chat checks call.
+
 A model *gateway* in front of the backends (LiteLLM; docs/llm-gateway.md) declares the
 feature `gateway` and adds `GatewayClient`'s three methods, so the suite can prove what
 the gateway is for: a bad key is a clean 401, a configured limit is a 429, and `/v1/models` is
@@ -39,7 +42,14 @@ A gateway whose keys are scoped by TLP ceiling (ADR-0033 decisions 10 and 11) de
 ceiling is above the ceiling of a role whose prompts leave the lab is refused that role (a 401 or
 403 on the chat, never a reply) while it is still served on a role it may call.  The per-request
 half of the rule (a request's own label) is the caller's (`homelabnext.registry.model_tlp.admit`):
-a gateway with no admission code of its own cannot read it.
+a gateway with no admission code of its own (LiteLLM) cannot read it.
+
+A gateway that applies that rule itself to the label a request carries in the `X-HNX-TLP` header
+(ADR-0038 decisions 5 and 7, the lab's own gateway) declares the feature `tlp-admit` and adds
+`TlpAdmitGateway`'s two methods: clients that can send header fields
+(`LabelledClient`), a role that leaves the lab, a role that stays in it, and a role whose
+deployments fail and whose first fallback is refused at admission.  A refusal is a 403 whose error
+names its reason (`unlabelled` or `above-ceiling`, `TLP_REASONS`).
 
 A gateway that keeps a per-call log declares the feature `turn-records` as well: it offers a
 `TurnSource`, `turns(start, end, tags)`, that yields the calls (*turns*) started in a
@@ -218,6 +228,254 @@ Inherited from `InferenceClient`.
 **Returns:** `Iterator[str]`
 
 #### `GatewayClient.embed`
+
+```python
+def embed(model: str, texts: Sequence[str]) -> list[list[float]]
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `texts` | `Sequence[str]` | required | positional or keyword |
+
+**Returns:** `list[list[float]]`
+
+### `LabelledClient` (Protocol)
+
+Defined in [`conformance.protocols.inference`](../../conformance/protocols/inference.py).
+
+A client that can send a chat with extra request header fields.
+
+#### `LabelledClient.chat_fields`
+
+```python
+def chat_fields(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    fields: Sequence[tuple[str, str]],
+    *,
+    max_tokens: int = 64,
+) -> ChatResult
+```
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `fields` | `Sequence[tuple[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+
+**Returns:** `ChatResult`
+
+A chat with `fields` (`(name, value)` pairs) as request header fields, each sent
+as a field of its own: a repeated name is several fields, an empty value an empty field.
+
+#### `LabelledClient.models`
+
+```python
+def models() -> list[str]
+```
+
+Inherited from `InferenceClient`.
+
+**Returns:** `list[str]`
+
+#### `LabelledClient.chat`
+
+```python
+def chat(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    *,
+    max_tokens: int = 64,
+    temperature: float = 0.0,
+) -> ChatResult
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+| `temperature` | `float` | `0.0` | keyword-only |
+
+**Returns:** `ChatResult`
+
+#### `LabelledClient.chat_stream`
+
+```python
+def chat_stream(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    *,
+    max_tokens: int = 64,
+) -> Iterator[str]
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+
+**Returns:** `Iterator[str]`
+
+#### `LabelledClient.embed`
+
+```python
+def embed(model: str, texts: Sequence[str]) -> list[list[float]]
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `texts` | `Sequence[str]` | required | positional or keyword |
+
+**Returns:** `list[list[float]]`
+
+### `TlpAdmitGateway` (Protocol)
+
+Defined in [`conformance.protocols.inference`](../../conformance/protocols/inference.py).
+
+Feature `tlp-admit`: the gateway admits each request by the TLP label in its
+`X-HNX-TLP` header (ADR-0038 decision 5): no field is `red` (reason `unlabelled` when
+refused), one field is read with `tlp.read` (an empty or unknown value is `red`), more
+than one field is `red`; a role that leaves the lab judges the request at the higher of its
+label and the key's sending ceiling; a refusal of the requested role is a 403 at once, never a
+fallback.
+
+#### `TlpAdmitGateway.tlp_admit`
+
+```python
+def tlp_admit() -> tuple[LabelledClient, LabelledClient, str, str]
+```
+
+**Returns:** `tuple[LabelledClient, LabelledClient, str, str]`
+
+`(sender, above, leaving, local)`: `leaving` is a role that leaves the lab, whose
+ceiling is `clear` or `green`; `local` a role that stays in the lab; `sender` a
+key whose sending ceiling is `clear` and that may call both; `above` a key whose
+sending ceiling is above `leaving`'s ceiling and that may still call it (the admin key,
+whose ceiling is always `red`).
+
+#### `TlpAdmitGateway.refused_fallback`
+
+```python
+def refused_fallback() -> tuple[InferenceClient, str] | None
+```
+
+**Returns:** `tuple[InferenceClient, str] \| None`
+
+`(client, role)`: every deployment of `role` fails with an error that moves on,
+its first fallback is refused at admission (its own limit) and a later fallback serves,
+so the call is served; or None when the target has no such role.  A TLP-refused
+fallback cannot be built from a rendered config (a role's ceiling and `leaves_lab`
+include its whole chain, so a fallback is never judged stricter than the role that was
+admitted): the gateway's own unit tests cover that one.
+
+#### `TlpAdmitGateway.declared_models`
+
+```python
+def declared_models() -> list[str]
+```
+
+Inherited from `GatewayClient`.
+
+**Returns:** `list[str]`
+
+The model names the gateway is configured to serve (the role aliases).
+
+#### `TlpAdmitGateway.with_key`
+
+```python
+def with_key(token: str | None) -> InferenceClient
+```
+
+Inherited from `GatewayClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `token` | `str \| None` | required | positional or keyword |
+
+**Returns:** `InferenceClient`
+
+The same endpoint called with `token` as the bearer key (`None`: no key at all).
+
+#### `TlpAdmitGateway.throttled`
+
+```python
+def throttled() -> tuple[InferenceClient, str, int]
+```
+
+Inherited from `GatewayClient`.
+
+**Returns:** `tuple[InferenceClient, str, int]`
+
+`(client, model, n)`: calls by `client` to `model` are limited to `n` per window.
+
+#### `TlpAdmitGateway.models`
+
+```python
+def models() -> list[str]
+```
+
+Inherited from `InferenceClient`.
+
+**Returns:** `list[str]`
+
+#### `TlpAdmitGateway.chat`
+
+```python
+def chat(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    *,
+    max_tokens: int = 64,
+    temperature: float = 0.0,
+) -> ChatResult
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+| `temperature` | `float` | `0.0` | keyword-only |
+
+**Returns:** `ChatResult`
+
+#### `TlpAdmitGateway.chat_stream`
+
+```python
+def chat_stream(
+    model: str,
+    messages: Sequence[dict[str, str]],
+    *,
+    max_tokens: int = 64,
+) -> Iterator[str]
+```
+
+Inherited from `InferenceClient`.
+
+| Parameter | Type | Default | Passing |
+|---|---|---|---|
+| `model` | `str` | required | positional or keyword |
+| `messages` | `Sequence[dict[str, str]]` | required | positional or keyword |
+| `max_tokens` | `int` | `64` | keyword-only |
+
+**Returns:** `Iterator[str]`
+
+#### `TlpAdmitGateway.embed`
 
 ```python
 def embed(model: str, texts: Sequence[str]) -> list[list[float]]
@@ -419,6 +677,7 @@ Defined in [`homelabnext.conform.adapters.openai_compat`](../../homelabnext/conf
 
 | Name | Value |
 |---|---|
+| `TLP_REASONS` | `('unlabelled', 'above-ceiling')` |
 | `TURN_FIELDS` | `('turn_id', 'gateway_tag', 'started_at', 'duration_ms', 'ttft_ms', 'model_role', 'model', 'call_type', 'status', 'error_code', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_hit', 'cost_usd')` |
 
 ### Errors
@@ -458,6 +717,13 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `gateway-limit-throttles` | MUST | on a key limited to n requests, the first n chat calls are served and call n+1 is a 429 | `gateway` |
 | `gateway-models-match-roles` | MUST | /v1/models lists exactly the declared role aliases (no backend ids, no extras) | `gateway` |
 | `gateway-refuses-role-above-key-ceiling` | MUST | a key whose sending TLP ceiling is above a cloud role's ceiling is refused that role with a 401 or 403 on the chat, and is still served on a role it may call | `gateway`, `tlp-ceiling` |
+| `tlp-admit-unlabelled-refused` | MUST | a request with no X-HNX-TLP field to a role that leaves the lab is a 403 unlabelled, never served by a fallback; the same unlabelled request to a role that stays in the lab is served | `gateway`, `tlp-admit` |
+| `tlp-admit-within-ceiling-served` | MUST | a label within the ceiling of a role that leaves the lab, from a key whose sending ceiling is within it too, is served by that role; any accepted spelling of the label reads the same | `gateway`, `tlp-admit` |
+| `tlp-admit-above-ceiling-refused` | MUST | a label above the ceiling of a role that leaves the lab is a 403 above-ceiling | `gateway`, `tlp-admit` |
+| `tlp-admit-judged-at-key-ceiling` | MUST | for a role that leaves the lab, a label below the key's sending ceiling is judged at that ceiling: a key whose ceiling is above the role's is refused (above-ceiling) whatever label it sends | `gateway`, `tlp-admit` |
+| `tlp-admit-empty-field-is-red` | MUST | an empty X-HNX-TLP field is a label that reads as red: refused as above-ceiling, not as unlabelled (one field differs from no field) | `gateway`, `tlp-admit` |
+| `tlp-admit-two-fields-are-red` | MUST | two X-HNX-TLP fields read as red, even when each is within the ceiling: refused as above-ceiling | `gateway`, `tlp-admit` |
+| `tlp-admit-refused-fallback-skipped` | MUST | when every deployment of a role fails, a fallback refused at admission is skipped, never called, and a later fallback serves the call under the requested alias | `gateway`, `tlp-admit` |
 | `turn-records-are-neutral` | MUST | every turn of a window known to hold some is exactly the neutral turn record (15 fields, each of its kind): nothing else of the gateway's log | `turn-records` |
 | `turn-records-only-the-asked-tags` | MUST | every turn carries one of the tags asked for; a tag no request used gives no turns, and each tag alone gives exactly that tag's turns | `turn-records` |
 | `turn-records-in-the-window` | MUST | every turn started inside the window asked for (whole seconds), and a window before any gives none | `turn-records` |
@@ -468,8 +734,9 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | Feature | Kind | Checks that need it |
 |---|---|---|
 | `embeddings` | product feature (checks skip without it) | `embeddings-fixed-dimension`, `embeddings-deterministic-and-distinct` |
-| `gateway` | product feature (checks skip without it) | `gateway-rejects-bad-key`, `gateway-limit-throttles`, `gateway-models-match-roles`, `gateway-refuses-role-above-key-ceiling` |
+| `gateway` | product feature (checks skip without it) | `gateway-rejects-bad-key`, `gateway-limit-throttles`, `gateway-models-match-roles`, `gateway-refuses-role-above-key-ceiling`, `tlp-admit-unlabelled-refused`, `tlp-admit-within-ceiling-served`, `tlp-admit-above-ceiling-refused`, `tlp-admit-judged-at-key-ceiling`, `tlp-admit-empty-field-is-red`, `tlp-admit-two-fields-are-red`, `tlp-admit-refused-fallback-skipped` |
 | `streaming` | product feature (checks skip without it) | `stream-matches-completion` |
+| `tlp-admit` | product feature (checks skip without it) | `tlp-admit-unlabelled-refused`, `tlp-admit-within-ceiling-served`, `tlp-admit-above-ceiling-refused`, `tlp-admit-judged-at-key-ceiling`, `tlp-admit-empty-field-is-red`, `tlp-admit-two-fields-are-red`, `tlp-admit-refused-fallback-skipped` |
 | `tlp-ceiling` | product feature (checks skip without it) | `gateway-refuses-role-above-key-ceiling` |
 | `turn-records` | product feature (checks skip without it) | `turn-records-are-neutral`, `turn-records-only-the-asked-tags`, `turn-records-in-the-window`, `turn-records-stable-ids` |
 
@@ -481,6 +748,9 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 |---|---|---|
 | `alias-swap` | `chat-echoes-requested-model` | replies come from a different model |
 | `ceiling-ignored` | `gateway-refuses-role-above-key-ceiling` | a key above a cloud role's TLP ceiling is scoped to it |
+| `tlp-empty-field-unlabelled` | `tlp-admit-empty-field-is-red` | an empty X-HNX-TLP field is read as no field (unlabelled) |
+| `tlp-label-only` | `tlp-admit-judged-at-key-ceiling` | a role that leaves the lab judges a request at its label alone, below the key's ceiling |
+| `tlp-refusal-substitutes` | `tlp-admit-unlabelled-refused` | a TLP refusal of the requested role falls back to a role that stays in the lab |
 
 ## Implementations
 
@@ -497,8 +767,8 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 The `inference` contract through an LLM gateway (the LiteLLM proxy), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/inference-gateway.yml`](../../compose/lab-in-a-box/targets/inference-gateway.yml) (target `lab-inference-gateway`)
-- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`
-- Config in the target: `{roles: schemas/platform/examples/model_roles.valid.json, model: fast-classifier, capability: llm-gateway, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3}`
+- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`
+- Config in the target: `{roles: schemas/platform/examples/model_roles.valid.json, model: fast-classifier, embed_model: embedder, capability: llm-gateway, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3}`
 - Features declared: `streaming`, `embeddings`, `gateway`
 
 <details><summary>Full adapter notes</summary>
@@ -519,7 +789,66 @@ admin key, plus the three methods of feature `gateway`
   `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key);
 * `over_ceiling()` (feature `tlp-ceiling`) - a client on a key whose sending TLP ceiling is
   above a cloud role's (`over_ceiling_key`), the role it must be refused
-  (`over_ceiling_model`) and one it may call (`over_ceiling_served`).
+  (`over_ceiling_model`) and one it may call (`over_ceiling_served`);
+* `tlp_admit()` and `refused_fallback()` (feature `tlp-admit`, a gateway that reads the
+  `X-HNX-TLP` header, ADR-0038) - a client on a key whose sending ceiling is `clear`
+  (`tlp_sender_key`), the admin key, a role that leaves the lab (`tlp_model`) and one that
+  stays in it (`tlp_local_model`); and a role whose deployments fail and whose first fallback is
+  refused at admission (`failover_model`, optional);
+* `turn_records()` (feature `turn-records`, the lab's own gateway) - sends a few calls tagged
+  `X-HNX-Tag` (two tags of this run, two calls refused by TLP when `tlp_model` is set) on
+  `turn_model` (default `model`), then reads them back through
+  `homelabnext.conform.adapters.gateway_usage` with the telemetry reader's key
+  (`telemetry_key`).
+
+`embed_model` names the embedding role the embeddings checks call (default: `model`).
+
+Keys are `secret:` references, read from `HNX_SECRET_<NAME>` at every call (never held).
+Nothing here is product specific: the target file shape is the gateway contract, so a gateway
+swap (ADR-0022 names the documented exit) is a target file plus this suite (docs/llm-gateway.md).
+
+</details>
+
+#### [`homelabnext.conform.adapters.llm_gateway:make`](../../homelabnext/conform/adapters/llm_gateway.py)
+
+The `inference` contract through an LLM gateway (the LiteLLM proxy), stdlib HTTP.
+
+- Target file: [`compose/lab-in-a-box/targets/inference-own-gateway.yml`](../../compose/lab-in-a-box/targets/inference-own-gateway.yml) (target `lab-inference-own-gateway`)
+- Factory: `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`
+- Config in the target: `{roles: compose/lab-in-a-box/config/llm-gateway-conformance/model_roles.json, model: fast-classifier, embed_model: embedder, capability: llm-gateway, throttle_key: 'secret:llm-gateway/key-conformance-throttle', throttle_model: fast-classifier, throttle_requests: 3, over_ceiling_key: 'secret:llm-gateway/key-conformance-red', over_ceiling_model: cloud-reasoner, over_ceiling_served: fast-classifier, tlp_sender_key: 'secret:llm-gateway/key-conformance-clear', tlp_model: cloud-reasoner, tlp_local_model: fast-classifier, failover_model: failover, telemetry_key: 'secret:llm-gateway/key-telemetry-reader'}`
+- Features declared: `streaming`, `embeddings`, `gateway`, `tlp-ceiling`, `tlp-admit`, `turn-records`
+
+<details><summary>Full adapter notes</summary>
+
+The `inference` contract through an LLM gateway (the LiteLLM proxy), stdlib HTTP.
+
+`make(**config)` returns a `GatewayTarget`: the library's own
+`~homelabnext.conform.adapters.openai_compat.OpenAICompat` client on the gateway endpoint
+(`HNX_ENDPOINT_<CAPABILITY>`, default `HNX_ENDPOINT_LLM_GATEWAY`), calling with the gateway's
+admin key, plus the three methods of feature `gateway`
+(`conformance.protocols.inference.GatewayClient`):
+
+* `declared_models()` - the role aliases of the role table the gateway config was generated from
+  (`roles`, a path relative to the checkout), so `/v1/models` is compared with the source of
+  truth rather than with itself;
+* `with_key(token)` - the same endpoint with another bearer key, or none;
+* `throttled()` - a client on the key that the generated config limits (`throttle_key`,
+  `throttle_model`, `throttle_requests`: the lab's `conformance-throttle` key);
+* `over_ceiling()` (feature `tlp-ceiling`) - a client on a key whose sending TLP ceiling is
+  above a cloud role's (`over_ceiling_key`), the role it must be refused
+  (`over_ceiling_model`) and one it may call (`over_ceiling_served`);
+* `tlp_admit()` and `refused_fallback()` (feature `tlp-admit`, a gateway that reads the
+  `X-HNX-TLP` header, ADR-0038) - a client on a key whose sending ceiling is `clear`
+  (`tlp_sender_key`), the admin key, a role that leaves the lab (`tlp_model`) and one that
+  stays in it (`tlp_local_model`); and a role whose deployments fail and whose first fallback is
+  refused at admission (`failover_model`, optional);
+* `turn_records()` (feature `turn-records`, the lab's own gateway) - sends a few calls tagged
+  `X-HNX-Tag` (two tags of this run, two calls refused by TLP when `tlp_model` is set) on
+  `turn_model` (default `model`), then reads them back through
+  `homelabnext.conform.adapters.gateway_usage` with the telemetry reader's key
+  (`telemetry_key`).
+
+`embed_model` names the embedding role the embeddings checks call (default: `model`).
 
 Keys are `secret:` references, read from `HNX_SECRET_<NAME>` at every call (never held).
 Nothing here is product specific: the target file shape is the gateway contract, so a gateway
@@ -544,6 +873,10 @@ resolver produced); there is no default.  An optional `auth` callable returns an
 `Authorization` header value at request time so a secret is never held in the object.  With
 `auth` set, plain `http` to a non-loopback host is refused unless `allow_plaintext=True`;
 redirects are followed only within the same origin; replies are read up to `max_bytes`.
+
+`OpenAICompat.chat_fields` sends a chat with extra request header fields, each sent as a
+field of its own even when a name repeats (`X-HNX-TLP` twice is two fields, which `urllib`
+cannot send): that request goes over `http.client` directly and follows no redirect.
 
 </details>
 
@@ -575,7 +908,7 @@ Depended on by: [llm-gateway](../systems/llm-gateway.md) ([[systems/llm-gateway|
    def make(**config) -> InferenceClient: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.llm_gateway:make` is `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False) -> GatewayTarget`.
+   The factory this repository ships: `homelabnext.conform.adapters.llm_gateway:make` is `make(*, roles: str, key: str='secret:llm-gateway/master-key', throttle_key: str | None=None, throttle_model: str | None=None, throttle_requests: int | None=None, over_ceiling_key: str | None=None, over_ceiling_model: str | None=None, over_ceiling_served: str | None=None, model: str | None=None, capability: str='llm-gateway', timeout: float=30.0, allow_plaintext: bool=False, embed_model: str | None=None, tlp_sender_key: str | None=None, tlp_model: str | None=None, tlp_local_model: str | None=None, failover_model: str | None=None, telemetry_key: str | None=None, turn_model: str | None=None) -> GatewayTarget`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 
@@ -589,6 +922,7 @@ Depended on by: [llm-gateway](../systems/llm-gateway.md) ([[systems/llm-gateway|
        - embeddings
        - gateway
        - streaming
+       - tlp-admit
        - tlp-ceiling
        - turn-records
    ```
@@ -600,4 +934,4 @@ Depended on by: [llm-gateway](../systems/llm-gateway.md) ([[systems/llm-gateway|
    hnx conform run inference --target path/to/my-target.yml --strict   # SHOULD checks too
    ```
 
-   Every MUST check (15) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.
+   Every MUST check (22) has to pass. Then follow the [swap procedure](../swap.md) ([[swap]]) to replace the incumbent.

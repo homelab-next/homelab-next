@@ -42,6 +42,26 @@
   ],
   "name": "lab-in-a-box",
   "roles": {
+    "embedder": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "inference-small",
+          "base_url": "http://inference-small.svc.example.internal:8000",
+          "id": "embedder-1",
+          "locality": "local",
+          "model": "example-embed-8d",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "embedding",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": null,
+      "tlp_ceiling": "red"
+    },
     "fast-classifier": {
       "cost_per_1k_tokens": 0.002,
       "deployments": [
