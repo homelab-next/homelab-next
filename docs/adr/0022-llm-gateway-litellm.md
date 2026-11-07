@@ -1,6 +1,6 @@
 ---
-summary: LiteLLM, run the supported way, is the only LLM gateway (Bifrost is the documented exit); its config is generated from the role table and profiles.
-summary_of: outline:sha256:2de47a0ddfd9cfdd
+summary: LiteLLM, run the supported way, is the LLM gateway until ADR-0038's own gateway takes over; its config is generated from the role table and profiles.
+summary_of: outline:sha256:45eeec97747ec04d
 ---
 # ADR-0022: Run LiteLLM, the supported way, as the only LLM gateway
 
@@ -100,6 +100,14 @@ it for v0:
   short), an audit that reads its rendered files for locality, a target file, and pass the
   `inference` suite with the `gateway` feature. Bifrost's three failed MUSTs above are the bar it
   would have to clear first.
+
+### Amendment (2026-11-07, ADR-0038): the exit is the lab's own gateway
+
+ADR-0038 takes the exit decision 5 describes, with a gateway of the lab's own rather than Bifrost.
+`hnx gen gateway render` also writes a product-neutral `gateway/gateway.json`, which the same audit
+reads, and the orchestrator's `cmd/gateway` serves it. Decision 1's rules for LiteLLM hold for as
+long as it is deployed, which is until ADR-0038 decision 7's cutover. Bifrost remains the evaluated
+alternative (the evidence above), not the planned exit.
 
 ## Consequences
 
