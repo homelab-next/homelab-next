@@ -214,6 +214,14 @@ class RoleTable:
                 limits={k: float(v) for k, v in limits.items()},
             )
         for name, role in roles.items():
+            fb = roles.get(role.fallback) if role.fallback else None
+            if fb is not None and fb.kind != role.kind:
+                # a fallback answers the same call: an embedding request cannot be served by a
+                # chat role (the LLM gateway refuses such a config at load, ADR-0038)
+                problems.append(
+                    f"role {name}: fallback mdl:{fb.name} is a {fb.kind} role, but {name} is "
+                    f"{role.kind}: a fallback must be of its role's kind"
+                )
             seen = {name}
             cur = role.fallback
             while cur is not None:

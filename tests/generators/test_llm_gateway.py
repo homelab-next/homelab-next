@@ -1641,3 +1641,15 @@ def test_check_reads_the_neutral_config_on_disk(tmp_path, capsys):
     assert f"differs: {NEUTRAL}" in err
     assert "key agent-reader: may call main-reasoner, which the spec does not grant" in err
 
+
+def test_a_fallback_of_another_kind_is_refused_before_render(tmp_path):
+    """The gateway refuses at load a fallback whose kind differs from its role's, so the role
+    table refuses it first and the renderer can never emit one."""
+    roles = copy.deepcopy(RICH_ROLES)
+    roles["roles"]["embedder"]["fallback"] = "mdl:small-local"
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        rich(tmp_path, roles=roles)
+    assert (
+        "role embedder: fallback mdl:small-local is a chat role, but embedder is embedding: a "
+        "fallback must be of its role's kind" in exc.value.problems
+    )
