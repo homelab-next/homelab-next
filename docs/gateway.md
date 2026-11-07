@@ -1,5 +1,5 @@
 ---
-summary: 'The lab''s own LLM gateway, orchestrator/cmd/gateway (ADR-0038, ADR-0039): routes, flags, behaviour, limits, usage records, conformance in CI and cutover.'
+summary: 'The lab''s own LLM gateway, orchestrator/cmd/gateway (ADR-0038, ADR-0026): routes, flags, behaviour, limits, usage records, conformance in CI and cutover.'
 summary_of: outline:sha256:5dcfa94e8e34c540
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -7,7 +7,7 @@ summary_of: outline:sha256:5dcfa94e8e34c540
 
 `orchestrator/cmd/gateway` is the lab's own LLM gateway, decided in
 [ADR-0038](adr/0038-the-llm-gateway-is-our-own-behind-the-same-contract.md) and built in this
-repository's Go module `orchestrator/` ([ADR-0039](adr/0039-make-the-orchestrator-and-its-gateway-part-of-this-repository.md)).
+repository's Go module `orchestrator/` ([ADR-0026](adr/0026-make-the-orchestrator-and-its-gateway-part-of-this-repository.md)).
 It is a separate process from the orchestration controller: it holds the provider API keys, and a
 controller restart must not drop model calls in flight. LiteLLM stays the deployed gateway until
 this binary passes the `inference` conformance suite and has served the lab beside it (ADR-0038
@@ -30,22 +30,29 @@ follows ADR-0038 with the four departures its security review made, recorded as 
 ADR-0038's amendment: in-flight caps before the body is read (R15), token and cost limits reserved
 at admission and settled after (R16), aggregated refusal records (R17) and grouped writes of the
 usage file with counted drops (R18). Each is described where it applies below. The code's comments
-cite the clauses of the gateway contract by the labels its security review gave them (R1 to R18);
-R15 to R18 are ADR-0038's amendment, and the others restate ADR-0038's decisions 2 to 6.
+cite the contract as ADR-0038's decisions (`ADR-0038 d4` is decision 4) and the four departures by
+the names ADR-0038's amendment gives them (R15 to R18).
 
 ## Running it
 
 ```sh
-cd orchestrator && go build -o ../build/bin/gateway ./cmd/gateway
+cd orchestrator && go build -o ../build/bin/llm-gateway ./cmd/gateway && cd ..
 export HNX_SECRET_LLM_GATEWAY_MASTER_KEY=...   # every *_env the config names
-build/bin/gateway -config /etc/llm-gateway/gateway.json -usage /var/lib/llm-gateway/usage.jsonl
+build/bin/llm-gateway -config /etc/llm-gateway/gateway.json -usage /var/lib/llm-gateway/usage.jsonl
 ```
 
-Validate a rendered config and its environment before a deploy (exit 0, or 1 with every problem;
-a problem names an environment variable, never a value):
+The binary is installed as `llm-gateway` (the name the example unit runs, from
+`/usr/local/bin/llm-gateway`); the package path stays `cmd/gateway`.
+
+Validate a rendered config, its environment and the serving flags before a deploy (exit 0, or 1
+with every problem; a problem names an environment variable, never a value). `-check` refuses
+what the serving path would refuse: `-tls-cert` without `-tls-key`, a non-positive timeout, cap or
+reservation, a per-key reply budget above the total, an `-upstream-proxy` that is not an http(s)
+URL, `-conformance` off loopback, and a non-loopback `-listen` with neither TLS nor
+`-allow-plaintext`:
 
 ```sh
-build/bin/gateway -config gateway.json -check
+build/bin/llm-gateway -config gateway.json -check
 ```
 
 | Flag | Default | Meaning |
@@ -73,7 +80,7 @@ an example only, wired into no deploy and naming no host. It runs the gateway as
 that can write only its state directory, reads the key values from a root-only environment file
 before dropping privileges, keeps `/proc/<pid>/environ` from other users
 (`ProtectProc=invisible`), filters system calls and unsets the proxy variables. A lab's real unit,
-with its paths and listen address, is the private overlay's (ADR-0039 decision 3).
+with its paths and listen address, is the private overlay's (ADR-0026 decision 3).
 
 ## Behaviour worth knowing
 
@@ -83,6 +90,8 @@ with its paths and listen address, is the private overlay's (ADR-0039 decision 3
   unit `DynamicUser=yes` and `ProtectProc=invisible` keep `/proc/<pid>/environ` from other users.
   Caller keys are kept only as SHA-256 digests and compared in constant time against all of them;
   provider keys are necessarily kept as values. Revoking a key is a config change and a restart.
+- **Request bodies** are capped at 8 MiB: a larger body is refused with 413 `request_too_large`
+  before it is decoded, and consumes no limit.
 - **Strict JSON.** The config loader refuses a key given twice at any level and any key that is
   not the exact field name (Go's decoder would keep the last duplicate and match names
   case-insensitively). A request body that gives a top-level key twice is a 400 `invalid_json`;
@@ -218,7 +227,7 @@ with its paths and listen address, is the private overlay's (ADR-0039 decision 3
 
 ## Conformance in CI
 
-CI's `gateway-conformance` job (`.github/workflows/ci.yml`, ADR-0038 decision 7 as ADR-0039
+CI's `gateway-conformance` job (`.github/workflows/ci.yml`, ADR-0038 decision 7 as ADR-0026
 amends it) runs the `inference` suite against this binary on every pull request and every push to
 `main`, and `go-ok` (the Go modules' one stable check) passes only when it passed. Its steps are
 [`tools/gateway_conformance.sh`](../tools/gateway_conformance.sh):
@@ -230,7 +239,9 @@ amends it) runs the `inference` suite against this binary on every pull request 
    `--no-deps --no-build-isolation`), then a check that every installed distribution is named, and
    so hash-pinned, by the two constraint files (pip hashes only what the constraints list, so a new
    transitive dependency would otherwise install unhashed);
-3. `run`: render `compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml` with
+3. `run`, in a network namespace with only loopback and as the runner user under
+   `setpriv --no-new-privs` (as the `go` job runs the tests): refuse to start when anything
+   already listens on either port; render `compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml` with
    `hnx gen gateway render --conformance --conformance-host <loopback>` into a scratch directory;
    give every `*_env` name in the rendered `gateway.json` a fresh random value (64 bytes, distinct,
    never printed); start the fake inference server (`conformance/fakes/openai_server.py`) on
@@ -242,16 +253,18 @@ amends it) runs the `inference` suite against this binary on every pull request 
    `embeddings`, `gateway`, `tlp-ceiling`, `tlp-admit`, `turn-records`).
 
 The job fails on a non-zero exit and on any check that did not pass, skipped and untested ones
-included (24 checks today). It always stops both processes, and on a failure prints the gateway's
+included. Because the suite, the renderer, the spec and the fake are Python, a change on the Python
+side that breaks them also turns this job, and with it `go-ok`, red: a red `go-ok` is not always a
+Go change. It always stops both processes, and on a failure prints the gateway's
 and the fake's logs (neither logs a key value). There is no cross-repository pin any more: the
 suite, the spec, the renderer and the binary are one commit.
 
 Run it on a workstation the same way, from the repository root:
 
 ```sh
-(cd orchestrator && go build -o ../build/bin/gateway ./cmd/gateway)
+(cd orchestrator && go build -o ../build/bin/llm-gateway ./cmd/gateway)
 HNX_VENV=build/gateway-venv HNX_PYTHON=python3.12 tools/gateway_conformance.sh deps
-HNX_VENV=build/gateway-venv GATEWAY_BIN="$PWD/build/bin/gateway" WORK_DIR="$(mktemp -d)" \
+HNX_VENV=build/gateway-venv GATEWAY_BIN=build/bin/llm-gateway WORK_DIR="$(mktemp -d)" \
   tools/gateway_conformance.sh run
 ```
 
@@ -263,6 +276,6 @@ needs the matching change there. A new `*_env` name in the spec needs none.
 LiteLLM reads a request's tag from `x-litellm-tags`; this gateway reads `X-HNX-Tag` (one field)
 and the TLP label from `X-HNX-TLP` (no field reads as red). Before the lab moves from LiteLLM to
 this gateway, its callers must send both: the orchestration controller's gateway-tag header and the
-agent runtime's per-request headers (the runner contract of ADR-0039 decision 5 carries them). This
+agent runtime's per-request headers (the runner contract of ADR-0026 decision 5 carries them). This
 binary does not change them; a caller that sends neither header is judged red and refused on any
 role whose ceiling is below red.

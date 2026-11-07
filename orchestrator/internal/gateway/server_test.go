@@ -151,7 +151,7 @@ func TestGatewayRoutesAndLimits(t *testing.T) {
 }
 
 func TestGatewayEvaluationOrder(t *testing.T) {
-	// R4: scope (403) before TLP (403 tlp_refused) before limits; refused requests consume nothing
+	// ADR-0038 d4: scope (403) before TLP (403 tlp_refused) before limits; refused requests consume nothing
 	f := newFixture(t, func(cfg map[string]any) {
 		roleOf(cfg, "cloud")["limits"] = map[string]any{"window_s": 60, "max_requests": 1, "max_tokens": nil, "max_cost": nil}
 	})
@@ -190,7 +190,7 @@ func TestGatewayTLPRefusal(t *testing.T) {
 	if r := f.chat(agentKey, "cloud", "X-HNX-TLP", "TLP:CLEAR"); r.status != 200 {
 		t.Fatalf("clear: %d %s", r.status, r.body)
 	}
-	// R1: the admin key's sending ceiling is red, so it never reaches a green cloud role
+	// ADR-0038 d5: the admin key's sending ceiling is red, so it never reaches a green cloud role
 	if r := f.chat(adminKey, "cloud", "X-HNX-TLP", "clear"); r.status != 403 {
 		t.Fatalf("admin on cloud: %d %s", r.status, r.body)
 	}

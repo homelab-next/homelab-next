@@ -5,8 +5,8 @@ package gateway
 import "encoding/json"
 
 // The scanner below finds the values of top-level keys in a JSON object without decoding it, so
-// a large reply can have its model rewritten without being copied (security audit M1). It is
-// only ever run on data json.Valid has accepted.
+// a large reply can have its model rewritten without being copied, which bounds the memory a
+// reply holds (ADR-0038's security review). It is only ever run on data json.Valid has accepted.
 
 func skipSpace(d []byte, i int) int {
 	for i < len(d) && (d[i] == ' ' || d[i] == '\t' || d[i] == '\r' || d[i] == '\n') {

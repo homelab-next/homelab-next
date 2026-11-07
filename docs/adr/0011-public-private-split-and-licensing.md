@@ -1,6 +1,6 @@
 ---
 summary: Public repo is greenfield with fictional example data and a three-layer leak defence; real inventory, detections and credentials stay private.
-summary_of: outline:sha256:e9b30f68bb47b12d
+summary_of: outline:sha256:bf87496b641e22c5
 ---
 # ADR-0011: What is public, what stays private, and the licence rule
 
@@ -12,7 +12,10 @@ summary_of: outline:sha256:e9b30f68bb47b12d
   counts as one, while the repository declares ansible-core (GPL-3.0) as an extra and its lab
   stack runs AGPL-3.0 images; and CI's licence check left out SSPL. Decision 4 now separates code
   the project links or vendors (refused) from tools it invokes and services it deploys (allowed,
-  recorded), and `tools/tests/test_licence_policy.py` holds CI's deny list to it.
+  recorded), and `tools/tests/test_licence_policy.py` holds CI's deny list to it. And 2026-11-07 by
+  ADR-0026: decision 1 lets generic code the operator owns come in from the private repository,
+  fresh and without its history (see the amendment after Decision).
+- **Amended-by:** ADR-0026
 
 ## Context
 
@@ -52,6 +55,20 @@ identifying or security-relevant material, and ambiguity about licence and third
    Third-party content (OCSF subset, ATT&CK attribution, rule licences) is recorded in `NOTICE`.
    The maintainers hold copyright in the original private material and re-author it under
    Apache-2.0.
+
+### Amendment (2026-11-07, ADR-0026): operator-owned generic code may come in fresh
+
+Decision 1 said files are never copied from private sources. ADR-0026 moves the operator's own
+orchestrator into this repository, so decision 1 now reads: files are written fresh, **or** they are
+generic code the operator owns brought in from a private repository **as new files, in a new
+commit, without its history**, each reviewed file by file and rewritten for this repository, and
+passing the gates of ADR-0026 decision 4 (the leak scan on the tree, on every added line and on
+every author; the raw-endpoint gate; the product-name lint; `tools/private_leak_check.py public`;
+and the operator's own deny-list before the branch is pushed). Lab data never comes in this way: it
+goes to the private overlay (ADR-0021). The rest of decision 1 stands: the public history starts
+empty, and private history never touches the public remote. The alternative below, a scrubbed
+export of the private repository, stays rejected, because what it would carry is the history and
+the rename trail, and neither is carried.
 
 ## Consequences
 

@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// tagRE is an X-HNX-Tag value: the turn-record TAG pattern exactly (R9').
+// tagRE is an X-HNX-Tag value: the turn-record TAG pattern exactly (ADR-0038 d6).
 var tagRE = regexp.MustCompile(`^[A-Za-z0-9._:/-]{0,64}[A-Za-z0-9._:-]{1,128}$`)
 
 // call is one model request on its way through admission and routing.
@@ -32,7 +32,7 @@ type call struct {
 	includeUsage bool
 	tlpFields    []string
 	tag          *string
-	bodyBytes    int          // the request body's size: the input estimate (M3)
+	bodyBytes    int          // the request body's size: the input estimate (ADR-0038 R16)
 	res          *Reservation // what admission reserved on the limit windows
 	refused      bool         // refused at admission (scope, TLP, limit): an aggregated record
 	called       bool         // a request was sent to some deployment
@@ -60,7 +60,7 @@ type spent struct {
 // tokenUsage is what a reply reported (or, estimated, what the gateway counted).
 type tokenUsage struct {
 	input, output *int
-	cacheRead     *int // nil: the upstream reported no cache figure (R10')
+	cacheRead     *int // nil: the upstream reported no cache figure (ADR-0038 d6)
 	estimated     bool
 }
 
@@ -75,9 +75,9 @@ func (u tokenUsage) total() int {
 	return n
 }
 
-// modelCall runs the contract's evaluation order (R4): auth (done by the caller), body and exact
+// modelCall runs the contract's evaluation order (ADR-0038 d4): auth (done by the caller), body and exact
 // model (400), key scope (403), TLP (403), key then role limit (429), routing. Every decision
-// past the 400 step writes one usage record (R10).
+// past the 400 step writes one usage record (ADR-0038 d6).
 func (s *Server) modelCall(w http.ResponseWriter, r *http.Request, c *caller, kind string) {
 	cl, apiErr := s.parseCall(w, r, c, kind)
 	if apiErr != nil {
@@ -155,7 +155,7 @@ func (s *Server) parseCall(w http.ResponseWriter, r *http.Request, c *caller, ki
 }
 
 // admit applies scope, TLP and limits, in that order; only a request that passes all of them is
-// counted. A TLP refusal of the requested role is final: it never leads to a fallback (R3).
+// counted. A TLP refusal of the requested role is final: it never leads to a fallback (ADR-0038 d5).
 func (s *Server) admit(cl *call) *apiError {
 	c, role := cl.caller, cl.role
 	switch {
@@ -197,7 +197,7 @@ func jsonInt(raw json.RawMessage, min int64) (int64, bool) {
 // maxEstimate caps one reservation, so that an absurd max_tokens or n cannot overflow.
 const maxEstimate = 1 << 40
 
-// estimate is what admission reserves on the token and cost windows for a call to role (M3):
+// estimate is what admission reserves on the token and cost windows for a call to role (ADR-0038 R16):
 // the output it may produce (max_completion_tokens or max_tokens, else the role's
 // max_context_tokens, else the configured default; times n) plus its input, estimated from the
 // body size. An embedding call produces no output tokens: its estimate is its input.

@@ -80,7 +80,7 @@ func TestGatewayTLPZeroValueIsRed(t *testing.T) {
 }
 
 func TestGatewayTLPHeaderFields(t *testing.T) {
-	// R2: no field is unlabelled; one empty field and several fields are red, above-ceiling.
+	// ADR-0038 d5: no field is unlabelled; one empty field and several fields are red, above-ceiling.
 	cases := []struct {
 		fields []string
 		reason string

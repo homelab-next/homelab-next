@@ -727,13 +727,13 @@
         "2": "the register cannot be read"
       },
       "id": "licence-check",
-      "inputs": "constraints/*.txt, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml",
+      "inputs": "constraints/*.txt, every go.mod's require lines, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml",
       "kind": "check",
       "language": "python",
       "outputs": "one line per problem; a summary line",
       "owner": "maintainers",
       "path": "tools/licence_check.py",
-      "purpose": "Fail when a pinned Python package or a compose image has no reviewed licence entry, or a linked one is copyleft.",
+      "purpose": "Fail when a pinned Python package, a Go module a go.mod requires or a compose image has no reviewed licence entry, or a linked one is copyleft.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",

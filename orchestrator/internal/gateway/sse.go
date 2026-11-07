@@ -90,5 +90,5 @@ func (s *sseWriter) send(data []byte) error {
 
 func (s *sseWriter) done() error { return s.send([]byte("[DONE]")) }
 
-// estimateTokens is the R7 estimate for a stream that reported no usage.
+// estimateTokens is the ADR-0038 d4 estimate for a stream that reported no usage.
 func estimateTokens(contentBytes int) int { return (contentBytes + 3) / 4 }

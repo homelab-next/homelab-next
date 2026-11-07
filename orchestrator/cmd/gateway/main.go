@@ -167,7 +167,7 @@ func load(path string, lookup func(string) (string, bool)) (*gateway.Config, *ga
 	return cfg, secrets, nil
 }
 
-// checkServing refuses flag combinations that cannot serve safely (R12).
+// checkServing refuses flag combinations that cannot serve safely (ADR-0038 d3).
 func checkServing(o options) error {
 	if (o.tlsCert == "") != (o.tlsKey == "") {
 		return errors.New("-tls-cert and -tls-key go together")

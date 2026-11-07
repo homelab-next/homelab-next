@@ -128,7 +128,7 @@ func TestGatewayUpstreamAuthRefusalIs502(t *testing.T) {
 }
 
 func TestGatewayFallbackIsTLPAdmittedAndLimited(t *testing.T) {
-	// chat-a (green) falls back to a clear cloud role; a request labelled green skips it (R3),
+	// chat-a (green) falls back to a clear cloud role; a request labelled green skips it (ADR-0038 d5),
 	// chat-b is skipped by its limit, and the caller gets 502
 	edit := func(cfg map[string]any) {
 		roles := cfg["roles"].(map[string]any)

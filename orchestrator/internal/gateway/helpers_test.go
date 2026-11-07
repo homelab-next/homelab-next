@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// keys: every client key is at least 32 bytes (R8).
+// keys: every client key is at least 32 bytes (ADR-0038 d2).
 const (
 	adminKey     = "admin-key-0123456789abcdef0123456789"
 	telemetryKey = "telemetry-key-0123456789abcdef012345"

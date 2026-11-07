@@ -1,18 +1,17 @@
 ---
 summary: The orchestrator joins this repository as the Go module orchestrator/, gateway first; lab data goes to the overlay, MCP servers become modules, in stages.
-summary_of: outline:sha256:5f956351a61b0999
+summary_of: outline:sha256:55a2d2ccded19d6a
 ---
-# ADR-0039: Make the orchestrator and its gateway part of this repository
+# ADR-0026: Make the orchestrator and its gateway part of this repository
 
 - **Status:** proposed
 - **Date:** 2026-11-07
-- **Related:** ADR-0005, ADR-0011, ADR-0017, ADR-0021, ADR-0022, ADR-0024, ADR-0026 (reserved: the
-  agent-runner contract, decision 5), ADR-0027, ADR-0030, ADR-0033,
+- **Related:** ADR-0005, ADR-0017, ADR-0021, ADR-0022, ADR-0024, ADR-0027, ADR-0030, ADR-0033,
   [LLM gateway](../llm-gateway.md), [the lab's own gateway](../gateway.md),
   [modules](../modules.md), [MCP catalog](../mcp-catalog.md),
   [private overlay](../private-overlay.md), `tools/go_modules.py`, `tools/go_test_policy.py`
 - **Depends-on:** ADR-0038
-- **Amends:** ADR-0038
+- **Amends:** ADR-0011, ADR-0038
 
 ## Context
 
@@ -47,10 +46,8 @@ ADR records is the one recommended and decided with it.
 Most of the private repository is generic: the gateway, the controller's queue, admission,
 scheduling, grant loading and telemetry, and MCP servers for products anyone might run. What is
 lab-specific is data (hosts, addresses, paths, profiles, catalogs, homes) and a few tools for
-systems only this lab has. ADR-0011 decision 1 makes this repository greenfield: files are written
-fresh and its history starts empty, and the maintainers re-author material they own under
-Apache-2.0. Generic code the operator owns, brought in without its history, read file by file and
-rewritten for this repository, is that re-authoring; lab data never is.
+systems only this lab has. ADR-0011 decision 1 says files are written fresh and never copied from
+private sources, so bringing that generic code in needs an amendment to it (decision 4).
 
 ## Decision
 
@@ -58,23 +55,27 @@ rewritten for this repository, is that re-authoring; lab data never is.
    are one control plane, so a contract, its implementation and its conformance land in one pull
    request. The orchestrator's code joins as **one Go module at the top-level directory
    `orchestrator/`**, module path `github.com/homelab-next/homelab-next/orchestrator`, beside the
-   Python broker (`homelabnext/broker`). The name was chosen because it names the component, and
-   because the repository was already prepared for it: `.gitignore` covers its build outputs,
-   `.github/CODEOWNERS` owns `/orchestrator/` and `MANIFEST.in` prunes it from the Python
-   distributions (`tests/packaging/test_orchestrator_tree.py`).
+   Python broker (`homelabnext/broker`). The name names the component. The module is in neither
+   Python distribution (`MANIFEST.in` prunes it), CODEOWNERS owns `/orchestrator/`, and its build
+   outputs are ignored (`tests/packaging/test_orchestrator_tree.py` holds all three).
 2. **The module's layout and rules.**
    - `cmd/gateway` and `internal/gateway` now; the controller's `cmd/` and `internal/` packages
-     later (decision 6). `internal/` is private to the module, as Go enforces: no other module
-     imports it.
+     later (decision 8, stage 2). `internal/` is private to the module, as Go enforces: no other
+     module imports it.
    - The `go` line of `orchestrator/go.mod` is the Go of CI's `GO_VERSION` (1.27.3 today), raised
      with it, by hand, to a release past the 14-day cooldown (CONTRIBUTING.md, "Keeping pins
      current"). CI's `go` job installs that version (`GOTOOLCHAIN=local`) and runs with
      `GOFLAGS=-mod=readonly` and `GOWORK=off`.
-   - Standard library first. The gateway imports nothing else, so there is no `go.sum`. A
+   - Standard library first. The gateway imports nothing else, so the module has no `go.sum`. A
      third-party Go dependency follows ADR-0011 decision 4 and CONTRIBUTING.md rule 8 as a Python
-     one does: permissively licensed, justified in its pull request, with a reviewed licence entry
-     in `tools/licences.yml` added with the first one. Dependabot watches the module (a `gomod`
-     entry; `tests/packaging/test_orchestrator_tree.py` fails on a discovered module it misses).
+     one does: permissively licensed, justified in its pull request, and listed by module path in
+     the `go` section of `tools/licences.yml`, which `make licence-check` reads from every
+     `go.mod`'s requirements. Dependabot watches the module and its linters' module (`gomod`
+     entries; `tests/packaging/test_orchestrator_tree.py` fails on a discovered module it misses).
+   - **Linters.** `orchestrator/tools/go.mod` is the module's linters' module (the
+     `tools/go_modules.py` rule): staticcheck and govulncheck pinned as `tool` dependencies, with
+     their `go.sum`, at releases past the 14-day cooldown, each module they pull in listed in
+     `tools/licences.yml` as a `tool`. CI's `go` job runs both after the tests.
    - Every Go file starts with the SPDX line (CONTRIBUTING.md rule 10). The tests follow
      `tools/go_test_policy.py`: no network beyond loopback (CI runs them in a network namespace),
      every skip registered with a reason, a quarantine or a root-only test listed in
@@ -90,8 +91,11 @@ rewritten for this repository, is that re-authoring; lab data never is.
    lab systems (`<overlay>/lab/mcp/`); the agent runtime's homes; MCP tools for lab-only systems
    (decision 6); and the real controller and gateway configs. Credentials are `secret:` references
    everywhere (ADR-0021 decision 3).
-4. **Files come in fresh and pass every gate.** Each move is a new commit with no private history
-   (ADR-0011 decision 1). Every file is read and rewritten for this repository before it lands:
+4. **Files come in fresh and pass every gate; ADR-0011 decision 1 is amended to allow it.**
+   Generic code the operator owns may come in from the private repository: as new files, in a new
+   commit, without its history, each read and rewritten for this repository before it lands.
+   ADR-0011's rejected alternative, a scrubbed export of the private repository, stays rejected:
+   no history and no rename trail comes across. Every file is read and rewritten before it lands:
    import paths take the new module path, private-repository paths and lab names go, real
    addresses become documentation ranges. The move's pull request passes the leak scan on the
    tree, on every added line (`--history`) and on every author (`--check-authors`), the
@@ -104,12 +108,13 @@ rewritten for this repository, is that re-authoring; lab data never is.
    toolsets and MCP grants; give it a home and config; collect its usage report; cancel it; and
    receive its stall signals. That **agent-runner contract** is public core, with a fake and a
    conformance suite like every other capability. It is the `agent-runtime` slot of ADR-0027, and
-   its contract is written as ADR-0026, the number reserved for it. The Hermes agent runtime is
+   its contract is written as an ADR of its own, which takes the next free number when it is
+   written. The Hermes agent runtime is
    one **provider module** behind it (the private repository's `internal/hermesagent` splits along
    that line: the generic runner logic becomes the contract and its fake here, and what is
    Hermes-specific becomes the provider's code), so the runtime can change later without touching
    the controller. This ADR names the decision; the contract and the provider come in a later pull
-   request (decision 7, stage 3).
+   request (decision 8, stage 3).
 6. **MCP servers are modules, not orchestrator code.** Each MCP server of the private repository
    becomes:
    - a **module** (ADR-0027): a provider module when it wraps a product (a hypervisor's API, a case
@@ -137,35 +142,52 @@ rewritten for this repository, is that re-authoring; lab data never is.
    (**specified, not implemented**: the first Go module's pull request adds the launch for a
    first-party Go path). Module code may import **only a small public SDK** for writing MCP
    servers against this platform: a separate Go module at `orchestrator/mcpkit/` with its own
-   `go.mod`, required through a relative `replace`, so a module and the SDK it was tested with are
-   one commit. It never imports the controller or `orchestrator/internal/`; the SDK is the one
-   interface module code depends on, and it is versioned with the contract.
-8. **The staged order.** Each stage is its own pull request (or series), and a stage starts only
-   once the one before it has merged:
+   `go.mod`, which imports nothing from the rest of `orchestrator/`. It never imports the
+   controller or `orchestrator/internal/`; the SDK is the one interface module code depends on,
+   and it is versioned with the contract.
+   - **In this repository**, a module requires the SDK through a relative `replace`, so a module
+     and the SDK it was tested with are one commit.
+   - **In the overlay**, a module pins the SDK by module version or pseudo-version at the
+     homelab-next commit the overlay pins (`HNX_REF`, ADR-0021 decision 7); there is no relative
+     `replace` across repositories.
+
+   Follow-ups, **specified, not implemented**: a `modules/<id>/go/` tree gets a manifest rule in
+   `homelabnext/modules/rules.py` like `code_tree_problems` for `python/` (only the module's own
+   code, no symlink, no other module's tree), and it stays out of both Python distributions, as
+   `orchestrator/` does.
+8. **The staged order.** Each stage is its own pull request (or series). Stages 1 to 3 run in order,
+   each starting once the one before it has merged; stages 4 and 5 may run in parallel once stage 3
+   has merged:
    1. **The gateway** (this pull request): `orchestrator/cmd/gateway`, `orchestrator/internal/gateway`,
       its docs and its in-repository conformance job.
    2. **The controller's core**, after scrubbing: the generic packages (queue, admission,
       scheduling, grant loading, telemetry), with fictional example configs.
-   3. **The agent-runner contract** (ADR-0026) **and the Hermes provider module** (decision 5).
+   3. **The agent-runner contract** (its own ADR) **and the Hermes provider module** (decision 5).
    4. **The MCP modules, one by one**: each its own module pull request, with its review tier
       (`hnx modules review-tier`), its catalog record and its conformance target where its slot
       has a contract.
    5. **The lab-only modules and the lab's data to the overlay**, through pull requests the
       operator merges there.
-   6. **Cutover**: the lab's deployment builds the controller, the gateway and the modules from this
-      repository at the commit the overlay pins (ADR-0021 decision 7), and the private repository is
-      archived read-only, never deleted, so its history stays readable.
+   6. **Archive**: once every component has cut over, the private repository is archived
+      read-only, never deleted, so its history stays readable.
 
-   Until stage 6, the lab keeps running what it runs today. From this pull request on, this
-   repository's gateway is the implementation ADR-0038 is judged against: the private copy is
-   frozen and is removed there, with its own conformance job, by an operator-merged pull request.
+   **Each component cuts over as soon as it lands**, so the lab never runs a frozen copy for long:
+   the lab's deployment then builds it from this repository at the commit the overlay pins
+   (ADR-0021 decision 7). The gateway cuts over under ADR-0038's rules (its suite green here, a
+   period beside LiteLLM, the runtime sending labels); the controller cuts over right after its
+   stage. From this pull request on, this repository's gateway is the implementation ADR-0038 is
+   judged against, and the private copy is frozen. Until a component has cut over, a security fix
+   may be backported to its private copy, and each such backport is recorded in the pull request
+   here that carries the same fix. After cutover the private copy is removed there, with its own
+   conformance job, by an operator-merged pull request.
 9. **ADR-0038 decision 7 changes: the conformance run is an in-repository CI job.** CI's
    `gateway-conformance` job builds `orchestrator/cmd/gateway`, renders the conformance gateway
    spec with `--conformance`, starts the fake inference server and the gateway on loopback with
    generated keys, and runs `hnx conform run inference --target
    compose/lab-in-a-box/targets/inference-own-gateway.yml --strict`, failing on anything but a
-   pass of every check. It runs on every pull request and every push to `main`, and `go-ok`, the
-   Go modules' one stable check, passes only when it passed. The cross-repository pin
+   pass of every check. It runs on every pull request and every push to `main`, in a network
+   namespace with only loopback, and `go-ok`, the Go modules' one stable check, passes only when it
+   passed, so a Python-side break of the suite also shows as a red `go-ok`. The cross-repository pin
    (`ci/homelab-next.ref`) goes away: the suite, the spec, the renderer and the binary are one
    commit. ADR-0038's acceptance condition reads "green on this repository's `main`" where it read
    "green on the orchestrator's main branch"; the side-by-side period and the cutover rules are
@@ -182,8 +204,9 @@ rewritten for this repository, is that re-authoring; lab data never is.
   memory, the config holds environment names only, and the tests use documentation addresses.
 - The operator owns the review of each move: every stage's pull request is read for identifiers
   before it ships, as CONTRIBUTING.md asks of every new top-level directory.
-- Until stage 6, two repositories hold orchestrator code. The private one keeps running the lab and
-  is frozen for every package that has moved here, so a fix to a moved package is made here.
+- Until the archive, two repositories hold orchestrator code. A moved package is frozen in the
+  private one and its fixes are made here; a security fix is backported only until that component's
+  cutover, and recorded.
 - MCP servers move as modules, so each needs a manifest, a catalog record and a review before it
   lands. That is slower than copying a directory, and it is the point: a tool that reaches a lab
   system is granted, classed and reviewed like every other.
@@ -201,11 +224,11 @@ rewritten for this repository, is that re-authoring; lab data never is.
   passes the suite; a rewrite would add risk and delay for no change in behaviour, and a
   long-running, concurrent server is not what the Python package is built for.
 - **Import the private repository with its history** (a subtree or a filtered history). Rejected:
-  the history holds lab identifiers in old revisions, and ADR-0011 decision 1 keeps private
-  history off the public remote.
+  the history holds lab identifiers in old revisions, and ADR-0011 decision 1, as amended by
+  decision 4, still keeps private history off the public remote.
 - **Another top-level name** (`go/`, `cmd/`, `controlplane/`). `go/` and `cmd/` name a language or
   a convention, not a component. `controlplane/` is accurate but would also cover the Python
-  broker, which stays where it is. `orchestrator/` names the component and was already prepared.
+  broker, which stays where it is. `orchestrator/` names the component.
 - **MCP servers inside the orchestrator module.** That would put every product's name in the core
   and grant tools outside the catalog. Modules keep products in provider modules (ADR-0027) and
   every server in the catalog (ADR-0024).

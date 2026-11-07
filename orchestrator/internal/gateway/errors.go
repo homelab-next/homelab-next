@@ -121,7 +121,7 @@ func upstreamExhausted(credsRefused bool) *apiError {
 }
 
 // upstreamRejected is an upstream 4xx (not 401, 403 or 429): its status with the gateway's own
-// envelope, never the upstream body (R6).
+// envelope, never the upstream body (ADR-0038 d4).
 func upstreamRejected(status int) *apiError {
 	return &apiError{status: status, message: "upstream rejected the request (status " + strconv.Itoa(status) + ")",
 		typ: "invalid_request_error", code: "upstream_rejected"}

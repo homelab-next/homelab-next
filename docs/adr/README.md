@@ -18,9 +18,7 @@ line lists it under **Amended-by**), and **Depends-on** names the decisions an A
 test refuses a one-sided pair, an unknown id, and an accepted ADR that depends on one that is not
 accepted (the status values themselves are the operator's).
 
-A number held by planned work is reserved, and later ADRs skip it: **0026** (the orchestrator as a
-component of this repository: the agent-runner contract, which ADR-0039 decision 5 assigns to it;
-ADR-0027 relies on it for the `agent-runtime` slot) has no file yet.
+A number held by planned work is reserved, and later ADRs skip it; none is reserved today.
 `RESERVED` in `tools/tests/test_adr_log.py` lists the reserved numbers, and the test refuses an
 index that does not name each one.
 
@@ -51,6 +49,7 @@ index that does not name each one.
 | [0023](0023-model-serving-one-store-few-engines.md) | model-serving-one-store-few-engines | <!-- hnx:gen:summary:0023-model-serving-one-store-few-engines.md -->One model store, each model once, pinned by commit and sha256; vLLM serves production from it, a few engines elsewhere.<!-- /hnx:gen --> |
 | [0024](0024-mcp-catalog-single-source.md) | mcp-catalog-single-source | <!-- hnx:gen:summary:0024-mcp-catalog-single-source.md -->One record per MCP server is the single source for the class table, graph, system pages and hub views.<!-- /hnx:gen --> |
 | [0025](0025-orchestration-telemetry.md) | orchestration-telemetry | <!-- hnx:gen:summary:0025-orchestration-telemetry.md -->Each agent job usage is one closed, text-free agent.job.finished event; per-turn records come from the gateway spend-log API.<!-- /hnx:gen --> |
+| [0026](0026-make-the-orchestrator-and-its-gateway-part-of-this-repository.md) | make-the-orchestrator-and-its-gateway-part-of-this-repository | <!-- hnx:gen:summary:0026-make-the-orchestrator-and-its-gateway-part-of-this-repository.md -->The orchestrator joins this repository as the Go module orchestrator/, gateway first; lab data goes to the overlay, MCP servers become modules, in stages.<!-- /hnx:gen --> |
 | [0027](0027-feature-and-provider-modules.md) | feature-and-provider-modules | <!-- hnx:gen:summary:0027-feature-and-provider-modules.md -->Products live only in provider modules filling slots from a slot registry; optional missions are feature modules.<!-- /hnx:gen --> |
 | [0028](0028-veritas-single-source-of-truth.md) | veritas-single-source-of-truth | <!-- hnx:gen:summary:0028-veritas-single-source-of-truth.md -->Veritas names the single source of truth: authored files a generator or gate reads as the standard or copy source; every other copy is generated or checked.<!-- /hnx:gen --> |
 | [0029](0029-holds-released-by-liveness.md) | holds-released-by-liveness | <!-- hnx:gen:summary:0029-holds-released-by-liveness.md -->A slot, lease or token/KV reservation exists only while its worker is alive and is released on every exit; TTL is a backstop.<!-- /hnx:gen --> |
@@ -63,4 +62,3 @@ index that does not name each one.
 | [0036](0036-behavioural-novelty-baselines-are-deterministic-and-advisory.md) | behavioural-novelty-baselines-are-deterministic-and-advisory | <!-- hnx:gen:summary:0036-behavioural-novelty-baselines-are-deterministic-and-advisory.md -->A deterministic analyzer learns per-entity first-seen baselines from the lake over a decaying window; its findings are heuristic and never escalate alone.<!-- /hnx:gen --> |
 | [0037](0037-agent-memory-is-sourced-historied-and-retractable.md) | agent-memory-is-sourced-historied-and-retractable | <!-- hnx:gen:summary:0037-agent-memory-is-sourced-historied-and-retractable.md -->Every agent memory entry records its sources, TLP and revision history; an operator retracts a bad source and everything built on it.<!-- /hnx:gen --> |
 | [0038](0038-the-llm-gateway-is-our-own-behind-the-same-contract.md) | the-llm-gateway-is-our-own-behind-the-same-contract | <!-- hnx:gen:summary:0038-the-llm-gateway-is-our-own-behind-the-same-contract.md -->The lab's LLM gateway becomes its own Go binary that reads a product-neutral rendered config; LiteLLM stays deployed until that binary passes the gateway suite.<!-- /hnx:gen --> |
-| [0039](0039-make-the-orchestrator-and-its-gateway-part-of-this-repository.md) | make-the-orchestrator-and-its-gateway-part-of-this-repository | <!-- hnx:gen:summary:0039-make-the-orchestrator-and-its-gateway-part-of-this-repository.md -->The orchestrator joins this repository as the Go module orchestrator/, gateway first; lab data goes to the overlay, MCP servers become modules, in stages.<!-- /hnx:gen --> |

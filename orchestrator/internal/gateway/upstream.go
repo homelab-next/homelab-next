@@ -99,7 +99,7 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, cl *call, d *De
 		path = "/v1/messages"
 		body, err = toAnthropic(cl.body, d.Model)
 	case d.Locality == "local" && cl.urlPart() != "":
-		// a local backend would fetch the URL from inside the lab (security audit L5)
+		// a local backend would fetch the URL from inside the lab (docs/gateway.md, "URL parts never reach a local backend")
 		err = badRequest("unsupported_parameter", "the request ("+cl.urlPart()+")"+
 			" carries a URL, which this gateway does not send to a local deployment")
 	case cl.kind == "embedding":
@@ -198,8 +198,8 @@ func (s *Server) setUpstreamHeaders(req *http.Request, d *Deployment, stream boo
 	}
 }
 
-// withModel re-encodes the request body with model replaced by the backend id (R5) and, for a
-// stream, stream_options.include_usage set so the reply's tokens can be counted (R7).
+// withModel re-encodes the request body with model replaced by the backend id (ADR-0038 d3) and, for a
+// stream, stream_options.include_usage set so the reply's tokens can be counted (ADR-0038 d4).
 func withModel(body map[string]json.RawMessage, model string, stream bool) []byte {
 	out := make(map[string]json.RawMessage, len(body))
 	for k, v := range body {
@@ -258,7 +258,7 @@ func replyContentBytes(raw json.RawMessage) int {
 	return n
 }
 
-// estimateUsage is the usage counted for a reply that reported none (R7, M3): input estimated
+// estimateUsage is the usage counted for a reply that reported none (ADR-0038 d4 and R16): input estimated
 // from the request body's size, output from the reply's content (none for an embedding).
 func estimateUsage(cl *call, contentBytes int) tokenUsage {
 	in := estimateTokens(cl.bodyBytes)

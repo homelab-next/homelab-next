@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Defaults for the write deadline and the in-flight caps (security audit M1).
+// Defaults for the write deadline and the in-flight caps (ADR-0038 R15).
 const (
 	DefaultWriteTimeout      = 60 * time.Second
 	DefaultMaxInFlight       = 256

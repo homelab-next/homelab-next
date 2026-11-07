@@ -24,7 +24,7 @@ const (
 	TelemetryAlias = "@telemetry"
 )
 
-// MinClientKeyBytes is the shortest value a caller key may have: keys[] and telemetry (R8), and
+// MinClientKeyBytes is the shortest value a caller key may have: keys[] and telemetry (ADR-0038 d2), and
 // the admin key too, which can call every role.
 const MinClientKeyBytes = 32
 
@@ -53,7 +53,7 @@ func (c *caller) owner() string {
 	return c.alias()
 }
 
-// sender is the caller's sending TLP ceiling: the key's, and red for the admin key (R1).
+// sender is the caller's sending TLP ceiling: the key's, and red for the admin key (ADR-0038 d5).
 func (c *caller) sender() Label {
 	if c.kind == callerKey {
 		return c.key.ceiling
@@ -70,7 +70,7 @@ type Secrets struct {
 
 // LoadSecrets reads every *_env the config names through lookup (os.LookupEnv in production). A
 // missing or empty value is an error naming the variable, never a value. A client key shorter
-// than MinClientKeyBytes (the admin key included), and two callers with the same value, are refused (R8). Caller keys are
+// than MinClientKeyBytes (the admin key included), and two callers with the same value, are refused (ADR-0038 d2). Caller keys are
 // kept only as SHA-256 digests; provider keys are kept as values, since they are sent upstream.
 func LoadSecrets(c *Config, lookup func(string) (string, bool)) (*Secrets, error) {
 	var p problems

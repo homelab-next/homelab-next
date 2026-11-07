@@ -26,7 +26,7 @@ type Config struct {
 	Roles           map[string]*Role `json:"roles"`
 	Keys            []*Key           `json:"keys"`
 	TelemetryReader *TelemetryReader `json:"telemetry_reader"`
-	// ConformanceOnly marks a config rendered with the renderer's test-only option (R14): the
+	// ConformanceOnly marks a config rendered with the renderer's test-only option (ADR-0038 d7): the
 	// gateway serves it only when started with -conformance. The one optional key.
 	ConformanceOnly bool `json:"conformance_only,omitempty"`
 }

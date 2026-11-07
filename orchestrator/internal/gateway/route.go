@@ -15,7 +15,7 @@ const statusClientGone = 499
 
 // route tries the role's deployments in order, then each fallback role that TLP and its own
 // limit admit (a refused fallback is skipped), and answers 502 when every one failed with a
-// fallback-eligible error or was skipped (R3, R6).
+// fallback-eligible error or was skipped (ADR-0038 d4 and d5).
 func (s *Server) route(w http.ResponseWriter, r *http.Request, cl *call) {
 	credsRefused := false
 	if s.tryRole(w, r, cl, cl.role, &credsRefused) {
@@ -61,7 +61,7 @@ func (cl *call) markServed(w http.ResponseWriter) {
 }
 
 // tryRole tries each deployment of role in order; true once one answered the caller.
-// credsRefused is set when an upstream answered 401 or 403 (R6).
+// credsRefused is set when an upstream answered 401 or 403 (ADR-0038 d4).
 func (s *Server) tryRole(w http.ResponseWriter, r *http.Request, cl *call, role *Role, credsRefused *bool) bool {
 	for _, d := range role.Deployments {
 		if r.Context().Err() != nil {

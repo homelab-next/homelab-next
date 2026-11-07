@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# The run steps of CI's `gateway-conformance` job (ADR-0038 decision 7 as ADR-0039 amends it;
+# The run steps of CI's `gateway-conformance` job (ADR-0038 decision 7 as ADR-0026 amends it;
 # docs/gateway.md, "Conformance in CI"): this repository's `inference` conformance suite against
 # its own gateway, orchestrator/cmd/gateway, on loopback, with the fake inference server behind it.
 # A workstation runs it the same way.
@@ -22,7 +22,12 @@
 #
 # The keys are generated here (32 random bytes, hex: 64 bytes each, distinct), exported only into
 # this process's environment and never printed. Neither the gateway nor the fake logs a key value,
-# so the logs printed on a failure carry none. Both processes are stopped on every exit.
+# so the logs printed on a failure carry none. Both processes are stopped on every exit. `run`
+# refuses to start when anything already listens on either port, so the suite can only ever talk to
+# the processes it started. It needs no network beyond loopback: CI runs it in a network namespace
+# with only loopback, as an unprivileged user under no_new_privs (setpriv --no-new-privs), as the
+# go job runs the tests; on a workstation, `unshare -rn sh -c 'ip link set lo up && exec
+# tools/gateway_conformance.sh run'` does the same where user namespaces are allowed.
 # hnx-script:
 #   id: gateway-conformance
 #   kind: tool
@@ -113,6 +118,9 @@ cleanup() {
   exit "$status"
 }
 
+# port_free PORT: true when nothing accepts a connection on loopback PORT
+port_free() { ! (exec 3<>"/dev/tcp/$lo/$1") 2>/dev/null; }
+
 # wait_for URL PID NAME: up to 30 s for URL to answer 2xx while PID lives
 wait_for() {
   local i
@@ -130,9 +138,15 @@ cmd_run() {
   if [[ -d "$WORK_DIR" ]] && [[ -n "$(ls -A "$WORK_DIR")" ]]; then
     die "WORK_DIR must be empty (a stale usage file would be read back)"
   fi
-  local py="$HNX_VENV/bin/python"
+  local py="$HNX_VENV/bin/python" bin
   [[ -x "$py" ]] || die "HNX_VENV $HNX_VENV has no bin/python (run deps first)"
-  [[ -x "$GATEWAY_BIN" ]] || die "GATEWAY_BIN $GATEWAY_BIN is not an executable"
+  # resolved before the check, so the file checked is the file run (and cd below cannot change it)
+  bin=$(realpath -e -- "$GATEWAY_BIN" 2>/dev/null) || die "GATEWAY_BIN $GATEWAY_BIN does not exist"
+  [[ -f "$bin" && -x "$bin" ]] || die "GATEWAY_BIN $bin is not an executable file"
+  local port
+  for port in "$fake_port" "$gw_port"; do
+    port_free "$port" || die "something already listens on $lo:$port: stop it first (the suite must reach only what this run starts)"
+  done
   mkdir -p "$WORK_DIR"
   trap cleanup EXIT
   cd "$repo"
@@ -186,7 +200,7 @@ PY
   pids+=($!)
   wait_for "http://$lo:$fake_port/health" "${pids[-1]}" "the fake inference server"
 
-  "$GATEWAY_BIN" -config "$config" -conformance -listen "$lo:$gw_port" -usage "$WORK_DIR/usage.jsonl" \
+  "$bin" -config "$config" -conformance -listen "$lo:$gw_port" -usage "$WORK_DIR/usage.jsonl" \
     > "$WORK_DIR/gateway.log" 2>&1 &
   pids+=($!)
   wait_for "http://$lo:$gw_port/healthz" "${pids[-1]}" "the gateway"

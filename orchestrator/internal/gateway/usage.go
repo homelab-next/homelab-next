@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// UsageRecord is one admission decision and its served outcome (contract R10): names and
+// UsageRecord is one admission decision and its served outcome (ADR-0038 d6): names and
 // numbers only, never prompt or reply text. Its field names are the neutral turn record's where
 // the two overlap (conformance/protocols/inference.py TURN_FIELDS).
 type UsageRecord struct {

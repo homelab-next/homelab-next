@@ -1,6 +1,6 @@
 ---
 summary: The lab's LLM gateway becomes its own Go binary that reads a product-neutral rendered config; LiteLLM stays deployed until that binary passes the gateway suite.
-summary_of: outline:sha256:2ff377458fa4527f
+summary_of: outline:sha256:ee879beeb671ce89
 ---
 # ADR-0038: Make the LLM gateway our own, behind the same contract
 
@@ -10,13 +10,13 @@ summary_of: outline:sha256:2ff377458fa4527f
   the contract (amendments R15 to R18: in-flight caps, token and cost reservations, aggregated
   refusal records, grouped writes of the usage file), the embeddings checks' own role, and how the
   suite observes a skipped fallback (see the amendment at the end of Decision); and 2026-11-07 by
-  ADR-0039: the gateway is built in this repository's Go module `orchestrator/`, and decision 7's
+  ADR-0026: the gateway is built in this repository's Go module `orchestrator/`, and decision 7's
   acceptance run is an in-repository CI job with no cross-repository pin (see the second amendment)
 - **Related:** ADR-0005, ADR-0007, ADR-0022, ADR-0033, [LLM gateway](../llm-gateway.md),
   [orchestration telemetry](../orchestration-telemetry.md), `conformance/protocols/inference.py`
 - **Depends-on:** ADR-0033
 - **Amends:** ADR-0022, ADR-0033
-- **Amended-by:** ADR-0039
+- **Amended-by:** ADR-0026
 
 ## Context
 
@@ -231,9 +231,9 @@ Two consequences for decision 7's acceptance run:
   lab-in-a-box role table gains an `embedder` role served by the fake inference server, so the
   LiteLLM target checks embeddings on an embedding role too.
 
-### Amendment (2026-11-07, ADR-0039): the gateway is built here, and so is its acceptance run
+### Amendment (2026-11-07, ADR-0026): the gateway is built here, and so is its acceptance run
 
-ADR-0039 makes the orchestrator a component of this repository, as the Go module `orchestrator/`
+ADR-0026 makes the orchestrator a component of this repository, as the Go module `orchestrator/`
 (module path `github.com/homelab-next/homelab-next/orchestrator`). It changes this ADR in three
 places and leaves every rule of the contract as it is:
 
@@ -255,8 +255,8 @@ places and leaves every rule of the contract as it is:
   the remaining cutover rules stand.
 
 The alternative this ADR rejected, "write the gateway in this repository", is in effect what
-ADR-0039 decides, for the reason that rejection did not weigh: the contract and its implementation
-changing in two repositories at once (ADR-0039, Context).
+ADR-0026 decides, for the reason that rejection did not weigh: the contract and its implementation
+changing in two repositories at once (ADR-0026, Context).
 
 ## Consequences
 

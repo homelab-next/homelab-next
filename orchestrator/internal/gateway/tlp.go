@@ -5,7 +5,7 @@ package gateway
 import "strings"
 
 // Label is a TLP 2.0 label. Its zero value is Red, so a ceiling that was never set reads as the
-// most restrictive label, never as clear (contract R1). Compare labels only with AtOrBelow and
+// most restrictive label, never as clear (ADR-0038 d5). Compare labels only with AtOrBelow and
 // Stricter, never with < (the numeric order is not the restriction order).
 type Label uint8
 
@@ -89,8 +89,8 @@ type Admission struct {
 	Reason  string
 }
 
-// Admit applies the per-request TLP rule (ADR-0033 decision 11, ADR-0038 decision 5, contract
-// R2) to the X-HNX-TLP header fields of a request: none is red (reason unlabelled when refused),
+// Admit applies the per-request TLP rule (ADR-0033 decision 11, ADR-0038 decision 5) to the
+// X-HNX-TLP header fields of a request: none is red (reason unlabelled when refused),
 // exactly one is read as data, more than one is red (above-ceiling).
 func Admit(roleCeiling Label, leavesLab bool, sender Label, fields []string) Admission {
 	label := Red

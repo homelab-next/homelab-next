@@ -18,7 +18,7 @@ type openAIStream struct {
 }
 
 // chunk rewrites one upstream chunk: model is the role alias. keep is false for the usage-only
-// chunk the gateway asked for on the caller's behalf (R7); ok is false for a chunk that is not
+// chunk the gateway asked for on the caller's behalf (ADR-0038 d4); ok is false for a chunk that is not
 // a JSON object, which the gateway cannot rewrite and so never forwards.
 func (st *openAIStream) chunk(data string) (out []byte, keep, ok bool) {
 	var obj map[string]json.RawMessage

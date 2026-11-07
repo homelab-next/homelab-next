@@ -17,8 +17,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/llm-gateway/secrets.env
-ExecStartPre=/usr/local/bin/gateway -config /etc/llm-gateway/gateway.json -check
-ExecStart=/usr/local/bin/gateway -config /etc/llm-gateway/gateway.json -listen 127.0.0.1:4100 -usage /var/lib/llm-gateway/usage.jsonl
+ExecStartPre=/usr/local/bin/llm-gateway -config /etc/llm-gateway/gateway.json -check
+ExecStart=/usr/local/bin/llm-gateway -config /etc/llm-gateway/gateway.json -listen 127.0.0.1:4100 -usage /var/lib/llm-gateway/usage.jsonl
 Restart=on-failure
 RestartSec=5
 # SIGTERM drains in-flight calls for up to -upstream-timeout (120 s) + 5 s

@@ -808,7 +808,7 @@ jobs:
         run: |
           setpriv --no-new-privs -- go tool -modfile=tools/go.mod staticcheck ./...
           setpriv --no-new-privs -- go tool -modfile=tools/go.mod govulncheck ./...
-  # The gateway against its contract (ADR-0038 decision 7, as ADR-0039 amends it): build
+  # The gateway against its contract (ADR-0038 decision 7, as ADR-0026 amends it): build
   # orchestrator/cmd/gateway, render the conformance gateway spec with --conformance, start the
   # fake inference server and the gateway (-conformance) on loopback with generated keys, and run
   # the inference suite on compose/lab-in-a-box/targets/inference-own-gateway.yml with every
@@ -816,7 +816,11 @@ jobs:
   # which runs the same way on a workstation; its venv is pip-by-hash plus the core extra under
   # constraints/ci.txt, and refuses any installed distribution the constraints do not pin.  It
   # runs on every change, unconditionally: the contract, the renderer, the spec and the binary all
-  # live here, so any of them can break it, and it costs a few minutes.  go-ok requires it.
+  # live here, so any of them can break it, and it costs a few minutes.  go-ok requires it, so a
+  # Python-side break (the suite, the renderer, the spec or the fake) also shows as a red go-ok.
+  # The run step needs only loopback: it runs in a network namespace with only loopback, as the
+  # runner user under no_new_privs (sudo opens the namespace, setpriv drops back), as the go job's
+  # tests do; deps, which downloads, runs before it with the network.
   gateway-conformance:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -841,19 +845,23 @@ jobs:
           python-version: "3.12"
       - name: build orchestrator/cmd/gateway
         working-directory: orchestrator
-        run: go build -o "$RUNNER_TEMP/gateway" ./cmd/gateway
+        run: go build -o "$RUNNER_TEMP/llm-gateway" ./cmd/gateway
       - name: the suite's Python deps (venv, hash-pinned constraints, nothing unpinned)
         env:
           HNX_PYTHON: ${{ steps.python.outputs.python-path }}
         run: HNX_VENV="$RUNNER_TEMP/hnx-venv" tools/gateway_conformance.sh deps
-      - name: inference conformance against the gateway (fake upstream, loopback, every check a pass)
+      - name: inference conformance against the gateway (fake upstream, loopback only, every check a pass)
         run: |
-          HNX_VENV="$RUNNER_TEMP/hnx-venv" GATEWAY_BIN="$RUNNER_TEMP/gateway" \
-            WORK_DIR="$RUNNER_TEMP/gateway-conformance" tools/gateway_conformance.sh run
+          /usr/bin/sudo env "PATH=$PATH" "HOME=$HOME" "GITHUB_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" \
+            "HNX_VENV=$RUNNER_TEMP/hnx-venv" "GATEWAY_BIN=$RUNNER_TEMP/llm-gateway" \
+            "WORK_DIR=$RUNNER_TEMP/gateway-conformance" \
+            unshare --net -- sh -c 'ip link set lo up && exec setpriv --no-new-privs --reuid="$1" \
+              --regid="$2" --clear-groups -- tools/gateway_conformance.sh run' \
+            sh "$(id -u)" "$(id -g)"
 
   # One stable check name for branch protection, whatever the modules are called: the discovery
   # passed, every module's go job passed (or there was none to run), and the gateway passed its
-  # conformance suite (always run: the gateway is a module here, ADR-0039).
+  # conformance suite (always run: the gateway is a module here, ADR-0026).
   go-ok:
     needs: [go-modules, go, gateway-conformance]
     if: always()

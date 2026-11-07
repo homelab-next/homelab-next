@@ -482,6 +482,35 @@ def test_discovery_gates_the_go_job_and_one_check_sums_it_up():
     assert '[ "$GATEWAY" = success ]' in verdict["run"]
 
 
+def test_the_gateway_conformance_job_is_pinned_unconditional_and_builds_like_the_go_job():
+    """The job go-ok requires (ADR-0026 decision 9): pinned actions, never skipped, the module's
+    own Go, a read-only module graph, and the suite run as its last step without the network."""
+    import re
+
+    import yaml
+
+    jobs = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
+    job = jobs["gateway-conformance"]
+    assert "if" not in job and "needs" not in job and "continue-on-error" not in job
+    assert job["env"] == {"GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local", "GOWORK": "off"}
+    steps = job["steps"]
+    for step in steps:
+        assert "if" not in step and "continue-on-error" not in step, step
+        if "uses" in step:
+            assert re.fullmatch(r"[\w-]+/[\w-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
+    (checkout,) = [s for s in steps if s.get("uses", "").startswith("actions/checkout@")]
+    assert checkout["with"]["persist-credentials"] is False
+    (go,) = [s for s in steps if s.get("uses", "").startswith("actions/setup-go@")]
+    assert go["with"]["go-version-file"] == "orchestrator/go.mod"
+    (build,) = [s for s in steps if "./cmd/gateway" in s.get("run", "")]
+    assert build["working-directory"] == "orchestrator"
+    assert steps[-1]["run"].rstrip().endswith('sh "$(id -u)" "$(id -g)"')
+    assert (
+        "unshare --net" in steps[-1]["run"]
+        and "tools/gateway_conformance.sh run" in steps[-1]["run"]
+    )
+
+
 # --- the CI step itself, run with stand-ins for sudo, unshare, ip, setpriv and go ----------------
 
 FAKE_TOOLS = {

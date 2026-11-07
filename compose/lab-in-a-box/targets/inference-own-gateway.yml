@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# inference through the lab's own LLM gateway (ADR-0038: the orchestrator's cmd/gateway, built from
-# its private repository) on the conformance gateway spec, never a lab's: render
+# inference through the lab's own LLM gateway (ADR-0038: orchestrator/cmd/gateway, built in this
+# repository, ADR-0026; CI's gateway-conformance job, tools/gateway_conformance.sh) on the
+# conformance gateway spec, never a lab's: render
 # config/llm-gateway-conformance/gateway.yml with the test-only option (--conformance, and
 # a loopback --conformance-host when everything runs on one machine), start the fake inference
 # server and the gateway in its -conformance mode on loopback, export HNX_ENDPOINT_LLM_GATEWAY

@@ -15,7 +15,7 @@
 # (`make constraints` for ruff).  What dependabot cannot parse at all (role defaults, CI version+checksum pairs,
 # GO_VERSION, the Terraform provider) is reported weekly by tools/pin_freshness.py.
 #
-# Go modules (tools/go_modules.py discovers them; ADR-0039) are listed by hand, since dependabot
+# Go modules (tools/go_modules.py discovers them; ADR-0026) are listed by hand, since dependabot
 # cannot glob for them; tests/packaging/test_orchestrator_tree.py fails on one missing here.
 version: 2
 updates:
@@ -37,11 +37,14 @@ updates:
     commit-message:
       prefix: "ci"
 
-  # The Go modules.  orchestrator/ is standard library only today, so this raises nothing until
-  # it takes a dependency (which ADR-0011 decision 4 and CONTRIBUTING.md rule 8 then review).
+  # The Go modules and their linters' modules.  orchestrator/ is standard library only, so its
+  # entry raises nothing until it takes a dependency (ADR-0011 decision 4 and CONTRIBUTING.md
+  # rule 8 review that); orchestrator/tools pins staticcheck and govulncheck, and a bump that adds
+  # a module also needs its tools/licences.yml entry (make licence-check).
   - package-ecosystem: gomod
     directories:
       - "/orchestrator"
+      - "/orchestrator/tools"
     schedule:
       interval: weekly
     cooldown:

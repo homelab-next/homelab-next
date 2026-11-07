@@ -42,7 +42,7 @@ func TestGatewayConfigAcceptsTheContractShape(t *testing.T) {
 	if _, err := ParseConfig([]byte(example)); err != nil {
 		t.Fatal(err)
 	}
-	// R13: a cloud deployment may point anywhere (a conformance fixture points it at the fake)
+	// ADR-0038 d7: a cloud deployment may point anywhere (a conformance fixture points it at the fake)
 	cfg := validConfig()
 	depOf(cfg, "cloud", 0)["base_url"] = "http://127.0.0.1:9999"
 	if err := parse(t, cfg); err != nil {

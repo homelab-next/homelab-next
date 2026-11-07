@@ -160,3 +160,54 @@ def test_a_dockerfile_base_image_is_listed_too(tmp_path):
     ]
     dockerfile.write_text("FROM plain:3\n")
     assert lc.check(root) == []
+
+
+GO_MOD = """\
+module example.com/mod/tools
+
+go 1.27.3
+
+tool example.com/lint/cmd/lint
+
+require example.com/lint v1.2.3 // indirect
+
+require (
+\texample.com/dep v0.4.0 // indirect
+\texample.org/x/y v0.0.0-20260101000000-000000000000
+)
+"""
+
+
+def test_every_module_a_go_mod_requires_needs_an_entry(tmp_path):
+    root = _tree(tmp_path)
+    (root / "mod" / "tools").mkdir(parents=True)
+    (root / "mod" / "tools" / "go.mod").write_text(GO_MOD)
+    (root / "build" / "x").mkdir(parents=True)  # build output is never read
+    (root / "build" / "x" / "go.mod").write_text("module b\n\nrequire example.net/ignored v1.0.0\n")
+    assert lc.go_requires(root) == dict.fromkeys(
+        ("example.com/lint", "example.com/dep", "example.org/x/y"), "mod/tools/go.mod"
+    )
+    where = "(mod/tools/go.mod) has no entry in tools/licences.yml"
+    assert lc.check(root) == [f"go: {p} {where}" for p in sorted(lc.go_requires(root))]
+    listed = (
+        REGISTER
+        + "go:\n"
+        + "".join(
+            f'  {p}: {{spdx: BSD-3-Clause, kind: tool, reason: "a linter"}}\n'
+            for p in ("example.com/lint", "example.com/dep", "example.org/x/y", "example.com/gone")
+        )
+    )
+    (root / "tools" / "licences.yml").write_text(listed)
+    assert lc.check(root) == [
+        "tools/licences.yml: go.example.com/gone: nothing pins or runs it; remove the entry"
+    ]
+
+
+def test_a_linked_go_module_may_not_be_copyleft(tmp_path):
+    root = _tree(tmp_path)
+    (root / "go.mod").write_text("module m\n\ngo 1.27\n\nrequire example.com/gpl v1.0.0\n")
+    (root / "tools" / "licences.yml").write_text(
+        REGISTER + "go:\n  example.com/gpl: {spdx: GPL-3.0-only, kind: linked}\n"
+    )
+    (problem,) = lc.check(root)
+    assert "go.example.com/gpl: GPL-3.0-only is copyleft" in problem
