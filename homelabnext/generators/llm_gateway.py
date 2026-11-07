@@ -1059,6 +1059,14 @@ def render_neutral(spec: Spec) -> str:
     refused = neutral_refusals(spec)
     if refused:
         raise GatewaySpecError("the gateway config contract cannot express this spec", refused)
+    return json.dumps(_neutral_doc(spec), indent=2, sort_keys=True) + "\n"
+
+
+def _neutral_doc(spec: Spec) -> dict[str, Any]:
+    """The document :func:`render_neutral` writes, for a spec :func:`neutral_refusals` passes
+    (the audit compares an on-disk file with it).  Counts are JSON integers: the Go loader
+    decodes ``window_s``, ``max_requests`` and ``max_tokens`` strictly, and the role table holds
+    limits as floats."""
     leaving = leaves_lab_roles(spec)
     roles: dict[str, Any] = {}
     for rname, role in sorted(spec.table.roles.items()):
@@ -1105,16 +1113,16 @@ def render_neutral(spec: Spec) -> str:
             "tlp_ceiling": str(k.tlp_ceiling),
             "roles": sorted(_allowed(spec, k)),
             "limits": {
-                "window_s": k.window_s,
-                "max_requests": k.max_requests,
-                "max_tokens": k.max_tokens,
+                "window_s": int(k.window_s),
+                "max_requests": _count(k.max_requests),
+                "max_tokens": _count(k.max_tokens),
             }
             if k.window_s
             else None,
         }
         for k in sorted(spec.keys, key=lambda k: k.name)
     ]
-    doc = {
+    return {
         "version": NEUTRAL_VERSION,
         "name": spec.name,
         "admin_key_env": secret_env_name(spec.master_key),
@@ -1124,7 +1132,6 @@ def render_neutral(spec: Spec) -> str:
         if spec.telemetry_reader is not None
         else None,
     }
-    return json.dumps(doc, indent=2, sort_keys=True) + "\n"
 
 
 def _neutral_marker(spec: Spec, digest: str, neutral: str) -> str:
@@ -1254,7 +1261,9 @@ def _audit_neutral(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
     no ``local-only`` key may call a role with a cloud deployment or
     ``leaves_lab`` (amendment R13, which the gateway's loader also refuses); a cloud deployment's
     ``base_url`` is its provider's API; a missing or unknown ceiling reads as ``red`` (R1); no
-    credential environment variable serves two purposes."""
+    credential environment variable serves two purposes; every key's ``roles`` hold the
+    ``fallbacks`` of each role it lists (the contract's invariant); and every field the spec
+    decides is the spec's (:func:`_neutral_spec_problems`)."""
     try:
         doc = json.loads(text)
     except ValueError as exc:
@@ -1287,6 +1296,15 @@ def _audit_neutral(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
                 problems.append(f"role {role} lists itself as a fallback")
             elif f not in roles:
                 problems.append(f"role {role} falls back to {f}, which is not a role here")
+    for k in keys:  # the contract's invariant (the Go loader refuses a key that breaks it)
+        listed = {str(r) for r in k.get("roles") or []}
+        for role in sorted(listed & set(roles)):
+            for f in falls(role):
+                if f not in listed:
+                    problems.append(
+                        f"key {k.get('alias')} may call {role} but not its fallback {f}: a key's "
+                        "roles hold the fallbacks of every role it lists"
+                    )
     for role in sorted(roles):  # a cloud deployment calls its provider's real API, nothing else
         for d in deps(role):
             if not isinstance(d, Mapping) or d.get("locality") != "cloud":
@@ -1395,6 +1413,72 @@ def _audit_neutral(text: str, hosts: set[str], strict: Mapping[str, str], spec: 
     for env, whos in sorted(client.items()):
         if env in upstream:
             problems.append(f"{', '.join(whos)} ({env}) is the upstream key of {upstream[env]}")
+    return problems + _neutral_spec_problems(doc, spec)
+
+
+#: the fields of a deployment the spec's binding decides, compared one by one by the audit
+NEUTRAL_DEPLOYMENT = ("id", "backend", "locality", "protocol", "base_url", "model", "api_key_env")
+#: role and key fields compared with the spec as written (TLP fields have their own checks)
+NEUTRAL_ROLE = ("kind", "max_context_tokens", "fallbacks", "limits", "cost_per_1k_tokens")
+NEUTRAL_KEY = ("key_env", "owner", "roles", "limits")
+
+
+def _same(have: Any, want: Any) -> bool:
+    """Equal as JSON (so ``60.0`` is not ``60``: the Go loader decodes counts strictly)."""
+    return json.dumps(have, sort_keys=True) == json.dumps(want, sort_keys=True)
+
+
+def _neutral_spec_problems(doc: Mapping[str, Any], spec: Spec) -> list[str]:
+    """``gateway.json`` says what the spec renders, field by field: the role set, each role's
+    deployments (what its bindings render), fallbacks (:func:`_fallback_targets`), limits and
+    cost; each key's credential, owner, roles (:func:`_allowed`) and limits; the admin and
+    telemetry credentials.  A file that is internally consistent but is not this spec's (an
+    added fallback, swapped credentials, a deployment moved to another declared host) is refused
+    here, whatever its marker records."""
+    refused = neutral_refusals(spec)
+    if refused:
+        return [f"the spec has no gateway config, so this file is not its: {p}" for p in refused]
+    want = _neutral_doc(spec)
+    problems: list[str] = []
+    for name in ("version", "name", "admin_key_env", "telemetry_reader"):
+        if not _same(doc.get(name), want[name]):
+            problems.append(f"{name} must be {json.dumps(want[name])}, the spec's")
+    have_roles = doc.get("roles") if isinstance(doc.get("roles"), Mapping) else {}
+    want_roles: dict[str, Any] = want["roles"]
+    for role in sorted(set(want_roles) - set(have_roles)):
+        problems.append(f"role {role} of the spec is missing")
+    for role in sorted(set(have_roles) - set(want_roles)):
+        problems.append(f"role {role} is not a role of the spec")
+    for role in sorted(set(have_roles) & set(want_roles)):
+        have, w = have_roles[role], want_roles[role]
+        if not isinstance(have, Mapping):
+            continue  # the schema has said so
+        for name in NEUTRAL_ROLE:
+            if not _same(have.get(name), w[name]):
+                problems.append(f"role {role}: {name} must be {json.dumps(w[name])}, the spec's")
+        deps = have.get("deployments") if isinstance(have.get("deployments"), list) else []
+        if len(deps) != len(w["deployments"]):
+            problems.append(
+                f"role {role}: {len(deps)} deployment(s), but the spec binds "
+                f"{len(w['deployments'])}"
+            )
+        for i, (d, wd) in enumerate(zip(deps, w["deployments"], strict=False)):
+            d = d if isinstance(d, Mapping) else {}
+            for name in NEUTRAL_DEPLOYMENT:
+                if not _same(d.get(name), wd[name]):
+                    problems.append(
+                        f"role {role} deployments[{i}]: {name} must be {json.dumps(wd[name])}, "
+                        "what the spec's binding renders"
+                    )
+    want_keys = {k["alias"]: k for k in want["keys"]}
+    have_keys = {str(k.get("alias")): k for k in doc.get("keys") or [] if isinstance(k, Mapping)}
+    for alias in sorted(set(want_keys) - set(have_keys)):
+        problems.append(f"key {alias} of the spec is missing")
+    for alias in sorted(set(have_keys) & set(want_keys)):
+        for name in NEUTRAL_KEY:
+            have, w = have_keys[alias].get(name), want_keys[alias][name]
+            if not _same(have, w):
+                problems.append(f"key {alias}: {name} must be {json.dumps(w)}, the spec's")
     return problems
 
 
@@ -1913,12 +1997,10 @@ def main(argv: Iterable[str] | None = None) -> int:
 def _stale_neutral(out: Path, files: Mapping[str, str]) -> list[str]:
     """``gateway/gateway.json`` and its marker on disk when this render no longer produces them
     (the spec stopped being expressible).  The JSON file carries no marker of its own, so
-    :func:`~homelabnext.generators.core.write_tree` cannot prune it; its marker is what makes it
-    this generator's to remove."""
+    :func:`~homelabnext.generators.core.write_tree` cannot prune it.  ``gateway/gateway.json`` in
+    this generator's output directory is the gateway's config whether or not its marker survived:
+    a gateway would still read it, so it is stale (and removed) without one."""
     if NEUTRAL in files:
-        return []
-    marker = out / NEUTRAL_MARKER
-    if not marker.is_file() or MARKER not in marker.read_text(encoding="utf-8")[:400]:
         return []
     return [rel for rel in (NEUTRAL, NEUTRAL_MARKER) if (out / rel).is_file()]
 

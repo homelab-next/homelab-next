@@ -116,8 +116,8 @@ embedding role on an `anthropic` deployment, or a role `max_cost` without `cost_
 such a spec `render` still writes `litellm/` (LiteLLM stays the deployed gateway until the cutover,
 ADR-0038 decision 7), writes no `gateway/`, and says why in a `# note:` line of
 `litellm/config.yaml` and on stderr; a `gateway/gateway.json` left from an earlier render is
-removed (`--check` reports it stale), so the lab's gateway never reads a config the spec no longer
-produces.
+removed (`--check` reports it stale), with or without its marker, so the lab's gateway never
+reads a config the spec no longer produces.
 
 **The audit** (`--check`, and every render) reads `gateway.json` itself: it must be schema-valid;
 no local-only or agent role may have a cloud deployment or fall back to a role with one (a
@@ -126,8 +126,20 @@ cloud deployment's base URL is its provider's API; each role's `tlp_ceiling` and
 the spec's; every key is the spec's, with its data tier and ceiling (a missing or unknown label
 reads as `red`) and no role beyond what the spec grants; no key reaches a role whose ceiling is
 below its own, and no `local-only` key reaches a role with a cloud deployment or `leaves_lab`; every
-key role is a role of the file; and no environment name serves two credentials (admin, reader,
-keys, upstream keys).
+key role is a role of the file, and a key that lists a role also lists that role's fallbacks (the
+contract's own invariant); and no environment name serves two credentials (admin, reader, keys,
+upstream keys). It also holds the file to the spec, field by field: the same roles (none added or
+missing); each role's kind, context limit, fallbacks, limits and cost, and each deployment's id,
+backend, locality, protocol, base URL, model and API key environment as its binding renders; each
+key's environment name, owner, roles and limits; the admin and telemetry-reader environment names.
+Counts are compared as JSON (`60.0` is not `60`: the gateway decodes them as integers). A file that
+is consistent on its own but is not the spec's (a fallback added, two key environments swapped, a
+local deployment moved to another declared host) is refused, even when its marker's sha256 was
+rewritten to match. The marker only says the file is generated; the comparison is what proves it.
+
+Packaged examples carry `gateway.json` but not its `.hnx-generated` marker: no dotfile goes into a
+wheel (the sdist drops them, and the two wheels must be identical); `hnx` never reads the marker
+from the package.
 
 ## The locality rule
 
