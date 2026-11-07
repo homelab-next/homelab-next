@@ -158,13 +158,7 @@ class OpenAICompat:
                 raw = read_bounded(resp, self.max_bytes)
             except ResponseTooLarge as exc:
                 raise InferenceError(f"{path}: {exc}") from None
-        try:
-            doc = json.loads(raw)
-        except ValueError as exc:
-            raise InferenceError(f"{path}: reply is not JSON") from exc
-        if not isinstance(doc, dict):
-            raise InferenceError(f"{path}: reply is not an object")
-        return doc
+        return _reply_doc(raw, path)
 
     # ------------------------------------------------------------------ contract
     def models(self) -> list[str]:
@@ -262,13 +256,7 @@ class OpenAICompat:
                 path,
                 code,
             )
-        try:
-            doc = json.loads(raw)
-        except ValueError as exc:
-            raise InferenceError(f"{path}: reply is not JSON") from exc
-        if not isinstance(doc, dict):
-            raise InferenceError(f"{path}: reply is not an object")
-        return doc
+        return _reply_doc(raw, path)
 
     def chat_stream(
         self, model: str, messages: Sequence[dict[str, str]], *, max_tokens: int = 64
@@ -309,6 +297,17 @@ class OpenAICompat:
             return [list(map(float, d["embedding"])) for d in doc["data"]]
         except (KeyError, TypeError, ValueError) as exc:
             raise InferenceError("embeddings: unexpected shape") from exc
+
+
+def _reply_doc(raw: bytes, path: str) -> dict[str, Any]:
+    """A reply body as the JSON object it must be."""
+    try:
+        doc = json.loads(raw)
+    except ValueError as exc:
+        raise InferenceError(f"{path}: reply is not JSON") from exc
+    if not isinstance(doc, dict):
+        raise InferenceError(f"{path}: reply is not an object")
+    return doc
 
 
 def _chat_result(doc: dict[str, Any]) -> ChatResult:

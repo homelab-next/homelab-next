@@ -49,9 +49,7 @@ so the key never reaches another origin; the reply is read bounded.
 
 from __future__ import annotations
 
-import json
 import math
-import numbers
 import os
 import re
 import urllib.error
@@ -61,11 +59,14 @@ from collections.abc import Collection, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from conformance.protocols.inference import TAG, TURN_ID, TurnSourceError, is_name
-from homelabnext._http import ResponseTooLarge, check_plaintext, credential_opener, read_bounded
+from conformance.protocols.inference import TAG, TURN_ID, TurnSourceError
+from homelabnext._http import check_plaintext, credential_opener
 from homelabnext.registry import env_var_name
 from homelabnext.registry.model import secret_env_name
 from homelabnext.status.model import iso
+
+from ._turn_source import cost as cost_or_none
+from ._turn_source import count, fetch_json, name, plain_float, plain_int
 
 __all__ = [
     "DEFAULT_KEY",
@@ -102,20 +103,6 @@ _SECRET_REF = re.compile(r"secret:[a-z0-9][a-z0-9/_.-]{0,127}")
 _TS = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)")
 
 
-def _plain_number(value: object, kind: type) -> Any:
-    """``value`` as a plain ``int`` or ``float`` (``kind``), or None for a bool or another
-    type; the range is checked on the converted value, so a subclass that overrides its
-    comparisons cannot pass a check and reach the socket as something else."""
-    want = numbers.Integral if kind is int else numbers.Real
-    if isinstance(value, bool) or not isinstance(value, want):
-        return None
-    try:
-        out = kind(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return out if type(out) is kind else None
-
-
 class UsageError(TurnSourceError):
     """The usage log could not be read (configuration, transport, refusal, shape)."""
 
@@ -150,10 +137,10 @@ class UsageReader:
             check_plaintext(base_url, credentials=True, allow_plaintext=allow_plaintext)
         except ValueError as exc:
             raise UsageError(str(exc)) from None
-        max_pages = _plain_number(max_pages, int)
+        max_pages = plain_int(max_pages)
         if max_pages is None or max_pages < 1:
             raise UsageError("max_pages is positive")
-        timeout = _plain_number(timeout, float)
+        timeout = plain_float(timeout)
         if timeout is None or not 0 < timeout <= MAX_TIMEOUT:
             raise UsageError(f"timeout is seconds, 0 < timeout <= {MAX_TIMEOUT}")
         self.url = f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}{USAGE_PATH}"
@@ -176,28 +163,16 @@ class UsageReader:
         req = urllib.request.Request(f"{self.url}?{q}", method="GET")
         req.add_header("Accept", "application/json")
         req.add_header("Authorization", f"Bearer {self._key()}")
-        try:
-            with self._opener.open(req, timeout=self.timeout) as resp:
-                status, body = int(resp.status), read_bounded(resp, MAX_PAGE_BYTES)
-        except urllib.error.HTTPError as exc:
-            exc.close()
-            if exc.code in (401, 403):
-                raise UsageError(
-                    f"the gateway refused the key ({exc.code}): {USAGE_PATH} takes the telemetry "
-                    "reader's key"
-                ) from None
-            raise UsageError(f"the usage log answered HTTP {exc.code}") from None
-        except ResponseTooLarge:
-            raise UsageError(f"a usage page is over {MAX_PAGE_BYTES} bytes") from None
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            reason = getattr(exc, "reason", exc)
-            raise UsageError(f"the gateway is unreachable ({type(reason).__name__})") from None
-        if not 200 <= status < 300:
-            raise UsageError(f"the usage log answered HTTP {status}")
-        try:
-            doc = json.loads(body)
-        except ValueError:
-            raise UsageError("the usage log did not answer JSON") from None
+        doc = fetch_json(
+            self._opener,
+            req,
+            timeout=self.timeout,
+            max_bytes=MAX_PAGE_BYTES,
+            error=UsageError,
+            log="the usage log",
+            page="a usage page",
+            refused=f"{USAGE_PATH} takes the telemetry reader's key",
+        )
         if not isinstance(doc, dict) or not isinstance(doc.get("records"), list):
             raise UsageError("the usage log's answer has no records list")
         if not isinstance(doc.get("truncated", False), bool):
@@ -315,14 +290,6 @@ def _ts_of(turn: Mapping[str, Any]) -> float:
     )
 
 
-def _count(v: Any) -> int | None:
-    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
-
-
-def _name(key: str, v: Any) -> str | None:
-    return v if is_name(key, v) else None
-
-
 def turn_from_record(rec: Mapping[str, Any], tags: Iterable[str]) -> list[dict[str, Any]]:
     """The neutral turn records of one usage record: ``count`` of them (module docstring), or
     none when the record carries none of ``tags`` or has no usable turn id, time or status."""
@@ -335,39 +302,34 @@ def turn_from_record(rec: Mapping[str, Any], tags: Iterable[str]) -> list[dict[s
         return []
     if not (isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599):
         return []
-    count = rec.get("count", 1)
-    if not (isinstance(count, int) and not isinstance(count, bool) and 1 <= count <= MAX_COUNT):
-        raise UsageError(f"usage record {rid}: count {count!r} is not 1..{MAX_COUNT}")
+    times = rec.get("count", 1)
+    if not (isinstance(times, int) and not isinstance(times, bool) and 1 <= times <= MAX_COUNT):
+        raise UsageError(f"usage record {rid}: count {times!r} is not 1..{MAX_COUNT}")
     ok = 200 <= status < 300
-    cache = _count(rec.get("cache_read_tokens"))
+    cache = count(rec.get("cache_read_tokens"))
     hit = rec.get("cache_hit")
     cost = rec.get("cost_usd")
     turn = {
         "turn_id": rid,
         "gateway_tag": tag,
         "started_at": iso(start),
-        "duration_ms": _count(rec.get("duration_ms")),
-        "ttft_ms": _count(rec.get("ttft_ms")),
-        "model_role": _name("model_role", rec.get("model_role")),
-        "model": _name("model", rec.get("deployment")),
-        "call_type": _name("call_type", rec.get("call_type")),
+        "duration_ms": count(rec.get("duration_ms")),
+        "ttft_ms": count(rec.get("ttft_ms")),
+        "model_role": name("model_role", rec.get("model_role")),
+        "model": name("model", rec.get("deployment")),
+        "call_type": name("call_type", rec.get("call_type")),
         "status": "success" if ok else "failure",
         "error_code": None if ok else str(status),
-        "input_tokens": _count(rec.get("input_tokens")),
-        "output_tokens": _count(rec.get("output_tokens")),
+        "input_tokens": count(rec.get("input_tokens")),
+        "output_tokens": count(rec.get("output_tokens")),
         "cache_read_tokens": cache,
         "cache_hit": hit if isinstance(hit, bool) and cache is not None else None,
-        "cost_usd": float(cost)
-        if isinstance(cost, int | float)
-        and not isinstance(cost, bool)
-        and math.isfinite(cost)
-        and cost >= 0
-        else None,
+        "cost_usd": cost_or_none(cost),
     }
     out = [turn]
-    for n in range(2, count + 1):
+    for n in range(2, times + 1):
         twin = dict(turn, turn_id=f"{rid}.{n}")
         if not TURN_ID.fullmatch(twin["turn_id"]):
-            raise UsageError(f"usage record {rid}: too long a turn id to count {count} turns")
+            raise UsageError(f"usage record {rid}: too long a turn id to count {times} turns")
         out.append(twin)
     return out

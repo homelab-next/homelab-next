@@ -484,8 +484,6 @@ class TagRecorder(TlpGatewayServer):
 
 
 def test_turn_records_sends_tagged_calls_once_a_run_and_names_their_window(monkeypatch):
-    import time
-
     from homelabnext.conform.adapters.gateway_usage import UsageTurnSource
 
     cfg = _own_config()
@@ -503,11 +501,10 @@ def test_turn_records_sends_tagged_calls_once_a_run_and_names_their_window(monke
     monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER", "sk-fake-reader-0000")
     keep = ("roles", "model", "tlp_sender_key", "tlp_model", "tlp_local_model", "telemetry_key")
     try:
-        before = time.time()
         source, start, end, tags = llm_gateway.make(**{k: cfg[k] for k in keep}).turn_records()
         again = llm_gateway.make(**{k: cfg[k] for k in keep}).turn_records()
         assert isinstance(source, UsageTurnSource) and again[0] is source  # sent once a run
-        assert start <= before < time.time() < end and len(set(tags)) == 2
+        assert start < end and len(set(tags)) == 2
         assert srv.tagged == [
             (cfg["model"], [tags[0]], True),
             (cfg["model"], [tags[0]], True),

@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from homelabnext.registry.model import secret_env_name
@@ -68,6 +68,7 @@ class GatewayTarget(OpenAICompat):
         failover_model: str | None = None,
         telemetry_key: str | None = None,
         turn_model: str | None = None,
+        clock: Callable[[], float] = time.time,
     ):
         read = env_secret(key_env)
         super().__init__(
@@ -89,6 +90,7 @@ class GatewayTarget(OpenAICompat):
         self._telemetry = telemetry_key
         self._turn_model = turn_model or model
         self._turns: tuple | None = None
+        self._clock = clock
         if model:
             self.model = model
         if embed_model:
@@ -160,7 +162,7 @@ class GatewayTarget(OpenAICompat):
             )
             tags = [f"hnx-conform-{run_token()}-a", f"hnx-conform-{run_token()}-b"]
             admin = self._keyed(self._key_env)
-            start = math.floor(time.time())
+            start = math.floor(self._clock())
             for tag in (tags[0], tags[0], tags[1]):
                 admin.chat_fields(self._turn_model, _TURN_PROMPT, [("X-HNX-Tag", tag)])
             if self._tlp is not None:
@@ -173,7 +175,7 @@ class GatewayTarget(OpenAICompat):
                     except InferenceError as exc:
                         if exc.status != 403:
                             raise
-            end = math.ceil(time.time()) + 1
+            end = math.ceil(self._clock()) + 1
             self._turns = _SENT[sent] = (source, float(start), float(end), tags)
         return self._turns
 
