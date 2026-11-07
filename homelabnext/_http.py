@@ -7,16 +7,23 @@
 * :func:`safe_opener` follows a redirect only to the same scheme, host and port, so an
   ``Authorization`` header is never replayed to another origin and https is never downgraded,
   and only for a GET or HEAD: any other method's 3xx is the ``HTTPError`` (urllib would turn a
-  POST answered 301/302/303 into a GET with no body).  A ``303`` after a write is therefore
-  reported as an error even though the server processed the write; the events forwarder's
-  retry of it is safe because every send carries an idempotency key.
-* No opener here uses a proxy from the environment: ``HTTP(S)_PROXY`` would receive each
-  request's ``Authorization`` (or ``X-Vault-Token``) header, in clear for http.  Lab endpoints
-  are reached directly; a deployment that needs an egress proxy configures it explicitly, not
-  via ``HTTP(S)_PROXY``.
+  POST answered 301/302/303 into a GET with no body).  A ``303`` after a write the server
+  processed is therefore reported as an error; no caller retries a 3xx, so a manual re-run of
+  a create that is not idempotent may duplicate it.
+* No opener here uses a proxy from the environment: ``HTTP(S)_PROXY`` (and so ``HTTPS_PROXY``
+  too) would receive each request's ``Authorization`` (or ``X-Vault-Token``) header, in clear
+  for http.  Lab endpoints are reached directly.  A deployment that needs an egress proxy says
+  so explicitly: it passes the client an ``opener=`` built with its own
+  ``urllib.request.ProxyHandler`` (the events forwarder, the notify sender, the lake clients),
+  or a ``transport=`` for the model client; a model call to a cloud provider goes through the
+  LLM gateway, whose ``-upstream-proxy`` is that path's proxy.  The events forwarder, the
+  notify sender or a direct-mode model client pointed at a public host behind an egress proxy
+  need that.
 * :func:`no_redirect_urlopen` follows no redirect (a 3xx surfaces as an ``HTTPError``) and uses
   no proxy, for a POST whose 2xx answer is read as an acknowledgement and which may carry a
-  credential (the events forwarder, notify).
+  credential (the events forwarder, notify).  A ``303`` after a write the server processed is
+  reported as an error here too; the events forwarder's retry of it is safe because every
+  send carries an idempotency key.
 * :func:`credential_opener` follows no redirect and uses no proxy, for a request carrying a key
   (the st2 bridge's webhook, the gateway's spend-log reader).
 * :func:`read_bounded` reads at most ``limit`` bytes and refuses a longer reply instead of
@@ -146,7 +153,8 @@ def safe_opener() -> urllib.request.OpenerDirector:
 
 
 def safe_urlopen(req: Any, timeout: float | None = None) -> Any:
-    """Drop-in for ``urllib.request.urlopen`` with :class:`SameOriginRedirectHandler`."""
+    """Drop-in for ``urllib.request.urlopen`` with :class:`SameOriginRedirectHandler` and no
+    proxy."""
     return safe_opener().open(req, timeout=timeout)
 
 

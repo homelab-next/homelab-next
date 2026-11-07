@@ -230,7 +230,10 @@ answers: a matching model passes; another context, an unreported context, or ano
 That probe asks each backend directly (it checks a binding's model id and loaded context, which
 the gateway does not expose), so against a keyed vLLM it must carry the backend key
 (`probe(..., api_key=...)`, `check_serving(..., api_key=...)`); without it the answer is a 401 and
-the verdict `error`. Consumers, and `hnx golden run` by default, go through the gateway with their
+the verdict `error`. The key goes over plain http to a non-loopback backend only with
+`allow_plaintext=True` (`--allow-plaintext` beside `hnx golden`'s `--key-env`); otherwise the
+call is refused before anything is sent and the verdict is `error`. The model client follows no
+redirect and ignores `HTTP_PROXY`/`HTTPS_PROXY`. Consumers, and `hnx golden run` by default, go through the gateway with their
 own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
 
 ### `open_webui`

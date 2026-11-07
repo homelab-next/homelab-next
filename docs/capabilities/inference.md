@@ -878,13 +878,14 @@ resolver produced); there is no default.  An optional `auth` callable returns an
 `Authorization` header value at request time so a secret is never held in the object.  With
 `auth` set, plain `http` to a non-loopback host is refused unless `allow_plaintext=True`;
 redirects are followed only within the same origin, and only for GET/HEAD; writes follow
-none; replies are read up to `max_bytes`.
+none; no proxy is used (`HTTP_PROXY`/`HTTPS_PROXY` are ignored); replies are read up to
+`max_bytes`.
 
 `OpenAICompat.chat_fields` sends a chat with extra request header fields, each sent as a
 field of its own even when a name repeats (`X-HNX-TLP` twice is two fields, which `urllib`
-cannot send): that request goes over `http.client` directly, follows no redirect, and
-ignores `HTTP_PROXY`/`HTTPS_PROXY` (it connects to the gateway itself, so a header the test
-depends on is never rewritten or merged by a proxy).
+cannot send): that request goes over `http.client` directly and follows no redirect; it
+connects to the gateway itself, so a header the test depends on is never rewritten or merged
+by a proxy.
 
 </details>
 

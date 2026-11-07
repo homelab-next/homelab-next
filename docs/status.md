@@ -70,6 +70,9 @@ credential by secret-store name, `{secret: "secret:<name>", header: St2-Api-Key}
 configuration (a nested name is a subdirectory; a name that resolves outside the directory
 (absolute, `..`, or a symlink pointing out) is not read). A reference that does not resolve is that source's error: it is never polled
 without its credential, and the value never appears in an error, the state file or the page.
+The HTTP kinds ignore `HTTP_PROXY`/`HTTPS_PROXY` and connect to each registry service directly
+(a proxy from the environment would receive that credential); a redirect is followed only within
+the same origin.
 
 ### Mappings
 
