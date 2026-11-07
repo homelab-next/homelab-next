@@ -14,7 +14,8 @@ R10, R10', R11 and R17) and maps each record to the neutral turn record
 ``HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER``): the key the rendered config's
 ``telemetry_reader`` names, which may call ``/v1/usage`` and no model.  The gateway also lets its
 admin key read the route; this reader refuses the master key by the variable it is delivered in,
-as the spend-log reader does, so the hub never holds a key that can call every model.
+as the spend-log reader does, and a key whose value is the admin key's (the value of
+``HNX_SECRET_LLM_GATEWAY_MASTER_KEY``, when that is set), so the hub never holds a key that can call every model.
 
 **Paging.** One read is ``[start, end]`` in whole unix seconds (``end`` included) for one tag;
 the gateway returns the earliest 10000 matching records by ``ts`` and ``"truncated": true`` when
@@ -39,8 +40,11 @@ verdict, the contract's ``error_code`` word -- is never read out.
 says how many refusals it stands for.  The turn record has no such field and a consumer counts
 turns, so a record of ``count`` *n* becomes *n* turns: the first keeps the record's ``turn_id``,
 the others are ``<turn_id>.2`` to ``<turn_id>.<n>`` (stable across reads, and still turn ids).
-A refusal carries no tokens or cost, so the expansion adds turns, never spend; a ``count`` above
-:data:`MAX_COUNT` is refused as not the gateway's.
+A refusal carries no tokens or cost, so the expansion adds turns, never spend: a record of
+``count`` above 1 that is a 2xx or carries a token count or cost other than null or 0 is refused
+as not the gateway's, and so is a ``count`` above :data:`MAX_COUNT`, a page of more than
+:data:`MAX_RECORDS` records, and a read that would yield more than ``MAX_RECORDS * max_pages``
+turns.
 
 Transport as the spend-log reader's: https with verification (``ca_file`` for a private CA), plain
 http only to loopback or with ``allow_plaintext``; no redirect is followed and no proxy is used,
@@ -151,10 +155,16 @@ class UsageReader:
         return f"UsageReader({self.url!r}, key={self.key_ref!r})"
 
     def _key(self) -> str:
-        var = secret_env_name(self.key_ref)
-        value = (os.environ if self._env is None else self._env).get(var, "")
+        env = os.environ if self._env is None else self._env
+        var, admin = secret_env_name(self.key_ref), secret_env_name(MASTER_KEY)
+        value = env.get(var, "")
         if not value:
             raise UsageError(f"the gateway key is not set: {var} ({self.key_ref})")
+        if env.get(admin) and value == env.get(admin):
+            raise UsageError(
+                f"{var} holds the same value as {admin}, the gateway's admin key: give the "
+                "reader the telemetry reader's own key"
+            )
         return value
 
     def page(self, start: int, end: int, tag: str) -> dict[str, Any]:
@@ -177,6 +187,11 @@ class UsageReader:
             raise UsageError("the usage log's answer has no records list")
         if not isinstance(doc.get("truncated", False), bool):
             raise UsageError("the usage log's truncated is not a boolean")
+        if len(doc["records"]) > MAX_RECORDS:
+            raise UsageError(
+                f"a usage page holds {len(doc['records'])} records, more than the gateway's "
+                f"cap of {MAX_RECORDS}: not the gateway's answer"
+            )
         return doc
 
     def records(self, start: float, end: float, tag: str) -> Iterator[Mapping[str, Any]]:
@@ -216,12 +231,23 @@ class UsageTurnSource:
     def __repr__(self) -> str:
         return f"UsageTurnSource({self.reader!r})"
 
+    @property
+    def max_turns(self) -> int:
+        """The most turns one :meth:`turns` call yields: a full window's records
+        (``MAX_RECORDS * max_pages``), whatever ``count`` expands them to."""
+        return MAX_RECORDS * self.reader.max_pages
+
     def turns(self, start: float, end: float, tags: Collection[str]) -> Iterator[dict[str, Any]]:
         seen: set[str] = set()
         for tag in sorted({t for t in tags if isinstance(t, str) and TAG.fullmatch(t)}):
             for rec in self.reader.records(start, end, tag):
                 for turn in turn_from_record(rec, {tag}):
                     if turn["turn_id"] not in seen and start - 1 < _ts_of(turn) < end + 1:
+                        if len(seen) >= self.max_turns:
+                            raise UsageError(
+                                f"more than {self.max_turns} turns in one read: read a "
+                                "narrower window"
+                            )
                         seen.add(turn["turn_id"])
                         yield turn
 
@@ -290,6 +316,10 @@ def _ts_of(turn: Mapping[str, Any]) -> float:
     )
 
 
+#: the record fields that spend: an aggregated refusal (count > 1) holds none of them but null or 0
+_SPEND = ("input_tokens", "output_tokens", "cache_read_tokens", "cost_usd")
+
+
 def turn_from_record(rec: Mapping[str, Any], tags: Iterable[str]) -> list[dict[str, Any]]:
     """The neutral turn records of one usage record: ``count`` of them (module docstring), or
     none when the record carries none of ``tags`` or has no usable turn id, time or status."""
@@ -306,6 +336,14 @@ def turn_from_record(rec: Mapping[str, Any], tags: Iterable[str]) -> list[dict[s
     if not (isinstance(times, int) and not isinstance(times, bool) and 1 <= times <= MAX_COUNT):
         raise UsageError(f"usage record {rid}: count {times!r} is not 1..{MAX_COUNT}")
     ok = 200 <= status < 300
+    if times > 1:  # only refusals are aggregated (R17), and a refusal spends nothing
+        spent = [k for k in _SPEND if rec.get(k) not in (None, 0)]
+        if ok or spent:
+            why = f"status {status}" if ok else ", ".join(spent)
+            raise UsageError(
+                f"usage record {rid}: count {times} on a record that is not a refusal ({why}): "
+                "only refusals are aggregated, and they spend no tokens or cost"
+            )
     cache = count(rec.get("cache_read_tokens"))
     hit = rec.get("cache_hit")
     cost = rec.get("cost_usd")

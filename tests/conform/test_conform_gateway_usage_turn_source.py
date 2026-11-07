@@ -12,11 +12,20 @@ import json
 
 import pytest
 
-from conformance.fakes.gateway_usage_api import KEY_ENV, NEVER, TAGS, WINDOW, FakeUsage, records
+from conformance.fakes.gateway_usage_api import (
+    KEY_ENV,
+    NEVER,
+    READER_KEY,
+    TAGS,
+    WINDOW,
+    FakeUsage,
+    records,
+)
 from conformance.protocols.inference import TurnRecordsGateway, TurnSource, turn_problems
 from conformance.suites.inference import SUITE
 from homelabnext.conform.adapters.gateway_usage import (
     MAX_COUNT,
+    MAX_RECORDS,
     UsageError,
     UsageReader,
     make,
@@ -205,3 +214,52 @@ def test_a_missing_key_is_named_by_its_variable():
     reader = UsageReader("https://gw.example.internal", env={})
     with pytest.raises(UsageError, match="HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER"):
         reader.page(0, 1, "run-0001")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"status": 200},  # a served call is never aggregated
+        {"status": 204},
+        {"input_tokens": 6},
+        {"output_tokens": 1},
+        {"cache_read_tokens": 4},
+        {"cost_usd": 0.001},
+    ],
+)
+def test_an_aggregated_record_that_is_not_a_spendless_refusal_is_refused(change):
+    rec = next(r for r in records() if r["count"] == 3) | change
+    with pytest.raises(UsageError, match="not a refusal"):
+        turn_from_record(rec, ["run-0002"])
+
+
+def test_an_aggregated_refusal_with_zero_spend_is_expanded():
+    rec = next(r for r in records() if r["count"] == 3) | {"input_tokens": 0, "cost_usd": 0}
+    assert len(turn_from_record(rec, ["run-0002"])) == 3
+
+
+def test_a_page_over_the_gateways_cap_is_refused():
+    base = records()[0]
+    recs = [base | {"turn_id": f"req-{i:024d}"} for i in range(MAX_RECORDS + 1)]
+    with FakeUsage(recs, cap=MAX_RECORDS + 1) as gw, pytest.raises(UsageError, match="cap of"):
+        list(make(base_url=gw.url, env=KEY_ENV).turns(LO, HI, ["run-0001"]))
+
+
+def test_one_read_yields_at_most_a_full_windows_turns():
+    base = next(r for r in records() if r["count"] == 3)
+    recs = [
+        base | {"turn_id": f"req-{i:024d}", "gateway_tag": "run-0001", "count": MAX_COUNT}
+        for i in range(2)
+    ]
+    with FakeUsage(recs) as gw:
+        source = make(base_url=gw.url, env=KEY_ENV, max_pages=1)
+        with pytest.raises(UsageError, match=f"more than {MAX_RECORDS} turns"):
+            list(source.turns(LO, HI, ["run-0001"]))
+
+
+def test_a_reader_key_whose_value_is_the_admin_keys_is_refused():
+    env = KEY_ENV | {"HNX_SECRET_LLM_GATEWAY_MASTER_KEY": READER_KEY}
+    with FakeUsage() as gw, pytest.raises(UsageError, match="admin key") as exc:
+        list(make(base_url=gw.url, env=env).turns(LO, HI, TAGS))
+    assert READER_KEY not in str(exc.value)
+    assert not gw.requests  # refused before the key was sent
