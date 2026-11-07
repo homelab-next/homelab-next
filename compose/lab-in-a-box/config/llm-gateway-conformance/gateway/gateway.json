@@ -137,7 +137,7 @@
           "base_url": "http://inference-small.svc.example.internal:8000",
           "id": "spare-1",
           "locality": "local",
-          "model": "example-not-served",
+          "model": "conformance-spare",
           "protocol": "openai"
         }
       ],

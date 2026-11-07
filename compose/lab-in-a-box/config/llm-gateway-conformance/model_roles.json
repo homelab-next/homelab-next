@@ -47,7 +47,7 @@
       "bindings": [
         {
           "backend": "svc:inference-small",
-          "model_id": "example-not-served"
+          "model_id": "conformance-spare"
         }
       ],
       "fallback": "mdl:fast-classifier",

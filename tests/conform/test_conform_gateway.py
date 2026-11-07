@@ -11,6 +11,7 @@ Postgres: ``400 No connected db.``; Bifrost: provider-prefixed ``/v1/models`` id
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -470,6 +471,11 @@ def test_the_own_gateway_target_agrees_with_the_conformance_gateway_config():
     assert later and roles[first]["limits"]["max_tokens"] == 1
     # what must have served it, read back from the turn record: the later fallback's deployment
     assert cfg["failover_served"] == roles[later[-1]]["deployments"][0]["id"]
+    # the refused fallback is on a model the fake serves: a gateway that called it would be
+    # served by it, so the read-back (which names the deployment) is what tells the two apart
+    spare = roles[first]["deployments"][0]
+    assert spare["id"] != cfg["failover_served"]
+    assert spare["model"] in DOCUMENTED_FAKE_MODELS
     assert doc["telemetry_reader"]["key_env"] == secret_env_name(cfg["telemetry_key"])
     assert all(not str(v).startswith(("http://", "https://")) for v in cfg.values())
     assert "sk-" not in OWN_TARGET.read_text()
@@ -580,3 +586,26 @@ def test_the_skipped_fallback_is_proved_by_what_served_the_call(served, status):
     assert r.status == status, r
     if status == "fail":
         assert "the refused fallback was called" in r.evidence
+
+
+def _documented_fake_models() -> list[str]:
+    """The fake's ``--model`` list in docs/llm-gateway.md's own-gateway recipe."""
+    text = (ROOT / "docs" / "llm-gateway.md").read_text()
+    recipe = text.split("## Running the suite against the lab's own gateway", 1)[1]
+    block = recipe.split("```bash", 1)[1].split("```", 1)[0]
+    line = block[block.index("openai_server.py") :].split("&", 1)[0]
+    return re.findall(r"--model\s+(\S+)", line)
+
+
+DOCUMENTED_FAKE_MODELS = _documented_fake_models()
+
+
+def test_the_documented_fake_serves_every_conformance_deployment_but_the_dead_one():
+    doc = json.loads((CONFORMANCE / "gateway" / "gateway.json").read_text())
+    want = {
+        d["model"]
+        for r in doc["roles"].values()
+        for d in r["deployments"]
+        if d["backend"] != "inference-down"  # nothing listens there, on purpose
+    }
+    assert want == set(DOCUMENTED_FAKE_MODELS), (sorted(want), DOCUMENTED_FAKE_MODELS)

@@ -14,15 +14,17 @@
 #   failover        its one deployment is on a port nothing listens on; its fallbacks are spare
 #                   (refused at admission: a token limit below any reservation) and then
 #                   fast-classifier, which serves it;
-#   spare           never called: on the fake it names a model the fake does not serve, so a
-#                   gateway that tried it would answer 404.
+#   spare           never called: refused at admission by its own limit.  Its model is one the
+#                   fake serves (conformance-spare), so a gateway that called it anyway would be
+#                   served by spare-1, which the suite reads back from the usage records.
 name: conformance
 roles: model_roles.json
 domain: example.internal
 master_key: secret:llm-gateway/master-key
 database_url: secret:llm-gateway/database-url
 backends:
-  # the fake inference server serves conformance-chat, example-embed-8d and example-cloud-chat
+  # the fake inference server serves conformance-chat, conformance-spare, example-embed-8d and
+  # example-cloud-chat
   svc:inference-small: {locality: local, port: 8000}
   # nothing listens here: a connection error, which moves on to the next deployment
   svc:inference-down: {locality: local, port: 1}

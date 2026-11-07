@@ -357,8 +357,9 @@ gives it the conformance gateway spec, the test-only render and a target:
   table (`model_roles.json` beside it): `fast-classifier` and `embedder` on the fake,
   `cloud-reasoner` (a cloud `openai` deployment pointed at the fake by `cloud_base_url`, so it
   leaves the lab at ceiling `clear`, falling back to `fast-classifier`), and `failover` (its one
-  deployment on a port nothing listens on, then `spare`, refused by a token limit of 1 and naming a
-  model the fake does not serve, then `fast-classifier`). Its keys are `conformance-throttle` (3 a
+  deployment on a port nothing listens on, then `spare`, refused by a token limit of 1 although
+  the fake serves its model, then `fast-classifier`). A gateway that called `spare` anyway would be
+  served by `spare-1`, and the skip check's read-back of the call's turn record catches it. Its keys are `conformance-throttle` (3 a
   minute), `conformance-clear` (cloud-allowed, ceiling `clear`), `conformance-red` (local-only,
   ceiling `red`, scoped away from `cloud-reasoner`) and the telemetry reader. Its test-only render
   is committed beside it (`gateway/`), held by `make gateway-check`.
@@ -374,7 +375,8 @@ spec=compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml
 lo=127.0.0.1  # no-raw-endpoint: allow the conformance mode serves loopback only
 hnx gen gateway render $spec "$scratch" --conformance --conformance-host $lo
 python3 conformance/fakes/openai_server.py --port 8000 \
-  --model conformance-chat --model example-embed-8d --model example-cloud-chat &
+  --model conformance-chat --model conformance-spare --model example-embed-8d \
+  --model example-cloud-chat &
 # every *_env the rendered gateway.json names, each client key at least 32 bytes and distinct:
 # HNX_SECRET_LLM_GATEWAY_MASTER_KEY, ..._KEY_CONFORMANCE_THROTTLE, ..._KEY_CONFORMANCE_CLEAR,
 # ..._KEY_CONFORMANCE_RED, ..._KEY_TELEMETRY_READER, ..._CONFORMANCE_CLOUD_KEY (sent to the fake)

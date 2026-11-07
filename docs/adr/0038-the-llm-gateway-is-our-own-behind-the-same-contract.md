@@ -219,10 +219,10 @@ Two consequences for decision 7's acceptance run:
   stricter than the role that was admitted: no rendered config can make the gateway skip a
   fallback for TLP. The conformance spec (`compose/lab-in-a-box/config/llm-gateway-conformance`)
   therefore has a role whose deployment fails and whose first fallback is refused at admission by
-  its own token limit (R16) and would answer 404 if it were called; the suite's
-  `fallback-refused-at-admission-skipped` check passes only if that fallback is skipped and the
-  next one serves, and reads the call back from the usage records to see that the next one's
-  deployment served it. The TLP-refused fallback is covered by the gateway's own unit tests and the shared
+  its own token limit (R16), on a model the fake inference server does serve, so a gateway that
+  called it anyway would be answered by it; the suite's `fallback-refused-at-admission-skipped`
+  check passes only if the call is served and its usage record, read back by its tag, names the
+  next fallback's deployment, never the refused one's. The TLP-refused fallback is covered by the gateway's own unit tests and the shared
   vectors.
 - **The embeddings checks use their own role** (`embed_model`, decision 7 above), and the
   lab-in-a-box role table gains an `embedder` role served by the fake inference server, so the
