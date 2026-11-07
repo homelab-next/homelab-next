@@ -37,10 +37,10 @@ updates:
     commit-message:
       prefix: "ci"
 
-  # The Go modules and their linters' modules.  orchestrator/ is standard library only, so its
-  # entry raises nothing until it takes a dependency (ADR-0011 decision 4 and CONTRIBUTING.md
-  # rule 8 review that); orchestrator/tools pins staticcheck and govulncheck, and a bump that adds
-  # a module also needs its tools/licences.yml entry (make licence-check).
+  # The Go modules and their linters' modules.  orchestrator/ links golang.org/x/sys and
+  # modernc.org/sqlite (with the modules it pulls in), each reviewed under ADR-0011 decision 4 and
+  # CONTRIBUTING.md rule 8; orchestrator/tools pins staticcheck and govulncheck. A bump that adds a
+  # module also needs its tools/licences.yml entry (make licence-check).
   - package-ecosystem: gomod
     directories:
       - "/orchestrator"

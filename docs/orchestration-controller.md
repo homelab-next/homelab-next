@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:7730f9b1fec1c96b
+summary_of: outline:sha256:3702702006ea4c0a
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -105,9 +105,10 @@ The patches are proposals: nothing was committed to the controller.
 
 Other findings, not MUST failures:
 
-- **Idempotency keys are global and never expire** (`internal/store/store.go:57-58`). A repeated
-  key returns the first run even when the `agent_key` differs. The adapter therefore namespaces
-  every key per run.
+- **Idempotency keys are global and never expire** in the private controller at `a52a1c4`. A
+  repeated key returns the first run even when the `agent_key` differs. The adapter therefore
+  namespaces every key per run. In this repository's store a key is scoped to its submitter
+  (`orchestrator/internal/store`, below).
 - **A submit cannot be held.** A cancel sent right after a submit races the next 2 s tick, so
   `cancel-before-start-never-runs` can in principle flake against a live controller.
 - **No authentication**, and **no list or events endpoint**. Listing runs is now an optional
@@ -273,17 +274,20 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
 ADR-0026 stage 2 brings the controller's core into the Go module `orchestrator/`, one series of
 pull requests at a time; the lab keeps running the private controller, frozen, until the cutover
 after stage 3 (the ADR's amendment of 2026-11-07). Each package is rewritten for this repository,
-never copied with its history. The packages in so far are leaves, which import nothing else of the
-controller:
+never copied with its history. The packages in so far are the leaves, which import nothing else of
+the controller, and the store, which imports only `events`:
 
 | Package | What it does |
 |---|---|
 | `orchestrator/internal/safefs` | Reads, lists and writes under one fixed root so that the object reached is the one the relative path names: no symbolic link, hard link, mount crossing or swapped component redirects it, a write never opens an existing inode, and a root on a network or FUSE filesystem is refused (`SAFEFS_ALLOW_REMOTE_FS=1` accepts the risk). Its two bind-mount tests need root and are registered in `orchestrator/skips.yml`. |
-| `orchestrator/internal/pathscope` | Decides on path strings whether a path lies in a scope (writable and readable prefixes, segment by segment, no wildcard). A tree's zones are configuration (`pathscope.Zones`: `denied_roots`, `findings_root`, `shared_write`, `reserved_names`), with no defaults; the package names no zone of its own. Zones work only once validated (`NewZones`), and an empty `denied_roots` is refused unless `allow_no_denied_roots` is set. |
+| `orchestrator/internal/pathscope` | Decides on path strings whether a path lies in a scope (writable and readable prefixes, segment by segment, no wildcard). A tree's zones are configuration (`pathscope.Zones`: `denied_roots`, `findings_root`, `shared_write`, `reserved_names`), with no defaults; the package names no zone of its own. Zones work only once validated (`NewZones`), and an empty `denied_roots` is refused unless `allow_no_denied_roots` is set. A validated value decides on its own sealed copy: changing a field or a list element afterwards makes it refuse everything, as an unvalidated one does, until it is validated again. |
 | `orchestrator/internal/metrics` | The Prometheus text exposition writer, standard library only, and the metric name prefix. |
-| `orchestrator/internal/events` | The controller's CloudEvents envelope, its derived id (the same as `homelabnext.events.envelope.derive_event_id`, non-ASCII text included) and the durable outbox sender. Its tests validate what it builds against `schemas/events` in place, with a validator that is itself checked against the schemas' examples and negatives. |
+| `orchestrator/internal/events` | The controller's CloudEvents envelope, its derived id (the same as `homelabnext.events.envelope.derive_event_id`, non-ASCII text included) and the durable outbox sender. Its tests validate what it builds against `schemas/events` in place, with a validator that is itself checked against the schemas' examples and negatives. A failed delivery's logged detail names the forwarder URL redacted (no query, fragment or password), whatever the transport's error quotes. |
+| `orchestrator/internal/store` | The controller's durable state in one SQLite database (`modernc.org/sqlite`, no cgo): the jobs table and its state machine, every transition a compare-and-swap on the row's state; submits whose idempotency check, shadow back-pressure (one unfinished shadow job per agent) and insert share one write transaction; resubmits (`retry_of_run_id`: one retry per run, only after an environment failure class, replaying the parent's task); the event outbox, filled in the transaction of the state change it describes and drained by `events`; the operators' backend drains; startup reconciliation of orphaned jobs; and the instance lock (`flock` on `<db>.lock`), so two controllers never share a database. An idempotency key (at most 128 bytes) is scoped to its submitter and never released: one submitter's key is unique across every job the database has held, however old, and another submitter's key neither finds nor blocks it. |
 
-The module now has third-party dependencies (`golang.org/x/sys` first) and a `go.sum`. The gateway
+The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, and with the
+store `modernc.org/sqlite` v1.58.0 and the modules it pulls in, each listed as `linked` in
+`tools/licences.yml`. The gateway
 stays standard library only: `TestGatewayDependsOnlyOnTheStandardLibrary`
 (`orchestrator/cmd/gateway`) fails when `go list -deps -test` of its packages names anything else.
 
@@ -304,8 +308,12 @@ packages that hold them.
 |---|---|---|
 | Metric name prefix | `llmorch_` | `hnx_orchestrator_` (`metrics.Prefix`) |
 | Default event source | `svc:llm-orchestrator` | `svc:orchestrator` (`events.DefaultSource`) |
+| The jobs table's session id column | `hermes_session_id` | `session_id` (migrated in place, below) |
 
-Nothing emits either name yet: the module has no controller binary until stage 2's last pull
+The job API's `session_id` field, with its one release of both names, is the API package's
+concern; the store holds one column.
+
+Nothing emits the metric or event name yet: the module has no controller binary until stage 2's last pull
 request. The two names overlap differently at the cutover (the ADR's amendment).
 
 **Metrics are dual-emitted.** The release the lab first deploys the controller from writes every
@@ -343,6 +351,73 @@ consumers of `svc:llm-orchestrator` in this repository, which move before the ol
 - the docs that quote the source: [StackStorm](stackstorm.md),
   [orchestration telemetry](orchestration-telemetry.md), `docs/checklist.md` (O-11) and
   [ADR-0025](adr/0025-orchestration-telemetry.md).
+
+### The store's migration, behind a backup
+
+`store.Open` creates a new database whole. An existing one is migrated in place to the current
+schema: the session id column is renamed (`ALTER TABLE jobs RENAME COLUMN hermes_session_id TO
+session_id`, every value kept), each column added since the first schema (`task_description`
+among them) is added, a missing table or index is created, and the global idempotency index is
+replaced by one scoped to the submitter. The private controller's passthrough column
+`request_body` is left where it is, with its values, and never read. A jobs table holding both
+session id columns is refused, never guessed at, and so is a file that is not a controller
+database.
+
+The ADR's amendment requires a backup before every run of the migration against a live database,
+checked restorable first and protected like the database itself. The store enforces its part:
+
+- `Open` refuses to change the schema of a database that already holds tables
+  (`ErrBackupRequired`, naming the pending steps); `store.PendingMigrations` lists them without
+  changing anything.
+- `store.BackupForMigration(db, backup)` writes the backup with `VACUUM INTO` (one consistent
+  snapshot, frames still in the write-ahead log included) into a new owner-only (`0600`) file
+  that must not exist, in a directory only its owner can write, keeps that file's descriptor and
+  verifies it is still the file SQLite wrote and the file verified. Both paths are made absolute
+  first, so neither can reach SQLite as a `file:` URI.
+- `store.OpenWith(db, store.Options{MigrationBackup: backup})` migrates only once the backup
+  verifies, inside the migration's own write transaction, so nothing changes the database between
+  the check and the migration. The backup must be a regular file with one link, in a directory
+  only its owner can write, owned by the database's owner, with no permission the database file
+  lacks, and not the database or one of its side files under another name (a hard link, a path
+  through a linked directory). It must also open, pass `PRAGMA integrity_check`, hold exactly the
+  database's schema and rows (a digest of both), and still be the same, unchanged file once that
+  is known. A stale or unsafe backup is refused (`ErrBackupMismatch`).
+- The whole migration is one transaction: a refused or failed one (a test injects a failure
+  after the rename) leaves the database as it was.
+
+Run both steps under the instance lock, so no controller changes the database in between:
+`release, _ := store.LockInstance(db)`, then `BackupForMigration`, then
+`OpenWith(db, store.Options{MigrationBackup: backup, InstanceLockHeld: true})`. `OpenWith` takes
+the lock itself otherwise (from the database's resolved path, so two spellings of one database
+share it) and refuses `InstanceLockHeld` when it finds the lock free. The lock is `flock`, which
+holds only on a local filesystem: the database never belongs on a network share.
+
+**Restore** (the return to the previous controller after a migration that ran): stop the
+controller; copy the backup over the database, owner-only (`install -m 0600 backup db`); remove the
+database's `-wal` and `-shm` files; start the previous controller on it. Keep the backup, owner-only,
+until the new controller has run its first release.
+
+**The database's own permissions.** A new database is created owner-only (`0600`) before SQLite
+opens it, so it and its `-wal` and `-shm` files (SQLite gives them the database's mode) never take
+the process umask; an existing one, or a side file, that grants its group or others anything is
+refused (`ErrDatabasePermissions`) unless `Options.AllowSharedPermissions`. The controller's
+systemd unit runs with `UMask=0077` and `StateDirectoryMode=0700`; the example unit lands with the
+binary (PR 2.7).
+
+The tests build databases from two frozen schemas (`orchestrator/internal/store/testdata`, their
+sha256 pinned): the first one, a reconstruction from the earlier controller's base table and its
+in-place additions, and the last one before the rename, with every added column.
+
+**Left to the packages that call the store** (no code here):
+
+- PR 2.7 (`cmd/controller`): the startup path for a database with a pending migration. The
+  controller refuses to start with `ErrBackupRequired` and its pending steps, and a flag (for
+  example `--migrate-backup PATH`) takes the backup and migrates under the instance lock.
+- PR 2.6 (the API): an unknown agent key is a 404 before `CreateResubmit` runs; a replayed submit
+  is answered with `FindByIdempotencyKey(submitter, key)`; and the API caps the task and response
+  sizes it accepts and stores and sets a retention policy for finished jobs. The store has
+  neither: idempotency keys are never released, so a retention policy must keep a job's key as
+  long as a replay of it could arrive.
 
 ## Additive `orchestration` contract features
 

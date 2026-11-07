@@ -4,6 +4,7 @@ package events
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -233,5 +234,48 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not reached within 5s")
 		}
 		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+type failingTransport struct{ err error }
+
+func (f failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+// An unreachable forwarder's detail, which the sender logs, names the URL redacted: never its
+// query, fragment or password, whatever the transport's error quotes.
+func TestPost_UnreachableDetailRedactsTheURL(t *testing.T) {
+	raw := "https://svc:p4ssw0rd@events.example.internal/ingest?sig=s3cret&x=1#frag-s3cret"
+	for name, terr := range map[string]error{
+		"plain":       errors.New("dial tcp: connection refused"),
+		"quoting url": errors.New("proxy refused " + raw),
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := normalizeConfig(Config{URL: raw, HTTP: &http.Client{Transport: failingTransport{terr}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, detail := post(cfg, "evt-x", []byte(`{}`))
+			if res != transient {
+				t.Fatalf("outcome %d, want transient", res)
+			}
+			for _, secret := range []string{"s3cret", "p4ssw0rd", "sig=", "frag"} {
+				if strings.Contains(detail, secret) {
+					t.Errorf("detail %q holds %q", detail, secret)
+				}
+			}
+			if !strings.Contains(detail, "forwarder unreachable") || !strings.Contains(detail, "events.example.internal/ingest") {
+				t.Errorf("detail %q does not name the redacted URL", detail)
+			}
+		})
+	}
+}
+
+// A short query is redacted where it stands in the URL and nowhere else: the rest of the
+// message keeps its text.
+func TestScrubURL_ShortQueryDoesNotGarbleTheMessage(t *testing.T) {
+	raw := "https://events.example.internal/i?a=1"
+	got := scrubURL(errors.New("proxy said a=1 is not allowed for https://events.example.internal/i?a=1"), raw)
+	if want := "proxy said a=1 is not allowed for https://events.example.internal/i"; got != want {
+		t.Errorf("scrubURL = %q, want %q", got, want)
 	}
 }

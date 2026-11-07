@@ -4,6 +4,7 @@ package pathscope
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -12,6 +13,12 @@ import (
 // whose methods work, and every method of a Zones that was not validated refuses (ReservedName
 // reports every name reserved). A Zones with no denied root is refused unless AllowNoDeniedRoots
 // says so explicitly, so a missing scope block cannot silently make every root writable.
+//
+// A validated Zones cannot be changed afterwards: it keeps a private copy of what it validated
+// and decides on that copy alone. Changing one of its exported fields (or an element of one of
+// its lists) does not change a decision; it makes the value refuse everything, as an unvalidated
+// one does, until it is validated again. A change is never applied unchecked, and never ignored
+// silently.
 type Zones struct {
 	// DeniedRoots are top-level directories no writable prefix may name or lie under, compared
 	// case-insensitively: the zone where an operator's decisions live, for instance, which an
@@ -33,11 +40,32 @@ type Zones struct {
 	// may be granted for writing. It must be set on purpose.
 	AllowNoDeniedRoots bool `json:"allow_no_denied_roots" yaml:"allow_no_denied_roots"`
 
-	validated bool
+	// sealed is what Validate checked, owned by this value and its copies and never changed.
+	sealed *zoneSet
 }
 
-// errNotValidated is what a method of a Zones that did not come from NewZones returns.
-var errNotValidated = fmt.Errorf("%w: the scope zones were not validated (use NewZones)", ErrBadPrefix)
+// zoneSet is a validated Zones' own copy of its configuration.
+type zoneSet struct {
+	deniedRoots, sharedWrite, reservedNames []string
+	findingsRoot                            string
+	allowNoDeniedRoots                      bool
+}
+
+// set returns the sealed copy while the exported fields still equal it; nil otherwise (never
+// validated, or changed since).
+func (z Zones) set() *zoneSet {
+	v := z.sealed
+	if v == nil || z.FindingsRoot != v.findingsRoot || z.AllowNoDeniedRoots != v.allowNoDeniedRoots ||
+		!slices.Equal(z.DeniedRoots, v.deniedRoots) || !slices.Equal(z.SharedWrite, v.sharedWrite) ||
+		!slices.Equal(z.ReservedNames, v.reservedNames) {
+		return nil
+	}
+	return v
+}
+
+// errNotValidated is what a method of a Zones that did not come from NewZones, or was changed
+// after it, returns.
+var errNotValidated = fmt.Errorf("%w: the scope zones were not validated, or were changed after (use NewZones)", ErrBadPrefix)
 
 // NewZones validates z and returns the copy whose methods work.
 func NewZones(z Zones) (Zones, error) {
@@ -66,11 +94,15 @@ func (z Zones) NewScope(writable, readable []string) (Scope, error) {
 // clean or lies in a denied root; an empty reserved name, or one with surrounding space or a "/".
 // Every error wraps ErrBadPrefix. On success it returns the validated copy (as NewZones does).
 func (z Zones) Validate() (Zones, error) {
-	z.validated = false
+	z.sealed = nil
 	// the validated copy owns its lists: a caller changing its own slices later changes nothing
-	z.DeniedRoots = append([]string(nil), z.DeniedRoots...)
-	z.SharedWrite = append([]string(nil), z.SharedWrite...)
-	z.ReservedNames = append([]string(nil), z.ReservedNames...)
+	z.DeniedRoots = slices.Clone(z.DeniedRoots)
+	z.SharedWrite = slices.Clone(z.SharedWrite)
+	z.ReservedNames = slices.Clone(z.ReservedNames)
+	v := &zoneSet{
+		deniedRoots: slices.Clone(z.DeniedRoots), sharedWrite: slices.Clone(z.SharedWrite),
+		reservedNames: slices.Clone(z.ReservedNames), findingsRoot: z.FindingsRoot, allowNoDeniedRoots: z.AllowNoDeniedRoots,
+	}
 	if len(z.DeniedRoots) == 0 && !z.AllowNoDeniedRoots {
 		return Zones{}, fmt.Errorf("%w: no denied roots: list the zones no writable prefix may name, or set allow_no_denied_roots", ErrBadPrefix)
 	}
@@ -89,12 +121,12 @@ func (z Zones) Validate() (Zones, error) {
 		seen[key] = true
 	}
 	if z.FindingsRoot != "" {
-		if err := z.dirPrefix(z.FindingsRoot); err != nil {
+		if err := v.dirPrefix(z.FindingsRoot); err != nil {
 			return Zones{}, fmt.Errorf("findings root: %w", err)
 		}
 	}
 	for _, s := range z.SharedWrite {
-		if err := z.prefix(s, true); err != nil {
+		if err := v.prefix(s, true); err != nil {
 			return Zones{}, fmt.Errorf("shared write prefix: %w", err)
 		}
 	}
@@ -103,7 +135,7 @@ func (z Zones) Validate() (Zones, error) {
 			return Zones{}, fmt.Errorf("%w: reserved name %q must be a plain non-empty name", ErrBadPrefix, clipPath(n))
 		}
 	}
-	z.validated = true
+	z.sealed = v
 	return z, nil
 }
 
@@ -114,19 +146,20 @@ func (z Zones) Validate() (Zones, error) {
 // "owner//x" are all refused for a denied root "owner"). A readable prefix may name a path in a
 // denied root, a single file included.
 func (z Zones) ValidatePrefix(prefix string, writable bool) error {
-	if !z.validated {
+	v := z.set()
+	if v == nil {
 		return errNotValidated
 	}
-	return z.prefix(prefix, writable)
+	return v.prefix(prefix, writable)
 }
 
-func (z Zones) prefix(prefix string, writable bool) error {
+func (z *zoneSet) prefix(prefix string, writable bool) error {
 	if err := validatePrefix(prefix); err != nil {
 		return err
 	}
 	if writable {
 		first, _, _ := strings.Cut(strings.TrimSuffix(prefix, "/"), "/")
-		for _, r := range z.DeniedRoots {
+		for _, r := range z.deniedRoots {
 			if strings.EqualFold(first, strings.TrimSuffix(r, "/")) {
 				return fmt.Errorf("%w: %q is in the %s/ zone, which is never writable", ErrBadPrefix, clipPath(prefix), strings.TrimSuffix(r, "/"))
 			}
@@ -139,13 +172,14 @@ func (z Zones) prefix(prefix string, writable bool) error {
 // writes its own files into (a findings or a verdict directory). It must also end in "/", because
 // the file name is appended to it as written.
 func (z Zones) ValidateDirPrefix(prefix string) error {
-	if !z.validated {
+	v := z.set()
+	if v == nil {
 		return errNotValidated
 	}
-	return z.dirPrefix(prefix)
+	return v.dirPrefix(prefix)
 }
 
-func (z Zones) dirPrefix(prefix string) error {
+func (z *zoneSet) dirPrefix(prefix string) error {
 	if err := z.prefix(prefix, true); err != nil {
 		return err
 	}
@@ -157,19 +191,20 @@ func (z Zones) dirPrefix(prefix string) error {
 // replaces the file it names, so a verdict directory anywhere else could replace pending work or
 // another agent's finding. With no FindingsRoot every verdict directory is refused.
 func (z Zones) ValidateVerdictPrefix(prefix string) error {
-	if !z.validated {
+	v := z.set()
+	if v == nil {
 		return errNotValidated
 	}
-	if z.FindingsRoot == "" {
+	if v.findingsRoot == "" {
 		return fmt.Errorf("%w: verdict directory %q: no findings root is configured", ErrBadPrefix, clipPath(prefix))
 	}
-	if err := z.dirPrefix(prefix); err != nil {
+	if err := v.dirPrefix(prefix); err != nil {
 		return err
 	}
-	if prefix == z.FindingsRoot || !Within(prefix, []string{z.FindingsRoot}) {
-		return fmt.Errorf("%w: verdict directory %q must lie under %s", ErrBadPrefix, clipPath(prefix), z.FindingsRoot)
+	if prefix == v.findingsRoot || !Within(prefix, []string{v.findingsRoot}) {
+		return fmt.Errorf("%w: verdict directory %q must lie under %s", ErrBadPrefix, clipPath(prefix), v.findingsRoot)
 	}
-	for _, s := range z.SharedWrite {
+	for _, s := range v.sharedWrite {
 		if Within(prefix, []string{s}) || Within(s, []string{prefix}) {
 			return fmt.Errorf("%w: verdict directory %q overlaps %q, which every lane writes", ErrBadPrefix, clipPath(prefix), s)
 		}
@@ -179,13 +214,14 @@ func (z Zones) ValidateVerdictPrefix(prefix string) error {
 
 // ReservedName reports whether name is one of ReservedNames, or one of them followed by "-" and
 // anything, ignoring case and surrounding space. Every name is reserved on a Zones that was not
-// validated.
+// validated, or was changed after.
 func (z Zones) ReservedName(name string) bool {
-	if !z.validated {
+	v := z.set()
+	if v == nil {
 		return true
 	}
 	n := strings.ToLower(strings.TrimSpace(name))
-	for _, r := range z.ReservedNames {
+	for _, r := range v.reservedNames {
 		r = strings.ToLower(strings.TrimSpace(r))
 		if r != "" && (n == r || strings.HasPrefix(n, r+"-")) {
 			return true
