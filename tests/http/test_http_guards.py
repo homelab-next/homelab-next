@@ -331,13 +331,16 @@ def test_model_key_with_a_control_character_is_refused_without_quoting_it(server
     from homelabnext.registry.models import ModelError, authorized
 
     home = servers({"/v1/models": (200, {}, b'{"data": []}')})
-    raised = None
-    try:
-        authorized("s3cret\nX-Injected: 1")("GET", home.url + "/v1/models", None, 5)
-    except Exception as exc:
-        raised = exc
-    assert isinstance(raised, ModelError) and raised.kind == "misconfigured"
-    assert "s3cret" not in str(raised) and "Injected" not in str(raised)
+    # A control character, and a character outside printable ASCII (a pasted typographic
+    # quote or similar), which ``http.client`` refused with an uncaught UnicodeEncodeError.
+    for key in ("s3cret\nX-Injected: 1", "s3cr\u2603et Injected"):
+        raised = None
+        try:
+            authorized(key)("GET", home.url + "/v1/models", None, 5)
+        except Exception as exc:
+            raised = exc
+        assert isinstance(raised, ModelError) and raised.kind == "misconfigured", repr(raised)
+        assert "s3cr" not in str(raised) and "Injected" not in str(raised)
     assert home.seen == []
 
 

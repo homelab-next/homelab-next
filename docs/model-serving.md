@@ -233,8 +233,8 @@ the gateway does not expose), so against a keyed vLLM it must carry the backend 
 the verdict `error`. The key goes over plain http to a non-loopback backend only with
 `allow_plaintext=True` (`--allow-plaintext` beside `hnx golden`'s `--key-env`); otherwise the
 call is refused before anything is sent and the verdict is `error`. The model client follows no
-redirect and ignores `HTTP_PROXY`/`HTTPS_PROXY`. Consumers, and `hnx golden run` by default, go through the gateway with their
-own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
+redirect and ignores `HTTP_PROXY`/`HTTPS_PROXY`. Consumers, and `hnx golden run` by default,
+go through the gateway with their own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
 
 ### `open_webui`
 

@@ -10,8 +10,8 @@
   POST answered 301/302/303 into a GET with no body).  A ``303`` after a write the server
   processed is therefore reported as an error; no caller retries a 3xx, so a manual re-run of
   a create that is not idempotent may duplicate it.
-* No opener here uses a proxy from the environment: ``HTTP(S)_PROXY`` (and so ``HTTPS_PROXY``
-  too) would receive each request's ``Authorization`` (or ``X-Vault-Token``) header, in clear
+* No opener here uses a proxy from the environment: ``HTTP(S)_PROXY``
+  would receive each request's ``Authorization`` (or ``X-Vault-Token``) header, in clear
   for http.  Lab endpoints are reached directly.  A deployment that needs an egress proxy says
   so explicitly: it passes the client an ``opener=`` built with its own
   ``urllib.request.ProxyHandler`` (the events forwarder, the notify sender, the lake clients),

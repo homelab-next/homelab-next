@@ -49,7 +49,7 @@ SVC_RE = re.compile(r"^svc:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 MDL_RE = re.compile(r"^mdl:([a-z][a-z0-9]*(?:-[a-z0-9]+)*)\Z")
 KINDS = ("chat", "completion", "embedding")
 #: a character no header value may hold (http.client would echo the value in its error)
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL = re.compile(r"[^\x20-\x7e]")  # a bearer token is printable ASCII (RFC 6750)
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
 LIMIT_KEYS = ("window_s", "max_requests", "max_tokens", "max_cost", "cost_per_1k_tokens")
 #: keys an OpenAI-compatible ``/v1/models`` entry uses for the loaded context length, by engine
