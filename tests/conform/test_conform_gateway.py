@@ -364,7 +364,7 @@ def _own_config():
     return load_target(str(OWN_TARGET)).binding("inference").config
 
 
-def _tlp_target(monkeypatch, **server):
+def _tlp_target(monkeypatch, cls=None, **server):
     cfg = _own_config()
     roles = json.loads((ROOT / cfg["roles"]).read_text())["roles"]
     kw = {
@@ -374,7 +374,7 @@ def _tlp_target(monkeypatch, **server):
         "leaving": {cfg["tlp_model"]: tlp.Label.CLEAR},
         "key_ceilings": {ADMIN: tlp.Label.RED, CLEAR_KEY: tlp.Label.CLEAR},
     }
-    srv = TlpGatewayServer(**(kw | server)).start()
+    srv = (cls or TlpGatewayServer)(**(kw | server)).start()
     monkeypatch.setenv("HNX_ENDPOINT_LLM_GATEWAY", srv.url)
     monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_MASTER_KEY", ADMIN)
     monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_CLEAR", CLEAR_KEY)
@@ -514,3 +514,29 @@ def test_turn_records_sends_tagged_calls_once_a_run_and_names_their_window(monke
         ]
     finally:
         srv.stop()
+
+
+class LenientLabels(TlpGatewayServer):
+    """Reads an X-HNX-TLP value that is no label as clear (the defect the unknown labels catch)."""
+
+    def judge(self, fields, leaves, sender):
+        known = len(fields) != 1 or tlp.read(fields[0]) is not tlp.Label.RED
+        if not known and fields[0].strip().lower().removeprefix("tlp:") != "red":
+            fields = ["clear"]
+        return super().judge(fields, leaves, sender)
+
+
+def test_a_gateway_that_reads_an_unknown_label_as_clear_fails_the_above_ceiling_check(monkeypatch):
+    srv, t = _tlp_target(monkeypatch, cls=LenientLabels)
+    try:
+        r = SUITE.bind("tlp-admit-above-ceiling-refused", features=["gateway", "tlp-admit"])(t)
+        assert r.status == "fail" and "bogus" in r.evidence, r
+    finally:
+        srv.stop()
+
+
+def test_a_non_ascii_look_alike_label_reaches_the_gateway_as_utf8():
+    with HeaderRecorder(models=["m"]) as srv:
+        OpenAICompat(srv.url).chat_fields("m", PROMPT_MSG, [("X-HNX-TLP", "\uff43lear")])
+    # http.server decodes header bytes as latin-1: the UTF-8 bytes arrive unchanged
+    assert srv.seen == [("X-HNX-TLP", "\uff43lear".encode().decode("latin-1"))]

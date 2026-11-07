@@ -196,6 +196,22 @@ class LabelOnlyClient(FakeInferenceClient):
     SERVER = _LabelOnlyServer
 
 
+class _LenientLabelServer(TlpGatewayServer):
+    def judge(self, fields, leaves, sender):
+        value = fields[0].strip() if len(fields) == 1 else ""
+        unknown = value.lower().removeprefix("tlp:") != "red"
+        if value and unknown and tlp.read(value) is tlp.Label.RED:
+            fields = ["clear"]  # the defect: a value that is no label reads as clear
+        return super().judge(fields, leaves, sender)
+
+
+class LenientLabelClient(FakeInferenceClient):
+    """Defect: an ``X-HNX-TLP`` value that is not a label (``bogus``, a look-alike) reads as
+    ``clear`` instead of ``red``."""
+
+    SERVER = _LenientLabelServer
+
+
 class _EmptyFieldServer(TlpGatewayServer):
     def unlabelled(self, fields):
         return not [f for f in fields if f.strip()]

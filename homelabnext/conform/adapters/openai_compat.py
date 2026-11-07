@@ -235,7 +235,8 @@ class OpenAICompat:
             if token:
                 head.append(("Authorization", token))
             for name, value in [*head, *fields]:
-                conn.putheader(name, value)
+                # a non-ASCII value goes as its UTF-8 bytes (a look-alike label is data too)
+                conn.putheader(name, value if value.isascii() else value.encode("utf-8"))
             conn.endheaders(data)
             resp = conn.getresponse()
             try:

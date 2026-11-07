@@ -10,6 +10,7 @@ from conformance.fakes.inference_target import (
     EmptyFieldUnlabelledClient,
     FakeInferenceClient,
     LabelOnlyClient,
+    LenientLabelClient,
     TlpSubstituteClient,
     WrongModelClient,
 )
@@ -221,6 +222,10 @@ def _tlp_refusal(call, label):
     return found.group(1)
 
 
+#: values that are not an accepted spelling of any label: each reads as red (``tlp.read``)
+UNKNOWN_LABELS = ("bogus", "tlp:clearx", "\uff43lear", "tlp:tlp:clear")
+
+
 def _labelled(client, model, *labels):
     return lambda: client.chat_fields(model, PROMPT, [(TLP, v) for v in labels])
 
@@ -247,6 +252,7 @@ def _(c):
 )
 def _(c):
     sender, _above, leaving, _local = c.tlp_admit()
+    # the spaces of " TLP:CLEAR " are stripped by HTTP itself, so it tests case and prefix only
     for spelling in ("clear", " TLP:CLEAR ", "white"):
         r = sender.chat_fields(leaving, PROMPT, [(TLP, spelling)])
         assert r.content.strip(), f"{spelling!r} to {leaving!r}: empty reply"
@@ -255,12 +261,13 @@ def _(c):
 
 @SUITE.check(
     "tlp-admit-above-ceiling-refused",
-    "a label above the ceiling of a role that leaves the lab is a 403 above-ceiling",
+    "a label above the ceiling of a role that leaves the lab, or one that is not a label at all "
+    "(unknown, a doubled prefix, a non-ASCII look-alike), is a 403 above-ceiling",
     requires=["gateway", "tlp-admit"],
 )
 def _(c):
     sender, _above, leaving, _local = c.tlp_admit()
-    for label in ("amber", "red"):
+    for label in ("amber", "red", *UNKNOWN_LABELS):
         reason = _tlp_refusal(_labelled(sender, leaving, label), f"{label} to {leaving!r}")
         assert reason == "above-ceiling", f"{label}: reason {reason!r}, not above-ceiling"
 
@@ -415,6 +422,12 @@ MUTANTS = {
         LabelOnlyClient,
         "tlp-admit-judged-at-key-ceiling",
         "a role that leaves the lab judges a request at its label alone, below the key's ceiling",
+        features=frozenset({"gateway", "tlp-admit"}),
+    ),
+    "tlp-unknown-label-clear": Mutant(
+        LenientLabelClient,
+        "tlp-admit-above-ceiling-refused",
+        "an X-HNX-TLP value that is no label is read as clear, not red",
         features=frozenset({"gateway", "tlp-admit"}),
     ),
     "tlp-empty-field-unlabelled": Mutant(

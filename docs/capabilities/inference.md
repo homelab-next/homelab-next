@@ -719,7 +719,7 @@ What `hnx conform run` proves. A MUST failure fails the capability; a SHOULD fai
 | `gateway-refuses-role-above-key-ceiling` | MUST | a key whose sending TLP ceiling is above a cloud role's ceiling is refused that role with a 401 or 403 on the chat, and is still served on a role it may call | `gateway`, `tlp-ceiling` |
 | `tlp-admit-unlabelled-refused` | MUST | a request with no X-HNX-TLP field to a role that leaves the lab is a 403 unlabelled, never served by a fallback; the same unlabelled request to a role that stays in the lab is served | `gateway`, `tlp-admit` |
 | `tlp-admit-within-ceiling-served` | MUST | a label within the ceiling of a role that leaves the lab, from a key whose sending ceiling is within it too, is served by that role; any accepted spelling of the label reads the same | `gateway`, `tlp-admit` |
-| `tlp-admit-above-ceiling-refused` | MUST | a label above the ceiling of a role that leaves the lab is a 403 above-ceiling | `gateway`, `tlp-admit` |
+| `tlp-admit-above-ceiling-refused` | MUST | a label above the ceiling of a role that leaves the lab, or one that is not a label at all (unknown, a doubled prefix, a non-ASCII look-alike), is a 403 above-ceiling | `gateway`, `tlp-admit` |
 | `tlp-admit-judged-at-key-ceiling` | MUST | for a role that leaves the lab, a label below the key's sending ceiling is judged at that ceiling: a key whose ceiling is above the role's is refused (above-ceiling) whatever label it sends | `gateway`, `tlp-admit` |
 | `tlp-admit-empty-field-is-red` | MUST | an empty X-HNX-TLP field is a label that reads as red: refused as above-ceiling, not as unlabelled (one field differs from no field) | `gateway`, `tlp-admit` |
 | `tlp-admit-two-fields-are-red` | MUST | two X-HNX-TLP fields read as red, even when each is within the ceiling: refused as above-ceiling | `gateway`, `tlp-admit` |
@@ -751,6 +751,7 @@ Each is a deliberately broken fake (`hnx conform run inference --target broken:<
 | `tlp-empty-field-unlabelled` | `tlp-admit-empty-field-is-red` | an empty X-HNX-TLP field is read as no field (unlabelled) |
 | `tlp-label-only` | `tlp-admit-judged-at-key-ceiling` | a role that leaves the lab judges a request at its label alone, below the key's ceiling |
 | `tlp-refusal-substitutes` | `tlp-admit-unlabelled-refused` | a TLP refusal of the requested role falls back to a role that stays in the lab |
+| `tlp-unknown-label-clear` | `tlp-admit-above-ceiling-refused` | an X-HNX-TLP value that is no label is read as clear, not red |
 
 ## Implementations
 
