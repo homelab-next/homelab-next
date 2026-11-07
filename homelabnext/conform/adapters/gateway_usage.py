@@ -320,6 +320,14 @@ def _ts_of(turn: Mapping[str, Any]) -> float:
 _SPEND = ("input_tokens", "output_tokens", "cache_read_tokens", "cost_usd")
 
 
+def _spends_nothing(v: Any) -> bool:
+    """A spend field of an aggregated refusal: null, or a number equal to 0.  A boolean is no
+    number here (``False == 0`` in Python), so it never passes as nothing spent."""
+    if v is None:
+        return True
+    return isinstance(v, int | float) and not isinstance(v, bool) and v == 0
+
+
 def turn_from_record(rec: Mapping[str, Any], tags: Iterable[str]) -> list[dict[str, Any]]:
     """The neutral turn records of one usage record: ``count`` of them (module docstring), or
     none when the record carries none of ``tags`` or has no usable turn id, time or status."""
@@ -337,7 +345,7 @@ def turn_from_record(rec: Mapping[str, Any], tags: Iterable[str]) -> list[dict[s
         raise UsageError(f"usage record {rid}: count {times!r} is not 1..{MAX_COUNT}")
     ok = 200 <= status < 300
     if times > 1:  # only refusals are aggregated (R17), and a refusal spends nothing
-        spent = [k for k in _SPEND if rec.get(k) not in (None, 0)]
+        spent = [k for k in _SPEND if not _spends_nothing(rec.get(k))]
         if ok or spent:
             why = f"status {status}" if ok else ", ".join(spent)
             raise UsageError(

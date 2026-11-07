@@ -225,6 +225,10 @@ def test_a_missing_key_is_named_by_its_variable():
         {"output_tokens": 1},
         {"cache_read_tokens": 4},
         {"cost_usd": 0.001},
+        {"input_tokens": False},  # a boolean is no count, even though False == 0
+        {"cost_usd": False},
+        {"output_tokens": True},
+        {"cache_read_tokens": "0"},
     ],
 )
 def test_an_aggregated_record_that_is_not_a_spendless_refusal_is_refused(change):
