@@ -142,7 +142,9 @@ against the fake inference server, never for a lab. A spec's `conformance:` bloc
 without the flag refuses, points every cloud deployment at the fake (`cloud_base_url`, an origin
 under the lab's service domain) instead of its provider's API; `--conformance-host HOST`
 (a loopback name only) then moves every deployment's host to the machine the suite runs
-on, keeping its port. Such a render writes `gateway/` alone (LiteLLM has no conformance mode), and
+on, keeping its port. A spec with a cloud backend and no `conformance:` block is refused by the
+test-only render: its suite would otherwise send test prompts, with a real provider key, out of
+the lab. Such a render writes `gateway/` alone (LiteLLM has no conformance mode), and
 its `gateway.json` carries `"conformance_only": true`: the gateway refuses to start on it unless
 started with `-conformance`, which serves loopback only. Its audit requires the flag, the fake's
 URL on every cloud deployment and the moved hosts; a lab render's audit refuses

@@ -1725,13 +1725,29 @@ def test_conformance_host_moves_every_deployment_to_loopback(tmp_path):
     assert urls == {f"http://{LOOPBACK}:8000"}  # no-raw-endpoint: allow loopback test URL
 
 
-def test_without_a_conformance_block_cloud_deployments_keep_their_provider(tmp_path):
+def test_without_a_conformance_block_a_cloud_backend_is_refused(tmp_path):
     path = make_spec(tmp_path, roles=RICH_ROLES)
-    doc = json.loads(gw.render(gw.load_spec(path, conformance=True))[NEUTRAL])
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.load_spec(path, conformance=True)
+    assert any("svc:cloud would call their provider" in p for p in exc.value.problems)
+
+
+def _local_spec(tmp_path):
+    """A spec with no cloud backend: the test-only render needs no conformance block for it."""
+    roles = copy.deepcopy(ROLES)
+    del roles["roles"]["cloud-reasoner"]
+    doc = spec_doc()
+    del doc["backends"]["svc:cloud"]
+    doc["keys"] = [k for k in doc["keys"] if k["name"] == "local-agent"]
+    (tmp_path / "roles.json").write_text(json.dumps(roles))
+    path = tmp_path / "gateway.yml"
+    path.write_text(yaml.safe_dump(doc))
+    return path
+
+
+def test_without_a_cloud_backend_no_conformance_block_is_needed(tmp_path):
+    doc = json.loads(gw.render(gw.load_spec(_local_spec(tmp_path), conformance=True))[NEUTRAL])
     assert doc["conformance_only"] is True
-    assert doc["roles"]["cloud-reasoner"]["deployments"][0]["base_url"] == (
-        "https://api.anthropic.com"
-    )
 
 
 @pytest.mark.parametrize(
@@ -1763,7 +1779,7 @@ def test_conformance_host_needs_the_flag(tmp_path, capsys):
 
 
 def test_a_lab_check_refuses_a_test_only_render_and_the_reverse(tmp_path, capsys):
-    spec = str(make_spec(tmp_path, roles=RICH_ROLES))
+    spec = str(_local_spec(tmp_path))
     out = tmp_path / "out"
     assert hnx(["gen", "gateway", "render", spec, str(out), "--conformance"]) == 0
     capsys.readouterr()

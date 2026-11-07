@@ -660,6 +660,13 @@ def spec_from_dict(
     test_only = _conformance(
         doc.get("conformance"), conformance, conformance_host, service_domain, problems
     )
+    cloud = sorted(b.name for b in backends.values() if b.locality == "cloud")
+    if test_only is not None and test_only.cloud_base_url is None and cloud:
+        problems.append(
+            f"--conformance: cloud backend(s) {', '.join(f'svc:{c}' for c in cloud)} would call "
+            "their provider with the suite's prompts and a real key; give the spec "
+            "conformance.cloud_base_url (the fake inference server)"
+        )
 
     spec = Spec(
         name=spec_name,
