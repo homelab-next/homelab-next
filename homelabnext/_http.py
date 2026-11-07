@@ -7,7 +7,9 @@
 * :func:`safe_opener` follows a redirect only to the same scheme, host and port, so an
   ``Authorization`` header is never replayed to another origin and https is never downgraded,
   and only for a GET or HEAD: any other method's 3xx is the ``HTTPError`` (urllib would turn a
-  POST answered 301/302/303 into a GET with no body).
+  POST answered 301/302/303 into a GET with no body).  A ``303`` after a write is therefore
+  reported as an error even though the server processed the write; the events forwarder's
+  retry of it is safe because every send carries an idempotency key.
 * :func:`no_redirect_urlopen` follows no redirect (a 3xx surfaces as an ``HTTPError``) and uses
   no proxy, for a POST whose 2xx answer is read as an acknowledgement and which may carry a
   credential (the events forwarder, notify).

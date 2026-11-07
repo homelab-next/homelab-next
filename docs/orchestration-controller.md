@@ -289,7 +289,7 @@ stays standard library only: `TestGatewayDependsOnlyOnTheStandardLibrary`
 
 The events sender classifies the forwarder's answer by the [forwarder contract](events.md):
 `401`, `403`, `404` and `421` blame the configuration, and so does a `3xx`, because the sender follows
-no redirect (the contract's clause for a `3xx` the sender does not follow). Either way a durable
+no redirect (the contract's clause for a `3xx`). Either way a durable
 event stays in the outbox and is retried until the URL or the credential is fixed, where the private
 controller dropped it as a permanent refusal. Only the durable outbox sender is ported: the private
 copy's in-memory publisher, which lost queued events on a crash, has no use here.

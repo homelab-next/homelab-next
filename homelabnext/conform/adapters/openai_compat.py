@@ -6,7 +6,8 @@ The base URL is always supplied by the caller (a fake's ``.url``, or an endpoint
 resolver produced); there is no default.  An optional ``auth`` callable returns an
 ``Authorization`` header value at request time so a secret is never held in the object.  With
 ``auth`` set, plain ``http`` to a non-loopback host is refused unless ``allow_plaintext=True``;
-redirects are followed only within the same origin; replies are read up to ``max_bytes``.
+redirects are followed only within the same origin, and only for GET/HEAD; writes follow
+none; replies are read up to ``max_bytes``.
 
 :meth:`OpenAICompat.chat_fields` sends a chat with extra request header fields, each sent as a
 field of its own even when a name repeats (``X-HNX-TLP`` twice is two fields, which ``urllib``

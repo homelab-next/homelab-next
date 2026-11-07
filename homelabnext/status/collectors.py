@@ -54,7 +54,8 @@ class PendingApprovals(Protocol):
 
 
 class UrllibClient:
-    """The stdlib client: same-origin redirects only, a bounded read (``homelabnext._http``)."""
+    """The stdlib client: same-origin redirects only, and only for GET/HEAD (writes follow
+    none), a bounded read (``homelabnext._http``)."""
 
     def get(
         self, url: str, timeout: float, headers: Mapping[str, str] | None = None
