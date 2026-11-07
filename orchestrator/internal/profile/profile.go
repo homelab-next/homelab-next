@@ -156,7 +156,11 @@ func revisionOf(data []byte) string {
 // Registry is the loaded profiles, by agent key.
 type Registry struct {
 	profiles map[string]*Profile
+	notices  []string
 }
+
+// Notices are what loading noted: each old key read under its new name (LoadOptions.KeyAliases).
+func (r *Registry) Notices() []string { return slices.Clone(r.notices) }
 
 // LoadOptions tune LoadRegistry. Zones is required; the zero value of every other field accepts
 // only profiles that use no extension keys and no prompt_context files, state files or facts
@@ -180,6 +184,11 @@ type LoadOptions struct {
 	// CursorTemplate is the one shape a prompt_context.cursor_file may take. Zero:
 	// DefaultCursorTemplate.
 	CursorTemplate CursorTemplate
+	// KeyAliases are a site's own old top-level profile keys and the keys they are read as
+	// (KeyAliases.Validate), each read noted (Registry.Notices); a profile that sets both is
+	// refused. A site supplies them at runtime (ParseKeyAliases): this repository never spells
+	// them.
+	KeyAliases KeyAliases
 }
 
 // Extension is one deployment-specific top-level profile key. Exactly one of Schema and Opaque
@@ -226,6 +235,14 @@ func LoadRegistry(dir string, opts LoadOptions) (*Registry, error) {
 		}
 		allowed[e.Name] = e
 	}
+	if err := opts.KeyAliases.Validate(); err != nil {
+		return nil, err
+	}
+	for old := range opts.KeyAliases {
+		if _, ext := allowed[old]; ext {
+			return nil, fmt.Errorf("profile key aliases: %s is also an extension key", old)
+		}
+	}
 	penv, err := newPromptEnv(opts)
 	if err != nil {
 		return nil, err
@@ -244,7 +261,14 @@ func LoadRegistry(dir string, opts LoadOptions) (*Registry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read profile file %s: %w", full, err)
 		}
-		p, err := decodeProfile(data, allowed)
+		decoded, renamed, err := opts.KeyAliases.apply(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse profile file %s: %w", full, err)
+		}
+		for _, n := range renamed {
+			reg.notices = append(reg.notices, fmt.Sprintf("%s: %s", full, n))
+		}
+		p, err := decodeProfile(decoded, allowed)
 		if err != nil {
 			return nil, fmt.Errorf("parse profile file %s: %w", full, err)
 		}

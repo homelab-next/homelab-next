@@ -213,12 +213,26 @@ func Load(path string) (Config, error) {
 // Parse decodes a configuration strictly and checks it. Old keys are read under their new names
 // (each noted in Notices); a key set under both names, a key of what was not ported or a repeated
 // key is refused.
-func Parse(data []byte) (Config, error) {
+func Parse(data []byte) (Config, error) { return ParseWith(data, ParseOptions{}) }
+
+// ParseOptions tune ParseWith.
+type ParseOptions struct {
+	// ExtraRenames are the site's own old key names (SiteRenames), read under their new names and
+	// noted as Renames are.
+	ExtraRenames SiteRenames
+}
+
+// ParseWith is Parse with a site's own renames.
+func ParseWith(data []byte, opts ParseOptions) (Config, error) {
+	extra, err := opts.ExtraRenames.renames()
+	if err != nil {
+		return Config{}, err
+	}
 	doc, err := parseNode(data)
 	if err != nil {
 		return Config{}, err
 	}
-	notes, err := migrateNode(doc, false)
+	notes, err := migrateNode(doc, false, extra)
 	if err != nil {
 		return Config{}, err
 	}
