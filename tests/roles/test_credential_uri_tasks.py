@@ -11,7 +11,7 @@ a GET's redirect to any origin with the header and hand the request to ``HTTP(S)
 A task carries a credential when it has a header whose name or value looks like one, a
 ``url_password``/``password``, a ``url_username``/``username`` with ``force_basic_auth``, a
 ``client_key``/``client_cert``, or userinfo in its ``url``.  A ``headers`` value that is a template
-string cannot be inspected, so it is refused unless reviewed in ``HEADERS_REVIEWED`` (and is
+string cannot be inspected, so it is refused unless reviewed in ``tools/credential_headers.allow.yml`` (and is
 then held to the rules with the header names recorded there).  ``module_defaults`` may not set
 any of these for ``uri``/``get_url``: a default applies to tasks this scan cannot tie it to.
 
@@ -37,21 +37,15 @@ USERINFO = re.compile(r"://[^/]*@")
 CRED_KEYS = {"headers", "url_password", "password", "url_username", "username",
              "force_basic_auth", "client_key", "client_cert", "url"}  # fmt: skip
 
-# (file path suffix, task name) -> (the credential headers the template builds, why reviewed)
-HEADERS_REVIEWED = {
-    ("tasks/health.yml", "Ask each instance what it serves"): (
-        ("Authorization",),
-        "the model server role's health check: only Authorization: Bearer from the hnx_secret"
-        " lookup, or no header",
-    ),
-}
+ALLOW_FILE = ROOT / "tools" / "credential_headers.allow.yml"
 
 
-def _reviewed(label, name):
-    for (suffix, task), entry in HEADERS_REVIEWED.items():
-        if label.endswith("/" + suffix) and name == task:
-            return entry
-    return None
+def reviewed_headers():
+    """{(path, task name): credential header names} from the reviewed allowlist."""
+    entries = yaml.safe_load(ALLOW_FILE.read_text())["allow"]
+    for e in entries:
+        assert {"path", "task", "headers", "reason"} <= set(e), e
+    return {(e["path"], e["task"]): tuple(e["headers"]) for e in entries}
 
 
 def _module(name):
@@ -73,24 +67,39 @@ def _kv(text):
     return bare, args
 
 
+def _args(value, extra, skip_first=False):
+    """The module arguments as a dict, or None when they are (or hold) a template or free-form
+    words the scan cannot read: a whole-template argument block hides every argument."""
+    if isinstance(value, str):
+        bare, args = _kv(value)
+        if bare[1 if skip_first else 0 :]:
+            return None
+    elif isinstance(value, dict) or value is None:
+        args = {k: v for k, v in (value or {}).items() if not (skip_first and k == "module")}
+    else:
+        return None
+    if extra is not None and not isinstance(extra, dict):
+        return None
+    return {**args, **(extra or {})}
+
+
 def _call(task):
-    """(module, args) of a task that runs uri or get_url, in any form; None otherwise."""
+    """(module, args) of a task that runs uri or get_url, in any form (args None when they cannot
+    be read); None for any other task."""
     for key, value in task.items():
         mod = _module(key)
         if mod:
-            args = _kv(value)[1] if isinstance(value, str) else dict(value or {})
-            return mod, {**args, **(task.get("args") or {})}
+            return mod, _args(value, task.get("args"))
         if key in ("action", "local_action"):
             if isinstance(value, str):
-                bare, args = _kv(value)
+                bare = _kv(value)[0]
                 mod = _module(bare[0]) if bare else None
             elif isinstance(value, dict):
-                args = {k: v for k, v in value.items() if k != "module"}
                 mod = _module(value.get("module"))
             else:
                 mod = None
             if mod:
-                return mod, {**args, **(task.get("args") or {})}
+                return mod, _args(value, task.get("args"), skip_first=True)
     return None
 
 
@@ -110,12 +119,17 @@ def _status_codes(args):
     return [int(c) for c in codes if str(c).strip().isdigit()]
 
 
-def scan(label, text):
-    """(credential tasks found, problems) for one YAML file's text, labelled ``label``."""
+def scan(label, text, reviewed=None):
+    """(credential tasks found, problems, reviewed keys used) for one YAML file's text, labelled
+    ``label`` (its path from the repository root); ``reviewed`` as :func:`reviewed_headers`."""
+    reviewed = reviewed or {}
+    used = []
     found, problems = [], []
     for doc in yaml.safe_load_all(text):
         for node in _dicts(doc):
             defaults_map = node.get("module_defaults")
+            if defaults_map is not None and not isinstance(defaults_map, dict):
+                problems.append(f"{label}: module_defaults is not a mapping (cannot be checked)")
             for name, defaults in (defaults_map if isinstance(defaults_map, dict) else {}).items():
                 named = _module(name) or str(name).startswith("group/")
                 if named and isinstance(defaults, dict) and set(defaults) & CRED_KEYS:
@@ -127,15 +141,19 @@ def scan(label, text):
                 continue
             mod, args = call
             where = f"{label}: {node.get('name', '?')}"
+            if args is None:
+                problems.append(f"{where}: {mod} arguments are a template (cannot be checked)")
+                continue
             headers, cred_headers, carries = args.get("headers") or {}, [], False
             if isinstance(headers, str):
-                reviewed = _reviewed(label, node.get("name"))
-                if reviewed is None:
+                key = (label, node.get("name"))
+                if key not in reviewed:
                     problems.append(
-                        f"{where}: headers is a template string (review it into HEADERS_REVIEWED)"
+                        f"{where}: headers is a template string (review it into tools/credential_headers.allow.yml)"
                     )
                     continue
-                cred_headers, carries = list(reviewed[0]), True
+                cred_headers, carries = list(reviewed[key]), True
+                used.append(key)
             elif isinstance(headers, dict):
                 cred_headers = [
                     k
@@ -165,7 +183,7 @@ def scan(label, text):
                 missing = [h for h in cred_headers if h.lower() not in kept]
                 if missing:
                     problems.append(f"{where}: unredirected_headers must list {missing}")
-    return found, problems
+    return found, problems, used
 
 
 def _files():
@@ -174,13 +192,17 @@ def _files():
 
 
 def test_a_task_sending_a_credential_follows_no_redirect_and_uses_no_proxy():
-    found, problems = [], []
+    reviewed = reviewed_headers()
+    found, problems, used = [], [], []
     for path in _files():
-        f, p = scan(str(path.relative_to(ROOT)), path.read_text())
+        f, p, u = scan(str(path.relative_to(ROOT)), path.read_text(), reviewed)
         found += f
         problems += p
+        used += u
     assert found, "the scan found no credential-carrying task (the model server's has one)"
     assert problems == []
+    # every reviewed entry names exactly one scanned task: a stale or ambiguous one excuses nothing
+    assert sorted(used) == sorted(reviewed), {k: used.count(k) for k in reviewed}
 
 
 GOOD_URI = """
@@ -224,6 +246,10 @@ FIXTURES = {
     "free-form": ("- name: t\n  ansible.builtin.uri: url=https://h url_password=p\n", "use_proxy"),
     "in-a-block": ("- block:\n    - name: t\n      uri: {url: 'https://h', url_password: p}\n", "use_proxy"),
     "play-tasks": ("- hosts: all\n  tasks:\n    - name: t\n      uri: {url: 'https://h', url_password: p}\n", "use_proxy"),
+    "template-args": ("- name: t\n  ansible.builtin.uri: '{{ uri_args }}'\n", "template"),
+    "template-args-key": ("- name: t\n  uri: {url: 'https://h'}\n  args: '{{ more }}'\n", "template"),
+    "template-action": ("- name: t\n  action: uri {{ uri_args }}\n", "template"),
+    "list-module-defaults": ("- hosts: all\n  module_defaults: '{{ d }}'\n  tasks: []\n", "not a mapping"),
     "module-defaults": ("- hosts: all\n  module_defaults:\n    ansible.builtin.uri: {headers: {Authorization: x}}\n  tasks: []\n", "module_defaults"),
     "group-defaults": ("- hosts: all\n  module_defaults:\n    group/ansible.builtin.web: {url_password: x}\n  tasks: []\n", "module_defaults"),
 }  # fmt: skip
@@ -232,8 +258,19 @@ FIXTURES = {
 @pytest.mark.parametrize("case", sorted(FIXTURES))
 def test_the_credential_scan_flags_each_unsafe_form(case):
     text, expected = FIXTURES[case]
-    _, problems = scan("fixture.yml", text)
+    _, problems, _ = scan("fixture.yml", text)
     if expected is None:
         assert problems == []
     else:
         assert any(expected in p for p in problems), problems
+
+
+def test_a_reviewed_template_header_is_still_held_to_the_rules():
+    text = (
+        "- name: t\n  get_url: {url: 'https://h', dest: /x, headers: '{{ h }}', use_proxy: false}\n"
+    )
+    reviewed = {("fixture.yml", "t"): ("Authorization",)}
+    found, problems, used = scan("fixture.yml", text, reviewed)
+    assert used == [("fixture.yml", "t")] and found
+    assert any("unredirected_headers must list ['Authorization']" in p for p in problems), problems
+    assert scan("other.yml", text, reviewed)[1] != []  # the key is the full path, compared exactly
