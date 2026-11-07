@@ -58,15 +58,27 @@ type enumValue struct{ kind, text string }
 
 // ParseSchema parses a schema from its YAML (or JSON) node.
 func ParseSchema(n *yaml.Node) (*Schema, error) {
-	if err := plainYAML(n, "schema", 0, false); err != nil {
+	if err := plainYAML(n, "schema", false); err != nil {
 		return nil, err
 	}
 	return parseSchema(n, "", 0)
 }
 
-// plainYAML refuses anchors, aliases and merge keys under n, nesting deeper than MaxSchemaDepth
-// and, with tags set, a tag outside the core schema.
-func plainYAML(n *yaml.Node, where string, depth int, tags bool) error {
+// plainYAML refuses anchors, aliases and merge keys under n, nesting deeper than MaxSchemaDepth,
+// more than MaxNodes nodes and, with tags set, a tag outside the core schema. Aliases are refused
+// before they are followed, so the walk is bounded by the document as written.
+func plainYAML(n *yaml.Node, where string, tags bool) error {
+	count := 0
+	return plainNodes(n, where, 0, tags, &count)
+}
+
+// MaxNodes bounds the nodes of one schema or one extension value.
+const MaxNodes = 10000
+
+func plainNodes(n *yaml.Node, where string, depth int, tags bool, count *int) error {
+	if *count++; *count > MaxNodes {
+		return fmt.Errorf("%s: more than %d YAML nodes", where, MaxNodes)
+	}
 	if depth > MaxSchemaDepth+1 { // +1: the document node
 		return fmt.Errorf("%s: nested deeper than %d", where, MaxSchemaDepth)
 	}
@@ -88,7 +100,7 @@ func plainYAML(n *yaml.Node, where string, depth int, tags bool) error {
 		}
 	}
 	for _, c := range n.Content {
-		if err := plainYAML(c, where, depth+1, tags); err != nil {
+		if err := plainNodes(c, where, depth+1, tags, count); err != nil {
 			return err
 		}
 	}
@@ -203,7 +215,7 @@ func parseSchema(n *yaml.Node, at string, depth int) (*Schema, error) {
 
 // Validate checks a profile value (its YAML node) against the schema.
 func (s *Schema) Validate(n *yaml.Node) error {
-	if err := plainYAML(n, "value", 0, true); err != nil {
+	if err := plainYAML(n, "value", true); err != nil {
 		return err
 	}
 	return s.validate(n, "")

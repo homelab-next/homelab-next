@@ -355,6 +355,7 @@ func TestLoadRegistry_OpaqueExtensionsHoldNoAliases(t *testing.T) {
 		"anchor alone":    "agent_key: w\nqx: &x {a: 1}\n",
 		"merge key":       "agent_key: w\nqx: {<<: {a: 1}}\n",
 		"too deep":        "agent_key: w\nqx: " + strings.Repeat("[", 40) + strings.Repeat("]", 40) + "\n",
+		"too many nodes":  "agent_key: w\nqx: [" + strings.Repeat("1, ", MaxNodes) + "1]\n",
 	} {
 		dir := t.TempDir()
 		writeProfileFile(t, dir, "w.yaml", body)

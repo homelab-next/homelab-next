@@ -201,7 +201,7 @@ func (e Extension) check(p Profile) error {
 		// opaque: carried unchecked, but never as anchors and aliases (a recursive alias or an
 		// alias bomb would be expanded by every copy and every decode) and never past the depth
 		// bound
-		if err := plainYAML(&node, "profile extension "+e.Name, 0, false); err != nil {
+		if err := plainYAML(&node, "profile extension "+e.Name, false); err != nil {
 			return err
 		}
 		return nil

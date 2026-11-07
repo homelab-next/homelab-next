@@ -140,6 +140,7 @@ func TestExtensionSchemas(t *testing.T) {
 		"custom tag":     {"query_scope: !!binary aGVsbG8=\n", false},
 		"repeated key":   {"query_scope: {max_rows: 1, max_rows: 2}\n", false},
 		"non-scalar key": {"query_scope: {? [tables] : [a]}\n", false},
+		"too many nodes": {"query_scope: {tables: [" + strings.Repeat("a, ", MaxNodes) + "a]}\n", false},
 		"deep nesting":   {"query_scope: {tables: " + strings.Repeat("[", 40) + strings.Repeat("]", 40) + "}\n", false},
 	} {
 		t.Run(name, func(t *testing.T) {
