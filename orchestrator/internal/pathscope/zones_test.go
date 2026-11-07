@@ -107,6 +107,63 @@ func TestValidatedZonesOwnTheirLists(t *testing.T) {
 	}
 }
 
+// A validated Zones cannot be changed afterwards: changing a field or an element of a list
+// makes it refuse everything (never a decision on unchecked values), and validating it again
+// makes the change take effect, checked.
+func TestValidatedZonesCannotBeChangedAfterwards(t *testing.T) {
+	base := Zones{DeniedRoots: []string{"owner"}, FindingsRoot: "notes/findings/", SharedWrite: []string{"inbox/"}, ReservedNames: []string{"operator"}}
+	for name, change := range map[string]func(z *Zones){
+		"denied root element":  func(z *Zones) { z.DeniedRoots[0] = "other" },
+		"denied roots":         func(z *Zones) { z.DeniedRoots = nil },
+		"findings root":        func(z *Zones) { z.FindingsRoot = "inbox/" },
+		"shared write element": func(z *Zones) { z.SharedWrite[0] = "notes/" },
+		"shared write":         func(z *Zones) { z.SharedWrite = append(z.SharedWrite, "x/") },
+		"reserved name":        func(z *Zones) { z.ReservedNames[0] = "nobody" },
+		"opt-out":              func(z *Zones) { z.AllowNoDeniedRoots = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			z := mustZones(base)
+			copyBefore := z // a copy taken before the change shares the lists, and refuses too
+			change(&z)
+			for label, v := range map[string]Zones{"changed": z, "copy": copyBefore} {
+				if label == "copy" && !strings.Contains(name, "element") {
+					continue // replacing a field changes only the value it is set on
+				}
+				if err := v.ValidatePrefix("owner/x/", true); !errors.Is(err, ErrBadPrefix) {
+					t.Errorf("%s: a denied root became writable: %v", label, err)
+				}
+				if err := v.ValidatePrefix("inbox/", false); !errors.Is(err, ErrBadPrefix) {
+					t.Errorf("%s: a changed Zones still decides: %v", label, err)
+				}
+				if err := v.ValidateDirPrefix("notes/findings/a/"); !errors.Is(err, ErrBadPrefix) {
+					t.Errorf("%s: ValidateDirPrefix = %v", label, err)
+				}
+				if err := v.ValidateVerdictPrefix("notes/findings/a/"); !errors.Is(err, ErrBadPrefix) {
+					t.Errorf("%s: ValidateVerdictPrefix = %v", label, err)
+				}
+				if !v.ReservedName("anyone") {
+					t.Errorf("%s: a changed Zones does not reserve every name", label)
+				}
+			}
+		})
+	}
+	z := mustZones(base)
+	z.DeniedRoots = []string{"other"}
+	z, err := z.Validate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := z.ValidatePrefix("owner/x/", true); err != nil {
+		t.Errorf("revalidated: %v", err)
+	}
+	if err := z.ValidatePrefix("other/x/", true); !errors.Is(err, ErrBadPrefix) {
+		t.Errorf("revalidated: the new denied root is writable: %v", err)
+	}
+	if untouched := mustZones(base); untouched.ValidatePrefix("inbox/", true) != nil || untouched.ReservedName("anyone") {
+		t.Error("an unchanged validated Zones refuses")
+	}
+}
+
 func TestNewScope(t *testing.T) {
 	s, err := testZones.NewScope([]string{"notes/findings/a/", "inbox/"}, []string{"owner/approved/"})
 	if err != nil || CheckWrite(s, "inbox/x.md") != nil || CheckRead(s, "owner/approved/x.md") != nil {

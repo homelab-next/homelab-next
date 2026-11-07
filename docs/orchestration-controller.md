@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:7730f9b1fec1c96b
+summary_of: outline:sha256:3702702006ea4c0a
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -273,17 +273,20 @@ of its own to read, so this example is the input. `make gateway-check` runs the 
 ADR-0026 stage 2 brings the controller's core into the Go module `orchestrator/`, one series of
 pull requests at a time; the lab keeps running the private controller, frozen, until the cutover
 after stage 3 (the ADR's amendment of 2026-11-07). Each package is rewritten for this repository,
-never copied with its history. The packages in so far are leaves, which import nothing else of the
-controller:
+never copied with its history. The packages in so far are the leaves, which import nothing else of
+the controller, and the store, which imports only `events`:
 
 | Package | What it does |
 |---|---|
 | `orchestrator/internal/safefs` | Reads, lists and writes under one fixed root so that the object reached is the one the relative path names: no symbolic link, hard link, mount crossing or swapped component redirects it, a write never opens an existing inode, and a root on a network or FUSE filesystem is refused (`SAFEFS_ALLOW_REMOTE_FS=1` accepts the risk). Its two bind-mount tests need root and are registered in `orchestrator/skips.yml`. |
-| `orchestrator/internal/pathscope` | Decides on path strings whether a path lies in a scope (writable and readable prefixes, segment by segment, no wildcard). A tree's zones are configuration (`pathscope.Zones`: `denied_roots`, `findings_root`, `shared_write`, `reserved_names`), with no defaults; the package names no zone of its own. Zones work only once validated (`NewZones`), and an empty `denied_roots` is refused unless `allow_no_denied_roots` is set. |
+| `orchestrator/internal/pathscope` | Decides on path strings whether a path lies in a scope (writable and readable prefixes, segment by segment, no wildcard). A tree's zones are configuration (`pathscope.Zones`: `denied_roots`, `findings_root`, `shared_write`, `reserved_names`), with no defaults; the package names no zone of its own. Zones work only once validated (`NewZones`), and an empty `denied_roots` is refused unless `allow_no_denied_roots` is set. A validated value decides on its own sealed copy: changing a field or a list element afterwards makes it refuse everything, as an unvalidated one does, until it is validated again. |
 | `orchestrator/internal/metrics` | The Prometheus text exposition writer, standard library only, and the metric name prefix. |
-| `orchestrator/internal/events` | The controller's CloudEvents envelope, its derived id (the same as `homelabnext.events.envelope.derive_event_id`, non-ASCII text included) and the durable outbox sender. Its tests validate what it builds against `schemas/events` in place, with a validator that is itself checked against the schemas' examples and negatives. |
+| `orchestrator/internal/events` | The controller's CloudEvents envelope, its derived id (the same as `homelabnext.events.envelope.derive_event_id`, non-ASCII text included) and the durable outbox sender. Its tests validate what it builds against `schemas/events` in place, with a validator that is itself checked against the schemas' examples and negatives. A failed delivery's logged detail names the forwarder URL redacted (no query, fragment or password), whatever the transport's error quotes. |
+| `orchestrator/internal/store` | The controller's durable state in one SQLite database (`modernc.org/sqlite`, no cgo): the jobs table and its state machine, every transition a compare-and-swap on the row's state; submits whose idempotency check, shadow back-pressure (one unfinished shadow job per agent) and insert share one write transaction; resubmits (`retry_of_run_id`: one retry per run, only after an environment failure class, replaying the parent's task); the event outbox, filled in the transaction of the state change it describes and drained by `events`; the operators' backend drains; startup reconciliation of orphaned jobs; and the instance lock (`flock` on `<db>.lock`), so two controllers never share a database. An idempotency key is never released: it is unique across every job the database has held, however old. |
 
-The module now has third-party dependencies (`golang.org/x/sys` first) and a `go.sum`. The gateway
+The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, and with the
+store `modernc.org/sqlite` v1.58.0 and the modules it pulls in, each listed as `linked` in
+`tools/licences.yml`. The gateway
 stays standard library only: `TestGatewayDependsOnlyOnTheStandardLibrary`
 (`orchestrator/cmd/gateway`) fails when `go list -deps -test` of its packages names anything else.
 
@@ -304,8 +307,12 @@ packages that hold them.
 |---|---|---|
 | Metric name prefix | `llmorch_` | `hnx_orchestrator_` (`metrics.Prefix`) |
 | Default event source | `svc:llm-orchestrator` | `svc:orchestrator` (`events.DefaultSource`) |
+| The jobs table's session id column | `hermes_session_id` | `session_id` (migrated in place, below) |
 
-Nothing emits either name yet: the module has no controller binary until stage 2's last pull
+The job API's `session_id` field, with its one release of both names, is the API package's
+concern; the store holds one column.
+
+Nothing emits the metric or event name yet: the module has no controller binary until stage 2's last pull
 request. The two names overlap differently at the cutover (the ADR's amendment).
 
 **Metrics are dual-emitted.** The release the lab first deploys the controller from writes every
@@ -343,6 +350,36 @@ consumers of `svc:llm-orchestrator` in this repository, which move before the ol
 - the docs that quote the source: [StackStorm](stackstorm.md),
   [orchestration telemetry](orchestration-telemetry.md), `docs/checklist.md` (O-11) and
   [ADR-0025](adr/0025-orchestration-telemetry.md).
+
+### The store's migration, behind a backup
+
+`store.Open` creates a new database whole. An existing one is migrated in place to the current
+schema: the session id column is renamed (`ALTER TABLE jobs RENAME COLUMN hermes_session_id TO
+session_id`, every value kept), each column added since the first schema (`task_description`
+among them) is added, and a missing table or index is created. The private controller's
+passthrough column `request_body` is left where it is, with its values, and never read
+(`store.RetiredColumns`). A jobs table holding both session id columns is refused, never guessed
+at, and so is a file that is not a controller database.
+
+The ADR's amendment requires a backup before every run of the migration against a live database,
+checked restorable first and protected like the database itself. The store enforces its part:
+
+- `Open` refuses to change the schema of a database that already holds tables
+  (`ErrBackupRequired`, naming the pending steps); `store.PendingMigrations` lists them without
+  changing anything.
+- `store.BackupForMigration(db, backup)` writes the backup with `VACUUM INTO` (one consistent
+  snapshot) into a new owner-only (`0600`) file that must not exist, and verifies it.
+- `store.OpenWith(db, store.Options{MigrationBackup: backup})` migrates only once the backup
+  verifies, inside the migration's own write transaction, so nothing changes the database between
+  the check and the migration: the backup must be a regular file (no symbolic link) owned by the
+  database's owner with no permission the database file lacks, open, pass `PRAGMA
+  integrity_check`, and hold exactly the database's schema and rows (a digest of both). A stale
+  backup is refused (`ErrBackupMismatch`).
+- The whole migration is one transaction: a refused or failed one leaves the database as it was,
+  and the backup is the copy to restore.
+
+The tests build databases from two frozen schemas (`orchestrator/internal/store/testdata`): the
+first one, and the last one before the rename, with every added column.
 
 ## Additive `orchestration` contract features
 

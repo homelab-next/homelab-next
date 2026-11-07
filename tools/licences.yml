@@ -131,14 +131,23 @@ python:
 # both require is `linked`. Licences from each module's LICENSE (or COPYING) at the pinned version.
 go:
   github.com/BurntSushi/toml: {spdx: MIT, kind: tool, reason: "staticcheck's config reader; part of the linters, run as go tool, never linked into a shipped binary"}
+  github.com/dustin/go-humanize: {spdx: MIT, kind: linked, reason: "modernc.org/sqlite's dependency (size formatting), linked into the controller with orchestrator/internal/store"}
+  github.com/google/uuid: {spdx: BSD-3-Clause, kind: linked, reason: "modernc.org/libc's dependency, linked into the controller with orchestrator/internal/store"}
+  github.com/mattn/go-isatty: {spdx: MIT, kind: linked, reason: "modernc.org/libc's dependency on some platforms (not in the linux build graph); listed as linked because a build for those platforms links it"}
+  github.com/ncruces/go-strftime: {spdx: MIT, kind: linked, reason: "modernc.org/libc's dependency on some platforms (not in the linux build graph); listed as linked because a build for those platforms links it"}
+  github.com/remyoudompheng/bigfft: {spdx: BSD-3-Clause, kind: linked, reason: "modernc.org/mathutil's dependency, linked into the controller with orchestrator/internal/store"}
   golang.org/x/exp/typeparams: {spdx: BSD-3-Clause, kind: tool, reason: "staticcheck's dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/mod: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/sync: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
-  golang.org/x/sys: {spdx: BSD-3-Clause, kind: linked, reason: "orchestrator/internal/safefs's Linux system calls (statx mount ids, statfs, renameat2); also a dependency of the linters"}
+  golang.org/x/sys: {spdx: BSD-3-Clause, kind: linked, reason: "orchestrator/internal/safefs's Linux system calls (statx mount ids, statfs, renameat2) and internal/store's instance lock (flock); also a dependency of the linters"}
   golang.org/x/telemetry: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/tools: {spdx: BSD-3-Clause, kind: tool, reason: "the analysis framework the linters run on; run as go tool, never linked into a shipped binary"}
   golang.org/x/vuln: {spdx: BSD-3-Clause, kind: tool, reason: "govulncheck, run as go tool by CI's go job; never linked into a shipped binary"}
   honnef.co/go/tools: {spdx: MIT AND BSD-3-Clause, kind: tool, reason: "staticcheck, run as go tool by CI's go job (MIT; its LICENSE-THIRD-PARTY carries BSD-3-Clause code); never linked into a shipped binary"}
+  modernc.org/libc: {spdx: BSD-3-Clause AND MIT AND BSD-2-Clause, kind: linked, reason: "modernc.org/sqlite's C runtime in Go, linked into the controller (BSD-3-Clause; its LICENSE-3RD-PARTY.md carries musl's MIT and BSD-2-Clause parts and MIT-licensed Go ports)"}
+  modernc.org/mathutil: {spdx: BSD-3-Clause, kind: linked, reason: "modernc.org/libc's dependency, linked into the controller with orchestrator/internal/store"}
+  modernc.org/memory: {spdx: BSD-3-Clause, kind: linked, reason: "modernc.org/libc's allocator, linked into the controller (its LICENSE-GO and LICENSE-MMAP-GO are BSD-3-Clause too; LICENSE-LOGO is a link to an image)"}
+  modernc.org/sqlite: {spdx: BSD-3-Clause AND blessing, kind: linked, reason: "orchestrator/internal/store's database driver, SQLite translated to Go (no cgo): the driver is BSD-3-Clause, the bundled SQLite public domain with its blessing (LICENSE-SQLITE); LICENSE-SQLITE_VEC (MIT) covers an extension the store never imports"}
 images:
   binwiederhier/ntfy: {spdx: Apache-2.0 OR GPL-2.0-only, kind: service, reason: "the notify service; the project is dual-licensed (its LICENSE and LICENSE.GPLv2)"}
   dxflrs/garage: {spdx: AGPL-3.0-only, kind: service, reason: "the object store (v2.5.0: its LICENSE is still AGPL-3.0); run as its own service, nothing of it is shipped here (NOTICE)"}

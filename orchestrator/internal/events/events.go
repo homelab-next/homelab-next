@@ -30,6 +30,8 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -209,6 +211,35 @@ func redacted(u *url.URL) string {
 	return c.Redacted()
 }
 
+// scrubURL is err's text with the configured URL shown redacted. net/http's errors quote the
+// request URL with its query, which can carry a credential, and the sender logs the detail.
+func scrubURL(err error, raw string) string {
+	msg := err.Error()
+	u, perr := url.Parse(raw)
+	if perr != nil {
+		return "the events forwarder url is not a valid URL"
+	}
+	shown := redacted(u)
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		msg = ue.Op + " " + strconv.Quote(shown) + ": " + ue.Err.Error()
+	}
+	// whatever else quotes the URL, its query, fragment or password never reaches the text
+	for _, whole := range []string{raw, u.Redacted()} {
+		msg = strings.ReplaceAll(msg, whole, shown)
+	}
+	parts := []string{u.RawQuery, u.Fragment, u.EscapedFragment()}
+	if pw, ok := u.User.Password(); ok {
+		parts = append(parts, pw)
+	}
+	for _, p := range parts {
+		if p != "" {
+			msg = strings.ReplaceAll(msg, p, "[redacted]")
+		}
+	}
+	return msg
+}
+
 func isLoopback(host string) bool {
 	if host == "localhost" {
 		return true
@@ -232,7 +263,7 @@ const (
 func post(cfg Config, id string, body []byte) (outcome, string) {
 	req, err := http.NewRequest(http.MethodPost, cfg.URL, bytes.NewReader(body))
 	if err != nil {
-		return permanent, err.Error()
+		return permanent, scrubURL(err, cfg.URL)
 	}
 	req.Header.Set("Content-Type", ContentType)
 	req.Header.Set(IdempotencyHdr, id)
@@ -241,7 +272,7 @@ func post(cfg Config, id string, body []byte) (outcome, string) {
 	}
 	resp, err := cfg.HTTP.Do(req)
 	if err != nil {
-		return transient, "forwarder unreachable: " + err.Error()
+		return transient, "forwarder unreachable: " + scrubURL(err, cfg.URL)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	resp.Body.Close()
