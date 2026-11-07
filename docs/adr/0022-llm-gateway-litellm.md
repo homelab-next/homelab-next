@@ -8,6 +8,9 @@ summary_of: outline:sha256:2de47a0ddfd9cfdd
 - **Date:** 2026-10-21
 - **Amended:** 2026-10-31: the Bifrost adapter is removed; LiteLLM is the only gateway and Bifrost
   is the documented exit (decision 5, amended; see the amendment at the end of Decision)
+- **Amended:** 2026-11-07 by ADR-0038: LiteLLM is the deployed gateway until ADR-0038's cutover,
+  and the documented exit is ADR-0038's own gateway, no longer Bifrost
+- **Amended-by:** ADR-0038
 - **Related:** ADR-0005, ADR-0007, `schemas/platform/model_roles.json`, [LLM gateway](../llm-gateway.md)
 
 ## Context
