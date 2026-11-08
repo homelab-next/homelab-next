@@ -14,6 +14,7 @@ package scrape
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -25,8 +26,9 @@ import (
 	"time"
 )
 
-// MaxBodyBytes bounds what one scrape reads; a larger body is read up to here and the rest is
-// ignored, so an endpoint cannot make a probe hold memory without bound.
+// MaxBodyBytes bounds what one scrape reads. A larger body is no reading (ErrTooLarge): cut at
+// the bound, its last line could be a number cut short (12345 read as 12), so nothing of it is
+// trusted, and an endpoint cannot make a probe hold memory without bound.
 const MaxBodyBytes = 4 << 20
 
 // maxLineBytes bounds one line (an info metric's label set can be long).
@@ -41,6 +43,9 @@ type Sample struct {
 
 // ErrStatus is wrapped by Fetch for an answer other than 200.
 var ErrStatus = errors.New("scrape: the endpoint answered a status other than 200")
+
+// ErrTooLarge is Fetch's error for a body past MaxBodyBytes.
+var ErrTooLarge = errors.New("scrape: the body is larger than MaxBodyBytes")
 
 // NewClient returns the client a probe uses by default: no proxy from the environment (a probe
 // goes to the address it names, never through a proxy that may log it) and no redirect followed (the
@@ -74,7 +79,14 @@ func Fetch(ctx context.Context, client *http.Client, url string, timeout time.Du
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w (%d)", ErrStatus, resp.StatusCode)
 	}
-	return Parse(io.LimitReader(resp.Body, MaxBodyBytes), want)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > MaxBodyBytes {
+		return nil, ErrTooLarge
+	}
+	return Parse(bytes.NewReader(body), want)
 }
 
 // Parse reads the sample lines of r whose metric name want accepts (nil: every one). A line that
