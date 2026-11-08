@@ -25,7 +25,7 @@ hosts:
   siem-1:    {address: 192.0.2.70,    zone: services, role: siem}
   sensor-1:  {address: 192.0.2.71,    zone: services, role: sensor}
   cases-1:   {address: 192.0.2.72,    zone: services, role: cases}
-  soar-1:    {address: 192.0.2.73,    zone: services, role: orchestration}
+  soar-1:    {address: 192.0.2.73,    zone: services, role: automation}
   mon-1:     {address: 192.0.2.74,    zone: services, role: monitoring}
   hub-1:     {address: 192.0.2.75,    zone: services, role: status}
   bus-1:     {address: 192.0.2.140,   zone: data,     role: events}
@@ -113,8 +113,8 @@ services:
     tls: internal
     auth: idp
     description: One case per alert worth a look; analysts work them here.
-  orchestration:
-    capability: orchestration
+  automation:
+    capability: automation
     impl: example-soar
     host: soar-1
     protocol: https

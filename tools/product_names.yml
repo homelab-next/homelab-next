@@ -17,7 +17,7 @@ products:
   - {name: openbao, why: the secrets slot's reference product}
   - {name: vaultwarden, why: the operator password manager the secret seeding copies into}
   - {name: litellm, why: the LLM gateway's reference product}
-  - {name: stackstorm, aliases: [st2], why: the orchestration controller's reference product}
+  - {name: stackstorm, aliases: [st2], why: the automation slot's reference product (workflow runs and event rules)}
   - {name: nifi, why: the log pipeline's reference product}
   - {name: prometheus, why: the metrics service's reference product}
   - {name: grafana, why: the dashboards' reference product}
