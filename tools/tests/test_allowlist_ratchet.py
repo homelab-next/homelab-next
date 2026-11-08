@@ -330,11 +330,11 @@ def test_the_trusted_gates_copy_is_added_or_its_follow_up_is_still_tracked():
 
     ci = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text())
     trusted = "\n".join(str(s.get("run", "")) for s in ci["jobs"]["trusted-gates"]["steps"])
-    contributing = (REPO / "CONTRIBUTING.md").read_text()
+    # whitespace-insensitive: a rewrap of the CONTRIBUTING paragraph must not flip the check
+    contributing = " ".join((REPO / "CONTRIBUTING.md").read_text().split())
+    follow_up = "**Follow-up, open:** add the base's copy to CI's `trusted-gates` job"
     if '"$RUNNER_TEMP/base/tools/allowlist_ratchet.py" --base "$BASE"' in trusted:
-        assert "**Follow-up, open:** add the base's copy" not in contributing
+        assert follow_up not in contributing
     else:
-        assert (
-            "**Follow-up, open:** add the base's copy to CI's\n  `trusted-gates` job"
-            in contributing
-        )
+        assert follow_up in contributing
+
