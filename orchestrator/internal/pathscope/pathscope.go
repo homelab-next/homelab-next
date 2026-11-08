@@ -93,22 +93,61 @@ func hasAnyPrefix(p string, prefixes []string) bool {
 }
 
 // CheckWrite returns nil when p, cleaned, lies under one of scope's writable prefixes, and an
-// error wrapping ErrDenied otherwise.
+// error wrapping ErrDenied otherwise. A path holding a backslash, a NUL or a control or
+// line-break character is refused, as validatePrefix refuses one in a prefix, and so is a path
+// whose cleaned form has a hidden segment (HasHiddenSegment).
+//
+// The decision is about the cleaned path: "a/x/../b" is judged as "a/b". A caller opens the
+// cleaned form (or hands the same string to package safefs, which cleans it the same way), never
+// the raw string through a resolver that follows "..": through a symbolic link "a/x", the raw
+// path names a different file.
 func CheckWrite(scope Scope, p string) error {
-	if hasAnyPrefix(cleanRelPath(p), scope.WritablePrefixes) {
+	clean, err := checkedPath(p)
+	if err != nil {
+		return err
+	}
+	if hasAnyPrefix(clean, scope.WritablePrefixes) {
 		return nil
 	}
 	return fmt.Errorf("%w: %q is not under any writable prefix", ErrDenied, clipPath(p))
 }
 
 // CheckRead returns nil when p, cleaned, lies under a writable or a readable prefix of scope, and
-// an error wrapping ErrDenied otherwise. There is no wildcard: what no prefix names is denied.
+// an error wrapping ErrDenied otherwise; it refuses what CheckWrite refuses before any prefix is
+// compared, and its decision is about the cleaned path too. There is no wildcard: what no prefix
+// names is denied.
 func CheckRead(scope Scope, p string) error {
-	clean := cleanRelPath(p)
+	clean, err := checkedPath(p)
+	if err != nil {
+		return err
+	}
 	if hasAnyPrefix(clean, scope.WritablePrefixes) || hasAnyPrefix(clean, scope.ReadablePrefixes) {
 		return nil
 	}
 	return fmt.Errorf("%w: %q is not under any readable or writable prefix", ErrDenied, clipPath(p))
+}
+
+// checkedPath returns p cleaned, or the refusal of a path holding a character no prefix may hold
+// or naming a hidden file or directory. A path that climbs out of the tree ("..", "../x") is left
+// to the prefix match, which no relative prefix passes, so it keeps its "not under any prefix"
+// refusal. A prefix can never name a hidden segment (ValidatePrefix refuses it), and a path under
+// a prefix must not reach one either: under a code checkout that is the repository's .git or an
+// .env.
+func checkedPath(p string) (string, error) {
+	if strings.ContainsAny(p, "\\\x00") || strings.ContainsFunc(p, isControl) {
+		return "", fmt.Errorf("%w: %q holds a backslash, a NUL or a control or line-break character", ErrDenied, clipPath(p))
+	}
+	clean := cleanRelPath(p)
+	if clean != ".." && !strings.HasPrefix(clean, "../") && HasHiddenSegment(clean) {
+		return "", fmt.Errorf("%w: %q names a hidden file or directory (.git, .env, ...)", ErrDenied, clipPath(p))
+	}
+	return clean, nil
+}
+
+// isControl reports a C0 or C1 control character, DEL, or a Unicode line or paragraph separator:
+// the characters no prefix and no path may hold.
+func isControl(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029
 }
 
 // Within reports whether prefix (already ValidatePrefix-clean) names the same path as one of
@@ -158,10 +197,8 @@ func validatePrefix(prefix string) error {
 	if HasHiddenSegment(prefix) {
 		return fmt.Errorf("%w: %q names a hidden file or directory (.git, .env, ...)", ErrBadPrefix, clipPath(prefix))
 	}
-	for _, r := range prefix {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029 {
-			return fmt.Errorf("%w: %q holds a control or line-break character", ErrBadPrefix, clipPath(prefix))
-		}
+	if strings.ContainsFunc(prefix, isControl) {
+		return fmt.Errorf("%w: %q holds a control or line-break character", ErrBadPrefix, clipPath(prefix))
 	}
 	clean := path.Clean(prefix)
 	if clean == "." {
