@@ -308,8 +308,10 @@ func checkLimits(tx *sql.Tx, j *Job, lim *SubmitLimits) error {
 	}
 	if lim.MaxInWindow > 0 && lim.Window > 0 {
 		var n int
+		// Compared as instants (julianday), never as text: RFC3339Nano drops trailing zeros, so
+		// "...:00Z" sorts after "...:00.1Z" though it is earlier.
 		since := j.CreatedAt.Add(-lim.Window).UTC().Format(time.RFC3339Nano)
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = ? AND created_at >= ?`,
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = ? AND julianday(created_at) >= julianday(?)`,
 			j.SubmittedBy, since).Scan(&n); err != nil {
 			return fmt.Errorf("count recent jobs: %w", err)
 		}
