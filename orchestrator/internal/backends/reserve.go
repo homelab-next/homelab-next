@@ -65,6 +65,9 @@ func (p *Policy) Reserve(ctx context.Context, affinity Affinity, runID, agentKey
 			cause = CauseTokenBudget
 			continue
 		}
+		if testHookBeforeClaim != nil {
+			testHookBeforeClaim(runID, b.Name)
+		}
 		held, full := p.claimReservation(runID, b.Name, b.MaxConcurrent)
 		if held {
 			return "", false // another pass claimed this run meanwhile
@@ -99,6 +102,10 @@ func (p *Policy) Release(backend, runID string) {
 	atomic.AddInt64(p.inFlightCounter(held), -1)
 	p.releaseExclusive(held, runID)
 }
+
+// testHookBeforeClaim, when set, runs in Reserve between reading a backend's load and claiming its
+// slot: the window a racing claim falls into. Tests only.
+var testHookBeforeClaim func(runID, backend string)
 
 // claimReservation records runID's claim on backend and counts its slot together, under resMu, or
 // refuses (nothing counted): held when runID holds one already, full when the backend is measured
