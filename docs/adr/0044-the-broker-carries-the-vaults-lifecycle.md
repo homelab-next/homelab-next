@@ -176,8 +176,11 @@ they would keep the vault alive behind a module, with its self-asserted identity
      1.2, covered by the request digest). For actions whose manifest entry sets `requires:
      {approved_record: true}`, `decide()` refuses a request without one (`record-unlinked`), and
      refuses one whose note is not in `decided/approved`, is already completed, or is held
-     (`record-held`). The Approvals page shows the linked note beside the request. **An approved
-     records note authorizes no action by itself:** each action keeps its own tier and approval.
+     (`record-held`). **Decided 2026-11-08 (operator):** every action that changes a live system
+     sets it, which is every action at tier `execute` or `privileged` and every `write` action that
+     is not a records lane; `hnx broker validate` refuses such an action without it. The Approvals
+     page shows the linked note beside the request. **An approved records note authorizes no action
+     by itself:** each action keeps its own tier and approval.
    - **Where holds bite**, each a refusal with a reason and an audit record: `decide()` refuses
      `run` of an approved request, and `call` of an action, while an open hold names the request,
      the action, or the record in the request's `related` (`record-held`), **at run time**, so a
@@ -265,7 +268,8 @@ they would keep the vault alive behind a module, with its self-asserted identity
     (extending `homelabnext/broker/importer.py`; `import-proposals` becomes its `proposed/`
     mapping) imports proposals, the approved, denied and completed history with its completion
     requests, findings, the tasking queue with its holds, the deconfliction entries and their
-    closures, and the recall markers with their acks.
+    closures, and the recall markers with their acks. **Decided 2026-11-08 (operator):** all of
+    the history comes across, findings included, not only the open items.
     - **Offline, as the broker.** It refuses to run while the broker serves the same state
       directory (it takes `<state>/broker.lock`, which the serving broker holds), writes as the
       broker's user, and is a dry run unless `--apply`.
@@ -328,11 +332,11 @@ they would keep the vault alive behind a module, with its self-asserted identity
       period **one canary profile** runs on the broker tools instead of the vault tools, with its
       decisions made on the hub, so the first real records decision through the relay is not made
       on switch day.
-    - **Switch.** It needs a run of days with no difference and the canary's clean days (both
-      lengths are the operator's). Then the agents' profiles are granted the broker tools and lose
-      the vault tools in one reviewed overlay change, the guard hook's writable zones are emptied,
-      the dashboard's approval route is turned off (its shared key's revocation is ADR-0045's),
-      and the vault repository is archived read-only, never deleted.
+    - **Switch.** It needs seven consecutive shadow days with no difference and three clean
+      canary days (**decided 2026-11-08, operator**). Then the agents' profiles are granted the
+      broker tools and lose the vault tools in one reviewed overlay change, the guard hook's
+      writable zones are emptied, the dashboard's approval route is turned off (its shared key's
+      revocation is ADR-0045's), and the vault repository is archived read-only, never deleted.
 
 13. **ADR-0026 decision 6 is amended: the vault, tasking-queue and deconfliction MCP servers are
     not ported as overlay modules.** Their functions are the broker's records actions (decisions
@@ -379,10 +383,10 @@ the following minor (request 1.3, audit 1.6) and says so in its schema descripti
   kernel attests, not a label it chose.
 - The lesson about approved-but-held items stops being a rule an agent must remember: the broker
   refuses a held run wherever the request is linked to the held item or the hold names the action
-  or request, and for actions that require a linked record an unlinked request is refused too. An
-  action that needs no linked record and is not itself held is not stopped by a hold on a records
-  note: the manifest must mark the actions that carry out approved work. Likewise "no ledger
-  entry, no activity" and "ack the recall" stop being instructions.
+  or request, and for actions that require a linked record an unlinked request is refused too.
+  Every action that changes a live system requires one (decision 6), so a hold on a records note
+  stops every such action; only reads and records-lane writes need no linked record. Likewise "no
+  ledger entry, no activity" and "ack the recall" stop being instructions.
 - The broker becomes the store of record for governance, so its records tree is a stateful
   dataset: `git` is no longer its history. In ADR-0040's terms the broker is state class
   `private` (the tree is a `state` dataset on its own host), and it needs an ADR-0042 recovery
@@ -414,15 +418,16 @@ the following minor (request 1.3, audit 1.6) and says so in its schema descripti
    written; an expired ledger window reads `overdue`, never `closed`; a close with a stale
    `expected_revision` is refused; the registers' existing fold tests pass unchanged.
 4. **Manifest 1.10 lanes and preconditions, request 1.2 `related`**: kind `records`, `dir`,
-   `transitions`, `max_files: null`, `requires.deconflicted`, `requires.approved_record`,
-   `findings` (default `per-run`) and `recall` on callers, `deconfliction.graders`, the records
-   tree ownership check. Tests: each lane refusal by reason; a hold placed after an approval makes
-   the approved `run` fail `record-held` and leaves the approval unused; a gated action submitted
-   without `related` is refused `record-unlinked`; an agent's hold on an action it is not granted
-   is `hold-target-not-allowed`; an emulation action with no active entry is
-   `deconfliction-missing`; `validate` refuses an unknown `dir`, a world-readable records tree, and
-   a `class: emulation` action without `requires.deconflicted`; a caller with a scheduler entry
-   and no `findings` key reads `per-run`, and `findings: none` without a `reason` is refused.
+   `transitions`, `max_files: null`, `requires.deconflicted`, `requires.approved_record`, `findings`
+   (default `per-run`) and `recall` on callers, `deconfliction.graders`, the records tree ownership
+   check. Tests: each lane refusal by reason; a hold placed after an approval makes the approved
+   `run` fail `record-held` and leaves the approval unused; a gated action submitted without
+   `related` is refused `record-unlinked`; an agent's hold on an action it is not granted is
+   `hold-target-not-allowed`; an emulation action with no active entry is `deconfliction-missing`;
+   `validate` refuses an unknown `dir`, a world-readable records tree, and a `class: emulation`
+   action without `requires.deconflicted`, and an `execute` or `privileged` action, or a `write`
+   action outside a records lane, without `requires.approved_record`; a caller with a scheduler
+   entry and no `findings` key reads `per-run`, and `findings: none` without a `reason` is refused.
 5. **Relay operations and the decider in the broker**: `records-pending`, `records-decide`,
    `hold-place`, `hold-release`, `recall-raise`, `recall-resolve`; the Approvals page lists and
    decides notes under the viewer's ceiling; the CLI's `--break-glass`; the `decider.py`
@@ -459,12 +464,13 @@ the following minor (request 1.3, audit 1.6) and says so in its schema descripti
 10. **Overlay** (operator-merged, ADR-0026 stage 5): the lab's manifest lanes, quotas and grants,
     the map file, the tool-name table and rule deletions for the charters, the shadow run;
     ADR-0043's vault row moves to `new-shadow`.
-11. **The canary** (overlay, operator-merged): one profile on the broker tools for the last shadow
-    days, deciding on the hub.
+11. **The canary** (overlay, operator-merged): one profile on the broker tools for the last three
+    shadow days, deciding on the hub.
 12. **The switch** (overlay, operator-merged): the profile change of decision 12, the guard's
     zones emptied, the dashboard route off, the vault archived; ADR-0043's row to `new-primary`,
     then `old-retired`. Its evidence: the `records` contract run, the clean reconciliation, the
-    shadow comparison's clean days and the canary's clean days with its decisions made on the hub.
+    shadow comparison's seven clean days and the canary's three clean days with its decisions made
+    on the hub.
 
 ## Alternatives
 
@@ -485,9 +491,10 @@ the following minor (request 1.3, audit 1.6) and says so in its schema descripti
   with the judged approver. It keeps the docstring's separation, but the broker would still be the
   component that judges the approver, so a compromised broker could forge the call; the separate
   user would add a process and a user to deploy without removing that trust.
-- **Import only the open items and archive the rest read-only.** Cheaper, and the operator may yet
-  choose it for findings (open question); the approved-but-unbuilt backlog and the holds on it
-  cannot be left behind, because completing them is the agents' default work.
+- **Import only the open items and archive the rest read-only.** Cheaper, but rejected by the
+  operator on 2026-11-08 for findings too (decision 10); the approved-but-unbuilt backlog and the
+  holds on it cannot be left behind in any case, because completing them is the agents' default
+  work.
 - **A database for the records.** One file per fact under one writer already gives exactly-once and
   conflict-free writes (ADR-0014, ADR-0017 decision 5); a database would add a datastore to back
   up and swap without adding a guarantee.

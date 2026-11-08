@@ -587,7 +587,10 @@ the eligible backends, then stable-sorted by load ratio; configured order with `
 and counts the slot before it returns, so the next decision in the same pass sees it. A backend's
 load is the larger of its engines' own reading (the configured gauges summed over its
 `load_probe_urls`) and the pool's in-flight count; a backend with no `max_concurrent` is never
-full. Each probe URL is read at most once per 1.5 seconds (or the probe timeout, if longer), counted
+full. `max_concurrent` is a hard admission cap, not a selection weight (ADR-0026's amendment,
+decided 2026-11-08): `Reserve` skips a backend whose load has reached it before it looks at the
+token budget, so a backend at its cap is never given another session.
+Each probe URL is read at most once per 1.5 seconds (or the probe timeout, if longer), counted
 from when the read ended, by the load and the KV readers together; a failed read is remembered for
 20 seconds (one the caller's own context ended is not remembered); and one decision reads its
 backends concurrently (each probe bounded by `ProbeTimeout`, 2 seconds). So an endpoint that

@@ -105,8 +105,9 @@ holds each, for how long, and how it is replaced.
      run. The private key never leaves the handler's account.
    - **Lake writers** are module principals: each holds its own table-scoped credential under its
      module's namespace (ADR-0040; checklist S-05), never a catalog-wide one.
-2. **The service schema names the credentials a service uses.** The service schema's next minor
-   version (additive; the number is taken in merge order with the batch's other additions) adds an
+2. **The service schema names the credentials a service uses.** Service schema 2.10 (additive; the
+   batch numbers its service-schema minors in the merge order ADR-0039 (2.9), this ADR, ADR-0042
+   (2.11)) adds an
    optional `credentials` object with two lists of `secret:` references: `holds` (what the service
    presents, signs or decrypts with) and `verifies` (what it checks callers against, by value or
    by digest). `front_door.secret` and `status_sources[].auth.secret` count as held and need not
@@ -216,7 +217,7 @@ holds each, for how long, and how it is replaced.
      per job (deploy role: one hour, `source_addresses` bound), in the switch order
      [private overlay](../private-overlay.md) already gives. A person logs in to OpenBao through the
      IdP (Keycloak, the single IdP: ADR-0034, ADR-0039) for a certificate of at most a working day.
-   - The site schema's next minor version (additive, numbered in merge order) adds
+   - Site schema 1.7 (additive; ADR-0042's restore zone takes 1.8 after it) adds
      `access.ssh: certificates | static`. With `certificates`, `hnx guests validate` refuses a
      guest whose `cloudinit.ssh_authorized_keys` names any key but the site's one break-glass key,
      and refuses `cloudinit.sudo: nopasswd` for any account but the deploy account the CA's deploy
@@ -304,7 +305,8 @@ holds each, for how long, and how it is replaced.
       rotation, not by extension. These are the hypervisor and router API tokens, the deploy's age
       identity and cloud provider keys held by the gateway with spend limits. Offline break-glass
       material (the break-glass SSH key, the unseal shares; ADR-0042 decision 6) is permanent with a
-      `max_age` of at most 365 days, because it is exercised under F-13 rather than used.
+      `max_age` of 365 days (**decided 2026-11-08, operator**), because it is exercised under F-13
+      rather than used.
 
     `hnx secrets plan` refuses a broad rule (`broad: true`) that no exception matches, and a
     transitional exception further than 180 days from its commit. `hnx secrets audit --metadata`
@@ -367,7 +369,7 @@ requests the operator merges there.
    `fresh` rule markers with `seed` refusing a supplied value for either, and a Go test that the
    admin key is among the callers checked for equal values. Tests prove each refusal, and that a
    plain generated rule still accepts `--from-file`. This step blocks step 14.
-3. **Service schema `credentials`** (the next minor). Schema, the frozen previous version,
+3. **Service schema `credentials`** (2.10). Schema, the frozen previous version,
    examples and negatives (a reference held by two services; held and verified by one; verified by
    two; the admin key held). Tests prove `registry validate` refuses each negative and accepts the
    example registry with every existing `front_door`/`status_sources` secret counted as held.
@@ -409,7 +411,7 @@ requests the operator merges there.
     check with its mutants (a run sent the backend key; a run sent another profile's key; a key
     left after the run; a start of a unit outside the templates refused). The backend-key standing
     exception's expiry is set to the controller cutover.
-12. **Site `access.ssh` and the break-glass account.** The site schema's next minor, the
+12. **Site `access.ssh` and the break-glass account.** Site schema 1.7, the
     `guests validate` refusals (including a site without `access.ssh: certificates` once
     `lab/ssh-ca.yml` exists), and the break-glass account with its password-gated sudo. Tests prove
     each refusal.

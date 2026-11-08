@@ -83,9 +83,9 @@ Five facts in this repository shape the answer:
 The operator's decisions bound the product set. The old SOAR product and the old case manager are
 not part of homelab-next. The old case manager's analyzer engine has been removed. The CTI graph
 and its own storage layer stay, and so does the enrichment service: they enrich differently
-(ADR-0039 decision 6). The proposed lake decision is a fresh start at the cut, with the old lake
-kept as a read-only archive (ADR-0043 decision 7). That row stays `undecided` until the operator's
-review stamps it, so this ADR builds on `fresh` and says where a `migrate` stamp would change it.
+(ADR-0039 decision 6). The lake starts fresh at the cut, with the old lake kept as a read-only
+archive (ADR-0043 decision 7; confirmed by the operator on 2026-11-08), so this ADR builds on
+`fresh` and says where a `migrate` stamp would change it.
 Single sign-on is Keycloak; the old IdP retires (ADR-0039).
 
 ## Decision
@@ -205,9 +205,9 @@ Single sign-on is Keycloak; the old IdP retires (ADR-0039).
    - Writer code is written fresh against `homelabnext.lake`. The old writers are reference for
      behaviour only (ADR-0011 decision 1).
    - **No backfill path, while the lake row is `fresh`.** On a fresh lake there is nothing to
-     backfill. If the operator stamps the lake row `migrate`, the old lake is copied as ADR-0043
-     decision 7 describes, after the TLP backfill, and this decision gains a backfill path; the
-     other decisions do not change. The writer is tested with the recorded crash-and-replay case
+     backfill. Were the lake row ever restamped `migrate`, the old lake would be copied as
+     ADR-0043 decision 7 describes, after the TLP backfill, and this decision would gain a
+     backfill path; the other decisions would not change. The writer is tested with the recorded crash-and-replay case
      of `checkpoint.py`: a replay after a crash adds no row.
 
 4. **Sensors and endpoint forensics are modules at stage 1, and acting on endpoints goes through
@@ -429,19 +429,22 @@ Single sign-on is Keycloak; the old IdP retires (ADR-0039).
 - The lake's history and the archive (ADR-0043 decision 7). Restore drills and the cold-start
   order of these modules (ADR-0042). The modules' per-host enrolment and API credentials, issuance
   and rotation (ADR-0045).
-- The old SOAR product and the old case manager: not carried, `legacy` until their rows close (ADR-0039). The `automation`
-  slot stays without a primary.
+- The old SOAR product and the old case manager: not carried, `legacy` until their rows close
+  (ADR-0039). The `automation` slot's primary is StackStorm (ADR-0039 decision 6), which no
+  decision here needs.
 - The sandbox, honeypots, red-team range, vulnerability scanner, cloud-posture scanner and runtime
   kernel sensor. Their lake feeders follow decision 8's collector rule when their modules come.
 - The agents that read SOC data, and their MCP tools (ADR-0026 stages 3 to 5, ADR-0044, ADR-0047).
-- **Not carried, and not owned by any ADR of this batch.** Each needs its own ADR before it is
-  ported; until then its timers or flows get ledger rows of `undecided` (ADR-0043), so the gap
-  stays visible:
-  - the risk-based alerting engine's scoring (ADR-0036's analyzer and the decide cascade cover
-    first-seen behaviour; risk scoring is a separate design);
-  - the CTI external pipeline and its publishing;
-  - the live 24-hour dataflow page;
-  - the interactive-session runbook gate.
+- **Not carried, and not owned by any ADR of this batch.** **Decided 2026-11-08 (operator):**
+  - the live 24-hour dataflow page is retired: its ledger row is `retire` (ADR-0043), with no
+    successor;
+  - each of these three gets a future ADR of its own, named as a follow-up in
+    [module follow-ups](../modules/follow-ups.md#follow-up-adrs). Until each is written, its
+    timers or flows get ledger rows of `undecided` (ADR-0043), so the gap stays visible:
+    - the risk-based alerting engine's scoring (ADR-0036's analyzer and the decide cascade cover
+      first-seen behaviour; risk scoring is a separate design);
+    - the external CTI pipeline and its publishing;
+    - the interactive-session runbook gate.
 
 ## Consequences
 

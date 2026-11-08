@@ -76,8 +76,8 @@ the story:
 
 ## Decision
 
-1. **Every guest and host has a backup policy, said out loud.** Guest schema 1.7 (additive; the
-   next free minor if another lands first) adds `backup.reason`; the schema keeps `backup`
+1. **Every guest and host has a backup policy, said out loud.** Guest schema 1.7 (additive; no
+   other ADR of this batch changes the guest schema) adds `backup.reason`; the schema keeps `backup`
    optional, so the frozen baselines and the existing fixtures stay valid (ADR-0001's additive
    rule, `tools/schema_check.py`). The requirement is a semantic rule in `hnx guests validate`,
    as `homelabnext.power` already does for `ups: none`: it fails a guest with no `backup` block,
@@ -96,8 +96,9 @@ the story:
    decision 1), or, for a role that is not yet a module, when it declares a `data:` dataset or
    its `compose_app` spec mounts a named volume or a bind source. A `platform` module keeps no
    private datastore and needs no dump: its data is backed up by the stateful providers of the
-   slots it writes to. A stateful row carries a `recovery` block on its registry row (the service
-   schema's next free minor, additive), the one declaration site that ADR-0040's dataset
+   slots it writes to. A stateful row carries a `recovery` block on its registry row (service
+   schema 2.11, additive: the batch numbers its service-schema minors in the merge order ADR-0039
+   (2.9), ADR-0045 (2.10), this ADR), the one declaration site that ADR-0040's dataset
    `recovery: <entry>` reference points at: one entry per datastore, `{engine, method, schedule,
    retain, rto, rpo}`. `method` is a closed vocabulary, one entry per engine kind, each
    implemented once as a task file in `compose_app` (and callable by any role):
@@ -139,12 +140,12 @@ the story:
    restored instance (a target file rendered for it, `hnx conform run`), compares a per-dataset
    fingerprint recorded at dump time (row counts per table, document counts per index, the lake's
    snapshot ids), checks `duration` against the row's `rto`, and tears the instance down.
-   - **The zone.** It is a site-model zone with `purpose: restore` (the site schema's next free
-     minor, additive). The network generators render it with no route to any other zone and no
-     egress (a test of the firewall and router renderers holds this). The drill runs from an
-     ephemeral runner placed inside the restore zone. The only flow into the zone is generated:
-     the backup host pushes the restore set and pulls the drill record, and no other flow is
-     allowed in either direction.
+   - **The zone.** It is a site-model zone with `purpose: restore` (site schema 1.8,
+     additive, after ADR-0045's 1.7 in the batch's merge order). The network generators render it
+     with no route to any other zone and no egress (a test of the firewall and router renderers
+     holds this). The drill runs from an ephemeral runner placed inside the restore zone. The only
+     flow into the zone is generated: the backup host pushes the restore set and pulls the drill
+     record, and no other flow is allowed in either direction.
    - **Its dependencies are its own.** The restored service's dependencies come from inside the
      zone: a throw-away resolver, a throw-away IdP realm and a drill-only secret store seeded with
      fresh values. A restored service never resolves a `secret:` against the live store, and its
@@ -216,10 +217,17 @@ the story:
    The encryption key is held in the secret store **and** in break-glass custody (decision 6),
    since a copy whose only key lives in the lab is lost with the lab.
 
+   **Decided 2026-11-08 (operator):** no off-site provider is chosen yet; the provider stays the
+   operator's choice. No compliance-lock retention is set on any off-site store until the operator
+   has picked both the provider and the retention window, because a compliance lock cannot be
+   shortened or lifted by anyone inside its window, so a retention mistake cannot be undone until
+   the window ends. Until then the lab has no off-site copy, and F-09's off-site half is not met.
+
 6. **Break-glass is a written, tested procedure.** The secret store runs in server mode with
-   integrated storage; initialisation produces Shamir unseal shares (or, with auto-unseal,
-   recovery shares) at a threshold the operator sets, and the initial root token is revoked after
-   bootstrap.
+   integrated storage; initialisation produces Shamir unseal shares at a threshold the operator
+   sets, and the initial root token is revoked after bootstrap. **Decided 2026-11-08 (operator):**
+   unseal is by Shamir key shares, not auto-unseal, so the root of trust is never a key the lab
+   must reach at boot.
    - **Custody.** Each share is held offline by its holder, on paper and in a password manager
      that is not hosted by the lab, with at least the threshold held away from the lab's
      premises. The off-site encryption key, the off-site provider's admin credential, the site's
@@ -276,8 +284,10 @@ the story:
    A plan generator reads the site's `power` section and `boot-order.json` and writes, per UPS,
    the hosts that UPS feeds (`homelabnext.power`) in reverse tier order, the host that runs the
    UPS's monitor last.
-   - **The fleet stops first.** Every plan's first step is `hnx fleet stop` (ADR-0047 decision
-     11), engaged before any service the agents use is stopped.
+   - **The fleet stops first.** Every plan's first step, on each host the UPS feeds, creates the
+     local stop file of every fleet-stop point on that host (ADR-0047 decisions 11 and 13), before
+     any service the agents use is stopped. It needs no network credential and never calls `hnx
+     fleet stop`.
    - **Each host shuts down only its own guests, locally**, through the hypervisor's own reverse
      start order, which decision 7 already renders into each guest's start order: applications
      first, then data engines, identity, secrets and DNS. Cross-host order comes from tier waits
@@ -291,13 +301,12 @@ the story:
    - **Startup** after power returns is the boot order of decision 7, behind each guest's
      `on_boot`.
 
-   A new role configures the NUT client and its scheduler on each host from the plan, as the
-   `ups` module that contributes this decision's criteria (decision 4). Tested by replaying the
-   recorded upsd transcripts already in `tests/status/fixtures/nut/` (the on-battery and online
-   transcripts, the latter including a low-battery UPS) into the plan runner in dry-run,
-   asserting the order, the fleet stop first, the two-poll debounce and the abort; and by a unit
-   test per UPS that nothing a UPS does not feed is touched. A lab needs a `power` section before
-   this can run (F-20).
+   A new role configures the NUT client and its scheduler on each host from the plan, as the `ups`
+   module that contributes this decision's criteria (decision 4). Tested by replaying the recorded
+   upsd transcripts already in `tests/status/fixtures/nut/` (the on-battery and online transcripts,
+   the latter including a low-battery UPS) into the plan runner in dry-run, asserting the order, the
+   local stop files first, the two-poll debounce and the abort; and by a unit test per UPS that
+   nothing a UPS does not feed is touched. A lab needs a `power` section before this can run (F-20).
 
 10. **A restore runs the code that wrote the data.** Every image a stateful row runs is pinned by
     tag and sha256 digest (role-lint RL009 for roles, `compose_app`'s validate for specs, and a
@@ -307,10 +316,9 @@ the story:
     proven before the upgrade. A stateful engine past its end of life is drift: an automated
     criterion reads the pin-freshness report and an end-of-life table and fails on any. An
     end-of-life major is upgraded by a dump from the old major and a restore into the current
-    one, done as a service drill (decision 3) before the row's cutover (ADR-0043). If the
-    operator stamps ADR-0043 decision 7's fresh lake, the new lake's query engine and catalog are
-    pinned from the first deploy and dumped with `lake-snapshot`; until that stamp, the lake row
-    stays `undecided` and this decision asks only for the pins.
+    one, done as a service drill (decision 3) before the row's cutover (ADR-0043). The operator
+    confirmed ADR-0043 decision 7's fresh lake on 2026-11-08, so the new lake's query engine and
+    catalog are pinned from the first deploy and dumped with `lake-snapshot`.
 
 ## Consequences
 
@@ -324,12 +332,14 @@ the story:
   more disk on the backup target for dumps beside images, and a drill workload that runs every
   night on the backup host; drills of the large engines (a SIEM's search engine, the lake) are
   long and are scheduled for one a night at most.
-- An off-site provider is a recurring cost and an external dependency, chosen by the operator. Its
-  automation credential is put-and-read only under a compliance lock, so pruning off-site copies
-  happens only by retention expiry, and a retention mistake cannot be undone inside the window.
-- A cold start needs a human at the unseal gate unless the operator chooses auto-unseal, which
-  moves the dependency to whatever holds the auto-unseal key. The order makes that gate visible
-  instead of discovering it during an outage.
+- An off-site provider is a recurring cost and an external dependency, chosen by the operator
+  and not chosen yet (decision 5). Its automation credential is put-and-read only under a
+  compliance lock, so pruning off-site copies happens only by retention expiry, and a retention
+  mistake cannot be undone inside the window; that is why no retention is set before the provider
+  and the window are both chosen.
+- A cold start needs a human at the unseal gate: the operator chose Shamir shares over
+  auto-unseal (decision 6). The order makes that gate visible instead of discovering it during an
+  outage.
 - Every new service row with `upstreams`, every `secret:` reference and every module `requires`
   now changes the boot order; a change that forms a cycle fails generation and must name its
   `start_without` with a reason and a degraded mode the validator accepts.
@@ -427,9 +437,10 @@ so the dumps, drills and off-site copies come before the boot order.
    `--power-cut` (kill, restart dirty) in the nightly workflow. Tests: the nightly job passes; a
    deliberately unhealthy tier-1 fake stops the tiers after it and fails the report.
 10. **Ordered UPS shutdown and startup.** The host-order plan generator, the NUT client role over
-    TLS with per-host users, the dry-run runner, `hnx fleet stop` as the first step. Tests:
-    replaying the recorded on-battery and online transcripts (the latter with a low-battery UPS)
-    yields the expected order, the fleet stop first and the abort; a single-poll trigger does not
+    TLS with per-host users, the dry-run runner, the local stop files as the first step
+    (ADR-0047 decision 13). Tests: replaying the recorded on-battery and online transcripts (the
+    latter with a low-battery UPS) yields the expected order, the local stop files first and the
+    abort; a single-poll trigger does not
     fire; per-UPS tests that nothing outside a UPS's load is touched; the monitoring host is last;
     no plan step uses a credential for another host.
 11. **Pins and end of life.** The overlay's pin check (an overlay pull request, merged by the
@@ -457,10 +468,10 @@ so the dumps, drills and off-site copies come before the boot order.
   signalling needs none.
 - **Auto-unseal by default.** It removes the human from the cold start, and moves the root of
   trust to a key the lab must reach at boot (a cloud KMS, or a second secret store that is itself
-  in the boot order). Left to the operator (open question), with Shamir shares as the default.
+  in the boot order). Rejected: the operator chose Shamir shares on 2026-11-08 (decision 6).
 - **Drills against the live network or the live secret store.** Cheaper than a restore zone with
   its own dependencies, and a restored copy of a service that pages, writes to the bus, answers on
   the live address or authenticates as the live service is an incident of its own.
-- **Name an off-site provider here.** The cost, the jurisdiction and the trust are the operator's;
-  the contract (client-side encryption, a compliance lock, a tested restore) is what this
-  repository can check.
+- **Name an off-site provider here.** The cost, the jurisdiction and the trust are the operator's,
+  who has not chosen one yet (decision 5); the contract (client-side encryption, a compliance
+  lock, a tested restore) is what this repository can check.
