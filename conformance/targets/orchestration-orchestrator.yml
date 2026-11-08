@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# The orchestration adapter on this repository's own controller (orchestrator/cmd/controller), run
+# by tools/orchestration_conformance.py on loopback: the exec runner's sessions are
+# conformance/fakes/llm_orchestrator_hermes.py, and fault injection is real (a session killed by
+# its recorded pid; the controller killed and started again on the same database).  wait_floor 0:
+# the controller admits on a one-second tick, and a floor would turn a read (wait with timeout 0)
+# into a wait for the end.
+#   python3 tools/orchestration_conformance.py run --controller BIN --work DIR --strict
+name: orchestration-orchestrator
+capabilities:
+  orchestration:
+    adapter: homelabnext.conform.adapters.llm_orchestrator:make
+    config: {wait_floor: 0, fault_injection: true}

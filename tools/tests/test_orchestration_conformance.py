@@ -1,0 +1,150 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The orchestration suite's fault injection against this repository's controller (ADR-0026 stage
+2, PR 2.8): the two MUST checks that need it run and pass on the real binary, and the pieces they
+rest on (the runner body's pid file, the adapter's process faults) hold on their own."""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from conformance.fakes import llm_orchestrator_hermes as body
+from homelabnext.conform.adapters import llm_orchestrator as adapter
+from homelabnext.conform.adapters._env import AdapterConfigError
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import orchestration_conformance as harness
+
+RUN = "0123456789abcdef0123456789abcdef"
+FAULT_CHECKS = (
+    "killed-worker-fails-run-and-frees-capacity",
+    "restart-reconciles-runs-and-capacity",
+)
+
+
+@pytest.mark.usefixtures("go_toolchain")
+def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path):
+    binary = tmp_path / "controller"
+    subprocess.run(
+        ["go", "build", "-o", str(binary), "./cmd/controller"],
+        cwd=ROOT / "orchestrator",
+        check=True,
+        env=dict(os.environ, GOFLAGS="-mod=readonly", GOWORK="off"),
+    )
+    out = tmp_path / "result.json"
+    args = [
+        "run",
+        "--controller",
+        str(binary),
+        "--work",
+        str(tmp_path / "work"),
+        "--strict",
+        "--out",
+        str(out),
+    ]
+    for c in FAULT_CHECKS:
+        args += ["--check", c]
+    assert harness.main(args) == 0
+    (run,) = json.loads(out.read_text())["runs"]
+    results = {r["check"]: r["status"] for r in run["results"]}
+    assert results == dict.fromkeys(FAULT_CHECKS, "pass"), results
+    assert not list((tmp_path / "work" / "pids").glob("*.pid")), "a session outlived the run"
+
+
+def test_the_runner_body_records_its_session_pid(tmp_path):
+    path = body.write_pid_file({body.PID_DIR_ENV: str(tmp_path), "HNX_RUN_ID": RUN}, 4242)
+    assert path == tmp_path / f"{RUN}.pid" and path.read_text() == "4242\n"
+    assert not list(tmp_path.glob("*.tmp"))
+    assert body.write_pid_file({"HNX_RUN_ID": RUN}, 1) is None
+    assert body.write_pid_file({body.PID_DIR_ENV: str(tmp_path), "HNX_RUN_ID": "../x"}, 1) is None
+
+
+def test_the_runner_body_reads_its_prompt_from_stdin():
+    code, _, err = body.run(["--stdin"], stdin=lambda: "no job line here")
+    assert code == 1 and "no hnx-conform-job: line" in err
+    code, _, err = body.run([], stdin=lambda: "x")
+    assert code == 2 and "--stdin" in err
+
+
+def test_process_faults_kill_the_recorded_session(tmp_path):
+    proc = subprocess.Popen(["sleep", "30"])
+    try:
+        (tmp_path / f"{RUN}.pid").write_text(f"{proc.pid}\n")
+        faults = adapter.ProcessFaults(tmp_path, ["true"], lambda: True)
+        faults.kill(RUN)
+        assert proc.wait(timeout=30) == -signal.SIGKILL
+        with pytest.raises(ValueError):
+            faults.kill("../../etc")
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_process_faults_restart_runs_the_command_and_waits_for_health(tmp_path):
+    marker = tmp_path / "restarted"
+    calls = []
+
+    def healthy():
+        calls.append(1)
+        return len(calls) > 2
+
+    faults = adapter.ProcessFaults(tmp_path, ["touch", str(marker)], healthy, sleep=lambda s: None)
+    faults.restart()
+    assert marker.exists() and len(calls) == 3
+    failing = adapter.ProcessFaults(tmp_path, ["false"], lambda: True)
+    with pytest.raises(Exception, match="restart command failed"):
+        failing.restart()
+    clock = iter(range(0, 1000, 10))
+    never = adapter.ProcessFaults(
+        tmp_path, ["true"], lambda: False, wait_s=5, clock=lambda: next(clock), sleep=lambda s: None
+    )
+    with pytest.raises(Exception, match="did not answer"):
+        never.restart()
+
+
+def test_a_session_without_a_pid_file_is_not_measured(tmp_path):
+    clock = iter(range(0, 1000, 10))
+    faults = adapter.ProcessFaults(
+        tmp_path, ["true"], lambda: True, wait_s=5, clock=lambda: next(clock), sleep=lambda s: None
+    )
+    with pytest.raises(Exception, match="no session pid"):
+        faults.kill(RUN)
+
+
+def test_fault_injection_needs_both_settings(monkeypatch, tmp_path):
+    monkeypatch.setenv("HNX_ENDPOINT_ORCHESTRATION", f"http://{harness.LOOPBACK}:9")
+    monkeypatch.setenv(adapter.PROFILES_ENV, str(tmp_path))
+    monkeypatch.delenv(adapter.PID_DIR_ENV, raising=False)
+    monkeypatch.delenv(adapter.RESTART_ENV, raising=False)
+    with pytest.raises(AdapterConfigError, match=adapter.PID_DIR_ENV):
+        adapter.make(fault_injection=True)
+    monkeypatch.setenv(adapter.PID_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(adapter.RESTART_ENV, "not json")
+    with pytest.raises(AdapterConfigError, match="JSON"):
+        adapter.make(fault_injection=True)
+    monkeypatch.setenv(adapter.RESTART_ENV, json.dumps(["restart"]))
+    subject = adapter.make(fault_injection=True)
+    assert isinstance(subject._faults, adapter.ProcessFaults)
+    assert adapter.make()._faults is None  # a target without fault_injection declares none
+
+
+def test_the_harness_refuses_a_used_work_directory(tmp_path):
+    (tmp_path / "x").write_text("")
+    assert harness.main(["run", "--controller", "/bin/true", "--work", str(tmp_path)]) == 2
+    assert harness.main(["run", "--controller", "/bin/true", "--work", "relative"]) == 2
+
+
+def test_the_harness_config_gives_sessions_only_the_pid_directory(tmp_path):
+    cfg = json.loads(harness.write_config(tmp_path, 18000).read_text())
+    assert cfg["runner"]["env_allowlist"] == ["HNX_CONFORM_PID_DIR"]
+    assert cfg["api_auth"] == {"enabled": False} and cfg["http_addr"].startswith(
+        harness.LOOPBACK + ":"
+    )
+    assert "{prompt}" not in cfg["runner"]["exec"]["argv"]  # the prompt goes on stdin
