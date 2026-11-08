@@ -509,6 +509,17 @@ the configuration, the catalog and every profile, and renders every profile's tw
 `api_auth.tokens_file`, as `prompt_dir` already was) are read from the configuration file's
 directory.
 
+**The trust boundary.** Every session the exec runner starts runs as the controller's own user.
+It can therefore read what that user can: `controller.db` (every job's task and answer), the
+controller's `/proc/<pid>/environ`, and other runs' working directories and usage reports. The
+per-run usage directory is a layout, not an isolation; it does not hold against a session until
+stage 3's runner starts sessions as a separate session user. What the runner does hold:
+- a session inherits no environment variable nobody listed (an empty `runner.env_allowlist`
+  passes none);
+- `events.token_env` is never passed, and `check` refuses an allowlist entry that covers it;
+- the unit hides other users' processes (`ProtectProc=invisible`).
+Run only agents whose output you would let read the controller's state.
+
 - **`controller check --config FILE`** (ADR-0026 decision 17) loads the configuration, the
   profiles, the catalog of kinds, every profile's two lanes against it, the registers, the prompt
   contracts, the runner and the pool's own settings (`Policy.Validate`), as `serve` would. It opens
@@ -1177,17 +1188,26 @@ PR 2.7a (#331) and PR 2.7b leave these, each with the reason it was not done:
   above, authentication off on loopback) passed all 14 checks it executed. It needed the
   adapter's `wait_floor: 0`, because the floor turns the suite's `wait(timeout=0)` read into a
   wait for the end, which fails `retrying-run-keeps-its-hold`. The two fault-injection checks stay
-  `untested` until PR 2.8, so a `--strict` job needs PR 2.8 first, or a stated exception for those
-  two.
+  `untested` until PR 2.8. **Decided (operator default): PR 2.8's fault injection lands before
+  PR 2.7c, so 2.7c runs `--strict` with no exception.** The job also runs `make
+  controller-check`, and it is the controller's end-to-end test, which this PR has only at unit
+  level. A standalone `{prompt}` argument must now follow `--`, so the runner body takes its prompt
+  on stdin or after `--` there.
 - **After ADR-0039's `hnx registry bindings` (its step 5) merges: decision 16's wire names and the
   consumer check.** This covers the packs' `svc:orchestrator` target, the declared overlap source,
   the example registry row and the consumer check of `svc:llm-orchestrator`. The ADR makes PR 2.7
   depend on that step, which has not merged; the binary already emits `svc:orchestrator` by
-  default.
-- **Job pruning.** A retention job has to keep each pruned job's run id, submitter and
-  idempotency key for as long as replays may arrive. That needs a policy on how long callers
-  retry, which nothing states yet. Until then nothing is deleted, and the database grows by one
-  bounded row per job.
+  default. **Decided (operator default): the renames wait for ADR-0039 step 5.**
+- **Sessions isolated from the controller** (stage 3): a separate session user, so a session
+  cannot read `controller.db`, the controller's environment or other runs' directories ("The
+  trust boundary" above).
+- **Job and usage-directory pruning.** A retention job has to keep each pruned job's run id,
+  submitter and idempotency key for as long as replays may arrive. That needs a policy on how long
+  callers retry, which nothing states yet. Until then nothing is deleted: the database grows by one
+  bounded row per job, and `usage/` by one directory per run.
+- **The task digest of rows from before the column.** A row queued before `task_sha256` existed
+  has none and is nobody's duplicate. A backfill (the digest computed in Go for unfinished rows)
+  would need a data write at open, outside the schema migration; such rows drain as they finish.
 - **The tokens file's parent chain.** The API checks the file and its directory; the directories
   above them are the unit's to keep root-owned. A check of the whole chain is small, but it
   belongs to `api.LoadAuthenticator`, with its tests, not to the binary.

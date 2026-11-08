@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- Orchestrator exec runner and controller: sessions inherit no unlisted variable and never the event token; no subreaper; a stop ends admission before the drain (`KillMode=mixed`); signals caught first (PR 2.7b review).
 - Orchestrator queue: admission compares tasks by a stored digest and reads no task text; a backend-down requeue uncounts its attempt in the same write; the submit window's count is index-bounded by time (PR 2.7a).
 - Gateway: the reply scanner reads a top-level key holding invalid UTF-8 as `json.Unmarshal` does (found by `FuzzJSONScan`).
 - Orchestrator: `pathscope.CheckWrite`/`CheckRead` refuse a path with a hidden segment (found by `FuzzCheck`) or a backslash, NUL or control character.
