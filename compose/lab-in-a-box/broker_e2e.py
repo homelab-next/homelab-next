@@ -715,8 +715,16 @@ def hub_files(directory: Path, *, edge_address: str, socket_path: str) -> dict[s
         "hosts": {"lab-edge": {"address": addr, "zone": "lab", "role": "edge"}},
         "services": {
             "edge-proxy": {**svc, "capability": "edge-proxy", "impl": "caddy", "protocol": "https",
-                           "port": 443, "health": {"kind": "tcp"}, "upstreams": ["status-hub"],
+                           "port": 443, "health": {"kind": "tcp"},
+                           "upstreams": ["auth-proxy", "status-hub"],
                            "version": "2.11.7", "tls": "public"},
+            # the edge's forward auth (ADR-0034 decision 3): a public auth: idp site needs a
+            # primary auth-proxy; the e2e plays its part by sending edge_headers()
+            "auth-proxy": {**svc, "capability": "auth-proxy", "impl": "oauth2-proxy",
+                           "protocol": "http", "port": 4180,
+                           "health": {"kind": "http", "path": "/ping", "expect_status": 200},
+                           "upstreams": ["idp"], "version": "7.15.5", "tls": "none",
+                           "auth": "own"},
             "idp": {**svc, "capability": "idp", "impl": "keycloak", "protocol": "https",
                     "port": 9443, "health": {"kind": "tcp"}, "version": "0.0.0", "tls": "internal"},
             "status-hub": {**svc, "capability": "status-hub", "impl": "homelabnext",

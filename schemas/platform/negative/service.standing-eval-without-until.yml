@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# a non-primary row without until: nothing would ever expire it (ADR-0039 decision 1)
+registry_version: 1
+lab: {name: northwind, domain: example.internal}
+zones:
+  mgmt: {cidr: 192.0.2.0/24}
+hosts:
+  mon-core: {address: 192.0.2.20, zone: mgmt}
+services:
+  notify:
+    capability: notify
+    impl: notifier-a
+    host: mon-core
+    protocol: http
+    port: 8080
+    owner: platform-team
+    version: "2.11"
+    tls: none
+  notify-candidate:
+    capability: notify
+    impl: notifier-b
+    host: mon-core
+    protocol: http
+    port: 8081
+    owner: platform-team
+    version: "2.6"
+    tls: none
+    standing: {tier: eval, why: a candidate notifier under test}

@@ -159,7 +159,8 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
 
    A new check, `bindings.py` under `homelabnext/registry/`, is run as `hnx registry bindings` over a
    registry plus the role table, the packs and the selection. It refuses each of these:
-   - an upstream to a capability with no primary;
+   - an upstream to a capability with no primary (the registry's own rule since step 2, which
+     the check reuses);
    - a role binding or pack target naming a non-primary row;
    - a `svc:` target or event source in a pack or its fixtures that names neither a registry
      row, nor a capability, nor a declared platform source. The platform sources are a list in
@@ -312,9 +313,27 @@ Each step is one pull request, merged green after a design review and a security
    enrichment row whose ceiling is above the primary's (refused), an eval row with a
    `public_hostname` (refused), and an `auth: idp` row whose only `idp` row is `eval` (refused).
    Schema negatives under `schemas/platform/negative/`.
-3. **Resolution and generators by tier.** This step changes `by_capability`, `Resolver`, the
+   - **Also in this step:** an upstream to a capability with no primary is refused by
+     `semantic_problems` (after the self-upstream check), the one binding the registry holds
+     itself; step 5's `hnx registry bindings` reuses the rule. A public `auth: idp` row needs a
+     primary `auth-proxy`. A non-primary egress row's declared `tlp_ceiling`, legacy included,
+     is not above the primary's. An explicit `env_var` stays unique whatever the row's tier.
+     `until` and `why` are refused on a primary. A replica capability is named
+     `<replica_of>-<suffix>`.
+   - **Consumers see primaries only.** Until step 3, `build_registry` holds every non-primary
+     row back from consumers (`Registry.services` is the primaries; the rest are in
+     `Registry.non_primary`). `by_capability` returns the primary or nothing, and a non-primary
+     row's default endpoint variable is its row name's. So no generator, resolver or reader
+     sees an `eval`, `retiring` or `legacy` row before step 3 widens each one by tier.
+   - **The ceiling test uses `notify`.** An enrichment candidate is bounded by ADR-0033's
+     enrichment-analyzer maximums, not by a registry `tlp_ceiling`: the egress capabilities
+     that carry one are `notify`, `events`, `backup` and `webhook`, so the ceiling test is
+     written against `notify`.
+3. **Resolution and generators by tier.** Step 2 hides every non-primary row from consumers.
+   This step widens them by tier: `by_capability` (primary only, as today), `Resolver`, the
    endpoint variables, the DNS zone, the realm, edge, uptime, metrics, keyring and backup
-   generators, and the edge's auth-proxy presence check. The realm is rendered for the `idp` row
+   generators, and the edge's auth-proxy presence check. Each reads `Registry.non_primary`
+   for the tiers decision 2 gives it. The realm is rendered for the `idp` row
    whose `impl` is the realm format's product, primary or eval, and refuses with none. Tests: a
    golden render of an all-tiers registry; a resolver test showing an eval row is reachable by
    row name and never by the capability alias; a realm rendered for a Keycloak eval row beside a
