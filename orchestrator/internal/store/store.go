@@ -8,7 +8,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -377,6 +379,7 @@ func insertJobTx(tx *sql.Tx, j *Job, check *ResubmitCheck, lim *SubmitLimits) er
 		return fmt.Errorf("compute next seq: %w", err)
 	}
 	j.Seq = maxSeq.Int64 + 1
+	j.TaskSHA256 = taskDigest(j.TaskDescription)
 
 	_, err := tx.Exec(`
 		INSERT INTO jobs (
@@ -384,14 +387,15 @@ func insertJobTx(tx *sql.Tx, j *Job, check *ResubmitCheck, lim *SubmitLimits) er
 			shadow, local_attempts, cloud_fallback_used, local_failed_reason,
 			session_id, idempotency_key, created_at, started_at, deadline,
 			finished_at, result_path, evidence_refs, task_description, response_body,
-			retry_of_run_id, submitted_by, resubmits, parent_profile_revision
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			retry_of_run_id, submitted_by, resubmits, parent_profile_revision, task_sha256
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		j.RunID, j.AgentKey, j.ProfileID, j.ProfileRevision, j.Priority, j.Seq, string(j.State),
 		boolToInt(j.Shadow), j.LocalAttempts, boolToInt(j.CloudFallbackUsed), j.LocalFailedReason,
 		j.SessionID, nullIfEmpty(j.IdempotencyKey), j.CreatedAt.Format(time.RFC3339Nano),
 		timePtrToString(j.StartedAt), timePtrToString(j.Deadline), timePtrToString(j.FinishedAt),
 		j.ResultPath, j.EvidenceRefs, j.TaskDescription, nullIfEmpty(j.ResponseBody),
 		nullIfEmpty(j.RetryOfRunID), nullIfEmpty(j.SubmittedBy), j.Resubmits, nullIfEmpty(j.ParentProfileRevision),
+		taskDigest(j.TaskDescription),
 	)
 	if err != nil {
 		if j.IdempotencyKey != "" && strings.Contains(err.Error(), "idempotency") {
@@ -466,11 +470,19 @@ func (s *Store) GetJob(runID string) (*Job, error) {
 }
 
 // admissionColumns is jobColumns with the columns admission never reads sent as NULL: the
-// answer, the failure reason, the auxiliary usage and the evidence. A queued row holds no answer
-// anyway; the task stays (admission's duplicate check and the dispatch read it), bounded at submit.
+// answer, the failure reason, the auxiliary usage, the evidence and the task. A queued row holds
+// no answer anyway, and admission compares tasks by their digest (task_sha256), so a pass holds
+// the queue's summaries, never its task texts; an executor reads its own job's task (GetJob).
 var admissionColumns = strings.NewReplacer(
 	"local_failed_reason,", "NULL,", "response_body,", "NULL,", "aux_by_task,", "NULL,", "evidence_refs,", "NULL,",
+	"task_description,", "NULL,",
 ).Replace(jobColumns)
+
+// taskDigest is a task's hex sha256, the Job.TaskSHA256 the store writes.
+func taskDigest(task string) string {
+	sum := sha256.Sum256([]byte(task))
+	return hex.EncodeToString(sum[:])
+}
 
 // summaryColumns is jobColumns with every text a list never shows sent as NULL: the task and the
 // answer (up to hundreds of KiB each) too, so a full page costs its summaries, not its
@@ -524,7 +536,7 @@ const jobColumns = `run_id, agent_key, profile_id, profile_revision, priority, s
 		local_backend_used, input_tokens, output_tokens, reasoning_tokens, api_calls, retry_of_run_id,
 		completed, failed, turn_exit_reason, cost_usd, cache_read_tokens, aux_by_task,
 		injected_lessons, injected_runbooks, prompt_sha256, prompt_bytes, attempts, submitted_by,
-		failure_class, resubmits, parent_profile_revision, model,
+		failure_class, resubmits, parent_profile_revision, model, task_sha256,
 		(SELECT c.run_id FROM jobs c WHERE c.retry_of_run_id = jobs.run_id ORDER BY c.seq ASC LIMIT 1)`
 
 // MaxListLimit bounds one ListJobs page.
@@ -929,6 +941,28 @@ func (s *Store) UpdatePromptProvenance(runID string, lessonIDs, runbookIDs []str
 	return err
 }
 
+// Requeue moves runID from `from` back to queued and sets its attempt count to attempts, in one
+// statement: no pass can see the row queued with the attempt it gives back still counted, and a
+// lost compare-and-swap (ErrStateConflict: a cancel moved the row) changes neither. A move to
+// queued publishes no event.
+func (s *Store) Requeue(runID string, from State, attempts int) error {
+	if !CanTransition(from, StateQueued) {
+		return fmt.Errorf("requeue %s: %s cannot go back to %s", runID, from, StateQueued)
+	}
+	res, err := s.db.Exec(`UPDATE jobs SET state = ?, attempts = ? WHERE run_id = ? AND state = ?`, string(StateQueued), attempts, runID, string(from))
+	if err != nil {
+		return fmt.Errorf("requeue %s: %w", runID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("requeue %s: rows affected: %w", runID, err)
+	}
+	if n == 0 {
+		return ErrStateConflict
+	}
+	return nil
+}
+
 // UpdateAttempts records how many times a job's attempt chain has run.
 func (s *Store) UpdateAttempts(runID string, attempts int) error {
 	_, err := s.db.Exec(`UPDATE jobs SET attempts = ? WHERE run_id = ?`, attempts, runID)
@@ -1076,7 +1110,7 @@ func scanJob(row scannable) (*Job, error) {
 	var completed, failed, cacheReadTokens, promptBytes, attempts sql.NullInt64
 	var turnExitReason, auxByTask, injLessons, injRunbooks, promptSHA sql.NullString
 	var costUSD sql.NullFloat64
-	var submittedBy, failureClass, retriedBy, parentProfileRevision, model sql.NullString
+	var submittedBy, failureClass, retriedBy, parentProfileRevision, model, taskSHA sql.NullString
 	var resubmits sql.NullInt64
 
 	if err := row.Scan(
@@ -1087,7 +1121,7 @@ func scanJob(row scannable) (*Job, error) {
 		&localBackendUsed, &inputTokens, &outputTokens, &reasoningTokens, &apiCalls, &retryOfRunID,
 		&completed, &failed, &turnExitReason, &costUSD, &cacheReadTokens, &auxByTask,
 		&injLessons, &injRunbooks, &promptSHA, &promptBytes, &attempts, &submittedBy,
-		&failureClass, &resubmits, &parentProfileRevision, &model, &retriedBy,
+		&failureClass, &resubmits, &parentProfileRevision, &model, &taskSHA, &retriedBy,
 	); err != nil {
 		return nil, err
 	}
@@ -1105,6 +1139,7 @@ func scanJob(row scannable) (*Job, error) {
 	j.FinishedAt = parseNullTime(finishedAt)
 	j.ResultPath, j.EvidenceRefs = resultPath.String, evidenceRefs.String
 	j.TaskDescription = taskDescription.String
+	j.TaskSHA256 = taskSHA.String
 	j.ResponseBody = responseBody.String
 	j.LocalBackendUsed = localBackendUsed.String
 	j.InputTokens = int(inputTokens.Int64)

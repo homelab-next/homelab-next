@@ -38,8 +38,9 @@ func failingClass(callErr error, res *backends.Result) runner.Class {
 //   - stall: the failing leg stalled.
 //   - backend-down: no cloud leg ran and the pool found every eligible backend down, or confirmed
 //     the failing one down with its own probe.
-//   - capacity: nothing could be attempted (every eligible backend leased or drained), or the
-//     controller's own context ended the session (a shutdown).
+//   - capacity: nothing could be attempted (every eligible backend leased or drained), the
+//     gateway kept refusing the failing leg at its backend's concurrency cap, or the controller's
+//     own context ended the session (a shutdown).
 //   - timeout: a deadline of the controller's own on the way (not the job's).
 //   - handler-error: everything else, a turn that ran and failed and a signal the controller did
 //     not send included: nothing says a rerun fares better.
@@ -59,7 +60,8 @@ func ClassifyFailure(callErr error, res *backends.Result) string {
 		return store.FailureStall
 	case !cloudFailed && backends.IsBackendDown(callErr):
 		return store.FailureBackendDown
-	case !cloudFailed && errors.Is(callErr, backends.ErrNoAttemptableBackend), class == runner.KilledByController:
+	case !cloudFailed && errors.Is(callErr, backends.ErrNoAttemptableBackend), class == runner.KilledByController,
+		class == runner.ConcurrencyLimited:
 		return store.FailureCapacity
 	case class == runner.TurnFailed, class == runner.KilledExternally:
 		return store.FailureHandlerError

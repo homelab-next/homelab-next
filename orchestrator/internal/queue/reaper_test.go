@@ -57,7 +57,8 @@ func TestReaper_KeepsTheClaimOfARunStillExecuting(t *testing.T) {
 	r.pool.balanced(t)
 }
 
-// requeueStore runs hook right after the running -> queued write of a backend-down requeue.
+// requeueStore runs hook right after the running -> queued write of a backend-down requeue,
+// whichever store call makes it.
 type requeueStore struct {
 	*store.Store
 	once sync.Once
@@ -70,6 +71,50 @@ func (q *requeueStore) UpdateState(runID string, from, to store.State) error {
 		q.once.Do(q.hook)
 	}
 	return err
+}
+
+func (q *requeueStore) Requeue(runID string, from store.State, attempts int) error {
+	err := q.Store.Requeue(runID, from, attempts)
+	if err == nil && from == store.StateRunning {
+		q.once.Do(q.hook)
+	}
+	return err
+}
+
+// The moment a backend-down requeue's row reads queued, its attempt is already uncounted: a pass
+// admitting it then must not see the attempt it gave back.
+func TestBackendDownRequeue_TheQueuedRowHasItsAttemptUncounted(t *testing.T) {
+	h := newHealth(t)
+	run := runnertest.New(func(ctx context.Context, s runner.Session) (*runner.Result, error) {
+		h.ok.Store(false)
+		return &runner.Result{}, runner.MarkAbsent(errors.New("connection refused"))
+	})
+	r := newRig(t, rigOptions{runner: run, backends: []backends.Backend{{Name: "engine-a", HealthURL: h.URL}},
+		profiles: map[string]string{defaultProfile: "local_only: true\n"}})
+	rs := &requeueStore{Store: r.st}
+	cfg := r.cfg
+	cfg.Store = rs
+	sch, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := -1
+	var state store.State
+	rs.hook = func() {
+		j, err := r.st.GetJob("run-1")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		seen, state = j.Attempts, j.State
+	}
+	r.submit("run-1", defaultProfile)
+	if err := sch.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if state != store.StateQueued || seen != 0 {
+		t.Fatalf("at the requeue the row was %s with attempts=%d, want queued with 0", state, seen)
+	}
 }
 
 // A backend-down requeue gives its claim back before the row reads queued: a pass that admits the

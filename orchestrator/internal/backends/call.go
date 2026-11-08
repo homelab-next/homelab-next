@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/inference"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/runner"
@@ -18,6 +19,13 @@ import (
 // runner.ToolCallParse before the chain moves on: such a rejection is often intermittent, and a
 // local retry costs no cloud spend, while a deterministic one exhausts the retries and moves on.
 const sameBackendRetries = 2
+
+// DefaultConcurrencyWaits is Policy.ConcurrencyWaits' default: how many times one leg waits and
+// asks again after the gateway refused it for its backend's concurrency cap.
+const DefaultConcurrencyWaits = 30
+
+// defaultConcurrencyWait is Policy.ConcurrencyWait's default, the gateway's Retry-After.
+const defaultConcurrencyWait = time.Second
 
 // Locality is where a job may run: its profile's local_only, as a type, so a call cannot pass the
 // flag inverted by accident. The zero value is LocalOnly: a caller that sets nothing never starts a
@@ -71,6 +79,10 @@ var (
 	// ErrTurnCapStops: an attempt hit the turn cap, a runaway another backend would repeat; the
 	// chain stops there.
 	ErrTurnCapStops = errors.New("the turn cap ended the attempt; not retried on another backend or the cloud")
+	// ErrConcurrencyLimited: the gateway kept refusing the leg for its backend's concurrency cap
+	// past Policy.ConcurrencyWaits pauses. A limit is no fault of the backend, so the chain stops
+	// there rather than moving the job to another backend or to the cloud.
+	ErrConcurrencyLimited = errors.New("the gateway kept refusing the call at its backend's concurrency cap; not moved to another backend or the cloud")
 )
 
 // Attempt is one leg of a chain, classified on its own, before any leg's error is joined with
@@ -130,6 +142,11 @@ func attributable(err error) bool {
 // (errors.Is), checked in this order:
 //
 //   - runner.TurnCap stops the chain (ErrTurnCapStops);
+//   - runner.ConcurrencyLimited (the gateway's 429 concurrency_limited) asks the same backend
+//     again after Policy.ConcurrencyWait, up to Policy.ConcurrencyWaits times, and then stops the
+//     chain (ErrConcurrencyLimited): a limit is a wait, never a fault, so it neither marks the
+//     backend down nor moves the job to another backend or to the cloud. The cloud leg waits
+//     the same way;
 //   - runner.ToolCallParse asks the same backend again, up to sameBackendRetries times;
 //   - runner.ContextExceeded puts the remaining backends in order of declared window, biggest first;
 //   - anything else moves to the next backend, whatever its class: a second local attempt costs
@@ -216,6 +233,7 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 			p.logf("backends: run=%s backend=%s is at its max_concurrent (%d); not attempted", rid, backend.Name, backend.MaxConcurrent)
 			continue
 		}
+		waits := 0
 		for retry := 0; retry <= sameBackendRetries; retry++ {
 			if ctx.Err() != nil {
 				if !counted {
@@ -225,6 +243,27 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 			}
 			out.LocalAttempts++
 			res, err = p.callLocal(ctx, backend, s, nextUsagePath())
+			if errors.Is(err, runner.ConcurrencyLimited) && !errors.Is(err, runner.TurnCap) {
+				// A limit, not a fault: no health probe, no move to another backend.
+				out.Attempts = append(out.Attempts, Attempt{Backend: backend.Name, Failed: true, Class: runner.ClassOf(err)})
+				out.Result = res.Result
+				lastErr = err
+				if waits < p.concurrencyWaits() && p.pause(ctx) {
+					waits++
+					retry-- // a wait spends none of the parser retries
+					p.logf("backends: run=%s backend=%s attempt=%d refused at the gateway's concurrency cap: asking again (%d of %d)", rid, backend.Name, out.LocalAttempts, waits, p.concurrencyWaits())
+					continue
+				}
+				if !counted {
+					p.giveSlot(backend)
+				}
+				if ctx.Err() != nil {
+					return deadline(lastErr)
+				}
+				setLocalFailure(out, err)
+				out.LocalClass = runner.ClassOf(err)
+				return out, fmt.Errorf("%w: %w", ErrConcurrencyLimited, err)
+			}
 			if err != nil {
 				err = p.confirmBackendDown(ctx, backend, err)
 			} else if ac, ok := p.Runner.(runner.AnswerChecker); ok {
@@ -291,6 +330,11 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 	cs.Limits = p.Limits
 	cs.UsagePath = nextUsagePath()
 	rr, err := p.Runner.Run(ctx, cs)
+	for waits := 0; errors.Is(err, runner.ConcurrencyLimited) && waits < p.concurrencyWaits() && p.pause(ctx); waits++ {
+		p.logf("backends: run=%s the cloud leg was refused at the gateway's concurrency cap: asking again (%d of %d)", rid, waits+1, p.concurrencyWaits())
+		cs.UsagePath = nextUsagePath()
+		rr, err = p.Runner.Run(ctx, cs)
+	}
 	out.UsedCloud = true
 	out.Result = runner.Result{}
 	if rr != nil {
@@ -358,6 +402,33 @@ func (p *Policy) callLocal(ctx context.Context, backend Backend, s runner.Sessio
 		return &Result{}, err
 	}
 	return &Result{Result: *rr}, err
+}
+
+func (p *Policy) concurrencyWaits() int {
+	if p.ConcurrencyWaits > 0 {
+		return p.ConcurrencyWaits
+	}
+	return DefaultConcurrencyWaits
+}
+
+// pause waits Policy.ConcurrencyWait before a leg refused at the gateway's concurrency cap is
+// asked again; false when ctx ended first.
+func (p *Policy) pause(ctx context.Context) bool {
+	d := p.ConcurrencyWait
+	if d <= 0 {
+		d = defaultConcurrencyWait
+	}
+	if p.sleep != nil {
+		return p.sleep(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // reasonMaxBytes bounds the failure text kept in a reason or a log line.

@@ -216,10 +216,19 @@ type Policy struct {
 	DrainMaxWait time.Duration
 	DrainCooloff time.Duration
 
+	// ConcurrencyWait is the pause before an attempt classed runner.ConcurrencyLimited (the
+	// gateway's 429 concurrency_limited) is asked again on the same backend; 0 is one second, the
+	// gateway's Retry-After. ConcurrencyWaits bounds those pauses in one leg; 0 is
+	// DefaultConcurrencyWaits. Past it the chain ends with ErrConcurrencyLimited: it never falls
+	// over to another backend or to the cloud for a limit, and never marks the backend down.
+	ConcurrencyWait  time.Duration
+	ConcurrencyWaits int
+
 	// Log receives the pool's log lines; nil is log.Printf.
 	Log func(format string, args ...any)
 
-	now func() time.Time // test seam for every clock the pool reads
+	now   func() time.Time                                // test seam for every clock the pool reads
+	sleep func(ctx context.Context, d time.Duration) bool // test seam for the concurrency wait
 
 	probeMu sync.Mutex
 	probes  map[string]*probeEntry // load probe URL -> its last reading

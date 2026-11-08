@@ -118,6 +118,11 @@ type Job struct {
 	// prompt is built from. Empty is valid.
 	TaskDescription string
 
+	// TaskSHA256 is the hex sha256 of TaskDescription, which the store computes on insert (any
+	// value a caller sets is ignored). Admission compares tasks by it and never reads their text
+	// (ListForAdmission). Empty on a row created before the column existed.
+	TaskSHA256 string
+
 	// ResponseBody is what the run produced (the runner's response text), stored when the run
 	// reaches a terminal state; empty until then and on runs that produced nothing.
 	ResponseBody string

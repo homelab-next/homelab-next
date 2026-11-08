@@ -129,6 +129,11 @@ const (
 	KilledByController
 	// KilledExternally: a signal the controller did not send ended the session.
 	KilledExternally
+	// ConcurrencyLimited: the gateway refused a model call because its backend was at the cap
+	// the gateway enforces for it (a 429 concurrency_limited). It is a wait, not a fault: the pool
+	// asks the same backend again after a pause, never marks it down, and never falls over to
+	// another backend or to the cloud for it.
+	ConcurrencyLimited
 )
 
 var classNames = [...]string{
@@ -142,6 +147,7 @@ var classNames = [...]string{
 	TurnFailed:         "turn-failed",
 	KilledByController: "killed-by-controller",
 	KilledExternally:   "killed-externally",
+	ConcurrencyLimited: "concurrency-limited",
 }
 
 func (c Class) String() string {
