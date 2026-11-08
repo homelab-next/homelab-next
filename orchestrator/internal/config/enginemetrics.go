@@ -7,10 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/homelab-next/homelab-next/orchestrator/internal/grants"
 )
 
 // EngineMetrics names the metrics a backend's load_probe_urls serve: the gauges summed into its
@@ -66,12 +67,17 @@ func (m EngineMetrics) Check() error {
 	return nil
 }
 
-// LoadEngineMetrics reads a site's engine metrics file: one mapping with the keys of
-// EngineMetrics (load, kv), decoded strictly and checked.
+// maxEngineMetricsBytes bounds a site's engine metrics file.
+const maxEngineMetricsBytes = 64 << 10
+
+// LoadEngineMetrics reads a site's engine metrics file: a regular file (not a link, not a FIFO) of
+// at most 64 KiB holding one YAML document, one mapping with the keys of EngineMetrics (load, kv),
+// decoded strictly and checked.
 func LoadEngineMetrics(path string) (EngineMetrics, error) {
-	data, err := os.ReadFile(path)
+	// a regular file, opened without following a link or blocking (a FIFO), at most 64 KiB
+	data, err := grants.ReadConfigFile(path, maxEngineMetricsBytes)
 	if err != nil {
-		return EngineMetrics{}, fmt.Errorf("read engine metrics %s: %w", path, err)
+		return EngineMetrics{}, fmt.Errorf("read engine metrics: %w", err)
 	}
 	var m EngineMetrics
 	dec := yaml.NewDecoder(bytes.NewReader(data))
@@ -81,6 +87,10 @@ func LoadEngineMetrics(path string) (EngineMetrics, error) {
 			return EngineMetrics{}, fmt.Errorf("engine metrics %s: the file is empty", path)
 		}
 		return EngineMetrics{}, fmt.Errorf("engine metrics %s: %w", path, err)
+	}
+	var more yaml.Node
+	if err := dec.Decode(&more); !errors.Is(err, io.EOF) {
+		return EngineMetrics{}, fmt.Errorf("engine metrics %s: one YAML document only", path)
 	}
 	if m.IsZero() {
 		return EngineMetrics{}, fmt.Errorf("engine metrics %s: names no metric", path)

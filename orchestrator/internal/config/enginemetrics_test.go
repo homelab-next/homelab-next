@@ -3,9 +3,12 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // The tests' engine names its metrics engine:*; nothing in this package names any engine's.
@@ -94,5 +97,40 @@ func TestMigrate_WritesTheSitesEngineMetrics(t *testing.T) {
 	}
 	if _, notes, _ := Migrate([]byte(oldConfig)); strings.Contains(strings.Join(notes, "\n"), "engine_metrics") {
 		t.Errorf("a configuration without load probes got the note: %q", notes)
+	}
+}
+
+// The site's file is read like every other configuration file: a link, a FIFO, a file past 64 KiB
+// and a second YAML document are refused.
+func TestLoadEngineMetrics_ReadsOneBoundedRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "engine_metrics.yaml")
+	writeFile(t, good, "load: [engine:requests_running]\n")
+	link := filepath.Join(dir, "link.yaml")
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(dir, "fifo.yaml")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	big := filepath.Join(dir, "big.yaml")
+	writeFile(t, big, "load: [engine:requests_running]\n# "+strings.Repeat("x", 64<<10)+"\n")
+	two := filepath.Join(dir, "two.yaml")
+	writeFile(t, two, "load: [engine:requests_running]\n---\nload: [engine:other]\n")
+	for name, path := range map[string]string{"a symbolic link": link, "a FIFO": fifo, "past 64 KiB": big, "two documents": two} {
+		done := make(chan error, 1)
+		go func() { _, err := LoadEngineMetrics(path); done <- err }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("%s: loaded", name)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the read blocked", name)
+		}
+	}
+	if _, err := LoadEngineMetrics(good); err != nil {
+		t.Errorf("the regular file: %v", err)
 	}
 }
