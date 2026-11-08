@@ -31,15 +31,19 @@ import (
 // defaultProbeTimeout bounds one metrics probe unless ProbeTimeout says otherwise.
 const defaultProbeTimeout = 2 * time.Second
 
-// sampleTTL is how long one probe's reading (or its failure) serves: one admission decision, or a
-// burst of them, reads each URL once, so a slow or hanging endpoint costs one timeout, not one per
-// backend, per check and per job.
+// sampleTTL is how long one probe's reading serves (at least the probe timeout, so a slow answer
+// is not stale on arrival): one admission decision, or a burst of them, reads each URL once.
 const sampleTTL = 1500 * time.Millisecond
+
+// failBackoff is how long a failed probe (an error, a timeout, a status) is remembered before the
+// URL is tried again, so an endpoint that never answers costs one timeout per backoff, not one per
+// decision.
+const failBackoff = 20 * time.Second
 
 // probeEntry is one URL's last reading.
 type probeEntry struct {
 	mu      sync.Mutex // held while the URL is fetched, so concurrent readers wait for one fetch
-	at      time.Time
+	at      time.Time  // when the last fetch ended
 	samples []scrape.Sample
 	err     error
 }
@@ -52,7 +56,8 @@ func (p *Policy) probeTimeout() time.Duration {
 }
 
 // samples returns url's samples of every metric the pool reads (the load gauges and the KV pool's),
-// fetched at most once per sampleTTL; a failed fetch is remembered as long as a reading.
+// fetched at most once per sampleTTL (or the probe timeout, if longer), and a failed fetch at most
+// once per failBackoff.
 func (p *Policy) samples(ctx context.Context, url string) ([]scrape.Sample, error) {
 	p.probeMu.Lock()
 	if p.probes == nil {
@@ -66,13 +71,21 @@ func (p *Policy) samples(ctx context.Context, url string) ([]scrape.Sample, erro
 	p.probeMu.Unlock()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	now := p.clock()
-	if !e.at.IsZero() && now.Sub(e.at) < sampleTTL && now.Sub(e.at) >= 0 {
-		return e.samples, e.err
+	if !e.at.IsZero() {
+		age, life := p.clock().Sub(e.at), max(sampleTTL, p.probeTimeout())
+		if e.err != nil {
+			life = max(failBackoff, p.probeTimeout())
+		}
+		if age >= 0 && age < life {
+			return e.samples, e.err
+		}
 	}
 	names := append(append([]string(nil), p.LoadMetrics...), p.KV.Info, p.KV.Usage)
 	e.samples, e.err = scrape.Fetch(ctx, p.probeClient(), url, p.probeTimeout(), scrape.Names(names...))
-	e.at = now
+	e.at = p.clock() // stamped when the fetch ended: a slow fetch is fresh, not already stale
+	if e.err != nil && ctx.Err() != nil {
+		e.at = time.Time{} // the caller's context ended it, not the endpoint: remember nothing
+	}
 	return e.samples, e.err
 }
 

@@ -581,10 +581,11 @@ the eligible backends, then stable-sorted by load ratio; configured order with `
 and counts the slot before it returns, so the next decision in the same pass sees it. A backend's
 load is the larger of its engines' own reading (the configured gauges summed over its
 `load_probe_urls`) and the pool's in-flight count; a backend with no `max_concurrent` is never
-full. Each probe URL is read at most once per 1.5 seconds, a failure included, by the load and the
-KV readers together, and one decision reads its backends concurrently (each probe bounded by
-`ProbeTimeout`, 2 seconds), so an endpoint that hangs costs one timeout per window, not one per
-check and job. A probe that cannot be read leaves the pool's own count, as in the private
+full. Each probe URL is read at most once per 1.5 seconds (or the probe timeout, if longer), counted
+from when the read ended, by the load and the KV readers together; a failed read is remembered for
+20 seconds (one the caller's own context ended is not remembered); and one decision reads its
+backends concurrently (each probe bounded by `ProbeTimeout`, 2 seconds). So an endpoint that
+never answers costs one timeout per 20 seconds, not one per check and job. A probe that cannot be read leaves the pool's own count, as in the private
 controller: its backend can still admit. A reading that is not a finite, non-negative count is no
 reading, and a huge one reads as full. A claim is recorded against its run id, one per run id; a run id `""` is refused. The
 reaper (`ReapStaleReservations`) returns the slot, token weight and lease of a claim whose run is

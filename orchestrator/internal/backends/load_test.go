@@ -4,6 +4,7 @@ package backends
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,5 +190,63 @@ func TestReserve_ReadsEachProbeOnceAndATarpitOnlyOnce(t *testing.T) {
 	p.Reserve(ctx, Affinity{}, "run-3", "agent")
 	if other.count() != 2 {
 		t.Errorf("a decision after the window did not read again: fast %d", other.count())
+	}
+}
+
+// On the real clock: several decisions against two metrics URLs that never answer make one fetch
+// per URL (the failure is remembered for failBackoff, stamped when the fetch ended), so only the
+// first decision waits one probe timeout, and the rest do not wait at all.
+func TestReserve_ANeverAnsweringProbeCostsOneTimeoutPerBackoff(t *testing.T) {
+	stop := make(chan struct{})
+	hang := newEngine(t, func() string { <-stop; return "" })
+	t.Cleanup(func() { close(stop) }) // after the server's Close is registered, so it runs first
+	p, _ := newPool(nil,
+		Backend{Name: "a", MaxConcurrent: 4, LoadProbeURLs: []string{hang.URL + "/a"}},
+		Backend{Name: "b", MaxConcurrent: 4, LoadProbeURLs: []string{hang.URL + "/b"}},
+	)
+	p.now = nil // the real clock
+	p.LoadMetrics = testLoadMetrics
+	p.ProbeTimeout = 1500 * time.Millisecond
+	ctx := context.Background()
+	start := time.Now()
+	for i := 0; i < 4; i++ {
+		id := fmt.Sprintf("run-%d", i)
+		name, ok := p.Reserve(ctx, Affinity{}, id, "")
+		if !ok {
+			t.Fatalf("decision %d refused", i)
+		}
+		p.Release(name, id)
+	}
+	elapsed := time.Since(start)
+	if n := hang.count(); n != 2 {
+		t.Errorf("%d fetches, want 2 (one per URL in the backoff window)", n)
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("four decisions took %v; want about one probe timeout (1.5s)", elapsed)
+	}
+}
+
+// A failed probe is retried only after failBackoff; a probe the caller's own context ended is not
+// remembered at all.
+func TestSamples_AFailureIsRememberedForTheBackoffOnly(t *testing.T) {
+	dead := deadURL(t)
+	p, clk := newPool(nil)
+	p.LoadMetrics = testLoadMetrics
+	srv := newEngine(t, func() string { return "engine:requests_running 1\n" })
+	if _, err := p.samples(context.Background(), dead); err == nil {
+		t.Fatal("a dead URL answered")
+	}
+	p.probes[dead].at = clk.now()
+	clk.add(failBackoff / 2)
+	if _, err := p.samples(context.Background(), dead); err == nil {
+		t.Fatal("the failure was forgotten inside the backoff")
+	}
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.samples(cctx, srv.URL); err == nil {
+		t.Fatal("a cancelled context fetched")
+	}
+	if got, err := p.samples(context.Background(), srv.URL); err != nil || len(got) != 1 {
+		t.Fatalf("the caller's cancel was remembered as the endpoint's failure: %v, %v", got, err)
 	}
 }
