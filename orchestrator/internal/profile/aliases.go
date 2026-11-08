@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -203,10 +204,28 @@ func MigrateDir(dir string, opts LoadOptions) ([]string, error) {
 			notes = append(notes, filepath.Base(f.path)+": "+n)
 		}
 	}
+	// The directory as written must load with the aliases (which checks them against the
+	// extension keys too), the rewrite without them, and each must read the same: a migration
+	// changes how a profile is spelt, never what it says.
+	before, err := buildRegistry(files, opts)
+	if err != nil {
+		return nil, fmt.Errorf("the profiles do not load with the aliases (nothing written): %w", err)
+	}
 	check := opts
 	check.KeyAliases = nil
-	if _, err := buildRegistry(rewritten, check); err != nil {
+	after, err := buildRegistry(rewritten, check)
+	if err != nil {
 		return nil, fmt.Errorf("the migrated profiles do not load (nothing written): %w", err)
+	}
+	b, c := before.All(), after.All()
+	if len(b) != len(c) {
+		return nil, fmt.Errorf("the migrated profiles read differently (nothing written)")
+	}
+	for i := range b {
+		b[i].Revision, c[i].Revision = "", ""
+		if !reflect.DeepEqual(b[i], c[i]) {
+			return nil, fmt.Errorf("profile %s reads differently after the migration (nothing written)", b[i].AgentKey)
+		}
 	}
 	for _, w := range writes {
 		if err := replaceFile(dir, w); err != nil {

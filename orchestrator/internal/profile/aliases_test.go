@@ -230,3 +230,19 @@ func TestKeyAliases_AnEmptyFileSaysSo(t *testing.T) {
 		}
 	}
 }
+
+// An alias whose old name is also an extension key is refused before anything is written: the
+// file would have read as the extension, and its migration as the scope.
+func TestMigrateDir_RefusesAnAliasThatIsAnExtension(t *testing.T) {
+	dir := t.TempDir()
+	body := "agent_key: q\nqx: {writable_prefixes: [notes/q/]}\n"
+	writeProfileFile(t, dir, "q.yaml", body)
+	opts := withExt(Extension{Name: "qx", Opaque: true})
+	opts.KeyAliases = KeyAliases{"qx": "path_scope"}
+	if _, err := MigrateDir(dir, opts); err == nil {
+		t.Fatal("an alias that is an extension key migrated")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "q.yaml")); string(b) != body {
+		t.Errorf("the file was written:\n%s", b)
+	}
+}
