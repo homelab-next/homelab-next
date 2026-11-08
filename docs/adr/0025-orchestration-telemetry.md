@@ -8,6 +8,7 @@ summary_of: outline:sha256:81ef3895e136016e
 - **Date:** 2026-10-22
 - **Related:** ADR-0009, ADR-0013, ADR-0022, `schemas/events/agent.job.finished.schema.json`,
   `docs/orchestration-telemetry.md`
+- **Amended-by:** ADR-0040, ADR-0047
 
 ## Context
 

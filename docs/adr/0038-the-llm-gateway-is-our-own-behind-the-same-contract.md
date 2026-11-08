@@ -16,7 +16,7 @@ summary_of: outline:sha256:ee879beeb671ce89
   [orchestration telemetry](../orchestration-telemetry.md), `conformance/protocols/inference.py`
 - **Depends-on:** ADR-0033
 - **Amends:** ADR-0022, ADR-0033
-- **Amended-by:** ADR-0026
+- **Amended-by:** ADR-0026, ADR-0047
 
 ## Context
 

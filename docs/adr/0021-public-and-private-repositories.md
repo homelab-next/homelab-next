@@ -8,6 +8,7 @@ summary_of: outline:sha256:77a9faa558b5ac46
 - **Date:** 2026-10-21
 - **Related:** ADR-0011 (extended), ADR-0002, ADR-0016 decision 7, `docs/private-overlay.md`,
   `examples/private-overlay/`, `tools/private_leak_check.py`, `homelabnext/sops.py`
+- **Amended-by:** ADR-0046
 
 ## Context
 

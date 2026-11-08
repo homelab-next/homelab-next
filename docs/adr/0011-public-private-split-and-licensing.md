@@ -15,7 +15,7 @@ summary_of: outline:sha256:bf87496b641e22c5
   recorded), and `tools/tests/test_licence_policy.py` holds CI's deny list to it. And 2026-11-07 by
   ADR-0026: decision 1 lets generic code the operator owns come in from the private repository,
   fresh and without its history (see the amendment after Decision).
-- **Amended-by:** ADR-0026
+- **Amended-by:** ADR-0026, ADR-0046
 
 ## Context
 

@@ -7,6 +7,7 @@ summary_of: outline:sha256:816dedca4a8d0f2c
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0001, ADR-0002, ADR-0003, `homelabnext/swap`, `homelabnext/conform`
+- **Amended-by:** ADR-0039, ADR-0040
 
 ## Context
 

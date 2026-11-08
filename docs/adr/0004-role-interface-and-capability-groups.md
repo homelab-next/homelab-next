@@ -7,6 +7,7 @@ summary_of: outline:sha256:b3d0e1b40715040f
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0002, ADR-0005, ADR-0008, `docs/role-interface.md`
+- **Amended-by:** ADR-0040
 
 ## Context
 

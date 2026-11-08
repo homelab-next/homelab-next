@@ -12,6 +12,7 @@ summary_of: outline:sha256:e2334f5f35796d84
   agent-runner contract the latter names for the `agent-runtime` slot. `schemas/platform/module.schema.json` (draft),
   [modules](../modules.md), [swap kit](../swap.md), [conformance](../conformance.md),
   [decommission audit](../decommission.md), [private overlay](../private-overlay.md)
+- **Amended-by:** ADR-0040
 
 ## Context
 

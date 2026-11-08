@@ -7,6 +7,7 @@ summary_of: outline:sha256:5cbd1fe67bd124f3
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0003, ADR-0005, `schemas/records/`
+- **Amended-by:** ADR-0044
 
 ## Context
 

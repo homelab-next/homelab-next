@@ -9,6 +9,7 @@ summary_of: outline:sha256:c60df505d993e6ba
 - **Amends:** ADR-0013
 - **Related:** ADR-0010, ADR-0014, `docs/broker.md`, `docs/agent.md`, `schemas/broker/`,
   `homelabnext/broker/`, `conformance/protocols/broker.py`
+- **Amended-by:** ADR-0044
 
 ## Context
 

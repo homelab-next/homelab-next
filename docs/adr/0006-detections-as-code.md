@@ -7,6 +7,7 @@ summary_of: outline:sha256:0b473ec2dc9e7a63
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0001, ADR-0005, `detections/`
+- **Amended-by:** ADR-0049
 
 ## Context
 
