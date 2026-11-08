@@ -137,9 +137,9 @@ func TestScheduler_VerifyFindingWrittenLooksInTheLanesDirectory(t *testing.T) {
 	}
 }
 
-// A prefix the tree root cannot hold (a symbolic link out of it) is never followed: the check
-// cannot be read, so it does not apply.
-func TestScheduler_FindingsCheckStaysInsideTheTreeRoot(t *testing.T) {
+// A link in place of the prefix's directory is never followed: the check fails, whatever the
+// link's target holds.
+func TestScheduler_FindingsCheckRefusesALinkedPrefix(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "notes/findings"), 0o700); err != nil {
 		t.Fatal(err)
@@ -150,16 +150,47 @@ func TestScheduler_FindingsCheckStaysInsideTheTreeRoot(t *testing.T) {
 	r := findingsRig(t, writeFinding(outside, ""), root)
 	r.submit("run-1", defaultProfile)
 	r.tick()
-	j := r.job("run-1")
-	if j.State != store.StateDone {
-		t.Fatalf("job = %s %q", j.State, j.LocalFailedReason)
+	if j := r.job("run-1"); j.State != store.StateFailed {
+		t.Fatalf("a finding behind a linked prefix counted: %s", j.State)
 	}
-	found := false
-	for _, l := range r.log.all() {
-		found = found || strings.Contains(l, "findings check skipped")
+	inside := filepath.Join(root, "notes/elsewhere")
+	if err := os.MkdirAll(inside, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if !found {
-		t.Fatal("the escape was not refused (no skipped check logged)")
+	if err := os.Remove(filepath.Join(root, "notes/findings/watcher")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(inside, filepath.Join(root, "notes/findings/watcher")); err != nil {
+		t.Fatal(err)
+	}
+	r2 := findingsRig(t, writeFinding(inside, ""), root)
+	r2.submit("run-2", defaultProfile)
+	r2.tick()
+	if j := r2.job("run-2"); j.State != store.StateFailed {
+		t.Fatalf("a link inside the root counted: %s", j.State)
+	}
+}
+
+// A file dated in the future is no proof the run wrote it.
+func TestScheduler_FutureDatedFindingDoesNotCount(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "notes/findings/watcher")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(dir, "planted.md")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(24 * time.Hour)
+	if err := os.Chtimes(f, later, later); err != nil {
+		t.Fatal(err)
+	}
+	r := findingsRig(t, runnertest.Answer("done"), root)
+	r.submit("run-1", defaultProfile)
+	r.tick()
+	if j := r.job("run-1"); j.State != store.StateFailed {
+		t.Fatalf("a future-dated file counted: %s", j.State)
 	}
 }
 

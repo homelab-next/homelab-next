@@ -123,8 +123,19 @@ func nonNegSeconds(d time.Duration) float64 {
 // started, a terminal row its TerminalEventTypes. gatewayTagPrefix must be the scheduler's
 // (Config.GatewayTagPrefix), so the finished record's gateway_tag is the tag every session of
 // the run carried. A failed event is built only for an agent key the schema's slug admits; the
-// finished record names any other key as ProfileUnregistered.
+// finished record names any other key as ProfileUnregistered (the scheduler warns of such a
+// profile once, when it is loaded). It logs through log.Printf; a scheduler's own builder
+// (Scheduler.EventBuilder) logs through its Config.Log.
 func OutboxEventBuilder(source, gatewayTagPrefix string) store.EventBuilder {
+	return eventBuilder(source, gatewayTagPrefix, log.Printf)
+}
+
+// EventBuilder is OutboxEventBuilder with the scheduler's gateway tag prefix and log.
+func (sch *Scheduler) EventBuilder(source string) store.EventBuilder {
+	return eventBuilder(source, sch.cfg.GatewayTagPrefix, sch.logf)
+}
+
+func eventBuilder(source, gatewayTagPrefix string, logf func(format string, args ...any)) store.EventBuilder {
 	return func(j *store.Job) []store.OutboxEvent {
 		types := []string{EventJobStarted}
 		if j.State != store.StateRunning {
@@ -142,14 +153,13 @@ func OutboxEventBuilder(source, gatewayTagPrefix string) store.EventBuilder {
 			case typ == EventJobFinished:
 				e = JobFinishedEvent(source, gatewayTagPrefix, j, at)
 			case typ == EventJobFailed && !isSlug(j.AgentKey, 64):
-				log.Printf("queue: run=%s: its agent key is no slug, so no failed event is built for it", j.RunID)
 				continue
 			default:
 				e = JobEvent(source, typ, j, at)
 			}
 			body, err := json.Marshal(e)
 			if err != nil {
-				log.Printf("queue: run=%s cannot encode %s: %v", j.RunID, typ, err)
+				logf("queue: run=%s cannot encode %s: %v", j.RunID, typ, err)
 				continue
 			}
 			out = append(out, store.OutboxEvent{ID: e.ID, Body: body})

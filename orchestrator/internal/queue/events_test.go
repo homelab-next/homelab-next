@@ -399,3 +399,22 @@ func FuzzJobFinishedFitsSchema(f *testing.F) {
 		finishedData(t, j)
 	})
 }
+
+// A profile whose agent key is no event slug is warned of once, through the scheduler's log, at
+// load and at every reload.
+func TestSetProfiles_WarnsOnceOfANonSlugAgentKey(t *testing.T) {
+	r := newRig(t, rigOptions{profiles: map[string]string{"file_watcher": "", "watcher": ""}})
+	r.sch.SetProfiles(loadProfiles(t, map[string]string{"file_watcher": "", "watcher": ""}))
+	n := 0
+	for _, l := range r.log.all() {
+		if strings.Contains(l, `"file_watcher" is no event slug`) {
+			n++
+		}
+		if strings.Contains(l, `"watcher"`) {
+			t.Errorf("a slug key was warned of: %s", l)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("warned %d times, want once", n)
+	}
+}
