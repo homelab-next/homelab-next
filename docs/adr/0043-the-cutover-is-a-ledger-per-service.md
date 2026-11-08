@@ -278,7 +278,7 @@ Nothing tracks the move itself:
    | The lake (archive events, OCSF tables, CTI reporting, the honeypot, sandbox, agent-health and metrics-bridge tables, frozen shadow tables) | **`fresh`**, as the operator chose (2026-11-07: "start fresh unless you tell me that's a bad idea"), with the old lake kept read-only as an **archive**; **confirmed 2026-11-08 (operator)** | See "The lake" below. |
    | Vault: proposals, decisions, completion history, findings, tasking queue and holds, deconfliction ledger, recall markers and acks | `migrate`, to the broker | ADR-0044 owns the mapping and the importer. This row's gate is that importer's manifest: per zone, the counts in, the counts out and the lost-record check. |
    | Vault: agent memory | `migrate`, to agent memory (ADR-0037) | Its own row and its own importer, governed by ADR-0037, not ADR-0044. Each memory arrives with its source and history, as ADR-0037 requires; a memory with no recoverable source arrives retracted, not as fact. The gate is the importer's manifest. |
-   | Vault: case notes | `migrate`, to the cases capability (**decided 2026-11-08, operator**) | An importer into the `cases` primary through its adapter (ADR-0049 decision 5). The gate is the importer's manifest: the counts in, the counts out and the lost-record check. Until the importer exists the row cannot pass its gate. |
+   | Vault: case notes | `migrate`, to the cases capability (**decided 2026-11-08, operator**) | An importer into the `cases` primary through its adapter (ADR-0049 decision 5), built in ADR-0049 step 9a (`hnx cases import-notes`). The gate is the importer's manifest: the counts in, the counts out and the lost-record check. Until the importer exists the row cannot pass its gate. |
    | Vault: detector machine state | `archive` | The new detectors rebuild their working state on their first runs (ADR-0049), so nothing is imported; the old state is kept read-only as a `files` export so its history stays answerable. |
    | Vault: per-agent continuity files | `archive` | The new coordinator memory is a folded ledger (ADR-0035) that starts from the migrated records, not from the old files. |
    | Lessons and runbooks | `migrate` | `hnx registers split`, then `hnx records assign-uids` (the old numbered codes go to `aliases.yml`, so every citation in the tracker, the invariants, code and memory still resolves), then `hnx registers events migrate`. The check is that the record count equals the source count. A key the schema refuses is mapped in the import's map file or carried into the record's `Notes` section, never dropped. Lessons that use `match` validate against lesson schema 2.2. The import is **re-runnable**, keyed by the old codes in `aliases.yml`: register content may still be written on the old side until `new-primary` (decision 6), so each run adds what is new and changes nothing it already imported. The `new-shadow` to `new-primary` gate is a final re-import whose record count equals the source count at the named source commit. |
@@ -312,10 +312,12 @@ Nothing tracks the move itself:
    - **Where and how long (decided 2026-11-08, operator).** The archive is kept for one year from
      the cut date, read-only, on the lab's NAS, and only the operator can query it. At the end of
      the year it is deleted, as a `drop` with the operator's approval.
-   - **Archive access (decided 2026-11-08, operator).** Every archive this ledger makes (the old
-     lake, the agent-audit trail, the legacy case store, the vault's detector state and
-     continuity files) is readable by the operator principal only. No other person and no agent
-     is given a view of it.
+   - **Archive access (decided 2026-11-08, operator).** Every archive this ledger makes is
+     readable by the operator principal only: the old lake, the agent-audit trail, the legacy case
+     store, the vault's detector state and continuity files, the vault repository archived at the
+     broker switch (ADR-0044 decision 12), and the old lab's repository archived at the archive
+     gate (decision 8), with its board's archive page of done cards. No other person and no agent
+     is given a view of any of them.
    - `warm_until` is overlay data on the row: the cut date plus the longest look-back of any
      detection or baseline that reads the lake. Each detection's look-back is read from its
      detection metadata (ADR-0049), and the baselines' from the ADR-0036 window setting. A
@@ -596,5 +598,6 @@ proposed; the answers are applied in decisions 6, 7 and 10 and in the implementa
 3. **The freeze date.** Decided: the old repository is frozen for new features at this ADR's
    acceptance (fixes only), with no later date for agent and timer features.
 4. **Done tracker cards.** Decided: not imported; they stay in the old board's archive page.
-5. **Archive access.** Decided: only the operator reads the archives; no other view is made.
+5. **Archive access.** Decided: only the operator reads the archives, the vault repository and
+   the old repository with its done-card archive page included; no other view is made.
 6. **Vault case notes.** Decided: imported into the cases capability.

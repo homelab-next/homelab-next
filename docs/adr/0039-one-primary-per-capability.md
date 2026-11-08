@@ -207,7 +207,7 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
    | `auth-proxy` | oauth2-proxy (ADR-0034 decision 3) | none | — |
    | `llm-gateway` | the own gateway, `orchestrator/cmd/gateway` (ADR-0038, ADR-0026) | LiteLLM: `legacy` at the switch, once the own gateway passes the gateway suite against the lab (ADR-0038 decision 7). The isolated range's gateway is a row of a separate capability, `range-llm-gateway`, because the range is its own trust zone and its consumers must not reach the production gateway; its product follows the same switch on its own ledger row. **Decided 2026-11-08 (operator):** the range keeps its own model gateway, so `range-llm-gateway` stays a capability of its own | the gateway's ledger row; `render_litellm` and its lab-in-a-box targets are deleted at that row's close (ADR-0022, as amended by ADR-0038) |
    | `orchestration` (the agent-orchestrator contract) | the controller in `orchestrator/`, row name `orchestrator` | the private controller and its LLM queue: `legacy` at the controller cutover after stage 3 (ADR-0026 amendment) | the ADR-0026 amendment's placement of the controller |
-   | `automation` | StackStorm (**decided 2026-11-08, operator**). It is `experimental` here (`tools/experimental.yml`) until a lab host runs it, so its row enters as `eval` and is promoted at its switch; until then nothing in the lab may bind to `automation` | the old SOAR product: `legacy` | the `automation` ledger row: StackStorm's row is promoted once a lab host runs it and `hnx workflows st2 check` passes against the lab |
+   | `automation` | StackStorm (**decided 2026-11-08, operator**). It is `experimental` here (`tools/experimental.yml`) until a lab host runs it. Its row enters the overlay registry as `eval` in the overlay pull request that places StackStorm on a lab host (not in step 9's pass, which adds no row for a product nothing runs), and is promoted at its switch; until then the overlay's only `automation` row is the old SOAR's `legacy` one, and nothing in the lab may bind to `automation` | the old SOAR product: `legacy` | the `automation` ledger row: StackStorm's row is promoted once a lab host runs it and `hnx workflows st2 check` passes against the lab |
    | `cases` | DFIR-IRIS | the old case manager: `legacy`, kept read-only until its ledger row closes. Its analyzer engine has been removed, so its guest record is deleted in the overlay. **Decided 2026-11-08 (operator):** the removed Cortex is that analyzer engine, not the one tied to Synapse | ADR-0049 brings IRIS in as a provider module with a real `cases` adapter (none exists today) |
    | `cti-graph` | Synapse, together with its own Cortex (Synapse's storage core, not the removed analyzer engine of the same name). One row, so they retire together. If Synapse is ever replaced, IntelOwl stays. | none | — |
    | `ioc-enrichment` | IntelOwl: on-demand analysis of single observables through its analyzers | none | — |
@@ -352,10 +352,12 @@ Each step is one pull request, merged green after a design review and a security
 9. **The overlay pass** (overlay pull request, operator merges), as listed under Consequences,
    validated with this repository's CLI at the bumped pin and clean under
    `private_leak_check.py private`.
-10. **The switches**, one per ledger row (ADR-0043): `idp`, `llm-gateway`, `orchestration`. Each
-    is ADR-0040's switch step, carrying a `plan_promote` once its candidate passes its suite
-    against the lab. At each close, the non-primary row is removed with the support code only it
-    used.
+10. **The switches**, one per ledger row (ADR-0043): `idp`, `llm-gateway`, `orchestration`, and
+    `automation` once StackStorm's `eval` row exists (it enters with the overlay pull request that
+    places StackStorm on a lab host). Each is ADR-0040's switch step, carrying a `plan_promote` once
+    its candidate passes its suite against the lab (for `automation`, which has no suite, `hnx
+    workflows st2 check` against the lab). At each close, the non-primary row is removed with the
+    support code only it used.
 
 ## Alternatives
 
@@ -379,7 +381,8 @@ proposed; the answers are applied in decision 6 and the Consequences above.
 1. **Which Cortex was removed?** Decided: as this ADR read it. The removed Cortex is the old case
    manager's analyzer engine; Synapse's own storage core stays with Synapse in the `cti-graph`
    row, and the overlay pass deletes the analyzer engine's guest record.
-2. **`automation`.** Decided: StackStorm is the `automation` primary. Its row enters as `eval` and
-   is promoted at its switch (decision 6).
+2. **`automation`.** Decided: StackStorm is the `automation` primary. Its row enters the overlay
+   registry as `eval` with the overlay pull request that places it on a lab host, and is promoted
+   at its switch (decision 6).
 3. **The isolated range's gateway.** Decided: the range keeps its own model gateway, so the
    `range-llm-gateway` capability stays.

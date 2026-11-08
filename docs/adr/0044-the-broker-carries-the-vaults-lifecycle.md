@@ -176,9 +176,20 @@ they would keep the vault alive behind a module, with its self-asserted identity
      1.2, covered by the request digest). For actions whose manifest entry sets `requires:
      {approved_record: true}`, `decide()` refuses a request without one (`record-unlinked`), and
      refuses one whose note is not in `decided/approved`, is already completed, or is held
-     (`record-held`). **Decided 2026-11-08 (operator):** every action that changes a live system
-     sets it, which is every action at tier `execute` or `privileged` and every `write` action that
-     is not a records lane; `hnx broker validate` refuses such an action without it. The Approvals
+     (`record-held`). **Decided 2026-11-08 (operator):** every broker action that changes a live
+     system sets it. `hnx broker validate` refuses an action at tier `execute` or `privileged`, or
+     a `write` action, without it, with two exemptions:
+     - every `builtin/lane` write, whatever its lane kind (`records-inbox` or `files`, so the
+       memory lane is exempt too), because a lane write files a note and changes no live system;
+       both example manifests' lane actions (memory, findings, proposals) still validate, and
+       their one `execute` action, `service.restart`, gains `requires.approved_record: true`;
+     - by name, the stop and containment actions, which must work before anyone has filed a note:
+       `incident.recall`, `fleet.stop`, and the endpoint quarantine, file-removal and process-kill
+       `remote-admin` actions of ADR-0049 decision 4. They keep their own approval tier.
+
+     `validate` lists every exemption it applied. The rule trusts each action's declared tier (a
+     mis-tiered action escapes it, and the tier is reviewed with the manifest), and it covers
+     broker actions only: StackStorm actions and MCP write tools are outside it. The Approvals
      page shows the linked note beside the request. **An approved records note authorizes no action
      by itself:** each action keeps its own tier and approval.
    - **Where holds bite**, each a refusal with a reason and an audit record: `decide()` refuses
@@ -384,9 +395,11 @@ the following minor (request 1.3, audit 1.6) and says so in its schema descripti
 - The lesson about approved-but-held items stops being a rule an agent must remember: the broker
   refuses a held run wherever the request is linked to the held item or the hold names the action
   or request, and for actions that require a linked record an unlinked request is refused too.
-  Every action that changes a live system requires one (decision 6), so a hold on a records note
-  stops every such action; only reads and records-lane writes need no linked record. Likewise "no
-  ledger entry, no activity" and "ack the recall" stop being instructions.
+  Every broker action that changes a live system requires one (decision 6), so a hold on a
+  records note stops every action linked to that note. Reads, lane writes and the named stop and
+  containment actions need no linked record, and StackStorm actions and MCP write tools are
+  outside the rule. Likewise "no ledger entry, no activity" and "ack the recall" stop being
+  instructions.
 - The broker becomes the store of record for governance, so its records tree is a stateful
   dataset: `git` is no longer its history. In ADR-0040's terms the broker is state class
   `private` (the tree is a `state` dataset on its own host), and it needs an ADR-0042 recovery
@@ -425,9 +438,12 @@ the following minor (request 1.3, audit 1.6) and says so in its schema descripti
    `related` is refused `record-unlinked`; an agent's hold on an action it is not granted is
    `hold-target-not-allowed`; an emulation action with no active entry is `deconfliction-missing`;
    `validate` refuses an unknown `dir`, a world-readable records tree, and a `class: emulation`
-   action without `requires.deconflicted`, and an `execute` or `privileged` action, or a `write`
-   action outside a records lane, without `requires.approved_record`; a caller with a scheduler
-   entry and no `findings` key reads `per-run`, and `findings: none` without a `reason` is refused.
+   action without `requires.deconflicted`, and an `execute`, `privileged` or non-lane `write` action
+   without `requires.approved_record` unless it is a named stop or containment action (each
+   exemption listed in the output), while both example manifests validate with `service.restart`
+   marked `requires.approved_record: true`; a caller with a
+   scheduler entry and no `findings` key reads `per-run`, and `findings: none` without a `reason` is
+   refused.
 5. **Relay operations and the decider in the broker**: `records-pending`, `records-decide`,
    `hold-place`, `hold-release`, `recall-raise`, `recall-resolve`; the Approvals page lists and
    decides notes under the viewer's ceiling; the CLI's `--break-glass`; the `decider.py`

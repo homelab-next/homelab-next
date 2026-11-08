@@ -235,7 +235,9 @@ the story:
      custody (ADR-0021 decision 4).
    - **The procedure** (`docs/recovery.md`, generic; the lab's holders and places in the overlay)
      covers unseal after a cold start, generating a root token from the shares for a repair and
-     revoking it after, rekeying when a holder changes, restoring a raft snapshot, and using the
+     revoking it after, rekeying when a holder changes and at least yearly (ADR-0045 decision 11:
+     the shares and the break-glass SSH key have a `max_age` of 365 days, so both are rotated
+     every year), restoring a raft snapshot, and using the
      break-glass SSH key and the off-site credentials. Shares are entered at a console, never
      through an agent, the broker or a CI path.
    - **The dump principal.** `kv-snapshot` runs as a principal whose policy covers the raft
@@ -389,7 +391,10 @@ so the dumps, drills and off-site copies come before the boot order.
    reasonless `none`; a retired guest with no block passes; a hypervisor `none` refused when a
    stateful row is placed on it; the generator golden lists every guest; `schema_check` passes
    against the frozen baselines.
-2. **Consistent dumps** (was step 5). The `recovery` block with `rto` and `rpo`, the `backup`
+2. **Consistent dumps** (was step 5). Service schema 2.11, carrying both the `recovery` block and
+   decision 7's `start_without`, so step 7 adds no schema minor; it lands after ADR-0039 step 2
+   (2.9) and ADR-0045 step 3 (2.10), and if that order changes the numbers are re-taken in merge
+   order. The `recovery` block with `rto` and `rpo`, the `backup`
    hook's new contract, `compose_app` dump task files per method, the manifest with digests,
    ownership and `./` sources, `RL015`, X-02's automated half, the `schedule`-versus-`rpo` rule.
    ADR-0040 step 2 (its dataset `recovery` reference) lands with or after this step, and
@@ -398,7 +403,8 @@ so the dumps, drills and off-site copies come before the boot order.
    restore with matching fingerprints; a `record-tree` copy taken during appends restores every
    record up to its high-water mark; the lint refuses a database image with no entry; a schedule
    looser than the `rpo` is refused; manifest fixtures for `./` sources and ownership.
-3. **Service drills in a restore zone** (was step 6). `purpose: restore` in the site model and
+3. **Service drills in a restore zone** (was step 6). Site schema 1.8, after ADR-0045 step 12
+   (1.7; re-taken in merge order if that changes). `purpose: restore` in the site model and
    the network renderers, the in-zone ephemeral runner, the drill-only resolver, IdP realm and
    secret store, the `service` kind of `restore_drill`, the drill target file, fingerprints, the
    `services` mapping of `drills.json`, the per-run hypervisor credential, the per-row interval
@@ -425,10 +431,10 @@ so the dumps, drills and off-site copies come before the boot order.
    against a fake without the matching protection; the egress check refuses plaintext and an
    object encrypted under another key.
 7. **The recovery graph and the boot order** (was step 2). `homelabnext.recovery` (graph,
-   implicit edges, Tarjan components, `start_without` with its closed `degraded` vocabulary in the
-   service schema), `hnx recovery order`, a `boot-order.json` golden for the examples. Tests: each
-   cycle fixture (DNS, IdP, secrets, storage) fails with the cycle named; a declared
-   `start_without` breaks it; an auth proxy declaring `serves-static` on its `idp` edge is
+   implicit edges, Tarjan components, `start_without` with its closed `degraded` vocabulary, read
+   from step 2's service schema 2.11), `hnx recovery order`, a `boot-order.json` golden for the
+   examples. Tests: each cycle fixture (DNS, IdP, secrets, storage) fails with the cycle named; a
+   declared `start_without` breaks it; an auth proxy declaring `serves-static` on its `idp` edge is
    refused; a property test over generated registries that every edge points earlier; the golden.
 8. **The order reaches the hypervisor and lab-in-a-box** (was step 3). `terraform_proxmox`
    renders start order and delay from the tiers; a test compares lab-in-a-box's `depends_on` with

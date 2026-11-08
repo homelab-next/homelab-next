@@ -342,14 +342,14 @@ release" is the release at which the controller cuts over, and "cutover+1" the r
       (`0`, today "unmeasured", is refused there, since it would admit without limit), and a
       fixture in `tests/generators/fixtures/controller-backends/fail/` breaks each half of the
       rule once.
-    - **PR 2.5 makes `max_concurrent` a hard admission cap when it is set**, not only the
-      selection hint it is today (**decided 2026-11-08, operator**): no path admits a session on a
-      backend whose sessions have reached it, whatever the token budget or the selection order says,
-      and a backend at its cap is skipped, never overfilled. A test admits one session on a backend
-      with `max_concurrent: 1` and holds the second until the first releases, by liveness
-      (ADR-0029). The runner classes a `concurrency_limited` 429 as a retryable wait on the same
-      backend, never as a backend failure, so it never falls over to another backend or to the
-      cloud.
+    - **`max_concurrent` is a hard admission cap when it is set** (**decided 2026-11-08,
+      operator**). The merged PR 2.5 does this much: `Reserve` skips a backend whose load has
+      reached its cap, and a test admits one session on a backend with `max_concurrent: 1` and
+      holds the second until the first releases, by liveness (ADR-0029). Two parts are stage 2.6
+      follow-ups, recorded in the controller doc's "Left to stages 2.6 and 2.7": the attempt
+      chain's fallover (`callLocal`) must not overfill a backend at its cap, and the runner classes
+      a `concurrency_limited` 429 as a retryable wait on the same backend, never as a backend
+      failure, so it never falls over to another backend or to the cloud.
     - **Other callers** cannot exceed the cap where the engine's host admits calls only from the
       gateway (the guest's ingress and egress rules). That holds per site, so the lab check for
       the engine host (ADR-0049) states it and fails when another source can reach the engine.
@@ -641,11 +641,11 @@ the order follows the stage-2 series it rides on.
    two roles bound to the same spec backend; `hnx gen gateway render --check` fails a backend whose
    `max_concurrent` exceeds its engine's cap or is `0` (fixtures); the schema's examples and
    negatives pass and fail.
-5. **PR 2.5 enforces `max_concurrent`** as a hard admission cap and honours the interlock in the
+5. **PR 2.5 enforces `max_concurrent`** at admission (`Reserve`) and honours the interlock in the
    backends pool. Proves: with `max_concurrent: 1` a second session waits and is admitted when the
-   first is released by liveness; a `concurrency_limited` 429 is retried on the same backend and
-   never falls over; an interlock timeout on a `local-only` job's backend does not fall over to a
-   cloud backend.
+   first is released by liveness. The fallover cap and the retryable `concurrency_limited` 429 are
+   stage 2.6 follow-ups (the controller doc's "Left to stages 2.6 and 2.7"). Also proves: an
+   interlock timeout on a `local-only` job's backend does not fall over to a cloud backend.
 6. **PR 2.6 moves the stand-in to the ported behaviour and both fakes to `orchestrator/` cites**
    (decision 15). Proves: the recorded target refuses an unknown agent key with 404 and has no
    passthrough route; neither fake cites `internal/hermesagent`.

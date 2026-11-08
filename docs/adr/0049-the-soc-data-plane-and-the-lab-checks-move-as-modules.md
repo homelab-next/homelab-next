@@ -545,6 +545,14 @@ review and a security audit. Overlay pull requests are merged by the operator.
    from another bus user is refused (the `bus-acl` step), and an event with a foreign `source` is
    refused by `alert-intake`; the envelope's `tlp` is the source declaration's; the E-01
    criterion's canary, starting at a SIEM agent log line, reaches a closed case and does not page.
+   - **9a. The vault case-notes importer** (ADR-0043 decision 7: the operator decided on 2026-11-08
+     that the vault's case notes are imported into the `cases` capability). `hnx cases import-notes
+     DIR`, through the `cases` contract only, so it works against any `cases` primary: a dry run by
+     default, idempotent by each note's legacy path and sha256, writing a manifest of the counts in,
+     the counts out and every note skipped with its reason, which is the ADR-0043 row's gate. Tests:
+     against the `cases` fake and the `dfir-iris` product container, a re-run adds nothing, a
+     changed note becomes an update, a note above the target's TLP ceiling is refused, and the
+     manifest's counts match the fixture tree.
 10. **Sensor modules** (`suricata`, absorbing `suricata_enroll`, then `zeek`), the
     `network-sensor` slot and their health criteria; the moved role leaves
     `tools/product_names.baseline.json`. Tests: `HOME_NET` goldens with extra and IPv6

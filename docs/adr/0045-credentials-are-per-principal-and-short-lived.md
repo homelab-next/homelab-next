@@ -306,7 +306,9 @@ holds each, for how long, and how it is replaced.
       identity and cloud provider keys held by the gateway with spend limits. Offline break-glass
       material (the break-glass SSH key, the unseal shares; ADR-0042 decision 6) is permanent with a
       `max_age` of 365 days (**decided 2026-11-08, operator**), because it is exercised under F-13
-      rather than used.
+      rather than used. Rotation by that age means a yearly Shamir rekey (new shares to every
+      holder, the old shares void) and a yearly new break-glass SSH key, each a break-glass
+      procedure of ADR-0042 decision 6, done by the operator at a console.
 
     `hnx secrets plan` refuses a broad rule (`broad: true`) that no exception matches, and a
     transitional exception further than 180 days from its commit. `hnx secrets audit --metadata`
@@ -369,7 +371,9 @@ requests the operator merges there.
    `fresh` rule markers with `seed` refusing a supplied value for either, and a Go test that the
    admin key is among the callers checked for equal values. Tests prove each refusal, and that a
    plain generated rule still accepts `--from-file`. This step blocks step 14.
-3. **Service schema `credentials`** (2.10). Schema, the frozen previous version,
+3. **Service schema `credentials`** (2.10). Lands after ADR-0039 step 2 (2.9) and before
+   ADR-0042 step 2 (2.11); if that order changes, the numbers are re-taken in merge order. Schema,
+   the frozen previous version,
    examples and negatives (a reference held by two services; held and verified by one; verified by
    two; the admin key held). Tests prove `registry validate` refuses each negative and accepts the
    example registry with every existing `front_door`/`status_sources` secret counted as held.
@@ -411,7 +415,8 @@ requests the operator merges there.
     check with its mutants (a run sent the backend key; a run sent another profile's key; a key
     left after the run; a start of a unit outside the templates refused). The backend-key standing
     exception's expiry is set to the controller cutover.
-12. **Site `access.ssh` and the break-glass account.** Site schema 1.7, the
+12. **Site `access.ssh` and the break-glass account.** Site schema 1.7, landing before ADR-0042
+    step 3 (1.8; if that order changes, the numbers are re-taken in merge order), the
     `guests validate` refusals (including a site without `access.ssh: certificates` once
     `lab/ssh-ca.yml` exists), and the break-glass account with its password-gated sudo. Tests prove
     each refusal.
