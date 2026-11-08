@@ -153,7 +153,7 @@ def test_adr_links_are_reciprocal_and_rest_on_accepted_decisions():
 def test_the_amendments_are_linked_both_ways():
     """The amendments the ADRs record in prose carry the machine-readable pair."""
     adrs = {int(p.name[:4]): header(p.read_text()) for p in ADRS}
-    assert adrs[13]["Amended-by"] == "ADR-0017, ADR-0033"
+    assert adrs[13]["Amended-by"] == "ADR-0017, ADR-0033, ADR-0050"
     assert adrs[19]["Amends"] == "ADR-0014, ADR-0015"
 
 

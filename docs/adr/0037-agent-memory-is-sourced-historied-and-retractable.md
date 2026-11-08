@@ -26,9 +26,11 @@ summary_of: outline:sha256:cc0b15786d3b8d62
 - **Amended:** 2026-11-06 (review 2: decision 17 covers the ledger's decisions 3 and 7 as well,
   whose warm and cold tiers are now live keys, so decision 6 needs no opt-out; see the amendment
   under it)
-- **Amended:** 2026-11-08 by ADR-0050, proposed (decisions 1, 2, 7, 15 and 16: records gain
-  `standing`, `layer`, `reason`, `live_only` and `expect_rev`, a pack its `purpose`, and an
-  offline consolidation pass becomes an author of revisions; the text is ADR-0050 decision 8)
+- **Amended:** 2026-11-08 by ADR-0050, proposed (decisions 1, 2, 7, 12, 13, 15 and 16: records
+  gain `rung`, `pending`, `live_only`, `expired`, `consolidation_reason` and `expect_rev`, a pack
+  its `purpose`, one update per key per checked batch, `MemoryAdmin.review`, restoration on
+  `retract`, and an offline consolidation pass as an author of revisions; the text is ADR-0050
+  decision 9)
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
