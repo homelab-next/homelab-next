@@ -268,18 +268,22 @@ func waitExited(pid int) {
 	}
 }
 
-// sweepGroup waits until no member of process group pgid is running (a zombie is not), polling
-// /proc, for at most bound. It reports whether the group is gone.
+// sweepGroup waits until no member of process group pgid is running (a zombie is not), for at
+// most bound. It reports whether the group is gone. The common case costs one signal-0: a group
+// with no process at all (no zombie either) is gone at once, and only a group that still has one
+// is read from /proc, with a growing pause between reads.
 func sweepGroup(pgid int, bound time.Duration) bool {
 	deadline := time.Now().Add(bound)
+	pause := time.Millisecond
 	for {
-		if !groupRunning(pgid) {
+		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH || !groupRunning(pgid) {
 			return true
 		}
 		if !time.Now().Before(deadline) {
 			return false
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(pause)
+		pause = min(2*pause, 50*time.Millisecond)
 	}
 }
 
