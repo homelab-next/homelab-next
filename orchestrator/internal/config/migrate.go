@@ -150,6 +150,19 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"})
 			notes = append(notes, "set backends.local.needs_interlock: false (the private controller never took the interlock for its local backend)") // scrub-allow: a config key path, not a host name
 		}
+		// that controller served without a token unless api_auth.enabled said true; here unset
+		// means on
+		if auth := lookup(doc.Content[0], "api_auth"); auth == nil {
+			doc.Content[0].Content = append(doc.Content[0].Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "api_auth"},
+				&yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Style: yaml.FlowStyle, Content: []*yaml.Node{
+					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "enabled"}, {Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}}})
+			notes = append(notes, "added api_auth: {enabled: false} (the private controller served without a token; here authentication is on unless it says false, and an API without it binds loopback only)")
+		} else if auth.Kind == yaml.MappingNode && lookup(auth, "enabled") == nil {
+			auth.Content = append(auth.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "enabled"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"})
+			notes = append(notes, "set api_auth.enabled: false (the private controller's default; here authentication is on unless it says false)")
+		}
 	}
 	if opts.Scope != nil {
 		if lookup(doc.Content[0], "scope") != nil {

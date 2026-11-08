@@ -198,7 +198,7 @@ func TestTheDocsPrintTheMigrationTable(t *testing.T) {
 // the migration writes the one it is given, every key present, so the lab's file migrates in one
 // command; one that already has a block is refused.
 func TestMigrate_AddsTheScopeBlock(t *testing.T) {
-	old := strings.Replace(oldConfig, scopeYAML, "", 1)
+	old := strings.Replace(oldConfig, zonesYAML, "", 1)
 	if _, _, err := Migrate([]byte(old)); err == nil {
 		t.Fatal("a configuration without a scope block migrated without one")
 	}
@@ -334,5 +334,28 @@ func TestMigrate_UnsetContractsStayTheDefaults(t *testing.T) {
 	defaults := []string{"[built-in] one", "[built-in] two", "[built-in] three"}
 	if got, err := cfg.PromptContractTexts(t.TempDir(), defaults); err != nil || !slices.Equal(got, defaults) {
 		t.Fatalf("contracts = %q, %v; want the defaults", got, err)
+	}
+}
+
+// A configuration in the private controller's keys served without a token unless it said
+// otherwise; here authentication is on unless the file says false, so the migration writes
+// enabled: false where the file sets nothing, and leaves a file that turned it on alone.
+func TestMigrate_KeepsThePrivateControllersAuthDefault(t *testing.T) {
+	old := zonesYAML + "hermes_local_home: /etc/orchestrator/runner/local\n"
+	out, notes, err := Migrate([]byte(old))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustParse(t, string(out))
+	if cfg.APIAuth.On() || !strings.Contains(strings.Join(notes, "\n"), "api_auth") {
+		t.Fatalf("migrated = %s, notes %v", out, notes)
+	}
+	out, _, err = Migrate([]byte(zonesYAML + "hermes_local_home: /a\napi_auth: {tokens_file: /etc/orchestrator/t.yaml}\n"))
+	if err != nil || mustParse(t, string(out)).APIAuth.On() {
+		t.Fatalf("a block without enabled = %s, %v: want enabled: false", out, err)
+	}
+	out, _, err = Migrate([]byte(zonesYAML + "hermes_local_home: /a\napi_auth: {enabled: true, tokens_file: /etc/orchestrator/t.yaml}\n"))
+	if err != nil || !mustParse(t, string(out)).APIAuth.On() {
+		t.Fatalf("auth on = %s, %v: want it kept on", out, err)
 	}
 }

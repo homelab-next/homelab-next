@@ -13,13 +13,16 @@ import (
 	"github.com/homelab-next/homelab-next/orchestrator/internal/profile"
 )
 
-// scopeYAML is a fictional tree's zones, every key set.
-const scopeYAML = `scope:
+// zonesYAML is a fictional tree's zones, every key set.
+const zonesYAML = `scope:
   denied_roots: [owner]
   findings_root: notes/findings/
   shared_write: [inbox/]
   reserved_names: [operator]
 `
+
+// scopeYAML is the zones and an API served without tokens: the least a configuration must say.
+const scopeYAML = zonesYAML + "api_auth: {enabled: false}\n"
 
 func mustParse(t *testing.T, body string) Config {
 	t.Helper()
@@ -150,7 +153,7 @@ func TestParse_ScopeIsRequiredKeyByKey(t *testing.T) {
 	if _, err := Parse([]byte(none)); err == nil {
 		t.Error("an empty denied_roots loaded without allow_no_denied_roots")
 	}
-	cfg := mustParse(t, none+"  allow_no_denied_roots: true\n")
+	cfg := mustParse(t, none+"  allow_no_denied_roots: true\napi_auth: {enabled: false}\n")
 	if !cfg.Zones().Validated() || len(cfg.Zones().DeniedRoots) != 0 {
 		t.Errorf("zones = %+v", cfg.Zones())
 	}
@@ -206,20 +209,39 @@ func TestRegisters_FailClosed(t *testing.T) {
 
 // Authentication is on unless the file turns it off.
 func TestParse_APIAuthIsOnByDefault(t *testing.T) {
-	if cfg := mustParse(t, scopeYAML+"api_auth: {tokens_file: /etc/orchestrator/api-tokens.yaml}\n"); !cfg.APIAuth.On() {
+	if cfg := mustParse(t, zonesYAML+"api_auth: {tokens_file: /etc/orchestrator/api-tokens.yaml}\n"); !cfg.APIAuth.On() {
 		t.Error("an api_auth block without enabled is off")
 	}
-	if cfg := mustParse(t, scopeYAML+"api_auth: {enabled: false}\n"); cfg.APIAuth.On() {
+	if cfg := mustParse(t, zonesYAML+"api_auth: {enabled: false}\n"); cfg.APIAuth.On() {
 		t.Error("enabled: false is on")
+	}
+	for name, body := range map[string]string{"no block": "", "no tokens file": "api_auth: {enabled: true}\n", "blank tokens file": "api_auth: {tokens_file: \" \"}\n"} {
+		_, err := Parse([]byte(zonesYAML + body))
+		if err == nil || !strings.Contains(err.Error(), "tokens_file") || !strings.Contains(err.Error(), "enabled: false") {
+			t.Errorf("%s: authentication on with no tokens = %v, want a refusal naming both remedies", name, err)
+		}
+	}
+}
+
+// Profiling needs authentication on; the per-caller cap is not negative.
+func TestParse_APIPprofAndCap(t *testing.T) {
+	cfg := mustParse(t, zonesYAML+"api_auth: {tokens_file: /etc/orchestrator/t.yaml}\napi_pprof: true\napi_max_unfinished_per_caller: 50\n")
+	if !cfg.APIPprof || cfg.APIMaxUnfinishedPerCaller != 50 {
+		t.Fatalf("parsed = %v %d", cfg.APIPprof, cfg.APIMaxUnfinishedPerCaller)
+	}
+	for name, body := range map[string]string{"pprof without auth": "api_pprof: true\n", "negative cap": "api_max_unfinished_per_caller: -1\n"} {
+		if _, err := Parse([]byte(scopeYAML + body)); err == nil {
+			t.Errorf("%s loaded", name)
+		}
 	}
 }
 
 func TestParse_APIAuthEventsAndAdmissionDefaults(t *testing.T) {
 	cfg := mustParse(t, scopeYAML)
-	if !cfg.APIAuth.On() || cfg.TokenWeightedAdmission || cfg.KVBudgetFraction != 0 || cfg.PrimaryFirst || cfg.Events.ForwarderURL != "" {
+	if cfg.APIAuth.On() || cfg.TokenWeightedAdmission || cfg.KVBudgetFraction != 0 || cfg.PrimaryFirst || cfg.Events.ForwarderURL != "" {
 		t.Errorf("defaults = %+v", cfg)
 	}
-	cfg = mustParse(t, scopeYAML+"api_auth: {enabled: true, tokens_file: /etc/orchestrator/api-tokens.yaml}\n"+
+	cfg = mustParse(t, zonesYAML+"api_auth: {enabled: true, tokens_file: /etc/orchestrator/api-tokens.yaml}\n"+
 		"events: {forwarder_url: https://events.example.internal/ingest, token_env: EVENTS_TOKEN, queue_size: 10, gateway_tag_prefix: \"job:\"}\n"+
 		"token_weighted_admission: true\nkv_budget_fraction: 0.7\nprimary_first: true\n")
 	if !cfg.APIAuth.On() || cfg.APIAuth.TokensFile == "" || cfg.Events.QueueSize != 10 || cfg.Events.Source != "" || cfg.Events.GatewayTagPrefix != "job:" ||
