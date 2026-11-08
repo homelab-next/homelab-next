@@ -22,6 +22,7 @@ import yaml
 from homelabnext import paths, sops, tlp
 from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.capability_names import platform_capabilities as _platform_capabilities
 
 
 class RegistryError(Exception):
@@ -418,10 +419,9 @@ def _a(word: str) -> str:
 
 def platform_capabilities() -> frozenset[str]:
     """Every capability name the platform knows (the capability-class table, the conformance
-    contracts), without the ``cap:`` prefix: the names an eval or retiring row may never take."""
-    from homelabnext.mcp.servers import known_capabilities  # local: mcp imports the registry
-
-    return frozenset(c.removeprefix("cap:") for c in known_capabilities())
+    contracts), without the ``cap:`` prefix: the names an eval or retiring row may never take
+    (:func:`homelabnext.capability_names.platform_capabilities`)."""
+    return _platform_capabilities()
 
 
 def _name_claim_problems(services: Mapping[str, Any], caps: set[str]) -> list[str]:
