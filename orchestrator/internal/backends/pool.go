@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"sync"
@@ -269,6 +270,17 @@ func (p *Policy) Validate() error {
 			return fmt.Errorf("%w: two backends are named %q", ErrInvalid, b.Name)
 		case len(b.LoadProbeURLs) > 0 && len(p.LoadMetrics) == 0:
 			return fmt.Errorf("%w: backend %q has load probes but no load metric is named, so they would read nothing", ErrInvalid, b.Name)
+		case b.Weight < 0 || b.Weight > maxWeight:
+			return fmt.Errorf("%w: backend %q: weight %d is outside 0..%d", ErrInvalid, b.Name, b.Weight, maxWeight)
+		}
+		urls := append([]string(nil), b.LoadProbeURLs...)
+		if b.HealthURL != "" {
+			urls = append(urls, b.HealthURL)
+		}
+		for _, u := range urls {
+			if err := checkProbeURL(u); err != nil {
+				return fmt.Errorf("%w: backend %q: %w", ErrInvalid, b.Name, err)
+			}
 		}
 		seen[b.Name] = true
 	}
@@ -282,6 +294,26 @@ func (p *Policy) Validate() error {
 	case "", "cpu", "progress":
 	default:
 		return fmt.Errorf("%w: liveness %q: want cpu or progress", ErrInvalid, p.Limits.Liveness)
+	}
+	return nil
+}
+
+// maxWeight bounds a backend's weight: the round-robin's totals add weights on every pick.
+const maxWeight = 1000
+
+// checkProbeURL accepts an http or https URL with a host and no userinfo (a probe carries no
+// credential, and an error quoting the URL must not quote one). The URL is never quoted back.
+func checkProbeURL(raw string) error {
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil:
+		return errors.New("a probe URL does not parse")
+	case u.Scheme != "http" && u.Scheme != "https":
+		return errors.New("a probe URL is not http or https")
+	case u.Hostname() == "":
+		return errors.New("a probe URL has no host")
+	case u.User != nil:
+		return errors.New("a probe URL carries userinfo")
 	}
 	return nil
 }

@@ -200,7 +200,7 @@ func TestHealthSnapshot_TheErrorClassComesFromTheProbesType(t *testing.T) {
 	p.setHealth("a", false, "call_failed", &net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, "call failed: the session said: secret")
 	s := p.HealthSnapshot()[0]
 	r := s.Redacted()
-	if s.ErrorClass != "call_failed:connection_refused" || r.LastError != "" || r.ErrorClass != s.ErrorClass || r.Up || r.Backend != "a" {
+	if s.ErrorClass != "call_failed:connection_refused" || r.LastError != "" || r.HealthURL != "" || s.HealthURL == "" || r.ErrorClass != s.ErrorClass || r.Up || r.Backend != "a" {
 		t.Errorf("snapshot %+v, redacted %+v", s, r)
 	}
 	p.setHealth("a", true, "", nil, "")

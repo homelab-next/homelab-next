@@ -81,9 +81,10 @@ type HealthStatus struct {
 	Drained    bool   `json:"drained"`
 }
 
-// Redacted is s without LastError (ErrorClass stays): what a caller that is not admin sees.
+// Redacted is s without LastError and HealthURL (ErrorClass stays): what a caller that is not
+// admin sees; the URL names an internal address.
 func (s HealthStatus) Redacted() HealthStatus {
-	s.LastError = ""
+	s.LastError, s.HealthURL = "", ""
 	return s
 }
 

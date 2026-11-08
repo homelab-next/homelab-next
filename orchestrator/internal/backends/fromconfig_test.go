@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,7 +101,7 @@ func TestLimitsAndJobLimitFromConfig(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	good := func() *Policy {
-		p, _ := newPool(nil, Backend{Name: "a", LoadProbeURLs: []string{"u"}}, Backend{Name: "b"})
+		p, _ := newPool(nil, Backend{Name: "a", Weight: 1000, LoadProbeURLs: []string{"http://engine-a.example.internal:8000/metrics"}, HealthURL: "https://engine-a.example.internal/health"}, Backend{Name: "b"})
 		p.LoadMetrics = testLoadMetrics
 		return p
 	}
@@ -116,12 +117,24 @@ func TestValidate(t *testing.T) {
 			p.TokenWeightedAdmission, p.KV = true, KVMetrics{Info: "engine:cache_info", BlocksLabel: "num_blocks"}
 		},
 		"a budget fraction past 1": func(p *Policy) { p.KVBudgetFraction = 1.5 },
-		"an unknown liveness":      func(p *Policy) { p.Limits.Liveness = "vibes" },
+		"a probe URL with userinfo": func(p *Policy) {
+			p.Backends[0].LoadProbeURLs = []string{"http://user:pw@engine-a.example.internal:8000/metrics"}
+		},
+		"a probe URL that is not http": func(p *Policy) { p.Backends[0].LoadProbeURLs = []string{"file:///etc/passwd"} },
+		"a probe URL without a host":   func(p *Policy) { p.Backends[0].LoadProbeURLs = []string{"http:///metrics"} },
+		"a relative probe URL":         func(p *Policy) { p.Backends[0].LoadProbeURLs = []string{"u"} },
+		"a health URL with userinfo":   func(p *Policy) { p.Backends[1].HealthURL = "https://user@engine-b.example.internal/health" },
+		"a weight past the bound":      func(p *Policy) { p.Backends[0].Weight = maxWeight + 1 },
+		"a negative weight":            func(p *Policy) { p.Backends[1].Weight = -1 },
+		"an unknown liveness":          func(p *Policy) { p.Limits.Liveness = "vibes" },
 	} {
 		p := good()
 		spoil(p)
-		if err := p.Validate(); !errors.Is(err, ErrInvalid) {
+		err := p.Validate()
+		if !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
+		} else if strings.Contains(err.Error(), "pw@") || strings.Contains(err.Error(), "user@") {
+			t.Errorf("%s: the refusal quotes the URL's userinfo: %v", name, err)
 		}
 	}
 	p := good()
