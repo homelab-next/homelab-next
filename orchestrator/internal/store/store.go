@@ -402,6 +402,23 @@ func (s *Store) GetJob(runID string) (*Job, error) {
 	return j, nil
 }
 
+// admissionColumns is jobColumns with the columns admission never reads sent as NULL: the
+// answer, the failure reason, the auxiliary usage and the evidence. A queued row holds no answer
+// anyway; the task stays (admission's duplicate check and the dispatch read it), bounded at submit.
+var admissionColumns = strings.NewReplacer(
+	"local_failed_reason,", "NULL,", "response_body,", "NULL,", "aux_by_task,", "NULL,", "evidence_refs,", "NULL,",
+).Replace(jobColumns)
+
+// ListForAdmission is ListByState with admissionColumns: what a scheduler pass and its executors
+// read of the queue, without the text they never use.
+func (s *Store) ListForAdmission(state State) ([]*Job, error) {
+	rows, err := s.db.Query(`SELECT `+admissionColumns+` FROM jobs WHERE state = ? ORDER BY seq ASC`, string(state))
+	if err != nil {
+		return nil, fmt.Errorf("list for admission: %w", err)
+	}
+	return collectJobs(rows, "list for admission "+string(state))
+}
+
 // ListByState returns every job in state, oldest submission first.
 func (s *Store) ListByState(state State) ([]*Job, error) {
 	rows, err := s.db.Query(`SELECT `+jobColumns+` FROM jobs WHERE state = ? ORDER BY seq ASC`, string(state))

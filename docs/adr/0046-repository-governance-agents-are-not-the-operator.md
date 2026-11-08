@@ -308,11 +308,11 @@ audit; that overlay pull requests are merged only by the operator; and that no a
      pull request it came from, found by the merge commit that added it.
    - `tools/check_changelog.py --cadence` (nightly) fails when the newest version section is more
      than 28 days old. It is a nightly failure with no page: there is no entry-count trigger, since
-     about 25 entries a day would cross any small count every few days. This answers ADR-0041's
-     open question on release cadence; its 30-day deprecation window closes by the second release
-     after a deprecation. A release is an agent pull request (version in `homelabnext/_version.py`,
-     the `[Unreleased]` section renamed) that the agent may merge; the tag that starts
-     `release.yml` is pushed by the operator.
+     about 25 entries a day would cross any small count every few days. This is the release cadence
+     ADR-0041 decision 6 relies on; its deprecation window (at least one later release plus 30 days,
+     decided 2026-11-08) closes by the second release after a deprecation. A release is an agent
+     pull request (version in `homelabnext/_version.py`, the `[Unreleased]` section renamed) that
+     the agent may merge; the tag that starts `release.yml` is pushed by the operator.
 10. **The proposed ADRs are put to the operator.** The 34 proposed ADRs that predate this batch are
     listed below for the operator to accept, reject or leave; the batch's own 11 (0039 to 0049)
     join the list as the last group. An agent prepares a status change only on the operator's

@@ -535,10 +535,10 @@ func TestScheduler_TelemetryPersistedFromUsageFile(t *testing.T) {
 		j.SessionID != "sess-9" || j.Model != "model-a" || j.Completed == nil || !*j.Completed || j.CostUSD != 0.25 {
 		t.Fatalf("telemetry = %+v", j)
 	}
-	if s := run.Sessions(); s[0].UsagePath != filepath.Join(r.cfg.UsageDir, "run-1.json") {
+	if s := run.Sessions(); s[0].UsagePath != filepath.Join(r.cfg.UsageDir, "run-1", "run-1.json") {
 		t.Errorf("usage path = %q", s[0].UsagePath)
 	}
-	fi, err := os.Stat(r.cfg.UsageDir)
+	fi, err := os.Stat(filepath.Join(r.cfg.UsageDir, "run-1"))
 	if err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("usage directory = %v, %v; want owner-only", fi, err)
 	}

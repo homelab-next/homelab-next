@@ -95,7 +95,7 @@ func (sch *Scheduler) execute(ctx context.Context, job *store.Job, reserved stri
 		requeued = true
 		return
 	}
-	if err != nil && sch.requeueBackendDown(d, err, attempt) {
+	if err != nil && sch.requeueBackendDown(d, err, attempt, &reserved) {
 		requeued = true
 		return
 	}
@@ -199,10 +199,12 @@ func (sch *Scheduler) prepare(ctx context.Context, job *store.Job, prof *profile
 	}
 	usage := ""
 	if sch.cfg.UsageDir != "" {
-		if merr := os.MkdirAll(sch.cfg.UsageDir, 0o700); merr != nil {
+		// One directory per run, so a runner can give a session write access to its own run's
+		// reports only, and no session can write a file another run's sum would read.
+		if merr := os.MkdirAll(runUsageDir(sch.cfg.UsageDir, runID), 0o700); merr != nil {
 			sch.logf("queue: run=%s no usage report: cannot create the usage directory: %v", runID, merr)
 		} else {
-			usage = filepath.Join(sch.cfg.UsageDir, runID+".json")
+			usage = filepath.Join(runUsageDir(sch.cfg.UsageDir, runID), runID+".json")
 		}
 	}
 	return &dispatch{
@@ -340,6 +342,10 @@ func (sch *Scheduler) retryGate(ctx context.Context, d *dispatch, reserved *stri
 	return retryRequeued
 }
 
+// runUsageDir is runID's own usage directory under base. The run id is one the gateway tag
+// accepted, so it is one path segment.
+func runUsageDir(base, runID string) string { return filepath.Join(base, runID) }
+
 // attemptUsagePath is attempt n's usage path: base for the first, base with ".aN" before its
 // ".json" after. The pool derives one path per leg from it (backends.LegUsagePath).
 func attemptUsagePath(base string, attempt int) string {
@@ -354,7 +360,7 @@ func attemptUsagePath(base string, attempt int) string {
 // Each write is best effort: an audit field that cannot be written never fails the job.
 func (sch *Scheduler) record(runID string, res *backends.Result, callErr error, class string) {
 	if sch.cfg.UsageDir != "" {
-		if total, ok := sumRunUsage(sch.cfg.UsageDir, runID, res.Usage); ok {
+		if total, ok := sumRunUsage(runUsageDir(sch.cfg.UsageDir, runID), runID, res.Usage); ok {
 			res.Usage = total
 		}
 	}
@@ -401,29 +407,35 @@ func (sch *Scheduler) persistCallSizing(runID string, usage map[string]any) {
 // The attempt does not count: neither against max_attempts nor as a first attempt spent (the
 // count goes back to what it was), and nothing of it is recorded. After MaxBackendDownRequeues
 // requeues the job fails backend-down instead. It reports whether it requeued.
-func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int) bool {
+func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int, reserved *string) bool {
 	if d.locality != backends.LocalOnly || !backends.IsBackendDown(callErr) || !mayAutoRequeue(callErr) {
 		return false
 	}
 	runID := d.job.RunID
 	sch.mu.Lock()
-	if sch.requeues == nil {
-		sch.requeues = map[string]int{}
-	}
 	n := sch.requeues[runID]
+	sch.mu.Unlock()
 	if n >= MaxBackendDownRequeues {
-		sch.mu.Unlock()
 		sch.logf("queue: run=%s lost its backends %d times: failing it backend-down", runID, n+1)
 		return false
+	}
+	// The claim goes back before the row reads queued, as a drained retry's does: once queued, a
+	// pass may admit the run again and reserve under its run id, and a release after that would
+	// drop the new claim.
+	sch.release(*reserved, runID)
+	*reserved = ""
+	if err := sch.cfg.Store.UpdateState(runID, store.StateRunning, store.StateQueued); err != nil {
+		sch.logf("queue: run=%s lost its backends and cannot go back to the queue: %v", runID, err)
+		return false
+	}
+	sch.mu.Lock()
+	if sch.requeues == nil {
+		sch.requeues = map[string]int{}
 	}
 	sch.requeues[runID] = n + 1
 	sch.mu.Unlock()
 	if err := sch.cfg.Store.UpdateAttempts(runID, attempt-1); err != nil {
 		sch.logf("queue: run=%s cannot uncount the attempt: %v", runID, err)
-	}
-	if err := sch.cfg.Store.UpdateState(runID, store.StateRunning, store.StateQueued); err != nil {
-		sch.logf("queue: run=%s lost its backends and cannot go back to the queue: %v", runID, err)
-		return false
 	}
 	sch.logf("queue: run=%s agent=%s local-only, every eligible backend is down: back to queued until one is up (%d of %d)", runID, d.job.AgentKey, n+1, MaxBackendDownRequeues)
 	return true
@@ -469,7 +481,7 @@ func (sch *Scheduler) fail(ctx context.Context, d *dispatch, res *backends.Resul
 // identicalQueued reports whether a queued job of the same submitter, agent, task and lane
 // already waits.
 func (sch *Scheduler) identicalQueued(job *store.Job) bool {
-	queued, err := sch.cfg.Store.ListByState(store.StateQueued)
+	queued, err := sch.cfg.Store.ListForAdmission(store.StateQueued)
 	if err != nil {
 		return false
 	}

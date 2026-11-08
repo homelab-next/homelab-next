@@ -590,7 +590,11 @@ the eligible backends, then stable-sorted by load ratio; configured order with `
 and counts the slot before it returns, so the next decision in the same pass sees it. A backend's
 load is the larger of its engines' own reading (the configured gauges summed over its
 `load_probe_urls`) and the pool's in-flight count; a backend with no `max_concurrent` is never
-full. Each probe URL is read at most once per 1.5 seconds (or the probe timeout, if longer), counted
+full. `max_concurrent` is a hard admission cap (ADR-0026's amendment, decided 2026-11-08). What
+the code does today: `Reserve` skips a backend whose load has reached it, before it looks at the
+token budget. The attempt chain's fallover and the 429 handling are left to stage 2.6 ("Left to
+stages 2.6 and 2.7" below).
+Each probe URL is read at most once per 1.5 seconds (or the probe timeout, if longer), counted
 from when the read ended, by the load and the KV readers together; a failed read is remembered for
 20 seconds (one the caller's own context ended is not remembered); and one decision reads its
 backends concurrently (each probe bounded by `ProbeTimeout`, 2 seconds). So an endpoint that
@@ -755,8 +759,12 @@ minutes before, 1.0 s now).
   queued), `Reserve` otherwise. When that fails and nothing the job may use is up, a local-only
   job waits queued; any other job is admitted unreserved, and the pool's chain skips the down
   backends and runs its cloud leg (a local attempt on a backend that came back meanwhile takes a
-  free slot at its `max_concurrent` or is skipped: the chain never overfills a backend, a
-  fallover from the reserved one included). A job left queued takes none of the pass's slots and records why
+  free slot at its `max_concurrent` or is skipped). The pool's own in-flight count (its
+  reservations and running attempts) never exceeds a backend's `max_concurrent`: a reservation
+  and a fallover attempt take a slot with one compare-and-swap, so two racing for the last slot
+  cannot both have it. That count is the pool's only: a fallover attempt does not read the
+  backend's probe load or the token budget, which admission reads, so load from other callers can
+  still put the engine past its cap. A job left queued takes none of the pass's slots and records why
   (`slot`, `token_budget`, `exclusive`, `backend_down`, written to `wait_cause` when it finishes).
   A local-only job held for health is cancelled when a newer queued job of the same submitter,
   agent, task and lane exists; another submitter's job is never touched. Wait causes of runs no
@@ -782,7 +790,7 @@ minutes before, 1.0 s now).
   `runner.job_timeout_seconds` nor `runner.timeout_seconds`) gets `Config.JobCeiling`
   (`queue.DefaultJobCeiling`, 6 hours, when unset), so no job is unbounded. An attempt that failed
   as the deadline passed, with another attempt due, is classed `deadline`. Every attempt keeps the run id and the session (its
-  tag, servers and toolsets), with its own usage path (`<run id>.json`, then `.aN.json`; the pool
+  tag, servers and toolsets), with its own usage path (`<usage dir>/<run id>/<run id>.json`, then `.aN.json`; the pool
   adds `.legN` per leg). Before a retry: a bounded backoff, the row must still read running (a
   cancel moves it first), and a drained reservation is released and admission run again; with no
   other backend the job goes back to queued, its attempts kept. A spent budget in either leg (the
@@ -822,7 +830,11 @@ minutes before, 1.0 s now).
   tokens and no `cache_read_reported: true`), makes the run's total unknown, never a smaller known
   number. A usage file is opened without following a link or blocking (`O_NOFOLLOW|O_NONBLOCK`),
   checked with `Fstat` and read through a limit: only regular files of at most 1 MiB count, and a
-  run with 256 or more files is not summed. Nothing prunes the usage directory: it grows by one
+  run with 256 or more files is not summed. Each run has its own directory under the usage
+  directory and only that directory is summed, so a runner can give a session write access to
+  its own run's reports alone and no session can write a file another run's sum reads. A pass
+  reads the queue without its answers and failure reasons (`store.ListForAdmission`); the task
+  stays, the duplicate check's key and the dispatch's input, bounded at submit. Nothing prunes the usage directory: it grows by one
   file per session, and a site prunes the files of finished runs on its own schedule.
 - **The findings check** (with `tree_root` set, for a profile with a findings prefix for the lane):
   a clean exit with no file newer than the dispatch (and not dated past now) directly in that
@@ -947,6 +959,13 @@ above says how.
     `ErrNotAttributable`, `ErrNoCloudBackend` and `ErrCloudFailed` wrap the attempts' errors. The
     queue logs and stores the bounded `LocalFailedReason`, never `err.Error()`, and classifies with
     `errors.Is`;
+  - (from the ADR-0026 amendment's 2026-11-08 decision that `max_concurrent` is a hard admission
+    cap) the attempt chain's fallover must not overfill a backend at its cap: done in PR 2.6a, a
+    fallover takes a free slot by the pool's own count (shared with `Reserve`'s claim) or skips the
+    backend;
+  - (same decision) a `concurrency_limited` 429 from the gateway is a retryable wait on the same
+    backend, never a backend failure, so it neither marks the backend down nor falls over to
+    another backend or to the cloud;
   - (from 2.5) depend on `backends.Pool`, not `*Policy`, so the queue's tests can stub
     admission; call `Reserve` or `ReserveExclusive` once per admission decision from the one
     scheduling goroutine, pass the backend to `Call` as `reserved` and `Release(backend, run id)`
@@ -971,6 +990,10 @@ above says how.
     is requeued, not failed;
   - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
     log or keep text, as `backends` does;
+- **Priority across callers (2.7):** a `jobs` token may submit any priority from 1 to 100, so one
+  caller can put its jobs ahead of everyone's. Which callers may use which range is a policy of
+  the tokens file (a per-caller ceiling, say), so it lands with the binary's configuration rather
+  than as a clamp here that would also hold back the operator's own jobs.
 - **Noted by the 2.6 reviews, for later:** an `InstanceLock` given to `OpenWith` could be bound to
   the one `Store` it opens (today two stores may share one lock on purpose, as the store's tests
   do); `retryGate` re-reads the profile's locality only at admission (a reload between attempts

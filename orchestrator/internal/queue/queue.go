@@ -39,6 +39,9 @@ import (
 // so a test can wrap the real store and fail one call deterministically.
 type Store interface {
 	ListByState(state store.State) ([]*store.Job, error)
+	// ListForAdmission is ListByState without the text admission never reads (the answer, the
+	// failure reason): what a pass reads of the queue.
+	ListForAdmission(state store.State) ([]*store.Job, error)
 	GetJob(runID string) (*store.Job, error)
 	CreateJob(j *store.Job) error
 	UpdateState(runID string, from, to store.State) error
@@ -80,8 +83,10 @@ type Config struct {
 	// Concurrency is a hard cap on the jobs running at once (at least 1), however admission passes
 	// overlap.
 	Concurrency int
-	// UsageDir receives each session's usage report (<run id>.json, then .aN for a later
-	// attempt and .legN for a later leg, summed per run); empty: no usage report is asked for.
+	// UsageDir receives each session's usage report, in a directory per run (<dir>/<run id>/:
+	// <run id>.json, then .aN for a later attempt and .legN for a later leg, summed per run), so a
+	// runner can scope a session's write access to its own run's directory; empty: no usage
+	// report is asked for.
 	UsageDir string
 	// TreeRoot, when set, turns on the findings check: a job that ends cleanly but wrote nothing
 	// under its profile's findings prefix for its lane fails (handler-error).
@@ -308,7 +313,7 @@ func (sch *Scheduler) admit(ctx context.Context, wg *sync.WaitGroup) error {
 		return nil
 	}
 	sch.reapStaleReservations()
-	queued, err := sch.cfg.Store.ListByState(store.StateQueued)
+	queued, err := sch.cfg.Store.ListForAdmission(store.StateQueued)
 	if err != nil {
 		return fmt.Errorf("list queued: %w", err)
 	}
@@ -351,6 +356,8 @@ func (sch *Scheduler) admit(ctx context.Context, wg *sync.WaitGroup) error {
 		sch.counters.admit()
 		jobCtx, cancel := context.WithCancel(ctx)
 		entry := &runExec{cancel: cancel}
+		// The one place running grows, and only under admitMu: that, and the free() check above
+		// under mu, is what makes Concurrency a hard cap. A second increment site would break it.
 		sch.mu.Lock()
 		sch.running++
 		sch.execs[job.RunID] = entry

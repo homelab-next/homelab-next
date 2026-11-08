@@ -1,6 +1,6 @@
 ---
 summary: Each capability contract and suite carries a semver; providers declare the versions they meet, CI tests each claim, breaking changes get an overlap release.
-summary_of: outline:sha256:995bca245214ac21
+summary_of: outline:sha256:cd644884ec416538
 ---
 # ADR-0041: Version capability contracts and test every version claimed
 
@@ -203,16 +203,17 @@ this repository has for a product swap, and they have no version.
      `requires`, `prefers` or claim that names one, so an overlay sees it when it validates at its
      pin.
    - **Removal.** N may be marked `removed`, and its `until`-tagged code deleted, only when all
-     three hold, checked by `contract_check.py` under `tools/`: a later release than `deprecated_in` exists
-     in `CHANGELOG.md`; at least the deprecation window has passed since `deprecated_in`'s date (30
-     days by default, an open question below); and `hnx conform versions consumers <cap> --major N`
-     finds no in-tree `requires`, `prefers`, claim or core-module requirement naming major N. With
-     ADR-0046 decision 9's release at least every 28 days, the two clocks agree: the 30-day window
-     closes before or at the second release after the deprecation, so removal waits at most two
-     release cycles. An overlay is not visible to this repository's CI, so it is protected the
-     other way: after removal the loader refuses a `requires`, `prefers` or claim naming a removed
-     version, and the overlay's checks fail on the pin move that crosses the removal until it has
-     migrated.
+     three hold, checked by `contract_check.py` under `tools/`: a later release than `deprecated_in`
+     exists in `CHANGELOG.md`; at least the deprecation window has passed since `deprecated_in`'s
+     date (30 days, the same for every slot, privileged ones included: **decided 2026-11-08,
+     operator**, so the window is at least one later release plus 30 days); and `hnx conform
+     versions consumers <cap> --major N` finds no in-tree `requires`, `prefers`, claim or
+     core-module requirement naming major N. With ADR-0046 decision 9's release at least every 28
+     days, the two clocks agree: the 30-day window closes before or at the second release after the
+     deprecation, so removal waits at most two release cycles. An overlay is not visible to this
+     repository's CI, so it is protected the other way: after removal the loader refuses a
+     `requires`, `prefers` or claim naming a removed version, and the overlay's checks fail on the
+     pin move that crosses the removal until it has migrated.
 7. **Dependants are matched against claims, and claims against evidence.** A new rule beside
    `rules.dependants` in `homelabnext.modules.rules`, run at selection and re-run at a swap's
    cutover against the incoming provider:
@@ -434,11 +435,14 @@ matrix can exercise the first `1.1` claims in the conformance step, the lab-in-a
 - **Hand-written version files.** A surface typed by hand drifts from the code it describes; the
   lock is extracted, so it can be checked (ADR-0028).
 
-### Open questions for the operator
+### Operator decisions (2026-11-08)
 
-- The deprecation window: is "at least one later release and 30 days" right, or should it be
-  counted in releases only, or longer for privileged slots (secrets, idp, edge, broker,
-  orchestration, records)?
-- When a major lands, may an in-tree provider that cannot yet claim the new major stay on the old
-  one through the window (decision 6 allows it with a stated reason), or must every in-tree
-  provider claim both in the same pull request?
+The operator answered this ADR's open questions on 2026-11-08 ("use defaults"). The ADR stays
+proposed; the answers are applied in decision 6.
+
+- **The deprecation window.** Decided: at least one later release plus 30 days, counted the same
+  way for every slot; privileged slots (secrets, idp, edge, broker, orchestration, records) get no
+  longer window.
+- **An in-tree provider behind a new major.** Decided: as decision 6 says. It may stay on the old
+  major through the window, with the reason stated in its own manifest change; it need not claim
+  both majors in the pull request that lands the new one.

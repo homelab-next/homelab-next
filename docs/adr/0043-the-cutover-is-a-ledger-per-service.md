@@ -1,6 +1,6 @@
 ---
 summary: The old lab cuts over through a ledger, one record per service, flow, agent, timer and dataset, each moved old to retired by gated, recorded transitions.
-summary_of: outline:sha256:ad36e45c42d1f7ca
+summary_of: outline:sha256:e66f33ebadfab4c7
 ---
 # ADR-0043: The cutover from the old lab is a ledger, one row per service
 
@@ -237,6 +237,9 @@ Nothing tracks the move itself:
      `fail` items goes through the notify channel's ceiling (ADR-0033 decision 6). The renderer and
      the mapping are public code with fictional fixtures. The data stays in the overlay.
 6. **The old lab's repository is frozen for features from this ADR's acceptance: fixes only.**
+   **Decided 2026-11-08 (operator):** the freeze starts at acceptance, for every kind of feature,
+   although the controller cannot cut over before ADR-0026 stage 3; there is no later date for
+   agent and timer features.
    - **Allowed:** a fix, a security fix, and register content. Lessons, runbooks and invariants may
      still be written in the old repository until their dataset row reaches `new-primary`; after
      that, its register files are read-only.
@@ -267,19 +270,20 @@ Nothing tracks the move itself:
    - `drop`: deleted, with the operator's approval.
 
    The proposed dataset rows. Each is seeded `disposition: undecided`, with the `data` form below
-   proposed; the operator's review sets it.
+   proposed; the operator's review sets it. Where the operator has already decided (2026-11-08:
+   the lake, the vault's case notes, the tracker's done cards), the review applies that decision.
 
    | Dataset | Proposed `data` | Mechanism and gate |
    |---|---|---|
-   | The lake (archive events, OCSF tables, CTI reporting, the honeypot, sandbox, agent-health and metrics-bridge tables, frozen shadow tables) | **`fresh`**, as the operator chose (2026-11-07: "start fresh unless you tell me that's a bad idea"), with the old lake kept read-only as an **archive** | See "The lake" below. |
+   | The lake (archive events, OCSF tables, CTI reporting, the honeypot, sandbox, agent-health and metrics-bridge tables, frozen shadow tables) | **`fresh`**, as the operator chose (2026-11-07: "start fresh unless you tell me that's a bad idea"), with the old lake kept read-only as an **archive**; **confirmed 2026-11-08 (operator)** | See "The lake" below. |
    | Vault: proposals, decisions, completion history, findings, tasking queue and holds, deconfliction ledger, recall markers and acks | `migrate`, to the broker | ADR-0044 owns the mapping and the importer. This row's gate is that importer's manifest: per zone, the counts in, the counts out and the lost-record check. |
    | Vault: agent memory | `migrate`, to agent memory (ADR-0037) | Its own row and its own importer, governed by ADR-0037, not ADR-0044. Each memory arrives with its source and history, as ADR-0037 requires; a memory with no recoverable source arrives retracted, not as fact. The gate is the importer's manifest. |
-   | Vault: case notes | `migrate`, to the cases capability, or `archive` | The operator chooses on the row. Until an importer exists the row stays `undecided`; `archive` takes a `markdown-tree` export. |
+   | Vault: case notes | `migrate`, to the cases capability (**decided 2026-11-08, operator**) | An importer into the `cases` primary through its adapter (ADR-0049 decision 5), built in ADR-0049 step 9a (`hnx cases import-notes`). The gate is the importer's manifest: the count in equals the notes imported plus the above-ceiling notes archived (operator-only), and the lost-record check covers both. Until the importer exists the row cannot pass its gate. |
    | Vault: detector machine state | `archive` | The new detectors rebuild their working state on their first runs (ADR-0049), so nothing is imported; the old state is kept read-only as a `files` export so its history stays answerable. |
    | Vault: per-agent continuity files | `archive` | The new coordinator memory is a folded ledger (ADR-0035) that starts from the migrated records, not from the old files. |
    | Lessons and runbooks | `migrate` | `hnx registers split`, then `hnx records assign-uids` (the old numbered codes go to `aliases.yml`, so every citation in the tracker, the invariants, code and memory still resolves), then `hnx registers events migrate`. The check is that the record count equals the source count. A key the schema refuses is mapped in the import's map file or carried into the record's `Notes` section, never dropped. Lessons that use `match` validate against lesson schema 2.2. The import is **re-runnable**, keyed by the old codes in `aliases.yml`: register content may still be written on the old side until `new-primary` (decision 6), so each run adds what is new and changes nothing it already imported. The `new-shadow` to `new-primary` gate is a final re-import whose record count equals the source count at the named source commit. |
    | Invariants | `migrate` | Into the overlay's invariant register (`schemas/registers/invariant.schema.json`), re-homed as `lab-invariants/<old id>` in the overlay's `lab-invariants` module (ADR-0049), with the old ids in `aliases.yml` so every citation still resolves. Each becomes `evidence: auto` with its lab-side `check`, run by `homelabnext.invariants` under a fleet unit, paging newly red only (`page_changes`). **An imported `check` is code, not data:** each lands under the human review tier, and it runs under a least-privilege invariant-runner principal of its own (ADR-0045 decision 1), never under the old stack's deploy account. A check that needs root is listed on the row and reviewed individually. The results history is archived, not imported. |
-   | The old task tracker (projects, cards) | `migrate`, to the `projects` capability (ADR-0020) | A new `hnx projects import-kanban`. It runs the old board's own validator first and refuses a board that fails. It is a dry run by default and idempotent by the card's old id, which it keeps as an external reference. Project cards become projects, step cards become steps, and done cards become closed items with their result and date. |
+   | The old task tracker (projects, cards) | `migrate`, to the `projects` capability (ADR-0020) | A new `hnx projects import-kanban`. It runs the old board's own validator first and refuses a board that fails. It is a dry run by default and idempotent by the card's old id, which it keeps as an external reference. Project cards become projects and step cards become steps. **Done cards are not imported (decided 2026-11-08, operator):** they stay in the old board's archive page, which is archived with the old repository. |
    | Threat-intel platform, case store, CTI graph | `in-place` | Each product keeps its own data, and the cutover moves its deployment, not its store. The gate is the product's export hook (ADR-0008), taken and restore-tested (ADR-0042) before the redeploy. |
    | The legacy case store, kept read-only | `archive` | A `jsonl` and `markdown-tree` export, then retire (ADR-0039: `legacy`). |
    | The agent-audit trail | `archive` | A sealed export whose tamper-evident chain is verified at export time. New audit is the broker's audit trail and the run traces (ADR-0047). |
@@ -305,19 +309,29 @@ Nothing tracks the move itself:
      local model role's `red` ceiling (ADR-0033) does not reach a catalog it holds no rule for.
    - The archive is drilled under ADR-0042 decision 3: restored in full once at freeze, verified
      against its manifest on the drill interval, and restored in full every 365 days.
+   - **Where and how long (decided 2026-11-08, operator).** The archive is kept for one year from
+     the cut date, read-only, on the lab's NAS, and only the operator can query it. At the end of
+     the year it is deleted, as a `drop` with the operator's approval.
+   - **Archive access (decided 2026-11-08, operator).** Every archive this ledger makes is
+     readable by the operator principal only: the old lake, the agent-audit trail, the legacy case
+     store, the vault's detector state and continuity files, the vault repository archived at the
+     broker switch (ADR-0044 decision 12), and the old lab's repository archived at the archive
+     gate (decision 8), with its board's archive page of done cards. No other person and no agent
+     is given a view of any of them.
    - `warm_until` is overlay data on the row: the cut date plus the longest look-back of any
      detection or baseline that reads the lake. Each detection's look-back is read from its
      detection metadata (ADR-0049), and the baselines' from the ADR-0036 window setting. A
      detection that declares none is listed on the row as unknown, and the operator's review sets
      `warm_until` by hand. Until then the status hub shows the lake as warming (decision 5).
-   - ADR-0042 and ADR-0049 build on a fresh lake. If the operator stamps the lake row `migrate`
-     instead, the old lake is copied as build order S3 describes, after the TLP backfill, and
-     ADR-0049 gains a backfill path; neither ADR's other decisions change.
+   - ADR-0042 and ADR-0049 build on a fresh lake, which the operator confirmed on 2026-11-08. Were
+     the lake row ever restamped `migrate`, the old lake would be copied as build order S3
+     describes, after the TLP backfill, and ADR-0049 would gain a backfill path; neither ADR's
+     other decisions would change.
    - The build order's S3 text changes to "copy the data, or record a fresh start on the ledger".
      Copying stays the generic default.
 
-   **What a fresh lake costs.** The operator may still object to these costs, and the lake row is
-   not decided until the operator's review stamps it:
+   **What a fresh lake costs.** The operator confirmed the fresh start with these costs on
+   2026-11-08:
    - **Behavioural baselines re-learn.** The novelty analyzer's first-seen window (ADR-0036) starts
      empty, so for one window nearly everything is first-seen. Its findings are advisory and
      never escalate alone, so this is noise, not false alarms. The source census needs its
@@ -384,11 +398,13 @@ Nothing tracks the move itself:
    - The agents' operating context, now two diverged copies, becomes one file named by the roster.
      The other copies are deleted when the agent rows reach `new-primary`.
 10. **The inference hosts without default-deny egress are a cutover blocker to fix, not a failure
-    to accept.** No new allowlist or accepted-failure list is added to `hnx guests validate`.
-    Decision 3 refuses `new-shadow` for any row whose new side runs on a guest with a problem in
-    `validate_fleet` whose subject is that guest. The gate reads those per-guest problems, not the
-    command's exit code, because a site-wide exit would block every row. Each inference host gets
-    one of three fixes:
+    to accept.** **Decided 2026-11-08 (operator):** each inference host gets real default-deny
+    egress (the first fix below), and none gets a recorded exemption. No new allowlist or
+    accepted-failure list is added to `hnx guests validate`. Decision 3 refuses `new-shadow` for any
+    row whose new side runs on a guest with a problem in `validate_fleet` whose subject is that
+    guest. The gate reads those per-guest problems, not the command's exit code, because a site-wide
+    exit would block every row. In general an inference host gets one of three fixes, and the
+    operator's decision takes the first for every host:
     - real default-deny egress (`policy_out` DROP or REJECT, an allow list, and a baseline that
       defines `egress-filter`), after which the overlay's documented failure is removed;
     - a recorded `network.firewall_exemption` whose `filtered_by` names a zone whose
@@ -415,7 +431,8 @@ Nothing tracks the move itself:
 - Porting the SOC data plane, the detection rules and the lab's detector and collector checks
   (ADR-0049); the items the orchestrator split left unplaced (the ADR-0026 amendment). Those ADRs
   move rows. This one only tracks them.
-- The successor of the interactive-session runbook gate and the runbook skill generation.
+- The successor of the interactive-session runbook gate (a future ADR, named as a follow-up by
+  ADR-0049) and the runbook skill generation.
 - Roles for the household apps, which are overlay-only by design. They get rows, not designs here.
 - Cutover dates. A row's target date is overlay data.
 
@@ -437,7 +454,7 @@ Nothing tracks the move itself:
   is slower, and it is the only way a review in a file means anything while agents share the
   operator's token.
 - The fresh lake loses look-back. The costs are written above. The archive stays readable by the
-  operator only, and it must be kept somewhere for as long as the operator wants it.
+  operator only, on the lab's NAS, for one year from the cut.
 - The old repository stops gaining features, so every new idea lands in homelab-next or waits.
   Fixes still flow, and each fix the new side also needs is carried on its row.
 - Nothing is archived while one old credential still works at its issuer. That may hold the
@@ -514,19 +531,18 @@ and a security audit. Overlay and old-repository pull requests are merged by the
    registry row produces a row; an agent row gets `requires` on its inference rows.
 10. **The kanban importer**: `hnx projects import-kanban`, against the projects fake and the
     OpenProject adapter's recorded target. Tests: a board that fails the old board's validator is
-    refused; a dry run writes nothing; a re-run adds nothing; a done card arrives closed with its
-    result.
+    refused; a dry run writes nothing; a re-run adds nothing; a done card is not imported.
 11. **The checklist**: E-12's observable becomes `hnx cutover check --archive-gate`, and a new
     Modularity row, X-13 ("the cutover ledger is well formed"; X-12 is ADR-0039's), runs `hnx
     cutover check` as a plugin criterion. Tests: the examples pass, a broken fixture fails, and
     the checklist totals are restamped.
 12. **Overlay: the ledger seeded** (operator merges). This adds `lab/registers/cutover/`,
     `lab/registers/cutover-revocations/`, `lab/cutover/` (policy, review policy, the inventory
-    exports, evidence) and `lab/agents/roster-of-record.yml`. It adds the dataset rows of
-    decision 7, each `undecided` with its proposed `data`, the lake row awaiting the operator's
-    stamp. It adds `hnx cutover check --old-inventory` to `checks.yml`, running on main only for
-    the decider. Validated with this repository's CLI at the pinned ref and clean under
-    `private_leak_check.py private`.
+    exports, evidence) and `lab/agents/roster-of-record.yml`. It adds the dataset rows of decision
+    7, each `undecided` with its proposed `data`, and the operator's 2026-11-08 decisions (the lake,
+    the case notes, the done cards) ready for the review to apply. It adds `hnx cutover check
+    --old-inventory` to `checks.yml`, running on main only for the decider. Validated with this
+    repository's CLI at the pinned ref and clean under `private_leak_check.py private`.
 13. **Overlay: the registers imported** (operator merges): lessons and runbooks split, given uids
     and events-migrated, and the invariants converted, each imported `check` under the human
     review tier and the invariant-runner principal. Tests: the counts match, `check_lost` is
@@ -536,9 +552,9 @@ and a security audit. Overlay and old-repository pull requests are merged by the
     decision 6, or its scheduled detector. Tests there: a commit that adds a timer without the
     trailer is refused (or paged); a fix passes; a commit pushed with `--no-verify` is still
     caught.
-15. **Overlay: inference egress** (operator merges): default-deny egress on each inference host, a
-    recorded exemption behind a deny-egress zone, or the host's removal from the inference rows.
-    The overlay's documented failure is deleted. Test: `hnx guests validate lab/guests --site
+15. **Overlay: inference egress** (operator merges): real default-deny egress on each inference
+    host, with no recorded exemption (decision 10). The overlay's documented failure is
+    deleted. Test: `hnx guests validate lab/guests --site
     lab/site.yml` exits 0.
 
 After step 15, rows move by transition intents, singly or in batches, each row with its own
@@ -570,18 +586,18 @@ evidence, as the work of ADR-0026, ADR-0044 and ADR-0049 lands.
   boundary that keeps model-written actions inside the lab. Accepting it at cutover would mean
   migrating the gap.
 
-### Open questions for the operator
+### Operator decisions (2026-11-08)
 
-1. **The lake.** Do you confirm a fresh start with the old lake kept as an operator-only archive,
-   given the costs in decision 7? How long should the archive be kept, and where: on the old
-   storage until that hardware is reused, or copied to other lab storage or off site?
-2. **The accepted validation failure.** For each host the overlay lists under it: fix the host so
-   the rule passes, record an exemption, or retire the row?
-3. **The freeze date.** Does the old repository freeze at this ADR's acceptance even though the
-   controller cannot cut over before ADR-0026 stage 3? The alternative is a later date for agent
-   and timer features only.
-4. **Done tracker cards.** Should they be imported as closed items, or left in the old board's
-   archive page?
-5. **Archive access.** Should anyone besides you query the archives (lake, agent audit, legacy
-   cases, vault case notes), and through which view?
-6. **Vault case notes.** Import them into the cases capability, or archive them?
+The operator answered this ADR's open questions on 2026-11-08 ("use defaults"). The ADR stays
+proposed; the answers are applied in decisions 6, 7 and 10 and in the implementation plan.
+
+1. **The lake.** Decided: a fresh start, with the costs in decision 7. The old lake is kept for
+   one year from the cut, read-only, on the lab's NAS, and only the operator can query it.
+2. **The accepted validation failure.** Decided: every inference host the overlay lists under it
+   gets real default-deny egress. No exemption is recorded.
+3. **The freeze date.** Decided: the old repository is frozen for new features at this ADR's
+   acceptance (fixes only), with no later date for agent and timer features.
+4. **Done tracker cards.** Decided: not imported; they stay in the old board's archive page.
+5. **Archive access.** Decided: only the operator reads the archives, the vault repository and
+   the old repository with its done-card archive page included; no other view is made.
+6. **Vault case notes.** Decided: imported into the cases capability.
