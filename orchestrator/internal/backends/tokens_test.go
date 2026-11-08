@@ -260,3 +260,23 @@ func TestReapStaleReservations_ReturnsTokenWeights(t *testing.T) {
 		t.Fatalf("units = %v, want 1 (the orphan's 2 returned, the live run's 1 kept)", u)
 	}
 }
+
+// A pool size that is not finite, or past any engine's, is no reading: never a budget that admits
+// everything.
+func TestEngineReading_AnAbsurdPoolIsNoReading(t *testing.T) {
+	for name, body := range map[string]string{
+		"blocks times block size overflows": `engine:cache_info{block_size="1e200",num_blocks="1e200"} 1` + "\n",
+		"a pool label past any engine":      `engine:cache_info{pool_tokens="1e300"} 1` + "\n",
+		"an infinite pool label":            `engine:cache_info{pool_tokens="+Inf"} 1` + "\n",
+	} {
+		if pool, _, ok := reading(t, body); ok {
+			t.Errorf("%s: read a pool of %v", name, pool)
+		}
+	}
+	big := newEngine(t, func() string { return `engine:cache_info{pool_tokens="6e11"} 1` + "\n" })
+	p, _ := newPool(nil, Backend{Name: "engine", LoadProbeURLs: []string{big.URL, big.URL}})
+	p.KV = testKV
+	if s := p.engineState(context.Background(), p.Backends[0]); s.poolTokens != 0 {
+		t.Errorf("two plausible engines summing past the bound read as %v", s.poolTokens)
+	}
+}

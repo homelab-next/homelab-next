@@ -4,6 +4,7 @@ package backends
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"sort"
 	"sync"
@@ -55,16 +56,26 @@ func (p *Policy) currentLoad(ctx context.Context, b Backend) int {
 		if err != nil {
 			continue
 		}
-		if v, ok := scrape.Sum(samples, p.LoadMetrics...); ok {
+		// A reading that is not a finite count of requests is no reading.
+		if v, ok := scrape.Sum(samples, p.LoadMetrics...); ok && !math.IsInf(v, 0) && !math.IsNaN(v) && v >= 0 {
 			total += v
 			anyOK = true
 		}
 	}
-	if !anyOK || int(total) < tracked {
+	if !anyOK {
 		return tracked
 	}
-	return int(total)
+	// Clamped before the conversion: a huge count reads as full, never as a wrapped integer.
+	load := int(math.Min(total, maxLoadReading))
+	if load < tracked {
+		return tracked
+	}
+	return load
 }
+
+// maxLoadReading bounds a probe's load: past any real engine's queue, so a backend reporting more
+// reads as full.
+const maxLoadReading = 1 << 20
 
 // loadRatio is the load as a fraction of MaxConcurrent; 0 for an unmeasured backend, which is
 // never penalised for its load.

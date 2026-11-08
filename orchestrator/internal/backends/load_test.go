@@ -130,3 +130,21 @@ func TestInFlightSnapshot(t *testing.T) {
 		t.Errorf("snapshot = %+v", snap)
 	}
 }
+
+// A load reading that is not a finite, non-negative count is no reading; a huge one reads as full,
+// never as a wrapped integer that looks idle.
+func TestCurrentLoad_RejectsNonFiniteAndNegativeAndClampsHuge(t *testing.T) {
+	for _, c := range []struct {
+		value string
+		want  float64
+	}{{"1e300", 1}, {"-5", 0.5}, {"+Inf", 0.5}, {"NaN", 0.5}} {
+		e := newEngine(t, func() string { return "engine:requests_running " + c.value + "\n" })
+		p, _ := newPool(nil)
+		p.LoadMetrics = testLoadMetrics
+		atomic.StoreInt64(p.inFlightCounter("a"), 2)
+		got := p.loadRatio(context.Background(), Backend{Name: "a", MaxConcurrent: 4, LoadProbeURLs: []string{e.URL}})
+		if (c.want == 1 && got < 1) || (c.want != 1 && got != c.want) {
+			t.Errorf("%s: ratio %v, want %v", c.value, got, c.want)
+		}
+	}
+}

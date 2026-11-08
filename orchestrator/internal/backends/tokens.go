@@ -101,6 +101,14 @@ func (p *Policy) kvBudgetFraction() float64 {
 	return defaultKVBudgetFraction
 }
 
+// maxPoolTokens bounds a KV pool: far past any engine's, so a reading above it (or one that is not
+// finite) is a broken or hostile endpoint, and no reading at all rather than a budget that admits
+// everything.
+const maxPoolTokens = 1e12
+
+// plausiblePool reports whether v can be a KV pool's size in tokens.
+func plausiblePool(v float64) bool { return v > 0 && v <= maxPoolTokens && !math.IsNaN(v) }
+
 // engineReading is one probe URL's pool size and used fraction.
 func (p *Policy) engineReading(samples []scrape.Sample) (pool, usage float64, ok bool) {
 	label := func(s scrape.Sample, key string) (float64, bool) {
@@ -108,7 +116,7 @@ func (p *Policy) engineReading(samples []scrape.Sample) (pool, usage float64, ok
 			return 0, false
 		}
 		v, err := strconv.ParseFloat(s.Labels[key], 64)
-		return v, err == nil && v > 0 && !math.IsInf(v, 0)
+		return v, err == nil && plausiblePool(v)
 	}
 	for _, s := range samples {
 		switch s.Name {
@@ -120,7 +128,7 @@ func (p *Policy) engineReading(samples []scrape.Sample) (pool, usage float64, ok
 			if pool == 0 {
 				nb, okb := label(s, p.KV.BlocksLabel)
 				bs, oks := label(s, p.KV.BlockSizeLabel)
-				if okb && oks {
+				if okb && oks && plausiblePool(nb*bs) {
 					pool, ok = nb*bs, true
 				}
 			}
@@ -164,7 +172,7 @@ func (p *Policy) engineState(ctx context.Context, b Backend) engineSample {
 	}
 	s := engineSample{fetched: now}
 	switch {
-	case anyOK && pool > 0:
+	case anyOK && plausiblePool(pool):
 		s.poolTokens, s.usagePerc = pool, used/pool
 	case had:
 		s.poolTokens = prev.poolTokens
