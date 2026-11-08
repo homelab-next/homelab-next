@@ -561,9 +561,9 @@ evidence, as the work of ADR-0026, ADR-0044 and ADR-0049 lands.
 
 1. **The lake.** Do you confirm a fresh start with the old lake kept as an operator-only archive,
    given the costs in decision 7? How long should the archive be kept, and where: on the old
-   storage until that hardware is reused, or copied to the NAS or off site?
-2. **The inference hosts.** For each of them: real default-deny egress, a recorded exemption behind
-   a deny-egress zone, or stop serving models from it and retire its inference row?
+   storage until that hardware is reused, or copied to other lab storage or off site?
+2. **The accepted validation failure.** For each host the overlay lists under it: fix the host so
+   the rule passes, record an exemption, or retire the row?
 3. **The freeze date.** Does the old repository freeze at this ADR's acceptance even though the
    controller cannot cut over before ADR-0026 stage 3? The alternative is a later date for agent
    and timer features only.
