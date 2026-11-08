@@ -12,8 +12,10 @@
 # /run/orchestrator/                   the interlock's lock file (lock_path), when one is used
 #
 # A database that needs a migration stops the start with exit status 3, which is not restarted
-# (RestartPreventExitStatus). Take the backup and migrate once by hand, as the service's user:
-#   controller serve --config /etc/orchestrator/controller.yaml --migrate-backup /var/backups/orchestrator/controller.db.bak
+# (RestartPreventExitStatus). Take the backup and migrate once by hand, as the service's user, with
+# the unit stopped; --migrate-only exits once the database is migrated, without serving:
+#   controller serve --config /etc/orchestrator/controller.yaml --migrate-only \
+#     --migrate-backup /var/backups/orchestrator/controller.db.bak
 # (a new file, in a directory only that user can write), then start the unit again.
 [Unit]
 Description=Orchestration controller (agent job queue and runner)
@@ -45,6 +47,10 @@ RuntimeDirectory=orchestrator
 RuntimeDirectoryMode=0700
 UMask=0077
 ReadWritePaths=/var/lib/orchestrator
+# Bounds on what the controller and every session it runs may take together (size them for the
+# site's concurrency); a runaway session cannot fork or allocate the host away
+TasksMax=512
+MemoryMax=8G
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -56,11 +62,17 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
+# Other users' processes are invisible, and with them their command lines (a session's argv can
+# hold its prompt) and environments
+ProtectProc=invisible
+# A runner that sandboxes its sessions with user namespaces (bubblewrap, say) needs them: such a
+# site relaxes this to the namespace types it uses, e.g. RestrictNamespaces=user mnt pid
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
 CapabilityBoundingSet=
 AmbientCapabilities=
 # the sessions reach the model gateway; nothing else is needed by the controller itself

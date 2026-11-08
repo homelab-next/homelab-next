@@ -691,3 +691,27 @@ func TestCheck_WrongFilesAndMissingFiles(t *testing.T) {
 		})
 	}
 }
+
+// --migrate-only migrates behind the backup and exits without serving: the hand migration the
+// unit's comment gives ends by itself.
+func TestServe_MigrateOnlyExitsAfterTheMigration(t *testing.T) {
+	cfg, dir := siteConfig(t, nil)
+	db := filepath.Join(dir, "state", "controller.db")
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateJob(&store.Job{RunID: "r1", AgentKey: "collector", Priority: 50, State: store.StateDone}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	dropIndex(t, db)
+	backup := filepath.Join(t.TempDir(), "controller.db.bak")
+	var b bytes.Buffer
+	if code := serve([]string{"--config", cfg, "--migrate-only", "--migrate-backup", backup}, &b, &serveHooks{signals: make(chan os.Signal, 1)}); code != exitOK || !strings.Contains(b.String(), "not serving") {
+		t.Fatalf("serve --migrate-only = %d: %s", code, b.String())
+	}
+	if steps, _ := store.PendingMigrations(db); len(steps) != 0 {
+		t.Fatalf("still pending: %v", steps)
+	}
+}

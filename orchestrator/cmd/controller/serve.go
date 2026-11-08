@@ -75,6 +75,7 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "", "the controller's configuration (required)")
 	backup := fs.String("migrate-backup", "", "when the database needs a migration: back it up to this new file (in an owner-only directory) and migrate behind it")
+	migrateOnly := fs.Bool("migrate-only", false, "open the database (migrating it behind --migrate-backup when it needs it), then exit without serving")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -99,7 +100,7 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 		lg.Printf("controller: note: %s", n)
 	}
 	cfg := s.cfg
-	if s.runner == nil {
+	if s.runner == nil && !*migrateOnly {
 		lg.Printf("controller: runner.kind is not set: there is no runner to serve with")
 		return exitProblem
 	}
@@ -117,6 +118,10 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 		st.Close()
 		releaseLock()
 	}()
+	if *migrateOnly {
+		lg.Printf("controller: --migrate-only: the database is at the current schema; not serving")
+		return exitOK
+	}
 
 	var sender *events.OutboxSender
 	if cfg.Events.ForwarderURL != "" {

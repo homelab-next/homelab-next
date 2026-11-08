@@ -536,7 +536,9 @@ directory.
   whose schema must change is refused with exit status 3 and its pending steps, and is left
   unchanged; the example unit lists 3 in `RestartPreventExitStatus=`, so it does not crash-loop.
   `--migrate-backup PATH` takes the backup (a new file in an owner-only directory) under the
-  instance lock and migrates behind it (`store.BackupForMigration`, then `OpenWith`). A database
+  instance lock and migrates behind it (`store.BackupForMigration`, then `OpenWith`); with
+  `--migrate-only` it exits once the database is current, without serving, which is the hand
+  migration the unit's comment gives (unit stopped, as the service's user). A database
   file, or its `-wal`/`-shm`, readable by anyone but its owner is refused with the remedy (`chmod
   0600`). A `lock_path` whose directory anyone but its owner may write is refused before the
   database is opened, whenever a backend uses the interlock. `serve` then enables the event outbox
@@ -561,7 +563,11 @@ the only built-in kind. An agent harness's runner comes with its provider module
 until then a migrated configuration has no runner and cannot serve. The example unit,
 `orchestrator/deploy/systemd/orchestrator.service`, is named after the registry row (ADR-0026
 decision 16). It sets `UMask=0077`, `StateDirectoryMode=0700`, `RuntimeDirectory=` for the lock
-file, `KillMode=mixed`, `ExecReload` as SIGHUP, and `controller check` as `ExecStartPre`.
+file, `KillMode=mixed`, `ExecReload` as SIGHUP, and `controller check` as `ExecStartPre`, with
+`TasksMax=` and `MemoryMax=` over the controller and its sessions together,
+`ProtectProc=invisible` (other users' command lines and environments, a session's prompt in argv
+included, are hidden), `SystemCallFilter=@system-service`, and `RestrictNamespaces=yes`, which a
+runner that sandboxes sessions in user namespaces (bubblewrap) relaxes to the types it uses.
 
 ### Lessons and runbooks in a job's prompt
 
