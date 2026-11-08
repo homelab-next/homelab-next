@@ -462,8 +462,8 @@ func TestScheduler_LocalOnlyJobWhoseBackendsAreAllDownIsRequeued(t *testing.T) {
 	r.submit("run-1", defaultProfile)
 	r.tick()
 	j := r.job("run-1")
-	if j.State != store.StateQueued || j.Attempts != 1 {
-		t.Fatalf("run-1 is %s (attempts %d), want back to queued", j.State, j.Attempts)
+	if j.State != store.StateQueued || j.Attempts != 0 || j.LocalFailedReason != "" {
+		t.Fatalf("run-1 is %s (attempts %d, reason %q), want back to queued with nothing counted or recorded", j.State, j.Attempts, j.LocalFailedReason)
 	}
 	r.tick()
 	if j := r.job("run-1"); j.State != store.StateQueued {
@@ -472,8 +472,8 @@ func TestScheduler_LocalOnlyJobWhoseBackendsAreAllDownIsRequeued(t *testing.T) {
 	h.ok.Store(true)
 	probe(r)
 	r.tick()
-	if j := r.waitState("run-1", store.StateDone); j.Attempts != 2 {
-		t.Errorf("attempts = %d, want 2 under one run id", j.Attempts)
+	if j := r.waitState("run-1", store.StateDone); j.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (the requeued one does not count) under one run id", j.Attempts)
 	}
 	if q, _ := r.st.ListByState(store.StateQueued); len(q) != 0 {
 		t.Errorf("a new run was queued: %v", q)
