@@ -252,17 +252,23 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      runs again at review.
    - **Pending.** A promotion, and any pass change to an `index` value, creates a **pending**
      revision. A profile holds at most `max_pending` of them (default 10, in
-     `memory_consolidation`). While the queue is full, the store drops each update that would add
-     one, applies the rest of the batch, and reports the drops; the event counts them
-     (`pending-full`). The next pass may propose them again once the operator has reviewed. `hnx
-     agent memory review <profile>`, a `MemoryAdmin` method taking an `OperatorPrincipal` (ADR-0037
-     decision 12), lists each pending revision with its evidence and diff. Approving it appends an
-     operator record bound to that revision's `(rev, value_digest)`. Only an approved pair is ever
-     rendered. While a change is pending, the entry's last approved value keeps rendering.
-     Rejecting returns a promotion to `note`. The same value cannot be proposed again; a new
-     proposal needs a changed value.
-   - **Removal is not reviewed.** A demotion or a `retire` of an index entry takes effect at once.
-     It only reduces what runs see, and decision 7's restoration covers a wrong one.
+     `memory_consolidation`). A batch that would take the profile past `max_pending` is refused
+     whole, like any other refusal: nothing applies, the cursor does not advance, and the event
+     counts it (`pending-full`). The refusal pages at once (pair `AGENT_MEMORY_REVIEW_QUEUE_FULL`,
+     keyed by the profile, naming no key, recovered by the next accepted pass). The remedy is the
+     operator clearing the queue, and the next pass then applies the same window. `hnx agent memory
+     review <profile>`, a `MemoryAdmin` method taking an `OperatorPrincipal` (ADR-0037 decision
+     12), lists each pending revision with its evidence and diff. Approving it appends an operator
+     record bound to that revision's `(rev, value_digest)`. Only an approved pair is ever rendered.
+     While a change is pending, the entry's last approved value keeps rendering. Rejecting returns
+     a promotion to `note`. The same value cannot be proposed again; a new proposal needs a changed
+     value.
+   - **Removal is not reviewed.** A pass may withdraw an approved index value: a demotion
+     (back to `note`, so it stops rendering) or a `retire` takes effect at once, with no review. It
+     only reduces what runs see, and decision 7's restoration covers a wrong one. A withdrawal is
+     not a pending revision, so it does not count against `max_pending`. It still travels in the
+     pass's batch, though, so while the queue is full a batch holding a withdrawal is refused like
+     any other. The operator's review action is what unblocks it.
    - **Auto-promotion** (`auto_promote: true`) skips review for a profile. The compiler refuses
      it on a profile with `reads_untrusted: true`.
    - **For readers, review is the barrier.** For a reader profile, the transcript a confirmation
@@ -388,9 +394,8 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
        them.
      - **Decision 7:** a pack records its `purpose`, and `report_result` 1.3 adds `rung`, `kind`,
        `consolidation_reason` and `expect_rev`. For every profile, a checked batch carries at most
-       one update per key. A consolidation batch drops, and reports, updates past `max_pending`,
-       as an unchecked batch drops a denied update; it is otherwise all or nothing. Expiry
-       retirements are a platform write to a model-written scope; they only retire.
+       one update per key. Expiry retirements are a platform write to a model-written scope;
+       they only retire.
      - **Decision 12:** `MemoryAdmin` gains `review`.
      - **Decision 13:** `dependents` and `retract` follow the transcript exposure edge, and
        `retract` restores.
@@ -496,8 +501,12 @@ waits for ADR-0047's task evals.
      demotion (`test_a_revert_to_the_shadow_restores_note`);
    - an expiring hypothesis with a shadow reverts to the shadow at `note` instead of being retired
      (`test_an_expired_hypothesis_reverts_to_its_shadow`);
-   - with `max_pending` pending revisions held, a new proposal is dropped and reported, and the
-     rest of the batch applies;
+   - a batch that would exceed `max_pending` is refused whole and the cursor stays put
+     (`test_a_batch_past_max_pending_is_refused_and_the_cursor_stays`); after the operator
+     rejects the pending entries, the same window applies
+     (`test_the_same_window_applies_after_the_queue_is_cleared`); a withdrawal of an approved
+     index value does not count against `max_pending`
+     (`test_a_withdrawal_does_not_count_against_max_pending`);
    - transcript exposures are stored keyed by uid and charged to `exposure_bytes`, and
      `retract` still reaches the records citing a transcript after that run's pack is purged
      (`test_retract_reaches_through_a_transcript_after_its_pack_is_purged`);
