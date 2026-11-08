@@ -71,7 +71,8 @@ func canonical(p string) bool {
 }
 
 // checkProperty is FuzzCheck's property for scope and p, against r. CheckWrite and CheckRead allow
-// p only when r allows it and its cleaned form has no hidden segment, a write allowed implies a
+// p only when r allows it, it holds no backslash, NUL or control character (the set
+// validatePrefix refuses, spelled out here) and its cleaned form has no hidden segment, a write allowed implies a
 // read allowed, and on a canonical p under a scope whose entries ValidatePrefix accepts, they allow
 // exactly what r allows (no hidden segment).
 func checkProperty(r ref, scope Scope, p string) error {
@@ -84,13 +85,19 @@ func checkProperty(r ref, scope Scope, p string) error {
 	if (w || rd) && HasHiddenSegment(clean) {
 		return fmt.Errorf("%q (cleans to %q) is allowed and has a hidden segment", p, clean)
 	}
+	badChar := strings.ContainsAny(p, "\\\x00") || strings.ContainsFunc(p, func(r rune) bool {
+		return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029
+	})
+	if (w || rd) && badChar {
+		return fmt.Errorf("%q is allowed and holds a backslash, a NUL or a control character", p)
+	}
 	if w && !r(scope.WritablePrefixes, p) {
 		return fmt.Errorf("CheckWrite allows %q, the reference does not", p)
 	}
 	if rd && !r(both, p) {
 		return fmt.Errorf("CheckRead allows %q, the reference does not", p)
 	}
-	if !canonical(p) || HasHiddenSegment(p) {
+	if !canonical(p) || HasHiddenSegment(p) || badChar {
 		return nil
 	}
 	for _, e := range both {
