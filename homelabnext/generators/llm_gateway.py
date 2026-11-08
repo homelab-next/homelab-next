@@ -502,6 +502,15 @@ def spec_from_dict(
             backends[name] = Backend(name, loc, provider=str(prov), api_key=key)
             continue
         svc = registry.services.get(name) if registry else None
+        other = registry.row(name, "eval", "retiring", "legacy") if registry else None
+        if svc is None and other is not None:
+            # its row-name record would take the non-registry path below and reach the row
+            problems.append(
+                f"{where}: registry row {name} is {'an' if other.standing == 'eval' else 'a'} "
+                f"{other.standing} row; a gateway backend binds only a primary (ADR-0039 "
+                "decision 3)"
+            )
+            continue
         if svc is not None:
             if _cloud_zone(registry, svc):
                 problems.append(

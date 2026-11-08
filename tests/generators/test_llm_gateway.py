@@ -283,6 +283,32 @@ def test_audit_counts_a_host_under_a_cloud_api_domain_as_cloud(tmp_path):
     assert not gw.internal_host(spec, "x.api.anthropic.com")
 
 
+def registry_with_candidate(tmp_path, tier):
+    """The example registry plus an inference row of standing ``tier`` named
+    ``inference-candidate`` (ADR-0039)."""
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    row = copy.deepcopy(doc["services"]["inference"])
+    row.pop("env_var", None)
+    row.pop("mcp", None)
+    row.pop("status_sources", None)
+    row.pop("public_hostname", None)
+    row["port"] = row["port"] + 1
+    row["standing"] = {"tier": tier, "until": "2027-01-31", "why": "a candidate engine"}
+    doc["services"]["inference-candidate"] = row
+    (tmp_path / "registry.yml").write_text(yaml.safe_dump(doc))
+    return "registry.yml"
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring", "legacy"])
+def test_a_gateway_backend_naming_a_non_primary_row_is_refused(tmp_path, tier):
+    backends = spec_doc()["backends"] | {"svc:inference-candidate": {"locality": "local"}}
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:inference-candidate"
+    reg = registry_with_candidate(tmp_path, tier)
+    with pytest.raises(gw.GatewaySpecError, match=f"inference-candidate is an? {tier} row"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
 def test_a_spec_domain_that_differs_from_the_registry_is_refused(tmp_path):
     reg = registry_with(tmp_path, "compute")
     with pytest.raises(gw.GatewaySpecError, match="differs from the registry's"):
