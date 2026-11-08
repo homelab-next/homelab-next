@@ -1,0 +1,6 @@
+go test fuzz v1
+string("owner")
+string("notes/findings/")
+string("inbox/")
+string("owners/")
+string("owners/x.md")
