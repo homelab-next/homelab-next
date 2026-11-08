@@ -92,23 +92,38 @@ func hasAnyPrefix(p string, prefixes []string) bool {
 	return false
 }
 
-// CheckWrite returns nil when p, cleaned, lies under one of scope's writable prefixes, and an
-// error wrapping ErrDenied otherwise.
+// CheckWrite returns nil when p, cleaned, lies under one of scope's writable prefixes and has no
+// hidden segment (HasHiddenSegment), and an error wrapping ErrDenied otherwise.
 func CheckWrite(scope Scope, p string) error {
-	if hasAnyPrefix(cleanRelPath(p), scope.WritablePrefixes) {
+	clean := cleanRelPath(p)
+	if HasHiddenSegment(clean) {
+		return hiddenErr(p, clean)
+	}
+	if hasAnyPrefix(clean, scope.WritablePrefixes) {
 		return nil
 	}
 	return fmt.Errorf("%w: %q is not under any writable prefix", ErrDenied, clipPath(p))
 }
 
-// CheckRead returns nil when p, cleaned, lies under a writable or a readable prefix of scope, and
-// an error wrapping ErrDenied otherwise. There is no wildcard: what no prefix names is denied.
+// CheckRead returns nil when p, cleaned, lies under a writable or a readable prefix of scope and
+// has no hidden segment, and an error wrapping ErrDenied otherwise. There is no wildcard: what no
+// prefix names is denied.
 func CheckRead(scope Scope, p string) error {
 	clean := cleanRelPath(p)
+	if HasHiddenSegment(clean) {
+		return hiddenErr(p, clean)
+	}
 	if hasAnyPrefix(clean, scope.WritablePrefixes) || hasAnyPrefix(clean, scope.ReadablePrefixes) {
 		return nil
 	}
 	return fmt.Errorf("%w: %q is not under any readable or writable prefix", ErrDenied, clipPath(p))
+}
+
+// hiddenErr refuses a path that, cleaned, names a hidden file or directory. A prefix can never
+// name one (ValidatePrefix refuses it), and a path under a prefix must not reach one either:
+// under a code checkout that is the repository's .git or an .env.
+func hiddenErr(p, clean string) error {
+	return fmt.Errorf("%w: %q names a hidden file or directory (.git, .env, ...)", ErrDenied, clipPath(clean))
 }
 
 // Within reports whether prefix (already ValidatePrefix-clean) names the same path as one of
