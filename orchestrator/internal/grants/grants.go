@@ -351,29 +351,36 @@ const MaxCatalogBytes = 4 << 20
 // following a symbolic link in its last component, of at most max bytes. The size is checked on
 // the open descriptor, so a file swapped after a check cannot be read instead.
 func ReadConfigFile(file string, max int64) ([]byte, error) {
-	f, err := os.OpenFile(file, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	data, _, err := ReadConfigFileMode(file, max)
+	return data, err
+}
+
+// ReadConfigFileMode is ReadConfigFile that also returns the file's permission bits, taken from
+// the descriptor it read, so a rewrite can keep the mode of the file it read.
+func ReadConfigFileMode(file string, max int64) ([]byte, os.FileMode, error) {
+	f, err := os.OpenFile(file, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: not a regular file", file)
+		return nil, 0, fmt.Errorf("%s: not a regular file", file)
 	}
 	if fi.Size() > max {
-		return nil, fmt.Errorf("%s: larger than %d bytes", file, max)
+		return nil, 0, fmt.Errorf("%s: larger than %d bytes", file, max)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if int64(len(data)) > max {
-		return nil, fmt.Errorf("%s: larger than %d bytes", file, max)
+		return nil, 0, fmt.Errorf("%s: larger than %d bytes", file, max)
 	}
-	return data, nil
+	return data, fi.Mode().Perm(), nil
 }
 
 // ParseCatalog decodes a catalog strictly (unknown fields refused, a repeated key refused) and
