@@ -46,7 +46,9 @@ func (s *site) path(p string) string {
 	return filepath.Join(s.dir, p)
 }
 
-// errUnreadable marks a file that cannot be read at all: exit 2 rather than 1.
+// errUnreadable marks a file or directory the configuration names that is missing or cannot be
+// read at all: exit 2. One that is there but wrong (a directory where a file belongs, content
+// its loader refuses, a mode that is too open) is a problem: exit 1.
 var errUnreadable = errors.New("unreadable")
 
 // loadSite reads the configuration at path and every file it names, and returns each problem
@@ -163,14 +165,14 @@ func checkSecretFile(path string) error {
 	}
 	fi, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("cannot be read: %v", errors.Unwrap(err))
+		return fmt.Errorf("%w: cannot be read: %v", errUnreadable, errors.Unwrap(err))
 	}
 	if !fi.Mode().IsRegular() {
 		return errors.New("is not a regular file")
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("cannot be opened: %v", errors.Unwrap(err))
+		return fmt.Errorf("%w: cannot be opened: %v", errUnreadable, errors.Unwrap(err))
 	}
 	return f.Close()
 }
@@ -194,7 +196,7 @@ func checkLockDir(lockPath string) error {
 	// Lstat: a link would name a directory whose owner and mode this check never saw.
 	fi, err := os.Lstat(dir)
 	if err != nil {
-		return fmt.Errorf("its directory cannot be read: %v", errors.Unwrap(err))
+		return fmt.Errorf("%w: its directory cannot be read: %v", errUnreadable, errors.Unwrap(err))
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return errors.New("its directory is a symbolic link: name the directory itself")

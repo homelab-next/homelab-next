@@ -514,7 +514,10 @@ directory.
   contracts, the runner and the pool's own settings (`Policy.Validate`), as `serve` would. It opens
   no database, binds no port and reaches no network. It reads no secret file's contents: the tokens
   file is checked to be a regular file it may open, and nothing more. Exit 0 when clean, 1 with one
-  line per problem, 2 for a usage error or an unreadable file. A configuration with no `runner.kind`
+  line per problem, 2 for a usage error or an unreadable file: a file or directory the
+  configuration names that is missing or cannot be read is 2, whichever key names it, and one that
+  is there but wrong (a directory where a file belongs, content its loader refuses, a mode that is
+  too open) is 1. `serve` exits the same way before it opens the database. A configuration with no `runner.kind`
   passes with a note: it loads, but `serve` refuses it. `make controller-check` runs it on the
   fictional example `orchestrator/deploy/examples/controller.yaml`, and the Go tests run it there
   too (`TestCheck_TheExamplePasses`, in CI's `go` job), with one fixture for each refusal

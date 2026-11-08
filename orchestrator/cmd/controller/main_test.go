@@ -139,7 +139,6 @@ func TestCheck_EachRefusal(t *testing.T) {
 		"profile refused":      {replace(examples+"/mcp/clients/orchestrator/profiles", badProfiles), "profiles:"},
 		"grant refused":        {replace(examples+"/mcp/clients/orchestrator/profiles", ungranted), "grants:"},
 		"registers refused":    {replace("lessons_path: "+examples+"/registers/lessons", "lessons_disabled: true"), "lessons_disabled"},
-		"no tokens file":       {replace("tokens_file: api-tokens.yaml", "tokens_file: missing.yaml"), "api_auth.tokens_file"},
 		"tokens file a folder": {replace("tokens_file: api-tokens.yaml", "tokens_file: state"), "not a regular file"},
 		"open lock directory": {replace("needs_interlock: false}", "needs_interlock: true}\nlock_path: "+openDir+"/interlock.lock"),
 			"writable by group or others"},
@@ -658,5 +657,37 @@ func TestCheckLockDir_RefusesAForeignOwner(t *testing.T) {
 	}
 	if err := checkLockDir(filepath.Join(dir, "interlock.lock")); err == nil || !strings.Contains(err.Error(), "owned by uid 4242") {
 		t.Fatalf("a foreign owner = %v", err)
+	}
+}
+
+// Each named file that is there but wrong is a problem (exit 1); each that is missing or cannot be
+// read is exit 2, whichever key names it.
+func TestCheck_WrongFilesAndMissingFiles(t *testing.T) {
+	notADir := filepath.Join(t.TempDir(), "file")
+	writeFile(t, notADir, "x\n", 0o600)
+	badCatalog := filepath.Join(t.TempDir(), "catalog.yaml")
+	writeFile(t, badCatalog, "kinds: [not, a, mapping]\n", 0o600)
+	cat := examples + "/mcp/clients/orchestrator/mcp_catalog.yaml"
+	for name, c := range map[string]struct {
+		edit func(string) string
+		code int
+		want string
+	}{
+		"catalog refused":         {replace(cat, badCatalog), exitProblem, "grants catalog"},
+		"lock path not a dir":     {replace("needs_interlock: false}", "needs_interlock: true}\nlock_path: "+notADir+"/interlock.lock"), exitProblem, "not a directory"},
+		"catalog missing":         {replace(cat, cat+".missing"), exitUsage, "grants catalog"},
+		"contracts missing":       {func(s string) string { return s + "prompt_contracts: [missing.txt]\n" }, exitUsage, "prompt contracts"},
+		"lock dir missing":        {replace("needs_interlock: false}", "needs_interlock: true}\nlock_path: /nonexistent-dir/interlock.lock"), exitUsage, "lock_path"},
+		"tokens file missing":     {replace("tokens_file: api-tokens.yaml", "tokens_file: missing.yaml"), exitUsage, "api_auth.tokens_file"},
+		"tokens file unopenable":  {replace("tokens_file: api-tokens.yaml", "tokens_file: api-tokens.yaml/t.yaml"), exitUsage, "api_auth.tokens_file"},
+		"profiles folder missing": {replace(examples+"/mcp/clients/orchestrator/profiles", "/nonexistent-profiles"), exitUsage, "profiles"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, _ := siteConfig(t, c.edit)
+			code, out, errs := runCmd(t, "check", "--config", cfg)
+			if code != c.code || !strings.Contains(out, c.want) {
+				t.Fatalf("check = %d, want %d naming %q\n%s%s", code, c.code, c.want, out, errs)
+			}
+		})
 	}
 }
