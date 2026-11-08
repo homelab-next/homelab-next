@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:4189232de200620b
+summary_of: outline:sha256:e6edeac97c1cf348
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -8,7 +8,10 @@ summary_of: outline:sha256:4189232de200620b
 The maintainer's Go controller (the "LLM orchestrator", pinned here at commit `a52a1c4`) admits
 whole agent sessions. Each job is one `hermes -z` subprocess, admitted against live engine load,
 moved to another backend when it fails, and sent to cloud only when the failure is the backend's
-fault. This page covers two things:
+fault. File:line cites of the controller on this page are to that private repository at
+`a52a1c4`. Its `internal/hermesagent` package has since been split into `internal/runner/hermes`,
+`internal/prompt` and `internal/backends`, so those cites hold only at that commit; the in-repo
+successor of its `internal/store` is `orchestrator/internal/store`. This page covers two things:
 
 - how the controller is measured against the `orchestration` contract;
 - how its model calls go through the [LLM gateway](llm-gateway.md) ([[llm-gateway]]).
@@ -47,7 +50,7 @@ Two target files ship with it:
   came from.
 
 `tests/conform/test_conform_orchestration_controller.py` runs the whole suite through the adapter
-on that stand-in, both as recorded and with the proposed fixes turned on.
+on that stand-in, both as recorded and with the landed fixes turned on.
 
 ## Holds: capacity is held only by live work
 
@@ -87,7 +90,7 @@ controller host, is what would prove those paths.
 Live run on 2026-10-22: the controller built with Go 1.25, a dev config, the stand-in as `hermes`.
 Result: `FAIL orchestration ... 11 executed`, with 8 passing.
 
-| Check | What the controller does | Proposed fix |
+| Check | What the controller does | Fix (landed privately on 2026-10-22) |
 |---|---|---|
 | `unknown-job-raises` | It accepts an `agent_key` that has no profile, answers `201`, and queues an HTTP passthrough job. That job fails later with `primary-local: unreachable`. A typo in `agent_key` silently changes the dispatch path. | `0002`: `reject_unknown_agent_keys: true` makes the API answer `404 unknown agent_key` unless the request carries an explicit `request_body`. It is opt-in, because passthrough callers still exist. |
 | `retries-until-success` | It attempts a run once. Its only requeues are the special cases (capacity kill, backend down), and each requeue creates a new run id. | `0003`: profile `max_attempts` re-runs the attempt chain under the same run id. It never retries after a cancel, a job deadline, a timeout ceiling or a turn cap. `GET /jobs/{id}` reports `attempts`. |
@@ -101,7 +104,10 @@ as-is run worked around it by giving the controller a private mount namespace wi
 The three patches apply in order with `git am` to `a52a1c4`. Each one has its own Go test
 (`internal/config`, `internal/api/unknown_agent_test.go`, `internal/queue/max_attempts_test.go`,
 `internal/api/attempts_test.go`). With all three applied, the same live run passes all 11 checks.
-The patches are proposals: nothing was committed to the controller.
+All three landed on the private controller on 2026-10-22, after `a52a1c4`, so the result above
+is still the as-is one. ADR-0026 does not port the opt-in of `0002`: with no HTTP passthrough, the
+controller ported into `orchestrator/` refuses an unknown `agent_key` (404) unconditionally, and
+`request_body` and `reject_unknown_agent_keys` are not ported.
 
 Other findings, not MUST failures:
 
@@ -276,8 +282,9 @@ pull requests at a time; the lab keeps running the private controller, frozen, u
 after stage 3 (the ADR's amendment of 2026-11-07). Each package is rewritten for this repository,
 never copied with its history. The packages in so far are the leaves, which import nothing else of
 the controller, the store, which imports only `events`, the grants and the profiles (PR 2.3a),
-the configuration and the registers reader (PR 2.3b), and the runner seam, its fake, the prompt
-assembly, the interlock and the gateway tag (PR 2.4):
+the configuration and the registers reader (PR 2.3b), the runner seam, its fake, the prompt
+assembly, the interlock and the gateway tag (PR 2.4), and the backend pool with its attempt chain
+(PR 2.5):
 
 | Package | What it does |
 |---|---|
@@ -294,6 +301,9 @@ assembly, the interlock and the gateway tag (PR 2.4):
 | `orchestrator/internal/prompt` | Builds a job's prompt from its task, the register context, the site's contracts and the profile's prompt context. See "A job's prompt" below. |
 | `orchestrator/internal/inference` | The cross-process interlock (`flock(2)` on a shared lock file, the lock `flock(1)` takes) and the job's gateway tag. There is no HTTP client: the controller sends no model request. |
 | `orchestrator/internal/gatewaytag` | The gateway tag's one definition, the header (`X-HNX-Tag`) and the pattern (held equal to the event schema's `gateway_tag` and `run_id`), shared by the controller and the gateway, standard library only. |
+| `orchestrator/internal/backends` | The backend pool and the attempt chain: admission (reservations, the slot cap, token-weighted admission, health, operator drains, exclusive leases) and the order of one job's attempts, each local backend, then the cloud leg, all through `runner.Runner`. `backends.Pool` is the interface the queue uses. See "The backend pool and the attempt chain" below. |
+| `orchestrator/internal/scrape` | Reads samples from a metrics endpoint in the text exposition format, for a backend's load and its KV pool: one GET, no proxy from the environment, no redirect followed, a bounded body, and an unreadable endpoint is no reading. It names no metric: the engine's names are configuration. |
+| `orchestrator/internal/errtext` | An allowlist lint over Go source for decisions on text the core must not decide on: an error's text (`x.Error()`, `fmt.Sprint` of an error) and a session's output (`Response`, `Stderr`). Such text may only reach a formatting or log sink, a sink the package names (each of which only bounds, logs or keeps it), `+`, an assignment, a composite literal's value or a return; any other call, comparison, switch, key, index, slice or range, and an import of `regexp`, is a finding. It follows variables within a function, not fields, parameters or an error's fields after `errors.As` (documented). `backends` runs it over itself and `scrape`; 2.6 runs it over `queue` and `api`. |
 | `orchestrator/internal/store` | The controller's durable state in one SQLite database (`modernc.org/sqlite`, no cgo): the jobs table and its state machine, every transition a compare-and-swap on the row's state; submits whose idempotency check, shadow back-pressure (one unfinished shadow job per agent) and insert share one write transaction; resubmits (`retry_of_run_id`: one retry per run, only after an environment failure class, replaying the parent's task); the event outbox, filled in the transaction of the state change it describes and drained by `events`; the operators' backend drains; startup reconciliation of orphaned jobs; and the instance lock (`flock` on `<db>.lock`), so two controllers never share a database. An idempotency key (at most 128 bytes) is scoped to its submitter and never released: one submitter's key is unique across every job the database has held, however old, and another submitter's key neither finds nor blocks it. |
 
 The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, with the
@@ -444,6 +454,18 @@ traffic), `health_url` and `load_probe_urls` are probes only, and the one other 
 forwarder's (`events.forwarder_url`). A test walks every key and fails on any other URL key, and on
 any key that names a product or the passthrough.
 
+`engine_metrics` names the metrics a backend's `load_probe_urls` serve: `load`, the gauges summed
+into its load (its running and waiting requests), and `kv`, its KV pool's (`info`, the info metric
+whose `pool_label`, else `blocks_label` times `block_size_label`, gives the pool in tokens; `usage`,
+the fraction in use). They are the engine's own names, so nothing is built in and this repository
+spells none; each is checked against the metrics format's name rules. The private controller had
+its engine's names built in, so a configuration in its keys names none: `config.LoadEngineMetrics`
+reads a site's own file of them (one mapping, `load` and `kv`, strict) and
+`MigrateOptions.EngineMetrics` writes it as the block, refused when the file already has one;
+migrated without it, a configuration whose backends have load probes gets a note that the
+controller will refuse them (the pool's `Validate`). The long-term home of an engine's names is its
+provider module's manifest, once inference engines are modules.
+
 The `scope` block is required, with each of `denied_roots`, `findings_root`, `shared_write` and
 `reserved_names` present even when empty, so a missing key is never read as "nothing denied". It
 becomes `pathscope.Zones` through `NewZones` (`Config.Zones()`), and an explicit `denied_roots: []`
@@ -550,6 +572,103 @@ from a second process (the test binary run again) and against `flock(1)`, which 
 registered reason, where `flock(1)` is not installed; none needs root, so `orchestrator/skips.yml`
 gains nothing.
 
+### The backend pool and the attempt chain
+
+`backends.Policy` is the pool, `backends.Pool` the interface the queue (PR 2.6) uses: `Reserve`,
+`ReserveExclusive`, `Release`, `HoldsReservation`, `LastRefusalCause`, `AnyHealthy`, `Drained`,
+`ExplainEligibility`, `ReapStaleReservations`, `Call` and `JobTimeout`. The controller's own
+admin view reads `HealthSnapshot`, `InFlightSnapshot`, `SetDrained`, `RestoreDrains` and
+`RunHealthProber` on the `*Policy`.
+
+**Admission.** The scheduler calls `Reserve` (or `ReserveExclusive` for an exclusive profile) once
+per admission decision, from one goroutine, and passes the backend to `Call` as `reserved`; `Release`
+once that `Call` returns. `Reserve` picks the way `Call` would (smooth weighted round-robin over
+the eligible backends, then stable-sorted by load ratio; configured order with `primary_first`)
+and counts the slot before it returns, so the next decision in the same pass sees it. A backend's
+load is the larger of its engines' own reading (the configured gauges summed over its
+`load_probe_urls`) and the pool's in-flight count; a backend with no `max_concurrent` is never
+full. Each probe URL is read at most once per 1.5 seconds (or the probe timeout, if longer), counted
+from when the read ended, by the load and the KV readers together; a failed read is remembered for
+20 seconds (one the caller's own context ended is not remembered); and one decision reads its
+backends concurrently (each probe bounded by `ProbeTimeout`, 2 seconds). So an endpoint that
+never answers costs one timeout per 20 seconds, not one per check and job. A probe that cannot be read leaves the pool's own count, as in the private
+controller: its backend can still admit. A reading that is not a finite, non-negative count is no
+reading, and a huge one reads as full. A claim is recorded against its run id, one per run id; a run id `""` is refused. The
+reaper (`ReapStaleReservations`) returns the slot, token weight and lease of a claim whose run is
+not live, and a late release of a reaped run returns nothing. With `token_weighted_admission`, a
+second gate admits while the live reservations' weights plus the job's stay within
+`kv_budget_fraction` of the engine's KV pool (a weight is the agent's p90 last-call prompt over
+57,000 tokens, clamped to 0.5..4, 1 without history); the slot cap is checked first, and a pool
+that cannot be read leaves only the slot cap.
+
+**Eligibility, drains, leases, health.** A profile's `backend_affinity` narrows the backends (by
+name, then tags, then a declared `max_context`, an unknown one failing a `min_context`). An
+operator drain blocks new admissions and other runs' failover until undrained, and is written
+through to the store and restored at start. An exclusive run drains one backend and leases it once
+its load reads 0; a drain nobody refreshes lapses after 2 minutes, and one that never empties is
+let go after `DrainMaxWait`, for `DrainCooloff`. A backend is marked down only by the pool's own
+GET of its `health_url`: two failed probes in a row (one good one marks it up), or one failed probe
+run at once when an attempt's failure carries the runner's absent hint (`runner.LooksAbsent`, then
+`ErrBackendUnreachable`). Neither a `BackendFault` nor the hint marks anything down on its own. A
+health record's `error_class` comes from the probe error's type (connection refused, unreachable,
+dns, timeout, connection reset, eof, an HTTP status), never its text. The pool's only HTTP traffic
+is those GETs (`TestTheProbesAreGETsOnly`), with no proxy from the environment and no redirect
+followed, so a `health_url` that redirects reads as down.
+
+**The chain.** `Call` gives each eligible backend one attempt, the reserved one first, skipping
+backends drained, leased to another run or marked down. Each attempt's session gets its target
+(the backend's name, home, endpoint and probes), the pool's limits and its own usage path
+(`LegUsagePath`: the base path for the first leg, `.legN.json` after). A backend with
+`needs_interlock` holds the shared interlock for the whole attempt; a wait past
+`interlock_wait_timeout_seconds` is a `BackendFault` (busy), a wait the job's own context ended is
+`KilledByController`, and a lock file the interlock refuses is unclassified. What follows a failure
+is decided per leg, from every class anywhere in that leg's own error (`errors.Is`), checked in this
+order: a runner wraps what its output showed under what ended the session (a failed turn around a
+context exhaustion, an external kill around a connection fault), and each class is a fact about
+the leg. `runner.ClassOf` (the outermost class) is kept only for the trail (`Attempts`,
+`LocalClass`, `CloudClass`).
+
+| A class in the leg's error | What follows |
+|---|---|
+| `TurnCap` | the chain stops (`ErrTurnCapStops`): a runaway would repeat elsewhere |
+| `ToolCallParse` | the same backend again, up to twice more, then on |
+| `ContextExceeded` | the remaining backends, biggest declared window first |
+| anything else | the next local backend (a second local attempt costs nothing a cloud leg would) |
+
+A clean exit is checked by the runner's `AnswerChecker` when it has one, on local legs only; a
+failure it reports is that failure. When every local attempt failed, the cloud leg runs only when
+the job is not local-only (`ErrLocalOnly`), the pool has a cloud home (`ErrNoCloudBackend`) and the
+last local failure is attributable (`ErrNotAttributable` otherwise): any of `BackendFault`,
+`Stalled`, `TimeoutCeiling`, `TurnFailed`, `ContextExceeded` or `ToolCallParse` anywhere in its error, or the pool's own
+`ErrNoHealthyBackend`, `ErrBackendUnreachable` or `ErrNoLocalCapacity` (the affinity excludes every
+backend). An unclassified failure never reaches the cloud, whatever its text says. The cloud leg's
+session has the cloud home only: no endpoint, so progress liveness never watches its sockets, and
+no probes. Its answer is never checked. The job's deadline (`JobLimit`, `runner.job_timeout_seconds`
+or twice `runner.timeout_seconds`) ends the chain between legs with `ErrJobDeadline`, and no leg
+starts after it. `Call` returns a non-nil `Result` on every path, with each leg's class
+(`Attempts`, `LocalClass`, `CloudClass`) taken before any two legs' errors are joined: when the
+cloud leg fails too, the error (`ErrCloudFailed`) wraps both legs', so `errors.Is` finds either
+leg's class, but `runner.ClassOf` of it is the local leg's.
+
+`TestTheCoreReadsNoErrorText` runs `errtext.Check` over the package and over `scrape`.
+
+**Configuration.** `backends.FromConfig` builds the local backends from `backends.local`, <!-- scrub-allow: config key paths, not host names -->
+`backends.local_fallback` and `backends.additional`, in that order, each only with a `home`, and
+reads each backend's interlock from its own `needs_interlock` (unset is on). The private controller
+built its local backend with the interlock off whatever its file said, and `config.Migrate` writes
+that as `needs_interlock: false`, so no backend is special here. The cloud backend gives its home
+only. `LimitsFromConfig` and `JobLimitFromConfig` read the `runner` block. `Policy.Validate` refuses
+a pool with no runner, a backend without a name or two of one name, load probes with no load metric
+named, token-weighted admission without the KV pool's metrics, a budget fraction outside 0..1 and
+an unknown liveness: each would make a feature read nothing and keep quiet about it.
+
+The engine's metric names are configuration with no default, so no engine's names are in the code:
+`Policy.LoadMetrics` (the gauges summed into a backend's load, its running and waiting requests)
+and `Policy.KV` (`Info`, the info metric whose `PoolLabel`, else `BlocksLabel` times
+`BlockSizeLabel`, gives the pool's size in tokens; `Usage`, the used fraction, a floor under the
+reservations). They come from the configuration's `engine_metrics` block (`MetricsFromConfig`; "The
+controller's configuration" above).
+
 ### A job's prompt
 
 `prompt.Build` composes, in order and separated by blank lines: the task; the register context
@@ -604,21 +723,20 @@ facts command that fails, leaves its block out and never fails a dispatch.
   the separators a space), so a stored value cannot pose as a line of the prompt's own. The
   own-state block and the cursor store are decoded, every string in them made one line, and
   encoded again as one line of JSON with sorted keys, so no such character is left raw or
-  escaped; the cursor store sits in a fence no stored backtick can close. The register context is
+  escaped (two keys of one object that become the same line are both kept: a key that is one line
+  already keeps its name, and the others, in sorted order, get ` [collision N]` appended when their
+  line is taken); the cursor store sits in a fence no stored backtick can close. The register context is
   quoted between its own markers as data (above).
 - **The whole prompt** is at most `prompt.MaxPromptBytes` (1 MiB). A larger one is an error, never
   cut, since a cut would drop the task's end or a contract unseen.
 
-### Left to stages 2.5 to 2.7 by PR 2.4
+### Left to stages 2.6 and 2.7 by PRs 2.4 and 2.5
 
-- **2.5 (the backends):** build each attempt's `Session` (`Target`, `Limits`, the leg's
-  `UsagePath`), call `Runner.Run`, and decide fallback only by `runner.ClassOf`, with no error-text
-  matching in the core. Take each leg's `ClassOf` before joining the legs into one error: a joined
-  error's class is its first branch's, which is the local leg's, not necessarily the one that
-  decides. An expired interlock wait (`inference.ErrWaitEnded` under the pool's own bound,
-  `interlock_wait_timeout_seconds`) is a `BackendFault`; the same error under a cancelled job is a
-  cancel. Mark a backend unhealthy only on the pool's own probe, never on a `BackendFault` or
-  `LooksAbsent`. Apply `AnswerChecker` to local attempts. Port the pool's tests to `runnertest`.
+PR 2.4's items for 2.5 (sessions built per attempt, fallback by class only, each leg classified
+before the legs are joined, the interlock wait, health only on the pool's own probe, the answer
+check on local legs, the tests on `runnertest`) are done; "The backend pool and the attempt chain"
+above says how.
+
 - **2.6 (the queue and the API):**
   - call `prompt.Build` with the job's lane, the paths it names and
     `Config.PromptContractTexts(dir, prompt.DefaultContracts())` (loaded once), under the job's
@@ -634,10 +752,44 @@ facts command that fails, leaves its block out and never fails a dispatch.
     pattern) fails the job before any attempt, never runs untagged;
   - port the queue's tests to `runnertest`, keeping kill, signal and orphan tests on a real
     subprocess runner.
+  - (from 2.5) pass a profile's `local_only` as `backends.LocalityOf(prof.LocalOnly)`: `Call`
+    takes a `Locality`, whose zero value is `LocalOnly`, so a call site that forgets it never
+    starts a cloud leg;
+  - (from 2.5) a job record's failure reason is `Result.LocalFailedReason` (class and a bounded
+    excerpt); `LocalFailedDetail` and the text of `Call`'s error hold the whole text, which can quote
+    a session's output, so they go only to an admin-only view. That includes every error `Call`
+    returns: `ErrJobDeadline: <reason>` quotes the last attempt, and `ErrLocalOnly`,
+    `ErrNotAttributable`, `ErrNoCloudBackend` and `ErrCloudFailed` wrap the attempts' errors. The
+    queue logs and stores the bounded `LocalFailedReason`, never `err.Error()`, and classifies with
+    `errors.Is`;
+  - (from 2.5) depend on `backends.Pool`, not `*Policy`, so the queue's tests can stub
+    admission; call `Reserve` or `ReserveExclusive` once per admission decision from the one
+    scheduling goroutine, pass the backend to `Call` as `reserved` and `Release(backend, run id)`
+    exactly once when `Call` returns, whatever it returned; skip a queued run that
+    `HoldsReservation`; read `LastRefusalCause` for the wait cause; reap with the admitted,
+    running and awaiting run ids (`ReapStaleReservations`). There is no `HasCapacity` and no claim
+    without a run id: the private controller's read-only check and run-id-less reservations are not
+    ported;
+  - (from 2.5) put `Pool.JobTimeout()` on the job's context once, before the `max_attempts` loop,
+    so a retry gets no fresh budget;
+  - (from 2.5) the failure class: test the pool's sentinels with `errors.Is` (`ErrJobDeadline`,
+    `IsBackendDown`, `ErrNoAttemptableBackend`, `ErrNoLocalCapacity`, `ErrLocalOnly`,
+    `ErrNoCloudBackend`, `ErrNotAttributable`, `ErrCloudFailed`, `ErrTurnCapStops`) and read the
+    runner classes from the `Result` (`LocalClass`, `CloudClass`, `Attempts`), never with
+    `runner.ClassOf` on `Call`'s error: when both legs failed it is the local leg's class. A spent
+    budget (`TimeoutCeiling`, `TurnCap`, the job deadline) in either leg still refuses a retry and
+    an automatic requeue (`errors.Is` on the joined error finds either leg's);
+  - (from 2.5) on a failure `Call`'s `Result` carries the last attempt's session result (its
+    usage, stderr and exit code, which the job's accounting wants), and its `Response` may be a
+    failure report: store it as the failed attempt's output, never as the job's answer;
+  - (from 2.5) a local-only job failing with `IsBackendDown` (every eligible backend marked down)
+    is requeued, not failed;
+  - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
+    log or keep text, as `backends` does;
 - **2.7 (the controller binary and the cutover docs):** the binary loads the contracts once at
   start (`Config.PromptContractTexts` with `prompt.DefaultContracts()`) and refuses to start when
   that fails. The private controller's three contracts are built in here, reworded to name this
-  repository's output tools, so the lab's configuration needs no contract file; a lab-only
+  repository's output tools, so the lab's configuration needs no contract file once the lab's agents file through the broker (until that move the lab's tools are still the vault's, so the overlay replaces the contracts with its own files through `prompt_contracts`); a lab-only
   contract goes into an overlay file listed in `prompt_contracts_append`. A configuration with an
   invalid `events.gateway_tag_prefix`, or a relative `lock_path`, no longer loads. The example
   unit sets `RuntimeDirectory=` for the lock file, and bounds what a facts command leaves behind
@@ -646,9 +798,37 @@ facts command that fails, leaves its block out and never fails a dispatch.
   killed with the service rather than reparented out of reach. When the cursor tool's module lands
   (stage 4), a test holds its store reader and `prompt.CursorFile` to the same verdicts, as the
   private controller did with one shared reader.
+- **2.7, from 2.5:** build the pool from the configuration: `backends.FromConfig`, `Limits`
+  (`LimitsFromConfig`), `JobLimit` (`JobLimitFromConfig`), the `Interlock` on `lock_path` (one
+  `inference.NewInterlock` shared by every caller), `InterlockWait` from
+  `interlock_wait_timeout_seconds`, `PrimaryFirst`, `TokenWeightedAdmission`, `KVBudgetFraction`,
+  `AgentPromptP90` from `store.AgentLastCallPromptP90(agent, 200)`, `DrainStore` (the store) and
+  `Log` (the service's logger). Refuse to start when `Policy.Validate` or `RestoreDrains` fails, and
+  run `RunHealthProber` every `backend_health_interval_seconds`. Set `LoadMetrics` and `KV` from
+  `engine_metrics` (`MetricsFromConfig`), and give `controller migrate` an `--engine-metrics FILE`
+  option (`config.LoadEngineMetrics` into `MigrateOptions.EngineMetrics`): at the cutover the
+  overlay supplies the lab engine's names in that file, or `Validate` refuses every backend that
+  has `load_probe_urls` and the controller does not start. The admin routes serve `HealthSnapshot` (`Redacted` to a caller that
+  is not admin), `InFlightSnapshot` and `SetDrained`; the metrics read `InFlight` and the health
+  snapshot. Cutover checks for the lab: `backends.cloud.home` must be set (no home is no cloud <!-- scrub-allow: config key paths, not host names -->
+  leg; the private controller ran its cloud leg with whatever home it had); a local backend
+  without a `home` is no longer dispatched to (the private controller always used its local one);
+  a `health_url` that answers with a redirect now reads as down; the directory of the lab's
+  `lock_path` must not be writable by anyone (the interlock refuses a lock file there, and every
+  local attempt on an interlocked backend would then fail unclassified); an interlock wait ended by the
+  job is no longer a backend fault; a stored drain of a backend only the HTTP passthrough used is
+  dropped at start (logged).
 - **Stage 3 (the provider):** the runner sends `Session.GatewayTag` as the `gatewaytag.Header`
   (`X-HNX-Tag`) on every model request of the session, the header the gateway reads; an empty tag
-  sends none.
+  sends none. From 2.5: the provider classifies its own failures, since the pool
+  reads nothing else: a connection or timeout signature is `BackendFault`, a context window
+  exhausted `ContextExceeded`, a tool-call parser's rejection `ToolCallParse`, a stall `Stalled`,
+  a ceiling on a session still working `TimeoutCeiling`, a turn it started and could not complete
+  `TurnFailed`, and output that says nothing serves the backend carries `runner.MarkAbsent`; a
+  clean exit whose answer is such a report goes through its `AnswerChecker`. The private pool's
+  tests drove those signatures as text through the private runner (the outage strings, the parser
+  messages, the exit-0 retry report, a stalled sleep); they belong to the provider's tests, with
+  its classifier, and the pool's tests here drive the classes instead.
 
 ### The store's migration, behind a backup
 

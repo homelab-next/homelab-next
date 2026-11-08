@@ -54,7 +54,7 @@ Reads the event stream of ``go test -json`` (one or more files) and fails on:
 The policy file (``skips.yml`` in the module's root)::
 
     quarantine:          # a known-flaky test keeps running; its failure or skip is tolerated
-      - {test: TestStall, package: internal/hermesagent, owner: maintainers,
+      - {test: TestStall, package: internal/queue, owner: maintainers,
          until: 2026-01-31, reason: timing-sensitive under -race on shared runners}
     privileged:          # needs root: skips in the normal run, must pass in the privileged run
       - {test: TestHardening, package: internal/api, reason: chowns a file to another user}
