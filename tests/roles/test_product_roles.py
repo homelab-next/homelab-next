@@ -93,10 +93,15 @@ def test_wazuh_agent_refuses_bad_inputs(first, over):
     assert "wazuh_agent: manager id" in r.stdout
 
 
-def test_wazuh_agent_needs_a_manager(tmp_path):
+def _first(tmp_path):
     v = wazuh_vars(tmp_path)
     del v["wazuh_agent_manager_id"]
-    r = run_role(tmp_path, SIEM_ROLE, "main", v)
+    return {"role": SIEM_ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first)
+def test_wazuh_agent_needs_a_manager(first):
+    r, _ = first
     assert r.returncode != 0 and "wazuh_agent_manager_id" in r.stdout + r.stderr
 
 

@@ -220,8 +220,9 @@ and an entry that no longer excuses anything fails the lint.
 - **Time budgets.** Each suite (a test file's first two directories, e.g. `tests/lake`) has a budget
   (`suite_budget_default`, `suite_budgets`); a suite over it fails the run. `pytest --suite-times`
   prints the table; `HNX_SUITE_BUDGET_SCALE=3` scales every budget on a slow machine.
-  `tests/roles` starts each module's independent first role runs together, one per CPU and at
-  most 8 at once; `HNX_ROLERUN_WORKERS=N` sets the number (any positive integer of up to four
+  `tests/roles` starts the session's independent first role runs (`rolerun.first_run`, every
+  module's) together, one per CPU and at most 8 at once, and `run_cases(..., parallel=True)`
+  splits a long list of stand-alone cases over as many processes; `HNX_ROLERUN_WORKERS=N` sets the number (any positive integer of up to four
   digits: an explicit value is not capped), and a bad value stops the session at start.
 - **Shards.** CI runs the suite as six jobs per Python version: `pytest --shard I/6
   --shard-report FILE` runs the tests whose node id hashes to the I-th sixth and writes what it
@@ -229,7 +230,9 @@ and an entry that no longer excuses anything fails the lint.
   (`python -m tests.shard_report --groups 3.11,3.12 DIR`) fails unless every shard passed, together
   they ran each collected test exactly once, and each suite's time summed over the shards is
   within its budget. A module- or session-scoped fixture runs, and is timed, once per shard that
-  uses it, so the summed time can exceed a whole run's. Branch protection requires `test-ok`, the
+  uses it, so the summed time can exceed a whole run's; a module marked
+  `pytestmark = pytest.mark.shard_by_module` goes to one shard whole, so its module fixtures run
+  once (the packaging builds do). Branch protection requires `test-ok`, the
   one stable check name. Locally, `make test` still runs the suite whole.
 
 ## Keeping pins current

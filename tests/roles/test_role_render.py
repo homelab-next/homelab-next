@@ -193,10 +193,15 @@ def test_example_service_unknown_dependency_fails(first):
     assert "unknown service id 'nope'" in r.stdout + r.stderr
 
 
-def test_example_service_missing_required_input_fails(tmp_path):
+def _first(tmp_path):
     v = svc_vars(tmp_path)
     del v["example_service_logical_id"]
-    r = run_role(tmp_path, "example_service", "main", v)
+    return {"role": "example_service", "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first)
+def test_example_service_missing_required_input_fails(first):
+    r, _ = first
     assert r.returncode != 0
     assert "example_service_logical_id" in r.stdout + r.stderr
 
