@@ -142,8 +142,8 @@ func TestMigrate_FromTheLastSchemaBeforeTheRename(t *testing.T) {
 		`INSERT INTO event_outbox (event_id, body, created_at) VALUES ('evt-1', '{}', '2026-10-01T00:00:00Z')`,
 	)
 	steps, err := PendingMigrations(path)
-	if want := "[rename column jobs.hermes_session_id to session_id drop index idx_jobs_idempotency create index idx_jobs_idempotency_owner create index idx_jobs_submitter_created_jd create index idx_jobs_submitter_state]"; err != nil || fmt.Sprint(steps) != want {
-		t.Fatalf("pending = %v, %v; want the rename, the key index's replacement and the submitter indexes alone", steps, err)
+	if want := "[rename column jobs.hermes_session_id to session_id add column jobs.task_sha256 drop index idx_jobs_idempotency create index idx_jobs_idempotency_owner create index idx_jobs_submitter_created_jd create index idx_jobs_submitter_state]"; err != nil || fmt.Sprint(steps) != want {
+		t.Fatalf("pending = %v, %v; want the rename, the task digest, the key index's replacement and the submitter indexes alone", steps, err)
 	}
 	s, _ := migrateWithBackup(t, path)
 	j, err := s.GetJob("r1")

@@ -69,6 +69,7 @@ var addedColumns = []column{
 	{"wait_cause", "TEXT"},
 	{"model", "TEXT"},
 	{"finished_pending", "INTEGER"},
+	{"task_sha256", "TEXT"},
 }
 
 // legacySessionColumn is the session id column's name before it took a runner-neutral one. A

@@ -299,13 +299,20 @@ func (sch *Scheduler) free() int {
 }
 
 // heldKey is what makes two queued jobs the same work: one submitter's same agent, task and lane.
+// The task is compared by its digest (store.Job.TaskSHA256), so a pass never holds the queue's task
+// texts. A row with no digest (queued before the store kept one) is its own key: it is never taken
+// for a duplicate of another job.
 type heldKey struct {
 	agent, task, submitter string
 	shadow                 bool
 }
 
 func keyOf(j *store.Job) heldKey {
-	return heldKey{agent: j.AgentKey, task: j.TaskDescription, submitter: j.SubmittedBy, shadow: j.Shadow}
+	task := "sha256:" + j.TaskSHA256
+	if j.TaskSHA256 == "" {
+		task = "run:" + j.RunID
+	}
+	return heldKey{agent: j.AgentKey, task: task, submitter: j.SubmittedBy, shadow: j.Shadow}
 }
 
 // admit is one pass's admission, under admitMu; each admitted job's goroutine is added to wg.

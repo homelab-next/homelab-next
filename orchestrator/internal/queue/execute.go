@@ -76,6 +76,15 @@ func (sch *Scheduler) execute(ctx context.Context, job *store.Job, reserved stri
 	defer func() { sch.release(reserved, runID) }()
 	defer sch.takeWaitCause(runID)
 
+	// Admission's row carries no task text (store.ListForAdmission); the executor reads its own.
+	full, err := sch.cfg.Store.GetJob(runID)
+	if err != nil {
+		sch.failRunning(runID, "the job's row cannot be read")
+		sch.logf("queue: run=%s cannot read its row: %v", runID, err)
+		return
+	}
+	job = full
+
 	prof, err := sch.resolve(job.AgentKey)
 	if err != nil {
 		sch.failRunning(runID, "no profile is registered for agent key "+job.AgentKey)

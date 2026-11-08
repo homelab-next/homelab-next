@@ -369,3 +369,21 @@ func TestUsage_ARunsSumReadsOnlyItsOwnDirectory(t *testing.T) {
 		t.Fatalf("input tokens %d: a file outside the run's own directory was summed", j.InputTokens)
 	}
 }
+
+// Two queued jobs are the same work by their task's digest, never by text admission does not
+// hold; a row without a digest is nobody's duplicate.
+func TestKeyOf_ComparesTasksByDigest(t *testing.T) {
+	a := &store.Job{RunID: "a", AgentKey: "watcher", SubmittedBy: "alice", TaskDescription: "one"}
+	b := &store.Job{RunID: "b", AgentKey: "watcher", SubmittedBy: "alice", TaskDescription: "one"}
+	c := &store.Job{RunID: "c", AgentKey: "watcher", SubmittedBy: "alice", TaskDescription: "two"}
+	a.TaskSHA256, b.TaskSHA256, c.TaskSHA256 = "d1", "d1", "d2"
+	b.TaskDescription = "" // admission's rows carry no text: the digest alone decides
+	if keyOf(a) != keyOf(b) || keyOf(a) == keyOf(c) {
+		t.Fatal("tasks are not compared by digest")
+	}
+	old1 := &store.Job{RunID: "o1", AgentKey: "watcher", SubmittedBy: "alice"}
+	old2 := &store.Job{RunID: "o2", AgentKey: "watcher", SubmittedBy: "alice"}
+	if keyOf(old1) == keyOf(old2) {
+		t.Fatal("two rows without a digest were taken for one task")
+	}
+}
