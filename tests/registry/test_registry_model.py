@@ -63,7 +63,7 @@ NEGATIVES = {
     "unknown-host": (lambda d: d["services"]["notify"].update(host="nowhere"), "unknown host"),
     "duplicate-capability": (
         lambda d: d["services"]["metrics"].update(capability="notify"),
-        "already provided",
+        "capability 'notify' has more than one primary: notify, metrics",
     ),
     "duplicate-port-on-host": (
         lambda d: d["services"]["metrics"].update(port=8080),
@@ -262,3 +262,242 @@ def test_an_ipv4_mapped_zone_or_host_address_is_refused():
     assert any(p.startswith("host m6host: address ") and "IPv4-mapped" in p for p in problems), (
         problems
     )
+
+
+# 2.9 (ADR-0039): a row's standing; at most one primary per capability ----------------------
+
+
+def _row(base, **over):
+    row = copy.deepcopy(base)
+    row.update(over)
+    return row
+
+
+def _eval_notify(tier="eval", **over):
+    """A second ``notify`` row beside the example's primary: a candidate on its own port."""
+
+    def fn(d):
+        d["services"]["notify"]["tlp_ceiling"] = "amber"
+        row = {
+            "capability": "notify",
+            "impl": "notifier-b",
+            "host": d["services"]["notify"]["host"],
+            "protocol": "http",
+            "port": 8081,
+            "owner": "platform-team",
+            "version": "2.6",
+            "tls": "none",
+            "standing": {"tier": tier, "until": "2026-12-31", "why": "a candidate under test"},
+            "tlp_ceiling": "green",
+        }
+        row.update(over)
+        d["services"]["notify-candidate"] = row
+
+    return fn
+
+
+def _problems(doc):
+    from homelabnext.registry.model import schema_problems, semantic_problems
+
+    return schema_problems(doc) or semantic_problems(doc)
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring", "legacy"])
+def test_a_non_primary_row_shares_its_primarys_capability(tier):
+    from homelabnext.registry.model import build_registry
+
+    reg = build_registry(mutate(_eval_notify(tier)))
+    row = reg.services["notify-candidate"]
+    assert (row.capability, row.standing, row.until) == ("notify", tier, "2026-12-31")
+    assert row.why == "a candidate under test" and not row.is_primary
+    assert reg.services["notify"].standing == "primary" and reg.services["notify"].is_primary
+
+
+def test_an_explicit_primary_standing_is_the_default():
+    def fn(d):
+        d["services"]["notify"]["standing"] = {"tier": "primary"}
+
+    assert _problems(mutate(fn)) == []
+
+
+def test_two_non_primary_rows_of_one_capability_are_fine():
+    def fn(d):
+        _eval_notify()(d)
+        d["services"]["notify-old"] = _row(
+            d["services"]["notify-candidate"], impl="notifier-c", port=8082
+        )
+
+    assert _problems(mutate(fn)) == []
+
+
+def test_a_second_explicit_primary_is_refused():
+    def fn(d):
+        _eval_notify()(d)
+        d["services"]["notify-candidate"]["standing"] = {"tier": "primary"}
+
+    problems = _problems(mutate(fn))
+    assert "capability 'notify' has more than one primary: notify, notify-candidate" in problems
+    # one defect, one line: the shared name and variable of the two primaries are not repeated
+    assert not [p for p in problems if "already used by" in p], problems
+
+
+@pytest.mark.parametrize("missing", ["until", "why"])
+def test_a_non_primary_row_needs_until_and_why(missing):
+    def fn(d):
+        _eval_notify()(d)
+        del d["services"]["notify-candidate"]["standing"][missing]
+
+    assert any(missing in p for p in _problems(mutate(fn)))
+
+
+def test_until_is_a_calendar_date():
+    def fn(d):
+        _eval_notify()(d)
+        d["services"]["notify-candidate"]["standing"]["until"] = "2026-02-30"
+
+    assert any("is not a calendar date" in p for p in _problems(mutate(fn)))
+
+
+@pytest.mark.parametrize(
+    "cap",
+    [
+        "notify-legacy",
+        "notify-old",
+        "notify-new",
+        "notify-next",
+        "notify-eval",
+        "notify-test",
+        "notify-candidate",
+        "notify-v2",
+    ],
+)
+def test_a_capability_name_carries_no_tier(cap):
+    def fn(d):
+        d["services"]["notify"]["capability"] = cap
+
+    assert any("carries a tier in its name" in p for p in _problems(mutate(fn)))
+
+
+@pytest.mark.parametrize("cap", ["dns-secondary", "dns-tertiary", "dns-replica"])
+def test_a_replica_suffix_needs_replica_of(cap):
+    def bare(d):
+        d["services"]["dns2"] = _row(d["services"]["dns"], capability=cap, host="mon-core")
+
+    def declared(d):
+        bare(d)
+        d["services"]["dns2"]["replica_of"] = "dns"
+
+    assert any("declare replica_of" in p for p in _problems(mutate(bare)))
+    assert _problems(mutate(declared)) == []
+
+
+def test_replica_of_names_a_primary_of_the_same_impl():
+    def replica(**over):
+        def fn(d):
+            d["services"]["dns2"] = _row(
+                d["services"]["dns"],
+                capability="dns-secondary",
+                host="mon-core",
+                **{"replica_of": "dns", **over},
+            )
+
+        return _problems(mutate(fn))
+
+    assert any("needs the primary's impl" in p for p in replica(impl="unbound"))
+    assert any("has no primary" in p for p in replica(replica_of="ghost"))
+    assert any("names its own capability" in p for p in replica(replica_of="dns-secondary"))
+
+    def eval_only(d):  # the named capability's only row is not a primary
+        d["services"]["dns"]["standing"] = {"tier": "eval", "until": "2026-12-31", "why": "trial"}
+        d["services"]["dns2"] = _row(
+            d["services"]["dns"], capability="dns-secondary", host="mon-core", replica_of="dns"
+        )
+        del d["services"]["dns2"]["standing"]
+
+    assert any("replica_of 'dns' has no primary" in p for p in _problems(mutate(eval_only)))
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring", "legacy"])
+def test_public_hostname_is_for_a_primary_row_only(tier):
+    problems = _problems(
+        mutate(_eval_notify(tier, public_hostname="notify2.lab.example", auth="own"))
+    )
+    assert (
+        f"service notify-candidate: public_hostname is for a primary row only, not a {tier} one"
+        in problems
+    )
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring"])
+def test_a_non_primary_egress_row_is_held_to_the_primarys_ceiling(tier):
+    assert _problems(mutate(_eval_notify(tier, tlp_ceiling="amber"))) == []  # equal: fine
+    above = _problems(mutate(_eval_notify(tier, tlp_ceiling="red")))
+    assert "service notify-candidate: tlp_ceiling red is above the primary's (amber)" in above
+
+    def undeclared(d):
+        _eval_notify(tier)(d)
+        del d["services"]["notify-candidate"]["tlp_ceiling"]
+
+    assert any("declares its own tlp_ceiling" in p for p in _problems(mutate(undeclared)))
+
+    def primary_undeclared(d):
+        _eval_notify(tier)(d)
+        del d["services"]["notify"]["tlp_ceiling"]
+
+    assert any(
+        "no primary of 'notify' declares one" in p for p in _problems(mutate(primary_undeclared))
+    )
+
+
+def test_a_legacy_egress_row_needs_no_ceiling():
+    def fn(d):
+        _eval_notify("legacy")(d)
+        del d["services"]["notify-candidate"]["tlp_ceiling"]
+
+    assert _problems(mutate(fn)) == []
+
+
+def test_auth_idp_needs_a_primary_idp():
+    def fn(d):
+        d["services"]["idp"]["standing"] = {"tier": "eval", "until": "2026-12-31", "why": "trial"}
+        d["services"]["idp"].pop("public_hostname")
+
+    problems = _problems(mutate(fn))
+    assert any("auth=idp but no primary provides capability 'idp'" in p for p in problems)
+
+
+def test_an_upstream_needs_a_primary():
+    def fn(d):
+        d["services"]["notify"]["standing"] = {
+            "tier": "retiring",
+            "until": "2026-12-31",
+            "why": "replaced",
+        }
+
+    problems = _problems(mutate(fn))
+    assert any("upstream 'notify' has no primary" in p for p in problems), problems
+
+
+def test_an_eval_row_named_like_another_capability_is_refused():
+    def fn(d):
+        _eval_notify()(d)
+        d["services"]["dashboards-app"] = d["services"].pop("dashboards")  # the dashboards primary
+        # the eval notify row is named "dashboards": its row-named record and variable would be
+        # the dashboards primary's
+        d["services"]["dashboards"] = d["services"].pop("notify-candidate")
+
+    problems = _problems(mutate(fn))
+    assert (
+        "service dashboards: alias-zone name 'dashboards' already used by dashboards-app"
+        in problems
+    )
+
+
+def test_a_legacy_row_answers_by_no_name():
+    def fn(d):
+        _eval_notify("legacy")(d)
+        # named like another capability: harmless, as a legacy row gets no record or variable
+        d["services"]["metrics-legacy-row"] = d["services"].pop("notify-candidate")
+        d["services"]["metrics-legacy-row"]["capability"] = "notify"
+
+    assert _problems(mutate(fn)) == []

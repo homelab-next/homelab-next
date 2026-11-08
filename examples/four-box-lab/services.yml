@@ -58,6 +58,7 @@ services:
     description: The primary resolver, authoritative for the lab's zone.
   dns-secondary:
     capability: dns-secondary
+    replica_of: dns
     impl: technitium
     host: dns-2
     protocol: dns
