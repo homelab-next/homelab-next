@@ -24,10 +24,11 @@ type KeyAliases map[string]string
 var aliasNameRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // unaliasable are the keys no alias may target: a profile's identity and its permissions (its
-// grants, its tools, what its prompt may read) are read under their own names only. The one
+// grants, its tools and toolsets, what its prompt may read, whether it may leave the local
+// backends) are read under their own names only. The one
 // permission key that may be aliased is path_scope: the private controller's name for it is the
 // reason aliases exist, and an aliased scope is checked against the zones as path_scope is.
-var unaliasable = []string{"agent_key", "id", "grants", "allowed_tools", "prompt_context"}
+var unaliasable = []string{"agent_key", "id", "grants", "allowed_tools", "toolsets", "prompt_context", "local_only"}
 
 // Validate refuses a table that is not a set of plain second names for existing keys: every name
 // a plain key; every new name a key the loader defines, never agent_key, id or grants; no old
@@ -46,7 +47,7 @@ func (a KeyAliases) Validate() error {
 		case !slices.Contains(known, target):
 			return fmt.Errorf("profile key aliases: %s -> %s: not a profile key", old, target)
 		case slices.Contains(unaliasable, target):
-			return fmt.Errorf("profile key aliases: %s -> %s: an identity or a permission is read under its own name only", old, target)
+			return fmt.Errorf("profile key aliases: %s -> %s: %s is an identity or a permission, read under its own name only (of the permissions, only path_scope may be aliased)", old, target, target)
 		case a[target] != "":
 			return fmt.Errorf("profile key aliases: %s -> %s: %s is aliased itself (no chains)", old, target, target)
 		case targets[target] != "":
@@ -109,6 +110,37 @@ func (a KeyAliases) rename(doc *yaml.Node) ([]string, error) {
 	return notes, nil
 }
 
+// present are the old keys of the table that doc sets at its top level.
+func (a KeyAliases) present(doc *yaml.Node) []string {
+	var out []string
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) == 1 && doc.Content[0].Kind == yaml.MappingNode {
+		top := doc.Content[0]
+		for i := 0; i+1 < len(top.Content); i += 2 {
+			if _, ok := a[top.Content[i].Value]; ok {
+				out = append(out, top.Content[i].Value)
+			}
+		}
+	}
+	return out
+}
+
+// renameText renames each old key in data where it is written: the one line that starts, in
+// column 0, with the key and a colon. Every other byte is kept, so a file a render owns (its
+// generated grants block) is unchanged but for that line. A key written any other way (quoted,
+// in a flow mapping, twice) is refused rather than rewritten by re-encoding.
+func (a KeyAliases) renameText(data []byte, olds []string) ([]byte, error) {
+	for _, old := range olds {
+		re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(old) + `:([ \t]|$)`)
+		locs := re.FindAllIndex(data, -1)
+		if len(locs) != 1 {
+			return nil, fmt.Errorf("%s: written %d times as a line \"%s:\" in column 0; rename it by hand", old, len(locs), old)
+		}
+		at := locs[0][0]
+		data = slices.Concat(data[:at], []byte(a[old]), data[at+len(old):])
+	}
+	return data, nil
+}
+
 // ParseKeyAliases decodes a site's profile key aliases file: one mapping of old key to new key,
 // decoded strictly (a repeated key refused) and validated.
 func ParseKeyAliases(data []byte) (KeyAliases, error) {
@@ -146,6 +178,7 @@ func MigrateDir(dir string, opts LoadOptions) ([]string, error) {
 		if err := yaml.Unmarshal(f.data, &doc); err != nil {
 			return nil, fmt.Errorf("%s: %w", f.path, err)
 		}
+		olds := aliases.present(&doc)
 		renamed, err := aliases.rename(&doc)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f.path, err)
@@ -154,16 +187,11 @@ func MigrateDir(dir string, opts LoadOptions) ([]string, error) {
 			rewritten = append(rewritten, f)
 			continue
 		}
-		var buf bytes.Buffer
-		enc := yaml.NewEncoder(&buf)
-		enc.SetIndent(2)
-		if err := enc.Encode(&doc); err != nil {
-			return nil, err
+		data, err := aliases.renameText(f.data, olds)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f.path, err)
 		}
-		if err := enc.Close(); err != nil {
-			return nil, err
-		}
-		out := profileFile{f.path, buf.Bytes(), f.mode}
+		out := profileFile{f.path, data, f.mode}
 		rewritten = append(rewritten, out)
 		writes = append(writes, out)
 		for _, n := range renamed {

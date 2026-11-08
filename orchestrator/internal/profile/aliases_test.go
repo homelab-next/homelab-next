@@ -82,6 +82,8 @@ func KeyAliasesCases() map[string]KeyAliases {
 		"permission target":     {"legacy_grants": "grants"},
 		"tools target":          {"legacy_tools": "allowed_tools"},
 		"prompt target":         {"legacy_prompt": "prompt_context"},
+		"toolsets target":       {"legacy_toolsets": "toolsets"},
+		"local-only target":     {"legacy_local": "local_only"},
 		"not a plain name":      {"Legacy-Scope": "path_scope"},
 		"dotted":                {"legacy.scope": "path_scope"},
 		"a chain":               {"legacy_a": "legacy_b", "legacy_b": "path_scope"},
@@ -188,5 +190,35 @@ func TestMigrateDir_WritesSafelyAllOrNothing(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "a.yaml")); !strings.Contains(string(b), "legacy_scope") {
 		t.Error("a file was written before the refusal")
+	}
+}
+
+// MigrateDir renames the key where it is written and keeps every other byte, so a profile the MCP
+// render owns (its generated grants block) still matches the render after the migration.
+func TestMigrateDir_KeepsEveryOtherByte(t *testing.T) {
+	rendered, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "mcp", "clients", "orchestrator", "profiles", "collector.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(rendered), "\npath_scope:") != 1 {
+		t.Fatal("the example profile no longer has one path_scope line")
+	}
+	old := strings.Replace(string(rendered), "\npath_scope:", "\nlegacy_scope:", 1)
+	dir := t.TempDir()
+	writeProfileFile(t, dir, "collector.yaml", old)
+	if _, err := MigrateDir(dir, migrateOpts(legacyAliases)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "collector.yaml"))
+	if string(got) != string(rendered) {
+		t.Errorf("the migrated profile differs from the render beyond the renamed line:\n%s", got)
+	}
+	// a key written otherwise is refused, never rewritten by re-encoding
+	for _, body := range []string{"{agent_key: q, legacy_scope: {}}\n", "agent_key: q\n\"legacy_scope\": {}\n"} {
+		d := t.TempDir()
+		writeProfileFile(t, d, "q.yaml", body)
+		if _, err := MigrateDir(d, migrateOpts(legacyAliases)); err == nil {
+			t.Errorf("%q migrated", body)
+		}
 	}
 }
