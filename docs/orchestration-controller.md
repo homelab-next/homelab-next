@@ -415,11 +415,14 @@ them supplies them at runtime, from its own (private) file, and the code here ne
   key.
 - **profiles:** an aliases file, one mapping of old top-level key to new top-level key
   (`profile.ParseKeyAliases`), given to the loader (`LoadOptions.KeyAliases`; each read noted in
-  `Registry.Notices`) and to `profile.MigrateDir`, which rewrites a profiles directory, comments
-  kept, all or nothing: the whole rewritten directory must load first, and each file is replaced
+  `Registry.Notices`) and to `profile.MigrateDir`, which rewrites a profiles directory by renaming
+  each old key's column-0 line and keeping every other byte (so a profile whose grants block the
+  MCP render owns still passes `hnx mcp catalog render --check`; a key written another way is
+  refused), all or nothing: the whole rewritten directory must load first, and each file is replaced
   through a new exclusive temporary file with the original's mode, synced and renamed. An alias
-  targets a key the loader defines, never `agent_key`, `id`, `grants`, `allowed_tools` or
-  `prompt_context` (permissions are read under their own names only), and is no extension key;
+  targets a key the loader defines, never `agent_key`, `id`, `grants`, `allowed_tools`,
+  `toolsets`, `local_only` or `prompt_context` (permissions are read under their own names
+  only), and is no extension key;
   `path_scope` may be aliased, and the scope it reaches is checked against the zones as
   `path_scope` is.
 
@@ -563,8 +566,9 @@ in-place additions, and the last one before the rename, with every added column.
   example `--migrate-backup PATH`) takes the backup and migrates under the instance lock.
 - PR 2.5 (the backends): `Backend.InterlockRequired` defaults to true for every backend, as the
   configuration states it; the private controller built its local backend with the interlock off
-  whatever the file said, so the lab's configuration must say `needs_interlock: false` on that
-  backend at the cutover. The cloud backend's `endpoint` is never watched by progress liveness: a
+  whatever the file said; `config.Migrate` therefore writes `needs_interlock: false` on the
+  local backend of a configuration in the private controller's keys that leaves it unset (a note
+  says so). The cloud backend's `endpoint` is never watched by progress liveness: a
   session on the cloud backend reaches it through the gateway, not a socket the controller can
   attribute.
 - PR 2.6 (the API): an unknown agent key is a 404 before `CreateResubmit` runs; a replayed submit
