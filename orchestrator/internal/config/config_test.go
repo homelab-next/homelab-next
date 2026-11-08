@@ -21,8 +21,8 @@ const zonesYAML = `scope:
   reserved_names: [operator]
 `
 
-// scopeYAML is the zones and an API served without tokens: the least a configuration must say.
-const scopeYAML = zonesYAML + "api_auth: {enabled: false}\n"
+// scopeYAML is the zones and the API's tokens file: the least a configuration must say.
+const scopeYAML = zonesYAML + "api_auth: {enabled: true, tokens_file: /etc/orchestrator/api-tokens.yaml}\n"
 
 func mustParse(t *testing.T, body string) Config {
 	t.Helper()
@@ -229,8 +229,8 @@ func TestParse_APIPprofAndCap(t *testing.T) {
 	if !cfg.APIPprof || cfg.APIMaxUnfinishedPerCaller != 50 {
 		t.Fatalf("parsed = %v %d", cfg.APIPprof, cfg.APIMaxUnfinishedPerCaller)
 	}
-	for name, body := range map[string]string{"pprof without auth": "api_pprof: true\n", "negative cap": "api_max_unfinished_per_caller: -1\n"} {
-		if _, err := Parse([]byte(scopeYAML + body)); err == nil {
+	for name, body := range map[string]string{"pprof without auth": "api_auth: {enabled: false}\napi_pprof: true\n", "negative cap": "api_auth: {enabled: false}\napi_max_unfinished_per_caller: -1\n"} {
+		if _, err := Parse([]byte(zonesYAML + body)); err == nil {
 			t.Errorf("%s loaded", name)
 		}
 	}
@@ -238,7 +238,7 @@ func TestParse_APIPprofAndCap(t *testing.T) {
 
 func TestParse_APIAuthEventsAndAdmissionDefaults(t *testing.T) {
 	cfg := mustParse(t, scopeYAML)
-	if cfg.APIAuth.On() || cfg.TokenWeightedAdmission || cfg.KVBudgetFraction != 0 || cfg.PrimaryFirst || cfg.Events.ForwarderURL != "" {
+	if !cfg.APIAuth.On() || cfg.TokenWeightedAdmission || cfg.KVBudgetFraction != 0 || cfg.PrimaryFirst || cfg.Events.ForwarderURL != "" {
 		t.Errorf("defaults = %+v", cfg)
 	}
 	cfg = mustParse(t, zonesYAML+"api_auth: {enabled: true, tokens_file: /etc/orchestrator/api-tokens.yaml}\n"+

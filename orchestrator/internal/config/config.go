@@ -266,6 +266,12 @@ func ParseWith(data []byte, opts ParseOptions) (Config, error) {
 		return Config{}, fmt.Errorf("parse: %w", err)
 	}
 	cfg.Notices = notes
+	if auth := lookup(doc.Content[0], "api_auth"); auth != nil && auth.Kind == yaml.ScalarNode && auth.Tag == "!!null" {
+		return Config{}, errors.New("api_auth: null: give the block (tokens_file, or enabled: false), or leave it out")
+	}
+	if !cfg.APIAuth.On() {
+		cfg.Notices = append(cfg.Notices, "api_auth.enabled is false: the API serves every route without a token, on a loopback address only")
+	}
 	if err := checkScopePresent(doc); err != nil {
 		return Config{}, err
 	}
