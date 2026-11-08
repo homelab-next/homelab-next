@@ -77,7 +77,12 @@ def reachable_services(registry: Any, zone: str, *, with_eval: bool = False) -> 
 
     ``with_eval`` adds the ``eval`` rows (the keyring's rows, ADR-0039 decision 2), each reached
     by its own zone and client zones only: an upstream binds to its capability's primary, never to
-    a candidate, and an eval row's own upstreams make nothing reachable."""
+    a candidate, and an eval row's own upstreams make nothing reachable.
+
+    The keyring states what the registry declares: an eval row's grant to a client zone is not
+    a firewall rule.  The generated zone matrix (``firewall_matrix``) stays primary-only, so a
+    client zone in another zone than the eval row is still denied at the firewall (fail-closed)
+    until a site's service exception lets it through."""
     in_zone = [s for s in registry.sorted_services() if registry.host_of(s).zone == zone]
     called = {u for s in in_zone for u in s.upstreams}
     out = [

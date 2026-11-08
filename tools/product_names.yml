@@ -41,8 +41,10 @@ products:
 allow:
   - path: "tests/lake/golden/novelty_finding.*"
     reason: "the novelty_finding table's DDL goldens (ADR-0036), named like every other table's by the engine whose generated DDL each pins (the older tables' goldens are in the baseline); the generator is counted where it lives, homelabnext/lake/ddl.py"
-  - path: "tests/generators/tiers/golden/**"
-    reason: "the all-tiers goldens (ADR-0039 step 3), at the output paths of the generators like the older goldens in the baseline; the generators are counted where they live, homelabnext/generators/builtin.py"
+  - path: "tests/generators/tiers/golden/caddy/**"
+    reason: "the all-tiers golden of the edge generator (ADR-0039 step 3), at its output path like the older golden in the baseline; the generator is counted where it lives, homelabnext/generators/builtin.py"
+  - path: "tests/generators/tiers/golden/prometheus/**"
+    reason: "the all-tiers golden of the metrics generator (ADR-0039 step 3), at its output path like the older golden in the baseline; the generator is counted where it lives, homelabnext/generators/builtin.py"
   - path: "tests/generators/test_gen_tiers.py"
     reason: "the tier rule of each built-in generator, keyed by the generator's id and its output paths (ADR-0039 step 3); the ids are counted where they live, homelabnext/generators/builtin.py"
   - path: "docs/scripts/catalog.json"
