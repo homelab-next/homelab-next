@@ -195,10 +195,11 @@ func KnownIncidents(stateFile, agentKey string) string {
 }
 
 // sanitize returns v (decoded JSON) with every string, keys included, made one line. Two keys of
-// one object can become the same line ("a\nb" and "a\rb" both read "a b"): the keys are walked in
-// sorted order, the first keeps the line, and each later one is kept under it with " [collision
-// N]" appended (N from 2, the first number not taken), so no entry is lost and the result is the
-// same for the same input.
+// one object can become the same line ("a\nb" reads "a b", and so does a real "a b"): the keys that
+// are one line already keep their names, then the others are placed in sorted order, each under its
+// line when that is free and otherwise with " [collision N]" appended (N from 2, the first number
+// not taken). So a real key is never displaced, no entry is lost, and the result is the same for the
+// same input.
 func sanitize(v any) any {
 	switch x := v.(type) {
 	case string:
@@ -213,7 +214,13 @@ func sanitize(v any) any {
 		for k := range x {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
+		sort.SliceStable(keys, func(i, j int) bool {
+			ci, cj := oneLine(keys[i]) != keys[i], oneLine(keys[j]) != keys[j]
+			if ci != cj {
+				return !ci // unchanged keys first
+			}
+			return keys[i] < keys[j]
+		})
 		out := make(map[string]any, len(x))
 		for _, k := range keys {
 			line := oneLine(k)
