@@ -470,6 +470,23 @@ func TestListJobs_SubmittedBy(t *testing.T) {
 	}
 }
 
+// ListJobs filters by the runner's session id.
+func TestListJobs_SessionID(t *testing.T) {
+	s := openTest(t)
+	for _, id := range []string{"a", "b"} {
+		if err := s.CreateJob(queued(id, "x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.UpdateUsageFields("b", UsageFields{SessionID: "sess-b"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListJobs(ListFilter{SessionID: "sess-b", Limit: 10})
+	if err != nil || len(got) != 1 || got[0].RunID != "b" || got[0].SessionID != "sess-b" {
+		t.Fatalf("ListJobs(session) = %v, %v", got, err)
+	}
+}
+
 // A drain survives a restart and keeps its first since.
 func TestDrains_SaveLoadDelete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "orch.db")

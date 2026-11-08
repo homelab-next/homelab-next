@@ -116,10 +116,12 @@ type Events struct {
 	GatewayTagPrefix string `yaml:"gateway_tag_prefix"`
 }
 
-// APIAuth configures bearer-token authentication of the HTTP API.
+// APIAuth configures bearer-token authentication of the HTTP API. It is on unless the file says
+// enabled: false (Enabled nil is on: a safe default never rests on a key someone forgot).
 type APIAuth struct {
-	// Enabled turns auth on; TokensFile must then load or the controller refuses to start.
-	Enabled bool `yaml:"enabled"`
+	// Enabled: nil or true turns auth on, and TokensFile must then load or the controller refuses
+	// to start; false serves the API with no token, on a loopback address only (package api).
+	Enabled *bool `yaml:"enabled"`
 	// TokensFile lists {caller, sha256, scopes}: each caller's token digest, never the token.
 	TokensFile string `yaml:"tokens_file"`
 }
@@ -201,6 +203,9 @@ type Config struct {
 
 	zones pathscope.Zones // Scope, validated
 }
+
+// On reports whether the API authenticates: unless enabled is set false.
+func (a APIAuth) On() bool { return a.Enabled == nil || *a.Enabled }
 
 // Zones are the validated scope zones.
 func (c Config) Zones() pathscope.Zones { return c.zones }

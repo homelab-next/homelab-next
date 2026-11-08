@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:49810088f46e1cdf
+summary_of: outline:sha256:13af3fe008873b1f
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -284,7 +284,7 @@ never copied with its history. The packages in so far are the leaves, which impo
 the controller, the store, which imports only `events`, the grants and the profiles (PR 2.3a),
 the configuration and the registers reader (PR 2.3b), the runner seam, its fake, the prompt
 assembly, the interlock and the gateway tag (PR 2.4), the backend pool with its attempt chain
-(PR 2.5), and the run queue (PR 2.6a):
+(PR 2.5), the run queue (PR 2.6a) and the job API (PR 2.6b):
 
 | Package | What it does |
 |---|---|
@@ -307,6 +307,7 @@ assembly, the interlock and the gateway tag (PR 2.4), the backend pool with its 
 | `orchestrator/internal/store` | The controller's durable state in one SQLite database (`modernc.org/sqlite`, no cgo): the jobs table and its state machine, every transition a compare-and-swap on the row's state; submits whose idempotency check, shadow back-pressure (one unfinished shadow job per agent) and insert share one write transaction; resubmits (`retry_of_run_id`: one retry per run, only after an environment failure class, replaying the parent's task); the event outbox, filled in the transaction of the state change it describes and drained by `events`; the operators' backend drains; startup reconciliation of orphaned jobs; and the instance lock (`flock` on `<db>.lock`), so two controllers never share a database. An idempotency key (at most 128 bytes) is scoped to its submitter and never released: one submitter's key is unique across every job the database has held, however old, and another submitter's key neither finds nor blocks it. |
 | `orchestrator/internal/queue` | The run queue: admits queued jobs in priority and aging order, up to a concurrency limit, through `backends.Pool`, and runs each one's attempt chain (the profile's `max_attempts`, one run id) to a terminal state, or back to the queue. It records the result, the usage report summed over every session, the call sizing and the wait cause, and builds the job events the store's outbox sends. It decides from the pool's sentinels and the runner classes only (`errtext` over the package). See "The run queue" below. |
 | `orchestrator/internal/schematest` | Test support, imported only by `_test.go` files: validates JSON against `schemas/ids`, `schemas/events` and `schemas/platform` read in place (moved from `internal/events`'s tests, ADR-0048 decision 3), so the queue's events are held to the schemas as the events package's are. |
+| `orchestrator/internal/api` | The job API over HTTP: submit, list, read and cancel jobs, resubmits, and the operators' admin routes, with bearer-token scopes. It takes the scheduler's and the pool's behaviour as functions and imports neither. Authentication is on by default, an unauthenticated API binds loopback only, and profiling is served only on request, behind the admin scope. See "The job API" below. |
 
 The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, with the
 store `modernc.org/sqlite` v1.58.0 and the modules it pulls in, and with the configuration the
@@ -335,8 +336,8 @@ comes with the API package.
 | Default event source | `svc:llm-orchestrator` | `svc:orchestrator` (`events.DefaultSource`) |
 | The jobs table's session id column | `hermes_session_id` | `session_id` (migrated in place, below) |
 
-The job API's `session_id` field, with its one release of both names, is the API package's
-concern; the store holds one column.
+The job API serves `session_id` and, for its one release of both names, the old field beside it
+("The job API" below); the store holds one column.
 
 Nothing emits the metric or event name yet: the module has no controller binary until stage 2's last pull
 request. The two names overlap differently at the cutover (the ADR's amendment).
@@ -819,6 +820,53 @@ The queue's process tests (a cancel, a foreign kill, the deadline) run this test
 the session, in its own process group with a child of its own, and check both processes are gone;
 the rest run on `runnertest`.
 
+### The job API
+
+`api.NewHandler(api.Config{...})` and `api.NewServer(addr, cfg)` serve the routes the private
+controller served, with the HTTP passthrough gone and these defaults made refusals:
+
+- **Authentication is on by default.** `NewHandler` refuses a configuration with no
+  `Authenticator` unless `Unauthenticated` is set explicitly (and refuses both at once). The
+  configuration's `api_auth.enabled` is on unless the file says `false`, so a file with no
+  `api_auth` block needs `api_auth.tokens_file`; the private controller served without a token, so
+  at the cutover the lab's file sets one or the other. Tokens and scopes are the private
+  controller's: `jobs` (one's own jobs), `read` (every caller's job summaries and the queue
+  summary), `metrics`, `admin`; `/healthz` and `GET /admin/backend-health` are open, the latter's
+  error text for an admin token only. The tokens file is decoded strictly (an unknown key is
+  refused), at most 1 MiB, a regular file no one but the controller or root can rewrite.
+- **An unauthenticated API binds loopback only.** `NewServer` (`CheckBind`) refuses an address
+  whose host is not a loopback IP literal when authentication is off: not `0.0.0.0`, `::`, an empty
+  host or a name. The server bounds header reads, reads, writes, idle connections and header size.
+- **Profiling** (`/debug/pprof/*`) is served only with `Config.Pprof`, and then under the admin
+  scope like every route not named otherwise.
+- **An unknown agent key is a 404** before anything is stored, a resubmit's included (checked
+  before `CreateResubmit`). `request_body` and `input` are refused (400), never dropped.
+- **Replays** are answered from `store.FindByIdempotencyKey`: 200 with the key's run when the
+  request is the same submit (same agent key, `retry_of_run_id` and lane), 422
+  `idempotency_key_mismatch` when the key was used for another. A resubmit is stored under its
+  parent's owner, so its replay is looked up there once the caller may see the parent (an admin
+  replaying its resubmit of a caller's run gets the child, not a conflict).
+- **Size caps.** A submit body is at most `api.MaxSubmitBytes` (512 KiB) before it is decoded and
+  a task at most `api.MaxTaskBytes` (256 KiB), each over its cap a 413; an idempotency key at most
+  128 bytes. Every response is bounded too: a job's answer is cut when the scheduler stores it
+  (`queue.MaxResponseBytes`), a list page holds at most 500 summaries without task or answer, and
+  the status command's output at most 1 MiB.
+- **The session id under both names.** `GET /jobs/{id}` and `GET /jobs` serve `session_id` and,
+  for the one overlap release ADR-0026's amendment sets, `hermes_session_id` beside it with the
+  same value; `GET /jobs` filters by either (`?session_id=`, `?hermes_session_id=`) and refuses
+  both with different values (400). The old name goes no earlier than the release after the
+  cutover.
+- **Error text stays in the log.** A failed reload, drain, status command or store call answers a
+  fixed message; the error goes to the controller's log (`errtext` over the package).
+
+**Retention.** Nothing deletes a job: every row, and with it every idempotency key, is kept for
+the life of the database, so a replay of any submit, however late, finds its first run, and a key
+is never reused for another job. A deployment that ever prunes rows must keep each pruned job's
+run id, submitter and idempotency key for as long as its callers may replay (a caller's own
+retry window; for an automated retrier, its event retention), and never prune a job that is not
+terminal. Until a pruning job exists, the database grows by one row per job; the sizes above bound
+each row.
+
 ### Left to stages 2.6 and 2.7 by PRs 2.4 and 2.5
 
 PR 2.4's items for 2.5 (sessions built per attempt, fallback by class only, each leg classified
@@ -827,7 +875,7 @@ check on local legs, the tests on `runnertest`) are done; "The backend pool and 
 above says how.
 
 - **2.6 (the queue and the API):** the queue's items below are done in PR 2.6a ("The run queue"
-  above); the API's are PR 2.6b's.
+  above), the API's in PR 2.6b ("The job API" above).
   - call `prompt.Build` with the job's lane, the paths it names and
     `Config.PromptContractTexts(dir, prompt.DefaultContracts())` (loaded once), under the job's
     context, and store `Meta` with the job;
@@ -990,11 +1038,10 @@ in-place additions, and the last one before the rename, with every added column.
   says so). The cloud backend's `endpoint` is never watched by progress liveness: a
   session on the cloud backend reaches it through the gateway, not a socket the controller can
   attribute.
-- PR 2.6 (the API): an unknown agent key is a 404 before `CreateResubmit` runs; a replayed submit
-  is answered with `FindByIdempotencyKey(submitter, key)`; and the API caps the task and response
-  sizes it accepts and stores and sets a retention policy for finished jobs. The store has
-  neither: idempotency keys are never released, so a retention policy must keep a job's key as
-  long as a replay of it could arrive.
+- PR 2.6 (the API), done ("The job API" above): an unknown agent key is a 404 before
+  `CreateResubmit` runs; a replayed submit is answered with `FindByIdempotencyKey`; the API caps
+  the task and the body it accepts, the scheduler the answer it stores, and the retention policy
+  keeps every key.
 
 ## Additive `orchestration` contract features
 

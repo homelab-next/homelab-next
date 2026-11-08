@@ -204,15 +204,25 @@ func TestRegisters_FailClosed(t *testing.T) {
 	}
 }
 
+// Authentication is on unless the file turns it off.
+func TestParse_APIAuthIsOnByDefault(t *testing.T) {
+	if cfg := mustParse(t, scopeYAML+"api_auth: {tokens_file: /etc/orchestrator/api-tokens.yaml}\n"); !cfg.APIAuth.On() {
+		t.Error("an api_auth block without enabled is off")
+	}
+	if cfg := mustParse(t, scopeYAML+"api_auth: {enabled: false}\n"); cfg.APIAuth.On() {
+		t.Error("enabled: false is on")
+	}
+}
+
 func TestParse_APIAuthEventsAndAdmissionDefaults(t *testing.T) {
 	cfg := mustParse(t, scopeYAML)
-	if cfg.APIAuth.Enabled || cfg.TokenWeightedAdmission || cfg.KVBudgetFraction != 0 || cfg.PrimaryFirst || cfg.Events.ForwarderURL != "" {
+	if !cfg.APIAuth.On() || cfg.TokenWeightedAdmission || cfg.KVBudgetFraction != 0 || cfg.PrimaryFirst || cfg.Events.ForwarderURL != "" {
 		t.Errorf("defaults = %+v", cfg)
 	}
 	cfg = mustParse(t, scopeYAML+"api_auth: {enabled: true, tokens_file: /etc/orchestrator/api-tokens.yaml}\n"+
 		"events: {forwarder_url: https://events.example.internal/ingest, token_env: EVENTS_TOKEN, queue_size: 10, gateway_tag_prefix: \"job:\"}\n"+
 		"token_weighted_admission: true\nkv_budget_fraction: 0.7\nprimary_first: true\n")
-	if !cfg.APIAuth.Enabled || cfg.APIAuth.TokensFile == "" || cfg.Events.QueueSize != 10 || cfg.Events.Source != "" || cfg.Events.GatewayTagPrefix != "job:" ||
+	if !cfg.APIAuth.On() || cfg.APIAuth.TokensFile == "" || cfg.Events.QueueSize != 10 || cfg.Events.Source != "" || cfg.Events.GatewayTagPrefix != "job:" ||
 		!cfg.TokenWeightedAdmission || cfg.KVBudgetFraction != 0.7 || !cfg.PrimaryFirst {
 		t.Errorf("parsed = %+v", cfg)
 	}

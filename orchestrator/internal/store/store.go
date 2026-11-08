@@ -448,6 +448,8 @@ type ListFilter struct {
 	AgentKey string
 	// SubmittedBy, when not empty, keeps only that caller's jobs.
 	SubmittedBy string
+	// SessionID, when not empty, keeps only the jobs whose runner session had that id.
+	SessionID string
 	// BeforeSeq, when > 0, keeps only jobs with seq < BeforeSeq: the cursor of the next, older
 	// page.
 	BeforeSeq int64
@@ -472,6 +474,10 @@ func (s *Store) ListJobs(f ListFilter) ([]*Job, error) {
 	if f.SubmittedBy != "" {
 		q += ` AND submitted_by = ?`
 		args = append(args, f.SubmittedBy)
+	}
+	if f.SessionID != "" {
+		q += ` AND session_id = ?`
+		args = append(args, f.SessionID)
 	}
 	if f.BeforeSeq > 0 {
 		q += ` AND seq < ?`

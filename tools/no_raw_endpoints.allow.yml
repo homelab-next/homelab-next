@@ -133,6 +133,8 @@ allow:
     reason: negative schema fixtures, each a copy of the table's example (a documentation address as the finding's entity)
   - path: "orchestrator/cmd/gateway/main_test.go"
     reason: the gateway command's tests (ADR-0026) listen on a loopback port they open themselves and pass loopback, wildcard and documentation (RFC 5737) listen addresses the command must accept or refuse
+  - path: "orchestrator/internal/api/auth_test.go"
+    reason: the API's bind check (ADR-0026) is given loopback, wildcard, name and documentation (RFC 5737) listen addresses it must accept or refuse; a server is built on a loopback port and never started
   - path: "orchestrator/internal/gateway/anthropic_test.go"
     reason: request bodies carrying URL parts with documentation addresses (RFC 5737) that the gateway must refuse to send to a local backend; never dialled
   - path: "orchestrator/internal/gateway/config_test.go"
