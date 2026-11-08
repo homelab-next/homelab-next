@@ -95,7 +95,7 @@ func (sch *Scheduler) execute(ctx context.Context, job *store.Job, reserved stri
 		requeued = true
 		return
 	}
-	if err != nil && sch.requeueBackendDown(d, err, attempt) {
+	if err != nil && sch.requeueBackendDown(d, err, attempt, &reserved) {
 		requeued = true
 		return
 	}
@@ -401,29 +401,35 @@ func (sch *Scheduler) persistCallSizing(runID string, usage map[string]any) {
 // The attempt does not count: neither against max_attempts nor as a first attempt spent (the
 // count goes back to what it was), and nothing of it is recorded. After MaxBackendDownRequeues
 // requeues the job fails backend-down instead. It reports whether it requeued.
-func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int) bool {
+func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int, reserved *string) bool {
 	if d.locality != backends.LocalOnly || !backends.IsBackendDown(callErr) || !mayAutoRequeue(callErr) {
 		return false
 	}
 	runID := d.job.RunID
 	sch.mu.Lock()
-	if sch.requeues == nil {
-		sch.requeues = map[string]int{}
-	}
 	n := sch.requeues[runID]
+	sch.mu.Unlock()
 	if n >= MaxBackendDownRequeues {
-		sch.mu.Unlock()
 		sch.logf("queue: run=%s lost its backends %d times: failing it backend-down", runID, n+1)
 		return false
+	}
+	// The claim goes back before the row reads queued, as a drained retry's does: once queued, a
+	// pass may admit the run again and reserve under its run id, and a release after that would
+	// drop the new claim.
+	sch.release(*reserved, runID)
+	*reserved = ""
+	if err := sch.cfg.Store.UpdateState(runID, store.StateRunning, store.StateQueued); err != nil {
+		sch.logf("queue: run=%s lost its backends and cannot go back to the queue: %v", runID, err)
+		return false
+	}
+	sch.mu.Lock()
+	if sch.requeues == nil {
+		sch.requeues = map[string]int{}
 	}
 	sch.requeues[runID] = n + 1
 	sch.mu.Unlock()
 	if err := sch.cfg.Store.UpdateAttempts(runID, attempt-1); err != nil {
 		sch.logf("queue: run=%s cannot uncount the attempt: %v", runID, err)
-	}
-	if err := sch.cfg.Store.UpdateState(runID, store.StateRunning, store.StateQueued); err != nil {
-		sch.logf("queue: run=%s lost its backends and cannot go back to the queue: %v", runID, err)
-		return false
 	}
 	sch.logf("queue: run=%s agent=%s local-only, every eligible backend is down: back to queued until one is up (%d of %d)", runID, d.job.AgentKey, n+1, MaxBackendDownRequeues)
 	return true
