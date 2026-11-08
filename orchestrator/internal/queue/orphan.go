@@ -126,11 +126,18 @@ func (sch *Scheduler) settleOrphan(j *store.Job, from store.State, grace time.Du
 	return nil
 }
 
-// reapStaleReservations gives back the claims of runs no longer admitted, running or
-// awaiting_inference. The three states are read one after another, so a row moving between them
-// can be missed for one pass; the reap grace covers it. A failed read reaps nothing.
+// reapStaleReservations gives back the claims of runs that are neither admitted, running or
+// awaiting_inference nor held by a live executor: a run cancelled while running is no longer in
+// flight by its row, but its session runs until its executor returns, and its executor releases
+// its claim then. The three states are read one after another, so a row moving between them can
+// be missed for one pass; the reap grace covers it. A failed read reaps nothing.
 func (sch *Scheduler) reapStaleReservations() {
 	live := map[string]bool{}
+	sch.mu.Lock()
+	for id := range sch.execs {
+		live[id] = true
+	}
+	sch.mu.Unlock()
 	for _, st := range []store.State{store.StateAdmitted, store.StateRunning, store.StateAwaitingInference} {
 		jobs, err := sch.cfg.Store.ListByState(st)
 		if err != nil {
