@@ -34,7 +34,7 @@ RestartPreventExitStatus=3
 # SIGTERM drains the API for up to 30 s, then cancels the running sessions (their process groups)
 TimeoutStopSec=60
 # Everything the service started goes with it, a session's descendant that left its process group
-# included; the controller is also the child subreaper of what it starts
+# included (init reaps such an orphan; the controller is not a subreaper)
 KillMode=control-group
 
 StateDirectory=orchestrator

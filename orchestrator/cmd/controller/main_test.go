@@ -16,6 +16,9 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/config"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/runner"
@@ -524,5 +527,23 @@ func TestRunner_TheForwarderTokenNeverReachesASession(t *testing.T) {
 	}
 	if strings.Contains(res.Response, "the-forwarder-secret") || !strings.Contains(res.Response, "HNX_EVENTS_OTHER=kept") {
 		t.Fatalf("the session's environment:\n%s", res.Response)
+	}
+}
+
+// The controller is not the child subreaper of what it starts: it waits only for the processes
+// os/exec started, so an orphan reparented to it would stay a zombie. Orphans go to init, and the
+// unit's KillMode ends them with the service.
+func TestServe_DoesNotBecomeASubreaper(t *testing.T) {
+	cfg, _ := siteConfig(t, nil)
+	base, _, _, _, _ := serveSite(t, cfg)
+	if code := get(t, base+"/jobs", "token-one"); code != http.StatusOK {
+		t.Fatalf("serve is not up: %d", code)
+	}
+	var on int32
+	if err := unix.Prctl(unix.PR_GET_CHILD_SUBREAPER, uintptr(unsafe.Pointer(&on)), 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if on != 0 {
+		t.Fatal("serve made the process a child subreaper")
 	}
 }

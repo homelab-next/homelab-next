@@ -25,7 +25,6 @@ import (
 	"github.com/homelab-next/homelab-next/orchestrator/internal/metrics"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/profile"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/queue"
-	execrunner "github.com/homelab-next/homelab-next/orchestrator/internal/runner/exec"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/store"
 )
 
@@ -136,9 +135,6 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 	if err := pool.RestoreDrains(); err != nil {
 		lg.Printf("controller: restore the operators' drains: %v", err)
 		return exitProblem
-	}
-	if err := execrunner.BecomeSubreaper(); err != nil {
-		lg.Printf("controller: cannot become the child subreaper (an orphaned session process escapes the reaper): %v", err)
 	}
 
 	orphanGrace := time.Duration(cfg.OrphanGraceSeconds) * time.Second

@@ -22,6 +22,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -189,12 +190,16 @@ func (r *Runner) Run(ctx context.Context, s runner.Session) (*runner.Result, err
 	if err := cmd.Start(); err != nil {
 		return res, fmt.Errorf("exec runner: start %s: %w", filepath.Base(argv[0]), err)
 	}
+	pgid := cmd.Process.Pid
+	// Whatever is left of the group (a descendant that outlived the leader) goes with it. The
+	// group is killed while its leader is exited but not yet reaped, so the group id cannot have
+	// been reused by an unrelated group; then the leader is reaped, and Run waits, at most
+	// KillGrace, until no member of the group is still running (one stuck in an uninterruptible
+	// wait cannot hold Run for ever).
+	waitExited(pgid)
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	waitErr := cmd.Wait()
-	// Whatever is left of the group (a descendant that outlived the leader) goes with it, and is
-	// reaped here when this process is its subreaper (BecomeSubreaper), so it is gone, not only
-	// signalled, when Run returns.
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	reapGroup(cmd.Process.Pid)
+	sweepGroup(pgid, r.cfg.KillGrace)
 
 	res.Stderr = stderr.String()
 	res.ExitCode = cmd.ProcessState.ExitCode()
@@ -233,28 +238,61 @@ func (r *Runner) Run(ctx context.Context, s runner.Session) (*runner.Result, err
 	return res, nil
 }
 
-// BecomeSubreaper makes this process the child subreaper of everything it starts
-// (PR_SET_CHILD_SUBREAPER): a session's descendant whose parent exits is reparented here rather
-// than to init, so Run can reap what is left of a session's group and a facts command's orphan
-// stays within the service. The controller calls it once at start.
-func BecomeSubreaper() error {
-	return unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
-}
-
-// reapGroup waits for every member of process group pgid that is this process's child (one
-// reparented here as subreaper), which the caller has sent SIGKILL. Without a subreaper, none is
-// a child and it returns at once.
-func reapGroup(pgid int) {
+// waitExited blocks until process pid has exited, leaving it unreaped (WNOWAIT): os/exec's Wait
+// reaps it after.
+func waitExited(pid int) {
 	for {
-		var ws syscall.WaitStatus
-		_, err := syscall.Wait4(-pgid, &ws, 0, nil)
-		if err == syscall.EINTR {
-			continue
-		}
-		if err != nil {
+		var info unix.Siginfo
+		err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil)
+		if err != unix.EINTR {
 			return
 		}
 	}
+}
+
+// sweepGroup waits until no member of process group pgid is running (a zombie is not), polling
+// /proc, for at most bound. It reports whether the group is gone.
+func sweepGroup(pgid int, bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
+	for {
+		if !groupRunning(pgid) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// groupRunning reports whether any process of group pgid is still running (not a zombie).
+func groupRunning(pgid int) bool {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name()[0] < '0' || e.Name()[0] > '9' {
+			continue
+		}
+		data, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		st := string(data)
+		i := strings.LastIndexByte(st, ')')
+		if i < 0 {
+			continue
+		}
+		f := strings.Fields(st[i+1:]) // state, ppid, pgrp, ...
+		if len(f) < 3 || f[0] == "Z" || f[0] == "X" {
+			continue
+		}
+		if f[2] == strconv.Itoa(pgid) {
+			return true
+		}
+	}
+	return false
 }
 
 // argv is the session's command line, and whether the prompt goes to stdin (no element holds it).

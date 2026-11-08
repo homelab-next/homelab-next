@@ -24,16 +24,6 @@ import (
 // argv after "--" names what it does. No test decides by elapsed time; the one that waits for a
 // helper to start polls for the file it writes.
 
-func TestMain(m *testing.M) {
-	// As the controller does at start: a session's orphaned descendant is reparented here and
-	// reaped by Run, so a test can see it gone.
-	if err := BecomeSubreaper(); err != nil {
-		fmt.Fprintln(os.Stderr, "become subreaper:", err)
-		os.Exit(1)
-	}
-	os.Exit(m.Run())
-}
-
 func helperArgv(mode string, args ...string) []string {
 	return append([]string{os.Args[0], "-test.run=^TestHelperProcess$", "--", mode}, args...)
 }
@@ -74,6 +64,13 @@ func TestHelperProcess(t *testing.T) {
 		for {
 			time.Sleep(time.Hour)
 		}
+	case "orphan": // leave a child in the group that outlives this process, then exit 0
+		child := osexec.Command(os.Args[0], "-test.run=^TestHelperProcess$", "--", "block")
+		child.Stdout, child.Stderr = nil, nil
+		if err := child.Start(); err != nil {
+			os.Exit(9)
+		}
+		_ = os.WriteFile(rest[0], []byte(strconv.Itoa(child.Process.Pid)), 0o600)
 	case "tree": // start a blocking child in the group, write its pid to rest[0], block
 		child := osexec.Command(os.Args[0], "-test.run=^TestHelperProcess$", "--", "block")
 		if err := child.Start(); err != nil {
@@ -318,5 +315,65 @@ func TestRun_ACancelledContextStartsNothing(t *testing.T) {
 	cancel()
 	if _, err := r.Run(ctx, runner.Session{}); runner.ClassOf(err) != runner.KilledByController || !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// A descendant left in the group when the session exits is killed with it, and gone (not
+// running) by the time Run returns.
+func TestRun_TheGroupIsGoneWhenRunReturns(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	r := newRunner(t, Config{Argv: helperArgv("orphan", pidFile)})
+	if _, err := r.Run(context.Background(), runner.Session{}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(string(data))
+	if alive(pid) {
+		t.Fatalf("the session's descendant %d is still running after Run returned", pid)
+	}
+}
+
+// The sweep is bounded: a group that does not go away within the bound is given up on.
+func TestSweepGroup_IsBounded(t *testing.T) {
+	cmd := osexec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	if sweepGroup(cmd.Process.Pid, 0) {
+		t.Fatal("a running group read as gone")
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if !sweepGroup(cmd.Process.Pid, 30*time.Second) {
+		t.Fatal("a killed group was never seen gone")
+	}
+}
+
+// A descendant that leaves the session's group (setsid) is not this process's to reap: it is
+// never left as this process's zombie.
+func TestRun_ASetsidDescendantIsNoZombieOfOurs(t *testing.T) {
+	// the leader answers only once the descendant is in its own session
+	ready := filepath.Join(t.TempDir(), "ready")
+	script := `setsid sh -c 'echo $$ > "$1"; exec sleep 0.3' - "$0" & while [ ! -s "$0" ]; do :; done; cat "$0"`
+	r := newRunner(t, Config{Argv: []string{"/bin/sh", "-c", script, ready}, EnvAllowlist: []string{"PATH"}})
+	res, err := r.Run(context.Background(), runner.Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(res.Response))
+	if err != nil {
+		t.Fatalf("response %q", res.Response)
+	}
+	for deadline := time.Now().Add(30 * time.Second); alive(pid); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the descendant never exited")
+		}
+	}
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid)); err == nil && strings.Contains(string(data), fmt.Sprintf("\nPPid:\t%d\n", os.Getpid())) {
+		t.Fatalf("the exited descendant %d is a zombie of this process", pid)
 	}
 }
