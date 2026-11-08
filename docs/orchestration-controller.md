@@ -306,7 +306,7 @@ assembly, the interlock and the gateway tag (PR 2.4), the backend pool with its 
 | `orchestrator/internal/errtext` | An allowlist lint over Go source for decisions on text the core must not decide on: an error's text (`x.Error()`, `fmt.Sprint` of an error) and a session's output (`Response`, `Stderr`). Such text may only reach a formatting or log sink, a sink the package names (each of which only bounds, logs or keeps it), `+`, an assignment, a composite literal's value or a return; any other call, comparison, switch, key, index, slice or range, and an import of `regexp`, is a finding. It follows variables within a function, not fields, parameters or an error's fields after `errors.As` (documented). `backends` runs it over itself and `scrape`; 2.6 runs it over `queue` and `api`. |
 | `orchestrator/internal/fuzzseed` | The fuzz targets' shared test helper (ADR-0048 decision 1): it reads a target's committed seed corpus (`testdata/fuzz/FuzzX/`, go test's own format) and proves a property can fail (every seed holds against the right reference, at least one breaks it against the deliberately wrong one in the same `_test.go`). Only `_test.go` files import it, which its test asserts. The first targets: `pathscope` (`FuzzCheck`, `FuzzZones`), `events` (`FuzzDeriveID`), `schematest` (`FuzzSchemaSubset`) and `gateway` (`FuzzJSONScan`, `FuzzSSE`, `FuzzParseConfig`); `go test` runs their seeds in the `go` job. |
 | `orchestrator/internal/store` | The controller's durable state in one SQLite database (`modernc.org/sqlite`, no cgo): the jobs table and its state machine, every transition a compare-and-swap on the row's state; submits whose idempotency check, shadow back-pressure (one unfinished shadow job per agent) and insert share one write transaction; resubmits (`retry_of_run_id`: one retry per run, only after an environment failure class, replaying the parent's task); the event outbox, filled in the transaction of the state change it describes and drained by `events`; the operators' backend drains; startup reconciliation of orphaned jobs; and the instance lock (`flock` on `<db>.lock`), so two controllers never share a database. An idempotency key (at most 128 bytes) is scoped to its submitter and never released: one submitter's key is unique across every job the database has held, however old, and another submitter's key neither finds nor blocks it. |
-| `orchestrator/internal/queue` | The run queue: admits queued jobs in priority and aging order, up to a concurrency limit, through `backends.Pool`, and runs each one's attempt chain (the profile's `max_attempts`, one run id) to a terminal state, or back to the queue. It records the result, the usage report summed over every session, the call sizing and the wait cause, and builds the job events the store's outbox sends. It decides from the pool's sentinels and the runner classes only (`errtext` over the package). See "The run queue" below. |
+| `orchestrator/internal/queue` | The run queue: admits queued jobs in priority and aging order, never more running than its concurrency (a hard cap), through `backends.Pool`, and runs each one's attempt chain (the profile's `max_attempts`, one run id) to a terminal state, or back to the queue. It records the result, the usage report summed over every session, the call sizing and the wait cause, and builds the job events the store's outbox sends. It decides from the pool's sentinels and the runner classes only (`errtext` over the package). See "The run queue" below. |
 | `orchestrator/internal/schematest` | Test support, imported only by `_test.go` files: validates JSON against `schemas/ids`, `schemas/events` and `schemas/platform` read in place (moved from `internal/events`'s tests, ADR-0048 decision 3), so the queue's events are held to the schemas as the events package's are. |
 
 The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, with the
@@ -745,24 +745,33 @@ reload), the registers index, the contracts (`Config.PromptContractTexts`, loade
 nil means the built-in ones), the grants catalog, the concurrency, the usage directory (created
 owner-only), the tree root of the findings check, the gateway tag prefix and the orphan grace.
 `Tick` is one admission pass; `Run` starts one every interval, each in its own goroutine, and
-returns once every pass and its jobs have.
+returns once every pass and its jobs have. Only one pass admits at a time (a pass that finds
+another admitting skips its admission) and every admission re-checks the free slots under the
+scheduler's lock, so `Concurrency` is a hard cap on running jobs, however passes overlap. A pass
+reads the queued list once and orders it once, so its cost is linear in the queue during an
+outage too (one pass over 750 held local-only jobs: 74 s before, 0.5 s now; 1,750: past ten
+minutes before, 1.0 s now).
 
 - **Admission.** The queued job with the lowest effective priority runs first (`priority - 5` for
   every 15 minutes waited, never below 1; submit order on a tie). A run that already holds a claim
   is skipped (another pass is admitting it). Each admission decision reserves once, from the
   admitting goroutine: `ReserveExclusive` for an exclusive profile (called every pass while it is
-  queued), `Reserve` otherwise. A local-only job waits queued while nothing it may use is up;
-  any other job is admitted unreserved then, and the pool's chain skips the down backends and runs
-  its cloud leg. A job left queued takes none of the pass's slots and records why
+  queued), `Reserve` otherwise. When that fails and nothing the job may use is up, a local-only
+  job waits queued; any other job is admitted unreserved, and the pool's chain skips the down
+  backends and runs its cloud leg (a local attempt on a backend that came back meanwhile takes a
+  free slot at its `max_concurrent` or is skipped: the chain never overfills a backend, a
+  fallover from the reserved one included). A job left queued takes none of the pass's slots and records why
   (`slot`, `token_budget`, `exclusive`, `backend_down`, written to `wait_cause` when it finishes).
-  A local-only job held for health is cancelled when a newer queued job of the same agent and task
-  exists.
+  A local-only job held for health is cancelled when a newer queued job of the same submitter,
+  agent, task and lane exists; another submitter's job is never touched. Wait causes of runs no
+  longer queued are pruned each pass.
 - **Release.** The claim is passed to `Call` as `reserved` and released exactly once when the
   executor returns, whatever it returned: a success, a failure, a cancel, the job's deadline, a
   kill. A failed admission write releases at once. A restart holds nothing (the pool's claims are
   in memory) and `store.ReconcileOrphans` settles the rows; while running, the orphan sweep settles
   a row whose executor is gone (after `orphan_grace_seconds`) and the reaper returns the claims of
-  runs no longer in flight. `TestHolds_CapacityIsReleasedOnEveryEnd` holds the five ends.
+  runs no longer in flight. `TestHolds_CapacityIsReleasedOnEveryEnd` holds the ends: success and
+  failure, cancel, deadline, kill, shutdown, an exclusive lease, a token weight and a restart.
 - **One job's dispatch.** Before any attempt: the task (or the profile's default; none fails the
   job), the gateway tag (`inference.GatewayTag`, computed once; a run id it refuses fails the job,
   so no session runs untagged), the prompt (`prompt.Build` under the job's context, with the lane
@@ -771,9 +780,12 @@ returns once every pass and its jobs have.
   profile with no `grants` block; exactly the lane's rendered servers otherwise, and a profile with
   grants but no catalog configured fails) and the toolsets (`Profile.LaneToolsets(lane)`, the one
   place they are derived: the lane's toolsets entry, or the granted server names). Any of these
-  failing fails the job with `handler-error` and no session.
+  failing fails the job with `handler-error` and no session, its reason bounded to 512 bytes.
 - **Attempts.** `Pool.JobTimeout()` goes on the job's context once, before the first attempt, so a
-  `max_attempts` retry gets no fresh budget. Every attempt keeps the run id and the session (its
+  `max_attempts` retry gets no fresh budget; a pool with no job deadline (neither
+  `runner.job_timeout_seconds` nor `runner.timeout_seconds`) gets `Config.JobCeiling`
+  (`queue.DefaultJobCeiling`, 6 hours, when unset), so no job is unbounded. An attempt that failed
+  as the deadline passed, with another attempt due, is classed `deadline`. Every attempt keeps the run id and the session (its
   tag, servers and toolsets), with its own usage path (`<run id>.json`, then `.aN.json`; the pool
   adds `.legN` per leg). Before a retry: a bounded backoff, the row must still read running (a
   cancel moves it first), and a drained reservation is released and admission run again; with no
@@ -788,12 +800,22 @@ returns once every pass and its jobs have.
   `handler-error` (a failed turn and a signal the controller did not send included). The stored
   reason is the class, `: `, then the pool's bounded `LocalFailedReason`; neither the log nor the
   row ever carries `err.Error()` of a `Call`, which can quote whole sessions.
-- **Requeues and retries.** A local-only job failing with `IsBackendDown` goes back to queued under
-  its run id (admission then holds it until a backend is up), not failed. A kill (the controller's
-  context or a foreign signal) on a single-attempt job, and a run cut off by a shutdown, get one
-  automatic retry, a new run created in the failing transaction (`store.FailWithRetry`), so the
-  failed event names it; a retry is never retried, and an operator's cancel wins the
-  compare-and-swap and creates nothing.
+- **Requeues.** A local-only job failing with `IsBackendDown` (every eligible backend found down)
+  goes back to queued under its own run id, not failed, and admission holds it until a backend is
+  up. The requeued attempt is not counted (neither against `max_attempts` nor as the first attempt
+  a kill's retry needs) and nothing of it is recorded (its reason, usage and result); the prompt's
+  provenance stays its first dispatch's. A job goes back at most `queue.MaxBackendDownRequeues`
+  (5) times, then fails `backend-down`; the count is in memory, so a restart resets it. Each
+  admission puts the job deadline on afresh, so a requeued job's total time is bounded by the
+  requeues plus one deadlines. A drained reservation before a retry also requeues (its attempts
+  kept, above).
+- **Automatic retries.** A kill (the controller's context or a foreign signal) and a run cut off
+  by a shutdown get one automatic retry, a new run created in the failing transaction
+  (`store.FailWithRetry`), so the failed event names it, and only for an original job (no
+  `retry_of_run_id`) on its first attempt that spent no session budget (ceiling, turn cap), and
+  never while an identical job of the same submitter and lane is queued. A retry gets no automatic
+  retry of its own (a run has at most one retry, a caller's resubmit included), and an operator's
+  cancel wins the compare-and-swap and creates nothing.
 - **The answer.** Only a success stores `Response`, bounded to `queue.MaxResponseBytes` (1 MiB,
   cut at a character boundary with a marker). A failed `Call`'s `Result` is the last session's
   (usage, stderr, exit code, which the accounting reads); its `Response` may be a failure report
@@ -802,15 +824,20 @@ returns once every pass and its jobs have.
 - **Usage.** Every session's report under the usage directory is summed per counter; a counter one
   session left unknown, or a cache-read `0` its report does not vouch for (a report with prompt
   tokens and no `cache_read_reported: true`), makes the run's total unknown, never a smaller known
-  number. Only regular files of at most 1 MiB are read.
+  number. A usage file is opened without following a link or blocking (`O_NOFOLLOW|O_NONBLOCK`),
+  checked with `Fstat` and read through a limit: only regular files of at most 1 MiB count, and a
+  run with 256 or more files is not summed. Nothing prunes the usage directory: it grows by one
+  file per session, and a site prunes the files of finished runs on its own schedule.
 - **The findings check** (with `tree_root` set, for a profile with a findings prefix for the lane):
-  a clean exit with no file newer than the dispatch directly in that directory fails the job
-  (`handler-error`); a missing directory counts as unwritten. The directory is opened through an
-  `os.Root` at the tree root, so a link out of it is never followed (the check is skipped and
-  logged). A prefix several concurrent runs share is checked as a whole: the private controller's
-  match on one agent's task wording, which attributed a file to one run, is lab policy and not
-  ported.
-- **Events.** `queue.OutboxEventBuilder(source, prefix)` is the store's event builder: started,
+  a clean exit with no file newer than the dispatch (and not dated past now) directly in that
+  directory fails the job (`handler-error`); a missing directory counts as unwritten. The directory
+  is opened through an `os.Root` at the tree root, so the prefix cannot lead outside it, and a link
+  in place of the prefix's own directory fails the check. A prefix several runs share, concurrent
+  runs of one profile or two profiles whose scopes name one directory, is checked as a whole (a
+  sibling's file counts), so a site gives each profile its own findings directory; the private
+  controller's match on one agent's task wording, which attributed a file to one run, is lab
+  policy and not ported.
+- **Events.** `Scheduler.EventBuilder(source)` (or `queue.OutboxEventBuilder(source, prefix)`) is the store's event builder: started,
   failed and finished, built from the row in the transaction of its transition. Every value the
   controller does not control is checked against the schema's rule (written by hand: the package
   imports no `regexp`) and sent as null when it does not fit; the model rule is stricter than the
@@ -888,6 +915,12 @@ above says how.
     is requeued, not failed;
   - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
     log or keep text, as `backends` does;
+- **Noted by the 2.6 reviews, for later:** an `InstanceLock` given to `OpenWith` could be bound to
+  the one `Store` it opens (today two stores may share one lock on purpose, as the store's tests
+  do); `retryGate` re-reads the profile's locality only at admission (a reload between attempts
+  keeps the old one); the queue's real-process tests re-execute the test binary and move to
+  `runner/exec` when it lands (2.7). The binary must serve the API through `api.NewServer`, never
+  `api.NewHandler` alone, which skips the bind check; 2.7 adds a test that it does.
 - **2.7 (the controller binary and the cutover docs):** the binary loads the contracts once at
   start (`Config.PromptContractTexts` with `prompt.DefaultContracts()`) and refuses to start when
   that fails. The private controller's three contracts are built in here, reworded to name this
