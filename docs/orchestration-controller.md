@@ -745,6 +745,12 @@ above says how.
     pattern) fails the job before any attempt, never runs untagged;
   - port the queue's tests to `runnertest`, keeping kill, signal and orphan tests on a real
     subprocess runner.
+  - (from 2.5) pass a profile's `local_only` as `backends.LocalityOf(prof.LocalOnly)`: `Call`
+    takes a `Locality`, whose zero value is `LocalOnly`, so a call site that forgets it never
+    starts a cloud leg;
+  - (from 2.5) a job record's failure reason is `Result.LocalFailedReason` (class and a bounded
+    excerpt); `LocalFailedDetail` and the text of `Call`'s error hold the whole text, which can quote
+    a session's output, so they go only to an admin-only view;
   - (from 2.5) depend on `backends.Pool`, not `*Policy`, so the queue's tests can stub
     admission; call `Reserve` or `ReserveExclusive` once per admission decision from the one
     scheduling goroutine, pass the backend to `Call` as `reserved` and `Release(backend, run id)`
@@ -767,11 +773,12 @@ above says how.
     failure report: store it as the failed attempt's output, never as the job's answer;
   - (from 2.5) a local-only job failing with `IsBackendDown` (every eligible backend marked down)
     is requeued, not failed;
-  - (from 2.5) run `errtext.Check` over `queue` and `api` in a test, as `backends` does;
+  - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
+    log or keep text, as `backends` does;
 - **2.7 (the controller binary and the cutover docs):** the binary loads the contracts once at
   start (`Config.PromptContractTexts` with `prompt.DefaultContracts()`) and refuses to start when
   that fails. The private controller's three contracts are built in here, reworded to name this
-  repository's output tools, so the lab's configuration needs no contract file; a lab-only
+  repository's output tools, so the lab's configuration needs no contract file once the lab's agents file through the broker (until that move the lab's tools are still the vault's, so the overlay replaces the contracts with its own files through `prompt_contracts`); a lab-only
   contract goes into an overlay file listed in `prompt_contracts_append`. A configuration with an
   invalid `events.gateway_tag_prefix`, or a relative `lock_path`, no longer loads. The example
   unit sets `RuntimeDirectory=` for the lock file, and bounds what a facts command leaves behind
@@ -795,7 +802,9 @@ above says how.
   snapshot. Cutover checks for the lab: `backends.cloud.home` must be set (no home is no cloud <!-- scrub-allow: config key paths, not host names -->
   leg; the private controller ran its cloud leg with whatever home it had); a local backend
   without a `home` is no longer dispatched to (the private controller always used its local one);
-  a `health_url` that answers with a redirect now reads as down; an interlock wait ended by the
+  a `health_url` that answers with a redirect now reads as down; the directory of the lab's
+  `lock_path` must not be writable by anyone (the interlock refuses a lock file there, and every
+  local attempt on an interlocked backend would then fail unclassified); an interlock wait ended by the
   job is no longer a backend fault; a stored drain of a backend only the HTTP passthrough used is
   dropped at start (logged).
 - **Stage 3 (the provider):** the runner sends `Session.GatewayTag` as the `gatewaytag.Header`
