@@ -127,9 +127,22 @@ func TestGatewayConfigRefusals(t *testing.T) {
 		}},
 		{"bad owner", "owner", func(c map[string]any) { keyOf(c, 1)["owner"] = "someone" }},
 		{"bad data tier", "data_tier", func(c map[string]any) { keyOf(c, 1)["data_tier"] = "any" }},
-		{"negative limit", "negative", func(c map[string]any) {
+		{"negative limit", "must be at least 1", func(c map[string]any) {
 			keyOf(c, 1)["limits"].(map[string]any)["max_requests"] = -1
 		}},
+		{"zero limit", "must be at least 1", func(c map[string]any) {
+			keyOf(c, 1)["limits"].(map[string]any)["max_requests"] = 0
+		}},
+		{"zero cost limit", "max_cost: must be a number > 0", func(c map[string]any) {
+			roleOf(c, "chat-b")["cost_per_1k_tokens"] = 0.01
+			roleOf(c, "chat-b")["limits"] = map[string]any{"window_s": 60, "max_requests": nil, "max_tokens": nil, "max_cost": 0}
+		}},
+		{"null where the contract has none", "config.keys: null is not allowed", func(c map[string]any) { c["keys"] = nil }},
+		{"backend not a slug", "is not a slug", func(c map[string]any) { depOf(c, "chat-b", 0)["backend"] = "svc_b" }},
+		{"model with a space", "model", func(c map[string]any) { depOf(c, "chat-b", 0)["model"] = "a model" }},
+		{"base_url upper-case host", "lower-case", func(c map[string]any) { depOf(c, "chat-b", 0)["base_url"] = "http://X.example" }},
+		{"owner profile not a slug", "owner", func(c map[string]any) { keyOf(c, 0)["owner"] = "profile:Agent.A" }},
+		{"name too long", "not a slug", func(c map[string]any) { c["name"] = strings.Repeat("a", 65) }},
 		{"conformance_only not a bool", "not a gateway config", func(c map[string]any) { c["conformance_only"] = "yes" }},
 	}
 	for _, c := range cases {

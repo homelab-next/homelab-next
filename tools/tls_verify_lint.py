@@ -196,6 +196,16 @@ def _scalar_state(node: yaml.Node) -> bool | None:
     return None
 
 
+# JSON allows a lone UTF-16 surrogate escape (``"\\ud800"``); YAML refuses it, so a valid JSON file
+# would read as a parse failure.  Swap each such escape for U+FFFD's: the same length, the same lines
+# and the same keys, so the walk below sees the document unchanged.
+_LONE_SURROGATE = re.compile(r"(?<!\\)((?:\\\\)*)\\u[dD][89a-fA-F][0-9a-fA-F]{2}")
+
+
+def lint_json(text: str, rel: str = "<string>") -> list[Finding]:
+    return lint_config(_LONE_SURROGATE.sub(lambda m: m.group(1) + "\\ufffd", text), rel)
+
+
 def lint_config(text: str, rel: str = "<string>") -> list[Finding]:
     lines = text.splitlines()
     found: list[Finding] = []
@@ -255,6 +265,8 @@ def scan(root: Path, allow: list[tuple[str, str]]) -> tuple[list[Finding], int]:
             text = p.read_text(encoding="utf-8")
             if p.suffix == ".py":
                 findings += lint_python(text, rel)
+            elif p.suffix == ".json":
+                findings += lint_json(text, rel)
             else:
                 findings += lint_config(text, rel)
         except (SyntaxError, UnicodeDecodeError, yaml.YAMLError) as exc:
