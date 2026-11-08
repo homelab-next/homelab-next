@@ -247,34 +247,39 @@ func TestReserve_OneClaimPerRunID(t *testing.T) {
 	}
 }
 
-// Concurrent reservations for one slot: exactly one claims it, however the reads of the backend's
-// load interleave; a fallover attempt racing them for it is held to the same count.
+// Two reservations for one slot, the second claiming between the first's read of the load and its
+// claim (the hook holds the first there): exactly one has the slot, every time. A fallover attempt
+// in the same window is held to the same count.
 func TestReserve_TheLastSlotIsClaimedOnceUnderARace(t *testing.T) {
-	for round := 0; round < 20; round++ {
-		p, _ := newPool(nil, Backend{Name: "a", MaxConcurrent: 1})
-		var wg sync.WaitGroup
-		var won atomic.Int32
-		start := make(chan struct{})
-		for i := 0; i < 32; i++ {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				<-start
-				if i%4 == 0 {
-					if p.takeSlot(Backend{Name: "a", MaxConcurrent: 1}) {
-						won.Add(1)
-					}
+	for _, second := range []string{"reserve", "attempt"} {
+		t.Run(second, func(t *testing.T) {
+			p, _ := newPool(nil, Backend{Name: "a", MaxConcurrent: 1})
+			var once sync.Once
+			won := 0
+			testHookBeforeClaim = func(runID, backend string) {
+				if runID != "first" {
 					return
 				}
-				if _, ok := p.Reserve(context.Background(), Affinity{}, fmt.Sprintf("run-%d", i), "watcher"); ok {
-					won.Add(1)
-				}
-			}(i)
-		}
-		close(start)
-		wg.Wait()
-		if n := won.Load(); n != 1 || p.InFlight("a") != 1 {
-			t.Fatalf("round %d: %d claims, in flight %d, for one slot", round, n, p.InFlight("a"))
-		}
+				once.Do(func() {
+					// The first has read the backend's load (0 of 1); the second takes the slot now.
+					if second == "attempt" {
+						if p.takeSlot(Backend{Name: "a", MaxConcurrent: 1}) {
+							won++
+						}
+						return
+					}
+					if _, ok := p.Reserve(context.Background(), Affinity{}, "second", "watcher"); ok {
+						won++
+					}
+				})
+			}
+			t.Cleanup(func() { testHookBeforeClaim = nil })
+			if _, ok := p.Reserve(context.Background(), Affinity{}, "first", "watcher"); ok {
+				won++
+			}
+			if won != 1 || p.InFlight("a") != 1 {
+				t.Fatalf("%d claims, in flight %d, for one slot", won, p.InFlight("a"))
+			}
+		})
 	}
 }

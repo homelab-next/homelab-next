@@ -757,3 +757,27 @@ func TestCall_FalloverNeverOverfillsAFullBackend(t *testing.T) {
 		t.Fatalf("a = %d", p.InFlight("a"))
 	}
 }
+
+// A backend leased to another run while an earlier attempt of the chain ran is not attempted by
+// the fallover.
+func TestCall_FalloverSkipsABackendLeasedMeanwhile(t *testing.T) {
+	var p *Policy
+	r := runnertest.New(runnertest.On(map[string]runnertest.Step{
+		"a": func(ctx context.Context, s runner.Session) (*runner.Result, error) {
+			if got, ok := p.ReserveExclusive(ctx, Affinity{RequireTags: []string{"solo"}}, "other"); !ok || got != "b" {
+				return nil, fmt.Errorf("the lease = %q %v", got, ok)
+			}
+			return &runner.Result{}, runner.Wrap(runner.BackendFault, errors.New("reset"))
+		},
+	}, runnertest.Answer("b")))
+	p, _ = newPool(r, Backend{Name: "a"}, Backend{Name: "b", Tags: []string{"solo"}})
+	p.PrimaryFirst = true
+	if _, err := p.Call(context.Background(), session("run-1"), LocalOnly, Affinity{}, ""); err == nil {
+		t.Fatal("the chain answered from a backend leased to another run")
+	}
+	for _, s := range r.Sessions() {
+		if s.Target.Backend == "b" {
+			t.Fatal("the fallover attempted a backend leased to another run since the chain began")
+		}
+	}
+}
