@@ -9,18 +9,9 @@ sys.path.insert(0, str(ROOT / "tests" / "models"))
 
 from models_support import make_registry, role_doc
 
-from conformance.fakes.openai_server import FakeOpenAIServer, label_rule
+from conformance.fakes.openai_server import FakeOpenAIServer
 from homelabnext.registry import FakeDNS, Resolver
 from homelabnext.registry.models import ModelResolver, RoleTable
-
-SUITE = ROOT / "homelabnext" / "golden" / "examples" / "classifier_smoke.yml"
-
-
-def good_rules():
-    return [
-        label_rule("revert the commit", "accept", 0.97),
-        label_rule("NO-ROLLBACK", "reject", 0.91),
-    ]
 
 
 @pytest.fixture

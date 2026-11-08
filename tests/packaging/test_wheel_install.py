@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 DATA_TREES = ("schemas", "profiles", "examples")
 NOT_PACKAGED = ("examples/private-overlay/",)  # setup.py NOT_PACKAGED: templates, not data
 
-pytestmark = pytest.mark.slow
+# one shard builds this module's artefacts once (tests/suite_policy.py, shard_by_module)
+pytestmark = [pytest.mark.slow, pytest.mark.shard_by_module]
 
 
 def _tree_files(base: Path) -> set[str]:

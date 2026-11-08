@@ -2,11 +2,13 @@
 """The test run split across CI jobs, and the proof that the parts add up (checklist Q-02).
 
 ``pytest --shard I/N`` (``tests/suite_policy.py``) keeps the collected tests whose node id hashes
-(SHA-256) to ``I-1`` modulo ``N``: every file and every suite is spread over all the shards, so
+(SHA-256) to ``I-1`` modulo ``N`` (a module marked ``shard_by_module`` hashes its path instead, so
+it stays whole): every file and every suite is spread over all the shards, so
 they come out about even with no table of timings to keep up to date, and the choice does not
 depend on collection order, which may differ between runners.  The cost is that a module- or
 session-scoped fixture runs once in each shard that needs it -- and its time counts once per
-shard in the summed budget below, so a suite with a heavy shared fixture needs the headroom.
+shard in the summed budget below, so a suite with a heavy shared fixture needs the headroom, or
+its module the ``shard_by_module`` mark.
 
 ``--shard-report FILE`` writes what the shard collected (the count and a digest of every node id,
 after ``-m`` and ``--deselect``), the node ids it kept and those it actually ran (a setup

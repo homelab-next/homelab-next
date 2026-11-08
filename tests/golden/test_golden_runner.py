@@ -2,8 +2,9 @@
 import json
 from pathlib import Path
 
+from golden_helpers import SUITE, good_rules
+
 from conformance.fakes.openai_server import Fault
-from conftest import SUITE, good_rules
 from homelabnext.golden import client_completer, load_suite, run_suite
 
 DATA = Path(__file__).parent / "data"
