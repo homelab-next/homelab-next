@@ -59,6 +59,12 @@ const (
 var placeholders = []string{PromptPlaceholder, UsagePathPlaceholder, ToolsetsPlaceholder, RunIDPlaceholder,
 	AgentKeyPlaceholder, LanePlaceholder, HomePlaceholder, BackendPlaceholder}
 
+// ErrArgumentsTooLong: the session's command line is over the system's limit (a prompt in argv is
+// at most 128 KiB on Linux). It is the configuration's, not the backend's: no class, so the pool
+// neither retries it elsewhere nor starts a cloud leg that would fail the same way. Give the
+// prompt on stdin.
+var ErrArgumentsTooLong = errors.New("the command line is too long for the system (E2BIG): give the prompt on stdin, with no {prompt} in argv")
+
 // Config is the runner's command and bounds.
 type Config struct {
 	// Argv is the command: an absolute program path or a name found on PATH, then its arguments,
@@ -109,6 +115,14 @@ func New(cfg Config) (*Runner, error) {
 			if strings.ContainsRune(a, 0) {
 				return nil, errors.New("exec runner: an argument holds a NUL byte")
 			}
+		}
+	}
+	for i, a := range cfg.Argv {
+		// A prompt as an argument of its own would be read as an option when it starts with "-":
+		// only after "--" is it the operand it is meant to be. Inside an element ("--prompt={prompt}")
+		// it cannot be read as one.
+		if a == PromptPlaceholder && (i == 0 || cfg.Argv[i-1] != "--") {
+			return nil, errors.New(`exec runner: {prompt} as an argument of its own must follow "--" (or give the prompt on stdin: no {prompt} at all)`)
 		}
 	}
 	for code, c := range cfg.ExitClasses {
@@ -188,6 +202,9 @@ func (r *Runner) Run(ctx context.Context, s runner.Session) (*runner.Result, err
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = r.cfg.KillGrace
 	if err := cmd.Start(); err != nil {
+		if errors.Is(err, syscall.E2BIG) {
+			return res, fmt.Errorf("exec runner: start %s: %w", filepath.Base(argv[0]), ErrArgumentsTooLong)
+		}
 		return res, fmt.Errorf("exec runner: start %s: %w", filepath.Base(argv[0]), err)
 	}
 	pgid := cmd.Process.Pid

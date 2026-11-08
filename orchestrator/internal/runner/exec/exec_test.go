@@ -100,7 +100,7 @@ func newRunner(t *testing.T, cfg Config) *Runner {
 }
 
 func TestRun_AnswerIsStdoutWithPlaceholdersExpandedOnce(t *testing.T) {
-	r := newRunner(t, Config{Argv: helperArgv("echo", "-z", "{prompt}", "run={run_id}", "{agent_key}/{lane}@{backend}:{home}", "{unknown}"),
+	r := newRunner(t, Config{Argv: helperArgv("echo", "-z", "--prompt={prompt}", "run={run_id}", "{agent_key}/{lane}@{backend}:{home}", "{unknown}"),
 		ToolsetsArgs: []string{"--toolsets", "{toolsets}"}})
 	s := runner.Session{RunID: "r1", AgentKey: "watcher", Lane: runner.LaneReal, Prompt: "say {run_id}", Toolsets: []string{"a", "b"},
 		Target: runner.Target{Backend: "engine-a", Home: "home-a"}}
@@ -108,7 +108,7 @@ func TestRun_AnswerIsStdoutWithPlaceholdersExpandedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "-z\nsay {run_id}\nrun=r1\nwatcher/real@engine-a:home-a\n{unknown}\n--toolsets\na,b\n"
+	want := "-z\n--prompt=say {run_id}\nrun=r1\nwatcher/real@engine-a:home-a\n{unknown}\n--toolsets\na,b\n"
 	if res.Response != want || res.ExitCode != 0 {
 		t.Fatalf("response = %q, want %q", res.Response, want)
 	}
@@ -388,5 +388,30 @@ func TestRun_OutputHeldOpenAfterACleanExitIsTurnFailed(t *testing.T) {
 	res, err := r.Run(context.Background(), runner.Session{})
 	if runner.ClassOf(err) != runner.TurnFailed || res.Response != "" {
 		t.Fatalf("class %v, response %q, err %v", runner.ClassOf(err), res.Response, err)
+	}
+}
+
+// {prompt} as an argument of its own is refused unless it follows "--", where a prompt starting
+// with "-" cannot be read as an option.
+func TestNew_AStandalonePromptFollowsDoubleDash(t *testing.T) {
+	for _, argv := range [][]string{{"agent", "{prompt}"}, {"agent", "-z", "{prompt}"}, {"{prompt}"}} {
+		if _, err := New(Config{Argv: argv}); err == nil {
+			t.Errorf("%q: accepted", argv)
+		}
+	}
+	for _, argv := range [][]string{{"agent", "--", "{prompt}"}, {"agent", "--prompt={prompt}"}, {"agent"}} {
+		if _, err := New(Config{Argv: argv}); err != nil {
+			t.Errorf("%q: %v", argv, err)
+		}
+	}
+}
+
+// A prompt over the system's argument limit is named as such, with no class: the pool does not
+// take a configuration's limit for the backend's.
+func TestRun_APromptTooLongForArgv(t *testing.T) {
+	r := newRunner(t, Config{Argv: helperArgv("echo", "--", "{prompt}")})
+	_, err := r.Run(context.Background(), runner.Session{Prompt: strings.Repeat("x", 256<<10)})
+	if !errors.Is(err, ErrArgumentsTooLong) || runner.ClassOf(err) != runner.Internal {
+		t.Fatalf("err = %v (class %v)", err, runner.ClassOf(err))
 	}
 }
