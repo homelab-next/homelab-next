@@ -88,6 +88,9 @@ type Config struct {
 	// GatewayTagPrefix prefixes the run id in the gateway tag (events.gateway_tag_prefix). The
 	// outbox's event builder must be given the same prefix (OutboxEventBuilder).
 	GatewayTagPrefix string
+	// JobCeiling is the job deadline when the pool sets none (Pool.JobTimeout() == 0); 0 is
+	// DefaultJobCeiling.
+	JobCeiling time.Duration
 	// OrphanGrace is how long an in-flight row may have no live executor before the orphan sweep
 	// settles it: 0 is DefaultOrphanGrace, negative disables the sweep.
 	OrphanGrace time.Duration

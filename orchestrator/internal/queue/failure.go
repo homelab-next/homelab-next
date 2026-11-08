@@ -97,6 +97,13 @@ func spentBudget(callErr error) bool {
 		errors.Is(callErr, runner.TurnCap) || errors.Is(callErr, backends.ErrTurnCapStops)
 }
 
+// spentSessionBudget is spentBudget but for the job's deadline: a session's own ceiling or turn
+// cap. A shutdown ends the chain with the pool's ErrJobDeadline (a cancelled context), which is no
+// budget the job spent.
+func spentSessionBudget(callErr error) bool {
+	return errors.Is(callErr, runner.TimeoutCeiling) || errors.Is(callErr, runner.TurnCap) || errors.Is(callErr, backends.ErrTurnCapStops)
+}
+
 // mayRetryAttempt reports whether a failed chain may run again under the profile's max_attempts:
 // never once the job's context has ended (a cancel, its deadline) and never after a spent budget.
 func mayRetryAttempt(ctx context.Context, callErr error) bool {
