@@ -199,8 +199,8 @@ type Config struct {
 	APIPprof bool `yaml:"api_pprof"`
 	// APIMaxUnfinishedPerCaller bounds one submitter's unfinished jobs (a submit past it is a
 	// 429); 0 is the API's default (1000).
-	APIMaxUnfinishedPerCaller int `yaml:"api_max_unfinished_per_caller"`
-	Events                Events   `yaml:"events"`
+	APIMaxUnfinishedPerCaller int    `yaml:"api_max_unfinished_per_caller"`
+	Events                    Events `yaml:"events"`
 	// Scope is the shared tree's zones (pathscope.Zones). Required, every key present.
 	Scope pathscope.Zones `yaml:"scope"`
 
