@@ -206,6 +206,12 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 		// reservation's claim shares (probe load and the token budget are admission's), taken for
 		// the attempt: a fallover never takes a slot another job's reservation holds.
 		counted := backend.Name == reserved
+		// The order was filtered for leases and drains when the chain began; an earlier attempt
+		// can take long, so a backend leased to another run or drained since is skipped too.
+		if !counted && p.exclusivelyBlocked(backend.Name, s.RunID) {
+			p.logf("backends: run=%s backend=%s was leased or drained since the chain began; not attempted", rid, backend.Name)
+			continue
+		}
 		if !counted && !p.takeSlot(backend) {
 			p.logf("backends: run=%s backend=%s is at its max_concurrent (%d); not attempted", rid, backend.Name, backend.MaxConcurrent)
 			continue
