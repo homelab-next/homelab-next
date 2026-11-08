@@ -751,7 +751,11 @@ above says how.
     starts a cloud leg;
   - (from 2.5) a job record's failure reason is `Result.LocalFailedReason` (class and a bounded
     excerpt); `LocalFailedDetail` and the text of `Call`'s error hold the whole text, which can quote
-    a session's output, so they go only to an admin-only view;
+    a session's output, so they go only to an admin-only view. That includes every error `Call`
+    returns: `ErrJobDeadline: <reason>` quotes the last attempt, and `ErrLocalOnly`,
+    `ErrNotAttributable`, `ErrNoCloudBackend` and `ErrCloudFailed` wrap the attempts' errors. The
+    queue logs and stores the bounded `LocalFailedReason`, never `err.Error()`, and classifies with
+    `errors.Is`;
   - (from 2.5) depend on `backends.Pool`, not `*Policy`, so the queue's tests can stub
     admission; call `Reserve` or `ReserveExclusive` once per admission decision from the one
     scheduling goroutine, pass the backend to `Call` as `reserved` and `Release(backend, run id)`
