@@ -3,11 +3,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -130,17 +132,89 @@ func newRunID() string {
 
 func submitError(w http.ResponseWriter, status int, e SubmitError) { writeJSON(w, status, e) }
 
-func handleSubmit(s *store.Store, agentKnown func(string) bool) http.HandlerFunc {
+// DefaultMaxUnfinishedPerCaller is Config.MaxUnfinishedPerCaller's default.
+const DefaultMaxUnfinishedPerCaller = 1000
+
+// maxProfileIDLen bounds a submit's profile_id.
+const maxProfileIDLen = 128
+
+// submitFields are SubmitRequest's JSON keys, exactly as spelled: a body's keys must be these, each
+// at most once.
+var submitFields = map[string]bool{
+	"agent_key": true, "profile_id": true, "priority": true, "task_description": true, "idempotency_key": true,
+	"shadow": true, "retry_of_run_id": true, "reason": true, "input": true, "request_body": true,
+}
+
+// errNotStrict is a body that is not exactly one JSON object of SubmitRequest's keys.
+var errNotStrict = errors.New("not one JSON object of the submit's keys")
+
+// decodeSubmit decodes a submit body strictly: one JSON object, nothing after it, every key one of
+// SubmitRequest's spelled exactly (encoding/json alone would match "Agent_Key" and take the last
+// of two "input" keys), none repeated, and no unknown key.
+func decodeSubmit(body []byte, req *SubmitRequest) error {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return errNotStrict
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		t, err := dec.Token()
+		key, ok := t.(string)
+		if err != nil || !ok || !submitFields[key] || seen[key] {
+			return errNotStrict
+		}
+		seen[key] = true
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return errNotStrict
+		}
+	}
+	if t, err := dec.Token(); err != nil || t != json.Delim('}') {
+		return errNotStrict
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return errNotStrict
+	}
+	strict := json.NewDecoder(bytes.NewReader(body))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(req); err != nil {
+		return errNotStrict
+	}
+	return nil
+}
+
+// validProfileID is at most maxProfileIDLen of [A-Za-z0-9._:-], starting with a letter or digit.
+func validProfileID(id string) bool {
+	if len(id) < 1 || len(id) > maxProfileIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		alnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if !alnum && (i == 0 || (c != '.' && c != '_' && c != ':' && c != '-')) {
+			return false
+		}
+	}
+	return true
+}
+
+func handleSubmit(s *store.Store, agentKnown func(string) bool, maxUnfinished int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, MaxSubmitBytes)
-		var req SubmitRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
 				http.Error(w, "the request body is larger than "+strconv.Itoa(MaxSubmitBytes)+" bytes", http.StatusRequestEntityTooLarge)
 				return
 			}
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+			http.Error(w, "the request body could not be read", http.StatusBadRequest)
+			return
+		}
+		var req SubmitRequest
+		if decodeSubmit(body, &req) != nil {
+			submitError(w, http.StatusBadRequest, SubmitError{Reason: "invalid_body",
+				Error: "the body must be one JSON object of the submit's keys, each spelled exactly and given once"})
 			return
 		}
 		if req.AgentKey == "" {
@@ -174,6 +248,10 @@ func handleSubmit(s *store.Store, agentKnown func(string) bool) http.HandlerFunc
 			http.Error(w, "task_description is larger than "+strconv.Itoa(MaxTaskBytes)+" bytes", http.StatusRequestEntityTooLarge)
 			return
 		}
+		if req.ProfileID != "" && !validProfileID(req.ProfileID) {
+			http.Error(w, "profile_id must be at most "+strconv.Itoa(maxProfileIDLen)+" of [A-Za-z0-9._:-], starting with a letter or digit", http.StatusBadRequest)
+			return
+		}
 		// Before anything is stored, a resubmit's included: a job no profile can run is refused.
 		if !agentKnown(req.AgentKey) {
 			http.Error(w, "unknown agent_key: no profile is registered for it", http.StatusNotFound)
@@ -186,13 +264,20 @@ func handleSubmit(s *store.Store, agentKnown func(string) bool) http.HandlerFunc
 			return
 		}
 		ctx := r.Context()
+		if n, err := s.UnfinishedBySubmitter(CallerFrom(ctx)); err != nil {
+			log.Printf("api: count unfinished jobs: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		} else if n >= maxUnfinished {
+			http.Error(w, "too many unfinished jobs for this caller: wait for some to finish", http.StatusTooManyRequests)
+			return
+		}
 		j := &store.Job{
 			RunID: newRunID(), AgentKey: req.AgentKey, ProfileID: req.ProfileID, Priority: req.Priority,
 			State: store.StateQueued, Shadow: req.Shadow, IdempotencyKey: req.IdempotencyKey,
 			CreatedAt: time.Now().UTC(), TaskDescription: req.TaskDescription,
 			SubmittedBy: CallerFrom(ctx), RetryOfRunID: req.RetryOfRunID,
 		}
-		var err error
 		if req.RetryOfRunID != "" {
 			err = s.CreateResubmit(j, store.ResubmitCheck{
 				MayAccess: func(submittedBy string) bool { return mayAccessJob(ctx, submittedBy) },
@@ -244,8 +329,9 @@ func keyOwner(ctx context.Context, s *store.Store, req *SubmitRequest) string {
 }
 
 // answerReplay answers a submit whose idempotency key is taken: 200 with the key's run when the
-// request is the same submit again (same agent key, same retry_of_run_id, same lane), 422 when the
-// key was used for a different submit.
+// request is the same submit again (same agent key and retry_of_run_id, and for an ordinary submit
+// the same lane: a resubmit takes its parent's lane, whatever the request said), 422 when the key
+// was used for a different submit.
 func answerReplay(w http.ResponseWriter, ctx context.Context, s *store.Store, req *SubmitRequest) {
 	existing, err := s.FindByIdempotencyKey(keyOwner(ctx, s, req), req.IdempotencyKey)
 	if err != nil || !mayAccessJob(ctx, existing.SubmittedBy) {
@@ -255,7 +341,7 @@ func answerReplay(w http.ResponseWriter, ctx context.Context, s *store.Store, re
 		http.Error(w, "duplicate idempotency key, and its job cannot be resolved", http.StatusConflict)
 		return
 	}
-	if existing.AgentKey != req.AgentKey || existing.RetryOfRunID != req.RetryOfRunID || existing.Shadow != req.Shadow {
+	if existing.AgentKey != req.AgentKey || existing.RetryOfRunID != req.RetryOfRunID || (req.RetryOfRunID == "" && existing.Shadow != req.Shadow) {
 		submitError(w, http.StatusUnprocessableEntity, SubmitError{Reason: "idempotency_key_mismatch", RetryOfRunID: req.RetryOfRunID,
 			Error: "the idempotency key was already used for a different submit (agent_key, retry_of_run_id or shadow differs); use a new key"})
 		return
@@ -322,13 +408,13 @@ func handleCancel(s *store.Store, cancelRun func(string) bool) http.HandlerFunc 
 				http.Error(w, "the job's state changed concurrently; cancel aborted", http.StatusConflict)
 				return
 			}
-			log.Printf("api: cancel %s: %v", j.RunID, err)
+			log.Printf("api: cancel %q: %v", j.RunID, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		if cancelRun == nil || !cancelRun(j.RunID) {
 			if err := s.EmitDeferredFinished(j.RunID); err != nil {
-				log.Printf("api: cancel %s: cannot emit the deferred finished record: %v", j.RunID, err)
+				log.Printf("api: cancel %q: cannot emit the deferred finished record: %v", j.RunID, err)
 			}
 		}
 		w.WriteHeader(http.StatusOK)
@@ -344,11 +430,11 @@ func handleReloadProfiles(reload func() error) http.HandlerFunc {
 			return
 		}
 		if err := reload(); err != nil {
-			log.Printf("api: profile reload by %s failed, the loaded profiles stay: %v", callerOrAnonymous(r), err)
+			log.Printf("api: profile reload by %q failed, the loaded profiles stay: %v", callerOrAnonymous(r), err)
 			http.Error(w, "the reload failed and the loaded profiles stay in force (see the controller's log)", http.StatusInternalServerError)
 			return
 		}
-		log.Printf("api: profiles reloaded by %s", callerOrAnonymous(r))
+		log.Printf("api: profiles reloaded by %q", callerOrAnonymous(r))
 		w.WriteHeader(http.StatusOK)
 	}
 }

@@ -492,6 +492,18 @@ func (s *Store) ListJobs(f ListFilter) ([]*Job, error) {
 	return collectJobs(rows, "list jobs")
 }
 
+// UnfinishedBySubmitter counts submittedBy's jobs that have not finished (queued, admitted,
+// running, awaiting_inference); "" counts the jobs submitted with the API's auth off.
+func (s *Store) UnfinishedBySubmitter(submittedBy string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = ? AND state IN (?, ?, ?, ?)`,
+		submittedBy, string(StateQueued), string(StateAdmitted), string(StateRunning), string(StateAwaitingInference)).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count unfinished jobs: %w", err)
+	}
+	return n, nil
+}
+
 // UpdateState is a compare-and-swap transition: the row changes only while its state still
 // equals `from`, and ErrStateConflict says it did not. The caller passes the state it last
 // observed and has already checked with CanTransition. Entering running stamps started_at (once),
