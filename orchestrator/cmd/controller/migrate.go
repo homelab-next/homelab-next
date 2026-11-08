@@ -49,6 +49,14 @@ func migrate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "controller migrate: --config and --out are required, and nothing else")
 		return exitUsage
 	}
+	// --out must not exist, checked before anything else: the profiles are rewritten in place
+	// before --out is written, so a refusal there would come after they had changed.
+	for _, p := range []string{*out, *out + ".tmp"} {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(stderr, "controller migrate: %s already exists (or cannot be checked): --out must name a new file\n", p)
+			return exitProblem
+		}
+	}
 	data, err := grants.ReadConfigFile(*cfgPath, maxConfigBytes)
 	if err != nil {
 		fmt.Fprintln(stderr, "controller migrate: the configuration:", err)

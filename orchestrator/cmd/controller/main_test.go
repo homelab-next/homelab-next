@@ -600,3 +600,31 @@ func TestServe_AStopEndsAdmissionBeforeTheAPI(t *testing.T) {
 		t.Fatalf("when admission stopped the API answered %d, want it still serving", apiUp)
 	}
 }
+
+// An existing --out is refused before anything changes: the profiles are left as they were.
+func TestMigrate_AnExistingOutChangesNothing(t *testing.T) {
+	dir := t.TempDir()
+	profiles := filepath.Join(dir, "profiles")
+	if err := os.Mkdir(profiles, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const prof = "agent_key: w\nold_task: Watch.\n"
+	writeFile(t, filepath.Join(profiles, "w.yaml"), prof, 0o600)
+	tokens := filepath.Join(dir, "t.yaml")
+	writeFile(t, tokens, "tokens: []\n", 0o600)
+	writeFile(t, filepath.Join(dir, "old.yaml"), "backend_status_script: /s.py\nprofiles_dir: profiles\napi_auth: {tokens_file: "+tokens+"}\n"+
+		"scope: {denied_roots: [owner], findings_root: '', shared_write: [], reserved_names: []}\n", 0o600)
+	writeFile(t, filepath.Join(dir, "aliases.yaml"), "old_task: default_task_description\n", 0o600)
+	out := filepath.Join(dir, "new.yaml")
+	writeFile(t, out, "keep\n", 0o600)
+	code, _, errs := runCmd(t, "migrate", "--config", filepath.Join(dir, "old.yaml"), "--out", out, "--profile-aliases", filepath.Join(dir, "aliases.yaml"))
+	if code != exitProblem {
+		t.Fatalf("migrate over an existing --out = %d: %s", code, errs)
+	}
+	if got, _ := os.ReadFile(filepath.Join(profiles, "w.yaml")); string(got) != prof {
+		t.Fatalf("a refused migration rewrote the profiles:\n%s", got)
+	}
+	if got, _ := os.ReadFile(out); string(got) != "keep\n" {
+		t.Fatal("a refused migration changed --out")
+	}
+}
