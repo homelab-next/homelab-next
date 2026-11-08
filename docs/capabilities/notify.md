@@ -164,6 +164,8 @@ Findings (fidelity limits of the channel, not of this adapter):
   shortens a longer title (so it does not round-trip) and refuses such tags itself; the key tag is
   the key's UTF-8 bytes in hex, so a key over 246 bytes (fewer with the message's own tags) cannot
   be sent through this target.
+* The same 512-byte budget covers a recovery's tags, and a recovery adds `recovered` to its
+  problem's tags.  Keep a problem's own tags within 502 bytes, or ntfy refuses its recovery.
 * Messages live in ntfy's cache for `cache-duration` (12h by default); `received()` sees only
   what is still cached.
 
@@ -200,6 +202,8 @@ Findings (fidelity limits of the channel, not of this adapter):
   shortens a longer title (so it does not round-trip) and refuses such tags itself; the key tag is
   the key's UTF-8 bytes in hex, so a key over 246 bytes (fewer with the message's own tags) cannot
   be sent through this target.
+* The same 512-byte budget covers a recovery's tags, and a recovery adds `recovered` to its
+  problem's tags.  Keep a problem's own tags within 502 bytes, or ntfy refuses its recovery.
 * Messages live in ntfy's cache for `cache-duration` (12h by default); `received()` sees only
   what is still cached.
 

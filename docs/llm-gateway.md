@@ -60,7 +60,10 @@ It writes:
   per-minute share, rounded down) and `max_budget`. LiteLLM limits each deployment and its
   pre-call checks move an over-limit request onto the next one, so a role with `n` bindings gives
   each deployment `1/n` of the share and of the budget (rounded down): the sum is never above the
-  declared figure, and a share that rounds to nothing is refused. LiteLLM counts only per minute, so a limit
+  declared figure, and a share that rounds to nothing is refused. An exhausted per-deployment budget only takes that
+  deployment out of the routing (LiteLLM's "No deployments available - crossed budget"), which
+  the proxy answers with 429; since LiteLLM 1.106.2, an exhausted key, user or team budget
+  answers 422 instead, and the lab sets none of those. LiteLLM counts only per minute, so a limit
   must have a window of whole minutes and at least one call a minute: `1` per `3600` s or `5` per
   `10` s is refused rather than rendered looser (`1` rpm, `30` rpm). Counts are whole numbers of
   at least 1; `max_requests: 0` is refused, never rendered as unlimited. Role fallbacks go in `router_settings`, with
