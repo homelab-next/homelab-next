@@ -870,14 +870,21 @@ controller served, with the HTTP passthrough gone and these defaults made refusa
   configuration's `api_auth.enabled` is on unless the file says `false`, so a file with no
   `api_auth` block needs `api_auth.tokens_file`, and a configuration with authentication on and no
   tokens file does not load (the message names both remedies). The private controller served
-  without a token, so `config.Migrate` writes `api_auth: {enabled: false}` (with a note) into a
-  file in its keys that sets nothing, and an API without authentication binds loopback only. Tokens and scopes are the private
+  without a token, so `config.Migrate` refuses a file in its keys that leaves authentication unset
+  and names no tokens file, naming both remedies: a `tokens_file`, or
+  `MigrateOptions.AllowUnauthenticatedAPI` (a flag of `controller migrate`, 2.7), which writes
+  `api_auth.enabled: false`. A file that names a tokens file migrates with authentication on, with
+  a note. `api_auth: null` is refused, and a configuration with authentication off says so in a
+  notice on every load. Without authentication the API binds loopback only, and every request
+  carries an explicit auth-off principal; a request with no principal at all may see nothing.
+  Off loopback, bearer tokens travel over plain HTTP unless a TLS proxy terminates in front of the
+  controller: put one there. Tokens and scopes are the private
   controller's: `jobs` (one's own jobs), `read` (every caller's job summaries and the queue
   summary), `metrics`, `admin`; `/healthz` and `GET /admin/backend-health` are open, the latter's
   error text for an admin token only. The tokens file is opened without following a link and
   without blocking and checked on the open descriptor: a regular file of at most 1 MiB, decoded
   strictly (an unknown key is refused), that no one but the controller or root owns or can write,
-  in a directory its group and others cannot write. A route's scope is the scope of the route the
+  in a directory the controller or root owns and its group and others cannot write. A route's scope is the scope of the route the
   request reaches (the pattern the mux matches; no route is admin), not of the raw path.
 - **An unauthenticated API binds loopback only.** `NewServer` (`CheckBind`) refuses an address
   whose host is not a loopback IP literal when authentication is off: not `0.0.0.0`, `::`, an empty
@@ -893,9 +900,16 @@ controller served, with the HTTP passthrough gone and these defaults made refusa
   submit's spelled exactly (`encoding/json` alone matches keys case-insensitively and takes the
   last of two), none repeated, no unknown key (400 `invalid_body`). `profile_id` is at most 128 of
   `[A-Za-z0-9._:-]`.
-- **Unfinished jobs are bounded per caller**: a submit while the caller has
-  `api_max_unfinished_per_caller` (default 1000) jobs queued, admitted or running is a 429. The
-  count and the insert are not one transaction, so concurrent submits can pass the bound by a few.
+- **Each caller's jobs are bounded**, in the submit's own write transaction, after the idempotency
+  key (a replay is answered, never refused) and beside the shadow back-pressure check, so the
+  bounds are exact: at most `api_max_unfinished_per_caller` (default 1000) jobs queued, admitted or
+  running, and at most 2000 jobs created in the last hour, cancelled ones included, so
+  submit-then-cancel cannot grow the database without bound (`api.Config.MaxSubmitsPerWindow`,
+  `SubmitWindow`; a 429 either way). With authentication off every request is the one caller `""`,
+  so the bounds are global. `retry_of_run_id` is at most 64 bytes and `reason` 32.
+- **A list page is summaries**: `store.ListJobs` reads no task, answer or failure reason, so a page
+  of 500 costs its summaries, not up to a GiB of transcripts (50 jobs of 256 KiB tasks: 13 MB
+  allocated per page before, 124 KB now).
 - **Replays** are answered from `store.FindByIdempotencyKey`: 200 with the key's run when the
   request is the same submit (same agent key and `retry_of_run_id`, and for an ordinary submit the
   same lane; a resubmit takes its parent's lane whatever it says), 422
@@ -991,6 +1005,10 @@ above says how.
     is requeued, not failed;
   - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
     log or keep text, as `backends` does;
+- **The API in the binary (2.7):** `Authenticator.Reload` needs a trigger (a signal, or the reload
+  route); importing `net/http/pprof` registers its handlers on `http.DefaultServeMux`, so the
+  binary must never serve the default mux (a test that it serves `api.NewServer`'s handler only);
+  the API's allowlist entry for its bind-check test could narrow to inline markers.
 - **The queue's leftovers (2.7):** the admission duplicate check keys on the whole task text; a
   digest (a store column filled at submit) would cut a pass's memory to the summaries. A
   backend-down requeue writes the state and then uncounts the attempt in two statements; one store
