@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# The reviewed size of each gate's suppression list (tools/allowlist_ratchet.py, which says what
+# each one counts).  A list above its count fails: the change that adds an exemption raises the
+# count here, and this file's code owner reviews it.  A list below its count fails too, with the
+# number to lower it to: `make allowlist-counts` (tools/allowlist_ratchet.py --update) lowers
+# every count to what is there; raising one needs --grow, or a hand edit, and that review.
+# digests: the sha256 of each entry list's sorted entries, so an entry edited in place (a glob
+# widened, a path swapped) changes this file too; `make allowlist-counts` records it.
+counts:
+  product-names-allow: 18
+  no-raw-endpoints-allow: 74
+  scripts-allow: 22
+  caddy-lint-allow: 3
+  credential-headers-allow: 1
+  run-output-lint-allow: 0
+  shared-helpers-allow: 9
+  tls-verify-allow: 0
+  workstation-refs-allow: 2
+  scrub-allow-markers: 70
+  no-raw-endpoint-markers: 308
+digests:
+  product-names-allow: sha256:6604be9afcd96e656e8ac17b45aa8b5c9288fb6ea8a7f9505571e82eeb07606a
+  no-raw-endpoints-allow: sha256:1973cc5de352ec3b0ed7206ad22e1cea35569dc3c2f1d26030bcb9ebaf913b53
+  scripts-allow: sha256:8455c3acb0f7c01db2ef1efe1981ccb9f7a450fba93ff490c26daba6bd40c94d
+  caddy-lint-allow: sha256:ce7e5fc1469ba8390c4618b84c8b8d61b3f3bde5a7e49623e70bd09257947844
+  credential-headers-allow: sha256:741f0c84795e4d682d16a229a223a75fc3080304ad8d56716be9730c2524c230
+  run-output-lint-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  shared-helpers-allow: sha256:50221d10b449435d73ee81f13bbb24672ec4034797a5a61443ad260f39fcb9e3
+  tls-verify-allow: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  workstation-refs-allow: sha256:efc83f88ce7abea0c7e7b37f84bdf9b1ab41dcb56bec6ca6ff33dd296054c887

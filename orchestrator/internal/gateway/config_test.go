@@ -9,7 +9,7 @@ import (
 )
 
 func validConfig() map[string]any {
-	return baseConfig("http://a.svc.lab.example:8000", "http://b.svc.lab.example:8000",
+	return baseConfig("http://a.svc.lab.example:8000", "http://b.svc.lab.example:8000", // no-raw-endpoint: allow reserved .example deployments, parsed and never dialled
 		"http://c.svc.lab.example", "https://api.anthropic.com")
 }
 
@@ -33,7 +33,8 @@ func TestGatewayConfigAcceptsTheContractShape(t *testing.T) {
 	example := `{"version":"1.0","name":"lab-in-a-box","admin_key_env":"HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
 	"roles":{"fast-classifier":{"kind":"chat","max_context_tokens":8192,"tlp_ceiling":"red","leaves_lab":false,
 	"deployments":[{"id":"fast-classifier-1","backend":"fake-inference","locality":"local","protocol":"openai",
-	"base_url":"http://fake-inference.svc.lab.example:8000","model":"backend-small","api_key_env":null}],"fallbacks":[],
+	"base_url":"http://fake-inference.svc.lab.example:8000","model":"backend-small","api_key_env":null}],"fallbacks":[],` + // no-raw-endpoint: allow the example's reserved .example base URL, never dialled
+		`
 	"limits":{"window_s":60,"max_requests":600,"max_tokens":null,"max_cost":null},"cost_per_1k_tokens":null}},
 	"keys":[{"alias":"conformance-throttle","key_env":"HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE",
 	"owner":"conformance-throttle","data_tier":"local-only","tlp_ceiling":"red","roles":["fast-classifier"],
@@ -44,7 +45,7 @@ func TestGatewayConfigAcceptsTheContractShape(t *testing.T) {
 	}
 	// ADR-0038 d7: a cloud deployment may point anywhere (a conformance fixture points it at the fake)
 	cfg := validConfig()
-	depOf(cfg, "cloud", 0)["base_url"] = "http://127.0.0.1:9999"
+	depOf(cfg, "cloud", 0)["base_url"] = "http://127.0.0.1:9999" // no-raw-endpoint: allow a loopback base URL that is parsed, never dialled
 	if err := parse(t, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -126,9 +127,22 @@ func TestGatewayConfigRefusals(t *testing.T) {
 		}},
 		{"bad owner", "owner", func(c map[string]any) { keyOf(c, 1)["owner"] = "someone" }},
 		{"bad data tier", "data_tier", func(c map[string]any) { keyOf(c, 1)["data_tier"] = "any" }},
-		{"negative limit", "negative", func(c map[string]any) {
+		{"negative limit", "must be at least 1", func(c map[string]any) {
 			keyOf(c, 1)["limits"].(map[string]any)["max_requests"] = -1
 		}},
+		{"zero limit", "must be at least 1", func(c map[string]any) {
+			keyOf(c, 1)["limits"].(map[string]any)["max_requests"] = 0
+		}},
+		{"zero cost limit", "max_cost: must be a number > 0", func(c map[string]any) {
+			roleOf(c, "chat-b")["cost_per_1k_tokens"] = 0.01
+			roleOf(c, "chat-b")["limits"] = map[string]any{"window_s": 60, "max_requests": nil, "max_tokens": nil, "max_cost": 0}
+		}},
+		{"null where the contract has none", "config.keys: null is not allowed", func(c map[string]any) { c["keys"] = nil }},
+		{"backend not a slug", "is not a slug", func(c map[string]any) { depOf(c, "chat-b", 0)["backend"] = "svc_b" }},
+		{"model with a space", "model", func(c map[string]any) { depOf(c, "chat-b", 0)["model"] = "a model" }},
+		{"base_url upper-case host", "lower-case", func(c map[string]any) { depOf(c, "chat-b", 0)["base_url"] = "http://X.example" }},
+		{"owner profile not a slug", "owner", func(c map[string]any) { keyOf(c, 0)["owner"] = "profile:Agent.A" }},
+		{"name too long", "not a slug", func(c map[string]any) { c["name"] = strings.Repeat("a", 65) }},
 		{"conformance_only not a bool", "not a gateway config", func(c map[string]any) { c["conformance_only"] = "yes" }},
 	}
 	for _, c := range cases {

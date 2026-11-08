@@ -129,21 +129,24 @@ func TestGatewayUpstreamAuthRefusalIs502(t *testing.T) {
 
 func TestGatewayFallbackIsTLPAdmittedAndLimited(t *testing.T) {
 	// chat-a (green) falls back to a clear cloud role; a request labelled green skips it (ADR-0038 d5),
-	// chat-b is skipped by its limit, and the caller gets 502
+	// chat-b is skipped by its limit (one request a window, spent first), and the caller gets 502
 	edit := func(cfg map[string]any) {
 		roles := cfg["roles"].(map[string]any)
 		roles["chat-a"].(map[string]any)["leaves_lab"] = true
 		roles["chat-a"].(map[string]any)["tlp_ceiling"] = "green"
 		roles["chat-a"].(map[string]any)["fallbacks"] = []any{"cloud", "chat-b"}
 		roles["cloud"].(map[string]any)["tlp_ceiling"] = "clear"
-		roles["chat-b"].(map[string]any)["limits"] = map[string]any{"window_s": 60, "max_requests": 0, "max_tokens": nil, "max_cost": nil}
+		roles["chat-b"].(map[string]any)["limits"] = map[string]any{"window_s": 60, "max_requests": 1, "max_tokens": nil, "max_cost": nil}
 		cfg["keys"].([]any)[0].(map[string]any)["tlp_ceiling"] = "clear"
 	}
 	f := newFixture(t, edit)
+	if r := f.chat(agentKey, "chat-b"); r.status != 200 || len(f.up3.calls()) != 1 {
+		t.Fatalf("chat-b: %d %s", r.status, r.body)
+	}
 	f.up1.set(status(503))
 	f.up2.set(status(503))
 	r := f.chat(agentKey, "chat-a", "X-HNX-TLP", "green")
-	if r.status != 502 || len(f.anth.calls()) != 0 || len(f.up3.calls()) != 0 {
+	if r.status != 502 || len(f.anth.calls()) != 0 || len(f.up3.calls()) != 1 {
 		t.Fatalf("green: %d, cloud %d, chat-b %d", r.status, len(f.anth.calls()), len(f.up3.calls()))
 	}
 	r = f.chat(agentKey, "chat-a", "X-HNX-TLP", "clear")

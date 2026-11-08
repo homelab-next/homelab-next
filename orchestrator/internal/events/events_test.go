@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,19 +16,42 @@ import (
 	"time"
 )
 
-// DeriveID agrees with homelabnext.events.envelope.derive_event_id (each value below computed
-// with it), so a controller event and a Python publisher agree on what "the same event" is,
-// non-ASCII text, line separators and control characters included.
+// eventIDVectors is the repository's own conformance/fixtures/event_id_vectors.json, which the
+// Python tests regenerate from homelabnext.events.envelope.derive_event_id. It is read in place,
+// never copied, so a change to the Python derivation that is not carried here fails this test.
+const eventIDVectors = "../../../conformance/fixtures/event_id_vectors.json"
+
+// DeriveID agrees with homelabnext.events.envelope.derive_event_id on every shared vector, so a
+// controller event and a Python publisher agree on what "the same event" is, non-ASCII text, line
+// separators, control characters and characters above the BMP included.
 func TestDeriveID_MatchesThePythonDerivation(t *testing.T) {
-	for _, c := range []struct{ typ, src, subj, key, want string }{
-		{"homelabnext.agent.job.started", "svc:orchestrator", "0123abcd", "0123abcd:homelabnext.agent.job.started", "evt-7c6ffffc9e1247f7765210c396fd31e6"},
-		{"homelabnext.task.queued", "svc:siem", "", "job-17", "evt-fc5dd6b1e9046c2df0131ba4949ca363"},
-		{"t.x", "svc:a", "s", "k<&>", "evt-2342b253dc5b8f54fcc9e95b7ec0db7c"},
-		{"t.x", "svc:a", "caf\u00e9", "k\u2028\U0001F600\n\x01", "evt-d201f3b562ba841cb6c9df1561a1b081"},
-		{"t.x", "svc:a", "s\x7f", "k\x7fz", "evt-3f03de4198cce1e61939ac19eb7ace4f"},
-	} {
-		if got := DeriveID(c.typ, c.src, c.subj, c.key); got != c.want {
-			t.Errorf("DeriveID(%q,%q,%q,%q) = %s, want %s", c.typ, c.src, c.subj, c.key, got, c.want)
+	data, err := os.ReadFile(eventIDVectors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Vectors []struct {
+			Name      string  `json:"name"`
+			Type      string  `json:"type"`
+			Source    string  `json:"source"`
+			Subject   *string `json:"subject"`
+			DedupeKey string  `json:"dedupe_key"`
+			ID        string  `json:"id"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	if len(file.Vectors) < 10 {
+		t.Fatalf("only %d vectors", len(file.Vectors))
+	}
+	for _, v := range file.Vectors {
+		subject := "" // no subject is hashed as the empty one, as the Python side does
+		if v.Subject != nil {
+			subject = *v.Subject
+		}
+		if got := DeriveID(v.Type, v.Source, subject, v.DedupeKey); got != v.ID {
+			t.Errorf("%s: DeriveID(%q,%q,%q,%q) = %s, want %s", v.Name, v.Type, v.Source, subject, v.DedupeKey, got, v.ID)
 		}
 	}
 }

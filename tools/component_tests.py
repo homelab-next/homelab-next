@@ -53,7 +53,7 @@ NOT_SOURCE = frozenset({"build", "dist", "venv", "node_modules"})
 # component path (relative, posix) -> why it has no tests of its own
 ALLOW: dict[str, str] = {
     "conformance/fakes": "reference fakes; every one is exercised by its capability's suite",
-    "conformance/fixtures": "recorded product shapes (data, not code), read by the fakes",
+    "conformance/fixtures": "recorded product shapes and shared test vectors (data, not code), read by the fakes and the tests",
     "conformance/protocols": "typing protocols only (no behaviour); the suites check them",
     "conformance/suites": "the suites are the tests the capability directories run",
     "conformance/targets": "target descriptions (YAML), not code",
