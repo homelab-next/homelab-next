@@ -95,7 +95,8 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      - `budgets`: ADR-0047's run budgets. The run tokens of a pass carry these, not the profile's
        ordinary budgets: budgets are picked by purpose.
      - `hypothesis_ttl`: default 14 days.
-     - `max_runs` (default 20) and `max_retires` (default 20) per pass.
+     - `max_runs` (default 20) and `max_retires` (default 20) per pass, and `max_pending`
+       (default 10, decision 5).
      - `auto_promote`: default false (decision 5).
 
      The compiler adds the platform scope `memory-consolidation` to both `memory_scopes` and
@@ -119,14 +120,23 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      `consolidate`, and serves such a token no other role. That role requires a token from the
      first day: it is never `run_binding: optional`, and the render refuses a purpose-marked role
      on any key whose run binding is not required. So an ordinary run cannot spend the pass's
-     budget or role, and a pass cannot reach the profile's other roles.
+     budget or role, and a pass cannot reach the profile's other roles. Opting a profile in
+     therefore makes its whole gateway key require run tokens, so its ordinary runs need them
+     too.
+   - **The pass's tokens die with it.** They are delivered in the pass unit's
+     `$CREDENTIALS_DIRECTORY` (ADR-0045 decision 6), which goes away when the unit stops. Their
+     `exp` is the pass's own deadline plus ADR-0047's grace. No other run of the profile runs
+     beside the pass (the exclusion above), and the pass has no tools, so nothing holds a copy
+     once the unit has stopped.
    - **What it writes.** A `report_result`, applied by `apply_report` with every ADR-0037 check.
      Each update carries `consolidation_reason`, a closed enum separate from ADR-0037's operator
      `reason`: `corrected`, `confirmed`, `merged`, `duplicate`, `promoted`, `demoted`,
      `contradicted` or `live-state`. Each cites at least one transcript its pack rendered, and
-     names `expect_rev`, the `rev` its memory block showed (absent for a new key). The store
-     refuses the batch when any key has moved since. A batch with more retirements than
-     `max_retires` is refused whole. The pass edits nothing in place, so `history`, `as_of`,
+     names `expect_rev`. The memory block shows each entry's head `rev` (its latest revision) and,
+     for an entry with a shadow (decision 4), the shadow's `{rev, value_digest}` beside it.
+     `expect_rev` is checked against the head, never against the shadow, and is absent for a new
+     key. The store refuses the batch when any head has moved since. A batch with more retirements
+     than `max_retires` is refused whole. The pass edits nothing in place, so `history`, `as_of`,
      `dependents` and `retract` all see what it did.
    - **Where it resumes.** The pass renders at most `max_runs` of the owner's runs, oldest
      first, from its cursor. After its report applies, platform code advances the cursor
@@ -135,7 +145,8 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      a row, the operator is paged (pair `AGENT_MEMORY_CONSOLIDATION_STUCK`, keyed by the profile,
      naming no key). The page has no skip command. A poisoned window is cleared by retracting its
      source, since denied transcripts are dropped (decision 3); a window that is too large is
-     cleared by lowering `max_runs` in reviewed configuration.
+     cleared by lowering `max_runs` in reviewed configuration. A benign transcript that makes
+     every pass fail can be cleared only by retracting it, with the reach that has (decision 3).
    - **Not consolidated:** platform scopes, which a report can never write. ADR-0035's
      `fleet-ledger` stays folded by code.
 
@@ -152,7 +163,10 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      activity store holds it under the `via` of that profile's run spool (`spool:<the profile's
      spool directory>`), as owner (`ActivityStore.add(..., owner=True)` keeps any other `via`
      from adding to a session it does not own). A session stored via a push sender, or any other
-     `via`, is refused.
+     `via`, is refused. Within a bound session, any row stored under a foreign `via` is dropped,
+     and the pass's event counts it. The collectors change to make this hold: one spool source
+     per profile, and `drain_spool` calling `add` with `owner=True`. Push ingest already does
+     (`owner=True`).
    - **The residual risk.** The binding reaches the profile's system user, not the single run.
      Runs of one profile share that uid (ADR-0045 decision 7), so one run, or anything else
      running as that uid, can write records into a sibling run's session. That stays inside the
@@ -164,10 +178,18 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      `run_id` and `finished_at` recorded in the pack. Its run's rendered identifiers are **not**
      copied into the closure of records that cite it. They stay where they are, in that run's
      pack provenance. Two things follow:
-     - **Retract reaches through them.** `dependents` and `retract` join from a source to the
-       runs whose packs rendered it, then to the transcripts of those runs, then to the records
-       citing those transcripts. This is an exposure edge, walked at operator time, not a closure
-       entry. Citing a transcript costs a record one closure identifier.
+     - **Retract reaches through them.** When a pass's batch applies, the store records each cited
+       transcript's rendered identifiers in its exposure table, keyed by the transcript's uid
+       and charged to the owner's `exposure_bytes` budget (ADR-0037 decision 6). They are held
+       durably there, so the walk does not depend on the run's pack outliving its retention.
+       `dependents` and `retract` follow that edge: from a source, to the transcripts whose runs
+       rendered it, to the records citing those transcripts. It is an exposure edge, not a
+       closure entry: citing a transcript costs a record one closure identifier.
+     - **The edge is coarse, on purpose.** A retraction that follows it retires every record
+       citing the transcript, good ones too, and that is not undone. A transcript's run read
+       everything at once, and the platform cannot tell which record leaned on the bad item. The
+       dry run (`dependents`, with its confirm digest) shows that reach before anything is
+       retired.
      - **Denied runs are dropped.** A transcript whose run's pack rendered a denied source is
        dropped from the pass's pack before rendering. It is counted, and the rest of the window
        goes on. So a retracted item cannot be laundered back through the transcript of a run that
@@ -193,7 +215,11 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      `hypothesis`. A run may not change an `index` entry. A run's `replace` of a `note` keeps the
      confirmed revision as the entry's **shadow**, `{rev, value_digest}`. The shadow stays the
      confirmed value, for promotion and for the memory block, until a pass confirms the new value
-     or reverts to the shadow.
+     or reverts to the shadow. A pass's `replace` back to the shadow's exact value
+     (`consolidation_reason: corrected`, `expect_rev` the head) restores the entry at `note` and
+     clears the shadow: it is not a value change, so it does not demote. If the new hypothesis
+     expires instead, the entry reverts to the shadow at `note`, by the same expiry write, rather
+     than being retired.
    - **A pass's value is a hypothesis too.** A pass's `add`, and any pass `replace` that changes
      a value, lands at `hypothesis`. That includes a correction and a merge survivor whose value
      changed. A merge survivor whose value did not change takes the lowest rung among the entries
@@ -210,8 +236,10 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
    - **Expiry.** A hypothesis expires `hypothesis_ttl` after the key became one. A `replace` or
      `verify` does not restart the clock. An expired hypothesis leaves every memory block at
      once, in code. Platform code retires expired hypotheses after a pass's report has applied,
-     in their own transaction, in batches of at most 500, with `expired: true`. These retirements
-     are not counted against `max_retires`, and the pass's event counts them.
+     in their own transaction, in batches of at most 500, with `expired: true`. An entry with a
+     shadow reverts to it instead. These writes count against neither `max_retires` nor the
+     scope's record and byte caps; each adds one record per expired key. The pass's event counts
+     them.
    - **Migration.** On a profile's first pass, its existing entries fold, without being
      rewritten, to `hypothesis`. Their clocks start at that pass's cursor time, spread by a hash
      of the key across one `hypothesis_ttl`, so a large memory does not all expire on one day.
@@ -223,12 +251,16 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      `index` entry is refused when the entry's closure has more than 32 identifiers. That check
      runs again at review.
    - **Pending.** A promotion, and any pass change to an `index` value, creates a **pending**
-     revision. `hnx agent memory review <profile>`, a `MemoryAdmin` method taking an
-     `OperatorPrincipal` (ADR-0037 decision 12), lists each pending revision with its evidence
-     and diff. Approving it appends an operator record bound to that revision's `(rev,
-     value_digest)`. Only an approved pair is ever rendered. While a change is pending, the
-     entry's last approved value keeps rendering. Rejecting returns a promotion to `note`. The
-     same value cannot be proposed again; a new proposal needs a changed value.
+     revision. A profile holds at most `max_pending` of them (default 10, in
+     `memory_consolidation`). While the queue is full, the store drops each update that would add
+     one, applies the rest of the batch, and reports the drops; the event counts them
+     (`pending-full`). The next pass may propose them again once the operator has reviewed. `hnx
+     agent memory review <profile>`, a `MemoryAdmin` method taking an `OperatorPrincipal` (ADR-0037
+     decision 12), lists each pending revision with its evidence and diff. Approving it appends an
+     operator record bound to that revision's `(rev, value_digest)`. Only an approved pair is ever
+     rendered. While a change is pending, the entry's last approved value keeps rendering.
+     Rejecting returns a promotion to `note`. The same value cannot be proposed again; a new
+     proposal needs a changed value.
    - **Removal is not reviewed.** A demotion or a `retire` of an index entry takes effect at once.
      It only reduces what runs see, and decision 7's restoration covers a wrong one.
    - **Auto-promotion** (`auto_promote: true`) skips review for a profile. The compiler refuses
@@ -256,7 +288,9 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
         they are unconfirmed.
 
      It says how many entries it left out. The compiler refuses `tail: keys` on a reader, and the
-     renderer never shows a tail to one. Entries above the ceiling count as withheld, and
+     renderer never shows a tail to one. The renderer applies the deny check (ADR-0037 decision 14)
+     to the approved revision it shows, not only to the head, so an approved value whose closure
+     reaches a denied source is left out. Entries above the ceiling count as withheld, and
      live-only entries (below) are never rendered.
    - **The file.** `hnx agent memory index render` writes one file per profile:
      - **When:** after every applied report, after every pass and approval, on deploy and on
@@ -316,7 +350,8 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
      - the count per `consolidation_reason`;
      - the pending, expired and dropped-transcript counts;
      - refusals by a closed class (`expect-rev`, `per-key`, `retire-cap`, `record-cap`,
-       `byte-cap`, `deny`, `source`, `label`, `schema`, `budget`);
+       `byte-cap`, `deny`, `source`, `label`, `schema`, `budget`, `pending-full`);
+     - the rows dropped for a foreign `via`;
      - each scope's record-cap headroom;
      - the size ratio: the bytes of approved index values over the bytes of everything their
        closures cite that is still held, notes and transcripts alike. Detail records age out
@@ -346,13 +381,16 @@ So decision 7 measures both hypotheses per profile, and both parts switch off pe
 9. **Amendments and dependencies.**
    - **ADR-0037 is amended** (it lists this ADR under **Amended-by**), for opted-in profiles
      unless a line says otherwise:
+     - **Decision 6:** the exposure table also holds transcript exposures, keyed by transcript
+       uid, charged to `exposure_bytes`.
      - **Decisions 1 and 2:** records and entries gain `rung`, `kind`, `shadow`, `pending`,
        `live_only`, `expired`, `consolidation_reason` and `expect_rev`, and the fold reproduces
        them.
      - **Decision 7:** a pack records its `purpose`, and `report_result` 1.3 adds `rung`, `kind`,
        `consolidation_reason` and `expect_rev`. For every profile, a checked batch carries at most
-       one update per key. Expiry retirements are a platform write to a model-written scope; they
-       only retire.
+       one update per key. A consolidation batch drops, and reports, updates past `max_pending`,
+       as an unchecked batch drops a denied update; it is otherwise all or nothing. Expiry
+       retirements are a platform write to a model-written scope; they only retire.
      - **Decision 12:** `MemoryAdmin` gains `review`.
      - **Decision 13:** `dependents` and `retract` follow the transcript exposure edge, and
        `retract` restores.
@@ -452,7 +490,17 @@ waits for ADR-0047's task evals.
 3. **The store** (`memory.py`, `report.py`). Its tests prove, on both backends:
    - a profile without `memory_consolidation` folds no rung and expires nothing;
    - a run's `add` or `replace` lands at `hypothesis`;
-   - a run's `replace` of a note keeps the shadow in `memory_block_input`;
+   - a run's `replace` of a note keeps the shadow in `memory_block_input`, beside the head `rev`
+     that `expect_rev` is checked against;
+   - a pass's `replace` back to the shadow's `(rev, value_digest)` restores `note` without a
+     demotion (`test_a_revert_to_the_shadow_restores_note`);
+   - an expiring hypothesis with a shadow reverts to the shadow at `note` instead of being retired
+     (`test_an_expired_hypothesis_reverts_to_its_shadow`);
+   - with `max_pending` pending revisions held, a new proposal is dropped and reported, and the
+     rest of the batch applies;
+   - transcript exposures are stored keyed by uid and charged to `exposure_bytes`, and
+     `retract` still reaches the records citing a transcript after that run's pack is purged
+     (`test_retract_reaches_through_a_transcript_after_its_pack_is_purged`);
    - a run's update to an index entry is refused;
    - a pass's value change lands at `hypothesis`, and a merge survivor whose value did not change
      takes the lowest merged rung;
@@ -477,7 +525,8 @@ waits for ADR-0047's task evals.
    render|check`). Its tests prove:
    - the cap holds against adversarial memory (10,000 entries of 2,000 characters, CJK included);
    - the fill order and left-out counts are as decided;
-   - pending, hypothesis, withheld and live-only values are never rendered;
+   - pending, hypothesis, withheld and live-only values are never rendered, and an approved
+     revision whose closure reaches a denied source is left out;
    - the tail is keys only, with no block rows, and absent for a reader;
    - the file is renamed into place, and is re-rendered after an applied report, an approval, a
      deploy and a recompile (a hook test for each);
@@ -503,6 +552,11 @@ waits for ADR-0047's task evals.
      with it, and `hnx gen gateway render` refuses a purpose-marked role on a key whose run
      binding is optional;
    - `test_transcript_session_is_joined_on_the_job_rows_session_id`;
+   - the collectors register one spool source per profile, and `drain_spool` calls `add` with
+     `owner=True`, so a second `via` cannot add to a spooled session;
+   - a row under a foreign `via` inside a bound session is dropped and counted;
+   - the pass's tokens are delivered only in the unit's `$CREDENTIALS_DIRECTORY`, with `exp` at
+     the pass's deadline plus grace, and an ordinary run started after the pass holds none;
    - `test_a_session_stored_under_another_via_is_refused`, covering a push sender's record for the
      owner's run;
    - `test_a_transcript_whose_run_rendered_a_denied_source_is_dropped`, the rest of the window
