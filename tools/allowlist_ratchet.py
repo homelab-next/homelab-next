@@ -379,15 +379,18 @@ def against_base(
         print(f"allowlist_ratchet: no {COUNTS} at {rev[:12]} (its adoption)", file=out)
         return []
     then, then_sums = parse_counts(text, f"{COUNTS}@{rev[:12]}")
+    # a list the base's counts lack (new, or renamed) counts from 0 there, so its whole size is a
+    # rise the code owner sees, never a list that slips in uncompared
     rose = [
-        f"{n}: the count rises {then[n]} -> {counts[n]} against {rev[:12]}"
+        f"{n}: the count rises {then.get(n, 0)} -> {counts[n]} against {rev[:12]}"
+        + ("" if n in then else " (a list the base has no count for)")
         for n in LISTS
-        if n in then and counts[n] > then[n]
+        if counts[n] > then.get(n, 0)
     ]
     rose += [
         f"{n}: its entries changed against {rev[:12]} (the count {then.get(n, '-')} -> {counts[n]})"
         for n in ENTRY_LISTS
-        if n in then_sums and sums[n] != then_sums[n] and not counts[n] > then.get(n, counts[n])
+        if n in then_sums and sums[n] != then_sums[n] and not counts[n] > then.get(n, 0)
     ]
     if not rose:
         return []

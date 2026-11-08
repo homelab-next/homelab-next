@@ -286,6 +286,30 @@ def test_an_entry_edited_against_the_base_is_printed_and_needs_the_bases_code_ow
         assert f"no-raw-endpoints-allow: its entries changed against {base[:12]}" in out
 
 
+@pytest.mark.parametrize("owners,want", [(OWNED, 0), ("*  @owner\n", 1)])
+def test_a_list_the_bases_counts_lack_rises_from_zero_for_review(tmp_path, owners, want):
+    """A new (or renamed) list has no count at the base: its whole size is a rise from 0, printed
+    for the base's code owner, never a list that joins the counts file uncompared."""
+    root = _tree(tmp_path, owners=owners)
+    _write_counts(root)
+    full = (root / ar.COUNTS).read_text()
+    (root / ar.COUNTS).write_text(
+        "".join(l for l in full.splitlines(True) if "credential-headers-allow" not in l)
+    )
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "base without the list")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / ar.COUNTS).write_text(full)
+    rc, out, _ = _run("--base", base, root)
+    assert rc == want, out
+    assert (
+        f"credential-headers-allow: the count rises 0 -> 1 against {base[:12]} "
+        "(a list the base has no count for)" in out
+    )
+    assert "its entries changed" not in out  # the rise already says it
+
+
 def test_equal_or_lower_counts_against_the_base_say_nothing(tmp_path):
     root, base = _repo(tmp_path)
     rc, out, _ = _run("--base", base, root)
