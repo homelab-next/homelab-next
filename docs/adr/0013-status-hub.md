@@ -8,7 +8,11 @@ summary_of: outline:sha256:307e554cc253d6af
 - **Date:** 2026-10-20
 - **Amended:** 2026-10-20 by ADR-0017 stage 2b (the Approvals page, decision 1's one exception);
   by ADR-0033 (the hub's readers have TLP ceilings, stage 1b decision 1)
-- **Amended-by:** ADR-0017, ADR-0033
+- **Amended:** 2026-11-08 by ADR-0050, proposed (decision 1's detail tier gains one reader beyond
+  the trusted front door: the owning profile's own consolidation pass, through platform code, so
+  detail content, including any secret the redaction missed, now reaches a model; approval
+  payloads are dropped; see ADR-0050 decision 3)
+- **Amended-by:** ADR-0017, ADR-0033, ADR-0050
 - **Related:** ADR-0017, ADR-0033, ADR-0002, ADR-0003, ADR-0009, ADR-0010, `schemas/status/`, `schemas/platform/service.json` (2.1), [status hub guide](../status.md)
 
 ## Context
