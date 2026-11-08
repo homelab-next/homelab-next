@@ -25,7 +25,8 @@ them while the debt they excuse was being paid down elsewhere.  This check count
 * ``scrub-allow-markers``: the lines carrying a leak-scan suppression marker, as
   ``tools/leak_scan.py`` reads them (its own ``SUPPRESS_RE``, its own file walk);
 * ``no-raw-endpoint-markers``: the lines carrying an inline raw-endpoint allow marker
-  (``homelabnext.endpoints_scan.INLINE_ALLOW``), over the same files.
+  (``homelabnext.endpoints_scan.INLINE_ALLOW``), as ``tools/no_raw_endpoints.py`` reads them (its
+  own walk, ``iter_files``, and its own read, ``read_scannable``), allowlisted paths included.
 
 **A count above what is committed fails**: the change that adds an exemption must raise the count
 in the same change.  **A count below what is there also fails**, telling you the number to lower
@@ -135,9 +136,13 @@ class Markers:
 
 
 def markers(root: Path) -> Markers:
+    """Each marker kind counted with its own gate's walk and read, so the count is the markers the
+    gate obeys: the two walks differ (tracked files, or every file under the root) and so do their
+    binary tests (a NUL in the first 8192 bytes, or in the first 4096), so a file one of them skips
+    can still carry markers the other obeys."""
     import leak_scan  # tools/leak_scan.py: its own walk and its own marker
 
-    from homelabnext.endpoints_scan import INLINE_ALLOW
+    from homelabnext import endpoints_scan
 
     scrub = endpoint = 0
     for f in leak_scan.iter_files([str(root)]):
@@ -146,9 +151,15 @@ def markers(root: Path) -> Markers:
         text = leak_scan.read_text_file(f)
         if isinstance(text, leak_scan.Skipped):
             continue
-        for line in text.splitlines():
-            scrub += bool(leak_scan.SUPPRESS_RE.search(line))
-            endpoint += bool(INLINE_ALLOW.search(line))
+        scrub += sum(bool(leak_scan.SUPPRESS_RE.search(line)) for line in text.splitlines())
+    # every file the raw-endpoint scan reads, an allowlisted path's too: a marker there is inert
+    # only while the path stays allowlisted, and dropping the entry must not wake markers unseen
+    for p in endpoints_scan.iter_files(root):
+        text = endpoints_scan.read_scannable(p)
+        if text is not None:
+            endpoint += sum(
+                bool(endpoints_scan.INLINE_ALLOW.search(line)) for line in text.splitlines()
+            )
     return Markers(scrub, endpoint)
 
 

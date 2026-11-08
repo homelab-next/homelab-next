@@ -148,6 +148,18 @@ def test_human_tier_reads_codeowners_like_github():
     assert not ar.human_tier("/tools/ not-an-owner\n", ar.COUNTS)
 
 
+def test_endpoint_markers_are_counted_with_the_raw_endpoint_scans_own_read(tmp_path):
+    """A NUL between bytes 4096 and 8192: the leak scan reads the file as binary, the raw-endpoint
+    scan does not, so the markers in it suppress findings and must be counted."""
+    root = _tree(tmp_path, inline=0)
+    marked = f"probe = 1  # {ENDPOINT}\n" * 20
+    (root / "late_nul.txt").write_bytes(b"a" * 5000 + b"\0\n" + marked.encode())
+    assert ar.measure(root)["no-raw-endpoint-markers"] == 20
+    _write_counts(root, no_raw_endpoint_markers=0)
+    rc, out, _ = _run(root)
+    assert rc == 1 and "no-raw-endpoint-markers: 20 entries, the reviewed count is 0" in out
+
+
 @pytest.mark.parametrize(
     "text",
     [
