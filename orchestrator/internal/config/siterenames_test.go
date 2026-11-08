@@ -88,3 +88,11 @@ func TestSiteRenames_Validate(t *testing.T) {
 		}
 	}
 }
+
+func TestSiteRenames_AnEmptyFileSaysSo(t *testing.T) {
+	for _, data := range []string{"", "\n", "# only a comment\n"} {
+		if _, err := ParseSiteRenames([]byte(data)); err == nil || !strings.Contains(err.Error(), "the file is empty") {
+			t.Errorf("%q: %v", data, err)
+		}
+	}
+}

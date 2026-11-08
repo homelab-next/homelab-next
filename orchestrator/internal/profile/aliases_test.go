@@ -222,3 +222,11 @@ func TestMigrateDir_KeepsEveryOtherByte(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyAliases_AnEmptyFileSaysSo(t *testing.T) {
+	for _, data := range []string{"", "# only a comment\n"} {
+		if _, err := ParseKeyAliases([]byte(data)); err == nil || !strings.Contains(err.Error(), "the file is empty") {
+			t.Errorf("%q: %v", data, err)
+		}
+	}
+}

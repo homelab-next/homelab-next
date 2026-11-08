@@ -4,7 +4,9 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"regexp"
 	"sort"
@@ -132,6 +134,9 @@ func ParseSiteRenames(data []byte) (SiteRenames, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&r); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("site renames: the file is empty (map each old key to its new key, or give no file)")
+		}
 		return nil, fmt.Errorf("site renames: %w", err)
 	}
 	if err := r.Validate(); err != nil {

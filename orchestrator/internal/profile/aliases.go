@@ -4,7 +4,9 @@ package profile
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -148,6 +150,9 @@ func ParseKeyAliases(data []byte) (KeyAliases, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&a); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, errors.New("profile key aliases: the file is empty (map each old key to its new key, or give no file)")
+		}
 		return nil, fmt.Errorf("profile key aliases: %w", err)
 	}
 	return a, a.Validate()
