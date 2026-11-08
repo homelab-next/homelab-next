@@ -20,9 +20,15 @@ ENDPOINT = "no-raw" + "-endpoint: allow a reviewed example"
 OWNED = "*  @owner\n/tools/  @owner\n"
 
 
-def _tree(tmp_path: Path, *, globs=2, endpoints=1, scripts=1, scrub=1, inline=1, owners=OWNED):
+def _tree(
+    tmp_path: Path, *, globs=2, endpoints=1, scripts=1, scrub=1, inline=1, owners=OWNED, gate=None
+):
     root = tmp_path / "repo"
     (root / "tools").mkdir(parents=True)
+    # the other gates' allow: files, by list name: one credential-headers entry, the rest absent
+    for name, n in {"credential-headers-allow": 1, **(gate or {})}.items():
+        rows = "".join(f'  - {{path: "g{i}/*", reason: r}}\n' for i in range(n))
+        (root / ar.GATE_ALLOW_FILES[name]).write_text(f"allow:\n{rows}" if n else "allow: []\n")
     allow = "".join(f'  - {{path: "p{i}/*", reason: r}}\n' for i in range(globs))
     (root / "tools/product_names.yml").write_text(
         f"products: []\nallow:\n{allow}" if globs else "products: []\n"
@@ -60,6 +66,8 @@ def test_every_list_at_its_count_passes(tmp_path):
         "product-names-allow": 2,
         "no-raw-endpoints-allow": 3,
         "scripts-allow": 1,
+        **dict.fromkeys(ar.GATE_ALLOW_FILES, 0),
+        "credential-headers-allow": 1,
         "scrub-allow-markers": 2,
         "no-raw-endpoint-markers": 1,
     }
@@ -73,6 +81,11 @@ GROW = {
     "product-names-allow": {"globs": 3},
     "no-raw-endpoints-allow": {"endpoints": 2},
     "scripts-allow": {"scripts": 2},
+    # an absent file counts as empty, so creating one is growth (credential-headers has one entry)
+    **{
+        name: {"gate": {name: 2 if name == "credential-headers-allow" else 1}}
+        for name in ar.GATE_ALLOW_FILES
+    },
     "scrub-allow-markers": {"scrub": 2},
     "no-raw-endpoint-markers": {"inline": 2},
 }
@@ -116,6 +129,7 @@ WIDEN = {
     "product-names-allow": ("tools/product_names.yml", '"p0/*"', '"**"'),
     "no-raw-endpoints-allow": ("tools/no_raw_endpoints.allow.yml", '"e0/*"', '"**"'),
     "scripts-allow": ("tools/scripts.allow.yml", "s0: why", "anything: why"),
+    "credential-headers-allow": ("tools/credential_headers.allow.yml", '"g0/*"', '"**"'),
 }
 
 
@@ -338,3 +352,23 @@ def test_the_trusted_gates_copy_is_added_or_its_follow_up_is_still_tracked():
     else:
         assert follow_up in contributing
 
+
+def test_every_allowlist_and_baseline_file_is_ratcheted_or_excluded_with_a_reason():
+    """A gate that gains a tools/*.allow.yml or tools/*.baseline.json must be counted here or
+    excluded in NOT_RATCHETED with why, so a new list cannot sit outside the ratchet unnoticed."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "tools/*.allow.yml", "tools/*.baseline.json"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    counted = {
+        "tools/no_raw_endpoints.allow.yml",
+        "tools/scripts.allow.yml",
+        *ar.GATE_ALLOW_FILES.values(),
+    }
+    assert tracked
+    outside = sorted(set(tracked) - counted - set(ar.NOT_RATCHETED))
+    assert not outside, f"add each to the ratchet or to NOT_RATCHETED with a reason: {outside}"
+    assert all(len(why) > 40 for why in ar.NOT_RATCHETED.values())

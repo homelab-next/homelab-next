@@ -22,15 +22,19 @@ them while the debt they excuse was being paid down elsewhere.  This check count
 * ``product-names-allow``: the ``allow:`` globs of ``tools/product_names.yml``;
 * ``no-raw-endpoints-allow``: every entry of ``tools/no_raw_endpoints.allow.yml``;
 * ``scripts-allow``: every entry of every section of ``tools/scripts.allow.yml``;
+* one list per other gate's ``tools/*.allow.yml`` file (:data:`GATE_ALLOW_FILES`, named after
+  the file): its ``allow:`` entries;
 * ``scrub-allow-markers``: the lines carrying a leak-scan suppression marker, as
   ``tools/leak_scan.py`` reads them (its own ``SUPPRESS_RE``, its own file walk);
 * ``no-raw-endpoint-markers``: the lines carrying an inline raw-endpoint allow marker
   (``homelabnext.endpoints_scan.INLINE_ALLOW``), as the raw-endpoint gate reads them (its
   own walk, ``iter_files``, and its own read, ``read_scannable``), allowlisted paths included.
 
+What is deliberately not counted, and why, is :data:`NOT_RATCHETED`.
+
 **The counts are what is ratcheted, plus a digest of each entry list.**  An entry edited in place
 (a glob widened to ``**``, a path swapped for another) keeps the count, so each list kept in a file
-(:data:`ENTRY_LISTS`: the first three) also has the ``sha256`` of its sorted entries, reasons
+(:data:`ENTRY_LISTS`: the first three, and the other gates' ``allow:`` files) also has the ``sha256`` of its sorted entries, reasons
 included, in the counts file; an edit that changes it fails until the digest is recorded there
 (``--update``, which needs no ``--grow`` for it).  A marker kind has no digest: what is counted is
 the number of marked lines, and a marked line edited in place (another endpoint added beside the
@@ -149,6 +153,23 @@ def _every_section(rel: str) -> Callable[[Path], list[str]]:
     return read
 
 
+#: the other gates' ``allow:`` files (one ``allow:`` list each); an absent file has no entries,
+#: so creating one (tools/tls_verify_lint.py reads its file only if it exists) is growth too
+GATE_ALLOW_FILES: dict[str, str] = {
+    "caddy-lint-allow": "tools/caddy_lint.allow.yml",
+    "credential-headers-allow": "tools/credential_headers.allow.yml",
+    "run-output-lint-allow": "tools/run_output_lint.allow.yml",
+    "shared-helpers-allow": "tools/shared_helpers.allow.yml",
+    "tls-verify-allow": "tools/tls_verify.allow.yml",
+    "workstation-refs-allow": "tools/workstation_refs.allow.yml",
+}
+
+
+def _gate_allow(rel: str) -> Callable[[Path], list[str]]:
+    read = _section(rel, "allow")
+    return lambda root: read(root) if (root / rel).is_file() else []
+
+
 @dataclass
 class Markers:
     """The suppression-marker lines of the tree, counted once for both marker kinds."""
@@ -191,6 +212,25 @@ ENTRY_LISTS: dict[str, Callable[[Path], list[str]]] = {
     "product-names-allow": _section("tools/product_names.yml", "allow"),
     "no-raw-endpoints-allow": _every_section("tools/no_raw_endpoints.allow.yml"),
     "scripts-allow": _every_section("tools/scripts.allow.yml"),
+    **{name: _gate_allow(rel) for name, rel in GATE_ALLOW_FILES.items()},
+}
+
+#: what the ratchet deliberately does not count, and why; tools/tests/test_allowlist_ratchet.py
+#: fails on a ``tools/*.allow.yml`` or ``tools/*.baseline.json`` that is in neither table
+NOT_RATCHETED: dict[str, str] = {
+    "tools/dup_check.baseline.json": (
+        "a shrink-only baseline with its own ratchet: the duplication check fails a clone beyond it "
+        "and, against the base (--base, CI's trusted-gates job), a baseline that loosened"
+    ),
+    "tools/product_names.baseline.json": (
+        "a shrink-only baseline with its own ratchet: the product-name lint fails a count above "
+        "it and, against the base (--base, CI's trusted-gates job), a baseline that grew"
+    ),
+    "the edge-config, workstation-ref and tls-verify lints' inline markers": (
+        "follow-up: each gate reads its markers over its own walk, which this check would have "
+        "to reuse as it does for the two marker kinds above; until then a marker is reviewed "
+        "only in the diff of the line that carries it"
+    ),
 }
 
 #: each ratcheted list and how it is counted; a new list is added here and to the counts file

@@ -180,11 +180,12 @@ and an entry that no longer excuses anything fails the lint.
   `workstation-ref: allow <reason>` on the line.
 - `tools/allowlist_ratchet.py`: the suppression lists only grow by a reviewed change. It counts
   the `allow:` globs of `tools/product_names.yml`, the entries of
-  `tools/no_raw_endpoints.allow.yml` and of `tools/scripts.allow.yml`, and the lines carrying a
-  `scrub-allow` or an inline `no-raw-endpoint: allow` marker, and holds each count to
+  `tools/no_raw_endpoints.allow.yml` and of `tools/scripts.allow.yml`, the `allow:` entries of
+  the other gates' `tools/*.allow.yml` files (an absent one counts as empty), and the lines
+  carrying a `scrub-allow` or an inline `no-raw-endpoint: allow` marker, and holds each count to
   `tools/allowlist_counts.yml`. A list above its count fails: raise the count in the same change
   (a code-owned file, so the raise is the code owner's to review). A list below its count fails
-  too, with the number to lower it to (`make allowlist-counts`). The three list files also have a
+  too, with the number to lower it to (`make allowlist-counts`). The list files also have a
   digest of their sorted entries there, so an entry edited in place (a glob widened, a path
   swapped, a reason reworded) fails until `make allowlist-counts` records it; a marker's count is
   of marked lines only, and a marked line edited in place is reviewed in its own file's diff. The
@@ -197,7 +198,10 @@ and an entry that no longer excuses anything fails the lint.
   `tests/gates/test_ci_trusted_gates.py`) in the first change after the tool is on `main`. Until
   then a change can edit `tools/allowlist_ratchet.py` itself to always pass, and only the `/tools/`
   code-owner review stands in the way; `tools/tests/test_allowlist_ratchet.py` keeps this note
-  here until the step exists.
+  here until the step exists. What it deliberately leaves out, with why, is its `NOT_RATCHETED`
+  (the two shrink-only baselines, which have their own ratchets, and the other gates' inline
+  markers, a follow-up); a new `tools/*.allow.yml` or `tools/*.baseline.json` in neither fails its
+  tests.
 - `make keyring-check` (M-12): `examples/keyring/keyring.json` is exactly what
   `hnx agent keyring build examples/keyring/sources.yml` generates (`make keyring` rebuilds it).
 
