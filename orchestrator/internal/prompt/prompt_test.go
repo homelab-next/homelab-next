@@ -45,8 +45,13 @@ func writeState(t *testing.T, body string) string {
 	return writeFile(t, filepath.Join(t.TempDir(), "state.json"), body, 0o644)
 }
 
+// build is Build with the shadow lane and no contract unless in says otherwise, so a test sees
+// only the blocks it is about.
 func build(t *testing.T, in Input) string {
 	t.Helper()
+	if in.Contracts == nil {
+		in.Contracts = []string{}
+	}
 	if in.Lane == "" {
 		in.Lane = runner.LaneShadow
 	}
@@ -57,15 +62,51 @@ func build(t *testing.T, in Input) string {
 	return got
 }
 
-// The package has no built-in contract: with none configured the prompt is the bare task.
-func TestBuild_NoContractUnlessConfigured(t *testing.T) {
+// Without a configured list the built-in contracts follow the task, in order; a list replaces them,
+// and an empty one (the site's opt-out) leaves none.
+func TestBuild_BuiltInContractsUnlessReplaced(t *testing.T) {
 	p := profile.Profile{ID: "collector-v1", AgentKey: "collector"}
-	if got := build(t, Input{Profile: p, Task: "task"}); got != "task" {
-		t.Fatalf("prompt = %q, want the bare task", got)
+	got, _, err := Build(context.Background(), Input{Profile: p, Task: "task", Lane: runner.LaneReal})
+	if err != nil {
+		t.Fatal(err)
 	}
-	got := build(t, Input{Profile: p, Task: "task", Contracts: []string{"[house-rule] one", "[house-rule] two"}})
-	if got != "task\n\n[house-rule] one\n\n[house-rule] two" {
-		t.Fatalf("prompt = %q", got)
+	if want := "task\n\n" + strings.Join(DefaultContracts(), "\n\n"); got != want {
+		t.Fatalf("prompt = %q, want the task and the built-in contracts", got)
+	}
+	for _, marker := range []string{"[evidence-appendix]", "[loop-detection]", "[required-tool-call]", "finding_write", "proposal_file"} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("the built-in contracts lack %q", marker)
+		}
+	}
+	if got := build(t, Input{Profile: p, Task: "task", Contracts: []string{"[house-rule] one", "[house-rule] two"}}); got != "task\n\n[house-rule] one\n\n[house-rule] two" {
+		t.Fatalf("replaced: %q", got)
+	}
+	if got := build(t, Input{Profile: p, Task: "task", Contracts: []string{}}); got != "task" {
+		t.Fatalf("none: %q", got)
+	}
+}
+
+// The built-in contracts name only tools this repository defines, and no product.
+func TestDefaultContracts_NameThisRepositorysTools(t *testing.T) {
+	data, err := os.ReadFile("../../../examples/mcp/hnx-broker.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"finding_write", "proposal_file"} {
+		if !strings.Contains(string(data), "name: "+tool+",") {
+			t.Errorf("the broker's MCP record does not define %s", tool)
+		}
+	}
+	all := strings.Join(DefaultContracts(), "\n")
+	for _, word := range []string{"write_finding", "write_proposal", "vault"} {
+		if strings.Contains(all, word) {
+			t.Errorf("a built-in contract names %q", word)
+		}
+	}
+	d := DefaultContracts()
+	d[0] = "changed"
+	if DefaultContracts()[0] == "changed" {
+		t.Error("DefaultContracts hands out shared state")
 	}
 }
 
@@ -80,13 +121,14 @@ func TestBuild_ContractsComeFromTheConfiguration(t *testing.T) {
   findings_root: notes/findings/
   shared_write: [inbox/]
   reserved_names: [operator]
-prompt_contracts: [contracts/evidence.md, contracts/done.md]
+prompt_contracts: [contracts/evidence.md]
+prompt_contracts_append: [contracts/done.md]
 `, 0o600)
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	contracts, err := cfg.LoadPromptContracts(dir)
+	contracts, err := cfg.PromptContractTexts(dir, DefaultContracts())
 	if err != nil {
 		t.Fatal(err)
 	}

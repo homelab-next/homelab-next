@@ -556,9 +556,15 @@ It returns the uids of the records it quoted and the sha256 and length of the ex
 other than `real` or `shadow` is an error; nothing else is. A state file that cannot be read, or a
 facts command that fails, leaves its block out and never fails a dispatch.
 
-- **Contracts come from configuration only.** `prompt_contracts` names the files, in order; unset
-  or empty means none. The package has no built-in contract: what a run must do to count as done
-  names a site's own tools, so it is the site's policy.
+- **Contracts.** Three are built in (`prompt.DefaultContracts`): `[evidence-appendix]` (the exact
+  query behind every claim a decision could rest on), `[loop-detection]` (stop re-deriving a
+  conclusion already reached) and `[required-tool-call]` (a run is done only once it has called its
+  output tool: `finding_write` or `proposal_file` through the broker's MCP server, `hnx-broker`,
+  or the output tool its profile grants). `prompt_contracts` replaces them with a site's files,
+  in order, and `prompt_contracts_append` adds files after them (`Config.PromptContractTexts`).
+  Unset, as in the private controller's configuration (which `config.Migrate` leaves unset), means
+  the built-in ones; an explicit `prompt_contracts: []` with nothing appended means none, the
+  opt-out for a runner with no output tool to name (a conformance stand-in, say).
 - **Facts** run the catalog entry the profile names, argv and no shell, with an empty stdin, its
   stderr discarded, in its own process group, under the dispatch's context and the profile's
   `facts_timeout_s` (60 seconds by default). Either ending kills the whole group, and the wait for
@@ -592,13 +598,15 @@ facts command that fails, leaves its block out and never fails a dispatch.
   on the pool's own probe, never on a `BackendFault` or `LooksAbsent`. Apply `AnswerChecker` to
   local attempts. Port the pool's tests to `runnertest`.
 - **2.6 (the queue and the API):** call `prompt.Build` with the job's lane, the paths it names and
-  `Config.LoadPromptContracts`, under the job's context, and store `Meta` with the job; port the
+  `Config.PromptContractTexts(dir, prompt.DefaultContracts())`, under the job's context, and store `Meta` with the job; port the
   queue's tests to `runnertest`, keeping kill, signal and orphan tests on a real subprocess runner.
-- **2.7 (the controller binary and the cutover docs):** the lab's contract texts move to the
-  overlay as files its configuration lists in `prompt_contracts`, since this module has none
-  built in and `config.Migrate` adds none; a configuration with an invalid
-  `events.gateway_tag_prefix` no longer loads. When the cursor tool's module lands (stage 4), a
-  test holds its store reader and `prompt.CursorFile` to the same verdicts, as the private
+- **2.7 (the controller binary and the cutover docs):** the binary loads the contracts once at
+  start (`Config.PromptContractTexts` with `prompt.DefaultContracts()`) and refuses to start when
+  that fails. The private controller's three contracts are built in here, reworded to name this
+  repository's output tools, so the lab's configuration needs no contract file; a lab-only
+  contract goes into an overlay file listed in `prompt_contracts_append`. A configuration with an
+  invalid `events.gateway_tag_prefix` no longer loads. When the cursor tool's module lands (stage 4), a test holds its store reader and
+  `prompt.CursorFile` to the same verdicts, as the private
   controller did with one shared reader.
 
 ### The store's migration, behind a backup

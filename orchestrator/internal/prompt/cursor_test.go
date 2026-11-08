@@ -185,7 +185,7 @@ func TestBuild_CancelReachesTheFactsCommand(t *testing.T) {
 	time.AfterFunc(200*time.Millisecond, cancel)
 	p := profile.Profile{AgentKey: "collector", PromptContext: profile.PromptContext{FactsCommand: profile.FactsCommand{Argv: []string{"sleep", "30"}}}}
 	start := time.Now()
-	got, _, err := Build(ctx, Input{Profile: p, Task: "t", Lane: runner.LaneReal})
+	got, _, err := Build(ctx, Input{Profile: p, Task: "t", Lane: runner.LaneReal, Contracts: []string{}})
 	if err != nil || got != "t" {
 		t.Fatalf("got %q, %v", got, err)
 	}

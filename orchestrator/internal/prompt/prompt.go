@@ -41,9 +41,9 @@ type Input struct {
 	Paths []string
 	// Lane is runner.LaneReal or runner.LaneShadow: it picks the profile's lane appendix.
 	Lane string
-	// Contracts are the site's contracts (config.LoadPromptContracts), in order; none by default.
-	// The package has no built-in contract: what a run must do to count as done is the site's
-	// policy, stated in its configuration.
+	// Contracts are the contracts, in order: nil = DefaultContracts(); otherwise exactly these
+	// (config.Config.PromptContractTexts gives the site's list), an empty, non-nil slice meaning
+	// none (the site's opt-out, prompt_contracts: []).
 	Contracts []string
 }
 
@@ -60,7 +60,7 @@ type Meta struct {
 //
 //  1. the task;
 //  2. [dispatch-context]: the lessons and runbooks matched to the task (and Paths);
-//  3. the contracts, in order;
+//  3. the contracts, in order (DefaultContracts unless Input.Contracts is set);
 //  4. from the profile's prompt context, each only when the profile turns it on:
 //     [known-incidents] (known_incidents_key), [deterministic-facts] (facts), [own-state]
 //     (own_state or inject_own_state), [prior-cursor] (cursor: the cursor store, or the state
@@ -93,7 +93,11 @@ func Build(ctx context.Context, in Input) (string, Meta, error) {
 	add(regs)
 	meta.LessonUIDs, meta.RunbookUIDs = lids, rids
 
-	for _, c := range in.Contracts {
+	contracts := in.Contracts
+	if contracts == nil {
+		contracts = DefaultContracts()
+	}
+	for _, c := range contracts {
 		add(c)
 	}
 
