@@ -320,4 +320,21 @@ def test_the_ratchet_runs_in_make_gates_and_ci():
     gates = make[make.index("\ngates:\n") :].split("\n\n", 1)[0]
     assert "$(PY) tools/allowlist_ratchet.py ." in gates
     ci = (REPO / ".github/workflows/ci.yml").read_text()
-    assert "run: python tools/allowlist_ratchet.py ." in ci
+    assert "run: python tools/allowlist_ratchet.py --ci-base ." in ci
+
+
+def test_the_trusted_gates_copy_is_added_or_its_follow_up_is_still_tracked():
+    """The schemas job's copy is the change's own, which the change can edit; the base's copy in
+    trusted-gates waits for the tool to be on main, and the open follow-up says so until then."""
+    import yaml
+
+    ci = yaml.safe_load((REPO / ".github/workflows/ci.yml").read_text())
+    trusted = "\n".join(str(s.get("run", "")) for s in ci["jobs"]["trusted-gates"]["steps"])
+    contributing = (REPO / "CONTRIBUTING.md").read_text()
+    if '"$RUNNER_TEMP/base/tools/allowlist_ratchet.py" --base "$BASE"' in trusted:
+        assert "**Follow-up, open:** add the base's copy" not in contributing
+    else:
+        assert (
+            "**Follow-up, open:** add the base's copy to CI's\n  `trusted-gates` job"
+            in contributing
+        )

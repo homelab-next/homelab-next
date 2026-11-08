@@ -190,7 +190,14 @@ and an entry that no longer excuses anything fails the lint.
   of marked lines only, and a marked line edited in place is reviewed in its own file's diff. The
   counts file must sit under an explicit CODEOWNERS path rule, not the catch-all; with
   `--base`/`--ci-base` a count raised or a digest changed since the base is printed, and fails
-  unless the base's CODEOWNERS puts the counts file there.
+  unless the base's CODEOWNERS puts the counts file there. CI's schemas job runs it with
+  `--ci-base`, the change's own copy. **Follow-up, open:** add the base's copy to CI's
+  `trusted-gates` job (`"$PY" -I "$RUNNER_TEMP/base/tools/allowlist_ratchet.py" --base "$BASE"
+  "$GITHUB_WORKSPACE"`, and `allowlist_ratchet` to `RATCHETS` in
+  `tests/gates/test_ci_trusted_gates.py`) in the first change after the tool is on `main`. Until
+  then a change can edit `tools/allowlist_ratchet.py` itself to always pass, and only the `/tools/`
+  code-owner review stands in the way; `tools/tests/test_allowlist_ratchet.py` keeps this note
+  here until the step exists.
 - `make keyring-check` (M-12): `examples/keyring/keyring.json` is exactly what
   `hnx agent keyring build examples/keyring/sources.yml` generates (`make keyring` rebuilds it).
 
