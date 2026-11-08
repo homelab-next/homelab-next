@@ -151,18 +151,42 @@ func TestCall_AnUnattributableFailureNeverStartsTheCloudLeg(t *testing.T) {
 	}
 }
 
-// One leg is one class: the runner's outermost classification decides, not a class it wraps (a
-// fault the runner saw first, with a turn cap inside it, moves on rather than stopping).
-func TestCall_DecidesOnEachLegsFirstClass(t *testing.T) {
-	step := func(context.Context, runner.Session) (*runner.Result, error) {
-		return &runner.Result{}, runner.Wrap(runner.BackendFault, runner.Wrap(runner.TurnCap, errors.New("too many turns")))
+// Every class in a leg's error decides, not only its outermost: a runner wraps what it saw first
+// under what ended the session. The shapes are the ones a subprocess runner builds (a failed turn or
+// a kill around the class its output showed).
+func TestCall_DecidesOnEveryClassInALeg(t *testing.T) {
+	nest := func(outer, inner runner.Class) runnertest.Step {
+		return func(context.Context, runner.Session) (*runner.Result, error) {
+			return &runner.Result{}, runner.Wrap(outer, runner.Wrap(inner, errors.New("the leg failed")))
+		}
 	}
-	r := runnertest.New(failsOn(map[string]runnertest.Step{"a": step}, "answer from b"))
-	p, _ := newPool(r, Backend{Name: "a"}, Backend{Name: "b"})
-	p.PrimaryFirst = true
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
-	if err != nil || res.LocalBackendUsed != "b" || res.Attempts[0].Class != runner.BackendFault {
-		t.Fatalf("res = %+v, err = %v", res, err)
+	threeWindows := []Backend{{Name: "small", MaxContext: 8}, {Name: "mid", MaxContext: 16}, {Name: "big", MaxContext: 64}}
+	for _, c := range []struct {
+		name     string
+		backends []Backend
+		failing  string
+		step     runnertest.Step
+		want     []string
+		wantErr  error
+	}{
+		{"a failed turn around the turn cap stops the chain", []Backend{{Name: "a"}, {Name: "b"}}, "a", nest(runner.TurnFailed, runner.TurnCap), []string{"a"}, ErrTurnCapStops},
+		{"a failed turn around a parser rejection retries the backend", []Backend{{Name: "a"}, {Name: "b"}}, "a", nest(runner.TurnFailed, runner.ToolCallParse), []string{"a", "a", "a", "b"}, nil},
+		{"a fault around a parser rejection retries the backend", []Backend{{Name: "a"}, {Name: "b"}}, "a", nest(runner.BackendFault, runner.ToolCallParse), []string{"a", "a", "a", "b"}, nil},
+		{"a failed turn around a context exhaustion goes biggest first", threeWindows, "small", nest(runner.TurnFailed, runner.ContextExceeded), []string{"small", "big"}, nil},
+		{"an external kill around a fault reaches the cloud", []Backend{{Name: "a"}}, "a", nest(runner.KilledExternally, runner.BackendFault), []string{"a", "cloud"}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := runnertest.New(runnertest.On(map[string]runnertest.Step{c.failing: c.step, "mid": runnertest.Fail(runner.Internal, "mid was tried")}, runnertest.Answer("answer")))
+			p, _ := newPool(r, c.backends...)
+			p.PrimaryFirst = true
+			_, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+			if got := targets(r); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("targets = %v, want %v", got, c.want)
+			}
+			if (c.wantErr == nil && err != nil) || (c.wantErr != nil && !errors.Is(err, c.wantErr)) {
+				t.Errorf("err = %v, want %v", err, c.wantErr)
+			}
+		})
 	}
 }
 

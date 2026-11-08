@@ -598,9 +598,13 @@ backends drained, leased to another run or marked down. Each attempt's session g
 `needs_interlock` holds the shared interlock for the whole attempt; a wait past
 `interlock_wait_timeout_seconds` is a `BackendFault` (busy), a wait the job's own context ended is
 `KilledByController`, and a lock file the interlock refuses is unclassified. What follows a failure
-is decided per leg, from `runner.ClassOf` of that leg's own error (its first class):
+is decided per leg, from every class anywhere in that leg's own error (`errors.Is`), checked in this
+order: a runner wraps what its output showed under what ended the session (a failed turn around a
+context exhaustion, an external kill around a connection fault), and each class is a fact about
+the leg. `runner.ClassOf` (the outermost class) is kept only for the trail (`Attempts`,
+`LocalClass`, `CloudClass`).
 
-| The leg's class | What follows |
+| A class in the leg's error | What follows |
 |---|---|
 | `TurnCap` | the chain stops (`ErrTurnCapStops`): a runaway would repeat elsewhere |
 | `ToolCallParse` | the same backend again, up to twice more, then on |
@@ -610,8 +614,8 @@ is decided per leg, from `runner.ClassOf` of that leg's own error (its first cla
 A clean exit is checked by the runner's `AnswerChecker` when it has one, on local legs only; a
 failure it reports is that failure. When every local attempt failed, the cloud leg runs only when
 the job is not local-only (`ErrLocalOnly`), the pool has a cloud home (`ErrNoCloudBackend`) and the
-last local failure is attributable (`ErrNotAttributable` otherwise): a class of `BackendFault`,
-`Stalled`, `TimeoutCeiling`, `TurnFailed`, `ContextExceeded` or `ToolCallParse`, or the pool's own
+last local failure is attributable (`ErrNotAttributable` otherwise): any of `BackendFault`,
+`Stalled`, `TimeoutCeiling`, `TurnFailed`, `ContextExceeded` or `ToolCallParse` anywhere in its error, or the pool's own
 `ErrNoHealthyBackend`, `ErrBackendUnreachable` or `ErrNoLocalCapacity` (the affinity excludes every
 backend). An unclassified failure never reaches the cloud, whatever its text says. The cloud leg's
 session has the cloud home only: no endpoint, so progress liveness never watches its sockets, and

@@ -54,7 +54,8 @@ type Attempt struct {
 	Cloud   bool
 	// Failed is false for the attempt that produced the answer.
 	Failed bool
-	// Class is runner.ClassOf of this leg's own error; Internal on success or for no class.
+	// Class is runner.ClassOf of this leg's own error (its outermost class), for the trail only;
+	// Internal on success or for no class. Decisions read every class in the leg's error.
 	Class runner.Class
 }
 
@@ -66,8 +67,8 @@ type Result struct {
 	LocalAttempts     int
 	LocalFailedReason string // the last local failure's text
 	LocalBackendUsed  string // the local backend that answered; "" otherwise
-	// LocalClass is the class of the local failure the cloud gate decided on; CloudClass the
-	// cloud leg's. Internal when there was none, or it had no class.
+	// LocalClass is runner.ClassOf of the local failure the cloud gate decided on, CloudClass of
+	// the cloud leg's, for reporting; Internal when there was none, or it had no class.
 	LocalClass runner.Class
 	CloudClass runner.Class
 	// Attempts are every leg, in order.
@@ -79,12 +80,15 @@ type Result struct {
 // context or produced tool calls its parser rejected; the cloud leg runs neither). A session still
 // working when its ceiling fired, one stalled on a wedged dependency, a turn the runner started and
 // could not complete, a connection or busy fault, and a backend the pool itself found down all
-// count. Decided per leg, by class.
+// count. Any such class anywhere in the leg's error counts (errors.Is), not only its outermost: a
+// runner wraps what it saw first under what ended the session (a kill around a connection fault,
+// a failed turn around a context exhaustion), and every class it recorded is a fact about the leg.
 func attributable(err error) bool {
-	switch runner.ClassOf(err) {
-	case runner.BackendFault, runner.Stalled, runner.TimeoutCeiling, runner.TurnFailed,
-		runner.ContextExceeded, runner.ToolCallParse:
-		return true
+	for _, c := range []runner.Class{runner.BackendFault, runner.Stalled, runner.TimeoutCeiling, runner.TurnFailed,
+		runner.ContextExceeded, runner.ToolCallParse} {
+		if errors.Is(err, c) {
+			return true
+		}
 	}
 	return IsBackendDown(err) || errors.Is(err, ErrNoLocalCapacity)
 }
@@ -92,7 +96,8 @@ func attributable(err error) bool {
 // Call runs one job's attempt chain. Each eligible local backend gets one attempt, in order: the
 // reserved backend first when the caller reserved one (its slot is counted already), otherwise a
 // fresh pick (weighted round-robin, then least loaded). A backend leased to another run, drained,
-// or marked down is skipped. After a failure:
+// or marked down is skipped. After a failure, by the classes anywhere in that leg's error
+// (errors.Is), checked in this order:
 //
 //   - runner.TurnCap stops the chain (ErrTurnCapStops);
 //   - runner.ToolCallParse asks the same backend again, up to sameBackendRetries times;
@@ -187,17 +192,17 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, localOnly bool, aff
 				return out, nil
 			}
 			p.logf("backends: run=%s backend=%s attempt=%d retry=%d failed (%s): %v", rid, backend.Name, out.LocalAttempts, retry, class, err)
-			if class == runner.TurnCap {
+			if errors.Is(err, runner.TurnCap) {
 				out.LocalFailedReason = err.Error()
 				out.LocalClass = class
 				return out, fmt.Errorf("%w: %w", ErrTurnCapStops, err)
 			}
-			if class != runner.ToolCallParse {
+			if !errors.Is(err, runner.ToolCallParse) {
 				break
 			}
 		}
 		lastErr = err
-		if runner.ClassOf(err) == runner.ContextExceeded && i+1 < len(order) {
+		if errors.Is(err, runner.ContextExceeded) && i+1 < len(order) {
 			rest := order[i+1:]
 			sort.SliceStable(rest, func(a, b int) bool { return rest[a].MaxContext > rest[b].MaxContext })
 			p.logf("backends: run=%s backend=%s ran out of context; the rest go biggest window first", rid, backend.Name)
