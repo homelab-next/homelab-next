@@ -160,7 +160,11 @@ func revisionOf(data []byte) string {
 // Registry is the loaded profiles, by agent key.
 type Registry struct {
 	profiles map[string]*Profile
+	notices  []string
 }
+
+// Notices are what loading noted: each old key read under its new name (LoadOptions.KeyAliases).
+func (r *Registry) Notices() []string { return slices.Clone(r.notices) }
 
 // LoadOptions tune LoadRegistry. Zones is required; the zero value of every other field accepts
 // only profiles that use no extension keys and no prompt_context files, state files or facts
@@ -184,6 +188,11 @@ type LoadOptions struct {
 	// CursorTemplate is the one shape a prompt_context.cursor_file may take. Zero:
 	// DefaultCursorTemplate.
 	CursorTemplate CursorTemplate
+	// KeyAliases are a site's own old top-level profile keys and the keys they are read as
+	// (KeyAliases.Validate), each read noted (Registry.Notices); a profile that sets both is
+	// refused. A site supplies them at runtime (ParseKeyAliases): this repository never spells
+	// them.
+	KeyAliases KeyAliases
 }
 
 // Extension is one deployment-specific top-level profile key. Exactly one of Schema and Opaque
@@ -217,6 +226,44 @@ func (e Extension) check(p Profile) error {
 // except top-level keys named in opts.Extensions. Two files with one agent_key is a configuration
 // error, never a silent override.
 func LoadRegistry(dir string, opts LoadOptions) (*Registry, error) {
+	files, err := readProfileDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	return buildRegistry(files, opts)
+}
+
+// profileFile is one profile file as read: its path, content and mode.
+type profileFile struct {
+	path string
+	data []byte
+	mode os.FileMode
+}
+
+// readProfileDir reads every *.yaml file of dir (grants.ReadConfigFileMode: no symbolic link
+// followed, a regular file, bounded), in name order.
+func readProfileDir(dir string) ([]profileFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read profile dir %s: %w", dir, err)
+	}
+	var out []profileFile
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
+			continue
+		}
+		full := filepath.Join(dir, entry.Name())
+		data, mode, err := grants.ReadConfigFileMode(full, MaxProfileBytes)
+		if err != nil {
+			return nil, fmt.Errorf("read profile file %s: %w", full, err)
+		}
+		out = append(out, profileFile{full, data, mode})
+	}
+	return out, nil
+}
+
+// buildRegistry is LoadRegistry over files already read.
+func buildRegistry(files []profileFile, opts LoadOptions) (*Registry, error) {
 	if !opts.Zones.Validated() {
 		return nil, fmt.Errorf("profiles: the scope zones were not validated (pathscope.NewZones)")
 	}
@@ -236,25 +283,29 @@ func LoadRegistry(dir string, opts LoadOptions) (*Registry, error) {
 		}
 		allowed[e.Name] = e
 	}
+	if err := opts.KeyAliases.Validate(); err != nil {
+		return nil, err
+	}
+	for old := range opts.KeyAliases {
+		if _, ext := allowed[old]; ext {
+			return nil, fmt.Errorf("profile key aliases: %s is also an extension key", old)
+		}
+	}
 	penv, err := newPromptEnv(opts)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, fmt.Errorf("read profile dir %s: %w", dir, err)
-	}
 	reg := &Registry{profiles: make(map[string]*Profile)}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".yaml" {
-			continue
-		}
-		full := filepath.Join(dir, entry.Name())
-		data, err := grants.ReadConfigFile(full, MaxProfileBytes)
+	for _, f := range files {
+		full, data := f.path, f.data
+		decoded, renamed, err := opts.KeyAliases.apply(data)
 		if err != nil {
-			return nil, fmt.Errorf("read profile file %s: %w", full, err)
+			return nil, fmt.Errorf("parse profile file %s: %w", full, err)
 		}
-		p, err := decodeProfile(data, allowed)
+		for _, n := range renamed {
+			reg.notices = append(reg.notices, fmt.Sprintf("%s: %s", full, n))
+		}
+		p, err := decodeProfile(decoded, allowed)
 		if err != nil {
 			return nil, fmt.Errorf("parse profile file %s: %w", full, err)
 		}
