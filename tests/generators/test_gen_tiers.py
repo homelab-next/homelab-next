@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from homelabnext.generators import GENERATORS, flatten, generate
+from homelabnext.generators import GENERATORS, GeneratorRefusal, flatten, generate
 from homelabnext.generators.builtin import REALM_PRODUCT, realm_idp
 from homelabnext.registry import load
 from homelabnext.registry.model import STANDINGS, build_registry
@@ -208,13 +208,16 @@ def _with_idp_tiers(**tier_by_row) -> dict:
 
 
 @pytest.mark.parametrize("tier", ["retiring", "legacy", None])
-def test_the_realm_is_refused_when_no_primary_or_eval_row_is_its_product(tier):
+def test_no_realm_is_rendered_when_no_primary_or_eval_row_is_its_product(tier):
+    """A full render has no realm (and so prunes a stale one); asked for by name, it refuses."""
     reg = build_registry(_with_idp_tiers(**{"kc-trial": tier}))
-    with pytest.raises(ValueError, match="no primary or eval idp row has impl 'keycloak'"):
+    files = flatten(generate(reg))
+    assert "idp/realm.json" not in files and "dns/svc.example.internal.zone" in files
+    with pytest.raises(GeneratorRefusal, match="no primary or eval idp row has impl 'keycloak'"):
         generate(reg, ["idp_realm"])
 
 
-def test_the_realm_is_refused_for_a_hand_built_row_whose_standing_is_retiring():
+def test_no_realm_is_rendered_for_a_hand_built_row_whose_standing_is_retiring():
     """The rule is on the standing, not on which of the two maps holds the row."""
     kc = dataclasses.replace(REG.non_primary["kc-trial"], standing="retiring")
     reg = dataclasses.replace(
@@ -222,7 +225,8 @@ def test_the_realm_is_refused_for_a_hand_built_row_whose_standing_is_retiring():
         services={**REG.services, "kc-trial": kc},
         non_primary={k: v for k, v in REG.non_primary.items() if k != "kc-trial"},
     )
-    with pytest.raises(ValueError, match="no primary or eval idp row"):
+    assert generate(reg)["idp_realm"] == {}
+    with pytest.raises(GeneratorRefusal, match="no primary or eval idp row"):
         generate(reg, ["idp_realm"])
 
 

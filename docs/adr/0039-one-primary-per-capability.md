@@ -1,6 +1,6 @@
 ---
 summary: Each capability has one primary product; other rows are eval, retiring or legacy with nothing bound to them; the registry refuses a second primary.
-summary_of: outline:sha256:90d672517784a18b
+summary_of: outline:sha256:124ff1aa3e498b62
 ---
 # ADR-0039: Give each capability one primary product
 
@@ -127,7 +127,9 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
      and the variable `HNX_ENDPOINT_<ROW>`. Conformance targets and the shadow lane address it by
      that name. `semantic_problems`' environment-variable uniqueness check covers the row-named
      variables and the row-named DNS records too, so a row named like another capability is
-     refused.
+     refused. An `eval` or `retiring` row's name is no capability of the registry (any tier) and
+     none the platform knows, it declares no `env_var`, and every capability's default variable
+     stays its primary's even when the primary declares its own `env_var`.
    - A `legacy` row gets no record: the old lab serves its own name until the ledger retires it.
    - "A capability is provided" means "it has a primary". `semantic_problems`' `auth=idp but no
      service provides capability 'idp'` becomes *no primary provides `idp`*, and the edge's
@@ -136,8 +138,8 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
 
    The generators follow the same rule:
    - **realm:** the realm is rendered for the `idp` row whose `impl` is the realm format's
-     product, primary or eval. With none, it refuses. It never renders for a retiring or legacy
-     row. Its clients are for `auth: idp` rows that are primary or eval;
+     product, primary or eval. With none, it renders no realm (asked for by name, it refuses).
+     It never renders for a retiring or legacy row. Its clients are for `auth: idp` rows that are primary or eval;
    - **edge site:** `public_hostname` is allowed on primary rows only and refused on eval,
      retiring and legacy rows (ADR-0040 step 2: a shadowed candidate has no public route);
    - **uptime and metrics targets:** primary and eval rows only;
@@ -334,10 +336,10 @@ Each step is one pull request, merged green after a design review and a security
    endpoint variables, the DNS zone, the realm, edge, uptime, metrics, keyring and backup
    generators, and the edge's auth-proxy presence check. Each reads `Registry.non_primary`
    for the tiers decision 2 gives it. The realm is rendered for the `idp` row
-   whose `impl` is the realm format's product, primary or eval, and refuses with none. Tests: a
+   whose `impl` is the realm format's product, primary or eval, and renders no realm with none. Tests: a
    golden render of an all-tiers registry; a resolver test showing an eval row is reachable by
    row name and never by the capability alias; a realm rendered for a Keycloak eval row beside a
-   different primary; a realm refused when the only matching row is retiring.
+   different primary; no realm when the only matching row is retiring.
 4. **The names** (decision 7, vocabulary only): the lab-topology SOAR moved to `automation`, the
    StackStorm vocabulary wording, and `_runs_on` by host role. Tests: `hnx agent access`
    resolves the runner with no `agent-runtime` row and refuses two candidate hosts.
@@ -416,3 +418,17 @@ proposed; the answers are applied in decision 6 and the Consequences above.
    at its switch (decision 6).
 3. **The isolated range's gateway.** Decided: the range keeps its own model gateway, so the
    `range-llm-gateway` capability stays.
+
+### Amendments (2026-11-08)
+
+Made while ADR-0039 is proposed, in the pull request for step 3 after its design review and
+security audit:
+
+1. **The realm renders nothing without its product's row**, instead of refusing. Refusing made
+   `hnx registry generate` fail for every lab whose IdP is another product. A full generate
+   prunes a stale realm; `--only idp_realm` still refuses.
+2. **A non-primary row's name and variable claim no capability.** A consumer with no registry
+   cannot tell a row name from a capability, so decision 2's uniqueness rule is widened: an
+   `eval` or `retiring` row may not be named like any capability (of the registry, any tier, or
+   the platform's), may not declare `env_var`, and no row but a capability's primary may take
+   its default variable.

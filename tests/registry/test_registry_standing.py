@@ -13,12 +13,7 @@ import pytest
 import yaml
 
 from homelabnext import tlp
-from homelabnext.generators import (
-    GENERATORS,
-    builtin,  # noqa: F401  (registers GENERATORS)
-    flatten,
-    generate,
-)
+from homelabnext.generators import GeneratorRefusal, flatten, generate
 from homelabnext.notify.ceiling import channel_ceiling
 from homelabnext.registry import RegistryError
 from homelabnext.registry.model import build_registry, schema_problems, semantic_problems
@@ -56,10 +51,6 @@ def _rendered(doc, names=None):
     return {k: v.replace(reg.digest[:16], "<digest>") for k, v in out.items()}
 
 
-#: every generator but the realm, which the four-box lab (an Authentik primary) has none of
-_NOT_REALM = sorted(set(GENERATORS) - {"idp_realm"})
-
-
 def _added(old: str, new: str) -> list[str]:
     """The lines ``new`` has beyond ``old``, which must be all that changed."""
     a, b = old.splitlines(), new.splitlines()
@@ -69,11 +60,11 @@ def _added(old: str, new: str) -> list[str]:
 
 def test_an_eval_row_reaches_only_the_outputs_its_tier_is_given():
     """Step 3: an eval IdP gets its row-name address record (DNS zone and hosts block), its
-    row-named endpoint variable and an uptime target, and the realm, now that an eval row of the
-    realm format's product exists; every other generated file is byte-identical."""
+    row-named endpoint variable and an uptime target, and the realm, which the Authentik primary
+    alone does not get; every other generated file is byte-identical."""
     assert _problems(_eval_idp()) == []
-    base, cand = _rendered(_doc(), _NOT_REALM), _rendered(_eval_idp(), _NOT_REALM)
-    assert set(base) == set(cand)
+    base, cand = _rendered(_doc()), _rendered(_eval_idp())
+    assert set(cand) - set(base) == {"idp/realm.json"} and set(base) <= set(cand)
     changed = {k for k in base if base[k] != cand[k]}
     zone = next(k for k in base if k.startswith("dns/") and "hosts" not in k)
     assert changed == {
@@ -94,14 +85,13 @@ def test_an_eval_row_reaches_only_the_outputs_its_tier_is_given():
     assert "https://aaa-idp.svc.example.internal:" + "9443/-/health/live/" in "".join(
         _added(base["blackbox/targets_http.yml"], cand["blackbox/targets_http.yml"])
     )
-    # the realm: refused for the Authentik primary alone, rendered once the Keycloak eval exists
-    with pytest.raises(ValueError, match="no primary or eval idp row has impl 'keycloak'"):
+    # the realm: none for the Authentik primary alone (asked for by name, refused)
+    with pytest.raises(GeneratorRefusal, match="no primary or eval idp row has impl 'keycloak'"):
         generate(build_registry(_doc()), ["idp_realm"])
-    assert "idp/realm.json" in _rendered(_eval_idp(), ["idp_realm"])
 
 
 def test_an_eval_row_adds_no_capability_record_no_own_files_and_moves_no_firewall_rule():
-    out = flatten(generate(build_registry(_eval_idp()), _NOT_REALM))
+    out = flatten(generate(build_registry(_eval_idp())))
     zone = next(v for k, v in out.items() if k.startswith("dns/") and "hosts" not in k)
     lines = zone.splitlines()
     assert sum(ln.startswith("idp IN A ") for ln in lines) == 1
@@ -116,7 +106,7 @@ def test_an_eval_row_adds_no_capability_record_no_own_files_and_moves_no_firewal
     assert not any(k.startswith(("env/aaa-idp", "systemd/aaa-idp")) for k in out)
     # the firewall matrix is by zone: the idp rule is the primary's, unchanged by the candidate
     fw = {k: v for k, v in out.items() if k.startswith("firewall/")}
-    base = flatten(generate(build_registry(_doc()), _NOT_REALM))
+    base = flatten(generate(build_registry(_doc())))
     old, new = build_registry(_doc()).digest[:16], build_registry(_eval_idp()).digest[:16]
     assert fw and fw == {k: v.replace(old, new) for k, v in base.items() if k in fw}
     assert any("| idp |" in v for v in fw.values()) and not any("aaa-idp" in v for v in fw.values())

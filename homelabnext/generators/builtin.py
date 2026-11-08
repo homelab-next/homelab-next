@@ -46,7 +46,7 @@ from homelabnext.registry.model import (
 )
 
 from .core import MARKER, register
-from .safe import check_fields, checked
+from .safe import GeneratorRefusal, check_fields, checked
 from .templates import render
 
 
@@ -237,14 +237,14 @@ def allowed_groups_arg(s: Service) -> str:
     ``allowed_groups`` admits every signed-in user, so such a site would let the whole realm in."""
     groups = sorted({g for gs in s.roles.values() for g in gs})
     if not groups:
-        raise ValueError(
+        raise GeneratorRefusal(
             f"{s.name} has auth: idp and a public hostname but no roles: the edge lets in "
             "only the groups of a service's group-to-role table, and with none it would let in "
             "every signed-in user (give it roles, ADR-0034)"
         )
     for g in groups:
         if not _GROUP.fullmatch(g):
-            raise ValueError(f"{s.name}: group {g!r} is not lower case and '-'")
+            raise GeneratorRefusal(f"{s.name}: group {g!r} is not lower case and '-'")
     return ",".join(quote(g, safe="") for g in groups)
 
 
@@ -255,7 +255,7 @@ def _auth_proxy(reg: Registry) -> Service | None:
     if proxy is None:
         gated = [s.name for s in reg.sorted_services() if s.auth == "idp" and s.public_hostname]
         if gated:
-            raise ValueError(
+            raise GeneratorRefusal(
                 f"caddy: {', '.join(gated)} need(s) auth: idp at the edge but no primary provides "
                 f"capability {AUTH_PROXY_CAPABILITY!r} (the forward-auth proxy, ADR-0034; a "
                 "non-primary one is not it, ADR-0039)"
@@ -707,23 +707,30 @@ REALM_PRODUCT = "keycloak"
 REALM_TIERS = ("primary", "eval")
 
 
-def realm_idp(reg: Registry) -> Service:
+def realm_idp(reg: Registry) -> Service | None:
     """The ``idp`` row the realm is rendered for: the one whose ``impl`` is the realm format's
-    product, primary or ``eval`` (the primary when both are).  None is refused, so a realm in
-    this format is never rendered for another product, nor for a ``retiring`` or ``legacy``
-    row."""
+    product, primary or ``eval`` (the primary when both are), or None.  With none no realm is
+    rendered, so a realm in this format is never rendered for another product, nor for a
+    ``retiring`` or ``legacy`` row."""
     rows = [s for s in reg.rows(*REALM_TIERS) if s.capability == "idp" and s.impl == REALM_PRODUCT]
-    if rows:
-        return min(rows, key=lambda s: (not s.is_primary, s.name))
+    return min(rows, key=lambda s: (not s.is_primary, s.name)) if rows else None
+
+
+def require_realm_idp(reg: Registry) -> Service:
+    """:func:`realm_idp`, refused when there is none: run when the realm is asked for by name
+    (``--only idp_realm``), where rendering nothing would read as success."""
+    row = realm_idp(reg)
+    if row is not None:
+        return row
     seen = ", ".join(
         f"{s.name} ({s.standing}, impl {s.impl or 'none'})"
         for s in reg.rows(*STANDINGS)
         if s.capability == "idp"
     )
-    raise ValueError(
+    raise GeneratorRefusal(
         f"idp_realm: no primary or eval idp row has impl {REALM_PRODUCT!r}, the realm format's "
-        f"product (idp rows: {seen or 'none'}); the realm is not rendered for another product "
-        "or a retiring or legacy row (ADR-0039)"
+        f"product (idp rows: {seen or 'none'}); no realm is rendered for another product or "
+        "a retiring or legacy row (ADR-0039)"
     )
 
 
@@ -742,6 +749,8 @@ def registry_grants(reg: Registry) -> dict[str, dict[str, set[str]]]:
     "idp_realm",
     "OIDC IdP realm (clients, groups and their roles, MFA browser flow) for services with auth=idp",
     "identity provider (realm import)",
+    when_named=require_realm_idp,
+    dirs=("idp",),
 )
 def idp_realm(reg: Registry) -> dict[str, str]:
     """The IdP's realm as an importable realm document (ADR-0034): one confidential OIDC client
@@ -753,10 +762,12 @@ def idp_realm(reg: Registry) -> dict[str, str]:
     subject, the SSH CA's principal: :data:`homelabnext.edge_identity.USERNAME_CLAIM`).  No
     secret is in it: each client secret is a secret-store reference.
 
-    It is rendered only for the :func:`realm_idp` row, and its clients are for the ``auth: idp``
+    It is rendered only for the :func:`realm_idp` row (with none it renders nothing, and a full
+    generate prunes a stale realm; asked for by name it is refused), and its clients are for the ``auth: idp``
     rows that are primary or ``eval`` (an eval row has no public hostname, so no redirect); the
     auth proxy's client is the primary auth proxy's (ADR-0039 decision 2)."""
-    realm_idp(reg)
+    if realm_idp(reg) is None:
+        return {}
     gated = [s for s in reg.rows(*REALM_TIERS) if s.auth == "idp"]
     clients, roles = [], {}
     for s in gated:

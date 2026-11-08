@@ -78,3 +78,22 @@ def test_a_generator_refusing_the_registry_exits_1_with_its_reason(tmp_path):
     rc, _, err = run("generate", minimal, str(tmp_path), "--only", "idp_realm")
     assert rc == 1 and "no primary or eval idp row has impl 'keycloak'" in err
     assert not any(tmp_path.iterdir())
+
+
+EXAMPLES = sorted((Path(EXAMPLE).parent).glob("*/services.yml")) + [Path(EXAMPLE)]
+
+
+def test_generate_succeeds_over_every_example_registry(tmp_path):
+    """A lab whose IdP is not the realm format's product renders everything but the realm."""
+    for i, path in enumerate(EXAMPLES):
+        rc, _, err = run("generate", str(path), str(tmp_path / str(i)))
+        assert rc == 0, (path, err)
+        assert run("check", str(path), str(tmp_path / str(i)))[0] == 0, path
+
+
+def test_a_full_generate_prunes_a_stale_realm(tmp_path):
+    minimal = str(Path(EXAMPLE).parent / "minimal" / "services.yml")
+    assert run("generate", EXAMPLE, str(tmp_path))[0] == 0
+    assert (tmp_path / "idp" / "realm.json").is_file()
+    rc, out, _ = run("generate", minimal, str(tmp_path))
+    assert rc == 0 and not (tmp_path / "idp" / "realm.json").exists()
