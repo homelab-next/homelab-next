@@ -84,6 +84,8 @@ func TestClassifyFailure(t *testing.T) {
 		"backend down":                {fmt.Errorf("%w: %w", backends.ErrLocalOnly, down), local(runner.BackendFault), store.FailureBackendDown},
 		"no healthy backend":          {fmt.Errorf("%w: %w (x)", backends.ErrLocalOnly, backends.ErrNoHealthyBackend), local(runner.Internal), store.FailureBackendDown},
 		"down local, cloud failed":    {fmt.Errorf("%w (local: %w): %w", backends.ErrCloudFailed, down, classed(runner.TurnFailed)), cloud(runner.BackendFault, runner.TurnFailed), store.FailureHandlerError},
+		"concurrency limited":         {fmt.Errorf("%w: %w", backends.ErrConcurrencyLimited, classed(runner.ConcurrencyLimited)), local(runner.ConcurrencyLimited), store.FailureCapacity},
+		"cloud concurrency limited":   {cloudFailed(runner.BackendFault, runner.ConcurrencyLimited), cloud(runner.BackendFault, runner.ConcurrencyLimited), store.FailureCapacity},
 		"nothing attemptable":         {fmt.Errorf("%w: %w", backends.ErrLocalOnly, backends.ErrNoAttemptableBackend), local(runner.Internal), store.FailureCapacity},
 		"killed by controller":        {fmt.Errorf("%w: %w", backends.ErrLocalOnly, classed(runner.KilledByController)), local(runner.KilledByController), store.FailureCapacity},
 		"killed externally":           {fmt.Errorf("%w: %w", backends.ErrLocalOnly, classed(runner.KilledExternally)), local(runner.KilledExternally), store.FailureHandlerError},
@@ -365,5 +367,23 @@ func TestUsage_ARunsSumReadsOnlyItsOwnDirectory(t *testing.T) {
 	r.tick()
 	if j := r.job("run-1"); j.InputTokens != 10 {
 		t.Fatalf("input tokens %d: a file outside the run's own directory was summed", j.InputTokens)
+	}
+}
+
+// Two queued jobs are the same work by their task's digest, never by text admission does not
+// hold; a row without a digest is nobody's duplicate.
+func TestKeyOf_ComparesTasksByDigest(t *testing.T) {
+	a := &store.Job{RunID: "a", AgentKey: "watcher", SubmittedBy: "alice", TaskDescription: "one"}
+	b := &store.Job{RunID: "b", AgentKey: "watcher", SubmittedBy: "alice", TaskDescription: "one"}
+	c := &store.Job{RunID: "c", AgentKey: "watcher", SubmittedBy: "alice", TaskDescription: "two"}
+	a.TaskSHA256, b.TaskSHA256, c.TaskSHA256 = "d1", "d1", "d2"
+	b.TaskDescription = "" // admission's rows carry no text: the digest alone decides
+	if keyOf(a) != keyOf(b) || keyOf(a) == keyOf(c) {
+		t.Fatal("tasks are not compared by digest")
+	}
+	old1 := &store.Job{RunID: "o1", AgentKey: "watcher", SubmittedBy: "alice"}
+	old2 := &store.Job{RunID: "o2", AgentKey: "watcher", SubmittedBy: "alice"}
+	if keyOf(old1) == keyOf(old2) {
+		t.Fatal("two rows without a digest were taken for one task")
 	}
 }

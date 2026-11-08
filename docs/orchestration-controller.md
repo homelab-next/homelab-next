@@ -284,7 +284,7 @@ never copied with its history. The packages in so far are the leaves, which impo
 the controller, the store, which imports only `events`, the grants and the profiles (PR 2.3a),
 the configuration and the registers reader (PR 2.3b), the runner seam, its fake, the prompt
 assembly, the interlock and the gateway tag (PR 2.4), the backend pool with its attempt chain
-(PR 2.5), the run queue (PR 2.6a) and the job API (PR 2.6b):
+(PR 2.5), the run queue (PR 2.6a), the job API (PR 2.6b) and the subprocess runner (PR 2.7a):
 
 | Package | What it does |
 |---|---|
@@ -298,6 +298,7 @@ assembly, the interlock and the gateway tag (PR 2.4), the backend pool with its 
 | `orchestrator/internal/lessons` | Reads this repository's lessons and runbooks registers (record directories, transitions applied) and matches a job's task against the records that declare a `match` (below). |
 | `orchestrator/internal/runner` | The internal runner seam (ADR-0026's amendment): `Runner.Run(ctx, Session) (*Result, error)`, the `Session` one attempt needs (run id, agent key, lane, prompt, toolsets, the rendered MCP servers, target, usage path, limits and the gateway tag, all fields, nothing in `ctx`), and the failure classes the core decides on. See "The runner seam" below. |
 | `orchestrator/internal/runner/runnertest` | An in-process `Runner` for tests: scripted answers and classified failures, a session that blocks until released or cancelled, a hook that runs when a blocked session is killed, and a step per target (backend or cloud). It starts no process. |
+| `orchestrator/internal/runner/exec` | A generic subprocess runner, no agent harness: one process per session from an argv template (no shell; `{prompt}`, `{usage_path}`, `{toolsets}`, `{run_id}`, `{agent_key}`, `{lane}`, `{home}` and `{backend}` expanded inside each element in one pass; the prompt on stdin when no element holds it), its stdout the answer and its exit status the outcome, classed by a configured table (an unlisted non-zero status is `TurnFailed`). A cancel or the attempt's `Timeout` ends the whole process group (SIGTERM, SIGKILL after a grace), and the group is swept after every exit (killed, and reaped when the process is the subreaper, `exec.BecomeSubreaper`, which the controller calls at start). It enforces no stall timeout or turn cap (the program's own). See "The runner seam" below. |
 | `orchestrator/internal/prompt` | Builds a job's prompt from its task, the register context, the site's contracts and the profile's prompt context. See "A job's prompt" below. |
 | `orchestrator/internal/inference` | The cross-process interlock (`flock(2)` on a shared lock file, the lock `flock(1)` takes) and the job's gateway tag. There is no HTTP client: the controller sends no model request. |
 | `orchestrator/internal/gatewaytag` | The gateway tag's one definition, the header (`X-HNX-Tag`) and the pattern (held equal to the event schema's `gateway_tag` and `run_id`), shared by the controller and the gateway, standard library only. |
@@ -542,7 +543,17 @@ The core never runs an agent itself. It builds a `runner.Session` per attempt an
 failures. Cancelling the context must stop the whole session before `Run` returns, because a
 backend's capacity is released only then. This is the internal seam ADR-0026's amendment names,
 not the public agent-runner contract stage 3 defines (which may reshape it); behind it this module
-has only the in-process fake (`runnertest`).
+has the in-process fake (`runnertest`) and a generic subprocess runner (`runner/exec`, PR 2.7a),
+which is what the in-repository conformance job and the process tests drive.
+
+`ConcurrencyLimited` is the class of a session the gateway refused with `429
+concurrency_limited` (its backend at the `max_in_flight` the gateway enforces, ADR-0026 decision
+10). It is a wait, never a fault: the pool pauses (`Policy.ConcurrencyWait`, one second, the
+gateway's `Retry-After`) and asks the same backend again, up to `Policy.ConcurrencyWaits` (30)
+times a leg; then the chain stops with `ErrConcurrencyLimited`, which the queue classes
+`capacity`. It never marks the backend down and never moves the job to another backend or to the
+cloud; the cloud leg waits the same way. `runner/exec` reports it by the program's exit status
+(`exit_classes`), since only the program sees the gateway's answer.
 
 Fallback, retry and a job's failure class are decided from the classes, never from error text:
 `runner.Wrap(class, err)` keeps the text exactly, a bare class wrapped with `%w` counts too, and
@@ -981,7 +992,8 @@ above says how.
     backend;
   - (same decision) a `concurrency_limited` 429 from the gateway is a retryable wait on the same
     backend, never a backend failure, so it neither marks the backend down nor falls over to
-    another backend or to the cloud;
+    another backend or to the cloud: done in PR 2.7a (`runner.ConcurrencyLimited`, "The runner
+    seam" above);
   - (from 2.5) depend on `backends.Pool`, not `*Policy`, so the queue's tests can stub
     admission; call `Reserve` or `ReserveExclusive` once per admission decision from the one
     scheduling goroutine, pass the backend to `Call` as `reserved` and `Release(backend, run id)`
@@ -1014,11 +1026,13 @@ above says how.
   route); importing `net/http/pprof` registers its handlers on `http.DefaultServeMux`, so the
   binary must never serve the default mux (a test that it serves `api.NewServer`'s handler only);
   the API's allowlist entry for its bind-check test could narrow to inline markers.
-- **The queue's leftovers (2.7):** the admission duplicate check keys on the whole task text; a
-  digest (a store column filled at submit) would cut a pass's memory to the summaries. A
-  backend-down requeue writes the state and then uncounts the attempt in two statements; one store
-  operation would close the window in which a pass re-admits the run with the attempt still
-  counted.
+- **The queue's leftovers (2.7), done in PR 2.7a:** the store writes `task_sha256` on insert, the
+  admission list carries no task text and the duplicate check compares digests (a row queued
+  before the column existed is nobody's duplicate); an executor reads its own task with `GetJob`.
+  A backend-down requeue moves the row and uncounts the attempt in one statement
+  (`store.Requeue`). The submit window's count searches an index on `(COALESCE(submitted_by,
+  ''), julianday(created_at))`, so it is bounded by time, not by every job the submitter sent;
+  a migration drops the earlier index on the text column.
 - **Priority across callers (2.7):** a `jobs` token may submit any priority from 1 to 100, so one
   caller can put its jobs ahead of everyone's. Which callers may use which range is a policy of
   the tokens file (a per-caller ceiling, say), so it lands with the binary's configuration rather

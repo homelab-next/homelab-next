@@ -76,6 +76,15 @@ func (sch *Scheduler) execute(ctx context.Context, job *store.Job, reserved stri
 	defer func() { sch.release(reserved, runID) }()
 	defer sch.takeWaitCause(runID)
 
+	// Admission's row carries no task text (store.ListForAdmission); the executor reads its own.
+	full, err := sch.cfg.Store.GetJob(runID)
+	if err != nil {
+		sch.failRunning(runID, "the job's row cannot be read")
+		sch.logf("queue: run=%s cannot read its row: %v", runID, err)
+		return
+	}
+	job = full
+
 	prof, err := sch.resolve(job.AgentKey)
 	if err != nil {
 		sch.failRunning(runID, "no profile is registered for agent key "+job.AgentKey)
@@ -424,7 +433,9 @@ func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int
 	// drop the new claim.
 	sch.release(*reserved, runID)
 	*reserved = ""
-	if err := sch.cfg.Store.UpdateState(runID, store.StateRunning, store.StateQueued); err != nil {
+	// The row goes back and the attempt is uncounted in one store operation: a pass that admits
+	// the run between two writes would run it with the attempt it gave back still counted.
+	if err := sch.cfg.Store.Requeue(runID, store.StateRunning, attempt-1); err != nil {
 		sch.logf("queue: run=%s lost its backends and cannot go back to the queue: %v", runID, err)
 		return false
 	}
@@ -434,9 +445,6 @@ func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int
 	}
 	sch.requeues[runID] = n + 1
 	sch.mu.Unlock()
-	if err := sch.cfg.Store.UpdateAttempts(runID, attempt-1); err != nil {
-		sch.logf("queue: run=%s cannot uncount the attempt: %v", runID, err)
-	}
 	sch.logf("queue: run=%s agent=%s local-only, every eligible backend is down: back to queued until one is up (%d of %d)", runID, d.job.AgentKey, n+1, MaxBackendDownRequeues)
 	return true
 }
