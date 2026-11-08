@@ -83,9 +83,9 @@ Five facts in this repository shape the answer:
 The operator's decisions bound the product set. The old SOAR product and the old case manager are
 not part of homelab-next. The old case manager's analyzer engine has been removed. The CTI graph
 and its own storage layer stay, and so does the enrichment service: they enrich differently
-(ADR-0039 decision 6). The proposed lake decision is a fresh start at the cut, with the old lake
-kept as a read-only archive (ADR-0043 decision 7). That row stays `undecided` until the operator's
-review stamps it, so this ADR builds on `fresh` and says where a `migrate` stamp would change it.
+(ADR-0039 decision 6). The lake starts fresh at the cut, with the old lake kept as a read-only
+archive (ADR-0043 decision 7; confirmed by the operator on 2026-11-08), so this ADR builds on
+`fresh` and says where a `migrate` stamp would change it.
 Single sign-on is Keycloak; the old IdP retires (ADR-0039).
 
 ## Decision
@@ -205,9 +205,9 @@ Single sign-on is Keycloak; the old IdP retires (ADR-0039).
    - Writer code is written fresh against `homelabnext.lake`. The old writers are reference for
      behaviour only (ADR-0011 decision 1).
    - **No backfill path, while the lake row is `fresh`.** On a fresh lake there is nothing to
-     backfill. If the operator stamps the lake row `migrate`, the old lake is copied as ADR-0043
-     decision 7 describes, after the TLP backfill, and this decision gains a backfill path; the
-     other decisions do not change. The writer is tested with the recorded crash-and-replay case
+     backfill. Were the lake row ever restamped `migrate`, the old lake would be copied as
+     ADR-0043 decision 7 describes, after the TLP backfill, and this decision would gain a
+     backfill path; the other decisions would not change. The writer is tested with the recorded crash-and-replay case
      of `checkpoint.py`: a replay after a crash adds no row.
 
 4. **Sensors and endpoint forensics are modules at stage 1, and acting on endpoints goes through
@@ -225,8 +225,9 @@ Single sign-on is Keycloak; the old IdP retires (ADR-0039).
      fleet-wide root agent. The hunt principal the module uses holds only collect rights over an
      allow-listed artifact set, catalogued in the module and human-approve, with no EXECVE,
      FILESYSTEM_WRITE, artifact-writer or server-admin permission. Any artifact that needs one of
-     those, and any action that changes an endpoint (a quarantine, a file removal, a process
-     kill), is a `remote-admin` broker action behind approval (ADR-0017). That acting credential
+     those, and any action that changes an endpoint is a `remote-admin` broker action behind
+     approval (ADR-0017), one per kind of change: `endpoint.quarantine`, `endpoint.remove-file` and
+     `endpoint.kill-process`. That acting credential
      is held by the broker's handler and never by an agent (ADR-0030, ADR-0045). A test proves the
      hunt principal is refused an EXECVE artifact and an artifact upload.
    - Baseline hunts write to `endpoint_forensics.hunts`, which the module owns (decision 3) and
@@ -429,19 +430,22 @@ Single sign-on is Keycloak; the old IdP retires (ADR-0039).
 - The lake's history and the archive (ADR-0043 decision 7). Restore drills and the cold-start
   order of these modules (ADR-0042). The modules' per-host enrolment and API credentials, issuance
   and rotation (ADR-0045).
-- The old SOAR product and the old case manager: not carried, `legacy` until their rows close (ADR-0039). The `automation`
-  slot stays without a primary.
+- The old SOAR product and the old case manager: not carried, `legacy` until their rows close
+  (ADR-0039). The `automation` slot's primary is StackStorm (ADR-0039 decision 6), which no
+  decision here needs.
 - The sandbox, honeypots, red-team range, vulnerability scanner, cloud-posture scanner and runtime
   kernel sensor. Their lake feeders follow decision 8's collector rule when their modules come.
 - The agents that read SOC data, and their MCP tools (ADR-0026 stages 3 to 5, ADR-0044, ADR-0047).
-- **Not carried, and not owned by any ADR of this batch.** Each needs its own ADR before it is
-  ported; until then its timers or flows get ledger rows of `undecided` (ADR-0043), so the gap
-  stays visible:
-  - the risk-based alerting engine's scoring (ADR-0036's analyzer and the decide cascade cover
-    first-seen behaviour; risk scoring is a separate design);
-  - the CTI external pipeline and its publishing;
-  - the live 24-hour dataflow page;
-  - the interactive-session runbook gate.
+- **Not carried, and not owned by any ADR of this batch.** **Decided 2026-11-08 (operator):**
+  - the live 24-hour dataflow page is retired: its ledger row is `retire` (ADR-0043), with no
+    successor;
+  - each of these three gets a future ADR of its own, named as a follow-up in
+    [module follow-ups](../modules/follow-ups.md#follow-up-adrs). Until each is written, its
+    timers or flows get ledger rows of `undecided` (ADR-0043), so the gap stays visible:
+    - the risk-based alerting engine's scoring (ADR-0036's analyzer and the decide cascade cover
+      first-seen behaviour; risk scoring is a separate design);
+    - the external CTI pipeline and its publishing;
+    - the interactive-session runbook gate.
 
 ## Consequences
 
@@ -542,6 +546,34 @@ review and a security audit. Overlay pull requests are merged by the operator.
    from another bus user is refused (the `bus-acl` step), and an event with a foreign `source` is
    refused by `alert-intake`; the envelope's `tlp` is the source declaration's; the E-01
    criterion's canary, starting at a SIEM agent log line, reaches a closed case and does not page.
+   - **9a. The vault case-notes importer** (ADR-0043 decision 7: the operator decided on 2026-11-08
+     that the vault's case notes are imported into the `cases` capability). `hnx cases import-notes
+     DIR` uses today's `cases` contract only (`create_alert`, `promote`, `add_note`, `set_status`;
+     no new contract minor), so it works against any `cases` primary. It is a dry run by default.
+     - **Idempotent by `dedup_key` and its own manifest.** Each legacy case's alert carries a
+       `dedup_key` derived from the case's legacy id, and the importer's manifest records, per
+       legacy note, its path, sha256 and the case it became; a re-run reads the manifest first and
+       writes nothing it already recorded.
+     - **Append, never update.** A note whose sha256 changed since the last run is appended to its
+       case as a revision note naming the earlier sha256; nothing is edited in place.
+     - **Closed cases are written in full, then closed.** A historical case that was closed in the
+       vault gets every note before its `set_status(closed, resolution)`, and is never re-opened
+       afterwards. A re-run that finds new or changed notes for an imported case that is already
+       closed writes nothing and records the note as `closed-no-op` in the manifest.
+     - **The TLP ceiling is checked before anything is written.** The importer compares each
+       note's label with the `cases` primary's ceiling (ADR-0033) and refuses an above-ceiling
+       note before any call to the contract. A refused note goes to the operator-only archive
+       (ADR-0043 decision 7) and is recorded in the manifest as `archived`.
+     - **The manifest is the ADR-0043 row's gate**: the count in equals the notes imported plus
+       the notes archived (a `closed-no-op` is recorded against a note already imported, so it
+       adds to neither), and the lost-record check covers both the imported and the archived
+       notes.
+
+     Tests, against the `cases` fake and the `dfir-iris` product container: a re-run adds
+     nothing; a changed note is appended as a revision note and the earlier note is unchanged; a
+     closed legacy case arrives with all its notes and closed, and a re-run with a changed note
+     leaves it closed and records `closed-no-op`; an above-ceiling note makes no contract call, is
+     archived and is counted; the manifest's counts match the fixture tree.
 10. **Sensor modules** (`suricata`, absorbing `suricata_enroll`, then `zeek`), the
     `network-sensor` slot and their health criteria; the moved role leaves
     `tools/product_names.baseline.json`. Tests: `HOME_NET` goldens with extra and IPv6

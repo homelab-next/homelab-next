@@ -1,6 +1,6 @@
 ---
-summary: 'Module manifest reference: prerequisite record changes, the migration path, per-slot contract follow-ups, each follow-up''s status and open questions.'
-summary_of: outline:sha256:59ec989c77b36c2c
+summary: 'Module manifest reference: prerequisite record changes, the migration path, per-slot contract follow-ups, each follow-up''s status, follow-up ADRs, open items.'
+summary_of: outline:sha256:88e7a9c112c56143
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Modules: record changes, migration and follow-ups
@@ -129,6 +129,22 @@ exist in no form.
     has `export` and `import_` (`conformance/protocols/migration.py`); no stateful slot's protocol
     does, there is no MUST round-trip check per slot, and X-07 is not slot-keyed. See
     [`data:` and lifecycle safety](data.md#data-and-lifecycle-safety).
+
+## Follow-up ADRs
+
+Pieces of the old lab that no ADR owns yet. The operator decided on 2026-11-08 that each gets an
+ADR of its own before it is ported
+([ADR-0049](../adr/0049-the-soc-data-plane-and-the-lab-checks-move-as-modules.md), "Out of
+scope"). Until each ADR is written, its timers or flows are `undecided` rows on the cutover ledger
+([ADR-0043](../adr/0043-the-cutover-is-a-ledger-per-service.md)).
+
+| Follow-up | What the ADR must decide | State |
+|---|---|---|
+| Risk-based alerting | the engine's scoring, beside ADR-0036's first-seen analyzer and the decide cascade | not written |
+| The external CTI pipeline | its ingest, extraction and publishing, and what it may publish | not written |
+| The interactive-session runbook gate | the successor of the gate that hands a session its runbook before it acts | not written |
+
+The live 24-hour dataflow page is not a follow-up: it is retired, a `retire` row on the ledger.
 
 ## Open questions
 

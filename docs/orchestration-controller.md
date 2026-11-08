@@ -587,7 +587,11 @@ the eligible backends, then stable-sorted by load ratio; configured order with `
 and counts the slot before it returns, so the next decision in the same pass sees it. A backend's
 load is the larger of its engines' own reading (the configured gauges summed over its
 `load_probe_urls`) and the pool's in-flight count; a backend with no `max_concurrent` is never
-full. Each probe URL is read at most once per 1.5 seconds (or the probe timeout, if longer), counted
+full. `max_concurrent` is a hard admission cap (ADR-0026's amendment, decided 2026-11-08). What
+the code does today: `Reserve` skips a backend whose load has reached it, before it looks at the
+token budget. The attempt chain's fallover and the 429 handling are left to stage 2.6 ("Left to
+stages 2.6 and 2.7" below).
+Each probe URL is read at most once per 1.5 seconds (or the probe timeout, if longer), counted
 from when the read ended, by the load and the KV readers together; a failed read is remembered for
 20 seconds (one the caller's own context ended is not remembered); and one decision reads its
 backends concurrently (each probe bounded by `ProbeTimeout`, 2 seconds). So an endpoint that
@@ -762,6 +766,13 @@ above says how.
     `ErrNotAttributable`, `ErrNoCloudBackend` and `ErrCloudFailed` wrap the attempts' errors. The
     queue logs and stores the bounded `LocalFailedReason`, never `err.Error()`, and classifies with
     `errors.Is`;
+  - (from the ADR-0026 amendment's 2026-11-08 decision that `max_concurrent` is a hard admission
+    cap) the attempt chain's fallover must not overfill a backend at its cap: `callLocal` today
+    runs an attempt on a fallover backend without checking its `max_concurrent`, so a fallover
+    checks the cap as `Reserve` does and skips a full backend;
+  - (same decision) a `concurrency_limited` 429 from the gateway is a retryable wait on the same
+    backend, never a backend failure, so it neither marks the backend down nor falls over to
+    another backend or to the cloud;
   - (from 2.5) depend on `backends.Pool`, not `*Policy`, so the queue's tests can stub
     admission; call `Reserve` or `ReserveExclusive` once per admission decision from the one
     scheduling goroutine, pass the backend to `Call` as `reserved` and `Release(backend, run id)`
