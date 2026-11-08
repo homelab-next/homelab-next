@@ -628,3 +628,35 @@ func TestMigrate_AnExistingOutChangesNothing(t *testing.T) {
 		t.Fatal("a refused migration changed --out")
 	}
 }
+
+// The lock directory is judged by itself, never through a link, and must be the controller's
+// user's or root's.
+func TestCheckLockDir_NoLinkAndAnOwnOwner(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkLockDir(filepath.Join(real, "interlock.lock")); err != nil {
+		t.Fatalf("an owner-only directory: %v", err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkLockDir(filepath.Join(link, "interlock.lock")); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("a linked directory = %v", err)
+	}
+}
+
+func TestCheckLockDir_RefusesAForeignOwner(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(dir, 4242, 4242); err != nil {
+		t.Skip("chown to another user needs root")
+	}
+	if err := checkLockDir(filepath.Join(dir, "interlock.lock")); err == nil || !strings.Contains(err.Error(), "owned by uid 4242") {
+		t.Fatalf("a foreign owner = %v", err)
+	}
+}

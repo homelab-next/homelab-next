@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/backends"
@@ -190,15 +191,24 @@ func anyInterlock(b config.Backends) bool {
 // backend would then fail unclassified, so the controller refuses to start instead.
 func checkLockDir(lockPath string) error {
 	dir := filepath.Dir(lockPath)
-	fi, err := os.Stat(dir)
+	// Lstat: a link would name a directory whose owner and mode this check never saw.
+	fi, err := os.Lstat(dir)
 	if err != nil {
 		return fmt.Errorf("its directory cannot be read: %v", errors.Unwrap(err))
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return errors.New("its directory is a symbolic link: name the directory itself")
 	}
 	if !fi.IsDir() {
 		return errors.New("its directory is not a directory")
 	}
 	if fi.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("its directory is writable by group or others (mode %04o): keep the lock file in the service's own runtime directory", fi.Mode().Perm())
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		if uid := int(st.Uid); uid != 0 && uid != os.Geteuid() {
+			return fmt.Errorf("its directory is owned by uid %d, neither the controller's user nor root: that owner could replace the lock file", uid)
+		}
 	}
 	return nil
 }
