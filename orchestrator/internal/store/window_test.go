@@ -15,7 +15,7 @@ import (
 // a range on the second.
 func TestSubmitWindow_CountSearchesByTime(t *testing.T) {
 	s := openTest(t)
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = ? AND julianday(created_at) >= julianday(?)`,
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN `+windowCountQuery,
 		"alice", time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatal(err)

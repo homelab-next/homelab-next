@@ -104,7 +104,6 @@ type Runner struct {
 	JobHomeRoot string `yaml:"job_home_root"`
 }
 
-// Liveness values.
 // RunnerKindExec is the built-in subprocess runner's kind.
 const RunnerKindExec = "exec"
 
@@ -130,6 +129,7 @@ func (e ExecRunner) IsZero() bool {
 		e.MaxResponseBytes == 0 && e.KillGraceSeconds == 0
 }
 
+// livenessModes are runner.liveness's values.
 var livenessModes = map[string]bool{"": true, "cpu": true, "progress": true}
 
 // Events configures the job lifecycle event sender (package events).

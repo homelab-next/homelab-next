@@ -288,6 +288,11 @@ var ErrTooManyUnfinished = errors.New("the submitter has too many unfinished job
 // ErrTooManySubmits: the submitter is at SubmitLimits.MaxInWindow.
 var ErrTooManySubmits = errors.New("the submitter created too many jobs in the window")
 
+// windowCountQuery counts one submitter's jobs created since an instant. It compares instants
+// (julianday), never text, and the expression index idx_jobs_submitter_created_jd bounds it by
+// time; its test reads this query's plan.
+const windowCountQuery = `SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = ? AND julianday(created_at) >= julianday(?)`
+
 // CreateSubmit is CreateJob for a caller's submit, bounded by lim.
 func (s *Store) CreateSubmit(j *Job, lim SubmitLimits) error {
 	return s.createJob(j, nil, &lim)
@@ -313,8 +318,7 @@ func checkLimits(tx *sql.Tx, j *Job, lim *SubmitLimits) error {
 		// Compared as instants (julianday), never as text: RFC3339Nano drops trailing zeros, so
 		// "...:00Z" sorts after "...:00.1Z" though it is earlier.
 		since := j.CreatedAt.Add(-lim.Window).UTC().Format(time.RFC3339Nano)
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = ? AND julianday(created_at) >= julianday(?)`,
-			j.SubmittedBy, since).Scan(&n); err != nil {
+		if err := tx.QueryRow(windowCountQuery, j.SubmittedBy, since).Scan(&n); err != nil {
 			return fmt.Errorf("count recent jobs: %w", err)
 		}
 		if n >= lim.MaxInWindow {
