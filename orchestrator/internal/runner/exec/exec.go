@@ -221,8 +221,9 @@ func (r *Runner) Run(ctx context.Context, s runner.Session) (*runner.Result, err
 		return res, runner.Wrap(runner.KilledExternally, fmt.Errorf("exec runner: ended by %s", ws.Signal()))
 	}
 	if waitErr != nil && res.ExitCode == 0 {
-		// The process exited 0 but a descendant held its output open past KillGrace.
-		return res, fmt.Errorf("exec runner: %w", waitErr)
+		// The program exited 0, but a descendant outside its group (one that called setsid) held
+		// its output open past KillGrace: the answer read may be cut short, so it is no answer.
+		return res, runner.Wrap(runner.TurnFailed, fmt.Errorf("exec runner: the program exited, but its output stayed open past the kill grace: %w", waitErr))
 	}
 	if res.ExitCode != 0 {
 		c, ok := r.cfg.ExitClasses[res.ExitCode]

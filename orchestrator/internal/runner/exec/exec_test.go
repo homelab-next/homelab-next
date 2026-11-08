@@ -377,3 +377,16 @@ func TestRun_ASetsidDescendantIsNoZombieOfOurs(t *testing.T) {
 		t.Fatalf("the exited descendant %d is a zombie of this process", pid)
 	}
 }
+
+// A program that exits cleanly while a descendant outside its group keeps its stdout open has given
+// no complete answer: the session fails TurnFailed once the grace has run out.
+func TestRun_OutputHeldOpenAfterACleanExitIsTurnFailed(t *testing.T) {
+	// the leader waits until the descendant is in its own session before it answers and exits
+	ready := filepath.Join(t.TempDir(), "ready")
+	script := `setsid sh -c 'echo x > "$1"; exec sleep 3' - "$0" & while [ ! -s "$0" ]; do :; done; echo partial`
+	r := newRunner(t, Config{Argv: []string{"/bin/sh", "-c", script, ready}, EnvAllowlist: []string{"PATH"}, KillGrace: 100 * time.Millisecond})
+	res, err := r.Run(context.Background(), runner.Session{})
+	if runner.ClassOf(err) != runner.TurnFailed || res.Response != "" {
+		t.Fatalf("class %v, response %q, err %v", runner.ClassOf(err), res.Response, err)
+	}
+}
