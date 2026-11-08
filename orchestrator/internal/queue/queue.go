@@ -103,8 +103,16 @@ type Scheduler struct {
 	cfg      Config
 	profiles atomic.Pointer[profile.Registry]
 
+	// admitMu is held by the one pass that is admitting: passes overlap (Run starts one per
+	// interval, and a pass waits for its jobs), so a second pass that finds it held skips its
+	// admission instead of reading a free-slot count the first is about to spend.
+	admitMu sync.Mutex
+
 	mu      sync.Mutex
 	running int
+	// requeues counts, by run id, how often a job went back to the queue because every backend
+	// it may use was down (requeueBackendDown); in memory, so a restart resets it.
+	requeues map[string]int
 	// execs holds each live executor's entry, by run id, from admission until its executor has
 	// returned. An executor removes only its own entry (identity, not run id): a run requeued by a
 	// drain keeps its run id, and a concurrent Tick can admit it again before the old executor's
@@ -237,37 +245,69 @@ var testHookExecuted func(runID string)
 // Tick runs one admission pass: the sweeps, then as many queued jobs as there are free slots,
 // each executed in its own goroutine. It returns once every job it admitted has finished, on
 // every path, the admission error's included. Run starts each Tick in its own goroutine, so a long
-// job never holds up admission.
+// job never holds up admission; only one pass admits at a time (a pass that finds another
+// admitting skips its admission), and every admission re-checks the free slots under the lock, so
+// Concurrency is a hard cap on running jobs.
+//
+// The queued list is read once per pass and ordered once (by effective priority, then submit
+// order): the cost of a pass is linear in the queue, however many jobs are held in it.
 func (sch *Scheduler) Tick(ctx context.Context) error {
 	sch.sweepDeferredFinished()
 	sch.sweepOrphanedRuns()
+	if !sch.admitMu.TryLock() {
+		return nil
+	}
+	var wg sync.WaitGroup
+	err := sch.admit(ctx, &wg)
+	sch.admitMu.Unlock()
+	wg.Wait()
+	return err
+}
+
+// free is how many more jobs may start now.
+func (sch *Scheduler) free() int {
 	sch.mu.Lock()
-	available := sch.cfg.Concurrency - sch.running
-	sch.mu.Unlock()
-	if available <= 0 {
+	defer sch.mu.Unlock()
+	return sch.cfg.Concurrency - sch.running
+}
+
+// heldKey is what makes two queued jobs the same work: one submitter's same agent, task and lane.
+type heldKey struct {
+	agent, task, submitter string
+	shadow                 bool
+}
+
+func keyOf(j *store.Job) heldKey {
+	return heldKey{agent: j.AgentKey, task: j.TaskDescription, submitter: j.SubmittedBy, shadow: j.Shadow}
+}
+
+// admit is one pass's admission, under admitMu; each admitted job's goroutine is added to wg.
+func (sch *Scheduler) admit(ctx context.Context, wg *sync.WaitGroup) error {
+	if sch.free() <= 0 {
 		return nil
 	}
 	sch.reapStaleReservations()
-
 	queued, err := sch.cfg.Store.ListByState(store.StateQueued)
 	if err != nil {
 		return fmt.Errorf("list queued: %w", err)
 	}
-	var wg sync.WaitGroup
-	defer wg.Wait()
+	sch.pruneWaitCauses(queued)
 	now := time.Now().UTC()
-	admitted := 0
-	// A job left queued for capacity takes none of this pass's slots: a job behind one full
-	// backend must not starve another that has room. Each queued job is considered once.
-	for admitted < available && len(queued) > 0 {
-		job := PickNext(queued, now)
-		queued = removeJob(queued, job.RunID)
-		if !store.CanTransition(job.State, store.StateAdmitted) {
-			continue
+	order := orderQueued(queued, now)
+	// The newest queued job of each key, for superseding a held duplicate.
+	newest := make(map[heldKey]time.Time, len(queued))
+	for _, j := range queued {
+		if k := keyOf(j); j.CreatedAt.After(newest[k]) {
+			newest[k] = j.CreatedAt
 		}
-		// Ticks overlap, so another may be admitting this run now and hold its claim; the pool
-		// also refuses a second claim for one run id.
-		if sch.cfg.Pool.HoldsReservation(job.RunID) {
+	}
+	// A job left queued for capacity takes no slot: a job behind one full backend must not starve
+	// another that has room. Each queued job is considered once.
+	for _, job := range order {
+		if sch.free() <= 0 {
+			break
+		}
+		if !store.CanTransition(job.State, store.StateAdmitted) || sch.cfg.Pool.HoldsReservation(job.RunID) {
 			continue
 		}
 		prof, perr := sch.resolve(job.AgentKey)
@@ -276,8 +316,11 @@ func (sch *Scheduler) Tick(ctx context.Context) error {
 			reserved, ok = sch.reserve(ctx, job, prof)
 		}
 		if !ok {
+			if sch.heldForHealth(prof) && newest[keyOf(job)].After(job.CreatedAt) {
+				sch.supersede(job)
+				continue
+			}
 			sch.noteWaitCause(job.RunID, sch.waitCause(job, prof))
-			sch.supersedeIfHeldDuplicate(job, prof)
 			continue
 		}
 		if err := sch.cfg.Store.UpdateState(job.RunID, job.State, store.StateAdmitted); err != nil {
@@ -291,7 +334,6 @@ func (sch *Scheduler) Tick(ctx context.Context) error {
 		sch.running++
 		sch.execs[job.RunID] = entry
 		sch.mu.Unlock()
-		admitted++
 
 		wg.Add(1)
 		go func(j *store.Job, reserved string) {
@@ -321,6 +363,30 @@ func (sch *Scheduler) Tick(ctx context.Context) error {
 	return nil
 }
 
+// orderQueued is the queue in admission order at now: lowest effective priority first, then
+// submit order (seq). Effective priority depends only on now within a pass, so one sort is it.
+func orderQueued(queued []*store.Job, now time.Time) []*store.Job {
+	type ranked struct {
+		job *store.Job
+		eff int
+	}
+	r := make([]ranked, len(queued))
+	for i, j := range queued {
+		r[i] = ranked{j, EffectivePriority(j.Priority, now.Sub(j.CreatedAt).Seconds())}
+	}
+	sort.Slice(r, func(a, b int) bool {
+		if r[a].eff != r[b].eff {
+			return r[a].eff < r[b].eff
+		}
+		return r[a].job.Seq < r[b].job.Seq
+	})
+	out := make([]*store.Job, len(r))
+	for i := range r {
+		out[i] = r[i].job
+	}
+	return out
+}
+
 // Run calls Tick every interval, each in its own goroutine, until ctx ends, and returns once every
 // Tick (and so every job it admitted) has returned: the caller may close the store then.
 func (sch *Scheduler) Run(ctx context.Context, interval time.Duration) {
@@ -344,29 +410,25 @@ func (sch *Scheduler) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-func removeJob(jobs []*store.Job, runID string) []*store.Job {
-	out := jobs[:0]
-	for _, j := range jobs {
-		if j.RunID != runID {
-			out = append(out, j)
-		}
-	}
-	return out
-}
-
 // reserve is the admission decision for one queued job: the backend reserved for it, or ok
-// false to leave it queued. A local-only job waits while nothing eligible is up; any other job is
-// admitted unreserved then, and the pool skips the down backends and runs its cloud leg. An
-// exclusive job drains a backend and leases it once empty (called once per pass while queued).
+// false to leave it queued. An exclusive job drains a backend and leases it once empty (called
+// once per pass while queued); any other reserves a slot. When nothing it may use is up, a
+// local-only job waits; any other job is admitted unreserved, and its chain runs only its cloud
+// leg (the down backends are skipped, and a local attempt on a backend that came back meanwhile
+// still takes a free slot at its max_concurrent or is skipped: backends.Policy.Call).
 func (sch *Scheduler) reserve(ctx context.Context, job *store.Job, prof *profile.Profile) (string, bool) {
 	affinity := backends.AffinityOf(prof.BackendAffinity)
-	if !sch.cfg.Pool.AnyHealthy(affinity) {
-		return "", !prof.LocalOnly
-	}
+	var backend string
+	var ok bool
 	if affinity.Exclusive {
-		return sch.cfg.Pool.ReserveExclusive(ctx, affinity, job.RunID)
+		backend, ok = sch.cfg.Pool.ReserveExclusive(ctx, affinity, job.RunID)
+	} else {
+		backend, ok = sch.cfg.Pool.Reserve(ctx, affinity, job.RunID, job.AgentKey)
 	}
-	return sch.cfg.Pool.Reserve(ctx, affinity, job.RunID, job.AgentKey)
+	if ok {
+		return backend, true
+	}
+	return "", !prof.LocalOnly && !sch.cfg.Pool.AnyHealthy(affinity)
 }
 
 // release returns runID's claim on backend; "" holds none.
@@ -378,6 +440,9 @@ func (sch *Scheduler) release(backend, runID string) {
 
 // waitCause says why reserve just left job queued.
 func (sch *Scheduler) waitCause(job *store.Job, prof *profile.Profile) string {
+	if prof == nil {
+		return ""
+	}
 	affinity := backends.AffinityOf(prof.BackendAffinity)
 	switch {
 	case affinity.Exclusive:
@@ -410,27 +475,43 @@ func (sch *Scheduler) takeWaitCause(runID string) string {
 	return c
 }
 
-// supersedeIfHeldDuplicate cancels a local-only job held queued because nothing eligible is up
-// when a newer queued job of the same agent and task exists: an agent that keeps submitting on a
-// timer during an outage would otherwise leave a stampede of identical runs for the backend's
-// return. The newest run is the one worth doing.
-func (sch *Scheduler) supersedeIfHeldDuplicate(job *store.Job, prof *profile.Profile) {
-	if prof == nil || !prof.LocalOnly || sch.cfg.Pool.AnyHealthy(backends.AffinityOf(prof.BackendAffinity)) {
-		return
+// pruneWaitCauses drops the causes, and the backend-down requeue counts, of runs that are neither
+// queued nor live (cancelled while queued, say), so neither map outgrows the queue.
+func (sch *Scheduler) pruneWaitCauses(queued []*store.Job) {
+	keep := make(map[string]bool, len(queued))
+	for _, j := range queued {
+		keep[j.RunID] = true
 	}
-	queued, err := sch.cfg.Store.ListByState(store.StateQueued)
-	if err != nil {
-		return
-	}
-	for _, other := range queued {
-		if other.RunID != job.RunID && other.AgentKey == job.AgentKey &&
-			other.TaskDescription == job.TaskDescription && other.CreatedAt.After(job.CreatedAt) {
-			if err := sch.cfg.Store.UpdateState(job.RunID, store.StateQueued, store.StateCancelled); err == nil {
-				sch.logf("queue: run=%s agent=%s held for a healthy backend, superseded by the newer run=%s: cancelled", job.RunID, job.AgentKey, other.RunID)
-			}
-			return
+	sch.mu.Lock()
+	defer sch.mu.Unlock()
+	for id := range sch.waitCauses {
+		if _, live := sch.execs[id]; !live && !keep[id] {
+			delete(sch.waitCauses, id)
 		}
 	}
+	for id := range sch.requeues {
+		if _, live := sch.execs[id]; !live && !keep[id] {
+			delete(sch.requeues, id)
+		}
+	}
+}
+
+// heldForHealth reports whether a job of prof is held only because nothing it may use is up: a
+// local-only profile during an outage.
+func (sch *Scheduler) heldForHealth(prof *profile.Profile) bool {
+	return prof != nil && prof.LocalOnly && !sch.cfg.Pool.AnyHealthy(backends.AffinityOf(prof.BackendAffinity))
+}
+
+// supersede cancels a local-only job held for a healthy backend when a newer queued job of the
+// same submitter, agent, task and lane exists: an agent that keeps submitting on a timer during an
+// outage would otherwise leave a stampede of identical runs for the backend's return. The newest
+// run is the one worth doing; another submitter's job is never touched.
+func (sch *Scheduler) supersede(job *store.Job) {
+	if err := sch.cfg.Store.UpdateState(job.RunID, store.StateQueued, store.StateCancelled); err != nil {
+		return
+	}
+	sch.takeWaitCause(job.RunID)
+	sch.logf("queue: run=%s agent=%s held for a healthy backend, superseded by a newer identical run: cancelled", job.RunID, job.AgentKey)
 }
 
 // Counters are the scheduler's totals since it started (GET /metrics); a restart resets them, as
