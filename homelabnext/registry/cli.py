@@ -45,6 +45,15 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         action="store_true",
         help="resolve an eval or retiring row by its row name (ADR-0039), not a capability",
     )
+    p = sub.add_parser(
+        "standing",
+        help="list the non-primary rows and their until dates; --overdue fails on one past its "
+        "date (ADR-0039 decision 8, checklist X-12)",
+    )
+    p.add_argument("registry")
+    p.add_argument("--overdue", action="store_true", help="only rows past their until; exit 1")
+    p.add_argument("--today", help="judge against this date (YYYY-MM-DD; default HNX_TODAY)")
+    p.add_argument("--json", action="store_true", help="print the rows as JSON")
     for name in ("generate", "check"):
         p = sub.add_parser(
             name,
@@ -78,6 +87,15 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             file=out,
         )
         return 0
+    if args.cmd == "standing":
+        from homelabnext.registry import standing
+
+        try:
+            on = standing.today(_date(args.today) if args.today else None)
+        except ValueError as exc:
+            print(f"hnx: {exc}", file=err)
+            return 2
+        return standing.run(reg, on, overdue_only=args.overdue, as_json=args.json, out=out, err=err)
     if args.cmd == "resolve":
         try:
             res = Resolver(reg)
@@ -110,6 +128,15 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     for p in problems:
         print(p, file=err)
     return 1 if problems else 0
+
+
+def _date(raw: str):
+    import datetime as dt
+
+    try:
+        return dt.date.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(f"--today {raw!r} is not a YYYY-MM-DD date") from None
 
 
 def _names() -> list[str]:

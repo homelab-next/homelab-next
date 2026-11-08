@@ -6,7 +6,6 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import ipaddress
-import os
 from typing import Any
 
 from .model import (
@@ -428,14 +427,14 @@ def model_runtime(g: Guest) -> str | None:
 
 def today(now: dt.date | None = None) -> dt.date:
     """The date reviews are judged against: ``now`` when given, else ``HNX_TODAY`` (YYYY-MM-DD)
-    when set, so a test or a replay is deterministic, else the local date."""
-    raw = os.environ.get("HNX_TODAY")
-    if now is None and raw:
-        try:
-            now = dt.date.fromisoformat(raw)
-        except ValueError:
-            raise ComputeError(f"HNX_TODAY={raw!r} is not a YYYY-MM-DD date") from None
-    return now or dt.date.today()
+    when set, so a test or a replay is deterministic, else the local date
+    (:func:`homelabnext.registry.standing.today`, the one reader of ``HNX_TODAY``)."""
+    from homelabnext.registry.standing import today as judged_on
+
+    try:
+        return judged_on(now)
+    except ValueError as exc:
+        raise ComputeError(str(exc)) from None
 
 
 def _review_date(raw: Any) -> dt.date | None:

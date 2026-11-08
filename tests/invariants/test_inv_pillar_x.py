@@ -283,8 +283,13 @@ def test_server_checks_skip_with_reason(tmp_path, id_):
 
 
 def test_the_pillar_x_checks_registered_here():
-    """X-01..X-08 and X-11 live in pillar_x; X-09 and X-10 come through the entry-point group."""
-    assert sorted(default_registry().checks) == [*(f"X-0{i}" for i in range(1, 9)), "X-11"]
+    """X-01..X-08, X-11 and X-12 live in pillar_x; X-09 and X-10 come through the entry-point
+    group."""
+    assert sorted(default_registry().checks) == [
+        *(f"X-0{i}" for i in range(1, 9)),
+        "X-11",
+        "X-12",
+    ]
 
 
 def test_x11_runs_the_product_name_lint(tmp_path):
@@ -347,3 +352,58 @@ def test_x03_on_this_repository_checks_every_schema_the_checker_does():
     r = pillar_x.x03(ctx(root))
     assert r.status == "pass", r.evidence
     assert "schema_check --strict" in r.evidence
+
+
+# ---- X-12: no non-primary registry row past its until (ADR-0039 decision 8) -------------------
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+LATE = """
+  dns-trial:
+    capability: dns
+    impl: other-resolver
+    host: dns-core
+    protocol: dns
+    port: 5353
+    owner: platform-team
+    version: "1.0"
+    tls: none
+    standing: {tier: eval, until: "2026-11-30", why: the resolver candidate}
+"""
+
+
+def _lab_registry(root: pathlib.Path, extra: str = "") -> pathlib.Path:
+    text = (REPO / "examples" / "minimal" / "services.yml").read_text()
+    path = root / "lab" / "services.yml"
+    write(path, text.rstrip("\n") + "\n" + extra)
+    return path
+
+
+def test_x12_runs_green_over_the_repository_s_registries(monkeypatch):
+    monkeypatch.setenv("HNX_TODAY", "2026-11-08")
+    r = default_registry().get("X-12").fn(ctx(REPO))
+    assert r.status == "pass", r.evidence
+    assert r.evidence.startswith("4 registries")  # examples/ and its three labs
+
+
+def test_x12_fails_on_a_row_past_its_until_and_passes_on_the_day(tmp_path, monkeypatch):
+    _lab_registry(tmp_path, LATE)
+    monkeypatch.setenv("HNX_TODAY", "2026-11-30")  # on its date: not yet past it
+    assert pillar_x.x12(ctx(tmp_path)).status == "pass"
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail"
+    assert "lab/services.yml: dns-trial (eval dns) until 2026-11-30" in r.evidence
+
+
+def test_x12_skips_an_empty_tree_ignores_tests_and_errors_on_what_it_cannot_judge(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HNX_TODAY", "2027-01-01")
+    assert pillar_x.x12(ctx(tmp_path)).status == "skip"
+    _lab_registry(tmp_path / "tests", LATE)  # a test fixture is no registry of the tree
+    assert pillar_x.x12(ctx(tmp_path)).status == "skip"
+    write(tmp_path / "lab" / "services.yml", "services: [unclosed\n")
+    assert pillar_x.x12(ctx(tmp_path)).status == "error"
+    _lab_registry(tmp_path)
+    monkeypatch.setenv("HNX_TODAY", "tomorrow")
+    assert pillar_x.x12(ctx(tmp_path)).status == "error"
