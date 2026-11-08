@@ -427,6 +427,25 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
   from the caller, raise `homelabnext.lake.EndpointNotConfigured` when none was supplied; `tools/no_raw_endpoints.py` gates the tree (ADR-0002).
 - Environment variables use the prefix `HNX_`. Endpoint overrides are `HNX_ENDPOINT_<NAME>` with
   the service name upper-cased and `-` replaced by `_`.
+- Bindings reach a primary only (ADR-0039 decision 3). A binding is a row's `upstreams`, a role
+  binding's `backend: svc:<name>`, a workflow pack's `svc:` targets and event sources, and a
+  module's `requires` through the site selection; `svc:<name>` names a row or a capability, and a
+  capability means its primary. `hnx registry bindings REGISTRY [--roles FILE] [--eval-report
+  FILE [--base REV | --ci-base]] [--packs PATH [--deployed MANIFEST]] [--target FILE] [--site FILE
+  --modules DIR]` refuses each one naming an `eval`, `retiring` or `legacy` row, a capability
+  with no primary, or (in a pack) a name that is no row, no capability and none of the declared
+  platform sources (`svc:broker`, and the controller's old `svc:llm-orchestrator` for its
+  overlap). A platform capability the registry does not place is a note. Two declared
+  exceptions (`homelabnext/registry/bindings.py`): an evaluation report's `canary` bindings may
+  name an `eval` row, and a conformance target file any non-legacy row. Status sources, the
+  census, `hnx decommission` and the ledger read every tier, and agent lanes name executors, so
+  none of them is a binding. At run time `ModelResolver` raises `NonPrimaryBinding` instead of
+  falling back past such a binding, and `resolve_binding(..., allow_eval=True)`, passed only by
+  the egress canary runner, resolves an `eval` row by its row name. `make check` runs it over
+  the examples (`bindings-check`); the overlay's `checks.yml` runs it over `lab/`.
+- The platform's capability names (the conformance contracts and the capability-class table) are
+  one list, `homelabnext.capability_names`; registry validation reads it without importing the
+  MCP catalog or the conformance harness.
 
 ## 4. Logical ids
 

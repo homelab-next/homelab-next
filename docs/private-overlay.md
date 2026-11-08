@@ -606,7 +606,10 @@ job needs it and checks out only the commit it hands on), the private leak check
 --overlay . --deploy`, with the pinned `hnx`, the overlay read as data), the specs the operator
 applies by hand (`lab-specs`: `hnx ssh-ca check lab/ssh-ca.yml` and `hnx secrets plan lab --spec
 lab/secrets.yml`, each when the file exists; the plan reads names only and reaches no store), the
-site review tier (`site-review-tier`) and the swap gate (`swap-gate`), and a last job, `checks`,
+site review tier (`site-review-tier`), the swap gate (`swap-gate`), the binding check
+(`registry-bindings`: `hnx registry bindings lab/services.yml`, with `lab/model_roles.json` and
+the selection's `requires` when present and the evaluation report's canary bindings as the base
+has them; ADR-0039 decision 3), and a last job, `checks`,
 that needs all of them and fails unless each succeeded: it is the one check branch protection
 requires, so no job can be left out of it. A pull request's code never sees a credential, and a
 module or spec problem shows on the pull request, not only at the deploy or when it is applied.

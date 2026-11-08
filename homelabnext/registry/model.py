@@ -369,17 +369,7 @@ def semantic_problems(doc: dict) -> list[str]:
             problems.append(
                 f"service {sname}: front_door needs auth: idp and a public_hostname (the edge adds it)"
             )
-    for sname, s in services.items():
-        for up in s.get("upstreams", []):
-            if up not in caps:
-                problems.append(f"service {sname}: upstream {up!r} is not a registered capability")
-            elif up == s["capability"]:
-                problems.append(f"service {sname}: lists itself as upstream")
-            elif up not in primary:
-                problems.append(
-                    f"service {sname}: upstream {up!r} has no primary (a binding reaches only a "
-                    "primary)"
-                )
+    problems += upstream_problems(services)
     # a primary answers by its capability, an eval or retiring row by its row name (ADR-0039
     # decision 2): both the endpoint variables and the alias-zone names must stay unique, so a
     # row named like another capability is refused
@@ -410,6 +400,27 @@ def semantic_problems(doc: dict) -> list[str]:
     problems += _name_claim_problems(services, caps)
     problems += status_source_problems(services)
     problems += secret_ref_problems(service_secret_refs(services))
+    return problems
+
+
+def upstream_problems(services: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """A row's ``upstreams`` name capabilities of the registry, never its own, and each one with
+    a primary (ADR-0039 decision 3: an upstream is a binding, and a binding reaches only a
+    primary).  The one binding the registry holds itself; ``hnx registry bindings`` reuses it."""
+    caps = {s["capability"] for s in services.values()}
+    primary = {s["capability"] for s in services.values() if standing_of(s) == "primary"}
+    problems = []
+    for sname, s in services.items():
+        for up in s.get("upstreams", []):
+            if up not in caps:
+                problems.append(f"service {sname}: upstream {up!r} is not a registered capability")
+            elif up == s["capability"]:
+                problems.append(f"service {sname}: lists itself as upstream")
+            elif up not in primary:
+                problems.append(
+                    f"service {sname}: upstream {up!r} has no primary (a binding reaches only a "
+                    "primary)"
+                )
     return problems
 
 

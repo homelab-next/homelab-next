@@ -191,6 +191,19 @@ gateway-check:
 	$(PY) -m homelabnext.cli gen gateway render $(CONFORMANCE_GATEWAY)/gateway.yml $(CONFORMANCE_GATEWAY) --conformance --check
 	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway --check
 
+# consumers bind only to a primary (ADR-0039 decision 3): the example registry's upstreams, the
+# role table, the evaluation report's canary bindings, the packs the workflow deploy manifest pins
+# and each reference site's requires through its selection (docs/interfaces.md, "Registry and
+# naming")
+.PHONY: bindings-check
+check: bindings-check
+bindings-check:
+	for site in examples/modules/sites/*.yml; do \
+	  $(PY) -m homelabnext.cli registry bindings examples/services.yml --roles $(MODEL_ROLES) \
+	    --eval-report $(MODEL_EVAL) --packs workflows/packs --deployed workflows/deploy.yml \
+	    --site "$$site" --modules examples/modules || exit 1; \
+	done
+
 # the Go loader's judgement of the controller's fictional example configuration (ADR-0026 decision
 # 17): its profiles, their grants against the catalog, the registers, the runner and the pool,
 # with no database, port, network or secret read. CI's go job runs it; it needs a Go toolchain.
