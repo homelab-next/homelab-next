@@ -26,12 +26,17 @@ summary_of: outline:sha256:cc0b15786d3b8d62
 - **Amended:** 2026-11-06 (review 2: decision 17 covers the ledger's decisions 3 and 7 as well,
   whose warm and cold tiers are now live keys, so decision 6 needs no opt-out; see the amendment
   under it)
+- **Amended:** 2026-11-08 by ADR-0050, proposed (decisions 1, 2, 7, 12, 13, 15 and 16, for
+  profiles that opt into consolidation: rungs, pending review, expiry and a pack `purpose`; for
+  every profile, one update per key per checked batch; `retract` follows transcript exposure and
+  restores; the text is ADR-0050 decision 9)
 - **Related:** ADR-0001 (additive schemas), ADR-0014 (append-only events, derived state), ADR-0017
   and ADR-0030 (the broker), ADR-0032 (context in levels), [Agent profiles](../agent.md) ("Agent
   memory (M-09)"), `homelabnext/agent/memory.py`, `homelabnext/agent/pack.py`,
   `homelabnext/agent/knowledge.py`, `schemas/agent/report_result.schema.json`
 - **Depends-on:** ADR-0033
 - **Amends:** ADR-0035
+- **Amended-by:** ADR-0050
 
 ## Context
 
