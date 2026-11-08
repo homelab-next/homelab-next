@@ -264,11 +264,19 @@ def test_unattended_upgrades_refuses_bad_inputs(first):
     assert not (tmp_path / "52hnx").exists()
 
 
-def test_unattended_upgrades_health_reads_the_stamp(tmp_path):
+def _first(tmp_path):
+    v = uu_vars(tmp_path)
+    return {"role": "unattended_upgrades", "tasks_from": "health", "extra_vars": v,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_health_reads_the_stamp(first):
     import os
 
-    v = uu_vars(tmp_path)
-    assert run_role(tmp_path, "unattended_upgrades", "health", v).returncode != 0  # never ran
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode != 0  # never ran
     (tmp_path / "stamp").touch()
     assert run_role(tmp_path, "unattended_upgrades", "health", v).returncode == 0
     os.utime(tmp_path / "stamp", (86400, 86400))  # 1970: long stale
@@ -838,13 +846,8 @@ def test_nftables_host_renders_the_models_rules_checks_and_loads_once(first):
     assert len(calls(tmp_path)) == 1
 
 
-def test_nftables_host_renders_a_physical_model_runtime_default_deny(tmp_path):
-    """gpu-1 (kind host, cap:inference; tests/compute/physical) end to end: the inventory the
-    compute model renders for it is what the role is fed, and the ruleset that passes nft's own
-    check drops every outbound packet its lab allows do not name."""
+def _first(tmp_path):
     import importlib.util
-
-    import yaml
 
     from homelabnext.compute import load_fleet, render
 
@@ -858,8 +861,17 @@ def test_nftables_host_renders_a_physical_model_runtime_default_deny(tmp_path):
     egress = "egress-filter" in hv["hnx_controls"]
     v = nft_vars(tmp_path, nftables_host_firewall=hv["hnx_firewall"],
                  nftables_host_require_egress=egress)  # fmt: skip
-    r = run_role(tmp_path, "nftables_host", "config", v)
-    assert egress and r.returncode == 0, r.stdout + r.stderr
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v,
+            "setup": {"egress": egress}}  # fmt: skip
+
+
+@first_run(_first)
+def test_nftables_host_renders_a_physical_model_runtime_default_deny(first):
+    """gpu-1 (kind host, cap:inference; tests/compute/physical) end to end: the inventory the
+    compute model renders for it is what the role is fed, and the ruleset that passes nft's own
+    check drops every outbound packet its lab allows do not name."""
+    r, tmp_path = first
+    assert first.setup["egress"] and r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "nftables.conf").read_text()
     out = text.split("chain output {", 1)[1]
     assert "type filter hook output priority filter; policy drop;" in out
@@ -891,48 +903,52 @@ def test_nftables_host_accept_egress_refuses_only_the_metadata_services(first):
     assert "accept" not in out.split("policy accept;", 1)[1] and "hnx-egress-drop" not in out
 
 
-def test_nftables_host_refuses_cloud_metadata_before_any_allow(tmp_path):
+def _first(tmp_path, policy):
+    fw = {
+        "policy_out": policy,
+        "inbound_allow": [],
+        "outbound_allow": []
+        if policy == "ACCEPT"
+        else [{"name": "link-local", "proto": "tcp", "ports": "80", "dest": "169.254.0.0/16"}],
+    }
+    v = nft_vars(tmp_path, nftables_host_firewall=fw, nftables_host_require_egress=False)
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v}
+
+
+@pytest.mark.parametrize("policy", ["ACCEPT", "DROP"])
+@first_run(_first)
+def test_nftables_host_refuses_cloud_metadata_before_any_allow(first, policy):
     """No outbound_allow (here the whole link-local range) and no policy reopens the metadata
     services: their drop is the output chain's first verdict, ahead of established flows."""
-    for policy in ("ACCEPT", "DROP"):
-        fw = {
-            "policy_out": policy,
-            "inbound_allow": [],
-            "outbound_allow": []
-            if policy == "ACCEPT"
-            else [{"name": "link-local", "proto": "tcp", "ports": "80", "dest": "169.254.0.0/16"}],
-        }
-        v = nft_vars(tmp_path, nftables_host_firewall=fw, nftables_host_require_egress=False)
-        assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
-        out = (tmp_path / "nftables.conf").read_text().split("chain output {", 1)[1]
-        lines = [
-            ln.strip() for ln in out.splitlines() if ln.strip() and not ln.strip().startswith("#")
-        ]
-        verdicts = [
-            ln
-            for ln in lines[1:]
-            if ln.endswith(("accept", "drop")) or '" accept' in ln or "drop comment" in ln
-        ]
-        assert (
-            verdicts[0]
-            == (
-                "ip daddr { 169.254.169.254, 169.254.170.2, 192.0.0.192, 100.100.100.200 } "  # scrub-allow: cloud metadata, refused
-                'drop comment "homelabnext-refused-destination"'
-            )
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = (tmp_path / "nftables.conf").read_text().split("chain output {", 1)[1]
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    verdicts = [
+        ln
+        for ln in lines[1:]
+        if ln.endswith(("accept", "drop")) or '" accept' in ln or "drop comment" in ln
+    ]
+    assert (
+        verdicts[0]
+        == (
+            "ip daddr { 169.254.169.254, 169.254.170.2, 192.0.0.192, 100.100.100.200 } "  # scrub-allow: cloud metadata, refused
+            'drop comment "homelabnext-refused-destination"'
         )
-        assert (
-            verdicts[1]
-            == 'ip6 daddr { fd00:ec2::254 } drop comment "homelabnext-refused-destination"'  # scrub-allow: cloud metadata, refused
-        )
-        assert lines[1].endswith('log prefix "hnx-egress-refused: " level warn')
-        assert ("hnx-egress-drop: " in out) is (policy == "DROP")
-        # forwarded (container bridge) traffic: the same refusal, ahead of a container engine's
-        # forward chains (priority filter is 0), and nothing else
-        text = (tmp_path / "nftables.conf").read_text()
-        fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
-        assert "type filter hook forward priority filter - 10; policy accept;" in fwd
-        assert fwd.count('drop comment "homelabnext-refused-destination"') == 2
-        assert "accept comment" not in fwd and "hnx-egress-drop" not in fwd
+    )
+    assert (
+        verdicts[1]
+        == 'ip6 daddr { fd00:ec2::254 } drop comment "homelabnext-refused-destination"'  # scrub-allow: cloud metadata, refused
+    )
+    assert lines[1].endswith('log prefix "hnx-egress-refused: " level warn')
+    assert ("hnx-egress-drop: " in out) is (policy == "DROP")
+    # forwarded (container bridge) traffic: the same refusal, ahead of a container engine's
+    # forward chains (priority filter is 0), and nothing else
+    text = (tmp_path / "nftables.conf").read_text()
+    fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
+    assert "type filter hook forward priority filter - 10; policy accept;" in fwd
+    assert fwd.count('drop comment "homelabnext-refused-destination"') == 2
+    assert "accept comment" not in fwd and "hnx-egress-drop" not in fwd
 
 
 def _verdict_lines(chain: str) -> list[str]:
@@ -1461,11 +1477,16 @@ def test_disk_encryption_check_needs_a_reason_for_each_accepted_volume(first):
     assert r.returncode != 0 and "non-empty reason" in r.stdout
 
 
-@pytest.mark.requires_tool("lsblk")
-def test_disk_encryption_check_reads_the_real_lsblk(tmp_path):
+def _first(tmp_path):
     v = disk_vars(tmp_path)
     del v["disk_encryption_check_lsblk_cli"]
-    r = run_role(tmp_path, "disk_encryption_check", "main", v)
+    return {"role": "disk_encryption_check", "tasks_from": "main", "extra_vars": v}
+
+
+@pytest.mark.requires_tool("lsblk")
+@first_run(_first)
+def test_disk_encryption_check_reads_the_real_lsblk(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert isinstance(
         json.loads((tmp_path / "state" / "report.json").read_text())["unencrypted"], list
@@ -2226,12 +2247,7 @@ def test_rkhunter_health_follows_the_checks_exit_status(first, rc, ok):
 
 
 # ---------------------------------------------------------------- clamav
-@pytest.mark.parametrize(
-    ("rc", "fresh", "ok"), [(0, True, True), (1, True, False), (0, False, False)]
-)
-def test_clamav_scans_the_paths_that_exist_and_health_wants_fresh_signatures(
-    tmp_path, rc, fresh, ok
-):
+def _first(tmp_path, rc, fresh, ok):
     import os
 
     share = tmp_path / "share"
@@ -2249,7 +2265,18 @@ def test_clamav_scans_the_paths_that_exist_and_health_wants_fresh_signatures(
     v = scanner_vars(tmp_path, "clamav", clamav_paths=[str(share), str(tmp_path / "absent")], clamav_cli=cli,
                      clamav_exclude_dirs=["^/srv/cache"], clamav_database_dir=str(db),
                      clamav_freshclam_config=str(tmp_path / "freshclam.conf"))  # fmt: skip
-    assert run_role(tmp_path, "clamav", "config", v).returncode == 0
+    return {"role": "clamav", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v, "share": share}}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("rc", "fresh", "ok"), [(0, True, True), (1, True, False), (0, False, False)]
+)
+@first_run(_first)
+def test_clamav_scans_the_paths_that_exist_and_health_wants_fresh_signatures(first, rc, fresh, ok):
+    r, tmp_path = first
+    v, share = first.setup["v"], first.setup["share"]
+    assert r.returncode == 0, r.stdout + r.stderr
     run_scan(tmp_path)
     argv = (tmp_path / "argv").read_text()
     assert argv.startswith("--recursive --infected --no-summary --exclude-dir=^/srv/cache --log=")
@@ -2575,11 +2602,18 @@ def mails(tmp_path):
     return [m for m in p.read_text().split("\0") if m] if p.exists() else []
 
 
-def test_needrestart_is_list_only_and_alerts_only_when_the_set_changes(tmp_path):
+def _first(tmp_path):
+    v, out = nr_setup(tmp_path)
+    return {"role": "needrestart", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v, "out": out}}  # fmt: skip
+
+
+@first_run(_first)
+def test_needrestart_is_list_only_and_alerts_only_when_the_set_changes(first):
     import os
 
-    v, out = nr_setup(tmp_path)
-    r = run_role(tmp_path, "needrestart", "config", v)
+    r, tmp_path = first
+    v, out = first.setup["v"], first.setup["out"]
     assert r.returncode == 0, r.stdout + r.stderr
     conf = (tmp_path / "50-homelabnext.conf").read_text()
     assert "$nrconf{restart} = 'l';" in conf and "$nrconf{kernelhints} = 1;" in conf
