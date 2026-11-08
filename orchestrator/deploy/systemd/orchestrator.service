@@ -31,11 +31,13 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 RestartPreventExitStatus=3
-# SIGTERM drains the API for up to 30 s, then cancels the running sessions (their process groups)
+# SIGTERM goes to the controller alone (KillMode=mixed): it stops admitting, drains the API for up
+# to 30 s, then cancels the running sessions itself (SIGTERM to each session's process group, then
+# SIGKILL after the runner's grace), so a session ends as the controller's cancel, never as an
+# outside kill a retry would answer. Whatever is left in the cgroup when the controller has exited
+# or TimeoutStopSec runs out (a descendant that left its group, which init reaps) gets SIGKILL.
 TimeoutStopSec=60
-# Everything the service started goes with it, a session's descendant that left its process group
-# included (init reaps such an orphan; the controller is not a subreaper)
-KillMode=control-group
+KillMode=mixed
 
 StateDirectory=orchestrator
 StateDirectoryMode=0700

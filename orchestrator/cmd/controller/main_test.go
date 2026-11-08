@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -545,5 +546,57 @@ func TestServe_DoesNotBecomeASubreaper(t *testing.T) {
 	}
 	if on != 0 {
 		t.Fatal("serve made the process a child subreaper")
+	}
+}
+
+// The signals are caught first: before the database is opened (so a migration is never ended by
+// a SIGHUP's default action).
+func TestServe_CatchesSignalsBeforeTheDatabase(t *testing.T) {
+	cfg, dir := siteConfig(t, nil)
+	db := filepath.Join(dir, "state", "controller.db")
+	caught := false
+	hooks := &serveHooks{signals: make(chan os.Signal, 1)}
+	hooks.signalsCaught = func() {
+		if _, err := os.Stat(db); !os.IsNotExist(err) {
+			t.Error("the database was opened before the signals were caught")
+		}
+		caught = true
+	}
+	hooks.signals <- syscall.SIGTERM // an early stop: serve starts and stops at once
+	var b bytes.Buffer
+	if code := serve([]string{"--config", cfg}, &b, hooks); code != exitOK || !caught {
+		t.Fatalf("serve = %d, caught %v: %s", code, caught, b.String())
+	}
+}
+
+// A stop ends admission while the API still answers: no new session starts during the drain.
+func TestServe_AStopEndsAdmissionBeforeTheAPI(t *testing.T) {
+	cfg, _ := siteConfig(t, nil)
+	ln, err := net.Listen("tcp", loopback+":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "http://" + ln.Addr().String()
+	sigs := make(chan os.Signal, 1)
+	apiUp := -1
+	hooks := &serveHooks{listener: ln, signals: sigs}
+	hooks.admissionStopped = func() { apiUp = get(t, base+"/jobs", "token-one") }
+	done := make(chan int, 1)
+	var logs syncBuffer
+	go func() { done <- serve([]string{"--config", cfg}, &logs, hooks) }()
+	if code := get(t, base+"/jobs", "token-one"); code != http.StatusOK {
+		t.Fatalf("serve is not up: %d", code)
+	}
+	sigs <- syscall.SIGTERM
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Fatalf("serve = %d: %s", code, logs.String())
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+	if apiUp != http.StatusOK {
+		t.Fatalf("when admission stopped the API answered %d, want it still serving", apiUp)
 	}
 }

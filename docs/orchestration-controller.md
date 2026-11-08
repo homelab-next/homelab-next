@@ -545,8 +545,12 @@ directory.
   registers handlers (`TestServe_NeverServesTheDefaultMux`;
   `TestServe_RefusesAnUnauthenticatedNonLoopbackBind` is the bind check through the binary). SIGHUP
   reloads the tokens file (`Authenticator.Reload`); a file that does not load keeps the tokens
-  already loaded. SIGTERM or SIGINT drains the API for up to 30 seconds, then cancels the running
-  sessions.
+  already loaded. Signals are caught before anything else, so a SIGHUP during a migration does
+  not end the process. SIGTERM or SIGINT first ends admission (`queue.RunAdmitting`: no job is
+  admitted after it, by a pass under way included), then drains the API for up to 30 seconds,
+  then cancels the running sessions. The unit's `KillMode=mixed` sends SIGTERM to the controller
+  alone, so sessions end as its cancel (`KilledByController`), never as an outside kill that the
+  kill retry would answer with a new session.
 
 `runner.kind: exec` selects the subprocess runner (`runner.exec`: `argv`, `usage_args`,
 `toolsets_args`, `exit_classes` by class name, `max_response_bytes`, `kill_grace_seconds`). It is
@@ -554,7 +558,7 @@ the only built-in kind. An agent harness's runner comes with its provider module
 until then a migrated configuration has no runner and cannot serve. The example unit,
 `orchestrator/deploy/systemd/orchestrator.service`, is named after the registry row (ADR-0026
 decision 16). It sets `UMask=0077`, `StateDirectoryMode=0700`, `RuntimeDirectory=` for the lock
-file, `KillMode=control-group`, `ExecReload` as SIGHUP, and `controller check` as `ExecStartPre`.
+file, `KillMode=mixed`, `ExecReload` as SIGHUP, and `controller check` as `ExecStartPre`.
 
 ### Lessons and runbooks in a job's prompt
 
@@ -1106,7 +1110,8 @@ above says how.
   invalid `events.gateway_tag_prefix`, or a relative `lock_path`, no longer loads. The example
   unit sets `RuntimeDirectory=` for the lock file. What a session or facts command leaves behind
   beyond its process group (one that called `setsid`) is reparented to init, which reaps it, and
-  stays in the service's cgroup, so the unit's `KillMode` ends it with the service. The controller
+  stays in the service's cgroup, so the unit (`KillMode=mixed`: SIGKILL to what is left once the
+  controller has exited) ends it with the service. The controller
   is not a child subreaper: it waits only for the processes it started, so an orphan reparented to
   it would stay a zombie (`TestServe_DoesNotBecomeASubreaper`). When the cursor tool's module lands
   (stage 4), a test holds its store reader and `prompt.CursorFile` to the same verdicts, as the

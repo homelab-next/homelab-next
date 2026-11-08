@@ -45,6 +45,11 @@ type serveHooks struct {
 	server func(*http.Server)
 	// reloaded, when set, is called after each SIGHUP's reload with its error.
 	reloaded func(error)
+	// signalsCaught, when set, is called once the signals are caught, before anything else.
+	signalsCaught func()
+	// admissionStopped, when set, is called at a stop once admission has ended, before the API
+	// drains.
+	admissionStopped func()
 }
 
 // serve is `controller serve`: load the site, open the database (refusing a pending migration
@@ -53,6 +58,18 @@ type serveHooks struct {
 func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 	if hooks == nil {
 		hooks = &serveHooks{}
+	}
+	// The signals are caught before anything else happens: a SIGHUP's default action ends the
+	// process, which must never happen in the middle of a migration. One that arrives early waits
+	// in the channel and is handled once the controller serves (a SIGTERM then stops it at once).
+	sigs := hooks.signals
+	if sigs == nil {
+		sigs = make(chan os.Signal, 4)
+		signal.Notify(sigs, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
+		defer signal.Stop(sigs)
+	}
+	if hooks.signalsCaught != nil {
+		hooks.signalsCaught()
 	}
 	fs := flag.NewFlagSet("controller serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -174,17 +191,15 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 		}
 	}
 
+	// Two lifetimes: admission ends first, at a stop, so no new session starts while the API
+	// drains; the running jobs (and the prober) end after it.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sigs := hooks.signals
-	if sigs == nil {
-		sigs = make(chan os.Signal, 4)
-		signal.Notify(sigs, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
-		defer signal.Stop(sigs)
-	}
+	admit, stopAdmitting := context.WithCancel(ctx)
+	defer stopAdmitting()
 	go pool.RunHealthProber(ctx, time.Duration(cfg.BackendHealthIntervalSeconds)*time.Second)
 	schedDone := make(chan struct{})
-	go func() { defer close(schedDone); sch.Run(ctx, tickInterval) }()
+	go func() { defer close(schedDone); sch.RunAdmitting(admit, ctx, tickInterval) }()
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 	lg.Printf("controller: serving on %s (%d profiles, auth %v)", ln.Addr(), len(s.profiles.All()), auth != nil)
@@ -215,6 +230,10 @@ loop:
 				hooks.reloaded(err)
 			}
 		}
+	}
+	stopAdmitting()
+	if hooks.admissionStopped != nil {
+		hooks.admissionStopped()
 	}
 	sctx, scancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer scancel()
