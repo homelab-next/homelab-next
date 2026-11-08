@@ -92,6 +92,13 @@ func (c *countingStore) ListByState(s store.State) ([]*store.Job, error) {
 	return c.Store.ListByState(s)
 }
 
+func (c *countingStore) ListForAdmission(s store.State) ([]*store.Job, error) {
+	if s == store.StateQueued {
+		c.queuedReads.Add(1)
+	}
+	return c.Store.ListForAdmission(s)
+}
+
 // A pass reads the queued list once, however many jobs it holds: during an outage a long queue of
 // held local-only jobs costs one read, not one per job.
 func TestTick_ReadsTheQueueOncePerPass(t *testing.T) {
@@ -175,5 +182,38 @@ func TestWaitCauses_PrunedForRunsNoLongerQueued(t *testing.T) {
 	defer r.sch.mu.Unlock()
 	if _, ok := r.sch.waitCauses["gone"]; ok {
 		t.Error("a cause of a run no longer queued was kept")
+	}
+}
+
+// fullRowsStore records a read of whole queued rows.
+type fullRowsStore struct {
+	*store.Store
+	fullReads atomic.Int32
+}
+
+func (f *fullRowsStore) ListByState(s store.State) ([]*store.Job, error) {
+	if s == store.StateQueued {
+		f.fullReads.Add(1)
+	}
+	return f.Store.ListByState(s)
+}
+
+// A pass, and an automatic retry's duplicate check, read the queue without its text: never whole
+// queued rows.
+func TestTick_ReadsTheQueueWithoutItsText(t *testing.T) {
+	r := newRig(t, rigOptions{runner: runnertestFail()})
+	fs := &fullRowsStore{Store: r.st}
+	cfg := r.cfg
+	cfg.Store = fs
+	sch, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.submit("run-1", defaultProfile)
+	if err := sch.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := fs.fullReads.Load(); n != 0 {
+		t.Fatalf("whole queued rows were read %d times", n)
 	}
 }
