@@ -1,6 +1,6 @@
 ---
-summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:13af3fe008873b1f
+summary: 'The orchestration controller: adapter, holds, pinned result, gateway calls, optional features, its core in orchestrator/ and the controller binary.'
+summary_of: outline:sha256:791a9c3ae04dbbd7
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability

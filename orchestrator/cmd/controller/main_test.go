@@ -88,9 +88,11 @@ scope:
 	return cfgPath, dir
 }
 
-// loopbackBind is the sites' API address; NewServer checks it, and a test serves on its own
-// listener.
-const loopbackBind = "127.0.0.1:8088" // no-raw-endpoint: allow a loopback bind the API checks and never dials
+// loopback is the address every test binds: the sites' API address (loopbackBind; a test serves
+// on its own listener) and those listeners.
+const loopback = "127.0.0.1" // no-raw-endpoint: allow the loopback address the tests bind, never a dial elsewhere
+
+const loopbackBind = loopback + ":8088"
 
 func replace(old, new string) func(string) string {
 	return func(s string) string {
@@ -135,7 +137,7 @@ func TestCheck_EachRefusal(t *testing.T) {
 		"open lock directory": {replace("needs_interlock: false}", "needs_interlock: true}\nlock_path: "+openDir+"/interlock.lock"),
 			"writable by group or others"},
 		"unknown exit class": {replace("{argv: [/bin/true]}", "{argv: [/bin/true], exit_classes: {9: no-such-class}}"), "names no runner class"},
-		"pool refused": {replace("needs_interlock: false}", "needs_interlock: false, load_probe_urls: [http://engine-a.example.internal/metrics]}"), // no-raw-endpoint: allow a fictional probe URL, never dialled
+		"pool refused": {replace("needs_interlock: false}", "needs_interlock: false, load_probe_urls: [http://engine-a.example.internal/metrics]}"),
 			"backends:"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -205,7 +207,7 @@ func TestCheck_NoRunnerIsANote(t *testing.T) {
 // file, and never turning authentication off unless asked.
 func TestMigrate(t *testing.T) {
 	dir := t.TempDir()
-	old := "backend_status_script: /usr/local/libexec/status.py\nbackends:\n  local: {name: engine-a, base_url: http://engine-a.example.internal:8000/v1, home: /h}\n" // no-raw-endpoint: allow a fictional old base URL the migration rewrites
+	old := "backend_status_script: /usr/local/libexec/status.py\nbackends:\n  local: {name: engine-a, base_url: http://engine-a.example.internal/v1, home: /h}\n"
 	writeFile(t, filepath.Join(dir, "old.yaml"), old, 0o600)
 	scope := filepath.Join(dir, "scope.yaml")
 	writeFile(t, scope, "denied_roots: [owner]\nfindings_root: ''\nshared_write: []\nreserved_names: []\n", 0o600)
@@ -226,7 +228,7 @@ func TestMigrate(t *testing.T) {
 		t.Fatalf("--out: %v %v", fi, err)
 	}
 	data, _ := os.ReadFile(out)
-	for _, want := range []string{"engine-a.example.internal:8000", "backend_status_command", "enabled: false", "denied_roots"} { // no-raw-endpoint: allow the fictional endpoint the migration writes
+	for _, want := range []string{"engine-a.example.internal", "backend_status_command", "enabled: false", "denied_roots"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("migrated config lacks %q:\n%s", want, data)
 		}
@@ -250,7 +252,7 @@ func TestMigrate_SiteFiles(t *testing.T) {
 	writeFile(t, filepath.Join(profiles, "w.yaml"), "agent_key: w\nold_task: Watch.\n", 0o600)
 	tokens := filepath.Join(dir, "t.yaml")
 	writeFile(t, tokens, "tokens: []\n", 0o600)
-	old := "legacy_turns: 9\nprofiles_dir: profiles\napi_auth: {tokens_file: " + tokens + "}\nbackends:\n  local: {name: engine-a, base_url: http://engine-a.example.internal:8000, home: /h, load_probe_urls: [http://engine-a.example.internal:8000/metrics]}\n" + // no-raw-endpoint: allow fictional old URLs the migration rewrites
+	old := "legacy_turns: 9\nprofiles_dir: profiles\napi_auth: {tokens_file: " + tokens + "}\nbackends:\n  local: {name: engine-a, base_url: http://engine-a.example.internal, home: /h, load_probe_urls: [http://engine-a.example.internal/metrics]}\n" +
 		"scope: {denied_roots: [owner], findings_root: '', shared_write: [], reserved_names: []}\n"
 	writeFile(t, filepath.Join(dir, "old.yaml"), old, 0o600)
 	writeFile(t, filepath.Join(dir, "renames.yaml"), "legacy_turns: runner.max_turns\n", 0o600)
@@ -277,7 +279,7 @@ func TestMigrate_SiteFiles(t *testing.T) {
 // signal channel and a channel with serve's exit status.
 func serveSite(t *testing.T, cfg string, extra ...string) (base string, sigs chan os.Signal, done chan int, reloaded chan error, srv chan *http.Server) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0") // no-raw-endpoint: allow a loopback test listener
+	ln, err := net.Listen("tcp", loopback+":0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +380,7 @@ func TestServe_NeverServesTheDefaultMux(t *testing.T) {
 func TestServe_RefusesAnUnauthenticatedNonLoopbackBind(t *testing.T) {
 	cfg, _ := siteConfig(t, func(s string) string {
 		s = replace("api_auth: {tokens_file: api-tokens.yaml}", "api_auth: {enabled: false}")(s)
-		return replace("http_addr: "+loopbackBind, "http_addr: 0.0.0.0:8088")(s) // no-raw-endpoint: allow the wildcard bind the controller must refuse
+		return replace("http_addr: "+loopbackBind, "http_addr: :8088")(s) // every interface, which an unauthenticated API must refuse
 	})
 	var b bytes.Buffer
 	if code := serve([]string{"--config", cfg}, &b, &serveHooks{}); code != exitProblem || !strings.Contains(b.String(), "api:") {

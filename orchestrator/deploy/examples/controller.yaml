@@ -3,7 +3,7 @@
 # controller binary"), naming no host. `make controller-check` runs `controller check --config` on
 # it in CI. Relative paths are read from this file's directory.
 db_path: /var/lib/orchestrator/controller.db
-http_addr: 127.0.0.1:8088 # no-raw-endpoint: allow the loopback bind default, a bind and never a dial
+http_addr: 127.0.0.1:8088 # no-raw-endpoint: allow the loopback bind of the example, never a dial
 concurrency: 2
 
 runner:
