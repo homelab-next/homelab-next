@@ -202,8 +202,9 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 		var res *Result
 		// The reserved backend's slot is the caller's reservation, its same-backend retries
 		// included (they run one after another). Any other backend is attempted only when it has
-		// a free slot at its max_concurrent, taken for the attempt: a fallover never overfills a
-		// backend another job's reservation filled.
+		// a free slot at its max_concurrent by the pool's own in-flight count, the count a
+		// reservation's claim shares (probe load and the token budget are admission's), taken for
+		// the attempt: a fallover never takes a slot another job's reservation holds.
 		counted := backend.Name == reserved
 		if !counted && !p.takeSlot(backend) {
 			p.logf("backends: run=%s backend=%s is at its max_concurrent (%d); not attempted", rid, backend.Name, backend.MaxConcurrent)
