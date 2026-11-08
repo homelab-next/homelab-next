@@ -9,6 +9,9 @@ summary_of: outline:sha256:c60df505d993e6ba
 - **Amends:** ADR-0013
 - **Related:** ADR-0010, ADR-0014, `docs/broker.md`, `docs/agent.md`, `schemas/broker/`,
   `homelabnext/broker/`, `conformance/protocols/broker.py`
+- **Amended:** 2026-11-07 by ADR-0044 (decision 14): decision 10's relay operations gain the
+  records, hold and recall operations, and decision 17's import becomes decision 10's
+- **Amended-by:** ADR-0044
 
 ## Context
 

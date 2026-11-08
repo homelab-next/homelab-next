@@ -2,7 +2,12 @@
 """A loopback stand-in for the LLM orchestrator's job API (the Go controller at ``a52a1c4``).
 
 Only what the ``orchestration`` adapter touches, each shape taken from the controller's code
-(paths are relative to that repository):
+(paths are relative to that private repository and hold only at ``a52a1c4``: its
+``internal/hermesagent`` package has since been split into ``internal/runner/hermes``,
+``internal/prompt`` and ``internal/backends``, and the in-repo successor of its ``internal/store``
+is ``orchestrator/internal/store``, which differs where this stand-in follows ``a52a1c4``, for
+example an idempotency key scoped to its submitter, a ``running -> queued`` retry and restart
+reconciliation failing ``awaiting_inference`` jobs too):
 
 * routes -- ``POST /jobs``, ``GET /jobs/{id}``, ``POST /jobs/{id}/cancel``,
   ``POST /admin/reload-profiles`` (``internal/api/server.go:39-42``); anything else is 404 (Go's
@@ -46,11 +51,14 @@ Only what the ``orchestration`` adapter touches, each shape taken from the contr
   index is a table, so keys survive.  :meth:`FakeController.kill` makes one job's hermes process
   die (``signal: killed``), the way an OOM kill or a crash would.
 
-``fixes`` turns on the controller changes proposed for the two failing MUST checks (the patch
-series in docs/orchestration-controller.md): ``reject-unknown-agent-key`` answers ``404 unknown
-agent_key`` for an unprofiled key without ``request_body``; ``max-attempts`` honours a profile's
-``max_attempts`` (same run id, never after a cancel) and reports ``attempts``.  It also takes
-the :data:`UPSTREAM` changes that landed in the controller after ``a52a1c4``:
+``fixes`` turns on the controller changes for the two failing MUST checks (the patch series in
+docs/orchestration-controller.md, which landed on the private controller on 2026-10-22, after
+``a52a1c4``): ``reject-unknown-agent-key`` answers ``404 unknown agent_key`` for an unprofiled
+key without ``request_body``; ``max-attempts`` honours a profile's ``max_attempts`` (same run
+id, never after a cancel) and reports ``attempts``.  ADR-0026 does not port the opt-in: the
+controller ported into ``orchestrator/`` refuses an unknown key unconditionally and has no
+``request_body``.  It also
+takes the :data:`UPSTREAM` changes that landed in the controller after ``a52a1c4``:
 ``backend-inflight`` serves ``GET /admin/backend-inflight`` (``internal/api/server.go``,
 ``WithBackendInFlight``; ``hermesagent.Policy.InFlightSnapshot``): ``{"backends": {name:
 {"in_flight": n, "reserved_runs": [run ids]}}}``, a backend listed once it has been used.
@@ -75,10 +83,11 @@ import yaml
 from conformance.fakes import llm_orchestrator_hermes as hermes
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow fake server binds loopback only
+#: controller changes for the failing MUST checks, landed privately on 2026-10-22 (after a52a1c4)
 FIXES = frozenset({"reject-unknown-agent-key", "max-attempts"})
-#: controller changes that landed upstream after a52a1c4 (not proposals), opt-in like ``fixes``
+#: further controller changes that landed upstream after a52a1c4, opt-in like ``fixes``
 UPSTREAM = frozenset({"backend-inflight"})
-#: ``store.ReconcileFailedReason``
+#: ``store.ReconcileFailedReason`` (also ``orchestrator/internal/store/store.go:858``)
 RECONCILE_REASON = "controller-restart-reconciliation"
 BACKEND = "primary-local"
 TRANSITIONS = {

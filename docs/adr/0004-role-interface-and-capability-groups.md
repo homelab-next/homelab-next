@@ -7,6 +7,10 @@ summary_of: outline:sha256:b3d0e1b40715040f
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0002, ADR-0005, ADR-0008, `docs/role-interface.md`
+- **Amended:** 2026-11-07 by ADR-0040 (decision 1): the `backup` and `restore` hooks of decision 1
+  take the declared method of the module's `recovery` entry, the backup manifest names every named
+  volume and bind source the role mounts, and role interface 1.1 gains an `import` hook
+- **Amended-by:** ADR-0040
 
 ## Context
 

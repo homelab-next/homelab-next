@@ -8,7 +8,10 @@ summary_of: outline:sha256:e6edeac97c1cf348
 The maintainer's Go controller (the "LLM orchestrator", pinned here at commit `a52a1c4`) admits
 whole agent sessions. Each job is one `hermes -z` subprocess, admitted against live engine load,
 moved to another backend when it fails, and sent to cloud only when the failure is the backend's
-fault. This page covers two things:
+fault. File:line cites of the controller on this page are to that private repository at
+`a52a1c4`. Its `internal/hermesagent` package has since been split into `internal/runner/hermes`,
+`internal/prompt` and `internal/backends`, so those cites hold only at that commit; the in-repo
+successor of its `internal/store` is `orchestrator/internal/store`. This page covers two things:
 
 - how the controller is measured against the `orchestration` contract;
 - how its model calls go through the [LLM gateway](llm-gateway.md) ([[llm-gateway]]).
@@ -47,7 +50,7 @@ Two target files ship with it:
   came from.
 
 `tests/conform/test_conform_orchestration_controller.py` runs the whole suite through the adapter
-on that stand-in, both as recorded and with the proposed fixes turned on.
+on that stand-in, both as recorded and with the landed fixes turned on.
 
 ## Holds: capacity is held only by live work
 
@@ -87,7 +90,7 @@ controller host, is what would prove those paths.
 Live run on 2026-10-22: the controller built with Go 1.25, a dev config, the stand-in as `hermes`.
 Result: `FAIL orchestration ... 11 executed`, with 8 passing.
 
-| Check | What the controller does | Proposed fix |
+| Check | What the controller does | Fix (landed privately on 2026-10-22) |
 |---|---|---|
 | `unknown-job-raises` | It accepts an `agent_key` that has no profile, answers `201`, and queues an HTTP passthrough job. That job fails later with `primary-local: unreachable`. A typo in `agent_key` silently changes the dispatch path. | `0002`: `reject_unknown_agent_keys: true` makes the API answer `404 unknown agent_key` unless the request carries an explicit `request_body`. It is opt-in, because passthrough callers still exist. |
 | `retries-until-success` | It attempts a run once. Its only requeues are the special cases (capacity kill, backend down), and each requeue creates a new run id. | `0003`: profile `max_attempts` re-runs the attempt chain under the same run id. It never retries after a cancel, a job deadline, a timeout ceiling or a turn cap. `GET /jobs/{id}` reports `attempts`. |
@@ -101,7 +104,10 @@ as-is run worked around it by giving the controller a private mount namespace wi
 The three patches apply in order with `git am` to `a52a1c4`. Each one has its own Go test
 (`internal/config`, `internal/api/unknown_agent_test.go`, `internal/queue/max_attempts_test.go`,
 `internal/api/attempts_test.go`). With all three applied, the same live run passes all 11 checks.
-The patches are proposals: nothing was committed to the controller.
+All three landed on the private controller on 2026-10-22, after `a52a1c4`, so the result above
+is still the as-is one. ADR-0026 does not port the opt-in of `0002`: with no HTTP passthrough, the
+controller ported into `orchestrator/` refuses an unknown `agent_key` (404) unconditionally, and
+`request_body` and `reject_unknown_agent_keys` are not ported.
 
 Other findings, not MUST failures:
 

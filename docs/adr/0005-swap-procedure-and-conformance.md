@@ -7,6 +7,11 @@ summary_of: outline:sha256:816dedca4a8d0f2c
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0001, ADR-0002, ADR-0003, `homelabnext/swap`, `homelabnext/conform`
+- **Amended:** 2026-11-07 by ADR-0040 (decision 5): a swap is one protocol for every capability,
+  `hnx modules replace FROM TO` (plan, shadow, conformance, migrate into the shadow through the
+  slot's export and import, compare, switch by one reviewed change, a read-only rollback window,
+  decommission, close); `hnx swap` stays the network-route leg inside its switch
+- **Amended-by:** ADR-0039, ADR-0040
 
 ## Context
 
