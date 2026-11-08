@@ -214,6 +214,40 @@ func alive(pid int) bool {
 	return i < 0 || i+2 >= len(s) || (s[i+2] != 'Z' && s[i+2] != 'X')
 }
 
+// An empty allowlist inherits nothing, and a denied name never reaches the session, whatever the
+// allowlist says: a session can print its environment into the answer a caller reads.
+func TestRun_NothingInheritedUnlessListedAndDeniedNeverIs(t *testing.T) {
+	t.Setenv("HNX_TEST_TOKEN", "the-forwarder-secret")
+	t.Setenv("HNX_TEST_OTHER", "x")
+	r := newRunner(t, Config{Argv: helperArgv("env")})
+	res, err := r.Run(context.Background(), runner.Session{RunID: "r1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Response, "the-forwarder-secret") || strings.Contains(res.Response, "HNX_TEST_OTHER") || strings.Contains("\n"+res.Response, "\nPATH=") {
+		t.Errorf("an empty allowlist passed the controller's environment:\n%s", res.Response)
+	}
+	if !strings.Contains(res.Response, "HNX_RUN_ID=r1") {
+		t.Errorf("the session's own variables are missing:\n%s", res.Response)
+	}
+	cfg := Config{Argv: helperArgv("env"), EnvAllowlist: []string{"HNX_*"}}
+	cfg.DenyEnv = []string{"HNX_TEST_TOKEN"}
+	r = newRunner(t, cfg)
+	res, err = r.Run(context.Background(), runner.Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Response, "the-forwarder-secret") || !strings.Contains(res.Response, "HNX_TEST_OTHER=x") {
+		t.Errorf("a denied name passed, or the allowlist did not:\n%s", res.Response)
+	}
+	if e, ok := Covers([]string{"LANG", "HNX_*"}, "HNX_TEST_TOKEN"); !ok || e != "HNX_*" {
+		t.Errorf("Covers = %q %v", e, ok)
+	}
+	if _, ok := Covers(nil, "LANG"); ok {
+		t.Error("an empty allowlist covers a name")
+	}
+}
+
 func TestRun_TheEnvironmentIsTheAllowlistAndTheSession(t *testing.T) {
 	t.Setenv("HNX_TEST_KEEP", "1")
 	t.Setenv("HNX_TEST_DROP", "1")
@@ -245,7 +279,7 @@ func TestRun_TheEnvironmentIsTheAllowlistAndTheSession(t *testing.T) {
 // The servers file holds the session's rendered grants and is gone with the run directory.
 func TestRun_TheServersFileHoldsTheGrants(t *testing.T) {
 	base := t.TempDir()
-	r := newRunner(t, Config{Argv: append(helperArgv("echo"), ""), RunDirBase: base})
+	r := newRunner(t, Config{Argv: append(helperArgv("echo"), ""), RunDirBase: base, EnvAllowlist: []string{"PATH"}})
 	r.cfg.Argv = []string{"/bin/sh", "-c", `cat "$HNX_SERVERS_FILE"`}
 	res, err := r.Run(context.Background(), runner.Session{Servers: map[string]runner.Server{"files": {Command: "files-mcp", Args: []string{"--ro"}}}})
 	if err != nil {

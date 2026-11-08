@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -16,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/homelab-next/homelab-next/orchestrator/internal/config"
+	"github.com/homelab-next/homelab-next/orchestrator/internal/runner"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/store"
 )
 
@@ -491,4 +494,35 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// The event forwarder's token never reaches a session: an allowlist entry covering it is refused
+// by the check, and the runner strips it whatever the list says.
+func TestRunner_TheForwarderTokenNeverReachesASession(t *testing.T) {
+	cfg, _ := siteConfig(t, func(s string) string {
+		s = replace("exec: {argv: [/bin/true]}", "exec: {argv: [/bin/true]}\n  env_allowlist: [HNX_EV*]")(s)
+		return s + "events: {token_env: HNX_EVENTS_TOKEN}\n"
+	})
+	code, out, errs := runCmd(t, "check", "--config", cfg)
+	if code != exitProblem || !strings.Contains(out, "covers HNX_EVENTS_TOKEN") {
+		t.Fatalf("check = %d\n%s%s", code, out, errs)
+	}
+	t.Setenv("HNX_EVENTS_TOKEN", "the-forwarder-secret")
+	t.Setenv("HNX_EVENTS_OTHER", "kept")
+	c, err := config.Load(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runner.Exec.Argv = []string{"/usr/bin/env"}
+	r, err := newRunner(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Run(context.Background(), runner.Session{RunID: "r1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Response, "the-forwarder-secret") || !strings.Contains(res.Response, "HNX_EVENTS_OTHER=kept") {
+		t.Fatalf("the session's environment:\n%s", res.Response)
+	}
 }

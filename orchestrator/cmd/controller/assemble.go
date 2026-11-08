@@ -121,7 +121,12 @@ func loadSite(path string) (*site, []error) {
 			problems = append(problems, fmt.Errorf("lock_path: %w", err))
 		}
 	}
-	if r, err := buildRunner(cfg.Runner); err != nil {
+	for _, name := range secretEnv(cfg) {
+		if e, ok := execrunner.Covers(cfg.Runner.EnvAllowlist, name); ok {
+			problems = append(problems, fmt.Errorf("runner.env_allowlist: entry %q covers %s, which holds a secret the controller reads; it is never passed to a session, so list the variables sessions need by name", e, name))
+		}
+	}
+	if r, err := newRunner(cfg); err != nil {
 		problems = append(problems, fmt.Errorf("runner: %w", err))
 	} else if r == nil {
 		s.notes = append(s.notes, "runner.kind is not set: this configuration loads but cannot serve")
@@ -198,8 +203,19 @@ func checkLockDir(lockPath string) error {
 	return nil
 }
 
-// buildRunner is the configured runner; nil with no kind.
-func buildRunner(r config.Runner) (runner.Runner, error) {
+// secretEnv are the environment variables the controller reads secrets from: never passed to a
+// session, whatever runner.env_allowlist says.
+func secretEnv(cfg config.Config) []string {
+	var out []string
+	if cfg.Events.TokenEnv != "" {
+		out = append(out, cfg.Events.TokenEnv)
+	}
+	return out
+}
+
+// newRunner is the configured runner; nil with no kind.
+func newRunner(cfg config.Config) (runner.Runner, error) {
+	r := cfg.Runner
 	switch r.Kind {
 	case "":
 		return nil, nil
@@ -214,7 +230,7 @@ func buildRunner(r config.Runner) (runner.Runner, error) {
 		}
 		return execrunner.New(execrunner.Config{
 			Argv: r.Exec.Argv, UsageArgs: r.Exec.UsageArgs, ToolsetsArgs: r.Exec.ToolsetsArgs,
-			ExitClasses: classes, EnvAllowlist: r.EnvAllowlist, RunDirBase: r.RunDirBase,
+			ExitClasses: classes, EnvAllowlist: r.EnvAllowlist, DenyEnv: secretEnv(cfg), RunDirBase: r.RunDirBase,
 			MaxResponseBytes: r.Exec.MaxResponseBytes, KillGrace: time.Duration(r.Exec.KillGraceSeconds) * time.Second,
 		})
 	}

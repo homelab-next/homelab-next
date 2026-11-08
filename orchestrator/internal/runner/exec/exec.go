@@ -21,6 +21,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -72,9 +73,13 @@ type Config struct {
 	// mapped here to runner.ConcurrencyLimited.
 	ExitClasses map[int]runner.Class
 	// EnvAllowlist: the process gets only these of the controller's environment variables (an
-	// exact name, or a prefix ending in "*"), then the session's HNX_* variables. Empty: the whole
-	// environment.
+	// exact name, or a prefix ending in "*"), then the session's HNX_* variables. Empty: none of
+	// them (fail-closed: a session never inherits what nobody listed).
 	EnvAllowlist []string
+	// DenyEnv are variables a session never gets, whatever EnvAllowlist says: the names the
+	// controller reads its own secrets from (the event forwarder's token, say). A session's
+	// output is the answer a caller reads, so a variable it can print is one a caller can read.
+	DenyEnv []string
 	// RunDirBase is where each session gets a fresh owner-only working directory, removed when it
 	// ends; empty is the system's temporary directory.
 	RunDirBase string
@@ -316,7 +321,7 @@ func (r *Runner) environ(s runner.Session) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if _, mine := own[name]; mine || name == "HNX_SERVERS_FILE" {
+		if _, mine := own[name]; mine || name == "HNX_SERVERS_FILE" || slices.Contains(r.cfg.DenyEnv, name) {
 			continue
 		}
 		if r.allowed(name) {
@@ -330,19 +335,23 @@ func (r *Runner) environ(s runner.Session) []string {
 }
 
 func (r *Runner) allowed(name string) bool {
-	if len(r.cfg.EnvAllowlist) == 0 {
-		return true
-	}
-	for _, e := range r.cfg.EnvAllowlist {
+	_, ok := Covers(r.cfg.EnvAllowlist, name)
+	return ok
+}
+
+// Covers reports whether an allowlist entry (an exact name, or a prefix ending in "*") lets name
+// through, and which; an empty list lets nothing through.
+func Covers(allowlist []string, name string) (string, bool) {
+	for _, e := range allowlist {
 		if p, ok := strings.CutSuffix(e, "*"); ok {
 			if strings.HasPrefix(name, p) {
-				return true
+				return e, true
 			}
 		} else if name == e {
-			return true
+			return e, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // readUsage reads the session's usage report: a regular file, not a link, at most maxUsageBytes, a

@@ -93,11 +93,12 @@ type Runner struct {
 	Liveness string `yaml:"liveness"`
 	// MaxTurns caps the model turns of one session; 0 is no cap.
 	MaxTurns int `yaml:"max_turns"`
-	// RunDirBase: each session gets a fresh owner-only working directory under it. Empty: the
-	// controller's own.
+	// RunDirBase: each session gets a fresh owner-only working directory under it, removed when
+	// the session ends. Empty: the system's temporary directory.
 	RunDirBase string `yaml:"run_dir_base"`
-	// EnvAllowlist: a session gets only these environment variables (an exact name, or a prefix
-	// ending in "*"). Empty: the controller's whole environment.
+	// EnvAllowlist: a session gets only these of the controller's environment variables (an exact
+	// name, or a prefix ending in "*"). Empty: none. events.token_env is never passed, whatever
+	// the list says, and an entry that covers it is refused by the controller's check.
 	EnvAllowlist []string `yaml:"env_allowlist"`
 	// JobHomeRoot is where a runner keeps per-job homes; empty is beside db_path.
 	JobHomeRoot string `yaml:"job_home_root"`
