@@ -359,8 +359,16 @@ func TestHolds_CapacityIsReleasedOnEveryEnd(t *testing.T) {
 		r.tick()
 		next(t, r)
 	})
+	// run-1 blocks until its context ends; every other run answers (whether or not run-1's session
+	// started before its cancel or deadline).
+	blockFirst := runnertest.New(func(ctx context.Context, s runner.Session) (*runner.Result, error) {
+		if s.RunID == "run-1" {
+			return runnertest.Block(make(chan struct{}), "", nil)(ctx, s)
+		}
+		return &runner.Result{Response: "ok"}, nil
+	})
 	t.Run("cancel", func(t *testing.T) {
-		r := newRig(t, rigOptions{runner: runnertest.New(runnertest.Block(make(chan struct{}), "", nil), runnertest.Answer("ok")), backends: oneSlot})
+		r := newRig(t, rigOptions{runner: blockFirst, backends: oneSlot})
 		r.submit("run-1", defaultProfile)
 		done := r.tickAsync(context.Background())
 		r.waitState("run-1", store.StateRunning)
@@ -369,7 +377,7 @@ func TestHolds_CapacityIsReleasedOnEveryEnd(t *testing.T) {
 		next(t, r)
 	})
 	t.Run("deadline", func(t *testing.T) {
-		r := newRig(t, rigOptions{runner: runnertest.New(runnertest.Block(make(chan struct{}), "", nil), runnertest.Answer("ok")), backends: oneSlot, jobLimit: 30 * time.Millisecond})
+		r := newRig(t, rigOptions{runner: blockFirst, backends: oneSlot, jobLimit: 30 * time.Millisecond})
 		r.submit("run-1", defaultProfile)
 		r.tick()
 		if j := r.job("run-1"); j.FailureClass != store.FailureDeadline {
