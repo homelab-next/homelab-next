@@ -416,14 +416,14 @@ func newEntry(uid string, m *MatchDef, systems []string, title, spanText string)
 	return e
 }
 
-// pathScore scores each of the entry's own paths once when any of the caller's paths starts with
-// it or holds it.
+// pathScore scores each of the entry's own paths once when it prefixes one of the paths the job
+// names (never when it merely occurs inside one: vendor/roles/proxy/ is not under roles/proxy/).
 func pathScore(paths, entryPaths []string) (int, []string) {
 	score := 0
 	var why []string
 	for _, p := range entryPaths {
 		for _, x := range paths {
-			if strings.HasPrefix(x, p) || strings.Contains(x, p) {
+			if strings.HasPrefix(x, p) {
 				score += wPath
 				why = append(why, "path:"+p)
 				break

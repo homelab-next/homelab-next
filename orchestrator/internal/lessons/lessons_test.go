@@ -346,3 +346,18 @@ func TestLoadIndex_EventsDirectoryIsTheRecordsOwn(t *testing.T) {
 		t.Error("a record with too many events loaded")
 	}
 }
+
+// A record's path matches a path the job names only as its prefix.
+func TestMatch_APathMatchesOnlyAsAPrefix(t *testing.T) {
+	ix := testIndex(t)
+	for paths, want := range map[string]int{
+		"roles/proxy/tasks/main.yml":        1,
+		"roles/proxy/":                      1,
+		"vendor/roles/proxy/tasks/main.yml": 0,
+		"docs/roles/proxy/":                 0,
+	} {
+		if got := ix.MatchLessons("tidy the role", []string{paths}); len(got) != want {
+			t.Errorf("%s: %d hits, want %d", paths, len(got), want)
+		}
+	}
+}
