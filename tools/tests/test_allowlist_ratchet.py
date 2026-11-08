@@ -45,7 +45,7 @@ def _tree(tmp_path: Path, *, globs=2, endpoints=1, scripts=1, scrub=1, inline=1,
 def _write_counts(root: Path, **over) -> None:
     counts = ar.measure(root)
     counts.update({k.replace("_", "-"): v for k, v in over.items()})
-    ar.write_counts(root / ar.COUNTS, counts)
+    ar.write_counts(root / ar.COUNTS, counts, ar.digests(root))
 
 
 def _run(*args) -> tuple[int, str, str]:
@@ -111,6 +111,40 @@ def test_a_list_below_its_count_fails_with_the_count_to_lower_it_to(tmp_path, na
     assert _run(root)[0] == 0
 
 
+#: an entry edited in place, per entry list: the count stays, the digest does not
+WIDEN = {
+    "product-names-allow": ("tools/product_names.yml", '"p0/*"', '"**"'),
+    "no-raw-endpoints-allow": ("tools/no_raw_endpoints.allow.yml", '"e0/*"', '"**"'),
+    "scripts-allow": ("tools/scripts.allow.yml", "s0: why", "anything: why"),
+}
+
+
+@pytest.mark.parametrize("name", list(WIDEN))
+def test_an_entry_widened_in_place_fails_until_the_counts_file_records_it(tmp_path, name):
+    root = _tree(tmp_path)
+    _write_counts(root)
+    rel, old, new = WIDEN[name]
+    text = (root / rel).read_text()
+    assert old in text
+    (root / rel).write_text(text.replace(old, new))
+    assert ar.measure(root)[name] == ar.load_counts(root / ar.COUNTS)[0][name]  # same count
+    rc, out, _ = _run(root)
+    assert rc == 1, out
+    assert f"{name}: an entry changed in place" in out
+    rc, out, _ = _run("--update", root)  # recording an edit needs no --grow: the diff shows it
+    assert rc == 0 and f"{name} entries edited" in out
+    assert _run(root)[0] == 0
+
+
+def test_the_digest_ignores_entry_order(tmp_path):
+    root = _tree(tmp_path, globs=3)
+    before = ar.digests(root)["product-names-allow"]
+    rel = root / "tools/product_names.yml"
+    head, _, rows = rel.read_text().partition("allow:\n")
+    rel.write_text(head + "allow:\n" + "".join(reversed(rows.splitlines(keepends=True))))
+    assert ar.digests(root)["product-names-allow"] == before
+
+
 def test_update_refuses_to_raise_a_count_without_grow(tmp_path):
     root = _tree(tmp_path, globs=4)
     _write_counts(root, product_names_allow=2)
@@ -120,7 +154,7 @@ def test_update_refuses_to_raise_a_count_without_grow(tmp_path):
     assert "product-names-allow would rise 2 -> 4" in err
     assert (root / ar.COUNTS).read_text() == before
     assert _run("--update", "--grow", root)[0] == 0
-    assert ar.load_counts(root / ar.COUNTS)["product-names-allow"] == 4
+    assert ar.load_counts(root / ar.COUNTS)[0]["product-names-allow"] == 4
     assert _run("--grow", root)[0] == 2  # --grow alone is a usage error
 
 
@@ -168,6 +202,7 @@ def test_endpoint_markers_are_counted_with_the_raw_endpoint_scans_own_read(tmp_p
         "counts: {product-names-allow: -1}\n",
         "counts: {product-names-allow: yes}\n",
         "counts: {product-names-allow: 1}\n",  # the other lists have no count
+        "counts: {}\ndigests: {product-names-allow: md5:00}\n",
         ": [\n",
     ],
 )
@@ -226,14 +261,25 @@ def test_a_count_raised_against_the_base_is_printed_for_review(tmp_path):
     assert "code owner" in out
 
 
+def test_an_entry_edited_against_the_base_is_printed_and_needs_the_bases_code_owner(tmp_path):
+    for owners, want in ((OWNED, 0), ("*  @owner\n", 1)):
+        root, base = _repo(tmp_path / str(want), owners=owners)
+        rel = root / "tools/no_raw_endpoints.allow.yml"
+        rel.write_text(rel.read_text().replace('"e0/*"', '"**"'))
+        _write_counts(root)
+        rc, out, _ = _run("--base", base, root)
+        assert rc == want, out
+        assert f"no-raw-endpoints-allow: its entries changed against {base[:12]}" in out
+
+
 def test_equal_or_lower_counts_against_the_base_say_nothing(tmp_path):
     root, base = _repo(tmp_path)
     rc, out, _ = _run("--base", base, root)
-    assert rc == 0 and "rises" not in out
+    assert rc == 0 and "rises" not in out and "changed" not in out
     (root / "src.txt").write_text("plain\n")
     _write_counts(root)
     rc, out, _ = _run("--base", base, root)
-    assert rc == 0 and "rises" not in out
+    assert rc == 0 and "rises" not in out and "changed" not in out
 
 
 def test_a_raise_fails_when_the_bases_codeowners_does_not_own_the_counts_file(tmp_path):

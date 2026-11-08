@@ -184,9 +184,13 @@ and an entry that no longer excuses anything fails the lint.
   `scrub-allow` or an inline `no-raw-endpoint: allow` marker, and holds each count to
   `tools/allowlist_counts.yml`. A list above its count fails: raise the count in the same change
   (a code-owned file, so the raise is the code owner's to review). A list below its count fails
-  too, with the number to lower it to (`make allowlist-counts`). The counts file must sit under an
-  explicit CODEOWNERS path rule, not the catch-all; with `--base`/`--ci-base` a count raised since
-  the base is printed, and fails unless the base's CODEOWNERS puts the counts file there.
+  too, with the number to lower it to (`make allowlist-counts`). The three list files also have a
+  digest of their sorted entries there, so an entry edited in place (a glob widened, a path
+  swapped, a reason reworded) fails until `make allowlist-counts` records it; a marker's count is
+  of marked lines only, and a marked line edited in place is reviewed in its own file's diff. The
+  counts file must sit under an explicit CODEOWNERS path rule, not the catch-all; with
+  `--base`/`--ci-base` a count raised or a digest changed since the base is printed, and fails
+  unless the base's CODEOWNERS puts the counts file there.
 - `make keyring-check` (M-12): `examples/keyring/keyring.json` is exactly what
   `hnx agent keyring build examples/keyring/sources.yml` generates (`make keyring` rebuilds it).
 

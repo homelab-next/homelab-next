@@ -7,7 +7,7 @@
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:gates, make:allowlist-counts]
 #   inputs: the tracked tree; tools/allowlist_counts.yml; CODEOWNERS; the base commit's counts and CODEOWNERS (--base, --ci-base)
-#   outputs: one line per list that grew or shrank against its count (or against the base); --update rewrites the counts
+#   outputs: one line per list that grew, shrank or had an entry edited against the counts file (or against the base); --update rewrites the counts and digests
 #   exit:
 #     "0": every list is at its count (and no count rose against the base without a human-tier code owner)
 #     "1": a list above or below its count, a counts file outside CODEOWNERS' human tier, or a count raised against the base with none
@@ -25,8 +25,16 @@ them while the debt they excuse was being paid down elsewhere.  This check count
 * ``scrub-allow-markers``: the lines carrying a leak-scan suppression marker, as
   ``tools/leak_scan.py`` reads them (its own ``SUPPRESS_RE``, its own file walk);
 * ``no-raw-endpoint-markers``: the lines carrying an inline raw-endpoint allow marker
-  (``homelabnext.endpoints_scan.INLINE_ALLOW``), as ``tools/no_raw_endpoints.py`` reads them (its
+  (``homelabnext.endpoints_scan.INLINE_ALLOW``), as the raw-endpoint gate reads them (its
   own walk, ``iter_files``, and its own read, ``read_scannable``), allowlisted paths included.
+
+**The counts are what is ratcheted, plus a digest of each entry list.**  An entry edited in place
+(a glob widened to ``**``, a path swapped for another) keeps the count, so each list kept in a file
+(:data:`ENTRY_LISTS`: the first three) also has the ``sha256`` of its sorted entries, reasons
+included, in the counts file; an edit that changes it fails until the digest is recorded there
+(``--update``, which needs no ``--grow`` for it).  A marker kind has no digest: what is counted is
+the number of marked lines, and a marked line edited in place (another endpoint added beside the
+marker) is reviewed only in the diff of the file it is in, like any other line.
 
 **A count above what is committed fails**: the change that adds an exemption must raise the count
 in the same change.  **A count below what is there also fails**, telling you the number to lower
@@ -36,8 +44,8 @@ slack a removal frees cannot be spent later without review.
 **Why the counts file, and why CODEOWNERS.**  Raising a count is an edit of
 ``tools/allowlist_counts.yml``, which must sit under a *human-tier* rule of CODEOWNERS: the last
 rule matching it is an explicit path rule (``/tools/``), not the catch-all ``*``.  So every growth
-of any list, wherever its entries live (a marker in a test file, a glob in a gate's list), touches
-one file whose review is the code owner's.  A label (``tools/experimental.yml``'s
+of any list, wherever its entries live (a marker in a test file, a glob in a gate's list), and
+every edit of an entry list's entries, touches one file whose review is the code owner's.  A label (``tools/experimental.yml``'s
 ``experimental-growth``) was the alternative; it approves one head and needs the operator to act
 on every growth, which suits a list that should almost never grow but not lists that legitimately
 grow by a reviewed line most weeks.  The code-owner review is advisory until GitHub can require it
@@ -46,8 +54,9 @@ and the check is what makes it impossible to land silently.
 
 ``--base REV`` / ``--ci-base`` also compare the committed counts with the base commit's: a count
 that rose is printed, and fails unless the base's own CODEOWNERS puts the counts file under a
-human-tier rule (read at the base, so a change cannot drop the rule and raise a count at once).  A
-base with no counts file is the adoption commit and has nothing to compare.
+human-tier rule (read at the base, so a change cannot drop the rule and raise a count at once);
+likewise an entry list whose digest changed against the base.  A base with no counts file is the
+adoption commit and has nothing to compare.
 
 Usage:
   python tools/allowlist_ratchet.py [ROOT] [--json] [--update [--grow]] [--base REV | --ci-base]
@@ -57,7 +66,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -85,6 +96,8 @@ HEADER = """\
 # count here, and this file's code owner reviews it.  A list below its count fails too, with the
 # number to lower it to: `make allowlist-counts` (tools/allowlist_ratchet.py --update) lowers
 # every count to what is there; raising one needs --grow, or a hand edit, and that review.
+# digests: the sha256 of each entry list's sorted entries, so an entry edited in place (a glob
+# widened, a path swapped) changes this file too; `make allowlist-counts` records it.
 """
 
 
@@ -99,32 +112,41 @@ def _yaml(path: Path) -> Any:
         raise RatchetError(f"{path}: {exc}") from None
 
 
-def _entries(value: Any, where: str) -> int:
+def _canonical(section: str, entry: Any) -> str:
+    return json.dumps([section, entry], sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _entries(value: Any, section: str, where: str) -> list[str]:
+    """One canonical string per entry of a section (a list item, or a mapping's key and value)."""
     if value is None:
-        return 0
-    if isinstance(value, (list, dict)):
-        return len(value)
+        return []
+    if isinstance(value, list):
+        return [_canonical(section, e) for e in value]
+    if isinstance(value, dict):
+        return [_canonical(section, [k, v]) for k, v in value.items()]
     raise RatchetError(f"{where}: expected a list or a mapping, not {type(value).__name__}")
 
 
-def _section(rel: str, key: str) -> Callable[[Path, Markers], int]:
-    def count(root: Path, _markers: Markers) -> int:
-        doc = _yaml(root / rel) or {}
-        if not isinstance(doc, dict):
-            raise RatchetError(f"{rel}: not a mapping")
-        return _entries(doc.get(key), f"{rel}: {key}")
-
-    return count
+def _doc(root: Path, rel: str) -> dict:
+    doc = _yaml(root / rel) or {}
+    if not isinstance(doc, dict):
+        raise RatchetError(f"{rel}: not a mapping")
+    return doc
 
 
-def _every_section(rel: str) -> Callable[[Path, Markers], int]:
-    def count(root: Path, _markers: Markers) -> int:
-        doc = _yaml(root / rel) or {}
-        if not isinstance(doc, dict):
-            raise RatchetError(f"{rel}: not a mapping")
-        return sum(_entries(v, f"{rel}: {k}") for k, v in doc.items())
+def _section(rel: str, key: str) -> Callable[[Path], list[str]]:
+    def read(root: Path) -> list[str]:
+        return _entries(_doc(root, rel).get(key), key, f"{rel}: {key}")
 
-    return count
+    return read
+
+
+def _every_section(rel: str) -> Callable[[Path], list[str]]:
+    def read(root: Path) -> list[str]:
+        doc = _doc(root, rel)
+        return [e for k, v in doc.items() for e in _entries(v, str(k), f"{rel}: {k}")]
+
+    return read
 
 
 @dataclass
@@ -163,11 +185,17 @@ def markers(root: Path) -> Markers:
     return Markers(scrub, endpoint)
 
 
-#: each ratcheted list and how it is counted; a new list is added here and to the counts file
-LISTS: dict[str, Callable[[Path, Markers], int]] = {
+#: the lists kept in a file of entries: each is counted and digested (its sorted entries), so an
+#: entry edited in place (a glob widened, a path swapped) changes the counts file like a new one
+ENTRY_LISTS: dict[str, Callable[[Path], list[str]]] = {
     "product-names-allow": _section("tools/product_names.yml", "allow"),
     "no-raw-endpoints-allow": _every_section("tools/no_raw_endpoints.allow.yml"),
     "scripts-allow": _every_section("tools/scripts.allow.yml"),
+}
+
+#: each ratcheted list and how it is counted; a new list is added here and to the counts file
+LISTS: dict[str, Callable[[Path, Markers], int]] = {
+    **{name: (lambda root, _m, read=read: len(read(root))) for name, read in ENTRY_LISTS.items()},
     "scrub-allow-markers": lambda _root, m: m.scrub_allow,
     "no-raw-endpoint-markers": lambda _root, m: m.no_raw_endpoint,
 }
@@ -178,45 +206,75 @@ def measure(root: Path) -> dict[str, int]:
     return {name: count(root, m) for name, count in LISTS.items()}
 
 
-def parse_counts(text: str, where: str) -> dict[str, int]:
+def digests(root: Path) -> dict[str, str]:
+    """``sha256:<hex>`` of each entry list's sorted canonical entries (order does not matter)."""
+    return {
+        name: "sha256:" + hashlib.sha256("\n".join(sorted(read(root))).encode()).hexdigest()
+        for name, read in ENTRY_LISTS.items()
+    }
+
+
+DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def parse_counts(text: str, where: str) -> tuple[dict[str, int], dict[str, str]]:
+    """The counts and the entry lists' digests of a counts file."""
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise RatchetError(f"{where}: {exc}") from None
-    if not isinstance(doc, dict) or set(doc) != {"counts"} or not isinstance(doc["counts"], dict):
-        raise RatchetError(f"{where}: expected one mapping, counts: {{list: count}}")
-    counts = doc["counts"]
+    if (
+        not isinstance(doc, dict)
+        or set(doc) != {"counts", "digests"}
+        or not all(isinstance(doc[k], dict) for k in doc)
+    ):
+        raise RatchetError(
+            f"{where}: expected two mappings, counts: {{list: count}} and digests: {{list: sha256}}"
+        )
+    counts, sums = doc["counts"], doc["digests"]
     for name, n in counts.items():
         if isinstance(n, bool) or not isinstance(n, int) or n < 0:
             raise RatchetError(f"{where}: {name}: the count must be a whole number >= 0")
-    return {str(k): v for k, v in counts.items()}
+    for name, d in sums.items():
+        if not isinstance(d, str) or not DIGEST_RE.fullmatch(d):
+            raise RatchetError(f"{where}: digests: {name}: expected sha256:<64 hex digits>")
+    return {str(k): v for k, v in counts.items()}, {str(k): v for k, v in sums.items()}
 
 
-def load_counts(path: Path) -> dict[str, int]:
+def load_counts(path: Path) -> tuple[dict[str, int], dict[str, str]]:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise RatchetError(f"{path}: {exc}") from None
-    counts = parse_counts(text, str(path))
-    unknown, missing = sorted(set(counts) - set(LISTS)), sorted(set(LISTS) - set(counts))
-    if unknown or missing:
-        raise RatchetError(
-            f"{path}: lists {unknown or '-'} are not ratcheted here, lists {missing or '-'} have "
-            "no count (tools/allowlist_ratchet.py LISTS names each list once)"
-        )
-    return counts
+    counts, sums = parse_counts(text, str(path))
+    for what, got, want in (("count", counts, LISTS), ("digest", sums, ENTRY_LISTS)):
+        unknown, missing = sorted(set(got) - set(want)), sorted(set(want) - set(got))
+        if unknown or missing:
+            raise RatchetError(
+                f"{path}: lists {unknown or '-'} take no {what} here, lists {missing or '-'} have "
+                f"no {what} (tools/allowlist_ratchet.py LISTS and ENTRY_LISTS name each list once)"
+            )
+    return counts, sums
 
 
-def write_counts(path: Path, counts: dict[str, int]) -> None:
+def write_counts(path: Path, counts: dict[str, int], sums: dict[str, str]) -> None:
     body = "".join(f"  {name}: {counts[name]}\n" for name in LISTS)
-    path.write_text(f"{HEADER}counts:\n{body}", encoding="utf-8")
+    hashes = "".join(f"  {name}: {sums[name]}\n" for name in ENTRY_LISTS)
+    path.write_text(f"{HEADER}counts:\n{body}digests:\n{hashes}", encoding="utf-8")
 
 
-def compare(have: dict[str, int], counts: dict[str, int]) -> list[str]:
+def compare(
+    have: dict[str, int], counts: dict[str, int], have_sums: dict[str, str], sums: dict[str, str]
+) -> list[str]:
     out = []
     for name in LISTS:
         n, c = have[name], counts[name]
-        if n > c:
+        if n == c and name in ENTRY_LISTS and have_sums[name] != sums[name]:
+            out.append(
+                f"{name}: an entry changed in place (the count is still {n}): record it with "
+                f"make allowlist-counts, so the change shows in {COUNTS} for its code owner"
+            )
+        elif n > c:
             out.append(
                 f"{name}: {n} entries, the reviewed count is {c}: remove the exemption, or raise "
                 f"the count in {COUNTS} in this change for its code owner to review"
@@ -269,30 +327,40 @@ def _show(root: Path, rev: str, rel: str) -> str | None:
         raise RatchetError(f"--base {rev[:12]}: {rel} is not UTF-8") from None
 
 
-def against_base(root: Path, rev: str, counts: dict[str, int], out) -> list[str]:
-    """Counts that rose against ``rev``'s: each is printed, and fails unless ``rev``'s own
-    CODEOWNERS puts the counts file under a human-tier rule."""
+def against_base(
+    root: Path, rev: str, counts: dict[str, int], sums: dict[str, str], out
+) -> list[str]:
+    """Counts that rose against ``rev``'s, and entry lists whose digest changed: each is printed,
+    and fails unless ``rev``'s own CODEOWNERS puts the counts file under a human-tier rule."""
     if _git(root, "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}").returncode:
         raise RatchetError(f"--base {rev}: not a commit here")
     text = _show(root, rev, COUNTS)
     if text is None:
         print(f"allowlist_ratchet: no {COUNTS} at {rev[:12]} (its adoption)", file=out)
         return []
-    then = parse_counts(text, f"{COUNTS}@{rev[:12]}")
-    rose = [(n, then[n], counts[n]) for n in LISTS if n in then and counts[n] > then[n]]
+    then, then_sums = parse_counts(text, f"{COUNTS}@{rev[:12]}")
+    rose = [
+        f"{n}: the count rises {then[n]} -> {counts[n]} against {rev[:12]}"
+        for n in LISTS
+        if n in then and counts[n] > then[n]
+    ]
+    rose += [
+        f"{n}: its entries changed against {rev[:12]} (the count {then.get(n, '-')} -> {counts[n]})"
+        for n in ENTRY_LISTS
+        if n in then_sums and sums[n] != then_sums[n] and not counts[n] > then.get(n, counts[n])
+    ]
     if not rose:
         return []
     owners = next((t for p in CODEOWNERS_PATHS if (t := _show(root, rev, p)) is not None), None)
     owned = human_tier(owners, COUNTS)
     problems = []
-    for name, was, now in rose:
-        line = f"{name}: the count rises {was} -> {now} against {rev[:12]}"
+    for line in rose:
         if owned:
             print(f"allowlist_ratchet: {line}: for the code owner of {COUNTS} to review", file=out)
         else:
             problems.append(
                 f"{line}, and {COUNTS} has no human-tier CODEOWNERS rule at the base, so nobody "
-                "reviews the growth"
+                "reviews the change"
             )
     return problems
 
@@ -352,31 +420,38 @@ def _main(argv: list[str] | None, out, err) -> int:
     if not root.is_dir():
         raise RatchetError(f"{root}: not a directory")
     path = root / COUNTS
-    have = measure(root)
+    have, have_sums = measure(root), digests(root)
     if args.update:
-        counts = load_counts(path) if path.exists() else dict.fromkeys(LISTS, 0)
+        counts = load_counts(path)[0] if path.exists() else dict.fromkeys(LISTS, 0)
         rises = [n for n in LISTS if have[n] > counts[n]]
         if rises and not args.grow:
             for n in rises:
                 print(f"allowlist_ratchet: {n} would rise {counts[n]} -> {have[n]}", file=err)
             raise RatchetError("refusing to raise a count without --grow (the raise is reviewed)")
-        write_counts(path, have)
+        old_sums = load_counts(path)[1] if path.exists() else {}
+        write_counts(path, have, have_sums)
         changed = [f"{n} {counts[n]} -> {have[n]}" for n in LISTS if have[n] != counts[n]]
+        changed += [
+            f"{n} entries edited"
+            for n in ENTRY_LISTS
+            if have[n] == counts[n] and old_sums.get(n) != have_sums[n]
+        ]
         print(
             f"allowlist_ratchet: {COUNTS} updated ({', '.join(changed) or 'no change'})", file=out
         )
         return 0
-    counts = load_counts(path)
-    problems = compare(have, counts)
+    counts, sums = load_counts(path)
+    problems = compare(have, counts, have_sums, sums)
     if not human_tier(_codeowners_in_tree(root), COUNTS):
         problems.append(
             f"{COUNTS}: no human-tier CODEOWNERS rule owns it (an explicit path rule, not the "
             "catch-all), so a raised count would land unreviewed"
         )
     rev = _pick_base(root, args, out)
-    problems += against_base(root, rev, counts, out) if rev else []
+    problems += against_base(root, rev, counts, sums, out) if rev else []
     if args.json:
-        print(json.dumps({"counts": counts, "measured": have, "problems": problems}, indent=2))
+        doc = {"counts": counts, "measured": have, "digests": sums, "measured_digests": have_sums}
+        print(json.dumps({**doc, "problems": problems}, indent=2))
     else:
         for line in problems:
             print(line, file=out)

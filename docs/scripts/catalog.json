@@ -31,7 +31,7 @@
       "inputs": "the tracked tree; tools/allowlist_counts.yml; CODEOWNERS; the base commit's counts and CODEOWNERS (--base, --ci-base)",
       "kind": "check",
       "language": "python",
-      "outputs": "one line per list that grew or shrank against its count (or against the base); --update rewrites the counts",
+      "outputs": "one line per list that grew, shrank or had an entry edited against the counts file (or against the base); --update rewrites the counts and digests",
       "owner": "maintainers",
       "path": "tools/allowlist_ratchet.py",
       "purpose": "Fail when a gate's allowlist or inline suppression markers outgrow the reviewed counts in tools/allowlist_counts.yml.",

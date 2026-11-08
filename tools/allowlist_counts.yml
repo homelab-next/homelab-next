@@ -4,9 +4,15 @@
 # count here, and this file's code owner reviews it.  A list below its count fails too, with the
 # number to lower it to: `make allowlist-counts` (tools/allowlist_ratchet.py --update) lowers
 # every count to what is there; raising one needs --grow, or a hand edit, and that review.
+# digests: the sha256 of each entry list's sorted entries, so an entry edited in place (a glob
+# widened, a path swapped) changes this file too; `make allowlist-counts` records it.
 counts:
   product-names-allow: 17
   no-raw-endpoints-allow: 69
   scripts-allow: 22
   scrub-allow-markers: 55
   no-raw-endpoint-markers: 305
+digests:
+  product-names-allow: sha256:0cc7ae851a88526055bd681f559029243533f7056010518c8b3f058fdcd8244c
+  no-raw-endpoints-allow: sha256:6eb47e8e8a2416dd8f23025994bc38e9c487b0ab76c13b855a131e6a704277c5
+  scripts-allow: sha256:8455c3acb0f7c01db2ef1efe1981ccb9f7a450fba93ff490c26daba6bd40c94d
