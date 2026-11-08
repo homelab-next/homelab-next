@@ -512,7 +512,7 @@ change until its ADR is accepted):
 | `platform/guest` | 1.6 | `schemas/platform/guest.schema.json` | stable |
 | `platform/interface` | 1.0 | `schemas/platform/interface.schema.json` | draft |
 | `platform/lake_table` | 1.0 | `schemas/platform/lake_table.schema.json` | draft |
-| `platform/mcp_server` | 1.3 | `schemas/platform/mcp_server.schema.json` | stable |
+| `platform/mcp_server` | 1.4 | `schemas/platform/mcp_server.schema.json` | stable |
 | `platform/model_roles` | 1.4 | `schemas/platform/model_roles.json` | stable |
 | `platform/model_serving` | 1.0 | `schemas/platform/model_serving.schema.json` | stable |
 | `platform/model_store` | 1.0 | `schemas/platform/model_store.schema.json` | stable |
@@ -522,6 +522,7 @@ change until its ADR is accepted):
 | `platform/module_selection` | 1.0 | `schemas/platform/module_selection.schema.json` | draft |
 | `platform/module_swap` | 1.0 | `schemas/platform/module_swap.schema.json` | draft |
 | `platform/novelty_spec` | 1.0 | `schemas/platform/novelty_spec.schema.json` | draft |
+| `platform/orchestrator_profile` | 1.0 | `schemas/platform/orchestrator_profile.schema.json` | draft |
 | `platform/role_interface` | 1.0 | `schemas/platform/role_interface.schema.json` | stable |
 | `platform/script_header` | 1.0 | `schemas/platform/script_header.schema.json` | stable |
 | `platform/service` | 2.8 | `schemas/platform/service.json` | stable |
@@ -532,9 +533,9 @@ change until its ADR is accepted):
 | `registers/decision_spec` | 1.3 | `schemas/registers/decision_spec.json` | stable |
 | `registers/invariant` | 1.0 | `schemas/registers/invariant.schema.json` | stable |
 | `registers/kanban_item` | 1.0 | `schemas/registers/kanban_item.schema.json` | stable |
-| `registers/lesson` | 2.1 | `schemas/registers/lesson.schema.json` | stable |
+| `registers/lesson` | 2.2 | `schemas/registers/lesson.schema.json` | stable |
 | `registers/register_event` | 1.3 | `schemas/registers/register_event.schema.json` | stable |
-| `registers/runbook` | 2.2 | `schemas/registers/runbook.schema.json` | stable |
+| `registers/runbook` | 2.3 | `schemas/registers/runbook.schema.json` | stable |
 | `status/agent_activity` | 1.0 | `schemas/status/agent_activity.schema.json` | stable |
 | `status/agent_activity_detail` | 1.0 | `schemas/status/agent_activity_detail.schema.json` | stable |
 | `status/agents` | 1.4 | `schemas/status/agents.schema.json` | stable |

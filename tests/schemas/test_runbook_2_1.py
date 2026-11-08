@@ -39,8 +39,8 @@ def doc(**extra):
 
 
 def test_version_2_1_is_frozen_and_the_current_one_additive_over_it_and_2_0():
-    # 2.2 added `summary` (ADR-0032); 2.1's rule on `lessons` stands unchanged
-    assert CURRENT["$id"].endswith("/registers/runbook/2.2")
+    # 2.2 added `summary` (ADR-0032), 2.3 `match`; 2.1's rule on `lessons` stands unchanged
+    assert CURRENT["$id"].endswith("/registers/runbook/2.3")
     assert FROZEN_21.is_file()
     frozen_21 = json.loads(FROZEN_21.read_text())
     assert frozen_21["properties"]["lessons"] == CURRENT["properties"]["lessons"]

@@ -67,12 +67,6 @@ REMOTE = "remote"
 REGISTRY_TRANSPORT = {"http": "streamable-http", "sse": "sse", "stdio": "stdio"}
 #: the directory name of a catalog beside a registry file or under an examples tree
 CATALOG_DIR = "mcp"
-#: llm-orchestrator's own hard-denied grant keys (internal/grants/grants.go:71, deniedEnvRe),
-#: which :func:`homelabnext.mcp.clients.orch_accepts` mirrors
-ORCH_DENIED_ENV = re.compile(
-    r"^(LD_.*|DYLD_.*|PATH|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONINSPECT|HOME|SHELL|BASH_ENV"
-    r"|ENV|NODE_OPTIONS|HERMES_HOME)$"
-)
 #: environment keys no setting, env secret or parameter may ever set (any case): they change what
 #: code runs or how, not what a server is scoped to.  A record's settings and env become the
 #: environment of the launcher too (npx, uvx, docker), so its configuration is here as well: the
@@ -96,8 +90,9 @@ ORCH_DENIED_ENV = re.compile(
 #: HOSTALIASES, RES_OPTIONS, LOCALDOMAIN, GLIBC_TUNABLES, MALLOC_*, TZDIR), the other
 #: interpreters' option and library variables (JAVA_TOOL_OPTIONS, _JAVA_OPTIONS,
 #: JDK_JAVA_OPTIONS, PERL5OPT, PERL5LIB, PERLLIB, RUBYOPT, RUBYLIB) and the shell's
-#: (BASH_FUNC_* exported functions, SHELLOPTS, BASHOPTS, PS4).  A superset of
-#: :data:`ORCH_DENIED_ENV`.
+#: (BASH_FUNC_* exported functions, SHELLOPTS, BASHOPTS, PS4).  The orchestrator's grants loader
+#: denies the same keys (``orchestrator/internal/grants``, ``DeniedEnvPattern``: this pattern
+#: character for character, held equal by tests/mcp/test_mcp_clients.py).
 DENIED_ENV = re.compile(
     r"(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_"
     r"|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)"
@@ -109,6 +104,17 @@ DENIED_ENV = re.compile(
     r"|JDK_JAVA_OPTIONS|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4",
     re.I,
 )
+
+
+#: the orchestrator's grants loader (orchestrator/internal/grants, scopeEnvRe and identityKeyRe):
+#: an env key that picks an identity or a scope.  Such a parameter is never pinned to values
+#: across profiles: it says how it binds to the granting profile (``binds``)
+SCOPE_KEY = re.compile(r"(?i)(?:_PREFIX\w*|_AGENT_KEY|_BY|_SCOPE|_LIST)$")
+IDENTITY_KEY = re.compile(r"(?i)(?:_AGENT_KEY|_BY)$")
+#: ``binds`` values: an identity (agent_key, agent_key_lane), the lane name (lane), or a scope of
+#: the profile's path_scope under the tree a setting names (writable, readable, prefix: ``root``)
+BINDS = ("agent_key", "agent_key_lane", "lane", "writable", "readable", "prefix")
+ROOTED_BINDS = ("writable", "readable", "prefix")
 
 
 def denied_env(key: str) -> bool:
@@ -1267,6 +1273,31 @@ def _template_problems(rec: Mapping[str, Any], where: str) -> list[str]:
             for ref in TEMPLATE.findall(default):
                 if ref not in BUILTINS:
                     out.append(f"{where}: parameter {name}: default may use only {list(BUILTINS)}")
+        binds = p.get("binds")
+        if key and SCOPE_KEY.search(key) and binds is None:
+            out.append(
+                f"{where}: parameter {name}: env {key} picks an identity or a scope; say how it "
+                f"binds to the granting profile (binds: one of {list(BINDS)})"
+            )
+        if binds is not None:
+            if not key:
+                out.append(f"{where}: parameter {name}: binds needs env")
+            elif IDENTITY_KEY.search(key) and binds not in ("agent_key", "agent_key_lane"):
+                out.append(
+                    f"{where}: parameter {name}: env {key} is an identity; binds agent_key or agent_key_lane"
+                )
+            if binds in ROOTED_BINDS:
+                if p.get("root") not in settings:
+                    out.append(
+                        f"{where}: parameter {name}: binds {binds} needs root, a setting naming "
+                        "the tree the prefixes are under"
+                    )
+            elif p.get("root") is not None:
+                out.append(
+                    f"{where}: parameter {name}: root belongs to a writable, readable or prefix binding"
+                )
+            if binds == "lane" and sorted(p.get("enum") or ()) != ["real", "shadow"]:
+                out.append(f"{where}: parameter {name}: binds lane needs enum [real, shadow]")
         pat = p.get("pattern")
         if pat is not None:
             try:

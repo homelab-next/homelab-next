@@ -19,6 +19,7 @@ A record file::
     date: 2026-01-12
     author: unknown                 # reviews: see homelabnext.reviews
     systems: [proxy, tls]
+    match: {keywords: [...], paths: [...]}  # optional: what the orchestrator matches a task by
     recurrences: 1
     review_by: 2027-01-17
     verification: {observable: ..., expected: ...}
@@ -134,7 +135,7 @@ SECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
 FRONT_ORDER = {
     "lessons": (
         *("uid", "type", "title", "summary", "order", "kind", "status", "date", "author"),
-        *("systems", "applies_to"),
+        *("systems", "match", "applies_to"),
         *("recurrences", "review_by", "retired_on", "retired_by", "incorporated_into"),
         *("superseded_by", "verification", "related", "reviews"),
     ),
@@ -145,6 +146,7 @@ FRONT_ORDER = {
         "summary",
         "order",
         "systems",
+        "match",
         "last_reviewed",
         "review_by",
         "superseded_by",

@@ -51,7 +51,7 @@ GENERATED = (
     # client configurations rendered from the MCP catalog (hnx mcp catalog render, compared byte
     # for byte by its --check): the formats are other programs', so the render adds no licence line
     "examples/mcp/clients/hermes/*",
-    "examples/mcp/clients/llm-orchestrator/mcp_catalog.yaml",
+    "examples/mcp/clients/orchestrator/mcp_catalog.yaml",
 )
 # https://go.dev/s/generatedcode: the line marking a Go file as written by a tool, not a person
 GO_GENERATED = re.compile(r"^// Code generated .* DO NOT EDIT\.$")
