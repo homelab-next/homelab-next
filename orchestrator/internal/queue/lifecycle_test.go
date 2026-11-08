@@ -5,6 +5,9 @@ package queue
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -407,6 +410,75 @@ func TestHolds_CapacityIsReleasedOnEveryEnd(t *testing.T) {
 		// The kill's automatic retry is queued too: let it run, then the next job.
 		r.tick()
 		next(t, r)
+	})
+	t.Run("shutdown", func(t *testing.T) {
+		r := newRig(t, rigOptions{runner: blockFirst, backends: oneSlot})
+		r.submit("run-1", defaultProfile)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := r.tickAsync(ctx)
+		r.waitState("run-1", store.StateRunning)
+		cancel()
+		waitClosed(t, done, "the shut-down run")
+		j := r.job("run-1")
+		if r.policy.HoldsReservation("run-1") || j.RetriedByRunID == "" {
+			t.Fatalf("after the shutdown: claim held %v, retry %q", r.policy.HoldsReservation("run-1"), j.RetriedByRunID)
+		}
+		r.tick() // the retry takes the slot the shutdown gave back
+		if retry := r.job(j.RetriedByRunID); retry.State != store.StateDone {
+			t.Fatalf("the retry is %s: the slot was not given back", retry.State)
+		}
+		r.pool.balanced(t)
+	})
+	t.Run("exclusive lease", func(t *testing.T) {
+		r := newRig(t, rigOptions{runner: blockFirst, backends: []backends.Backend{{Name: "engine-a"}}, concur: 2,
+			profiles: map[string]string{defaultProfile: "", "solo": "backend_affinity: {exclusive: true}\n"}})
+		r.submit("run-1", "solo")
+		done := r.tickAsync(context.Background())
+		r.waitState("run-1", store.StateRunning)
+		r.submit("run-wait", defaultProfile)
+		r.tick()
+		if j := r.job("run-wait"); j.State != store.StateQueued {
+			t.Fatalf("a job was admitted beside an exclusive lease: %s", j.State)
+		}
+		r.cancel("run-1")
+		waitClosed(t, done, "the leased run")
+		next(t, r)
+		if j := r.job("run-wait"); j.State != store.StateDone {
+			t.Fatalf("the waiting job is %s", j.State)
+		}
+	})
+	t.Run("token weight", func(t *testing.T) {
+		eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "engine:requests_running 0\nengine:cache_usage 0\nengine:cache_info{pool_tokens=\"100000\"} 1\n")
+		}))
+		t.Cleanup(eng.Close)
+		r := newRig(t, rigOptions{runner: blockFirst, concur: 2, backends: []backends.Backend{{Name: "engine-a", LoadProbeURLs: []string{eng.URL}}},
+			pool: func(p *backends.Policy) {
+				p.LoadMetrics = []string{"engine:requests_running"}
+				p.KV = backends.KVMetrics{Info: "engine:cache_info", PoolLabel: "pool_tokens", Usage: "engine:cache_usage"}
+				p.TokenWeightedAdmission = true
+			}})
+		r.submit("run-1", defaultProfile)
+		done := r.tickAsync(context.Background())
+		r.waitState("run-1", store.StateRunning)
+		r.submit("run-wait", defaultProfile)
+		r.tick()
+		if j := r.job("run-wait"); j.State != store.StateQueued {
+			t.Fatalf("a second job fit a one-job token budget: %s", j.State)
+		}
+		r.cancel("run-1")
+		waitClosed(t, done, "the weighted run")
+		if r.policy.HoldsReservation("run-1") {
+			t.Fatal("run-1 still holds its claim and weight")
+		}
+		r.tick()
+		if j := r.job("run-wait"); j.State != store.StateDone {
+			t.Fatalf("the waiting job is %s", j.State)
+		}
+		r.pool.balanced(t)
+		if cs, _ := r.st.GetCallSizing("run-wait"); cs.WaitCause != backends.CauseTokenBudget {
+			t.Errorf("wait cause = %q", cs.WaitCause)
+		}
 	})
 	t.Run("restart", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "orch.db")
