@@ -71,8 +71,14 @@ type Backends struct {
 	Additional    []Backend `yaml:"additional"`
 }
 
-// Runner holds the limits the controller puts on every runner session.
+// Runner selects the runner and holds the limits the controller puts on every runner session.
 type Runner struct {
+	// Kind is the runner sessions run on: "exec" (a generic subprocess, configured by Exec) is the
+	// only kind built in; an agent harness's runner comes with its provider module (ADR-0026 stage
+	// 3). Empty: no runner, which loads (a migrated configuration has none) but cannot serve.
+	Kind string `yaml:"kind"`
+	// Exec configures the exec runner (kind: exec); set only with that kind.
+	Exec ExecRunner `yaml:"exec"`
 	// TimeoutSeconds bounds one attempt.
 	TimeoutSeconds int `yaml:"timeout_seconds"`
 	// JobTimeoutSeconds bounds one job's whole attempt chain (every backend tried, the cloud
@@ -87,17 +93,43 @@ type Runner struct {
 	Liveness string `yaml:"liveness"`
 	// MaxTurns caps the model turns of one session; 0 is no cap.
 	MaxTurns int `yaml:"max_turns"`
-	// RunDirBase: each session gets a fresh owner-only working directory under it. Empty: the
-	// controller's own.
+	// RunDirBase: each session gets a fresh owner-only working directory under it, removed when
+	// the session ends. Empty: the system's temporary directory.
 	RunDirBase string `yaml:"run_dir_base"`
-	// EnvAllowlist: a session gets only these environment variables (an exact name, or a prefix
-	// ending in "*"). Empty: the controller's whole environment.
+	// EnvAllowlist: a session gets only these of the controller's environment variables (an exact
+	// name, or a prefix ending in "*"). Empty: none. events.token_env is never passed, whatever
+	// the list says, and an entry that covers it is refused by the controller's check.
 	EnvAllowlist []string `yaml:"env_allowlist"`
 	// JobHomeRoot is where a runner keeps per-job homes; empty is beside db_path.
 	JobHomeRoot string `yaml:"job_home_root"`
 }
 
-// Liveness values.
+// RunnerKindExec is the built-in subprocess runner's kind.
+const RunnerKindExec = "exec"
+
+// ExecRunner configures the exec runner (package runner/exec): the command each session runs, with
+// placeholders such as {prompt}, {usage_path} and {toolsets}, and how its exit statuses are classed.
+type ExecRunner struct {
+	Argv         []string `yaml:"argv"`
+	UsageArgs    []string `yaml:"usage_args"`
+	ToolsetsArgs []string `yaml:"toolsets_args"`
+	// ExitClasses names the runner class of a non-zero exit status (a class's name, such as
+	// concurrency-limited); an unlisted status is turn-failed.
+	ExitClasses map[int]string `yaml:"exit_classes"`
+	// MaxResponseBytes bounds a session's answer; 0 is the runner's default (1 MiB).
+	MaxResponseBytes int64 `yaml:"max_response_bytes"`
+	// KillGraceSeconds is the time a cancelled session's process group has between SIGTERM and
+	// SIGKILL; 0 is the runner's default (5).
+	KillGraceSeconds int `yaml:"kill_grace_seconds"`
+}
+
+// IsZero reports whether e sets nothing.
+func (e ExecRunner) IsZero() bool {
+	return len(e.Argv) == 0 && len(e.UsageArgs) == 0 && len(e.ToolsetsArgs) == 0 && len(e.ExitClasses) == 0 &&
+		e.MaxResponseBytes == 0 && e.KillGraceSeconds == 0
+}
+
+// livenessModes are runner.liveness's values.
 var livenessModes = map[string]bool{"": true, "cpu": true, "progress": true}
 
 // Events configures the job lifecycle event sender (package events).
@@ -153,6 +185,8 @@ type Config struct {
 	// EngineMetrics names the metrics load_probe_urls serve (no default: the engine's own names,
 	// which a site writes).
 	EngineMetrics EngineMetrics `yaml:"engine_metrics"`
+	// Concurrency caps the jobs running at once, over every backend; 0 is 1.
+	Concurrency int `yaml:"concurrency"`
 	// OrphanGraceSeconds: how long a job may have no live executor before the orphan sweep ends
 	// it; 0 is 600, negative disables the sweep.
 	OrphanGraceSeconds int `yaml:"orphan_grace_seconds"`
@@ -381,6 +415,21 @@ func (c Config) check() error {
 	if c.APIAuth.On() && strings.TrimSpace(c.APIAuth.TokensFile) == "" {
 		return errors.New("api_auth: authentication is on (the default) and no api_auth.tokens_file is given: name the tokens file, or set api_auth.enabled: false to serve without a token on a loopback address")
 	}
+	switch c.Runner.Kind {
+	case "":
+		if !c.Runner.Exec.IsZero() {
+			return errors.New("runner.exec is set but runner.kind is not exec")
+		}
+	case RunnerKindExec:
+		if len(c.Runner.Exec.Argv) == 0 {
+			return errors.New("runner.kind exec needs runner.exec.argv")
+		}
+		if c.Runner.Exec.MaxResponseBytes < 0 || c.Runner.Exec.KillGraceSeconds < 0 {
+			return errors.New("runner.exec.max_response_bytes and kill_grace_seconds must not be negative")
+		}
+	default:
+		return fmt.Errorf("runner.kind %q: the only built-in kind is exec", c.Runner.Kind)
+	}
 	if !livenessModes[c.Runner.Liveness] {
 		return fmt.Errorf("runner.liveness %q: want cpu or progress", c.Runner.Liveness)
 	}
@@ -391,7 +440,7 @@ func (c Config) check() error {
 		{"runner.timeout_seconds", c.Runner.TimeoutSeconds}, {"runner.job_timeout_seconds", c.Runner.JobTimeoutSeconds},
 		{"runner.stall_timeout_seconds", c.Runner.StallTimeoutSeconds}, {"runner.stall_poll_interval_seconds", c.Runner.StallPollIntervalSeconds},
 		{"runner.max_turns", c.Runner.MaxTurns}, {"interlock_wait_timeout_seconds", c.InterlockWaitTimeoutSeconds},
-		{"backend_health_interval_seconds", c.BackendHealthIntervalSeconds},
+		{"backend_health_interval_seconds", c.BackendHealthIntervalSeconds}, {"concurrency", c.Concurrency},
 	} {
 		if v.n < 0 {
 			return fmt.Errorf("%s %d is negative", v.key, v.n)

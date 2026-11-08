@@ -1,6 +1,6 @@
 ---
-summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:13af3fe008873b1f
+summary: 'The orchestration controller: adapter, holds, pinned result, gateway calls, optional features, its core in orchestrator/ and the controller binary.'
+summary_of: outline:sha256:791a9c3ae04dbbd7
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -284,7 +284,7 @@ never copied with its history. The packages in so far are the leaves, which impo
 the controller, the store, which imports only `events`, the grants and the profiles (PR 2.3a),
 the configuration and the registers reader (PR 2.3b), the runner seam, its fake, the prompt
 assembly, the interlock and the gateway tag (PR 2.4), the backend pool with its attempt chain
-(PR 2.5), the run queue (PR 2.6a), the job API (PR 2.6b) and the subprocess runner (PR 2.7a):
+(PR 2.5), the run queue (PR 2.6a), the job API (PR 2.6b), the subprocess runner (PR 2.7a) and the controller binary (PR 2.7b):
 
 | Package | What it does |
 |---|---|
@@ -298,7 +298,8 @@ assembly, the interlock and the gateway tag (PR 2.4), the backend pool with its 
 | `orchestrator/internal/lessons` | Reads this repository's lessons and runbooks registers (record directories, transitions applied) and matches a job's task against the records that declare a `match` (below). |
 | `orchestrator/internal/runner` | The internal runner seam (ADR-0026's amendment): `Runner.Run(ctx, Session) (*Result, error)`, the `Session` one attempt needs (run id, agent key, lane, prompt, toolsets, the rendered MCP servers, target, usage path, limits and the gateway tag, all fields, nothing in `ctx`), and the failure classes the core decides on. See "The runner seam" below. |
 | `orchestrator/internal/runner/runnertest` | An in-process `Runner` for tests: scripted answers and classified failures, a session that blocks until released or cancelled, a hook that runs when a blocked session is killed, and a step per target (backend or cloud). It starts no process. |
-| `orchestrator/internal/runner/exec` | A generic subprocess runner, no agent harness: one process per session from an argv template (no shell; `{prompt}`, `{usage_path}`, `{toolsets}`, `{run_id}`, `{agent_key}`, `{lane}`, `{home}` and `{backend}` expanded inside each element in one pass; the prompt on stdin when no element holds it), its stdout the answer and its exit status the outcome, classed by a configured table (an unlisted non-zero status is `TurnFailed`). A cancel or the attempt's `Timeout` ends the whole process group (SIGTERM, SIGKILL after a grace), and the group is swept after every exit (killed, and reaped when the process is the subreaper, `exec.BecomeSubreaper`, which the controller calls at start). It enforces no stall timeout or turn cap (the program's own). See "The runner seam" below. |
+| `orchestrator/cmd/controller` | The controller binary: `serve`, `check` and `migrate` ("The controller binary" below), its fictional example configuration in `orchestrator/deploy/examples/` and the example unit `orchestrator/deploy/systemd/orchestrator.service`. |
+| `orchestrator/internal/runner/exec` | A generic subprocess runner, no agent harness: one process per session from an argv template (no shell; `{prompt}`, `{usage_path}`, `{toolsets}`, `{run_id}`, `{agent_key}`, `{lane}`, `{home}` and `{backend}` expanded inside each element in one pass; the prompt on stdin when no element holds it), its stdout the answer and its exit status the outcome, classed by a configured table (an unlisted non-zero status is `TurnFailed`). A cancel or the attempt's `Timeout` ends the whole process group (SIGTERM, SIGKILL after a grace), and after every exit the group is killed while its leader is still unreaped (so the group id cannot have been reused), then Run waits, at most the grace, until no member is running. A descendant that left the group (`setsid`) is not the runner's: it is reparented to init and ended with the service by the unit's `KillMode`. It enforces no stall timeout or turn cap (the program's own). See "The runner seam" below. |
 | `orchestrator/internal/prompt` | Builds a job's prompt from its task, the register context, the site's contracts and the profile's prompt context. See "A job's prompt" below. |
 | `orchestrator/internal/inference` | The cross-process interlock (`flock(2)` on a shared lock file, the lock `flock(1)` takes) and the job's gateway tag. There is no HTTP client: the controller sends no model request. |
 | `orchestrator/internal/gatewaytag` | The gateway tag's one definition, the header (`X-HNX-Tag`) and the pattern (held equal to the event schema's `gateway_tag` and `run_id`), shared by the controller and the gateway, standard library only. |
@@ -478,8 +479,8 @@ needs `allow_no_denied_roots: true`. The private controller hard-coded its tree'
 writes them here, the lab's in its overlay, before its configuration loads, so the migration adds
 none, unless it is given one (`MigrateOptions.Scope`).
 
-The migration's entry point on the command line comes with the controller binary (PR 2.7); until
-then `config.Migrate` is the library call it will run.
+The migration's entry point on the command line is `controller migrate` (PR 2.7b, "The controller
+binary" below).
 
 ### Grants: the catalog render is the loader's input
 
@@ -496,10 +497,88 @@ stale, so the two cannot drift. The render still refuses what it cannot write (a
 argument that varies per instance), binds every identity or scope parameter in the kind's
 `profile_scope` rather than pinning it to every profile's values, and reads its own output back
 (`clients.orch_render_problems`: known kinds, allowed keys, pinned values, unique names, both
-lanes or neither), so a check that runs Python alone is not blind. A site has no command to run
-the Go loader on its own render until the controller binary lands: PR 2.7 adds `controller check
---config FILE`, which loads the configuration, the catalog and every profile, and renders every
-profile's two lanes (`Registry.CheckGrants`) without starting the controller.
+lanes or neither), so a check that runs Python alone is not blind. `controller check --config
+FILE` (PR 2.7b, "The controller binary" below) runs the Go loader on a site's own render: it loads
+the configuration, the catalog and every profile, and renders every profile's two lanes
+(`Registry.CheckGrants`) without starting the controller.
+
+### The controller binary
+
+`orchestrator/cmd/controller` (PR 2.7b) has three commands. Relative paths in the configuration
+(`db_path`, `profiles_dir`, `grants_catalog`, `lessons_path`, `runbooks_path`,
+`api_auth.tokens_file`, as `prompt_dir` already was) are read from the configuration file's
+directory.
+
+**The trust boundary.** Every session the exec runner starts runs as the controller's own user.
+It can therefore read what that user can: `controller.db` (every job's task and answer), the
+controller's `/proc/<pid>/environ`, and other runs' working directories and usage reports. The
+per-run usage directory is a layout, not an isolation; it does not hold against a session until
+stage 3's runner starts sessions as a separate session user. What the runner does hold:
+- a session inherits no environment variable nobody listed (an empty `runner.env_allowlist`
+  passes none);
+- `events.token_env` is never passed, and `check` refuses an allowlist entry that covers it;
+- the unit hides other users' processes (`ProtectProc=invisible`).
+Run only agents whose output you would let read the controller's state.
+
+- **`controller check --config FILE`** (ADR-0026 decision 17) loads the configuration, the
+  profiles, the catalog of kinds, every profile's two lanes against it, the registers, the prompt
+  contracts, the runner and the pool's own settings (`Policy.Validate`), as `serve` would. It opens
+  no database, binds no port and reaches no network. It reads no secret file's contents: the tokens
+  file is checked to be a regular file it may open, and nothing more. Exit 0 when clean, 1 with one
+  line per problem, 2 for a usage error or an unreadable file: a file or directory the
+  configuration names that is missing or cannot be read is 2, whichever key names it, and one that
+  is there but wrong (a directory where a file belongs, content its loader refuses, a mode that is
+  too open) is 1. `serve` exits the same way before it opens the database. A configuration with no `runner.kind`
+  passes with a note: it loads, but `serve` refuses it. `make controller-check` runs it on the
+  fictional example `orchestrator/deploy/examples/controller.yaml`, and the Go tests run it there
+  too (`TestCheck_TheExamplePasses`, in CI's `go` job), with one fixture for each refusal
+  (`TestCheck_EachRefusal`). The go job names no module (`tools/tests/test_go_test_policy.py`), so
+  the test, not a job step, carries the check.
+- **`controller migrate --config FILE --out FILE`** writes a configuration in the private
+  controller's keys in this controller's keys (`config.MigrateWith`) to `--out`. `--out` is a new
+  owner-only file and `--config` is never changed. Optional inputs: `--site-renames FILE`,
+  `--scope FILE` (the zones mapping, for a configuration that has none), `--engine-metrics FILE`
+  and `--profile-aliases FILE`. With aliases, the profiles directory is migrated in place
+  (`profile.MigrateDir`, all or nothing) with the load options of the migrated configuration.
+  `--out` appears only once every step has succeeded. Serving without a token is never inferred:
+  an old configuration that leaves API authentication unset is refused unless
+  `--allow-unauthenticated-api` is given.
+- **`controller serve --config FILE`** runs the same loading, then opens the database. A database
+  whose schema must change is refused with exit status 3 and its pending steps, and is left
+  unchanged; the example unit lists 3 in `RestartPreventExitStatus=`, so it does not crash-loop.
+  `--migrate-backup PATH` takes the backup (a new file in an owner-only directory) under the
+  instance lock and migrates behind it (`store.BackupForMigration`, then `OpenWith`); with
+  `--migrate-only` it exits once the database is current, without serving, which is the hand
+  migration the unit's comment gives (unit stopped, as the service's user). A database
+  file, or its `-wal`/`-shm`, readable by anyone but its owner is refused with the remedy (`chmod
+  0600`). A `lock_path` whose directory anyone but its owner may write is refused before the
+  database is opened, whenever a backend uses the interlock. `serve` then enables the event outbox
+  (when `events.forwarder_url` is set), reconciles the jobs a restart left, builds the pool
+  (`FromConfig`, the limits, the interlock, the engine metrics, token-weighted admission with the
+  store's prompt statistics, drains restored from the store), and runs the scheduler (`concurrency`, 1 by default, one admission pass a second;
+  usage reports under `usage/` beside the database). It serves the API through `api.NewServer`,
+  which checks the bind, and never `http.DefaultServeMux`, where importing `net/http/pprof`
+  registers handlers (`TestServe_NeverServesTheDefaultMux`;
+  `TestServe_RefusesAnUnauthenticatedNonLoopbackBind` is the bind check through the binary). SIGHUP
+  reloads the tokens file (`Authenticator.Reload`); a file that does not load keeps the tokens
+  already loaded. Signals are caught before anything else, so a SIGHUP during a migration does
+  not end the process. SIGTERM or SIGINT first ends admission (`queue.RunAdmitting`: no job is
+  admitted after it, by a pass under way included), then drains the API for up to 30 seconds,
+  then cancels the running sessions. The unit's `KillMode=mixed` sends SIGTERM to the controller
+  alone, so sessions end as its cancel (`KilledByController`), never as an outside kill that the
+  kill retry would answer with a new session.
+
+`runner.kind: exec` selects the subprocess runner (`runner.exec`: `argv`, `usage_args`,
+`toolsets_args`, `exit_classes` by class name, `max_response_bytes`, `kill_grace_seconds`). It is
+the only built-in kind. An agent harness's runner comes with its provider module at stage 3, and
+until then a migrated configuration has no runner and cannot serve. The example unit,
+`orchestrator/deploy/systemd/orchestrator.service`, is named after the registry row (ADR-0026
+decision 16). It sets `UMask=0077`, `StateDirectoryMode=0700`, `RuntimeDirectory=` for the lock
+file, `KillMode=mixed`, `ExecReload` as SIGHUP, and `controller check` as `ExecStartPre`, with
+`TasksMax=` and `MemoryMax=` over the controller and its sessions together,
+`ProtectProc=invisible` (other users' command lines and environments, a session's prompt in argv
+included, are hidden), `SystemCallFilter=@system-service`, and `RestrictNamespaces=yes`, which a
+runner that sandboxes sessions in user namespaces (bubblewrap) relaxes to the types it uses.
 
 ### Lessons and runbooks in a job's prompt
 
@@ -552,8 +631,12 @@ concurrency_limited` (its backend at the `max_in_flight` the gateway enforces, A
 gateway's `Retry-After`) and asks the same backend again, up to `Policy.ConcurrencyWaits` (30)
 times a leg; then the chain stops with `ErrConcurrencyLimited`, which the queue classes
 `capacity`. It never marks the backend down and never moves the job to another backend or to the
-cloud; the cloud leg waits the same way. `runner/exec` reports it by the program's exit status
-(`exit_classes`), since only the program sees the gateway's answer.
+cloud. The cloud leg waits too, at most `Policy.CloudConcurrencyWaits` (3) times, and each refused
+cloud session is in the trail (`Result.Attempts`). `runner/exec` reports it by the program's exit status
+(`exit_classes`), since only the program sees the gateway's answer. Every wait starts a whole new
+session, so a program should first retry the refused call itself, honouring `Retry-After`, and
+exit with the limited status only when the refusal came before it spent anything (its first model
+call); a refusal later in a session is the program's to wait out.
 
 Fallback, retry and a job's failure class are decided from the classes, never from error text:
 `runner.Wrap(class, err)` keeps the text exactly, a bare class wrapped with `%w` counts too, and
@@ -1018,14 +1101,14 @@ above says how.
     is requeued, not failed;
   - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
     log or keep text, as `backends` does;
-- **The API's leftovers (2.7):** nothing prunes jobs yet: a retention job (keeping every pruned
-  job's run id, submitter and idempotency key, as "Retention" above says) lands with the binary;
-  the tokens file's check covers the file and its directory, not the directories above it, which
-  the binary's unit (or a check of the whole parent chain) has to keep unwritable by others.
-- **The API in the binary (2.7):** `Authenticator.Reload` needs a trigger (a signal, or the reload
-  route); importing `net/http/pprof` registers its handlers on `http.DefaultServeMux`, so the
-  binary must never serve the default mux (a test that it serves `api.NewServer`'s handler only);
-  the API's allowlist entry for its bind-check test could narrow to inline markers.
+- **The API's leftovers, deferred past 2.7 (see "Carried past PR 2.7b" below):** nothing prunes
+  jobs yet: a retention job must keep every pruned job's run id, submitter and idempotency key, as
+  "Retention" above says. The tokens file's check covers the file and its directory, not the
+  directories above them; the example unit keeps those root-owned.
+- **The API in the binary (2.7), done in PR 2.7b:** SIGHUP triggers `Authenticator.Reload`. The
+  binary serves `api.NewServer`'s handler and never `http.DefaultServeMux`
+  (`TestServe_NeverServesTheDefaultMux`). The narrowing of the API's allowlist entry to inline
+  markers is carried.
 - **The queue's leftovers (2.7), done in PR 2.7a:** the store writes `task_sha256` on insert, the
   admission list carries no task text and the duplicate check compares digests (a row queued
   before the column existed is nobody's duplicate); an executor reads its own task with `GetJob`.
@@ -1033,7 +1116,7 @@ above says how.
   (`store.Requeue`). The submit window's count searches an index on `(COALESCE(submitted_by,
   ''), julianday(created_at))`, so it is bounded by time, not by every job the submitter sent;
   a migration drops the earlier index on the text column.
-- **Priority across callers (2.7):** a `jobs` token may submit any priority from 1 to 100, so one
+- **Priority across callers (carried past 2.7b):** a `jobs` token may submit any priority from 1 to 100, so one
   caller can put its jobs ahead of everyone's. Which callers may use which range is a policy of
   the tokens file (a per-caller ceiling, say), so it lands with the binary's configuration rather
   than as a clamp here that would also hold back the operator's own jobs.
@@ -1043,19 +1126,23 @@ above says how.
   keeps the old one); the queue's real-process tests re-execute the test binary and move to
   `runner/exec` when it lands (2.7). The binary must serve the API through `api.NewServer`, never
   `api.NewHandler` alone, which skips the bind check; 2.7 adds a test that it does.
-- **2.7 (the controller binary and the cutover docs):** the binary loads the contracts once at
-  start (`Config.PromptContractTexts` with `prompt.DefaultContracts()`) and refuses to start when
+- **2.7 (the controller binary and the cutover docs), done in PR 2.7b except the cursor test,
+  which waits for stage 4:** the binary loads the contracts once at start (`Config.PromptContractTexts` with `prompt.DefaultContracts()`) and refuses to start when
   that fails. The private controller's three contracts are built in here, reworded to name this
   repository's output tools, so the lab's configuration needs no contract file once the lab's agents file through the broker (until that move the lab's tools are still the vault's, so the overlay replaces the contracts with its own files through `prompt_contracts`); a lab-only
   contract goes into an overlay file listed in `prompt_contracts_append`. A configuration with an
   invalid `events.gateway_tag_prefix`, or a relative `lock_path`, no longer loads. The example
-  unit sets `RuntimeDirectory=` for the lock file, and bounds what a facts command leaves behind
-  beyond its process group (one that called `setsid`): `KillMode=control-group`, and the controller
-  as a child subreaper (`PR_SET_CHILD_SUBREAPER`) or under a real init, so an orphan is reaped and
-  killed with the service rather than reparented out of reach. When the cursor tool's module lands
+  unit sets `RuntimeDirectory=` for the lock file. What a session or facts command leaves behind
+  beyond its process group (one that called `setsid`) is reparented to init, which reaps it, and
+  stays in the service's cgroup, so the unit (`KillMode=mixed`: SIGKILL to what is left once the
+  controller has exited) ends it with the service. The controller
+  is not a child subreaper: it waits only for the processes it started, so an orphan reparented to
+  it would stay a zombie (`TestServe_DoesNotBecomeASubreaper`). When the cursor tool's module lands
   (stage 4), a test holds its store reader and `prompt.CursorFile` to the same verdicts, as the
   private controller did with one shared reader.
-- **2.7, from 2.5:** build the pool from the configuration: `backends.FromConfig`, `Limits`
+- **2.7, from 2.5, done in PR 2.7b (`buildPool` in `cmd/controller`; the lab's cutover checks
+  below stay a list for the operator, except the lock directory, which `serve` and `check`
+  refuse):** build the pool from the configuration: `backends.FromConfig`, `Limits`
   (`LimitsFromConfig`), `JobLimit` (`JobLimitFromConfig`), the `Interlock` on `lock_path` (one
   `inference.NewInterlock` shared by every caller), `InterlockWait` from
   `interlock_wait_timeout_seconds`, `PrimaryFirst`, `TokenWeightedAdmission`, `KVBudgetFraction`,
@@ -1086,6 +1173,54 @@ above says how.
   tests drove those signatures as text through the private runner (the outage strings, the parser
   messages, the exit-0 retry report, a stalled sleep); they belong to the provider's tests, with
   its classifier, and the pool's tests here drive the classes instead.
+
+### Carried past PR 2.7b
+
+PR 2.7a (#331) and PR 2.7b leave these, each with the reason it was not done:
+
+- **PR 2.7c: the `orchestration-conformance` job and the stand-in's retirement** (ADR-0026
+  decisions 14 and 15). The job builds `cmd/controller`, starts it on loopback in the network
+  namespace with `runner: {kind: exec}` running `conformance/fakes/llm_orchestrator_hermes.py`,
+  and runs `hnx conform run orchestration --target orchestration-orchestrator --strict`. The PR
+  also deletes the recorded stand-in, its target and the adapter's `fixes:` machinery, and renames
+  the adapter. It is a separate pull request because it changes the conformance tree and CI, not
+  the controller. A trial run of the suite against this binary (exec runner, the runner body
+  above, authentication off on loopback) passed all 14 checks it executed. It needed the
+  adapter's `wait_floor: 0`, because the floor turns the suite's `wait(timeout=0)` read into a
+  wait for the end, which fails `retrying-run-keeps-its-hold`. The two fault-injection checks stay
+  `untested` until PR 2.8. **Decided (operator default): PR 2.8's fault injection lands before
+  PR 2.7c, so 2.7c runs `--strict` with no exception.** The job also runs `make
+  controller-check`, and it is the controller's end-to-end test, which this PR has only at unit
+  level. A standalone `{prompt}` argument must now follow `--`, so the runner body takes its prompt
+  on stdin or after `--` there.
+- **After ADR-0039's `hnx registry bindings` (its step 5) merges: decision 16's wire names and the
+  consumer check.** This covers the packs' `svc:orchestrator` target, the declared overlap source,
+  the example registry row and the consumer check of `svc:llm-orchestrator`. The ADR makes PR 2.7
+  depend on that step, which has not merged; the binary already emits `svc:orchestrator` by
+  default. **Decided (operator default): the renames wait for ADR-0039 step 5.**
+- **Sessions isolated from the controller** (stage 3): a separate session user, so a session
+  cannot read `controller.db`, the controller's environment or other runs' directories ("The
+  trust boundary" above).
+- **Job and usage-directory pruning.** A retention job has to keep each pruned job's run id,
+  submitter and idempotency key for as long as replays may arrive. That needs a policy on how long
+  callers retry, which nothing states yet. Until then nothing is deleted: the database grows by one
+  bounded row per job, and `usage/` by one directory per run.
+- **The task digest of rows from before the column.** A row queued before `task_sha256` existed
+  has none and is nobody's duplicate. A backfill (the digest computed in Go for unfinished rows)
+  would need a data write at open, outside the schema migration; such rows drain as they finish.
+- **The tokens file's parent chain.** The API checks the file and its directory; the directories
+  above them are the unit's to keep root-owned. A check of the whole chain is small, but it
+  belongs to `api.LoadAuthenticator`, with its tests, not to the binary.
+- **Priority clamps.** A per-caller priority ceiling is a field of the tokens file (a schema
+  change of the API's file), not a binary flag.
+- **The API's bind-check allowlist entry narrowed to inline markers.** This is a tooling cleanup
+  with no behaviour change.
+- **The queue's real-process tests moved onto `runner/exec`.** They re-execute the test binary
+  today and prove the same process semantics; moving them is churn without new coverage.
+- **`InstanceLock` bound to the one `Store` it opens; `retryGate` re-reading locality between
+  attempts.** Noted by the 2.6 reviews, unchanged.
+- **The pprof switch** needed no change: `api_pprof` (behind the admin scope, refused with
+  authentication off) was already in the configuration.
 
 ### The store's migration, behind a backup
 
@@ -1147,9 +1282,9 @@ in-place additions, and the last one before the rename, with every added column.
 
 **Left to the packages that call the store** (no code here):
 
-- PR 2.7 (`cmd/controller`): the startup path for a database with a pending migration. The
-  controller refuses to start with `ErrBackupRequired` and its pending steps, and a flag (for
-  example `--migrate-backup PATH`) takes the backup and migrates under the instance lock.
+- PR 2.7b (`cmd/controller`), done: the startup path for a database with a pending migration.
+  The controller refuses to start with its pending steps (exit status 3, not restarted by the
+  unit), and `--migrate-backup PATH` takes the backup and migrates under the instance lock.
 - PR 2.5 (the backends): `Backend.InterlockRequired` defaults to true for every backend, as the
   configuration states it; the private controller built its local backend with the interlock off
   whatever the file said; `config.Migrate` therefore writes `needs_interlock: false` on the

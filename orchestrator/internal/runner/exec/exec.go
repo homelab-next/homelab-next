@@ -21,6 +21,8 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -57,6 +59,12 @@ const (
 var placeholders = []string{PromptPlaceholder, UsagePathPlaceholder, ToolsetsPlaceholder, RunIDPlaceholder,
 	AgentKeyPlaceholder, LanePlaceholder, HomePlaceholder, BackendPlaceholder}
 
+// ErrArgumentsTooLong: the session's command line is over the system's limit (a prompt in argv is
+// at most 128 KiB on Linux). It is the configuration's, not the backend's: no class, so the pool
+// neither retries it elsewhere nor starts a cloud leg that would fail the same way. Give the
+// prompt on stdin.
+var ErrArgumentsTooLong = errors.New("the command line is too long for the system (E2BIG): give the prompt on stdin, with no {prompt} in argv")
+
 // Config is the runner's command and bounds.
 type Config struct {
 	// Argv is the command: an absolute program path or a name found on PATH, then its arguments,
@@ -72,9 +80,13 @@ type Config struct {
 	// mapped here to runner.ConcurrencyLimited.
 	ExitClasses map[int]runner.Class
 	// EnvAllowlist: the process gets only these of the controller's environment variables (an
-	// exact name, or a prefix ending in "*"), then the session's HNX_* variables. Empty: the whole
-	// environment.
+	// exact name, or a prefix ending in "*"), then the session's HNX_* variables. Empty: none of
+	// them (fail-closed: a session never inherits what nobody listed).
 	EnvAllowlist []string
+	// DenyEnv are variables a session never gets, whatever EnvAllowlist says: the names the
+	// controller reads its own secrets from (the event forwarder's token, say). A session's
+	// output is the answer a caller reads, so a variable it can print is one a caller can read.
+	DenyEnv []string
 	// RunDirBase is where each session gets a fresh owner-only working directory, removed when it
 	// ends; empty is the system's temporary directory.
 	RunDirBase string
@@ -103,6 +115,14 @@ func New(cfg Config) (*Runner, error) {
 			if strings.ContainsRune(a, 0) {
 				return nil, errors.New("exec runner: an argument holds a NUL byte")
 			}
+		}
+	}
+	for i, a := range cfg.Argv {
+		// A prompt as an argument of its own would be read as an option when it starts with "-":
+		// only after "--" is it the operand it is meant to be. Inside an element ("--prompt={prompt}")
+		// it cannot be read as one.
+		if a == PromptPlaceholder && (i == 0 || cfg.Argv[i-1] != "--") {
+			return nil, errors.New(`exec runner: {prompt} as an argument of its own must follow "--" (or give the prompt on stdin: no {prompt} at all)`)
 		}
 	}
 	for code, c := range cfg.ExitClasses {
@@ -182,14 +202,21 @@ func (r *Runner) Run(ctx context.Context, s runner.Session) (*runner.Result, err
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = r.cfg.KillGrace
 	if err := cmd.Start(); err != nil {
+		if errors.Is(err, syscall.E2BIG) {
+			return res, fmt.Errorf("exec runner: start %s: %w", filepath.Base(argv[0]), ErrArgumentsTooLong)
+		}
 		return res, fmt.Errorf("exec runner: start %s: %w", filepath.Base(argv[0]), err)
 	}
+	pgid := cmd.Process.Pid
+	// Whatever is left of the group (a descendant that outlived the leader) goes with it. The
+	// group is killed while its leader is exited but not yet reaped, so the group id cannot have
+	// been reused by an unrelated group; then the leader is reaped, and Run waits, at most
+	// KillGrace, until no member of the group is still running (one stuck in an uninterruptible
+	// wait cannot hold Run for ever).
+	waitExited(pgid)
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	waitErr := cmd.Wait()
-	// Whatever is left of the group (a descendant that outlived the leader) goes with it, and is
-	// reaped here when this process is its subreaper (BecomeSubreaper), so it is gone, not only
-	// signalled, when Run returns.
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	reapGroup(cmd.Process.Pid)
+	sweepGroup(pgid, r.cfg.KillGrace)
 
 	res.Stderr = stderr.String()
 	res.ExitCode = cmd.ProcessState.ExitCode()
@@ -211,8 +238,9 @@ func (r *Runner) Run(ctx context.Context, s runner.Session) (*runner.Result, err
 		return res, runner.Wrap(runner.KilledExternally, fmt.Errorf("exec runner: ended by %s", ws.Signal()))
 	}
 	if waitErr != nil && res.ExitCode == 0 {
-		// The process exited 0 but a descendant held its output open past KillGrace.
-		return res, fmt.Errorf("exec runner: %w", waitErr)
+		// The program exited 0, but a descendant outside its group (one that called setsid) held
+		// its output open past KillGrace: the answer read may be cut short, so it is no answer.
+		return res, runner.Wrap(runner.TurnFailed, fmt.Errorf("exec runner: the program exited, but its output stayed open past the kill grace: %w", waitErr))
 	}
 	if res.ExitCode != 0 {
 		c, ok := r.cfg.ExitClasses[res.ExitCode]
@@ -228,28 +256,61 @@ func (r *Runner) Run(ctx context.Context, s runner.Session) (*runner.Result, err
 	return res, nil
 }
 
-// BecomeSubreaper makes this process the child subreaper of everything it starts
-// (PR_SET_CHILD_SUBREAPER): a session's descendant whose parent exits is reparented here rather
-// than to init, so Run can reap what is left of a session's group and a facts command's orphan
-// stays within the service. The controller calls it once at start.
-func BecomeSubreaper() error {
-	return unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
-}
-
-// reapGroup waits for every member of process group pgid that is this process's child (one
-// reparented here as subreaper), which the caller has sent SIGKILL. Without a subreaper, none is
-// a child and it returns at once.
-func reapGroup(pgid int) {
+// waitExited blocks until process pid has exited, leaving it unreaped (WNOWAIT): os/exec's Wait
+// reaps it after.
+func waitExited(pid int) {
 	for {
-		var ws syscall.WaitStatus
-		_, err := syscall.Wait4(-pgid, &ws, 0, nil)
-		if err == syscall.EINTR {
-			continue
-		}
-		if err != nil {
+		var info unix.Siginfo
+		err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil)
+		if err != unix.EINTR {
 			return
 		}
 	}
+}
+
+// sweepGroup waits until no member of process group pgid is running (a zombie is not), polling
+// /proc, for at most bound. It reports whether the group is gone.
+func sweepGroup(pgid int, bound time.Duration) bool {
+	deadline := time.Now().Add(bound)
+	for {
+		if !groupRunning(pgid) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// groupRunning reports whether any process of group pgid is still running (not a zombie).
+func groupRunning(pgid int) bool {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name()[0] < '0' || e.Name()[0] > '9' {
+			continue
+		}
+		data, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		st := string(data)
+		i := strings.LastIndexByte(st, ')')
+		if i < 0 {
+			continue
+		}
+		f := strings.Fields(st[i+1:]) // state, ppid, pgrp, ...
+		if len(f) < 3 || f[0] == "Z" || f[0] == "X" {
+			continue
+		}
+		if f[2] == strconv.Itoa(pgid) {
+			return true
+		}
+	}
+	return false
 }
 
 // argv is the session's command line, and whether the prompt goes to stdin (no element holds it).
@@ -316,7 +377,7 @@ func (r *Runner) environ(s runner.Session) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if _, mine := own[name]; mine || name == "HNX_SERVERS_FILE" {
+		if _, mine := own[name]; mine || name == "HNX_SERVERS_FILE" || slices.Contains(r.cfg.DenyEnv, name) {
 			continue
 		}
 		if r.allowed(name) {
@@ -330,19 +391,23 @@ func (r *Runner) environ(s runner.Session) []string {
 }
 
 func (r *Runner) allowed(name string) bool {
-	if len(r.cfg.EnvAllowlist) == 0 {
-		return true
-	}
-	for _, e := range r.cfg.EnvAllowlist {
+	_, ok := Covers(r.cfg.EnvAllowlist, name)
+	return ok
+}
+
+// Covers reports whether an allowlist entry (an exact name, or a prefix ending in "*") lets name
+// through, and which; an empty list lets nothing through.
+func Covers(allowlist []string, name string) (string, bool) {
+	for _, e := range allowlist {
 		if p, ok := strings.CutSuffix(e, "*"); ok {
 			if strings.HasPrefix(name, p) {
-				return true
+				return e, true
 			}
 		} else if name == e {
-			return true
+			return e, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // readUsage reads the session's usage report: a regular file, not a link, at most maxUsageBytes, a
