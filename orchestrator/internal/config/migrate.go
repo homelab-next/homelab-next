@@ -4,6 +4,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -118,6 +119,11 @@ type MigrateOptions struct {
 	// configuration that has the block and is given one is refused. Without it, a configuration
 	// whose backends have load probes migrates with a note saying the controller will refuse them.
 	EngineMetrics *EngineMetrics
+	// AllowUnauthenticatedAPI accepts migrating a configuration in the private controller's keys
+	// that leaves API authentication unset (that controller then served without a token): the
+	// result says api_auth.enabled: false. Without it such a configuration is refused, so serving
+	// without a token is always the operator's explicit choice.
+	AllowUnauthenticatedAPI bool
 }
 
 // Migrate rewrites a configuration to the keys this controller reads: every old key under its
@@ -149,6 +155,33 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "needs_interlock"},
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"})
 			notes = append(notes, "set backends.local.needs_interlock: false (the private controller never took the interlock for its local backend)") // scrub-allow: a config key path, not a host name
+		}
+		// that controller served without a token unless api_auth.enabled said true; here unset
+		// means on, so the migration never decides to serve without one by itself
+		auth := lookup(doc.Content[0], "api_auth")
+		hasTokens := auth != nil && auth.Kind == yaml.MappingNode && lookup(auth, "tokens_file") != nil &&
+			strings.TrimSpace(lookup(auth, "tokens_file").Value) != ""
+		switch {
+		case auth != nil && auth.Kind == yaml.MappingNode && lookup(auth, "enabled") != nil:
+		case hasTokens:
+			notes = append(notes, "api_auth.enabled is unset and a tokens file is named: authentication is now on (the private controller left it off unless enabled said true)")
+		case !opts.AllowUnauthenticatedAPI:
+			return nil, nil, errors.New("api_auth: the configuration leaves API authentication unset, and the private controller then served without a token: give api_auth.tokens_file (authentication is on unless enabled says false), or migrate with MigrateOptions.AllowUnauthenticatedAPI to write api_auth.enabled: false")
+		case auth == nil || (auth.Kind == yaml.ScalarNode && auth.Tag == "!!null"):
+			if auth != nil {
+				removeKey(doc.Content[0], "api_auth")
+			}
+			doc.Content[0].Content = append(doc.Content[0].Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "api_auth"},
+				&yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Style: yaml.FlowStyle, Content: []*yaml.Node{
+					{Kind: yaml.ScalarNode, Tag: "!!str", Value: "enabled"}, {Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"}}})
+			notes = append(notes, "added api_auth: {enabled: false}, as asked (AllowUnauthenticatedAPI): the API serves without a token, on loopback only")
+		case auth.Kind == yaml.MappingNode:
+			auth.Content = append(auth.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "enabled"}, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"})
+			notes = append(notes, "set api_auth.enabled: false, as asked (AllowUnauthenticatedAPI): the API serves without a token, on loopback only")
+		default:
+			return nil, nil, errors.New("api_auth: not a mapping")
 		}
 	}
 	if opts.Scope != nil {

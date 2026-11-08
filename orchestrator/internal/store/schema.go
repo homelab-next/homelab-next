@@ -110,6 +110,9 @@ var plainIndexes = []struct{ name, ddl string }{
 	{"idx_jobs_state", `CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state)`},
 	{"idx_jobs_seq", `CREATE INDEX IF NOT EXISTS idx_jobs_seq ON jobs(seq)`},
 	{"idx_jobs_idempotency_owner", `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_owner ON jobs(COALESCE(submitted_by, ''), idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != ''`},
+	// The per-submitter bounds' counts (SubmitLimits), keyed as their queries are.
+	{"idx_jobs_submitter_created", `CREATE INDEX IF NOT EXISTS idx_jobs_submitter_created ON jobs(COALESCE(submitted_by, ''), created_at)`},
+	{"idx_jobs_submitter_state", `CREATE INDEX IF NOT EXISTS idx_jobs_submitter_state ON jobs(COALESCE(submitted_by, ''), state)`},
 }
 
 // globalIdempotencyIndex is the earlier, global key index.

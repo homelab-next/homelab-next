@@ -161,7 +161,9 @@ func (p *Policy) ReserveExclusive(ctx context.Context, affinity Affinity, runID 
 	if _, drained := p.adminDrains[target]; drained {
 		return "", false // drained by the operator meanwhile
 	}
-	if !p.claimReservation(runID, target) {
+	// The lease is the backend alone: its claim is refused while anything else is in flight there
+	// (an attempt that took a slot since the backend was found empty).
+	if held, full := p.claimReservation(runID, target, 1); held || full {
 		return "", false
 	}
 	s.held = true
