@@ -299,3 +299,20 @@ func TestMigrate_KeepsTheLocalBackendsInterlockOff(t *testing.T) {
 		t.Errorf("a configuration in the new keys was changed: %v %v", notes, err)
 	}
 }
+
+// The interlock is written only for a configuration in the private controller's keys: a dropped
+// key or a site rename alone does not make one.
+func TestMigrate_InterlockOnlyForThePrivateControllersKeys(t *testing.T) {
+	for name, body := range map[string]string{
+		"dropped key only": scopeYAML + "passthrough_enabled: false\nbackends: {local: {name: engine-a}}\n",
+		"site rename only": scopeYAML + "legacy_root: /srv/notes\nbackends: {local: {name: engine-a}}\n",
+	} {
+		out, _, err := MigrateWith([]byte(body), MigrateOptions{ExtraRenames: legacyRenames})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if strings.Contains(string(out), "needs_interlock") {
+			t.Errorf("%s: the interlock was written:\n%s", name, out)
+		}
+	}
+}

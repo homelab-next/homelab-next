@@ -232,7 +232,7 @@ func ParseWith(data []byte, opts ParseOptions) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	notes, err := migrateNode(doc, false, extra)
+	notes, _, err := migrateNode(doc, false, extra)
 	if err != nil {
 		return Config{}, err
 	}

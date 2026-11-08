@@ -131,11 +131,11 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	notes, err := migrateNode(doc, true, extra)
+	notes, private, err := migrateNode(doc, true, extra)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(notes) > 0 {
+	if private {
 		// a configuration in the private controller's keys: that controller built its local
 		// backend with the interlock off whatever the file said, and here unset means on
 		if local := lookup(lookup(doc.Content[0], "backends"), "local"); local != nil && local.Kind == yaml.MappingNode && lookup(local, "needs_interlock") == nil {
@@ -199,7 +199,9 @@ func addScope(root *yaml.Node, z pathscope.Zones) error {
 
 // migrateNode applies Renames and Dropped to doc in place. Loading (rewrite false) refuses a
 // dropped key; a migration removes it.
-func migrateNode(doc *yaml.Node, rewrite bool, extra []Rename) ([]string, error) {
+// The second result reports whether a built-in rename fired: the configuration was written in
+// the private controller's keys (a site rename or a dropped key alone does not say so).
+func migrateNode(doc *yaml.Node, rewrite bool, extra []Rename) ([]string, bool, error) {
 	root := doc.Content[0]
 	var notes []string
 	for _, at := range expand(root, "") {
@@ -212,13 +214,14 @@ func migrateNode(doc *yaml.Node, rewrite bool, extra []Rename) ([]string, error)
 				continue
 			}
 			if !rewrite {
-				return nil, fmt.Errorf("%s: %s (remove it, or rewrite the configuration with the migration)", at.path, why)
+				return nil, false, fmt.Errorf("%s: %s (remove it, or rewrite the configuration with the migration)", at.path, why)
 			}
 			remove(at.node, at.key)
 			notes = append(notes, fmt.Sprintf("removed %s: %s", at.path, why))
 		}
 	}
-	for _, r := range append(slices.Clone(Renames), extra...) {
+	builtin := false
+	for i, r := range append(slices.Clone(Renames), extra...) {
 		for _, at := range expand(root, r.Old) {
 			val := lookup(at.node, at.key)
 			if val == nil {
@@ -227,19 +230,20 @@ func migrateNode(doc *yaml.Node, rewrite bool, extra []Rename) ([]string, error)
 			newPath := strings.Replace(r.New, "*", at.star, 1)
 			parent, leaf, err := ensure(root, newPath)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if lookup(parent, leaf) != nil {
-				return nil, fmt.Errorf("%s and %s are both set: they are one setting (keep %s)", at.path, newPath, newPath)
+				return nil, false, fmt.Errorf("%s and %s are both set: they are one setting (keep %s)", at.path, newPath, newPath)
 			}
 			if r.Convert != nil {
 				conv, err := r.Convert(val)
 				if err != nil {
-					return nil, fmt.Errorf("%s: %w", at.path, err)
+					return nil, false, fmt.Errorf("%s: %w", at.path, err)
 				}
 				if conv == nil {
 					removeKey(at.node, at.key)
 					notes = append(notes, fmt.Sprintf("removed %s: empty, so no %s", at.path, newPath))
+					builtin = builtin || i < len(Renames)
 					continue
 				}
 				conv.HeadComment, conv.LineComment = val.HeadComment, val.LineComment
@@ -257,9 +261,10 @@ func migrateNode(doc *yaml.Node, rewrite bool, extra []Rename) ([]string, error)
 				note += " (" + r.Note + ")"
 			}
 			notes = append(notes, note)
+			builtin = builtin || i < len(Renames)
 		}
 	}
-	return notes, nil
+	return notes, builtin, nil
 }
 
 // site is one place an old key may sit: its mapping, its key and its full path; star is what "*"
