@@ -98,18 +98,18 @@ type JobResponse struct {
 	APICalls         int    `json:"api_calls,omitempty"`
 	// SessionID is the runner's own session id; LegacySessionID the same value under its old name
 	// (LegacySessionField), for the overlap release.
-	SessionID        string  `json:"session_id,omitempty"`
-	LegacySessionID  string  `json:"hermes_session_id,omitempty"`
-	Completed        *bool   `json:"completed,omitempty"`
-	Failed           *bool   `json:"failed,omitempty"`
-	TurnExitReason   string  `json:"turn_exit_reason,omitempty"`
-	CostUSD          float64 `json:"cost_usd,omitempty"`
-	CacheReadTokens  int     `json:"cache_read_tokens,omitempty"`
-	InjectedLessons  string  `json:"injected_lessons,omitempty"`
-	InjectedRunbooks string  `json:"injected_runbooks,omitempty"`
-	PromptSHA256     string  `json:"prompt_sha256,omitempty"`
-	PromptBytes      int     `json:"prompt_bytes,omitempty"`
-	Model            string  `json:"model,omitempty"`
+	SessionID        string   `json:"session_id,omitempty"`
+	LegacySessionID  string   `json:"hermes_session_id,omitempty"`
+	Completed        *bool    `json:"completed,omitempty"`
+	Failed           *bool    `json:"failed,omitempty"`
+	TurnExitReason   string   `json:"turn_exit_reason,omitempty"`
+	CostUSD          *float64 `json:"cost_usd,omitempty"` // nil: no report gave one (never read as 0)
+	CacheReadTokens  int      `json:"cache_read_tokens,omitempty"`
+	InjectedLessons  string   `json:"injected_lessons,omitempty"`
+	InjectedRunbooks string   `json:"injected_runbooks,omitempty"`
+	PromptSHA256     string   `json:"prompt_sha256,omitempty"`
+	PromptBytes      int      `json:"prompt_bytes,omitempty"`
+	Model            string   `json:"model,omitempty"`
 	// The retry lineage: the run this one retries, the run that retried it, and how many retries
 	// precede it (0: an original submit).
 	RetryOfRunID   string `json:"retry_of_run_id,omitempty"`
@@ -393,7 +393,7 @@ func handleGetJob(s *store.Store) http.HandlerFunc {
 			ResponseBody: j.ResponseBody, LocalBackendUsed: j.LocalBackendUsed,
 			InputTokens: j.InputTokens, OutputTokens: j.OutputTokens, ReasoningTokens: j.ReasoningTokens, APICalls: j.APICalls,
 			SessionID: j.SessionID, LegacySessionID: j.SessionID, Completed: j.Completed, Failed: j.Failed,
-			TurnExitReason: j.TurnExitReason, CostUSD: j.CostUSD, CacheReadTokens: j.CacheReadTokens,
+			TurnExitReason: j.TurnExitReason, CostUSD: j.Usage.CostUSD, CacheReadTokens: j.CacheReadTokens,
 			InjectedLessons: j.InjectedLessons, InjectedRunbooks: j.InjectedRunbooks,
 			PromptSHA256: j.PromptSHA256, PromptBytes: j.PromptBytes, Model: j.Model,
 			RetryOfRunID: j.RetryOfRunID, RetriedByRunID: j.RetriedByRunID, Resubmits: j.Resubmits,
