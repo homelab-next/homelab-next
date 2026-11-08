@@ -41,8 +41,14 @@ type Config struct {
 	// then binds loopback only: a default must never depend on the bind address an operator
 	// chose.
 	Unauthenticated bool
-	// Pprof serves /debug/pprof/* (admin scope).
+	// Pprof serves /debug/pprof/*, behind the admin scope; refused with Unauthenticated (it would
+	// open the process's profiles to every local user). A CPU profile or trace longer than the
+	// server's WriteTimeout (2 minutes) is cut off.
 	Pprof bool
+	// MaxUnfinishedPerCaller bounds one submitter's jobs that are not yet finished (queued,
+	// admitted, running): a submit past it is a 429. 0 is DefaultMaxUnfinishedPerCaller; with
+	// authentication off every request is one caller.
+	MaxUnfinishedPerCaller int
 
 	// CancelRun stops a cancelled job's live session (the scheduler's CancelRun); nil: a cancel
 	// only moves the row.
@@ -81,6 +87,10 @@ func NewHandler(cfg Config) (http.Handler, error) {
 		return nil, fmt.Errorf("%w: authentication is on by default and no tokens were given (set Unauthenticated explicitly to serve without)", ErrInsecure)
 	case cfg.Auth != nil && cfg.Unauthenticated:
 		return nil, fmt.Errorf("%w: both an authenticator and Unauthenticated", ErrInsecure)
+	case cfg.Unauthenticated && cfg.Pprof:
+		return nil, fmt.Errorf("%w: profiling without authentication would open the process's profiles to every local user", ErrInsecure)
+	case cfg.MaxUnfinishedPerCaller < 0:
+		return nil, errors.New("api: a negative MaxUnfinishedPerCaller")
 	}
 	mux := newMux(cfg)
 	if cfg.Auth == nil {
@@ -116,13 +126,15 @@ const (
 	maxHeaderBytes    = 64 << 10
 )
 
-// NewServer is NewHandler on addr, refused for an unauthenticated API off loopback.
+// NewServer is NewHandler on addr, refused for an unauthenticated API off loopback. The
+// configuration is checked first, so a missing authenticator reads as that, not as a bind error.
+// A controller serves the API through NewServer only: NewHandler alone checks no address.
 func NewServer(addr string, cfg Config) (*http.Server, error) {
-	if err := CheckBind(addr, cfg.Auth != nil); err != nil {
-		return nil, err
-	}
 	h, err := NewHandler(cfg)
 	if err != nil {
+		return nil, err
+	}
+	if err := CheckBind(addr, cfg.Auth != nil); err != nil {
 		return nil, err
 	}
 	return &http.Server{
@@ -135,7 +147,11 @@ func NewServer(addr string, cfg Config) (*http.Server, error) {
 func newMux(cfg Config) *http.ServeMux {
 	s := cfg.Store
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /jobs", handleSubmit(s, cfg.AgentKnown))
+	maxUnfinished := cfg.MaxUnfinishedPerCaller
+	if maxUnfinished == 0 {
+		maxUnfinished = DefaultMaxUnfinishedPerCaller
+	}
+	mux.HandleFunc("POST /jobs", handleSubmit(s, cfg.AgentKnown, maxUnfinished))
 	mux.HandleFunc("GET /jobs", handleListJobs(s))
 	mux.HandleFunc("GET /jobs/{id}", handleGetJob(s))
 	mux.HandleFunc("POST /jobs/{id}/cancel", handleCancel(s, cfg.CancelRun))
@@ -197,11 +213,11 @@ func handleBackendDrain(setDrained func(string, bool) (any, error), drain bool) 
 			return
 		}
 		if err != nil {
-			log.Printf("api: drain %s=%v not changed: %v", name, drain, err)
+			log.Printf("api: drain %q=%v not changed: %v", name, drain, err)
 			http.Error(w, "the drain state is unchanged: it could not be stored (see the controller's log)", http.StatusInternalServerError)
 			return
 		}
-		log.Printf("api: drain %s=%v by %s", name, drain, callerOrAnonymous(r))
+		log.Printf("api: drain %q=%v by %q", name, drain, callerOrAnonymous(r))
 		writeJSON(w, http.StatusOK, status)
 	}
 }

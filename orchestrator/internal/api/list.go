@@ -51,6 +51,9 @@ type ListJobsResponse struct {
 // overlap release); a request that gives both with different values is refused.
 func sessionFilter(r *http.Request) (string, bool) {
 	q := r.URL.Query()
+	if len(q["session_id"]) > 1 || len(q[LegacySessionField]) > 1 {
+		return "", false
+	}
 	id, legacy := q.Get("session_id"), q.Get(LegacySessionField)
 	if id != "" && legacy != "" && id != legacy {
 		return "", false
@@ -78,7 +81,7 @@ func handleListJobs(s *store.Store) http.HandlerFunc {
 		}
 		sid, ok := sessionFilter(r)
 		if !ok {
-			http.Error(w, "session_id and "+LegacySessionField+" differ: give one", http.StatusBadRequest)
+			http.Error(w, "give one session id: session_id and "+LegacySessionField+" differ, or one is repeated", http.StatusBadRequest)
 			return
 		}
 		f.SessionID = sid

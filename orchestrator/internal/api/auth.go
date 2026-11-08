@@ -13,9 +13,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -75,6 +78,9 @@ type credential struct {
 type Authenticator struct {
 	path  string
 	creds atomic.Pointer[[]credential]
+	// lastUnknownLog and unknownSuppressed rate-limit the log of refused tokens.
+	lastUnknownLog    atomic.Int64
+	unknownSuppressed atomic.Int64
 }
 
 // LoadAuthenticator reads the tokens file at path. It refuses an unreadable, oversized or
@@ -101,14 +107,16 @@ func (a *Authenticator) Reload() error {
 }
 
 func parseTokensFile(path string) ([]credential, error) {
-	if err := checkTokensFileOwnership(path); err != nil {
-		return nil, err
-	}
-	f, err := os.Open(path)
+	// Opened without following a link at its name and without blocking, and checked on the
+	// descriptor: the file checked is the file read.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("read the api tokens file: %w", err)
 	}
 	defer f.Close()
+	if err := checkTokensFileOwnership(path, f); err != nil {
+		return nil, err
+	}
 	var buf bytes.Buffer
 	if n, err := buf.ReadFrom(io.LimitReader(f, MaxTokensFileBytes+1)); err != nil {
 		return nil, fmt.Errorf("read the api tokens file: %w", err)
@@ -157,11 +165,13 @@ func parseTokensFile(path string) ([]credential, error) {
 	return out, nil
 }
 
-// checkTokensFileOwnership refuses a tokens file someone other than the controller could rewrite:
-// not a regular file, group- or world-writable, or owned by a uid that is neither the
-// controller's nor root's. It holds only digests, but whoever edits it can mint an admin token.
-func checkTokensFileOwnership(path string) error {
-	fi, err := os.Lstat(path)
+// checkTokensFileOwnership refuses a tokens file someone other than the controller could
+// rewrite: not a regular file, group- or world-writable, owned by a uid that is neither the
+// controller's nor root's, or in a directory its group or others can write (they could replace
+// it). It holds only digests, but whoever edits it can mint an admin token. f is the open file:
+// the descriptor is what is checked.
+func checkTokensFileOwnership(path string, f *os.File) error {
+	fi, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("read the api tokens file: %w", err)
 	}
@@ -175,6 +185,13 @@ func checkTokensFileOwnership(path string) error {
 		if uid := int(st.Uid); uid != 0 && uid != os.Getuid() {
 			return fmt.Errorf("the api tokens file %s is owned by uid %d, not the controller (uid %d) or root", path, uid, os.Getuid())
 		}
+	}
+	dir, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("read the api tokens file's directory: %w", err)
+	}
+	if perm := dir.Mode().Perm(); perm&0o022 != 0 {
+		return fmt.Errorf("the api tokens file %s is in a group- or world-writable directory (mode %#o): another user could replace it", path, perm)
 	}
 	return nil
 }
@@ -273,10 +290,13 @@ const realm = `Bearer realm="orchestrator"`
 
 // Middleware puts next behind the bearer tokens: 401 for a missing or unknown token, 403 for a
 // valid one without the route's scope. On an open route a valid token still names the caller
-// (an admin sees the backend health's error text); an invalid one is ignored there.
+// (an admin sees the backend health's error text); an invalid one is ignored there. The scope is
+// the route's next would serve: when next is a ServeMux, the pattern it matches (so a path that
+// cleans or redirects to another route is judged as that route), else the cleaned path.
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		need := RouteScope(r.Method, r.URL.Path)
+		route := routePath(next, r)
+		need := RouteScope(r.Method, route)
 		token, hasToken := bearerToken(r)
 		if need == scopeOpen {
 			if hasToken {
@@ -294,18 +314,45 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		}
 		c := a.authenticate(token)
 		if c == nil {
-			log.Printf("api: refused an unknown token for %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			a.logUnknownToken(r)
 			w.Header().Set("WWW-Authenticate", realm+`, error="invalid_token"`)
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
 		}
-		if !c.allows(need) && !(c.scopes[ScopeRead] && readOnlyRoute(r.Method, r.URL.Path)) {
-			log.Printf("api: caller %s lacks scope %s for %s %s", c.caller, need, r.Method, r.URL.Path)
-			http.Error(w, fmt.Sprintf("the token of %s lacks the %s scope", c.caller, need), http.StatusForbidden)
+		if !c.allows(need) && !(c.scopes[ScopeRead] && readOnlyRoute(r.Method, route)) {
+			log.Printf("api: caller %q lacks scope %s for %q %q", c.caller, need, r.Method, r.URL.Path)
+			http.Error(w, fmt.Sprintf("the token lacks the %s scope", need), http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, c.principal())))
 	})
+}
+
+// routePath is the path the route r reaches is registered under: the matched pattern's path when
+// next is a ServeMux ("" for none: no route, judged admin), else r's cleaned path.
+func routePath(next http.Handler, r *http.Request) string {
+	if mux, ok := next.(*http.ServeMux); ok {
+		_, pattern := mux.Handler(r)
+		if _, p, found := strings.Cut(pattern, " "); found {
+			pattern = p
+		}
+		return pattern
+	}
+	return path.Clean("/" + r.URL.Path)
+}
+
+// unknownTokenLogEvery bounds the log of refused unknown tokens: a client hammering with a bad
+// token gets one line per interval, with the count of the ones not logged.
+const unknownTokenLogEvery = 10 * time.Second
+
+func (a *Authenticator) logUnknownToken(r *http.Request) {
+	now := time.Now().UnixNano()
+	last := a.lastUnknownLog.Load()
+	if now-last < int64(unknownTokenLogEvery) || !a.lastUnknownLog.CompareAndSwap(last, now) {
+		a.unknownSuppressed.Add(1)
+		return
+	}
+	log.Printf("api: refused an unknown token for %q %q from %q (%d more since the last line)", r.Method, r.URL.Path, r.RemoteAddr, a.unknownSuppressed.Swap(0))
 }
 
 func bearerToken(r *http.Request) (string, bool) {

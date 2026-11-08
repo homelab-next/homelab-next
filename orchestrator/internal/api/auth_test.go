@@ -276,3 +276,48 @@ func TestAuthDisabled_JobsVisibleToEveryone(t *testing.T) {
 		t.Fatalf("read = %d", code)
 	}
 }
+
+// A tokens file readable by its group (0640) is fine; one loosened after loading is refused on
+// Reload, the loaded set kept; one in a directory others can write is refused.
+func TestLoadAuthenticator_ModesAndItsDirectory(t *testing.T) {
+	body := "tokens: [{caller: a, sha256: " + digest("tok-a") + ", scopes: [jobs]}]\n"
+	path := writeTokens(t, body, 0o640)
+	a, err := LoadAuthenticator(path)
+	if err != nil {
+		t.Fatalf("0640 = %v", err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Reload(); err == nil {
+		t.Fatal("a loosened file reloaded")
+	}
+	if a.authenticate("tok-a") == nil {
+		t.Fatal("the loaded set was dropped")
+	}
+	dir := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	open := filepath.Join(dir, "tokens.yaml")
+	if err := os.WriteFile(open, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAuthenticator(open); err == nil || !strings.Contains(err.Error(), "directory") {
+		t.Fatalf("a world-writable directory = %v", err)
+	}
+}
+
+// A tokens file owned by another user is refused. Needs root, to give the file away.
+func TestLoadAuthenticator_RefusesAForeignOwner(t *testing.T) {
+	path := writeTokens(t, "tokens: [{caller: a, sha256: "+digest("tok-a")+", scopes: [jobs]}]\n", 0o600)
+	if err := os.Chown(path, 4242, 4242); err != nil {
+		t.Skip("chown to another user needs root")
+	}
+	if _, err := LoadAuthenticator(path); err == nil || !strings.Contains(err.Error(), "owned by uid 4242") {
+		t.Fatalf("a foreign owner = %v", err)
+	}
+}
