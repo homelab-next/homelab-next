@@ -114,18 +114,26 @@ def write_tree(
         dest.write_text(text, encoding="utf-8", newline="\n")
         res.written.append(rel)
     if prune and root.is_dir():
-        top_dirs = {Path(rel).parts[0] for rel in files} | set(dirs)
-        for top in sorted(top_dirs):
-            for p in sorted((root / top).rglob("*")) if (root / top).is_dir() else []:
-                rel = p.relative_to(root).as_posix()
-                if (
-                    p.is_file()
-                    and rel not in files
-                    and MARKER in p.read_text(encoding="utf-8", errors="replace")[:400]
-                ):
-                    p.unlink()
-                    res.pruned.append(rel)
+        for p, rel in _stale(root, files, dirs):
+            p.unlink()
+            res.pruned.append(rel)
     return res
+
+
+def _stale(root: Path, files: dict[str, str], dirs: tuple[str, ...]) -> list[tuple[Path, str]]:
+    """Generated files (they carry the marker) under the top-level directories of ``files`` and
+    ``dirs`` that ``files`` no longer holds."""
+    out = []
+    for top in sorted({Path(rel).parts[0] for rel in files} | set(dirs)):
+        for p in sorted((root / top).rglob("*")) if (root / top).is_dir() else []:
+            rel = p.relative_to(root).as_posix()
+            if (
+                p.is_file()
+                and rel not in files
+                and MARKER in p.read_text(encoding="utf-8", errors="replace")[:400]
+            ):
+                out.append((p, rel))
+    return out
 
 
 def check_tree(root: Path, files: dict[str, str], dirs: tuple[str, ...] = ()) -> list[str]:
@@ -139,14 +147,5 @@ def check_tree(root: Path, files: dict[str, str], dirs: tuple[str, ...] = ()) ->
             problems.append(f"missing: {rel}")
         elif dest.read_text(encoding="utf-8") != text:
             problems.append(f"differs: {rel}")
-    top_dirs = {Path(rel).parts[0] for rel in files} | set(dirs)
-    for top in sorted(top_dirs):
-        for p in sorted((root / top).rglob("*")) if (root / top).is_dir() else []:
-            rel = p.relative_to(root).as_posix()
-            if (
-                p.is_file()
-                and rel not in files
-                and MARKER in p.read_text(encoding="utf-8", errors="replace")[:400]
-            ):
-                problems.append(f"stale: {rel}")
+    problems += [f"stale: {rel}" for _, rel in _stale(root, files, dirs)]
     return problems
