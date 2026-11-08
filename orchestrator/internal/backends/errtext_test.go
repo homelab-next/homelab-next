@@ -13,12 +13,18 @@ import (
 	"github.com/homelab-next/homelab-next/orchestrator/internal/errtext"
 )
 
-// The pool decides on classes, hints, the answer check and its own sentinels: no file of it matches
-// an error's text or imports regexp (package errtext). The scrape package it reads metrics with is
-// held to the same.
+// The pool decides on classes, hints, the answer check and its own sentinels: no file of it decides
+// on an error's text or a session's output, or imports regexp (package errtext). The scrape package
+// it reads metrics with is held to the same.
+//
+// The pool's own sinks, each of which only bounds, logs or keeps the text: headSnippet (bounds an
+// excerpt), logf (the log), setHealth (keeps a health record's reason for the admin view), and
+// CheckAnswer, the runner's own answer check (a runner reads its output; the pool does not).
+var poolSinks = errtext.Options{Sinks: []string{"headSnippet", ".logf", ".setHealth", ".CheckAnswer"}}
+
 func TestTheCoreReadsNoErrorText(t *testing.T) {
 	for _, dir := range []string{".", "../scrape"} {
-		got, err := errtext.Check(dir)
+		got, err := errtext.CheckWith(dir, poolSinks)
 		if err != nil {
 			t.Fatal(err)
 		}
