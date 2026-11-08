@@ -21,7 +21,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/homelab-next/homelab-next/orchestrator/internal/inference"
+	"github.com/homelab-next/homelab-next/orchestrator/internal/gatewaytag"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/profile"
 )
@@ -374,8 +374,8 @@ func (c Config) check() error {
 	if c.LockPath != "" && (!filepath.IsAbs(c.LockPath) || filepath.Clean(c.LockPath) != c.LockPath) {
 		return fmt.Errorf("lock_path %q: want a clean absolute path (every caller of the backend must name the same file)", c.LockPath)
 	}
-	if err := inference.ValidateGatewayTagPrefix(c.Events.GatewayTagPrefix); err != nil {
-		return fmt.Errorf("events.%w", err)
+	if !gatewaytag.ValidPrefix(c.Events.GatewayTagPrefix) {
+		return fmt.Errorf("events.gateway_tag_prefix %q: want at most 64 of [A-Za-z0-9._:/-]", c.Events.GatewayTagPrefix)
 	}
 	backends := []struct {
 		at string

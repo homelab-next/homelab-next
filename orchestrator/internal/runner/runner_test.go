@@ -41,6 +41,10 @@ func TestClasses_AreErrorsIsTargetsAndKeepTheText(t *testing.T) {
 	if errors.Is(&Error{Class: Internal, Err: base}, Internal) {
 		t.Error("errors.Is matched Internal")
 	}
+	// the documented edge: a bare Internal matches by equality; ClassOf is the test for no class
+	if bare := fmt.Errorf("x: %w", Internal); !errors.Is(bare, Internal) || ClassOf(bare) != Internal {
+		t.Error("the bare-Internal edge changed: update the Class doc")
+	}
 }
 
 // TestClassOf_PreOrderAndBareClasses: ClassOf finds a bare Class wrapped with %w as well as a

@@ -94,6 +94,10 @@ type Result struct {
 
 // Class is a failure class the core decides on (fallback, retry, the job's failure class). A
 // Class is also an error value, so errors.Is(err, Stalled) reports whether err carries it.
+//
+// One edge: a bare Internal wrapped with %w matches errors.Is(err, Internal) by plain equality
+// (a Class is a comparable value), while an *Error never matches Internal. "No class" is
+// ClassOf(err) == Internal, never errors.Is(err, Internal).
 type Class int
 
 const (

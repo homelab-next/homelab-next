@@ -612,23 +612,43 @@ facts command that fails, leaves its block out and never fails a dispatch.
 ### Left to stages 2.5 to 2.7 by PR 2.4
 
 - **2.5 (the backends):** build each attempt's `Session` (`Target`, `Limits`, the leg's
-  `UsagePath`, `GatewayTag` from `inference.GatewayTag`), call `Runner.Run`, and decide fallback
-  only by `runner.ClassOf`, with no error-text matching in the core. An expired interlock wait
-  (`inference.ErrWaitEnded` under the pool's own bound, `interlock_wait_timeout_seconds`) is a
-  `BackendFault`; the same error under a cancelled job is a cancel. Mark a backend unhealthy only
-  on the pool's own probe, never on a `BackendFault` or `LooksAbsent`. Apply `AnswerChecker` to
-  local attempts. Port the pool's tests to `runnertest`.
-- **2.6 (the queue and the API):** call `prompt.Build` with the job's lane, the paths it names and
-  `Config.PromptContractTexts(dir, prompt.DefaultContracts())`, under the job's context, and store `Meta` with the job; port the
-  queue's tests to `runnertest`, keeping kill, signal and orphan tests on a real subprocess runner.
+  `UsagePath`), call `Runner.Run`, and decide fallback only by `runner.ClassOf`, with no error-text
+  matching in the core. Take each leg's `ClassOf` before joining the legs into one error: a joined
+  error's class is its first branch's, which is the local leg's, not necessarily the one that
+  decides. An expired interlock wait (`inference.ErrWaitEnded` under the pool's own bound,
+  `interlock_wait_timeout_seconds`) is a `BackendFault`; the same error under a cancelled job is a
+  cancel. Mark a backend unhealthy only on the pool's own probe, never on a `BackendFault` or
+  `LooksAbsent`. Apply `AnswerChecker` to local attempts. Port the pool's tests to `runnertest`.
+- **2.6 (the queue and the API):**
+  - call `prompt.Build` with the job's lane, the paths it names and
+    `Config.PromptContractTexts(dir, prompt.DefaultContracts())` (loaded once), under the job's
+    context, and store `Meta` with the job;
+  - `grants.Catalog.Render` returns an empty, non-nil map for a lane with no grants, which a
+    `Session` reads as "no servers"; pass `nil` (the runner's own default set) for a profile with
+    no `grants` block at all, and the rendered map only for one that has it;
+  - derive a lane's `Session.Toolsets` in one public place (a `Toolsets(lane)` on the profile,
+    from `toolsets` and the granted server names), not at each call site;
+  - compute the gateway tag once per run (`inference.GatewayTag(events.gateway_tag_prefix, run
+    id)`) and use that one value for every attempt's `Session.GatewayTag` and for the job record's
+    `gateway_tag`; a run id the tag refuses (one that does not match the record's `run_id`
+    pattern) fails the job before any attempt, never runs untagged;
+  - port the queue's tests to `runnertest`, keeping kill, signal and orphan tests on a real
+    subprocess runner.
 - **2.7 (the controller binary and the cutover docs):** the binary loads the contracts once at
   start (`Config.PromptContractTexts` with `prompt.DefaultContracts()`) and refuses to start when
   that fails. The private controller's three contracts are built in here, reworded to name this
   repository's output tools, so the lab's configuration needs no contract file; a lab-only
   contract goes into an overlay file listed in `prompt_contracts_append`. A configuration with an
-  invalid `events.gateway_tag_prefix` no longer loads. When the cursor tool's module lands (stage 4), a test holds its store reader and
-  `prompt.CursorFile` to the same verdicts, as the private
-  controller did with one shared reader.
+  invalid `events.gateway_tag_prefix`, or a relative `lock_path`, no longer loads. The example
+  unit sets `RuntimeDirectory=` for the lock file, and bounds what a facts command leaves behind
+  beyond its process group (one that called `setsid`): `KillMode=control-group`, and the controller
+  as a child subreaper (`PR_SET_CHILD_SUBREAPER`) or under a real init, so an orphan is reaped and
+  killed with the service rather than reparented out of reach. When the cursor tool's module lands
+  (stage 4), a test holds its store reader and `prompt.CursorFile` to the same verdicts, as the
+  private controller did with one shared reader.
+- **Stage 3 (the provider):** the runner sends `Session.GatewayTag` as the `gatewaytag.Header`
+  (`X-HNX-Tag`) on every model request of the session, the header the gateway reads; an empty tag
+  sends none.
 
 ### The store's migration, behind a backup
 
