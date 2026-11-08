@@ -31,8 +31,8 @@ const cursorBlockMaxBytes = 12000
 //
 //   - fallback is true only when the store does not exist yet (no file, or an empty one): the
 //     caller then uses the state file's block (StateCursor), as before the first write.
-//   - A stored object, {} included, is the block: dataNotice, then the object as compact JSON
-//     with its keys sorted, at most cursorBlockMaxBytes, in a ```json prior-cursor fence that a
+//   - A stored object, {} included, is the block: dataNotice, then the object as one line of
+//     JSON with its keys sorted and every string made one line, at most cursorBlockMaxBytes, in a ```json prior-cursor fence that a
 //     stored value cannot close (every backtick is written as the JSON escape for U+0060, the same
 //     character inside a JSON string).
 //   - A store that cannot be read, or a path that is not agentKey's own store, is a short notice
@@ -54,15 +54,14 @@ func CursorFile(tmpl profile.CursorTemplate, path, label, agentKey string) (bloc
 	if len(data) == 0 {
 		return "", true
 	}
-	obj, err := decodeObject(data)
+	if err := checkObject(data); err != nil {
+		return cursorNotice(agentKey, label), false
+	}
+	compact, err := compactJSON(data) // keys sorted: the same text for the same store
 	if err != nil {
 		return cursorNotice(agentKey, label), false
 	}
-	compact, err := json.Marshal(obj) // map keys sorted: the same text for the same store
-	if err != nil {
-		return cursorNotice(agentKey, label), false
-	}
-	body := strings.ReplaceAll(string(compact), "`", "\\u0060")
+	body := strings.ReplaceAll(compact, "`", "\\u0060")
 	if b, truncated := cut(body, cursorBlockMaxBytes); truncated {
 		body = b + " ...[cut]"
 	}
@@ -74,18 +73,18 @@ func CursorFile(tmpl profile.CursorTemplate, path, label, agentKey string) (bloc
 	return b.String(), false
 }
 
-// decodeObject decodes exactly one JSON object with nothing after it, numbers kept as written.
-func decodeObject(data []byte) (map[string]any, error) {
+// checkObject reports whether data is exactly one JSON object with nothing after it.
+func checkObject(data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var obj map[string]any
 	if err := dec.Decode(&obj); err != nil || obj == nil {
-		return nil, errors.New("not a JSON object")
+		return errors.New("not a JSON object")
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return nil, errors.New("data after the JSON object")
+		return errors.New("data after the JSON object")
 	}
-	return obj, nil
+	return nil
 }
 
 // cursorNotice is the [prior-cursor] block for a store that cannot be read.
