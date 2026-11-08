@@ -69,8 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     _common(v)
     v.add_argument(
         "--registry",
-        help="service registry whose hosts must agree with the guests on address and zone "
-        "(default: services.yml next to the site file, when there is one)",
+        help="service registry whose hosts must agree with the guests on address and zone, and "
+        "whose rows on a guest's host must include the guest's capability (default: services.yml "
+        "next to the site file, when there is one)",
     )
     r = sub.add_parser("render", help="render one target")
     _common(r)
@@ -143,13 +144,15 @@ def _baselines(args: argparse.Namespace, fleet) -> int:
 
 
 def _registry_problems(args: argparse.Namespace, fleet) -> list[str]:
-    """The registry's disagreements with the guests (none without a registry); an unreadable
+    """The registry's disagreements with the guests (none without a registry): an address or a
+    zone, or a capability no row on the guest's host serves (ADR-0039 decision 7); an unreadable
     registry is :class:`ComputeUnreadable`, an invalid one :class:`ComputeError`."""
     from pathlib import Path
 
     from homelabnext.network.loader import SiteError, SiteUnreadable, load_registry
+    from homelabnext.registry.model import STANDINGS
 
-    from .gen.registry_hosts import registry_problems
+    from .gen.registry_hosts import capability_problems, registry_problems
 
     path = Path(args.registry) if args.registry else Path(args.site).parent / "services.yml"
     if not args.registry and not path.is_file():
@@ -160,7 +163,7 @@ def _registry_problems(args: argparse.Namespace, fleet) -> list[str]:
         raise ComputeUnreadable(str(exc)) from exc
     except SiteError as exc:
         raise ComputeError(str(exc)) from exc
-    return registry_problems(fleet, reg.hosts)
+    return registry_problems(fleet, reg.hosts) + capability_problems(fleet, reg.rows(*STANDINGS))
 
 
 def _key_problems(fleet) -> list[str]:

@@ -8,7 +8,7 @@ generators (DNS, proxy, monitoring, ...) then see every guest, so one guest file
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from homelabnext.compute.model import ComputeError, Fleet
@@ -73,6 +73,46 @@ def registry_problems(fleet: Fleet, hosts: Mapping[str, Any]) -> list[str]:
                     f"guest {name}: registry hosts.{name}.{field} is {getattr(have, field)}, "
                     f"the guest file says {want[field]}"
                 )
+    return out
+
+
+def capability_problems(fleet: Fleet, rows: Iterable[Any]) -> list[str]:
+    """Where a guest's ``capability`` is not one the service registry places on it (ADR-0039
+    decision 7).
+
+    ``rows`` are the registry's rows of every tier (``Registry.rows`` with all four standings),
+    each with ``name``, ``capability`` and ``host``: a guest runs its eval candidate or its legacy
+    product as surely as its primary.  A guest whose host carries rows must declare the capability
+    of one of them, so ``cap:orchestration`` fits only the guest that runs the orchestrator, and a
+    catch-all borrowed from another host is refused.  A guest whose host carries no row (a
+    hypervisor, a bench machine) serves no registered capability; it is still refused a
+    capability the registry places on another host, and otherwise held to the platform's
+    vocabulary alone, as without a registry.
+    """
+    on: dict[str, list[Any]] = {}
+    placed: dict[str, set[str]] = {}
+    for r in rows:
+        on.setdefault(r.host, []).append(r)
+        placed.setdefault(r.capability, set()).add(r.host)
+    out = []
+    for g in fleet.sorted():
+        cap = g.capability.removeprefix("cap:")
+        here = on.get(g.name, [])
+        if cap in {r.capability for r in here}:
+            continue
+        hosts = sorted(placed.get(cap, set()) - {g.name})
+        served = ", ".join(sorted(f"{r.capability} ({r.name})" for r in here))
+        if hosts:
+            where = f"the registry places {cap} on {', '.join(hosts)}"
+            out.append(
+                f"guest {g.name}: capability {g.capability} is not served on {g.name}: {where}"
+                + (f"; the rows on {g.name} serve {served}" if here else "")
+            )
+        elif here:
+            out.append(
+                f"guest {g.name}: capability {g.capability} is no capability of a registry row on "
+                f"{g.name}; the rows there serve {served}"
+            )
     return out
 
 
