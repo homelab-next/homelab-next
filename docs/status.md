@@ -890,7 +890,7 @@ them from `tests/status/fixtures/`.
 | Uptime Kuma | kind `poll-uptime-kuma` | `server/routers/status-page-router.js`, `model/{status_page,group,monitor,heartbeat,incident}.js` (1.23 and 2.5); a real 1.23.16 and 2.5.6 | fixtures (recorded) + lab-in-a-box nightly |
 | StackStorm | kind `poll-stackstorm` | `st2common/openapi.yaml` (`/api/v1/executions`), `ActionExecutionAPI`, `constants/action.py` | fixtures only: it needs MongoDB, RabbitMQ and a dozen st2 services, far over the 4 GB lab's remaining 256 MB |
 | Apache NiFi | kind `poll-nifi` | `FlowResource` (`/flow/status`, `/flow/bulletin-board`), `ControllerStatusDTO`, `BulletinBoardEntity`, `BulletinEntity`/`BulletinDTO` | fixtures only: its default JVM heap alone is 1 GB (`bootstrap.conf`), four times what the 4 GB lab has left |
-| LLM orchestrator | builtin `orchestrator-queue` | `internal/api/server.go` (routes), `internal/store` `QueueSummary` | fixtures only (the maintainer's own service, not in the lab) |
+| LLM orchestrator | builtin `orchestrator-queue` | `internal/api/server.go` (routes), `orchestrator/internal/store` `QueueSummary` | fixtures only (the maintainer's own service, not in the lab) |
 | Agentmetry | builtin `agentmetry-audit` | `apps/orchestrator/api/routes/audit.py` (`/audit/status`), `core/auth.py` (`X-API-Key`) | fixtures only |
 
 ### Prometheus (`poll-prometheus`)

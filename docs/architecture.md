@@ -77,8 +77,10 @@ Not every layer is built at once. The first lab runs a small slice (operator dec
 2026-10-31; [build order](build-order.md), "The v0 slice"): the **registry and aliases**,
 **OpenBao** (secrets), the **lake** (Garage, Lakekeeper, Trino), **Sigma detections**, the
 **broker**, **notify**, the **status hub**, and **SSO** through Keycloak (ADR-0034, in flight).
-The LLM gateway is LiteLLM alone (ADR-0022, amended). Projects and tasks live in OpenProject
-only; the lessons, runbooks and invariants registers stay.
+The deployed LLM gateway is LiteLLM (ADR-0022, amended); the own gateway in `orchestrator/`
+(`orchestrator/cmd/gateway`, ADR-0038 and ADR-0026) replaces it at the gateway cutover.
+Projects and tasks live in OpenProject only; the lessons, runbooks and invariants registers
+stay.
 
 The rest keeps its contracts and code but not all of it blocks a merge: StackStorm is
 *experimental*, and Code Mode (layer 11), the strategy stack and the home-built projects store
