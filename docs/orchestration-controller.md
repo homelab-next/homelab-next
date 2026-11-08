@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:e6edeac97c1cf348
+summary_of: outline:sha256:49810088f46e1cdf
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -283,8 +283,8 @@ after stage 3 (the ADR's amendment of 2026-11-07). Each package is rewritten for
 never copied with its history. The packages in so far are the leaves, which import nothing else of
 the controller, the store, which imports only `events`, the grants and the profiles (PR 2.3a),
 the configuration and the registers reader (PR 2.3b), the runner seam, its fake, the prompt
-assembly, the interlock and the gateway tag (PR 2.4), and the backend pool with its attempt chain
-(PR 2.5):
+assembly, the interlock and the gateway tag (PR 2.4), the backend pool with its attempt chain
+(PR 2.5), and the run queue (PR 2.6a):
 
 | Package | What it does |
 |---|---|
@@ -304,8 +304,10 @@ assembly, the interlock and the gateway tag (PR 2.4), and the backend pool with 
 | `orchestrator/internal/backends` | The backend pool and the attempt chain: admission (reservations, the slot cap, token-weighted admission, health, operator drains, exclusive leases) and the order of one job's attempts, each local backend, then the cloud leg, all through `runner.Runner`. `backends.Pool` is the interface the queue uses. See "The backend pool and the attempt chain" below. |
 | `orchestrator/internal/scrape` | Reads samples from a metrics endpoint in the text exposition format, for a backend's load and its KV pool: one GET, no proxy from the environment, no redirect followed, a bounded body, and an unreadable endpoint is no reading. It names no metric: the engine's names are configuration. |
 | `orchestrator/internal/errtext` | An allowlist lint over Go source for decisions on text the core must not decide on: an error's text (`x.Error()`, `fmt.Sprint` of an error) and a session's output (`Response`, `Stderr`). Such text may only reach a formatting or log sink, a sink the package names (each of which only bounds, logs or keeps it), `+`, an assignment, a composite literal's value or a return; any other call, comparison, switch, key, index, slice or range, and an import of `regexp`, is a finding. It follows variables within a function, not fields, parameters or an error's fields after `errors.As` (documented). `backends` runs it over itself and `scrape`; 2.6 runs it over `queue` and `api`. |
-| `orchestrator/internal/fuzzseed` | The fuzz targets' shared test helper (ADR-0048 decision 1): it reads a target's committed seed corpus (`testdata/fuzz/FuzzX/`, go test's own format) and proves a property can fail (every seed holds against the right reference, at least one breaks it against the deliberately wrong one in the same `_test.go`). Only `_test.go` files import it, which its test asserts. The first targets: `pathscope` (`FuzzCheck`, `FuzzZones`), `events` (`FuzzDeriveID`, `FuzzSchemaSubset`) and `gateway` (`FuzzJSONScan`, `FuzzSSE`, `FuzzParseConfig`); `go test` runs their seeds in the `go` job. |
+| `orchestrator/internal/fuzzseed` | The fuzz targets' shared test helper (ADR-0048 decision 1): it reads a target's committed seed corpus (`testdata/fuzz/FuzzX/`, go test's own format) and proves a property can fail (every seed holds against the right reference, at least one breaks it against the deliberately wrong one in the same `_test.go`). Only `_test.go` files import it, which its test asserts. The first targets: `pathscope` (`FuzzCheck`, `FuzzZones`), `events` (`FuzzDeriveID`), `schematest` (`FuzzSchemaSubset`) and `gateway` (`FuzzJSONScan`, `FuzzSSE`, `FuzzParseConfig`); `go test` runs their seeds in the `go` job. |
 | `orchestrator/internal/store` | The controller's durable state in one SQLite database (`modernc.org/sqlite`, no cgo): the jobs table and its state machine, every transition a compare-and-swap on the row's state; submits whose idempotency check, shadow back-pressure (one unfinished shadow job per agent) and insert share one write transaction; resubmits (`retry_of_run_id`: one retry per run, only after an environment failure class, replaying the parent's task); the event outbox, filled in the transaction of the state change it describes and drained by `events`; the operators' backend drains; startup reconciliation of orphaned jobs; and the instance lock (`flock` on `<db>.lock`), so two controllers never share a database. An idempotency key (at most 128 bytes) is scoped to its submitter and never released: one submitter's key is unique across every job the database has held, however old, and another submitter's key neither finds nor blocks it. |
+| `orchestrator/internal/queue` | The run queue: admits queued jobs in priority and aging order, up to a concurrency limit, through `backends.Pool`, and runs each one's attempt chain (the profile's `max_attempts`, one run id) to a terminal state, or back to the queue. It records the result, the usage report summed over every session, the call sizing and the wait cause, and builds the job events the store's outbox sends. It decides from the pool's sentinels and the runner classes only (`errtext` over the package). See "The run queue" below. |
+| `orchestrator/internal/schematest` | Test support, imported only by `_test.go` files: validates JSON against `schemas/ids`, `schemas/events` and `schemas/platform` read in place (moved from `internal/events`'s tests, ADR-0048 decision 3), so the queue's events are held to the schemas as the events package's are. |
 
 The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, with the
 store `modernc.org/sqlite` v1.58.0 and the modules it pulls in, and with the configuration the
@@ -735,6 +737,93 @@ facts command that fails, leaves its block out and never fails a dispatch.
 - **The whole prompt** is at most `prompt.MaxPromptBytes` (1 MiB). A larger one is an error, never
   cut, since a cut would drop the task's end or a contract unseen.
 
+### The run queue
+
+`queue.New(queue.Config{...})` takes the store, a `backends.Pool` (required: there is no HTTP
+passthrough, so every job runs through the pool), the profiles (`SetProfiles` swaps them on a
+reload), the registers index, the contracts (`Config.PromptContractTexts`, loaded once at start;
+nil means the built-in ones), the grants catalog, the concurrency, the usage directory (created
+owner-only), the tree root of the findings check, the gateway tag prefix and the orphan grace.
+`Tick` is one admission pass; `Run` starts one every interval, each in its own goroutine, and
+returns once every pass and its jobs have.
+
+- **Admission.** The queued job with the lowest effective priority runs first (`priority - 5` for
+  every 15 minutes waited, never below 1; submit order on a tie). A run that already holds a claim
+  is skipped (another pass is admitting it). Each admission decision reserves once, from the
+  admitting goroutine: `ReserveExclusive` for an exclusive profile (called every pass while it is
+  queued), `Reserve` otherwise. A local-only job waits queued while nothing it may use is up;
+  any other job is admitted unreserved then, and the pool's chain skips the down backends and runs
+  its cloud leg. A job left queued takes none of the pass's slots and records why
+  (`slot`, `token_budget`, `exclusive`, `backend_down`, written to `wait_cause` when it finishes).
+  A local-only job held for health is cancelled when a newer queued job of the same agent and task
+  exists.
+- **Release.** The claim is passed to `Call` as `reserved` and released exactly once when the
+  executor returns, whatever it returned: a success, a failure, a cancel, the job's deadline, a
+  kill. A failed admission write releases at once. A restart holds nothing (the pool's claims are
+  in memory) and `store.ReconcileOrphans` settles the rows; while running, the orphan sweep settles
+  a row whose executor is gone (after `orphan_grace_seconds`) and the reaper returns the claims of
+  runs no longer in flight. `TestHolds_CapacityIsReleasedOnEveryEnd` holds the five ends.
+- **One job's dispatch.** Before any attempt: the task (or the profile's default; none fails the
+  job), the gateway tag (`inference.GatewayTag`, computed once; a run id it refuses fails the job,
+  so no session runs untagged), the prompt (`prompt.Build` under the job's context, with the lane
+  and the contracts; the job record names no paths, so `Paths` is nil and only the task text is
+  matched; its uids, digest and size are stored), the servers (nil, the runner's own set, for a
+  profile with no `grants` block; exactly the lane's rendered servers otherwise, and a profile with
+  grants but no catalog configured fails) and the toolsets (`Profile.LaneToolsets(lane)`, the one
+  place they are derived: the lane's toolsets entry, or the granted server names). Any of these
+  failing fails the job with `handler-error` and no session.
+- **Attempts.** `Pool.JobTimeout()` goes on the job's context once, before the first attempt, so a
+  `max_attempts` retry gets no fresh budget. Every attempt keeps the run id and the session (its
+  tag, servers and toolsets), with its own usage path (`<run id>.json`, then `.aN.json`; the pool
+  adds `.legN` per leg). Before a retry: a bounded backoff, the row must still read running (a
+  cancel moves it first), and a drained reservation is released and admission run again; with no
+  other backend the job goes back to queued, its attempts kept. A spent budget in either leg (the
+  job's deadline, an attempt's ceiling, the turn cap, by `errors.Is` on `Call`'s error) is never
+  retried.
+- **The failure class** comes from the pool's sentinels (`errors.Is`) and the failing leg's class
+  read from the `Result` (`CloudClass` when `ErrCloudFailed`, else `LocalClass`), never from
+  `runner.ClassOf` of `Call`'s joined error: `deadline`, `turn-cap`, `budget` (a spent budget),
+  then `stall`, `backend-down` (no cloud leg ran and `IsBackendDown`), `capacity` (nothing
+  attemptable, or the controller's own context ended the session: a shutdown), `timeout`, else
+  `handler-error` (a failed turn and a signal the controller did not send included). The stored
+  reason is the class, `: `, then the pool's bounded `LocalFailedReason`; neither the log nor the
+  row ever carries `err.Error()` of a `Call`, which can quote whole sessions.
+- **Requeues and retries.** A local-only job failing with `IsBackendDown` goes back to queued under
+  its run id (admission then holds it until a backend is up), not failed. A kill (the controller's
+  context or a foreign signal) on a single-attempt job, and a run cut off by a shutdown, get one
+  automatic retry, a new run created in the failing transaction (`store.FailWithRetry`), so the
+  failed event names it; a retry is never retried, and an operator's cancel wins the
+  compare-and-swap and creates nothing.
+- **The answer.** Only a success stores `Response`, bounded to `queue.MaxResponseBytes` (1 MiB,
+  cut at a character boundary with a marker). A failed `Call`'s `Result` is the last session's
+  (usage, stderr, exit code, which the accounting reads); its `Response` may be a failure report
+  and is never stored as the job's answer. There is no column for a failed attempt's output, so it
+  is not kept.
+- **Usage.** Every session's report under the usage directory is summed per counter; a counter one
+  session left unknown, or a cache-read `0` its report does not vouch for (a report with prompt
+  tokens and no `cache_read_reported: true`), makes the run's total unknown, never a smaller known
+  number. Only regular files of at most 1 MiB are read.
+- **The findings check** (with `tree_root` set, for a profile with a findings prefix for the lane):
+  a clean exit with no file newer than the dispatch directly in that directory fails the job
+  (`handler-error`); a missing directory counts as unwritten. The directory is opened through an
+  `os.Root` at the tree root, so a link out of it is never followed (the check is skipped and
+  logged). A prefix several concurrent runs share is checked as a whole: the private controller's
+  match on one agent's task wording, which attributed a file to one run, is lab policy and not
+  ported.
+- **Events.** `queue.OutboxEventBuilder(source, prefix)` is the store's event builder: started,
+  failed and finished, built from the row in the transaction of its transition. Every value the
+  controller does not control is checked against the schema's rule (written by hand: the package
+  imports no `regexp`) and sent as null when it does not fit; the model rule is stricter than the
+  schema's (no `@`, no dotted quad anywhere, ASCII only). The finished record's `gateway_tag` is
+  `queue.JobGatewayTag(prefix, run id)`, the value every session of the run carried. A failed event
+  is built only for an agent key the schema's slug admits (an agent key may hold `_`, a slug may
+  not); such a run's finished record names it `profile:unregistered`. The tests validate every
+  event against `schemas/events` in place (`schematest`), a fuzz target included.
+
+The queue's process tests (a cancel, a foreign kill, the deadline) run this test binary again as
+the session, in its own process group with a child of its own, and check both processes are gone;
+the rest run on `runnertest`.
+
 ### Left to stages 2.6 and 2.7 by PRs 2.4 and 2.5
 
 PR 2.4's items for 2.5 (sessions built per attempt, fallback by class only, each leg classified
@@ -742,7 +831,8 @@ before the legs are joined, the interlock wait, health only on the pool's own pr
 check on local legs, the tests on `runnertest`) are done; "The backend pool and the attempt chain"
 above says how.
 
-- **2.6 (the queue and the API):**
+- **2.6 (the queue and the API):** the queue's items below are done in PR 2.6a ("The run queue"
+  above); the API's are PR 2.6b's.
   - call `prompt.Build` with the job's lane, the paths it names and
     `Config.PromptContractTexts(dir, prompt.DefaultContracts())` (loaded once), under the job's
     context, and store `Meta` with the job;
@@ -876,10 +966,12 @@ checked restorable first and protected like the database itself. The store enfor
   after the rename) leaves the database as it was.
 
 Run both steps under the instance lock, so no controller changes the database in between:
-`release, _ := store.LockInstance(db)`, then `BackupForMigration`, then
-`OpenWith(db, store.Options{MigrationBackup: backup, InstanceLockHeld: true})`. `OpenWith` takes
-the lock itself otherwise (from the database's resolved path, so two spellings of one database
-share it) and refuses `InstanceLockHeld` when it finds the lock free. The lock is `flock`, which
+`lock, _ := store.LockInstance(db)`, then `BackupForMigration`, then
+`OpenWith(db, store.Options{MigrationBackup: backup, Lock: lock})`, and `lock.Release()` once the
+store is closed. Holding the lock is proven by the handle, not claimed by a flag: `OpenWith`
+refuses a released lock and another database's, and `Close` leaves a given lock held. `OpenWith`
+takes the lock itself otherwise (from the database's resolved path, so two spellings of one
+database share it). The lock is `flock`, which
 holds only on a local filesystem: the database never belongs on a network share.
 
 **Restore** (the return to the previous controller after a migration that ran): stop the
