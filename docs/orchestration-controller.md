@@ -1155,7 +1155,12 @@ PR 2.7a (#331) and PR 2.7b leave these, each with the reason it was not done:
   and runs `hnx conform run orchestration --target orchestration-orchestrator --strict`. The PR
   also deletes the recorded stand-in, its target and the adapter's `fixes:` machinery, and renames
   the adapter. It is a separate pull request because it changes the conformance tree and CI, not
-  the controller.
+  the controller. A trial run of the suite against this binary (exec runner, the runner body
+  above, authentication off on loopback) passed all 14 checks it executed. It needed the
+  adapter's `wait_floor: 0`, because the floor turns the suite's `wait(timeout=0)` read into a
+  wait for the end, which fails `retrying-run-keeps-its-hold`. The two fault-injection checks stay
+  `untested` until PR 2.8, so a `--strict` job needs PR 2.8 first, or a stated exception for those
+  two.
 - **After ADR-0039's `hnx registry bindings` (its step 5) merges: decision 16's wire names and the
   consumer check.** This covers the packs' `svc:orchestrator` target, the declared overlap source,
   the example registry row and the consumer check of `svc:llm-orchestrator`. The ADR makes PR 2.7
