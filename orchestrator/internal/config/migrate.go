@@ -135,6 +135,16 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if len(notes) > 0 {
+		// a configuration in the private controller's keys: that controller built its local
+		// backend with the interlock off whatever the file said, and here unset means on
+		if local := lookup(lookup(doc.Content[0], "backends"), "local"); local != nil && local.Kind == yaml.MappingNode && lookup(local, "needs_interlock") == nil {
+			local.Content = append(local.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "needs_interlock"},
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"})
+			notes = append(notes, "set backends.local.needs_interlock: false (the private controller never took the interlock for its local backend)") // scrub-allow: a config key path, not a host name
+		}
+	}
 	if opts.Scope != nil {
 		if lookup(doc.Content[0], "scope") != nil {
 			return nil, nil, fmt.Errorf("scope: the configuration has a scope block; give the migration none")

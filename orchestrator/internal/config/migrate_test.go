@@ -94,7 +94,7 @@ func TestMigrate_RewritesEveryOldKey(t *testing.T) {
 		t.Errorf("a migrated configuration loads without notices: %v", cfg.Notices)
 	}
 	// one note per change, deterministic
-	if len(notes) != 25 {
+	if len(notes) != 26 {
 		t.Errorf("%d notes: %v", len(notes), notes)
 	}
 	_, again, _ := Migrate([]byte(oldConfig))
@@ -226,7 +226,7 @@ func TestMigrate_BaseURLEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(out), "endpoint") || len(notes) != 1 || !strings.Contains(notes[0], "empty") {
+	if strings.Contains(string(out), "endpoint") || len(notes) != 2 || !strings.Contains(notes[0], "empty") {
 		t.Errorf("out = %s notes = %v", out, notes)
 	}
 	_, _, err = Migrate([]byte(scopeYAML + "backends: {local: {base_url: \"engine-user:s3cretpw@\"}}\n"))
@@ -271,5 +271,31 @@ func TestMigrate_KeepsCommentsWithTheirKeys(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "# the controller's database\ndb_path:") {
 		t.Errorf("a head comment moved:\n%s", out)
+	}
+}
+
+// The private controller built its local backend with the interlock off whatever its file said;
+// here unset means on, so a migration from its keys states the old behaviour, and a configuration
+// already in the new keys is left alone.
+func TestMigrate_KeepsTheLocalBackendsInterlockOff(t *testing.T) {
+	out, notes, err := Migrate([]byte(oldConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Parse(out)
+	if err != nil || cfg.Backends.Local.InterlockRequired() || !cfg.Backends.LocalFallback.InterlockRequired() {
+		t.Fatalf("interlock: local %v, fallback %v (%v)", cfg.Backends.Local.InterlockRequired(), cfg.Backends.LocalFallback.InterlockRequired(), err)
+	}
+	if !strings.Contains(strings.Join(notes, "\n"), "needs_interlock: false") {
+		t.Errorf("notes = %v", notes)
+	}
+	set := strings.Replace(oldConfig, "    name: engine-a\n", "    name: engine-a\n    needs_interlock: true\n", 1)
+	out, _, err = Migrate([]byte(set))
+	if cfg, _ := Parse(out); err != nil || !cfg.Backends.Local.InterlockRequired() {
+		t.Errorf("an explicit needs_interlock was overwritten (%v)", err)
+	}
+	neutral := scopeYAML + "backends: {local: {name: engine-a}}\n"
+	if out, notes, err := Migrate([]byte(neutral)); err != nil || len(notes) != 0 || string(out) != neutral {
+		t.Errorf("a configuration in the new keys was changed: %v %v", notes, err)
 	}
 }
