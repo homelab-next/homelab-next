@@ -329,6 +329,10 @@ jobs:
           HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
           HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: python tools/product_name_lint.py --ci-base .
+      # the base comparison (--ci-base) and its trusted-gates copy follow once the tool is on main:
+      # trusted-gates runs the base's copy of a ratchet, and a base without it has none to run
+      - name: the gates' allowlists and suppression markers at their reviewed counts (tools/allowlist_counts.yml)
+        run: python tools/allowlist_ratchet.py .
       - name: helpers are shared, not copied (M-03)
         run: python tools/shared_helpers_lint.py .
       - name: no copy-paste beyond the shrinking baseline (M-03); the baseline never loosens against the base

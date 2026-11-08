@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The reviewed size of each gate's suppression list (tools/allowlist_ratchet.py, which says what
+# each one counts).  A list above its count fails: the change that adds an exemption raises the
+# count here, and this file's code owner reviews it.  A list below its count fails too, with the
+# number to lower it to: `make allowlist-counts` (tools/allowlist_ratchet.py --update) lowers
+# every count to what is there; raising one needs --grow, or a hand edit, and that review.
+counts:
+  product-names-allow: 17
+  no-raw-endpoints-allow: 69
+  scripts-allow: 22
+  scrub-allow-markers: 55
+  no-raw-endpoint-markers: 305
