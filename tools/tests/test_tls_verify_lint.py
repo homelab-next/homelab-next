@@ -112,3 +112,13 @@ def test_tree_fails_then_allowlist_passes(tmp_path, capsys):
 
 def test_the_repository_verifies_tls_everywhere():
     assert lint.main([str(REPO)]) == 0
+
+
+def test_json_with_a_lone_surrogate_escape_is_read_not_a_parse_failure(tmp_path):
+    """Regression: JSON allows ``"\\ud800"`` but YAML refuses it, so a valid JSON fixture (the event
+    id vectors) was reported as an unparseable file; a verification switch in it is still found."""
+    (tmp_path / "vectors.json").write_text('{"key": "\\ud800", "escaped": "\\\\ud800x"}\n')
+    (tmp_path / "client.json").write_text('{"name": "\\udc00",\n "verify": false}\n')
+    findings, n = lint.scan(tmp_path, [])
+    assert n == 2
+    assert [(f.path, f.rule) for f in findings] == [("client.json", "config-verify-off")]

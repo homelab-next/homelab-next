@@ -52,6 +52,11 @@ in the past fails the test ("quarantine expired"), and a date more than ``quaran
 ``--shard-report FILE`` writes what the shard collected, ran and timed; CI runs the suite as N such
 jobs and ``python -m tests.shard_report`` proves from their reports that together they ran every
 test once and that each suite's summed time is within its budget (``tests/shard_report.py``).
+A module marked ``pytestmark = pytest.mark.shard_by_module`` goes to one shard whole (its tests
+are keyed by the module's path, not their own node ids), so a heavy module-scoped fixture it
+shares (a wheel build, a venv) is built once in all, not once in each shard that draws one of
+its tests and summed into the budget that many times.  Mark only a module whose shared setup
+outweighs its tests: the whole module's time lands on one shard.
 """
 
 from __future__ import annotations
@@ -71,6 +76,7 @@ from tests import shard_report
 
 QUARANTINE = "quarantine"
 REQUIRES_TOOL = "requires_tool"
+SHARD_BY_MODULE = "shard_by_module"
 _STATE = pytest.StashKey[dict]()
 
 
@@ -154,6 +160,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         f"{REQUIRES_TOOL}(*names): the test needs these external tools: require_tool() for each "
         "before any fixture (tests/suite_policy.py)",
+    )
+    config.addinivalue_line(
+        "markers",
+        f"{SHARD_BY_MODULE}: the module's tests all run in one shard, so a module-scoped fixture "
+        "is built once over the shards (tests/suite_policy.py)",
     )
     shard = config.getoption("shard")
     try:
@@ -391,6 +402,14 @@ class _Timer:
             st["ran"].append(report.nodeid)
 
 
+def shard_key(item: pytest.Item) -> str:
+    """What ``--shard`` hashes for ``item``: its node id, or its module's path when the module is
+    marked ``shard_by_module`` (the whole module then lands in one shard)."""
+    if item.get_closest_marker(SHARD_BY_MODULE) is not None:
+        return item.nodeid.split("::", 1)[0]
+    return item.nodeid
+
+
 class _Shard:
     """Keeps this shard's tests (a plugin object, so it can run after the other collection hooks)."""
 
@@ -402,7 +421,7 @@ class _Shard:
         st = _state(self.config)
         index, count = st["shard"]
         nodeids = [item.nodeid for item in items]
-        keep = shard_report.select(nodeids, index, count)
+        keep = shard_report.select([shard_key(item) for item in items], index, count)
         st["collected"] = nodeids
         st["selected"] = [n for n, k in zip(nodeids, keep, strict=True) if k]
         dropped = [item for item, k in zip(items, keep, strict=True) if not k]

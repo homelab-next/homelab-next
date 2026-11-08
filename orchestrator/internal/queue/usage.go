@@ -4,9 +4,11 @@ package queue
 
 import (
 	"encoding/json"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/store"
 )
@@ -16,11 +18,15 @@ import (
 // api_calls and cache_read_tokens (counters), estimated_cost_usd or cost_usd, completed and
 // failed (booleans), turn_exit_reason, session_id and model (strings), auxiliary.by_task (kept as
 // raw JSON), last_prompt_tokens, max_prompt_tokens and max_tokens (per-call sizing), and
-// cache_read_reported. A missing key, a null and a value of the wrong type are unknown, never 0
+// cache_read_reported. Nothing removes a usage file: the directory grows by one file per session,
+// and a site prunes it (files of finished runs) on its own schedule. A missing key, a null and a value of the wrong type are unknown, never 0
 // or false: a report that lacks a field says nothing about it.
 
 // maxUsageCount bounds a counter to what a float64 holds exactly.
 const maxUsageCount = 1 << 53
+
+// maxUsageSessions bounds the usage files one run's sum reads.
+const maxUsageSessions = 256
 
 // maxUsageFileBytes bounds one usage file read.
 const maxUsageFileBytes = 1 << 20
@@ -150,6 +156,11 @@ var additiveCounters = []string{"input_tokens", "output_tokens", "reasoning_toke
 func sumRunUsage(dir, runID string, last map[string]any) (map[string]any, bool) {
 	paths := []string{filepath.Join(dir, runID+".json")}
 	more, _ := filepath.Glob(filepath.Join(dir, runID+".*.json"))
+	if len(more) >= maxUsageSessions {
+		// More sessions than any profile's attempts times its legs: a sum of some would read as
+		// the run's. The last report stands alone.
+		return last, false
+	}
 	paths = append(paths, more...)
 	sums := map[string]float64{}
 	unknown := map[string]bool{}
@@ -198,15 +209,21 @@ func sumRunUsage(dir, runID string, last map[string]any) (map[string]any, bool) 
 	return out, true
 }
 
-// readUsageFile reads one usage report: a regular file of at most maxUsageFileBytes holding a
-// JSON object. Anything else is no report.
+// readUsageFile reads one usage report: a regular file (never through a link at its name, never
+// blocking on a FIFO) of at most maxUsageFileBytes, holding a JSON object. Anything else is no
+// report.
 func readUsageFile(path string) (map[string]any, bool) {
-	fi, err := os.Lstat(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxUsageFileBytes {
 		return nil, false
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	data, err := io.ReadAll(io.LimitReader(f, maxUsageFileBytes+1))
+	if err != nil || len(data) > maxUsageFileBytes {
 		return nil, false
 	}
 	var u map[string]any

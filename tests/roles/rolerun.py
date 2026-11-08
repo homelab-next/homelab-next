@@ -68,8 +68,11 @@ def first_run(case):
     the test reads back.  The test takes the ``first`` fixture, ``(result, tmp)`` with
     ``.vars`` and ``.setup``, in place of its own first run and ``tmp_path``.
 
-    The first test of a module to ask starts the first runs of every marked test of that module
-    this session will run, one ``ansible-playbook`` per CPU at a time (``prefetch_first_runs``).
+    The first test of the session to ask starts the first runs of every marked test this session
+    will run, in every module, one ``ansible-playbook`` per CPU at a time
+    (``prefetch_first_runs``): one pool over the whole session keeps every worker busy, where a
+    pool per module idled all but one worker on a module with one or two marked tests and waited
+    on each module's slowest run before the next module's started.
     Each is the very command the test ran itself, in its own directory, so it sees the same
     result, sooner: the role tests spend their time waiting on ``ansible-playbook`` (about 0.85 s
     to start, 0.3 s a module task), one process at a time, on runners with idle CPUs."""
@@ -136,13 +139,13 @@ def _will_run(item) -> bool:
 
 def prefetch_first_runs(request, tmp_path_factory):
     """The ``first`` fixture: this test's first run (see ``first_run``), with the first runs of
-    every other marked test of its module that this session will run started alongside it."""
+    every other marked test this session will run, in any module, started alongside it."""
     node = request.node
     if node.nodeid not in _FIRST_RUNS:
         todo = []
         for item in node.session.items:
             case = getattr(getattr(item, "function", None), "hnx_first_run", None)
-            if (case is None or item.module is not node.module or item.nodeid in _FIRST_RUNS
+            if (case is None or item.nodeid in _FIRST_RUNS
                     or not (item is node or _will_run(item))):  # fmt: skip
                 continue
             # named as tmp_path names a test's directory (30 characters: gpg's agent socket
@@ -211,10 +214,33 @@ def calls(tmp_path: Path) -> list[str]:
     return log.read_text().splitlines() if log.exists() else []
 
 
-def run_cases(tmp_path, role, tasks_from, base_vars, overrides, env=None):
+def run_cases(tmp_path, role, tasks_from, base_vars, overrides, env=None, parallel=False):
     """Run one hook once per override in a single ansible-playbook process (one ``block`` with a
     ``rescue`` per case, so a failing case does not stop the others).  Returns, per override,
-    ``(failed, message)``: whether the hook failed for that case, and its failure message."""
+    ``(failed, message)``: whether the hook failed for that case, and its failure message.
+
+    ``parallel=True`` splits the cases, in order, over up to :func:`workers` processes run at once
+    (each its own play, so a fact one case sets never reaches a case of another chunk): for a long
+    list of cases that each stand alone, such as refusals that write nothing the others read."""
+    chunks = [list(overrides)]
+    if parallel and len(overrides) > 1:
+        n = min(workers(), len(overrides))
+        size = -(-len(overrides) // n)
+        chunks = [list(overrides[i : i + size]) for i in range(0, len(overrides), size)]
+    if len(chunks) == 1:
+        return _run_case_chunk(tmp_path, "", role, tasks_from, base_vars, chunks[0], env)
+    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+        done = pool.map(
+            lambda kc: _run_case_chunk(
+                tmp_path, f"-{kc[0]}", role, tasks_from, base_vars, kc[1], env
+            ),
+            enumerate(chunks),
+        )
+        return [case for chunk in done for case in chunk]
+
+
+def _run_case_chunk(tmp_path, tag, role, tasks_from, base_vars, overrides, env):
+    """``run_cases`` for one list of cases, in one process; ``tag`` names its files."""
     tasks = []
     for i, over in enumerate(overrides):
         tasks.append(
@@ -242,7 +268,7 @@ def run_cases(tmp_path, role, tasks_from, base_vars, overrides, env=None):
     tasks.append(
         {
             "ansible.builtin.copy": {
-                "dest": str(tmp_path / "cases.json"),
+                "dest": str(tmp_path / f"cases{tag}.json"),
                 "content": "{{ [" + ", ".join(names) + "] | to_json }}",
                 "mode": "0600",
             }
@@ -259,9 +285,9 @@ def run_cases(tmp_path, role, tasks_from, base_vars, overrides, env=None):
             "tasks": tasks,
         }
     ]
-    pb = tmp_path / "cases.yml"
+    pb = tmp_path / f"cases{tag}.yml"
     pb.write_text(yaml.safe_dump(play))
-    ev = tmp_path / "vars.json"
+    ev = tmp_path / f"vars{tag}.json"
     ev.write_text(
         json.dumps(
             {
@@ -275,7 +301,7 @@ def run_cases(tmp_path, role, tasks_from, base_vars, overrides, env=None):
         ANSIBLE_CONFIG=str(ANSIBLE / "ansible.cfg"),
         ANSIBLE_ERROR_ON_UNDEFINED_VARS="True",
         ANSIBLE_LOCALHOST_WARNING="False",
-        ANSIBLE_HOME=str(tmp_path / ".ansible"),
+        ANSIBLE_HOME=str(tmp_path / f".ansible{tag}"),
         ANSIBLE_NOCOLOR="1",
         **(env or {}),
     )
@@ -284,4 +310,6 @@ def run_cases(tmp_path, role, tasks_from, base_vars, overrides, env=None):
         capture_output=True, text=True, env=run_env, cwd=tmp_path,
     )  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
-    return [(c["failed"], c["msg"]) for c in json.loads((tmp_path / "cases.json").read_text())]
+    return [
+        (c["failed"], c["msg"]) for c in json.loads((tmp_path / f"cases{tag}.json").read_text())
+    ]

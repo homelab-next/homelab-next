@@ -23,6 +23,16 @@ import (
 // longer answer is cut at a character boundary, with a marker saying so.
 const MaxResponseBytes = 1 << 20
 
+// DefaultJobCeiling bounds a job whose pool sets no job deadline (Pool.JobTimeout() == 0: the
+// configuration has neither runner.job_timeout_seconds nor runner.timeout_seconds), so no job runs
+// without one. Config.JobCeiling overrides it.
+const DefaultJobCeiling = 6 * time.Hour
+
+// MaxBackendDownRequeues bounds how often one job goes back to the queue because every backend it
+// may use was down; the next time it fails backend-down. Each admission gets the job's deadline
+// afresh, so the requeues bound the job's total time too: at most this many plus one deadlines.
+const MaxBackendDownRequeues = 5
+
 // heartbeatInterval is how often a running job logs that it is still running. A var so a test
 // can shorten it.
 var heartbeatInterval = 10 * time.Minute
@@ -78,13 +88,14 @@ func (sch *Scheduler) execute(ctx context.Context, job *store.Job, reserved stri
 	}
 	// The job's deadline bounds its whole attempt chain, every max_attempts retry included: it
 	// goes on the context once, here, so a retry gets no fresh budget.
-	if jt := sch.cfg.Pool.JobTimeout(); jt > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, jt)
-		defer cancel()
-	}
+	ctx, cancel := context.WithTimeout(ctx, sch.jobDeadline())
+	defer cancel()
 	res, attempt, outcome, err := sch.attempts(ctx, d, &reserved)
 	if outcome == retryRequeued {
+		requeued = true
+		return
+	}
+	if err != nil && sch.requeueBackendDown(d, err, attempt) {
 		requeued = true
 		return
 	}
@@ -94,10 +105,6 @@ func (sch *Scheduler) execute(ctx context.Context, job *store.Job, reserved stri
 	}
 	sch.record(runID, res, err, class)
 	if err != nil {
-		if sch.requeueBackendDown(d, err) {
-			requeued = true
-			return
-		}
 		sch.fail(ctx, d, res, err, class, attempt)
 		return
 	}
@@ -115,6 +122,17 @@ func (sch *Scheduler) execute(ctx context.Context, job *store.Job, reserved stri
 	if uerr := sch.cfg.Store.UpdateState(runID, store.StateRunning, store.StateDone); uerr != nil {
 		sch.logf("queue: run=%s cannot mark done: %v", runID, uerr)
 	}
+}
+
+// jobDeadline is the pool's job deadline, or the ceiling when the pool sets none.
+func (sch *Scheduler) jobDeadline() time.Duration {
+	if jt := sch.cfg.Pool.JobTimeout(); jt > 0 {
+		return jt
+	}
+	if sch.cfg.JobCeiling > 0 {
+		return sch.cfg.JobCeiling
+	}
+	return DefaultJobCeiling
 }
 
 // prepare builds what every attempt shares, or returns why the job cannot run (a class-prefixed
@@ -151,8 +169,11 @@ func (sch *Scheduler) prepare(ctx context.Context, job *store.Job, prof *profile
 	if err != nil {
 		return nil, fmt.Sprintf("the prompt cannot be built: %v", err)
 	}
-	if uerr := sch.cfg.Store.UpdatePromptProvenance(runID, meta.LessonUIDs, meta.RunbookUIDs, meta.SHA256, meta.Bytes); uerr != nil {
-		sch.logf("queue: run=%s cannot record the prompt's provenance: %v", runID, uerr)
+	// A job requeued and admitted again keeps the provenance of its first dispatch.
+	if job.PromptSHA256 == "" {
+		if uerr := sch.cfg.Store.UpdatePromptProvenance(runID, meta.LessonUIDs, meta.RunbookUIDs, meta.SHA256, meta.Bytes); uerr != nil {
+			sch.logf("queue: run=%s cannot record the prompt's provenance: %v", runID, uerr)
+		}
 	}
 	// A profile with no grants block runs with the runner's own server set (nil); one with grants
 	// gets exactly its lane's rendered servers.
@@ -252,6 +273,11 @@ func (sch *Scheduler) attempts(ctx context.Context, d *dispatch, reserved *strin
 			sch.logf("queue: run=%s cannot record the attempt count: %v", runID, uerr)
 		}
 		if err == nil || attempt >= maxAttempts || !mayRetryAttempt(ctx, err) {
+			// Another attempt was due and the job's deadline ended it: that is the class, whatever
+			// the last attempt failed with as the deadline passed.
+			if err != nil && attempt < maxAttempts && !spentBudget(err) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				err = fmt.Errorf("%w (before attempt %d): %w", backends.ErrJobDeadline, attempt+1, err)
+			}
 			return res, attempt, retryGo, err
 		}
 		sch.logf("queue: run=%s attempt %d/%d failed (%s), retrying", runID, attempt, maxAttempts, res.LocalFailedReason)
@@ -371,18 +397,35 @@ func (sch *Scheduler) persistCallSizing(runID string, usage map[string]any) {
 }
 
 // requeueBackendDown puts a local-only job whose every eligible backend was found down back in
-// the queue, its run id and attempts kept: it did no work, and admission holds it there until a
-// backend is up again. It reports whether it did.
-func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error) bool {
+// the queue, its run id kept: it did no work, and admission holds it there until a backend is up.
+// The attempt does not count: neither against max_attempts nor as a first attempt spent (the
+// count goes back to what it was), and nothing of it is recorded. After MaxBackendDownRequeues
+// requeues the job fails backend-down instead. It reports whether it requeued.
+func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int) bool {
 	if d.locality != backends.LocalOnly || !backends.IsBackendDown(callErr) || !mayAutoRequeue(callErr) {
 		return false
 	}
 	runID := d.job.RunID
+	sch.mu.Lock()
+	if sch.requeues == nil {
+		sch.requeues = map[string]int{}
+	}
+	n := sch.requeues[runID]
+	if n >= MaxBackendDownRequeues {
+		sch.mu.Unlock()
+		sch.logf("queue: run=%s lost its backends %d times: failing it backend-down", runID, n+1)
+		return false
+	}
+	sch.requeues[runID] = n + 1
+	sch.mu.Unlock()
+	if err := sch.cfg.Store.UpdateAttempts(runID, attempt-1); err != nil {
+		sch.logf("queue: run=%s cannot uncount the attempt: %v", runID, err)
+	}
 	if err := sch.cfg.Store.UpdateState(runID, store.StateRunning, store.StateQueued); err != nil {
 		sch.logf("queue: run=%s lost its backends and cannot go back to the queue: %v", runID, err)
 		return false
 	}
-	sch.logf("queue: run=%s agent=%s local-only, every eligible backend is down: back to queued until one is up", runID, d.job.AgentKey)
+	sch.logf("queue: run=%s agent=%s local-only, every eligible backend is down: back to queued until one is up (%d of %d)", runID, d.job.AgentKey, n+1, MaxBackendDownRequeues)
 	return true
 }
 
@@ -405,9 +448,11 @@ func (sch *Scheduler) fail(ctx context.Context, d *dispatch, res *backends.Resul
 			retry = retryOf(job)
 		}
 	}
-	if retry == nil && errors.Is(ctx.Err(), context.Canceled) && !sch.identicalQueued(job) {
+	if retry == nil && errors.Is(ctx.Err(), context.Canceled) && !spentSessionBudget(callErr) && attempt <= 1 &&
+		job.RetryOfRunID == "" && !sch.identicalQueued(job) {
 		// The controller is shutting down (an operator's cancel moved the row first, so its CAS
-		// below loses and nothing is created): the job ran into no fault of its own.
+		// below loses and nothing is created): the job ran into no fault of its own. Bounded like
+		// a kill's retry: one, for a first-attempt job that is no retry itself.
 		retry = retryOf(job)
 	}
 	retried, retryErr, err := sch.cfg.Store.FailWithRetry(job.RunID, store.StateRunning, class, retry)
@@ -421,14 +466,16 @@ func (sch *Scheduler) fail(ctx context.Context, d *dispatch, res *backends.Resul
 	}
 }
 
-// identicalQueued reports whether a queued job of the same agent and task already waits.
+// identicalQueued reports whether a queued job of the same submitter, agent, task and lane
+// already waits.
 func (sch *Scheduler) identicalQueued(job *store.Job) bool {
 	queued, err := sch.cfg.Store.ListByState(store.StateQueued)
 	if err != nil {
 		return false
 	}
+	k := keyOf(job)
 	for _, q := range queued {
-		if q.AgentKey == job.AgentKey && q.TaskDescription == job.TaskDescription {
+		if keyOf(q) == k {
 			return true
 		}
 	}
@@ -452,10 +499,13 @@ func retryOf(job *store.Job) *store.Job {
 	}
 }
 
+// maxPreparedReason bounds a reason found before any attempt: a grants error can quote a value.
+const maxPreparedReason = 512
+
 // failRunning fails a running job for a reason found before any attempt (its configuration or
 // its profile's), class handler-error: resubmitting it meets the same configuration.
 func (sch *Scheduler) failRunning(runID, reason string) {
-	reason = store.FailureHandlerError + ": " + reason
+	reason = boundText(store.FailureHandlerError+": "+reason, maxPreparedReason)
 	sch.logf("queue: run=%s %s", runID, reason)
 	if err := sch.cfg.Store.UpdateExecutionResult(runID, false, 0, reason, ""); err != nil {
 		sch.logf("queue: run=%s cannot record the result: %v", runID, err)

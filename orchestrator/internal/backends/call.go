@@ -9,7 +9,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync/atomic"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/inference"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/runner"
@@ -53,8 +52,8 @@ var (
 	// further leg starts, the cloud leg included.
 	ErrJobDeadline = errors.New("job deadline exceeded before the attempt chain finished")
 	// ErrNoAttemptableBackend: the local order was empty without any attempt (every eligible
-	// backend leased to another run or drained), so nothing ran.
-	ErrNoAttemptableBackend = errors.New("every eligible local backend is exclusively leased or drained; no local attempt was possible")
+	// backend leased to another run, drained, or full at its max_concurrent), so nothing ran.
+	ErrNoAttemptableBackend = errors.New("every eligible local backend is exclusively leased, drained or at its max_concurrent; no local attempt was possible")
 	// ErrNoLocalCapacity: the affinity excludes every configured local backend. Like an outage, it
 	// moves the job to the cloud leg unless the job is local-only.
 	ErrNoLocalCapacity = errors.New("backend affinity excluded every configured local backend")
@@ -201,13 +200,24 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 		backend := order[i]
 		var err error
 		var res *Result
+		// The reserved backend's slot is the caller's reservation, its same-backend retries
+		// included (they run one after another). Any other backend is attempted only when it has
+		// a free slot at its max_concurrent, taken for the attempt: a fallover never overfills a
+		// backend another job's reservation filled.
+		counted := backend.Name == reserved
+		if !counted && !p.takeSlot(backend) {
+			p.logf("backends: run=%s backend=%s is at its max_concurrent (%d); not attempted", rid, backend.Name, backend.MaxConcurrent)
+			continue
+		}
 		for retry := 0; retry <= sameBackendRetries; retry++ {
 			if ctx.Err() != nil {
+				if !counted {
+					p.giveSlot(backend)
+				}
 				return deadline(lastErr)
 			}
 			out.LocalAttempts++
-			// Only the reserved backend's first attempt is counted already.
-			res, err = p.callLocal(ctx, backend, s, nextUsagePath(), backend.Name == reserved && retry == 0)
+			res, err = p.callLocal(ctx, backend, s, nextUsagePath())
 			if err != nil {
 				err = p.confirmBackendDown(ctx, backend, err)
 			} else if ac, ok := p.Runner.(runner.AnswerChecker); ok {
@@ -217,6 +227,9 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 			out.Attempts = append(out.Attempts, Attempt{Backend: backend.Name, Failed: err != nil, Class: class})
 			out.Result = res.Result
 			if err == nil {
+				if !counted {
+					p.giveSlot(backend)
+				}
 				out.LocalBackendUsed = backend.Name
 				if len(order) > 1 || retry > 0 {
 					p.logf("backends: run=%s backend=%s attempt=%d retry=%d succeeded", rid, backend.Name, out.LocalAttempts, retry)
@@ -225,6 +238,9 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 			}
 			p.logf("backends: run=%s backend=%s attempt=%d retry=%d failed (%s): %s", rid, backend.Name, out.LocalAttempts, retry, class, headSnippet(err.Error(), reasonMaxBytes))
 			if errors.Is(err, runner.TurnCap) {
+				if !counted {
+					p.giveSlot(backend)
+				}
 				setLocalFailure(out, err)
 				out.LocalClass = class
 				return out, fmt.Errorf("%w: %w", ErrTurnCapStops, err)
@@ -232,6 +248,9 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 			if !errors.Is(err, runner.ToolCallParse) {
 				break
 			}
+		}
+		if !counted {
+			p.giveSlot(backend)
 		}
 		lastErr = err
 		if errors.Is(err, runner.ContextExceeded) && i+1 < len(order) {
@@ -288,15 +307,9 @@ func LegUsagePath(base string, n int) string {
 	return strings.TrimSuffix(base, ".json") + fmt.Sprintf(".leg%d.json", n)
 }
 
-// callLocal runs one attempt on backend. Its in-flight count covers the whole attempt (the wait for
-// the interlock included), unless the caller counted it at reservation. It never returns a nil
-// *Result.
-func (p *Policy) callLocal(ctx context.Context, backend Backend, s runner.Session, usagePath string, counted bool) (*Result, error) {
-	if !counted {
-		c := p.inFlightCounter(backend.Name)
-		atomic.AddInt64(c, 1)
-		defer atomic.AddInt64(c, -1)
-	}
+// callLocal runs one attempt on backend, whose slot the caller holds (its reservation, or takeSlot)
+// for the whole attempt, the wait for the interlock included. It never returns a nil *Result.
+func (p *Policy) callLocal(ctx context.Context, backend Backend, s runner.Session, usagePath string) (*Result, error) {
 	if backend.NeedsInterlock {
 		waitCtx := ctx
 		if p.InterlockWait > 0 {

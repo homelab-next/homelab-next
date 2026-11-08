@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -313,5 +314,33 @@ func TestSumRunUsage_ReadsOnlyRegularBoundedFiles(t *testing.T) {
 	}
 	if _, ok := sumRunUsage(dir, "r", nil); ok {
 		t.Fatal("a link or an oversized file was read")
+	}
+}
+
+// A FIFO in the usage directory never blocks the sum, and a run with more usage files than any
+// run could have is not summed.
+func TestSumRunUsage_NeverBlocksAndIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(dir, "r.json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan bool, 1)
+	go func() { _, ok := sumRunUsage(dir, "r", nil); done <- ok }()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("a FIFO was read as a report")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sum blocked on a FIFO")
+	}
+	many := t.TempDir()
+	for i := 0; i < maxUsageSessions; i++ {
+		if err := os.WriteFile(filepath.Join(many, fmt.Sprintf("r.a%d.json", i+2)), []byte(`{"input_tokens":1}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := sumRunUsage(many, "r", map[string]any{"input_tokens": 1.0}); ok {
+		t.Fatal("more usage files than a run can have were summed")
 	}
 }

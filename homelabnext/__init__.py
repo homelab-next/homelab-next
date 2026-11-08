@@ -9,7 +9,16 @@ from importlib import metadata as _metadata
 
 try:
     __version__ = _metadata.version("homelabnext")
-except _metadata.PackageNotFoundError:  # running from a source checkout without install
-    __version__ = "0.0.0+local"
+except _metadata.PackageNotFoundError:  # a source checkout that is not installed
+    # the checkout's own version (the one packaging stamps and the changelog gate reads), so
+    # anything that looks the version up in CHANGELOG.md finds its section
+    # Look beside this file, not through the import system: an editable install's finder would
+    # otherwise resolve ``homelabnext._version`` to the installed tree even for a partial copy.
+    from os import path as _path
+
+    if _path.isfile(_path.join(_path.dirname(__file__), "_version.py")):
+        from homelabnext._version import VERSION as __version__
+    else:  # a partial copy (config_leak_scan ships only __init__ and shapes)
+        __version__ = "0.0.0+local"
 
 __all__ = ["__version__"]
