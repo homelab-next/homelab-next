@@ -209,7 +209,7 @@ on one of these pages.
 | [what the census gathers](modules/census.md) | What the census gathers |
 | [how a swap works](modules/swap-flow.md) | How a swap works, end to end; Swap record 1.2 (draft: `platform/module_swap` 1.0) |
 | [the product-name lint](modules/name-lint.md) | The product-name lint (rule 1) |
-| [record changes, migration and follow-ups](modules/follow-ups.md) | Prerequisite record changes; Migration path (no code moves in this draft); Contract follow-ups (per slot); The follow-ups: each one's status; Open questions |
+| [record changes, migration and follow-ups](modules/follow-ups.md) | Prerequisite record changes; Migration path (no code moves in this draft); Contract follow-ups (per slot); The follow-ups: each one's status; Follow-up ADRs; Open questions |
 
 ## See also
 

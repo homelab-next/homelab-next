@@ -342,10 +342,13 @@ release" is the release at which the controller cuts over, and "cutover+1" the r
       (`0`, today "unmeasured", is refused there, since it would admit without limit), and a
       fixture in `tests/generators/fixtures/controller-backends/fail/` breaks each half of the
       rule once.
-    - **PR 2.5 makes `max_concurrent` an admission cap when it is set**, not only the selection
-      hint it is today: a test admits one session on a backend with `max_concurrent: 1` and holds
-      the second until the first releases, by liveness (ADR-0029). The runner classes a
-      `concurrency_limited` 429 as a retryable wait on the same backend, never as a backend
+    - **`max_concurrent` is a hard admission cap when it is set** (**decided 2026-11-08,
+      operator**). The merged PR 2.5 does this much: `Reserve` skips a backend whose load has
+      reached its cap, and a test admits one session on a backend with `max_concurrent: 1` and
+      holds the second until the first releases, by liveness (ADR-0029). Two parts are stage 2.6
+      follow-ups, recorded in the controller doc's "Left to stages 2.6 and 2.7": the attempt
+      chain's fallover (`callLocal`) must not overfill a backend at its cap, and the runner classes
+      a `concurrency_limited` 429 as a retryable wait on the same backend, never as a backend
       failure, so it never falls over to another backend or to the cloud.
     - **Other callers** cannot exceed the cap where the engine's host admits calls only from the
       gateway (the guest's ingress and egress rules). That holds per site, so the lab check for
@@ -563,9 +566,9 @@ release" is the release at which the controller cuts over, and "cutover+1" the r
 
 **Out of scope for this amendment:** the agent-runner contract itself (stage 3's own ADR), the
 broker's records actions and the vault import (ADR-0044), per-agent keys and their lifetimes
-(ADR-0045), run traces and budgets (ADR-0047), which product, if any, fills the `automation` slot
-(ADR-0039), an MCP server for the remaining IdP, and the conversion of the lab's agent profiles to
-compiled profiles (stage 5, with ADR-0043's roster of record).
+(ADR-0045), run traces and budgets (ADR-0047), which product fills the `automation` slot (ADR-0039:
+StackStorm, decided 2026-11-08), an MCP server for the remaining IdP, and the conversion of the
+lab's agent profiles to compiled profiles (stage 5, with ADR-0043's roster of record).
 
 **Requirements other ADRs put on these stages.** ADR-0045 and ADR-0047 do not amend this ADR, but
 their decisions land inside its stages, and each stage's pull request carries them as written
@@ -606,8 +609,8 @@ runner requirements.
 - One engine limit replaces a lock two dispatchers shared. It holds for every caller of the
   gateway, not only the two dispatchers that knew about the lock, at the cost of a gateway config
   field and a schema bump. It holds against other callers only where the engine host admits only
-  the gateway, which the lab check states. `max_concurrent` becomes an admission cap, so a backend
-  that set it as a measured hint now also limits admission.
+  the gateway, which the lab check states. `max_concurrent` becomes a hard admission cap (decided
+  2026-11-08), so a backend that set it as a measured hint now also limits admission.
 - Retiring the Go context store and the recorded stand-in removes two copies of code that would
   otherwise have to be kept true beside the real thing; the cost is that the lab's context comes
   only from the reference store until a provider module replaces it.
@@ -638,11 +641,11 @@ the order follows the stage-2 series it rides on.
    two roles bound to the same spec backend; `hnx gen gateway render --check` fails a backend whose
    `max_concurrent` exceeds its engine's cap or is `0` (fixtures); the schema's examples and
    negatives pass and fail.
-5. **PR 2.5 enforces `max_concurrent`** as an admission cap and honours the interlock in the
+5. **PR 2.5 enforces `max_concurrent`** at admission (`Reserve`) and honours the interlock in the
    backends pool. Proves: with `max_concurrent: 1` a second session waits and is admitted when the
-   first is released by liveness; a `concurrency_limited` 429 is retried on the same backend and
-   never falls over; an interlock timeout on a `local-only` job's backend does not fall over to a
-   cloud backend.
+   first is released by liveness. The fallover cap and the retryable `concurrency_limited` 429 are
+   stage 2.6 follow-ups (the controller doc's "Left to stages 2.6 and 2.7"). Also proves: an
+   interlock timeout on a `local-only` job's backend does not fall over to a cloud backend.
 6. **PR 2.6 moves the stand-in to the ported behaviour and both fakes to `orchestrator/` cites**
    (decision 15). Proves: the recorded target refuses an unknown agent key with 404 and has no
    passthrough route; neither fake cites `internal/hermesagent`.

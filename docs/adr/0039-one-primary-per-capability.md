@@ -1,6 +1,6 @@
 ---
 summary: Each capability has one primary product; other rows are eval, retiring or legacy with nothing bound to them; the registry refuses a second primary.
-summary_of: outline:sha256:ed47aa49571bebf4
+summary_of: outline:sha256:90d672517784a18b
 ---
 # ADR-0039: Give each capability one primary product
 
@@ -79,8 +79,9 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
 ## Decision
 
 1. **Each registry row has a standing; at most one row per capability is `primary`.** The
-   service registry's next minor version (2.9, or the next free minor if ADR-0045's
-   `credentials` or ADR-0042's `recovery` lands first; `schemas/platform/service.json`) adds an
+   service registry's next minor version (2.9, `schemas/platform/service.json`; the batch numbers
+   its service-schema minors in the merge order ADR-0039, ADR-0045, ADR-0042, so ADR-0045's
+   `credentials` is 2.10 and ADR-0042's `recovery` block 2.11) adds an
    optional `standing` object: `{tier, until, why}`. `tier` is one of the following:
    - `primary`: the product consumers of the capability use. This is the default when `standing`
      is absent, so every existing registry keeps validating (ADR-0001: additive). Because
@@ -204,10 +205,10 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
    |---|---|---|---|
    | `idp` | Keycloak, on the lab's IdP host (ADR-0034) | Authentik: `legacy` at the switch (an old-lab incumbent, decision 1); its hand-made SSO clients go on the revocation ledger (ADR-0043 decision 8). The old task tool's sign-in through an edge access provider's OIDC client, a third IdP in neither registry: `legacy`, retires with the task tool; its client goes on the revocation ledger (ADR-0043 decision 8) | the IdP's ledger row; when it closes, this repository's Authentik-specific defaults in `sssd_ldap` and its vocabulary entry go. ADR-0034 is unchanged: its decision 7 stands, and the role stays for a lab whose IdP has an LDAP outpost; only this repository's Authentik-specific defaults go |
    | `auth-proxy` | oauth2-proxy (ADR-0034 decision 3) | none | — |
-   | `llm-gateway` | the own gateway, `orchestrator/cmd/gateway` (ADR-0038, ADR-0026) | LiteLLM: `legacy` at the switch, once the own gateway passes the gateway suite against the lab (ADR-0038 decision 7). The isolated range's gateway is a row of a separate capability, `range-llm-gateway`, because the range is its own trust zone and its consumers must not reach the production gateway; its product follows the same switch on its own ledger row | the gateway's ledger row; `render_litellm` and its lab-in-a-box targets are deleted at that row's close (ADR-0022, as amended by ADR-0038) |
+   | `llm-gateway` | the own gateway, `orchestrator/cmd/gateway` (ADR-0038, ADR-0026) | LiteLLM: `legacy` at the switch, once the own gateway passes the gateway suite against the lab (ADR-0038 decision 7). The isolated range's gateway is a row of a separate capability, `range-llm-gateway`, because the range is its own trust zone and its consumers must not reach the production gateway; its product follows the same switch on its own ledger row. **Decided 2026-11-08 (operator):** the range keeps its own model gateway, so `range-llm-gateway` stays a capability of its own | the gateway's ledger row; `render_litellm` and its lab-in-a-box targets are deleted at that row's close (ADR-0022, as amended by ADR-0038) |
    | `orchestration` (the agent-orchestrator contract) | the controller in `orchestrator/`, row name `orchestrator` | the private controller and its LLM queue: `legacy` at the controller cutover after stage 3 (ADR-0026 amendment) | the ADR-0026 amendment's placement of the controller |
-   | `automation` | none chosen in the lab (StackStorm is `experimental` here, `tools/experimental.yml`) | the old SOAR product: `legacy` | an operator decision (open question); until then nothing in the lab may bind to `automation` |
-   | `cases` | DFIR-IRIS | the old case manager: `legacy`, kept read-only until its ledger row closes. Its analyzer engine has been removed, so its guest record is deleted in the overlay, but only after the operator confirms that the removed Cortex is that analyzer engine and not the one tied to Synapse (an open question below) | ADR-0049 brings IRIS in as a provider module with a real `cases` adapter (none exists today) |
+   | `automation` | StackStorm (**decided 2026-11-08, operator**). It is `experimental` here (`tools/experimental.yml`) until a lab host runs it. Its row enters the overlay registry as `eval` in the overlay pull request that places StackStorm on a lab host (not in step 9's pass, which adds no row for a product nothing runs), and is promoted at its switch; until then the overlay's only `automation` row is the old SOAR's `legacy` one, and nothing in the lab may bind to `automation` | the old SOAR product: `legacy` | the `automation` ledger row. Its switch needs: `hnx workflows st2 check` (the repository's drift check: the rendered pack is committed and current) as a prerequisite; the live observable of step 9a, `hnx workflows st2 check --live`, passing against the lab host (the installed pack's digest equals the rendered one, and the event bridge shows deliveries); at least 7 days of shadow runs (the shadow window `st2-live` already requires, and ADR-0044's shadow days); and one live A03 run of a person-approved request through the broker |
+   | `cases` | DFIR-IRIS | the old case manager: `legacy`, kept read-only until its ledger row closes. Its analyzer engine has been removed, so its guest record is deleted in the overlay. **Decided 2026-11-08 (operator):** the removed Cortex is that analyzer engine, not the one tied to Synapse | ADR-0049 brings IRIS in as a provider module with a real `cases` adapter (none exists today) |
    | `cti-graph` | Synapse, together with its own Cortex (Synapse's storage core, not the removed analyzer engine of the same name). One row, so they retire together. If Synapse is ever replaced, IntelOwl stays. | none | — |
    | `ioc-enrichment` | IntelOwl: on-demand analysis of single observables through its analyzers | none | — |
    | `projects` (tasks too) | OpenProject (ADR-0020). Recorded as the operator's 2026-10-31 decision; the operator may object here | the old task tool: `legacy`. This repository's Markdown store is the contract's frozen conformance reference, not a product any site runs, so it has no row and no tier (decision 1) | the task tool's ledger row |
@@ -268,8 +269,7 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
 - The agents' tasking queue and proposals: a broker lifecycle (ADR-0044), not the `projects`
   capability, so moving them is not a task-tool decision.
 - The controller's wire names, example row and unit (ADR-0026 amendment, PR 2.7).
-- Choosing an `automation` primary for the lab; renaming the lab's agent keys; several
-  capabilities per guest.
+- Renaming the lab's agent keys; several capabilities per guest.
 
 ## Consequences
 
@@ -280,13 +280,14 @@ ends at the IdP's ledger row (ADR-0043), which this ADR makes checkable.
   rows were. Every reader of `by_capability` keeps its contract, now "the primary".
 - The lab registry needs one reviewed pass, an overlay pull request the operator merges. It tags
   the rows in decision 6, moves the `-legacy` rows onto their real capability with a standing,
-  declares the replicas, drops the removed analyzer's guest record (once the operator has confirmed
-  which Cortex was removed), replaces the catch-all guest
+  declares the replicas, drops the removed analyzer's guest record (the operator confirmed on
+  2026-11-08 that it is the case manager's Cortex), replaces the catch-all guest
   capabilities, registers the edge access provider's OIDC client as `legacy`, and adds the
   Keycloak and own-gateway rows as `eval`. That pass bumps the overlay's pin past the steps
   below, because decision 5 refuses names the lab uses today.
-- Until the lab chooses an `automation` primary, the workflow packs cannot be deployed against
-  the lab registry. That is the intended effect: today one of them would aim at the SOAR.
+- Until StackStorm's `automation` row is promoted to primary, the workflow packs cannot be
+  deployed against the lab registry. That is the intended effect: today one of them would aim at
+  the SOAR.
 - Legacy rows are inventory, not deployments. A reader that needs one (the decommission audit,
   the ledger) reads every tier on purpose. A generator that renders one is a defect, and the
   golden test fails on it.
@@ -299,7 +300,7 @@ Each step is one pull request, merged green after a design review and a security
 
 1. **This ADR** (`docs:`), with its index row and summary stamp. Tests: the ADR log test
    (headings, `Depends-on`, the reciprocal `Amended-by` lines added to ADR-0002 and ADR-0005).
-2. **Registry 2.9 (or the next free minor): `standing` and `replica_of`.** This step covers the
+2. **Registry 2.9: `standing` and `replica_of`.** This step covers the
    schema, `Service` fields, the frozen copy of the previous minor, and the new rules in
    `semantic_problems`: one primary; `until` and `why` on non-primaries; `replica_of` naming a
    primary of the same `impl`; the suffix rule; `public_hostname` on primary rows only; a
@@ -351,10 +352,23 @@ Each step is one pull request, merged green after a design review and a security
 9. **The overlay pass** (overlay pull request, operator merges), as listed under Consequences,
    validated with this repository's CLI at the bumped pin and clean under
    `private_leak_check.py private`.
-10. **The switches**, one per ledger row (ADR-0043): `idp`, `llm-gateway`, `orchestration`. Each
-    is ADR-0040's switch step, carrying a `plan_promote` once its candidate passes its suite
-    against the lab. At each close, the non-primary row is removed with the support code only it
-    used.
+   - **9a. The live StackStorm check**: `hnx workflows st2 check --live --host <svc:automation
+     row>`, a read-only observable for the `automation` switch. It reads the installed pack's digest
+     from the StackStorm host (the pack API, as a StackStorm user whose only RBAC grant is to view
+     packs) and fails unless it equals the digest of the pack rendered at the pinned commit; and it
+     reads the event bridge's status source and fails unless the bridge has delivered at least one
+     event within its window and has nothing dead-lettered. Tests: against recorded API fixtures, a
+     matching digest with recent deliveries passes; a drifted digest, no deliveries in the window,
+     and a dead-lettered event each fail with their own reason; an unreachable host exits as not
+     measured, never as a pass.
+10. **The switches**, one per ledger row (ADR-0043): `idp`, `llm-gateway`, `orchestration`, and
+    `automation` once StackStorm's `eval` row exists (it enters with the overlay pull request that
+    places StackStorm on a lab host). Each is ADR-0040's switch step, carrying a `plan_promote` once
+    its candidate passes its suite against the lab. `automation` has no suite; its switch takes
+    the evidence the decision 6 table lists: `hnx workflows st2 check` as a prerequisite, step 9a's
+    `--live` check passing, at least 7 days of shadow runs, and one live A03 run of an approved
+    request through the broker. At each close, the non-primary row is removed with the
+    support code only it used.
 
 ## Alternatives
 
@@ -370,12 +384,16 @@ Each step is one pull request, merged green after a design review and a security
   target and an old product awaiting retirement are invisible to the census, the decommission
   audit and the ledger, which are the readers that most need them.
 
-### Open questions for the operator
+### Operator decisions (2026-11-08)
 
-1. **Which Cortex was removed?** This ADR reads "Cortex is tied to Synapse ... retire both" as
-   Synapse's own storage core, and treats the old case manager's Cortex analyzer engine as already
-   removed. If the sentence meant the analyzer engine (whose enrichment is the one that overlaps
-   IntelOwl's), the `cti-graph` row changes and the overlay pass must not delete that guest
-   record. Nothing is deleted until you confirm.
-2. **`automation`.** Is any automation product primary in the lab, or does the capability stay
-   unbound?
+The operator answered this ADR's open questions on 2026-11-08 ("use defaults"). The ADR stays
+proposed; the answers are applied in decision 6 and the Consequences above.
+
+1. **Which Cortex was removed?** Decided: as this ADR read it. The removed Cortex is the old case
+   manager's analyzer engine; Synapse's own storage core stays with Synapse in the `cti-graph`
+   row, and the overlay pass deletes the analyzer engine's guest record.
+2. **`automation`.** Decided: StackStorm is the `automation` primary. Its row enters the overlay
+   registry as `eval` with the overlay pull request that places it on a lab host, and is promoted
+   at its switch (decision 6).
+3. **The isolated range's gateway.** Decided: the range keeps its own model gateway, so the
+   `range-llm-gateway` capability stays.
