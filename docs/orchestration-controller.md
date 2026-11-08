@@ -509,6 +509,14 @@ the configuration, the catalog and every profile, and renders every profile's tw
 `api_auth.tokens_file`, as `prompt_dir` already was) are read from the configuration file's
 directory.
 
+The lab-in-a-box runs the controller (`compose/lab-in-a-box/orchestrator`, built from this
+module; service `orchestrator`, alias `orchestration.svc.example.internal`): an exec runner whose
+sessions are `/bin/sh` reading the prompt on stdin, one backend name, authentication on with a
+tokens file the entrypoint writes from the throwaway `LAB_ORCHESTRATOR_TOKEN`. The smoke submits
+one job through the job API and passes only when it was claimed on that backend and ended `done`
+with the session's answer (`smoke_checks.py`: `orchestration`). `orchestrator/` is in
+`tools/lab_paths.py`'s list, so a controller change starts the stack in CI.
+
 **The trust boundary.** Every session the exec runner starts runs as the controller's own user.
 It can therefore read what that user can: `controller.db` (every job's task and answer), the
 controller's `/proc/<pid>/environ`, and other runs' working directories and usage reports. The
