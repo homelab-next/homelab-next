@@ -70,3 +70,10 @@ func JobLimitFromConfig(r config.Runner) time.Duration {
 	}
 	return 0
 }
+
+// MetricsFromConfig are the pool's LoadMetrics and KV from the configuration's engine_metrics.
+func MetricsFromConfig(m config.EngineMetrics) ([]string, KVMetrics) {
+	return slices.Clone(m.Load), KVMetrics{
+		Info: m.KV.Info, PoolLabel: m.KV.PoolLabel, BlocksLabel: m.KV.BlocksLabel, BlockSizeLabel: m.KV.BlockSizeLabel, Usage: m.KV.Usage,
+	}
+}

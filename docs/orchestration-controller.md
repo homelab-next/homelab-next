@@ -448,6 +448,18 @@ traffic), `health_url` and `load_probe_urls` are probes only, and the one other 
 forwarder's (`events.forwarder_url`). A test walks every key and fails on any other URL key, and on
 any key that names a product or the passthrough.
 
+`engine_metrics` names the metrics a backend's `load_probe_urls` serve: `load`, the gauges summed
+into its load (its running and waiting requests), and `kv`, its KV pool's (`info`, the info metric
+whose `pool_label`, else `blocks_label` times `block_size_label`, gives the pool in tokens; `usage`,
+the fraction in use). They are the engine's own names, so nothing is built in and this repository
+spells none; each is checked against the metrics format's name rules. The private controller had
+its engine's names built in, so a configuration in its keys names none: `config.LoadEngineMetrics`
+reads a site's own file of them (one mapping, `load` and `kv`, strict) and
+`MigrateOptions.EngineMetrics` writes it as the block, refused when the file already has one;
+migrated without it, a configuration whose backends have load probes gets a note that the
+controller will refuse them (the pool's `Validate`). The long-term home of an engine's names is its
+provider module's manifest, once inference engines are modules.
+
 The `scope` block is required, with each of `denied_roots`, `findings_root`, `shared_write` and
 `reserved_names` present even when empty, so a missing key is never read as "nothing denied". It
 becomes `pathscope.Zones` through `NewZones` (`Config.Zones()`), and an explicit `denied_roots: []`
@@ -647,7 +659,8 @@ The engine's metric names are configuration with no default, so no engine's name
 `Policy.LoadMetrics` (the gauges summed into a backend's load, its running and waiting requests)
 and `Policy.KV` (`Info`, the info metric whose `PoolLabel`, else `BlocksLabel` times
 `BlockSizeLabel`, gives the pool's size in tokens; `Usage`, the used fraction, a floor under the
-reservations). The configuration's keys for them come with the controller binary (below).
+reservations). They come from the configuration's `engine_metrics` block (`MetricsFromConfig`; "The
+controller's configuration" above).
 
 ### A job's prompt
 
@@ -773,12 +786,11 @@ above says how.
   `interlock_wait_timeout_seconds`, `PrimaryFirst`, `TokenWeightedAdmission`, `KVBudgetFraction`,
   `AgentPromptP90` from `store.AgentLastCallPromptP90(agent, 200)`, `DrainStore` (the store) and
   `Log` (the service's logger). Refuse to start when `Policy.Validate` or `RestoreDrains` fails, and
-  run `RunHealthProber` every `backend_health_interval_seconds`. Add the configuration keys for the
-  engine's metric names, none with a default (for example `load_metrics: [...]` and `kv_metrics:
-  {info, pool_label, blocks_label, block_size_label, usage}`, held by the key walk's no-product
-  rule): the private controller had its engine's names built in, so at the cutover the overlay's
-  configuration names them, or `Validate` refuses every backend that has `load_probe_urls` and the
-  controller does not start. The admin routes serve `HealthSnapshot` (`Redacted` to a caller that
+  run `RunHealthProber` every `backend_health_interval_seconds`. Set `LoadMetrics` and `KV` from
+  `engine_metrics` (`MetricsFromConfig`), and give `controller migrate` an `--engine-metrics FILE`
+  option (`config.LoadEngineMetrics` into `MigrateOptions.EngineMetrics`): at the cutover the
+  overlay supplies the lab engine's names in that file, or `Validate` refuses every backend that
+  has `load_probe_urls` and the controller does not start. The admin routes serve `HealthSnapshot` (`Redacted` to a caller that
   is not admin), `InFlightSnapshot` and `SetDrained`; the metrics read `InFlight` and the health
   snapshot. Cutover checks for the lab: `backends.cloud.home` must be set (no home is no cloud <!-- scrub-allow: config key paths, not host names -->
   leg; the private controller ran its cloud leg with whatever home it had); a local backend

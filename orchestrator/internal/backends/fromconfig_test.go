@@ -143,3 +143,18 @@ func TestValidate(t *testing.T) {
 		t.Errorf("blocks and block size are enough: %v", err)
 	}
 }
+
+// The engine's metric names come from the configuration, and a pool built from a configuration
+// without them refuses its load probes.
+func TestMetricsFromConfig(t *testing.T) {
+	cfg := config.EngineMetrics{Load: []string{"engine:requests_running"}, KV: config.KVMetrics{Info: "engine:cache_info", PoolLabel: "pool_tokens", Usage: "engine:cache_usage"}}
+	load, kv := MetricsFromConfig(cfg)
+	if !reflect.DeepEqual(load, cfg.Load) || kv != (KVMetrics{Info: "engine:cache_info", PoolLabel: "pool_tokens", Usage: "engine:cache_usage"}) {
+		t.Fatalf("load %v, kv %+v", load, kv)
+	}
+	p, _ := newPool(nil, Backend{Name: "a", LoadProbeURLs: []string{"http://engine-a.example.internal:8000/metrics"}})
+	p.LoadMetrics, p.KV = MetricsFromConfig(config.EngineMetrics{})
+	if err := p.Validate(); !errors.Is(err, ErrInvalid) {
+		t.Errorf("no engine metrics, load probes: %v", err)
+	}
+}
