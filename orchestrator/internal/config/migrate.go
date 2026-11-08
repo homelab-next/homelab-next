@@ -156,6 +156,11 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"})
 			notes = append(notes, "set backends.local.needs_interlock: false (the private controller never took the interlock for its local backend)") // scrub-allow: a config key path, not a host name
 		}
+		// that controller gave its sessions its whole environment when the allowlist was empty or
+		// unset; here an empty allowlist passes none, which a site must see before it serves
+		if allow := lookup(lookup(doc.Content[0], "runner"), "env_allowlist"); allow == nil || (allow.Kind == yaml.SequenceNode && len(allow.Content) == 0) {
+			notes = append(notes, "runner.env_allowlist is empty or unset: the private controller then gave every session its whole environment, and this one gives none; list the variables sessions need (PATH, the runner's own) by name")
+		}
 		// that controller served without a token unless api_auth.enabled said true; here unset
 		// means on, so the migration never decides to serve without one by itself
 		auth := lookup(doc.Content[0], "api_auth")
