@@ -876,7 +876,8 @@ controller served, with the HTTP passthrough gone and these defaults made refusa
   `api_auth.enabled: false`. A file that names a tokens file migrates with authentication on, with
   a note. `api_auth: null` is refused, and a configuration with authentication off says so in a
   notice on every load. Without authentication the API binds loopback only, and every request
-  carries an explicit auth-off principal; a request with no principal at all may see nothing.
+  carries an explicit auth-off principal; a request with no principal at all is refused (403) at
+  every route but `/healthz` and `/admin/backend-health`.
   Off loopback, bearer tokens travel over plain HTTP unless a TLS proxy terminates in front of the
   controller: put one there. Tokens and scopes are the private
   controller's: `jobs` (one's own jobs), `read` (every caller's job summaries and the queue
@@ -1005,6 +1006,10 @@ above says how.
     is requeued, not failed;
   - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
     log or keep text, as `backends` does;
+- **The API's leftovers (2.7):** nothing prunes jobs yet: a retention job (keeping every pruned
+  job's run id, submitter and idempotency key, as "Retention" above says) lands with the binary;
+  the tokens file's check covers the file and its directory, not the directories above it, which
+  the binary's unit (or a check of the whole parent chain) has to keep unwritable by others.
 - **The API in the binary (2.7):** `Authenticator.Reload` needs a trigger (a signal, or the reload
   route); importing `net/http/pprof` registers its handlers on `http.DefaultServeMux`, so the
   binary must never serve the default mux (a test that it serves `api.NewServer`'s handler only);
