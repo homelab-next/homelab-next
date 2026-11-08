@@ -35,7 +35,7 @@ import json
 from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
-from .validate import expand_ports, ref_id
+from .validate import EXCEPTION_TIERS, expand_ports, ref_id
 
 DEFAULT_LEASE_HOURS = 12
 DEFAULT_TTL = 60
@@ -367,13 +367,13 @@ def build_ir(doc: dict, reg: Any) -> NetworkIR:
     records: list[DnsRecord] = []
     for name, h in reg.hosts.items():
         records.append(DnsRecord(f"{name}.{domain}", "A", h.address, "registry.host"))
-    for svc in reg.services.values():
+    # a primary by its capability alias, an eval or retiring row by its row name (ADR-0039
+    # decision 2); a legacy row gets no record
+    for svc in reg.rows("primary", "eval", "retiring"):
         records.append(
-            DnsRecord(
-                reg.alias(svc.capability), "CNAME", f"{svc.host}.{domain}", "registry.service"
-            )
+            DnsRecord(reg.address_of(svc), "CNAME", f"{svc.host}.{domain}", "registry.service")
         )
-        if split and svc.public_hostname:
+        if split and svc.public_hostname and svc.is_primary:
             records.append(
                 DnsRecord(svc.public_hostname, "A", host_addr[svc.host], "split-horizon")
             )
@@ -447,7 +447,13 @@ def firewall_rules(
 
     for i, exc in enumerate(fw.get("service_exceptions", [])):
         froms = exc["from"] if isinstance(exc["from"], list) else [exc["from"]]
-        svc = reg.services[ref_id(exc["to"])]
+        svc = reg.row(ref_id(exc["to"]), *EXCEPTION_TIERS)
+        if svc is None:
+            # validate() refuses it first; an unvalidated document must not reach a KeyError
+            raise ValueError(
+                f"firewall.service_exceptions[{i}]: {exc['to']} is no primary, eval or retiring "
+                "row of the registry (validate the site first)"
+            )
         dst = Selector("host", svc.host, (f"{host_addr[svc.host]}/32",), reg.hosts[svc.host].zone)
         ports = tuple(sorted(exc.get("ports", [svc.port])))
         for fref in froms:

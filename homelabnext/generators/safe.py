@@ -40,7 +40,12 @@ FORMAT_METACHARS: dict[str, str] = {
 }
 
 
-class UnsafeValueError(ValueError):
+class GeneratorRefusal(ValueError):
+    """A generator refuses this registry: what it would render is unsafe or impossible (a public
+    site with no login, a realm asked for with no IdP row of its format)."""
+
+
+class UnsafeValueError(GeneratorRefusal):
     """A value would change the structure of the generated file."""
 
 
