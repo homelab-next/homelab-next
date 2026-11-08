@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package queue is the controller's run queue: it admits queued jobs in priority and aging order,
-// up to a concurrency limit, through the backend pool (package backends), and runs each admitted
-// job's attempt chain to a terminal state, recording what happened in the store.
+// never more running than its concurrency, through the backend pool (package backends), and runs
+// each admitted job's attempt chain to a terminal state, recording what happened in the store.
 //
 // The queue decides from typed values only: the pool's sentinel errors (errors.Is), the runner
 // classes a Call's Result carries (LocalClass, CloudClass, Attempts), and the store's states. It
@@ -77,7 +77,8 @@ type Config struct {
 	// Grants is the MCP grants catalog. A profile with a grants block needs it: such a job fails
 	// when it is nil. A profile with no grants block runs with the runner's own server set.
 	Grants *grants.Catalog
-	// Concurrency bounds the jobs running at once (at least 1).
+	// Concurrency is a hard cap on the jobs running at once (at least 1), however admission passes
+	// overlap.
 	Concurrency int
 	// UsageDir receives each session's usage report (<run id>.json, then .aN for a later
 	// attempt and .legN for a later leg, summed per run); empty: no usage report is asked for.
