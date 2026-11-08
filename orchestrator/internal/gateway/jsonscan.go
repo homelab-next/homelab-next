@@ -2,7 +2,10 @@
 
 package gateway
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"unicode/utf8"
+)
 
 // The scanner below finds the values of top-level keys in a JSON object without decoding it, so
 // a large reply can have its model rewritten without being copied, which bounds the memory a
@@ -66,7 +69,8 @@ func scanValue(d []byte, i int) int {
 type span struct{ start, end int }
 
 // topLevel returns the span of every value whose key, decoded, is one of names (a key spelled
-// with escapes, "model", is the key it decodes to), keyed by name in order of appearance,
+// with escapes, "model", is the key it decodes to, and a key holding invalid UTF-8 is the key
+// json.Unmarshal decodes it to, each invalid byte U+FFFD), keyed by name in order of appearance,
 // and the index just after the object's '{'. ok is false when data is not a valid JSON object.
 func topLevel(data []byte, names ...string) (map[string][]span, int, bool) {
 	if !json.Valid(data) {
@@ -82,7 +86,8 @@ func topLevel(data []byte, names ...string) (map[string][]span, int, bool) {
 	for i < len(data) && data[i] == '"' {
 		kend, esc := scanString(data, i)
 		key := string(data[i+1 : kend-1])
-		if esc {
+		if esc || !utf8.ValidString(key) {
+			// decode as json.Unmarshal does: escapes resolved, each invalid byte U+FFFD
 			_ = json.Unmarshal(data[i:kend], &key)
 		}
 		i = skipSpace(data, kend) + 1 // past ':'
