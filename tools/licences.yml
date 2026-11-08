@@ -136,6 +136,7 @@ go:
   github.com/mattn/go-isatty: {spdx: MIT, kind: linked, reason: "modernc.org/libc's dependency on some platforms (not in the linux build graph); listed as linked because a build for those platforms links it"}
   github.com/ncruces/go-strftime: {spdx: MIT, kind: linked, reason: "modernc.org/libc's dependency on some platforms (not in the linux build graph); listed as linked because a build for those platforms links it"}
   github.com/remyoudompheng/bigfft: {spdx: BSD-3-Clause, kind: linked, reason: "modernc.org/mathutil's dependency, linked into the controller with orchestrator/internal/store"}
+  go.yaml.in/yaml/v3: {spdx: MIT AND Apache-2.0, kind: linked, reason: "the controller's YAML library (config, profiles, grants, the registers reader), linked into the controller; the maintained successor of the archived gopkg.in/yaml.v3 (Apache-2.0, with libyaml's ported files under MIT in its LICENSE), no dependency of its own"}
   golang.org/x/exp/typeparams: {spdx: BSD-3-Clause, kind: tool, reason: "staticcheck's dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/mod: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}
   golang.org/x/sync: {spdx: BSD-3-Clause, kind: tool, reason: "the linters' dependency; run as go tool, never linked into a shipped binary"}

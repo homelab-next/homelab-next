@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM orchestrator as the orchestration capability: adapter, holds, pinned result, gateway calls, optional features, and its core moving into orchestrator/.'
-summary_of: outline:sha256:3702702006ea4c0a
+summary_of: outline:sha256:22072ef5ad66967e
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -275,7 +275,8 @@ ADR-0026 stage 2 brings the controller's core into the Go module `orchestrator/`
 pull requests at a time; the lab keeps running the private controller, frozen, until the cutover
 after stage 3 (the ADR's amendment of 2026-11-07). Each package is rewritten for this repository,
 never copied with its history. The packages in so far are the leaves, which import nothing else of
-the controller, and the store, which imports only `events`:
+the controller, the store, which imports only `events`, and the grants and the profiles
+(PR 2.3a; the configuration and the registers reader follow in PR 2.3b):
 
 | Package | What it does |
 |---|---|
@@ -283,11 +284,15 @@ the controller, and the store, which imports only `events`:
 | `orchestrator/internal/pathscope` | Decides on path strings whether a path lies in a scope (writable and readable prefixes, segment by segment, no wildcard). A tree's zones are configuration (`pathscope.Zones`: `denied_roots`, `findings_root`, `shared_write`, `reserved_names`), with no defaults; the package names no zone of its own. Zones work only once validated (`NewZones`), and an empty `denied_roots` is refused unless `allow_no_denied_roots` is set. A validated value decides on its own sealed copy: changing a field or a list element afterwards makes it refuse everything, as an unvalidated one does, until it is validated again. |
 | `orchestrator/internal/metrics` | The Prometheus text exposition writer, standard library only, and the metric name prefix. |
 | `orchestrator/internal/events` | The controller's CloudEvents envelope, its derived id (the same as `homelabnext.events.envelope.derive_event_id`, non-ASCII text included) and the durable outbox sender. Its tests validate what it builds against `schemas/events` in place, with a validator that is itself checked against the schemas' examples and negatives. A failed delivery's logged detail names the forwarder URL redacted (no query, fragment or password), whatever the transport's error quotes. |
+| `orchestrator/internal/grants` | Checks and renders a profile's per-job MCP server grants: the catalog's kinds (what each server runs, and which environment keys a grant may set, each pinned to listed values, bound to the granting profile, or free in a declared shape), and per lane the servers a job is given. It refuses an unknown kind, an unclassified or denied key (`DeniedEnvPattern`, the MCP catalog's own deny list character for character), a value off its pins, a `${...}` reference, a profile-bound value the profile does not hold, a write outside the profile's scope or across lanes, and a profile that grants one lane and not the other. Its scope rules are decided against the configured zones. See "Grants" below. |
+| `orchestrator/internal/profile` | Loads the dispatch profiles, one YAML file per agent, strictly (an unknown key at any level is refused but the deployment's own extension keys, each validated against the schema its config gives it, or carried opaque on purpose), checks every `path_scope` entry against the scope zones and every agent key against the reserved names, resolves `prompt_context` against what the config lists (a facts command by name, a state file, text files inside `prompt_dir`) and renders every grant against the catalog (`Registry.CheckGrants`). `schemas/platform/orchestrator_profile.schema.json` documents it (a derived artifact of the agent profile); its tests hold the schema's keys to the Go types and its examples and negatives to the loader's verdicts. |
 | `orchestrator/internal/store` | The controller's durable state in one SQLite database (`modernc.org/sqlite`, no cgo): the jobs table and its state machine, every transition a compare-and-swap on the row's state; submits whose idempotency check, shadow back-pressure (one unfinished shadow job per agent) and insert share one write transaction; resubmits (`retry_of_run_id`: one retry per run, only after an environment failure class, replaying the parent's task); the event outbox, filled in the transaction of the state change it describes and drained by `events`; the operators' backend drains; startup reconciliation of orphaned jobs; and the instance lock (`flock` on `<db>.lock`), so two controllers never share a database. An idempotency key (at most 128 bytes) is scoped to its submitter and never released: one submitter's key is unique across every job the database has held, however old, and another submitter's key neither finds nor blocks it. |
 
-The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, and with the
-store `modernc.org/sqlite` v1.58.0 and the modules it pulls in, each listed as `linked` in
-`tools/licences.yml`. The gateway
+The module now has third-party dependencies and a `go.sum`: `golang.org/x/sys`, with the
+store `modernc.org/sqlite` v1.58.0 and the modules it pulls in, and with the grants and the
+profiles the YAML library `go.yaml.in/yaml/v3` v3.0.6 (released 2026-10-13, past the 14-day cooldown; MIT AND
+Apache-2.0; the maintained successor of the archived `gopkg.in/yaml.v3`, with no dependency of its
+own), each listed as `linked` in `tools/licences.yml`. The gateway
 stays standard library only: `TestGatewayDependsOnlyOnTheStandardLibrary`
 (`orchestrator/cmd/gateway`) fails when `go list -deps -test` of its packages names anything else.
 
@@ -301,8 +306,8 @@ copy's in-memory publisher, which lost queued events on a crash, has no use here
 ### Neutral names
 
 The controller's wire names take names that name no product (ADR-0027). Those the leaf packages
-carry are set here; the job API's `session_id` and the runtime-neutral config keys come with the
-packages that hold them.
+carry are set here; the configuration's keys come with the configuration package (PR 2.3b), the
+job API's `session_id` with the API package.
 
 | What | Private controller | Here |
 |---|---|---|
@@ -351,6 +356,31 @@ consumers of `svc:llm-orchestrator` in this repository, which move before the ol
 - the docs that quote the source: [StackStorm](stackstorm.md),
   [orchestration telemetry](orchestration-telemetry.md), `docs/checklist.md` (O-11) and
   [ADR-0025](adr/0025-orchestration-telemetry.md).
+
+### Grants: the catalog render is the loader's input
+
+The kinds file and each profile's `grants:` block are rendered from homelab-next's MCP catalog by
+`hnx mcp catalog render --client orchestrator` (`llm-orchestrator` is the client's old name, still
+accepted; [MCP catalog](mcp-catalog.md)). The render pins every grant-settable key: an `enum`
+parameter to its values, any other parameter to the values its rendered instances give it; a
+parameter that no rendered instance sets is left unsettable (a note says so). `internal/grants` is
+the one judge of what the controller accepts: the Python copy of its rules (`clients.orch_accepts`)
+is gone, and `TestThePythonRenderOfExamplesMCPLoads` loads the committed render of
+`examples/mcp/clients/orchestrator.yml` in place (the catalog, and every profile its
+`check_profiles` names, both lanes), while `tests/mcp/test_mcp_clients.py` fails when that render is
+stale, so the two cannot drift. The render still refuses what it cannot write (a remote server, an
+argument that varies per instance), binds every identity or scope parameter in the kind's
+`profile_scope` rather than pinning it to every profile's values, and reads its own output back
+(`clients.orch_render_problems`: known kinds, allowed keys, pinned values, unique names, both
+lanes or neither), so a check that runs Python alone is not blind. A site has no command to run
+the Go loader on its own render until the controller binary lands: PR 2.7 adds `controller check
+--config FILE`, which loads the configuration, the catalog and every profile, and renders every
+profile's two lanes (`Registry.CheckGrants`) without starting the controller.
+
+The profiles' scope is `path_scope` (the private controller's name for it matches the leak scan's
+secret-name rule, which no marker lifts, so this repository cannot spell it; the overlay renames
+it by hand at the cutover, and a profile that still uses it is refused as an unknown key, never
+read wrongly).
 
 ### The store's migration, behind a backup
 

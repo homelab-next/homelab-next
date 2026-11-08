@@ -1,0 +1,1 @@
+{"agent_key": "w", "grants": {"real": [{"name": "n", "kind": "notes", "env": {"A": "${SECRET}"}}], "shadow": [{"name": "n", "kind": "notes"}]}}
