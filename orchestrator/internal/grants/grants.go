@@ -30,6 +30,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
+	"github.com/homelab-next/homelab-next/orchestrator/internal/runner"
 )
 
 // Kind is one MCP server program as the catalog defines it. Command, Args and the fixed Env are
@@ -203,14 +204,6 @@ type Grant struct {
 type Set struct {
 	Real   []Grant `yaml:"real"`
 	Shadow []Grant `yaml:"shadow"`
-}
-
-// Server is one rendered server: what the runner starts for a job.
-type Server struct {
-	Command string
-	Args    []string
-	Env     map[string]string // nil when empty
-	Timeout int               // seconds; 0 = the runner's default
 }
 
 // UnmarshalYAML decodes a grants block strictly (unknown fields refused), wherever it is
@@ -976,12 +969,13 @@ func laneName(shadow bool) string {
 	return "real"
 }
 
-// Render turns one lane's grants into the servers a job is given, by server name. It fails closed
+// Render turns one lane's grants into the servers a job is given, by server name, in the
+// runner seam's own form (runner.Server: a Session's Servers). It fails closed
 // on any unknown kind, duplicate or malformed name, env key the kind does not allow, value the
 // catalog does not pin, or profile-bound value (Kind.ProfileScope) the owning profile o does not
 // hold.
-func (c *Catalog) Render(gs []Grant, o Owner) (map[string]Server, error) {
-	out := make(map[string]Server, len(gs))
+func (c *Catalog) Render(gs []Grant, o Owner) (map[string]runner.Server, error) {
+	out := make(map[string]runner.Server, len(gs))
 	for _, g := range gs {
 		if !nameRe.MatchString(g.Name) {
 			return nil, fmt.Errorf("%w: server name %q", ErrInvalid, g.Name)
@@ -1046,7 +1040,7 @@ func (c *Catalog) Render(gs []Grant, o Owner) (map[string]Server, error) {
 		if err := k.checkOwner(g, env, o, c.zones); err != nil {
 			return nil, err
 		}
-		s := Server{Command: k.Command, Args: append([]string{}, k.Args...)}
+		s := runner.Server{Command: k.Command, Args: append([]string{}, k.Args...)}
 		if len(env) > 0 {
 			s.Env = env
 		}

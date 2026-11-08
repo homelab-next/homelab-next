@@ -21,6 +21,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/homelab-next/homelab-next/orchestrator/internal/inference"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/profile"
 )
@@ -180,8 +181,9 @@ type Config struct {
 	LessonsPath     string `yaml:"lessons_path"`
 	RunbooksPath    string `yaml:"runbooks_path"`
 	LessonsDisabled bool   `yaml:"lessons_disabled"`
-	// PromptContracts replace the contracts every dispatch prompt carries with these files'
-	// texts, in order. Unset: the defaults; an explicit empty list: none.
+	// PromptContracts are the contracts every dispatch prompt carries: these files' texts, in
+	// order, after the task and its register context. Unset or empty: none (package prompt has no
+	// built-in contract; a site states its own).
 	PromptContracts []string `yaml:"prompt_contracts"`
 	APIAuth         APIAuth  `yaml:"api_auth"`
 	Events          Events   `yaml:"events"`
@@ -366,6 +368,9 @@ func (c Config) check() error {
 	if c.KVBudgetFraction < 0 || c.KVBudgetFraction > 1 {
 		return fmt.Errorf("kv_budget_fraction %v: want 0 (the default) to 1", c.KVBudgetFraction)
 	}
+	if err := inference.ValidateGatewayTagPrefix(c.Events.GatewayTagPrefix); err != nil {
+		return fmt.Errorf("events.%w", err)
+	}
 	backends := []struct {
 		at string
 		b  Backend
@@ -389,8 +394,8 @@ func (c Config) check() error {
 	return nil
 }
 
-// LoadPromptContracts reads PromptContracts' files: nil when the list is unset (use the
-// defaults), an empty, non-nil slice for an explicit empty list. One trailing newline per file is
+// LoadPromptContracts reads PromptContracts' files, in order: nil when the list is unset, an
+// empty, non-nil slice for an explicit empty list (both mean no contract). One trailing newline per file is
 // dropped.
 func (c Config) LoadPromptContracts(configDir string) ([]string, error) {
 	if c.PromptContracts == nil {

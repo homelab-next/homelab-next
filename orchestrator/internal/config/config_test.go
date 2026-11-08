@@ -168,6 +168,8 @@ func TestParse_Checks(t *testing.T) {
 		"endpoint is a URL": "backends: {local: {endpoint: \"http://engine-a.example.internal:8000\"}}\n",
 		"endpoint no port":  "backends: {additional: [{endpoint: engine-a.example.internal}]}\n",
 		"relative command":  "backend_status_command: [bin/status]\n",
+		"tag prefix comma":  "events: {gateway_tag_prefix: \"a,b\"}\n",
+		"tag prefix space":  "events: {gateway_tag_prefix: \"job \"}\n",
 	} {
 		if _, err := Parse([]byte(scopeYAML + body)); err == nil {
 			t.Errorf("%s: parsed", name)
@@ -263,7 +265,7 @@ func allKeys(t reflect.Type, at string) []string {
 	return out
 }
 
-// TestLoadPromptContracts: unset = nil (defaults), an explicit empty list = no contracts, files
+// TestLoadPromptContracts: unset = nil, an explicit empty list = empty (both no contract), files
 // are read relative to the config's directory with one trailing newline dropped, and a missing
 // file is an error.
 func TestLoadPromptContracts(t *testing.T) {
