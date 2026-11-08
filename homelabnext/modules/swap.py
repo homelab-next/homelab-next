@@ -521,3 +521,30 @@ def apply_selection_diff(
             )
         lines[0]["provider"] = d["to"]
     return out
+
+
+def apply_switch(
+    site: Doc,
+    swap: Doc,
+    mods: dict[str, Doc],
+    registry: Doc,
+    promotion: Any,
+    *,
+    models: ModelEvidence | None = None,
+) -> tuple[Doc, Doc]:
+    """The switch of ADR-0040 decision 5 step 6: both halves of the one reviewed change, the
+    selection diff (:func:`apply_selection_diff`) and the registry standing promotion (ADR-0039
+    decision 6, a :class:`homelabnext.swap.flip.PromotePlan` from ``plan_promote``).  Returns
+    ``(site, registry)`` after the switch, or raises with neither applied: both are computed on
+    copies, and the selection is not returned unless the promotion also holds.  The promotion's
+    inverse with the selection before the switch is the rollback."""
+    from homelabnext.swap.flip import FlipError, PromotePlan
+
+    if not isinstance(promotion, PromotePlan) or promotion.reverted:
+        raise ValueError("the switch takes a promotion from plan_promote, not its inverse")
+    after_site = apply_selection_diff(site, swap, mods, models=models)
+    try:
+        after_registry = promotion.apply(registry)
+    except FlipError as exc:
+        raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
+    return after_site, after_registry

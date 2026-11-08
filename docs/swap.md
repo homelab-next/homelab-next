@@ -1,6 +1,6 @@
 ---
-summary: 'The swap kit for replacing a product behind a capability: nine steps, swap record, parity tools, dual-write, registry flip, decommission check and rehearsal.'
-summary_of: outline:sha256:7e897921501b5be6
+summary: 'The swap kit for replacing a product behind a capability: nine steps, swap record, parity, dual-write, registry flip and promotion, decommission, rehearsal.'
+summary_of: outline:sha256:f0354e978030fb9a
 ---
 # The swap kit
 
@@ -171,6 +171,36 @@ assert flip_text(text, back) == yaml_text
 `plan_flip` is a pure function. `flip_text` re-parses its own output and refuses to write anything
 that does not equal the plan. The goldens in `tests/swap/golden/` show the diff, the inverse and
 the text change.
+
+A flip moves the same product (host, port, version). Once a capability has a non-primary row
+(`eval`, `retiring` or `legacy`, [ADR-0039](adr/0039-one-primary-per-capability.md)), `plan_flip`
+refuses an `impl` change on it: changing the product is a promotion.
+
+## The promotion
+
+The switch of a replacement ([ADR-0040](adr/0040-modules-are-replaceable-by-construction.md)
+decision 5, step 6) is one reviewed change with two halves: the selection diff
+(`homelabnext.modules.swap.apply_selection_diff`) and the registry standing promotion
+(ADR-0039 decision 6). `homelabnext.modules.swap.apply_switch` applies both, or neither.
+
+```python
+plan = plan_promote(doc, "idp", "sso-next", "2026-11-08", rollback_days=14, old_lab=True)
+print(plan.diff())  # every field that changes, with the window and its end
+text = promote_text(yaml_text, plan)  # touches only the changed fields
+assert promote_text(text, plan.inverse()) == yaml_text  # the rollback, byte for byte
+site, registry = apply_switch(site, swap, mods, doc, plan)
+```
+
+- The `eval` row becomes the primary (its `standing` is removed). The incumbent primary becomes
+  `retiring`, or `legacy` with `old_lab=True` (an old-lab product this repository does not
+  deploy), with `until` = the switch date + `rollback_days`: the ledger row's window
+  ([ADR-0043](adr/0043-the-cutover-is-a-ledger-per-service.md)), so the date is never authored.
+- The fields only a primary carries, `public_hostname` and `env_var`, move to the new primary.
+- Refused: a row that is not an `eval` row of the capability, a result with two primaries or none,
+  a `retiring` incumbent named like a capability (rename the row first; a `legacy` one may keep
+  its name), and anything the registry's own rules refuse.
+- `promote_text` writes a field that appears on one line, at the end of its row (or where it was,
+  when it comes back), and refuses unless its inverse restores the text byte for byte.
 
 ## Decommission check
 

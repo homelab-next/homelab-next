@@ -11,7 +11,16 @@ from __future__ import annotations
 from .backend import Backend, ManualBackend, Outcome
 from .decommission import Finding, Retired, retired_from_record, scan
 from .dualwrite import Divergence, DualWriter
-from .flip import Change, FlipError, FlipPlan, flip_text, plan_flip
+from .flip import (
+    Change,
+    FlipError,
+    FlipPlan,
+    PromotePlan,
+    flip_text,
+    plan_flip,
+    plan_promote,
+    promote_text,
+)
 from .lakebackend import LakeBackend
 from .machine import (
     STEP_SPECS,
@@ -41,6 +50,7 @@ __all__ = [
     "LakeBackend",
     "ManualBackend",
     "Outcome",
+    "PromotePlan",
     "RecordError",
     "Retired",
     "RollbackRefused",
@@ -48,7 +58,9 @@ __all__ = [
     "SwapRunner",
     "flip_text",
     "plan_flip",
+    "plan_promote",
     "plan_text",
+    "promote_text",
     "retired_from_record",
     "scan",
 ]
