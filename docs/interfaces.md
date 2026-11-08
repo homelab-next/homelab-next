@@ -533,9 +533,9 @@ change until its ADR is accepted):
 | `registers/decision_spec` | 1.3 | `schemas/registers/decision_spec.json` | stable |
 | `registers/invariant` | 1.0 | `schemas/registers/invariant.schema.json` | stable |
 | `registers/kanban_item` | 1.0 | `schemas/registers/kanban_item.schema.json` | stable |
-| `registers/lesson` | 2.1 | `schemas/registers/lesson.schema.json` | stable |
+| `registers/lesson` | 2.2 | `schemas/registers/lesson.schema.json` | stable |
 | `registers/register_event` | 1.3 | `schemas/registers/register_event.schema.json` | stable |
-| `registers/runbook` | 2.2 | `schemas/registers/runbook.schema.json` | stable |
+| `registers/runbook` | 2.3 | `schemas/registers/runbook.schema.json` | stable |
 | `status/agent_activity` | 1.0 | `schemas/status/agent_activity.schema.json` | stable |
 | `status/agent_activity_detail` | 1.0 | `schemas/status/agent_activity_detail.schema.json` | stable |
 | `status/agents` | 1.4 | `schemas/status/agents.schema.json` | stable |

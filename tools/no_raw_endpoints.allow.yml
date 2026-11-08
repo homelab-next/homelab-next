@@ -137,5 +137,9 @@ allow:
     reason: a loopback listener the test opens itself (a connection refused upstream) and a documentation address (RFC 5737) as a redirect target the gateway must never follow
   - path: "orchestrator/internal/gateway/server_test.go"
     reason: a documentation address (RFC 5737) as a caller's X-Forwarded-For header, which the gateway must not forward
+  - path: "orchestrator/internal/config/config_test.go"
+    reason: inline test configurations for the controller (ADR-0026) whose backends name reserved example.internal hosts and documentation addresses (RFC 5737) as probe endpoints and health URLs, and a loopback listen address; parsed and never dialled
+  - path: "orchestrator/internal/config/migrate_test.go"
+    reason: the private controller's old keys as test input, base URLs on example.internal hosts and documentation addresses (RFC 5737) that the migration turns into probe endpoints; parsed and never dialled
   - path: "orchestrator/deploy/systemd/llm-gateway.service"
     reason: the example gateway unit's loopback listen address (ADR-0038 decision 3), a bind and never a dial; a unit line cannot carry an inline marker

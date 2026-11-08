@@ -8,11 +8,11 @@
 # widened, a path swapped) changes this file too; `make allowlist-counts` records it.
 counts:
   product-names-allow: 17
-  no-raw-endpoints-allow: 69
+  no-raw-endpoints-allow: 71
   scripts-allow: 22
-  scrub-allow-markers: 55
+  scrub-allow-markers: 68
   no-raw-endpoint-markers: 305
 digests:
   product-names-allow: sha256:0cc7ae851a88526055bd681f559029243533f7056010518c8b3f058fdcd8244c
-  no-raw-endpoints-allow: sha256:6eb47e8e8a2416dd8f23025994bc38e9c487b0ab76c13b855a131e6a704277c5
+  no-raw-endpoints-allow: sha256:bd6562135a42982a5ded5d33d366c2136aa1ad030570809ca8107e4b96141493
   scripts-allow: sha256:8455c3acb0f7c01db2ef1efe1981ccb9f7a450fba93ff490c26daba6bd40c94d

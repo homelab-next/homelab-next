@@ -293,6 +293,15 @@ constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
   weekly `pin-freshness` workflow keeps the result in one issue ("Pin freshness"). It never fails
   a pull request. A new pin of that kind needs its upstream in `SOURCES` in that file
   (`python3 tools/pin_freshness.py inventory --check`, also a unit test).
+- **Security releases waiting out the cooldown**: a release that carries a security fix is still
+  held for 14 days, and the bump is its own pull request once the cooldown clears. Pending as of
+  2026-11-08:
+  - NATS 2.15.2 (security fixes, among them bounds on stream-state recovery) for the lab events
+    image and CI's `NATS_SERVER_VERSION`; it clears about 2026-11-09.
+  - Open WebUI 0.12.4 and 0.12.5, each opening with an upstream security advisory whose fixes are
+    not listed, for the `open_webui` role; they clear about 2026-11-08 and 2026-11-12.
+
+  Remove an item here when its bump lands.
 - **Bumping by hand**: take an action's SHA from `git ls-remote https://github.com/OWNER/REPO
   refs/tags/TAG^{} refs/tags/TAG` (the peeled `^{}` commit for an annotated tag), a binary's
   checksum from the release's own checksums file, a Go tool's from `go mod download -json`
