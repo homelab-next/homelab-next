@@ -1,0 +1,126 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package backends
+
+import (
+	"context"
+	"net/http"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/homelab-next/homelab-next/orchestrator/internal/scrape"
+)
+
+// Load is what a backend carries right now. Weighted round-robin balances the rate of first
+// picks, which says nothing about occupancy: a backend whose jobs run long fills up at the same
+// pick rate as one whose jobs end fast. So the pool measures it:
+//
+//   - a backend with load probes is read from its engines' own metrics (the LoadMetrics gauges,
+//     its running and waiting requests, summed over every probe URL: one per engine, since a
+//     balancer in front of several reports only one of them). That counts traffic this pool did
+//     not send too;
+//   - every backend also has the pool's own in-flight count (reservations, leases and running
+//     attempts), exact for a backend nothing else calls.
+//
+// The load is the larger of the two, and the own count alone when every probe fails, so an
+// unreadable backend never looks idle.
+
+// loadProbeTimeout bounds one load probe.
+const loadProbeTimeout = 2 * time.Second
+
+var (
+	defaultProbeClientOnce sync.Once
+	defaultProbeClient     *http.Client
+)
+
+func (p *Policy) probeClient() *http.Client {
+	if p.ProbeClient != nil {
+		return p.ProbeClient
+	}
+	defaultProbeClientOnce.Do(func() { defaultProbeClient = scrape.NewClient() })
+	return defaultProbeClient
+}
+
+func (p *Policy) currentLoad(ctx context.Context, b Backend) int {
+	tracked := int(atomic.LoadInt64(p.inFlightCounter(b.Name)))
+	if len(b.LoadProbeURLs) == 0 || len(p.LoadMetrics) == 0 {
+		return tracked
+	}
+	want := scrape.Names(p.LoadMetrics...)
+	total, anyOK := 0.0, false
+	for _, url := range b.LoadProbeURLs {
+		samples, err := scrape.Fetch(ctx, p.probeClient(), url, loadProbeTimeout, want)
+		if err != nil {
+			continue
+		}
+		if v, ok := scrape.Sum(samples, p.LoadMetrics...); ok {
+			total += v
+			anyOK = true
+		}
+	}
+	if !anyOK || int(total) < tracked {
+		return tracked
+	}
+	return int(total)
+}
+
+// loadRatio is the load as a fraction of MaxConcurrent; 0 for an unmeasured backend, which is
+// never penalised for its load.
+func (p *Policy) loadRatio(ctx context.Context, b Backend) float64 {
+	if b.MaxConcurrent <= 0 {
+		return 0
+	}
+	return float64(p.currentLoad(ctx, b)) / float64(b.MaxConcurrent)
+}
+
+// inFlightCounter is backend name's counter, created on first use.
+func (p *Policy) inFlightCounter(name string) *int64 {
+	p.inFlightMu.Lock()
+	defer p.inFlightMu.Unlock()
+	if p.inFlight == nil {
+		p.inFlight = make(map[string]*int64)
+	}
+	c, ok := p.inFlight[name]
+	if !ok {
+		c = new(int64)
+		p.inFlight[name] = c
+	}
+	return c
+}
+
+// InFlight is the pool's own in-flight count on backend name (reservations, leases and running
+// attempts).
+func (p *Policy) InFlight(name string) int64 { return atomic.LoadInt64(p.inFlightCounter(name)) }
+
+// InFlightSnapshot is each backend's in-flight count and the run ids holding a claim on it.
+func (p *Policy) InFlightSnapshot() map[string]InFlightStatus {
+	out := map[string]InFlightStatus{}
+	p.inFlightMu.Lock()
+	for name, c := range p.inFlight {
+		out[name] = InFlightStatus{InFlight: atomic.LoadInt64(c), ReservedRuns: []string{}}
+	}
+	p.inFlightMu.Unlock()
+	p.resMu.Lock()
+	for id, r := range p.reservations {
+		e, ok := out[r.backend]
+		if !ok {
+			e = InFlightStatus{ReservedRuns: []string{}}
+		}
+		e.ReservedRuns = append(e.ReservedRuns, id)
+		out[r.backend] = e
+	}
+	p.resMu.Unlock()
+	for name, e := range out {
+		sort.Strings(e.ReservedRuns)
+		out[name] = e
+	}
+	return out
+}
+
+// InFlightStatus is one backend's entry of InFlightSnapshot.
+type InFlightStatus struct {
+	InFlight     int64    `json:"in_flight"`
+	ReservedRuns []string `json:"reserved_runs"`
+}
