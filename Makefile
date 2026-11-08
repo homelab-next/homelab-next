@@ -81,6 +81,7 @@ CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) tools/product_name_lint.py .
+	$(PY) tools/allowlist_ratchet.py .
 	$(PY) $(ROLE_LINT) $(ROLES)
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
 	$(PY) -m homelabnext.cli custom check
@@ -403,7 +404,7 @@ licence-check:
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
 #   scripts write scratch output under their run directory (homelabnext.runs) or build/ only
-.PHONY: helpers-lint dup-check dup-baseline product-names-baseline tls-lint caddy-lint workstation-lint keyring-check keyring run-output-lint
+.PHONY: helpers-lint dup-check dup-baseline product-names-baseline allowlist-counts tls-lint caddy-lint workstation-lint keyring-check keyring run-output-lint
 check: helpers-lint dup-check tls-lint caddy-lint workstation-lint keyring-check run-output-lint
 
 helpers-lint:
@@ -421,6 +422,11 @@ dup-baseline:
 # product's total would rise) and commit it
 product-names-baseline:
 	$(PY) tools/product_name_lint.py --update .
+
+# after removing exemptions: lower tools/allowlist_counts.yml to what is there (refused when a
+# count would rise: raise one by hand, or with --update --grow, for its code owner to review)
+allowlist-counts:
+	$(PY) tools/allowlist_ratchet.py --update .
 
 caddy-lint:
 	$(PY) tools/caddy_lint.py .

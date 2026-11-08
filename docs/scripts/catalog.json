@@ -22,6 +22,28 @@
     },
     {
       "exit": {
+        "0": "every list is at its count (and no count rose against the base without a human-tier code owner)",
+        "1": "a list above or below its count, a counts file outside CODEOWNERS' human tier, or a count raised against the base with none",
+        "100": "the check itself failed (could not measure)",
+        "2": "usage error, a malformed counts file or allowlist, an unusable base, or an update that would raise a count without --grow"
+      },
+      "id": "allowlist-ratchet",
+      "inputs": "the tracked tree; tools/allowlist_counts.yml; CODEOWNERS; the base commit's counts and CODEOWNERS (--base, --ci-base)",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per list that grew, shrank or had an entry edited against the counts file (or against the base); --update rewrites the counts and digests",
+      "owner": "maintainers",
+      "path": "tools/allowlist_ratchet.py",
+      "purpose": "Fail when a gate's allowlist or inline suppression markers outgrow the reviewed counts in tools/allowlist_counts.yml.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:gates",
+        "make:allowlist-counts"
+      ]
+    },
+    {
+      "exit": {
         "0": "reported"
       },
       "id": "broker-example-dhcp-leases",
@@ -716,6 +738,7 @@
         "make:secret-scan",
         "pre-commit:leak-scan",
         "pre-commit:secret-scan",
+        "script:allowlist-ratchet",
         "script:coverage-floor",
         "script:private-leak-check"
       ]

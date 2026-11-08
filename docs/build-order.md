@@ -57,7 +57,7 @@ phases, so the public work is a prerequisite and not a duplicate.
 |---|---|---|---|
 | S1 | Hardware bring-up: hypervisor, storage, network zones, sensor feed, recovery basics (escrow, break-glass, dead-man check, backup jobs) before anything runs | P5, checklist rows F-01, F-09-F-11 | F-01, F-02, F-09-F-11, F-13, F-14, C |
 | S2 | Foundation services in order: secrets, identity, edge, monitoring, DNS aliases pointing at the incumbents, then the staging slice running the P9.1 compose definitions | P2, P4, P9 | F-03, F-04, F-06, F-12, F-16, F-24 |
-| S3 | Data platform: object store, catalog, query engine; run the recorded TLP label backfill of every table holding rows from before its `tlp` column (S-09) before the copy, then copy (not in-place swap) the data; first real swap rehearsal of `lake-query` in shadow | P3, P8 | S, S-09 |
+| S3 | Data platform: object store, catalog, query engine; run the recorded TLP label backfill of every table holding rows from before its `tlp` column (S-09) before the copy, then copy (not in-place swap) the data, or record a fresh start on the cutover ledger (ADR-0043 decision 7); first real swap rehearsal of `lake-query` in shadow | P3, P8 | S, S-09 |
 | S4 | SIEM and detection: manager and rules compiled from the detection layout; writers consume the raw stream and the OCSF schemas; dual-write during the window | P1, P6 | D, T |
 | S5 | Reaction and control plane: event bus and forwarder, the broker with approvals bound to a request digest, the decision service, workflows deployed disabled and in shadow | P1, P3, P4 | P, R, K |
 | S6 | Agent runtime, then the accelerator window: profile compiler live, budgets enforced, model roles resolved by the gateway; exit when every model role and agent profile has a TLP ceiling and model requests leave only at or below it (O-12) | P3, P6 | A, G, M, O-12 |
@@ -84,9 +84,10 @@ Effort goes to these, in roughly this order, before anything outside them is bui
 - **the status hub** ([status.md](status.md); ADR-0013);
 - **SSO** through Keycloak (ADR-0034, in flight).
 
-The LLM gateway stays LiteLLM alone (ADR-0022, amended 2026-10-31: the Bifrost adapter is
-removed). The lessons, runbooks and invariants registers stay. Projects and tasks live in
-OpenProject only.
+The deployed LLM gateway is LiteLLM (ADR-0022, amended 2026-10-31: the Bifrost adapter is
+removed); the own gateway in `orchestrator/` (`orchestrator/cmd/gateway`, ADR-0038 and ADR-0026)
+replaces it at the gateway cutover. The lessons, runbooks and invariants registers stay. Projects
+and tasks live in OpenProject only.
 
 ## Experimental and frozen components
 

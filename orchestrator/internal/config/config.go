@@ -148,6 +148,9 @@ type Config struct {
 	KVBudgetFraction float64 `yaml:"kv_budget_fraction"`
 	// PrimaryFirst tries backends in configured order instead of weighted round-robin.
 	PrimaryFirst bool `yaml:"primary_first"`
+	// EngineMetrics names the metrics load_probe_urls serve (no default: the engine's own names,
+	// which a site writes).
+	EngineMetrics EngineMetrics `yaml:"engine_metrics"`
 	// OrphanGraceSeconds: how long a job may have no live executor before the orphan sweep ends
 	// it; 0 is 600, negative disables the sweep.
 	OrphanGraceSeconds int `yaml:"orphan_grace_seconds"`
@@ -367,6 +370,9 @@ func (c Config) check() error {
 		if v.n < 0 {
 			return fmt.Errorf("%s %d is negative", v.key, v.n)
 		}
+	}
+	if err := c.EngineMetrics.Check(); err != nil {
+		return err
 	}
 	if c.KVBudgetFraction < 0 || c.KVBudgetFraction > 1 {
 		return fmt.Errorf("kv_budget_fraction %v: want 0 (the default) to 1", c.KVBudgetFraction)

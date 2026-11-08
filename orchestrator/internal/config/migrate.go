@@ -112,6 +112,12 @@ type MigrateOptions struct {
 	// (the private controller hard-coded them, so an old configuration never does). A
 	// configuration that has a scope block and is given one is refused.
 	Scope *pathscope.Zones
+	// EngineMetrics are the site's engine metric names (LoadEngineMetrics, from the site's own
+	// file), written as the engine_metrics block when the configuration has none: the private
+	// controller had its engine's names built in, so an old configuration never names them. A
+	// configuration that has the block and is given one is refused. Without it, a configuration
+	// whose backends have load probes migrates with a note saying the controller will refuse them.
+	EngineMetrics *EngineMetrics
 }
 
 // Migrate rewrites a configuration to the keys this controller reads: every old key under its
@@ -153,6 +159,25 @@ func MigrateWith(data []byte, opts MigrateOptions) ([]byte, []string, error) {
 			return nil, nil, err
 		}
 		notes = append(notes, "added the scope block")
+	}
+	if opts.EngineMetrics != nil {
+		if lookup(doc.Content[0], "engine_metrics") != nil {
+			return nil, nil, fmt.Errorf("engine_metrics: the configuration has the block; give the migration none")
+		}
+		if opts.EngineMetrics.IsZero() {
+			return nil, nil, fmt.Errorf("engine_metrics: the migration was given an empty set")
+		}
+		if err := opts.EngineMetrics.Check(); err != nil {
+			return nil, nil, err
+		}
+		var n yaml.Node
+		if err := n.Encode(*opts.EngineMetrics); err != nil {
+			return nil, nil, err
+		}
+		doc.Content[0].Content = append(doc.Content[0].Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "engine_metrics"}, &n)
+		notes = append(notes, "added the engine_metrics block")
+	} else if private && anyLoadProbes(doc.Content[0]) && lookup(doc.Content[0], "engine_metrics") == nil {
+		notes = append(notes, "a backend has load_probe_urls but the configuration names no engine_metrics: the controller refuses to start until it does (give the migration the site's engine metrics file)")
 	}
 	if len(notes) == 0 {
 		if _, err := ParseWith(data, ParseOptions{ExtraRenames: opts.ExtraRenames}); err != nil {

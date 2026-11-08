@@ -302,3 +302,24 @@ func TestBuild_RefusesAnOversizedPrompt(t *testing.T) {
 		t.Fatalf("an oversized prompt: %q, %v", got[:min(len(got), 40)], err)
 	}
 }
+
+// Keys that become one line alike do not merge: a key already one line keeps it, the others come
+// after in sorted order, each kept under the line with a collision mark, the same way every time.
+func TestOwnState_KeysThatFoldAlikeAreKeptAndMarked(t *testing.T) {
+	path := writeState(t, `{"agents": {"watcher": {"a\nb": 1, "a\rb": 2, "a b": 3, "inner": {"x\ty": "first", "x y": "second"}}}}`)
+	want := `{"a b":3,"a b [collision 2]":1,"a b [collision 3]":2,"inner":{"x y":"first","x y [collision 2]":"second"}}`
+	for i := 0; i < 20; i++ {
+		if body := strings.Split(OwnState(path, "s", "watcher"), "\n")[2]; body != want {
+			t.Fatalf("run %d: body = %q, want %q", i, body, want)
+		}
+	}
+}
+
+// A real key is never displaced by one that folds onto it, nor by one that folds onto its marker.
+func TestOwnState_ARealKeyKeepsItsName(t *testing.T) {
+	path := writeState(t, `{"agents": {"watcher": {"a\nb": "folded", "a b": "real", "a b [collision 2]": "real too", "a\rb": "folded too"}}}`)
+	want := `{"a b":"real","a b [collision 2]":"real too","a b [collision 3]":"folded","a b [collision 4]":"folded too"}`
+	if body := strings.Split(OwnState(path, "s", "watcher"), "\n")[2]; body != want {
+		t.Fatalf("body = %q, want %q", body, want)
+	}
+}

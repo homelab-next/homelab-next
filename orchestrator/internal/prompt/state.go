@@ -194,7 +194,12 @@ func KnownIncidents(stateFile, agentKey string) string {
 	return b.String()
 }
 
-// sanitize returns v (decoded JSON) with every string, keys included, made one line.
+// sanitize returns v (decoded JSON) with every string, keys included, made one line. Two keys of
+// one object can become the same line ("a\nb" reads "a b", and so does a real "a b"): the keys that
+// are one line already keep their names, then the others are placed in sorted order, each under its
+// line when that is free and otherwise with " [collision N]" appended (N from 2, the first number
+// not taken). So a real key is never displaced, no entry is lost, and the result is the same for the
+// same input.
 func sanitize(v any) any {
 	switch x := v.(type) {
 	case string:
@@ -205,9 +210,32 @@ func sanitize(v any) any {
 		}
 		return x
 	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.SliceStable(keys, func(i, j int) bool {
+			ci, cj := oneLine(keys[i]) != keys[i], oneLine(keys[j]) != keys[j]
+			if ci != cj {
+				return !ci // unchanged keys first
+			}
+			return keys[i] < keys[j]
+		})
 		out := make(map[string]any, len(x))
-		for k, c := range x {
-			out[oneLine(k)] = sanitize(c)
+		for _, k := range keys {
+			line := oneLine(k)
+			if _, taken := out[line]; taken {
+				n := 2
+				for {
+					marked := fmt.Sprintf("%s [collision %d]", line, n)
+					if _, taken := out[marked]; !taken {
+						line = marked
+						break
+					}
+					n++
+				}
+			}
+			out[line] = sanitize(x[k])
 		}
 		return out
 	}

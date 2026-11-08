@@ -9,7 +9,7 @@ import (
 )
 
 func validConfig() map[string]any {
-	return baseConfig("http://a.svc.lab.example:8000", "http://b.svc.lab.example:8000",
+	return baseConfig("http://a.svc.lab.example:8000", "http://b.svc.lab.example:8000", // no-raw-endpoint: allow reserved .example deployments, parsed and never dialled
 		"http://c.svc.lab.example", "https://api.anthropic.com")
 }
 
@@ -33,7 +33,8 @@ func TestGatewayConfigAcceptsTheContractShape(t *testing.T) {
 	example := `{"version":"1.0","name":"lab-in-a-box","admin_key_env":"HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
 	"roles":{"fast-classifier":{"kind":"chat","max_context_tokens":8192,"tlp_ceiling":"red","leaves_lab":false,
 	"deployments":[{"id":"fast-classifier-1","backend":"fake-inference","locality":"local","protocol":"openai",
-	"base_url":"http://fake-inference.svc.lab.example:8000","model":"backend-small","api_key_env":null}],"fallbacks":[],
+	"base_url":"http://fake-inference.svc.lab.example:8000","model":"backend-small","api_key_env":null}],"fallbacks":[],` + // no-raw-endpoint: allow the example's reserved .example base URL, never dialled
+		`
 	"limits":{"window_s":60,"max_requests":600,"max_tokens":null,"max_cost":null},"cost_per_1k_tokens":null}},
 	"keys":[{"alias":"conformance-throttle","key_env":"HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_THROTTLE",
 	"owner":"conformance-throttle","data_tier":"local-only","tlp_ceiling":"red","roles":["fast-classifier"],
@@ -44,7 +45,7 @@ func TestGatewayConfigAcceptsTheContractShape(t *testing.T) {
 	}
 	// ADR-0038 d7: a cloud deployment may point anywhere (a conformance fixture points it at the fake)
 	cfg := validConfig()
-	depOf(cfg, "cloud", 0)["base_url"] = "http://127.0.0.1:9999"
+	depOf(cfg, "cloud", 0)["base_url"] = "http://127.0.0.1:9999" // no-raw-endpoint: allow a loopback base URL that is parsed, never dialled
 	if err := parse(t, cfg); err != nil {
 		t.Fatal(err)
 	}
