@@ -76,6 +76,20 @@ author: unknown
 
 <!-- hnx:todo:failure -->
 > TODO(human): symptom, likely cause, first check, fix: one row each.
+
+- **A production OpenBao upgraded from 2.1 to 2.7 does not start, or starts without its data or
+  API.** Likely cause: what 2.2 to 2.7 removed. 2.2 dropped legacy barrier entries and direct
+  Shamir keys from storage. 2.7 removed the `file` storage backend, and its release notes list
+  seal, plugin and LDAP/Kerberos/RADIUS removals. 2.5.4 removed the legacy `sys/renew` and
+  `sys/revoke*` lease endpoints. First check: the server's storage stanza, seal and enabled auth
+  methods against the 2.7 release notes. Fix: move off the `file` backend (to raft, as
+  [the private overlay](../private-overlay.md) installs it) and off any removed seal or auth
+  method before the upgrade. In server mode the container now starts as the `openbao` user (2.6)
+  and the image declares no `VOLUME` (2.7), so mount the data directory explicitly and give it to
+  that user. Since 2.5 a listener refuses the unauthenticated `sys/rekey/*` endpoints, so rotate
+  unseal keys with `bao operator rotate-keys`. The lab-in-a-box runs `server -dev` in memory and
+  is unaffected.
+
 <!-- /hnx:todo -->
 
 ## Depends on / depended on by
