@@ -790,7 +790,7 @@ minutes before, 1.0 s now).
   `runner.job_timeout_seconds` nor `runner.timeout_seconds`) gets `Config.JobCeiling`
   (`queue.DefaultJobCeiling`, 6 hours, when unset), so no job is unbounded. An attempt that failed
   as the deadline passed, with another attempt due, is classed `deadline`. Every attempt keeps the run id and the session (its
-  tag, servers and toolsets), with its own usage path (`<run id>.json`, then `.aN.json`; the pool
+  tag, servers and toolsets), with its own usage path (`<usage dir>/<run id>/<run id>.json`, then `.aN.json`; the pool
   adds `.legN` per leg). Before a retry: a bounded backoff, the row must still read running (a
   cancel moves it first), and a drained reservation is released and admission run again; with no
   other backend the job goes back to queued, its attempts kept. A spent budget in either leg (the
@@ -830,7 +830,11 @@ minutes before, 1.0 s now).
   tokens and no `cache_read_reported: true`), makes the run's total unknown, never a smaller known
   number. A usage file is opened without following a link or blocking (`O_NOFOLLOW|O_NONBLOCK`),
   checked with `Fstat` and read through a limit: only regular files of at most 1 MiB count, and a
-  run with 256 or more files is not summed. Nothing prunes the usage directory: it grows by one
+  run with 256 or more files is not summed. Each run has its own directory under the usage
+  directory and only that directory is summed, so a runner can give a session write access to
+  its own run's reports alone and no session can write a file another run's sum reads. A pass
+  reads the queue without its answers and failure reasons (`store.ListForAdmission`); the task
+  stays, the duplicate check's key and the dispatch's input, bounded at submit. Nothing prunes the usage directory: it grows by one
   file per session, and a site prunes the files of finished runs on its own schedule.
 - **The findings check** (with `tree_root` set, for a profile with a findings prefix for the lane):
   a clean exit with no file newer than the dispatch (and not dated past now) directly in that
@@ -919,6 +923,10 @@ above says how.
     is requeued, not failed;
   - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
     log or keep text, as `backends` does;
+- **Priority across callers (2.7):** a `jobs` token may submit any priority from 1 to 100, so one
+  caller can put its jobs ahead of everyone's. Which callers may use which range is a policy of
+  the tokens file (a per-caller ceiling, say), so it lands with the binary's configuration rather
+  than as a clamp here that would also hold back the operator's own jobs.
 - **Noted by the 2.6 reviews, for later:** an `InstanceLock` given to `OpenWith` could be bound to
   the one `Store` it opens (today two stores may share one lock on purpose, as the store's tests
   do); `retryGate` re-reads the profile's locality only at admission (a reload between attempts

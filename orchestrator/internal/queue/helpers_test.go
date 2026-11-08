@@ -305,3 +305,9 @@ func (c *countingPool) claimCount() int {
 	}
 	return n
 }
+
+// runnertestFail is a runner whose every session is killed by a foreign signal: the failure an
+// automatic retry follows.
+func runnertestFail() runner.Runner {
+	return runnertest.New(runnertest.Fail(runner.KilledExternally, "killed"))
+}

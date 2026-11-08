@@ -344,3 +344,26 @@ func TestSumRunUsage_NeverBlocksAndIsBounded(t *testing.T) {
 		t.Fatal("more usage files than a run can have were summed")
 	}
 }
+
+// Each run's reports are in its own directory: a file another session wrote under another run's
+// name, at the top of the usage directory or in its own run's directory, is not summed.
+func TestUsage_ARunsSumReadsOnlyItsOwnDirectory(t *testing.T) {
+	usage := map[string]any{"input_tokens": 10.0}
+	dir := t.TempDir()
+	r := newRig(t, rigOptions{runner: newUsageRunner(usage), tweak: func(c *Config) { c.UsageDir = dir }})
+	forged := []byte(`{"input_tokens": 1000000}`)
+	if err := os.WriteFile(filepath.Join(dir, "run-1.a9.json"), forged, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "run-other"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run-other", "run-1.a9.json"), forged, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.submit("run-1", defaultProfile)
+	r.tick()
+	if j := r.job("run-1"); j.InputTokens != 10 {
+		t.Fatalf("input tokens %d: a file outside the run's own directory was summed", j.InputTokens)
+	}
+}

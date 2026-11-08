@@ -199,10 +199,12 @@ func (sch *Scheduler) prepare(ctx context.Context, job *store.Job, prof *profile
 	}
 	usage := ""
 	if sch.cfg.UsageDir != "" {
-		if merr := os.MkdirAll(sch.cfg.UsageDir, 0o700); merr != nil {
+		// One directory per run, so a runner can give a session write access to its own run's
+		// reports only, and no session can write a file another run's sum would read.
+		if merr := os.MkdirAll(runUsageDir(sch.cfg.UsageDir, runID), 0o700); merr != nil {
 			sch.logf("queue: run=%s no usage report: cannot create the usage directory: %v", runID, merr)
 		} else {
-			usage = filepath.Join(sch.cfg.UsageDir, runID+".json")
+			usage = filepath.Join(runUsageDir(sch.cfg.UsageDir, runID), runID+".json")
 		}
 	}
 	return &dispatch{
@@ -340,6 +342,10 @@ func (sch *Scheduler) retryGate(ctx context.Context, d *dispatch, reserved *stri
 	return retryRequeued
 }
 
+// runUsageDir is runID's own usage directory under base. The run id is one the gateway tag
+// accepted, so it is one path segment.
+func runUsageDir(base, runID string) string { return filepath.Join(base, runID) }
+
 // attemptUsagePath is attempt n's usage path: base for the first, base with ".aN" before its
 // ".json" after. The pool derives one path per leg from it (backends.LegUsagePath).
 func attemptUsagePath(base string, attempt int) string {
@@ -354,7 +360,7 @@ func attemptUsagePath(base string, attempt int) string {
 // Each write is best effort: an audit field that cannot be written never fails the job.
 func (sch *Scheduler) record(runID string, res *backends.Result, callErr error, class string) {
 	if sch.cfg.UsageDir != "" {
-		if total, ok := sumRunUsage(sch.cfg.UsageDir, runID, res.Usage); ok {
+		if total, ok := sumRunUsage(runUsageDir(sch.cfg.UsageDir, runID), runID, res.Usage); ok {
 			res.Usage = total
 		}
 	}
@@ -475,7 +481,7 @@ func (sch *Scheduler) fail(ctx context.Context, d *dispatch, res *backends.Resul
 // identicalQueued reports whether a queued job of the same submitter, agent, task and lane
 // already waits.
 func (sch *Scheduler) identicalQueued(job *store.Job) bool {
-	queued, err := sch.cfg.Store.ListByState(store.StateQueued)
+	queued, err := sch.cfg.Store.ListForAdmission(store.StateQueued)
 	if err != nil {
 		return false
 	}
