@@ -758,8 +758,12 @@ minutes before, 1.0 s now).
   queued), `Reserve` otherwise. When that fails and nothing the job may use is up, a local-only
   job waits queued; any other job is admitted unreserved, and the pool's chain skips the down
   backends and runs its cloud leg (a local attempt on a backend that came back meanwhile takes a
-  free slot at its `max_concurrent` or is skipped: the chain never overfills a backend, a
-  fallover from the reserved one included). A job left queued takes none of the pass's slots and records why
+  free slot at its `max_concurrent` or is skipped). The pool's own in-flight count (its
+  reservations and running attempts) never exceeds a backend's `max_concurrent`: a reservation
+  and a fallover attempt take a slot with one compare-and-swap, so two racing for the last slot
+  cannot both have it. That count is the pool's only: a fallover attempt does not read the
+  backend's probe load or the token budget, which admission reads, so load from other callers can
+  still put the engine past its cap. A job left queued takes none of the pass's slots and records why
   (`slot`, `token_budget`, `exclusive`, `backend_down`, written to `wait_cause` when it finishes).
   A local-only job held for health is cancelled when a newer queued job of the same submitter,
   agent, task and lane exists; another submitter's job is never touched. Wait causes of runs no
@@ -884,9 +888,9 @@ above says how.
     queue logs and stores the bounded `LocalFailedReason`, never `err.Error()`, and classifies with
     `errors.Is`;
   - (from the ADR-0026 amendment's 2026-11-08 decision that `max_concurrent` is a hard admission
-    cap) the attempt chain's fallover must not overfill a backend at its cap: `callLocal` today
-    runs an attempt on a fallover backend without checking its `max_concurrent`, so a fallover
-    checks the cap as `Reserve` does and skips a full backend;
+    cap) the attempt chain's fallover must not overfill a backend at its cap: done in PR 2.6a, a
+    fallover takes a free slot by the pool's own count (shared with `Reserve`'s claim) or skips the
+    backend;
   - (same decision) a `concurrency_limited` 429 from the gateway is a retryable wait on the same
     backend, never a backend failure, so it neither marks the backend down nor falls over to
     another backend or to the cloud;

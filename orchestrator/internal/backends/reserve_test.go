@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -242,6 +243,38 @@ func TestReserve_OneClaimPerRunID(t *testing.T) {
 		}
 		if _, ok := p.Reserve(ctx, Affinity{}, "run-x", ""); !ok {
 			t.Fatal("a released run id cannot reserve again")
+		}
+	}
+}
+
+// Concurrent reservations for one slot: exactly one claims it, however the reads of the backend's
+// load interleave; a fallover attempt racing them for it is held to the same count.
+func TestReserve_TheLastSlotIsClaimedOnceUnderARace(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		p, _ := newPool(nil, Backend{Name: "a", MaxConcurrent: 1})
+		var wg sync.WaitGroup
+		var won atomic.Int32
+		start := make(chan struct{})
+		for i := 0; i < 32; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				if i%4 == 0 {
+					if p.takeSlot(Backend{Name: "a", MaxConcurrent: 1}) {
+						won.Add(1)
+					}
+					return
+				}
+				if _, ok := p.Reserve(context.Background(), Affinity{}, fmt.Sprintf("run-%d", i), "watcher"); ok {
+					won.Add(1)
+				}
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		if n := won.Load(); n != 1 || p.InFlight("a") != 1 {
+			t.Fatalf("round %d: %d claims, in flight %d, for one slot", round, n, p.InFlight("a"))
 		}
 	}
 }

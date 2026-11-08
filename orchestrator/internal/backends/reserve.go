@@ -65,8 +65,13 @@ func (p *Policy) Reserve(ctx context.Context, affinity Affinity, runID, agentKey
 			cause = CauseTokenBudget
 			continue
 		}
-		if !p.claimReservation(runID, b.Name) {
+		held, full := p.claimReservation(runID, b.Name, b.MaxConcurrent)
+		if held {
 			return "", false // another pass claimed this run meanwhile
+		}
+		if full {
+			cause = CauseSlot // another claim or attempt took the last slot since the ratio was read
+			continue
 		}
 		p.recordTokenReservation(b.Name, runID, w)
 		return b.Name, true
@@ -96,21 +101,26 @@ func (p *Policy) Release(backend, runID string) {
 }
 
 // claimReservation records runID's claim on backend and counts its slot together, under resMu, or
-// refuses (nothing counted) when runID holds one already. The reaper removes a claim under resMu
-// before it returns the slot, so it never returns a slot that is not counted yet.
-func (p *Policy) claimReservation(runID, backend string) bool {
+// refuses (nothing counted): held when runID holds one already, full when the backend is measured
+// (max > 0) and its in-flight count is at max. The count is taken with the same compare-and-swap
+// an attempt's slot is (takeSlot), so a reservation and a fallover attempt racing for the last
+// slot cannot both have it. The reaper removes a claim under resMu before it returns the slot, so
+// it never returns a slot that is not counted yet.
+func (p *Policy) claimReservation(runID, backend string, max int) (held, full bool) {
 	p.resMu.Lock()
 	defer p.resMu.Unlock()
-	if _, held := p.reservations[runID]; held {
-		return false
+	if _, ok := p.reservations[runID]; ok {
+		return true, false
 	}
-	atomic.AddInt64(p.inFlightCounter(backend), 1)
+	if !p.takeSlot(Backend{Name: backend, MaxConcurrent: max}) {
+		return false, true
+	}
 	if p.reservations == nil {
 		p.reservations = make(map[string]reservation)
 	}
 	p.reservations[runID] = reservation{backend: backend, at: p.clock()}
 	delete(p.reaped, runID) // a fresh claim supersedes an earlier reap of the same id
-	return true
+	return false, false
 }
 
 // HoldsReservation implements Pool.
