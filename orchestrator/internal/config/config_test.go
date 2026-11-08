@@ -169,6 +169,8 @@ func TestParse_Checks(t *testing.T) {
 		"endpoint no port":  "backends: {additional: [{endpoint: engine-a.example.internal}]}\n",
 		"relative command":  "backend_status_command: [bin/status]\n",
 		"tag prefix comma":  "events: {gateway_tag_prefix: \"a,b\"}\n",
+		"relative lock":     "lock_path: run/backend.lock\n",
+		"unclean lock":      "lock_path: /run/x/../backend.lock\n",
 		"tag prefix space":  "events: {gateway_tag_prefix: \"job \"}\n",
 	} {
 		if _, err := Parse([]byte(scopeYAML + body)); err == nil {

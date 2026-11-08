@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,7 +45,10 @@ type Interlock struct {
 }
 
 // NewInterlock returns the interlock on the lock file at path, or nil (disabled) when path is "".
-// pollInterval <= 0 is DefaultPollInterval.
+// The path must be clean and absolute (Acquire refuses any other): a relative one would depend on
+// the working directory, and every caller must name the same file. Put it in a directory only the
+// service and its cooperating callers can write, such as the unit's RuntimeDirectory
+// (/run/<service>/). pollInterval <= 0 is DefaultPollInterval.
 func NewInterlock(path string, pollInterval time.Duration) *Interlock {
 	if path == "" {
 		return nil
@@ -60,10 +65,15 @@ type Held struct {
 }
 
 // Acquire takes the lock, waiting while another process or descriptor holds it, until ctx ends
-// (ErrWaitEnded, wrapping ctx.Err()). A ctx with no deadline waits without bound. The lock file
-// is opened read-only, as flock(1) opens it, so a lock file another user created serves too, and
-// is created (0644: it holds nothing) if it does not exist; a symbolic link or anything but a regular file at its path is
-// refused, so the open can neither be redirected nor hang on a FIFO. The descriptor is
+// (ErrWaitEnded, wrapping ctx.Err(), naming the holder's pid when the kernel reports it). A ctx
+// with no deadline waits without bound.
+//
+// The lock file is opened read-only, as flock(1) opens it, so a lock file a cooperating caller
+// created serves too, and is created owner-only (0600) if it does not exist; a site whose
+// callers run as other users creates it beforehand, group-readable for a group they share. A
+// lock file in a directory anyone may write is refused (anyone could replace it, and two callers
+// holding two files exclude nothing), and so is a symbolic link or anything but a regular file at
+// its path, so the open can neither be redirected nor hang on a FIFO. The descriptor is
 // close-on-exec, so no runner subprocess inherits the lock.
 func (l *Interlock) Acquire(ctx context.Context) (*Held, error) {
 	if l == nil {
@@ -72,7 +82,15 @@ func (l *Interlock) Acquire(ctx context.Context) (*Held, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrWaitEnded, err)
 	}
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o644)
+	if !filepath.IsAbs(l.path) || filepath.Clean(l.path) != l.path {
+		return nil, fmt.Errorf("interlock: lock path %q is not a clean absolute path", l.path)
+	}
+	if di, err := os.Stat(filepath.Dir(l.path)); err != nil {
+		return nil, fmt.Errorf("interlock: the lock file's directory: %w", err)
+	} else if di.Mode().Perm()&0o002 != 0 {
+		return nil, fmt.Errorf("interlock: the lock file's directory %s is writable by anyone", filepath.Dir(l.path))
+	}
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("interlock: open the lock file: %w", err)
 	}
@@ -96,11 +114,43 @@ func (l *Interlock) Acquire(ctx context.Context) (*Held, error) {
 		}
 		select {
 		case <-ctx.Done():
+			holder := holderOf(f)
 			f.Close()
+			if holder != "" {
+				return nil, fmt.Errorf("%w (held by pid %s): %w", ErrWaitEnded, holder, ctx.Err())
+			}
 			return nil, fmt.Errorf("%w: %w", ErrWaitEnded, ctx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+// holderOf returns the pid /proc/locks names as holding a flock on f's inode, or "" when it names
+// none or cannot be read (another pid namespace, no /proc). It is for the error message only: a
+// pid can be reused and the lock can change hands at any moment.
+func holderOf(f *os.File) string {
+	fi, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return ""
+	}
+	data, err := os.ReadFile("/proc/locks")
+	if err != nil {
+		return ""
+	}
+	want := fmt.Sprintf("%02x:%02x:%d", unix.Major(uint64(st.Dev)), unix.Minor(uint64(st.Dev)), st.Ino)
+	for _, line := range strings.Split(string(data), "\n") {
+		// "1: FLOCK  ADVISORY  WRITE 4242 08:01:131 0 EOF"; a waiter's line has "->" after the
+		// number, and a non-blocking attempt never waits
+		fields := strings.Fields(line)
+		if len(fields) >= 6 && fields[1] == "FLOCK" && fields[5] == want {
+			return fields[4]
+		}
+	}
+	return ""
 }
 
 // Release unlocks and closes the lock. A nil, disabled or already released Held does nothing.

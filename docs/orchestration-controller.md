@@ -538,13 +538,17 @@ always splits back into prefix and run.
 
 The interlock serialises calls to a backend that serves one call at a time, across processes:
 every caller takes `flock(2)` on the same lock file, a shell script with `flock(1)` included. An
-empty `lock_path` disables it. `Acquire` polls without blocking and returns `ErrWaitEnded`,
-wrapping the context's error, when its context ends first; no Go mutex is held across a wait. The
-lock file is opened read-only (as `flock(1)` opens it) and close-on-exec, created `0644` if
-missing, and a symbolic link or anything but a regular file at its path is refused. Its tests
-take the lock from a second process (the test binary run again) and against `flock(1)`, which
-skips, with a registered reason, where `flock(1)` is not installed; none needs root, so
-`orchestrator/skips.yml` gains nothing.
+empty `lock_path` disables it; any other must be a clean absolute path (checked at load). `Acquire`
+polls without blocking and returns `ErrWaitEnded`, wrapping the context's error and naming the
+holder's pid when `/proc/locks` shows it, when its context ends first; no Go mutex is held across
+a wait. The lock file is opened read-only (as `flock(1)` opens it) and close-on-exec, and created
+owner-only (`0600`) if missing; a site whose callers run under other users creates it beforehand,
+group-readable for a group they share. A symbolic link or anything but a regular file at its
+path, and a lock file in a directory anyone may write, are refused. Keep it in the service's own
+runtime directory (`RuntimeDirectory=` in the unit, `/run/<service>/`). Its tests take the lock
+from a second process (the test binary run again) and against `flock(1)`, which skips, with a
+registered reason, where `flock(1)` is not installed; none needs root, so `orchestrator/skips.yml`
+gains nothing.
 
 ### A job's prompt
 

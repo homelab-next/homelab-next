@@ -371,6 +371,9 @@ func (c Config) check() error {
 	if c.KVBudgetFraction < 0 || c.KVBudgetFraction > 1 {
 		return fmt.Errorf("kv_budget_fraction %v: want 0 (the default) to 1", c.KVBudgetFraction)
 	}
+	if c.LockPath != "" && (!filepath.IsAbs(c.LockPath) || filepath.Clean(c.LockPath) != c.LockPath) {
+		return fmt.Errorf("lock_path %q: want a clean absolute path (every caller of the backend must name the same file)", c.LockPath)
+	}
 	if err := inference.ValidateGatewayTagPrefix(c.Events.GatewayTagPrefix); err != nil {
 		return fmt.Errorf("events.%w", err)
 	}
