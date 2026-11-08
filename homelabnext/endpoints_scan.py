@@ -34,6 +34,7 @@ __all__ = [
     "Finding",
     "iter_files",
     "load_allowlist",
+    "read_scannable",
     "scan_text",
     "scan_tree",
 ]
@@ -158,6 +159,21 @@ def iter_files(root: Path):
             yield p
 
 
+def read_scannable(p: Path) -> str | None:
+    """The text :func:`scan_tree` scans in ``p``, or None for a file it skips (unreadable, over
+    MAX_BYTES, or binary: a NUL in its first 4096 bytes).  The one read: the allowlist ratchet
+    counts the inline allow markers through it, so a marker the gate obeys is a marker it counts."""
+    try:
+        if p.stat().st_size > MAX_BYTES:
+            return None
+        data = p.read_bytes()
+    except OSError:
+        return None
+    if b"\0" in data[:4096]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
 def scan_tree(root: Path, allow: list[tuple[str, str]]) -> tuple[list[Finding], int]:
     findings: list[Finding] = []
     scanned = 0
@@ -165,15 +181,9 @@ def scan_tree(root: Path, allow: list[tuple[str, str]]) -> tuple[list[Finding], 
         rel = p.relative_to(root).as_posix()
         if _allowed(rel, allow):
             continue
-        try:
-            if p.stat().st_size > MAX_BYTES:
-                continue
-            data = p.read_bytes()
-        except OSError:
+        text = read_scannable(p)
+        if text is None:
             continue
-        if b"\0" in data[:4096]:
-            continue
-        text = data.decode("utf-8", errors="replace")
         scanned += 1
         findings.extend(scan_text(rel, text))
     return findings, scanned

@@ -329,6 +329,13 @@ jobs:
           HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
           HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: python tools/product_name_lint.py --ci-base .
+      # the change's own copy; its trusted-gates copy (the base's) follows once the tool is on main,
+      # since a base without it has none to run: CONTRIBUTING.md, "Hygiene lints", tracks it
+      - name: the gates' allowlists and suppression markers at their reviewed counts and digests (tools/allowlist_counts.yml), no raise against the base without its code owner
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: python tools/allowlist_ratchet.py --ci-base .
       - name: helpers are shared, not copied (M-03)
         run: python tools/shared_helpers_lint.py .
       - name: no copy-paste beyond the shrinking baseline (M-03); the baseline never loosens against the base
