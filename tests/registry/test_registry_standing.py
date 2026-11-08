@@ -210,3 +210,89 @@ def test_a_customization_scoped_to_a_capability_reaches_its_primarys_host_only()
     assert Universe(registry=doc).capability_hosts("cap:idp") == {
         FOUR_BOX["services"]["idp"]["host"]
     }
+
+
+# ---- a non-primary row never claims a capability's alias or default variable (#333 audit) ----
+def _search_row(tier="eval", **extra):
+    """A row of capability ``search``, which no row of the four-box lab provides."""
+    return {
+        "capability": "search",
+        "impl": "candidate-search",
+        "host": "hub-1",
+        "protocol": "https",
+        "port": 9201,
+        "owner": "platform-team",
+        "version": "1.0",
+        "tls": "internal",
+        "standing": {"tier": tier, **UNTIL, "why": "under test"},
+        **extra,
+    }
+
+
+def _with_rows(**rows):
+    doc = _doc()
+    for name, row in rows.items():
+        doc["services"][name] = row
+    return doc
+
+
+@pytest.mark.parametrize(
+    "rows,name",
+    [
+        # named like a capability of this registry (the lab's events row replaced, so no row
+        # of it is left) or one the platform knows
+        ({"events": _search_row()}, "events"),
+        ({"lake-query": _search_row()}, "lake-query"),
+        # named like its own capability, which has no primary
+        ({"search": _search_row()}, "search"),
+        # named like another eval-only capability of the registry
+        ({"s1": _search_row(), "search": {**_search_row(), "capability": "ranker", "port": 9202}},
+         "search"),
+    ],
+)  # fmt: skip
+def test_an_eval_row_named_like_any_capability_is_refused(rows, name):
+    problems = _problems(_with_rows(**rows))
+    assert any(
+        p.startswith(f"service {name}: an eval row answers by its row name") for p in problems
+    ), problems
+
+
+def test_a_retiring_row_named_like_its_capability_is_refused_after_the_primary_goes():
+    doc = _doc()
+    row = doc["services"]["status-hub"]
+    row["standing"] = {"tier": "retiring", **UNTIL, "why": "replaced"}
+    problems = _problems(doc)
+    assert any(
+        p.startswith("service status-hub: a retiring row answers by its row name") for p in problems
+    ), problems
+
+
+@pytest.mark.parametrize(
+    "env_var", ["HNX_ENDPOINT_SEARCH", "HNX_ENDPOINT_EVENTS", "HNX_ENDPOINT_S_CAND_OWN"]
+)
+def test_an_eval_row_declares_no_env_var(env_var):
+    problems = _problems(_with_rows(**{"s-cand": _search_row(env_var=env_var)}))
+    assert any(
+        p.startswith("service s-cand: env_var is for a primary or legacy row") for p in problems
+    ), problems
+
+
+def test_a_capabilitys_default_variable_stays_reserved_when_its_primary_names_another():
+    """The primary moves to its own env_var: its capability's default is still its alone, so a
+    legacy row (which may declare one) cannot take it."""
+    doc = _doc()
+    doc["services"]["status-hub"]["env_var"] = "HNX_HUB_URL"
+    old = copy.deepcopy(doc["services"]["status-hub"])
+    old.update(host="vault-1", port=8091, env_var="HNX_ENDPOINT_STATUS_HUB", impl="old-hub")
+    old["standing"] = {"tier": "legacy", **UNTIL, "why": "old lab hub"}
+    doc["services"]["hub-old"] = old
+    problems = _problems(doc)
+    assert any(
+        "service hub-old: env_var HNX_ENDPOINT_STATUS_HUB is reserved for capability "
+        "'status-hub''s primary" in p
+        for p in problems
+    ), problems
+    # the primary itself may still spell its own default out
+    doc = _doc()
+    doc["services"]["status-hub"]["env_var"] = "HNX_ENDPOINT_STATUS_HUB"
+    assert _problems(doc) == []

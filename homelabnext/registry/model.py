@@ -406,9 +406,66 @@ def semantic_problems(doc: dict) -> list[str]:
         if var in envs and (twin is None or s.get("env_var")):
             problems.append(f"service {sname}: env var {var} already used by {envs[var]}")
         envs[var] = sname
+    problems += _name_claim_problems(services, caps)
     problems += status_source_problems(services)
     problems += secret_ref_problems(service_secret_refs(services))
     return problems
+
+
+def _a(word: str) -> str:
+    return ("an " if word[:1] in "aeiou" else "a ") + word
+
+
+def platform_capabilities() -> frozenset[str]:
+    """Every capability name the platform knows (the capability-class table, the conformance
+    contracts), without the ``cap:`` prefix: the names an eval or retiring row may never take."""
+    from homelabnext.mcp.servers import known_capabilities  # local: mcp imports the registry
+
+    return frozenset(c.removeprefix("cap:") for c in known_capabilities())
+
+
+def _name_claim_problems(services: Mapping[str, Any], caps: set[str]) -> list[str]:
+    """ADR-0039 decision 2: a capability's alias and its default variable are its primary's
+    alone, whether or not the capability has a primary today.  A consumer with no registry (an
+    adapter resolving ``HNX_ENDPOINT_<CAPABILITY>``, a resolver given only a domain, a reader of
+    the aggregate env file) cannot tell a row name from a capability, so:
+
+    * an ``eval`` or ``retiring`` row's name is no capability of this registry (any tier) and no
+      capability the platform knows, and neither is its variable's stem;
+    * an ``eval`` or ``retiring`` row declares no ``env_var`` (its variable is its row name's);
+    * every capability's default variable ``HNX_ENDPOINT_<CAPABILITY>`` is reserved for that
+      capability's primary, even when the primary declares an ``env_var`` of its own or there is
+      no primary: no other row's explicit ``env_var`` may take it."""
+    out = []
+    reserved = caps | platform_capabilities()
+    reserved_vars = {env_var_name(c): c for c in reserved}
+    for sname, s in services.items():
+        tier = standing_of(s)
+        explicit = s.get("env_var")
+        if tier in ANSWERING_TIERS:
+            if sname in reserved:
+                out.append(
+                    f"service {sname}: {_a(tier)} row answers by its row name, and {sname!r} is a "
+                    "capability name; rename the row"
+                )
+            elif env_var_name(sname) in reserved_vars:
+                out.append(
+                    f"service {sname}: its variable {env_var_name(sname)} is capability "
+                    f"{reserved_vars[env_var_name(sname)]!r}'s; rename the row"
+                )
+            if explicit:
+                out.append(
+                    f"service {sname}: env_var is for a primary or legacy row ({_a(tier)} row's "
+                    f"variable is its row name's, {env_var_name(sname)})"
+                )
+            continue
+        owner = reserved_vars.get(explicit) if explicit else None
+        if owner is not None and not (tier == "primary" and s["capability"] == owner):
+            out.append(
+                f"service {sname}: env_var {explicit} is reserved for capability {owner!r}'s "
+                "primary"
+            )
+    return out
 
 
 def _standing_problems(services: Mapping[str, Any], primary: Mapping[str, Any]) -> list[str]:
