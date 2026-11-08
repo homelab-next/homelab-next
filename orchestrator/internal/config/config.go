@@ -194,6 +194,12 @@ type Config struct {
 	PromptContracts       []string `yaml:"prompt_contracts"`
 	PromptContractsAppend []string `yaml:"prompt_contracts_append"`
 	APIAuth               APIAuth  `yaml:"api_auth"`
+	// APIPprof serves the profiling routes (/debug/pprof/*) behind the admin scope; the API
+	// refuses it with authentication off.
+	APIPprof bool `yaml:"api_pprof"`
+	// APIMaxUnfinishedPerCaller bounds one submitter's unfinished jobs (a submit past it is a
+	// 429); 0 is the API's default (1000).
+	APIMaxUnfinishedPerCaller int `yaml:"api_max_unfinished_per_caller"`
 	Events                Events   `yaml:"events"`
 	// Scope is the shared tree's zones (pathscope.Zones). Required, every key present.
 	Scope pathscope.Zones `yaml:"scope"`
@@ -360,6 +366,15 @@ func checkScopePresent(doc *yaml.Node) error {
 
 // check holds the decoded configuration to the rules decoding cannot state.
 func (c Config) check() error {
+	if c.APIPprof && !c.APIAuth.On() {
+		return errors.New("api_pprof: profiling needs authentication on (it would open the process's profiles to every local user)")
+	}
+	if c.APIMaxUnfinishedPerCaller < 0 {
+		return fmt.Errorf("api_max_unfinished_per_caller %d is negative", c.APIMaxUnfinishedPerCaller)
+	}
+	if c.APIAuth.On() && strings.TrimSpace(c.APIAuth.TokensFile) == "" {
+		return errors.New("api_auth: authentication is on (the default) and no api_auth.tokens_file is given: name the tokens file, or set api_auth.enabled: false to serve without a token on a loopback address")
+	}
 	if !livenessModes[c.Runner.Liveness] {
 		return fmt.Errorf("runner.liveness %q: want cpu or progress", c.Runner.Liveness)
 	}
