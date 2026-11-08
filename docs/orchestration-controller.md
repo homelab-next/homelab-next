@@ -604,7 +604,8 @@ facts command that fails, leaves its block out and never fails a dispatch.
   the separators a space), so a stored value cannot pose as a line of the prompt's own. The
   own-state block and the cursor store are decoded, every string in them made one line, and
   encoded again as one line of JSON with sorted keys, so no such character is left raw or
-  escaped; the cursor store sits in a fence no stored backtick can close. The register context is
+  escaped (two keys of one object that become the same line are both kept: walked in sorted order,
+  the first keeps the line and each later one gets ` [collision N]` appended); the cursor store sits in a fence no stored backtick can close. The register context is
   quoted between its own markers as data (above).
 - **The whole prompt** is at most `prompt.MaxPromptBytes` (1 MiB). A larger one is an error, never
   cut, since a cut would drop the task's end or a contract unseen.

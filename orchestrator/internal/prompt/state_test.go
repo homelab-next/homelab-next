@@ -302,3 +302,15 @@ func TestBuild_RefusesAnOversizedPrompt(t *testing.T) {
 		t.Fatalf("an oversized prompt: %q, %v", got[:min(len(got), 40)], err)
 	}
 }
+
+// Keys that become one line alike do not merge: walked in sorted order, the first keeps the line,
+// each later one is kept under it with a collision mark, the same way every time.
+func TestOwnState_KeysThatFoldAlikeAreKeptAndMarked(t *testing.T) {
+	path := writeState(t, `{"agents": {"watcher": {"a\nb": 1, "a\rb": 2, "a b": 3, "inner": {"x\ty": "first", "x y": "second"}}}}`)
+	want := `{"a b":1,"a b [collision 2]":2,"a b [collision 3]":3,"inner":{"x y":"first","x y [collision 2]":"second"}}`
+	for i := 0; i < 20; i++ {
+		if body := strings.Split(OwnState(path, "s", "watcher"), "\n")[2]; body != want {
+			t.Fatalf("run %d: body = %q, want %q", i, body, want)
+		}
+	}
+}
