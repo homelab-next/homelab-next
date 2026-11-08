@@ -158,6 +158,23 @@ func (p *Policy) inFlightCounter(name string) *int64 {
 	return c
 }
 
+// takeSlot counts one more attempt on b unless b is measured (MaxConcurrent > 0) and already at it;
+// it reports whether it counted one. giveSlot returns it.
+func (p *Policy) takeSlot(b Backend) bool {
+	c := p.inFlightCounter(b.Name)
+	for {
+		v := atomic.LoadInt64(c)
+		if b.MaxConcurrent > 0 && v >= int64(b.MaxConcurrent) {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(c, v, v+1) {
+			return true
+		}
+	}
+}
+
+func (p *Policy) giveSlot(b Backend) { atomic.AddInt64(p.inFlightCounter(b.Name), -1) }
+
 // InFlight is the pool's own in-flight count on backend name (reservations, leases and running
 // attempts).
 func (p *Policy) InFlight(name string) int64 { return atomic.LoadInt64(p.inFlightCounter(name)) }

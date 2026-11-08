@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -243,5 +244,42 @@ func TestReserve_OneClaimPerRunID(t *testing.T) {
 		if _, ok := p.Reserve(ctx, Affinity{}, "run-x", ""); !ok {
 			t.Fatal("a released run id cannot reserve again")
 		}
+	}
+}
+
+// Two reservations for one slot, the second claiming between the first's read of the load and its
+// claim (the hook holds the first there): exactly one has the slot, every time. A fallover attempt
+// in the same window is held to the same count.
+func TestReserve_TheLastSlotIsClaimedOnceUnderARace(t *testing.T) {
+	for _, second := range []string{"reserve", "attempt"} {
+		t.Run(second, func(t *testing.T) {
+			p, _ := newPool(nil, Backend{Name: "a", MaxConcurrent: 1})
+			var once sync.Once
+			won := 0
+			testHookBeforeClaim = func(runID, backend string) {
+				if runID != "first" {
+					return
+				}
+				once.Do(func() {
+					// The first has read the backend's load (0 of 1); the second takes the slot now.
+					if second == "attempt" {
+						if p.takeSlot(Backend{Name: "a", MaxConcurrent: 1}) {
+							won++
+						}
+						return
+					}
+					if _, ok := p.Reserve(context.Background(), Affinity{}, "second", "watcher"); ok {
+						won++
+					}
+				})
+			}
+			t.Cleanup(func() { testHookBeforeClaim = nil })
+			if _, ok := p.Reserve(context.Background(), Affinity{}, "first", "watcher"); ok {
+				won++
+			}
+			if won != 1 || p.InFlight("a") != 1 {
+				t.Fatalf("%d claims, in flight %d, for one slot", won, p.InFlight("a"))
+			}
+		})
 	}
 }

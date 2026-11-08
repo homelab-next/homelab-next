@@ -309,9 +309,9 @@ func dropRoles(c *Config) ([]byte, error) {
 
 // parseConfigProperty: a config ParseConfig accepts encodes, the encoding is accepted, and it
 // parses to a value equal to the first; a refusal is a ConfigError with problems. The schema
-// subset half of ADR-0048's property waits for that validator's move to a package the gateway's
-// tests can import (ADR-0048, implementation plan, the note of 2026-11-08 at step 4); until then
-// the shared vectors hold the reader to the schema.
+// subset half of ADR-0048's property is not here yet: the validator is now importable
+// (internal/schematest, ADR-0048's note at step 4), and until the half lands the shared vectors
+// hold the reader to the schema.
 func parseConfigProperty(encode configEncoder, data []byte) error {
 	c, err := ParseConfig(data)
 	if err != nil {

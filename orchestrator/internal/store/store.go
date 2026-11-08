@@ -39,8 +39,8 @@ var ErrStateConflict = errors.New("job state changed concurrently, transition ab
 // Store is the controller's database.
 type Store struct {
 	db *sql.DB
-	// unlock releases the instance lock OpenWith took; nil when the caller holds it.
-	unlock func() error
+	// lock is the instance lock OpenWith took; nil when the caller holds it.
+	lock *InstanceLock
 	// outbox, once EnableOutbox has run, makes lifecycle transitions enqueue their events in
 	// the same transaction (outbox.go).
 	outbox atomic.Pointer[outboxConfig]
@@ -55,11 +55,11 @@ type Options struct {
 	// schema has to change; it verifies the backup then (VerifyBackup), inside the migration's
 	// own transaction, and ignores it otherwise.
 	MigrationBackup string
-	// InstanceLockHeld says the caller already holds LockInstance(dbPath), as it must while it
-	// takes the backup a migration needs and opens the database behind it. OpenWith then takes
-	// no lock of its own, and refuses when it finds the lock free (the caller does not hold it).
-	// Otherwise OpenWith takes the lock itself and Close releases it.
-	InstanceLockHeld bool
+	// Lock is the caller's own LockInstance(dbPath), as it must hold one while it takes the
+	// backup a migration needs and opens the database behind it. OpenWith then takes no lock of
+	// its own and refuses a lock that was released or is another database's; Close leaves it to
+	// the caller. nil: OpenWith takes the lock itself and Close releases it.
+	Lock *InstanceLock
 	// AllowSharedPermissions accepts a database file that grants its group or others any
 	// permission. Without it such a file is refused: the database holds every job's task and
 	// output, and is protected like the service's other state (owner-only).
@@ -81,8 +81,8 @@ func Open(dbPath string) (*Store, error) {
 // it, so a failed migration leaves the database as it was and the backup as its copy. Opening
 // the same file again after a restart is how jobs survive one.
 //
-// It holds the instance lock (LockInstance) for the life of the Store, or checks the caller does
-// (opts.InstanceLockHeld). A new database file is created owner-only (0600) before SQLite opens
+// It holds the instance lock (LockInstance) for the life of the Store, or checks that the lock the
+// caller gives (opts.Lock) is held and is this database's. A new database file is created owner-only (0600) before SQLite opens
 // it, and SQLite gives its -wal and -shm files the same mode; an existing one that grants its
 // group or others anything is refused unless opts.AllowSharedPermissions.
 //
@@ -98,21 +98,18 @@ func OpenWith(dbPath string, opts Options) (s *Store, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
-	var unlock func() error
-	if opts.InstanceLockHeld {
-		if rel, lerr := LockInstance(abs); lerr == nil {
-			rel()
-			return nil, fmt.Errorf("store: InstanceLockHeld is set but the instance lock of %s is free: take LockInstance first", dbPath)
-		} else if !errors.Is(lerr, ErrInstanceLocked) {
-			return nil, lerr
+	var lock *InstanceLock
+	if opts.Lock != nil {
+		if err := opts.Lock.heldFor(abs); err != nil {
+			return nil, err
 		}
 	} else {
-		if unlock, err = LockInstance(abs); err != nil {
+		if lock, err = LockInstance(abs); err != nil {
 			return nil, err
 		}
 		defer func() {
 			if err != nil {
-				unlock()
+				lock.Release()
 			}
 		}()
 	}
@@ -127,7 +124,7 @@ func OpenWith(dbPath string, opts Options) (s *Store, err error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, unlock: unlock}, nil
+	return &Store{db: db, lock: lock}, nil
 }
 
 // ensureDatabaseFile creates a missing database file owner-only, so that SQLite never creates it
@@ -245,15 +242,14 @@ func describeSteps(steps []migrationStep) string {
 	return strings.Join(names, "; ")
 }
 
-// Close closes the database and releases the instance lock OpenWith took.
+// Close closes the database and releases the instance lock OpenWith took (never one the caller
+// gave it).
 func (s *Store) Close() error {
 	err := s.db.Close()
-	if s.unlock != nil {
-		if uerr := s.unlock(); err == nil {
-			err = uerr
-		}
-		s.unlock = nil
+	if uerr := s.lock.Release(); err == nil {
+		err = uerr
 	}
+	s.lock = nil
 	return err
 }
 
@@ -404,6 +400,23 @@ func (s *Store) GetJob(runID string) (*Job, error) {
 		return nil, fmt.Errorf("get job %s: %w", runID, err)
 	}
 	return j, nil
+}
+
+// admissionColumns is jobColumns with the columns admission never reads sent as NULL: the
+// answer, the failure reason, the auxiliary usage and the evidence. A queued row holds no answer
+// anyway; the task stays (admission's duplicate check and the dispatch read it), bounded at submit.
+var admissionColumns = strings.NewReplacer(
+	"local_failed_reason,", "NULL,", "response_body,", "NULL,", "aux_by_task,", "NULL,", "evidence_refs,", "NULL,",
+).Replace(jobColumns)
+
+// ListForAdmission is ListByState with admissionColumns: what a scheduler pass and its executors
+// read of the queue, without the text they never use.
+func (s *Store) ListForAdmission(state State) ([]*Job, error) {
+	rows, err := s.db.Query(`SELECT `+admissionColumns+` FROM jobs WHERE state = ? ORDER BY seq ASC`, string(state))
+	if err != nil {
+		return nil, fmt.Errorf("list for admission: %w", err)
+	}
+	return collectJobs(rows, "list for admission "+string(state))
 }
 
 // ListByState returns every job in state, oldest submission first.

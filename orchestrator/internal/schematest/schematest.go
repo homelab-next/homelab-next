@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package events
+// Package schematest validates JSON against this repository's id, event and platform schemas,
+// read in place, for the controller's tests: what a package emits is held to schemas/ itself,
+// with the standard library only. Only _test.go files import it (TestOnlyTestsImportIt).
+package schematest
 
 import (
 	"encoding/json"
@@ -15,45 +18,45 @@ import (
 	"unicode/utf8"
 )
 
-// A JSON Schema (draft 2020-12) validator for the subset of the language this repository's
-// event and id schemas use, so the Go tests can hold what the package emits to schemas/ read in
-// place, with the standard library only. It fails closed: a keyword it does not implement, a
-// $ref it cannot resolve or a pattern it cannot translate is reported as unsupported, and every
-// test treats unsupported as a failure, never as a pass. schema_test.go checks the validator
+// A JSON Schema (draft 2020-12) Validator for the subset of the language this repository's
+// event and id schemas use. It fails closed: a keyword it does not implement, a $ref it cannot
+// resolve or a pattern it cannot translate is reported as unsupported, and every test treats
+// unsupported as a failure, never as a pass. package events' schema_test.go checks the Validator
 // itself against the schemas' own examples and negatives.
 
-// schemaDirs are the schema directories read, relative to this package.
-var schemaDirs = []string{"../../../schemas/ids", "../../../schemas/events"}
-
-type validator struct {
+// Validator holds the schemas under one schemas directory, by $id.
+type Validator struct {
+	dir      string
 	byID     map[string]any
 	patterns map[string]*pattern
 }
 
-// result is one validation: errs are the instance's faults, unsupported what the validator could
+// Result is one validation: Errs are the instance's faults, Unsupported what the Validator could
 // not judge.
-type result struct {
-	errs        []string
-	unsupported []string
+type Result struct {
+	Errs        []string
+	Unsupported []string
 }
 
-func (r *result) fail(at, format string, a ...any) {
-	r.errs = append(r.errs, at+": "+fmt.Sprintf(format, a...))
+func (r *Result) fail(at, format string, a ...any) {
+	r.Errs = append(r.Errs, at+": "+fmt.Sprintf(format, a...))
 }
 
-func (r *result) cannot(at, format string, a ...any) {
-	r.unsupported = append(r.unsupported, at+": "+fmt.Sprintf(format, a...))
+func (r *Result) cannot(at, format string, a ...any) {
+	r.Unsupported = append(r.Unsupported, at+": "+fmt.Sprintf(format, a...))
 }
 
-func loadValidator() (*validator, error) {
-	v := &validator{byID: map[string]any{}, patterns: map[string]*pattern{}}
-	for _, dir := range schemaDirs {
+// Load reads every schema under schemasDir's ids, events and platform directories (the
+// repository's schemas/, given relative to the calling test's package).
+func Load(schemasDir string) (*Validator, error) {
+	v := &Validator{dir: schemasDir, byID: map[string]any{}, patterns: map[string]*pattern{}}
+	for _, dir := range []string{filepath.Join(schemasDir, "ids"), filepath.Join(schemasDir, "events"), filepath.Join(schemasDir, "platform")} {
 		files, err := filepath.Glob(filepath.Join(dir, "*.schema.json"))
 		if err != nil || len(files) == 0 {
 			return nil, fmt.Errorf("no schemas under %s (%v)", dir, err)
 		}
 		for _, f := range files {
-			doc, err := readJSON(f)
+			doc, err := ReadJSON(f)
 			if err != nil {
 				return nil, err
 			}
@@ -68,7 +71,8 @@ func loadValidator() (*validator, error) {
 	return v, nil
 }
 
-func readJSON(path string) (any, error) {
+// ReadJSON decodes the JSON file at path.
+func ReadJSON(path string) (any, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -80,10 +84,10 @@ func readJSON(path string) (any, error) {
 	return doc, nil
 }
 
-// schemaIDOf returns the $id of the schema file stem (as in "agent.job.finished") under
+// SchemaIDOf returns the $id of the schema file stem (as in "agent.job.finished") under
 // schemas/events.
-func (v *validator) schemaIDOf(stem string) (string, error) {
-	doc, err := readJSON(filepath.Join("../../../schemas/events", stem+".schema.json"))
+func (v *Validator) SchemaIDOf(stem string) (string, error) {
+	doc, err := ReadJSON(filepath.Join(v.dir, "events", stem+".schema.json"))
 	if err != nil {
 		return "", err
 	}
@@ -91,9 +95,27 @@ func (v *validator) schemaIDOf(stem string) (string, error) {
 	return id, nil
 }
 
-// validate checks inst against the schema with the given $id.
-func (v *validator) validate(id string, inst any) result {
-	var r result
+// ValidateStem checks inst, a value JSON-encoded and decoded again, against the events schema of
+// the file stem (as in "agent.job.finished").
+func (v *Validator) ValidateStem(stem string, inst any) (Result, error) {
+	id, err := v.SchemaIDOf(stem)
+	if err != nil {
+		return Result{}, err
+	}
+	b, err := json.Marshal(inst)
+	if err != nil {
+		return Result{}, err
+	}
+	var doc any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return Result{}, err
+	}
+	return v.Validate(id, doc), nil
+}
+
+// Validate checks inst against the schema with the given $id.
+func (v *Validator) Validate(id string, inst any) Result {
+	var r Result
 	s, ok := v.byID[id]
 	if !ok {
 		r.cannot("", "no schema with $id %s", id)
@@ -113,7 +135,7 @@ var annotations = map[string]bool{
 	"then": true, "else": true,
 }
 
-func (v *validator) check(schema any, base string, inst any, at string, r *result) {
+func (v *Validator) check(schema any, base string, inst any, at string, r *Result) {
 	baseURI := base
 	switch s := schema.(type) {
 	case bool:
@@ -138,7 +160,7 @@ func (v *validator) check(schema any, base string, inst any, at string, r *resul
 	}
 }
 
-func (v *validator) keyword(s map[string]any, k, base string, inst any, at string, r *result) {
+func (v *Validator) keyword(s map[string]any, k, base string, inst any, at string, r *Result) {
 	val := s[k]
 	if annotations[k] || strings.HasPrefix(k, "x-") {
 		return
@@ -156,13 +178,13 @@ func (v *validator) keyword(s map[string]any, k, base string, inst any, at strin
 		subs, _ := val.([]any)
 		passed := 0
 		for _, sub := range subs {
-			var sr result
+			var sr Result
 			v.check(sub, base, inst, at, &sr)
-			r.unsupported = append(r.unsupported, sr.unsupported...)
-			if len(sr.errs) == 0 {
+			r.Unsupported = append(r.Unsupported, sr.Unsupported...)
+			if len(sr.Errs) == 0 {
 				passed++
 			} else if k == "allOf" {
-				r.errs = append(r.errs, sr.errs...)
+				r.Errs = append(r.Errs, sr.Errs...)
 			}
 		}
 		if k == "anyOf" && passed == 0 {
@@ -172,18 +194,18 @@ func (v *validator) keyword(s map[string]any, k, base string, inst any, at strin
 			r.fail(at, "matches %d of oneOf, not exactly one", passed)
 		}
 	case "not":
-		var sr result
+		var sr Result
 		v.check(val, base, inst, at, &sr)
-		r.unsupported = append(r.unsupported, sr.unsupported...)
-		if len(sr.errs) == 0 {
+		r.Unsupported = append(r.Unsupported, sr.Unsupported...)
+		if len(sr.Errs) == 0 {
 			r.fail(at, "matches a schema under not")
 		}
 	case "if":
-		var sr result
+		var sr Result
 		v.check(val, base, inst, at, &sr)
-		r.unsupported = append(r.unsupported, sr.unsupported...)
+		r.Unsupported = append(r.Unsupported, sr.Unsupported...)
 		branch := "else"
-		if len(sr.errs) == 0 {
+		if len(sr.Errs) == 0 {
 			branch = "then"
 		}
 		if sub, ok := s[branch]; ok {
@@ -231,7 +253,7 @@ func (v *validator) keyword(s map[string]any, k, base string, inst any, at strin
 	}
 }
 
-func (v *validator) object(s map[string]any, k, base string, obj map[string]any, at string, r *result) {
+func (v *Validator) object(s map[string]any, k, base string, obj map[string]any, at string, r *Result) {
 	props, _ := s["properties"].(map[string]any)
 	switch k {
 	case "properties":
@@ -268,7 +290,7 @@ func (v *validator) object(s map[string]any, k, base string, obj map[string]any,
 	}
 }
 
-func (v *validator) array(s map[string]any, k, base string, arr []any, at string, r *result) {
+func (v *Validator) array(s map[string]any, k, base string, arr []any, at string, r *Result) {
 	switch k {
 	case "items":
 		for i, inst := range arr {
@@ -292,7 +314,7 @@ func (v *validator) array(s map[string]any, k, base string, arr []any, at string
 	}
 }
 
-func (v *validator) str(k string, val any, str, at string, r *result) {
+func (v *Validator) str(k string, val any, str, at string, r *Result) {
 	switch k {
 	case "minLength", "maxLength":
 		lim, _ := val.(float64)
@@ -349,7 +371,7 @@ func hasType(inst, want any) bool {
 
 // resolve finds the schema a $ref names: an absolute $id or the current base, then a JSON
 // pointer fragment.
-func (v *validator) resolve(ref, base string) (any, string, error) {
+func (v *Validator) resolve(ref, base string) (any, string, error) {
 	uri, frag, _ := strings.Cut(ref, "#")
 	if uri == "" {
 		uri = base
@@ -401,7 +423,7 @@ func (p *pattern) match(s string) bool {
 	return true
 }
 
-func (v *validator) pattern(src string) (*pattern, error) {
+func (v *Validator) pattern(src string) (*pattern, error) {
 	if p, ok := v.patterns[src]; ok {
 		return p, nil
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -496,5 +497,28 @@ func TestDrains_SaveLoadDelete(t *testing.T) {
 	}
 	if got, _ := s.LoadDrains(); len(got) != 0 {
 		t.Errorf("after delete: %v", got)
+	}
+}
+
+// The admission list leaves out the text admission never reads, and keeps the rest.
+func TestListForAdmission_LeavesOutTheText(t *testing.T) {
+	s := openTest(t)
+	j := queued("a", "x")
+	j.TaskDescription = "the task"
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateExecutionResult("a", false, 1, "SECRET-REASON", "SECRET-ANSWER"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListForAdmission(StateQueued)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListForAdmission = %v, %v", got, err)
+	}
+	if g := got[0]; g.ResponseBody != "" || g.LocalFailedReason != "" || g.TaskDescription != "the task" || g.RunID != "a" || g.IdempotencyKey != "idem-a" {
+		t.Fatalf("row = %+v", g)
+	}
+	if strings.Count(admissionColumns, "NULL") != 4 {
+		t.Fatalf("columns = %s", admissionColumns)
 	}
 }
