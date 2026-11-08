@@ -198,10 +198,13 @@ and an entry that no longer excuses anything fails the lint.
   `tests/gates/test_ci_trusted_gates.py`) in the first change after the tool is on `main`. Until
   then a change can edit `tools/allowlist_ratchet.py` itself to always pass, and only the `/tools/`
   code-owner review stands in the way; `tools/tests/test_allowlist_ratchet.py` keeps this note
-  here until the step exists. What it deliberately leaves out, with why, is its `NOT_RATCHETED`
-  (the two shrink-only baselines, which have their own ratchets, and the other gates' inline
-  markers, a follow-up); a new `tools/*.allow.yml` or `tools/*.baseline.json` in neither fails its
-  tests.
+  here until the step exists. Each other gate's `tools/*.allow.yml` is a list named after the
+  file, so a new one has no count until one is reviewed in; with `--base`, a list the base has no
+  count for rises from 0. What it deliberately leaves out, with why, is its `NOT_RATCHETED`: the
+  two shrink-only baselines (their own ratchets), `.gitleaks.toml`'s `[[allowlists]]` (its own
+  CODEOWNERS rule), and, as a follow-up, the other inline markers (`run-output: allow`,
+  `# hermetic: allow`, `gitleaks:allow` and the edge-config, workstation-ref and tls-verify
+  lints' own); a `tools/*.baseline.json` in neither table fails its tests.
 - `make keyring-check` (M-12): `examples/keyring/keyring.json` is exactly what
   `hnx agent keyring build examples/keyring/sources.yml` generates (`make keyring` rebuilds it).
 

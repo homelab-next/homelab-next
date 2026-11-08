@@ -45,8 +45,8 @@ allow:
     reason: generated from the scripts' hnx-script header comments, which are prose
   - path: "tools/*.allow.yml"
     reason: other gates' reviewed path lists; a path that names a product is counted where it lives
-  - path: "tools/allowlist_*"
-    reason: the allowlist ratchet and its counts file name each gate's allowlist file and key its count by it, as the lists themselves are named; a path that names a product is counted where it lives
+  - path: "tools/allowlist_counts.yml"
+    reason: the allowlist ratchet's counts file keys each gate's list by the name of that gate's allow file, which the ratchet derives from the file name; a path that names a product is counted where it lives
   - path: "tools/dup_check.baseline.json"
     reason: the duplication baseline lists paths; a path that names a product is counted where it lives
   - path: "schemas/_frozen/*"

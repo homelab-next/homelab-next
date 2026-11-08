@@ -153,15 +153,29 @@ def _every_section(rel: str) -> Callable[[Path], list[str]]:
     return read
 
 
-#: the other gates' ``allow:`` files (one ``allow:`` list each); an absent file has no entries,
-#: so creating one (tools/tls_verify_lint.py reads its file only if it exists) is growth too
+#: allow files a gate reads only if they exist, so none may be in the tree yet; each is a list
+#: here all the same, so creating one is growth (tools/tls_verify_lint.py's default allowlist)
+OPTIONAL_ALLOW_FILES = ("tools/tls_verify.allow.yml",)
+#: the allow files with their own reader in ENTRY_LISTS (every section, not only ``allow:``)
+OWN_READER = {"tools/no_raw_endpoints.allow.yml", "tools/scripts.allow.yml"}
+
+
+def _list_name(rel: str) -> str:
+    """A ``tools/<stem>.allow.yml`` file's list: ``<stem>-allow``, underscores as hyphens."""
+    return Path(rel).name.removesuffix(".allow.yml").replace("_", "-") + "-allow"
+
+
+#: the other gates' ``allow:`` files, one list each, named after the file: every
+#: ``tools/*.allow.yml`` of this checkout, so a gate that gains one has a list (and the counts
+#: file has no count for it until its code owner reviews one), plus OPTIONAL_ALLOW_FILES; an
+#: absent file has no entries
 GATE_ALLOW_FILES: dict[str, str] = {
-    "caddy-lint-allow": "tools/caddy_lint.allow.yml",
-    "credential-headers-allow": "tools/credential_headers.allow.yml",
-    "run-output-lint-allow": "tools/run_output_lint.allow.yml",
-    "shared-helpers-allow": "tools/shared_helpers.allow.yml",
-    "tls-verify-allow": "tools/tls_verify.allow.yml",
-    "workstation-refs-allow": "tools/workstation_refs.allow.yml",
+    _list_name(rel): rel
+    for rel in sorted(
+        {f"tools/{p.name}" for p in (REPO / "tools").glob("*.allow.yml")}
+        | set(OPTIONAL_ALLOW_FILES)
+    )
+    if rel not in OWN_READER
 }
 
 
@@ -226,10 +240,18 @@ NOT_RATCHETED: dict[str, str] = {
         "a shrink-only baseline with its own ratchet: the product-name lint fails a count above "
         "it and, against the base (--base, CI's trusted-gates job), a baseline that grew"
     ),
-    "the edge-config, workstation-ref and tls-verify lints' inline markers": (
-        "follow-up: each gate reads its markers over its own walk, which this check would have "
-        "to reuse as it does for the two marker kinds above; until then a marker is reviewed "
-        "only in the diff of the line that carries it"
+    "the other gates' inline markers": (
+        "follow-up: the edge-config, workstation-ref, tls-verify and run-output lints' "
+        "`<gate>: allow <reason>` comments (each lint's INLINE_ALLOW) and the hermetic lint's "
+        "waiver comments (its WAIVER); each gate reads "
+        "them over its own walk, which this check would have to reuse as it does for the two "
+        "marker kinds above, so until then a marker is reviewed only in its own file's diff"
+    ),
+    ".gitleaks.toml": (
+        "the secret scan's [[allowlists]] and its inline `gitleaks:allow` comments: the file has "
+        "its own explicit CODEOWNERS rule, so every allowlist edit is already the code owner's "
+        "review; the inline comments, like the other gates' markers, are a follow-up (the "
+        "scanner's walk is an external binary's)"
     ),
 }
 

@@ -310,6 +310,15 @@ def test_a_list_the_bases_counts_lack_rises_from_zero_for_review(tmp_path, owner
     assert "its entries changed" not in out  # the rise already says it
 
 
+def test_each_gate_allow_file_is_a_list_named_after_the_file():
+    assert ar._list_name("tools/credential_headers.allow.yml") == "credential-headers-allow"
+    on_disk = {f"tools/{p.name}" for p in (REPO / "tools").glob("*.allow.yml")}
+    assert set(ar.GATE_ALLOW_FILES.values()) == (on_disk | set(ar.OPTIONAL_ALLOW_FILES)) - (
+        ar.OWN_READER
+    )
+    assert all(ar._list_name(rel) in ar.ENTRY_LISTS for rel in ar.OWN_READER)
+
+
 def test_equal_or_lower_counts_against_the_base_say_nothing(tmp_path):
     root, base = _repo(tmp_path)
     rc, out, _ = _run("--base", base, root)
