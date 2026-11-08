@@ -611,8 +611,12 @@ concurrency_limited` (its backend at the `max_in_flight` the gateway enforces, A
 gateway's `Retry-After`) and asks the same backend again, up to `Policy.ConcurrencyWaits` (30)
 times a leg; then the chain stops with `ErrConcurrencyLimited`, which the queue classes
 `capacity`. It never marks the backend down and never moves the job to another backend or to the
-cloud; the cloud leg waits the same way. `runner/exec` reports it by the program's exit status
-(`exit_classes`), since only the program sees the gateway's answer.
+cloud. The cloud leg waits too, at most `Policy.CloudConcurrencyWaits` (3) times, and each refused
+cloud session is in the trail (`Result.Attempts`). `runner/exec` reports it by the program's exit status
+(`exit_classes`), since only the program sees the gateway's answer. Every wait starts a whole new
+session, so a program should first retry the refused call itself, honouring `Retry-After`, and
+exit with the limited status only when the refusal came before it spent anything (its first model
+call); a refusal later in a session is the program's to wait out.
 
 Fallback, retry and a job's failure class are decided from the classes, never from error text:
 `runner.Wrap(class, err)` keeps the text exactly, a bare class wrapped with `%w` counts too, and

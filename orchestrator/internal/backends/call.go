@@ -24,6 +24,11 @@ const sameBackendRetries = 2
 // asks again after the gateway refused it for its backend's concurrency cap.
 const DefaultConcurrencyWaits = 30
 
+// DefaultCloudConcurrencyWaits is Policy.CloudConcurrencyWaits' default. It is smaller: every
+// session the cloud leg starts again may already have spent on a model before the limit refused
+// it.
+const DefaultCloudConcurrencyWaits = 3
+
 // defaultConcurrencyWait is Policy.ConcurrencyWait's default, the gateway's Retry-After.
 const defaultConcurrencyWait = time.Second
 
@@ -330,8 +335,9 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, 
 	cs.Limits = p.Limits
 	cs.UsagePath = nextUsagePath()
 	rr, err := p.Runner.Run(ctx, cs)
-	for waits := 0; errors.Is(err, runner.ConcurrencyLimited) && waits < p.concurrencyWaits() && p.pause(ctx); waits++ {
-		p.logf("backends: run=%s the cloud leg was refused at the gateway's concurrency cap: asking again (%d of %d)", rid, waits+1, p.concurrencyWaits())
+	for waits := 0; errors.Is(err, runner.ConcurrencyLimited) && waits < p.cloudConcurrencyWaits() && p.pause(ctx); waits++ {
+		out.Attempts = append(out.Attempts, Attempt{Cloud: true, Failed: true, Class: runner.ClassOf(err)})
+		p.logf("backends: run=%s the cloud leg was refused at the gateway's concurrency cap: asking again (%d of %d)", rid, waits+1, p.cloudConcurrencyWaits())
 		cs.UsagePath = nextUsagePath()
 		rr, err = p.Runner.Run(ctx, cs)
 	}
@@ -402,6 +408,13 @@ func (p *Policy) callLocal(ctx context.Context, backend Backend, s runner.Sessio
 		return &Result{}, err
 	}
 	return &Result{Result: *rr}, err
+}
+
+func (p *Policy) cloudConcurrencyWaits() int {
+	if p.CloudConcurrencyWaits > 0 {
+		return p.CloudConcurrencyWaits
+	}
+	return DefaultCloudConcurrencyWaits
 }
 
 func (p *Policy) concurrencyWaits() int {
