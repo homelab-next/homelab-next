@@ -5,6 +5,7 @@ package backends
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -51,7 +52,7 @@ func TestCall_EachSessionCarriesTheRunAndItsOwnLeg(t *testing.T) {
 	p, _ := newPool(r, Backend{Name: "a", Home: "ha", Endpoint: "engine-a.example.internal:8000", LoadProbeURLs: []string{"u"}})
 	p.Limits = runner.Limits{Timeout: time.Minute, StallTimeout: time.Second, MaxTurns: 7, Liveness: "progress"}
 	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
-	if err != nil || !res.UsedCloud || res.Response != "cloud answer" || res.LocalFailedReason != "it did not work" {
+	if err != nil || !res.UsedCloud || res.Response != "cloud answer" || res.LocalFailedReason != "backend-fault: it did not work" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
 	got := r.Sessions()
@@ -314,7 +315,7 @@ func TestCall_ATotalFailureKeepsTheTrailAndEachLegsClass(t *testing.T) {
 		runnertest.Fail(runner.BackendFault, "connection refused")))
 	p, _ := newPool(r, Backend{Name: "a"})
 	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
-	if !errors.Is(err, ErrCloudFailed) || res == nil || !res.UsedCloud || res.LocalAttempts != 1 || res.LocalFailedReason != "connection refused" {
+	if !errors.Is(err, ErrCloudFailed) || res == nil || !res.UsedCloud || res.LocalAttempts != 1 || res.LocalFailedReason != "backend-fault: connection refused" || res.LocalFailedDetail != "connection refused" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
 	if res.LocalClass != runner.BackendFault || res.CloudClass != runner.TimeoutCeiling {
@@ -658,5 +659,33 @@ func TestLegUsagePath(t *testing.T) {
 func TestRunLabel(t *testing.T) {
 	if runLabel("") != "-" || runLabel("abc") != "abc" {
 		t.Error("runLabel")
+	}
+}
+
+// A failure's text can quote a session's output: the reason and the log carry its class and a
+// bounded excerpt, the whole text only the detail.
+func TestCall_TheFailureReasonAndTheLogAreBounded(t *testing.T) {
+	long := "the model said: " + strings.Repeat("x", 10000)
+	r := runnertest.New(runnertest.Fail(runner.TurnFailed, long))
+	p, _ := newPool(r, Backend{Name: "a"})
+	p.CloudHome = ""
+	var mu sync.Mutex
+	var lines []string
+	p.Log = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	res, _ := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	if !strings.HasPrefix(res.LocalFailedReason, "turn-failed: the model said: ") || len(res.LocalFailedReason) > len("turn-failed: ")+reasonMaxBytes+len(" ...[truncated]") {
+		t.Errorf("reason (%d bytes) = %.80q", len(res.LocalFailedReason), res.LocalFailedReason)
+	}
+	if res.LocalFailedDetail != long {
+		t.Errorf("the detail lost the text (%d bytes)", len(res.LocalFailedDetail))
+	}
+	for _, l := range lines {
+		if len(l) > 2*reasonMaxBytes {
+			t.Errorf("a log line of %d bytes: %.80q", len(l), l)
+		}
 	}
 }

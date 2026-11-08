@@ -65,7 +65,11 @@ type Result struct {
 	runner.Result
 	UsedCloud         bool
 	LocalAttempts     int
-	LocalFailedReason string // the last local failure's text
+	// LocalFailedReason is the last local failure, bounded: its outermost class, then at most
+	// reasonMaxBytes of its text. The text can quote a session's output, so LocalFailedDetail, its
+	// whole text, is for an admin-only view.
+	LocalFailedReason string
+	LocalFailedDetail string
 	LocalBackendUsed  string // the local backend that answered; "" otherwise
 	// LocalClass is runner.ClassOf of the local failure the cloud gate decided on, CloudClass of
 	// the cloud leg's, for reporting; Internal when there was none, or it had no class.
@@ -134,7 +138,8 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, localOnly bool, aff
 	out := &Result{}
 	deadline := func(lastErr error) (*Result, error) {
 		reason := jobDeadlineReason(ctx, lastErr)
-		out.LocalFailedReason = reason
+		out.LocalFailedReason = headSnippet(reason, reasonMaxBytes)
+		out.LocalFailedDetail = reason
 		return out, fmt.Errorf("%w: %s", ErrJobDeadline, reason)
 	}
 
@@ -191,9 +196,9 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, localOnly bool, aff
 				}
 				return out, nil
 			}
-			p.logf("backends: run=%s backend=%s attempt=%d retry=%d failed (%s): %v", rid, backend.Name, out.LocalAttempts, retry, class, err)
+			p.logf("backends: run=%s backend=%s attempt=%d retry=%d failed (%s): %s", rid, backend.Name, out.LocalAttempts, retry, class, headSnippet(err.Error(), reasonMaxBytes))
 			if errors.Is(err, runner.TurnCap) {
-				out.LocalFailedReason = err.Error()
+				setLocalFailure(out, err)
 				out.LocalClass = class
 				return out, fmt.Errorf("%w: %w", ErrTurnCapStops, err)
 			}
@@ -215,7 +220,7 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, localOnly bool, aff
 	if lastErr == nil {
 		lastErr = ErrNoAttemptableBackend
 	}
-	out.LocalFailedReason = lastErr.Error()
+	setLocalFailure(out, lastErr)
 	out.LocalClass = runner.ClassOf(lastErr)
 	switch {
 	case localOnly:
@@ -306,6 +311,16 @@ func (p *Policy) callLocal(ctx context.Context, backend Backend, s runner.Sessio
 		return &Result{}, err
 	}
 	return &Result{Result: *rr}, err
+}
+
+// reasonMaxBytes bounds the failure text kept in a reason or a log line.
+const reasonMaxBytes = 400
+
+// setLocalFailure records err as the last local failure: bounded in the reason, whole in the detail.
+func setLocalFailure(out *Result, err error) {
+	text := err.Error()
+	out.LocalFailedReason = runner.ClassOf(err).String() + ": " + headSnippet(text, reasonMaxBytes)
+	out.LocalFailedDetail = text
 }
 
 // runLabel names a run in a log line: "-" for none.
