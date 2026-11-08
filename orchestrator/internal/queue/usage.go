@@ -157,9 +157,19 @@ func sumRunUsage(dir, runID string, last map[string]any) (map[string]any, bool) 
 	paths := []string{filepath.Join(dir, runID+".json")}
 	more, _ := filepath.Glob(filepath.Join(dir, runID+".*.json"))
 	if len(more) >= maxUsageSessions {
-		// More sessions than any profile's attempts times its legs: a sum of some would read as
-		// the run's. The last report stands alone.
-		return last, false
+		// More sessions than any profile's attempts times its legs: neither a sum of some nor the
+		// last session's alone is the run's, so every total is unknown (never a smaller number
+		// that would read as the run's).
+		out := make(map[string]any, len(last)+len(additiveCounters)+3)
+		for k, v := range last {
+			out[k] = v
+		}
+		for _, k := range additiveCounters {
+			out[k] = nil
+		}
+		out["estimated_cost_usd"], out["cost_usd"] = nil, nil
+		out[summedUsageKey] = true
+		return out, true
 	}
 	paths = append(paths, more...)
 	sums := map[string]float64{}

@@ -77,6 +77,12 @@ func TestClass_NamesAreDistinct(t *testing.T) {
 			t.Errorf("class %d: name %q", int(c), n)
 		}
 		seen[n] = true
+		if back, ok := ParseClass(n); !ok || back != c {
+			t.Errorf("ParseClass(%q) = %v, %v", n, back, ok)
+		}
+	}
+	if _, ok := ParseClass("no-such-class"); ok {
+		t.Error("an unknown class name parsed")
 	}
 	if Class(99).String() != "class(99)" || Class(-1).String() != "class(-1)" {
 		t.Error("an unknown class is named by its number")

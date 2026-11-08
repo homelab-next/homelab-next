@@ -25,6 +25,7 @@ help:
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke lab-broker"
 	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>; models-canary REGISTRY=<file> ROLE=<role>"
+	@echo "Go (needs a Go toolchain; CI's go job runs it): controller-check"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
 check: lint component-tests hermetic-lint test schemas gates decide-lint decide-safety models-check agent-lint prompts-lint injection-check workflows scripts-check detections registers ids-check conform-check spdx leak-scan changelog-check
@@ -189,6 +190,13 @@ gateway-check:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC)) --check
 	$(PY) -m homelabnext.cli gen gateway render $(CONFORMANCE_GATEWAY)/gateway.yml $(CONFORMANCE_GATEWAY) --conformance --check
 	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway --check
+
+# the Go loader's judgement of the controller's fictional example configuration (ADR-0026 decision
+# 17): its profiles, their grants against the catalog, the registers, the runner and the pool,
+# with no database, port, network or secret read. CI's go job runs it; it needs a Go toolchain.
+.PHONY: controller-check
+controller-check:
+	cd orchestrator && GOFLAGS=-mod=readonly GOWORK=off go run ./cmd/controller check --config deploy/examples/controller.yaml
 
 # the MCP catalog (docs/mcp-catalog.md, ADR-0024): every record valid and reviewed, the registry's
 # MCP entries and every profile's grants resolve to it, and the rendered example client configs

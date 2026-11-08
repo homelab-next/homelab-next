@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# EXAMPLE ONLY: a fictional controller configuration (docs/orchestration-controller.md, "The
+# controller binary"), naming no host. `make controller-check` runs `controller check --config` on
+# it in CI. Relative paths are read from this file's directory.
+db_path: /var/lib/orchestrator/controller.db
+http_addr: 127.0.0.1:8088 # no-raw-endpoint: allow the loopback bind of the example, never a dial
+concurrency: 2
+
+runner:
+  kind: exec
+  exec:
+    # the session: one process per attempt, no shell; the prompt goes to stdin (no {prompt})
+    argv: [/usr/local/bin/agent-session, --home, "{home}", --run, "{run_id}"]
+    usage_args: [--usage-file, "{usage_path}"]
+    toolsets_args: [--toolsets, "{toolsets}"]
+    # the session exits 75 when the gateway refused it with 429 concurrency_limited
+    exit_classes: {75: concurrency-limited}
+  timeout_seconds: 1800
+  env_allowlist: [LANG, TZ]
+  run_dir_base: /var/lib/orchestrator/runs
+
+backends:
+  local:
+    name: engine-a
+    home: /etc/orchestrator/homes/engine-a
+    max_concurrent: 2
+    needs_interlock: false
+  cloud:
+    name: cloud
+    home: /etc/orchestrator/homes/cloud
+
+profiles_dir: ../../../examples/mcp/clients/orchestrator/profiles
+grants_catalog: ../../../examples/mcp/clients/orchestrator/mcp_catalog.yaml
+lessons_path: ../../../examples/registers/lessons
+runbooks_path: ../../../examples/registers/runbooks
+
+api_auth:
+  tokens_file: api-tokens.yaml
+
+events:
+  source: svc:orchestrator
+  gateway_tag_prefix: hnx/
+
+scope:
+  denied_roots: [owner]
+  findings_root: notes/findings/
+  shared_write: [inbox/]
+  reserved_names: [operator]

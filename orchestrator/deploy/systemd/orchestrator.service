@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: Apache-2.0
+# EXAMPLE ONLY: not installed or referenced by any deploy, and naming no host
+# (docs/orchestration-controller.md, "The controller binary").
+#
+# The orchestration controller (ADR-0026), named after its registry row `orchestrator`. It runs as
+# its own system user, so the sessions it starts, the database and the runner's homes share one
+# owner; its state is owner-only.
+#
+# /etc/orchestrator/controller.yaml    the configuration (`controller check --config` before start)
+# /etc/orchestrator/api-tokens.yaml    the job API's token digests, owner-only
+# /var/lib/orchestrator/               the database (controller.db, -wal, -shm), usage reports, runs
+# /run/orchestrator/                   the interlock's lock file (lock_path), when one is used
+#
+# A database that needs a migration stops the start with exit status 3, which is not restarted
+# (RestartPreventExitStatus). Take the backup and migrate once by hand, as the service's user, with
+# the unit stopped; --migrate-only exits once the database is migrated, without serving:
+#   controller serve --config /etc/orchestrator/controller.yaml --migrate-only \
+#     --migrate-backup /var/backups/orchestrator/controller.db.bak
+# (a new file, in a directory only that user can write), then start the unit again.
+[Unit]
+Description=Orchestration controller (agent job queue and runner)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orchestrator
+Group=orchestrator
+ExecStartPre=/usr/local/bin/controller check --config /etc/orchestrator/controller.yaml
+ExecStart=/usr/local/bin/controller serve --config /etc/orchestrator/controller.yaml
+# SIGHUP reloads the tokens file; a rotation needs no restart (which would end every running job)
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=3
+# SIGTERM goes to the controller alone (KillMode=mixed): it stops admitting, drains the API for up
+# to 30 s, then cancels the running sessions itself (SIGTERM to each session's process group, then
+# SIGKILL after the runner's grace), so a session ends as the controller's cancel, never as an
+# outside kill a retry would answer. Whatever is left in the cgroup when the controller has exited
+# or TimeoutStopSec runs out (a descendant that left its group, which init reaps) gets SIGKILL.
+TimeoutStopSec=60
+KillMode=mixed
+
+StateDirectory=orchestrator
+StateDirectoryMode=0700
+RuntimeDirectory=orchestrator
+RuntimeDirectoryMode=0700
+UMask=0077
+ReadWritePaths=/var/lib/orchestrator
+# Bounds on what the controller and every session it runs may take together (size them for the
+# site's concurrency); a runaway session cannot fork or allocate the host away
+TasksMax=512
+MemoryMax=8G
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# Other users' processes are invisible, and with them their command lines (a session's argv can
+# hold its prompt) and environments
+ProtectProc=invisible
+# A runner that sandboxes its sessions with user namespaces (bubblewrap, say) needs them: such a
+# site relaxes this to the namespace types it uses, e.g. RestrictNamespaces=user mnt pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+# the sessions reach the model gateway; nothing else is needed by the controller itself
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

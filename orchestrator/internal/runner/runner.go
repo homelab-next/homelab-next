@@ -157,6 +157,17 @@ func (c Class) String() string {
 	return fmt.Sprintf("class(%d)", int(c))
 }
 
+// ParseClass is the class whose name (String) is name, for a site's configuration; false for an
+// unknown name.
+func ParseClass(name string) (Class, bool) {
+	for c, n := range classNames {
+		if n == name {
+			return Class(c), true
+		}
+	}
+	return Internal, false
+}
+
 // Error makes a Class an errors.Is target.
 func (c Class) Error() string { return "runner: " + c.String() }
 

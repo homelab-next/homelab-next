@@ -17,7 +17,7 @@ counts:
   tls-verify-allow: 0
   workstation-refs-allow: 2
   scrub-allow-markers: 70
-  no-raw-endpoint-markers: 308
+  no-raw-endpoint-markers: 310
 digests:
   product-names-allow: sha256:46c8070d91d339db3063866e76e3689569ffaaec4c26913340d9fb6619603bc3
   no-raw-endpoints-allow: sha256:4cd649047149dfe3e3a6ca94977736a0a5af97f559aefa2f7c4ec3a92dd925a2

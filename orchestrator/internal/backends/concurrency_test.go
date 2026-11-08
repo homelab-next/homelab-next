@@ -123,3 +123,35 @@ func TestPause_EndsWithTheContext(t *testing.T) {
 		t.Fatal("ConcurrencyWaits 0 is the default")
 	}
 }
+
+// The cloud leg waits fewer times than a local one (each new cloud session may have spent before
+// the limit refused it), and every refused cloud session is in the trail.
+func TestCall_TheCloudLegWaitsLessAndRecordsEachWait(t *testing.T) {
+	cloud := 0
+	step := func(ctx context.Context, s runner.Session) (*runner.Result, error) {
+		if !s.Target.Cloud {
+			return runnertest.Fail(runner.BackendFault, "connection refused")(ctx, s)
+		}
+		cloud++
+		return limited(ctx, s)
+	}
+	r := runnertest.New(step)
+	p, _ := newPool(r, Backend{Name: "a"})
+	countPauses(p)
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
+	if !errors.Is(err, runner.ConcurrencyLimited) || cloud != DefaultCloudConcurrencyWaits+1 {
+		t.Fatalf("err = %v, %d cloud sessions, want %d", err, cloud, DefaultCloudConcurrencyWaits+1)
+	}
+	n := 0
+	for _, a := range res.Attempts {
+		if a.Cloud {
+			n++
+			if !a.Failed || a.Class != runner.ConcurrencyLimited {
+				t.Errorf("cloud attempt %+v", a)
+			}
+		}
+	}
+	if n != cloud {
+		t.Fatalf("%d cloud attempts in the trail for %d cloud sessions", n, cloud)
+	}
+}

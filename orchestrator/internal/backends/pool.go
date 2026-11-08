@@ -221,8 +221,10 @@ type Policy struct {
 	// gateway's Retry-After. ConcurrencyWaits bounds those pauses in one leg; 0 is
 	// DefaultConcurrencyWaits. Past it the chain ends with ErrConcurrencyLimited: it never falls
 	// over to another backend or to the cloud for a limit, and never marks the backend down.
-	ConcurrencyWait  time.Duration
-	ConcurrencyWaits int
+	// CloudConcurrencyWaits is the cloud leg's bound (0 is DefaultCloudConcurrencyWaits).
+	ConcurrencyWait       time.Duration
+	ConcurrencyWaits      int
+	CloudConcurrencyWaits int
 
 	// Log receives the pool's log lines; nil is log.Printf.
 	Log func(format string, args ...any)

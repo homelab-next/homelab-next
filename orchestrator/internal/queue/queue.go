@@ -278,14 +278,17 @@ var testHookExecuted func(runID string)
 //
 // The queued list is read once per pass and ordered once (by effective priority, then submit
 // order): the cost of a pass is linear in the queue, however many jobs are held in it.
-func (sch *Scheduler) Tick(ctx context.Context) error {
+func (sch *Scheduler) Tick(ctx context.Context) error { return sch.tick(ctx, ctx) }
+
+// tick is Tick whose admissions stop once stop ends; the jobs it admits run under ctx.
+func (sch *Scheduler) tick(stop, ctx context.Context) error {
 	sch.sweepDeferredFinished()
 	sch.sweepOrphanedRuns()
 	if !sch.admitMu.TryLock() {
 		return nil
 	}
 	var wg sync.WaitGroup
-	err := sch.admit(ctx, &wg)
+	err := sch.admit(stop, ctx, &wg)
 	sch.admitMu.Unlock()
 	wg.Wait()
 	return err
@@ -316,7 +319,7 @@ func keyOf(j *store.Job) heldKey {
 }
 
 // admit is one pass's admission, under admitMu; each admitted job's goroutine is added to wg.
-func (sch *Scheduler) admit(ctx context.Context, wg *sync.WaitGroup) error {
+func (sch *Scheduler) admit(stop, ctx context.Context, wg *sync.WaitGroup) error {
 	if sch.free() <= 0 {
 		return nil
 	}
@@ -338,7 +341,7 @@ func (sch *Scheduler) admit(ctx context.Context, wg *sync.WaitGroup) error {
 	// A job left queued for capacity takes no slot: a job behind one full backend must not starve
 	// another that has room. Each queued job is considered once.
 	for _, job := range order {
-		if sch.free() <= 0 {
+		if sch.free() <= 0 || stop.Err() != nil {
 			break
 		}
 		if !store.CanTransition(job.State, store.StateAdmitted) || sch.cfg.Pool.HoldsReservation(job.RunID) {
@@ -426,19 +429,30 @@ func orderQueued(queued []*store.Job, now time.Time) []*store.Job {
 // Run calls Tick every interval, each in its own goroutine, until ctx ends, and returns once every
 // Tick (and so every job it admitted) has returned: the caller may close the store then.
 func (sch *Scheduler) Run(ctx context.Context, interval time.Duration) {
+	sch.RunAdmitting(ctx, ctx, interval)
+}
+
+// RunAdmitting is Run with admission and the jobs apart: it admits every interval until admit
+// ends, and the jobs it admitted run under jobs, so a service stopping can refuse new work first
+// and end the running jobs later. No job is admitted once admit has ended, by a pass already
+// under way included. It returns once every pass, and so every job it admitted, has returned.
+func (sch *Scheduler) RunAdmitting(admit, jobs context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var ticks sync.WaitGroup
 	for {
 		select {
-		case <-ctx.Done():
+		case <-admit.Done():
 			ticks.Wait()
 			return
 		case <-ticker.C:
+			if admit.Err() != nil {
+				continue
+			}
 			ticks.Add(1)
 			go func() {
 				defer ticks.Done()
-				if err := sch.Tick(ctx); err != nil {
+				if err := sch.tick(admit, jobs); err != nil {
 					sch.logf("queue: tick: %v", err)
 				}
 			}()

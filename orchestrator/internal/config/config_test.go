@@ -412,3 +412,24 @@ func TestProfileLoadOptions_CursorTemplateIsDefaultOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestRunner_KindAndExecBlock(t *testing.T) {
+	cfg := mustParse(t, scopeYAML+"runner:\n  kind: exec\n  exec:\n    argv: [agent, -z, '{prompt}']\n    exit_classes: {75: concurrency-limited}\n")
+	if cfg.Runner.Kind != RunnerKindExec || cfg.Runner.Exec.Argv[2] != "{prompt}" || cfg.Runner.Exec.ExitClasses[75] != "concurrency-limited" {
+		t.Fatalf("runner = %+v", cfg.Runner)
+	}
+	if cfg := mustParse(t, scopeYAML); cfg.Runner.Kind != "" {
+		t.Fatal("a configuration without a runner has a kind")
+	}
+	for name, body := range map[string]string{
+		"unknown kind":        "runner: {kind: harness}\n",
+		"exec without argv":   "runner: {kind: exec}\n",
+		"exec block, no kind": "runner: {exec: {argv: [agent]}}\n",
+		"negative grace":      "runner: {kind: exec, exec: {argv: [agent], kill_grace_seconds: -1}}\n",
+		"unknown exec key":    "runner: {kind: exec, exec: {argv: [agent], shell: true}}\n",
+	} {
+		if _, err := Parse([]byte(scopeYAML + body)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

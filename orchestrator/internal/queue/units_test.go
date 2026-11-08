@@ -342,8 +342,10 @@ func TestSumRunUsage_NeverBlocksAndIsBounded(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, ok := sumRunUsage(many, "r", map[string]any{"input_tokens": 1.0}); ok {
-		t.Fatal("more usage files than a run can have were summed")
+	// more files than a run can have: the totals are unknown, never the last session's alone
+	total, ok := sumRunUsage(many, "r", map[string]any{"input_tokens": 1.0, "cost_usd": 0.5, "session_id": "s-9"})
+	if !ok || total["input_tokens"] != nil || total["cost_usd"] != nil || total["session_id"] != "s-9" {
+		t.Fatalf("over the session bound: %v, %v", total, ok)
 	}
 }
 
