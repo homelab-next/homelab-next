@@ -68,7 +68,8 @@ def test_resolve_row_by_its_row_name(monkeypatch):
     rc, out, _ = run("resolve", TIERS, "hub-candidate", "--row")
     assert rc == 0 and out == "https://hub-candidate.svc.example.internal:" + "8443\n"
     rc, _, err = run("resolve", TIERS, "hub-candidate")
-    assert rc == 1 and "not in the registry" in err
+    assert rc == 1 and "'hub-candidate': is an eval row, not a capability" in err
+    assert "use --row" in err or "(--row)" in err
     rc, _, err = run("resolve", TIERS, "hub-oldlab", "--row")
     assert rc == 1 and "legacy row answers by no name" in err
 
@@ -80,7 +81,7 @@ def test_a_generator_refusing_the_registry_exits_1_with_its_reason(tmp_path):
     assert not any(tmp_path.iterdir())
 
 
-EXAMPLES = sorted((Path(EXAMPLE).parent).glob("*/services.yml")) + [Path(EXAMPLE)]
+EXAMPLES = [*sorted(Path(EXAMPLE).parent.glob("*/services.yml")), Path(EXAMPLE)]
 
 
 def test_generate_succeeds_over_every_example_registry(tmp_path):
@@ -95,5 +96,5 @@ def test_a_full_generate_prunes_a_stale_realm(tmp_path):
     minimal = str(Path(EXAMPLE).parent / "minimal" / "services.yml")
     assert run("generate", EXAMPLE, str(tmp_path))[0] == 0
     assert (tmp_path / "idp" / "realm.json").is_file()
-    rc, out, _ = run("generate", minimal, str(tmp_path))
+    rc, _, _ = run("generate", minimal, str(tmp_path))
     assert rc == 0 and not (tmp_path / "idp" / "realm.json").exists()

@@ -35,13 +35,22 @@ from .model import ANSWERING_TIERS, STANDINGS, Registry, Service, env_var_name
 
 
 class ResolutionError(Exception):
-    """A capability could not be resolved. ``trail`` records what was tried."""
+    """A capability (or, ``what="row"``, a row by its row name) could not be resolved.
+    ``trail`` records what was tried."""
 
-    def __init__(self, capability: str, message: str, trail: list[str] | None = None):
+    def __init__(
+        self,
+        capability: str,
+        message: str,
+        trail: list[str] | None = None,
+        *,
+        what: str = "capability",
+    ):
         self.capability = capability
+        self.what = what
         self.trail = list(trail or [])
         detail = "".join(f"\n  tried: {t}" for t in self.trail)
-        super().__init__(f"cannot resolve capability {capability!r}: {message}{detail}")
+        super().__init__(f"cannot resolve {what} {capability!r}: {message}{detail}")
 
 
 class UnknownCapability(ResolutionError):
@@ -76,16 +85,18 @@ class Endpoint:
 _VALID_SCHEMES = {"http", "https", "grpc", "tcp", "udp", "postgres", "nats", "tls", "dns", "ssh"}
 
 
-def parse_override(capability: str, var: str, value: str) -> Endpoint:
+def parse_override(capability: str, var: str, value: str, *, what: str = "capability") -> Endpoint:
     parts = urlsplit(value.strip())
     if parts.scheme not in _VALID_SCHEMES or not parts.hostname:
-        raise InvalidOverride(capability, f"{var}={value!r} is not a scheme://host:port URL")
+        raise InvalidOverride(
+            capability, f"{var}={value!r} is not a scheme://host:port URL", what=what
+        )
     try:
         port = parts.port
     except ValueError:
         port = None
     if port is None:
-        raise InvalidOverride(capability, f"{var}={value!r} has no explicit port")
+        raise InvalidOverride(capability, f"{var}={value!r} has no explicit port", what=what)
     return Endpoint(capability, parts.scheme, parts.hostname, port, "env")
 
 
@@ -119,11 +130,16 @@ class Resolver:
         svc = self.registry.by_capability(capability) if self.registry else None
         if self.registry and svc is None:
             rows = [s.name for s in self.registry.rows(*STANDINGS) if s.capability == capability]
-            why = (
-                f"no primary (its rows {', '.join(rows)} answer only by their row names)"
-                if rows
-                else "not in the registry"
-            )
+            row = self.registry.row(capability, *ANSWERING_TIERS)
+            if row is not None:
+                why = (
+                    f"is {'an' if row.standing == 'eval' else 'a'} {row.standing} row, not a "
+                    "capability; resolve it by its row name (--row)"
+                )
+            elif rows:
+                why = f"no primary (its rows {', '.join(rows)} answer only by their row names)"
+            else:
+                why = "not in the registry"
             raise UnknownCapability(capability, why, [f"registry ({self.registry.digest[:12]})"])
         var = svc.endpoint_env_var if svc else env_var_name(capability)
         value = self.environ.get(var)
@@ -144,37 +160,46 @@ class Resolver:
         A primary answers by its capability (:meth:`resolve`), a ``legacy`` row by no name, and a
         row is resolved by name only against a loaded registry (no SRV record names a row)."""
         if self.registry is None:
-            raise ResolutionError(name, "a row is resolved by its name only with a registry")
+            raise ResolutionError(
+                name, "a row is resolved by its name only with a registry", what="row"
+            )
         trail = [f"registry ({self.registry.digest[:12]})"]
         svc = self.registry.row(name, *ANSWERING_TIERS)
         if svc is None:
             other = self.registry.row(name, *STANDINGS)
             if other is None:
-                raise UnknownCapability(name, "no such registry row", trail)
+                raise UnknownCapability(name, "no such registry row", trail, what="row")
             if other.is_primary:
                 why = f"a primary answers by its capability; resolve {other.capability!r}"
             else:
                 why = f"a {other.standing} row answers by no name"
-            raise UnknownCapability(name, why, trail)
+            raise UnknownCapability(name, why, trail, what="row")
         return self._resolve_row(svc, trail)
 
     def _resolve_row(self, svc: Service, trail: list[str]) -> Endpoint:
         var = svc.endpoint_env_var
         value = self.environ.get(var)
         if value is not None and value.strip() == "":
-            raise InvalidOverride(svc.name, f"{var} is set but empty")
+            raise InvalidOverride(svc.name, f"{var} is set but empty", what="row")
         if value is not None:
-            return parse_override(svc.name, var, value)
+            return parse_override(svc.name, var, value, what="row")
         trail.append(f"env {var} (unset)")
         trail.append(
             f"registry (row {svc.name}, {svc.standing}, scheme={svc.scheme} port={svc.port})"
         )
         return self._resolve_name(
-            svc.name, svc.scheme, svc.port, self.registry.address_of(svc), trail
+            svc.name, svc.scheme, svc.port, self.registry.address_of(svc), trail, what="row"
         )
 
     def _resolve_name(
-        self, capability: str, scheme: str, port: int, alias: str, trail: list[str]
+        self,
+        capability: str,
+        scheme: str,
+        port: int,
+        alias: str,
+        trail: list[str],
+        *,
+        what: str = "capability",
     ) -> Endpoint:
         if self.dns.lookup_host(alias):
             return Endpoint(capability, scheme, alias, port, "dns")
@@ -186,6 +211,7 @@ class Resolver:
             capability,
             f"alias {alias} does not resolve; set the override env var or publish the alias",
             trail,
+            what=what,
         )
 
     def _resolve_srv(self, capability: str, alias: str, trail: list[str]) -> Endpoint:

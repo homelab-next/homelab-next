@@ -448,6 +448,12 @@ def firewall_rules(
     for i, exc in enumerate(fw.get("service_exceptions", [])):
         froms = exc["from"] if isinstance(exc["from"], list) else [exc["from"]]
         svc = reg.row(ref_id(exc["to"]), *EXCEPTION_TIERS)
+        if svc is None:
+            # validate() refuses it first; an unvalidated document must not reach a KeyError
+            raise ValueError(
+                f"firewall.service_exceptions[{i}]: {exc['to']} is no primary, eval or retiring "
+                "row of the registry (validate the site first)"
+            )
         dst = Selector("host", svc.host, (f"{host_addr[svc.host]}/32",), reg.hosts[svc.host].zone)
         ports = tuple(sorted(exc.get("ports", [svc.port])))
         for fref in froms:

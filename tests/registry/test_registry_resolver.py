@@ -200,9 +200,11 @@ def test_an_eval_row_is_reachable_by_its_row_name_and_never_by_the_capability_al
     assert ep.url == u("https", CAND, 8443) and ep.source == "dns"
     # the capability alias is the primary's, whatever rows share the capability
     assert r.resolve("status-hub").url == u("https", HUB, 8443)
-    # and a row name is no capability
-    with pytest.raises(UnknownCapability, match="not in the registry"):
+    # and a row name is no capability: the error says so and names the way to reach it
+    with pytest.raises(UnknownCapability, match=r"is an eval row, not a capability.*--row"):
         r.resolve("hub-candidate")
+    with pytest.raises(UnknownCapability, match=r"is a retiring row, not a capability"):
+        r.resolve("hub-rollback")
 
 
 def test_a_row_name_override_is_its_own_variable_never_the_capabilitys():
@@ -246,3 +248,19 @@ def test_a_capability_with_no_primary_names_its_rows():
     )
     with pytest.raises(UnknownCapability, match=r"no primary .*hub-candidate.*answer only by"):
         make(registry=reg).resolve("status-hub")
+
+
+def test_a_row_lookup_names_a_row_not_a_capability():
+    """resolve_row's errors are about a row (the capability wording would send a reader to the
+    wrong table), the override and DNS failures included."""
+    r = make(registry=TIERS)
+    for name in ("hub-oldlab", "nope", "hub-candidate"):
+        with pytest.raises(ResolutionError) as ei:
+            r.resolve_row(name)
+        assert str(ei.value).startswith(f"cannot resolve row {name!r}: "), ei.value
+        assert ei.value.what == "row"
+    env = {"HNX_ENDPOINT_HUB_CANDIDATE": "not a url"}
+    with pytest.raises(InvalidOverride, match=r"^cannot resolve row 'hub-candidate'"):
+        make(registry=TIERS, env=env).resolve_row("hub-candidate")
+    with pytest.raises(ResolutionError, match=r"^cannot resolve capability 'status-hub'"):
+        r.resolve("status-hub")

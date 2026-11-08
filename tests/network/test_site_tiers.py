@@ -85,3 +85,10 @@ def test_site_dns_records_give_a_row_its_own_name_and_a_legacy_row_none(doc):
     assert records["idp-prev.svc.example.internal"].value == "idp-core.example.internal"
     assert not [f for f in records if f.startswith("idp-old.")]
     assert sum(1 for f in records if f.startswith("idp.")) == 1
+
+
+def test_build_ir_refuses_an_unvalidated_exception_to_a_legacy_row(doc):
+    """build_ir runs on a validated site; one that skipped validation fails with the reason,
+    not with an attribute error on a missing row."""
+    with pytest.raises(ValueError, match=r"svc:idp-old is no primary, eval or retiring row"):
+        build_ir(_exception(doc, "idp-old"), REG)
