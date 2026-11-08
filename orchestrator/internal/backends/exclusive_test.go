@@ -49,13 +49,14 @@ func TestExclusive_ALeaseWaitsForTheProbeToReadEmpty(t *testing.T) {
 	var running atomic.Int32
 	running.Store(2)
 	e := newEngine(t, func() string { return "engine:requests_running " + string(rune('0'+running.Load())) + "\n" })
-	p, _ := newPool(nil, Backend{Name: "big", MaxContext: 1 << 20, LoadProbeURLs: []string{e.URL}})
+	p, clk := newPool(nil, Backend{Name: "big", MaxContext: 1 << 20, LoadProbeURLs: []string{e.URL}})
 	p.LoadMetrics = testLoadMetrics
 	ctx := context.Background()
 	if _, ok := p.ReserveExclusive(ctx, exclusiveBig, "run-big"); ok {
 		t.Fatal("leased while the engine reports work")
 	}
 	running.Store(0)
+	clk.add(2 * sampleTTL) // the next scheduling pass reads the probe again
 	if b, ok := p.ReserveExclusive(ctx, exclusiveBig, "run-big"); !ok || b != "big" {
 		t.Fatalf("not leased once empty: %q, %v", b, ok)
 	}

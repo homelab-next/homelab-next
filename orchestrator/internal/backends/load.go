@@ -28,8 +28,53 @@ import (
 // The load is the larger of the two, and the own count alone when every probe fails, so an
 // unreadable backend never looks idle.
 
-// loadProbeTimeout bounds one load probe.
-const loadProbeTimeout = 2 * time.Second
+// defaultProbeTimeout bounds one metrics probe unless ProbeTimeout says otherwise.
+const defaultProbeTimeout = 2 * time.Second
+
+// sampleTTL is how long one probe's reading (or its failure) serves: one admission decision, or a
+// burst of them, reads each URL once, so a slow or hanging endpoint costs one timeout, not one per
+// backend, per check and per job.
+const sampleTTL = 1500 * time.Millisecond
+
+// probeEntry is one URL's last reading.
+type probeEntry struct {
+	mu      sync.Mutex // held while the URL is fetched, so concurrent readers wait for one fetch
+	at      time.Time
+	samples []scrape.Sample
+	err     error
+}
+
+func (p *Policy) probeTimeout() time.Duration {
+	if p.ProbeTimeout > 0 {
+		return p.ProbeTimeout
+	}
+	return defaultProbeTimeout
+}
+
+// samples returns url's samples of every metric the pool reads (the load gauges and the KV pool's),
+// fetched at most once per sampleTTL; a failed fetch is remembered as long as a reading.
+func (p *Policy) samples(ctx context.Context, url string) ([]scrape.Sample, error) {
+	p.probeMu.Lock()
+	if p.probes == nil {
+		p.probes = make(map[string]*probeEntry)
+	}
+	e := p.probes[url]
+	if e == nil {
+		e = &probeEntry{}
+		p.probes[url] = e
+	}
+	p.probeMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	now := p.clock()
+	if !e.at.IsZero() && now.Sub(e.at) < sampleTTL && now.Sub(e.at) >= 0 {
+		return e.samples, e.err
+	}
+	names := append(append([]string(nil), p.LoadMetrics...), p.KV.Info, p.KV.Usage)
+	e.samples, e.err = scrape.Fetch(ctx, p.probeClient(), url, p.probeTimeout(), scrape.Names(names...))
+	e.at = now
+	return e.samples, e.err
+}
 
 var (
 	defaultProbeClientOnce sync.Once
@@ -49,10 +94,9 @@ func (p *Policy) currentLoad(ctx context.Context, b Backend) int {
 	if len(b.LoadProbeURLs) == 0 || len(p.LoadMetrics) == 0 {
 		return tracked
 	}
-	want := scrape.Names(p.LoadMetrics...)
 	total, anyOK := 0.0, false
 	for _, url := range b.LoadProbeURLs {
-		samples, err := scrape.Fetch(ctx, p.probeClient(), url, loadProbeTimeout, want)
+		samples, err := p.samples(ctx, url)
 		if err != nil {
 			continue
 		}

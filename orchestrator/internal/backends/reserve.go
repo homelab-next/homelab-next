@@ -46,11 +46,16 @@ func (p *Policy) Reserve(ctx context.Context, affinity Affinity, runID, agentKey
 	}
 	w := p.weightFor(agentKey)
 	cause := ""
-	for _, b := range p.selectOrder(ctx, eligible) {
+	order, ratios := p.selectOrderRatios(ctx, eligible)
+	for _, b := range order {
 		if p.exclusivelyBlocked(b.Name, "") || !p.BackendUp(b.Name) {
 			continue
 		}
-		if b.MaxConcurrent > 0 && p.loadRatio(ctx, b) >= 1.0 {
+		ratio, read := ratios[b.Name]
+		if !read {
+			ratio = p.loadRatio(ctx, b) // PrimaryFirst or one backend: read only the ones reached
+		}
+		if b.MaxConcurrent > 0 && ratio >= 1.0 {
 			if cause == "" {
 				cause = CauseSlot
 			}

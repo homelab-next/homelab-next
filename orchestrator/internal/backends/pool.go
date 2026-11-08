@@ -194,7 +194,9 @@ type Policy struct {
 	PrimaryFirst bool
 
 	// ProbeClient is the client of every probe; nil is scrape.NewClient() (no proxy, no redirect).
-	ProbeClient *http.Client
+	// ProbeTimeout bounds one metrics probe; 0 is 2 seconds.
+	ProbeClient  *http.Client
+	ProbeTimeout time.Duration
 	// LoadMetrics are the gauges a load probe sums into a backend's load (its running and waiting
 	// requests). Required when a backend has LoadProbeURLs (Validate).
 	LoadMetrics []string
@@ -217,6 +219,9 @@ type Policy struct {
 	Log func(format string, args ...any)
 
 	now func() time.Time // test seam for every clock the pool reads
+
+	probeMu sync.Mutex
+	probes  map[string]*probeEntry // load probe URL -> its last reading
 
 	inFlightMu sync.Mutex
 	inFlight   map[string]*int64
@@ -358,21 +363,45 @@ func (p *Policy) pickOrder(backends []Backend) []Backend {
 
 // selectOrder is the attempt order for a fresh pick: pickOrder's, then stable-sorted by load ratio
 // (least loaded first), so backends tied on load (unmeasured ones are all 0) keep the round-robin's
-// order. PrimaryFirst keeps the configured order. Always a copy.
+// order. PrimaryFirst keeps the configured order. Always a copy. The ratios are read concurrently,
+// one probe per URL at most; selectOrderRatios returns them too (nil with PrimaryFirst or one
+// backend).
 func (p *Policy) selectOrder(ctx context.Context, backends []Backend) []Backend {
+	order, _ := p.selectOrderRatios(ctx, backends)
+	return order
+}
+
+// selectOrderRatios is selectOrder with the ratios it read.
+func (p *Policy) selectOrderRatios(ctx context.Context, backends []Backend) ([]Backend, map[string]float64) {
 	if p.PrimaryFirst {
-		return slices.Clone(backends)
+		return slices.Clone(backends), nil
 	}
 	order := slices.Clone(p.pickOrder(backends))
 	if len(order) <= 1 {
-		return order
+		return order, nil
 	}
-	ratios := make(map[string]float64, len(order))
-	for _, b := range order {
-		ratios[b.Name] = p.loadRatio(ctx, b)
-	}
+	ratios := p.loadRatios(ctx, order)
 	sort.SliceStable(order, func(i, j int) bool { return ratios[order[i].Name] < ratios[order[j].Name] })
-	return order
+	return order, ratios
+}
+
+// loadRatios reads every backend's load ratio concurrently.
+func (p *Policy) loadRatios(ctx context.Context, backends []Backend) map[string]float64 {
+	ratios := make(map[string]float64, len(backends))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, b := range backends {
+		wg.Add(1)
+		go func(b Backend) {
+			defer wg.Done()
+			r := p.loadRatio(ctx, b)
+			mu.Lock()
+			ratios[b.Name] = r
+			mu.Unlock()
+		}(b)
+	}
+	wg.Wait()
+	return ratios
 }
 
 // moveToFront returns a copy of order with the backend named name first, the rest in order.

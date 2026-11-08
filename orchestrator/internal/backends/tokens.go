@@ -154,11 +154,10 @@ func (p *Policy) engineState(ctx context.Context, b Backend) engineSample {
 	if had && now.Sub(prev.fetched) < engineSampleTTL {
 		return prev
 	}
-	want := scrape.Names(p.KV.Info, p.KV.Usage)
 	var pool, used float64
 	anyOK := false
 	for _, u := range b.LoadProbeURLs {
-		samples, err := scrape.Fetch(ctx, p.probeClient(), u, loadProbeTimeout, want)
+		samples, err := p.samples(ctx, u)
 		if err != nil {
 			continue
 		}

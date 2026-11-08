@@ -6,6 +6,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const loadBody = `# TYPE engine:requests_running gauge
@@ -146,5 +147,47 @@ func TestCurrentLoad_RejectsNonFiniteAndNegativeAndClampsHuge(t *testing.T) {
 		if (c.want == 1 && got < 1) || (c.want != 1 && got != c.want) {
 			t.Errorf("%s: ratio %v, want %v", c.value, got, c.want)
 		}
+	}
+}
+
+// One admission decision reads each probe URL once at most, however many checks it makes (the
+// order's ratios, the slot cap, the token budget), and reads the backends concurrently; the next
+// decision inside sampleTTL reads none. A probe that hangs costs one timeout, and, as in the
+// private controller, its backend falls back to the pool's own count, so it can still admit.
+func TestReserve_ReadsEachProbeOnceAndATarpitOnlyOnce(t *testing.T) {
+	stop := make(chan struct{})
+	tarpit := newEngine(t, func() string { <-stop; return "" })
+	t.Cleanup(func() { close(stop) })
+	other := newEngine(t, func() string {
+		return "engine:requests_running 0\n" + `engine:cache_info{pool_tokens="1000000"} 1` + "\n"
+	})
+	p, clk := newPool(nil,
+		Backend{Name: "slow", MaxConcurrent: 4, LoadProbeURLs: []string{tarpit.URL}},
+		Backend{Name: "fast", MaxConcurrent: 4, LoadProbeURLs: []string{other.URL}},
+		Backend{Name: "slow-too", MaxConcurrent: 4, LoadProbeURLs: []string{tarpit.URL + "/2"}},
+	)
+	p.LoadMetrics, p.KV, p.TokenWeightedAdmission = testLoadMetrics, testKV, true
+	p.ProbeTimeout = 200 * time.Millisecond
+	ctx := context.Background()
+	start := time.Now()
+	name, ok := p.Reserve(ctx, Affinity{}, "run-1", "agent")
+	elapsed := time.Since(start)
+	if !ok {
+		t.Fatal("refused: a hanging probe falls back to the own count")
+	}
+	if tarpit.count() != 2 || other.count() != 1 {
+		t.Errorf("fetches: tarpit %d (want 2, one per URL), fast %d (want 1)", tarpit.count(), other.count())
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("one decision took %v against two hanging probes", elapsed)
+	}
+	p.Release(name, "run-1")
+	if _, ok := p.Reserve(ctx, Affinity{}, "run-2", "agent"); !ok || tarpit.count() != 2 || other.count() != 1 {
+		t.Errorf("a second decision inside the window fetched again: tarpit %d, fast %d", tarpit.count(), other.count())
+	}
+	clk.add(2 * sampleTTL)
+	p.Reserve(ctx, Affinity{}, "run-3", "agent")
+	if other.count() != 2 {
+		t.Errorf("a decision after the window did not read again: fast %d", other.count())
 	}
 }
