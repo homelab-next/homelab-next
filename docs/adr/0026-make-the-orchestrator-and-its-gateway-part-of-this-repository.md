@@ -1,6 +1,6 @@
 ---
 summary: The orchestrator joins this repository as the Go module orchestrator/, gateway first; lab data goes to the overlay, MCP servers become modules, in stages.
-summary_of: outline:sha256:dd8a0ee78f574512
+summary_of: outline:sha256:07f8a62fd60cb6e2
 ---
 # ADR-0026: Make the orchestrator and its gateway part of this repository
 
@@ -10,13 +10,20 @@ summary_of: outline:sha256:dd8a0ee78f574512
   stage 3, behind a runner seam proven first in the private repository; neutral wire names with a
   migration; no HTTP passthrough; the lessons and runbooks readers on this repository's register
   formats; the module's first third-party dependencies, among them the YAML library, and its
-  `go.sum` (see the amendment at the end of Decision)
+  `go.sum` (see the amendment at the end of Decision); and 2026-11-07 again, with the placement of
+  what the split left unplaced (decisions 10 to 21; see the second amendment at the end of
+  Decision and its consequences); and 2026-11-07 by ADR-0043 (decision 8): stage 6's archive
+  waits for the revocation ledger and the scoped archive gate (decision 19 here), and by ADR-0044
+  (decision 13): decision 6's vault, tasking-queue and deconfliction MCP servers are not ported,
+  the broker's records actions replace them (decision 20 here)
 - **Related:** ADR-0005, ADR-0017, ADR-0021, ADR-0022, ADR-0024, ADR-0027, ADR-0030, ADR-0033,
+  ADR-0039 to ADR-0049,
   [LLM gateway](../llm-gateway.md), [the lab's own gateway](../gateway.md),
   [modules](../modules.md), [MCP catalog](../mcp-catalog.md),
   [private overlay](../private-overlay.md), `tools/go_modules.py`, `tools/go_test_policy.py`
 - **Depends-on:** ADR-0038
 - **Amends:** ADR-0011, ADR-0038
+- **Amended-by:** ADR-0043, ADR-0044
 
 ## Context
 
@@ -138,7 +145,9 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    `config` keys the site fills from the overlay's registry (`svc:` names) and its credentials are
    `secret:` references. A tool for a system only this lab has (a probe of one specific honeypot,
    the lab's own tooling, the Hermes vault, the tasking queue) becomes an overlay module under
-   `<overlay>/lab/modules/<id>/`, with its record under `<overlay>/lab/mcp/`.
+   `<overlay>/lab/modules/<id>/`, with its record under `<overlay>/lab/mcp/`. *Amended by
+   ADR-0044 decision 13:* the vault, tasking-queue and deconfliction servers are not ported; the
+   broker's records actions replace them (decision 20).
 7. **Go code in a module.** A module's Go MCP server lives at `modules/<id>/go/` (in the overlay,
    `<overlay>/lab/modules/<id>/go/`), beside the module's `python/` tree, as **its own Go module**
    with its own `go.mod` (module path `github.com/homelab-next/homelab-next/modules/<id>/go` here).
@@ -178,7 +187,9 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    5. **The lab-only modules and the lab's data to the overlay**, through pull requests the
       operator merges there.
    6. **Archive**: once every component has cut over, the private repository is archived
-      read-only, never deleted, so its history stays readable.
+      read-only, never deleted, so its history stays readable. *Amended by ADR-0043 decision 8:*
+      the archive waits until the private repository's ledger rows are `old-retired` and their
+      revocation records `verified` (decision 19).
 
    **Each component cuts over as soon as it can run the lab's work: the gateway as soon as it
    lands, the controller after stage 3** (see the amendment), so the lab runs a frozen copy only
@@ -273,6 +284,297 @@ what stage 2 carries:
   2 adds the test that holds them to it: `go list -deps` of the gateway's packages names only the
   standard library and the module's own packages.
 
+### Amendment (2026-11-07): what the split left unplaced
+
+The parity and naming audits of 2026-11-07 listed every piece of the private repository and of this
+repository's orchestration code against the stages of decision 8. Most pieces had a stage. Twelve
+did not, or had one that contradicts a later ADR: a lock shared with the legacy scheduler; a Go
+implementation of the `context` capability; three third-party MCP servers launched from wrapper
+scripts; a patch to the agent runtime; the private end-to-end tests and the per-agent profile tests;
+the recorded conformance stand-in; four names for the controller, two of which belong to something
+else; a loader check that only Go can run; profile-bound grants; the private repository's freeze;
+and the vault and tasking-queue MCP servers that decision 6 sent to the overlay while ADR-0044
+retires the vault they front. Decisions 10 to 21 place each one. Each names its stage, the check
+that holds it and the code it extends. Pull-request numbers such as "PR 2.4" are those of the
+controller's stage-2 series in [the controller doc](../orchestration-controller.md); "the cutover
+release" is the release at which the controller cuts over, and "cutover+1" the release after it
+(decision 8's amendment). The ledger and its rows are ADR-0043's.
+
+| Piece | Where it goes | Decision |
+|---|---|---|
+| Interlock lock shared with the legacy scheduler | already in the config (PR 2.3b); taken in PR 2.4, honoured in the pool in PR 2.5; replaced by one declared per-engine limit | 10 |
+| Go `context` store (`internal/mdctx`, `cmd/ctxstore`) and its private adapter | **retired**; not ported | 11 |
+| Third-party MCP servers launched by wrapper scripts | catalog records with pinned origins, stage 4; the IdP's server retires with that IdP | 12 |
+| The agent runtime's usage-sizing patch | upstreamed; carried by the stage-3 provider module until a release has it | 13 |
+| Private end-to-end and per-agent profile tests | not ported; replaced by loopback CI jobs and overlay checks | 14 |
+| The recorded stand-in and its `-recorded` target | retired in PR 2.7 | 15 |
+| Four names for the controller | one row name, `orchestrator`, for the event source and the broker target | 16 |
+| The Go loader's judgement, for a site without Go | `controller check --config` in PR 2.7 | 17 |
+| Profile-bound grants (`binds`) | every lab record binds before the controller's row is `new-primary` | 18 |
+| The private repository's freeze | marked and guarded there; backports recorded here | 19 |
+| The vault, tasking-queue and deconfliction MCP servers | **not ported** (ADR-0044 decision 13) | 20 |
+| Pieces nothing needs (scratch commands, one-off scripts, notes) | not ported; listed on the ledger as `retire` (code) or `archive` (notes) | 21 |
+
+10. **The interlock is honoured from the config that already has it, and one declared limit per
+    engine replaces it.** The private controller takes an advisory `flock` on a lock file in the
+    legacy scheduler's state directory before each local session, so the legacy dispatcher and the
+    controller never run two sessions at once on an engine that serves one. The lock protects a
+    property of the engine, not of either dispatcher, and it disappears with the legacy scheduler.
+    - **The interlock is already in the configuration (PR 2.3b):** a top-level `lock_path`, a
+      per-backend `needs_interlock` (unset is true, resolved by `InterlockRequired()`) and
+      `interlock_wait_timeout_seconds`. No second key set is added. `config.Check` already refuses
+      a `lock_path` that is not a clean absolute path; it also refuses one under the controller's
+      state directory (the store's instance lock owns that) or in a directory writable by group or
+      others, whenever any backend requires the interlock.
+    - **PR 2.4** (`inference`) takes the `flock` on `lock_path` for a backend whose
+      `InterlockRequired()` is true. Its test holds the lock from a second process and proves a
+      session waits for it, and that a cancel while waiting releases nothing it did not take (the
+      `flock` test registered as root-only where it needs one, in `orchestrator/skips.yml`).
+      **PR 2.5** honours it in the backends pool. A backend whose interlock wait times out falls
+      over only to a backend its job may use, never to a lane its job forbids (`local-only`).
+    - **The engine's concurrency is declared once**, in the gateway spec's backend entry, as an
+      additive `max_in_flight` (the spec's schema version bumps under ADR-0001's schema-version
+      rule). The gateway counts calls in flight per spec backend, summed over every role and
+      deployment bound to it, and refuses a call over the cap with R15's `429
+      concurrency_limited`. `hnx gen gateway render --check` with a `controller:` block extends
+      `homelabnext/generators/agent_homes.py` `controller_problems`: a backend whose engine
+      declares `max_in_flight` must set `max_concurrent` to a value from 1 to `max_in_flight`
+      (`0`, today "unmeasured", is refused there, since it would admit without limit), and a
+      fixture in `tests/generators/fixtures/controller-backends/fail/` breaks each half of the
+      rule once.
+    - **PR 2.5 makes `max_concurrent` an admission cap when it is set**, not only the selection
+      hint it is today: a test admits one session on a backend with `max_concurrent: 1` and holds
+      the second until the first releases, by liveness (ADR-0029). The runner classes a
+      `concurrency_limited` 429 as a retryable wait on the same backend, never as a backend
+      failure, so it never falls over to another backend or to the cloud.
+    - **Other callers** cannot exceed the cap where the engine's host admits calls only from the
+      gateway (the guest's ingress and egress rules). That holds per site, so the lab check for
+      the engine host (ADR-0049) states it and fails when another source can reach the engine.
+    - **The interlock is removed from the lab's config when the legacy dispatcher's ledger rows
+      are `old-retired`.** The controller row's `new-shadow` to `new-primary` gate (ADR-0043
+      decision 3) requires either those rows retired, or `needs_interlock` not false on every
+      backend the legacy dispatcher also uses (the overlay overrides what `config.Migrate` wrote
+      for the local backend, and says why). `lock_path`, `needs_interlock` and
+      `interlock_wait_timeout_seconds` are deleted from the code at cutover+1 if no site sets them.
+11. **The Go `context` store is retired; this repository's reference store is the `context`
+    primary.** `internal/mdctx` is imported only by `cmd/ctxstore` and by the vault MCP server
+    (decision 20), so neither caller survives. `homelabnext.context.ContextStore`, which passes
+    `hnx conform run context --target context-reference`, is the capability's one primary
+    (ADR-0039), and ADR-0032 holds that context stays authored files, served in levels. The
+    private adapter for the Go store (`contrib/hnx_adapter`, with its target file) retires with
+    it; no third home for adapter code is created. A Go or product context store may come later
+    only as a provider module under ADR-0040's replace protocol, passing the `context` suite at
+    the contract version it claims (ADR-0041). Whatever the Go store holds in the lab is a dataset
+    row (ADR-0043 decision 7): `in-place` if it is the authored files the reference store reads
+    unchanged, otherwise `migrate` or `archive`, decided at stage 5.
+    - `tests/packaging/test_orchestrator_tree.py` gains a `NOT_PORTED` list of package
+      directories, `orchestrator/cmd/ctxstore` and `orchestrator/internal/mdctx`, and fails when a
+      tracked path lies under one. The same test scans `orchestrator/` and `modules/*/` for those
+      packages' import paths.
+    - The passthrough is held by what it does, not by a file name, since PR 2.4's `inference`
+      package may well have a legitimate `client.go`: a Go test fails when any file in
+      `orchestrator/internal/inference` registers a passthrough route or defines its handler
+      (asserted on the route pattern and the handler symbol).
+    - Decision 20's servers would live in the overlay's modules, which this repository cannot
+      see, so their guard is in the overlay's checks job (decision 20), by neutral role names here.
+12. **Third-party MCP servers become catalog records with pinned origins; the IdP's server retires
+    with its IdP.** Decision 6 covered the MCP servers of the private repository. Three more are in
+    the lab's catalog and are launched by wrapper shell scripts: a Sigma rule tool, an ATT&CK
+    lookup server and a server for the IdP that ADR-0034 and the operator's decision retire.
+    - The first two come in at **stage 4**, each as a provider module (ADR-0027) whose record
+      (ADR-0024) names a `package`, `image` or `git` origin with an exact version and a digest. The
+      launch is rendered from the record by `hnx mcp catalog render`; no wrapper script comes
+      across. `hnx mcp catalog check` already fails `kind: unknown`, and `hnx mcp catalog import`
+      turns a wrapper-script launch into exactly that, so a record that is still a wrapper cannot
+      be granted. Both are read-only (`read` class); neither acts, so neither needs a broker lane.
+    - Each record declares `egress: []` at run time. The ATT&CK and Sigma data the servers read is
+      a pinned, digest-verified artifact of the module, fetched at build time and never at run
+      time, so an agent's query text never leaves with a download. The record's `tlp` admits at
+      most what the granting profile's ceiling allows (ADR-0033). A server that needs run-time
+      egress is refused at stage 4 until that egress is listed and reviewed.
+    - The IdP's server is **not ported**. Its ledger row is `retire`, tied to the IdP's own row:
+      it is stopped no later than the IdP it fronts, and its credential is on the revocation
+      ledger (ADR-0043 decision 8). No server for the remaining IdP is added by this amendment.
+13. **The agent runtime's patch is upstreamed, and carried by the provider module until then.** The
+    private repository applies one patch to the agent runtime so that its usage file sizes each
+    model call. Dropping it silently changes the usage report the controller reads (ADR-0025's
+    job-finished record and ADR-0047 decision 4's trace check, which compares the report's call
+    count with the run's model-call spans, depend on it).
+    - The patch is offered upstream first, by an operator-owned contribution.
+    - Until an upstream release that contains it is past the 14-day cooldown and pinned, the
+      **stage-3 provider module** carries it as a file in its own directory, listed in its
+      manifest by path and sha256 (an additive field of `module.schema.json`, landing with that
+      module). `hnx modules check` refuses a listed patch whose digest differs and a patch file the
+      manifest does not list.
+    - The agent-runner suite (stage 3's ADR) gains a usage check: a session of two model calls
+      reports two sized calls. It fails against the unpatched runtime, so a pin bump that loses
+      the fix is red, not silent. When an upstream release carries the fix, the patch file and its
+      manifest entry go in the pull request that moves the pin.
+14. **The private end-to-end and per-agent profile tests are not ported; what replaces them runs
+    on loopback or in the overlay.** This repository's test policy allows no network beyond loopback
+    (`tools/go_test_policy.py`, `tests/network_guard.py`, CI's network namespace), and the private
+    tests either reach a live lake or pin lab data. Each kind goes to a stated home:
+    - **The controller's end-to-end behaviour** is `orchestration-conformance` (PR 2.7): the
+      controller built from `orchestrator/cmd/controller`, started on loopback in the namespace
+      with the exec runner and the runner body `conformance/fakes/llm_orchestrator_hermes.py`, and
+      `hnx conform run orchestration --target orchestration-orchestrator --strict`. `go-ok`
+      requires it, as it requires `gateway-conformance`. PR 2.8's fault injection adds the hold
+      checks (killed worker, restart reconciles) against the real binary.
+    - **The live-lake test** is not ported. The lake reads it exercised are the `lake` suite's,
+      against the loopback stand-in this repository already runs; a check against the lab's own
+      lake is a lab check under ADR-0049, run where the lake is, never in CI.
+    - **The deploy, toolset-home and catalog tests** become checks that already exist or that
+      decision 17 adds: `hnx gen gateway render --check` (homes against the gateway spec),
+      `hnx gen gateway homes` (invariant A-14), `hnx mcp catalog render --check` and `controller
+      check --config`.
+    - **The per-agent profile tests** pin facts about the lab's agents, so they are lab data. Each
+      one is classified at stage 5: a rule every profile must meet becomes a rule of the profile
+      compiler's policy ceiling (`hnx agent verify`), with its test here on fictional profiles; a
+      fact about one lab agent becomes an invariant criterion in the overlay's register, run by
+      `homelabnext/invariants` and the overlay's checks job (ADR-0049). A test that fits neither
+      is recorded on the ledger as dropped, with its reason. The overlay's checks job runs both.
+15. **The recorded stand-in retires in PR 2.7.** `conformance/fakes/llm_orchestrator_api.py`
+    models a private commit and cites private `file:line` shapes; once the controller is built
+    here it is a second thing to keep true.
+    - **PR 2.6** (the API) moves the stand-in to the ported behaviour (no passthrough, an unknown
+      agent key always 404), and moves both fakes' cites (`llm_orchestrator_api.py` and
+      `llm_orchestrator_hermes.py`) to `orchestrator/` paths, or to the seam's documented
+      behaviour where no in-repo file exists yet, as decision 8's amendment requires of stage 2.
+    - **PR 2.7** deletes the stand-in, the target `orchestration-llm-orchestrator-recorded.yml`,
+      the as-recorded half of `tests/conform/test_conform_orchestration_controller.py` and the
+      adapter's `fixes:` machinery (the stage-2 plan put that in PR 2.8; it goes in PR 2.7 because
+      the recorded target it served is deleted there, and this amendment wins); renames the adapter to
+      `orchestrator.py` in `homelabnext/conform/adapters/` and the target that runs the in-repo binary to
+      `orchestration-orchestrator` (targets are `<capability>-<impl>`); and moves the example
+      registry's controller version and the pin in `tools/tests/test_pin_consistency.py` from the
+      private commit to this repository's. A test in `tests/conform/` fails when any target file's
+      name ends in `-recorded` for `orchestration` or when a file under `conformance/` cites
+      `internal/hermesagent`. The live target `orchestration-llm-orchestrator.yml`, which measures
+      the lab's private controller, stays until the controller's row is `old-retired`, then goes.
+    - `conformance/fakes/llm_orchestrator_hermes.py` stays as the runner body until stage 3's
+      runner fake replaces it.
+16. **The controller has one service name, `orchestrator`, as event source and as broker target.**
+    Today it is the broker target `svc:orchestration`, the event source `svc:llm-orchestrator`
+    (private) or `svc:orchestrator` (`orchestrator/internal/events`), and the example registry row
+    `agent-runtime`; in the lab's registry `orchestration` is a SOAR product and the controller has
+    no row. ADR-0039 decision 7 settles the vocabulary; this decision settles the wire names:
+    - The registry row is `orchestrator`, capability `orchestration`. The event source is
+      `svc:orchestrator`, the default the code already has. The broker target of
+      `workflows/packs/agent-job-retry.yml` and `workflows/packs/proposal-validate.yml` becomes
+      `svc:orchestrator`, and their pinned renders under `workflows/stackstorm/homelabnext/pinned/`
+      are regenerated. The target moves at once, without an overlap: the old target names no
+      controller in any registry (in the lab's it names the SOAR product), so nothing could depend
+      on it and an overlap would keep a live misdirection. ADR-0039 decision 7 says the same; its
+      overlap applies to the event source only. `hnx registry bindings` (ADR-0039 decision 3)
+      refuses a pack whose `svc:` target or source names no registry row, capability or declared
+      platform source, which holds the rename.
+    - The event source keeps decision 8's overlap, worded once: **in the cutover release every
+      consumer accepts both `svc:llm-orchestrator` and `svc:orchestrator`**; the old source is
+      dropped at cutover+1, and only once PR 2.7's consumer check finds no consumer of it. The
+      controller emits under one configured source at a time. For the overlap, `svc:llm-orchestrator`
+      is one of ADR-0039 decision 3's declared platform sources (an event source only, never a
+      target, with its `why`), so the check that holds the rename also admits the overlap in
+      `workflows/packs/agent-job-retry.yml` and its fixtures; the entry is removed by the change
+      that drops the old source at cutover+1. PR 2.7's consumer check covers the
+      list in [the controller doc](../orchestration-controller.md) ("Neutral names") plus
+      `schemas/events/README.md` and the conformance fakes, which the audit found missing from it.
+    - `agent-runtime` is the runner slot only (ADR-0039): the runner host is found by host role,
+      and stage 3's ADR names the slot's contract.
+    - PR 2.7 depends on ADR-0039's `hnx registry bindings` (its implementation step 5), which
+      must merge first; ADR-0039's step 4 changes only the vocabulary and the fictional SOAR row,
+      and leaves the wire names, the controller's example row and the packs to PR 2.7, so the
+      rename is implemented once.
+    - The controller's example unit is `orchestrator/deploy/systemd/orchestrator.service` (PR
+      2.7), named after the row. The lab's row and unit are added to the overlay at stage 5, apart
+      from the SOAR product's row, which ADR-0039 moves out of `orchestration`.
+17. **`controller check --config` gives every site the Go loader's judgement (PR 2.7).** PR 2.3a
+    removed the Python copy of the grant loader's rules (`clients.orch_accepts`): the Go loader is
+    the one judge, and a Go test loads this repository's committed render in place. A site that
+    runs only the Python tooling then has `clients.orch_render_problems`, which checks that the
+    render is well formed, not that the controller accepts it. PR 2.7 adds `controller check
+    --config FILE`:
+    - it loads the configuration, the catalog of kinds and every profile the configuration names,
+      and renders each profile's two lanes (`Registry.CheckGrants`), without opening the database,
+      binding a port or reaching the network;
+    - it reads no `tokens_file` or other secret file's contents: it checks only that the path is set
+      and is a regular file it is allowed to read;
+    - exit `0` clean, `1` one line per problem (no value from a record or a secret in any line,
+      the rule `hnx mcp catalog` follows), `2` a usage error or an unreadable file;
+    - `make controller-check` runs it on the fictional example in CI's `go` job, and a fixture
+      breaks each refusal once;
+    - the overlay's checks job builds `orchestrator/cmd/controller` at the commit the overlay pins,
+      with `GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOWORK=off` against the pinned `go.sum` as CI's
+      `go` job does, and runs the check on the lab's configuration. The binary that a site deploys runs the same
+      check, so a site without a Go toolchain uses that binary rather than a Python copy.
+18. **Every identity or scope grant binds to its profile before the controller cuts over.** PR
+    2.3a added `binds` to the MCP catalog record (record schema 1.4): a parameter that picks an
+    identity or a scope binds to the granting profile (`agent_key`, `agent_key_lane`, `lane`,
+    `writable`, `readable` or `prefix`), the render writes it into the kind's `profile_scope`, and
+    `hnx mcp catalog check` refuses such a parameter that does not bind. That check finds such a
+    parameter by its env key's suffix (`_PREFIX…`, `_SCOPE`, `_LIST`, `_AGENT_KEY`, `_BY`), and
+    any other parameter is pinned to the union of every rendered profile's values. The lab's
+    grants were written for the private controller and pin values across profiles, which would let one profile
+    set another's prefix. So:
+    - at stage 5 the lab's records under `<overlay>/lab/mcp/` declare `binds` on every identity or
+      scope parameter, and the lab's profiles carry the scope key under its public name (the
+      private name is refused as an unknown key, never read wrongly);
+    - the controller row's `new-shadow` to `new-primary` gate (ADR-0043 decision 3) requires
+      `hnx mcp catalog check` and `hnx mcp catalog render --check` clean over the overlay's
+      catalog and `controller check --config` (decision 17) clean over the lab's configuration,
+      each recorded by digest as the gate's evidence;
+    - the gate's evidence also includes the render's cross-profile report, because the suffix rule
+      misses an identity or path parameter spelled `_USER`, `_DIR`, `_PATH`, `_ROOT`, `_ID` or
+      `_TENANT`: every pinned, non-`enum` parameter whose `allowed_values` holds values from more
+      than one profile is listed, and each must either declare `binds` or carry a human-reviewed
+      `shared: true` with a reason. A listed parameter with neither fails the gate.
+19. **The private repository is marked frozen, and every backport is recorded here.** From the
+    merge of each stage here, its packages are frozen in the private repository (decision 8). The
+    audit found no marker there. So, by an operator-merged pull request in the private repository
+    (it is outside this repository's reach, ADR-0046):
+    - its README and each frozen package's doc comment say `FROZEN: moved to homelab-next`, with
+      the stage;
+    - its CI refuses a commit that touches a frozen path unless the commit's message carries a
+      `Cutover-Fix: <ledger uid>` trailer naming the row the fix belongs to and a `Backport-Of:`
+      trailer naming the pull request here that carries the same fix, the pair ADR-0043 decision 6
+      defines for both frozen repositories, so `carried_fixes` reads one format;
+    - that CI resolves the named pull request through the GitHub API and refuses a `Backport-Of:`
+      that names no open or merged homelab-next pull request, or one without the `security`
+      label (only security fixes are backported, decision 8's amendment);
+    - the private gateway, its conformance job, its pin file and its copied vectors are deleted at
+      the gateway's cutover, as decision 8 already says.
+    Here, a pull request that carries a backported security fix says so in its description, and
+    the controller's ledger row lists it in `carried_fixes` (ADR-0043 decision 6). Stage 6's
+    archive waits until every ledger row whose `old` names a component of the private repository
+    (the controller, the gateway, its MCP servers and decision 21's rows) is `old-retired` and their
+    revocation records are `verified`: `hnx cutover check --archive-gate --rows <those uids>`. The
+    lab-wide gate (every row of the ledger) would hold the archive on unrelated services such as
+    DNS or the lake, which share nothing with this repository; ADR-0043 decision 8 is reworded to
+    this scoped gate for stage 6, and its step 6 adds the `--rows` filter.
+20. **The vault, tasking-queue and deconfliction MCP servers are not ported.** ADR-0044 decision
+    13 owns this (it amends decision 6), including what replaces them and how the vault's history
+    comes across. This amendment adds only the guard: the overlay's checks job fails when a module
+    or catalog record under the overlay names one of them, and their code is archived with the
+    private repository at stage 6. The other lab-only servers of decision 6 keep its plan.
+21. **Everything else the audit found without a stage is not ported unless a ledger row says
+    otherwise.** A scratch command, the one-off sync and facts scripts and the private design and
+    verification notes stay in the private repository's archive (stage 6). Each is a ledger row
+    with disposition `retire` or `archive` (ADR-0043), so the ledger's completeness check, not
+    memory, shows that nothing was dropped by accident.
+
+**Out of scope for this amendment:** the agent-runner contract itself (stage 3's own ADR), the
+broker's records actions and the vault import (ADR-0044), per-agent keys and their lifetimes
+(ADR-0045), run traces and budgets (ADR-0047), which product, if any, fills the `automation` slot
+(ADR-0039), an MCP server for the remaining IdP, and the conversion of the lab's agent profiles to
+compiled profiles (stage 5, with ADR-0043's roster of record).
+
+**Requirements other ADRs put on these stages.** ADR-0045 and ADR-0047 do not amend this ADR, but
+their decisions land inside its stages, and each stage's pull request carries them as written
+there: controller authentication on by default in stage 2's controller pull request (ADR-0045
+decision 9); `Session.Trace` and `Session.RunTokens` on the runner seam and the facts block's
+budget in PR 2.4, and the run deadline in PR 2.6 (ADR-0047); per-run agent credentials and trace
+propagation in stage 3's agent-runner ADR, which must cite ADR-0045 decision 6 and ADR-0047's
+runner requirements.
+
 ## Consequences
 
 - A contract change, its implementation and its conformance run are one pull request, reviewed and
@@ -294,6 +596,93 @@ what stage 2 carries:
   system is granted, classed and reviewed like every other.
 - The module SDK (`orchestrator/mcpkit`) becomes an interface this repository must keep stable for
   the modules that import it, in-tree and in the overlay.
+
+### Of the amendment of what the split left unplaced
+
+- Every piece of the private repository now has a stage, a retirement or a ledger row, and each
+  placement is held by a check: the orchestrator tree test's `NOT_PORTED` list and passthrough
+  test, the overlay's server-name guard, `controller check --config`, `hnx mcp catalog check`, `hnx registry bindings`, `controller_problems` and the
+  ledger's gates.
+- One engine limit replaces a lock two dispatchers shared. It holds for every caller of the
+  gateway, not only the two dispatchers that knew about the lock, at the cost of a gateway config
+  field and a schema bump. It holds against other callers only where the engine host admits only
+  the gateway, which the lab check states. `max_concurrent` becomes an admission cap, so a backend
+  that set it as a measured hint now also limits admission.
+- Retiring the Go context store and the recorded stand-in removes two copies of code that would
+  otherwise have to be kept true beside the real thing; the cost is that the lab's context comes
+  only from the reference store until a provider module replaces it.
+- The live-lake end-to-end test has no CI successor. Its coverage moves to the `lake` suite on
+  loopback and to a lab check that runs at the lab, which CI does not see.
+- Carrying a runtime patch makes the stage-3 provider module heavier until upstream takes it; the
+  runner suite's usage check is what keeps a pin bump from dropping it silently.
+- The overlay's checks job gains a Go build at the pinned commit, so overlay CI takes longer.
+
+**Implementation plan.** Each step is one pull request in this repository unless it says otherwise;
+the order follows the stage-2 series it rides on.
+
+1. **This amendment** (`docs:`), with the header lines and the index summary restamped. Proves:
+   `tools/tests/test_adr_log.py` (headings, reciprocal **Amends**/**Amended-by**, known ids).
+2. **The tree's `NOT_PORTED` list** (`test:`), in `tests/packaging/test_orchestrator_tree.py`.
+   Proves: a fixture tree holding a file under `orchestrator/cmd/ctxstore` or
+   `orchestrator/internal/mdctx`, or a `modules/*/` file importing either, fails; the real tree
+   passes.
+3. **PR 2.4 takes the interlock** (decision 10) from the existing `lock_path` and
+   `needs_interlock`, with the `config.Check` refusals and the passthrough test of decision 11.
+   Proves: a lock held by a second process delays a session on a backend whose
+   `InterlockRequired()` is true and not on one set `needs_interlock: false`; a `lock_path` under
+   the state directory or in a group-writable directory is refused when any backend requires the
+   interlock; a fixture `inference` file registering a passthrough route fails the Go test.
+4. **The gateway's per-engine `max_in_flight`** (decision 10), with the spec schema's additive
+   bump, the renderer, the gateway's enforcement and the `controller_problems` rule. Proves: a call
+   over the cap gets `429 concurrency_limited` before its body is read, with the count summed over
+   two roles bound to the same spec backend; `hnx gen gateway render --check` fails a backend whose
+   `max_concurrent` exceeds its engine's cap or is `0` (fixtures); the schema's examples and
+   negatives pass and fail.
+5. **PR 2.5 enforces `max_concurrent`** as an admission cap and honours the interlock in the
+   backends pool. Proves: with `max_concurrent: 1` a second session waits and is admitted when the
+   first is released by liveness; a `concurrency_limited` 429 is retried on the same backend and
+   never falls over; an interlock timeout on a `local-only` job's backend does not fall over to a
+   cloud backend.
+6. **PR 2.6 moves the stand-in to the ported behaviour and both fakes to `orchestrator/` cites**
+   (decision 15). Proves: the recorded target refuses an unknown agent key with 404 and has no
+   passthrough route; neither fake cites `internal/hermesagent`.
+7. **PR 2.7: the controller binary**, after ADR-0039's `hnx registry bindings` has merged, with `controller check --config` (decision 17), the
+   `orchestration-conformance` job (decision 14), the stand-in's retirement and the renames
+   (decision 15), the one service name and the consumer check (decision 16), and the example
+   unit. Proves: `make controller-check` passes on the example and each refusal fixture fails with
+   exit 1; `hnx conform run orchestration --target orchestration-orchestrator --strict` passes in
+   the namespace and `go-ok` requires it; no `-recorded` orchestration target and no
+   `internal/hermesagent` cite under `conformance/` remain; `hnx registry bindings` passes over
+   `examples/` with the packs targeting `svc:orchestrator`, and fails a fixture pack targeting an
+   unregistered `svc:`, while the overlap source in `agent-job-retry.yml`'s fixtures passes as a
+   declared platform source and fails as a target; the consumer check lists every consumer of `svc:llm-orchestrator` named in
+   decision 16.
+8. **PR 2.8: fault injection** against the real binary. Proves: the hold checks run and pass
+   instead of skipping.
+9. **The private repository's freeze** (decision 19), an operator-merged pull request there.
+   Proves, in its CI: a commit touching a frozen path without `Cutover-Fix:` and `Backport-Of:` is
+   refused, and so is one whose `Backport-Of:` names no homelab-next pull request or one without
+   the `security` label.
+10. **Stage 3: the agent-runner contract and the provider module**, carrying the runtime patch
+    (decision 13). Proves: the runner suite's usage check fails on the unpatched runtime and passes
+    on the patched one; `hnx modules check` refuses a patch whose digest differs from the manifest.
+11. **Stage 4: the two third-party MCP modules** (decision 12), one pull request each, with review
+    tier and record. Proves: `hnx mcp catalog check` passes with pinned origins and `egress: []`,
+    and fails the imported wrapper-script form (`kind: unknown`) and a record listing run-time
+    egress; the module's data artifact is refused when its digest differs.
+12. **Stage 5, in the overlay (operator-merged):** the lab's records with `binds` (decision 18),
+    the controller's row and unit (decision 16), the per-agent tests classified into compiler
+    rules, invariant criteria or dropped rows (decision 14), the checks job running `controller
+    check --config` at the pin (decision 17), and the ledger rows for decisions 11, 12, 20 and 21.
+    the cross-profile report (decision 18), the server-name guard (decision 20), and the dataset row
+    for the Go store's contents (decision 11). Proves: the overlay's checks job is green with all of
+    them; a fixture record with an identity parameter named `*_DIR` holding two profiles' values
+    fails the gate; `hnx cutover check` shows no piece of the private repository without a row.
+13. **The cutover release:** consumers accept both event sources (decision 16); the controller's
+    `new-primary` gate holds decision 18's evidence and decision 10's interlock condition.
+    **Cutover+1:** the old source and its declared platform-source entry, the old client kind and,
+    if no site sets them, `lock_path`, `needs_interlock` and `interlock_wait_timeout_seconds` are
+    removed, each after its consumer check finds nothing.
 
 ## Alternatives
 

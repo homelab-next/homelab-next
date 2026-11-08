@@ -4,7 +4,9 @@
 
 The controller runs every profiled job as ``hermes -z PROMPT [--toolsets T] [--usage-file F]``
 (``internal/hermesagent/invoker.go:239-247`` at ``a52a1c4``), where PROMPT starts with the job's
-``task_description`` (``internal/hermesagent/prompt.go:153``).  The adapter
+``task_description`` (``internal/hermesagent/prompt.go:153``, same commit; the package has since
+been split into ``internal/runner/hermes``, ``internal/prompt`` and ``internal/backends``, so both
+cites hold only at ``a52a1c4``).  The adapter
 (``homelabnext.conform.adapters.llm_orchestrator``) puts one job line into that description:
 ``hnx-conform-job:<base64url JSON>`` naming its loopback handler host, the job and its parameters.
 This script finds the line, asks the handler host to run the job's handler, and answers the way

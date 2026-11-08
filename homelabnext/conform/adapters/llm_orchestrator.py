@@ -9,7 +9,7 @@ The mapping (docs/orchestration-controller.md has the whole table):
   controller's profiles directory (``profiles_dir``, or ``HNX_ORCHESTRATION_PROFILES_DIR``), then
   ``POST /admin/reload-profiles``.  The agent key is ``hnxconf-<run token>-<name>``; the profile
   is ``local_only`` and asks for ``max_attempts: n + 1``, a field only a controller with the
-  proposed retry change reads.  The handler is kept by the handler host, never sent anywhere.
+  retry change (landed privately on 2026-10-22, after ``a52a1c4``) reads.  The handler is kept by the handler host, never sent anywhere.
 * ``submit`` -> ``POST /jobs`` with that agent key, the idempotency key namespaced by the run
   token (the controller's keys are global and never expire), and a task description holding one
   job line (``hnx-conform-job:<base64url JSON>``: handler host URL, a token per submit and its
@@ -30,9 +30,10 @@ The mapping (docs/orchestration-controller.md has the whole table):
 * ``cancel`` -> ``POST /jobs/{id}/cancel``; ``409`` (a run that may no longer be cancelled) reads
   the run back unchanged, which is the contract for a finished run.
 * ``capacity`` (feature ``admission``) -> ``GET /admin/backend-inflight`` (the route landed after
-  ``a52a1c4``; ``hermesagent.Policy.InFlightSnapshot``): ``in_flight`` summed over the backends,
-  ``holders`` the union of their ``reserved_runs``, ``limit`` ``None`` (the snapshot reports no
-  limit).  ``admission`` is declared only when that route answers; a ``404`` means no route, so
+  ``a52a1c4``; ``hermesagent.Policy.InFlightSnapshot``, in the private package as it was before
+  its split into ``internal/runner/hermes``, ``internal/prompt`` and ``internal/backends``):
+  ``in_flight`` summed over the backends, ``holders`` the union of their ``reserved_runs``,
+  ``limit`` ``None`` (the snapshot reports no limit).  ``admission`` is declared only when that route answers; a ``404`` means no route, so
   the capacity checks skip, and any other answer (a 5xx, a timeout, a ``401``) makes the run
   unmeasured rather than skipped.  Without a limit the suite judges a release by the run leaving
   ``reserved_runs``: ``in_flight`` is a counter shared with any other traffic on the controller,
@@ -94,7 +95,7 @@ _LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the handler host is local by d
 #: the largest ``POST /run`` body the handler host reads (a job line's token, MAC and parameters)
 MAX_RUN_BODY = 1 << 20
 _AGENT_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
-#: controller state -> contract state (internal/store/job.go:8-15)
+#: controller state -> contract state (orchestrator/internal/store/job.go:10-19)
 STATES = {
     "queued": "queued",
     "admitted": "running",

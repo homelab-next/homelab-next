@@ -290,7 +290,10 @@ def _int(value: Any) -> int:
 
 
 def orchestrator_queue(payload: Any, mapping: Mapping[str, Any], now: float) -> list[Draft]:
-    """``GET /admin/queue-summary`` of the LLM orchestrator (``internal/store`` QueueSummary)."""
+    """``GET /admin/queue-summary`` of the LLM orchestrator.
+
+    The shape is ``QueueSummary`` in ``orchestrator/internal/store``.
+    """
     if not isinstance(payload, Mapping) or not isinstance(payload.get("by_state"), Mapping):
         raise MappingError("orchestrator queue summary: expected {'by_state': {...}, ...}")
     by_state = payload["by_state"]
