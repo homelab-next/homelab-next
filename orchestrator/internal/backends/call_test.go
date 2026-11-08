@@ -720,3 +720,40 @@ func TestCall_ALocalOnlyCallNeverReachesTheCloud(t *testing.T) {
 		t.Errorf("every backend down, local-only: %v", err)
 	}
 }
+
+// A fallover attempts a backend only when it has a free slot at its max_concurrent: another run's
+// reservation filling it means it is skipped, never overfilled. An unreserved chain is held to
+// the same cap on every backend.
+func TestCall_FalloverNeverOverfillsAFullBackend(t *testing.T) {
+	r := runnertest.New(runnertest.On(map[string]runnertest.Step{"a": runnertest.Fail(runner.BackendFault, "reset")}, runnertest.Answer("b")))
+	p, _ := newPool(r, Backend{Name: "a", MaxConcurrent: 1}, Backend{Name: "b", MaxConcurrent: 1})
+	p.PrimaryFirst = true
+	ctx := context.Background()
+	if got, ok := p.Reserve(ctx, Affinity{}, "run-1", "watcher"); !ok || got != "a" {
+		t.Fatalf("reserve run-1 = %q %v", got, ok)
+	}
+	if got, ok := p.Reserve(ctx, Affinity{}, "other", "watcher"); !ok || got != "b" {
+		t.Fatalf("reserve other = %q %v", got, ok)
+	}
+	res, err := p.Call(ctx, session("run-1"), LocalOnly, Affinity{}, "a")
+	if err == nil || len(r.Sessions()) != 1 || r.Sessions()[0].Target.Backend != "a" || res.LocalAttempts != 1 {
+		t.Fatalf("Call = %v, sessions %+v: the full backend b was attempted", err, r.Sessions())
+	}
+	if p.InFlight("b") != 1 || p.InFlight("a") != 1 {
+		t.Fatalf("in flight a=%d b=%d: a slot leaked", p.InFlight("a"), p.InFlight("b"))
+	}
+	p.Release("b", "other")
+	if _, err := p.Call(ctx, session("run-2"), LocalOnly, Affinity{}, ""); err != nil {
+		t.Fatalf("an unreserved call with b free = %v", err)
+	}
+	if n := len(r.Sessions()); n != 2 || r.Sessions()[1].Target.Backend != "b" {
+		t.Fatalf("sessions = %+v", r.Sessions())
+	}
+	if p.InFlight("b") != 0 {
+		t.Fatalf("the unreserved attempt's slot was not given back: %d", p.InFlight("b"))
+	}
+	p.Release("a", "run-1")
+	if p.InFlight("a") != 0 {
+		t.Fatalf("a = %d", p.InFlight("a"))
+	}
+}
