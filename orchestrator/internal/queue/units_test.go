@@ -84,6 +84,8 @@ func TestClassifyFailure(t *testing.T) {
 		"backend down":                {fmt.Errorf("%w: %w", backends.ErrLocalOnly, down), local(runner.BackendFault), store.FailureBackendDown},
 		"no healthy backend":          {fmt.Errorf("%w: %w (x)", backends.ErrLocalOnly, backends.ErrNoHealthyBackend), local(runner.Internal), store.FailureBackendDown},
 		"down local, cloud failed":    {fmt.Errorf("%w (local: %w): %w", backends.ErrCloudFailed, down, classed(runner.TurnFailed)), cloud(runner.BackendFault, runner.TurnFailed), store.FailureHandlerError},
+		"concurrency limited":         {fmt.Errorf("%w: %w", backends.ErrConcurrencyLimited, classed(runner.ConcurrencyLimited)), local(runner.ConcurrencyLimited), store.FailureCapacity},
+		"cloud concurrency limited":   {cloudFailed(runner.BackendFault, runner.ConcurrencyLimited), cloud(runner.BackendFault, runner.ConcurrencyLimited), store.FailureCapacity},
 		"nothing attemptable":         {fmt.Errorf("%w: %w", backends.ErrLocalOnly, backends.ErrNoAttemptableBackend), local(runner.Internal), store.FailureCapacity},
 		"killed by controller":        {fmt.Errorf("%w: %w", backends.ErrLocalOnly, classed(runner.KilledByController)), local(runner.KilledByController), store.FailureCapacity},
 		"killed externally":           {fmt.Errorf("%w: %w", backends.ErrLocalOnly, classed(runner.KilledExternally)), local(runner.KilledExternally), store.FailureHandlerError},

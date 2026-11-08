@@ -71,7 +71,7 @@ func TestClassOf_PreOrderAndBareClasses(t *testing.T) {
 
 func TestClass_NamesAreDistinct(t *testing.T) {
 	seen := map[string]bool{}
-	for c := Internal; c <= KilledExternally; c++ {
+	for c := Internal; c <= ConcurrencyLimited; c++ {
 		n := c.String()
 		if n == "" || seen[n] || c.Error() != "runner: "+n {
 			t.Errorf("class %d: name %q", int(c), n)
