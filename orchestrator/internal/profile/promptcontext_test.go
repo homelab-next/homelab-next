@@ -276,7 +276,7 @@ func TestLoadRegistry_FactsTimeoutBounds(t *testing.T) {
 // entry's own names pass; the controller's API keys never do.
 func TestFactsCommand_EnvironIsScrubbed(t *testing.T) {
 	environ := []string{"PATH=/usr/bin", "HOME=/home/example", "LANG=C.UTF-8", "LC_ALL=C", "TZ=UTC",
-		"EXAMPLE_CREDENTIAL=not-for-prompts", "EXAMPLE_ENDPOINT=https://facts.example.internal", "PATHX=no", "=odd", "NOEQUALS"}
+		"LC_SECRET_TOKEN=not-a-locale", "LC_EXAMPLE=not-a-locale", "EXAMPLE_CREDENTIAL=not-for-prompts", "EXAMPLE_ENDPOINT=https://facts.example.internal", "PATHX=no", "=odd", "NOEQUALS"}
 	got := FactsCommand{Argv: []string{"/bin/true"}, Env: []string{"EXAMPLE_ENDPOINT", "EXAMPLE_ABSENT"}}.Environ(environ)
 	want := []string{"PATH=/usr/bin", "HOME=/home/example", "LANG=C.UTF-8", "LC_ALL=C", "TZ=UTC", "EXAMPLE_ENDPOINT=https://facts.example.internal"}
 	if !reflect.DeepEqual(got, want) {
@@ -306,6 +306,35 @@ func TestLoadRegistry_OwnStateExcludesTheFactsBranch(t *testing.T) {
 				t.Fatalf("err = %v, want the own_state combination refused", err)
 			}
 		})
+	}
+}
+
+// TestLoadRegistry_StateFileLinksResolveAtLoad: a link the operator made along the state file's
+// path is followed once, at load; a link swapped in afterwards changes nothing the builder opens.
+func TestLoadRegistry_StateFileLinksResolveAtLoad(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	writePCFile(t, filepath.Join(real, "state.json"), "{}")
+	link := filepath.Join(root, "notes")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, state := range map[string]string{"existing": filepath.Join(link, "state.json"), "not yet written": filepath.Join(link, "later.json")} {
+		dir := t.TempDir()
+		writePCFile(t, filepath.Join(dir, "w.yaml"), "id: w-v1\nagent_key: w\nprompt_context: {state_file: "+state+", own_state: true}\n")
+		opts := pcOptions(t.TempDir())
+		opts.StateFiles = []string{state}
+		reg, err := LoadRegistry(dir, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, _ := reg.Resolve("w")
+		if got, want := p.PromptContext.ResolvedStateFile(), filepath.Join(real, filepath.Base(state)); got != want || p.PromptContext.StateFile != state {
+			t.Errorf("%s: resolved %q (state_file %q), want %q", name, got, p.PromptContext.StateFile, want)
+		}
+	}
+	if got := (PromptContext{StateFile: "/x/y.json"}).ResolvedStateFile(); got != "/x/y.json" {
+		t.Errorf("a profile not loaded: %q", got)
 	}
 }
 

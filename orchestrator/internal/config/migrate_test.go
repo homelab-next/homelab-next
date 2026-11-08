@@ -316,3 +316,23 @@ func TestMigrate_InterlockOnlyForThePrivateControllersKeys(t *testing.T) {
 		}
 	}
 }
+
+// The private controller's configuration sets no prompt_contracts (its contracts were built in);
+// migrated, it still sets none and so gets the built-in ones.
+func TestMigrate_UnsetContractsStayTheDefaults(t *testing.T) {
+	out, _, err := Migrate([]byte(oldConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PromptContracts != nil || cfg.PromptContractsAppend != nil {
+		t.Fatalf("the migration set contracts: %q, %q", cfg.PromptContracts, cfg.PromptContractsAppend)
+	}
+	defaults := []string{"[built-in] one", "[built-in] two", "[built-in] three"}
+	if got, err := cfg.PromptContractTexts(t.TempDir(), defaults); err != nil || !slices.Equal(got, defaults) {
+		t.Fatalf("contracts = %q, %v; want the defaults", got, err)
+	}
+}
