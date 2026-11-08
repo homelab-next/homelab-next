@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# EXAMPLE ONLY: the job API's tokens file (docs/orchestration-controller.md, "The job API"): each
+# caller's token digest (sha256 of the token, hex), never the token. This digest is of a published
+# dummy value, so the file grants nothing to anyone who reads it. A site's file is owner-only.
+tokens:
+  - caller: operator
+    sha256: 5548f81a04538a7b25ee8141c0221729905743d20671c30369d2892018b10c53
+    scopes: [jobs, admin]
