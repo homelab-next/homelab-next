@@ -110,13 +110,19 @@ var plainIndexes = []struct{ name, ddl string }{
 	{"idx_jobs_state", `CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state)`},
 	{"idx_jobs_seq", `CREATE INDEX IF NOT EXISTS idx_jobs_seq ON jobs(seq)`},
 	{"idx_jobs_idempotency_owner", `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_owner ON jobs(COALESCE(submitted_by, ''), idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != ''`},
-	// The per-submitter bounds' counts (SubmitLimits), keyed as their queries are.
-	{"idx_jobs_submitter_created", `CREATE INDEX IF NOT EXISTS idx_jobs_submitter_created ON jobs(COALESCE(submitted_by, ''), created_at)`},
+	// The per-submitter bounds' counts (SubmitLimits), keyed as their queries are. The window's
+	// count compares instants (julianday(created_at)), so its index is on that expression: an index
+	// on the text column would bound the scan by the submitter only, every job it ever sent.
+	{"idx_jobs_submitter_created_jd", `CREATE INDEX IF NOT EXISTS idx_jobs_submitter_created_jd ON jobs(COALESCE(submitted_by, ''), julianday(created_at))`},
 	{"idx_jobs_submitter_state", `CREATE INDEX IF NOT EXISTS idx_jobs_submitter_state ON jobs(COALESCE(submitted_by, ''), state)`},
 }
 
 // globalIdempotencyIndex is the earlier, global key index.
 const globalIdempotencyIndex = "idx_jobs_idempotency"
+
+// textWindowIndex is the earlier window index, on created_at's text, which the window's count
+// (julianday) cannot use past the submitter; a migration drops it.
+const textWindowIndex = "idx_jobs_submitter_created"
 
 // jobsTableDDL is the jobs table as a new database creates it: the base columns, then the added
 // ones, so a new database and a migrated one have the same columns (a migrated one may carry
@@ -252,6 +258,9 @@ func planMigration(st schemaState) ([]migrationStep, error) {
 	}
 	if st.indexes[globalIdempotencyIndex] {
 		steps = append(steps, migrationStep{describe: "drop index " + globalIdempotencyIndex, stmt: `DROP INDEX ` + globalIdempotencyIndex})
+	}
+	if st.indexes[textWindowIndex] {
+		steps = append(steps, migrationStep{describe: "drop index " + textWindowIndex, stmt: `DROP INDEX ` + textWindowIndex})
 	}
 	for _, ix := range plainIndexes {
 		if !st.indexes[ix.name] {
