@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext import paths, sops
+from homelabnext import paths, sops, tlp
 from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyLoader
 
@@ -109,7 +109,9 @@ class Service:
 
     @property
     def endpoint_env_var(self) -> str:
-        return self.env_var or env_var_name(self.capability)
+        """A primary's override variable is its capability's; an eval or retiring row's is its
+        own row name's (ADR-0039 decision 2), so it can never claim the capability's."""
+        return self.env_var or env_var_name(self.capability if self.is_primary else self.name)
 
 
 #: the capabilities whose row may declare a ``tlp_ceiling`` (2.8): a service data leaves the lab's
@@ -156,8 +158,12 @@ class Registry:
     owner: str
     zones: dict[str, Zone]
     hosts: dict[str, Host]
+    #: the rows consumers see: the primaries only (ADR-0039 decision 2)
     services: dict[str, Service]
     digest: str
+    #: 2.9: the eval, retiring and legacy rows, validated but held back from every consumer: no
+    #: generator, resolver or reader sees them until ADR-0039 step 3 widens each by tier
+    non_primary: dict[str, Service] = field(default_factory=dict)
 
     @property
     def alias_zone(self) -> str:
@@ -167,8 +173,9 @@ class Registry:
         return f"{capability}.{self.alias_zone}"
 
     def by_capability(self, capability: str) -> Service | None:
+        """The capability's primary, or None: never another tier (ADR-0039 decision 2)."""
         for svc in self.services.values():
-            if svc.capability == capability:
+            if svc.capability == capability and svc.is_primary:
                 return svc
         return None
 
@@ -255,7 +262,8 @@ def semantic_problems(doc: dict) -> list[str]:
             primaries.setdefault(s["capability"], []).append(sname)
     for cap, names in primaries.items():
         if len(names) > 1:
-            problems.append(f"capability {cap!r} has more than one primary: {', '.join(names)}")
+            count = "two" if len(names) == 2 else str(len(names))
+            problems.append(f"capability {cap} has {count} primaries: {', '.join(names)}")
     primary = {cap: services[names[0]] for cap, names in primaries.items()}
     problems += _standing_problems(services, primary)
     ports: dict[tuple[str, int, str], str] = {}
@@ -303,6 +311,13 @@ def semantic_problems(doc: dict) -> list[str]:
                 problems.append(f"service {sname}: mcp requires an http(s) protocol")
         if s.get("auth") == "idp" and "idp" not in primary:
             problems.append(f"service {sname}: auth=idp but no primary provides capability 'idp'")
+        # the edge's forward auth (ADR-0034 decision 3): a public auth: idp site behind no
+        # primary auth-proxy would be published with no login; a non-primary one is not it
+        if s.get("auth") == "idp" and pub and "auth-proxy" not in primary:
+            problems.append(
+                f"service {sname}: a public auth: idp route needs a primary 'auth-proxy' "
+                "(the edge's forward auth)"
+            )
         if s.get("roles") and s.get("auth") != "idp":
             problems.append(
                 f"service {sname}: roles needs auth: idp (the IdP grants them at sign-in)"
@@ -320,13 +335,13 @@ def semantic_problems(doc: dict) -> list[str]:
         for up in s.get("upstreams", []):
             if up not in caps:
                 problems.append(f"service {sname}: upstream {up!r} is not a registered capability")
+            elif up == s["capability"]:
+                problems.append(f"service {sname}: lists itself as upstream")
             elif up not in primary:
                 problems.append(
                     f"service {sname}: upstream {up!r} has no primary (a binding reaches only a "
                     "primary)"
                 )
-            elif up == s["capability"]:
-                problems.append(f"service {sname}: lists itself as upstream")
     # a primary answers by its capability, an eval or retiring row by its row name (ADR-0039
     # decision 2): both the endpoint variables and the alias-zone names must stay unique, so a
     # row named like another capability is refused
@@ -334,16 +349,23 @@ def semantic_problems(doc: dict) -> list[str]:
     labels: dict[str, str] = {}
     for sname, s in services.items():
         label = row_name_label(sname, s)
-        if label is None:
+        twin = None
+        if label is not None:
+            # a second primary of one capability is reported above; its name and variable
+            # clash too
+            twin = labels.get(label)
+            if twin is not None and not (
+                standing_of(s) == "primary" and standing_of(services[twin]) == "primary"
+            ):
+                problems.append(
+                    f"service {sname}: alias-zone name {label!r} already used by {twin}"
+                )
+            labels.setdefault(label, sname)
+        # an explicit env_var is held unique whatever the tier: a legacy row answers by no name,
+        # but its env_var would still be read by whatever reads that variable
+        var = s.get("env_var") or (env_var_name(label) if label is not None else None)
+        if var is None:
             continue
-        # a second primary of one capability is reported above; its name and variable clash too
-        twin = labels.get(label)
-        if twin is not None and not (
-            standing_of(s) == "primary" and standing_of(services[twin]) == "primary"
-        ):
-            problems.append(f"service {sname}: alias-zone name {label!r} already used by {twin}")
-        labels.setdefault(label, sname)
-        var = s.get("env_var") or env_var_name(label)
         if var in envs and (twin is None or s.get("env_var")):
             problems.append(f"service {sname}: env var {var} already used by {envs[var]}")
         envs[var] = sname
@@ -355,11 +377,6 @@ def semantic_problems(doc: dict) -> list[str]:
 def _standing_problems(services: Mapping[str, Any], primary: Mapping[str, Any]) -> list[str]:
     """2.9 (ADR-0039 decisions 1, 2, 4 and 5): a non-primary row's date, route and ceiling; a
     replica's relation; and capability names that carry a tier."""
-    # local: importing homelabnext.registry must not import homelabnext.tlp (coverage imports
-    # this package to locate a --cov module and then drops what it imported, which left the
-    # package's ``tlp`` attribute naming a discarded copy of the module, so two Label types)
-    from homelabnext.tlp import parse_stored
-
     out = []
     for sname, s in services.items():
         cap = s["capability"]
@@ -375,32 +392,54 @@ def _standing_problems(services: Mapping[str, Any], primary: Mapping[str, Any]) 
                 f"service {sname}: capability {cap!r} carries a tier in its name; "
                 "use standing (and the capability it competes for)"
             )
-        if _REPLICA_SUFFIX.search(cap) and not s.get("replica_of"):
+        suffix = _REPLICA_SUFFIX.search(cap)
+        source = s.get("replica_of")
+        if suffix and not source:
             out.append(
                 f"service {sname}: capability {cap!r} reads as a replica; declare replica_of"
             )
-        source = s.get("replica_of")
+        elif suffix and source != cap and cap != f"{source}{suffix.group(0)}":
+            out.append(
+                f"service {sname}: a replica capability is named for what it replicates: "
+                f"{source}{suffix.group(0)}, not {cap}"
+            )
         if source:
             of = primary.get(source)
             if source == cap:
                 out.append(f"service {sname}: replica_of names its own capability {cap!r}")
             elif of is None:
                 out.append(f"service {sname}: replica_of {source!r} has no primary")
-            elif not s.get("impl") or s.get("impl") != of.get("impl"):
+            elif not s.get("impl") and not of.get("impl"):
+                out.append(
+                    f"service {sname}: replica_of {source!r} needs an impl on both rows "
+                    "(a replica serves the same product's data)"
+                )
+            elif s.get("impl") != of.get("impl"):
                 out.append(
                     f"service {sname}: replica_of {source!r} needs the primary's impl "
                     f"({of.get('impl') or 'none'}), not {s.get('impl') or 'none'}"
                 )
         if tier == "primary":
+            extra = sorted(set(s.get("standing") or {}) & {"until", "why"})
+            if extra:
+                out.append(
+                    f"service {sname}: standing {' and '.join(extra)} is for a non-primary row "
+                    "(a primary has no end date)"
+                )
             continue
         if s.get("public_hostname"):
             out.append(
                 f"service {sname}: public_hostname is for a primary row only, not a {tier} one"
             )
-        if tier in ("eval", "retiring") and cap in EGRESS_CAPABILITIES:
+        if cap in EGRESS_CAPABILITIES:
+            # every non-primary egress row is held to the primary's ceiling, legacy included:
+            # a legacy row needs none (this repository sends nothing to it), but one it declares
+            # must not be above what the capability's consumers send to
             mine = s.get("tlp_ceiling")
             theirs = (primary.get(cap) or {}).get("tlp_ceiling")
-            if not mine:
+            if not mine and tier == "legacy":
+                pass
+            elif not mine:
                 out.append(
                     f"service {sname}: a {tier} row of egress capability {cap!r} declares its "
                     "own tlp_ceiling"
@@ -410,7 +449,7 @@ def _standing_problems(services: Mapping[str, Any], primary: Mapping[str, Any]) 
                     f"service {sname}: tlp_ceiling cannot be held to the primary's: "
                     f"no primary of {cap!r} declares one"
                 )
-            elif parse_stored(mine) > parse_stored(theirs):
+            elif tlp.parse_stored(mine) > tlp.parse_stored(theirs):
                 out.append(f"service {sname}: tlp_ceiling {mine} is above the primary's ({theirs})")
     return out
 
@@ -676,8 +715,9 @@ def build_registry(doc: dict) -> Registry:
         owner=lab.get("owner", ""),
         zones=zones,
         hosts=hosts,
-        services=services,
+        services={k: v for k, v in services.items() if v.is_primary},
         digest=canonical_digest(doc),
+        non_primary={k: v for k, v in services.items() if not v.is_primary},
     )
 
 

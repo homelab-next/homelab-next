@@ -63,7 +63,7 @@ NEGATIVES = {
     "unknown-host": (lambda d: d["services"]["notify"].update(host="nowhere"), "unknown host"),
     "duplicate-capability": (
         lambda d: d["services"]["metrics"].update(capability="notify"),
-        "capability 'notify' has more than one primary: notify, metrics",
+        "capability notify has two primaries: notify, metrics",
     ),
     "duplicate-port-on-host": (
         lambda d: d["services"]["metrics"].update(port=8080),
@@ -307,10 +307,12 @@ def test_a_non_primary_row_shares_its_primarys_capability(tier):
     from homelabnext.registry.model import build_registry
 
     reg = build_registry(mutate(_eval_notify(tier)))
-    row = reg.services["notify-candidate"]
+    row = reg.non_primary["notify-candidate"]
     assert (row.capability, row.standing, row.until) == ("notify", tier, "2026-12-31")
     assert row.why == "a candidate under test" and not row.is_primary
     assert reg.services["notify"].standing == "primary" and reg.services["notify"].is_primary
+    # held back from every consumer until ADR-0039 step 3 widens each by tier
+    assert "notify-candidate" not in reg.services and reg.by_capability("notify").name == "notify"
 
 
 def test_an_explicit_primary_standing_is_the_default():
@@ -336,7 +338,7 @@ def test_a_second_explicit_primary_is_refused():
         d["services"]["notify-candidate"]["standing"] = {"tier": "primary"}
 
     problems = _problems(mutate(fn))
-    assert "capability 'notify' has more than one primary: notify, notify-candidate" in problems
+    assert "capability notify has two primaries: notify, notify-candidate" in problems
     # one defect, one line: the shared name and variable of the two primaries are not repeated
     assert not [p for p in problems if "already used by" in p], problems
 
@@ -404,6 +406,31 @@ def test_replica_of_names_a_primary_of_the_same_impl():
         return _problems(mutate(fn))
 
     assert any("needs the primary's impl" in p for p in replica(impl="unbound"))
+    assert not replica()  # the same impl
+    # a replica capability is named for what it replicates
+    assert any(
+        "named for what it replicates: dns-secondary" in p
+        for p in _problems(
+            mutate(
+                lambda d: d["services"].update(
+                    dns2=_row(
+                        d["services"]["dns"],
+                        capability="zone-secondary",
+                        host="mon-core",
+                        replica_of="dns",
+                    )
+                )
+            )
+        )
+    )
+
+    def no_impl(d):
+        d["services"]["dns"].pop("impl")
+        d["services"]["dns2"] = _row(
+            d["services"]["dns"], capability="dns-secondary", host="mon-core", replica_of="dns"
+        )
+
+    assert any("needs an impl on both rows" in p for p in _problems(mutate(no_impl)))
     assert any("has no primary" in p for p in replica(replica_of="ghost"))
     assert any("names its own capability" in p for p in replica(replica_of="dns-secondary"))
 
@@ -496,8 +523,41 @@ def test_an_eval_row_named_like_another_capability_is_refused():
 def test_a_legacy_row_answers_by_no_name():
     def fn(d):
         _eval_notify("legacy")(d)
-        # named like another capability: harmless, as a legacy row gets no record or variable
-        d["services"]["metrics-legacy-row"] = d["services"].pop("notify-candidate")
-        d["services"]["metrics-legacy-row"]["capability"] = "notify"
+        # the metrics primary's row has another name, and the legacy notify row is named
+        # "metrics", like that capability: harmless, as a legacy row gets no record or variable
+        d["services"]["metrics-server"] = d["services"].pop("metrics")
+        d["services"]["metrics"] = d["services"].pop("notify-candidate")
 
-    assert _problems(mutate(fn)) == []
+    doc = mutate(fn)
+    assert doc["services"]["metrics"]["capability"] == "notify"
+    assert doc["services"]["metrics-server"]["capability"] == "metrics"
+    assert _problems(doc) == []
+
+    def as_eval(d):  # the same name on an eval row answers by it, so it is refused
+        fn(d)
+        d["services"]["metrics"]["standing"]["tier"] = "eval"
+
+    assert any("alias-zone name 'metrics' already used by" in p for p in _problems(mutate(as_eval)))
+
+
+@pytest.mark.parametrize("field", ["until", "why"])
+def test_until_and_why_are_refused_on_a_primary(field):
+    def fn(d):
+        value = "2026-12-31" if field == "until" else "the decided product"
+        d["services"]["notify"]["standing"] = {"tier": "primary", field: value}
+
+    assert any(f"standing {field} is for a non-primary row" in p for p in _problems(mutate(fn)))
+
+
+def test_a_self_upstream_is_reported_before_a_missing_primary():
+    def fn(d):
+        d["services"]["metrics"]["standing"] = {
+            "tier": "eval",
+            "until": "2026-12-31",
+            "why": "trial",
+        }
+        d["services"]["metrics"]["upstreams"] = ["metrics"]
+
+    problems = [p for p in _problems(mutate(fn)) if p.startswith("service metrics:")]
+    assert any("lists itself as upstream" in p for p in problems), problems
+    assert not any("upstream 'metrics' has no primary" in p for p in problems), problems

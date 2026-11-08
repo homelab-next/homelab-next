@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from homelabnext.identity.aliases import AliasMap
+from homelabnext.registry.model import standing_of
 
 __all__ = ["Universe", "discover"]
 
@@ -50,14 +51,15 @@ class Universe:
         return (self.registry.get("services", {}).get(service) or {}).get("host")
 
     def capability_hosts(self, cap: str) -> set[str]:
-        """Registry hosts of services providing ``cap:<name>`` (empty if unknown)."""
+        """Registry hosts of the primary providing ``cap:<name>`` (empty if unknown): an eval,
+        retiring or legacy row is not what the capability means (ADR-0039 decision 2)."""
         if self.registry is None:
             return set()
         name = cap.split(":", 1)[1]
         return {
             s["host"]
             for s in self.registry.get("services", {}).values()
-            if s.get("capability") == name and "host" in s
+            if s.get("capability") == name and "host" in s and standing_of(s) == "primary"
         }
 
 

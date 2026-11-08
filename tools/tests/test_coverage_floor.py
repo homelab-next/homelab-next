@@ -155,6 +155,15 @@ def test_each_unit_is_measured_by_its_own_tests_only(tmp_path, monkeypatch, caps
         assert targets == {coverage_floor._cov_target(u) for u in units}
 
 
+def test_every_coverage_target_is_a_directory_never_a_dotted_name():
+    # a dotted --cov name is imported by coverage before the tests and then dropped from
+    # sys.modules, leaving a package attribute naming a discarded copy of a submodule
+    for unit in coverage_floor.UNITS:
+        target = coverage_floor._cov_target(unit)
+        assert (coverage_floor.REPO_ROOT / target).is_dir(), (unit, target)
+        assert unit == target or unit.startswith(target + "/"), (unit, target)
+
+
 def test_subprocesses_the_tests_start_are_measured(tmp_path, monkeypatch):
     # tools/leak_scan.py's tests run it as a program; without this its main() reads as untested
     cmds = []

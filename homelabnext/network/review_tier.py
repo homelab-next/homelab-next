@@ -132,7 +132,8 @@ SELECTION_OWNER = {"hosts.*.capacity": "the resources a host offers: a limit, no
 #: files and directories whose every change is human-approve as a whole, and why
 TRUST_PATHS = {
     "lab/services.yml": "the registry: the hosts, addresses, ports and zones every svc: allow "
-    "and route renders to",
+    "and route renders to, and each row's standing and replica_of, which decide the one primary "
+    "every consumer of a capability reaches (ADR-0039)",
     "lab/guests/": "a guest's zone, addresses, extra addresses and outbound_allow",
     "lab/modules/": "the overlay's own modules (manifests, roles, units), which hnx modules "
     "review-tier does not read",

@@ -32,7 +32,7 @@ def test_version_is_2_9_frozen_and_additive():
 
 def test_standing_validates_in_2_9_only_and_reaches_the_model():
     doc = copy.deepcopy(DOC)
-    doc["services"]["metrics"]["standing"] = {"tier": "primary", "why": "the decided product"}
+    doc["services"]["metrics"]["standing"] = {"tier": "primary"}
     assert sc.errors_for(CURRENT, doc, REG) == []
     assert sc.errors_for(FROZEN_28, doc, REG) != []
     assert build_registry(doc).services["metrics"].standing == "primary"
