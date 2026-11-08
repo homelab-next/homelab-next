@@ -295,15 +295,21 @@ func serveSite(t *testing.T, cfg string, extra ...string) (base string, sigs cha
 	srv = make(chan *http.Server, 1)
 	hooks := &serveHooks{listener: ln, signals: sigs, reloaded: func(err error) { reloaded <- err }, server: func(s *http.Server) { srv <- s }}
 	var logs syncBuffer
-	go func() { done <- serve(append([]string{"--config", cfg}, extra...), &logs, hooks) }()
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		done <- serve(append([]string{"--config", cfg}, extra...), &logs, hooks)
+	}()
 	t.Cleanup(func() {
 		select {
 		case sigs <- syscall.SIGTERM:
 		default:
 		}
+		// serve must have stopped before the test's directories go: wait for it, bounded
 		select {
-		case <-done:
-		default:
+		case <-finished:
+		case <-time.After(60 * time.Second):
+			t.Error("serve did not stop within 60s of SIGTERM")
 		}
 		if t.Failed() {
 			t.Log(logs.String())
