@@ -1,5 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The eleven built-in generators."""
+"""The eleven built-in generators.
+
+Each reads the registry's primaries (``Registry.services``) and, where ADR-0039 decision 2 gives
+it a non-primary tier, reads that tier through ``Registry.rows`` by name, so a tier a generator
+does not name never reaches its output:
+
+* DNS zone and hosts block: an ``eval`` or ``retiring`` row gets its row-name address record
+  (``<row>.<svc_label>.<domain>``), never the capability alias, SRV or TXT;
+* endpoint variables (the aggregate env file): an ``eval`` or ``retiring`` row's
+  ``HNX_ENDPOINT_<ROW>``, naming its row-name record;
+* metrics and uptime targets: primary and ``eval`` rows, by the name each answers by;
+* the IdP realm: rendered only for an ``idp`` row whose ``impl`` is the realm format's product,
+  primary or ``eval``; clients for ``auth: idp`` rows that are primary or ``eval``;
+* the edge: primaries only, and the forward-auth check needs a primary ``auth-proxy``.
+
+A ``legacy`` row reaches no output.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +37,13 @@ from homelabnext.edge_identity import (
     USERNAME_CLAIM,
     IdentityHeaders,
 )
-from homelabnext.registry.model import Registry, Service, secret_env_name
+from homelabnext.registry.model import (
+    ANSWERING_TIERS,
+    STANDINGS,
+    Registry,
+    Service,
+    secret_env_name,
+)
 
 from .core import MARKER, register
 from .safe import check_fields, checked
@@ -45,7 +67,13 @@ def _yaml_doc(reg: Registry, body) -> str:
 
 
 def _endpoint_url(reg: Registry, svc: Service) -> str:
-    return f"{svc.scheme}://{reg.alias(svc.capability)}:{svc.port}"
+    """The URL ``svc`` answers by: a primary's capability alias, an eval or retiring row's
+    row-name record (ADR-0039 decision 2)."""
+    return f"{svc.scheme}://{reg.address_of(svc)}:{svc.port}"
+
+
+#: the tiers whose metrics and uptime targets are rendered (ADR-0039 decision 2)
+OBSERVED_TIERS = ("primary", "eval")
 
 
 def _l4(svc: Service) -> str:
@@ -87,6 +115,12 @@ def dns_zone(reg: Registry) -> dict[str, str]:
         host = reg.host_of(s)
         check_fields("zone", {"capability": s.capability, "address": host.address})
         lines.append(f"{s.capability} IN {_rrtype(host.address)} {host.address}")
+    # an eval or retiring row answers by its row name only: its address record, no SRV or TXT
+    # (those, like the capability alias, belong to the primary alone; ADR-0039 decision 2)
+    for s in reg.rows(*ANSWERING_TIERS):
+        host = reg.host_of(s)
+        check_fields("zone", {"service": s.name, "address": host.address})
+        lines.append(f"{s.name} IN {_rrtype(host.address)} {host.address}")
     for s in reg.sorted_services():
         lines.append(f"_{s.capability}._{_l4(s)} IN SRV 0 0 {s.port} {s.capability}.{zone}.")
         scheme = s.scheme
@@ -128,6 +162,9 @@ def hosts_file(reg: Registry) -> dict[str, str]:
         by_addr[reg.hosts[name].address].append(f"{name}.{reg.domain}")
     for s in reg.sorted_services():
         by_addr[reg.host_of(s).address].append(reg.alias(s.capability))
+    # the resolver's fallback for a row-name record (ADR-0039 decision 2)
+    for s in reg.rows(*ANSWERING_TIERS):
+        by_addr[reg.host_of(s).address].append(reg.address_of(s))
     lines = [f"{HOSTS_BEGIN} sha256:{reg.digest[:16]} ({MARKER}; do not edit)"]
     for addr in sorted(by_addr, key=lambda a: ipaddress.ip_address(a)):
         lines.append(f"{addr} " + " ".join(sorted(by_addr[addr])))
@@ -219,8 +256,9 @@ def _auth_proxy(reg: Registry) -> Service | None:
         gated = [s.name for s in reg.sorted_services() if s.auth == "idp" and s.public_hostname]
         if gated:
             raise ValueError(
-                f"caddy: {', '.join(gated)} need(s) auth: idp at the edge but no service provides "
-                f"capability {AUTH_PROXY_CAPABILITY!r} (the forward-auth proxy, ADR-0034)"
+                f"caddy: {', '.join(gated)} need(s) auth: idp at the edge but no primary provides "
+                f"capability {AUTH_PROXY_CAPABILITY!r} (the forward-auth proxy, ADR-0034; a "
+                "non-primary one is not it, ADR-0039)"
             )
     return proxy
 
@@ -239,7 +277,9 @@ def caddy(reg: Registry) -> dict[str, str]:
         )
     strip = IDENTITY_HEADERS.strip_lines("\t")
     for s in reg.sorted_services():
-        if not s.public_hostname:
+        # a public route is a primary's alone (ADR-0039 decision 2; the registry refuses one
+        # elsewhere, and a hand-built model is held to it here too)
+        if not s.public_hostname or not s.is_primary:
             continue
         # every site strips the client's identity headers at site level, before every handle
         # and route of the site (Caddy sorts request_header first): a path that never reaches
@@ -280,18 +320,19 @@ def caddy(reg: Registry) -> dict[str, str]:
 )
 def prometheus(reg: Registry) -> dict[str, str]:
     jobs = []
-    for s in reg.sorted_services():
+    for s in reg.rows(*OBSERVED_TIERS):
         if not s.metrics:
             continue
         port = s.metrics.get("port", s.port)
         jobs.append(
             {
-                "job_name": s.capability,
+                # a primary's job is its capability's, an eval row's its row name's
+                "job_name": s.answers_by,
                 "metrics_path": s.metrics["path"],
                 "scheme": s.scheme if s.scheme in ("http", "https") else "http",
                 "static_configs": [
                     {
-                        "targets": [f"{reg.alias(s.capability)}:{port}"],
+                        "targets": [f"{reg.address_of(s)}:{port}"],
                         "labels": {"owner": s.owner, "service": s.name, "version": s.version},
                     }
                 ],
@@ -308,9 +349,9 @@ def prometheus(reg: Registry) -> dict[str, str]:
 )
 def blackbox(reg: Registry) -> dict[str, str]:
     http, tcp = [], []
-    for s in reg.sorted_services():
+    for s in reg.rows(*OBSERVED_TIERS):
         kind = s.health.get("kind", "none")
-        alias = reg.alias(s.capability)
+        alias = reg.address_of(s)
         if kind == "http":
             http.append(
                 {
@@ -660,10 +701,37 @@ def realm_grants(realm: dict) -> dict[str, dict[str, set[str]]]:
     }
 
 
+#: the product whose realm format :func:`idp_realm` renders (ADR-0034, ADR-0039 decision 2)
+REALM_PRODUCT = "keycloak"
+#: the tiers the realm is rendered for, and whose ``auth: idp`` rows get its clients
+REALM_TIERS = ("primary", "eval")
+
+
+def realm_idp(reg: Registry) -> Service:
+    """The ``idp`` row the realm is rendered for: the one whose ``impl`` is the realm format's
+    product, primary or ``eval`` (the primary when both are).  None is refused, so a realm in
+    this format is never rendered for another product, nor for a ``retiring`` or ``legacy``
+    row."""
+    rows = [s for s in reg.rows(*REALM_TIERS) if s.capability == "idp" and s.impl == REALM_PRODUCT]
+    if rows:
+        return min(rows, key=lambda s: (not s.is_primary, s.name))
+    seen = ", ".join(
+        f"{s.name} ({s.standing}, impl {s.impl or 'none'})"
+        for s in reg.rows(*STANDINGS)
+        if s.capability == "idp"
+    )
+    raise ValueError(
+        f"idp_realm: no primary or eval idp row has impl {REALM_PRODUCT!r}, the realm format's "
+        f"product (idp rows: {seen or 'none'}); the realm is not rendered for another product "
+        "or a retiring or legacy row (ADR-0039)"
+    )
+
+
 def registry_grants(reg: Registry) -> dict[str, dict[str, set[str]]]:
-    """``{group: {service: {role, ...}}}`` from the registry's group-to-role table."""
+    """``{group: {service: {role, ...}}}`` from the group-to-role table of the rows the realm
+    has clients for (primary and ``eval``)."""
     out: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
-    for s in reg.sorted_services():
+    for s in reg.rows(*REALM_TIERS):
         for role, groups in s.roles.items():
             for g in groups:
                 out[g][s.name].add(role)
@@ -683,20 +751,28 @@ def idp_realm(reg: Registry) -> dict[str, str]:
     cannot change their own username (``editUsernameAllowed: false``): it is the
     ``preferred_username`` claim the platform names a person by (the status hub's approver
     subject, the SSH CA's principal: :data:`homelabnext.edge_identity.USERNAME_CLAIM`).  No
-    secret is in it: each client secret is a secret-store reference."""
-    gated = [s for s in reg.sorted_services() if s.auth == "idp"]
+    secret is in it: each client secret is a secret-store reference.
+
+    It is rendered only for the :func:`realm_idp` row, and its clients are for the ``auth: idp``
+    rows that are primary or ``eval`` (an eval row has no public hostname, so no redirect); the
+    auth proxy's client is the primary auth proxy's (ADR-0039 decision 2)."""
+    realm_idp(reg)
+    gated = [s for s in reg.rows(*REALM_TIERS) if s.auth == "idp"]
     clients, roles = [], {}
     for s in gated:
-        root = f"https://{s.public_hostname}" if s.public_hostname else None
+        # a redirect is under a public route, which is a primary's alone
+        root = f"https://{s.public_hostname}" if s.public_hostname and s.is_primary else None
         clients.append(_client(s.name, s.owner, [f"{root}/*"] if root else [], root))
         if s.roles:
             roles[s.name] = [
                 {"clientRole": True, "description": f"{s.name} {r}", "name": r} for r in s.roles
             ]
     proxy = reg.by_capability(AUTH_PROXY_CAPABILITY)
-    if proxy is not None and proxy not in gated:
+    if proxy is not None and proxy.name not in {s.name for s in gated}:
         callbacks = sorted(
-            f"https://{s.public_hostname}{AUTH_PROXY_CALLBACK}" for s in gated if s.public_hostname
+            f"https://{s.public_hostname}{AUTH_PROXY_CALLBACK}"
+            for s in gated
+            if s.public_hostname and s.is_primary
         )
         clients.append(_client(proxy.name, proxy.owner, callbacks, None))
     clients.sort(key=lambda c: c["clientId"])
@@ -823,9 +899,11 @@ def env_files(reg: Registry) -> dict[str, str]:
             check_fields("env", {"env_var": u.endpoint_env_var, "url": _endpoint_url(reg, u)})
             lines.append(f"{u.endpoint_env_var}={_endpoint_url(reg, u)}")
         out[f"env/{s.name}.env.generated"] = "\n".join(lines) + "\n"
+    # an eval or retiring row's variable is its row name's, naming its row-name record
+    # (ADR-0039 decision 2): the conformance targets and the shadow lane address it so
     allv = [_hdr(reg)] + [
         f"{s.endpoint_env_var}={_endpoint_url(reg, s)}"
-        for s in sorted(reg.sorted_services(), key=lambda x: x.endpoint_env_var)
+        for s in sorted(reg.rows("primary", *ANSWERING_TIERS), key=lambda x: x.endpoint_env_var)
     ]
     out["env/_all.env.generated"] = "\n".join(allv) + "\n"
     return out

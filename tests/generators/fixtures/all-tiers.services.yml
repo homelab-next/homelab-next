@@ -1,0 +1,169 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# A registry holding every standing (ADR-0039 decision 1), rendered by every generator in
+# tests/generators/test_gen_tiers.py and compared with tests/generators/tiers/golden/: each
+# capability below has one primary, and status-hub and idp also have rows of the other tiers,
+# each declaring every field a generator could render, so an artefact a tier may not have
+# shows up in the golden. Synthetic documentation addresses only.
+registry_version: 1
+
+lab:
+  name: tiers
+  domain: example.internal
+  svc_label: svc
+  owner: platform-team
+
+zones:
+  mgmt: {cidr: 192.0.2.0/26, description: management and shared infrastructure}
+  data: {cidr: 192.0.2.64/26, description: storage and the hub}
+  edge: {cidr: 198.51.100.0/26, description: reverse proxy and public entry}
+
+hosts:
+  dns-core: {address: 192.0.2.5, zone: mgmt, role: resolver}
+  idp-core: {address: 192.0.2.6, zone: mgmt, role: identity}
+  kc-core: {address: 192.0.2.7, zone: mgmt, role: identity}
+  oldlab-core: {address: 192.0.2.8, zone: mgmt, role: status}
+  hub-core: {address: 192.0.2.70, zone: data, role: status}
+  next-core: {address: 192.0.2.71, zone: data, role: status}
+  prev-core: {address: 192.0.2.72, zone: data, role: status}
+  edge-core: {address: 198.51.100.10, zone: edge, role: edge}
+  proxy-core: {address: 198.51.100.11, zone: edge, role: auth}
+
+services:
+  dns:
+    capability: dns
+    impl: resolver
+    host: dns-core
+    protocol: dns
+    port: 53
+    health: {kind: none}
+    owner: platform-team
+    version: "13.0"
+    tls: none
+  idp:
+    capability: idp
+    impl: incumbent-idp
+    host: idp-core
+    protocol: https
+    port: 9443
+    health: {kind: http, path: /-/health/live/, expect_status: 204}
+    owner: identity-team
+    version: "2024.8"
+    tls: internal
+    auth: own
+    public_hostname: login.lab.example
+  kc-trial:
+    capability: idp
+    impl: keycloak
+    host: kc-core
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /health/ready, expect_status: 200}
+    metrics: {path: /metrics, port: 9000}
+    clients: [data]
+    owner: identity-team
+    version: "26.8.1"
+    tls: internal
+    auth: own
+    standing: {tier: eval, until: "2026-12-31", why: the single sign-on candidate}
+  auth-proxy:
+    capability: auth-proxy
+    impl: oauth2-proxy
+    host: proxy-core
+    protocol: http
+    port: 4180
+    health: {kind: http, path: /ping, expect_status: 200}
+    owner: identity-team
+    version: "7.6.0"
+    tls: none
+  edge-proxy:
+    capability: edge-proxy
+    impl: edge-server
+    host: edge-core
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    owner: platform-team
+    version: "2.11.7"
+    tls: public
+  status-hub:
+    capability: status-hub
+    impl: hnx-status
+    host: hub-core
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /healthz, expect_status: 200}
+    metrics: {path: /metrics}
+    clients: [mgmt, edge]
+    owner: platform-team
+    version: "1.4.0"
+    tls: internal
+    auth: idp
+    roles: {viewer: [hub-viewers]}
+    public_hostname: status.lab.example
+    backup_job: daily-core
+  hub-candidate:
+    capability: status-hub
+    impl: hnx-status
+    host: next-core
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /healthz, expect_status: 200}
+    metrics: {path: /metrics}
+    clients: [mgmt]
+    owner: platform-team
+    version: "1.5.0"
+    tls: internal
+    auth: idp
+    roles: {viewer: [hub-viewers], approver: [hub-candidate-approvers]}
+    backup_job: daily-core
+    mcp: {name: hub-candidate}
+    upstreams: [dns]
+    standing: {tier: eval, until: "2026-12-31", why: the next hub release in shadow}
+  hub-rollback:
+    capability: status-hub
+    impl: hnx-status
+    host: prev-core
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /healthz, expect_status: 200}
+    metrics: {path: /metrics}
+    clients: [mgmt]
+    owner: platform-team
+    version: "1.3.2"
+    tls: internal
+    auth: idp
+    roles: {viewer: [hub-rollback-viewers]}
+    backup_job: weekly-rollback
+    mcp: {name: hub-rollback}
+    upstreams: [dns]
+    standing: {tier: retiring, until: "2026-12-15", why: the former hub in its rollback window}
+  hub-oldlab:
+    capability: status-hub
+    impl: old-dashboard
+    host: oldlab-core
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /healthz, expect_status: 200}
+    metrics: {path: /metrics}
+    clients: [edge]
+    owner: platform-team
+    version: "0.9.0"
+    tls: internal
+    auth: idp
+    roles: {viewer: [hub-oldlab-viewers]}
+    backup_job: monthly-oldlab
+    mcp: {name: hub-oldlab}
+    upstreams: [dns]
+    standing: {tier: legacy, until: "2027-01-31", why: "the old lab's dashboard, until its ledger row closes"}
+  reports:
+    capability: reports
+    impl: hnx-reports
+    host: hub-core
+    protocol: http
+    port: 9100
+    health: {kind: tcp}
+    upstreams: [status-hub]
+    owner: platform-team
+    version: "0.3.0"
+    tls: none

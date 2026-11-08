@@ -71,16 +71,28 @@ def _cap_service(registry: Any, cap_id: str):
     return registry.by_capability(cap_id.split(":", 1)[1]) if ":" in cap_id else None
 
 
-def reachable_services(registry: Any, zone: str) -> list[Any]:
+def reachable_services(registry: Any, zone: str, *, with_eval: bool = False) -> list[Any]:
     """Services a host in ``zone`` may connect to: same zone, a listed client zone, or a
-    dependency of a service in the zone (``upstreams``)."""
+    dependency of a service in the zone (``upstreams``).
+
+    ``with_eval`` adds the ``eval`` rows (the keyring's rows, ADR-0039 decision 2), each reached
+    by its own zone and client zones only: an upstream binds to its capability's primary, never to
+    a candidate, and an eval row's own upstreams make nothing reachable."""
     in_zone = [s for s in registry.sorted_services() if registry.host_of(s).zone == zone]
     called = {u for s in in_zone for u in s.upstreams}
-    return [
+    out = [
         s
         for s in registry.sorted_services()
         if registry.host_of(s).zone == zone or zone in s.clients or s.capability in called
     ]
+    if with_eval:
+        out += [
+            s
+            for s in registry.rows("eval")
+            if registry.host_of(s).zone == zone or zone in s.clients
+        ]
+        out.sort(key=lambda s: s.name)
+    return out
 
 
 def _broker_grants(broker: Mapping[str, Any] | None, principal: str) -> dict[str, dict]:

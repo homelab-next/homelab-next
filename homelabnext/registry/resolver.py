@@ -16,6 +16,11 @@ consultation, first definitive answer wins:
 The URL always names the alias, never an address, so swapping the product
 behind a capability changes DNS only. If nothing answers the resolver raises
 :class:`ResolutionError`; it never falls back to a literal host or port.
+
+A capability resolves to its primary only (ADR-0039 decision 2). An ``eval`` or
+``retiring`` row answers only by its own row name, through :meth:`Resolver.resolve_row`:
+``HNX_ENDPOINT_<ROW>`` (or its ``env_var``), then ``<row>.<svc_label>.<domain>``. A
+``legacy`` row answers by no name.
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from .dns import DNSBackend, SystemDNS, read_hosts
-from .model import Registry, env_var_name
+from .model import ANSWERING_TIERS, STANDINGS, Registry, Service, env_var_name
 
 
 class ResolutionError(Exception):
@@ -113,9 +118,13 @@ class Resolver:
         trail: list[str] = []
         svc = self.registry.by_capability(capability) if self.registry else None
         if self.registry and svc is None:
-            raise UnknownCapability(
-                capability, "not in the registry", [f"registry ({self.registry.digest[:12]})"]
+            rows = [s.name for s in self.registry.rows(*STANDINGS) if s.capability == capability]
+            why = (
+                f"no primary (its rows {', '.join(rows)} answer only by their row names)"
+                if rows
+                else "not in the registry"
             )
+            raise UnknownCapability(capability, why, [f"registry ({self.registry.digest[:12]})"])
         var = svc.endpoint_env_var if svc else env_var_name(capability)
         value = self.environ.get(var)
         if value is not None and value.strip() == "":
@@ -128,6 +137,41 @@ class Resolver:
             trail.append(f"registry (scheme={svc.scheme} port={svc.port})")
             return self._resolve_name(capability, svc.scheme, svc.port, alias, trail)
         return self._resolve_srv(capability, alias, trail)
+
+    def resolve_row(self, name: str) -> Endpoint:
+        """An ``eval`` or ``retiring`` row by its own row name (ADR-0039 decision 2), for the
+        conformance targets and the shadow lane: its override variable, then its row-name record.
+        A primary answers by its capability (:meth:`resolve`), a ``legacy`` row by no name, and a
+        row is resolved by name only against a loaded registry (no SRV record names a row)."""
+        if self.registry is None:
+            raise ResolutionError(name, "a row is resolved by its name only with a registry")
+        trail = [f"registry ({self.registry.digest[:12]})"]
+        svc = self.registry.row(name, *ANSWERING_TIERS)
+        if svc is None:
+            other = self.registry.row(name, *STANDINGS)
+            if other is None:
+                raise UnknownCapability(name, "no such registry row", trail)
+            if other.is_primary:
+                why = f"a primary answers by its capability; resolve {other.capability!r}"
+            else:
+                why = f"a {other.standing} row answers by no name"
+            raise UnknownCapability(name, why, trail)
+        return self._resolve_row(svc, trail)
+
+    def _resolve_row(self, svc: Service, trail: list[str]) -> Endpoint:
+        var = svc.endpoint_env_var
+        value = self.environ.get(var)
+        if value is not None and value.strip() == "":
+            raise InvalidOverride(svc.name, f"{var} is set but empty")
+        if value is not None:
+            return parse_override(svc.name, var, value)
+        trail.append(f"env {var} (unset)")
+        trail.append(
+            f"registry (row {svc.name}, {svc.standing}, scheme={svc.scheme} port={svc.port})"
+        )
+        return self._resolve_name(
+            svc.name, svc.scheme, svc.port, self.registry.address_of(svc), trail
+        )
 
     def _resolve_name(
         self, capability: str, scheme: str, port: int, alias: str, trail: list[str]

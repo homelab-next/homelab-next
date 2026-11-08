@@ -234,11 +234,17 @@ def test_an_ipv4_and_an_ipv6_zone_never_overlap():
     "path", [ROOT / "examples" / "services.yml", ROOT / "examples" / "minimal" / "services.yml"]
 )
 def test_every_public_site_of_the_examples_has_a_login(path):
-    from homelabnext.generators import flatten, generate
+    from homelabnext.generators import GENERATORS, flatten, generate
+    from homelabnext.generators.builtin import REALM_PRODUCT
 
     reg = load(path)
-    # every generator's output: the edge's site file is the one with a "<host> {" block
-    out = "".join(flatten(generate(reg)).values())
+    # every generator's output: the edge's site file is the one with a "<host> {" block; the
+    # realm is rendered only for an idp row of the realm format's product (ADR-0039), which the
+    # minimal example's is not
+    names = sorted(GENERATORS)
+    if reg.by_capability("idp").impl != REALM_PRODUCT:
+        names.remove("idp_realm")
+    out = "".join(flatten(generate(reg, names)).values())
     for s in reg.sorted_services():
         if s.public_hostname:
             assert s.auth in ("idp", "own"), s.name
