@@ -168,6 +168,10 @@ func TestParse_Checks(t *testing.T) {
 		"endpoint is a URL": "backends: {local: {endpoint: \"http://engine-a.example.internal:8000\"}}\n",
 		"endpoint no port":  "backends: {additional: [{endpoint: engine-a.example.internal}]}\n",
 		"relative command":  "backend_status_command: [bin/status]\n",
+		"tag prefix comma":  "events: {gateway_tag_prefix: \"a,b\"}\n",
+		"relative lock":     "lock_path: run/backend.lock\n",
+		"unclean lock":      "lock_path: /run/x/../backend.lock\n",
+		"tag prefix space":  "events: {gateway_tag_prefix: \"job \"}\n",
 	} {
 		if _, err := Parse([]byte(scopeYAML + body)); err == nil {
 			t.Errorf("%s: parsed", name)
@@ -263,29 +267,47 @@ func allKeys(t reflect.Type, at string) []string {
 	return out
 }
 
-// TestLoadPromptContracts: unset = nil (defaults), an explicit empty list = no contracts, files
-// are read relative to the config's directory with one trailing newline dropped, and a missing
-// file is an error.
-func TestLoadPromptContracts(t *testing.T) {
+// TestPromptContractTexts: unset = the defaults; prompt_contracts replaces them and
+// prompt_contracts_append adds after them, files read relative to the config's directory with one
+// trailing newline dropped; a missing file is an error.
+func TestPromptContractTexts(t *testing.T) {
 	dir := t.TempDir()
-	if got, err := (Config{}).LoadPromptContracts(dir); got != nil || err != nil {
-		t.Fatalf("unset = %v, %v; want nil, nil", got, err)
+	defaults := []string{"[built-in] one", "[built-in] two"}
+	got, err := (Config{}).PromptContractTexts(dir, defaults)
+	if err != nil || !slices.Equal(got, defaults) {
+		t.Fatalf("unset = %q, %v; want the defaults", got, err)
 	}
-	if got, err := (Config{PromptContracts: []string{}}).LoadPromptContracts(dir); got == nil || len(got) != 0 || err != nil {
-		t.Fatalf("empty list = %#v, %v; want empty non-nil", got, err)
+	got[0] = "changed"
+	if defaults[0] != "[built-in] one" {
+		t.Fatal("the result aliases the defaults")
 	}
 	writeFile(t, filepath.Join(dir, "a.md"), "[a] first\n")
 	abs := filepath.Join(t.TempDir(), "b.md")
 	writeFile(t, abs, "[b] second\n\n")
-	got, err := (Config{PromptContracts: []string{"a.md", abs}}).LoadPromptContracts(dir)
-	if err != nil {
-		t.Fatal(err)
+	if got, err = (Config{PromptContracts: []string{"a.md", abs}}).PromptContractTexts(dir, defaults); err != nil || !slices.Equal(got, []string{"[a] first", "[b] second\n"}) {
+		t.Fatalf("replaced = %q, %v", got, err)
 	}
-	if len(got) != 2 || got[0] != "[a] first" || got[1] != "[b] second\n" {
-		t.Fatalf("contracts = %q", got)
+	if got, err = (Config{PromptContractsAppend: []string{"a.md"}}).PromptContractTexts(dir, defaults); err != nil || !slices.Equal(got, []string{"[built-in] one", "[built-in] two", "[a] first"}) {
+		t.Fatalf("appended = %q, %v", got, err)
 	}
-	if _, err := (Config{PromptContracts: []string{"missing.md"}}).LoadPromptContracts(dir); err == nil {
-		t.Fatal("a missing contract file must be an error")
+	if got, err = (Config{PromptContracts: []string{}, PromptContractsAppend: []string{"a.md"}}).PromptContractTexts(dir, defaults); err != nil || !slices.Equal(got, []string{"[a] first"}) {
+		t.Fatalf("replaced by nothing, then appended = %q, %v", got, err)
+	}
+	for _, c := range []Config{{PromptContracts: []string{"missing.md"}}, {PromptContractsAppend: []string{"missing.md"}}} {
+		if _, err := c.PromptContractTexts(dir, defaults); err == nil {
+			t.Fatalf("%+v: a missing contract file must be an error", c)
+		}
+	}
+}
+
+// An explicit empty list is the opt-out: no contract, and the configuration loads.
+func TestPromptContracts_EmptyListIsNone(t *testing.T) {
+	cfg := mustParse(t, scopeYAML+"prompt_contracts: []\n")
+	if got, err := cfg.PromptContractTexts(t.TempDir(), []string{"[d]"}); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("prompt_contracts: [] = %#v, %v; want empty, non-nil", got, err)
+	}
+	if got, err := mustParse(t, scopeYAML).PromptContractTexts(t.TempDir(), []string{"[d]"}); err != nil || !slices.Equal(got, []string{"[d]"}) {
+		t.Fatalf("unset = %#v, %v; want the defaults", got, err)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/homelab-next/homelab-next/orchestrator/internal/gatewaytag"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/profile"
 )
@@ -180,11 +181,15 @@ type Config struct {
 	LessonsPath     string `yaml:"lessons_path"`
 	RunbooksPath    string `yaml:"runbooks_path"`
 	LessonsDisabled bool   `yaml:"lessons_disabled"`
-	// PromptContracts replace the contracts every dispatch prompt carries with these files'
-	// texts, in order. Unset: the defaults; an explicit empty list: none.
-	PromptContracts []string `yaml:"prompt_contracts"`
-	APIAuth         APIAuth  `yaml:"api_auth"`
-	Events          Events   `yaml:"events"`
+	// PromptContracts replace the built-in contracts every dispatch prompt carries (package
+	// prompt's DefaultContracts) with these files' texts, in order. Unset: the built-in ones.
+	// An explicit empty list is none: the site's opt-out, for a runner with no output tool to name
+	// (a conformance stand-in, say). PromptContractsAppend adds files after them (the built-in
+	// ones or the replacement).
+	PromptContracts       []string `yaml:"prompt_contracts"`
+	PromptContractsAppend []string `yaml:"prompt_contracts_append"`
+	APIAuth               APIAuth  `yaml:"api_auth"`
+	Events                Events   `yaml:"events"`
 	// Scope is the shared tree's zones (pathscope.Zones). Required, every key present.
 	Scope pathscope.Zones `yaml:"scope"`
 
@@ -366,6 +371,12 @@ func (c Config) check() error {
 	if c.KVBudgetFraction < 0 || c.KVBudgetFraction > 1 {
 		return fmt.Errorf("kv_budget_fraction %v: want 0 (the default) to 1", c.KVBudgetFraction)
 	}
+	if c.LockPath != "" && (!filepath.IsAbs(c.LockPath) || filepath.Clean(c.LockPath) != c.LockPath) {
+		return fmt.Errorf("lock_path %q: want a clean absolute path (every caller of the backend must name the same file)", c.LockPath)
+	}
+	if !gatewaytag.ValidPrefix(c.Events.GatewayTagPrefix) {
+		return fmt.Errorf("events.gateway_tag_prefix %q: want at most 64 of [A-Za-z0-9._:/-]", c.Events.GatewayTagPrefix)
+	}
 	backends := []struct {
 		at string
 		b  Backend
@@ -389,26 +400,40 @@ func (c Config) check() error {
 	return nil
 }
 
-// LoadPromptContracts reads PromptContracts' files: nil when the list is unset (use the
-// defaults), an empty, non-nil slice for an explicit empty list. One trailing newline per file is
-// dropped.
-func (c Config) LoadPromptContracts(configDir string) ([]string, error) {
-	if c.PromptContracts == nil {
-		return nil, nil
-	}
-	out := make([]string, 0, len(c.PromptContracts))
-	for _, name := range c.PromptContracts {
-		path := name
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(configDir, path)
+// PromptContractTexts returns the contracts every dispatch prompt carries: defaults (the built-in
+// ones, prompt.DefaultContracts, which the caller passes so this package does not import the
+// prompt builder) unless prompt_contracts replaces them, then prompt_contracts_append's files.
+// Files are read relative to configDir unless absolute, one trailing newline dropped each. The
+// result is never nil, so prompt.Input.Contracts takes it as it is; it is empty when the site
+// opted out (prompt_contracts: [] and nothing appended).
+func (c Config) PromptContractTexts(configDir string, defaults []string) ([]string, error) {
+	read := func(key string, names []string) ([]string, error) {
+		out := make([]string, 0, len(names))
+		for _, name := range names {
+			path := name
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(configDir, path)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", key, err)
+			}
+			out = append(out, strings.TrimSuffix(string(data), "\n"))
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("prompt_contracts: %w", err)
-		}
-		out = append(out, strings.TrimSuffix(string(data), "\n"))
+		return out, nil
 	}
-	return out, nil
+	out := append([]string{}, defaults...)
+	if c.PromptContracts != nil {
+		var err error
+		if out, err = read("prompt_contracts", c.PromptContracts); err != nil {
+			return nil, err
+		}
+	}
+	more, err := read("prompt_contracts_append", c.PromptContractsAppend)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, more...), nil
 }
 
 // Registers returns the lessons and runbooks paths to load: both "" when lessons_disabled is set.
