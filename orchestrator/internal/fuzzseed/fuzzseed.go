@@ -113,8 +113,9 @@ func value(typ, lit string) (any, error) {
 		n, err := strconv.ParseUint(lit, 0, 64)
 		return uint(n), err
 	case "byte", "uint8":
-		if strings.HasPrefix(lit, "'") {
-			r, _, tail, err := strconv.UnquoteChar(strings.Trim(lit, "'"), '\'')
+		if len(lit) >= 2 && lit[0] == '\'' && lit[len(lit)-1] == '\'' {
+			// the text between the quotes as written: strings.Trim would also eat the quote of '\''
+			r, _, tail, err := strconv.UnquoteChar(lit[1:len(lit)-1], '\'')
 			if err != nil || tail != "" || r > 0xff {
 				return nil, fmt.Errorf("not one byte")
 			}

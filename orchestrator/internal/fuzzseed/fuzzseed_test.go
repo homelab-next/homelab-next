@@ -23,6 +23,15 @@ func TestCorpusReadsGoTestsOwnFormat(t *testing.T) {
 	}
 }
 
+func TestParseReadsEveryByteLiteral(t *testing.T) {
+	for lit, want := range map[string]byte{`'\''`: '\'', `'\\'`: '\\', `'x'`: 'x', `'\x00'`: 0, `'\xff'`: 0xff, `'\n'`: '\n', `0x41`: 'A'} {
+		got, err := Parse([]byte(header + "\nbyte(" + lit + ")\n"))
+		if err != nil || len(got) != 1 || got[0] != want {
+			t.Errorf("byte(%s) = %v, %v, want %q", lit, got, err, want)
+		}
+	}
+}
+
 func TestParseRefusesWhatItCannotRead(t *testing.T) {
 	for _, data := range []string{
 		"",
@@ -32,6 +41,8 @@ func TestParseRefusesWhatItCannotRead(t *testing.T) {
 		header + "\nstring(\"unterminated)\n", // a bad literal
 		header + "\nstring\"a\"\n",            // not a conversion
 		header + "\nbyte('ab')\n",             // not one byte
+		header + "\nbyte(')\n",                // one quote
+		header + "\nbyte('\\u0100')\n",        // not a byte
 	} {
 		if _, err := Parse([]byte(data)); err == nil {
 			t.Errorf("Parse(%q) accepted", data)
