@@ -923,6 +923,11 @@ above says how.
     is requeued, not failed;
   - (from 2.5) run `errtext.CheckWith` over `queue` and `api` in a test, with only sinks that bound,
     log or keep text, as `backends` does;
+- **The queue's leftovers (2.7):** the admission duplicate check keys on the whole task text; a
+  digest (a store column filled at submit) would cut a pass's memory to the summaries. A
+  backend-down requeue writes the state and then uncounts the attempt in two statements; one store
+  operation would close the window in which a pass re-admits the run with the attempt still
+  counted.
 - **Priority across callers (2.7):** a `jobs` token may submit any priority from 1 to 100, so one
   caller can put its jobs ahead of everyone's. Which callers may use which range is a policy of
   the tokens file (a per-caller ceiling, say), so it lands with the binary's configuration rather
