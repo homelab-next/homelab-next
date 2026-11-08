@@ -116,10 +116,12 @@ type Events struct {
 	GatewayTagPrefix string `yaml:"gateway_tag_prefix"`
 }
 
-// APIAuth configures bearer-token authentication of the HTTP API.
+// APIAuth configures bearer-token authentication of the HTTP API. It is on unless the file says
+// enabled: false (Enabled nil is on: a safe default never rests on a key someone forgot).
 type APIAuth struct {
-	// Enabled turns auth on; TokensFile must then load or the controller refuses to start.
-	Enabled bool `yaml:"enabled"`
+	// Enabled: nil or true turns auth on, and TokensFile must then load or the controller refuses
+	// to start; false serves the API with no token, on a loopback address only (package api).
+	Enabled *bool `yaml:"enabled"`
 	// TokensFile lists {caller, sha256, scopes}: each caller's token digest, never the token.
 	TokensFile string `yaml:"tokens_file"`
 }
@@ -192,7 +194,13 @@ type Config struct {
 	PromptContracts       []string `yaml:"prompt_contracts"`
 	PromptContractsAppend []string `yaml:"prompt_contracts_append"`
 	APIAuth               APIAuth  `yaml:"api_auth"`
-	Events                Events   `yaml:"events"`
+	// APIPprof serves the profiling routes (/debug/pprof/*) behind the admin scope; the API
+	// refuses it with authentication off.
+	APIPprof bool `yaml:"api_pprof"`
+	// APIMaxUnfinishedPerCaller bounds one submitter's unfinished jobs (a submit past it is a
+	// 429); 0 is the API's default (1000).
+	APIMaxUnfinishedPerCaller int    `yaml:"api_max_unfinished_per_caller"`
+	Events                    Events `yaml:"events"`
 	// Scope is the shared tree's zones (pathscope.Zones). Required, every key present.
 	Scope pathscope.Zones `yaml:"scope"`
 
@@ -201,6 +209,9 @@ type Config struct {
 
 	zones pathscope.Zones // Scope, validated
 }
+
+// On reports whether the API authenticates: unless enabled is set false.
+func (a APIAuth) On() bool { return a.Enabled == nil || *a.Enabled }
 
 // Zones are the validated scope zones.
 func (c Config) Zones() pathscope.Zones { return c.zones }
@@ -255,6 +266,12 @@ func ParseWith(data []byte, opts ParseOptions) (Config, error) {
 		return Config{}, fmt.Errorf("parse: %w", err)
 	}
 	cfg.Notices = notes
+	if auth := lookup(doc.Content[0], "api_auth"); auth != nil && auth.Kind == yaml.ScalarNode && auth.Tag == "!!null" {
+		return Config{}, errors.New("api_auth: null: give the block (tokens_file, or enabled: false), or leave it out")
+	}
+	if !cfg.APIAuth.On() {
+		cfg.Notices = append(cfg.Notices, "api_auth.enabled is false: the API serves every route without a token, on a loopback address only")
+	}
 	if err := checkScopePresent(doc); err != nil {
 		return Config{}, err
 	}
@@ -355,6 +372,15 @@ func checkScopePresent(doc *yaml.Node) error {
 
 // check holds the decoded configuration to the rules decoding cannot state.
 func (c Config) check() error {
+	if c.APIPprof && !c.APIAuth.On() {
+		return errors.New("api_pprof: profiling needs authentication on (it would open the process's profiles to every local user)")
+	}
+	if c.APIMaxUnfinishedPerCaller < 0 {
+		return fmt.Errorf("api_max_unfinished_per_caller %d is negative", c.APIMaxUnfinishedPerCaller)
+	}
+	if c.APIAuth.On() && strings.TrimSpace(c.APIAuth.TokensFile) == "" {
+		return errors.New("api_auth: authentication is on (the default) and no api_auth.tokens_file is given: name the tokens file, or set api_auth.enabled: false to serve without a token on a loopback address")
+	}
 	if !livenessModes[c.Runner.Liveness] {
 		return fmt.Errorf("runner.liveness %q: want cpu or progress", c.Runner.Liveness)
 	}

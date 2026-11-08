@@ -262,23 +262,83 @@ func (s *Store) Close() error {
 //   - a job with RetryOfRunID whose parent already has a retry or is one (a *ResubmitRefusal):
 //     a run is retried at most once, by the scheduler or a caller alike.
 func (s *Store) CreateJob(j *Job) error {
-	return s.createJob(j, nil)
+	return s.createJob(j, nil, nil)
 }
 
-func (s *Store) createJob(j *Job, check *ResubmitCheck) error {
+// SubmitLimits bound one submitter's jobs (Job.SubmittedBy; "" is every job submitted with the
+// API's auth off). They are checked in the submit's own write transaction, after the idempotency
+// key (a replay is never refused by them) and before the insert, so they are exact. A zero field
+// is no bound.
+type SubmitLimits struct {
+	// MaxUnfinished bounds the submitter's queued, admitted, running and awaiting_inference jobs
+	// (ErrTooManyUnfinished).
+	MaxUnfinished int
+	// MaxInWindow bounds the jobs the submitter created in the last Window, whatever became of
+	// them, a cancelled one included (ErrTooManySubmits): submit-then-cancel cannot grow the
+	// database faster.
+	MaxInWindow int
+	Window      time.Duration
+}
+
+// ErrTooManyUnfinished: the submitter is at SubmitLimits.MaxUnfinished.
+var ErrTooManyUnfinished = errors.New("the submitter has too many unfinished jobs")
+
+// ErrTooManySubmits: the submitter is at SubmitLimits.MaxInWindow.
+var ErrTooManySubmits = errors.New("the submitter created too many jobs in the window")
+
+// CreateSubmit is CreateJob for a caller's submit, bounded by lim.
+func (s *Store) CreateSubmit(j *Job, lim SubmitLimits) error {
+	return s.createJob(j, nil, &lim)
+}
+
+// checkLimits applies lim to j's submitter inside tx.
+func checkLimits(tx *sql.Tx, j *Job, lim *SubmitLimits) error {
+	if lim == nil {
+		return nil
+	}
+	if lim.MaxUnfinished > 0 {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = ? AND state IN (?, ?, ?, ?)`,
+			j.SubmittedBy, string(StateQueued), string(StateAdmitted), string(StateRunning), string(StateAwaitingInference)).Scan(&n); err != nil {
+			return fmt.Errorf("count unfinished jobs: %w", err)
+		}
+		if n >= lim.MaxUnfinished {
+			return ErrTooManyUnfinished
+		}
+	}
+	if lim.MaxInWindow > 0 && lim.Window > 0 {
+		var n int
+		// Compared as instants (julianday), never as text: RFC3339Nano drops trailing zeros, so
+		// "...:00Z" sorts after "...:00.1Z" though it is earlier.
+		since := j.CreatedAt.Add(-lim.Window).UTC().Format(time.RFC3339Nano)
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = ? AND julianday(created_at) >= julianday(?)`,
+			j.SubmittedBy, since).Scan(&n); err != nil {
+			return fmt.Errorf("count recent jobs: %w", err)
+		}
+		if n >= lim.MaxInWindow {
+			return ErrTooManySubmits
+		}
+	}
+	return nil
+}
+
+func (s *Store) createJob(j *Job, check *ResubmitCheck, lim *SubmitLimits) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := insertJobTx(tx, j, check); err != nil {
+	if check != nil && lim == nil && check.Limits != (SubmitLimits{}) {
+		lim = &check.Limits
+	}
+	if err := insertJobTx(tx, j, check, lim); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 // insertJobTx is createJob's checks and insert inside the caller's transaction.
-func insertJobTx(tx *sql.Tx, j *Job, check *ResubmitCheck) error {
+func insertJobTx(tx *sql.Tx, j *Job, check *ResubmitCheck, lim *SubmitLimits) error {
 	if len(j.IdempotencyKey) > MaxIdempotencyKeyLen {
 		return ErrIdempotencyKeyTooLong
 	}
@@ -297,6 +357,9 @@ func insertJobTx(tx *sql.Tx, j *Job, check *ResubmitCheck) error {
 		if err := checkResubmit(tx, j, check); err != nil {
 			return err
 		}
+	}
+	if err := checkLimits(tx, j, lim); err != nil {
+		return err
 	}
 	if j.Shadow {
 		var active bool
@@ -409,6 +472,14 @@ var admissionColumns = strings.NewReplacer(
 	"local_failed_reason,", "NULL,", "response_body,", "NULL,", "aux_by_task,", "NULL,", "evidence_refs,", "NULL,",
 ).Replace(jobColumns)
 
+// summaryColumns is jobColumns with every text a list never shows sent as NULL: the task and the
+// answer (up to hundreds of KiB each) too, so a full page costs its summaries, not its
+// transcripts.
+var summaryColumns = strings.NewReplacer(
+	"local_failed_reason,", "NULL,", "response_body,", "NULL,", "aux_by_task,", "NULL,", "evidence_refs,", "NULL,",
+	"task_description,", "NULL,",
+).Replace(jobColumns)
+
 // ListForAdmission is ListByState with admissionColumns: what a scheduler pass and its executors
 // read of the queue, without the text they never use.
 func (s *Store) ListForAdmission(state State) ([]*Job, error) {
@@ -465,6 +536,8 @@ type ListFilter struct {
 	AgentKey string
 	// SubmittedBy, when not empty, keeps only that caller's jobs.
 	SubmittedBy string
+	// SessionID, when not empty, keeps only the jobs whose runner session had that id.
+	SessionID string
 	// BeforeSeq, when > 0, keeps only jobs with seq < BeforeSeq: the cursor of the next, older
 	// page.
 	BeforeSeq int64
@@ -472,11 +545,12 @@ type ListFilter struct {
 	Limit int
 }
 
-// ListJobs returns jobs newest first (seq descending). seq is unique and assigned in submission
+// ListJobs returns jobs newest first (seq descending), as summaries: summaryColumns, without the
+// task, the answer or the failure reason (GetJob has them). seq is unique and assigned in submission
 // order, so the order is stable across calls and a BeforeSeq cursor never skips or repeats a job.
 func (s *Store) ListJobs(f ListFilter) ([]*Job, error) {
 	limit := min(max(f.Limit, 1), MaxListLimit)
-	q := `SELECT ` + jobColumns + ` FROM jobs WHERE 1=1`
+	q := `SELECT ` + summaryColumns + ` FROM jobs WHERE 1=1`
 	var args []any
 	if f.State != "" {
 		q += ` AND state = ?`
@@ -489,6 +563,10 @@ func (s *Store) ListJobs(f ListFilter) ([]*Job, error) {
 	if f.SubmittedBy != "" {
 		q += ` AND submitted_by = ?`
 		args = append(args, f.SubmittedBy)
+	}
+	if f.SessionID != "" {
+		q += ` AND session_id = ?`
+		args = append(args, f.SessionID)
 	}
 	if f.BeforeSeq > 0 {
 		q += ` AND seq < ?`

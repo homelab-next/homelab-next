@@ -8,7 +8,7 @@
 # widened, a path swapped) changes this file too; `make allowlist-counts` records it.
 counts:
   product-names-allow: 18
-  no-raw-endpoints-allow: 74
+  no-raw-endpoints-allow: 75
   scripts-allow: 22
   caddy-lint-allow: 3
   credential-headers-allow: 1
@@ -20,7 +20,7 @@ counts:
   no-raw-endpoint-markers: 308
 digests:
   product-names-allow: sha256:6604be9afcd96e656e8ac17b45aa8b5c9288fb6ea8a7f9505571e82eeb07606a
-  no-raw-endpoints-allow: sha256:1973cc5de352ec3b0ed7206ad22e1cea35569dc3c2f1d26030bcb9ebaf913b53
+  no-raw-endpoints-allow: sha256:4cd649047149dfe3e3a6ca94977736a0a5af97f559aefa2f7c4ec3a92dd925a2
   scripts-allow: sha256:8455c3acb0f7c01db2ef1efe1981ccb9f7a450fba93ff490c26daba6bd40c94d
   caddy-lint-allow: sha256:ce7e5fc1469ba8390c4618b84c8b8d61b3f3bde5a7e49623e70bd09257947844
   credential-headers-allow: sha256:741f0c84795e4d682d16a229a223a75fc3080304ad8d56716be9730c2524c230

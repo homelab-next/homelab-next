@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -336,5 +337,86 @@ func TestFailWithRetry(t *testing.T) {
 	failedRun(t, s, "d", "", StateRunning, "")
 	if retried, _, err := s.FailWithRetry("d", StateRunning, FailureHandlerError, nil); retried || err != nil {
 		t.Errorf("no retry asked: %v %v", retried, err)
+	}
+}
+
+// The per-submitter bounds are checked after the idempotency key and inside the insert's
+// transaction: a replay meets ErrDuplicateIdempotencyKey, never a bound, and a bound counts only
+// its own submitter.
+func TestSubmitLimits(t *testing.T) {
+	s := openTest(t)
+	lim := SubmitLimits{MaxUnfinished: 1}
+	a := queued("a", "x")
+	a.SubmittedBy = "alice"
+	if err := s.CreateSubmit(a, lim); err != nil {
+		t.Fatal(err)
+	}
+	again := queued("a2", "x")
+	again.SubmittedBy, again.IdempotencyKey = "alice", a.IdempotencyKey
+	if err := s.CreateSubmit(again, lim); !errors.Is(err, ErrDuplicateIdempotencyKey) {
+		t.Fatalf("a replay = %v, want the duplicate key", err)
+	}
+	b := queued("b", "x")
+	b.SubmittedBy = "alice"
+	if err := s.CreateSubmit(b, lim); !errors.Is(err, ErrTooManyUnfinished) {
+		t.Fatalf("past the bound = %v", err)
+	}
+	c := queued("c", "x")
+	c.SubmittedBy = "bob"
+	if err := s.CreateSubmit(c, lim); err != nil {
+		t.Fatalf("another submitter = %v", err)
+	}
+	if err := s.UpdateState("a", StateQueued, StateCancelled); err != nil {
+		t.Fatal(err)
+	}
+	win := SubmitLimits{MaxInWindow: 1, Window: time.Hour}
+	d := queued("d", "x")
+	d.SubmittedBy = "alice"
+	if err := s.CreateSubmit(d, win); !errors.Is(err, ErrTooManySubmits) {
+		t.Fatalf("a cancelled job still counts in the window: %v", err)
+	}
+}
+
+// The window is compared as instants: a job at a whole second's fraction counts against a cutoff on
+// that whole second, which text comparison of RFC3339Nano ("...:00.1Z" < "...:00Z") gets wrong.
+func TestSubmitLimits_TheWindowComparesInstants(t *testing.T) {
+	s := openTest(t)
+	base := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	a := queued("a", "x")
+	a.SubmittedBy, a.CreatedAt = "alice", base.Add(100*time.Millisecond)
+	if err := s.CreateJob(a); err != nil {
+		t.Fatal(err)
+	}
+	b := queued("b", "x")
+	b.SubmittedBy, b.CreatedAt = "alice", base.Add(time.Hour) // the cutoff is base exactly
+	if err := s.CreateSubmit(b, SubmitLimits{MaxInWindow: 1, Window: time.Hour}); !errors.Is(err, ErrTooManySubmits) {
+		t.Fatalf("a job 100 ms past the cutoff was not counted: %v", err)
+	}
+}
+
+// The submitter bounds' indexes exist on a new database and are used by their counts.
+func TestSubmitLimits_HaveTheirIndexes(t *testing.T) {
+	s := openTest(t)
+	for _, q := range []string{
+		`EXPLAIN QUERY PLAN SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = 'a' AND state IN ('queued', 'running')`,
+		`EXPLAIN QUERY PLAN SELECT COUNT(*) FROM jobs WHERE COALESCE(submitted_by, '') = 'a' AND julianday(created_at) >= julianday('2026-01-01T00:00:00Z')`,
+	} {
+		rows, err := s.db.Query(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan strings.Builder
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			plan.WriteString(detail + "; ")
+		}
+		rows.Close()
+		if !strings.Contains(plan.String(), "idx_jobs_submitter") {
+			t.Errorf("%s: plan %s uses no submitter index", q, plan.String())
+		}
 	}
 }

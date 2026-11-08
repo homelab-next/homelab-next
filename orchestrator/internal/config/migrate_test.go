@@ -162,7 +162,7 @@ func TestMigrate_LeavesANeutralConfigurationAlone(t *testing.T) {
 		t.Error("a repeated key migrated")
 	}
 	// the result must load: a migration does not write a configuration this controller refuses
-	if _, _, err := Migrate([]byte("hermes_agent_max_turns: 3\n")); err == nil || !strings.Contains(err.Error(), "does not load") {
+	if _, _, err := Migrate([]byte("hermes_agent_max_turns: 3\napi_auth: {enabled: false}\n")); err == nil || !strings.Contains(err.Error(), "does not load") {
 		t.Errorf("a configuration without a scope block migrated: %v", err)
 	}
 }
@@ -198,7 +198,7 @@ func TestTheDocsPrintTheMigrationTable(t *testing.T) {
 // the migration writes the one it is given, every key present, so the lab's file migrates in one
 // command; one that already has a block is refused.
 func TestMigrate_AddsTheScopeBlock(t *testing.T) {
-	old := strings.Replace(oldConfig, scopeYAML, "", 1)
+	old := strings.Replace(oldConfig, zonesYAML, "", 1)
 	if _, _, err := Migrate([]byte(old)); err == nil {
 		t.Fatal("a configuration without a scope block migrated without one")
 	}
@@ -334,5 +334,54 @@ func TestMigrate_UnsetContractsStayTheDefaults(t *testing.T) {
 	defaults := []string{"[built-in] one", "[built-in] two", "[built-in] three"}
 	if got, err := cfg.PromptContractTexts(t.TempDir(), defaults); err != nil || !slices.Equal(got, defaults) {
 		t.Fatalf("contracts = %q, %v; want the defaults", got, err)
+	}
+}
+
+// A configuration in the private controller's keys served without a token unless it said
+// otherwise; here authentication is on unless the file says false. The migration never decides to
+// serve without a token: a file with no tokens file is refused, naming both remedies, unless the
+// operator asks (AllowUnauthenticatedAPI), and then it says enabled: false; a file that names a
+// tokens file is on, with a note.
+func TestMigrate_NeverTurnsAuthenticationOffByItself(t *testing.T) {
+	for name, old := range map[string]string{
+		"no block":         zonesYAML + "hermes_local_home: /a\n",
+		"a null block":     zonesYAML + "hermes_local_home: /a\napi_auth: null\n",
+		"no tokens file":   zonesYAML + "hermes_local_home: /a\napi_auth: {}\n",
+		"blank token file": zonesYAML + "hermes_local_home: /a\napi_auth: {tokens_file: \"\"}\n",
+	} {
+		_, _, err := Migrate([]byte(old))
+		if err == nil || !strings.Contains(err.Error(), "tokens_file") || !strings.Contains(err.Error(), "AllowUnauthenticatedAPI") {
+			t.Errorf("%s: Migrate = %v, want a refusal naming both remedies", name, err)
+			continue
+		}
+		var opts MigrateOptions
+		opts.AllowUnauthenticatedAPI = true
+		out, notes, err := MigrateWith([]byte(old), opts)
+		if err != nil {
+			t.Errorf("%s: with the option: %v", name, err)
+			continue
+		}
+		if cfg := mustParse(t, string(out)); cfg.APIAuth.On() || !strings.Contains(strings.Join(notes, "\n"), "AllowUnauthenticatedAPI") {
+			t.Errorf("%s: migrated = %s, notes %v", name, out, notes)
+		}
+	}
+	out, notes, err := Migrate([]byte(zonesYAML + "hermes_local_home: /a\napi_auth: {tokens_file: /etc/orchestrator/t.yaml}\n"))
+	if err != nil || !mustParse(t, string(out)).APIAuth.On() || !strings.Contains(strings.Join(notes, "\n"), "now on") {
+		t.Fatalf("a tokens file = %s, %v, %v: want on, with a note", out, notes, err)
+	}
+}
+
+// A null api_auth is refused on load, and a configuration with authentication off says so on
+// every load.
+func TestParse_NullAuthAndTheOffNotice(t *testing.T) {
+	if _, err := Parse([]byte(zonesYAML + "api_auth: null\n")); err == nil || !strings.Contains(err.Error(), "null") {
+		t.Fatalf("api_auth: null = %v", err)
+	}
+	cfg := mustParse(t, zonesYAML+"api_auth: {enabled: false}\n")
+	if !strings.Contains(strings.Join(cfg.Notices, "\n"), "without a token") {
+		t.Fatalf("notices = %v", cfg.Notices)
+	}
+	if cfg := mustParse(t, scopeYAML); len(cfg.Notices) != 0 {
+		t.Fatalf("auth on noted: %v", cfg.Notices)
 	}
 }
