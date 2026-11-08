@@ -855,21 +855,37 @@ controller served, with the HTTP passthrough gone and these defaults made refusa
 - **Authentication is on by default.** `NewHandler` refuses a configuration with no
   `Authenticator` unless `Unauthenticated` is set explicitly (and refuses both at once). The
   configuration's `api_auth.enabled` is on unless the file says `false`, so a file with no
-  `api_auth` block needs `api_auth.tokens_file`; the private controller served without a token, so
-  at the cutover the lab's file sets one or the other. Tokens and scopes are the private
+  `api_auth` block needs `api_auth.tokens_file`, and a configuration with authentication on and no
+  tokens file does not load (the message names both remedies). The private controller served
+  without a token, so `config.Migrate` writes `api_auth: {enabled: false}` (with a note) into a
+  file in its keys that sets nothing, and an API without authentication binds loopback only. Tokens and scopes are the private
   controller's: `jobs` (one's own jobs), `read` (every caller's job summaries and the queue
   summary), `metrics`, `admin`; `/healthz` and `GET /admin/backend-health` are open, the latter's
-  error text for an admin token only. The tokens file is decoded strictly (an unknown key is
-  refused), at most 1 MiB, a regular file no one but the controller or root can rewrite.
+  error text for an admin token only. The tokens file is opened without following a link and
+  without blocking and checked on the open descriptor: a regular file of at most 1 MiB, decoded
+  strictly (an unknown key is refused), that no one but the controller or root owns or can write,
+  in a directory its group and others cannot write. A route's scope is the scope of the route the
+  request reaches (the pattern the mux matches; no route is admin), not of the raw path.
 - **An unauthenticated API binds loopback only.** `NewServer` (`CheckBind`) refuses an address
   whose host is not a loopback IP literal when authentication is off: not `0.0.0.0`, `::`, an empty
   host or a name. The server bounds header reads, reads, writes, idle connections and header size.
-- **Profiling** (`/debug/pprof/*`) is served only with `Config.Pprof`, and then under the admin
-  scope like every route not named otherwise.
+- **Profiling** (`/debug/pprof/*`) is served only with `Config.Pprof` (the configuration's
+  `api_pprof`), under the admin scope, and refused without authentication (it would open the
+  process's profiles to every local user). The server's write timeout (2 minutes) cuts a longer
+  CPU profile or trace. `NewServer` checks the configuration before the address, so a missing
+  authenticator is reported as that.
 - **An unknown agent key is a 404** before anything is stored, a resubmit's included (checked
   before `CreateResubmit`). `request_body` and `input` are refused (400), never dropped.
+- **The body is decoded strictly**: one JSON object, nothing after it, every key one of the
+  submit's spelled exactly (`encoding/json` alone matches keys case-insensitively and takes the
+  last of two), none repeated, no unknown key (400 `invalid_body`). `profile_id` is at most 128 of
+  `[A-Za-z0-9._:-]`.
+- **Unfinished jobs are bounded per caller**: a submit while the caller has
+  `api_max_unfinished_per_caller` (default 1000) jobs queued, admitted or running is a 429. The
+  count and the insert are not one transaction, so concurrent submits can pass the bound by a few.
 - **Replays** are answered from `store.FindByIdempotencyKey`: 200 with the key's run when the
-  request is the same submit (same agent key, `retry_of_run_id` and lane), 422
+  request is the same submit (same agent key and `retry_of_run_id`, and for an ordinary submit the
+  same lane; a resubmit takes its parent's lane whatever it says), 422
   `idempotency_key_mismatch` when the key was used for another. A resubmit is stored under its
   parent's owner, so its replay is looked up there once the caller may see the parent (an admin
   replaying its resubmit of a caller's run gets the child, not a conflict).
@@ -881,10 +897,14 @@ controller served, with the HTTP passthrough gone and these defaults made refusa
 - **The session id under both names.** `GET /jobs/{id}` and `GET /jobs` serve `session_id` and,
   for the one overlap release ADR-0026's amendment sets, `hermes_session_id` beside it with the
   same value; `GET /jobs` filters by either (`?session_id=`, `?hermes_session_id=`) and refuses
-  both with different values (400). The old name goes no earlier than the release after the
+  both with different values, or either repeated (400). The old name goes no earlier than the release after the
   cutover.
 - **Error text stays in the log.** A failed reload, drain, status command or store call answers a
-  fixed message; the error goes to the controller's log (`errtext` over the package).
+  fixed message; the error goes to the controller's log. `TestNoResponseIsBuiltFromAnError` checks
+  that no argument of `http.Error`, `writeJSON` or `submitError` names an error or calls `Error()`
+  (`errtext` over the package covers decisions on error text, not what a response says). What a
+  caller controls (a path, a method, a backend name, a caller name) is logged quoted, so it cannot
+  forge a line, and refused unknown tokens are logged at most once every 10 seconds, with a count.
 
 **Retention.** Nothing deletes a job: every row, and with it every idempotency key, is kept for
 the life of the database, so a replay of any submit, however late, finds its first run, and a key
