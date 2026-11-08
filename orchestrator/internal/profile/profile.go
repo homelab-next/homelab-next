@@ -31,6 +31,7 @@ import (
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/grants"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
+	"github.com/homelab-next/homelab-next/orchestrator/internal/runner"
 )
 
 // PathScope is the profile's path scope in the shared tree (pathscope): the prefixes it may write
@@ -145,6 +146,33 @@ func (p Profile) GrantOwner(shadow bool) grants.Owner {
 		WritablePrefixes: slices.Clone(p.PathScope.WritablePrefixes),
 		ReadablePrefixes: slices.Clone(p.PathScope.ReadablePrefixes),
 	}
+}
+
+// LaneToolsets are the toolsets a session of this profile gets on lane (runner.LaneReal or
+// runner.LaneShadow), in the one place they are derived: a profile with grants gets its lane's
+// granted server names, sorted (each grant is one server the runner enables); one without gets
+// its toolsets entry for the lane, split on commas. nil when the lane has none.
+func (p Profile) LaneToolsets(lane string) ([]string, error) {
+	var shadow bool
+	switch lane {
+	case runner.LaneReal:
+	case runner.LaneShadow:
+		shadow = true
+	default:
+		return nil, fmt.Errorf("profile: lane %q: want %s or %s", lane, runner.LaneReal, runner.LaneShadow)
+	}
+	if !p.Grants.IsZero() {
+		names := grants.Names(p.Grants.Lane(shadow))
+		if len(names) == 0 {
+			return nil, nil
+		}
+		return names, nil
+	}
+	ts := p.Toolsets.Real
+	if shadow {
+		ts = p.Toolsets.Shadow
+	}
+	return runner.SplitToolsets(ts), nil
 }
 
 // ErrProfileNotFound: no profile is registered for the agent key.

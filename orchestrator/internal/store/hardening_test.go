@@ -184,7 +184,8 @@ func TestOpen_DatabaseIsOwnerOnly(t *testing.T) {
 }
 
 // OpenWith holds the instance lock for the Store's life, through any spelling of the path, and
-// Close releases it; InstanceLockHeld is refused when the caller does not hold the lock.
+// Close releases it. A lock the caller gives must be held and this database's: a released one, or
+// another database's, is refused, and Close leaves a given lock held.
 func TestOpenWith_HoldsTheInstanceLock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "orch.db")
@@ -208,8 +209,33 @@ func TestOpenWith_HoldsTheInstanceLock(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenWith(path, Options{InstanceLockHeld: true}); err == nil || !strings.Contains(err.Error(), "free") {
-		t.Errorf("InstanceLockHeld without the lock = %v", err)
+	other, err := LockInstance(filepath.Join(dir, "other.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Release()
+	if _, err := OpenWith(path, Options{Lock: other}); err == nil || !strings.Contains(err.Error(), "not this database's") {
+		t.Errorf("another database's lock = %v", err)
+	}
+	lock, err := LockInstance(filepath.Join(link, "orch.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenWith(path, Options{Lock: lock})
+	if err != nil {
+		t.Fatalf("OpenWith a held lock through another spelling: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LockInstance(path); !errors.Is(err, ErrInstanceLocked) {
+		t.Errorf("Close released the caller's lock: LockInstance = %v", err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenWith(path, Options{Lock: lock}); err == nil || !strings.Contains(err.Error(), "released") {
+		t.Errorf("a released lock = %v", err)
 	}
 	s, err = Open(path)
 	if err != nil {
