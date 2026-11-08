@@ -81,6 +81,7 @@ type rigOptions struct {
 	concur   int
 	outbox   bool
 	tweak    func(*Config)
+	pool     func(*backends.Policy) // before Validate
 }
 
 const defaultProfile = "watcher"
@@ -105,6 +106,9 @@ func newRig(t *testing.T, o rigOptions) *rig {
 		o.profiles = map[string]string{defaultProfile: ""}
 	}
 	policy := &backends.Policy{Runner: o.runner, Backends: o.backends, CloudHome: o.cloud, JobLimit: o.jobLimit, Log: quiet}
+	if o.pool != nil {
+		o.pool(policy)
+	}
 	if err := policy.Validate(); err != nil {
 		t.Fatal(err)
 	}

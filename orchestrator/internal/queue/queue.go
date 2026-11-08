@@ -129,6 +129,8 @@ type Scheduler struct {
 	orphanErrLogged map[string]time.Time
 
 	counters counters
+	// slugWarned: agent keys already warned of (SetProfiles).
+	slugWarned sync.Map
 }
 
 // runExec is one executor's entry in execs; its address identifies the executor.
@@ -151,7 +153,7 @@ func New(cfg Config) (*Scheduler, error) {
 	}
 	cfg.Contracts = cloneContracts(cfg.Contracts)
 	sch := &Scheduler{cfg: cfg, execs: map[string]*runExec{}}
-	sch.profiles.Store(cfg.Profiles)
+	sch.SetProfiles(cfg.Profiles)
 	return sch, nil
 }
 
@@ -172,8 +174,23 @@ func (sch *Scheduler) logf(format string, args ...any) {
 }
 
 // SetProfiles swaps in a freshly loaded registry. A registry is never changed once loaded, so an
-// executor sees the old one or the new one whole. nil leaves no profile: every job then fails.
-func (sch *Scheduler) SetProfiles(reg *profile.Registry) { sch.profiles.Store(reg) }
+// executor sees the old one or the new one whole. nil leaves no profile: every job then fails. A
+// profile whose agent key the event schemas' slug refuses (an "_", a leading digit) is warned of
+// once per key: its runs publish no failed event, and their finished record names no profile.
+func (sch *Scheduler) SetProfiles(reg *profile.Registry) {
+	sch.profiles.Store(reg)
+	if reg == nil {
+		return
+	}
+	for _, p := range reg.All() {
+		if isSlug(p.AgentKey, 64) {
+			continue
+		}
+		if _, seen := sch.slugWarned.LoadOrStore(p.AgentKey, true); !seen {
+			sch.logf("queue: agent key %q is no event slug: its runs publish no failed event, and their finished record names the profile %s", p.AgentKey, ProfileUnregistered)
+		}
+	}
+}
 
 // resolve is the job's profile in the current registry.
 func (sch *Scheduler) resolve(agentKey string) (*profile.Profile, error) {
