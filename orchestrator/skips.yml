@@ -7,3 +7,4 @@ privileged:
   - {test: TestBindMountedDirectoryIsRefused, package: internal/safefs, reason: bind-mounts a directory inside the root (mount --bind needs root)}
   - {test: TestBindMountedFileIsRefused, package: internal/safefs, reason: bind-mounts a file inside the root (mount --bind needs root)}
   - {test: TestLoadAuthenticator_RefusesAForeignOwner, package: internal/api, reason: gives the tokens file to another uid (chown needs root)}
+  - {test: TestLoadAuthenticator_RefusesAForeignDirectory, package: internal/api, reason: gives the tokens file's directory to another uid (chown needs root)}

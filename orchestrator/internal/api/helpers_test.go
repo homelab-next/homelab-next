@@ -138,3 +138,11 @@ func tokens(t *testing.T, scopes map[string][]string) *Authenticator {
 	}
 	return a
 }
+
+// httptestServer serves h and returns its URL, closed at cleanup.
+func httptestServer(t *testing.T, h http.Handler) string {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}

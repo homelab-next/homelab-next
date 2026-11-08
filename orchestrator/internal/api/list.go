@@ -72,7 +72,12 @@ func handleListJobs(s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		f := store.ListFilter{State: store.State(q.Get("state")), AgentKey: q.Get("agent"), Limit: DefaultListLimit}
-		if owner, restricted := listOwnerFilter(r.Context()); restricted {
+		owner, restricted, allowed := listOwnerFilter(r.Context())
+		if !allowed {
+			http.Error(w, "no caller", http.StatusForbidden)
+			return
+		}
+		if restricted {
 			f.SubmittedBy = owner
 		}
 		if f.State != "" && !store.ValidState(f.State) {
