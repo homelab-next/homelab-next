@@ -116,7 +116,8 @@ func TestBuild_ContractsComeFromTheConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "contracts", "evidence.md"), "[evidence] Show the query behind every number.\n", 0o600)
 	writeFile(t, filepath.Join(dir, "contracts", "done.md"), "[done] A run is done when its output is written.\n", 0o600)
-	cfgPath := writeFile(t, filepath.Join(dir, "controller.yaml"), `scope:
+	cfgPath := writeFile(t, filepath.Join(dir, "controller.yaml"), `api_auth: {enabled: false}
+scope:
   denied_roots: [owner]
   findings_root: notes/findings/
   shared_write: [inbox/]

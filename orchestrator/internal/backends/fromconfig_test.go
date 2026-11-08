@@ -44,6 +44,7 @@ func TestFromConfig(t *testing.T) {
 // the interlock; one that says nothing is on it.
 func TestFromConfig_TheInterlockIsEachBackendsOwnKey(t *testing.T) {
 	cfg, err := config.Parse([]byte(`db_path: /var/lib/orchestrator/controller.db
+api_auth: {enabled: false}
 profiles_dir: /etc/orchestrator/profiles
 lessons_disabled: true
 backends:
