@@ -225,8 +225,9 @@ Single sign-on is Keycloak; the old IdP retires (ADR-0039).
      fleet-wide root agent. The hunt principal the module uses holds only collect rights over an
      allow-listed artifact set, catalogued in the module and human-approve, with no EXECVE,
      FILESYSTEM_WRITE, artifact-writer or server-admin permission. Any artifact that needs one of
-     those, and any action that changes an endpoint (a quarantine, a file removal, a process
-     kill), is a `remote-admin` broker action behind approval (ADR-0017). That acting credential
+     those, and any action that changes an endpoint is a `remote-admin` broker action behind
+     approval (ADR-0017), one per kind of change: `endpoint.quarantine`, `endpoint.remove-file` and
+     `endpoint.kill-process`. That acting credential
      is held by the broker's handler and never by an agent (ADR-0030, ADR-0045). A test proves the
      hunt principal is refused an EXECVE artifact and an artifact upload.
    - Baseline hunts write to `endpoint_forensics.hunts`, which the module owns (decision 3) and
@@ -547,12 +548,32 @@ review and a security audit. Overlay pull requests are merged by the operator.
    criterion's canary, starting at a SIEM agent log line, reaches a closed case and does not page.
    - **9a. The vault case-notes importer** (ADR-0043 decision 7: the operator decided on 2026-11-08
      that the vault's case notes are imported into the `cases` capability). `hnx cases import-notes
-     DIR`, through the `cases` contract only, so it works against any `cases` primary: a dry run by
-     default, idempotent by each note's legacy path and sha256, writing a manifest of the counts in,
-     the counts out and every note skipped with its reason, which is the ADR-0043 row's gate. Tests:
-     against the `cases` fake and the `dfir-iris` product container, a re-run adds nothing, a
-     changed note becomes an update, a note above the target's TLP ceiling is refused, and the
-     manifest's counts match the fixture tree.
+     DIR` uses today's `cases` contract only (`create_alert`, `promote`, `add_note`, `set_status`;
+     no new contract minor), so it works against any `cases` primary. It is a dry run by default.
+     - **Idempotent by `dedup_key` and its own manifest.** Each legacy case's alert carries a
+       `dedup_key` derived from the case's legacy id, and the importer's manifest records, per
+       legacy note, its path, sha256 and the case it became; a re-run reads the manifest first and
+       writes nothing it already recorded.
+     - **Append, never update.** A note whose sha256 changed since the last run is appended to its
+       case as a revision note naming the earlier sha256; nothing is edited in place.
+     - **Closed cases are written in full, then closed.** A historical case that was closed in the
+       vault gets every note before its `set_status(closed, resolution)`, and is never re-opened
+       afterwards. A re-run that finds new or changed notes for an imported case that is already
+       closed writes nothing and records the note as `closed-no-op` in the manifest.
+     - **The TLP ceiling is checked before anything is written.** The importer compares each
+       note's label with the `cases` primary's ceiling (ADR-0033) and refuses an above-ceiling
+       note before any call to the contract. A refused note goes to the operator-only archive
+       (ADR-0043 decision 7) and is recorded in the manifest as `archived`.
+     - **The manifest is the ADR-0043 row's gate**: the count in equals the notes imported plus
+       the notes archived (a `closed-no-op` is recorded against a note already imported, so it
+       adds to neither), and the lost-record check covers both the imported and the archived
+       notes.
+
+     Tests, against the `cases` fake and the `dfir-iris` product container: a re-run adds
+     nothing; a changed note is appended as a revision note and the earlier note is unchanged; a
+     closed legacy case arrives with all its notes and closed, and a re-run with a changed note
+     leaves it closed and records `closed-no-op`; an above-ceiling note makes no contract call, is
+     archived and is counted; the manifest's counts match the fixture tree.
 10. **Sensor modules** (`suricata`, absorbing `suricata_enroll`, then `zeek`), the
     `network-sensor` slot and their health criteria; the moved role leaves
     `tools/product_names.baseline.json`. Tests: `HOME_NET` goldens with extra and IPv6

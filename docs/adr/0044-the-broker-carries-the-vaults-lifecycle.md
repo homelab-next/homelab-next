@@ -184,14 +184,16 @@ they would keep the vault alive behind a module, with its self-asserted identity
        both example manifests' lane actions (memory, findings, proposals) still validate, and
        their one `execute` action, `service.restart`, gains `requires.approved_record: true`;
      - by name, the stop and containment actions, which must work before anyone has filed a note:
-       `incident.recall`, `fleet.stop`, and the endpoint quarantine, file-removal and process-kill
-       `remote-admin` actions of ADR-0049 decision 4. They keep their own approval tier.
+       `incident.recall`, `fleet.stop`, and ADR-0049 decision 4's `remote-admin` actions
+       `endpoint.quarantine`, `endpoint.remove-file` and `endpoint.kill-process`. They keep their
+       own approval tier.
 
-     `validate` lists every exemption it applied. The rule trusts each action's declared tier (a
-     mis-tiered action escapes it, and the tier is reviewed with the manifest), and it covers
-     broker actions only: StackStorm actions and MCP write tools are outside it. The Approvals
-     page shows the linked note beside the request. **An approved records note authorizes no action
-     by itself:** each action keeps its own tier and approval.
+     The name list is closed and lives in `hnx broker validate`'s code; no manifest field can add to
+     it or set an exemption. `validate` lists every exemption it applied. The rule trusts each
+     action's declared tier (a mis-tiered action escapes it, and the tier is reviewed with the
+     manifest), and it covers broker actions only: StackStorm actions and MCP write tools are
+     outside it. The Approvals page shows the linked note beside the request. **An approved records
+     note authorizes no action by itself:** each action keeps its own tier and approval.
    - **Where holds bite**, each a refusal with a reason and an audit record: `decide()` refuses
      `run` of an approved request, and `call` of an action, while an open hold names the request,
      the action, or the record in the request's `related` (`record-held`), **at run time**, so a
