@@ -132,8 +132,20 @@ func newRunID() string {
 
 func submitError(w http.ResponseWriter, status int, e SubmitError) { writeJSON(w, status, e) }
 
-// DefaultMaxUnfinishedPerCaller is Config.MaxUnfinishedPerCaller's default.
-const DefaultMaxUnfinishedPerCaller = 1000
+// The per-caller bounds' defaults (Config.MaxUnfinishedPerCaller, MaxSubmitsPerWindow,
+// SubmitWindow).
+const (
+	DefaultMaxUnfinishedPerCaller = 1000
+	DefaultMaxSubmitsPerWindow    = 2000
+	DefaultSubmitWindow           = time.Hour
+)
+
+// Bounds of a resubmit's fields: a run id the API creates is 32 characters, a failure class is
+// one short word.
+const (
+	maxRetryOfLen = 64
+	maxReasonLen  = 32
+)
 
 // maxProfileIDLen bounds a submit's profile_id.
 const maxProfileIDLen = 128
@@ -198,7 +210,7 @@ func validProfileID(id string) bool {
 	return true
 }
 
-func handleSubmit(s *store.Store, agentKnown func(string) bool, maxUnfinished int) http.HandlerFunc {
+func handleSubmit(s *store.Store, agentKnown func(string) bool, limits store.SubmitLimits) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, MaxSubmitBytes)
 		body, err := io.ReadAll(r.Body)
@@ -248,6 +260,10 @@ func handleSubmit(s *store.Store, agentKnown func(string) bool, maxUnfinished in
 			http.Error(w, "task_description is larger than "+strconv.Itoa(MaxTaskBytes)+" bytes", http.StatusRequestEntityTooLarge)
 			return
 		}
+		if len(req.RetryOfRunID) > maxRetryOfLen || len(req.Reason) > maxReasonLen {
+			http.Error(w, "retry_of_run_id is at most "+strconv.Itoa(maxRetryOfLen)+" bytes and reason at most "+strconv.Itoa(maxReasonLen), http.StatusBadRequest)
+			return
+		}
 		if req.ProfileID != "" && !validProfileID(req.ProfileID) {
 			http.Error(w, "profile_id must be at most "+strconv.Itoa(maxProfileIDLen)+" of [A-Za-z0-9._:-], starting with a letter or digit", http.StatusBadRequest)
 			return
@@ -264,14 +280,6 @@ func handleSubmit(s *store.Store, agentKnown func(string) bool, maxUnfinished in
 			return
 		}
 		ctx := r.Context()
-		if n, err := s.UnfinishedBySubmitter(CallerFrom(ctx)); err != nil {
-			log.Printf("api: count unfinished jobs: %v", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		} else if n >= maxUnfinished {
-			http.Error(w, "too many unfinished jobs for this caller: wait for some to finish", http.StatusTooManyRequests)
-			return
-		}
 		j := &store.Job{
 			RunID: newRunID(), AgentKey: req.AgentKey, ProfileID: req.ProfileID, Priority: req.Priority,
 			State: store.StateQueued, Shadow: req.Shadow, IdempotencyKey: req.IdempotencyKey,
@@ -282,9 +290,10 @@ func handleSubmit(s *store.Store, agentKnown func(string) bool, maxUnfinished in
 			err = s.CreateResubmit(j, store.ResubmitCheck{
 				MayAccess: func(submittedBy string) bool { return mayAccessJob(ctx, submittedBy) },
 				Reason:    req.Reason,
+				Limits:    limits,
 			})
 		} else {
-			err = s.CreateJob(j)
+			err = s.CreateSubmit(j, limits)
 		}
 		var refusal *store.ResubmitRefusal
 		switch {
@@ -302,6 +311,10 @@ func handleSubmit(s *store.Store, agentKnown func(string) bool, maxUnfinished in
 				RetryOfRunID: req.RetryOfRunID, RetriedByRunID: refusal.RetriedByRunID, FailureClass: refusal.FailureClass})
 		case errors.Is(err, store.ErrDuplicateIdempotencyKey):
 			answerReplay(w, ctx, s, &req)
+		case errors.Is(err, store.ErrTooManyUnfinished):
+			http.Error(w, "too many unfinished jobs for this caller: wait for some to finish", http.StatusTooManyRequests)
+		case errors.Is(err, store.ErrTooManySubmits):
+			http.Error(w, "too many jobs submitted by this caller in the window: wait", http.StatusTooManyRequests)
 		case errors.Is(err, store.ErrShadowBackpressure):
 			http.Error(w, "the agent already has an unfinished shadow job", http.StatusTooManyRequests)
 		case errors.Is(err, store.ErrIdempotencyKeyTooLong):

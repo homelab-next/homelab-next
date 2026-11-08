@@ -186,12 +186,24 @@ func checkTokensFileOwnership(path string, f *os.File) error {
 			return fmt.Errorf("the api tokens file %s is owned by uid %d, not the controller (uid %d) or root", path, uid, os.Getuid())
 		}
 	}
-	dir, err := os.Stat(filepath.Dir(path))
+	// The directory is checked through its own descriptor: whoever owns it, or can write it,
+	// could replace the file.
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("read the api tokens file's directory: %w", err)
+	}
+	defer d.Close()
+	dir, err := d.Stat()
 	if err != nil {
 		return fmt.Errorf("read the api tokens file's directory: %w", err)
 	}
 	if perm := dir.Mode().Perm(); perm&0o022 != 0 {
 		return fmt.Errorf("the api tokens file %s is in a group- or world-writable directory (mode %#o): another user could replace it", path, perm)
+	}
+	if st, ok := dir.Sys().(*syscall.Stat_t); ok {
+		if uid := int(st.Uid); uid != 0 && uid != os.Getuid() {
+			return fmt.Errorf("the api tokens file %s is in a directory owned by uid %d, not the controller (uid %d) or root: its owner could replace it", path, uid, os.Getuid())
+		}
 	}
 	return nil
 }
@@ -248,9 +260,10 @@ type callerKey struct{}
 
 // principal is the authenticated identity a request carries.
 type principal struct {
-	caller string
-	admin  bool
-	read   bool
+	caller  string
+	admin   bool
+	read    bool
+	authOff bool // the API is served without authentication: every job is every request's
 }
 
 // CallerFrom returns the authenticated caller, or "" with auth off or on an open route.
@@ -267,23 +280,39 @@ func principalFrom(ctx context.Context) (principal, bool) {
 }
 
 // mayAccessJob reports whether the request may read or cancel a job owned by submittedBy: always
-// with auth off, always for admin, otherwise only its submitter.
+// with auth off (the explicit auth-off principal), always for admin, otherwise only its
+// submitter. A request with no principal at all (a route reached without the handler NewHandler
+// builds) may access nothing.
 func mayAccessJob(ctx context.Context, submittedBy string) bool {
 	p, ok := principalFrom(ctx)
 	if !ok {
-		return true
+		return false
 	}
-	return p.admin || (p.caller != "" && p.caller == submittedBy)
+	return p.authOff || p.admin || (p.caller != "" && p.caller == submittedBy)
 }
 
 // listOwnerFilter is the owner GET /jobs keeps: none with auth off, for admin and for a read
-// token; else the caller's own.
-func listOwnerFilter(ctx context.Context) (owner string, restricted bool) {
+// token; else the caller's own. allowed is false for a request with no principal: it lists
+// nothing.
+func listOwnerFilter(ctx context.Context) (owner string, restricted, allowed bool) {
 	p, ok := principalFrom(ctx)
-	if !ok || p.admin || p.read {
-		return "", false
+	switch {
+	case !ok:
+		return "", true, false
+	case p.authOff || p.admin || p.read:
+		return "", false, true
 	}
-	return p.caller, true
+	return p.caller, true, true
+}
+
+// authOffPrincipal is every request's principal when the API is served without authentication.
+var authOffPrincipal = principal{authOff: true}
+
+// withAuthOff gives every request the auth-off principal.
+func withAuthOff(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, authOffPrincipal)))
+	})
 }
 
 const realm = `Bearer realm="orchestrator"`

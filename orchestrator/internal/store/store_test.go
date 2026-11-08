@@ -539,3 +539,45 @@ func TestListForAdmission_LeavesOutTheText(t *testing.T) {
 		t.Fatalf("columns = %s", admissionColumns)
 	}
 }
+
+// A list page carries summaries: no task, answer or failure reason, however large they are.
+func TestListJobs_IsSummariesOnly(t *testing.T) {
+	s := openTest(t)
+	j := queued("a", "x")
+	j.TaskDescription = strings.Repeat("t", 200<<10)
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateExecutionResult("a", false, 1, "a reason", strings.Repeat("r", 1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListJobs(ListFilter{Limit: 10})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListJobs = %v, %v", got, err)
+	}
+	if g := got[0]; g.TaskDescription != "" || g.ResponseBody != "" || g.LocalFailedReason != "" || g.RunID != "a" || g.AgentKey != "x" {
+		t.Fatalf("summary carries text: task %d bytes, answer %d bytes", len(g.TaskDescription), len(g.ResponseBody))
+	}
+}
+
+func BenchmarkListJobs_FullPageOfLargeJobs(b *testing.B) {
+	s, err := Open(filepath.Join(b.TempDir(), "orch.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+	big := strings.Repeat("t", 256<<10)
+	for i := 0; i < 50; i++ {
+		j := queued(fmt.Sprintf("r%03d", i), "x")
+		j.TaskDescription = big
+		if err := s.CreateJob(j); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := s.ListJobs(ListFilter{Limit: MaxListLimit}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

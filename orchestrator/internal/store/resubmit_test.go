@@ -338,3 +338,40 @@ func TestFailWithRetry(t *testing.T) {
 		t.Errorf("no retry asked: %v %v", retried, err)
 	}
 }
+
+// The per-submitter bounds are checked after the idempotency key and inside the insert's
+// transaction: a replay meets ErrDuplicateIdempotencyKey, never a bound, and a bound counts only
+// its own submitter.
+func TestSubmitLimits(t *testing.T) {
+	s := openTest(t)
+	lim := SubmitLimits{MaxUnfinished: 1}
+	a := queued("a", "x")
+	a.SubmittedBy = "alice"
+	if err := s.CreateSubmit(a, lim); err != nil {
+		t.Fatal(err)
+	}
+	again := queued("a2", "x")
+	again.SubmittedBy, again.IdempotencyKey = "alice", a.IdempotencyKey
+	if err := s.CreateSubmit(again, lim); !errors.Is(err, ErrDuplicateIdempotencyKey) {
+		t.Fatalf("a replay = %v, want the duplicate key", err)
+	}
+	b := queued("b", "x")
+	b.SubmittedBy = "alice"
+	if err := s.CreateSubmit(b, lim); !errors.Is(err, ErrTooManyUnfinished) {
+		t.Fatalf("past the bound = %v", err)
+	}
+	c := queued("c", "x")
+	c.SubmittedBy = "bob"
+	if err := s.CreateSubmit(c, lim); err != nil {
+		t.Fatalf("another submitter = %v", err)
+	}
+	if err := s.UpdateState("a", StateQueued, StateCancelled); err != nil {
+		t.Fatal(err)
+	}
+	win := SubmitLimits{MaxInWindow: 1, Window: time.Hour}
+	d := queued("d", "x")
+	d.SubmittedBy = "alice"
+	if err := s.CreateSubmit(d, win); !errors.Is(err, ErrTooManySubmits) {
+		t.Fatalf("a cancelled job still counts in the window: %v", err)
+	}
+}

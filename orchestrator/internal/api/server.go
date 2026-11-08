@@ -46,9 +46,15 @@ type Config struct {
 	// server's WriteTimeout (2 minutes) is cut off.
 	Pprof bool
 	// MaxUnfinishedPerCaller bounds one submitter's jobs that are not yet finished (queued,
-	// admitted, running): a submit past it is a 429. 0 is DefaultMaxUnfinishedPerCaller; with
-	// authentication off every request is one caller.
+	// admitted, running): a submit past it is a 429. MaxSubmitsPerWindow bounds the jobs one
+	// submitter created in the last SubmitWindow, cancelled ones included (429), so
+	// submit-then-cancel cannot grow the database without bound. Both are checked in the submit's
+	// own transaction, after the idempotency key: a replay is never refused, and the bounds are
+	// exact. 0 is the default of each. With authentication off every request is one caller, "", so
+	// the bounds are global.
 	MaxUnfinishedPerCaller int
+	MaxSubmitsPerWindow    int
+	SubmitWindow           time.Duration
 
 	// CancelRun stops a cancelled job's live session (the scheduler's CancelRun); nil: a cancel
 	// only moves the row.
@@ -89,12 +95,12 @@ func NewHandler(cfg Config) (http.Handler, error) {
 		return nil, fmt.Errorf("%w: both an authenticator and Unauthenticated", ErrInsecure)
 	case cfg.Unauthenticated && cfg.Pprof:
 		return nil, fmt.Errorf("%w: profiling without authentication would open the process's profiles to every local user", ErrInsecure)
-	case cfg.MaxUnfinishedPerCaller < 0:
-		return nil, errors.New("api: a negative MaxUnfinishedPerCaller")
+	case cfg.MaxUnfinishedPerCaller < 0 || cfg.MaxSubmitsPerWindow < 0 || cfg.SubmitWindow < 0:
+		return nil, errors.New("api: a negative per-caller bound")
 	}
 	mux := newMux(cfg)
 	if cfg.Auth == nil {
-		return mux, nil
+		return withAuthOff(mux), nil
 	}
 	return cfg.Auth.Middleware(mux), nil
 }
@@ -147,11 +153,17 @@ func NewServer(addr string, cfg Config) (*http.Server, error) {
 func newMux(cfg Config) *http.ServeMux {
 	s := cfg.Store
 	mux := http.NewServeMux()
-	maxUnfinished := cfg.MaxUnfinishedPerCaller
-	if maxUnfinished == 0 {
-		maxUnfinished = DefaultMaxUnfinishedPerCaller
+	limits := store.SubmitLimits{MaxUnfinished: cfg.MaxUnfinishedPerCaller, MaxInWindow: cfg.MaxSubmitsPerWindow, Window: cfg.SubmitWindow}
+	if limits.MaxUnfinished == 0 {
+		limits.MaxUnfinished = DefaultMaxUnfinishedPerCaller
 	}
-	mux.HandleFunc("POST /jobs", handleSubmit(s, cfg.AgentKnown, maxUnfinished))
+	if limits.MaxInWindow == 0 {
+		limits.MaxInWindow = DefaultMaxSubmitsPerWindow
+	}
+	if limits.Window == 0 {
+		limits.Window = DefaultSubmitWindow
+	}
+	mux.HandleFunc("POST /jobs", handleSubmit(s, cfg.AgentKnown, limits))
 	mux.HandleFunc("GET /jobs", handleListJobs(s))
 	mux.HandleFunc("GET /jobs/{id}", handleGetJob(s))
 	mux.HandleFunc("POST /jobs/{id}/cancel", handleCancel(s, cfg.CancelRun))
@@ -164,7 +176,7 @@ func newMux(cfg Config) *http.ServeMux {
 		authOff := cfg.Auth == nil
 		mux.HandleFunc("GET /admin/backend-health", func(w http.ResponseWriter, r *http.Request) {
 			full := authOff
-			if p, ok := principalFrom(r.Context()); ok && p.admin {
+			if p, ok := principalFrom(r.Context()); ok && (p.admin || p.authOff) {
 				full = true
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"backends": cfg.BackendHealth(full)})

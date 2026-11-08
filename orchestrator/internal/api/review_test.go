@@ -232,3 +232,97 @@ func isResponseWriter(fun ast.Expr) bool {
 	}
 	return false
 }
+
+// A replay of an accepted submit is answered with its run, never refused by the per-caller
+// bound it now fills.
+func TestSubmit_AReplayIsNeverRefusedByTheCap(t *testing.T) {
+	a := newAPI(t, func(c *Config) { c.MaxUnfinishedPerCaller = 1 })
+	body := map[string]any{"agent_key": "watcher", "idempotency_key": "k-1"}
+	code, first, _ := a.submit("", body)
+	if code != http.StatusCreated {
+		t.Fatal(code)
+	}
+	if code, again, _ := a.submit("", body); code != http.StatusOK || again.RunID != first.RunID {
+		t.Fatalf("the replay = %d %+v, want 200 with the first run", code, again)
+	}
+	if code, _, _ := a.submit("", map[string]any{"agent_key": "watcher"}); code != http.StatusTooManyRequests {
+		t.Fatalf("a new submit past the cap = %d", code)
+	}
+}
+
+// Submit-then-cancel cannot grow the database without bound: the jobs a caller created in the
+// window count, cancelled or not.
+func TestSubmit_SubmitThenCancelIsBoundedByTheWindow(t *testing.T) {
+	a := newAPI(t, func(c *Config) { c.MaxUnfinishedPerCaller = 2; c.MaxSubmitsPerWindow = 2; c.SubmitWindow = time.Hour })
+	accepted := 0
+	for i := 0; i < 10; i++ {
+		code, ok, _ := a.submit("", map[string]any{"agent_key": "watcher"})
+		if code == http.StatusCreated {
+			accepted++
+			if c, _ := a.do(http.MethodPost, "/jobs/"+ok.RunID+"/cancel", "", nil); c != http.StatusOK {
+				t.Fatalf("cancel = %d", c)
+			}
+		} else if code != http.StatusTooManyRequests {
+			t.Fatalf("cycle %d = %d", i, code)
+		}
+	}
+	if accepted != 2 {
+		t.Fatalf("%d of 10 submit-and-cancel cycles were accepted, want 2", accepted)
+	}
+}
+
+// A resubmit's fields are bounded.
+func TestSubmit_ResubmitFieldsAreBounded(t *testing.T) {
+	a := newAPI(t, nil)
+	for name, body := range map[string]map[string]any{
+		"retry_of_run_id": {"agent_key": "watcher", "retry_of_run_id": strings.Repeat("r", 65)},
+		"reason":          {"agent_key": "watcher", "retry_of_run_id": "p", "reason": strings.Repeat("c", 33)},
+	} {
+		if code, _, _ := a.submit("", body); code != http.StatusBadRequest {
+			t.Errorf("an over-long %s = %d", name, code)
+		}
+	}
+}
+
+// A route reached without the handler NewHandler builds has no principal, and then may see,
+// cancel or list nothing: the open default is gone.
+func TestNoPrincipalAccessesNothing(t *testing.T) {
+	st := openStore(t)
+	if err := st.CreateJob(&store.Job{RunID: "r-1", AgentKey: "watcher", Priority: 50, State: store.StateQueued, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptestServer(t, newMux(Config{Store: st, AgentKnown: agentKnown, Unauthenticated: true}))
+	for _, c := range []struct{ method, path string }{{"GET", "/jobs/r-1"}, {"POST", "/jobs/r-1/cancel"}, {"GET", "/jobs"}} {
+		req, _ := http.NewRequest(c.method, srv+c.path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Errorf("%s %s with no principal = 200", c.method, c.path)
+		}
+	}
+	if j, _ := st.GetJob("r-1"); j.State != store.StateQueued {
+		t.Fatalf("a request with no principal cancelled the job: %s", j.State)
+	}
+}
+
+// A tokens file in a directory another user owns is refused. Needs root, to give the directory
+// away.
+func TestLoadAuthenticator_RefusesAForeignDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "theirs")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "tokens.yaml")
+	if err := os.WriteFile(path, []byte("tokens: [{caller: a, sha256: "+digest("tok-a")+", scopes: [jobs]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(dir, 4242, 4242); err != nil {
+		t.Skip("chown to another user needs root")
+	}
+	if _, err := LoadAuthenticator(path); err == nil || !strings.Contains(err.Error(), "directory owned by uid 4242") {
+		t.Fatalf("a foreign directory = %v", err)
+	}
+}
