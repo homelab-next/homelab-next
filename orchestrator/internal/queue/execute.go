@@ -424,7 +424,9 @@ func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int
 	// drop the new claim.
 	sch.release(*reserved, runID)
 	*reserved = ""
-	if err := sch.cfg.Store.UpdateState(runID, store.StateRunning, store.StateQueued); err != nil {
+	// The row goes back and the attempt is uncounted in one store operation: a pass that admits
+	// the run between two writes would run it with the attempt it gave back still counted.
+	if err := sch.cfg.Store.Requeue(runID, store.StateRunning, attempt-1); err != nil {
 		sch.logf("queue: run=%s lost its backends and cannot go back to the queue: %v", runID, err)
 		return false
 	}
@@ -434,9 +436,6 @@ func (sch *Scheduler) requeueBackendDown(d *dispatch, callErr error, attempt int
 	}
 	sch.requeues[runID] = n + 1
 	sch.mu.Unlock()
-	if err := sch.cfg.Store.UpdateAttempts(runID, attempt-1); err != nil {
-		sch.logf("queue: run=%s cannot uncount the attempt: %v", runID, err)
-	}
 	sch.logf("queue: run=%s agent=%s local-only, every eligible backend is down: back to queued until one is up (%d of %d)", runID, d.job.AgentKey, n+1, MaxBackendDownRequeues)
 	return true
 }

@@ -581,3 +581,30 @@ func BenchmarkListJobs_FullPageOfLargeJobs(b *testing.B) {
 		}
 	}
 }
+
+// Requeue moves the row and sets its attempts together, and a lost compare-and-swap changes
+// neither.
+func TestRequeue_StateAndAttemptsTogether(t *testing.T) {
+	s := openTest(t)
+	mkJob(t, s, "run-1", "watcher", StateRunning)
+	if err := s.UpdateAttempts("run-1", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Requeue("run-1", StateRunning, 2); err != nil {
+		t.Fatal(err)
+	}
+	j, _ := s.GetJob("run-1")
+	if j.State != StateQueued || j.Attempts != 2 {
+		t.Fatalf("job = %s attempts=%d", j.State, j.Attempts)
+	}
+	if err := s.Requeue("run-1", StateRunning, 0); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("a lost compare-and-swap: %v", err)
+	}
+	if j, _ := s.GetJob("run-1"); j.State != StateQueued || j.Attempts != 2 {
+		t.Fatalf("a lost compare-and-swap changed the row: %s attempts=%d", j.State, j.Attempts)
+	}
+	mkJob(t, s, "run-2", "watcher", StateDone)
+	if err := s.Requeue("run-2", StateDone, 0); err == nil || errors.Is(err, ErrStateConflict) {
+		t.Fatalf("a finished job went back to the queue: %v", err)
+	}
+}

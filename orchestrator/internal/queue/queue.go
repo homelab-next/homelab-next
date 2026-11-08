@@ -55,6 +55,7 @@ type Store interface {
 	UpdatePromptProvenance(runID string, lessonIDs, runbookIDs []string, promptSHA256 string, promptBytes int) error
 	UpdateProfileRevision(runID, revision string) error
 	UpdateAttempts(runID string, attempts int) error
+	Requeue(runID string, from store.State, attempts int) error
 	EmitDeferredFinished(runID string) error
 	DeferredFinishedPending() ([]string, error)
 }

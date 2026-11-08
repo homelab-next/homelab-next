@@ -929,6 +929,28 @@ func (s *Store) UpdatePromptProvenance(runID string, lessonIDs, runbookIDs []str
 	return err
 }
 
+// Requeue moves runID from `from` back to queued and sets its attempt count to attempts, in one
+// statement: no pass can see the row queued with the attempt it gives back still counted, and a
+// lost compare-and-swap (ErrStateConflict: a cancel moved the row) changes neither. A move to
+// queued publishes no event.
+func (s *Store) Requeue(runID string, from State, attempts int) error {
+	if !CanTransition(from, StateQueued) {
+		return fmt.Errorf("requeue %s: %s cannot go back to %s", runID, from, StateQueued)
+	}
+	res, err := s.db.Exec(`UPDATE jobs SET state = ?, attempts = ? WHERE run_id = ? AND state = ?`, string(StateQueued), attempts, runID, string(from))
+	if err != nil {
+		return fmt.Errorf("requeue %s: %w", runID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("requeue %s: rows affected: %w", runID, err)
+	}
+	if n == 0 {
+		return ErrStateConflict
+	}
+	return nil
+}
+
 // UpdateAttempts records how many times a job's attempt chain has run.
 func (s *Store) UpdateAttempts(runID string, attempts int) error {
 	_, err := s.db.Exec(`UPDATE jobs SET attempts = ? WHERE run_id = ?`, attempts, runID)
