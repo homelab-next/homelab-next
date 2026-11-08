@@ -74,7 +74,7 @@ func TestTheCloudLegIsNeverWatchedByItsEndpoint(t *testing.T) {
 	p, _ := newPool(r, local...)
 	p.CloudHome = cloud
 	p.Limits = runner.Limits{Liveness: "progress"}
-	if _, err := p.Call(context.Background(), session("run-1"), false, noAffinity, ""); err != nil {
+	if _, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, ""); err != nil {
 		t.Fatal(err)
 	}
 	cs := r.Sessions()[1]

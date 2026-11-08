@@ -124,13 +124,13 @@ func TestCall_OnlyAConfirmedOutageMarksABackendDown(t *testing.T) {
 		return &runner.Result{}, absent("nothing answered")
 	}))
 	p, _ := newPool(r, Backend{Name: "a", HealthURL: down.URL})
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || !res.UsedCloud || p.BackendUp("a") {
 		t.Fatalf("res = %+v, err = %v, up = %v", res, err, p.BackendUp("a"))
 	}
 	r2 := runnertest.New(cloudAnswers(runnertest.Fail(runner.BackendFault, "connection refused")))
 	q, _ := newPool(r2, Backend{Name: "a", HealthURL: down.URL})
-	if _, err := q.Call(context.Background(), session("run-1"), false, noAffinity, ""); err != nil || !q.BackendUp("a") {
+	if _, err := q.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, ""); err != nil || !q.BackendUp("a") {
 		t.Fatalf("a fault without the hint marked the backend down (err %v)", err)
 	}
 }
@@ -164,11 +164,11 @@ func TestCall_AllDownLocalOnlyFailsFastWithoutASession(t *testing.T) {
 	r := runnertest.New()
 	p, _ := newPool(r, Backend{Name: "a", HealthURL: "u"})
 	p.setHealth("a", false, "probe_failed", nil, "test")
-	res, err := p.Call(context.Background(), session("run-1"), true, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), LocalOnly, noAffinity, "")
 	if !errors.Is(err, ErrNoHealthyBackend) || !IsBackendDown(err) || res.LocalAttempts != 0 || len(r.Sessions()) != 0 {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
-	res, err = p.Call(context.Background(), session("run-2"), false, noAffinity, "")
+	res, err = p.Call(context.Background(), session("run-2"), CloudFallback, noAffinity, "")
 	if err != nil || !res.UsedCloud {
 		t.Fatalf("every backend down is the cloud leg's case: res = %+v, err = %v", res, err)
 	}
@@ -232,7 +232,7 @@ func TestTheProbesAreGETsOnly(t *testing.T) {
 	ctx := context.Background()
 	p.ProbeOnce(ctx)
 	name, _ := p.Reserve(ctx, Affinity{}, "run-1", "agent")
-	_, _ = p.Call(ctx, session("run-1"), false, Affinity{}, name)
+	_, _ = p.Call(ctx, session("run-1"), CloudFallback, Affinity{}, name)
 	_, _ = p.ReserveExclusive(ctx, Affinity{Exclusive: true, ExcludeBackends: []string{"b"}}, "run-2")
 	mu <- struct{}{}
 	defer func() { <-mu }()

@@ -128,8 +128,8 @@ func TestExclusive_CallOrder(t *testing.T) {
 	if got := p.filterForExclusive([]Backend{{Name: "big"}, {Name: "small"}}, exclusiveBig, "big", "run-big"); len(got) != 1 || got[0].Name != "big" {
 		t.Fatalf("the exclusive run's order = %v", got)
 	}
-	_, _ = p.Call(ctx, session("run-big"), false, exclusiveBig, "big")
-	_, _ = p.Call(ctx, session("run-other"), false, Affinity{}, "")
+	_, _ = p.Call(ctx, session("run-big"), CloudFallback, exclusiveBig, "big")
+	_, _ = p.Call(ctx, session("run-other"), CloudFallback, Affinity{}, "")
 	if got := targets(r); len(got) != 2 || got[0] != "big" || got[1] != "small" {
 		t.Errorf("targets = %v, want big (the lease only), then small (never the leased big)", got)
 	}

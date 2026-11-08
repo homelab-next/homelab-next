@@ -51,7 +51,7 @@ func TestCall_EachSessionCarriesTheRunAndItsOwnLeg(t *testing.T) {
 	r := runnertest.New(cloudAnswers(runnertest.Fail(runner.BackendFault, "it did not work")))
 	p, _ := newPool(r, Backend{Name: "a", Home: "ha", Endpoint: "engine-a.example.internal:8000", LoadProbeURLs: []string{"u"}})
 	p.Limits = runner.Limits{Timeout: time.Minute, StallTimeout: time.Second, MaxTurns: 7, Liveness: "progress"}
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || !res.UsedCloud || res.Response != "cloud answer" || res.LocalFailedReason != "backend-fault: it did not work" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -75,7 +75,7 @@ func TestCall_ALocalAnswerNeverStartsTheCloudLeg(t *testing.T) {
 	r := runnertest.New(failsOn(map[string]runnertest.Step{"cloud": runnertest.Fail(runner.Internal, "the cloud leg ran")}, "local answer"))
 	p, _ := newPool(r, Backend{Name: "a", Home: "ha", NeedsInterlock: true})
 	p.Interlock = inference.NewInterlock(lockFile(t), 10*time.Millisecond)
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || res.Response != "local answer" || res.UsedCloud || res.LocalAttempts != 1 || res.LocalFailedReason != "" || res.LocalBackendUsed != "a" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -93,7 +93,7 @@ func TestCall_FailsOverToTheNextLocalBackendBeforeTheCloud(t *testing.T) {
 	p, _ := newPool(r, Backend{Name: "first", Home: "h1"}, Backend{Name: "second", Home: "h2", NeedsInterlock: true})
 	p.Interlock = inference.NewInterlock(lockFile(t), 10*time.Millisecond)
 	p.PrimaryFirst = true
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || res.UsedCloud || res.LocalBackendUsed != "second" || res.LocalAttempts != 2 || res.Response != "second answer" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -108,7 +108,7 @@ func TestCall_EveryLocalFailureMovesToTheNextLocalBackend(t *testing.T) {
 	r := runnertest.New(failsOn(map[string]runnertest.Step{"first": runnertest.Fail(runner.Internal, "a bad flag")}, "second answer"))
 	p, _ := newPool(r, Backend{Name: "first"}, Backend{Name: "second"})
 	p.PrimaryFirst = true
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || res.LocalBackendUsed != "second" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -121,7 +121,7 @@ func TestCall_EveryAttributableClassReachesTheCloud(t *testing.T) {
 		t.Run(c.String(), func(t *testing.T) {
 			r := runnertest.New(cloudAnswers(runnertest.Fail(c, "the leg failed")))
 			p, _ := newPool(r, Backend{Name: "a"})
-			res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+			res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 			if err != nil || !res.UsedCloud || res.Response != "cloud answer" || res.LocalClass != c || res.CloudClass != runner.Internal {
 				t.Fatalf("res = %+v, err = %v", res, err)
 			}
@@ -144,7 +144,7 @@ func TestCall_AnUnattributableFailureNeverStartsTheCloudLeg(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := runnertest.New(cloudAnswers(step))
 			p, _ := newPool(r, Backend{Name: "a"})
-			res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+			res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 			if !errors.Is(err, ErrNotAttributable) || res.UsedCloud || res.LocalAttempts != 1 || res.LocalFailedReason == "" || len(r.Sessions()) != 1 {
 				t.Fatalf("res = %+v, err = %v, sessions = %v", res, err, targets(r))
 			}
@@ -180,7 +180,7 @@ func TestCall_DecidesOnEveryClassInALeg(t *testing.T) {
 			r := runnertest.New(runnertest.On(map[string]runnertest.Step{c.failing: c.step, "mid": runnertest.Fail(runner.Internal, "mid was tried")}, runnertest.Answer("answer")))
 			p, _ := newPool(r, c.backends...)
 			p.PrimaryFirst = true
-			_, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+			_, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 			if got := targets(r); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("targets = %v, want %v", got, c.want)
 			}
@@ -195,7 +195,7 @@ func TestCall_DecidesOnEveryClassInALeg(t *testing.T) {
 func TestCall_TheTurnCapStopsTheChain(t *testing.T) {
 	r := runnertest.New(runnertest.Fail(runner.TurnCap, "too many turns"))
 	p, _ := newPool(r, Backend{Name: "a"}, Backend{Name: "b"})
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if !errors.Is(err, ErrTurnCapStops) || !errors.Is(err, runner.TurnCap) || len(r.Sessions()) != 1 || res.LocalClass != runner.TurnCap || res.UsedCloud {
 		t.Fatalf("res = %+v, err = %v, sessions = %d", res, err, len(r.Sessions()))
 	}
@@ -211,7 +211,7 @@ func TestCall_ContextExceededTriesTheBiggestRemainingWindowNext(t *testing.T) {
 	backends := []Backend{{Name: "small", MaxContext: 43690}, {Name: "medium", MaxContext: 65536}, {Name: "big", MaxContext: 131072}}
 	p, _ := newPool(r, backends...)
 	p.PrimaryFirst = true
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || res.LocalBackendUsed != "big" || res.LocalAttempts != 2 || res.UsedCloud {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -224,7 +224,7 @@ func TestCall_ContextExceededTriesTheBiggestRemainingWindowNext(t *testing.T) {
 func TestCall_ContextExceededEverywhereFallsBackToTheCloud(t *testing.T) {
 	r := runnertest.New(cloudAnswers(runnertest.Fail(runner.ContextExceeded, "no room")))
 	p, _ := newPool(r, Backend{Name: "a", MaxContext: 131072}, Backend{Name: "b", MaxContext: 65536})
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || !res.UsedCloud || res.LocalAttempts != 2 {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -245,7 +245,7 @@ func TestCall_AnAnswerCheckFailureEscalatesLikeTheSameFailure(t *testing.T) {
 	}
 	p, _ := newPool(r, Backend{Name: "small", MaxContext: 43690}, Backend{Name: "big", MaxContext: 131072})
 	p.PrimaryFirst = true
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || res.LocalBackendUsed != "big" || res.LocalAttempts != 2 || res.Response != "big answer" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -266,7 +266,7 @@ func TestCall_AnAnswerCheckFailureMovesToTheNextBackend(t *testing.T) {
 	}
 	p, _ := newPool(r, Backend{Name: "first"}, Backend{Name: "second"})
 	p.PrimaryFirst = true
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || res.LocalBackendUsed != "second" || res.LocalAttempts != 2 || res.Response != "second answer" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -277,7 +277,7 @@ func TestCall_TheCloudAnswerIsNeverChecked(t *testing.T) {
 	r := runnertest.New(runnertest.Answer("compression gave up"))
 	r.AnswerCheck = func(resp string) error { return runner.Wrap(runner.ContextExceeded, errors.New(resp)) }
 	p, _ := newPool(r, Backend{Name: "a"})
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || !res.UsedCloud || res.Response != "compression gave up" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -288,7 +288,7 @@ func TestCall_AnIntermittentToolCallParseIsRetriedOnTheSameBackend(t *testing.T)
 	r := runnertest.New(runnertest.Fail(runner.ToolCallParse, "parser said no"), runnertest.Answer("local answer"))
 	p, _ := newPool(r, Backend{Name: "a"}, Backend{Name: "b"})
 	p.PrimaryFirst = true
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || res.UsedCloud || res.Response != "local answer" || res.LocalBackendUsed != "a" || res.LocalAttempts != 2 {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -301,7 +301,7 @@ func TestCall_AnIntermittentToolCallParseIsRetriedOnTheSameBackend(t *testing.T)
 func TestCall_ADeterministicToolCallParseExhaustsItsRetriesThenReachesTheCloud(t *testing.T) {
 	r := runnertest.New(cloudAnswers(runnertest.Fail(runner.ToolCallParse, "parser said no")))
 	p, _ := newPool(r, Backend{Name: "a"})
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || !res.UsedCloud || res.Response != "cloud answer" || res.LocalAttempts != 1+sameBackendRetries {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -314,7 +314,7 @@ func TestCall_ATotalFailureKeepsTheTrailAndEachLegsClass(t *testing.T) {
 	r := runnertest.New(runnertest.On(map[string]runnertest.Step{"cloud": runnertest.Fail(runner.TimeoutCeiling, "cloud ceiling")},
 		runnertest.Fail(runner.BackendFault, "connection refused")))
 	p, _ := newPool(r, Backend{Name: "a"})
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if !errors.Is(err, ErrCloudFailed) || res == nil || !res.UsedCloud || res.LocalAttempts != 1 || res.LocalFailedReason != "backend-fault: connection refused" || res.LocalFailedDetail != "connection refused" {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -338,7 +338,7 @@ func TestCall_LocalOnlyNeverStartsTheCloudLeg(t *testing.T) {
 	t.Run("fails", func(t *testing.T) {
 		r := runnertest.New(cloudAnswers(runnertest.Fail(runner.BackendFault, "local unreachable")))
 		p, _ := newPool(r, Backend{Name: "a"})
-		res, err := p.Call(context.Background(), session("run-1"), true, noAffinity, "")
+		res, err := p.Call(context.Background(), session("run-1"), LocalOnly, noAffinity, "")
 		if !errors.Is(err, ErrLocalOnly) || !errors.Is(err, runner.BackendFault) || res.UsedCloud || res.LocalAttempts != 1 || res.LocalFailedReason == "" || len(r.Sessions()) != 1 {
 			t.Fatalf("res = %+v, err = %v", res, err)
 		}
@@ -346,7 +346,7 @@ func TestCall_LocalOnlyNeverStartsTheCloudLeg(t *testing.T) {
 	t.Run("answers", func(t *testing.T) {
 		r := runnertest.New(runnertest.Answer("local answer"))
 		p, _ := newPool(r, Backend{Name: "a"})
-		res, err := p.Call(context.Background(), session("run-1"), true, noAffinity, "")
+		res, err := p.Call(context.Background(), session("run-1"), LocalOnly, noAffinity, "")
 		if err != nil || res.Response != "local answer" || res.UsedCloud {
 			t.Fatalf("res = %+v, err = %v", res, err)
 		}
@@ -358,7 +358,7 @@ func TestCall_WithoutACloudHomeThereIsNoCloudLeg(t *testing.T) {
 	r := runnertest.New(runnertest.Fail(runner.BackendFault, "local unreachable"))
 	p, _ := newPool(r, Backend{Name: "a"})
 	p.CloudHome = ""
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if !errors.Is(err, ErrNoCloudBackend) || res.UsedCloud || len(r.Sessions()) != 1 {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -369,11 +369,11 @@ func TestCall_WithoutACloudHomeThereIsNoCloudLeg(t *testing.T) {
 func TestCall_AnAffinityNoBackendSatisfies(t *testing.T) {
 	r := runnertest.New(cloudAnswers(runnertest.Fail(runner.Internal, "a local backend was tried")))
 	p, _ := newPool(r, Backend{Name: "a", Tags: []string{"general"}, MaxContext: 131072})
-	_, err := p.Call(context.Background(), session("run-1"), true, Affinity{RequireTags: []string{"special"}}, "")
+	_, err := p.Call(context.Background(), session("run-1"), LocalOnly, Affinity{RequireTags: []string{"special"}}, "")
 	if !errors.Is(err, ErrNoLocalCapacity) || !strings.Contains(err.Error(), "excluded every configured local backend") || len(r.Sessions()) != 0 {
 		t.Fatalf("local-only: err = %v, sessions = %v", err, targets(r))
 	}
-	res, err := p.Call(context.Background(), session("run-2"), false, Affinity{MinContext: 260000}, "")
+	res, err := p.Call(context.Background(), session("run-2"), CloudFallback, Affinity{MinContext: 260000}, "")
 	if err != nil || !res.UsedCloud || res.Response != "cloud answer" || !strings.Contains(res.LocalFailedReason, "excluded every configured local backend") || res.LocalAttempts != 0 {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -384,7 +384,7 @@ func TestCall_AffinityRoutesOnlyToEligibleBackends(t *testing.T) {
 	r := runnertest.New(failsOn(map[string]runnertest.Step{"a": runnertest.Fail(runner.Internal, "a was tried")}, "answer from b"))
 	p, _ := newPool(r, Backend{Name: "a", Tags: []string{"general"}}, Backend{Name: "b", Tags: []string{"special"}})
 	for i := 0; i < 10; i++ {
-		res, err := p.Call(context.Background(), session("run"), true, Affinity{RequireTags: []string{"special"}}, "")
+		res, err := p.Call(context.Background(), session("run"), LocalOnly, Affinity{RequireTags: []string{"special"}}, "")
 		if err != nil || res.LocalBackendUsed != "b" {
 			t.Fatalf("call %d: res = %+v, err = %v", i, res, err)
 		}
@@ -396,7 +396,7 @@ func TestCall_EqualWeightsShareRealCalls(t *testing.T) {
 	p, _ := newPool(nil, Backend{Name: "a", Weight: 1}, Backend{Name: "b", Weight: 1})
 	used := map[string]int{}
 	for i := 0; i < 10; i++ {
-		res, err := p.Call(context.Background(), session("run"), false, noAffinity, "")
+		res, err := p.Call(context.Background(), session("run"), CloudFallback, noAffinity, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -424,7 +424,7 @@ func TestCall_TheReservedBackendGoesFirstAndIsNotCountedTwice(t *testing.T) {
 	}
 	done := make(chan *Result)
 	go func() {
-		res, _ := p.Call(ctx, session("run-1"), false, noAffinity, name)
+		res, _ := p.Call(ctx, session("run-1"), CloudFallback, noAffinity, name)
 		done <- res
 	}()
 	<-started
@@ -469,7 +469,7 @@ func TestCall_HoldsTheInterlockForTheWholeLocalAttempt(t *testing.T) {
 	p.Interlock = inference.NewInterlock(path, 10*time.Millisecond)
 	done := make(chan struct{})
 	go func() {
-		_, _ = p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+		_, _ = p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 		close(done)
 	}()
 	select {
@@ -501,7 +501,7 @@ func TestCall_AnInterlockWaitPastItsBoundIsABackendFault(t *testing.T) {
 	p.Interlock = inference.NewInterlock(path, 10*time.Millisecond)
 	p.InterlockWait = 150 * time.Millisecond
 	start := time.Now()
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err != nil || !res.UsedCloud || res.Response != "cloud answer" || res.LocalClass != runner.BackendFault {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -525,7 +525,7 @@ func TestCall_AnInterlockWaitEndedByTheJobIsNotABackendFault(t *testing.T) {
 	p.InterlockWait = time.Hour
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	res, err := p.Call(ctx, session("run-1"), false, noAffinity, "")
+	res, err := p.Call(ctx, session("run-1"), CloudFallback, noAffinity, "")
 	if !errors.Is(err, ErrJobDeadline) || res.UsedCloud || len(r.Sessions()) != 0 {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -539,7 +539,7 @@ func TestCall_ARefusedLockFileIsNotABackendFault(t *testing.T) {
 	r := runnertest.New(cloudAnswers(runnertest.Answer("local answer")))
 	p, _ := newPool(r, Backend{Name: "a", NeedsInterlock: true})
 	p.Interlock = inference.NewInterlock("relative/lock", 10*time.Millisecond)
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if !errors.Is(err, ErrNotAttributable) || res.LocalClass != runner.Internal {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -553,7 +553,7 @@ func TestCall_TheJobLimitBoundsTheWholeChain(t *testing.T) {
 	p, _ := newPool(r, Backend{Name: "a"}, Backend{Name: "b"})
 	p.JobLimit = 150 * time.Millisecond
 	start := time.Now()
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if !errors.Is(err, ErrJobDeadline) || res == nil || res.UsedCloud {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -584,7 +584,7 @@ func TestCall_CountsEveryRunningAttemptInFlight(t *testing.T) {
 		done.Add(1)
 		go func() {
 			defer done.Done()
-			_, _ = p.Call(context.Background(), session("run"), true, noAffinity, "")
+			_, _ = p.Call(context.Background(), session("run"), LocalOnly, noAffinity, "")
 		}()
 	}
 	started.Wait()
@@ -606,7 +606,7 @@ func TestCall_ACancelledJobReleasesItsAttempt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)
 	go func() {
-		_, err := p.Call(ctx, session("run-1"), false, noAffinity, "")
+		_, err := p.Call(ctx, session("run-1"), CloudFallback, noAffinity, "")
 		done <- err
 	}()
 	for len(r.Sessions()) == 0 {
@@ -625,7 +625,7 @@ func TestCall_ACancelledJobReleasesItsAttempt(t *testing.T) {
 }
 
 func TestCall_WithoutARunnerIsAnErrorNotAPanic(t *testing.T) {
-	res, err := (&Policy{Backends: []Backend{{Name: "a"}}}).Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := (&Policy{Backends: []Backend{{Name: "a"}}}).Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if err == nil || res == nil {
 		t.Fatalf("res = %v, err = %v", res, err)
 	}
@@ -638,7 +638,7 @@ func TestCall_NothingAttemptableIsNamed(t *testing.T) {
 	if _, err := p.SetDrained("a", true); err != nil {
 		t.Fatal(err)
 	}
-	res, err := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, err := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if !errors.Is(err, ErrNoAttemptableBackend) || res.UsedCloud || res.LocalAttempts != 0 {
 		t.Fatalf("res = %+v, err = %v", res, err)
 	}
@@ -676,7 +676,7 @@ func TestCall_TheFailureReasonAndTheLogAreBounded(t *testing.T) {
 		defer mu.Unlock()
 		lines = append(lines, fmt.Sprintf(format, args...))
 	}
-	res, _ := p.Call(context.Background(), session("run-1"), false, noAffinity, "")
+	res, _ := p.Call(context.Background(), session("run-1"), CloudFallback, noAffinity, "")
 	if !strings.HasPrefix(res.LocalFailedReason, "turn-failed: the model said: ") || len(res.LocalFailedReason) > len("turn-failed: ")+reasonMaxBytes+len(" ...[truncated]") {
 		t.Errorf("reason (%d bytes) = %.80q", len(res.LocalFailedReason), res.LocalFailedReason)
 	}
@@ -687,5 +687,36 @@ func TestCall_TheFailureReasonAndTheLogAreBounded(t *testing.T) {
 		if len(l) > 2*reasonMaxBytes {
 			t.Errorf("a log line of %d bytes: %.80q", len(l), l)
 		}
+	}
+}
+
+// A local-only call never gives the runner a cloud target, whatever the local failure, and the
+// zero locality is local-only.
+func TestCall_ALocalOnlyCallNeverReachesTheCloud(t *testing.T) {
+	var zero Locality
+	if zero != LocalOnly || LocalityOf(true) != LocalOnly || LocalityOf(false) != CloudFallback {
+		t.Fatalf("zero = %s, LocalityOf(true) = %s, LocalityOf(false) = %s", zero, LocalityOf(true), LocalityOf(false))
+	}
+	classes := []runner.Class{runner.Internal, runner.BackendFault, runner.ContextExceeded, runner.ToolCallParse, runner.Stalled,
+		runner.TimeoutCeiling, runner.TurnFailed, runner.KilledExternally}
+	for _, c := range classes {
+		for _, affinity := range []Affinity{{}, {RequireTags: []string{"none"}}} {
+			r := runnertest.New(runnertest.Fail(c, "local failed"))
+			p, _ := newPool(r, Backend{Name: "a", HealthURL: "u"}, Backend{Name: "b"})
+			_, err := p.Call(context.Background(), session("run-1"), zero, affinity, "")
+			for _, s := range r.Sessions() {
+				if s.Target.Cloud {
+					t.Fatalf("%s, affinity %+v: a local-only call reached the cloud", c, affinity)
+				}
+			}
+			if !errors.Is(err, ErrLocalOnly) {
+				t.Errorf("%s, affinity %+v: err = %v", c, affinity, err)
+			}
+		}
+	}
+	p, _ := newPool(runnertest.New(), Backend{Name: "a", HealthURL: "u"})
+	p.setHealth("a", false, "probe_failed", nil, "test")
+	if _, err := p.Call(context.Background(), session("run-2"), LocalOnly, noAffinity, ""); !errors.Is(err, ErrLocalOnly) || !IsBackendDown(err) {
+		t.Errorf("every backend down, local-only: %v", err)
 	}
 }

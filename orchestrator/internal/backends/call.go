@@ -20,6 +20,33 @@ import (
 // local retry costs no cloud spend, while a deterministic one exhausts the retries and moves on.
 const sameBackendRetries = 2
 
+// Locality is where a job may run: its profile's local_only, as a type, so a call cannot pass the
+// flag inverted by accident. The zero value is LocalOnly: a caller that sets nothing never starts a
+// cloud leg (and spends nothing outside the lab).
+type Locality int
+
+const (
+	// LocalOnly: local backends only; the cloud leg never runs.
+	LocalOnly Locality = iota
+	// CloudFallback: the cloud leg runs after the local attempts when the gate allows.
+	CloudFallback
+)
+
+// LocalityOf is a profile's local_only as a Locality.
+func LocalityOf(localOnly bool) Locality {
+	if localOnly {
+		return LocalOnly
+	}
+	return CloudFallback
+}
+
+func (l Locality) String() string {
+	if l == CloudFallback {
+		return "cloud-fallback"
+	}
+	return "local-only"
+}
+
 // The pool's own errors.
 var (
 	// ErrJobDeadline: the job's context ended (its deadline, or a cancel) before the chain did. No
@@ -63,8 +90,8 @@ type Attempt struct {
 // one, on failure), and the chain's trail.
 type Result struct {
 	runner.Result
-	UsedCloud         bool
-	LocalAttempts     int
+	UsedCloud     bool
+	LocalAttempts int
 	// LocalFailedReason is the last local failure, bounded: its outermost class, then at most
 	// reasonMaxBytes of its text. The text can quote a session's output, so LocalFailedDetail, its
 	// whole text, is for an admin-only view.
@@ -112,14 +139,14 @@ func attributable(err error) bool {
 // A clean exit is checked by the runner's AnswerChecker, when it has one: an answer that reports a
 // failure is that failure. Only local attempts are checked; the cloud leg's answer is the job's.
 //
-// When every local attempt failed, the cloud leg runs only when the job is not local-only, the pool
+// When every local attempt failed, the cloud leg runs only when locality is CloudFallback, the pool
 // has a CloudHome and the last local failure is attributable (attributable). The job's deadline
 // (JobLimit, applied here, or the caller's) ends the chain between legs with ErrJobDeadline.
 //
 // s carries the run's identity, prompt, toolsets, servers and the base usage path; Call sets each
 // attempt's Target, Limits and its own leg's UsagePath (LegUsagePath). It returns a non-nil
 // *Result on every path.
-func (p *Policy) Call(ctx context.Context, s runner.Session, localOnly bool, affinity Affinity, reserved string) (*Result, error) {
+func (p *Policy) Call(ctx context.Context, s runner.Session, locality Locality, affinity Affinity, reserved string) (*Result, error) {
 	if p.JobLimit > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.JobLimit)
@@ -223,7 +250,7 @@ func (p *Policy) Call(ctx context.Context, s runner.Session, localOnly bool, aff
 	setLocalFailure(out, lastErr)
 	out.LocalClass = runner.ClassOf(lastErr)
 	switch {
-	case localOnly:
+	case locality != CloudFallback:
 		return out, fmt.Errorf("%w: %w", ErrLocalOnly, lastErr)
 	case p.CloudHome == "":
 		return out, fmt.Errorf("%w: %w", ErrNoCloudBackend, lastErr)

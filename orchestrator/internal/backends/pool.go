@@ -58,7 +58,7 @@ type Pool interface {
 	// ReapStaleReservations returns the claims of runs not in live and older than grace.
 	ReapStaleReservations(live map[string]bool, grace time.Duration) []string
 	// Call runs one job's attempt chain.
-	Call(ctx context.Context, s runner.Session, localOnly bool, affinity Affinity, reserved string) (*Result, error)
+	Call(ctx context.Context, s runner.Session, locality Locality, affinity Affinity, reserved string) (*Result, error)
 	// JobTimeout bounds one job's whole attempt chain; 0 is none. A caller that runs Call more
 	// than once for a job (its profile's max_attempts) puts this deadline on its own context
 	// once, before the first, so a retry gets no fresh budget.
