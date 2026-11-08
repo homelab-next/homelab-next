@@ -421,14 +421,16 @@ func (sch *Scheduler) fail(ctx context.Context, d *dispatch, res *backends.Resul
 	}
 }
 
-// identicalQueued reports whether a queued job of the same agent and task already waits.
+// identicalQueued reports whether a queued job of the same submitter, agent, task and lane
+// already waits.
 func (sch *Scheduler) identicalQueued(job *store.Job) bool {
 	queued, err := sch.cfg.Store.ListByState(store.StateQueued)
 	if err != nil {
 		return false
 	}
+	k := keyOf(job)
 	for _, q := range queued {
-		if q.AgentKey == job.AgentKey && q.TaskDescription == job.TaskDescription {
+		if keyOf(q) == k {
 			return true
 		}
 	}
