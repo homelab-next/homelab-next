@@ -22,12 +22,17 @@ import (
 // pythonJSON below spells out independently; DeriveID is deterministic, has the id's shape and is
 // the hash of that encoding. The seeds include every shared vector of
 // conformance/fixtures/event_id_vectors.json, read in place.
+//
+// The ADR's "refuses what decision 3's vectors refuse" is not here yet: the vectors hold no refusal
+// and DeriveID still derives an id for an empty dedupe key. ADR-0048's implementation plan says why
+// (its note of 2026-11-08 at step 3).
 
 // decoded is what the encoding of s must decode to.
 type decodedRef func(s string) string
 
-// perByte is the reference: encoding/json, like Python reading the bytes as surrogate escapes and
-// replacing them, turns each invalid byte into one U+FFFD; a Go conversion to runes does the same.
+// perByte is the reference: encoding/json, which asciiJSON encodes with, writes one U+FFFD for
+// each invalid byte of a string, and a Go conversion to runes does the same. (Invalid UTF-8 is
+// outside the domain shared with Python, so this is Go's own rule, not a cross-language one.)
 func perByte(s string) string { return string([]rune(s)) }
 
 // collapsed is the wrong reference: one U+FFFD for each run of invalid bytes.

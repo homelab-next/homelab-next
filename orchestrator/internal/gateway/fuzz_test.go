@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -80,6 +81,10 @@ func firstKept(data []byte) (map[string]json.RawMessage, bool) {
 	return m, true
 }
 
+// absentKey is a name topLevel is also asked for, to show it finds no key the decoder does not;
+// when the input does hold it, it is an ordinary key and the probe proves nothing.
+const absentKey = "\x00absent"
+
 // jsonScanProperty: on input json.Valid accepts, topLevel finds an object exactly when the
 // decoder does, finds for each key the spans of every occurrence in order (decoded keys, so a key
 // spelled with escapes is the key it decodes to), each span is the value's own bytes, and last
@@ -99,7 +104,11 @@ func jsonScanProperty(kept keptRef, data []byte) error {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	spans, open, ok := topLevel(data, append(keys, "\x00absent")...)
+	names := keys
+	if _, real := m[absentKey]; !real {
+		names = append(slices.Clone(keys), absentKey)
+	}
+	spans, open, ok := topLevel(data, names...)
 	if ok != isObject {
 		return fmt.Errorf("topLevel(%q) ok = %v, the decoder finds an object: %v", data, ok, isObject)
 	}
@@ -109,7 +118,7 @@ func jsonScanProperty(kept keptRef, data []byte) error {
 	if open < 1 || data[open-1] != '{' {
 		return fmt.Errorf("topLevel(%q): open %d is not just after the object's '{'", data, open)
 	}
-	if len(spans["\x00absent"]) != 0 || len(spans) > len(keys) {
+	if _, real := m[absentKey]; (!real && len(spans[absentKey]) != 0) || len(spans) > len(keys) {
 		return fmt.Errorf("topLevel(%q) finds a key the decoder does not: %v", data, spans)
 	}
 	for _, k := range keys {
@@ -277,12 +286,42 @@ func TestSSEReaderBound(t *testing.T) {
 
 // --- FuzzParseConfig ---
 
-// reencodeRef judges an accepted config c, read from input.
-type reencodeRef func(c *Config, input []byte) error
+// configEncoder encodes an accepted config for the property to re-parse.
+type configEncoder func(c *Config) ([]byte, error)
 
-// reparsesEqual is the reference: c re-encodes, and the encoding parses to an equal value.
-func reparsesEqual(c *Config, _ []byte) error {
+// marshalConfig is the reference: encoding/json, as the renderer's output is read.
+func marshalConfig(c *Config) ([]byte, error) { return json.Marshal(c) }
+
+// dropRoles is the wrong reference: an encoder that loses the roles, so the re-parse cannot give
+// the value back. A property that no longer re-parses and compares stays green on it.
+func dropRoles(c *Config) ([]byte, error) {
 	b, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	delete(m, "roles")
+	return json.Marshal(m)
+}
+
+// parseConfigProperty: a config ParseConfig accepts encodes, the encoding is accepted, and it
+// parses to a value equal to the first; a refusal is a ConfigError with problems. The schema
+// subset half of ADR-0048's property waits for that validator's move to a package the gateway's
+// tests can import (ADR-0048, implementation plan, the note of 2026-11-08 at step 4); until then
+// the shared vectors hold the reader to the schema.
+func parseConfigProperty(encode configEncoder, data []byte) error {
+	c, err := ParseConfig(data)
+	if err != nil {
+		var ce *ConfigError
+		if !errors.As(err, &ce) || len(ce.Problems) == 0 {
+			return fmt.Errorf("ParseConfig refuses with %T %v, not a ConfigError with problems", err, err)
+		}
+		return nil
+	}
+	b, err := encode(c)
 	if err != nil {
 		return fmt.Errorf("an accepted config does not encode: %v", err)
 	}
@@ -294,30 +333,6 @@ func reparsesEqual(c *Config, _ []byte) error {
 		return fmt.Errorf("an accepted config re-parses to a different value: %+v, then %+v", c, c2)
 	}
 	return nil
-}
-
-// sameBytes is the wrong reference: the re-encoding is the input's own bytes.
-func sameBytes(c *Config, input []byte) error {
-	b, err := json.Marshal(c)
-	if err != nil || !bytes.Equal(b, input) {
-		return fmt.Errorf("re-encodes to other bytes")
-	}
-	return nil
-}
-
-// parseConfigProperty: a config ParseConfig accepts re-encodes and re-parses to an equal value
-// (the schema-subset half of ADR-0048's property waits for that validator's move to a package the
-// gateway's tests can import; until then the shared vectors hold the reader to the schema).
-func parseConfigProperty(r reencodeRef, data []byte) error {
-	c, err := ParseConfig(data)
-	if err != nil {
-		var ce *ConfigError
-		if !errors.As(err, &ce) || len(ce.Problems) == 0 {
-			return fmt.Errorf("ParseConfig refuses with %T %v, not a ConfigError with problems", err, err)
-		}
-		return nil
-	}
-	return r(c, data)
 }
 
 // contractSeeds are the contract's examples and negatives, read in place.
@@ -340,21 +355,25 @@ func contractSeeds(tb testing.TB) [][]any {
 	return out
 }
 
+// FuzzParseConfig's committed corpus adds what the contract's files cannot hold:
+// case-variant-key spells one key twice in two cases, which encoding/json would read as one
+// field (it matches names case-insensitively and keeps the last) and ParseConfig must refuse
+// before decoding; a JSON Schema instance file cannot carry that refusal as a negative.
 func FuzzParseConfig(f *testing.F) {
 	for _, s := range contractSeeds(f) {
 		f.Add(s[0].([]byte))
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		if err := parseConfigProperty(reparsesEqual, data); err != nil {
+		if err := parseConfigProperty(marshalConfig, data); err != nil {
 			t.Fatal(err)
 		}
 	})
 }
 
-func parseConfigWith(r reencodeRef) func([]any) error {
-	return func(a []any) error { return parseConfigProperty(r, a[0].([]byte)) }
+func parseConfigWith(e configEncoder) func([]any) error {
+	return func(a []any) error { return parseConfigProperty(e, a[0].([]byte)) }
 }
 
 func TestFuzzParseConfigPropertyCanFail(t *testing.T) {
-	fuzzseed.HoldsAndCanFail(t, append(fuzzseed.Corpus(t, "FuzzParseConfig"), contractSeeds(t)...), parseConfigWith(reparsesEqual), parseConfigWith(sameBytes))
+	fuzzseed.HoldsAndCanFail(t, append(fuzzseed.Corpus(t, "FuzzParseConfig"), contractSeeds(t)...), parseConfigWith(marshalConfig), parseConfigWith(dropRoles))
 }

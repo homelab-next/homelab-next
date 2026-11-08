@@ -22,7 +22,8 @@ import (
 // unsupported and is the same on a second run, a combinator (allOf, anyOf, oneOf, not, if) never
 // loses an unsupported verdict from under it, and an unsupported keyword beside the schema makes
 // the verdict unsupported whatever the document. The target moves with the validator when it
-// leaves this package (ADR-0048 decision 1, internal/schematest).
+// leaves this package for internal/schematest (ADR-0048 decision 1; the implementation plan's note
+// of 2026-11-08 at step 4 says why it has not yet).
 
 // verdictRef reads a result as one verdict.
 type verdictRef func(r result) string
