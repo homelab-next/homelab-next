@@ -153,6 +153,15 @@ func NewServer(addr string, cfg Config) (*http.Server, error) {
 func newMux(cfg Config) *http.ServeMux {
 	s := cfg.Store
 	mux := http.NewServeMux()
+	// Every route but the two open ones needs a principal (the authenticator's, or the auth-off
+	// one NewHandler gives): reached without one, it answers 403.
+	handle := func(pattern string, h http.HandlerFunc) {
+		if pattern == "GET /healthz" || pattern == "GET /admin/backend-health" {
+			mux.HandleFunc(pattern, h)
+			return
+		}
+		mux.HandleFunc(pattern, requirePrincipal(h))
+	}
 	limits := store.SubmitLimits{MaxUnfinished: cfg.MaxUnfinishedPerCaller, MaxInWindow: cfg.MaxSubmitsPerWindow, Window: cfg.SubmitWindow}
 	if limits.MaxUnfinished == 0 {
 		limits.MaxUnfinished = DefaultMaxUnfinishedPerCaller
@@ -163,18 +172,18 @@ func newMux(cfg Config) *http.ServeMux {
 	if limits.Window == 0 {
 		limits.Window = DefaultSubmitWindow
 	}
-	mux.HandleFunc("POST /jobs", handleSubmit(s, cfg.AgentKnown, limits))
-	mux.HandleFunc("GET /jobs", handleListJobs(s))
-	mux.HandleFunc("GET /jobs/{id}", handleGetJob(s))
-	mux.HandleFunc("POST /jobs/{id}/cancel", handleCancel(s, cfg.CancelRun))
-	mux.HandleFunc("POST /admin/reload-profiles", handleReloadProfiles(cfg.ReloadProfiles))
-	mux.HandleFunc("GET /admin/backend-status", handleBackendStatus(cfg.BackendStatus))
-	mux.HandleFunc("GET /admin/queue-summary", handleQueueSummary(s))
-	mux.HandleFunc("GET /admin/backend-throughput", handleBackendThroughput(s))
-	mux.HandleFunc("GET /admin/backend-eligibility", handleBackendEligibility(cfg.BackendEligibility))
+	handle("POST /jobs", handleSubmit(s, cfg.AgentKnown, limits))
+	handle("GET /jobs", handleListJobs(s))
+	handle("GET /jobs/{id}", handleGetJob(s))
+	handle("POST /jobs/{id}/cancel", handleCancel(s, cfg.CancelRun))
+	handle("POST /admin/reload-profiles", handleReloadProfiles(cfg.ReloadProfiles))
+	handle("GET /admin/backend-status", handleBackendStatus(cfg.BackendStatus))
+	handle("GET /admin/queue-summary", handleQueueSummary(s))
+	handle("GET /admin/backend-throughput", handleBackendThroughput(s))
+	handle("GET /admin/backend-eligibility", handleBackendEligibility(cfg.BackendEligibility))
 	if cfg.BackendHealth != nil {
 		authOff := cfg.Auth == nil
-		mux.HandleFunc("GET /admin/backend-health", func(w http.ResponseWriter, r *http.Request) {
+		handle("GET /admin/backend-health", func(w http.ResponseWriter, r *http.Request) {
 			full := authOff
 			if p, ok := principalFrom(r.Context()); ok && (p.admin || p.authOff) {
 				full = true
@@ -183,29 +192,40 @@ func newMux(cfg Config) *http.ServeMux {
 		})
 	}
 	if cfg.BackendDrain != nil {
-		mux.HandleFunc("POST /admin/backends/{name}/drain", handleBackendDrain(cfg.BackendDrain, true))
-		mux.HandleFunc("POST /admin/backends/{name}/undrain", handleBackendDrain(cfg.BackendDrain, false))
+		handle("POST /admin/backends/{name}/drain", handleBackendDrain(cfg.BackendDrain, true))
+		handle("POST /admin/backends/{name}/undrain", handleBackendDrain(cfg.BackendDrain, false))
 	}
 	if cfg.BackendInFlight != nil {
-		mux.HandleFunc("GET /admin/backend-inflight", func(w http.ResponseWriter, _ *http.Request) {
+		handle("GET /admin/backend-inflight", func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"backends": cfg.BackendInFlight()})
 		})
 	}
 	if cfg.Metrics != nil {
-		mux.HandleFunc("GET /metrics", handleMetrics(cfg.Metrics))
+		handle("GET /metrics", handleMetrics(cfg.Metrics))
 	}
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	handle("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	if cfg.Pprof {
-		mux.HandleFunc("GET /debug/pprof/", pprof.Index)
-		mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
-		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
-		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
-		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+		handle("GET /debug/pprof/", pprof.Index)
+		handle("GET /debug/pprof/cmdline", pprof.Cmdline)
+		handle("GET /debug/pprof/profile", pprof.Profile)
+		handle("GET /debug/pprof/symbol", pprof.Symbol)
+		handle("GET /debug/pprof/trace", pprof.Trace)
 	}
 	return mux
+}
+
+// requirePrincipal answers 403 to a request that carries no principal.
+func requirePrincipal(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := principalFrom(r.Context()); !ok {
+			http.Error(w, "no caller", http.StatusForbidden)
+			return
+		}
+		h(w, r)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

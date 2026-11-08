@@ -326,3 +326,35 @@ func TestLoadAuthenticator_RefusesAForeignDirectory(t *testing.T) {
 		t.Fatalf("a foreign directory = %v", err)
 	}
 }
+
+// Every route but the two open ones answers 403 to a request with no principal, a submit
+// included; the open ones still answer.
+func TestNoPrincipalIsRefusedAtEveryRoute(t *testing.T) {
+	st := openStore(t)
+	srv := httptestServer(t, newMux(Config{Store: st, AgentKnown: agentKnown, Unauthenticated: true,
+		BackendHealth: func(bool) any { return nil }, Metrics: func(io.Writer) error { return nil }}))
+	for _, c := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{"POST", "/jobs", `{"agent_key":"watcher"}`, http.StatusForbidden},
+		{"GET", "/metrics", "", http.StatusForbidden},
+		{"GET", "/admin/queue-summary", "", http.StatusForbidden},
+		{"POST", "/admin/reload-profiles", "", http.StatusForbidden},
+		{"GET", "/healthz", "", http.StatusOK},
+		{"GET", "/admin/backend-health", "", http.StatusOK},
+	} {
+		req, _ := http.NewRequest(c.method, srv+c.path, strings.NewReader(c.body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != c.want {
+			t.Errorf("%s %s with no principal = %d, want %d", c.method, c.path, resp.StatusCode, c.want)
+		}
+	}
+	if jobs, _ := st.ListJobs(store.ListFilter{Limit: 10}); len(jobs) != 0 {
+		t.Fatalf("a submit with no principal stored %d jobs", len(jobs))
+	}
+}
