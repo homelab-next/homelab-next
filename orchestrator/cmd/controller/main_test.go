@@ -721,3 +721,14 @@ func TestServe_MigrateOnlyExitsAfterTheMigration(t *testing.T) {
 		t.Fatalf("still pending: %v", steps)
 	}
 }
+
+// A facts command given the event forwarder's token would put it in the prompt: refused.
+func TestCheck_AFactsCommandIsNeverGivenTheForwarderToken(t *testing.T) {
+	cfg, _ := siteConfig(t, func(s string) string {
+		return s + "events: {token_env: HNX_EVENTS_TOKEN}\nfacts_commands:\n  disk: {argv: [/bin/df], env: [HNX_EVENTS_TOKEN]}\n"
+	})
+	code, out, errs := runCmd(t, "check", "--config", cfg)
+	if code != exitProblem || !strings.Contains(out, "facts_commands.disk.env names HNX_EVENTS_TOKEN") {
+		t.Fatalf("check = %d\n%s%s", code, out, errs)
+	}
+}

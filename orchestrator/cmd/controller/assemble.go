@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -127,6 +129,13 @@ func loadSite(path string) (*site, []error) {
 	for _, name := range secretEnv(cfg) {
 		if e, ok := execrunner.Covers(cfg.Runner.EnvAllowlist, name); ok {
 			problems = append(problems, fmt.Errorf("runner.env_allowlist: entry %q covers %s, which holds a secret the controller reads; it is never passed to a session, so list the variables sessions need by name", e, name))
+		}
+		// a facts command's output goes into the prompt, so a secret it is given can reach a
+		// session's answer, and the cloud leg's model
+		for _, fname := range slices.Sorted(maps.Keys(cfg.FactsCommands)) {
+			if slices.Contains(cfg.FactsCommands[fname].Env, name) {
+				problems = append(problems, fmt.Errorf("facts_commands.%s.env names %s, which holds a secret the controller reads: a facts command's output goes into the prompt", fname, name))
+			}
 		}
 	}
 	if r, err := newRunner(cfg); err != nil {
