@@ -383,13 +383,14 @@ Each step is one pull request in this repository unless it says otherwise; overl
 operator's to merge.
 
 1. **This ADR, the amendments and the operator's to-do.** ADR-0011 and ADR-0021 gain
-   `Amended-by: ADR-0046` and their amendment notes; `TODO.md` §1 gains the stand-up items: create
+   `Amended-by: ADR-0046` and their **Amended:** lines; `TODO.md` §1 gains the stand-up items, to
+   be done once the operator accepts this ADR: create
    the App with decision 1's permissions and install it on the two repositories; put its key with
    the token mint; remove every route that acts as the operator's account from agent
    environments (tokens, `gh` logins, SSH and deploy keys, and hosted-session GitHub connectors and
    MCP servers authorised as the operator); verify whether the plan offers organisation
    required-workflow rules (decision 2); create the overlay's `leak-watch` Environment and identity
-   and seal the deny-list (step 8); and decide the ADRs of decision 10. Applying the rulesets is
+   and seal the deny-list (after step 8); and §5 gains deciding the ADRs of decision 10. Applying the rulesets is
    step 7's item, not this one: applied earlier, the required checks would never report and every
    path would need the operator. *Tests:* the ADR log test (reciprocal
    amendments), the docs index and summaries checks.

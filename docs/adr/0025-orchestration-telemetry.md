@@ -8,6 +8,12 @@ summary_of: outline:sha256:81ef3895e136016e
 - **Date:** 2026-10-22
 - **Related:** ADR-0009, ADR-0013, ADR-0022, `schemas/events/agent.job.finished.schema.json`,
   `docs/orchestration-telemetry.md`
+- **Amended:** 2026-11-07 by ADR-0040 (decision 2): the status hub reads the telemetry store
+  through a read-only status source its owner serves, not by opening the SQLite file (decision 5
+  here); `--orchestration` stays one release as a deprecated alias. And 2026-11-07 by ADR-0047
+  (decision 13): `agent.job.finished` gains `trace_id`, `parent_trace_id` and `budget` in an
+  additive 1.3 (decision 1 here), and `gateway_tag` stays the job-to-turn join while the trace id
+  joins every component in the lake (decision 4 here)
 - **Amended-by:** ADR-0040, ADR-0047
 
 ## Context

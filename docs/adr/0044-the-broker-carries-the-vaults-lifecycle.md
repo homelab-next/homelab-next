@@ -401,7 +401,8 @@ the following minor (request 1.3, audit 1.6) and says so in its schema descripti
 
 ### Implementation plan (each step one pull request, in order)
 
-1. **This ADR**, with **Amended-by:** lines in ADR-0010, ADR-0017 and ADR-0026 and the index
+1. **This ADR**, with **Amended-by:** lines in ADR-0010, ADR-0017 and ADR-0026, an **Amended:**
+   line on each naming the decisions it changes, a pointer at ADR-0026 decision 6, and the index
    regenerated. Tests: `tools/tests/test_adr_log.py` accepts the reciprocal pairs; the docs index
    check passes.
 2. **Records schema 1.5 and the event schema**: the new types, `task.kind`, `escalate`, `tlp`,

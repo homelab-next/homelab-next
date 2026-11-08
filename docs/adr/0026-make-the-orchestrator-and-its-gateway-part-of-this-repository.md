@@ -12,7 +12,10 @@ summary_of: outline:sha256:07f8a62fd60cb6e2
   formats; the module's first third-party dependencies, among them the YAML library, and its
   `go.sum` (see the amendment at the end of Decision); and 2026-11-07 again, with the placement of
   what the split left unplaced (decisions 10 to 21; see the second amendment at the end of
-  Decision and its consequences)
+  Decision and its consequences); and 2026-11-07 by ADR-0043 (decision 8): stage 6's archive
+  waits for the revocation ledger and the scoped archive gate (decision 19 here), and by ADR-0044
+  (decision 13): decision 6's vault, tasking-queue and deconfliction MCP servers are not ported,
+  the broker's records actions replace them (decision 20 here)
 - **Related:** ADR-0005, ADR-0017, ADR-0021, ADR-0022, ADR-0024, ADR-0027, ADR-0030, ADR-0033,
   ADR-0039 to ADR-0049,
   [LLM gateway](../llm-gateway.md), [the lab's own gateway](../gateway.md),
@@ -142,7 +145,9 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    `config` keys the site fills from the overlay's registry (`svc:` names) and its credentials are
    `secret:` references. A tool for a system only this lab has (a probe of one specific honeypot,
    the lab's own tooling, the Hermes vault, the tasking queue) becomes an overlay module under
-   `<overlay>/lab/modules/<id>/`, with its record under `<overlay>/lab/mcp/`.
+   `<overlay>/lab/modules/<id>/`, with its record under `<overlay>/lab/mcp/`. *Amended by
+   ADR-0044 decision 13:* the vault, tasking-queue and deconfliction servers are not ported; the
+   broker's records actions replace them (decision 20).
 7. **Go code in a module.** A module's Go MCP server lives at `modules/<id>/go/` (in the overlay,
    `<overlay>/lab/modules/<id>/go/`), beside the module's `python/` tree, as **its own Go module**
    with its own `go.mod` (module path `github.com/homelab-next/homelab-next/modules/<id>/go` here).
@@ -182,7 +187,9 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    5. **The lab-only modules and the lab's data to the overlay**, through pull requests the
       operator merges there.
    6. **Archive**: once every component has cut over, the private repository is archived
-      read-only, never deleted, so its history stays readable.
+      read-only, never deleted, so its history stays readable. *Amended by ADR-0043 decision 8:*
+      the archive waits until the private repository's ledger rows are `old-retired` and their
+      revocation records `verified` (decision 19).
 
    **Each component cuts over as soon as it can run the lab's work: the gateway as soon as it
    lands, the controller after stage 3** (see the amendment), so the lab runs a frozen copy only
@@ -473,8 +480,8 @@ release" is the release at which the controller cuts over, and "cutover+1" the r
       `schemas/events/README.md` and the conformance fakes, which the audit found missing from it.
     - `agent-runtime` is the runner slot only (ADR-0039): the runner host is found by host role,
       and stage 3's ADR names the slot's contract.
-    - PR 2.7 depends on ADR-0039's `hnx registry bindings` (its implementation step 4), which
-      must merge first; ADR-0039's step 5 changes only the vocabulary and the fictional SOAR row,
+    - PR 2.7 depends on ADR-0039's `hnx registry bindings` (its implementation step 5), which
+      must merge first; ADR-0039's step 4 changes only the vocabulary and the fictional SOAR row,
       and leaves the wire names, the controller's example row and the packs to PR 2.7, so the
       rename is implemented once.
     - The controller's example unit is `orchestrator/deploy/systemd/orchestrator.service` (PR
@@ -542,7 +549,7 @@ release" is the release at which the controller cuts over, and "cutover+1" the r
     revocation records are `verified`: `hnx cutover check --archive-gate --rows <those uids>`. The
     lab-wide gate (every row of the ledger) would hold the archive on unrelated services such as
     DNS or the lake, which share nothing with this repository; ADR-0043 decision 8 is reworded to
-    this scoped gate for stage 6, and its step 5 adds the `--rows` filter.
+    this scoped gate for stage 6, and its step 6 adds the `--rows` filter.
 20. **The vault, tasking-queue and deconfliction MCP servers are not ported.** ADR-0044 decision
     13 owns this (it amends decision 6), including what replaces them and how the vault's history
     comes across. This amendment adds only the guard: the overlay's checks job fails when a module

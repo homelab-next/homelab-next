@@ -8,6 +8,9 @@ summary_of: outline:sha256:77a9faa558b5ac46
 - **Date:** 2026-10-21
 - **Related:** ADR-0011 (extended), ADR-0002, ADR-0016 decision 7, `docs/private-overlay.md`,
   `examples/private-overlay/`, `tools/private_leak_check.py`, `homelabnext/sops.py`
+- **Amended:** 2026-11-07 by ADR-0046 (decisions 6 and 7): decision 5's "a writer can dispatch" no
+  longer holds for the agents' writer, a GitHub App that cannot dispatch; only the operator starts
+  a deploy. Decision 7's pin is the tracked file `locks/hnx-ref`
 - **Amended-by:** ADR-0046
 
 ## Context

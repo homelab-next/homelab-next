@@ -11,7 +11,10 @@ summary_of: outline:sha256:ee879beeb671ce89
   refusal records, grouped writes of the usage file), the embeddings checks' own role, and how the
   suite observes a skipped fallback (see the amendment at the end of Decision); and 2026-11-07 by
   ADR-0026: the gateway is built in this repository's Go module `orchestrator/`, and decision 7's
-  acceptance run is an in-repository CI job with no cross-repository pin (see the second amendment)
+  acceptance run is an in-repository CI job with no cross-repository pin (see the second amendment);
+  and 2026-11-07 by ADR-0047 (decision 13): decision 3's request rewrite, decision 4's refusal
+  order (the fleet stop and run-token checks, the honeytoken check, the per-run budget) and
+  decision 6's usage record (trace fields, `budget_phase`, `wrap_up_violation`)
 - **Related:** ADR-0005, ADR-0007, ADR-0022, ADR-0033, [LLM gateway](../llm-gateway.md),
   [orchestration telemetry](../orchestration-telemetry.md), `conformance/protocols/inference.py`
 - **Depends-on:** ADR-0033

@@ -12,6 +12,11 @@ summary_of: outline:sha256:e2334f5f35796d84
   agent-runner contract the latter names for the `agent-runtime` slot. `schemas/platform/module.schema.json` (draft),
   [modules](../modules.md), [swap kit](../swap.md), [conformance](../conformance.md),
   [decommission audit](../decommission.md), [private overlay](../private-overlay.md)
+- **Amended:** 2026-11-07 by ADR-0040: a module declares its state class and the loader refuses
+  state nobody declared (decision 1); no module reads or writes another module's storage
+  (decision 2); what a module creates elsewhere is generated from its manifest, labelled with its
+  id and garbage-collected (decision 3); and replacing a module is the one protocol `hnx modules
+  replace` (decision 5)
 - **Amended-by:** ADR-0040
 
 ## Context

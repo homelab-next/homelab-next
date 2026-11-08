@@ -582,7 +582,8 @@ Each step is one pull request, in this order. Steps 10 and 11 depend only on ste
 gateway detector also on step 4), and may run in parallel with steps 3 to 9.
 
 1. **This ADR** (docs only): the ADR, its index row, and the **Amended:** and **Amended-by** lines
-   on ADR-0025, ADR-0038 and ADR-0042, each with a short amendment section. Its tests prove the ADR
+   on ADR-0025, ADR-0038 and ADR-0042, each line naming the decisions it changes; the amendment's
+   text is decision 13 here, written once, which each line points to. Its tests prove the ADR
    log passes (`tools/tests/test_adr_log.py`: the reciprocal pairs, `Depends-on` ids) and the
    summaries are stamped.
 2. **Contracts and the shared vectors.** This step adds:

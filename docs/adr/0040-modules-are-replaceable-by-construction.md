@@ -336,7 +336,8 @@ nothing implements it.
 1. **This ADR**, with **Amended-by: ADR-0040** on ADR-0004, ADR-0005, ADR-0025 and ADR-0027 and
    their **Amended:** lines, and on ADR-0008 one **Amended-by:** list naming ADR-0040 (export and
    import become slot protocol methods with a round-trip MUST) and ADR-0042 (a dump restores the
-   same product; an export leaves it), written once with ADR-0042's note; summaries restamped.
+   same product; an export leaves it), with one **Amended:** line naming both; summaries
+   restamped.
    Proves: `tools/tests/test_adr_log.py` accepts the reciprocal pairs and the index.
 2. **State class in the schema**: `state`, the dataset `recovery` reference, `lifecycle.backup`/
    `restore`, `rules.state_problems`; examples updated; one negative per rule. Lands with or

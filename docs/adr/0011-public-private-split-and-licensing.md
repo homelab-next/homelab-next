@@ -14,7 +14,9 @@ summary_of: outline:sha256:bf87496b641e22c5
   the project links or vendors (refused) from tools it invokes and services it deploys (allowed,
   recorded), and `tools/tests/test_licence_policy.py` holds CI's deny list to it. And 2026-11-07 by
   ADR-0026: decision 1 lets generic code the operator owns come in from the private repository,
-  fresh and without its history (see the amendment after Decision).
+  fresh and without its history (see the amendment after Decision). And 2026-11-07 by ADR-0046
+  (decision 8): decision 3's third layer, the deny-list scan, also runs on GitHub's copy after
+  every push, in the overlay's private CI with the list sealed; the pre-push check stays.
 - **Amended-by:** ADR-0026, ADR-0046
 
 ## Context

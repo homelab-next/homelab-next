@@ -214,6 +214,11 @@ Nothing tracks the move itself:
    - `hnx cutover check --archive-gate` is the observable for checklist row E-12. It runs the
      inventory diff, and it exits 0 only when that diff is empty, every row is `old-retired` and
      every revocation record is `verified`.
+   - `hnx cutover check --archive-gate --rows <uids>` is the same gate scoped to the named rows: it
+     exits 0 only when each named row is `old-retired`, every revocation record whose `consumers`
+     include a named row is `verified`, and no `requires` entry of a named row names a row outside
+     the set that is not `old-retired`. A named uid that is no row is a failure. It is the gate for
+     archiving one old repository whose components are only some of the ledger's rows (decision 8).
 5. **homelab-next renders the ledger, and the status hub shows it.**
    - `hnx cutover render ROOT --out DIR` writes `cutover.json` (schema `homelabnext.cutover.report/1`)
      and a self-contained HTML page. It shows counts by state and kind, each row's blockers, open
@@ -354,9 +359,13 @@ Nothing tracks the move itself:
    - A module swap's `credentials_revoked` (`decommission_problems`) moves a record to `revoked`,
      never to `verified`. It is a name list the swap asserts, so a component that moves by `hnx
      modules replace` is not revoked twice, but it is still verified at its issuer.
-   - **ADR-0026 stage 6 (archive the private orchestrator repository) and the archive of the old
-     lab's repository run only after `hnx cutover check --archive-gate` exits 0.** Lifetimes,
-     rotation drills and per-principal issuance for the new credentials belong to ADR-0045.
+   - **The archive of the old lab's repository runs only after `hnx cutover check --archive-gate`
+     exits 0. ADR-0026 stage 6 (archive the private orchestrator repository) runs only after the
+     scoped form exits 0 over the rows whose `old` names a component of that repository**
+     (`--rows`, decision 4; the ADR-0026 amendment's decision 19 lists them). The lab-wide gate
+     would hold that archive on services that share nothing with it, such as DNS or the lake.
+     Lifetimes, rotation drills and per-principal issuance for the new credentials belong to
+     ADR-0045.
 9. **One agent roster of record.**
    - `<overlay>/lab/agents/roster-of-record.yml`, schema `schemas/registers/agent_roster.schema.json`
      1.0, is authoritative for **agent keys and membership** only. For each agent it holds:
@@ -441,8 +450,9 @@ Each step is one pull request: in this repository unless marked, merged green af
 and a security audit. Overlay and old-repository pull requests are merged by the operator.
 
 1. **This ADR** (`docs:`), with its index row and summary stamp, the reciprocal `Amended-by:
-   ADR-0043` line and an amendment note on ADR-0026's stage 6, and the build-order S3 and E-12
-   wording. Tests: the ADR log test (headings, `Depends-on`, the reciprocal pair).
+   ADR-0043` line and an amendment note on ADR-0026's stage 6, and the build-order S3 wording
+   (decision 7). E-12's observable changes in step 11, with the checklist's tests. Tests: the ADR
+   log test (headings, `Depends-on`, the reciprocal pair).
 2. **Schemas**: `cutover_row.schema.json` 1.0, `cutover_revocation.schema.json` 1.0 and
    `agent_roster.schema.json` 1.0, with positive examples under `examples/registers/cutover/` and
    negatives under `schemas/registers/negative/`. Negatives include: a `null` `new` with a
@@ -482,8 +492,11 @@ and a security audit. Overlay and old-repository pull requests are merged by the
 
    With full evidence, each transition is applied.
 6. **Revocations and the archive gate**: `hnx cutover revocations check --old-names FILE` and
-   `hnx cutover check --archive-gate`. Tests: a name with no record fails; an unverified record
-   fails the archive gate; a swap record's `credentials_revoked` moves a record to `revoked` and
+   `hnx cutover check --archive-gate`, with its `--rows` filter. Tests: a name with no record
+   fails; an unverified record fails the archive gate; with `--rows`, a named row not
+   `old-retired`, an unverified record one of them consumes, a named row that `requires` an
+   unretired row outside the set and an unknown uid each fail, while an unretired row outside the
+   set that nothing named requires does not; a swap record's `credentials_revoked` moves a record to `revoked` and
    not to `verified`; an `expire` record before its date cannot be `verified`; a `reissue` with
    only the new credential's evidence cannot be `verified`; a refusal log from a non-issuer is
    refused as evidence; a non-empty inventory diff fails the archive gate.

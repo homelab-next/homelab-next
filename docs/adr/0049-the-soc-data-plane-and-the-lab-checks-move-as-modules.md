@@ -80,13 +80,13 @@ Five facts in this repository shape the answer:
   open the controller's database, the notifier's cache file and the IdP's database. ADR-0040
   decision 2 forbids that for modules.
 
-The operator's decisions bound the product set. Shuffle and TheHive are not part of homelab-next.
-TheHive's analyzer engine has been removed. The CTI graph and its own storage layer stay, and so
-does the enrichment service: they enrich differently (ADR-0039 decision 6). The proposed lake
-decision is a fresh start at the cut, with the old lake kept as a read-only archive (ADR-0043
-decision 7). That row stays `undecided` until the operator's review stamps it, so this ADR builds
-on `fresh` and says where a `migrate` stamp would change it. Single sign-on is Keycloak; the old
-IdP retires (ADR-0039).
+The operator's decisions bound the product set. The old SOAR product and the old case manager are
+not part of homelab-next. The old case manager's analyzer engine has been removed. The CTI graph
+and its own storage layer stay, and so does the enrichment service: they enrich differently
+(ADR-0039 decision 6). The proposed lake decision is a fresh start at the cut, with the old lake
+kept as a read-only archive (ADR-0043 decision 7). That row stays `undecided` until the operator's
+review stamps it, so this ADR builds on `fresh` and says where a `migrate` stamp would change it.
+Single sign-on is Keycloak; the old IdP retires (ADR-0039).
 
 ## Decision
 
@@ -130,7 +130,8 @@ IdP retires (ADR-0039).
    `privileged` in the slot registry. Each new slot is provisional (`contract: null`) until its
    contract ships, and then it starts at contract 1.0 (ADR-0041 decision 1). ADR-0039's standing
    applies to every row these modules create: one primary per capability, and nothing binds to
-   Shuffle (`legacy`) or TheHive (`legacy`, read-only until its ledger row closes).
+   the old SOAR product (`legacy`) or the old case manager (`legacy`, read-only until its ledger
+   row closes).
 
 2. **The SIEM manager is a provider module, and its native rules are module content with tests.**
    - The `wazuh` module ships the manager, indexer and dashboard role, a reference by name to the
@@ -428,7 +429,7 @@ IdP retires (ADR-0039).
 - The lake's history and the archive (ADR-0043 decision 7). Restore drills and the cold-start
   order of these modules (ADR-0042). The modules' per-host enrolment and API credentials, issuance
   and rotation (ADR-0045).
-- Shuffle and TheHive: not carried, `legacy` until their rows close (ADR-0039). The `automation`
+- The old SOAR product and the old case manager: not carried, `legacy` until their rows close (ADR-0039). The `automation`
   slot stays without a primary.
 - The sandbox, honeypots, red-team range, vulnerability scanner, cloud-posture scanner and runtime
   kernel sensor. Their lake feeders follow decision 8's collector rule when their modules come.
@@ -467,7 +468,7 @@ IdP retires (ADR-0039).
 - Paging gets quieter: one state diff per unit and cadence, no page during shadow, a baseline at
   the switch that the operator sees. The cost is a results transport to build and keep, and a hub
   that shows only what reaches it.
-- Retiring TheHive and Shuffle also retires the search and column stores only they used, the
+- Retiring the old case manager and the old SOAR product also retires the search and column stores only they used, the
   strongest consolidation candidate in the datastore audit.
 - The fresh lake means the census and look-back checks are `learning` for their first window. That
   is the visible form of ADR-0043's warm-up cost, shown as `warn`, with an absolute floor so a

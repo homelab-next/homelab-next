@@ -16,6 +16,9 @@ summary_of: outline:sha256:e2ac09ceaad99c52
   `ansible/roles/restore_drill/`, `homelabnext/compute/gen/backup_jobs.py`,
   `homelabnext/status/nut.py`, `homelabnext/power.py`, `conformance/protocols/backup.py`
 - **Amends:** ADR-0008
+- **Amended:** 2026-11-07 by ADR-0047 (decision 13): decision 9's UPS plan first creates, on each
+  host it feeds, the local stop file of every fleet-stop point on that host, needing no network
+  credential, in place of a call to `hnx fleet stop`
 - **Amended-by:** ADR-0047
 
 ## Context
