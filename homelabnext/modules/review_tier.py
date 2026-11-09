@@ -130,6 +130,7 @@ GOVERNANCE = (
     "homelabnext/modules/swap_evidence.py",
     "homelabnext/modules/swap.py",
     "homelabnext/swap/flip.py",  # the standing promotion the switch applies (ADR-0039 step 7)
+    "homelabnext/registry/standing.py",  # the date the switch's promotion must carry
     "homelabnext/modules/rules.py",
     "homelabnext/golden/pins.py",
     "homelabnext/models/store.py",
