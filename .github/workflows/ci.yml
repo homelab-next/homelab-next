@@ -880,24 +880,81 @@ jobs:
               --regid="$2" --clear-groups -- tools/gateway_conformance.sh run' \
             sh "$(id -u)" "$(id -g)"
 
+  # The controller against its contract (ADR-0026 decision 14, PR 2.7c): build
+  # orchestrator/cmd/controller, check the fictional example configuration with it (decision 17),
+  # and run the orchestration suite strict against the binary on loopback, with process-level
+  # fault injection (tools/orchestration_conformance.py), in a network namespace with only
+  # loopback, as an unprivileged user under no_new_privs. Every executed check must pass.
+  orchestration-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GOFLAGS: -mod=readonly  # go.mod is an input: a build never rewrites it
+      GOTOOLCHAIN: local  # the go setup-go installed from go.mod, never a download
+      GOWORK: "off"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+      - id: python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: build orchestrator/cmd/controller
+        working-directory: orchestrator
+        run: go build -o "$RUNNER_TEMP/controller" ./cmd/controller
+      - name: the controller's check on the example configuration (make controller-check)
+        run: make controller-check
+      - name: the suite's Python deps (venv, hash-pinned constraints, nothing unpinned)
+        env:
+          HNX_PYTHON: ${{ steps.python.outputs.python-path }}
+        # the same venv the gateway's job makes: the core extra and this checkout, by hash
+        run: HNX_VENV="$RUNNER_TEMP/hnx-venv" tools/gateway_conformance.sh deps
+      # The network namespace is for the suite's hermeticity (it reaches nothing but loopback), not
+      # a sandbox for this pull request's code: the build and deps steps above run it with the
+      # network, as every other job here does.
+      - name: orchestration conformance against the controller (strict, fault injection, loopback only)
+        run: |
+          /usr/bin/sudo env "PATH=$PATH" "HOME=$HOME" \
+            "PY=$RUNNER_TEMP/hnx-venv/bin/python" "BIN=$RUNNER_TEMP/controller" \
+            "WORK=$RUNNER_TEMP/orchestration-conformance" "OUT=$RUNNER_TEMP/orchestration.json" \
+            unshare --net -- sh -c 'ip link set lo up && exec setpriv --no-new-privs --reuid="$1" \
+              --regid="$2" --clear-groups -- "$PY" -I tools/orchestration_conformance.py run \
+              --controller "$BIN" --work "$WORK" --strict --out "$OUT"' \
+            sh "$(id -u)" "$(id -g)"
+      # a target that lost fault_injection: true would leave the two fault checks out of a
+      # passing run (untested fails --strict, but a skip would not): they must have passed
+      - name: the two fault-injection checks ran and passed
+        run: >-
+          "$RUNNER_TEMP/hnx-venv/bin/python" -I tools/orchestration_conformance.py verdict
+          "$RUNNER_TEMP/orchestration.json"
+
   # One stable check name for branch protection, whatever the modules are called: the discovery
-  # passed, every module's go job passed (or there was none to run), and the gateway passed its
-  # conformance suite (always run: the gateway is a module here, ADR-0026).
+  # passed, every module's go job passed (or there was none to run), and the gateway and the
+  # controller passed their conformance suites (always run: both are modules here, ADR-0026).
   go-ok:
-    needs: [go-modules, go, gateway-conformance]
+    needs: [go-modules, go, gateway-conformance, orchestration-conformance]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: the Go modules were discovered and every one passed, and so did the gateway's conformance run
+      - name: the Go modules were discovered and every one passed, and so did the gateway's and the controller's conformance runs
         env:
           MODULES: ${{ needs.go-modules.result }}
           GO: ${{ needs.go.result }}
           GATEWAY: ${{ needs.gateway-conformance.result }}
+          ORCHESTRATION: ${{ needs.orchestration-conformance.result }}
         run: |
-          echo "go-modules: $MODULES, go: $GO, gateway-conformance: $GATEWAY"
+          echo "go-modules: $MODULES, go: $GO, gateway-conformance: $GATEWAY, orchestration-conformance: $ORCHESTRATION"
           [ "$MODULES" = success ] && { [ "$GO" = success ] || [ "$GO" = skipped ]; } \
-            && [ "$GATEWAY" = success ]
+            && [ "$GATEWAY" = success ] && [ "$ORCHESTRATION" = success ]
 
   # The lab-in-a-box: the real stack, brought up by the nightly's smoke, on every change that can
   # affect it.  lab-paths decides (tools/lab_paths.py: the stack's compose file, config, images and

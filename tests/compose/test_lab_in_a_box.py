@@ -1399,7 +1399,21 @@ def guard(lab, tmp_path, docker=False, **env):
 
 
 def real_credentials():
-    return {k: f"changed-{k.lower()}" for k in CREDENTIALS}
+    # long enough for the job API token's 32-character minimum
+    return {k: f"changed-{k.lower()}-0123456789abcdef" for k in CREDENTIALS}
+
+
+def test_pass1_refuses_a_short_job_api_token_off_loopback(lab_copy, tmp_path):
+    env = {
+        "LAB_BIND": "0.0.0.0",
+        "LAB_I_UNDERSTAND_UNAUTHENTICATED": "1",
+        **real_credentials(),
+    }
+    env["LAB_ORCHESTRATOR_TOKEN"] = "short-but-changed-token"
+    r = guard_pass1(lab_copy, tmp_path, **env)
+    assert r.returncode == 4 and "LAB_ORCHESTRATOR_TOKEN is 23 characters" in r.stderr, r.stderr
+    env["LAB_ORCHESTRATOR_TOKEN"] = "a-job-api-token-of-32-characters"
+    assert guard_pass1(lab_copy, tmp_path, **env).returncode == 0
 
 
 def guard_pass1(lab, tmp_path, **env):
@@ -1943,3 +1957,50 @@ def test_the_lab_smoke_reads_the_orchestration_endpoint_and_token(checks):
     assert (
         bases["orchestration"] == f"http://{LOOPBACK}:8088" and bases["orchestration-token"] == "t"
     )
+
+
+def _resolved_judge() -> str:
+    text = GUARD.read_text()
+    return text.split("read -r -d '' _LAB_RESOLVED_JUDGE <<'PY' || true\n", 1)[1].split(
+        "\nPY\n", 1
+    )[0]
+
+
+def test_pass2_judges_the_job_api_token_compose_resolves(tmp_path):
+    """Pass 1 reads .env as written; compose expands ${VAR} there, so
+    `LAB_ORCHESTRATOR_TOKEN=${UNSET}x` is 9 characters to pass 1 and `x` to compose. The resolved
+    judge holds the resolved value to the 32-character minimum, with a stub docker that answers
+    as compose resolves such an .env."""
+    lab = tmp_path / "lab"
+    lab.mkdir()
+    (lab / ".env.example").write_text("LAB_ORCHESTRATOR_TOKEN=fake-placeholder\n")
+    (lab / ".env").write_text("LAB_ORCHESTRATOR_TOKEN=${UNSET}x\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    resolved = tmp_path / "resolved.env"
+    stub = bin_dir / "docker"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  *\'--format json\'*) echo \'{"services": {"orchestrator": {"ports": [{"host_ip": "0.0.0.0", "published": "8088"}]}}}\' ;;\n'
+        f"  *'.env -f'*) cat {resolved} ;;\n"
+        "  *) echo LAB_ORCHESTRATOR_TOKEN=fake-placeholder ;;\n"
+        "esac\n"
+    )
+    stub.chmod(0o755)
+
+    def judge(token: str) -> subprocess.CompletedProcess:
+        resolved.write_text(f"LAB_I_UNDERSTAND_UNAUTHENTICATED=1\nLAB_ORCHESTRATOR_TOKEN={token}\n")
+        return subprocess.run(
+            [sys.executable, "-I", "-c", _resolved_judge(), str(lab)],
+            env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+
+    r = judge("x")  # what ${UNSET}x resolves to
+    assert r.returncode == 4 and "LAB_ORCHESTRATOR_TOKEN resolves to 1 characters" in r.stderr, (
+        r.stderr
+    )
+    r = judge("a-job-api-token-of-32-characters")
+    assert r.returncode == 0, r.stderr

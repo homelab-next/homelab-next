@@ -160,6 +160,17 @@ _lab_bind_guard_values() {
       "placeholder:$placeholders. Set real values in compose/lab-in-a-box/.env first." >&2
     return 4
   fi
+  # the controller's job API is the one authenticated door off loopback: its bearer token has
+  # to be long enough not to be guessed (32 characters, say 16 random bytes in hex). A minimum
+  # length, not an entropy check; this is the early message on the literal text, and pass 2
+  # checks the value compose resolves (a ${VAR} in .env)
+  local token
+  token=$(_lab_effective LAB_ORCHESTRATOR_TOKEN)
+  if [ "${#token}" -lt 32 ]; then
+    echo "lab-in-a-box: refusing LAB_BIND=$bind: LAB_ORCHESTRATOR_TOKEN is ${#token} characters;" \
+      "give it at least 32 (openssl rand -hex 16) in compose/lab-in-a-box/.env." >&2
+    return 4
+  fi
   return 0
 }
 
@@ -266,6 +277,15 @@ if same:
     print(f"lab-in-a-box: refusing: the resolved compose configuration publishes {shown} beyond"
           f" loopback while these resolve to their .env.example placeholder: {' '.join(same)}."
           " Set real values in compose/lab-in-a-box/.env first.", file=sys.stderr)
+    sys.exit(REFUSED)
+# the controller's job API is the one authenticated door off loopback: its bearer token, as
+# compose resolves it (a ${VAR} in .env expands here, which pass 1's literal text cannot see),
+# must be at least 32 characters. A minimum length, not an entropy check.
+token = effective.get("LAB_ORCHESTRATOR_TOKEN", "")
+if len(token) < 32:
+    print(f"lab-in-a-box: refusing: the resolved compose configuration publishes {shown} beyond"
+          f" loopback while LAB_ORCHESTRATOR_TOKEN resolves to {len(token)} characters; give it at"
+          " least 32 (openssl rand -hex 16) in compose/lab-in-a-box/.env.", file=sys.stderr)
     sys.exit(REFUSED)
 print(f"lab-in-a-box: WARNING: publishing {shown}; the query engine, bus, catalog and notify"
       " services have no authentication and OpenBao runs in dev mode", file=sys.stderr)
