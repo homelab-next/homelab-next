@@ -313,7 +313,8 @@ Swap anything behind a contract. Checked by plugins in `homelabnext/invariants/p
 | X-09 | Customizations are owned and not expired | Every customization has reason, owner and `review_by`, none is past its date, none conflicts (`hnx custom check`; plugin `homelabnext.customization.plugins.x09_customizations`, loaded through the `homelabnext.invariants.checks` entry point) | PUBLIC-NOW |
 | X-10 | Every capability has a conformance test that passes and could fail | `hnx conform report --json` lists no `capabilities_without_passing_test`: each suite ran enough checks, no MUST check failed, every deliberately broken fake was caught (X-04 only asks that a test file exists; plugin `homelabnext.conform.plugins.x10_conformance`, same entry-point group; `HNX_CONFORM_TARGET` aims it at a real deployment) | PUBLIC-NOW |
 | X-11 | Product names live only in their provider modules | `tools/product_name_lint.py` exits 0 over the tree: no product name (a provider's name, display name or alias, `tools/product_names.yml`, a model id of the role table) in the core or a feature or core module outside site configuration and prose, beyond `tools/product_names.baseline.json`, which only shrinks; in CI the baseline and vocabulary may not grow since the base commit (ADR-0027 rule 1) | PUBLIC-NOW |
+| X-12 | No non-primary registry row is past its `until` | `hnx registry standing REGISTRY --overdue` exits 0 for each registry in the tree (`services.yml` at most two directories down, not under `tests/`): no `eval`, `retiring` or `legacy` row past its `until` on `HNX_TODAY` or the local date, so a candidate that never ends or a former primary nobody removed turns red ([ADR-0039](adr/0039-one-primary-per-capability.md) decision 8; validation itself never reads the clock) | PUBLIC-NOW |
 
 ---
 
-**Totals:** 189 criteria across 16 pillars; 104 PUBLIC-NOW, 85 SERVER.
+**Totals:** 190 criteria across 16 pillars; 105 PUBLIC-NOW, 85 SERVER.

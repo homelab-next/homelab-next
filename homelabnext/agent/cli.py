@@ -232,7 +232,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("--policy", help="ceiling policy the --profile is verified against")
     p.add_argument("--lock", help="reviewed digests the --profile is verified against")
     p.add_argument("--registry", help="service registry (with --profile)")
-    p.add_argument("--runs-on", help="registry host the agent runs on (default: agent-runtime)")
+    p.add_argument(
+        "--runs-on",
+        help="registry host the agent runs on (default: the one host with role agent-runtime)",
+    )
     p.add_argument("--broker", help="broker manifest, to list the profile's broker actions")
     p.add_argument("--root", default=".", help="checkout whose graph feeds include: rules")
     p.add_argument("--task-path", action="append", default=[], help="file the task edits")
