@@ -169,23 +169,94 @@ def test_plan_flip_refuses_an_impl_change_beside_a_non_primary_row():
     assert plan_flip(load_doc(registry_text()), "lake-query", impl="duckdb").changes
 
 
-def test_the_switch_applies_the_selection_diff_and_the_promotion_together(monkeypatch):
+#: the swap whose standing half the lake-query promotion is: its selection diff moves the
+#: lake-query slot from the incumbent's provider to the candidate's
+SWAP = {
+    "route": {
+        "selection_diff": [
+            {
+                "slot": "lake-query",
+                "instance": "lake-query",
+                "from": "query-mod-a",
+                "to": "query-mod-b",
+            }
+        ]
+    }
+}
+MODS = {
+    # the incumbent's product, as the example registry names it (read, not spelled here)
+    "query-mod-a": {
+        "product": {"name": load_doc(registry_text())["services"]["lake-query"]["impl"]}
+    },
+    "query-mod-b": {"product": {"name": "duckdb"}},
+}
+
+
+@pytest.fixture
+def selection(monkeypatch):
     calls = []
 
-    def selection(site, swap, mods, *, models=None):
+    def fake(site, swap, mods, *, models=None):
         calls.append(site)
         return {"after": True}
 
-    monkeypatch.setattr(ms, "apply_selection_diff", selection)
+    monkeypatch.setattr(ms, "apply_selection_diff", fake)
+    return calls
+
+
+def test_the_switch_applies_the_selection_diff_and_the_promotion_together(selection):
     text = _text()
     p = _plan(text)
-    site, reg = ms.apply_switch({"before": True}, {}, {}, load_doc(text), p)
-    assert site == {"after": True} and calls == [{"before": True}]
-    assert reg == p.apply(load_doc(text))
+    site, after = ms.apply_switch({"before": True}, SWAP, MODS, text, p)
+    assert site == {"after": True} and selection == [{"before": True}]
+    assert after == promote_text(text, p)  # the text, byte-exact, not a re-dumped document
     with pytest.raises(ValueError, match="standing promotion does not apply"):
-        ms.apply_switch({"before": True}, {}, {}, reg, p)  # already switched: stale
+        ms.apply_switch({"before": True}, SWAP, MODS, after, p)  # already switched: stale
     with pytest.raises(ValueError, match="not its inverse"):
-        ms.apply_switch({"before": True}, {}, {}, reg, p.inverse())
+        ms.apply_switch({"before": True}, SWAP, MODS, after, p.inverse())
+
+
+def test_the_switch_refuses_a_promotion_of_another_capability_or_provider(selection):
+    text = _idp_text()
+    p = plan_promote(load_doc(text), "idp", "sso-next", "2026-11-08", 30, old_lab=True)
+    with pytest.raises(ValueError, match="moves no idp line"):
+        ms.apply_switch({}, SWAP, MODS, text, p)
+    text = _text()
+    p = _plan(text)
+    other = {**MODS, "query-mod-b": {"product": {"name": "another-engine"}}}
+    with pytest.raises(ValueError, match="query-b runs 'duckdb', not the incoming provider"):
+        ms.apply_switch({}, SWAP, other, text, p)
+    swapped = {**MODS, "query-mod-a": {"product": {"name": "another-engine"}}}
+    with pytest.raises(ValueError, match=r"retiring row query-a runs '.+', not the outgoing"):
+        ms.apply_switch({}, SWAP, swapped, text, p)
+    assert selection == []  # neither half applied
+
+
+def test_the_switch_refuses_a_tampered_plan(selection):
+    """A plan read back with from_dict is not trusted: an extra change, or one altered, is
+    refused before anything is applied."""
+    text = _text()
+    d = _plan(text).to_dict()
+    extra = {
+        **d,
+        "changes": [
+            *d["changes"],
+            {
+                "path": "services.query-a.owner",
+                "before": "data-team",
+                "after": "someone-else",
+                "anchor": None,
+            },
+        ],
+    }
+    with pytest.raises(
+        ValueError, match=r"changes services\.query-a\.owner, which no promotion touches"
+    ):
+        ms.apply_switch({}, SWAP, MODS, text, PromotePlan.from_dict(extra))
+    longer = {**d, "until": "2027-06-01"}
+    with pytest.raises(ValueError, match="not the one plan_promote computes"):
+        ms.apply_switch({}, SWAP, MODS, text, PromotePlan.from_dict(longer))
+    assert selection == []
 
 
 # ---- review follow-up: an egress incumbent leaves primacy at the new primary's ceiling --------

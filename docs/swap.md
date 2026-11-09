@@ -188,7 +188,7 @@ plan = plan_promote(doc, "idp", "sso-next", "2026-11-08", rollback_days=14, old_
 print(plan.diff())  # every field that changes, with the window and its end
 text = promote_text(yaml_text, plan)  # touches only the changed fields
 assert promote_text(text, plan.inverse()) == yaml_text  # the rollback, byte for byte
-site, registry = apply_switch(site, swap, mods, doc, plan)
+site, text = apply_switch(site, swap, mods, yaml_text, plan)  # write both in one commit
 ```
 
 - The `eval` row becomes the primary (its `standing` is removed). The incumbent primary becomes
@@ -200,6 +200,12 @@ site, registry = apply_switch(site, swap, mods, doc, plan)
 - Refused: a row that is not an `eval` row of the capability, a result with two primaries or none,
   a `retiring` incumbent named like a capability (rename the row first; a `legacy` one may keep
   its name), and anything the registry's own rules refuse.
+- `apply_switch` refuses a promotion that is not the swap's: a capability its selection diff does
+  not move, a promoted row that does not run the incoming provider's product (or a `retiring`
+  incumbent the outgoing one's), a change outside the two rows' `standing`, `public_hostname`,
+  `env_var` and `tlp_ceiling`, or a plan that differs from the one `plan_promote` recomputes from
+  the registry (`PromotePlan.from_dict` does not validate). It returns the registry *text*; the
+  switch step writes the selection and the registry in one commit.
 - `promote_text` writes a field that appears on one line, at the end of its row (or where it was,
   when it comes back), and refuses unless its inverse restores the text byte for byte.
 

@@ -523,28 +523,116 @@ def apply_selection_diff(
     return out
 
 
+def _product(mods: dict[str, Doc], mid: str) -> str | None:
+    return ((mods.get(mid) or {}).get("product") or {}).get("name")
+
+
+def _promotion_problems(swap: Doc, mods: dict[str, Doc], doc: Doc, promotion: Any) -> list[str]:
+    """Why ``promotion`` is not this swap's standing half: its capability is no slot the swap's
+    selection diff moves, its row does not run the incoming provider's product (nor its
+    incumbent the outgoing one's, for a ``retiring`` incumbent), or it changes anything but the
+    standing fields of those two rows."""
+    from homelabnext.swap.flip import PROMOTION_FIELDS
+
+    cap = promotion.capability
+    diff = (swap.get("route") or {}).get("selection_diff") or []
+    lines = [d for d in diff if d.get("slot") == cap]
+    if not lines:
+        slots = sorted({str(d.get("slot")) for d in diff})
+        return [
+            f"the promotion is of {cap}, and the swap's selection diff moves no {cap} line "
+            f"(it moves {', '.join(slots) or 'nothing'})"
+        ]
+    out = []
+    rows = doc.get("services") or {}
+    incoming = {_product(mods, d.get("to")) for d in lines}
+    impl = (rows.get(promotion.row) or {}).get("impl")
+    if impl not in incoming:
+        out.append(
+            f"the promoted row {promotion.row} runs {impl!r}, not the incoming provider's product "
+            f"({', '.join(sorted(str(p) for p in incoming))})"
+        )
+    outgoing = {_product(mods, d.get("from")) for d in lines} - {None}
+    if promotion.incumbent and promotion.incumbent_tier == "retiring" and outgoing:
+        was = (rows.get(promotion.incumbent) or {}).get("impl")
+        if was not in outgoing:
+            out.append(
+                f"the retiring row {promotion.incumbent} runs {was!r}, not the outgoing "
+                f"provider's product ({', '.join(sorted(outgoing))})"
+            )
+    for c in promotion.changes:
+        parts = str(c.path).split(".")
+        ok = (
+            len(parts) == 3
+            and parts[0] == "services"
+            and parts[1] in {promotion.row, promotion.incumbent}
+            and parts[2] in PROMOTION_FIELDS
+        )
+        if not ok:
+            out.append(f"the promotion changes {c.path}, which no promotion touches")
+    return out
+
+
 def apply_switch(
     site: Doc,
     swap: Doc,
     mods: dict[str, Doc],
-    registry: Doc,
+    registry_text: str,
     promotion: Any,
     *,
     models: ModelEvidence | None = None,
-) -> tuple[Doc, Doc]:
+) -> tuple[Doc, str]:
     """The switch of ADR-0040 decision 5 step 6: both halves of the one reviewed change, the
     selection diff (:func:`apply_selection_diff`) and the registry standing promotion (ADR-0039
-    decision 6, a :class:`homelabnext.swap.flip.PromotePlan` from ``plan_promote``).  Returns
-    ``(site, registry)`` after the switch, or raises with neither applied: both are computed on
-    copies, and the selection is not returned unless the promotion also holds.  The promotion's
-    inverse with the selection before the switch is the rollback."""
-    from homelabnext.swap.flip import FlipError, PromotePlan
+    decision 6, a :class:`homelabnext.swap.flip.PromotePlan`).
+
+    The promotion must be this swap's: its capability a slot the selection diff moves, its row
+    the incoming provider's product, and the plan exactly the one ``plan_promote`` computes from
+    this registry (a plan read with ``from_dict`` is not trusted as given).  Returns ``(site,
+    registry text)`` after the switch, the registry written by ``promote_text`` (only the changed
+    fields, with a byte-exact inverse), or raises with neither applied.  The caller writes **both
+    files in one commit** (the overlay's one reviewed pull request): a selection switched without
+    its promotion, or the reverse, leaves consumers bound to a row that no longer answers.  The
+    promotion's inverse with the selection before the switch is the rollback."""
+    from homelabnext.swap.flip import FlipError, PromotePlan, load_doc, plan_promote, promote_text
 
     if not isinstance(promotion, PromotePlan) or promotion.reverted:
         raise ValueError("the switch takes a promotion from plan_promote, not its inverse")
-    after_site = apply_selection_diff(site, swap, mods, models=models)
     try:
-        after_registry = promotion.apply(registry)
+        doc = load_doc(registry_text)
+    except FlipError as exc:
+        raise ValueError(f"cutover refused: {exc}") from None
+    problems = _promotion_problems(swap, mods, doc, promotion)
+    if problems:
+        raise ValueError("cutover refused: " + "; ".join(problems))
+    why = next(
+        (
+            c.after.get("why")
+            for c in promotion.changes
+            if c.path == f"services.{promotion.incumbent}.standing" and isinstance(c.after, dict)
+        ),
+        None,
+    )
+    try:
+        rebuilt = plan_promote(
+            doc,
+            promotion.capability,
+            promotion.row,
+            promotion.switched_on,
+            promotion.rollback_days,
+            old_lab=promotion.incumbent_tier == "legacy",
+            why=why,
+        )
     except FlipError as exc:
         raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
-    return after_site, after_registry
+    if rebuilt != promotion:
+        raise ValueError(
+            "cutover refused: the promotion is not the one plan_promote computes from this "
+            "registry (recompute it; a plan is never applied as given)"
+        )
+    after_site = apply_selection_diff(site, swap, mods, models=models)
+    try:
+        after_text = promote_text(registry_text, promotion)
+    except FlipError as exc:
+        raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
+    return after_site, after_text

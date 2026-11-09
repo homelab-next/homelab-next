@@ -279,6 +279,8 @@ def flip_text(text: str, plan: FlipPlan) -> str:
 #: so consumers keep the public route and the override variable they read (ADR-0039 decision 2)
 PRIMARY_ONLY = ("public_hostname", "env_var")
 _STANDING_ORDER = ("tier", "until", "why")
+#: every field a promotion changes, on its candidate and its incumbent only
+PROMOTION_FIELDS = ("standing", *PRIMARY_ONLY, "tlp_ceiling")
 
 
 @dataclass(frozen=True)
@@ -348,6 +350,9 @@ class PromotePlan:
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> PromotePlan:
+        """The plan :meth:`to_dict` wrote, as read: it is **not** validated or checked against
+        any registry.  A plan from outside is trusted only after ``apply_switch`` (or the caller)
+        recomputes it with :func:`plan_promote` and finds it identical."""
         return cls(
             d["capability"],
             d["row"],
