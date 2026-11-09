@@ -65,6 +65,11 @@ var placeholders = []string{PromptPlaceholder, UsagePathPlaceholder, ToolsetsPla
 // prompt on stdin.
 var ErrArgumentsTooLong = errors.New("the command line is too long for the system (E2BIG): give the prompt on stdin, with no {prompt} in argv")
 
+// SessionVariables are the variables the runner sets for every session itself, whatever the
+// controller's environment holds.
+var SessionVariables = []string{"HNX_RUN_ID", "HNX_AGENT_KEY", "HNX_LANE", "HNX_GATEWAY_TAG", "HNX_USAGE_PATH",
+	"HNX_HOME", "HNX_BACKEND", "HNX_TOOLSETS", "HNX_SERVERS_FILE"}
+
 // Config is the runner's command and bounds.
 type Config struct {
 	// Argv is the command: an absolute program path or a name found on PATH, then its arguments,
@@ -388,7 +393,7 @@ func (r *Runner) environ(s runner.Session) []string {
 			env = append(env, kv)
 		}
 	}
-	for _, k := range []string{"HNX_RUN_ID", "HNX_AGENT_KEY", "HNX_LANE", "HNX_GATEWAY_TAG", "HNX_USAGE_PATH", "HNX_HOME", "HNX_BACKEND", "HNX_TOOLSETS"} {
+	for _, k := range SessionVariables[:len(SessionVariables)-1] { // HNX_SERVERS_FILE is set by Run
 		env = append(env, k+"="+own[k])
 	}
 	return env

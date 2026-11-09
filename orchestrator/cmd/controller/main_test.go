@@ -765,3 +765,14 @@ func TestServe_AnInterruptDuringTheStartStopsIt(t *testing.T) {
 		t.Fatal("the interrupted start took a backup")
 	}
 }
+
+// The forwarder's token cannot live in a variable facts commands or sessions are given anyway.
+func TestCheck_TheForwarderTokenNeedsAVariableOfItsOwn(t *testing.T) {
+	for _, name := range []string{"PATH", "LANG", "HNX_RUN_ID", "HNX_SERVERS_FILE"} {
+		cfg, _ := siteConfig(t, func(s string) string { return s + "events: {token_env: " + name + "}\n" })
+		code, out, errs := runCmd(t, "check", "--config", cfg)
+		if code != exitProblem || !strings.Contains(out, "events.token_env "+name) {
+			t.Errorf("%s: check = %d\n%s%s", name, code, out, errs)
+		}
+	}
+}

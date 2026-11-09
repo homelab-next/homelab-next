@@ -127,6 +127,11 @@ func loadSite(path string) (*site, []error) {
 		}
 	}
 	for _, name := range secretEnv(cfg) {
+		// a name every facts command or session gets anyway would hand them the secret, and a
+		// session variable would be overwritten in the session by the runner's own value
+		if slices.Contains(profile.BaseFactsEnv, name) || slices.Contains(execrunner.SessionVariables, name) {
+			problems = append(problems, fmt.Errorf("events.token_env %s is a variable every facts command or session is given: name the forwarder's token in a variable of its own", name))
+		}
 		if e, ok := execrunner.Covers(cfg.Runner.EnvAllowlist, name); ok {
 			problems = append(problems, fmt.Errorf("runner.env_allowlist: entry %q covers %s, which holds a secret the controller reads; it is never passed to a session, so list the variables sessions need by name", e, name))
 		}
