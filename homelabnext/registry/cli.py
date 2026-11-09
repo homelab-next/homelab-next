@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""``hnx`` command line: validate, resolve, generate, check.
+"""``hnx`` command line: validate, resolve, bindings, generate, check.
 
 Exit codes: 0 ok, 1 an invalid registry, an unresolvable capability or drift, 2 usage error or a
 registry file that cannot be read or parsed.
@@ -46,6 +46,57 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         help="resolve an eval or retiring row by its row name (ADR-0039), not a capability",
     )
     p = sub.add_parser(
+        "bindings",
+        help="refuse a binding to a non-primary row (ADR-0039 decision 3): upstreams, role "
+        "bindings, pack targets and event sources, requires through the selection",
+    )
+    p.add_argument("registry")
+    p.add_argument("--roles", action="append", default=[], help="a model-role table (repeatable)")
+    p.add_argument(
+        "--eval-report",
+        action="append",
+        default=[],
+        help="an evaluation report whose canary bindings may name an eval row (repeatable); "
+        "with --base or --ci-base also read from that commit, as the swap gate reads it",
+    )
+    which = p.add_mutually_exclusive_group()
+    which.add_argument("--base", help="also read --eval-report from this commit")
+    which.add_argument(
+        "--ci-base",
+        action="store_true",
+        help="also read --eval-report from the base CI compares with",
+    )
+    p.add_argument("--root", default=".", help="the git checkout --eval-report is relative to")
+    p.add_argument(
+        "--packs", action="append", default=[], help="a workflow pack or a directory of packs"
+    )
+    p.add_argument(
+        "--deployed",
+        help="a workflow deploy manifest (workflows/deploy.yml): check only the --packs it pins",
+    )
+    p.add_argument(
+        "--target", action="append", default=[], help="a conformance target file (repeatable)"
+    )
+    p.add_argument(
+        "--reference-examples",
+        action="store_true",
+        help="this repository's reference examples (make check only): a pack may name a "
+        "capability bindings.UNPLACED declares for it; never for a lab",
+    )
+    p.add_argument(
+        "--gateway",
+        action="append",
+        default=[],
+        help="an LLM gateway spec: its backends and role table against the registry (repeatable)",
+    )
+    p.add_argument("--site", help="a site selection: its modules' requires (with --modules)")
+    p.add_argument(
+        "--modules",
+        action="append",
+        default=[],
+        help="a directory of module manifests the selection names (repeatable)",
+    )
+    p = sub.add_parser(
         "standing",
         help="list the non-primary rows and their until dates; --overdue fails on one past its "
         "date (ADR-0039 decision 8, checklist X-12)",
@@ -87,6 +138,8 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             file=out,
         )
         return 0
+    if args.cmd == "bindings":
+        return _bindings(args, reg, out, err)
     if args.cmd == "standing":
         from homelabnext.registry import standing
 
@@ -128,6 +181,66 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     for p in problems:
         print(p, file=err)
     return 1 if problems else 0
+
+
+def _bindings(args: argparse.Namespace, reg, out, err) -> int:
+    """``hnx registry bindings``: exit 0 when every binding reaches a primary, 1 when one does
+    not, 2 when an input cannot be read (:mod:`homelabnext.registry.bindings`)."""
+    from homelabnext.registry import bindings as bd
+
+    try:
+        if bool(args.site) != bool(args.modules):
+            raise bd.BindingsInputError("--site and --modules go together")
+        tables = bd.load_role_tables(args.roles)
+        reports = bd.load_eval_reports(args.eval_report, root=args.root, base=_base(args))
+        packs = bd.load_packs(args.packs, args.deployed)
+        targets = bd.load_targets(args.target)
+        gateways = bd.load_gateways(args.gateway)
+        site = mods = None
+        if args.site:
+            site, mods = bd.load_selection(args.site, args.modules)
+        rep = bd.check(
+            reg,
+            tables=tables,
+            reports=reports,
+            packs=packs,
+            targets=targets,
+            gateways=gateways,
+            site=site,
+            mods=mods,
+            reference_examples=args.reference_examples,
+        )
+    except bd.BindingsInputError as exc:
+        print(f"hnx registry bindings: {exc}", file=err)
+        return 2
+    for n in rep.notes:
+        print(f"note: {n}", file=out)
+    for p in rep.problems:
+        print(p, file=err)
+    print(
+        f"bindings: {len(rep.problems)} problem(s); {len(tables)} role table(s), "
+        f"{len(reports)} report(s), {len(packs)} pack(s), {len(targets)} target(s), "
+        f"{len(gateways)} gateway spec(s)" + (", the selection's requires" if site else ""),
+        file=out,
+    )
+    return 1 if rep.problems else 0
+
+
+def _base(args: argparse.Namespace) -> str | None:
+    """The commit ``--eval-report`` is also read from: ``--base``, or ``--ci-base``'s pick (None
+    for a root commit, which has no base)."""
+    if args.base:
+        return args.base
+    if not args.ci_base:
+        return None
+    from homelabnext.gitbase import ci_base_from_env
+    from homelabnext.registry.bindings import BindingsInputError
+
+    try:
+        base, _why = ci_base_from_env(Path(args.root))
+    except ValueError as exc:
+        raise BindingsInputError(f"--ci-base: {exc}") from None
+    return base or None
 
 
 def _date(raw: str):

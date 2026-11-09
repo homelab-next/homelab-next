@@ -334,9 +334,9 @@ def read_capabilities(b: Builder) -> None:
     from homelabnext.sop import capabilities as caps
 
     for name in CAPABILITIES:
-        b.declare(f"cap:{name}", "cap", "homelabnext/conform/registry.py", conformance="core")
+        b.declare(f"cap:{name}", "cap", "homelabnext/capability_names.py", conformance="core")
     for name in EXTENDED:
-        b.declare(f"cap:{name}", "cap", "homelabnext/conform/registry.py", conformance="extended")
+        b.declare(f"cap:{name}", "cap", "homelabnext/capability_names.py", conformance="extended")
     for name in declared_capabilities(b.root) or ():  # the one validated reader of the file
         b.declare(f"cap:{name}", "cap", "capabilities.yml")
     tc = _yaml(b.root / "homelabnext/agent/tool_classes.yml") or {}
