@@ -30,10 +30,13 @@ from __future__ import annotations
 import base64
 import functools
 import json
+import os
+import re
 import sys
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -104,9 +107,14 @@ def _post(url: str, body: dict[str, Any]) -> dict[str, Any]:
 
 
 def run(
-    argv: Sequence[str], *, post: Callable[[str, dict[str, Any]], dict[str, Any]] = _post
+    argv: Sequence[str],
+    *,
+    post: Callable[[str, dict[str, Any]], dict[str, Any]] = _post,
+    stdin: Callable[[], str] | None = None,
 ) -> tuple[int, str, str]:
-    """``(exit code, stdout, stderr)`` for one ``hermes`` invocation with arguments ``argv``."""
+    """``(exit code, stdout, stderr)`` for one ``hermes`` invocation with arguments ``argv``.
+    ``--stdin`` reads the prompt from ``stdin()`` (the controller's exec runner gives it there,
+    so a prompt is never an argument the parser could read as an option) instead of ``-z``."""
     prompt, usage_file = None, None
     args = list(argv)
     for i, a in enumerate(args[:-1]):
@@ -114,8 +122,10 @@ def run(
             prompt = args[i + 1]
         elif a == "--usage-file":
             usage_file = args[i + 1]
+    if prompt is None and "--stdin" in args and stdin is not None:
+        prompt = stdin()
     if prompt is None:
-        return 2, "", "usage: hermes -z PROMPT [--toolsets T] [--usage-file F]"
+        return 2, "", "usage: hermes (-z PROMPT | --stdin) [--toolsets T] [--usage-file F]"
     job = decode(prompt)
     if job is None:
         return 1, "", f"no {JOB_MARKER} line in the prompt: not a conformance job"
@@ -145,8 +155,34 @@ def _call(post, url: str, body: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"HTTP {exc.code}") from exc
 
 
+#: where the session records its pid for the conformance harness's fault injection: the
+#: adapter's ``kill(run_id)`` reads ``<dir>/<run id>.pid`` (``HNX_RUN_ID`` is the exec runner's)
+PID_DIR_ENV = "HNX_CONFORM_PID_DIR"
+_RUN_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+def write_pid_file(environ: Mapping[str, str], pid: int) -> Path | None:
+    """Record ``pid`` as the session of run ``HNX_RUN_ID`` under ``HNX_CONFORM_PID_DIR`` (written
+    to a temporary name, then renamed, so a reader never sees a partial file); ``None`` when
+    either variable is unset or the run id is not a controller's."""
+    directory, run_id = environ.get(PID_DIR_ENV), environ.get("HNX_RUN_ID", "")
+    if not directory or not _RUN_ID.match(run_id):
+        return None
+    path = Path(directory) / f"{run_id}.pid"
+    tmp = path.with_suffix(f".pid.{pid}.tmp")
+    tmp.write_text(f"{pid}\n", encoding="ascii")
+    os.replace(tmp, path)
+    return path
+
+
 def main() -> int:  # pragma: no cover - exercised as a subprocess in the live run
-    code, out, err = run(sys.argv[1:])
+    pid_file = write_pid_file(os.environ, os.getpid())
+    try:
+        code, out, err = run(sys.argv[1:], stdin=sys.stdin.read)
+    finally:
+        # a session that ends removes its pid file: one left behind is a session that was killed
+        if pid_file is not None:
+            pid_file.unlink(missing_ok=True)
     sys.stdout.write(out)
     if err:
         sys.stderr.write(err + "\n")

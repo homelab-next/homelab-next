@@ -72,6 +72,10 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+# Like every setting here, the filter and the bounds above apply to the sessions the controller
+# starts as well (they run in its cgroup, under its seccomp filter and namespaces): a runner whose
+# programs need a system call outside @system-service, or more memory than MemoryMax= leaves
+# beside the controller, is sized here, by the site, for those programs
 SystemCallFilter=@system-service
 CapabilityBoundingSet=
 AmbientCapabilities=

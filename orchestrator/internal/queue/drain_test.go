@@ -45,4 +45,19 @@ func TestRunAdmitting_StopsAdmittingAndKeepsRunningJobs(t *testing.T) {
 	if j := r.job("run-2"); j.State != store.StateQueued {
 		t.Fatalf("run-2 is %s: it was admitted after admission stopped", j.State)
 	}
+	// The slot is free now, so only the stop keeps run-2 queued: a pass that runs after it (one
+	// already under way when admission ended) admits nothing.
+	if err := r.sch.tick(admit, jobs); err != nil {
+		t.Fatal(err)
+	}
+	if j := r.job("run-2"); j.State != store.StateQueued {
+		t.Fatalf("run-2 is %s: a pass after the stop admitted it into the free slot", j.State)
+	}
+	// and the same pass with admission on admits it: the slot really was free
+	if err := r.sch.tick(context.Background(), jobs); err != nil {
+		t.Fatal(err)
+	}
+	if j := r.job("run-2"); j.State != store.StateDone {
+		t.Fatalf("run-2 is %s after a pass with admission on", j.State)
+	}
 }

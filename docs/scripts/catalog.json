@@ -588,6 +588,24 @@
     },
     {
       "exit": {
+        "0": "the controller stopped cleanly",
+        "1": "no token, or the configuration's check failed"
+      },
+      "id": "lab-orchestrator-entrypoint",
+      "inputs": "HNX_SECRET_ORCHESTRATOR_TOKEN; /etc/orchestrator/controller.yaml",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "/var/lib/orchestrator/api-tokens.yaml (owner-only); the controller's log",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/orchestrator/entrypoint.sh",
+      "purpose": "Start the lab controller with a tokens file written from the throwaway token's digest.",
+      "status": "active",
+      "trigger": [
+        "compose:lab-in-a-box/orchestrator"
+      ]
+    },
+    {
+      "exit": {
         "0": "decided (or, with --check, every stack input is covered)",
         "1": "with --check, a stack input no entry covers",
         "2": "the changed paths could not be read"
@@ -955,6 +973,25 @@
       "status": "active",
       "trigger": [
         "role:module_census"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the suite passed",
+        "1": "a check did not pass, or the controller did not come up",
+        "2": "usage error"
+      },
+      "id": "orchestration-conformance",
+      "inputs": "a built orchestrator/cmd/controller; an absolute, empty or missing work directory",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the work directory (controller.yaml, controller.log, the state, the session pids); the suite's verdict",
+      "owner": "maintainers",
+      "path": "tools/orchestration_conformance.py",
+      "purpose": "Run the orchestration conformance suite against the repository's own controller binary on loopback, with process-level fault injection.",
+      "status": "active",
+      "trigger": [
+        "make:orchestration-conformance"
       ]
     },
     {
