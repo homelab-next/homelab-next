@@ -131,6 +131,12 @@ GOVERNANCE = (
     "homelabnext/modules/swap.py",
     "homelabnext/swap/flip.py",  # the standing promotion the switch applies (ADR-0039 step 7)
     "homelabnext/registry/standing.py",  # the date the switch's promotion must carry
+    # what ADR-0039 steps 6 and 8 judge a registry with: the guests held to the rows on their
+    # host (the compute loader and the registry-hosts table it reads) and checklist X-12, the
+    # standing that expires loudly; a change there changes what passes on every pull request
+    "homelabnext/compute/loader.py",
+    "homelabnext/compute/gen/registry_hosts.py",
+    "homelabnext/invariants/plugins/pillar_x.py",
     "homelabnext/modules/rules.py",
     "homelabnext/golden/pins.py",
     "homelabnext/models/store.py",

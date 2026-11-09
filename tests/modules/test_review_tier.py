@@ -971,6 +971,20 @@ def test_governance_lists_every_module_the_tiers_and_the_gate_import():
         assert must in rt.GOVERNANCE
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "homelabnext/compute/loader.py",
+        "homelabnext/compute/gen/registry_hosts.py",
+        "homelabnext/invariants/plugins/pillar_x.py",
+    ],
+)
+def test_the_adr_0039_registry_judges_are_governance(path):
+    """Guests held to the registry rows on their host (step 6) and X-12 (step 8) decide what a
+    registry change passes: a change to them is human-approve."""
+    assert path in rt.GOVERNANCE
+
+
 def test_governance_lists_no_file_that_does_not_exist():
     root = ROOT
     gone = [g for g in rt.GOVERNANCE if g not in rt.CODEOWNERS_PATHS and not (root / g).is_file()]
