@@ -476,7 +476,8 @@ def test_discovery_gates_the_go_job_and_one_check_sums_it_up():
     assert "tools/go_modules.py --github-output" in discover["run"]
     assert set(jobs["go-modules"]["outputs"]) == {"modules", "present"}
     ok = jobs["go-ok"]
-    assert ok["needs"] == ["go-modules", "go", "gateway-conformance"] and ok["if"] == "always()"
+    assert ok["needs"] == ["go-modules", "go", "gateway-conformance", "orchestration-conformance"]
+    assert ok["if"] == "always()"
     (verdict,) = ok["steps"]
     assert verdict["env"]["GATEWAY"] == "${{ needs.gateway-conformance.result }}"
     assert '[ "$GATEWAY" = success ]' in verdict["run"]

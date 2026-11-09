@@ -535,6 +535,8 @@ def _promotion_problems(swap: Doc, mods: dict[str, Doc], doc: Doc, promotion: An
     from homelabnext.swap.flip import PROMOTION_FIELDS
 
     cap = promotion.capability
+    # a slot's name is its capability: the slot registry (examples/modules/slots.yml) is keyed by
+    # capability name, and a selection line's slot is the capability its provider serves
     diff = (swap.get("route") or {}).get("selection_diff") or []
     lines = [d for d in diff if d.get("slot") == cap]
     if not lines:
@@ -553,12 +555,19 @@ def _promotion_problems(swap: Doc, mods: dict[str, Doc], doc: Doc, promotion: An
             f"({', '.join(sorted(str(p) for p in incoming))})"
         )
     outgoing = {_product(mods, d.get("from")) for d in lines} - {None}
-    if promotion.incumbent and promotion.incumbent_tier == "retiring" and outgoing:
+    ours = sorted({str(d.get("from")) for d in lines if d.get("from") in mods})
+    if promotion.incumbent and promotion.incumbent_tier == "legacy" and ours:
+        out.append(
+            f"the incumbent {promotion.incumbent} is promoted out as legacy, but the swap's "
+            f"outgoing provider ({', '.join(ours)}) is a module this repository deploys: it goes "
+            "retiring, kept restorable for its rollback window (legacy is the old lab's)"
+        )
+    if promotion.incumbent and outgoing:
         was = (rows.get(promotion.incumbent) or {}).get("impl")
         if was not in outgoing:
             out.append(
-                f"the retiring row {promotion.incumbent} runs {was!r}, not the outgoing "
-                f"provider's product ({', '.join(sorted(outgoing))})"
+                f"the {promotion.incumbent_tier} row {promotion.incumbent} runs {was!r}, not the "
+                f"outgoing provider's product ({', '.join(sorted(outgoing))})"
             )
     for c in promotion.changes:
         parts = str(c.path).split(".")
@@ -581,6 +590,7 @@ def apply_switch(
     promotion: Any,
     *,
     models: ModelEvidence | None = None,
+    today: Any = None,
 ) -> tuple[Doc, str]:
     """The switch of ADR-0040 decision 5 step 6: both halves of the one reviewed change, the
     selection diff (:func:`apply_selection_diff`) and the registry standing promotion (ADR-0039
@@ -593,11 +603,26 @@ def apply_switch(
     fields, with a byte-exact inverse), or raises with neither applied.  The caller writes **both
     files in one commit** (the overlay's one reviewed pull request): a selection switched without
     its promotion, or the reverse, leaves consumers bound to a row that no longer answers.  The
-    promotion's inverse with the selection before the switch is the rollback."""
+    promotion's inverse with the selection before the switch is the rollback.
+
+    The promotion must be dated ``today`` (default ``HNX_TODAY``, else the local date), so its
+    ``until`` runs from the day it is applied, and its window is at most
+    ``flip.MAX_ROLLBACK_DAYS``, until ADR-0043's ledger row binds both.  An incumbent leaving as
+    ``legacy`` is refused when the swap's outgoing provider is one of ``mods`` (a module this
+    repository deploys goes ``retiring``); an old-lab switch is a promotion without a module swap.
+    A slot's name is its capability (the slot registry is keyed by capability)."""
     from homelabnext.swap.flip import FlipError, PromotePlan, load_doc, plan_promote, promote_text
 
     if not isinstance(promotion, PromotePlan) or promotion.reverted:
         raise ValueError("the switch takes a promotion from plan_promote, not its inverse")
+    from homelabnext.registry.standing import today as judged_on
+
+    on = judged_on(today).isoformat()
+    if promotion.switched_on != on:
+        raise ValueError(
+            f"cutover refused: the promotion is dated {promotion.switched_on}, and the switch is "
+            f"on {on}: its rollback window runs from the day it is applied (recompute it today)"
+        )
     try:
         doc = load_doc(registry_text)
     except FlipError as exc:

@@ -279,6 +279,10 @@ def flip_text(text: str, plan: FlipPlan) -> str:
 #: so consumers keep the public route and the override variable they read (ADR-0039 decision 2)
 PRIMARY_ONLY = ("public_hostname", "env_var")
 _STANDING_ORDER = ("tier", "until", "why")
+#: the longest rollback window a promotion takes.  Until ADR-0043's ledger binds the window to
+#: the service's ledger row (``rollback_days``, 14 by default), a window is only bounded here: a
+#: stopped incumbent kept restorable for a year is a second product nobody runs
+MAX_ROLLBACK_DAYS = 90
 #: every field a promotion changes, on its candidate and its incumbent only
 PROMOTION_FIELDS = ("standing", *PRIMARY_ONLY, "tlp_ceiling")
 
@@ -466,8 +470,15 @@ def plan_promote(
             f"{row} is {'the primary' if tier == 'primary' else 'a ' + tier + ' row'} of "
             f"{capability}: only an eval row is promoted (a rollback is the promotion's inverse)"
         )
-    if isinstance(rollback_days, bool) or not isinstance(rollback_days, int) or rollback_days < 1:
-        raise FlipError(f"rollback_days is a whole number of days >= 1, not {rollback_days!r}")
+    if (
+        isinstance(rollback_days, bool)
+        or not isinstance(rollback_days, int)
+        or not 1 <= rollback_days <= MAX_ROLLBACK_DAYS
+    ):
+        raise FlipError(
+            f"rollback_days is a whole number of days from 1 to {MAX_ROLLBACK_DAYS}, not "
+            f"{rollback_days!r}"
+        )
     day = _date(switched_on)
     until = (day + dt.timedelta(days=rollback_days)).isoformat()
     incumbent_tier = "legacy" if old_lab else "retiring"

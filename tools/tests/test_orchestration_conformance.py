@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -25,10 +27,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import orchestration_conformance as harness
 
 RUN = "0123456789abcdef0123456789abcdef"
-FAULT_CHECKS = (
-    "killed-worker-fails-run-and-frees-capacity",
-    "restart-reconciles-runs-and-capacity",
-)
+FAULT_CHECKS = harness.FAULT_CHECKS
 
 
 # no network in the test run: the module cache only (CI's Go leg fetches it before the namespace)
@@ -81,10 +80,13 @@ def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path)
     ]
     for c in FAULT_CHECKS:
         args += ["--check", c]
-    assert harness.main(args) == 0
+    work = tmp_path / "work"
+    rc = harness.main(args)
+    assert rc == 0, f"harness exit {rc}\n{_diagnose(work, out)}"
     (run,) = json.loads(out.read_text())["runs"]
     results = {r["check"]: r["status"] for r in run["results"]}
-    assert results == dict.fromkeys(FAULT_CHECKS, "pass"), results
+    assert results == dict.fromkeys(FAULT_CHECKS, "pass"), f"{results}\n{_diagnose(work, out)}"
+    assert harness.main(["verdict", str(out)]) == 0  # the report CI's verdict step reads
     # a session that ended removed its pid file; one that was killed left it, and is not running
     for p in (tmp_path / "work" / "pids").glob("*.pid"):
         assert not harness.is_session(int(p.read_text()), p.name.removesuffix(".pid")), p
@@ -100,13 +102,44 @@ def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path)
                 ("%controller-restart-reconciliation%",),
             )
         ]
-        assert len(reconciled) == 1, reconciled
+        assert len(reconciled) == 1, f"reconciled runs {reconciled}\n{_diagnose(work, out)}"
         retries = db.execute(
             "SELECT COUNT(*) FROM jobs WHERE retry_of_run_id = ?", (reconciled[0],)
         ).fetchone()[0]
-        assert retries == 0, f"the reconciled run {reconciled[0]} was retried"
+        assert retries == 0, (
+            f"the reconciled run {reconciled[0]} was retried\n{_diagnose(work, out)}"
+        )
     finally:
         db.close()
+
+
+def _diagnose(work: Path, out: Path) -> str:
+    """What a failed strict run leaves to read: every job row, each failing check's evidence, the
+    controller log's tail."""
+    lines = []
+    try:
+        db = sqlite3.connect(work / "state" / "controller.db")
+        try:
+            for row in db.execute(
+                "SELECT run_id, agent_key, state, attempts, retry_of_run_id, local_failed_reason FROM jobs ORDER BY seq"
+            ):
+                lines.append("job " + " | ".join(str(c)[:160] for c in row))
+        finally:
+            db.close()
+    except sqlite3.Error as exc:
+        lines.append(f"(no job rows: {exc})")
+    try:
+        for r in json.loads(out.read_text())["runs"][0]["results"]:
+            if r["status"] != "pass":
+                lines.append(f"check {r['check']}: {r['status']}: {str(r.get('evidence'))[:400]}")
+    except (OSError, ValueError, KeyError, IndexError):
+        lines.append("(no suite result)")
+    try:
+        tail = (work / "controller.log").read_text(errors="replace").splitlines()[-40:]
+        lines += ["controller log:", *tail]
+    except OSError:
+        lines.append("(no controller log)")
+    return "\n".join(lines)
 
 
 def test_the_runner_body_records_its_session_pid(tmp_path):
@@ -124,7 +157,7 @@ def test_the_runner_body_reads_its_prompt_from_stdin():
     assert code == 2 and "--stdin" in err
 
 
-def test_process_faults_kill_the_recorded_session(tmp_path):
+def test_process_faults_kill_the_recorded_session(tmp_path, caplog):
     proc = subprocess.Popen(["sleep", "30"], env=dict(os.environ, HNX_RUN_ID=RUN))
     other = subprocess.Popen(["sleep", "30"])  # a reused pid: not the run's session
     try:
@@ -135,6 +168,8 @@ def test_process_faults_kill_the_recorded_session(tmp_path):
         (tmp_path / f"{'b' * 32}.pid").write_text("1\n")
         faults.kill("b" * 32)  # never pid 1
         assert other.poll() is None, "a process that is not the run's session was killed"
+        said = caplog.text
+        assert "no longer that run's session" in said and "refused pid 1" in said, said
         (tmp_path / f"{RUN}.pid").write_text(f"{proc.pid}\n")
         faults.kill(RUN)
         assert proc.wait(timeout=30) == -signal.SIGKILL
@@ -213,26 +248,54 @@ def _spawn(argv, **env):
     return subprocess.Popen(argv, env=dict(os.environ, **env), start_new_session=True)
 
 
+def _fake_controller(work: Path) -> subprocess.Popen:
+    """A process whose command line is exactly what start() gives the controller of ``work``."""
+    (work / "serve").write_text("while :; do sleep 1; done\n")  # sh runs it in place: argv stays
+    binary = str(work / "controller")
+    (work / "controller.bin").write_text(binary + "\n")
+    proc = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            'exec -a "$0" sh "$@"',
+            binary,
+            "serve",
+            "--config",
+            str(work / "controller.yaml"),
+        ],
+        cwd=work,
+        start_new_session=True,
+    )
+    # bash execs into the stand-in: wait until the command line is the controller's
+    deadline = time.monotonic() + 30
+    while not harness.is_controller(proc.pid, work):
+        assert time.monotonic() < deadline, "the stand-in controller never started"
+        time.sleep(0.01)
+    return proc
+
+
 def test_a_restart_kills_the_controller_before_its_sessions(tmp_path, monkeypatch):
     """A session killed while its controller still runs is a failure that controller records
     (and retries), not a crash it reconciles: the controller goes first, and is waited for."""
     work = tmp_path
     (work / "pids").mkdir()
-    cfg = str(work / "controller.yaml")
-    controller = _spawn(["sh", "-c", "sleep 30", "serve", "--config", cfg])
+    controller = _fake_controller(work)
     session = _spawn(["sleep", "30"], HNX_RUN_ID=RUN)
     stale = _spawn(["sleep", "30"], HNX_RUN_ID="f" * 32)  # a pid file naming another run's pid
+    impostor = _spawn(["sleep", "30"])  # serve --config elsewhere is not this controller
     try:
         (work / "controller.pid").write_text(f"{controller.pid}\n")
         (work / "pids" / f"{RUN}.pid").write_text(f"{session.pid}\n")
         (work / "pids" / f"{'e' * 32}.pid").write_text(f"{stale.pid}\n")
         (work / "pids" / f"{'d' * 32}.pid").write_text("1\n")
+        assert not harness.is_controller(impostor.pid, work)
         order = []
         real_kill = harness._kill
 
-        def kill(pid):
-            order.append(pid)
-            real_kill(pid)
+        def kill(pid, still):
+            if real_kill(pid, still):
+                order.append(pid)
+            return pid in order
 
         monkeypatch.setattr(harness, "_kill", kill)
         harness.stop(work)
@@ -242,6 +305,130 @@ def test_a_restart_kills_the_controller_before_its_sessions(tmp_path, monkeypatc
         assert stale.poll() is None, "a pid that was no longer the run's session was killed"
         assert not list((work / "pids").glob("*.pid"))
     finally:
-        for p in (controller, session, stale):
+        for p in (controller, session, stale, impostor):
             p.kill()
             p.wait()
+
+
+def test_a_restart_fails_loudly_when_the_controller_outlives_its_kill(tmp_path, monkeypatch):
+    """A controller still running after the wait is a failed restart, never a silent one: its
+    sessions are left alone (killed under it they would be retried, not reconciled)."""
+    work = tmp_path
+    (work / "pids").mkdir()
+    controller = _fake_controller(work)
+    session = _spawn(["sleep", "30"], HNX_RUN_ID=RUN)
+    try:
+        (work / "controller.pid").write_text(f"{controller.pid}\n")
+        (work / "pids" / f"{RUN}.pid").write_text(f"{session.pid}\n")
+        # a controller that survives its SIGKILL (stuck in the kernel, say): the kill is "sent"
+        # and the wait runs out
+        monkeypatch.setattr(harness, "_kill", lambda pid, still=None: still is None or still(pid))
+        monkeypatch.setattr(harness, "_gone", lambda pid, wait_s=None: False)
+        with pytest.raises(RuntimeError, match="still runs"):
+            harness.stop(work)
+        assert session.poll() is None, "a session was killed under a live controller"
+        assert harness.cmd_restart(work) == 1
+    finally:
+        for p in (controller, session):
+            p.kill()
+            p.wait()
+
+
+def _ci() -> dict:
+    import yaml
+
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+
+
+def test_the_ci_job_runs_the_check_and_the_strict_suite_on_loopback():
+    job = _ci()["jobs"]["orchestration-conformance"]
+    assert "if" not in job and "continue-on-error" not in job
+    assert not any("continue-on-error" in step or "if" in step for step in job["steps"])
+    runs = [s.get("run", "") for s in job["steps"]]
+    assert any("make controller-check" in r for r in runs)
+    last, verdict = runs[-2:]
+    assert "tools/orchestration_conformance.py run" in last and "--strict" in last
+    # the run writes its report, and the job fails unless both fault checks in it passed
+    assert '--out "$OUT"' in last and '"OUT=$RUNNER_TEMP/orchestration.json"' in last
+    assert "tools/orchestration_conformance.py verdict" in verdict
+    assert '"$RUNNER_TEMP/orchestration.json"' in verdict
+    # loopback only, as the runner user under no_new_privs
+    assert "unshare --net" in last and "setpriv --no-new-privs --reuid=" in last
+    assert job["env"] == {"GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local", "GOWORK": "off"}
+    for step in job["steps"]:
+        if "uses" in step:
+            assert re.fullmatch(r"[\w-]+/[\w-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
+
+
+def test_go_ok_requires_the_orchestration_job():
+    ok = _ci()["jobs"]["go-ok"]
+    assert "orchestration-conformance" in ok["needs"] and ok["if"] == "always()"
+    (step,) = ok["steps"]
+    assert step["env"]["ORCHESTRATION"] == "${{ needs.orchestration-conformance.result }}"
+    assert '[ "$ORCHESTRATION" = success ]' in step["run"]
+
+
+def test_a_kill_without_pidfds_does_not_claim_the_session_ended(tmp_path, monkeypatch, caplog):
+    """ENOSYS from pidfd_open says nothing about the session, so the skip must not say it ended."""
+    import errno
+
+    def no_pidfds(pid):
+        raise OSError(errno.ENOSYS, "Function not implemented")
+
+    monkeypatch.setattr(adapter.os, "pidfd_open", no_pidfds)
+    (tmp_path / f"{RUN}.pid").write_text("4242\n")
+    adapter.ProcessFaults(tmp_path, ["true"], lambda: True).kill(RUN)
+    assert "not signalled" in caplog.text and "already ended" not in caplog.text, caplog.text
+
+
+def test_the_harness_says_it_is_linux_only(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(harness.sys, "platform", "darwin")
+    work = tmp_path / "work"
+    assert harness.main(["run", "--controller", "/bin/true", "--work", str(work)]) == 2
+    assert harness.main(["restart", "--work", str(work)]) == 2
+    err = capsys.readouterr().err
+    assert err.count("Linux only") == 2 and not work.exists(), err
+
+
+def test_a_run_whose_stop_fails_says_so_in_one_line(tmp_path, monkeypatch, capsys):
+    """cmd_run's stop() raising in its finally is a one-line failure, as in cmd_restart, not a
+    traceback that hides the suite's verdict."""
+    monkeypatch.setattr(harness, "write_config", lambda work, port: None)
+    monkeypatch.setattr(harness, "free_port", lambda: 0)
+    monkeypatch.setattr(harness, "start", lambda work: (work / "endpoint").write_text("http://x\n"))
+
+    def stuck(work):
+        raise RuntimeError("the controller (pid 7) still runs")
+
+    monkeypatch.setattr(harness, "stop", stuck)
+    monkeypatch.setattr(
+        harness.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0)
+    )
+    rc = harness.main(["run", "--controller", "/bin/true", "--work", str(tmp_path / "w")])
+    err = capsys.readouterr().err
+    assert (
+        rc == 1 and err == "orchestration-conformance: run: the controller (pid 7) still runs\n"
+    ), err
+
+
+def _report(tmp_path, ok=True, **status) -> Path:
+    results = [{"check": c, "status": status.get(c, "pass")} for c in FAULT_CHECKS]
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps({"runs": [{"ok": ok, "results": results}]}))
+    return path
+
+
+def test_the_verdict_needs_both_fault_checks_passed(tmp_path, capsys):
+    """A strict run whose target lost fault_injection: true can pass with the fault checks
+    skipped; the verdict CI runs after it cannot."""
+    assert harness.main(["verdict", str(_report(tmp_path))]) == 0
+    skipped = {FAULT_CHECKS[1]: "skip"}
+    assert harness.main(["verdict", str(_report(tmp_path, **skipped))]) == 1
+    assert f"{FAULT_CHECKS[1]}: skip" in capsys.readouterr().err
+    assert harness.main(["verdict", str(_report(tmp_path, ok=False))]) == 1
+    absent = tmp_path / "absent.json"
+    absent.write_text(json.dumps({"runs": [{"ok": True, "results": []}]}))
+    assert harness.main(["verdict", str(absent)]) == 1
+    assert "not run" in capsys.readouterr().err
+    (tmp_path / "junk.json").write_text("{")
+    assert harness.main(["verdict", str(tmp_path / "junk.json")]) == 1

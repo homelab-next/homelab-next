@@ -48,6 +48,10 @@ The mapping (docs/orchestration-controller.md has the whole table):
   an attempt ran on (``shadow``, ``constraints``, ``local-only``) and has no list route
   (``list-runs``).  Its check needs a reported limit, which ``capacity()`` never has, so it
   skips here.
+* ``deadline`` is not declared, so ``deadline-expiry-frees-capacity`` skips: the job API takes no
+  per-run deadline.  The controller does end a job at its deadline (``failed``, failure class
+  ``deadline``), but that deadline is the pool's ``runner.job_timeout_seconds`` from the
+  configuration, one value for every job, which ``submit(..., deadline_s=...)`` cannot set.
 * ``kill`` / ``restart`` (test hook ``fault-injection``) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -69,6 +73,7 @@ import base64
 import contextlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -90,6 +95,8 @@ from homelabnext._http import read_bounded, safe_opener, send_json
 from ._env import AdapterConfigError, resolve, run_token
 
 __all__ = ["JOB_MARKER", "LLMOrchestrator", "encode_job", "make"]
+
+_log = logging.getLogger(__name__)
 
 JOB_MARKER = "hnx-conform-job:"
 PROFILES_ENV = "HNX_ORCHESTRATION_PROFILES_DIR"
@@ -283,12 +290,30 @@ class ProcessFaults:
 
     def kill(self, run_id: str) -> None:
         pid = self._pid(run_id)
-        # only a pid that is still the run's session (its environment carries the run id): the
-        # pid file can outlive the session and the number be reused by another process
-        if not _is_session(pid, run_id):
+        # only a pid that is still the run's session (its environment carries the run id),
+        # checked and signalled through one pidfd: the pid file can outlive the session and the
+        # number be reused by another process
+        try:
+            fd = os.pidfd_open(pid) if pid > 1 else None
+        except ProcessLookupError:
+            _log.warning("kill %s: pid %d is gone: the session had already ended", run_id, pid)
             return
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+        except OSError as exc:  # ENOSYS (no pidfds in this kernel), EMFILE, ...: nothing is known
+            _log.warning("kill %s: no pidfd for pid %d (%s): not signalled", run_id, pid, exc)
+            return
+        if fd is None:
+            _log.warning("kill %s: refused pid %d (not a session's)", run_id, pid)
+            return
+        try:
+            if not _is_session(pid, run_id):
+                _log.warning(
+                    "kill %s: pid %d is no longer that run's session: not signalled", run_id, pid
+                )
+                return
+            with contextlib.suppress(ProcessLookupError):
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+        finally:
+            os.close(fd)
 
     def restart(self) -> None:
         proc = subprocess.run(self._restart, capture_output=True, text=True, timeout=120)
