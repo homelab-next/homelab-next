@@ -2,6 +2,7 @@
   "schema": "homelabnext.orchestration.export/1",
   "kind": "header",
   "sources": [
+    "svc:orchestrator",
     "svc:llm-orchestrator"
   ],
   "retention_days": 90,

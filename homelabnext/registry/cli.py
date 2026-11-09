@@ -102,6 +102,17 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         help="a directory of module manifests the selection names (repeatable)",
     )
     p = sub.add_parser(
+        "consumers",
+        help="list every line of the checkout that names a svc: id, by kind; exit 1 while any "
+        "remain (an old id is dropped only when none do, ADR-0026 decision 16). During an "
+        "overlap it also lists the overlap's own deliberate lines (the id's declaration, the "
+        "constant that keeps it, the example kept to show it), which go in the change that ends "
+        "the overlap. Run it over the overlay too (--root <overlay checkout>): a lab's dashboards, "
+        "rules and packs consume the id there",
+    )
+    p.add_argument("svc_id", help="the id, e.g. svc:llm-orchestrator")
+    p.add_argument("--root", default=".", help="the git checkout to read")
+    p = sub.add_parser(
         "standing",
         help="list the non-primary rows and their until dates; --overdue fails on one past its "
         "date (ADR-0039 decision 8, checklist X-12)",
@@ -124,6 +135,8 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         args = ap.parse_args(argv)
     except SystemExit as exc:
         return int(exc.code or 0) if exc.code != 0 else 0
+    if args.cmd == "consumers":
+        return _consumers(args, out, err)
     if args.cmd == "list-generators":
         for n in _names():
             print(n, file=out)
@@ -186,6 +199,29 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     for p in problems:
         print(p, file=err)
     return 1 if problems else 0
+
+
+def _consumers(args: argparse.Namespace, out, err) -> int:
+    """``hnx registry consumers``: 0 when nothing names the id, 1 when something does (each
+    listed), 2 when the checkout cannot be read."""
+    from homelabnext.registry import bindings as bd
+
+    try:
+        found = bd.consumers(Path(args.root), args.svc_id)
+    except bd.BindingsInputError as exc:
+        print(f"hnx registry consumers: {exc}", file=err)
+        return 2
+    for c in found:
+        print(f"{c.kind}\t{c.path}:{c.line}", file=out)
+    declared = [d for d in bd.PLATFORM_SOURCES if f"svc:{d.name}" == args.svc_id]
+    note = f"; declared platform source ({declared[0].why})" if declared else ""
+    kinds = sorted({c.kind for c in found})
+    print(
+        f"consumers: {len(found)} line(s) name {args.svc_id} in {len({c.path for c in found})} "
+        f"file(s){' (' + ', '.join(kinds) + ')' if kinds else ''}{note}",
+        file=out,
+    )
+    return 1 if found else 0
 
 
 def _bindings(args: argparse.Namespace, reg, out, err) -> int:

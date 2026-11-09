@@ -58,7 +58,7 @@ from conformance.protocols.events import EventsError
 from conformance.protocols.inference import TurnSource, TurnSourceError
 from homelabnext.events.envelope import EventError
 
-from .model import CONTROLLER_SOURCE
+from .model import CONTROLLER_SOURCES
 from .store import DEFAULT_RETENTION_DAYS, STORE_ERRORS, TelemetryStore
 
 TURN_SOURCE_ENV = "HNX_ORCHESTRATION_TURN_SOURCE"
@@ -124,7 +124,7 @@ def _parser() -> argparse.ArgumentParser:
             default=None,
             metavar="svc:NAME",
             help="the controller's service id, the only source of job records (repeatable; "
-            f"default: ${SOURCE_ENV}, else {CONTROLLER_SOURCE})",
+            f"default: ${SOURCE_ENV}, else {','.join(CONTROLLER_SOURCES)})",
         )
 
     p = sub.add_parser("consume", help="drain agent.job.finished from the bus (one pass)")
@@ -543,7 +543,9 @@ def main(argv: Sequence[str] | None = None, *, clock: Callable[[], float] = time
     a = _parser().parse_args(argv)
     try:
         sources = a.source or [
-            s.strip() for s in os.environ.get(SOURCE_ENV, CONTROLLER_SOURCE).split(",") if s.strip()
+            s.strip()
+            for s in os.environ.get(SOURCE_ENV, ",".join(CONTROLLER_SOURCES)).split(",")
+            if s.strip()
         ]
         store = TelemetryStore(
             a.db,

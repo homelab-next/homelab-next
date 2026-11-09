@@ -313,7 +313,7 @@ Provided by (`examples/services.yml`):
 |---|---|
 | [secrets](../systems/secrets.md) ([[systems/secrets\|secrets]]) | `openbao` |
 
-Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), [object-store](../systems/object-store.md) ([[systems/object-store|object-store]])
+Depended on by: [object-store](../systems/object-store.md) ([[systems/object-store|object-store]]), [orchestrator](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]])
 
 ## Integrating a new product
 

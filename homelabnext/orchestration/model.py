@@ -40,10 +40,17 @@ from typing import Any
 from homelabnext.status.model import iso, parse_iso
 
 FINISHED_EVENT = "homelabnext.agent.job.finished"
-#: the default publisher of job records: the orchestration controller's service id in the example
-#: lab.  Which service fills the orchestration slot is site configuration
-#: (``TelemetryStore(sources=...)``, ``hnx orchestration --source``); this is only the default
-CONTROLLER_SOURCE = "svc:llm-orchestrator"
+#: the orchestration controller's event source: its default ``events.source``
+#: (``orchestrator/internal/events``) and its registry row's name (ADR-0026 decision 16)
+CONTROLLER_SOURCE = "svc:orchestrator"
+#: the private controller's source, accepted beside :data:`CONTROLLER_SOURCE` for the one-release
+#: overlap (the controller emits under one configured source at a time); it goes at cutover+1,
+#: once ``hnx registry consumers svc:llm-orchestrator`` finds no consumer of it
+CONTROLLER_OLD_SOURCE = "svc:llm-orchestrator"
+#: the default publishers of job records: both of the controller's sources, for the overlap.  Which
+#: service fills the orchestration slot is site configuration (``TelemetryStore(sources=...)``,
+#: ``hnx orchestration --source``); this is only the default
+CONTROLLER_SOURCES = (CONTROLLER_SOURCE, CONTROLLER_OLD_SOURCE)
 ROLLUP_SCHEMA = "homelabnext.orchestration.rollup/1"
 OUTCOMES = ("completed", "failed", "cancelled", "timeout")
 LANES = ("real", "shadow")
@@ -215,7 +222,9 @@ def rollup(
 
 
 __all__ = [
+    "CONTROLLER_OLD_SOURCE",
     "CONTROLLER_SOURCE",
+    "CONTROLLER_SOURCES",
     "FINISHED_EVENT",
     "LANES",
     "NO_BACKEND",

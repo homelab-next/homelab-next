@@ -1843,7 +1843,7 @@
    "stackstorm": 28
   },
   "tests/workflows/test_workflows_st2.py": {
-   "stackstorm": 223
+   "stackstorm": 222
   },
   "tools/caddy_lint.py": {
    "caddy": 165

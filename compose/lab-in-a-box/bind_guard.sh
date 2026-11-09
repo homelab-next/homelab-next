@@ -282,15 +282,60 @@ if same:
 # compose resolves it (a ${VAR} in .env expands here, which pass 1's literal text cannot see),
 # must be at least 32 characters. A minimum length, not an entropy check: any character counts,
 # padding spaces included (the entrypoint strips newlines only). The secret judged is the
-# one the orchestrator service itself mounts where its entrypoint reads the token
+# one the controller service itself mounts where its entrypoint reads the token
 # (/run/secrets/orchestrator-token), and the variable the one that secret reads: no name is assumed
-# here, so neither another service's secret nor another variable can stand in for it.
+# here, so neither another service's secret nor another variable can stand in for it. The
+# controller is found by every mark it has (name, image, entrypoint, its API port), and nothing
+# may be mounted over /run/secrets in it.
 TOKEN_TARGET = "/run/secrets/orchestrator-token"
-orch = config["services"].get("orchestrator")
-if isinstance(orch, dict):
+SECRETS_DIR = "/run/secrets"
+#: the controller's job API port in its container (docker-compose.yml, its healthcheck)
+API_PORT = 8088
+
+
+def _is_controller(name, svc):
+    """The controller service, by any of its marks, so a renamed copy is judged too: its name, its
+    image (hnx-lab-orchestrator) or its entrypoint (/app/entrypoint.sh), or a published port that
+    is the controller's API port in the container."""
+    image = str(svc.get("image") or "").rsplit("/", 1)[-1]
+    image = image.split("@", 1)[0].split(":", 1)[0]
+    argv = [str(a) for k in ("entrypoint", "command") for a in (svc.get(k) or [])]
+    ports = [p.get("target") for p in svc.get("ports") or [] if isinstance(p, dict)]
+    return (
+        name == "orchestrator"
+        or image == "hnx-lab-orchestrator"
+        or "/app/entrypoint.sh" in argv
+        or API_PORT in ports
+        or str(API_PORT) in [str(p) for p in ports]
+    )
+
+
+def _under_secrets(target):
+    target = str(target or "").rstrip("/") or "/"
+    return target == SECRETS_DIR or target.startswith(SECRETS_DIR + "/") or target in ("/run", "/")
+
+
+for cname, csvc in sorted(config["services"].items()):
+    if not isinstance(csvc, dict) or not _is_controller(cname, csvc):
+        continue
+    # a volume, bind or tmpfs at /run/secrets or above it replaces the file compose gives
+    shadows = [
+        str(v.get("target"))
+        for v in csvc.get("volumes") or []
+        if isinstance(v, dict) and _under_secrets(v.get("target"))
+    ] + [
+        str(t).split(":", 1)[0]
+        for t in ([csvc["tmpfs"]] if isinstance(csvc.get("tmpfs"), str) else csvc.get("tmpfs") or [])
+        if _under_secrets(str(t).split(":", 1)[0])
+    ]
+    if shadows:
+        print(f"lab-in-a-box: refusing: the resolved compose configuration publishes {shown} beyond"
+              f" loopback and the controller service {cname} mounts {', '.join(shadows)} over"
+              f" {SECRETS_DIR}, where its job API token is read from.", file=sys.stderr)
+        sys.exit(REFUSED)
     mounted = [
         m.get("source")
-        for m in orch.get("secrets") or []
+        for m in csvc.get("secrets") or []
         if isinstance(m, dict)
         and (m.get("target") or m.get("source")) in (TOKEN_TARGET, "orchestrator-token")
     ]
@@ -298,14 +343,14 @@ if isinstance(orch, dict):
     var = secret.get("environment") if isinstance(secret, dict) else None
     if not isinstance(var, str) or not var:
         print(f"lab-in-a-box: refusing: the resolved compose configuration publishes {shown} beyond"
-              " loopback and the secret the orchestrator service mounts at"
+              f" loopback and the secret the controller service {cname} mounts at"
               f" {TOKEN_TARGET} is not one secret read from an environment variable, so its"
               " length cannot be checked.", file=sys.stderr)
         sys.exit(REFUSED)
     token = effective.get(var, "")
     if len(token) < 32:
         print(f"lab-in-a-box: refusing: the resolved compose configuration publishes {shown} beyond"
-              f" loopback while {var} (the orchestrator's {mounted[0]} secret) resolves to"
+              f" loopback while {var} (the {cname} service's {mounted[0]} secret) resolves to"
               f" {len(token)} characters; give it at least 32 (openssl rand -hex 16) in"
               " compose/lab-in-a-box/.env.", file=sys.stderr)
         sys.exit(REFUSED)

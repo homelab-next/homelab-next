@@ -1,12 +1,12 @@
 {
   "generated_from": {
     "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
-    "classes": "sha256:b197e075244a8504c6f71bfa3bc7d7edaacee319c96d9214fb8b9eea7269f9a2",
+    "classes": "sha256:e8d4b40d58f7da11a42d0d95b7d51ef27e19b3dad2166431ec1be0b4e715e1ef",
     "profiles": {
       "profile:reader": "sha256:95bc28892ec6c046d214dbcba91400b3df7a4adf50ff45be3d6c77287123ba83",
       "profile:responder": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e"
     },
-    "registry": "3fbd32f7190e8ab13aaf56946b787a2bfb91e4ebc0d7326a964a93a398744741"
+    "registry": "5b15ffec214caa5aac42c7c5cb2367227944ef36eac9ee7395731c0c32a8d77a"
   },
   "keyring_version": 1,
   "principals": [
@@ -19,10 +19,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:agent-audit"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "cap:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
@@ -86,6 +82,10 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:orchestration"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:records-db"
         },
         {
@@ -99,10 +99,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:uptime"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "mcp:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
@@ -152,10 +148,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:agent-audit"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "cap:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
@@ -215,6 +207,10 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:orchestration"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:records-db"
         },
         {
@@ -228,10 +224,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:uptime"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "mcp:agent-runtime"
         }
       ],
       "grants": [
@@ -288,10 +280,6 @@
         },
         {
           "reason": "not granted (default deny)",
-          "resource": "cap:agent-runtime"
-        },
-        {
-          "reason": "not granted (default deny)",
           "resource": "cap:auth-proxy"
         },
         {
@@ -352,6 +340,10 @@
         },
         {
           "reason": "not granted (default deny)",
+          "resource": "cap:orchestration"
+        },
+        {
+          "reason": "not granted (default deny)",
           "resource": "cap:records-db"
         },
         {
@@ -365,10 +357,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:uptime"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "mcp:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
@@ -470,12 +458,6 @@
       ],
       "grants": [
         {
-          "endpoint": "agent-runtime.svc.example.internal",
-          "kind": "service",
-          "level": "connect",
-          "resource": "svc:agent-runtime"
-        },
-        {
           "endpoint": "automation.svc.example.internal",
           "kind": "service",
           "level": "connect",
@@ -524,6 +506,12 @@
           "resource": "svc:notify"
         },
         {
+          "endpoint": "orchestration.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:orchestrator"
+        },
+        {
           "endpoint": "secrets.svc.example.internal",
           "kind": "service",
           "level": "connect",
@@ -535,10 +523,6 @@
     },
     {
       "denials": [
-        {
-          "reason": "zone not a client (default deny)",
-          "resource": "svc:agent-runtime"
-        },
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:agentmetry"
@@ -570,6 +554,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:metrics"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:orchestrator"
         },
         {
           "reason": "zone not a client (default deny)",
@@ -649,10 +637,6 @@
       "denials": [
         {
           "reason": "zone not a client (default deny)",
-          "resource": "svc:agent-runtime"
-        },
-        {
-          "reason": "zone not a client (default deny)",
           "resource": "svc:agentmetry"
         },
         {
@@ -690,6 +674,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:object-store"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:orchestrator"
         },
         {
           "reason": "zone not a client (default deny)",
@@ -757,10 +745,6 @@
       "denials": [
         {
           "reason": "zone not a client (default deny)",
-          "resource": "svc:agent-runtime"
-        },
-        {
-          "reason": "zone not a client (default deny)",
           "resource": "svc:auth-proxy"
         },
         {
@@ -798,6 +782,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:object-store"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:orchestrator"
         },
         {
           "reason": "zone not a client (default deny)",

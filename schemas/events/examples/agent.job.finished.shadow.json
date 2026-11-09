@@ -1,7 +1,7 @@
 {
   "specversion": "1.0",
   "id": "evt-0003",
-  "source": "svc:llm-orchestrator",
+  "source": "svc:orchestrator",
   "type": "homelabnext.agent.job.finished",
   "time": "2026-01-01T02:03:00Z",
   "severity": "info",

@@ -3,7 +3,7 @@
 ---
 version: 1.0
 description: Queue one proposal-validator job for every proposal filed in the records inbox. (workflow
-  pack proposal-validate sha256:38f5f7f2c0b32fefeaa6d94531c626351680151e31528cf9291b72a9d8e93dab)
+  pack proposal-validate sha256:da650073ee0bc27b652bdbd6f45c5917c06cb4471208bc5c46f538e91367a0ce)
 input:
 - event
 vars:

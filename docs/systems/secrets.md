@@ -96,7 +96,7 @@ author: unknown
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), [object-store](object-store.md) ([[systems/object-store|object-store]])
+- Depended on by: [object-store](object-store.md) ([[systems/object-store|object-store]]), [orchestrator](orchestrator.md) ([[systems/orchestrator|orchestrator]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

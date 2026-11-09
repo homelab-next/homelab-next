@@ -163,7 +163,7 @@ def test_a_capability_the_docs_name_is_one_the_example_lab_provides():
     """ "the `llm-gateway` capability" in a page is something a reader can look up: a service of
     the example registry provides it, or it is a conformance capability.  The gateway every model
     consumer calls (docs/llm-gateway.md) once had no service in examples/services.yml, and the
-    example agent runtime reached the serving engine directly."""
+    example controller reached the serving engine directly."""
     from homelabnext.conform.registry import CAPABILITIES, EXTENDED
 
     services = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["services"]
@@ -177,5 +177,5 @@ def test_a_capability_the_docs_name_is_one_the_example_lab_provides():
     }
     assert named == set()
     assert "llm-gateway" in provided
-    assert "llm-gateway" in services["agent-runtime"]["upstreams"]
-    assert "inference" not in services["agent-runtime"]["upstreams"]
+    assert "llm-gateway" in services["orchestrator"]["upstreams"]
+    assert "inference" not in services["orchestrator"]["upstreams"]
