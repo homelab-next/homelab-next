@@ -402,8 +402,71 @@ def test_x12_skips_an_empty_tree_ignores_tests_and_errors_on_what_it_cannot_judg
     assert pillar_x.x12(ctx(tmp_path)).status == "skip"
     _lab_registry(tmp_path / "tests", LATE)  # a test fixture is no registry of the tree
     assert pillar_x.x12(ctx(tmp_path)).status == "skip"
-    write(tmp_path / "lab" / "services.yml", "services: [unclosed\n")
+    write(tmp_path / "lab" / "services.yml", "registry_version: 1\nservices: [unclosed\n")
     assert pillar_x.x12(ctx(tmp_path)).status == "error"
     _lab_registry(tmp_path)
     monkeypatch.setenv("HNX_TODAY", "tomorrow")
     assert pillar_x.x12(ctx(tmp_path)).status == "error"
+
+
+# ---- X-12 review follow-ups -------------------------------------------------------------------
+
+
+def test_x12_follows_no_link_out_of_the_tree_and_echoes_no_file_content(tmp_path, monkeypatch):
+    """A symlinked services.yml (or a symlinked directory holding one) pointed the check at a file
+    outside the repository, and an unparseable registry's error quoted its lines."""
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    outside = tmp_path / "outside"
+    write(outside / "services.yml", "registry_version: 1\nservices: [MARKER-OUTSIDE-TEXT\n")
+    root = tmp_path / "repo"
+    (root / "lab").mkdir(parents=True)
+    (root / "lab" / "services.yml").symlink_to(outside / "services.yml")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    r = pillar_x.x12(ctx(root))
+    assert r.status == "error"
+    assert "lab/services.yml: a symbolic link" in r.evidence
+    assert "linked/" not in r.evidence  # a linked directory is not walked
+    assert "MARKER" not in r.evidence
+    (root / "lab" / "services.yml").unlink()
+    write(root / "lab" / "services.yml", "registry_version: 1\nservices: [MARKER-INSIDE-TEXT\n")
+    r = pillar_x.x12(ctx(root))
+    assert r.status == "error" and "MARKER" not in r.evidence
+    assert "lab/services.yml: RegistryUnreadable" in r.evidence or "RegistryError" in r.evidence
+
+
+def test_x12_selects_registries_by_content_at_any_depth(tmp_path, monkeypatch):
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    deep = tmp_path / "a" / "b" / "c" / "services.yml"
+    write(deep, (REPO / "examples" / "minimal" / "services.yml").read_text() + LATE)
+    write(tmp_path / "mod" / "services.yml", "services: {}\n")  # a module fragment: no version
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail" and "a/b/c/services.yml: dns-trial" in r.evidence
+    assert "mod/services.yml" not in r.evidence
+
+
+def test_x12_judges_every_registry_and_names_what_it_could_not(tmp_path, monkeypatch):
+    """An invalid registry no longer stops the check before an overdue row elsewhere."""
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    write(tmp_path / "a" / "services.yml", "registry_version: 1\nservices: [unclosed\n")
+    _lab_registry(tmp_path, LATE)
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail"
+    assert "lab/services.yml: dns-trial (eval dns) until 2026-11-30" in r.evidence
+    assert "could not judge: a/services.yml:" in r.evidence
+
+
+def test_x12_names_a_registry_whose_until_is_no_date_as_unjudged(tmp_path, monkeypatch):
+    """The registry refuses an until that is no calendar date, so X-12 cannot judge that
+    registry: an error naming it, never "overdue by 1 day"."""
+    monkeypatch.setenv("HNX_TODAY", "2026-11-01")
+    _lab_registry(tmp_path, LATE.replace("2026-11-30", "2026-02-30"))
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "error" and "lab/services.yml: RegistryError" in r.evidence
+    assert "overdue" not in r.evidence
+
+
+def test_x12_passes_with_the_date_it_judged_and_marks_an_override(tmp_path, monkeypatch):
+    _lab_registry(tmp_path, LATE)
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "pass" and r.evidence.endswith("in date on 2026-11-09 (HNX_TODAY)")

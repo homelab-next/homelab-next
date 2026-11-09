@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- Checklist X-12 ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 8) follows no symbolic link: a symlinked `services.yml`, or one in a symlinked directory, pointed it at a file outside the repository, and an unreadable registry's error quoted its lines into the evidence. Such a path is now named and never read, and an error reports the path and error type only. It selects registries by content (a top-level `registry_version`) at any depth, judges every registry instead of stopping at the first invalid one, and states the date it judged, marked when `HNX_TODAY` set it.
 - Orchestrator exec runner and controller: sessions inherit no unlisted variable and never the event token; no subreaper; a stop ends admission before the drain (`KillMode=mixed`); signals caught first (PR 2.7b review).
 - Orchestrator queue: admission compares tasks by a stored digest and reads no task text; a backend-down requeue uncounts its attempt in the same write; the submit window's count is index-bounded by time (PR 2.7a).
 - Gateway: the reply scanner reads a top-level key holding invalid UTF-8 as `json.Unmarshal` does (found by `FuzzJSONScan`).
