@@ -150,3 +150,16 @@ def test_standing_refuses_a_bad_date(monkeypatch):
     monkeypatch.setenv("HNX_TODAY", "soon")
     rc, _, err = run("standing", EXAMPLE)
     assert rc == 2 and "HNX_TODAY='soon'" in err
+
+
+def test_standing_reports_an_until_that_is_no_date_as_invalid_not_overdue():
+    """The registry refuses such a row before this runs; a reader handed one anyway says what it
+    is instead of counting it a day overdue."""
+    from homelabnext.registry.standing import Standing, text
+
+    r = Standing("trial", "dns", "eval", "2026-02-30", "a candidate", 0, valid=False)
+    assert r.overdue and r.to_dict()["valid"] is False
+    assert (
+        text([r])
+        == "trial: eval dns until 2026-02-30 (invalid until: no calendar date): a candidate\n"
+    )

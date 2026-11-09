@@ -72,52 +72,136 @@ def x11(ctx: Context) -> CheckResult:
     return _tool_check(ctx, "tools/product_name_lint.py", [], "product names in place")
 
 
-def _registries(root: pathlib.Path) -> list[pathlib.Path]:
-    """The registries a tree holds: ``services.yml`` at most two directories down (a repository's
-    ``examples/<lab>/``, an overlay's ``lab/``), never under ``tests/`` or a hidden directory."""
-    found = {
-        *root.glob("services.yml"),
-        *root.glob("*/services.yml"),
-        *root.glob("*/*/services.yml"),
-    }
-    return sorted(
-        p
-        for p in found
-        if p.is_file()
-        and not any(part == "tests" or part.startswith(".") for part in p.relative_to(root).parts)
-    )
+#: directories X-12 never looks in: test fixtures and vendored or generated trees
+_X12_SKIP_DIRS = frozenset({"tests", "node_modules", "__pycache__", "dist", "build"})
+_X12_SKIPPED = "hidden directories, " + ", ".join(sorted(_X12_SKIP_DIRS))
+
+
+def _is_registry_doc(text: str) -> bool | None:
+    """Whether a YAML (or JSON) text is a registry: its top level is a mapping with the key
+    ``registry_version``, however the key is spelled (plain, quoted, flow, ``? key``) and
+    including through a merge key (``<<: {...}``, ``<<: *anchor`` or a list of them), as the
+    registry loader reads it.  Read by composing the node graph only, so no value is constructed
+    and an alias is never expanded.  None when it is not one YAML document: the caller cannot
+    tell, and fails closed."""
+    try:
+        node = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError:
+        return None
+    return "registry_version" in _top_keys(node, set())
+
+
+def _top_keys(node: object, seen: set[int]) -> set[str]:
+    """The scalar keys of a mapping node, those a merge key brings in included (a merged mapping,
+    an alias to one, or a sequence of them); ``seen`` stops an anchor cycle."""
+    if not isinstance(node, yaml.MappingNode) or id(node) in seen:
+        return set()
+    seen.add(id(node))
+    keys: set[str] = set()
+    for k, v in node.value:
+        if not isinstance(k, yaml.ScalarNode):
+            continue
+        if k.tag == "tag:yaml.org,2002:merge":
+            for m in v.value if isinstance(v, yaml.SequenceNode) else [v]:
+                keys |= _top_keys(m, seen)
+        else:
+            keys.add(k.value)
+    return keys
+
+
+_X12_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _registries(root: pathlib.Path) -> tuple[list[pathlib.Path], list[str]]:
+    """(the registries a tree holds, the paths it refused to read).
+
+    A registry is a ``services.yml`` (at any depth) whose top level declares
+    ``registry_version`` (read from the parsed top-level keys, :func:`_is_registry_doc`); a
+    module's registry fragment, which has none, is not one, and one that does not parse is
+    refused.  The walk
+    follows no symbolic link and skips hidden directories and :data:`_X12_SKIP_DIRS`.  A
+    ``services.yml`` that is a symbolic link, resolves outside the tree, is no regular file or is
+    over the size cap is refused (named, never read), so the check cannot be pointed at a file
+    outside the repository."""
+    import os
+
+    root_real = root.resolve()
+    found: list[pathlib.Path] = []
+    refused: list[str] = []
+    for d, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = sorted(x for x in dirs if not x.startswith(".") and x not in _X12_SKIP_DIRS)
+        if "services.yml" not in files:
+            continue
+        p = pathlib.Path(d) / "services.yml"
+        rel = p.relative_to(root).as_posix()
+        if p.is_symlink() or not p.resolve().is_relative_to(root_real) or not p.is_file():
+            refused.append(f"{rel}: a symbolic link or no regular file inside the tree")
+            continue
+        if p.stat().st_size > _X12_MAX_BYTES:
+            refused.append(f"{rel}: over {_X12_MAX_BYTES} bytes")
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            refused.append(f"{rel}: {type(exc).__name__}")
+            continue
+        is_reg = _is_registry_doc(text)
+        if is_reg is None:
+            refused.append(
+                f"{rel}: cannot be read as one YAML document, so it cannot be told from a registry"
+            )
+        elif is_reg:
+            found.append(p)
+    return sorted(found), refused
 
 
 def x12(ctx: Context) -> CheckResult:
     """ADR-0039 decision 8: an ``eval`` that never ends, or a ``retiring`` row nobody removed,
     turns red here instead of lingering.  The date is ``HNX_TODAY``, else the local date: the
-    same rule as ``hnx registry standing --overdue``, through the same code."""
+    same rule as ``hnx registry standing --overdue``, through the same code.  Every registry is
+    judged; one that cannot be read or validated is named with its error type only (no content
+    of the file reaches the evidence)."""
     from homelabnext.registry import model, standing
 
-    paths = _registries(ctx.root)
-    if not paths:
-        return CheckResult(SKIP, "no services.yml registry in this tree")
+    paths, errors = _registries(ctx.root)
+    if not paths and not errors:
+        return CheckResult(
+            SKIP,
+            f"no registry (services.yml with registry_version) in this tree (not searched: "
+            f"{_X12_SKIPPED})",
+        )
     try:
         on = standing.today()
-    except ValueError as exc:
-        return CheckResult(ERROR, str(exc))
+    except ValueError:
+        return CheckResult(ERROR, "HNX_TODAY is not a YYYY-MM-DD date")
+    when = on.isoformat() + (" (HNX_TODAY)" if standing.overridden() else "")
     late, rows = [], 0
     for path in paths:
         rel = path.relative_to(ctx.root).as_posix()
         try:
             reg = model.load(path)
         except model.RegistryError as exc:  # unreadable or invalid: this check cannot judge it
-            return CheckResult(ERROR, f"{rel}: {exc}"[:600])
+            errors.append(f"{rel}: {type(exc).__name__}")
+            continue
         found = standing.standings(reg, on)
         rows += len(found)
         late += [
-            f"{rel}: {r.row} ({r.tier} {r.capability}) until {r.until}" for r in found if r.overdue
+            f"{rel}: {r.row} ({r.tier} {r.capability}) "
+            + (f"invalid until {r.until}" if not r.valid else f"until {r.until}")
+            for r in found
+            if r.overdue
         ]
+    unjudged = f"; could not judge: {'; '.join(errors)}" if errors else ""
     if late:
-        return CheckResult(FAIL, f"past their until on {on.isoformat()}: " + "; ".join(late)[:500])
+        return CheckResult(
+            FAIL, (f"past their until on {when}: " + "; ".join(late) + unjudged)[:600]
+        )
+    if errors:
+        return CheckResult(ERROR, f"could not judge on {when}: {'; '.join(errors)}"[:600])
     return CheckResult(
         PASS,
-        f"{len(paths)} registr{'y' if len(paths) == 1 else 'ies'}, {rows} non-primary row(s) in date",
+        f"{len(paths)} registr{'y' if len(paths) == 1 else 'ies'}, {rows} non-primary row(s) in "
+        f"date on {when} (not searched: {_X12_SKIPPED})",
     )
 
 

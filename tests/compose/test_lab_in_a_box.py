@@ -1966,41 +1966,71 @@ def _resolved_judge() -> str:
     )[0]
 
 
-def test_pass2_judges_the_job_api_token_compose_resolves(tmp_path):
-    """Pass 1 reads .env as written; compose expands ${VAR} there, so
-    `LAB_ORCHESTRATOR_TOKEN=${UNSET}x` is 9 characters to pass 1 and `x` to compose. The resolved
-    judge holds the resolved value to the 32-character minimum, with a stub docker that answers
-    as compose resolves such an .env."""
+def _stub_judge(tmp_path: Path, config: dict, resolved: str) -> subprocess.CompletedProcess:
+    """The resolved judge run against a stub docker: ``config`` is what ``compose config
+    --format json`` prints, ``resolved`` what ``--environment`` prints for the lab's .env, and
+    .env.example alone resolves the token to a placeholder."""
     lab = tmp_path / "lab"
-    lab.mkdir()
+    lab.mkdir(exist_ok=True)
     (lab / ".env.example").write_text("LAB_ORCHESTRATOR_TOKEN=fake-placeholder\n")
     (lab / ".env").write_text("LAB_ORCHESTRATOR_TOKEN=${UNSET}x\n")
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    resolved = tmp_path / "resolved.env"
+    bin_dir.mkdir(exist_ok=True)
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    (tmp_path / "resolved.env").write_text(f"LAB_I_UNDERSTAND_UNAUTHENTICATED=1\n{resolved}")
     stub = bin_dir / "docker"
     stub.write_text(
         "#!/bin/sh\n"
         'case "$*" in\n'
-        '  *\'--format json\'*) echo \'{"services": {"orchestrator": {"ports": [{"host_ip": "0.0.0.0", "published": "8088"}]}}}\' ;;\n'
-        f"  *'.env -f'*) cat {resolved} ;;\n"
+        f"  *'--format json'*) cat {tmp_path / 'config.json'} ;;\n"
+        f"  *'.env -f'*) cat {tmp_path / 'resolved.env'} ;;\n"
         "  *) echo LAB_ORCHESTRATOR_TOKEN=fake-placeholder ;;\n"
         "esac\n"
     )
     stub.chmod(0o755)
+    return subprocess.run(
+        [sys.executable, "-I", "-c", _resolved_judge(), str(lab)],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
 
-    def judge(token: str) -> subprocess.CompletedProcess:
-        resolved.write_text(f"LAB_I_UNDERSTAND_UNAUTHENTICATED=1\nLAB_ORCHESTRATOR_TOKEN={token}\n")
-        return subprocess.run(
-            [sys.executable, "-I", "-c", _resolved_judge(), str(lab)],
-            env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
-            capture_output=True,
-            text=True,
-        )
 
-    r = judge("x")  # what ${UNSET}x resolves to
-    assert r.returncode == 4 and "LAB_ORCHESTRATOR_TOKEN resolves to 1 characters" in r.stderr, (
+#: 32 characters, the minimum (not hex: a hex secret this long trips the leak scan)
+LONG_TOKEN = "a-job-api-token-of-32-characters"
+EXPOSED = {"orchestrator": {"ports": [{"host_ip": "0.0.0.0", "published": "8088"}]}}
+
+
+def _config(**secret) -> dict:
+    return {"services": EXPOSED, "secrets": {"orchestrator-token": secret}}
+
+
+def test_pass2_judges_the_job_api_token_compose_resolves(tmp_path):
+    """Pass 1 reads .env as written; compose expands ${VAR} there, so
+    `LAB_ORCHESTRATOR_TOKEN=${UNSET}x` is 9 characters to pass 1 and `x` to compose. The resolved
+    judge holds the resolved value to the 32-character minimum."""
+    config = _config(environment="LAB_ORCHESTRATOR_TOKEN")
+    r = _stub_judge(tmp_path, config, "LAB_ORCHESTRATOR_TOKEN=x\n")  # what ${UNSET}x resolves to
+    assert (
+        r.returncode == 4
+        and "LAB_ORCHESTRATOR_TOKEN (the orchestrator-token secret) resolves to 1 characters"
+        in r.stderr
+    ), r.stderr
+    r = _stub_judge(tmp_path, config, f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n")
+    assert r.returncode == 0, r.stderr
+
+
+def test_pass2_measures_the_variable_the_token_secret_reads(tmp_path):
+    """The token's variable is the one the resolved orchestrator-token secret names, not a name
+    the guard assumes: a compose file that points the secret at another variable is judged by
+    that one, and a secret with no environment source cannot be measured, so it is refused."""
+    long = LONG_TOKEN
+    other = _config(environment="LAB_OTHER_TOKEN")
+    r = _stub_judge(tmp_path, other, f"LAB_ORCHESTRATOR_TOKEN={long}\nLAB_OTHER_TOKEN=x\n")
+    assert r.returncode == 4 and "LAB_OTHER_TOKEN (the orchestrator-token secret)" in r.stderr, (
         r.stderr
     )
-    r = judge("a-job-api-token-of-32-characters")
+    r = _stub_judge(tmp_path, other, f"LAB_ORCHESTRATOR_TOKEN=x\nLAB_OTHER_TOKEN={long}\n")
     assert r.returncode == 0, r.stderr
+    r = _stub_judge(tmp_path, _config(file="./token"), f"LAB_ORCHESTRATOR_TOKEN={long}\n")
+    assert r.returncode == 4 and "not read from an environment variable" in r.stderr, r.stderr

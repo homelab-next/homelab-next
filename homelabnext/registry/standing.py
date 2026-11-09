@@ -30,12 +30,16 @@ class Standing:
     tier: str
     until: str
     why: str
-    #: days from today to ``until``: negative once the row is overdue
+    #: days from today to ``until``: negative once the row is overdue (0 when ``until`` is no
+    #: real date)
     days_left: int
+    #: False when ``until`` matches the schema's shape but is no calendar date (``2026-02-30``):
+    #: such a row is reported as invalid, and counts as overdue (it can never be in date)
+    valid: bool = True
 
     @property
     def overdue(self) -> bool:
-        return self.days_left < 0
+        return not self.valid or self.days_left < 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +50,7 @@ class Standing:
             "why": self.why,
             "days_left": self.days_left,
             "overdue": self.overdue,
+            "valid": self.valid,
         }
 
 
@@ -63,22 +68,32 @@ def today(now: dt.date | None = None) -> dt.date:
 
 def standings(reg: Registry, on: dt.date) -> list[Standing]:
     """Every non-primary row of ``reg``, by row name, judged against ``on``.  A row the schema
-    let through without a usable ``until`` cannot happen (2.9 requires one); it would read as
-    overdue rather than be skipped."""
+    let through with an ``until`` that is no calendar date is reported as invalid (and counts as
+    overdue) rather than skipped."""
     out = []
     for s in reg.rows("eval", "retiring", "legacy"):
         try:
-            left = (dt.date.fromisoformat(s.until or "") - on).days
+            left, valid = (dt.date.fromisoformat(s.until or "") - on).days, True
         except ValueError:
-            left = -1
-        out.append(Standing(s.name, s.capability, s.standing, s.until or "", s.why, left))
+            left, valid = 0, False
+        out.append(Standing(s.name, s.capability, s.standing, s.until or "", s.why, left, valid))
     return out
+
+
+def overridden() -> bool:
+    """Whether the date judged against is ``HNX_TODAY``'s rather than the local date."""
+    return bool(os.environ.get("HNX_TODAY"))
 
 
 def text(rows: list[Standing]) -> str:
     lines = []
     for r in rows:
-        when = f"overdue by {-r.days_left} day(s)" if r.overdue else f"{r.days_left} day(s) left"
+        if not r.valid:
+            when = "invalid until: no calendar date"
+        elif r.overdue:
+            when = f"overdue by {-r.days_left} day(s)"
+        else:
+            when = f"{r.days_left} day(s) left"
         lines.append(f"{r.row}: {r.tier} {r.capability} until {r.until} ({when}): {r.why}")
     return "".join(f"{ln}\n" for ln in lines)
 
