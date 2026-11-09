@@ -20,7 +20,7 @@ import pytest
 from conformance.fakes import llm_orchestrator_hermes as body
 from homelabnext.conform.adapters import orchestrator as adapter
 from homelabnext.conform.adapters._env import AdapterConfigError
-from tests.suite_policy import require_tool
+from tests.conform.controller_rig import build_controller
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -30,43 +30,8 @@ RUN = "0123456789abcdef0123456789abcdef"
 FAULT_CHECKS = harness.FAULT_CHECKS
 
 
-# no network in the test run: the module cache only (CI's Go leg fetches it before the namespace)
-OFFLINE = dict(os.environ, GOFLAGS="-mod=readonly", GOWORK="off", GOPROXY="off")
-
-
-def _module_builds_offline() -> bool:
-    """Whether this Go can build the orchestrator module from the module cache alone: the
-    module's toolchain or newer, and every dependency cached."""
-    proc = subprocess.run(
-        ["go", "list", "-deps", "./cmd/controller"],
-        cwd=ROOT / "orchestrator",
-        env=OFFLINE,
-        capture_output=True,
-        check=False,
-    )
-    return proc.returncode == 0
-
-
-@pytest.fixture
-def offline_go() -> str:
-    # skips ("not available", a registered reason) where Go or the cached module is missing, and
-    # fails instead under HNX_REQUIRE_GO=1, CI's Go leg, which fetches the module first
-    return require_tool(
-        "go",
-        available=_module_builds_offline,
-        unusable="the orchestrator module is not available offline (its toolchain or its cached dependencies)",
-    )
-
-
-@pytest.mark.usefixtures("offline_go")
 def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path):
-    binary = tmp_path / "controller"
-    subprocess.run(
-        ["go", "build", "-o", str(binary), "./cmd/controller"],
-        cwd=ROOT / "orchestrator",
-        check=True,
-        env=OFFLINE,
-    )
+    binary = build_controller(tmp_path)  # CI's prebuilt one (HNX_CONTROLLER_BIN), or a build
     out = tmp_path / "result.json"
     args = [
         "run",
@@ -432,3 +397,33 @@ def test_the_verdict_needs_both_fault_checks_passed(tmp_path, capsys):
     assert "not run" in capsys.readouterr().err
     (tmp_path / "junk.json").write_text("{")
     assert harness.main(["verdict", str(tmp_path / "junk.json")]) == 1
+
+
+def test_a_prebuilt_controller_is_used_and_never_silently_rebuilt(tmp_path, monkeypatch):
+    """CI's Go leg builds the controller once before the network namespace; the tests take it
+    from HNX_CONTROLLER_BIN, and a bad value fails rather than falling back to a build."""
+    import tests.conform.controller_rig as rig
+
+    prebuilt = tmp_path / "controller"
+    prebuilt.write_text("#!/bin/sh\n")
+    prebuilt.chmod(0o755)
+    monkeypatch.setattr(rig.subprocess, "run", lambda *a, **k: pytest.fail(f"built: {a}"))
+    monkeypatch.setenv(rig.PREBUILT_ENV, str(prebuilt))
+    assert build_controller(tmp_path / "unused") == prebuilt
+    for bad in ("controller", str(tmp_path / "absent")):
+        monkeypatch.setenv(rig.PREBUILT_ENV, bad)
+        with pytest.raises(pytest.fail.Exception, match="HNX_CONTROLLER_BIN"):
+            build_controller(tmp_path / "unused")
+
+
+def test_the_go_test_leg_builds_the_controller_once_for_its_shards():
+    job = _ci()["jobs"]["test"]
+    (build,) = [s for s in job["steps"] if "go build" in s.get("run", "")]
+    assert build["if"] == "matrix.python.go" and build["working-directory"] == "orchestrator"
+    assert (
+        build["run"] == 'go mod download && go build -o "$RUNNER_TEMP/controller" ./cmd/controller'
+    )
+    (suite,) = [s for s in job["steps"] if "pytest" in s.get("run", "")]
+    assert suite["env"]["HNX_CONTROLLER_BIN"] == (
+        "${{ matrix.python.go && format('{0}/controller', runner.temp) || '' }}"
+    )

@@ -43,16 +43,29 @@ def _builds_offline() -> bool:
     return proc.returncode == 0
 
 
-@pytest.fixture(scope="session")
-def controller_binary(tmp_path_factory) -> Path:
-    """The controller built from this checkout, once a session; skips (a registered reason)
-    where Go or the cached module is missing, and fails instead under HNX_REQUIRE_GO=1."""
+#: a controller binary built before the run (CI's Go-capable test leg builds it once, beside
+#: ``go mod download``, so no shard cold-builds it under the suite's budget)
+PREBUILT_ENV = "HNX_CONTROLLER_BIN"
+
+
+def build_controller(dest: Path) -> Path:
+    """The controller built from this checkout: ``$HNX_CONTROLLER_BIN`` when set (an absolute path
+    to an executable file, or the test fails: a set variable is never silently replaced by a
+    build), else built into ``dest`` from the module cache. Without the variable it skips (a
+    registered reason) where Go or the cached module is missing, and fails instead under
+    HNX_REQUIRE_GO=1."""
+    prebuilt = os.environ.get(PREBUILT_ENV, "")
+    if prebuilt:
+        path = Path(prebuilt)
+        if not (path.is_absolute() and path.is_file() and os.access(path, os.X_OK)):
+            pytest.fail(f"{PREBUILT_ENV}={prebuilt} is not an absolute path to an executable file")
+        return path
     require_tool(
         "go",
         available=_builds_offline,
         unusable="the orchestrator module is not available offline (its toolchain or its cached dependencies)",
     )
-    binary = tmp_path_factory.mktemp("controller") / "controller"
+    binary = dest / "controller"
     subprocess.run(
         ["go", "build", "-o", str(binary), "./cmd/controller"],
         cwd=ROOT / "orchestrator",
@@ -60,6 +73,12 @@ def controller_binary(tmp_path_factory) -> Path:
         env=OFFLINE,
     )
     return binary
+
+
+@pytest.fixture(scope="session")
+def controller_binary(tmp_path_factory) -> Path:
+    """The controller, once a session (:func:`build_controller`)."""
+    return build_controller(tmp_path_factory.mktemp("controller"))
 
 
 @contextlib.contextmanager
