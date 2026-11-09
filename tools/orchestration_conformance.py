@@ -156,16 +156,42 @@ def _gone(pid: int, wait_s: float = 10.0) -> None:
         time.sleep(0.02)
 
 
+def _proc_file(pid: int, name: str) -> bytes:
+    try:
+        with open(f"/proc/{pid}/{name}", "rb") as f:
+            return f.read()
+    except OSError:
+        return b""
+
+
+def is_session(pid: int, run_id: str) -> bool:
+    """Whether ``pid`` is still the session of ``run_id`` (its environment carries the run id):
+    a pid file can outlive its process, and the number can be reused by another."""
+    return pid > 1 and f"HNX_RUN_ID={run_id}".encode() in _proc_file(pid, "environ").split(b"\0")
+
+
+def is_controller(pid: int, work: Path) -> bool:
+    """Whether ``pid`` is still the controller of ``work`` (``serve`` on its configuration)."""
+    argv = _proc_file(pid, "cmdline").split(b"\0")
+    return pid > 1 and b"serve" in argv and str(work / "controller.yaml").encode() in argv
+
+
 def stop(work: Path) -> None:
-    """SIGKILL the controller and every recorded session, as a crash ends them."""
-    for p in (work / "pids").glob("*.pid"):
-        with contextlib.suppress(OSError, ValueError):
-            _kill(int(p.read_text(encoding="ascii")))
-        p.unlink(missing_ok=True)
+    """SIGKILL the controller, then every recorded session, as a crash ends them. The controller
+    goes first and is waited for: a session killed while it still runs would be a failure it
+    records (KilledExternally, and an automatic retry), not a crash it reconciles at its next
+    start. Only a pid that is still that process is signalled."""
     with contextlib.suppress(OSError, ValueError):
         pid = int((work / "controller.pid").read_text(encoding="ascii"))
-        _kill(pid)
-        _gone(pid)
+        if is_controller(pid, work):
+            _kill(pid)
+            _gone(pid)
+    for p in (work / "pids").glob("*.pid"):
+        with contextlib.suppress(OSError, ValueError):
+            pid = int(p.read_text(encoding="ascii"))
+            if is_session(pid, p.name.removesuffix(".pid")):
+                _kill(pid)
+        p.unlink(missing_ok=True)
 
 
 def cmd_restart(work: Path) -> int:

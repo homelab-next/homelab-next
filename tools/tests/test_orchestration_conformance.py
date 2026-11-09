@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -84,7 +85,28 @@ def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path)
     (run,) = json.loads(out.read_text())["runs"]
     results = {r["check"]: r["status"] for r in run["results"]}
     assert results == dict.fromkeys(FAULT_CHECKS, "pass"), results
-    assert not list((tmp_path / "work" / "pids").glob("*.pid")), "a session outlived the run"
+    # a session that ended removed its pid file; one that was killed left it, and is not running
+    for p in (tmp_path / "work" / "pids").glob("*.pid"):
+        assert not harness.is_session(int(p.read_text()), p.name.removesuffix(".pid")), p
+    # the restart check's executing run was reconciled by the restarted controller: failed with
+    # the reconciliation's reason, and never retried (a session killed while the controller ran
+    # would have been a recorded failure, with an automatic retry of the work)
+    db = sqlite3.connect(tmp_path / "work" / "state" / "controller.db")
+    try:
+        reconciled = [
+            r
+            for (r,) in db.execute(
+                "SELECT run_id FROM jobs WHERE local_failed_reason LIKE ?",
+                ("%controller-restart-reconciliation%",),
+            )
+        ]
+        assert len(reconciled) == 1, reconciled
+        retries = db.execute(
+            "SELECT COUNT(*) FROM jobs WHERE retry_of_run_id = ?", (reconciled[0],)
+        ).fetchone()[0]
+        assert retries == 0, f"the reconciled run {reconciled[0]} was retried"
+    finally:
+        db.close()
 
 
 def test_the_runner_body_records_its_session_pid(tmp_path):
@@ -103,17 +125,25 @@ def test_the_runner_body_reads_its_prompt_from_stdin():
 
 
 def test_process_faults_kill_the_recorded_session(tmp_path):
-    proc = subprocess.Popen(["sleep", "30"])
+    proc = subprocess.Popen(["sleep", "30"], env=dict(os.environ, HNX_RUN_ID=RUN))
+    other = subprocess.Popen(["sleep", "30"])  # a reused pid: not the run's session
     try:
-        (tmp_path / f"{RUN}.pid").write_text(f"{proc.pid}\n")
         faults = adapter.ProcessFaults(tmp_path, ["true"], lambda: True)
+        other_run = "c" * 32
+        (tmp_path / f"{other_run}.pid").write_text(f"{other.pid}\n")
+        faults.kill(other_run)
+        (tmp_path / f"{'b' * 32}.pid").write_text("1\n")
+        faults.kill("b" * 32)  # never pid 1
+        assert other.poll() is None, "a process that is not the run's session was killed"
+        (tmp_path / f"{RUN}.pid").write_text(f"{proc.pid}\n")
         faults.kill(RUN)
         assert proc.wait(timeout=30) == -signal.SIGKILL
         with pytest.raises(ValueError):
             faults.kill("../../etc")
     finally:
-        proc.kill()
-        proc.wait()
+        for p in (proc, other):
+            p.kill()
+            p.wait()
 
 
 def test_process_faults_restart_runs_the_command_and_waits_for_health(tmp_path):
@@ -177,3 +207,41 @@ def test_the_harness_config_gives_sessions_only_the_pid_directory(tmp_path):
         harness.LOOPBACK + ":"
     )
     assert "{prompt}" not in cfg["runner"]["exec"]["argv"]  # the prompt goes on stdin
+
+
+def _spawn(argv, **env):
+    return subprocess.Popen(argv, env=dict(os.environ, **env), start_new_session=True)
+
+
+def test_a_restart_kills_the_controller_before_its_sessions(tmp_path, monkeypatch):
+    """A session killed while its controller still runs is a failure that controller records
+    (and retries), not a crash it reconciles: the controller goes first, and is waited for."""
+    work = tmp_path
+    (work / "pids").mkdir()
+    cfg = str(work / "controller.yaml")
+    controller = _spawn(["sh", "-c", "sleep 30", "serve", "--config", cfg])
+    session = _spawn(["sleep", "30"], HNX_RUN_ID=RUN)
+    stale = _spawn(["sleep", "30"], HNX_RUN_ID="f" * 32)  # a pid file naming another run's pid
+    try:
+        (work / "controller.pid").write_text(f"{controller.pid}\n")
+        (work / "pids" / f"{RUN}.pid").write_text(f"{session.pid}\n")
+        (work / "pids" / f"{'e' * 32}.pid").write_text(f"{stale.pid}\n")
+        (work / "pids" / f"{'d' * 32}.pid").write_text("1\n")
+        order = []
+        real_kill = harness._kill
+
+        def kill(pid):
+            order.append(pid)
+            real_kill(pid)
+
+        monkeypatch.setattr(harness, "_kill", kill)
+        harness.stop(work)
+        assert order == [controller.pid, session.pid], order
+        assert not Path(f"/proc/{controller.pid}").exists(), "the controller was not waited for"
+        assert session.wait(timeout=30) == -signal.SIGKILL
+        assert stale.poll() is None, "a pid that was no longer the run's session was killed"
+        assert not list((work / "pids").glob("*.pid"))
+    finally:
+        for p in (controller, session, stale):
+            p.kill()
+            p.wait()

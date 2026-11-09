@@ -231,6 +231,18 @@ class _HandlerHost:
         self._thread.join(timeout=5)
 
 
+def _is_session(pid: int, run_id: str) -> bool:
+    """Whether ``pid`` (never 0, 1 or a negative group) is still the session of ``run_id``."""
+    if pid <= 1:
+        return False
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            env = f.read().split(b"\0")
+    except OSError:
+        return False
+    return f"HNX_RUN_ID={run_id}".encode() in env
+
+
 class ProcessFaults:
     """Fault injection on a controller the harness runs as a process: ``kill`` sends SIGKILL to
     the session of a run (the pid its runner body recorded), as a crash would end it; ``restart``
@@ -271,6 +283,10 @@ class ProcessFaults:
 
     def kill(self, run_id: str) -> None:
         pid = self._pid(run_id)
+        # only a pid that is still the run's session (its environment carries the run id): the
+        # pid file can outlive the session and the number be reused by another process
+        if not _is_session(pid, run_id):
+            return
         with contextlib.suppress(ProcessLookupError):
             os.kill(pid, signal.SIGKILL)
 

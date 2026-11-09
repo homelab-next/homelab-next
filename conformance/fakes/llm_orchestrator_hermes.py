@@ -176,8 +176,13 @@ def write_pid_file(environ: Mapping[str, str], pid: int) -> Path | None:
 
 
 def main() -> int:  # pragma: no cover - exercised as a subprocess in the live run
-    write_pid_file(os.environ, os.getpid())
-    code, out, err = run(sys.argv[1:], stdin=sys.stdin.read)
+    pid_file = write_pid_file(os.environ, os.getpid())
+    try:
+        code, out, err = run(sys.argv[1:], stdin=sys.stdin.read)
+    finally:
+        # a session that ends removes its pid file: one left behind is a session that was killed
+        if pid_file is not None:
+            pid_file.unlink(missing_ok=True)
     sys.stdout.write(out)
     if err:
         sys.stderr.write(err + "\n")
