@@ -116,7 +116,7 @@ def test_the_committed_bridge_file_loads_and_pins_each_subjects_producers():
     assert cfg.api_key == "secret:stackstorm/webhook-key"
     by = {s.subject: s for s in cfg.subscriptions}
     assert by["homelabnext.proposal.created"].sources == {"svc:broker"}
-    assert by["homelabnext.agent.job.failed"].sources == {st2.ORCHESTRATOR_SOURCE}
+    assert by["homelabnext.agent.job.failed"].sources == set(st2.ORCHESTRATOR_SOURCES)
 
 
 @pytest.mark.parametrize(

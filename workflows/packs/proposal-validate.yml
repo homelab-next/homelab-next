@@ -20,7 +20,7 @@ steps:
   - id: submit
     kind: action
     action: agent.job.submit
-    target: svc:orchestration
+    target: svc:orchestrator
     params:
       agent_key: proposal-validator
       idempotency_key: $event.id
@@ -44,7 +44,7 @@ fixtures:
     expect:
       calls:
         - action: agent.job.submit
-          target: svc:orchestration
+          target: svc:orchestrator
           params:
             agent_key: proposal-validator
             idempotency_key: evt-prop-0001

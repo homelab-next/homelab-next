@@ -2015,7 +2015,7 @@ def test_pass2_judges_the_job_api_token_compose_resolves(tmp_path):
     r = _stub_judge(tmp_path, config, "LAB_ORCHESTRATOR_TOKEN=x\n")  # what ${UNSET}x resolves to
     assert (
         r.returncode == 4
-        and "LAB_ORCHESTRATOR_TOKEN (the orchestrator's orchestrator-token secret) resolves to 1 characters"
+        and "LAB_ORCHESTRATOR_TOKEN (the orchestrator service's orchestrator-token secret) resolves to 1 characters"
         in r.stderr
     ), r.stderr
     r = _stub_judge(tmp_path, config, f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n")
@@ -2031,7 +2031,7 @@ def test_pass2_measures_the_variable_the_token_secret_reads(tmp_path):
     r = _stub_judge(tmp_path, other, f"LAB_ORCHESTRATOR_TOKEN={long}\nLAB_OTHER_TOKEN=x\n")
     assert (
         r.returncode == 4
-        and "LAB_OTHER_TOKEN (the orchestrator's orchestrator-token secret)" in r.stderr
+        and "LAB_OTHER_TOKEN (the orchestrator service's orchestrator-token secret)" in r.stderr
     ), r.stderr
     r = _stub_judge(tmp_path, other, f"LAB_ORCHESTRATOR_TOKEN=x\nLAB_OTHER_TOKEN={long}\n")
     assert r.returncode == 0, r.stderr
@@ -2059,7 +2059,9 @@ def test_pass2_judges_the_secret_the_orchestrator_mounts(tmp_path):
     }
     env = f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\nLAB_WEAK=x\n"
     r = _stub_judge(tmp_path, config, env)
-    assert r.returncode == 4 and "LAB_WEAK (the orchestrator's weak secret)" in r.stderr, r.stderr
+    assert r.returncode == 4 and "LAB_WEAK (the orchestrator service's weak secret)" in r.stderr, (
+        r.stderr
+    )
     config["services"]["orchestrator"]["secrets"] = []
     r = _stub_judge(tmp_path, config, env)
     assert r.returncode == 4 and "not one secret read from an environment variable" in r.stderr, (
@@ -2068,4 +2070,61 @@ def test_pass2_judges_the_secret_the_orchestrator_mounts(tmp_path):
     # a stack without the controller has no job API token to judge
     config["services"] = {"other": {"ports": PORTS}}
     r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 0, r.stderr
+
+
+def _secrets(**env) -> dict:
+    return {"orchestrator-token": {"environment": "LAB_ORCHESTRATOR_TOKEN"}, **env}
+
+
+@pytest.mark.parametrize(
+    "marks",
+    [
+        {"image": "hnx-lab-orchestrator:local"},
+        {"image": "registry.example/x/hnx-lab-orchestrator@sha256:" + "0" * 64},
+        {"command": ["/bin/sh", "/app/entrypoint.sh"]},
+        {"ports": [{"host_ip": "0.0.0.0", "published": "9999", "target": 8088}]},
+    ],
+)
+def test_pass2_finds_a_renamed_controller_by_its_image_entrypoint_or_api_port(tmp_path, marks):
+    """The controller is judged by every mark it has, not only its service name: a copy renamed
+    `jobs` that mounts no token, or a weak one, is refused."""
+    svc = {"ports": PORTS, **marks}
+    config = {"services": {"jobs": svc}, "secrets": _secrets()}
+    env = f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n"
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 4 and "the controller service jobs mounts" in r.stderr, r.stderr
+    svc["secrets"] = [MOUNT]
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 0, r.stderr
+    r = _stub_judge(tmp_path, config, "LAB_ORCHESTRATOR_TOKEN=x\n")
+    assert r.returncode == 4 and "the jobs service's orchestrator-token secret" in r.stderr
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    [
+        {"tmpfs": ["/run/secrets:size=1m"]},
+        {"tmpfs": "/run/secrets"},
+        {
+            "volumes": [
+                {"type": "bind", "source": "./t", "target": "/run/secrets/orchestrator-token"}
+            ]
+        },
+        {"volumes": [{"type": "volume", "source": "v", "target": "/run/secrets"}]},
+        {"volumes": [{"type": "tmpfs", "target": "/run"}]},
+    ],
+)
+def test_pass2_refuses_a_mount_over_the_controllers_secrets(tmp_path, shadow):
+    """A volume, bind or tmpfs at /run/secrets (or above it) on the controller replaces the file
+    compose gives it, so the measured secret would not be the token it reads."""
+    config = {
+        "services": {"orchestrator": {"ports": PORTS, "secrets": [MOUNT], **shadow}},
+        "secrets": _secrets(),
+    }
+    r = _stub_judge(tmp_path, config, f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n")
+    assert r.returncode == 4 and "over /run/secrets" in r.stderr, r.stderr
+    config["services"]["orchestrator"]["volumes"] = [{"type": "volume", "target": "/var/lib/x"}]
+    config["services"]["orchestrator"].pop("tmpfs", None)
+    r = _stub_judge(tmp_path, config, f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n")
     assert r.returncode == 0, r.stderr

@@ -69,7 +69,7 @@ criteria are the pack trigger:
 
 Every event-triggered pack pins its producer: its `where` has `{ref: $event.source, equals: <id>}`
 (`st2-source`), so the rule fires, and `admit` admits, only events that name that source. A01 takes
-`svc:broker`, A02 `svc:llm-orchestrator` (the controller's default `events.source`; `ORCHESTRATOR_SOURCE` in `homelabnext.workflows.st2`, and `st2-bound` requires it). The source is what the producer writes, not proof of who
+`svc:broker`, A02 the controller's `svc:orchestrator` (its default `events.source`) and, for the one-release overlap of ADR-0026 decision 16, the private controller's `svc:llm-orchestrator` (`ORCHESTRATOR_SOURCES` in `homelabnext.workflows.st2`, an `in:` list; `st2-bound` requires both). The source is what the producer writes, not proof of who
 sent it: who may post to the webhook (the bridge's API key) and publish the subject on the bus are
 the bounds that make it mean something.
 
@@ -132,7 +132,7 @@ binding are the broker's ([ADR-0017](adr/0017-broker-service.md)). StackStorm in
 | Id | Pack | Trigger | Does | Replaces |
 |---|---|---|---|---|
 | A01 | `proposal-validate` | `homelabnext.proposal.created`, which the broker emits when a note is filed through the records-inbox lane (`proposal.file`) | `agent.job.submit` of one `proposal-validator` job whose `task_description` is the note's path in the records inbox, the event id as idempotency key | the proposal-validator dispatch timer |
-| A02 | `agent-job-retry` | `homelabnext.agent.job.failed` from `svc:llm-orchestrator` with `reason` (the failure class) in capacity, stall, timeout, backend-down, `resubmits` = 0, and neither `auto_retry_scheduled` (the scheduler retried it itself) nor `retried_by_run_id` | `agent.job.submit` again, at priority 90, with `retry_of_run_id`, `reason` and the failed run's id as idempotency key, and no payload: the controller replays the parent's | ad-hoc reruns of failed jobs |
+| A02 | `agent-job-retry` | `homelabnext.agent.job.failed` from `svc:orchestrator` or, for the overlap, `svc:llm-orchestrator`, with `reason` (the failure class) in capacity, stall, timeout, backend-down, `resubmits` = 0, and neither `auto_retry_scheduled` (the scheduler retried it itself) nor `retried_by_run_id` | `agent.job.submit` again, at priority 90, with `retry_of_run_id`, `reason` and the failed run's id as idempotency key, and no payload: the controller replays the parent's | ad-hoc reruns of failed jobs |
 | A03 | `approved-run` (built in) | `homelabnext.decision.returned` from the broker: a person approved a request | `run` of that request, only one a live step here submitted ([below](#running-an-approved-request-a03)) | running held requests by hand as the StackStorm user |
 
 `homelabnext.agent.job.failed` (`schemas/events/agent.job.failed.schema.json`) is what the
@@ -158,7 +158,7 @@ run), or 409 `already_retried` or `retry_chain_spent`, and
 
 - `st2-coalesce`: a rule whose pack dispatches agent work has a coalesce window.
 - `st2-bound`: a pack that reacts to `agent.job.failed` by dispatching pins `$event.data.resubmits` to
-  integers below 3 and `$event.source` to `svc:llm-orchestrator`, requires `auto_retry_scheduled`
+  integers below 3 and `$event.source` to both of the controller's sources (`svc:orchestrator`, `svc:llm-orchestrator`), requires `auto_retry_scheduled`
   and `retried_by_run_id` to be absent, and carries `retry_of_run_id: $event.data.run_id` and the
   same run id as `idempotency_key`; no dispatch step sends `input` or `resubmits`, a
   resubmit sends no `task_description`, and `reason` goes only with `retry_of_run_id`.
@@ -232,7 +232,7 @@ sequenceDiagram
     participant KV as st2 datastore
     participant Broker
     participant Hub as Approvals page
-    Bus->>Bridge: homelabnext.agent.job.failed (svc:llm-orchestrator)
+    Bus->>Bridge: homelabnext.agent.job.failed (svc:orchestrator)
     Bridge->>St2: POST webhook (St2-Api-Key, Idempotency-Key)
     St2->>St2: rule on_<pack>, admit (schema, trigger, dedupe, coalesce)
     St2->>Broker: submit (risky step, live)
@@ -544,7 +544,7 @@ excerpt drifts from it):
 ```
 
 Who may *publish* each subject is the bound that makes a pinned `source` mean something.
-`<prefix>.homelabnext.agent.job.>` (`agent.job.failed`, pinned to `svc:llm-orchestrator`, which A02
+`<prefix>.homelabnext.agent.job.>` (`agent.job.failed`, pinned to the controller's `svc:orchestrator` and `svc:llm-orchestrator`, which A02
 resubmits on) belongs to the orchestration controller's NATS user: grant it publish there and
 deny it to every other user, the bridge's and the broker's included, or anyone on the bus can make
 A02 resubmit a job of their choosing (bounded by `resubmits` and the controller's idempotency key,

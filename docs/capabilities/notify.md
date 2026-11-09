@@ -217,7 +217,7 @@ Provided by (`examples/services.yml`):
 |---|---|
 | [notify](../systems/notify.md) ([[systems/notify\|notify]]) | `ntfy` |
 
-Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), [metrics](../systems/metrics.md) ([[systems/metrics|metrics]])
+Depended on by: [metrics](../systems/metrics.md) ([[systems/metrics|metrics]]), [orchestrator](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]])
 
 ## Integrating a new product
 
