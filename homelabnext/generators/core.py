@@ -25,16 +25,22 @@ class Generator:
     description: str
     target: str  # the consumer the output is meant for
     func: Callable[[Registry], dict[str, str]]
+    #: run only when the generator is named explicitly (``--only``): raises
+    #: :class:`GeneratorRefusal` when it would render nothing that was asked for
+    when_named: Callable[[Registry], object] | None = None
+    #: the top-level output directories it owns even when it renders nothing, so a stale file
+    #: there is pruned and reported (its output for one registry may be no file at all)
+    dirs: tuple[str, ...] = ()
 
 
 GENERATORS: dict[str, Generator] = {}
 
 
-def register(name: str, description: str, target: str):
+def register(name: str, description: str, target: str, *, when_named=None, dirs=()):
     def deco(fn):
         if name in GENERATORS:
             raise RuntimeError(f"duplicate generator {name}")
-        GENERATORS[name] = Generator(name, description, target, fn)
+        GENERATORS[name] = Generator(name, description, target, fn, when_named, tuple(dirs))
         return fn
 
     return deco
@@ -53,6 +59,10 @@ def generate(reg: Registry, names: list[str] | None = None) -> dict[str, dict[st
     if bad:
         # every output is line-oriented: a line break in any value is a structural edit
         raise UnsafeValueError("registry model holds unsafe values:\n  - " + "\n  - ".join(bad))
+    for n in names or ():
+        check = GENERATORS[n].when_named
+        if check is not None:
+            check(reg)
     return {n: GENERATORS[n].func(reg) for n in sorted(selected)}
 
 
@@ -79,10 +89,20 @@ class WriteResult:
     pruned: list[str]
 
 
-def write_tree(root: Path, files: dict[str, str], prune: bool = True) -> WriteResult:
+def owned_dirs(names: list[str] | None = None) -> tuple[str, ...]:
+    """The output directories the (selected) generators own whatever they render."""
+    from . import builtin  # noqa: F401  (registers the generators)
+
+    return tuple(sorted({d for n in (names or GENERATORS) for d in GENERATORS[n].dirs}))
+
+
+def write_tree(
+    root: Path, files: dict[str, str], prune: bool = True, dirs: tuple[str, ...] = ()
+) -> WriteResult:
     """Write ``files`` under ``root``. Files whose content is already identical
     are not touched (mtime preserved). With ``prune``, stale files that carry the
-    generated-by marker and are no longer produced are removed."""
+    generated-by marker and are no longer produced are removed, under the top-level
+    directories of ``files`` and ``dirs``."""
     root = Path(root)
     res = WriteResult([], [], [])
     for rel, text in files.items():
@@ -94,22 +114,31 @@ def write_tree(root: Path, files: dict[str, str], prune: bool = True) -> WriteRe
         dest.write_text(text, encoding="utf-8", newline="\n")
         res.written.append(rel)
     if prune and root.is_dir():
-        top_dirs = {Path(rel).parts[0] for rel in files}
-        for top in sorted(top_dirs):
-            for p in sorted((root / top).rglob("*")):
-                rel = p.relative_to(root).as_posix()
-                if (
-                    p.is_file()
-                    and rel not in files
-                    and MARKER in p.read_text(encoding="utf-8", errors="replace")[:400]
-                ):
-                    p.unlink()
-                    res.pruned.append(rel)
+        for p, rel in _stale(root, files, dirs):
+            p.unlink()
+            res.pruned.append(rel)
     return res
 
 
-def check_tree(root: Path, files: dict[str, str]) -> list[str]:
-    """Return drift problems between ``files`` and what is on disk (empty = clean)."""
+def _stale(root: Path, files: dict[str, str], dirs: tuple[str, ...]) -> list[tuple[Path, str]]:
+    """Generated files (they carry the marker) under the top-level directories of ``files`` and
+    ``dirs`` that ``files`` no longer holds."""
+    out = []
+    for top in sorted({Path(rel).parts[0] for rel in files} | set(dirs)):
+        for p in sorted((root / top).rglob("*")) if (root / top).is_dir() else []:
+            rel = p.relative_to(root).as_posix()
+            if (
+                p.is_file()
+                and rel not in files
+                and MARKER in p.read_text(encoding="utf-8", errors="replace")[:400]
+            ):
+                out.append((p, rel))
+    return out
+
+
+def check_tree(root: Path, files: dict[str, str], dirs: tuple[str, ...] = ()) -> list[str]:
+    """Return drift problems between ``files`` and what is on disk (empty = clean); a stale
+    file is looked for under the top-level directories of ``files`` and ``dirs``."""
     root = Path(root)
     problems = []
     for rel, text in files.items():
@@ -118,14 +147,5 @@ def check_tree(root: Path, files: dict[str, str]) -> list[str]:
             problems.append(f"missing: {rel}")
         elif dest.read_text(encoding="utf-8") != text:
             problems.append(f"differs: {rel}")
-    top_dirs = {Path(rel).parts[0] for rel in files}
-    for top in sorted(top_dirs):
-        for p in sorted((root / top).rglob("*")) if (root / top).is_dir() else []:
-            rel = p.relative_to(root).as_posix()
-            if (
-                p.is_file()
-                and rel not in files
-                and MARKER in p.read_text(encoding="utf-8", errors="replace")[:400]
-            ):
-                problems.append(f"stale: {rel}")
+    problems += [f"stale: {rel}" for _, rel in _stale(root, files, dirs)]
     return problems

@@ -11,7 +11,15 @@ import argparse
 import sys
 from pathlib import Path
 
-from homelabnext.generators import GENERATORS, check_tree, flatten, generate, write_tree
+from homelabnext.generators import (
+    GENERATORS,
+    GeneratorRefusal,
+    check_tree,
+    flatten,
+    generate,
+    write_tree,
+)
+from homelabnext.generators.core import owned_dirs
 from homelabnext.registry.model import RegistryError, RegistryUnreadable, load
 from homelabnext.registry.resolver import ResolutionError, Resolver
 
@@ -32,6 +40,11 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     )
     p.add_argument("registry")
     p.add_argument("capability")
+    p.add_argument(
+        "--row",
+        action="store_true",
+        help="resolve an eval or retiring row by its row name (ADR-0039), not a capability",
+    )
     for name in ("generate", "check"):
         p = sub.add_parser(
             name,
@@ -60,13 +73,16 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         return 1
     if args.cmd == "validate":
         print(
-            f"ok: {len(reg.services)} services, {len(reg.hosts)} hosts, sha256:{reg.digest[:16]}",
+            f"ok: {len(reg.services)} services, {len(reg.non_primary)} non-primary, "
+            f"{len(reg.hosts)} hosts, sha256:{reg.digest[:16]}",
             file=out,
         )
         return 0
     if args.cmd == "resolve":
         try:
-            print(Resolver(reg).resolve(args.capability).url, file=out)
+            res = Resolver(reg)
+            ep = res.resolve_row(args.capability) if args.row else res.resolve(args.capability)
+            print(ep.url, file=out)
             return 0
         except ResolutionError as exc:
             print(f"hnx: {exc}", file=err)
@@ -76,14 +92,21 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     except KeyError as exc:
         print(f"hnx: {exc.args[0]}", file=err)
         return 2
+    except GeneratorRefusal as exc:
+        # a generator refusing this registry (an edge site with no login, a realm asked for by
+        # name with no idp row of its format): the registry cannot be rendered as it is
+        print(f"hnx: {exc}", file=err)
+        return 1
     if args.cmd == "generate":
-        res = write_tree(Path(args.out_dir), files, prune=args.only is None)
+        res = write_tree(
+            Path(args.out_dir), files, prune=args.only is None, dirs=owned_dirs(args.only)
+        )
         print(
             f"written={len(res.written)} unchanged={len(res.unchanged)} pruned={len(res.pruned)}",
             file=out,
         )
         return 0
-    problems = check_tree(Path(args.out_dir), files)
+    problems = check_tree(Path(args.out_dir), files, owned_dirs(args.only))
     for p in problems:
         print(p, file=err)
     return 1 if problems else 0
