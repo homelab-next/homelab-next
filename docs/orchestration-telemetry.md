@@ -36,7 +36,8 @@ The controller emits it once per job reaching a terminal state, through its dura
 the same transaction as the terminal transition, with `source` set to its service id and an `id`
 derived from the run id (a re-send is a duplicate). Which service id the hub accepts is
 configuration: `hnx orchestration --source svc:NAME` (repeatable) or `HNX_ORCHESTRATION_SOURCE`
-(comma-separated), default `svc:llm-orchestrator`, the example lab's controller; every other
+(comma-separated), default both of the controller's sources, `svc:orchestrator` and, for the
+one-release overlap of ADR-0026 decision 16, the private controller's `svc:llm-orchestrator`; every other
 source is refused. `agent.job.failed` is still emitted for
 failures; `finished` is the usage record of every outcome.
 

@@ -288,8 +288,8 @@ comes with the API package.
 The job API serves `session_id` and, for its one release of both names, the old field beside it
 ("The job API" below); the store holds one column.
 
-Nothing emits the metric or event name yet: the module has no controller binary until stage 2's last pull
-request. The two names overlap differently at the cutover (the ADR's amendment).
+The controller binary emits both (`orchestrator/cmd/controller`). The two names overlap differently
+at the cutover (the ADR's amendment).
 
 **Metrics are dual-emitted.** The release the lab first deploys the controller from writes every
 sample under both prefixes. The old prefix goes no earlier than the release after that, once a
@@ -301,9 +301,11 @@ subject and dedupe key, the source included, so the same job sent under two sour
 with two ids, and the telemetry store, which keys a job by its run id too, dead-letters the second
 as a run conflict. The overlap is on the consumer side instead:
 
-- in the release before the cutover, every consumer of the controller's events accepts both
-  `svc:llm-orchestrator` and `svc:orchestrator`: the telemetry store's sources, the StackStorm
-  bridge's allow-list and the rules' source patterns;
+- in the cutover release, every consumer of the controller's events accepts both
+  `svc:orchestrator` and `svc:llm-orchestrator`: the telemetry store's default sources
+  (`homelabnext.orchestration.CONTROLLER_SOURCES`), the StackStorm bridge's allow-list and the
+  rules' source patterns (`agent-job-retry`'s trigger is `$event.source in [svc:orchestrator,
+  svc:llm-orchestrator]`, and `st2-bound` requires both);
 - the controller emits each event once, under one configured source. The default is
   `svc:orchestrator`; the lab may set the old value for the overlap release and switch afterwards;
 - the id derivation does not change (the source stays in it), and an outbox migrated from the
@@ -311,12 +313,18 @@ as a run conflict. The overlap is on the consumer side instead:
 - two controllers never emit for the same runs into one store: the private controller stops before
   this one starts on its database.
 
-PR 2.7 (the controller binary) adds the check that finds the consumers of the old names. The
-consumers of `svc:llm-orchestrator` in this repository, which move before the old name goes:
+The broker target has no overlap: the packs' `target` is `svc:orchestrator`, the example
+registry's controller row (capability `orchestration`), and `hnx registry bindings` refuses
+`svc:llm-orchestrator` as a target (it is a declared platform source, an event source only).
 
-- `homelabnext.orchestration.model.CONTROLLER_SOURCE`, the default of `hnx orchestration consume
-  --source` ([orchestration telemetry](orchestration-telemetry.md)), with the store and export
-  tests in `tests/orchestration/` and the export examples
+`hnx registry consumers svc:llm-orchestrator` is the check that finds the consumers of the old
+source: every line of the checkout that names it, by kind, exit 1 while any remain (the changelog
+and the decision records quote history and are not read). The old source goes at cutover+1 only
+once it exits 0. Today it lists these, which move before the old name goes:
+
+- `homelabnext.orchestration.model.CONTROLLER_OLD_SOURCE`, in the default of `hnx orchestration
+  consume --source` ([orchestration telemetry](orchestration-telemetry.md)), with the store and
+  export tests in `tests/orchestration/` and the export examples
   `schemas/status/examples/orchestration_export.header.json` and `.job.json`;
 - the StackStorm bridge's allow-list (`workflows/stackstorm/bridge.json`), the pack
   `workflows/packs/agent-job-retry.yml`, its rule
@@ -324,8 +332,10 @@ consumers of `svc:llm-orchestrator` in this repository, which move before the ol
   `workflows/stackstorm/homelabnext/pinned/agent_job_retry.json` (A02, [StackStorm](stackstorm.md));
 - the event examples and negatives under `schemas/events/` and its README;
 - the docs that quote the source: [StackStorm](stackstorm.md),
-  [orchestration telemetry](orchestration-telemetry.md), `docs/checklist.md` (O-11) and
-  [ADR-0025](adr/0025-orchestration-telemetry.md).
+  [orchestration telemetry](orchestration-telemetry.md), `docs/checklist.md` (O-11),
+  `docs/interfaces.md` and this page ([ADR-0025](adr/0025-orchestration-telemetry.md) quotes it
+  too, as a decision record);
+- the declaration that admits it: `bindings.PLATFORM_SOURCES` (`homelabnext/registry/bindings.py`).
 
 ### The controller's configuration
 
@@ -1192,18 +1202,11 @@ privileged test with a size-limited mount.
 
 PR 2.7a (#331) and PR 2.7b leave these, each with the reason it was not done:
 
-- **PR 2.7c, done in two parts:** the `orchestration-conformance` job, which `go-ok` requires
-  (ADR-0026 decision 14), and the recorded stand-in's retirement (decision 15). **Deferred to the
-  decision-16 work:** decision 15 also moves the example registry's controller row (`agent-runtime`,
-  version `0.3.0` at the pinned `a52a1c4`) and its pin in `tools/tests/test_pin_consistency.py`
-  (`ORCHESTRATOR_ROW`, the metrics facts for `a52a1c4`) to this repository's controller. Done with
-  decision 16's rename of the row to `orchestrator`, the row, its goldens and `METRICS_SERVED`
-  change once instead of twice.
-- **After ADR-0039's `hnx registry bindings` (its step 5) merges: decision 16's wire names and the
-  consumer check.** This covers the packs' `svc:orchestrator` target, the declared overlap source,
-  the example registry row and the consumer check of `svc:llm-orchestrator`. The ADR makes PR 2.7
-  depend on that step, which has not merged; the binary already emits `svc:orchestrator` by
-  default. **Decided (operator default): the renames wait for ADR-0039 step 5.**
+- **Cutover+1: the old event source.** `svc:llm-orchestrator` (its consumers above, its
+  `bindings.PLATFORM_SOURCES` entry and `CONTROLLER_OLD_SOURCE`) goes once `hnx registry consumers
+  svc:llm-orchestrator` exits 0 (ADR-0026 decision 16). Decision 15's example-registry move and
+  decision 16's names are done: the row is `orchestrator` at this repository's version, and
+  `tools/tests/test_pin_consistency.py` reads this checkout's route table.
 - **Sessions isolated from the controller** (stage 3): a separate session user, so a session
   cannot read `controller.db`, the controller's environment or other runs' directories ("The
   trust boundary" above).
