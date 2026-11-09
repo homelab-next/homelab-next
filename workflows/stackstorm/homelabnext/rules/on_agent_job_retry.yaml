@@ -15,8 +15,10 @@ criteria:
     type: equals
     pattern: homelabnext.agent.job.failed
   trigger.body.source:
-    type: equals
-    pattern: svc:llm-orchestrator
+    type: inside
+    pattern:
+    - svc:orchestrator
+    - svc:llm-orchestrator
   trigger.body.data.reason:
     type: inside
     pattern:

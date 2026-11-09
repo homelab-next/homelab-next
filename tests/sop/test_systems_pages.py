@@ -34,7 +34,7 @@ def test_one_page_per_row_with_prefilled_facts(reg, tmp_path):
     assert "port `8443`" in page and "`/v1/info`" in page and "expects status `200`" in page
     # relative + path-qualified wiki link (docs/capabilities/ has pages of the same names)
     assert "[lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]])" in page
-    assert "Depended on by" in page and "agent-runtime" in page
+    assert "Depended on by" in page and "orchestrator" in page
     for _key, heading, _ in SECTIONS:
         assert f"## {heading}" in page
     assert page.count("TODO(human)") == len(SECTIONS)

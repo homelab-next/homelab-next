@@ -1,11 +1,11 @@
 ---
-title: agent-runtime
+title: orchestrator
 type: system
-summary: agent-runtime provides the agent-runtime capability (orchestrator), owned
+summary: orchestrator provides the orchestration capability (orchestrator), owned
   by ml-team.
 summary_generated: true
-service: agent-runtime
-capability: agent-runtime
+service: orchestrator
+capability: orchestration
 impl: orchestrator
 owner: ml-team
 host: runtime-core
@@ -18,14 +18,14 @@ status: draft
 author: unknown
 ---
 
-# agent-runtime
+# orchestrator
 
 ## What it does
 
 <!-- hnx:gen:what -->
-- Capability: `agent-runtime`
-- Contract: none (`agent-runtime` is not one of the conformance capabilities)
-- Implementation: `orchestrator` 0.3.0
+- Capability: `orchestration`
+- Contract: [orchestration capability reference](../capabilities/orchestration.md) ([[capabilities/orchestration|orchestration capability]]): operations, data shapes, conformance checks, adapters
+- Implementation: `orchestrator` 0.1.0
 - Owner: ml-team
 - Tags: agents, compute
 <!-- /hnx:gen -->
@@ -50,7 +50,7 @@ author: unknown
 
 <!-- hnx:gen:outputs -->
 - Metrics: none declared
-- MCP server `agent-runtime` (sse, `/sse`): read; owner platform-team; active; catalog record `mcp/agent-runtime.yml`
+- MCP: none
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:outputs -->
@@ -94,7 +94,7 @@ author: unknown
 
 <!-- hnx:gen:access -->
 - Authentication: `none`
-- Endpoint override variable: `HNX_ENDPOINT_AGENT_RUNTIME`
+- Endpoint override variable: `HNX_ENDPOINT_ORCHESTRATION`
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:access -->
@@ -104,7 +104,7 @@ author: unknown
 ## Source of truth
 
 <!-- hnx:gen:source -->
-- Registry row (Veritas, ADR-0028): `services.agent-runtime`
+- Registry row (Veritas, ADR-0028): `services.orchestrator`
 - Backup: not in a backup job
 <!-- /hnx:gen -->
 

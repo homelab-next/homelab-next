@@ -611,7 +611,11 @@ not given and does not retry a failed run itself, so the suite sees what the con
 
 ### Registry services
 
-No service in `examples/services.yml` declares `capability: orchestration`.
+Provided by (`examples/services.yml`):
+
+| Service | Implementation |
+|---|---|
+| [orchestrator](../systems/orchestrator.md) ([[systems/orchestrator\|orchestrator]]) | `orchestrator` |
 
 ## Integrating a new product
 

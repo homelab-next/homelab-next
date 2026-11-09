@@ -323,7 +323,7 @@ Provided by (`examples/services.yml`):
 |---|---|
 | [events](../systems/events.md) ([[systems/events\|events]]) | `nats` |
 
-Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
+Depended on by: [orchestrator](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]])
 
 ## Integrating a new product
 

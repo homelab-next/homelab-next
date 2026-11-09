@@ -340,7 +340,6 @@ def test_capabilities_are_checked_without_a_registry(tmp_catalog, capsys):
 
     cat = _edit(tmp_catalog, "notes", lambda r: r.update(capabilities=["cap:telepathy"]))
     assert any("capabilities names cap:telepathy" in p for p in servers.check(cat))
-    (tmp_catalog / "agent-runtime.yml").unlink()  # its capability is a registry service's
     assert not (tmp_catalog.parent / "services.yml").exists()
     args = ["mcp", "catalog", "check", "--catalog", str(tmp_catalog), "--policy", "none"]
     assert cli.main([*args, "--grants", str(ROOT / "schemas" / "agent" / "examples")]) == 1
@@ -415,13 +414,14 @@ def test_every_shipped_acting_server_is_the_broker_or_an_unreviewed_direct_draft
 
 
 def test_job_submission_and_shell_commands_are_the_brokers():
-    """ADR-0030: the orchestrator's tool server only reads its queue (a job is submitted through
-    the broker action agent.job.submit, docs/stackstorm.md), and the duplicate shell servers are
-    retired, pointing at the broker's MCP front."""
+    """ADR-0030: no tool server reaches the controller (a job is submitted through the broker
+    action agent.job.submit, docs/stackstorm.md; the controller serves no MCP endpoint), and the
+    duplicate shell servers are retired, pointing at the broker's MCP front."""
     import json
 
     cat = servers.load(CATALOG)
-    assert [t["name"] for t in cat.get("agent-runtime")["tools"]] == ["queue_summary"]
+    endpoints = {(rec.get("transport") or {}).get("endpoint") for _, rec in cat}
+    assert "svc:orchestrator" not in endpoints and "svc:agent-runtime" not in endpoints
     manifest = json.loads((ROOT / "workflows" / "broker.manifest.json").read_text())
     assert "agent.job.submit" in {a["action"] for a in manifest["actions"]}
     for sid in ("bash", "exec", "terminal"):

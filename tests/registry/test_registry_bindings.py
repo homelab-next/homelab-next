@@ -350,6 +350,32 @@ def test_a_declared_platform_source_passes(tmp_path, source, capsys):
     assert (rc, err) == (0, "")
 
 
+def test_the_overlap_source_passes_as_a_source_and_fails_as_a_target(tmp_path, capsys):
+    """ADR-0026 decision 16: svc:llm-orchestrator is admitted for its overlap as an event source
+    only; as a step's target it is refused (the target moved to svc:orchestrator at once)."""
+    reg = str(_registry(tmp_path))
+    ok = _pack(tmp_path, "svc:notify", source="svc:llm-orchestrator")
+    rc, _out, err = _run(reg, "--packs", str(ok), capsys=capsys)
+    assert (rc, err) == (0, "")
+    bad = _pack(tmp_path, "svc:llm-orchestrator")
+    rc, _out, err = _run(reg, "--packs", str(bad), capsys=capsys)
+    assert rc == 1
+    assert "svc:llm-orchestrator is a declared platform source, an event source only" in err
+
+
+def test_the_controller_packs_target_its_row(capsys):
+    """The packs' broker target is svc:orchestrator, the example controller row, with no
+    leniency: the unplaced entry for orchestration is gone."""
+    for name in ("agent-job-retry", "proposal-validate"):
+        doc = yaml.safe_load((ROOT / "workflows/packs" / f"{name}.yml").read_text())
+        targets = {s["target"] for s in doc["steps"] if "target" in s}
+        assert targets == {"svc:orchestrator"}, (name, targets)
+    reg = yaml.safe_load((ROOT / "examples/services.yml").read_text())["services"]
+    assert reg["orchestrator"]["capability"] == "orchestration"
+    assert "agent-runtime" not in reg  # the runner slot: found by host role, no service row
+    assert "orchestration" not in {d.name for d in bd.UNPLACED}
+
+
 def test_a_declared_unplaced_capability_of_the_pack_is_a_note_for_the_examples_only(
     tmp_path, capsys
 ):
@@ -365,7 +391,7 @@ def test_a_declared_unplaced_capability_of_the_pack_is_a_note_for_the_examples_o
 
 @pytest.mark.parametrize(
     ("target", "pack_name"),
-    [("svc:cases", "another-pack"), ("svc:orchestration", None), ("svc:projects", None)],
+    [("svc:cases", "another-pack"), ("svc:siem-source", None), ("svc:projects", None)],
 )
 def test_an_undeclared_unplaced_capability_is_refused(tmp_path, capsys, target, pack_name):
     path = _pack(tmp_path, target)
@@ -425,7 +451,6 @@ def test_every_unplaced_entry_is_a_platform_capability_scoped_to_existing_packs(
 def test_the_declarations_are_listed_each_with_a_why():
     assert [d.name for d in bd.PLATFORM_SOURCES] == ["broker", "llm-orchestrator"]
     assert [d.name for d in bd.UNPLACED] == [
-        "orchestration",
         "cases",
         "siem-source",
         "mail-gateway",
@@ -712,6 +737,73 @@ def test_a_truthy_stand_in_for_allow_eval_grants_nothing(tmp_path, value):
     role = next(iter(mr.table.roles))
     with pytest.raises(NonPrimaryBinding):
         mr.resolve_binding(role, mr.table.get(role).bindings[0], allow_eval=value)
+
+
+# ---------------------------------------------------------------- consumers of an old id
+
+#: every consumer of the controller's old event source decision 16 names (the controller doc's
+#: "Neutral names" list, schemas/events and its README, the conformance fakes)
+DECISION_16_CONSUMERS = (
+    "homelabnext/orchestration/model.py",
+    "schemas/status/examples/orchestration_export.header.json",
+    "schemas/status/examples/orchestration_export.job.json",
+    "workflows/packs/agent-job-retry.yml",
+    "schemas/events/examples/agent.job.finished.controller.json",
+    "schemas/events/negative/agent.job.finished.bad-lane.json",
+    "schemas/events/README.md",
+    "docs/orchestration-telemetry.md",
+    "docs/checklist.md",
+)
+
+
+def test_the_consumer_check_lists_every_consumer_of_the_old_source(capsys):
+    """ADR-0026 decision 16: the old source goes at cutover+1 only once this check finds none;
+    today it finds every consumer the decision names, and reads the conformance fakes, where none
+    is left."""
+    found = bd.consumers(ROOT, "svc:llm-orchestrator")
+    paths = {c.path for c in found}
+    assert set(DECISION_16_CONSUMERS) <= paths, set(DECISION_16_CONSUMERS) - paths
+    assert not [p for p in paths if p.startswith(("conformance/", "docs/adr/", "CHANGELOG"))]
+    # the automation renders of the pack: its bridge allow-list, rule and pinned render
+    renders = [p for p in paths if p.startswith("workflows/") and not p.startswith("workflows/p")]
+    assert len(renders) >= 3, renders
+    # and the docs that quote the source: the automation slot's page among them
+    assert len([p for p in paths if p.startswith("docs/")]) >= 5, paths
+    kinds = {c.kind for c in found}
+    assert {"pack", "workflow", "event-schema", "code", "doc"} <= kinds
+    rc, out, _err = _run_consumers("svc:llm-orchestrator", capsys)
+    assert rc == 1 and "declared platform source" in out.splitlines()[-1]
+    assert "pack\tworkflows/packs/agent-job-retry.yml:" in out
+
+
+def _run_consumers(svc: str, capsys, root: Path = ROOT) -> tuple[int, str, str]:
+    rc = hnx(["registry", "consumers", svc, "--root", str(root)])
+    out, err = capsys.readouterr()
+    return rc, out, err
+
+
+def test_the_consumer_check_matches_the_whole_id_and_skips_history(tmp_path, capsys):
+    import subprocess
+
+    (tmp_path / "workflows" / "packs").mkdir(parents=True)
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "workflows/packs/p.yml").write_text("source: svc:old-ctl\n")
+    (tmp_path / "docs/x.md").write_text("svc:old-ctl-two is another service\n")
+    (tmp_path / "docs/adr/0001.md").write_text("svc:old-ctl, as it was\n")
+    (tmp_path / "CHANGELOG.md").write_text("- svc:old-ctl renamed\n")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    rc, out, _ = _run_consumers("svc:old-ctl", capsys, tmp_path)
+    assert rc == 1 and out.splitlines()[0] == "pack\tworkflows/packs/p.yml:1", out
+    assert "1 line(s) name svc:old-ctl in 1 file(s) (pack)" in out
+    rc, out, _ = _run_consumers("svc:gone", capsys, tmp_path)
+    assert rc == 0 and "0 line(s)" in out
+    rc, _, err = _run_consumers("svc:Bad", capsys, tmp_path)
+    assert rc == 2 and "not a svc: id" in err
+    rc, _, err = _run_consumers("svc:x", capsys, tmp_path / "docs")  # inside, but not a root
+    assert rc in (0, 1)
+    rc, _, err = _run_consumers("svc:x", capsys, tmp_path.parent / "no-such-dir")
+    assert rc == 2 and "not a git checkout" in err
 
 
 @pytest.mark.parametrize("kind", ["absolute", "outside", "link"])
