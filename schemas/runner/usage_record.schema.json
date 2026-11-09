@@ -128,7 +128,13 @@
       "then": {
         "required": [
           "sized"
-        ]
+        ],
+        "properties": {
+          "sized": {
+            "type": "boolean",
+            "description": "Exactly true or false: a call record that is neither matches no closed shape."
+          }
+        }
       }
     },
     {

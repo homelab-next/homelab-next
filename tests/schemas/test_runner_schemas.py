@@ -30,12 +30,16 @@ WHY = {
     "usage_record.unknown-type": ("type", "is not one of"),
     "usage_record.end-with-unknown-class": ("class", "is not one of"),
     "usage_record.answer-in-end": ("$", "'answer' was unexpected"),
+    "usage_record.call-sized-is-a-string": ("sized", "is not of type 'boolean'"),
+    "usage_record.call-sized-is-null": ("sized", "is not of type 'boolean'"),
+    "usage_record.call-sized-is-a-number": ("sized", "is not of type 'boolean'"),
     "grants.stdio-without-command": ("servers/notes", "'command' is a required property"),
     "grants.http-with-command": ("servers/lake", "should not be valid"),
     "grants.unknown-transport": ("servers/lake/transport", "is not one of"),
     "grants.relative-command": ("servers/notes/command", "does not match"),
     "grants.no-profile-digest": ("$", "'profile_digest' is a required property"),
     "grants.unknown-key": ("$", "'secret' was unexpected"),
+    "grants.env-sets-the-loader": ("servers/notes/env", "should not be valid"),
 }
 
 
@@ -75,3 +79,25 @@ def test_every_negative_has_its_reason():
 def test_the_drafts_name_their_adr():
     for schema in SCHEMAS:
         assert "ADR-0051" in json.loads(schema.read_text())["x-draft"], schema.name
+
+
+@pytest.mark.parametrize(
+    "name", ["call-sized-is-a-string", "call-sized-is-null", "call-sized-is-a-number"]
+)
+def test_the_launcher_refuses_a_call_record_that_is_neither_sized_nor_unsized(name):
+    """A call whose ``sized`` is not exactly true or false matched no closed shape and took any
+    key, a prompt or model text included; the launcher's stream reader refuses it."""
+    from conformance.fakes.agent_runner_launcher import parse_stream
+
+    line = (DIR / "negative" / f"usage_record.{name}.json").read_text().replace("\n", "")
+    records, why = parse_stream(line.encode() + b"\n")
+    assert records == [] and "not a usage record" in why, (records, why)
+
+
+def test_the_grants_env_deny_list_is_the_catalogs():
+    """A stdio server's env in the grants file refuses exactly what the MCP catalog refuses."""
+    from homelabnext.mcp.servers import DENIED_ENV
+
+    schema = json.loads((DIR / "grants.schema.json").read_text())
+    env = schema["properties"]["servers"]["additionalProperties"]["properties"]["env"]
+    assert env["propertyNames"]["not"]["pattern"] == f"^(?:{DENIED_ENV.pattern})$"
