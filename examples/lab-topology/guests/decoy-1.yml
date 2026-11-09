@@ -10,7 +10,7 @@ resources:
   disks: [{name: rootfs, size_gb: 8, pool: fast}]
 image: {logical: debian-12-standard, kind: tarball, os_type: debian}
 network: {zone: lab, ip: 203.0.113.21}
-capability: cap:detections
+capability: cap:siem-source
 capability_groups: [cap_siem]
 tags: [lab]
 lifecycle:

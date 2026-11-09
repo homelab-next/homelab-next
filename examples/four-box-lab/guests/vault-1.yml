@@ -15,6 +15,6 @@ firewall_rules:
     - {name: ssh, proto: tcp, ports: "22", source: "zone:mgmt"}
     - {name: web-mgmt, proto: tcp, ports: "443", source: "zone:mgmt"}
     - {name: web-proxy, proto: tcp, ports: "443", source: "198.51.100.10/32"}
-capability: cap:records
+capability: cap:password-manager
 tags: [prod]
 owners: {primary: platform-team}

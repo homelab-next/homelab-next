@@ -10,7 +10,7 @@ resources:
   disks: [{name: rootfs, size_gb: 16, pool: fast}]
 image: {logical: debian-12-standard, kind: tarball, os_type: debian}
 network: {zone: services, ip: 192.0.2.75}
-capability: cap:records
+capability: cap:status-hub
 capability_groups: [cap_monitoring]
 tags: [prod]
 owners: {primary: platform-team}

@@ -10,7 +10,7 @@ resources:
   disks: [{name: rootfs, size_gb: 64, pool: fast}]
 image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
 network: {zone: services, ip: 192.0.2.71}
-capability: cap:detections
+capability: cap:network-sensor
 capability_groups: [cap_siem, cap_sensor]
 tags: [prod]
 owners: {primary: platform-team}
