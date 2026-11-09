@@ -96,15 +96,17 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false  # the tests build throwaway modules: nothing worth caching
       # The orchestrator module's dependencies, fetched (by go.sum) while the job still has a
-      # network: tools/tests/test_orchestration_conformance.py builds the controller inside the
-      # namespace below, from the module cache only (GOPROXY=off)
-      - name: fetch the orchestrator module's dependencies
+      # network, and the controller built from them once: the tests that run it
+      # (tests/conform/controller_rig.py, tools/tests/test_orchestration_conformance.py) take it
+      # from HNX_CONTROLLER_BIN instead of each shard cold-building it (modernc's sqlite is a big
+      # compile, with no Go cache here) inside its suite's time budget
+      - name: fetch the orchestrator module's dependencies and build the controller
         if: matrix.python.go
         working-directory: orchestrator
         env:
           GOFLAGS: -mod=readonly
           GOWORK: "off"
-        run: go mod download
+        run: go mod download && go build -o "$RUNNER_TEMP/controller" ./cmd/controller
       # test_this_repo_meets_the_floor runs tools/coverage_floor.py, which the coverage job below
       # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
       # No network: the suite runs as the runner user in a network namespace with only loopback,
@@ -113,6 +115,7 @@ jobs:
       # sudo -E keeps the job's environment (sudo's secure_path would drop the setup-python PATH)
       - env:
           HNX_REQUIRE_GO: ${{ matrix.python.go && '1' || '' }}
+          HNX_CONTROLLER_BIN: ${{ matrix.python.go && format('{0}/controller', runner.temp) || '' }}
           HNX_REQUIRE_MODULES: ${{ matrix.python.require-modules }}
           HNX_REQUIRE_TOOLS: ${{ matrix.python.require-tools }}
           SHARD: ${{ matrix.shard }}

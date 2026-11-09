@@ -9,5 +9,5 @@
 name: orchestration-orchestrator
 capabilities:
   orchestration:
-    adapter: homelabnext.conform.adapters.llm_orchestrator:make
+    adapter: homelabnext.conform.adapters.orchestrator:make
     config: {wait_floor: 0, fault_injection: true}

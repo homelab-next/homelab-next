@@ -280,12 +280,21 @@ if same:
     sys.exit(REFUSED)
 # the controller's job API is the one authenticated door off loopback: its bearer token, as
 # compose resolves it (a ${VAR} in .env expands here, which pass 1's literal text cannot see),
-# must be at least 32 characters. A minimum length, not an entropy check.
-token = effective.get("LAB_ORCHESTRATOR_TOKEN", "")
+# must be at least 32 characters. A minimum length, not an entropy check. The variable is the one
+# the resolved configuration's orchestrator-token secret reads, not a name assumed here.
+secret = (config.get("secrets") or {}).get("orchestrator-token")
+var = secret.get("environment") if isinstance(secret, dict) else None
+if not isinstance(var, str) or not var:
+    print(f"lab-in-a-box: refusing: the resolved compose configuration publishes {shown} beyond"
+          " loopback and its orchestrator-token secret is not read from an environment variable,"
+          " so its length cannot be checked.", file=sys.stderr)
+    sys.exit(REFUSED)
+token = effective.get(var, "")
 if len(token) < 32:
     print(f"lab-in-a-box: refusing: the resolved compose configuration publishes {shown} beyond"
-          f" loopback while LAB_ORCHESTRATOR_TOKEN resolves to {len(token)} characters; give it at"
-          " least 32 (openssl rand -hex 16) in compose/lab-in-a-box/.env.", file=sys.stderr)
+          f" loopback while {var} (the orchestrator-token secret) resolves to {len(token)}"
+          " characters; give it at least 32 (openssl rand -hex 16) in compose/lab-in-a-box/.env.",
+          file=sys.stderr)
     sys.exit(REFUSED)
 print(f"lab-in-a-box: WARNING: publishing {shown}; the query engine, bus, catalog and notify"
       " services have no authentication and OpenBao runs in dev mode", file=sys.stderr)
