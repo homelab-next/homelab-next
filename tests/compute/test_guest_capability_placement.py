@@ -110,3 +110,58 @@ def test_a_non_primary_row_places_its_capability_on_its_host(tmp_path):
     _set_capability(lab, "hub-1", "cap:idp")
     assert _validate(lab) == 0
     assert _validate(lab, "--registry", str(lab / "services.yml")) == 0
+
+
+# ---- review follow-ups: a guest cannot rename its way off its host's rows ---------------------
+
+
+def test_a_guest_renamed_away_from_its_registry_host_is_refused(tmp_path, capsys):
+    """hub-1's guest renamed to a name no registry host has, keeping hub-1's address, used to be
+    judged as a row-less guest and pass with a borrowed capability."""
+    lab = _lab(tmp_path)
+    old = lab / "guests" / "hub-1.yml"
+    text = old.read_text(encoding="utf-8").replace("id: guest:hub-1", "id: guest:statusbox", 1)
+    old.unlink()
+    (lab / "guests" / "statusbox.yml").write_text(text, encoding="utf-8")
+    _set_capability(lab, "statusbox", "cap:orchestration")
+    assert _validate(lab) == 1
+    err = capsys.readouterr().err
+    assert "guest statusbox: address 192.0.2.75 is registry host hub-1's" in err
+
+
+def test_a_row_less_guest_that_is_no_host_must_serve_nothing(tmp_path, capsys):
+    lab = _lab(tmp_path, "lab-topology")
+    assert _validate(lab) == 0  # decoy-1: no row, cap:siem-source serves no consumer
+    _set_capability(lab, "decoy-1", "cap:backup")
+    assert _validate(lab) == 1
+    assert "guest decoy-1: hosts no registry row, yet declares cap:backup" in (
+        capsys.readouterr().err
+    )
+
+
+def test_a_capability_group_of_another_host_s_capability_is_refused(tmp_path, capsys):
+    lab = _lab(tmp_path)
+    _edit(
+        lab / "guests" / "bus-1.yml",
+        "capability: cap:events\n",
+        "capability: cap:events\ncapability_groups: [cap_idp]\n",
+    )
+    assert _validate(lab) == 1
+    assert (
+        "guest bus-1: capability_groups cap_idp is capability idp's, which the registry places "
+        "on idp-1, not on bus-1"
+    ) in capsys.readouterr().err
+
+
+def test_a_runner_beside_rows_declares_agent_runtime_where_the_host_role_says_so(tmp_path):
+    """ADR-0039 decision 7: no row carries agent-runtime; the runner's host is found by its
+    registry role, so a runner guest on a host with rows may declare it there, and only there."""
+    lab = _lab(tmp_path)
+    _set_capability(lab, "bus-1", "cap:agent-runtime")
+    assert _validate(lab) == 1
+    _edit(
+        lab / "services.yml",
+        "zone: data,     role: events}",
+        "zone: data,     role: agent-runtime}",
+    )
+    assert _validate(lab) == 0

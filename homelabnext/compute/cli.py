@@ -163,7 +163,9 @@ def _registry_problems(args: argparse.Namespace, fleet) -> list[str]:
         raise ComputeUnreadable(str(exc)) from exc
     except SiteError as exc:
         raise ComputeError(str(exc)) from exc
-    return registry_problems(fleet, reg.hosts) + capability_problems(fleet, reg.rows(*STANDINGS))
+    return registry_problems(fleet, reg.hosts) + capability_problems(
+        fleet, reg.rows(*STANDINGS), reg.hosts
+    )
 
 
 def _key_problems(fleet) -> list[str]:
