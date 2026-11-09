@@ -890,8 +890,10 @@ def _check_rule(rule, pack, binding, tracked, bad) -> None:
         bad("st2-trigger", f"{name}: triggers on {SCHEDULE_EVENT} but the rule has no schedule")
     else:
         conds = [c for c in pack["trigger"].get("where", []) if c["ref"] == "$event.source"]
-        if not conds or len(pinned_sources({"where": conds})) == 0 or any(
-            "equals" not in c and "in" not in c for c in conds
+        if (
+            not conds
+            or len(pinned_sources({"where": conds})) == 0
+            or any("equals" not in c and "in" not in c for c in conds)
         ):
             bad(
                 "st2-source",

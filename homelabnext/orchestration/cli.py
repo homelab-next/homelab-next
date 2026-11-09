@@ -543,7 +543,9 @@ def main(argv: Sequence[str] | None = None, *, clock: Callable[[], float] = time
     a = _parser().parse_args(argv)
     try:
         sources = a.source or [
-            s.strip() for s in os.environ.get(SOURCE_ENV, ",".join(CONTROLLER_SOURCES)).split(",") if s.strip()
+            s.strip()
+            for s in os.environ.get(SOURCE_ENV, ",".join(CONTROLLER_SOURCES)).split(",")
+            if s.strip()
         ]
         store = TelemetryStore(
             a.db,
