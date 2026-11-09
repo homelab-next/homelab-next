@@ -79,18 +79,34 @@ _X12_SKIPPED = "hidden directories, " + ", ".join(sorted(_X12_SKIP_DIRS))
 
 def _is_registry_doc(text: str) -> bool | None:
     """Whether a YAML (or JSON) text is a registry: its top level is a mapping with the key
-    ``registry_version``, however the key is spelled (plain, quoted, flow, ``? key``).  Read by
-    composing the node graph only, so no value is constructed and an alias is never expanded.
-    None when it does not parse: the caller cannot tell, and fails closed."""
+    ``registry_version``, however the key is spelled (plain, quoted, flow, ``? key``) and
+    including through a merge key (``<<: {...}``, ``<<: *anchor`` or a list of them), as the
+    registry loader reads it.  Read by composing the node graph only, so no value is constructed
+    and an alias is never expanded.  None when it is not one YAML document: the caller cannot
+    tell, and fails closed."""
     try:
         node = yaml.compose(text, Loader=yaml.SafeLoader)
     except yaml.YAMLError:
         return None
-    if not isinstance(node, yaml.MappingNode):
-        return False
-    return any(
-        isinstance(k, yaml.ScalarNode) and k.value == "registry_version" for k, _ in node.value
-    )
+    return "registry_version" in _top_keys(node, set())
+
+
+def _top_keys(node: object, seen: set[int]) -> set[str]:
+    """The scalar keys of a mapping node, those a merge key brings in included (a merged mapping,
+    an alias to one, or a sequence of them); ``seen`` stops an anchor cycle."""
+    if not isinstance(node, yaml.MappingNode) or id(node) in seen:
+        return set()
+    seen.add(id(node))
+    keys: set[str] = set()
+    for k, v in node.value:
+        if not isinstance(k, yaml.ScalarNode):
+            continue
+        if k.tag == "tag:yaml.org,2002:merge":
+            for m in v.value if isinstance(v, yaml.SequenceNode) else [v]:
+                keys |= _top_keys(m, seen)
+        else:
+            keys.add(k.value)
+    return keys
 
 
 _X12_MAX_BYTES = 4 * 1024 * 1024
@@ -131,7 +147,9 @@ def _registries(root: pathlib.Path) -> tuple[list[pathlib.Path], list[str]]:
             continue
         is_reg = _is_registry_doc(text)
         if is_reg is None:
-            refused.append(f"{rel}: not YAML, so it cannot be told from a registry")
+            refused.append(
+                f"{rel}: cannot be read as one YAML document, so it cannot be told from a registry"
+            )
         elif is_reg:
             found.append(p)
     return sorted(found), refused

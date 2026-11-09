@@ -433,7 +433,7 @@ def test_x12_follows_no_link_out_of_the_tree_and_echoes_no_file_content(tmp_path
     write(root / "lab" / "services.yml", "registry_version: 1\nservices: [MARKER-INSIDE-TEXT\n")
     r = pillar_x.x12(ctx(root))
     assert r.status == "error" and "MARKER" not in r.evidence
-    assert "lab/services.yml: not YAML" in r.evidence  # named, its text not quoted
+    assert "lab/services.yml: cannot be read as one YAML document" in r.evidence  # text not quoted
 
 
 def test_x12_selects_registries_by_content_at_any_depth(tmp_path, monkeypatch):
@@ -508,5 +508,40 @@ def test_x12_refuses_a_services_file_it_cannot_parse_and_names_what_it_skipped(
     )
     write(tmp_path / "lab" / "services.yml", '"registry_version": [unclosed\n')
     r = pillar_x.x12(ctx(tmp_path))
-    assert r.status == "error" and "lab/services.yml: not YAML" in r.evidence
+    assert (
+        r.status == "error"
+        and "lab/services.yml: cannot be read as one YAML document" in r.evidence
+    )
     assert "unclosed" not in r.evidence
+
+
+@pytest.mark.parametrize("form", ["mapping", "anchor", "list"])
+def test_x12_finds_a_registry_whose_version_comes_through_a_merge_key(tmp_path, monkeypatch, form):
+    """``<<: {registry_version: 1}`` (or through an anchor) loads as a registry; X-12 read it as
+    none and skipped, hiding its overdue rows."""
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    doc = _minimal_registry_doc()
+    doc["services"]["dns-trial"] = yaml.safe_load(LATE)["dns-trial"]
+    version = doc.pop("registry_version")
+    body = yaml.safe_dump(doc)
+    text = {
+        "mapping": f"<<: {{registry_version: {version}}}\n" + body,
+        "anchor": f"<<: [&base {{registry_version: {version}}}, *base]\n" + body,
+        "list": f"<<: [{{registry_version: {version}}}]\n" + body,
+    }[form]
+    from homelabnext.registry import model
+
+    path = tmp_path / "lab" / "services.yml"
+    write(path, text)
+    model.load(path)  # the registry loader reads it as a registry
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail", r.evidence
+    assert "lab/services.yml: dns-trial (eval dns) until 2026-11-30" in r.evidence
+
+
+def test_x12_names_a_multi_document_services_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    write(tmp_path / "lab" / "services.yml", "registry_version: 1\n---\nservices: {}\n")
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "error"
+    assert "lab/services.yml: cannot be read as one YAML document" in r.evidence
