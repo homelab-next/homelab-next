@@ -121,10 +121,11 @@ EXCEPTIONS: tuple[Declared, ...] = (
         "primary in its rollback window, is proven by its row name",
     ),
 )
-#: platform capabilities a pack may name although the reference example registry places no row of
-#: them: a note, not a problem, for the packs listed only and only with ``reference_examples``
-#: (``make check``); against a lab registry they are refused like any other unplaced name.  Each entry ends with the change
-#: its reason names; a registry that holds any row of the capability judges it as usual.
+#: platform capabilities a pack may name although the reference example registry places no row
+#: of them: a note, not a problem, for the packs listed only and only with ``reference_examples``
+#: (``make check``); against a lab registry they are refused like any other unplaced name.  Each
+#: entry ends with the change its reason names; a registry that holds any row of the capability
+#: judges it as usual.
 UNPLACED: tuple[Declared, ...] = (
     Declared(
         "orchestration",
