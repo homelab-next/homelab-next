@@ -354,8 +354,9 @@ Set `HNX_CONFORM_TARGET` to run the invariant against a real target.
    summary and a precise assertion message.  Test errors and negative cases, not only the happy
    path.
 4. **Wire it.** Add the name to `CAPABILITIES` (core, only by changing `docs/interfaces.md`) or to
-   `EXTENDED` in `homelabnext/conform/registry.py`; add `conformance/<name>/test_conformance_<name>.py`
-   (copy any sibling); for a core capability add it to `capabilities.yml`.
+   `EXTENDED` in `homelabnext/capability_names.py`; add
+   `conformance/<name>/test_conformance_<name>.py` (copy any sibling); for a core capability add it
+   to `capabilities.yml`.
 5. **Prove it.** `python -m pytest -q tests/conform conformance` must pass: the fake passes with
    no skips, each mutant is caught by its named check.  A new check ships with a fake update in
    the same change (`docs/interfaces.md` section 6): checks are never removed, only added.

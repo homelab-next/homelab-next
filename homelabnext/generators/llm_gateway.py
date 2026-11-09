@@ -392,11 +392,59 @@ def _profile_slug(pid: str) -> str:
     return pid.removeprefix("profile:")
 
 
+def _registry_host_problem(registry: Any, host: str, service_domain: str, port: Any) -> str | None:
+    """Why a self-declared local ``host`` (with ``port``) in the registry's alias zone may not be
+    a backend (ADR-0039 decision 3: a gateway backend binds only a primary):
+
+    * a capability's primary alias is allowed with the primary's own port only: a candidate
+      usually shares the primary's host, so the alias with another port reaches it;
+    * any other host with a label that names a registry row or capability is refused: a row's
+      record (an ``eval`` or ``retiring`` row answers by its row name) or a made-up name under it.
+
+    Any other name in the alias zone answers nothing: the registry generates every record there
+    and site validation refuses a static one (``hnx site validate``)."""
+    from homelabnext.registry.model import STANDINGS
+
+    prefix = host[: -len(service_domain) - 1]
+    primary = registry.by_capability(prefix)
+    if primary is not None:
+        if port != primary.port:
+            return (
+                f"host {host} is capability {prefix}'s primary alias, but port {port} is not the "
+                f"primary's port {primary.port}; another port on that host may be a candidate "
+                "(name the registry row as the backend)"
+            )
+        return None
+    rows = {r.name: r for r in registry.rows(*STANDINGS)}
+    caps = {r.capability for r in rows.values()}
+    for label in prefix.split("."):
+        row = rows.get(label)
+        if row is not None and not row.is_primary:
+            article = "an" if row.standing == "eval" else "a"
+            where = "is" if label == prefix else "is under"
+            return (
+                f"host {host} {where} {article} {row.standing} row's record ({row.name}); a "
+                "gateway backend binds only a primary (ADR-0039 decision 3)"
+            )
+        if row is not None or label in caps:
+            kind = "row" if row is not None else "capability"
+            return (
+                f"host {host} names registry {kind} {label} but is not a capability's primary "
+                "alias; name the registry row as the backend, or use the capability alias"
+            )
+    return None
+
+
 def load_spec(
-    path: str | Path, *, conformance: bool = False, conformance_host: str | None = None
+    path: str | Path,
+    *,
+    conformance: bool = False,
+    conformance_host: str | None = None,
+    registry: Any = None,
 ) -> Spec:
     """Read and validate a gateway spec; relative paths in it resolve against its directory.
-    ``conformance`` (and ``conformance_host``) select the test-only render (module docstring)."""
+    ``conformance`` (and ``conformance_host``) select the test-only render (module docstring);
+    ``registry`` replaces the spec's own ``registry:`` file."""
     path = Path(path)
     doc = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
     return spec_from_dict(
@@ -405,6 +453,7 @@ def load_spec(
         source=path.as_posix(),
         conformance=conformance,
         conformance_host=conformance_host,
+        registry=registry,
     )
 
 
@@ -415,7 +464,10 @@ def spec_from_dict(
     source: str = "<spec>",
     conformance: bool = False,
     conformance_host: str | None = None,
+    registry: Any = None,
 ) -> Spec:
+    """``registry`` (a loaded :class:`~homelabnext.registry.model.Registry`) is used instead of
+    the spec's own ``registry:`` file when given (``hnx registry bindings --gateway``)."""
     problems: list[str] = []
     if not isinstance(doc, Mapping):
         raise GatewaySpecError(f"{source}: the gateway spec must be a mapping")
@@ -446,8 +498,7 @@ def spec_from_dict(
         raise GatewaySpecError(f"{source}: cannot read role table {roles_path}: {exc}") from None
     problems += [f"{roles_path}: {p}" for p in module_rules.role_ceiling_problems(raw_roles)]
 
-    registry = None
-    if doc.get("registry"):
+    if registry is None and doc.get("registry"):
         from homelabnext.registry import load as load_registry
 
         registry = load_registry(base / str(doc["registry"]))
@@ -502,6 +553,15 @@ def spec_from_dict(
             backends[name] = Backend(name, loc, provider=str(prov), api_key=key)
             continue
         svc = registry.services.get(name) if registry else None
+        other = registry.row(name, "eval", "retiring", "legacy") if registry else None
+        if svc is None and other is not None:
+            # its row-name record would take the non-registry path below and reach the row
+            problems.append(
+                f"{where}: registry row {name} is {'an' if other.standing == 'eval' else 'a'} "
+                f"{other.standing} row; a gateway backend binds only a primary (ADR-0039 "
+                "decision 3)"
+            )
+            continue
         if svc is not None:
             if _cloud_zone(registry, svc):
                 problems.append(
@@ -531,6 +591,10 @@ def spec_from_dict(
                     f"{where}: locality local is not self-declared: {host} is neither a registry "
                     f"service nor under the lab's service domain {service_domain}"
                 )
+                continue
+            why = _registry_host_problem(registry, host, service_domain, port) if registry else None
+            if why:
+                problems.append(f"{where}: {why}")
                 continue
         if not isinstance(port, int) or not 0 < port < 65536:
             problems.append(f"{where}: a local backend needs a port (or a registry service)")

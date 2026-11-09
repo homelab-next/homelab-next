@@ -395,6 +395,8 @@ jobs:
         run: make models-check PY=python
       - name: the LLM gateway configs have no drift and no local-only or agent role reaches a cloud model
         run: make gateway-check PY=python
+      - name: consumers bind only to a primary registry row (ADR-0039 decision 3)
+        run: make bindings-check PY=python
       - name: readers cannot act (agent profile and context manifest lint)
         run: python -m homelabnext.cli agent lint
       - name: prompt template lint (G-01, untrusted slots only inside fences)
