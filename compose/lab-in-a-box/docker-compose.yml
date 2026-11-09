@@ -370,7 +370,7 @@ services:
   # Kuma tries `sudo service nscd start` and logs that it failed: no-new-privileges, by design.
   uptime:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:2.5.6-slim-rootless@sha256:6eb4e96a7cbdb8a5d6779aa26dce2cb97dcea65b486856b9b2280f73a1d0adf4
+    image: louislam/uptime-kuma:2.5.7-slim-rootless@sha256:a2b9fc59ac8f43daf5c728d233dd7bf23fae25c819b20067ee2b5143606bc061
     environment:
       UPTIME_KUMA_DB_TYPE: sqlite
     volumes:
@@ -395,7 +395,7 @@ services:
   # healthy only then, so `up --wait` returns with the page in place.
   uptime-init:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:2.5.6-slim-rootless@sha256:6eb4e96a7cbdb8a5d6779aa26dce2cb97dcea65b486856b9b2280f73a1d0adf4
+    image: louislam/uptime-kuma:2.5.7-slim-rootless@sha256:a2b9fc59ac8f43daf5c728d233dd7bf23fae25c819b20067ee2b5143606bc061
     entrypoint: ["node", "/provision/provision.js"]
     working_dir: /app
     environment:
@@ -569,7 +569,7 @@ services:
   llm-gateway:
     <<: [*restart, *hardened]
     profiles: [gateway]
-    image: litellm/litellm-database:v1.106.3@sha256:f631537bfc317970ceda5fac99b436161cb7a78d515d7037226de396a71b9bf9
+    image: litellm/litellm-database:v1.106.4@sha256:db36453d25e76c9eb689d7d51b8e5fa48843243d7a86ed1284cf574ce0107b3f
     command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
     environment:
       HNX_SECRET_LLM_GATEWAY_MASTER_KEY: ${LAB_GATEWAY_MASTER_KEY:?see .env.example}
