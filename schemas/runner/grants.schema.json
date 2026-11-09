@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/runner/grants/1.0",
+  "x-draft": "ADR-0051 (proposed): the agent-runner contract's surface, step 2; not frozen, may change before acceptance",
+  "title": "Agent-runner grants file",
+  "description": "A compiled profile's MCP servers, rendered by the deploy (hnx gen agent-units, as root) into /etc/hnx-agent/<slug>/grants.json beside the unit template, which pins the file's own sha256 (ADR-0051 decision 3). A body starts only servers whose ids are both in the session spec and here. profile_digest is the compiled profile's digest, a staleness check only.",
+  "type": "object",
+  "properties": {
+    "grants_version": {
+      "const": "1.0"
+    },
+    "profile": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "profile_digest": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/sha256"
+    },
+    "servers": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "transport": {
+            "enum": [
+              "stdio",
+              "http"
+            ]
+          },
+          "locality": {
+            "enum": [
+              "local",
+              "non-local"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "maxLength": 512,
+            "pattern": "^/[^\\u0000-\\u001f]+$(?!\\n)"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "maxItems": 64
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "propertyNames": {
+              "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)",
+              "not": {
+                "pattern": "^(?:(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN|\\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSLKEYLOGFILE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PERL5\\w+|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4|TMPDIR|IFS)$"
+              }
+            },
+            "description": "Non-secret environment of a stdio server. A key that configures the process or its launcher (the MCP catalog's DENIED_ENV: PATH, LD_*, PYTHON*, NODE_*, *_PROXY, ...) is refused, as the catalog refuses it; a credential never rides here (the file is readable by the profile's group)."
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 256,
+            "pattern": "^https?://[a-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?$(?!\\n)"
+          }
+        },
+        "required": [
+          "kind",
+          "transport",
+          "locality"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "transport": {
+                  "const": "stdio"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "command"
+              ],
+              "not": {
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "transport": {
+                  "const": "http"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "url"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "command"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "args"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "env"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "maxProperties": 64
+    }
+  },
+  "required": [
+    "grants_version",
+    "profile",
+    "profile_digest",
+    "servers"
+  ],
+  "additionalProperties": false
+}

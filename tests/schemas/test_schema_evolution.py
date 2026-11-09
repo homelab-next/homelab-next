@@ -39,6 +39,9 @@ DRAFTS = {
     "codemode/execution_result.schema.json",
     "codemode/token.schema.json",
     "codemode/journal_step.schema.json",
+    "runner/session.schema.json",
+    "runner/usage_record.schema.json",
+    "runner/grants.schema.json",
 }
 
 
