@@ -545,3 +545,23 @@ def test_x12_names_a_multi_document_services_file(tmp_path, monkeypatch):
     r = pillar_x.x12(ctx(tmp_path))
     assert r.status == "error"
     assert "lab/services.yml: cannot be read as one YAML document" in r.evidence
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a: " + "[" * 5000 + "]" * 5000 + "\n",  # nested too deeply to compose
+        "".join(
+            f"m{i}: &m{i} {{<<: *m{i - 1}}}\n" if i else "m0: &m0 {k: 1}\n" for i in range(3000)
+        )
+        + "<<: *m2999\n",  # a merge chain too deep to follow
+    ],
+    ids=["nesting", "merge-chain"],
+)
+def test_x12_names_a_registry_too_deep_to_read_as_unreadable(tmp_path, monkeypatch, text):
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    write(tmp_path / "lab" / "services.yml", text)
+    assert pillar_x._is_registry_doc(text) is None
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "error"
+    assert "lab/services.yml: cannot be read as one YAML document" in r.evidence

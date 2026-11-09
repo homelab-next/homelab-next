@@ -86,9 +86,11 @@ def _is_registry_doc(text: str) -> bool | None:
     tell, and fails closed."""
     try:
         node = yaml.compose(text, Loader=yaml.SafeLoader)
+        return "registry_version" in _top_keys(node, set())
     except yaml.YAMLError:
         return None
-    return "registry_version" in _top_keys(node, set())
+    except RecursionError:  # nested (or merged) too deeply to read: cannot be told either
+        return None
 
 
 def _top_keys(node: object, seen: set[int]) -> set[str]:

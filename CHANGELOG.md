@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- Invariant X-12: a `services.yml` nested (or merge-chained) too deeply to read is named as "cannot be read" instead of crashing the check with a `RecursionError`.
 - Registry: a `services.yml` whose aliases or merge keys would expand past 200,000 YAML nodes is refused before it is constructed (`hnx registry validate` and every reader of the registry); a few hundred bytes of nested aliases or merges kept them busy for minutes. A registry nested too deeply is unreadable instead of a crash.
 - A gateway spec's role table: the default containment root is the working directory only when it is a checkout (a `.git` entry), then this package's own source checkout, else the spec's directory; a filesystem root (`/`) is refused as the root, and the root itself is opened without following a link. `hnx gen gateway render` takes `--root`.
 - LLM gateway and `hnx registry bindings --gateway`: a spec's `roles:` path is refused when absolute, when it leaves the root the caller gives (`--root`; by default the working directory when the spec is in it, else the spec's directory; `..` inside it is fine), or when a symbolic link is on its path (each component opened without following one); both read it through one validator, `RoleTable.loads`.
