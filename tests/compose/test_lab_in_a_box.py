@@ -1399,7 +1399,21 @@ def guard(lab, tmp_path, docker=False, **env):
 
 
 def real_credentials():
-    return {k: f"changed-{k.lower()}" for k in CREDENTIALS}
+    # long enough for the job API token's 32-character minimum
+    return {k: f"changed-{k.lower()}-0123456789abcdef" for k in CREDENTIALS}
+
+
+def test_pass1_refuses_a_short_job_api_token_off_loopback(lab_copy, tmp_path):
+    env = {
+        "LAB_BIND": "0.0.0.0",
+        "LAB_I_UNDERSTAND_UNAUTHENTICATED": "1",
+        **real_credentials(),
+    }
+    env["LAB_ORCHESTRATOR_TOKEN"] = "short-but-changed-token"
+    r = guard_pass1(lab_copy, tmp_path, **env)
+    assert r.returncode == 4 and "LAB_ORCHESTRATOR_TOKEN is 23 characters" in r.stderr, r.stderr
+    env["LAB_ORCHESTRATOR_TOKEN"] = "a-job-api-token-of-32-characters"
+    assert guard_pass1(lab_copy, tmp_path, **env).returncode == 0
 
 
 def guard_pass1(lab, tmp_path, **env):

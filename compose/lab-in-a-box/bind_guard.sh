@@ -160,6 +160,15 @@ _lab_bind_guard_values() {
       "placeholder:$placeholders. Set real values in compose/lab-in-a-box/.env first." >&2
     return 4
   fi
+  # the controller's job API is the one authenticated door off loopback: its bearer token has
+  # to be long enough not to be guessed (32 characters, say 16 random bytes in hex)
+  local token
+  token=$(_lab_effective LAB_ORCHESTRATOR_TOKEN)
+  if [ "${#token}" -lt 32 ]; then
+    echo "lab-in-a-box: refusing LAB_BIND=$bind: LAB_ORCHESTRATOR_TOKEN is ${#token} characters;" \
+      "give it at least 32 (openssl rand -hex 16) in compose/lab-in-a-box/.env." >&2
+    return 4
+  fi
   return 0
 }
 
