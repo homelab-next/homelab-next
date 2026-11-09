@@ -588,6 +588,24 @@
     },
     {
       "exit": {
+        "0": "the controller stopped cleanly",
+        "1": "no token, or the configuration's check failed"
+      },
+      "id": "lab-orchestrator-entrypoint",
+      "inputs": "HNX_SECRET_ORCHESTRATOR_TOKEN; /etc/orchestrator/controller.yaml",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "/var/lib/orchestrator/api-tokens.yaml (owner-only); the controller's log",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/orchestrator/entrypoint.sh",
+      "purpose": "Start the lab controller with a tokens file written from the throwaway token's digest.",
+      "status": "active",
+      "trigger": [
+        "compose:lab-in-a-box/orchestrator"
+      ]
+    },
+    {
+      "exit": {
         "0": "decided (or, with --check, every stack input is covered)",
         "1": "with --check, a stack input no entry covers",
         "2": "the changed paths could not be read"

@@ -151,9 +151,11 @@ go:
   modernc.org/sqlite: {spdx: BSD-3-Clause AND blessing, kind: linked, reason: "orchestrator/internal/store's database driver, SQLite translated to Go (no cgo): the driver is BSD-3-Clause, the bundled SQLite public domain with its blessing (LICENSE-SQLITE); LICENSE-SQLITE_VEC (MIT) covers an extension the store never imports"}
 images:
   binwiederhier/ntfy: {spdx: Apache-2.0 OR GPL-2.0-only, kind: service, reason: "the notify service; the project is dual-licensed (its LICENSE and LICENSE.GPLv2)"}
+  golang: {spdx: BSD-3-Clause, kind: service, reason: "the base image the lab's orchestrator image is built FROM and runs on (compose/lab-in-a-box/orchestrator/Dockerfile); the Go toolchain's licence, its Debian packages under their own"}
   dxflrs/garage: {spdx: AGPL-3.0-only, kind: service, reason: "the object store (v2.5.0: its LICENSE is still AGPL-3.0); run as its own service, nothing of it is shipped here (NOTICE)"}
   hnx-lab-broker: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
   hnx-lab-fakes: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box)"}
+  hnx-lab-orchestrator: {spdx: Apache-2.0, kind: service, reason: "built from this repository (compose/lab-in-a-box/orchestrator: the controller from orchestrator/)"}
   litellm/litellm-database: {spdx: MIT, kind: service, reason: "the LLM gateway; MIT outside the project's enterprise/ directory, which has its own licence and is not used"}
   louislam/uptime-kuma: {spdx: MIT, kind: service, reason: "the uptime monitor; the project's LICENSE"}
   nats: {spdx: Apache-2.0, kind: service, reason: "the event bus; the project's LICENSE (v2.15.1: still Apache-2.0, unchanged since v2.10.29)"}

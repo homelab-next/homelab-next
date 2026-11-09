@@ -28,7 +28,7 @@ does not cover fails rather than silently skipping the stack:
 * what the images are built from (the build context is the repository root): every ``COPY``
   source of every Dockerfile a service builds (the broker image copies the whole package, the
   conformance suites, schemas, profiles and examples, and installs from ``pyproject.toml`` and
-  ``constraints/``);
+  ``constraints/``; the orchestrator image builds the controller from ``orchestrator/``);
 * what the runner side runs: the project with its ``core`` and ``nats`` extras, installed by
   ``.github/actions/python-deps`` from ``constraints/``, and ``hnx conform`` with the adapters
   the ``targets/*.yml`` name (inside ``homelabnext/``);
@@ -77,6 +77,7 @@ LAB_PATHS: tuple[str, ...] = (
     "schemas/",
     "profiles/",
     "examples/",
+    "orchestrator/",  # the controller image's Go module (compose/lab-in-a-box/orchestrator)
     "pyproject.toml",
     "constraints/",
     # step-level inputs (hand-listed: see above): the editable install and the capability registry

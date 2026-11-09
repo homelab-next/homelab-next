@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The lab-in-a-box controller (orchestrator/cmd/controller; docs/orchestration-controller.md,
+# "The controller binary").  Its one backend is a name: the exec runner's sessions are /bin/sh,
+# which read the prompt on stdin and answer with a fixed line, so a job's run exercises the queue,
+# the pool, the runner and the store with no model behind it.  Bound on every interface of the
+# container (published on LAB_BIND only); authentication is on, with the tokens file the
+# entrypoint writes.
+db_path: /var/lib/orchestrator/controller.db
+http_addr: ":8088"
+concurrency: 1
+runner:
+  kind: exec
+  exec:
+    # builtins only: the session inherits no PATH (an empty env_allowlist passes nothing)
+    argv: [/bin/sh, -c, "while read -r line; do :; done; echo lab-smoke-ok"]
+  timeout_seconds: 60
+backends:
+  local: {name: engine-a, home: lab-smoke, needs_interlock: false}
+profiles_dir: profiles
+lessons_disabled: true
+prompt_contracts: []
+api_auth: {tokens_file: /var/lib/orchestrator/api-tokens.yaml}
+scope:
+  denied_roots: [owner]
+  findings_root: ''
+  shared_write: []
+  reserved_names: []

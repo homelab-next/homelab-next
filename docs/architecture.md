@@ -155,6 +155,7 @@ every service is single node. See the README "Try it" section.
 | `metrics` | Prometheus, scraping itself, two always-firing rules | (status hub source) |
 | `uptime` | Uptime Kuma, provisioned headlessly with a public status page | (status hub source) |
 | `broker`, `status-hub`, `broker-edge` | `hnx broker serve` on a Unix socket, `hnx status serve` with the Approvals page, and the edge that drives them, each as its own uid (no alias for `broker`: it has no network) | `broker` (the end-to-end check below) |
+| `orchestration` | the controller built from `orchestrator/` with the exec runner running `/bin/sh` sessions (no model), job API authenticated | `orchestration` (the smoke submits a job and waits for it to finish) |
 
 The object store is Garage v2 (`dxflrs/garage:v2.5.0`). `lab_init.py` speaks Garage's admin API
 v2 (`/v2/<Operation>`: `GetNodeInfo`, `UpdateClusterLayout`, `ApplyClusterLayout`, `ImportKey`,
@@ -304,6 +305,7 @@ service as follows:
 | `metrics` (Prometheus) | no authentication, 2-hour retention, rules that always fire | the real metrics service with its own rules, behind the forward-auth proxy |
 | `uptime` (Uptime Kuma) | a known admin password, a public status page | a generated admin password, 2FA, behind the forward-auth proxy; only the monitors the hub should see on the public page |
 | `broker`, `status-hub`, `broker-edge` | a known front-door secret, an edge that asserts the approver's identity without a login, the example handlers | the systemd unit in [broker](broker.md#a-systemd-unit) with the operator's manifest and handlers, the hub behind Caddy, the auth proxy and the IdP (ADR-0034) with the front-door secret from the secrets capability |
+| `orchestration` (the controller) | a known job API token, `/bin/sh` sessions, one backend name and no model | the example unit (`orchestrator/deploy/systemd/orchestrator.service`) with the site's runner, backends and tokens file, behind the gateway (docs/orchestration-controller.md) |
 
 ## Ansible host trust
 
