@@ -86,8 +86,10 @@ def test_the_example_proxy_is_registered_as_the_edge_proxy_not_the_identity_prov
     lab = ROOT / "examples" / "four-box-lab"
     zones, domain = open_site(lab / "site.yml")
     fleet = load_fleet(lab / "guests", zones, domain=domain or "example.internal")
-    flat = registry_hosts.fragment(fleet)["hosts"]
+    caps = {g.name: g.capability for g in fleet.sorted()}
     # each guest declares the capability of a row on its own host (ADR-0039 decision 7): the
     # secondary resolver its replica row's, not the primary's
-    assert flat["proxy-1"]["role"] == "edge-proxy"
-    assert (flat["dns-1"]["role"], flat["dns-2"]["role"]) == ("dns", "dns-secondary")
+    assert caps["proxy-1"] == "cap:edge-proxy"
+    assert (caps["dns-1"], caps["dns-2"]) == ("cap:dns", "cap:dns-secondary")
+    # the registry fragment derives no host role from a guest's capability
+    assert all("role" not in h for h in registry_hosts.fragment(fleet)["hosts"].values())

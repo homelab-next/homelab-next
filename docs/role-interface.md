@@ -138,6 +138,18 @@ Every capability also has a derived group, `cap_<capability>` with `-` as `_`
 (`homelabnext.compute.model.group_for_capability`): for example `cap_context` and `cap_projects`
 (the project-management tool's host, OpenProject in `docs/projects.md`).
 
+**Who may join a group** (`hnx guests validate --registry`, ADR-0039 decision 7). A group is
+bound to a capability when it is that capability's derived name: `cap_inference`, `cap_edge`,
+`cap_idp`, `cap_secrets`, `cap_orchestration`, `cap_broker`, `cap_cases`, `cap_monitoring` and
+`cap_backup` among the named groups. When the registry places a row of that capability, only a
+guest on a host carrying that row may join it. When the registry places no row of it, the group
+is free to join: nothing in the registry says where it belongs. The other named groups
+(`cap_siem`, `cap_lake`, `cap_query`, `cap_tip`, `cap_decision`, `cap_nifi`, `cap_sensor`,
+`cap_scanner`) name no registry capability, so they are always free to join. A free group still
+receives its playbooks, several of them the sensitive ones (secrets, identity, the broker), so
+joining one is a reviewed change of the guest file like any other: the registry check does not
+gate it.
+
 `ansible/inventory/example/hosts.yml` shows the layout (hosts under the reserved
 `example.internal` domain). Moving a capability to another guest is a group
 membership change. `role_lint.py --playbook X --inventory Y` fails a playbook whose
