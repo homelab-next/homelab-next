@@ -39,7 +39,7 @@ from __future__ import annotations
 import copy
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -631,13 +631,30 @@ def apply_switch(
     return after_site, after_text
 
 
+#: how many days before today's real date a promotion may be dated: an override of a few days
+#: (a pull request computed yesterday, or across a timezone) is accepted, an older one would write
+#: a rollback window already spent
+MAX_PROMOTION_AGE_DAYS = 3
+
+
+def _real_today() -> Any:
+    """Today's real date in UTC, the bound a promotion's date is held to: never ``HNX_TODAY`` or
+    ``today=`` (those only say which day the promotion claims), and the same on every machine
+    whatever its timezone."""
+    import datetime
+
+    return datetime.datetime.now(datetime.UTC).date()  # hermetic: allow the real date bound
+
+
 def _checked_promotion(
     registry_text: str, promotion: Any, today: Any, *, swap_problems: tuple | None = None
 ) -> Doc:
     """Every check a standing promotion meets before it is written, with or without a module
     swap: it is ``plan_promote``'s (not its inverse), dated ``today`` (``HNX_TODAY``, else the
-    local date) and never after the real local date (an override may not post-date a window:
-    ``until`` stays within ``MAX_ROLLBACK_DAYS`` of the day it is really applied), it changes only
+    local date), never after today's real UTC date (an override may not post-date a window:
+    ``until`` stays within ``MAX_ROLLBACK_DAYS`` of the day it is really applied) and no more than
+    :data:`MAX_PROMOTION_AGE_DAYS` before it (a stale override would write an ``until`` already
+    spent), it changes only
     the standing fields of its two rows (and, with ``swap_problems=(swap, mods)``, it is that
     swap's), and it is exactly the plan ``plan_promote`` computes from this registry.  Returns
     the parsed registry; raises ``ValueError`` (``cutover refused: ...``)."""
@@ -654,7 +671,7 @@ def _checked_promotion(
             f"cutover refused: the promotion is dated {promotion.switched_on}, and the switch is "
             f"on {on}: its rollback window runs from the day it is applied (recompute it today)"
         )
-    real = datetime.date.today()  # hermetic: allow the bound is the real date, never an override
+    real = _real_today()
     try:
         dated = datetime.date.fromisoformat(promotion.switched_on)
     except (TypeError, ValueError):
@@ -664,8 +681,14 @@ def _checked_promotion(
     if dated > real:
         raise ValueError(
             f"cutover refused: the promotion is dated {promotion.switched_on}, after today's "
-            f"real date {real.isoformat()}: an overridden date may not post-date its rollback "
-            "window (HNX_TODAY and today= do not move this bound)"
+            f"real date {real.isoformat()} (UTC): an overridden date may not post-date its "
+            "rollback window (HNX_TODAY and today= do not move this bound)"
+        )
+    if (real - dated).days > MAX_PROMOTION_AGE_DAYS:
+        raise ValueError(
+            f"cutover refused: the promotion is dated {promotion.switched_on}, more than "
+            f"{MAX_PROMOTION_AGE_DAYS} days before today's real date {real.isoformat()} (UTC): "
+            "its window would already be spent (recompute it today)"
         )
     try:
         doc = load_doc(registry_text)
@@ -706,18 +729,63 @@ def _checked_promotion(
     return doc
 
 
-def apply_promotion(registry_text: str, promotion: Any, *, today: Any = None) -> str:
+def apply_promotion(
+    registry_text: str,
+    promotion: Any,
+    *,
+    site: Doc,
+    mods: dict[str, Doc],
+    today: Any = None,
+) -> str:
     """A standing promotion with no module swap (ADR-0039 decision 6): an old-lab switch, whose
-    incumbent leaves as ``legacy`` and whose candidate no module of this repository provides,
-    or any capability no selection slot names.  It meets every check :func:`apply_switch`'s
-    promotion half meets but the swap's (:func:`_checked_promotion`: the date, never after the
-    real date; the standing fields only; the plan ``plan_promote`` computes) and returns the
-    registry text ``promote_text`` writes, whose inverse is the rollback.  A switch that also
-    moves a selection line goes through :func:`apply_switch`, which writes both halves."""
+    incumbent leaves as ``legacy`` and whose candidate no module of this repository provides.
+    It meets every check :func:`apply_switch`'s promotion half meets (:func:`_checked_promotion`:
+    the date and its real-date bounds; the standing fields only; the plan ``plan_promote``
+    computes) and returns the registry text ``promote_text`` writes, whose inverse is the
+    rollback.
+
+    It is refused when the switch belongs to :func:`apply_switch`, which writes the selection
+    beside the registry: the capability is a slot ``site`` selects (promoting it alone would
+    split the registry from what is deployed), or the incumbent or the candidate runs the product
+    of one of ``mods`` (a module this repository deploys goes ``retiring``, kept restorable
+    with its backups, through its own swap)."""
     from homelabnext.swap.flip import FlipError, promote_text
 
-    _checked_promotion(registry_text, promotion, today)
+    doc = _checked_promotion(registry_text, promotion, today)
+    problems = _module_backed_problems(site, mods, doc, promotion)
+    if problems:
+        raise ValueError("cutover refused: " + "; ".join(problems))
     try:
         return promote_text(registry_text, promotion)
     except FlipError as exc:
         raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
+
+
+def _module_backed_problems(site: Doc, mods: dict[str, Doc], doc: Doc, promotion: Any) -> list[str]:
+    """Why a promotion is not one :func:`apply_promotion` may write alone."""
+    cap = promotion.capability
+    out = []
+    lines = (site.get("slots") or {}).get(cap) if isinstance(site, Mapping) else None
+    if isinstance(lines, list) and lines:
+        out.append(
+            f"{cap} is a slot this site selects: its switch moves the selection too, so it goes "
+            "through apply_switch with the swap's selection diff"
+        )
+    products: dict[str, str] = {}
+    for mid, m in sorted(mods.items()):
+        prod = (m.get("product") or {}) if isinstance(m, Mapping) else {}
+        for name in (prod.get("name"), *(prod.get("aliases") or ())):
+            if isinstance(name, str):
+                products.setdefault(name, mid)
+    rows = doc.get("services") or {}
+    for role, name in (("incumbent", promotion.incumbent), ("candidate", promotion.row)):
+        impl = (rows.get(name) or {}).get("impl") if name else None
+        if impl in products and not (
+            role == "incumbent" and promotion.incumbent_tier == "retiring"
+        ):
+            out.append(
+                f"the {role} {name} runs {impl!r}, the product of module {products[impl]} that "
+                "this repository deploys: switch it through apply_switch (a deployed incumbent "
+                "goes retiring, kept restorable with its backups)"
+            )
+    return out

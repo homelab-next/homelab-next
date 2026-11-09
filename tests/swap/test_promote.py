@@ -195,6 +195,9 @@ MODS = {
 @pytest.fixture
 def selection(monkeypatch):
     monkeypatch.setenv("HNX_TODAY", "2026-11-08")  # the day the plans below are dated
+    monkeypatch.setattr(
+        ms, "_real_today", lambda: dt.date(2026, 11, 8), raising=False
+    )  # and the real date
     calls = []
 
     def fake(site, swap, mods, *, models=None):
@@ -360,22 +363,27 @@ def test_a_switch_may_not_post_date_its_window_with_an_overridden_date(monkeypat
         ms.apply_switch({}, SWAP, MODS, text, p, today=dt.date(2999, 1, 1))
 
 
+#: the site of the old-lab tests: it selects no idp provider (the old lab's IdP has no module)
+OLD_SITE = {"slots": {"lake-query": [{"provider": "query-mod-a", "instance": "q"}]}}
+
+
 def test_an_old_lab_promotion_meets_the_switch_checks_without_a_module_swap(monkeypatch):
     """The four ADR-0039 step-10 switches move no selection line: apply_promotion runs the
     promotion half's checks alone (the date, the standing fields, the recomputed plan)."""
     monkeypatch.setenv("HNX_TODAY", "2026-11-08")
+    monkeypatch.setattr(ms, "_real_today", lambda: dt.date(2026, 11, 8), raising=False)
     text = _idp_text()
     p = plan_promote(load_doc(text), "idp", "sso-next", dt.date(2026, 11, 8), 30, old_lab=True)
-    after = ms.apply_promotion(text, p)
+    after = ms.apply_promotion(text, p, site=OLD_SITE, mods=MODS)
     assert after == promote_text(text, p)
     assert loads(after).by_capability("idp").name == "sso-next"
     with pytest.raises(ValueError, match="not its inverse"):
-        ms.apply_promotion(after, p.inverse())
+        ms.apply_promotion(after, p.inverse(), site=OLD_SITE, mods=MODS)
     with pytest.raises(ValueError, match="standing promotion does not apply"):
-        ms.apply_promotion(after, p)  # already applied: stale
+        ms.apply_promotion(after, p, site=OLD_SITE, mods=MODS)  # already applied: stale
     early = plan_promote(load_doc(text), "idp", "sso-next", "2026-10-01", 30, old_lab=True)
     with pytest.raises(ValueError, match="dated 2026-10-01, and the switch is on 2026-11-08"):
-        ms.apply_promotion(text, early)
+        ms.apply_promotion(text, early, site=OLD_SITE, mods=MODS)
     d = p.to_dict()
     extra = {
         **d,
@@ -385,10 +393,51 @@ def test_an_old_lab_promotion_meets_the_switch_checks_without_a_module_swap(monk
         ],
     }
     with pytest.raises(ValueError, match=r"changes services\.idp\.owner, which no promotion"):
-        ms.apply_promotion(text, PromotePlan.from_dict(extra))
+        ms.apply_promotion(text, PromotePlan.from_dict(extra), site=OLD_SITE, mods=MODS)
     with pytest.raises(ValueError, match="not the one plan_promote computes"):
-        ms.apply_promotion(text, PromotePlan.from_dict({**d, "until": "2027-06-01"}))
-    monkeypatch.setenv("HNX_TODAY", "2999-01-01")
-    future = plan_promote(load_doc(text), "idp", "sso-next", "2999-01-01", 30, old_lab=True)
-    with pytest.raises(ValueError, match="after today's real date"):
-        ms.apply_promotion(text, future)
+        ms.apply_promotion(
+            text, PromotePlan.from_dict({**d, "until": "2027-06-01"}), site=OLD_SITE, mods=MODS
+        )
+
+
+def test_apply_promotion_refuses_a_promotion_apply_switch_would_refuse(monkeypatch):
+    """The security review's repro: the plan apply_switch refuses (query-a leaving as legacy
+    while query-mod-a is a deployed module) went through apply_promotion, dropping its backups;
+    and a capability the site selects was promoted with no selection diff."""
+    monkeypatch.setenv("HNX_TODAY", "2026-11-08")
+    monkeypatch.setattr(ms, "_real_today", lambda: dt.date(2026, 11, 8), raising=False)
+    text = _text()
+    legacy = plan_promote(load_doc(text), "lake-query", "query-b", "2026-11-08", 14, old_lab=True)
+    with pytest.raises(ValueError, match=r"query-a runs .* the product of module query-mod-a"):
+        ms.apply_promotion(text, legacy, site={"slots": {}}, mods=MODS)
+    retiring = plan_promote(load_doc(text), "lake-query", "query-b", "2026-11-08", 14)
+    with pytest.raises(ValueError, match="lake-query is a slot this site selects"):
+        ms.apply_promotion(text, retiring, site=OLD_SITE, mods={})
+    with pytest.raises(ValueError, match=r"candidate query-b runs .* the product of module"):
+        ms.apply_promotion(text, retiring, site={"slots": {}}, mods=MODS)
+
+
+def test_a_promotion_dated_days_before_the_real_date_is_refused(monkeypatch):
+    """A stale HNX_TODAY would write an until already spent."""
+    monkeypatch.setenv("HNX_TODAY", "2026-11-01")
+    monkeypatch.setattr(ms, "_real_today", lambda: dt.date(2026, 11, 8), raising=False)
+    text = _idp_text()
+    p = plan_promote(load_doc(text), "idp", "sso-next", "2026-11-01", 30, old_lab=True)
+    with pytest.raises(ValueError, match="more than 3 days before today's real date 2026-11-08"):
+        ms.apply_promotion(text, p, site={"slots": {}}, mods={})
+    monkeypatch.setenv("HNX_TODAY", "2026-11-05")
+    ok = plan_promote(load_doc(text), "idp", "sso-next", "2026-11-05", 30, old_lab=True)
+    assert ms.apply_promotion(text, ok, site={"slots": {}}, mods={})
+
+
+def test_the_real_date_bound_is_utc(monkeypatch):
+    import datetime
+
+    class Clock(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is datetime.UTC
+            return datetime.datetime(2026, 11, 8, 23, 30, tzinfo=datetime.UTC)
+
+    monkeypatch.setattr(datetime, "datetime", Clock)
+    assert ms._real_today() == dt.date(2026, 11, 8)
