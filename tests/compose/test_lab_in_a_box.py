@@ -1347,6 +1347,7 @@ CREDENTIALS = (
     "LAB_UPTIME_PASSWORD",
     "LAB_HUB_FRONT_DOOR_SECRET",
     "LAB_BROKER_DEMO_TOKEN",
+    "LAB_ORCHESTRATOR_TOKEN",
     "LAB_GATEWAY_MASTER_KEY",
     "LAB_GATEWAY_DB_PASSWORD",
     "LAB_GATEWAY_SALT_KEY",
@@ -1854,3 +1855,91 @@ def test_nats_server_accepts_the_lab_config(tmp_path, env_vars):
     proc = subprocess.run(["nats-server", "-c", str(conf), "-t"], env=env, capture_output=True,
                           text=True, timeout=30)  # fmt: skip
     assert proc.returncode == 0, proc.stderr
+
+
+class FakeJobAPI(BaseHTTPRequestHandler):
+    """The controller's job API as the orchestration check sees it: a submit, then the run's
+    states one read at a time, ending as ``FINAL`` says."""
+
+    BEARER = "lab-fake-bearer"
+    FINAL: ClassVar[dict] = {}
+    states: ClassVar[list[str]] = []
+
+    def _send(self, status, doc):
+        body = json.dumps(doc).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _authorized(self):
+        return self.headers.get("Authorization") == f"Bearer {self.BEARER}"
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            return self._send(200, {"ok": True})
+        if not self._authorized():
+            return self._send(401, {"error": "unauthorized"})
+        state = FakeJobAPI.states.pop(0) if len(FakeJobAPI.states) > 1 else FakeJobAPI.states[0]
+        doc = {"run_id": "r1", "state": state}
+        if state == FakeJobAPI.states[-1] and not FakeJobAPI.states[1:]:
+            doc.update(FakeJobAPI.FINAL)
+        self._send(200, doc)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        sent = json.loads(self.rfile.read(length))
+        if (
+            not self._authorized()
+            or sent.get("agent_key") != "lab-smoke"
+            or not sent.get("idempotency_key")
+        ):
+            return self._send(400, {"error": "bad submit"})
+        self._send(201, {"run_id": "r1"})
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def job_api():
+    httpd = ThreadingHTTPServer((LOOPBACK, 0), FakeJobAPI)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://{LOOPBACK}:{httpd.server_address[1]}"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+@pytest.mark.parametrize(
+    ("states", "final", "status", "detail"),
+    [
+        (["queued", "running", "done"], {"response_body": "lab-smoke-ok\n", "started_at": "t", "local_backend_used": "engine-a"},
+         "pass", "claimed on engine-a and done (states seen: queued -> running -> done)"),
+        (["queued", "failed"], {"local_failed_reason": "turn-failed: exit 1"}, "fail", "ended failed: turn-failed"),
+        (["done"], {"response_body": "lab-smoke-ok\n"}, "fail", "never claimed by a backend"),
+        (["done"], {"response_body": "something else", "started_at": "t", "local_backend_used": "engine-a"}, "fail", "ended done"),
+    ],
+)  # fmt: skip
+def test_orchestration_check_passes_only_for_a_claimed_finished_job(
+    checks, job_api, monkeypatch, states, final, status, detail
+):
+    monkeypatch.setattr(FakeJobAPI, "states", list(states))
+    monkeypatch.setattr(FakeJobAPI, "FINAL", final)
+    bases = {"orchestration": job_api, "orchestration-token": FakeJobAPI.BEARER}
+    (result,) = checks.run_checks(bases, only=["orchestration"], retries=1)
+    assert result["status"] == status and detail in result["detail"], result
+    (result,) = checks.run_checks(
+        {"orchestration": job_api, "orchestration-token": "wrong"},
+        only=["orchestration"],
+        retries=1,
+    )
+    assert result["status"] == "fail" and "HTTP 400" in result["detail"]
+
+
+def test_the_lab_smoke_reads_the_orchestration_endpoint_and_token(checks):
+    env = {"LAB_BIND": LOOPBACK, "LAB_PORT_ORCHESTRATOR": "8088", "LAB_ORCHESTRATOR_TOKEN": "t"}
+    bases = checks.bases_from_env(env)
+    assert (
+        bases["orchestration"] == f"http://{LOOPBACK}:8088" and bases["orchestration-token"] == "t"
+    )
