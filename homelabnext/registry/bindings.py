@@ -56,14 +56,18 @@ from typing import Any
 from .model import STANDINGS, Registry, upstream_problems
 
 __all__ = [
+    "CONSUMER_KINDS",
+    "CONSUMER_SKIP",
     "EXCEPTIONS",
     "PLATFORM_SOURCES",
     "UNPLACED",
     "BindingsInputError",
+    "Consumer",
     "Declared",
     "Report",
     "canary_problems",
     "check",
+    "consumers",
     "gateway_problems",
     "load_eval_reports",
     "load_gateways",
@@ -627,3 +631,73 @@ def load_selection(site_path: str, modules: Iterable[str]) -> tuple[dict, dict]:
             )
         mods.update(tree.mods)
     return site, mods
+
+
+# ---------------------------------------------------------------- consumers of a service id
+
+#: where a consumer of a ``svc:`` id lives, by the first path prefix that matches; anything else
+#: is ``other``.  A decision record and the changelog quote history, not configuration, so they
+#: are not read (:data:`CONSUMER_SKIP`).
+CONSUMER_KINDS: tuple[tuple[str, str], ...] = (
+    ("workflows/packs/", "pack"),
+    ("workflows/", "workflow"),
+    ("schemas/events/", "event-schema"),
+    ("schemas/", "schema"),
+    ("conformance/", "conformance"),
+    ("homelabnext/", "code"),
+    ("orchestrator/", "controller"),
+    ("examples/", "example"),
+    ("tests/", "test"),
+    ("tools/", "tool"),
+    ("docs/", "doc"),
+)
+CONSUMER_SKIP: tuple[str, ...] = ("CHANGELOG.md", "docs/adr/")
+
+
+@dataclass(frozen=True)
+class Consumer:
+    """One line of the checkout that names the id."""
+
+    kind: str
+    path: str
+    line: int
+
+
+def _tracked(root: Path) -> list[str]:
+    import subprocess
+
+    proc = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=False
+    )
+    if proc.returncode != 0:
+        raise BindingsInputError(f"{root}: not a git checkout (the consumer check reads its files)")
+    return sorted(p for p in proc.stdout.decode("utf-8", "surrogateescape").split("\0") if p)
+
+
+def consumers(root: Path, svc_id: str) -> list[Consumer]:
+    """Every tracked file line under ``root`` that names ``svc_id`` (``svc:<name>``, exactly: a
+    longer id that starts with it is another service), by kind (:data:`CONSUMER_KINDS`).  The
+    check behind dropping an old id (ADR-0026 decision 16: ``svc:llm-orchestrator`` goes at
+    cutover+1 only once this finds none).  Symbolic links and files that are not UTF-8 text are
+    not read."""
+    if SVC_ID.fullmatch(svc_id) is None:
+        raise BindingsInputError(f"{svc_id!r} is not a svc: id (svc:<lower-case kebab name>)")
+    word = re.compile(re.escape(svc_id) + r"(?![a-z0-9-])")
+    out: list[Consumer] = []
+    for rel in _tracked(root):
+        if rel.startswith(CONSUMER_SKIP):
+            continue
+        path = root / rel
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if svc_id not in text:
+            continue
+        kind = next((k for prefix, k in CONSUMER_KINDS if rel.startswith(prefix)), "other")
+        for n, line in enumerate(text.splitlines(), 1):
+            if word.search(line):
+                out.append(Consumer(kind, rel, n))
+    return out
