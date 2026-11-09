@@ -16,7 +16,7 @@ counts:
   shared-helpers-allow: 9
   tls-verify-allow: 0
   workstation-refs-allow: 2
-  scrub-allow-markers: 70
+  scrub-allow-markers: 71
   no-raw-endpoint-markers: 310
 digests:
   product-names-allow: sha256:46c8070d91d339db3063866e76e3689569ffaaec4c26913340d9fb6619603bc3

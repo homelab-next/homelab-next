@@ -200,7 +200,7 @@ services:
       timeout: 5s
       retries: 30
       start_period: 40s
-    mem_limit: 1232m  # the JVM heap is 896M (config/trino/jvm.config); 336M is left off-heap
+    mem_limit: 1232m  # heap -Xmx848M (config/trino/jvm.config) + code cache 128M + metaspace 192M leaves 64M for threads, GC and direct buffers
     networks:
       lab:
         aliases: [lake-query.svc.example.internal]

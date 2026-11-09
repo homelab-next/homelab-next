@@ -226,7 +226,7 @@ func TestMigrate_BaseURLEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(out), "endpoint") || len(notes) != 2 || !strings.Contains(notes[0], "empty") {
+	if strings.Contains(string(out), "endpoint") || len(notes) != 3 || !strings.Contains(notes[0], "empty") { // and the interlock and allowlist notes
 		t.Errorf("out = %s notes = %v", out, notes)
 	}
 	_, _, err = Migrate([]byte(scopeYAML + "backends: {local: {base_url: \"engine-user:s3cretpw@\"}}\n"))
@@ -383,5 +383,23 @@ func TestParse_NullAuthAndTheOffNotice(t *testing.T) {
 	}
 	if cfg := mustParse(t, scopeYAML); len(cfg.Notices) != 0 {
 		t.Fatalf("auth on noted: %v", cfg.Notices)
+	}
+}
+
+// An old configuration with no session allowlist gets a note: the private controller passed its
+// whole environment then, and this one passes none.
+func TestMigrate_NotesAnEmptySessionAllowlist(t *testing.T) {
+	for name, old := range map[string]string{
+		"unset": scopeYAML + "backend_status_script: /s.py\n",
+		"empty": scopeYAML + "backend_status_script: /s.py\nrunner: {env_allowlist: []}\n",
+	} {
+		_, notes, err := Migrate([]byte(old))
+		if err != nil || !strings.Contains(strings.Join(notes, "\n"), "gives none") {
+			t.Errorf("%s: notes %v, err %v", name, notes, err)
+		}
+	}
+	_, notes, err := Migrate([]byte(scopeYAML + "backend_status_script: /s.py\nrunner: {env_allowlist: [LANG]}\n"))
+	if err != nil || strings.Contains(strings.Join(notes, "\n"), "gives none") {
+		t.Fatalf("a listed allowlist: notes %v, err %v", notes, err)
 	}
 }

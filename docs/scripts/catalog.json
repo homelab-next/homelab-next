@@ -977,6 +977,25 @@
     },
     {
       "exit": {
+        "0": "the suite passed",
+        "1": "a check did not pass, or the controller did not come up",
+        "2": "usage error"
+      },
+      "id": "orchestration-conformance",
+      "inputs": "a built orchestrator/cmd/controller; an absolute, empty or missing work directory",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the work directory (controller.yaml, controller.log, the state, the session pids); the suite's verdict",
+      "owner": "maintainers",
+      "path": "tools/orchestration_conformance.py",
+      "purpose": "Run the orchestration conformance suite against the repository's own controller binary on loopback, with process-level fault injection.",
+      "status": "active",
+      "trigger": [
+        "make:orchestration-conformance"
+      ]
+    },
+    {
+      "exit": {
         "0": "the job is the manual deploy from main; it may run",
         "1": "any other job; the runner fails it before its first step"
       },

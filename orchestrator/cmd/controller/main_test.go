@@ -423,7 +423,10 @@ func TestServe_APendingMigrationNeedsTheBackupFlag(t *testing.T) {
 	}
 	backups := t.TempDir()
 	backup := filepath.Join(backups, "controller.db.bak")
-	_, sigs, done, _, _ := serveSite(t, cfg, "--migrate-backup", backup)
+	base, sigs, done, _, _ := serveSite(t, cfg, "--migrate-backup", backup)
+	if code := get(t, base+"/healthz", ""); code != http.StatusOK { // serving: the migration is done
+		t.Fatalf("healthz = %d", code)
+	}
 	sigs <- syscall.SIGTERM
 	if code := <-done; code != exitOK {
 		t.Fatalf("serve --migrate-backup = %d", code)
@@ -719,5 +722,57 @@ func TestServe_MigrateOnlyExitsAfterTheMigration(t *testing.T) {
 	}
 	if steps, _ := store.PendingMigrations(db); len(steps) != 0 {
 		t.Fatalf("still pending: %v", steps)
+	}
+}
+
+// A facts command given the event forwarder's token would put it in the prompt: refused.
+func TestCheck_AFactsCommandIsNeverGivenTheForwarderToken(t *testing.T) {
+	cfg, _ := siteConfig(t, func(s string) string {
+		return s + "events: {token_env: HNX_EVENTS_TOKEN}\nfacts_commands:\n  disk: {argv: [/bin/df], env: [HNX_EVENTS_TOKEN]}\n"
+	})
+	code, out, errs := runCmd(t, "check", "--config", cfg)
+	if code != exitProblem || !strings.Contains(out, "facts_commands.disk.env names HNX_EVENTS_TOKEN") {
+		t.Fatalf("check = %d\n%s%s", code, out, errs)
+	}
+}
+
+// A Ctrl-C during the start ends it before the database is touched: --migrate-only migrates
+// nothing, rather than carrying on with the signal held for later.
+func TestServe_AnInterruptDuringTheStartStopsIt(t *testing.T) {
+	cfg, dir := siteConfig(t, nil)
+	db := filepath.Join(dir, "state", "controller.db")
+	st, err := store.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateJob(&store.Job{RunID: "r1", AgentKey: "collector", Priority: 50, State: store.StateDone}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	dropIndex(t, db)
+	hooks := &serveHooks{signals: make(chan os.Signal, 2)}
+	hooks.signals <- syscall.SIGINT
+	var b bytes.Buffer
+	backup := filepath.Join(t.TempDir(), "controller.db.bak")
+	code := serve([]string{"--config", cfg, "--migrate-only", "--migrate-backup", backup}, &b, hooks)
+	if code != exitOK || !strings.Contains(b.String(), "stopping before serving") {
+		t.Fatalf("serve = %d: %s", code, b.String())
+	}
+	if steps, _ := store.PendingMigrations(db); len(steps) == 0 {
+		t.Fatal("the interrupted start migrated the database")
+	}
+	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatal("the interrupted start took a backup")
+	}
+}
+
+// The forwarder's token cannot live in a variable facts commands or sessions are given anyway.
+func TestCheck_TheForwarderTokenNeedsAVariableOfItsOwn(t *testing.T) {
+	for _, name := range []string{"PATH", "LANG", "HNX_RUN_ID", "HNX_SERVERS_FILE"} {
+		cfg, _ := siteConfig(t, func(s string) string { return s + "events: {token_env: " + name + "}\n" })
+		code, out, errs := runCmd(t, "check", "--config", cfg)
+		if code != exitProblem || !strings.Contains(out, "events.token_env "+name) {
+			t.Errorf("%s: check = %d\n%s%s", name, code, out, errs)
+		}
 	}
 }
