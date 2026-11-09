@@ -275,10 +275,20 @@ def test_make_needs_an_endpoint_and_a_profiles_dir(monkeypatch, tmp_path):
 def test_the_recorded_stand_in_stays_retired():
     """ADR-0026 decision 15: no orchestration target is a recording, and nothing under
     conformance/ cites the private controller's internal/hermesagent package."""
-    targets = sorted(p.name for p in (ROOT / "conformance" / "targets").glob("orchestration-*.yml"))
-    assert targets and not [t for t in targets if t.removesuffix(".yml").endswith("-recorded")], (
-        targets
-    )
+    import yaml
+
+    orchestration = {}
+    for p in sorted((ROOT / "conformance" / "targets").glob("*.y*ml")):
+        doc = yaml.safe_load(p.read_text()) or {}
+        cap = (doc.get("capabilities") or {}).get("orchestration")
+        if cap is not None:
+            orchestration[p.name] = (doc.get("name", ""), cap)
+    assert orchestration, "no target has an orchestration capability"
+    for file, (name, cap) in orchestration.items():
+        config = cap.get("config") or {}
+        assert cap.get("adapter") == "homelabnext.conform.adapters.orchestrator:make", file
+        assert "recorded" not in f"{file} {name}", f"{file} is a recording"
+        assert not [k for k in config if "recorded" in k or k == "fixes"], f"{file}: {config}"
     cites = [
         p.relative_to(ROOT).as_posix()
         for p in (ROOT / "conformance").rglob("*")
@@ -300,3 +310,20 @@ def test_a_threadsafe_fake_counts_nothing_it_did_not_run(fake, tmp_path):
         assert o.cancel(rid).state == "cancelled" and not ran.is_set()
     finally:
         o.close()
+
+
+def test_a_fake_that_runs_a_cancelled_job_fails_the_cancel_check(tmp_path):
+    """The sensitivity proof the stand-in's LeakOnCancel mutant gave: a controller whose cancel
+    answers 200 while the job runs anyway fails ``cancel-before-start-never-runs``, and the same
+    fake without the mutation passes it."""
+    for mutant, want in ((True, "fail"), (False, "pass")):
+        api = FakeJobAPI(cancel_runs_anyway=mutant)
+        try:
+            (res,) = run_checks(
+                suite.SUITE,
+                lambda api=api: _subject(api, tmp_path),
+                only=["cancel-before-start-never-runs"],
+            )
+        finally:
+            api.close()
+        assert res.status == want, (mutant, res)

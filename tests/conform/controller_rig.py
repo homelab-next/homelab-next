@@ -105,14 +105,17 @@ class FakeJobAPI:
     """The job API's answers, scripted: ``inflight`` is the backend in-flight route's (status,
     body); ``job`` makes a GET /jobs/{id} body from the run's stored submit. A submit's job runs
     its handler through the runner body in-process on its first read, so the handler host sees
-    the execution, as the controller's session would make it."""
+    the execution, as the controller's session would make it. ``cancel_runs_anyway`` is a mutant:
+    a cancel answers 200 and the job runs all the same, which the suite's cancel check must
+    fail."""
 
     def __init__(
         self,
         inflight: tuple[int, Any] = (404, {"error": "not found"}),
         job: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        cancel_runs_anyway: bool = False,
     ) -> None:
-        self.inflight, self.job = inflight, job
+        self.inflight, self.job, self.cancel_runs_anyway = inflight, job, cancel_runs_anyway
         self.jobs: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
         api = self
@@ -135,11 +138,12 @@ class FakeJobAPI:
                 if self.path == "/healthz":
                     return self._send(200, {"ok": True})
                 run = self.path.removeprefix("/jobs/")
-                with api._lock:
+                with api._lock:  # one reader runs a queued job, never two
                     sent = api.jobs.get(run)
-                if sent is None:
+                    doc = None if sent is None else api._read(run, sent)
+                if doc is None:
                     return self._send(404, {"error": "not found"})
-                return self._send(200, api._read(run, sent))
+                return self._send(200, doc)
 
             def do_POST(self) -> None:
                 length = int(self.headers.get("Content-Length") or 0)
@@ -147,8 +151,8 @@ class FakeJobAPI:
                 if self.path == "/admin/reload-profiles":
                     return self._send(200, {"ok": True})
                 if self.path == "/jobs":
-                    run = f"{len(api.jobs) + 1:032x}"
-                    with api._lock:
+                    with api._lock:  # two concurrent submits never share a run id
+                        run = f"{len(api.jobs) + 1:032x}"
                         api.jobs[run] = {**body, "state": "queued"}
                     return self._send(201, {"run_id": run})
                 if self.path.endswith("/cancel"):
@@ -157,13 +161,16 @@ class FakeJobAPI:
                         sent = api.jobs.get(run)
                         if sent is None or sent["state"] != "queued":
                             return self._send(409, {"error": "not cancellable"})
-                        sent["state"] = "cancelled"
+                        if not api.cancel_runs_anyway:
+                            sent["state"] = "cancelled"
                     return self._send(200, {"state": "cancelled"})
                 return self._send(404, {"error": "not found"})
 
         self._httpd = ThreadingHTTPServer((LOOPBACK, 0), Handler)
         self.url = f"http://{LOOPBACK}:{self._httpd.server_address[1]}"
-        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+        ).start()
 
     def _read(self, run: str, sent: dict[str, Any]) -> dict[str, Any]:
         from conformance.fakes import llm_orchestrator_hermes as body
