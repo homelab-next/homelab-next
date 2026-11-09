@@ -64,14 +64,14 @@ def test_removed_service_prunes_only_generated_files(tmp_path):
     import yaml as y
 
     doc = y.safe_load(EXAMPLE.read_text())
-    del doc["services"]["agent-runtime"]
+    del doc["services"]["orchestrator"]
     smaller = flatten(generate(build_registry(doc)))
     assert check_tree(tmp_path, smaller)  # drift detected, including stale
     res = write_tree(tmp_path, smaller)
-    assert "env/agent-runtime.env.generated" in res.pruned
+    assert "env/orchestrator.env.generated" in res.pruned
     assert (tmp_path / "env" / "hand-written.env.generated").exists()
     assert (
-        "agent-runtime"
+        "orchestrator"
         not in (tmp_path / "docs" / "services.md")
         .read_text()
         .split("## Service cards")[0]
@@ -88,8 +88,8 @@ def test_registry_change_changes_dependent_outputs_only():
     # header digest changes everywhere, so compare bodies without the header line
     body = lambda t: "\n".join(ln for ln in t.splitlines() if "sha256:" not in ln)  # noqa: E731
     really = {p for p in new if body(new[p]) != body(old[p])}
-    assert "env/agent-runtime.env.generated" in really
-    assert "systemd/agent-runtime.service.d/10-hnx-endpoints.conf" in really
+    assert "env/orchestrator.env.generated" in really
+    assert "systemd/orchestrator.service.d/10-hnx-endpoints.conf" in really
     assert "env/lake-query.env.generated" not in really
     assert "caddy/sites.caddy" not in really
     assert changed  # digests differ
@@ -163,10 +163,10 @@ def test_prometheus_and_blackbox_parse_as_yaml():
 
 def test_systemd_dropin_lists_upstreams():
     text = generate(REG, ["systemd_env"])["systemd_env"][
-        "systemd/agent-runtime.service.d/10-hnx-endpoints.conf"
+        "systemd/orchestrator.service.d/10-hnx-endpoints.conf"
     ]
     assert "[Service]" in text
-    for up in REG.services["agent-runtime"].upstreams:
+    for up in REG.services["orchestrator"].upstreams:
         assert f'Environment="HNX_ENDPOINT_{up.upper().replace("-", "_")}=' in text
 
 
@@ -175,7 +175,7 @@ def test_mcp_config_json():
     assert set(doc["mcpServers"]) == {"lake", "agent-runtime"}
     assert doc["mcpServers"]["agent-runtime"] == {
         "type": "sse",
-        "url": "http://" + REG.alias("agent-runtime") + ":" + "8088/sse",
+        "url": "http://" + REG.alias("orchestration") + ":" + "8088/sse",
     }
 
 
@@ -614,7 +614,9 @@ def test_a_return_target_with_an_ampersand_in_its_query_survives():
 
 def test_docs_page_lists_dependants():
     md = generate(REG, ["service_docs"])["service_docs"]["docs/services.md"]
-    assert "- Used by: `agent-runtime`" in md  # lake-query is used by agent-runtime
+    assert (
+        "- Used by: `orchestration`" in md
+    )  # lake-query is used by the controller (its capability)
     assert "### lake-query" in md
 
 
