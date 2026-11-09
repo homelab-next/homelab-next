@@ -359,6 +359,7 @@ SwapRunner.create(record_path, backend, *, swap_id, capability, from_adapter, to
     .rollback(reason) -> dict                                # RollbackRefused after decommission
     .status() / .record() / .note(text)
 plan_flip(registry_doc, service, host=..., port=..., impl=..., version=...) -> FlipPlan ; flip_text(text, plan)
+plan_promote(registry_doc, capability, row, switched_on, rollback_days, *, old_lab=False, why=None) -> PromotePlan ; promote_text(text, plan)
 DualWriter(primary, secondary) ; Retired(...) ; scan(roots, retired, registry=..., allow=...) -> list[Finding]
 # homelabnext.swap.record: new_record/load/save/problems/verify_evidence/dumps/head/verify_anchor (hash-chained
 #   transition log with state digests, optional HMAC key via HNX_SWAP_CHAIN_KEY; schema platform/swap_record 1.1).

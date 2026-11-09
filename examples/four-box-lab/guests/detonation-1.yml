@@ -6,7 +6,7 @@ kind: host
 provisioning: host-only
 placement: {node: detonation-1}
 network: {zone: sandbox, ip: 203.0.113.20}
-capability: cap:detections
+capability: cap:detonation
 power: {ups: ups-a}
 tags: [lab]
 owners: {primary: platform-team}

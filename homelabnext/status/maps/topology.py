@@ -639,12 +639,19 @@ def build(
 
 
 def inputs(
-    guests_dir: str | Path, site_path: str | Path
+    guests_dir: str | Path, site_path: str | Path, *, registry: Any = None
 ) -> tuple[Mapping[str, Any], list[Any], list[Any], dict[str, Any]]:
     """(site document, guests, zone flows, hypervisors: name -> ``_nodes.yml`` spec) read from a guest directory and the
     site model its zones come from (raises :class:`homelabnext.compute.model.ComputeError` on an
-    unloadable tree or site)."""
-    from homelabnext.compute.loader import NODES_FILE, load_fleet, load_nodes
+    unloadable tree or site).  The guests are judged against ``registry``, else the
+    ``services.yml`` beside the site file when there is one, as ``hnx guests`` judges them."""
+    from homelabnext.compute.loader import (
+        NODES_FILE,
+        load_fleet,
+        load_nodes,
+        load_registry_for,
+        registry_placement,
+    )
     from homelabnext.compute.model import ComputeError
     from homelabnext.compute.zones import (
         addresses_from_site,
@@ -669,6 +676,9 @@ def inputs(
         power=site_power(site_path),
         site_addresses=addresses_from_site(doc),
         delegated6=doc.get("delegated_prefixes6"),
+        placement=registry_placement(
+            registry if registry is not None else load_registry_for(site_path)
+        ),
     )
     nodes_file = Path(guests_dir) / NODES_FILE
     nodes = load_nodes(nodes_file) if nodes_file.is_file() else {}
@@ -685,7 +695,7 @@ def load(
 ) -> dict[str, Any]:
     """:func:`build` over :func:`inputs`, with the registry (services per guest), the
     dataflow view-model (its hops become flows) and the UPSes' live states when given."""
-    doc, guests, flows, nodes = inputs(guests_dir, site_path)
+    doc, guests, flows, nodes = inputs(guests_dir, site_path, registry=registry)
     return build(
         doc,
         guests,
