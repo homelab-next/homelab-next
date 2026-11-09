@@ -426,6 +426,8 @@ def _gateway_role_problems(registry: Registry, path: Path, doc: Any) -> list[str
     """The spec's role table: a binding naming a registry row or capability is judged as any
     role binding is; a name the registry does not hold is one of the spec's own backends, which
     the gateway rules above have judged."""
+    from homelabnext.modules import loader as ld
+
     from .models import RoleTable, RoleTableError
 
     rel = doc.get("roles") if isinstance(doc, Mapping) else None
@@ -433,9 +435,10 @@ def _gateway_role_problems(registry: Registry, path: Path, doc: Any) -> list[str
         return []
     table_path = path.parent / rel
     try:
-        read_input(table_path)
-        table = RoleTable.load(table_path)
-    except RoleTableError as exc:
+        table = RoleTable.loads(ld.read_contained(path.parent, rel), str(table_path))
+    except ld.Unreadable as exc:
+        raise BindingsInputError(f"{table_path}: {exc}") from None
+    except (RoleTableError, UnicodeDecodeError, ValueError) as exc:
         raise BindingsInputError(f"{table_path}: {exc}") from None
     known = {r.name for r in registry.rows(*STANDINGS)} | {
         r.capability for r in registry.rows(*STANDINGS)
@@ -521,19 +524,17 @@ def load_doc(path: str | Path) -> Any:
 
 def load_role_tables(paths: Iterable[str]) -> list[tuple[str, Any]]:
     """Each role table, validated against ``model_roles.json`` as :meth:`RoleTable.load` does."""
-    from .models import RoleTable, RoleTableError, schema_problems
+    from .models import RoleTable, RoleTableError
 
     out = []
     for path in paths:
-        doc = load_doc(path)
-        if problems := schema_problems(doc):
-            raise BindingsInputError(
-                f"{path}: role table does not match model_roles.json: " + "; ".join(problems[:5])
-            )
         try:
-            out.append((path, RoleTable.from_dict(doc)))
+            out.append((path, RoleTable.loads(read_input(path), str(path))))
         except RoleTableError as exc:
-            raise BindingsInputError(f"{path}: {exc}") from None
+            detail = "; ".join(exc.problems[:5]) if getattr(exc, "problems", None) else ""
+            raise BindingsInputError(f"{path}: {exc}" + (f": {detail}" if detail else "")) from None
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise BindingsInputError(f"{path}: not valid JSON ({exc})") from None
     return out
 
 

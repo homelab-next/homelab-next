@@ -275,6 +275,44 @@ def path_has_symlink(root: str | Path, rel: str) -> bool:
     return False
 
 
+def checkout_root(path: str | Path) -> Path:
+    """The top of the git checkout ``path`` is in, else ``path`` itself (absolute, links not
+    resolved beyond what git reports)."""
+    import subprocess
+
+    here = Path(os.path.abspath(path))
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(here), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return here
+    top = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+    return Path(top) if top else here
+
+
+def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -> bytes:
+    """The bytes of ``rel``, a path relative to directory ``base``, that must stay inside
+    ``root`` (default: the git checkout ``base`` is in, else ``base``).  ``..`` is allowed while
+    the normalised path stays inside the root; an absolute ``rel``, a path that leaves the root,
+    and a symbolic link on any component between the root and the file (the file included) are
+    refused with :class:`Unreadable`, as is anything :func:`read_bytes` refuses."""
+    if Path(rel).is_absolute():
+        raise Unreadable("an absolute path (give one relative to the file that names it)")
+    root = Path(os.path.abspath(root)) if root is not None else checkout_root(base)
+    target = Path(os.path.normpath(os.path.join(os.path.abspath(base), rel)))
+    try:
+        inside = target.relative_to(root)
+    except ValueError:
+        raise Unreadable(f"outside the checkout {root}") from None
+    if path_has_symlink(root, inside.as_posix()):
+        raise Unreadable("a symbolic link on its path")
+    return read_bytes(target, follow=False)
+
+
 def read_tree_file(root: str | Path, rel: str) -> bytes | str | None:
     """The working-tree bytes of ``rel`` under ``root`` (read like :func:`read_bytes` with
     ``follow=False``), None when it is absent, or why it cannot be read: a symbolic link anywhere

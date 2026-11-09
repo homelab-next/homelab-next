@@ -1999,3 +1999,34 @@ def test_the_spec_s_role_table_is_not_read_through_a_symbolic_link(tmp_path):
     doc["roles"] = "real/roles.json"
     spec.write_text(yaml.safe_dump(doc))
     gw.render_file(spec)
+
+
+def test_the_spec_s_role_table_stays_inside_the_checkout(tmp_path):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    spec = make_spec(spec_dir)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (spec_dir / "roles.json").rename(outside / "roles.json")
+    # tmp_path is in no git checkout, so the spec's own directory is the root
+    for roles, words in (
+        (str(outside / "roles.json"), "an absolute path"),
+        ("../outside/roles.json", "outside the checkout"),
+    ):
+        doc = yaml.safe_load(spec.read_text())
+        doc["roles"] = roles
+        spec.write_text(yaml.safe_dump(doc))
+        with pytest.raises(gw.GatewaySpecError, match=words):
+            gw.render_file(spec)
+    # an absolute path through a linked directory is refused before any link is followed
+    (tmp_path / "linkdir").symlink_to(outside, target_is_directory=True)
+    doc["roles"] = str(tmp_path / "linkdir" / "roles.json")
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(gw.GatewaySpecError, match="an absolute path"):
+        gw.render_file(spec)
+
+
+def test_a_role_table_path_with_dotdot_inside_the_checkout_is_read():
+    # the lab-in-a-box spec names ../../../../schemas/...: inside the repository, so allowed
+    assert ".." in yaml.safe_load(LAB_SPEC.read_text())["roles"]
+    assert gw.render_file(LAB_SPEC)
