@@ -309,6 +309,55 @@ def test_a_gateway_backend_naming_a_non_primary_row_is_refused(tmp_path, tier):
         gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
 
 
+@pytest.mark.parametrize("tier", ["eval", "retiring"])
+def test_a_backend_of_another_name_may_not_reach_a_non_primary_row_by_its_host(tmp_path, tier):
+    reg = registry_with_candidate(tmp_path, tier)
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    row = doc["services"]["inference-candidate"]
+    host = f"inference-candidate.{doc['lab']['svc_label']}.{doc['lab']['domain']}"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": row["port"]}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match=f"host {host} is an? {tier} row's record"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+@pytest.mark.parametrize("kind", ["capability", "row"])
+def test_a_self_declared_host_naming_a_registry_row_or_capability_is_refused(tmp_path, kind):
+    reg = registry_with_candidate(tmp_path, "eval")
+    services = yaml.safe_load((tmp_path / reg).read_text())["services"]
+    caps = {v["capability"] for v in services.values()}
+    # a primary row named apart from its capability: its name and its capability are both
+    # registry names that no record of this form answers by
+    row, svc = next((k, v) for k, v in services.items() if k not in caps and "standing" not in v)
+    label = svc["capability"] if kind == "capability" else row
+    host = f"{label}.extra.svc.example.internal"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": 9}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    words = f"names registry {kind} {label} but is not a capability's primary alias"
+    with pytest.raises(gw.GatewaySpecError, match=re.escape(words)):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_self_declared_host_at_a_capability_s_primary_alias_is_accepted(tmp_path):
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    host = f"inference.{doc['lab']['svc_label']}.{doc['lab']['domain']}"
+    port = doc["services"]["inference"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-main": {"locality": "local", "host": host, "port": port}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-main"
+    files = gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    assert host in files[PROXY_CONFIG]
+
+
 def test_a_spec_domain_that_differs_from_the_registry_is_refused(tmp_path):
     reg = registry_with(tmp_path, "compute")
     with pytest.raises(gw.GatewaySpecError, match="differs from the registry's"):

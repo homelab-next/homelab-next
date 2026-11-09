@@ -392,11 +392,45 @@ def _profile_slug(pid: str) -> str:
     return pid.removeprefix("profile:")
 
 
+def _registry_host_problem(registry: Any, host: str, service_domain: str) -> str | None:
+    """Why a self-declared local ``host`` under the service domain may not be a backend: its
+    first label names a registry row or capability, and it is not that capability's primary
+    alias.  An ``eval`` or ``retiring`` row answers by its row-name record, so a backend of
+    another name with an explicit ``host`` would reach it (ADR-0039 decision 3: a gateway
+    backend binds only a primary)."""
+    from homelabnext.registry.model import STANDINGS
+
+    prefix = host[: -len(service_domain) - 1]
+    label = prefix.split(".", 1)[0]
+    rows = registry.rows(*STANDINGS)
+    if registry.by_capability(prefix) is not None:
+        return None  # a capability's primary alias
+    row = next((r for r in rows if r.name == label), None)
+    if row is not None and not row.is_primary:
+        article = "an" if row.standing == "eval" else "a"
+        return (
+            f"host {host} is {article} {row.standing} row's record ({row.name}); a gateway "
+            "backend binds only a primary (ADR-0039 decision 3)"
+        )
+    if row is not None or any(r.capability == label for r in rows):
+        return (
+            f"host {host} names registry {'row' if row is not None else 'capability'} {label} "
+            "but is not a capability's primary alias; name the registry row as the backend, "
+            "or use the capability alias"
+        )
+    return None
+
+
 def load_spec(
-    path: str | Path, *, conformance: bool = False, conformance_host: str | None = None
+    path: str | Path,
+    *,
+    conformance: bool = False,
+    conformance_host: str | None = None,
+    registry: Any = None,
 ) -> Spec:
     """Read and validate a gateway spec; relative paths in it resolve against its directory.
-    ``conformance`` (and ``conformance_host``) select the test-only render (module docstring)."""
+    ``conformance`` (and ``conformance_host``) select the test-only render (module docstring);
+    ``registry`` replaces the spec's own ``registry:`` file."""
     path = Path(path)
     doc = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
     return spec_from_dict(
@@ -405,6 +439,7 @@ def load_spec(
         source=path.as_posix(),
         conformance=conformance,
         conformance_host=conformance_host,
+        registry=registry,
     )
 
 
@@ -415,7 +450,10 @@ def spec_from_dict(
     source: str = "<spec>",
     conformance: bool = False,
     conformance_host: str | None = None,
+    registry: Any = None,
 ) -> Spec:
+    """``registry`` (a loaded :class:`~homelabnext.registry.model.Registry`) is used instead of
+    the spec's own ``registry:`` file when given (``hnx registry bindings --gateway``)."""
     problems: list[str] = []
     if not isinstance(doc, Mapping):
         raise GatewaySpecError(f"{source}: the gateway spec must be a mapping")
@@ -446,8 +484,7 @@ def spec_from_dict(
         raise GatewaySpecError(f"{source}: cannot read role table {roles_path}: {exc}") from None
     problems += [f"{roles_path}: {p}" for p in module_rules.role_ceiling_problems(raw_roles)]
 
-    registry = None
-    if doc.get("registry"):
+    if registry is None and doc.get("registry"):
         from homelabnext.registry import load as load_registry
 
         registry = load_registry(base / str(doc["registry"]))
@@ -540,6 +577,10 @@ def spec_from_dict(
                     f"{where}: locality local is not self-declared: {host} is neither a registry "
                     f"service nor under the lab's service domain {service_domain}"
                 )
+                continue
+            why = _registry_host_problem(registry, host, service_domain) if registry else None
+            if why:
+                problems.append(f"{where}: {why}")
                 continue
         if not isinstance(port, int) or not 0 < port < 65536:
             problems.append(f"{where}: a local backend needs a port (or a registry service)")
