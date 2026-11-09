@@ -191,8 +191,12 @@ and the TLP label the lake stores, from the route's declaration, never the event
 [log pipeline](log-pipeline.md)), `agent-runner` (the `agent-runtime` slot's contract, ADR-0051:
 a session spec in, a usage stream and an answer out, classes from typed signals with the gateway
 corroborating what it records, the run's key and trace on every call, servers only from the
-grants file, a bounded stream; its fake is the reference runtime under the development launcher,
-`conformance/fakes/agent_runner_launcher.py`) and
+grants file, the gateway pinned outside the spec, a bounded stream; its fake is the reference
+runtime under the development launcher, `conformance/fakes/agent_runner_launcher.py`. A
+provider's target supplies only its runner body's argv and `exit_classes`
+(`adapter: conformance.fakes.agent_runner_launcher:make`) and so runs under the reference
+launcher, which a launcher's own target certifies: no target can skip the checks of the
+launcher's rules) and
 `orchestration-features`. The last one holds the optional features of the `orchestration`
 contract (clauses f-j): priority ordering (a SHOULD, needing a reported limit), shadow runs on the
 shadow lane only with one unfinished per job, placement constraints (tags, minimum context,
