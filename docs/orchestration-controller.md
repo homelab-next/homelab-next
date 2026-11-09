@@ -1203,10 +1203,17 @@ real target. `tools/orchestration_conformance.py run --controller BIN --work DIR
 - **Target:** `conformance/targets/orchestration-orchestrator.yml` (`wait_floor: 0`,
   `fault_injection: true`).
 - **The adapter's `ProcessFaults`:** `kill(run_id)` sends SIGKILL to that session, as a crash
-  ends it: the run fails `KilledExternally` and its capacity is released. `restart()` runs the
-  harness's `restart`, which kills every recorded session and the controller, then starts the
-  controller again on the same database. `ReconcileOrphans` fails the run that was executing; a
-  queued run and its idempotency key survive, and the body ran once.
+  ends it: the run fails `KilledExternally` and its capacity is released. The check passes with
+  the controller's one automatic retry of the work after a kill (a new run, `retry_of_run_id`
+  set), which the check allows: it asks only that the killed run fail and free its capacity.
+  `restart()` runs the harness's `restart`, which kills the controller first (and waits for it),
+  then every recorded session, so no session's death is recorded by a live controller, then
+  starts the controller again on the same database. `ReconcileOrphans` fails the run that was
+  executing with `controller-restart-reconciliation` and no retry (the end-to-end test asserts
+  both from the database); a queued run and its idempotency key survive, and the body ran once.
+  The harness and the adapter signal only a pid that is still the process it names (a session's
+  environment carries its run id; the controller's command line is `serve` on the work
+  directory's configuration), never pid 1.
 
 Run locally, `--strict` passed all 16 executed checks, three runs out of three. Only
 `deadline-expiry-frees-capacity` skips: the job API takes no per-run deadline, a feature, not a
@@ -1218,7 +1225,7 @@ The other crash cases have deterministic Go tests:
 - **A controller killed mid-claim:** reconciliation at start, never a second run of a body that
   ran. The restart check above covers it on the real binary, and store's `ReconcileOrphans` tests
   cover it at unit level.
-- **A crash during a migration** (`TestMigrate_ACrashInTheBackupOrTheMigrationResumesCleanly`): a
+- **An interrupted migration** (simulated: a partial backup file, a failing step; `TestMigrate_AnInterruptedBackupOrMigrationRollsBackAndResumes`): a
   partial backup is never taken for one, an interrupted migration commits nothing and its backup
   still verifies, and the restart's migration completes.
 - **The gateway's `concurrency_limited` 429:** the pool's concurrency tests, PR 2.7a and 2.7b.

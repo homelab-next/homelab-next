@@ -10,13 +10,16 @@ import (
 	"testing"
 )
 
-// A migration interrupted by a crash, at each point it can stop, resumes cleanly (ADR-0026 stage
-// 2, PR 2.8's restart-during-migration case):
+// A migration interrupted at each point it can stop rolls back and resumes cleanly (ADR-0026 stage
+// 2, PR 2.8's restart-during-migration case). The interruption is simulated, not a process
+// killed: a partial backup file stands for a backup cut short, and a failing step for a death
+// inside the migration's transaction, whose rollback is SQLite's (a killed process's open
+// transaction is rolled back the same way, from the journal, at the next open).
 //   - in the backup: what it left (a partial file) is never taken for a backup, the database is
 //     unchanged, and a new backup path migrates it;
 //   - in the migration: the transaction never committed, so the database is as it was and the
 //     backup still verifies against it.
-func TestMigrate_ACrashInTheBackupOrTheMigrationResumesCleanly(t *testing.T) {
+func TestMigrate_AnInterruptedBackupOrMigrationRollsBackAndResumes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "orch.db")
 	fixtureDB(t, path, "schema-v1.sql", v1Rows...)
 	before, _ := PendingMigrations(path)
