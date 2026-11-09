@@ -78,10 +78,30 @@ def schema_problems(doc: Any) -> list[str]:
         raise RoleTableError(
             "validating a role table needs jsonschema: pip install 'homelabnext[core]'"
         ) from exc
+    from homelabnext._schema_text import safe_message
+
+    def where(e: Any) -> str:
+        # a key that is no plain name is told as <key>: a file that is not a role table (one of
+        # credentials, say) read as one must not have its keys or values echoed into a CI log
+        parts = [
+            str(p) if isinstance(p, int) or _PLAIN_KEY.match(str(p)) else "<key>"
+            for p in e.absolute_path
+        ]
+        return "/".join(parts) or "$"
+
+    def what(e: Any) -> str:
+        if e.validator == "additionalProperties":
+            return "has properties the schema does not allow"
+        return safe_message(e)
+
     return [
-        f"{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}"
+        f"{where(e)}: {what(e)}"
         for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
     ]
+
+
+#: a key told as itself in a role-table problem: a role, backend or field name's shape
+_PLAIN_KEY = re.compile(r"[a-z][a-z0-9_]*(?:-[a-z0-9]+)*\Z")
 
 
 def normalize_role(name: str) -> str:

@@ -6,10 +6,10 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 33,
-  "duplicated_lines": 391,
-  "total_lines": 175174,
-  "duplicated_percent": 0.22
+  "clones": 32,
+  "duplicated_lines": 376,
+  "total_lines": 178412,
+  "duplicated_percent": 0.21
  },
  "increases": [
   {
@@ -273,18 +273,6 @@
     "00de33fd6f",
     "0ca20fd0a6",
     "0fff124342"
-   ]
-  },
-  "d96a187bdda54736": {
-   "tokens": 51,
-   "lines": 7,
-   "count": 1,
-   "files": [
-    "homelabnext/workflows/pack.py",
-    "tools/schema_check.py"
-   ],
-   "fingerprints": [
-    "13f29ea55d"
    ]
   },
   "e436e0fb014ab108": {

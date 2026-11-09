@@ -14,8 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from homelabnext._yaml import safe_load as _yaml_safe_load
 from homelabnext.identity.aliases import AliasMap
 from homelabnext.registry.model import standing_of
 
@@ -68,7 +67,7 @@ def _role_info(roles_dir: Path) -> tuple[dict[str, set[str]], dict[str, set[str]
     templates: dict[str, set[str]] = {}
     for r in sorted(p for p in roles_dir.iterdir() if p.is_dir()):
         d = r / "defaults" / "main.yml"
-        doc = yaml.safe_load(d.read_text(encoding="utf-8")) if d.is_file() else None
+        doc = _yaml_safe_load(d.read_text(encoding="utf-8")) if d.is_file() else None
         roles[r.name] = set(doc) if isinstance(doc, dict) else set()
         t = r / "templates"
         templates[r.name] = {f.name for f in t.iterdir() if f.is_file()} if t.is_dir() else set()
@@ -109,7 +108,7 @@ def discover(
     u = Universe()
     reg = registry or root / "examples" / "services.yml"
     if reg.is_file():
-        u.registry = yaml.safe_load(reg.read_text(encoding="utf-8"))
+        u.registry = _yaml_safe_load(reg.read_text(encoding="utf-8"))
     caps: set[str] | None = None
     if u.registry:
         caps = {
@@ -119,7 +118,7 @@ def discover(
         }
     inv = inventory or root / "ansible" / "inventory" / "example" / "hosts.yml"
     if inv.is_file():
-        groups = (yaml.safe_load(inv.read_text(encoding="utf-8")) or {}).get("all", {})
+        groups = (_yaml_safe_load(inv.read_text(encoding="utf-8")) or {}).get("all", {})
         names = {g[4:] for g in groups.get("children", {}) if g.startswith("cap_")}
         caps = (caps or set()) | {f"cap:{n.replace('_', '-')}" for n in names}
     u.capabilities = caps

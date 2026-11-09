@@ -342,6 +342,8 @@ jobs:
           HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
           HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: python tools/product_name_lint.py --ci-base .
+      - name: package code parses YAML through the budgeted loaders only (alias and merge bombs)
+        run: python tools/yaml_loader_lint.py .
       # the change's own copy; its trusted-gates copy (the base's) follows once the tool is on main,
       # since a base without it has none to run: CONTRIBUTING.md, "Hygiene lints", tracks it
       - name: the gates' allowlists and suppression markers at their reviewed counts and digests (tools/allowlist_counts.yml), no raise against the base without its code owner

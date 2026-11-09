@@ -19,6 +19,8 @@ import sys
 
 import yaml
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
+
 from ..notify.ceiling import CeilingSender, ceiling_arg
 from ..notify.core import Message
 from ..registers.schema import RegisterError, validate_invariants
@@ -98,7 +100,7 @@ def main(argv=None) -> int:
     reg_path = pathlib.Path(ns.register)
     # a register that is missing or does not parse is bad input (2), never a failed fleet (1)
     try:
-        raw = yaml.safe_load(reg_path.read_text(encoding="utf-8"))
+        raw = _yaml_safe_load(reg_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as ex:
         print(f"[invariants] FATAL: cannot read register {reg_path}: {ex}", file=sys.stderr)
         return 2

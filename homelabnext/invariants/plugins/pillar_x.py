@@ -43,6 +43,8 @@ import sys
 
 import yaml
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
+
 from ..api import ERROR, FAIL, PASS, SKIP, Check, CheckResult, Context, Registry
 
 __all__ = ["SERVER_ONLY", "register", "x01", "x03", "x04", "x05", "x06", "x11", "x12"]
@@ -86,9 +88,11 @@ def _is_registry_doc(text: str) -> bool | None:
     tell, and fails closed."""
     try:
         node = yaml.compose(text, Loader=yaml.SafeLoader)
+        return "registry_version" in _top_keys(node, set())
     except yaml.YAMLError:
         return None
-    return "registry_version" in _top_keys(node, set())
+    except RecursionError:  # nested (or merged) too deeply to read: cannot be told either
+        return None
 
 
 def _top_keys(node: object, seen: set[int]) -> set[str]:
@@ -238,8 +242,8 @@ def _load(path: pathlib.Path):
         m = _FRONTMATTER.match(text)
         if m is None:
             raise ValueError(f"{path}: no YAML frontmatter")
-        return yaml.safe_load(m.group(1))
-    return yaml.safe_load(text)
+        return _yaml_safe_load(m.group(1))
+    return _yaml_safe_load(text)
 
 
 def _build_registry(schemas: list[pathlib.Path]):
@@ -415,7 +419,7 @@ def _det_map(root: pathlib.Path) -> tuple[str, dict] | None:
     for cand in DET_MAPS:
         mp = root / cand
         if mp.exists():
-            return cand, yaml.safe_load(mp.read_text()) or {}
+            return cand, _yaml_safe_load(mp.read_text()) or {}
     return None
 
 

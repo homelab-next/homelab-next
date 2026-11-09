@@ -20,6 +20,8 @@ from typing import Any
 
 import yaml
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
+
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 ATTACK_TECH_RE = re.compile(r"^attack\.t\d{4}(\.\d{3})?$")
 #: ``attack.gNNNN`` (a group) and ``attack.sNNNN`` (software): valid ATT&CK tags, never tactics
@@ -254,7 +256,7 @@ def load_rule(path: Path, text: str | None = None) -> Rule:
     """The rule at ``path``; with ``text``, that text stands for the file's (a caller that has
     already read it safely, such as the module loader, passes it so the file is read once)."""
     try:
-        raw = yaml.safe_load(Path(path).read_text(encoding="utf-8") if text is None else text)
+        raw = _yaml_safe_load(Path(path).read_text(encoding="utf-8") if text is None else text)
     except yaml.YAMLError as exc:
         raise RuleError(f"{path}: invalid YAML: {exc}") from exc
     if not isinstance(raw, dict):
@@ -312,7 +314,7 @@ def load_rules(root: Path) -> list[Rule]:
 def load_mapping(path: Path | None) -> dict[str, str]:
     if path is None:
         return {}
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    data = _yaml_safe_load(Path(path).read_text(encoding="utf-8")) or {}
     return dict(data.get("fields", {}))
 
 

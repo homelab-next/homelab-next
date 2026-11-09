@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
+
 from .core import Suite
 from .registry import ConformError, find_root, load_module, schema_problems
 
@@ -128,9 +130,7 @@ def _read(path: Path) -> Mapping[str, Any]:
 
         doc = json.loads(text)
     else:
-        import yaml
-
-        doc = yaml.safe_load(text)
+        doc = _yaml_safe_load(text)
     if not isinstance(doc, Mapping):
         raise ConformError(f"{path}: target file must be a mapping")
     return doc
