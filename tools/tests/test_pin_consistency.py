@@ -208,7 +208,9 @@ def test_the_example_registries_run_the_caddy_ci_checks_with():
 # --- metrics: the scrape target each pinned version really serves -------------------------------
 
 ISSUES = "https://github.com/homelab-next/homelab-next/issues/"
-ORCHESTRATOR_ADAPTER = "homelabnext/conform/adapters/llm_orchestrator.py"
+#: the example registry's controller row, which still describes the private controller's pin until
+#: its rename to `orchestrator` moves it to this repository's (ADR-0026 decisions 15 and 16)
+ORCHESTRATOR_ROW = "examples/services.yml"
 
 # What each product serves for Prometheus, read from its own source at the versions listed; a
 # registry metrics block for another version fails until that version is read and added here.
@@ -226,7 +228,7 @@ ORCHESTRATOR_ADAPTER = "homelabnext/conform/adapters/llm_orchestrator.py"
 #     JmxOpenMetricsModule at 450 and 484, whose MetricsResource is @Path("/metrics");
 #     docs admin/openmetrics.md), behind the server's authentication: the generated job sends no
 #     credentials, so it gets 401 until scrape auth exists (issue 251)
-#   orchestrator: at the pinned a52a1c4 (the registry's 0.3.0; ORCHESTRATOR_ADAPTER names the
+#   orchestrator: at the pinned a52a1c4 (the registry's 0.3.0; ORCHESTRATOR_ROW names the
 #     pin) the controller's routes are its job API and /admin/*, and homelabnext serves nothing
 #     for it (docs/orchestration-controller.md).  Upstream serves GET /metrics from 0803f0f on,
 #     so a newer pin is a new version here.
@@ -332,8 +334,8 @@ def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
         f"{where} sets the metrics port; {FACTS} assumes the default"
     )
     pin = METRICS_SERVED["orchestrator"]["pin"]
-    assert f"pinned: ``{pin}``" in read(ORCHESTRATOR_ADAPTER), (
-        f"{ORCHESTRATOR_ADAPTER} no longer pins {pin}: read what the new pin serves for metrics "
+    assert f"pinned {pin}" in read(ORCHESTRATOR_ROW), (
+        f"{ORCHESTRATOR_ROW} no longer pins {pin}: read what the new pin serves for metrics "
         f"and update the orchestrator entry of {FACTS}"
     )
 

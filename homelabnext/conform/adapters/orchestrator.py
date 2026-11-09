@@ -1,66 +1,59 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The ``orchestration`` contract on the LLM orchestrator (the Go controller; pinned: ``a52a1c4``).
+"""The ``orchestration`` contract on the orchestration controller (``orchestrator/cmd/controller``).
 
-``make(**config)`` returns an :class:`LLMOrchestrator`: a stdlib client of the controller's job
-API on ``HNX_ENDPOINT_ORCHESTRATION`` plus a loopback *handler host* that runs the job bodies.
-The mapping (docs/orchestration-controller.md has the whole table):
+``make(**config)`` returns a :class:`Controller`: a stdlib client of the controller's job API on
+``HNX_ENDPOINT_ORCHESTRATION`` plus a loopback *handler host* that runs the job bodies. The
+mapping (docs/orchestration-controller.md has the whole table):
 
 * ``define(name, handler, retries=n)`` -> a profile file ``<agent key>.yaml`` written into the
   controller's profiles directory (``profiles_dir``, or ``HNX_ORCHESTRATION_PROFILES_DIR``), then
   ``POST /admin/reload-profiles``.  The agent key is ``hnxconf-<run token>-<name>``; the profile
-  is ``local_only`` and asks for ``max_attempts: n + 1``, a field only a controller with the
-  retry change (landed privately on 2026-10-22, after ``a52a1c4``) reads.  The handler is kept by the handler host, never sent anywhere.
+  is ``local_only`` and asks for ``max_attempts: n + 1``.  The handler is kept by the handler
+  host, never sent anywhere.
 * ``submit`` -> ``POST /jobs`` with that agent key, the idempotency key namespaced by the run
-  token (the controller's keys are global and never expire), and a task description holding one
-  job line (``hnx-conform-job:<base64url JSON>``: handler host URL, a token per submit and its
-  HMAC, the job and its parameters).  ``404`` is :class:`UnknownJob`.  The HMAC key never leaves
-  the adapter process: the controller's ``GET /jobs/{id}`` (unauthenticated) shows the task
-  description to anyone, so the line carries no host-wide secret, and the handler host runs only
-  a token it issued, with a valid MAC, for that token's own job and parameters.  Its request
-  body is bounded (``Content-Length``: not a number or negative is 400, over
-  :data:`MAX_RUN_BODY` is 413).
-* the job body -> the controller runs ``hermes -z PROMPT``; for a conformance run ``hermes`` is
-  ``conformance/fakes/llm_orchestrator_hermes.py``, which posts the job line to the handler host
-  and prints the handler's answer (or exits 1 with its error).
+  token (a submitter's keys never expire), and a task description holding one job line
+  (``hnx-conform-job:<base64url JSON>``: handler host URL, a token per submit and its HMAC, the
+  job and its parameters).  ``404`` is :class:`UnknownJob`.  The HMAC key never leaves the
+  adapter process: any reader of the job's task sees the line, so it carries no host-wide
+  secret, and the handler host runs only a token it issued, with a valid MAC, for that token's
+  own job and parameters.  Its request body is bounded (``Content-Length``: not a number or
+  negative is 400, over :data:`MAX_RUN_BODY` is 413).
+* the job body -> the controller's runner session; for a conformance run it is
+  ``conformance/fakes/llm_orchestrator_hermes.py`` under the exec runner
+  (``tools/orchestration_conformance.py``), which posts the job line to the handler host and
+  prints the handler's answer (or exits 1 with its error).
 * ``wait`` -> polls ``GET /jobs/{id}`` until a terminal state: ``done`` is ``succeeded``,
   ``failed`` and ``budget_killed`` are ``failed``, ``cancelled`` is ``cancelled``; ``result`` is
   the answer decoded from ``response_body``, ``error`` is ``local_failed_reason``.  A controller
   that does not report ``attempts`` gets the number of executions the handler host saw for the
-  run.  The timeout is at least ``wait_floor`` seconds: the controller admits on a 2 s tick.
+  run.  The timeout is at least ``wait_floor`` seconds (0 for the in-repository target: the
+  controller admits on a one-second tick, and a floor would turn a read into a wait).
 * ``cancel`` -> ``POST /jobs/{id}/cancel``; ``409`` (a run that may no longer be cancelled) reads
   the run back unchanged, which is the contract for a finished run.
-* ``capacity`` (feature ``admission``) -> ``GET /admin/backend-inflight`` (the route landed after
-  ``a52a1c4``; ``hermesagent.Policy.InFlightSnapshot``, in the private package as it was before
-  its split into ``internal/runner/hermes``, ``internal/prompt`` and ``internal/backends``):
-  ``in_flight`` summed over the backends, ``holders`` the union of their ``reserved_runs``,
-  ``limit`` ``None`` (the snapshot reports no limit).  ``admission`` is declared only when that route answers; a ``404`` means no route, so
-  the capacity checks skip, and any other answer (a 5xx, a timeout, a ``401``) makes the run
-  unmeasured rather than skipped.  Without a limit the suite judges a release by the run leaving
-  ``reserved_runs``: ``in_flight`` is a counter shared with any other traffic on the controller,
-  so it is never compared.  With API authentication on, the route needs an admin token, which
-  this adapter does not send.  The recorded stand-in is started only by the first contract call,
-  and its features come from ``fixes``, so a check that skips never starts one.
+* ``capacity`` (feature ``admission``) -> ``GET /admin/backend-inflight``: ``in_flight`` summed
+  over the backends, ``holders`` the union of their ``reserved_runs``, ``limit`` ``None`` (the
+  snapshot reports no limit).  ``admission`` is declared only when that route answers; a ``404``
+  means no route, so the capacity checks skip, and any other answer (a 5xx, a timeout, a ``401``)
+  makes the run unmeasured rather than skipped.  Without a limit the suite judges a release by
+  the run leaving ``reserved_runs``: ``in_flight`` is a counter shared with any other traffic on
+  the controller, so it is never compared.  With API authentication on, the route needs an admin
+  token, which this adapter does not send.
 * ``submit(..., priority=p)`` (feature ``priority``) -> the job's ``priority`` (1..100, lowest
-  admitted first, then submit order: ``handlers.go:97-111`` and the scheduler's queue order); a
-  value outside that range is refused with ``ValueError`` before it is sent, and without one the
-  adapter's own ``priority`` (default 50) is sent.  ``priority`` is the only optional feature
-  (``orchestration-features``) declared: the job API reports neither the backend nor the lane
-  an attempt ran on (``shadow``, ``constraints``, ``local-only``) and has no list route
-  (``list-runs``).  Its check needs a reported limit, which ``capacity()`` never has, so it
-  skips here.
-* ``kill`` / ``restart`` (test hook ``fault-injection``) exist only on the recorded stand-in, which
-  models the controller's process kill and restart reconciliation.  On a live controller the
+  admitted first, then submit order); a value outside that range is refused with ``ValueError``
+  before it is sent, and without one the adapter's own ``priority`` (default 50) is sent.
+  ``priority`` is the only optional feature (``orchestration-features``) declared: the job API
+  reports neither the backend nor the lane an attempt ran on (``shadow``, ``constraints``,
+  ``local-only``) and has no list route (``list-runs``).  Its check needs a reported limit, which
+  ``capacity()`` never has, so it skips; the claim is held on the binary instead
+  (tests/conform/test_conform_orchestration_features.py).
+* ``kill`` / ``restart`` (test hook ``fault-injection``) only with ``fault_injection: true`` and
+  the harness that runs the controller as a process (:class:`ProcessFaults`). Elsewhere the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
   declare the hook: there the checks needing it are ``untested`` (a MUST cannot be skipped by
   leaving a hook out), unless the controller lacks ``admission`` too, in which case they skip.
 
 The adapter never answers for the controller: it does not raise ``UnknownJob`` for a name it was
 not given and does not retry a failed run itself, so the suite sees what the controller does.
-
-Controller limits (of ``a52a1c4``, not of this adapter): an unknown ``agent_key`` is accepted and
-queued as an HTTP passthrough job (``unknown-job-raises`` fails); a run is attempted once
-(``retries-until-success`` and ``retries-are-bounded`` fail); a submit cannot be held, so a cancel
-races the next admission tick; the API has no authentication.
 """
 
 from __future__ import annotations
@@ -73,10 +66,8 @@ import logging
 import os
 import re
 import secrets
-import shutil
 import signal
 import subprocess
-import tempfile
 import threading
 import time
 import urllib.error
@@ -90,7 +81,7 @@ from homelabnext._http import read_bounded, safe_opener, send_json
 
 from ._env import AdapterConfigError, resolve, run_token
 
-__all__ = ["JOB_MARKER", "LLMOrchestrator", "encode_job", "make"]
+__all__ = ["JOB_MARKER", "Controller", "encode_job", "make"]
 
 _log = logging.getLogger(__name__)
 
@@ -129,13 +120,13 @@ def _protocol():
 
 
 def encode_job(doc: Mapping[str, Any]) -> str:
-    """The job line for ``doc`` (what the hermes stand-in decodes)."""
+    """The job line for ``doc`` (what the runner body decodes)."""
     raw = json.dumps(dict(doc), ensure_ascii=False, separators=(",", ":")).encode()
     return JOB_MARKER + base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 class _HandlerHost:
-    """Runs a defined job's handler when the hermes stand-in asks, and counts executions.
+    """Runs a defined job's handler when the runner body asks, and counts executions.
 
     :meth:`issue` gives every submit a token and ``HMAC-SHA256(key, token)``; the key stays in
     this object.  :meth:`run` accepts only an issued token with its MAC, for the job and the
@@ -325,7 +316,7 @@ class ProcessFaults:
             self._sleep(0.1)
 
 
-class LLMOrchestrator:
+class Controller:
     def __init__(
         self,
         base_url: str,
@@ -355,11 +346,11 @@ class LLMOrchestrator:
         self._tokens: dict[str, str] = {}
         #: a cancel is a process kill plus a poll: generous for a live controller under load
         self.cancel_grace_s = cancel_grace_s
-        self._faults = faults  # an object with kill(run_id) and restart(): the recorded stand-in
+        self._faults = faults  # an object with kill(run_id) and restart(): ProcessFaults
         self._features: frozenset[str] | None = None
 
     def __repr__(self) -> str:
-        return "LLMOrchestrator(<endpoint>)"
+        return "Controller(<endpoint>)"
 
     # ---------------------------------------------------------------- HTTP
     def _request(self, method: str, path: str, body: Any = None) -> tuple[int, bytes]:
@@ -406,7 +397,7 @@ class LLMOrchestrator:
     @property
     def features(self) -> frozenset[str]:
         """``admission`` when the controller serves its in-flight route, ``fault-injection``
-        only with a stand-in that can kill and restart (probed once per subject).
+        only with process faults that can kill and restart (probed once per subject).
 
         Only ``404`` means "no route": any other answer, or no answer, raises
         :class:`OrchestrationError`, so a transient fault makes the run unmeasured instead of
@@ -452,7 +443,7 @@ class LLMOrchestrator:
             "default_task_description": "hnx orchestration conformance job",
         }
         path = self._profiles / f"{key}.yaml"
-        header = "# written by homelabnext.conform.adapters.llm_orchestrator; removed on close\n"
+        header = "# written by homelabnext.conform.adapters.orchestrator; removed on close\n"
         path.write_text(header + json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         if path not in self._written:
             self._written.append(path)
@@ -509,7 +500,7 @@ class LLMOrchestrator:
         _, run_status, _ = _protocol()
         state = STATES[doc["state"]]
         attempts = doc.get("attempts")
-        if not isinstance(attempts, int):  # a52a1c4 reports none: count what the host ran
+        if not isinstance(attempts, int):  # a controller that reports none: count what the host ran
             attempts = self._host.count(self._tokens.get(run_id, ""))
         result = None
         if state == "succeeded":
@@ -549,13 +540,17 @@ class LLMOrchestrator:
     def kill(self, run_id: str) -> None:
         if self._faults is None:
             orch_error, _, _ = _protocol()
-            raise orch_error("kill needs the recorded stand-in: a live worker cannot be killed")
+            raise orch_error(
+                "kill needs fault injection (fault_injection: true, run by the harness): a live worker is not ours to kill"
+            )
         self._faults.kill(run_id)
 
     def restart(self) -> None:
         if self._faults is None:
             orch_error, _, _ = _protocol()
-            raise orch_error("restart needs the recorded stand-in: a live controller is not ours")
+            raise orch_error(
+                "restart needs fault injection (fault_injection: true, run by the harness): a live controller is not ours to restart"
+            )
         self._faults.restart()
 
     def close(self) -> None:
@@ -574,29 +569,22 @@ class LLMOrchestrator:
 def make(
     *,
     profiles_dir: str | None = None,
-    recorded_fake: bool = False,
-    fixes: list[str] | tuple[str, ...] = (),
     capability: str = "orchestration",
     priority: int = 50,
     poll: float = 0.2,
     wait_floor: float = 60.0,
     fault_injection: bool = False,
-) -> LLMOrchestrator | _Recorded:
+) -> Controller:
     """An ``orchestration`` subject on a controller: the one ``HNX_ENDPOINT_<CAPABILITY>`` names,
-    with its profiles directory, or (``recorded_fake``) a fresh loopback stand-in of its API,
-    with ``fixes`` (``conformance/fakes/llm_orchestrator_api.py``) turned on."""
-    if recorded_fake:
-        return _on_recorded_fake(tuple(fixes), priority)
-    if fixes:
-        raise AdapterConfigError("fixes only apply to the recorded fake")
+    with its profiles directory; with ``fault_injection``, the harness's process faults."""
     directory = profiles_dir or os.environ.get(PROFILES_ENV)
     if not directory:
         raise AdapterConfigError(
-            f"orchestration on the LLM orchestrator needs profiles_dir (or {PROFILES_ENV}): "
+            f"orchestration on the controller needs profiles_dir (or {PROFILES_ENV}): "
             "the directory the controller loads its profiles from"
         )
     ep = resolve(capability, env_only=True, schemes=("http", "https"))
-    subject = LLMOrchestrator(
+    subject = Controller(
         ep.url, profiles_dir=directory, priority=priority, poll=poll, wait_floor=wait_floor
     )
     if fault_injection:
@@ -614,96 +602,3 @@ def make(
             raise AdapterConfigError(f"{RESTART_ENV} must be a JSON list of strings (an argv)")
         subject._faults = ProcessFaults(pid_dir, argv, subject.healthy)
     return subject
-
-
-class _Recorded:
-    """An :class:`LLMOrchestrator` on a stand-in that is started only when a contract call needs
-    it.  Its features are known from ``fixes`` without a probe, so a check that skips for a
-    missing feature never pays for a stand-in and a handler host."""
-
-    #: the stand-in kills and releases at once (a 10 ms poll), so a short grace keeps the checks'
-    #: hold-persistence and late-result windows cheap
-    cancel_grace_s = 0.5
-
-    def __init__(self, fixes: tuple[str, ...], priority: int) -> None:
-        self._fixes, self._priority = fixes, priority
-        self._real: LLMOrchestrator | None = None
-        admission = {"admission"} if "backend-inflight" in fixes else set()
-        self.features = frozenset({"fault-injection", "priority", *admission})
-
-    def __repr__(self) -> str:
-        return "LLMOrchestrator(<recorded stand-in>)"
-
-    def _o(self) -> LLMOrchestrator:
-        if self._real is None:
-            self._real = _start_recorded(self._fixes, self._priority, self.cancel_grace_s)
-        return self._real
-
-    def define(self, name, handler, *, retries=0):
-        return self._o().define(name, handler, retries=retries)
-
-    def submit(self, name, params, *, idempotency_key, priority=None):
-        return self._o().submit(name, params, idempotency_key=idempotency_key, priority=priority)
-
-    def wait(self, run_id, timeout=5.0):
-        return self._o().wait(run_id, timeout)
-
-    def cancel(self, run_id):
-        return self._o().cancel(run_id)
-
-    def capacity(self):
-        return self._o().capacity()
-
-    def kill(self, run_id):
-        return self._o().kill(run_id)
-
-    def restart(self):
-        return self._o().restart()
-
-    def close(self) -> None:
-        if self._real is not None:
-            self._real.close()
-
-
-def _on_recorded_fake(fixes: tuple[str, ...], priority: int) -> _Recorded:
-    try:
-        from conformance.fakes.llm_orchestrator_api import FIXES, UPSTREAM
-    except ImportError as exc:  # pragma: no cover - a wheel carries no conformance/
-        raise AdapterConfigError(
-            "recorded_fake needs a source checkout (conformance/fakes)"
-        ) from exc
-    unknown = set(fixes) - FIXES - UPSTREAM
-    if unknown:
-        raise ValueError(f"unknown fixes {sorted(unknown)}")
-    return _Recorded(fixes, priority)
-
-
-def _start_recorded(fixes: tuple[str, ...], priority: int, grace: float) -> LLMOrchestrator:
-    try:
-        from conformance.fakes.llm_orchestrator_api import FakeController
-    except ImportError as exc:  # pragma: no cover - a wheel carries no conformance/
-        raise AdapterConfigError(
-            "recorded_fake needs a source checkout (conformance/fakes)"
-        ) from exc
-
-    directory = tempfile.mkdtemp(prefix="hnx-orch-profiles-")
-    fake = FakeController(directory, fixes=fixes).start()
-
-    def stop() -> None:
-        fake.stop()
-        shutil.rmtree(directory, ignore_errors=True)
-
-    try:
-        return LLMOrchestrator(
-            fake.url,
-            profiles_dir=directory,
-            priority=priority,
-            poll=0.02,
-            wait_floor=10.0,
-            on_close=stop,
-            faults=fake,
-            cancel_grace_s=grace,
-        )
-    except BaseException:
-        stop()
-        raise

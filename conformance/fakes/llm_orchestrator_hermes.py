@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Stands in for ``hermes`` under the LLM orchestrator, for the ``orchestration`` conformance run.
+"""The runner body for the ``orchestration`` conformance run: one session of the controller.
 
-The controller runs every profiled job as ``hermes -z PROMPT [--toolsets T] [--usage-file F]``
-(``internal/hermesagent/invoker.go:239-247`` at ``a52a1c4``), where PROMPT starts with the job's
-``task_description`` (``internal/hermesagent/prompt.go:153``, same commit; the package has since
-been split into ``internal/runner/hermes``, ``internal/prompt`` and ``internal/backends``, so both
-cites hold only at ``a52a1c4``).  The adapter
-(``homelabnext.conform.adapters.llm_orchestrator``) puts one job line into that description:
-``hnx-conform-job:<base64url JSON>`` naming its loopback handler host, the job and its parameters.
-This script finds the line, asks the handler host to run the job's handler, and answers the way
-hermes does.  The job line is controller data (any client of its API can read or write a task
-description), so the only URL it ever posts to is ``/run`` on IPv4 loopback (:data:`LOOPBACK`):
-a callback with another scheme (``file://`` included), host, userinfo, path or query is refused.
+The controller's exec runner (``orchestrator/internal/runner/exec``) runs it once per attempt, as
+tools/orchestration_conformance.py configures it: ``--stdin`` reads the prompt from stdin (the
+exec runner gives it there when no argument holds ``{prompt}``), ``-z PROMPT`` takes it as an
+argument, ``--usage-file F`` names the usage report. The prompt starts with the job's task
+description, where the adapter (``homelabnext.conform.adapters.orchestrator``) puts one job line:
+``hnx-conform-job:<base64url JSON>`` naming its loopback handler host, the job and its
+parameters. This script finds the line, asks the handler host to run the job's handler, and
+answers as a session does. The job line is controller data (any client of its API can read or
+write a task description), so the only URL it ever posts to is ``/run`` on IPv4 loopback
+(:data:`LOOPBACK`): a callback with another scheme (``file://`` included), host, userinfo, path
+or query is refused.
 
-* success: the answer on stdout (``{"hnx_result": ...}``) and exit 0 -- the controller stores
-  stdout as ``response_body`` (``internal/queue/scheduler.go:744``);
-* failure: the error on stderr and exit 1 -- a non-zero exit is a failed attempt whose stderr
-  ends up in ``local_failed_reason`` (``invoker.go:379-382``).
+* success: the answer on stdout (``{"hnx_result": ...}``) and exit 0, which the exec runner
+  returns as the session's answer and the queue stores as ``response_body``;
+* failure: the error on stderr and exit 1, which the exec runner classes ``turn-failed`` with a
+  bounded excerpt of stderr, which reaches ``local_failed_reason``.
 
-It also writes the ``--usage-file`` the controller reads back (``invoker.go:359-362``).  Install it
-for a live run by linking it as ``hermes`` first on the controller's PATH (docs/orchestration-
-controller.md).  Standard library only: it runs under the controller's ``python3``, not the
-repository's environment.
+It also writes the usage report the controller reads back, and records its pid for the harness's
+fault injection (:func:`write_pid_file`). Standard library only: it runs under the controller's
+``python3 -I``, not the repository's environment. Its file name keeps the name it had as the
+earlier controller's ``hermes`` stand-in until stage 3's runner fake replaces it.
 """
 
 from __future__ import annotations
@@ -40,10 +40,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-#: the job line prefix; homelabnext.conform.adapters.llm_orchestrator.JOB_MARKER is the same
+#: the job line prefix; homelabnext.conform.adapters.orchestrator.JOB_MARKER is the same
 JOB_MARKER = "hnx-conform-job:"
 CALL_TIMEOUT_S = 120.0
-#: the handler host is always on IPv4 loopback (homelabnext.conform.adapters.llm_orchestrator)
+#: the handler host is always on IPv4 loopback (homelabnext.conform.adapters.orchestrator)
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the handler host is local by design
 
 

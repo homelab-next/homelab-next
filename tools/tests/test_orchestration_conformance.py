@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from conformance.fakes import llm_orchestrator_hermes as body
-from homelabnext.conform.adapters import llm_orchestrator as adapter
+from homelabnext.conform.adapters import orchestrator as adapter
 from homelabnext.conform.adapters._env import AdapterConfigError
 from tests.suite_policy import require_tool
 

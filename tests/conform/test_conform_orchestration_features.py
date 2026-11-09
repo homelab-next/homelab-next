@@ -8,7 +8,6 @@ the records deciders are."""
 
 import pytest
 
-from conformance.fakes import llm_orchestrator_api as api
 from conformance.fakes.orchestrator import (
     BACKENDS,
     FakeOrchestrator,
@@ -21,9 +20,11 @@ from conformance.protocols.orchestration import (
     SubmitOptions,
 )
 from conformance.suites import orchestration_features as suite
-from homelabnext.conform.adapters import llm_orchestrator as lo
 from homelabnext.conform.core import run_checks
 from homelabnext.conform.registry import load_suite
+from tests.conform.controller_rig import controller_binary, live_controller
+
+__all__ = ["controller_binary"]  # the session fixture, imported for its tests
 
 PRIORITY = "lower-priority-number-starts-first"
 OPTIONAL = {"priority", "shadow", "constraints", "local-only", "list-runs"}
@@ -80,23 +81,19 @@ def test_the_fake_refuses_bad_feature_arguments():
     assert {b.locality for b in BACKENDS} == {"local", "cloud"}
 
 
-def test_the_controller_adapter_declares_priority_and_sends_it(tmp_path):
-    fake = api.FakeController(tmp_path).start()
-    o = lo.LLMOrchestrator(fake.url, profiles_dir=tmp_path, poll=0.01, wait_floor=5)
-    try:
+def test_the_controller_adapter_declares_priority_and_sends_it(controller_binary, tmp_path):
+    """Was the stand-in's; now the binary: the job API reports the priority the adapter sent."""
+    with live_controller(controller_binary, tmp_path / "work") as o:
         assert "priority" in o.features and isinstance(o, SubmitOptions)
         o.define("j", lambda p: "ok")
         rid = o.submit("j", {}, idempotency_key="k", priority=7)
-        assert fake.status(rid)[1]["priority"] == 7
-        assert fake.status(o.submit("j", {}, idempotency_key="d"))[1]["priority"] == 50
+        assert o._get(rid)["priority"] == 7
+        assert o._get(o.submit("j", {}, idempotency_key="d"))["priority"] == 50
         for bad in (0, 101, True):
             with pytest.raises(ValueError, match="1 to 100"):
                 o.submit("j", {}, idempotency_key=f"b{bad}", priority=bad)
         # the only optional feature it declares: the job API shows no backend, lane or run list
         assert not (o.features & (OPTIONAL - {"priority"}))
-    finally:
-        o.close()
-        fake.stop()
 
 
 class _Eager(FakeOrchestrator):
@@ -119,39 +116,35 @@ def test_the_shadow_limit_check_passes_a_target_that_starts_runs_eagerly():
     assert res.status == "pass", res.evidence
 
 
-def test_the_controller_stand_in_starts_the_lower_priority_number_first(tmp_path):
-    """What the adapter's ``priority`` claim rests on, at the controller's default concurrency 1:
-    with the one slot busy, a priority-9 job and then a priority-1 job are queued; when the slot
-    frees, the priority-1 job starts first (``min(priority, submit order)`` in the job API)."""
+def test_the_controller_starts_the_lower_priority_number_first(controller_binary, tmp_path):
+    """What the adapter's ``priority`` claim rests on, on the binary at the harness's concurrency
+    1 (moved from the retired stand-in): with the one slot busy, a priority-9 job and then a
+    priority-1 job are queued; when the slot frees, the priority-1 job starts first."""
     import threading
 
-    fake = api.FakeController(tmp_path, concurrency=1).start()
-    o = lo.LLMOrchestrator(fake.url, profiles_dir=tmp_path, poll=0.01, wait_floor=5)
     release, started, order = threading.Event(), threading.Event(), []
-    try:
+    with live_controller(controller_binary, tmp_path / "work") as o:
+        try:
 
-        def block(p):
-            started.set()
-            release.wait(10)
-            return "done"
+            def block(p):
+                started.set()
+                release.wait(60)
+                return "done"
 
-        o.define("block", block)
-        o.define("rec", lambda p: order.append(p["tag"]))
-        busy = o.submit("block", {}, idempotency_key="busy")
-        fake.status(busy)  # a client is waiting on it: admittable at once
-        assert started.wait(10), "the blocking job never started"
-        low = o.submit("rec", {"tag": "low"}, idempotency_key="low", priority=9)
-        high = o.submit("rec", {"tag": "high"}, idempotency_key="high", priority=1)
-        for rid in (low, high):
-            assert fake.status(rid)[1]["state"] == "queued"
-        release.set()
-        for rid in (busy, low, high):
-            assert o.wait(rid, timeout=10).state == "succeeded"
-        assert order == ["high", "low"], order
-    finally:
-        release.set()
-        o.close()
-        fake.stop()
+            o.define("block", block)
+            o.define("rec", lambda p: order.append(p["tag"]))
+            busy = o.submit("block", {}, idempotency_key="busy")
+            assert started.wait(60), "the blocking job never started"
+            low = o.submit("rec", {"tag": "low"}, idempotency_key="low", priority=9)
+            high = o.submit("rec", {"tag": "high"}, idempotency_key="high", priority=1)
+            for rid in (low, high):
+                assert o._get(rid)["state"] == "queued"
+            release.set()
+            for rid in (busy, low, high):
+                assert o.wait(rid, timeout=60).state == "succeeded"
+            assert order == ["high", "low"], order
+        finally:
+            release.set()
 
 
 def test_the_placement_check_says_when_it_is_vacuous():
