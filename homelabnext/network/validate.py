@@ -767,6 +767,13 @@ def _dns(doc: dict, reg: Any, r: Report) -> None:
                 r.error(
                     f"dns.resolvers[{res['id']}]: authoritative_for {zone!r} is outside site domain {domain!r}"
                 )
+            if zone == reg.alias_zone or zone.endswith("." + reg.alias_zone):
+                # the alias zone's records come from the registry alone (ADR-0039 decision 2):
+                # a resolver authoritative for it or a zone under it would serve its own
+                r.error(
+                    f"dns.resolvers[{res['id']}]: authoritative_for {zone!r} is at or under the "
+                    f"registry's alias zone {reg.alias_zone}; only the registry's records live there"
+                )
     generated = {f"{h}.{domain}" for h in reg.hosts}
     seen: set[tuple[str, str]] = set()
     for i, rec in enumerate(dns.get("records", {}).get("static", [])):

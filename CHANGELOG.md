@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- **Breaking for overlay sites:** `hnx site validate` refuses a resolver `authoritative_for` the registry's alias zone or a zone under it, as it refuses a static record there ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 2).
 - LLM gateway: a self-declared backend host that is a capability's primary alias is that registry service and meets its checks (lab zone, port, scheme); it skipped the zone check, so a backend in a non-lab zone rendered as local. A primary that serves a second API port cannot be reached through its alias on that port: register the second port as a row of its own ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 3).
 - LLM gateway: a spec backend that reaches an `eval`, `retiring` or `legacy` registry row is refused, whether it is named after the row, names its record (or a name under it) as a self-declared host, or uses a capability's primary alias with another port than the primary's ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 3).
 - **Breaking for overlay sites:** `hnx site validate` refuses a static DNS record in the registry's alias zone (`<svc_label>.<domain>`): only the registry's own records live there, so a made-up alias cannot be pointed at a candidate row ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 2).

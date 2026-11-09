@@ -221,6 +221,14 @@ def _static_collides_with_host(d):
     d["dns"]["records"]["static"][0]["fqdn"] = "dns-core.example.internal"
 
 
+def _resolver_authoritative_for_the_alias_zone(d):
+    d["dns"]["resolvers"][0]["authoritative_for"] = ["svc.example.internal"]
+
+
+def _resolver_authoritative_under_the_alias_zone(d):
+    d["dns"]["resolvers"][0]["authoritative_for"] = ["shadow.svc.example.internal"]
+
+
 def _static_in_the_alias_zone(d):
     rec = d["dns"]["records"]["static"][0]
     rec.update({"fqdn": "shadow.svc.example.internal", "type": "CNAME"})
@@ -300,6 +308,8 @@ CASES = [
     (_static_collides_with_host, "one source per fact"),
     (_static_bad_a, "not an IPv4 address"),
     (_static_in_the_alias_zone, "in the registry's alias zone svc.example.internal"),
+    (_resolver_authoritative_for_the_alias_zone, "at or under the registry's alias zone"),
+    (_resolver_authoritative_under_the_alias_zone, "at or under the registry's alias zone"),
     (_ip_in_notes, "IP literal"),
     (_url_in_notes, "URL literal"),
     (_registry_cidr_differs, "differs from registry cidr"),
