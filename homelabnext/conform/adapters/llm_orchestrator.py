@@ -69,6 +69,7 @@ import base64
 import contextlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -90,6 +91,8 @@ from homelabnext._http import read_bounded, safe_opener, send_json
 from ._env import AdapterConfigError, resolve, run_token
 
 __all__ = ["JOB_MARKER", "LLMOrchestrator", "encode_job", "make"]
+
+_log = logging.getLogger(__name__)
 
 JOB_MARKER = "hnx-conform-job:"
 PROFILES_ENV = "HNX_ORCHESTRATION_PROFILES_DIR"
@@ -283,12 +286,29 @@ class ProcessFaults:
 
     def kill(self, run_id: str) -> None:
         pid = self._pid(run_id)
-        # only a pid that is still the run's session (its environment carries the run id): the
-        # pid file can outlive the session and the number be reused by another process
-        if not _is_session(pid, run_id):
+        # only a pid that is still the run's session (its environment carries the run id),
+        # checked and signalled through one pidfd: the pid file can outlive the session and the
+        # number be reused by another process
+        try:
+            fd = os.pidfd_open(pid) if pid > 1 else None
+        except OSError as exc:
+            _log.warning(
+                "kill %s: pid %d is gone (%s): the session had already ended", run_id, pid, exc
+            )
             return
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+        if fd is None:
+            _log.warning("kill %s: refused pid %d (not a session's)", run_id, pid)
+            return
+        try:
+            if not _is_session(pid, run_id):
+                _log.warning(
+                    "kill %s: pid %d is no longer that run's session: not signalled", run_id, pid
+                )
+                return
+            with contextlib.suppress(ProcessLookupError):
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+        finally:
+            os.close(fd)
 
     def restart(self) -> None:
         proc = subprocess.run(self._restart, capture_output=True, text=True, timeout=120)

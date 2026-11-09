@@ -11,6 +11,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -81,10 +82,12 @@ def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path)
     ]
     for c in FAULT_CHECKS:
         args += ["--check", c]
-    assert harness.main(args) == 0
+    work = tmp_path / "work"
+    rc = harness.main(args)
+    assert rc == 0, f"harness exit {rc}\n{_diagnose(work, out)}"
     (run,) = json.loads(out.read_text())["runs"]
     results = {r["check"]: r["status"] for r in run["results"]}
-    assert results == dict.fromkeys(FAULT_CHECKS, "pass"), results
+    assert results == dict.fromkeys(FAULT_CHECKS, "pass"), f"{results}\n{_diagnose(work, out)}"
     # a session that ended removed its pid file; one that was killed left it, and is not running
     for p in (tmp_path / "work" / "pids").glob("*.pid"):
         assert not harness.is_session(int(p.read_text()), p.name.removesuffix(".pid")), p
@@ -100,13 +103,44 @@ def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path)
                 ("%controller-restart-reconciliation%",),
             )
         ]
-        assert len(reconciled) == 1, reconciled
+        assert len(reconciled) == 1, f"reconciled runs {reconciled}\n{_diagnose(work, out)}"
         retries = db.execute(
             "SELECT COUNT(*) FROM jobs WHERE retry_of_run_id = ?", (reconciled[0],)
         ).fetchone()[0]
-        assert retries == 0, f"the reconciled run {reconciled[0]} was retried"
+        assert retries == 0, (
+            f"the reconciled run {reconciled[0]} was retried\n{_diagnose(work, out)}"
+        )
     finally:
         db.close()
+
+
+def _diagnose(work: Path, out: Path) -> str:
+    """What a failed strict run leaves to read: every job row, each failing check's evidence, the
+    controller log's tail."""
+    lines = []
+    try:
+        db = sqlite3.connect(work / "state" / "controller.db")
+        try:
+            for row in db.execute(
+                "SELECT run_id, agent_key, state, attempts, retry_of_run_id, local_failed_reason FROM jobs ORDER BY seq"
+            ):
+                lines.append("job " + " | ".join(str(c)[:160] for c in row))
+        finally:
+            db.close()
+    except sqlite3.Error as exc:
+        lines.append(f"(no job rows: {exc})")
+    try:
+        for r in json.loads(out.read_text())["runs"][0]["results"]:
+            if r["status"] != "pass":
+                lines.append(f"check {r['check']}: {r['status']}: {str(r.get('evidence'))[:400]}")
+    except (OSError, ValueError, KeyError, IndexError):
+        lines.append("(no suite result)")
+    try:
+        tail = (work / "controller.log").read_text(errors="replace").splitlines()[-40:]
+        lines += ["controller log:", *tail]
+    except OSError:
+        lines.append("(no controller log)")
+    return "\n".join(lines)
 
 
 def test_the_runner_body_records_its_session_pid(tmp_path):
@@ -124,7 +158,7 @@ def test_the_runner_body_reads_its_prompt_from_stdin():
     assert code == 2 and "--stdin" in err
 
 
-def test_process_faults_kill_the_recorded_session(tmp_path):
+def test_process_faults_kill_the_recorded_session(tmp_path, caplog):
     proc = subprocess.Popen(["sleep", "30"], env=dict(os.environ, HNX_RUN_ID=RUN))
     other = subprocess.Popen(["sleep", "30"])  # a reused pid: not the run's session
     try:
@@ -135,6 +169,8 @@ def test_process_faults_kill_the_recorded_session(tmp_path):
         (tmp_path / f"{'b' * 32}.pid").write_text("1\n")
         faults.kill("b" * 32)  # never pid 1
         assert other.poll() is None, "a process that is not the run's session was killed"
+        said = caplog.text
+        assert "no longer that run's session" in said and "refused pid 1" in said, said
         (tmp_path / f"{RUN}.pid").write_text(f"{proc.pid}\n")
         faults.kill(RUN)
         assert proc.wait(timeout=30) == -signal.SIGKILL
@@ -213,26 +249,54 @@ def _spawn(argv, **env):
     return subprocess.Popen(argv, env=dict(os.environ, **env), start_new_session=True)
 
 
+def _fake_controller(work: Path) -> subprocess.Popen:
+    """A process whose command line is exactly what start() gives the controller of ``work``."""
+    (work / "serve").write_text("while :; do sleep 1; done\n")  # sh runs it in place: argv stays
+    binary = str(work / "controller")
+    (work / "controller.bin").write_text(binary + "\n")
+    proc = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            'exec -a "$0" sh "$@"',
+            binary,
+            "serve",
+            "--config",
+            str(work / "controller.yaml"),
+        ],
+        cwd=work,
+        start_new_session=True,
+    )
+    # bash execs into the stand-in: wait until the command line is the controller's
+    deadline = time.monotonic() + 30
+    while not harness.is_controller(proc.pid, work):
+        assert time.monotonic() < deadline, "the stand-in controller never started"
+        time.sleep(0.01)
+    return proc
+
+
 def test_a_restart_kills_the_controller_before_its_sessions(tmp_path, monkeypatch):
     """A session killed while its controller still runs is a failure that controller records
     (and retries), not a crash it reconciles: the controller goes first, and is waited for."""
     work = tmp_path
     (work / "pids").mkdir()
-    cfg = str(work / "controller.yaml")
-    controller = _spawn(["sh", "-c", "sleep 30", "serve", "--config", cfg])
+    controller = _fake_controller(work)
     session = _spawn(["sleep", "30"], HNX_RUN_ID=RUN)
     stale = _spawn(["sleep", "30"], HNX_RUN_ID="f" * 32)  # a pid file naming another run's pid
+    impostor = _spawn(["sleep", "30"])  # serve --config elsewhere is not this controller
     try:
         (work / "controller.pid").write_text(f"{controller.pid}\n")
         (work / "pids" / f"{RUN}.pid").write_text(f"{session.pid}\n")
         (work / "pids" / f"{'e' * 32}.pid").write_text(f"{stale.pid}\n")
         (work / "pids" / f"{'d' * 32}.pid").write_text("1\n")
+        assert not harness.is_controller(impostor.pid, work)
         order = []
         real_kill = harness._kill
 
-        def kill(pid):
-            order.append(pid)
-            real_kill(pid)
+        def kill(pid, still):
+            if real_kill(pid, still):
+                order.append(pid)
+            return pid in order
 
         monkeypatch.setattr(harness, "_kill", kill)
         harness.stop(work)
@@ -242,6 +306,30 @@ def test_a_restart_kills_the_controller_before_its_sessions(tmp_path, monkeypatc
         assert stale.poll() is None, "a pid that was no longer the run's session was killed"
         assert not list((work / "pids").glob("*.pid"))
     finally:
-        for p in (controller, session, stale):
+        for p in (controller, session, stale, impostor):
+            p.kill()
+            p.wait()
+
+
+def test_a_restart_fails_loudly_when_the_controller_outlives_its_kill(tmp_path, monkeypatch):
+    """A controller still running after the wait is a failed restart, never a silent one: its
+    sessions are left alone (killed under it they would be retried, not reconciled)."""
+    work = tmp_path
+    (work / "pids").mkdir()
+    controller = _fake_controller(work)
+    session = _spawn(["sleep", "30"], HNX_RUN_ID=RUN)
+    try:
+        (work / "controller.pid").write_text(f"{controller.pid}\n")
+        (work / "pids" / f"{RUN}.pid").write_text(f"{session.pid}\n")
+        # a controller that survives its SIGKILL (stuck in the kernel, say): the kill is "sent"
+        # and the wait runs out
+        monkeypatch.setattr(harness, "_kill", lambda pid, still=None: still is None or still(pid))
+        monkeypatch.setattr(harness, "_gone", lambda pid, wait_s=None: False)
+        with pytest.raises(RuntimeError, match="still runs"):
+            harness.stop(work)
+        assert session.poll() is None, "a session was killed under a live controller"
+        assert harness.cmd_restart(work) == 1
+    finally:
+        for p in (controller, session):
             p.kill()
             p.wait()

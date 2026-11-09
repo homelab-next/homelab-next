@@ -45,6 +45,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -135,24 +136,44 @@ def start(work: Path) -> int:
     return proc.pid
 
 
-def _kill(pid: int) -> None:
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(pid, signal.SIGKILL)
+#: how long a killed controller has to be gone before a restart gives up, loudly
+GONE_WAIT_S = 10.0
 
 
-def _gone(pid: int, wait_s: float = 10.0) -> None:
-    """Wait until ``pid`` no longer runs (a zombie of ours is reaped)."""
-    deadline = time.monotonic() + wait_s
-    while time.monotonic() < deadline:
+def _kill(pid: int, still: Callable[[int], bool]) -> bool:
+    """SIGKILL ``pid`` if ``still(pid)`` says it is still the process meant, checked and signalled
+    through one pidfd, so the number cannot be reused by another process in between. False when
+    it was not (gone, or another process now)."""
+    try:
+        fd = os.pidfd_open(pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+    try:
+        if not still(pid):
+            return False
+        with contextlib.suppress(ProcessLookupError):
+            signal.pidfd_send_signal(fd, signal.SIGKILL)
+        return True
+    finally:
+        os.close(fd)
+
+
+def _gone(pid: int, wait_s: float | None = None) -> bool:
+    """Wait until ``pid`` no longer runs (a zombie of ours is reaped); False when it still runs
+    after ``wait_s`` (GONE_WAIT_S)."""
+    deadline = time.monotonic() + (GONE_WAIT_S if wait_s is None else wait_s)
+    while True:
         with contextlib.suppress(ChildProcessError):
             if os.waitpid(pid, os.WNOHANG)[0] == pid:
-                return
+                return True
         try:
             with open(f"/proc/{pid}/stat", encoding="ascii") as f:
                 if f.read().rsplit(")", 1)[1].split()[0] in ("Z", "X"):
-                    return
+                    return True
         except (OSError, IndexError):
-            return
+            return True
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(0.02)
 
 
@@ -171,9 +192,14 @@ def is_session(pid: int, run_id: str) -> bool:
 
 
 def is_controller(pid: int, work: Path) -> bool:
-    """Whether ``pid`` is still the controller of ``work`` (``serve`` on its configuration)."""
-    argv = _proc_file(pid, "cmdline").split(b"\0")
-    return pid > 1 and b"serve" in argv and str(work / "controller.yaml").encode() in argv
+    """Whether ``pid`` is still the controller of ``work``: its command line is exactly the one
+    start() gave it (the work directory's binary, ``serve --config`` its configuration)."""
+    try:
+        binary = (work / "controller.bin").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    want = [binary, "serve", "--config", str(work / "controller.yaml")]
+    return pid > 1 and _proc_file(pid, "cmdline") == b"\0".join(a.encode() for a in want) + b"\0"
 
 
 def stop(work: Path) -> None:
@@ -181,21 +207,29 @@ def stop(work: Path) -> None:
     goes first and is waited for: a session killed while it still runs would be a failure it
     records (KilledExternally, and an automatic retry), not a crash it reconciles at its next
     start. Only a pid that is still that process is signalled."""
-    with contextlib.suppress(OSError, ValueError):
+    try:
         pid = int((work / "controller.pid").read_text(encoding="ascii"))
-        if is_controller(pid, work):
-            _kill(pid)
-            _gone(pid)
+    except (OSError, ValueError):
+        pid = 0
+    if pid and _kill(pid, lambda p: is_controller(p, work)) and not _gone(pid):
+        # its sessions are left alone: killed under a live controller they would be failures it
+        # records and retries, which is not the crash a restart stands for
+        raise RuntimeError(
+            f"the controller (pid {pid}) still runs {GONE_WAIT_S}s after SIGKILL; its sessions are left alone"
+        )
     for p in (work / "pids").glob("*.pid"):
+        run_id = p.name.removesuffix(".pid")
         with contextlib.suppress(OSError, ValueError):
-            pid = int(p.read_text(encoding="ascii"))
-            if is_session(pid, p.name.removesuffix(".pid")):
-                _kill(pid)
+            _kill(int(p.read_text(encoding="ascii")), lambda q, r=run_id: is_session(q, r))
         p.unlink(missing_ok=True)
 
 
 def cmd_restart(work: Path) -> int:
-    stop(work)
+    try:
+        stop(work)
+    except RuntimeError as exc:
+        print(f"orchestration-conformance: restart: {exc}", file=sys.stderr)
+        return 1
     start(work)
     return 0
 
