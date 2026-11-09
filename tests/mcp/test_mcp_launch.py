@@ -420,7 +420,8 @@ RUNTIME_KEYS = ["OPENSSL_CONF", "OPENSSL_ENGINES", "OPENSSL_MODULES", "SSL_CERT_
                 "NLSPATH", "HOSTALIASES", "RES_OPTIONS", "LOCALDOMAIN", "GLIBC_TUNABLES",
                 "MALLOC_CHECK_", "MALLOC_ARENA_MAX", "TZDIR", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
                 "JDK_JAVA_OPTIONS", "PERL5OPT", "PERL5LIB", "PERLLIB", "RUBYOPT", "RUBYLIB",
-                "BASH_FUNC_x%%", "SHELLOPTS", "BASHOPTS", "PS4"]  # fmt: skip
+                "BASH_FUNC_x%%", "SHELLOPTS", "BASHOPTS", "PS4", "PERL5DB", "TMPDIR",
+                "IFS"]  # fmt: skip
 
 
 @pytest.mark.parametrize("key", RUNTIME_KEYS)

@@ -296,11 +296,11 @@ func cloneGrants(in []Grant) []Grant {
 // (the loader, the search path and home, the interpreters and package launchers, git, the config
 // directories they read, the container CLI's own settings, the TLS stack's configuration and key
 // log, every proxy, the C library's module, locale, resolver and allocator knobs, other
-// interpreters' option variables and the shell's). It is homelab-next's DENIED_ENV
+// interpreters' option variables, the shell's and the temporary directory). It is homelab-next's DENIED_ENV
 // (homelabnext/mcp/servers.py) character for character, which tests/mcp/test_mcp_clients.py holds
 // equal, so a record the catalog accepts and a grant this package accepts are refused for the same
 // keys.
-const DeniedEnvPattern = `(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSLKEYLOGFILE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4`
+const DeniedEnvPattern = `(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSLKEYLOGFILE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PERL5\w+|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4|TMPDIR|IFS`
 
 var (
 	nameRe      = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
