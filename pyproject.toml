@@ -174,14 +174,17 @@ suite_budgets = [
   # without them it measured 84.1s on a local 4-core box (2026-10-26), where it took 136s with
   # them, so 110 leaves it the headroom it had and the sweeps no longer push it; 140 since CI
   # measured 111.2s on 3.12 (2026-11-05) after the lake-query count_by/cardinality and lake-catalog
-  # batch-source checks (ADR-0036), about 1.25x that
-  "tests/conform = 140",
+  # batch-source checks (ADR-0036), about 1.25x that; 180 since the agent-runner suite (ADR-0051
+  # step 2), whose every check starts real processes under the development launcher (about 8s a
+  # run): 147.5s on a shared local 4-core box (2026-11-09), about 1.2x that
+  "tests/conform = 180",
   # the sweeps: each registered mutant through its whole suite (test_conform_mutants.py, the
   # protocol mutants) and X-10 end to end over every suite (the CLI report tests, one of which
   # also runs every suite and mutant once, stay in tests/conform). They grow with
   # every check and mutant, so this budget is the one to raise as they do: 50.0s on the same box
-  # (2026-10-26), 75 is 1.5x that
-  "tests/conform_sweeps = 75",
+  # (2026-10-26), 75 is 1.5x that; 210 since the agent-runner suite's nine mutants, each a whole
+  # run of real processes (about 8s): 143.7s on a shared local 4-core box (2026-11-09), about 1.5x
+  "tests/conform_sweeps = 210",
 ]
 skip_reasons = [
   "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed

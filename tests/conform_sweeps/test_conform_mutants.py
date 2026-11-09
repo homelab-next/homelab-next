@@ -14,6 +14,7 @@ ALL = [*CAPABILITIES, *EXTENDED]
 #: catches proves less about the check it names (the older suites predate the rule)
 ONLY_ITS_OWN = frozenset(
     {
+        "agent-runner",
         "broker-tokens",
         "codemode-executor",
         "codemode-runner",

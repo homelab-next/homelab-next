@@ -52,6 +52,7 @@ EXTENDED: tuple[str, ...] = (
     "orchestration-features",
     "migration",
     "log-pipeline",
+    "agent-runner",
 )
 #: the capability-class table (the same file as ``homelabnext.agent.readers.DEFAULT_CLASSES``)
 CLASS_TABLE = Path(__file__).resolve().parent / "agent" / "tool_classes.yml"

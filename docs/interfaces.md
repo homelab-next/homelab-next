@@ -377,7 +377,7 @@ Suite(name, summary, protocol) ; @suite.check(id, summary, *, severity="must", r
 run(capability, binding_mapping, root=None) -> list[CheckResult]           # {"fake": True} or {"adapter": "pkg.mod:factory", ...}
 run_capability(capability, target, root=None, *, only=None) -> CapabilityRun  # target: "fake" | "broken[:M]" | file | name
 build_report(root=None, target="fake", ...) -> dict                          # capabilities_without_passing_test
-CAPABILITIES (eighteen) / EXTENDED (backup, dns, edge, broker-tokens, orchestration-features, migration, log-pipeline) ; ConformError (misconfiguration, exit 2)
+CAPABILITIES (eighteen) / EXTENDED (backup, dns, edge, broker-tokens, orchestration-features, migration, log-pipeline, agent-runner) ; ConformError (misconfiguration, exit 2)
 # the suites, Protocols and fakes live in conformance/ of the source tree (hnx conform --root DIR); an
 # installed wheel lists the eighteen names and says "no suite" until pointed at a checkout.
 # invariant X-10 (plugins/x10_conformance.py) is registered through the homelabnext.invariants.checks entry point.
@@ -473,7 +473,7 @@ schemas/<dir>/examples/<name>.<n>.json     at least one valid example per schema
 schemas/<dir>/negative/<name>.<n>.json     at least one example that MUST be rejected
 ```
 
-Directories: <!-- hnx:gen:fact:schema-dirs -->`agent`, `broker`, `codemode`, `conform`, `events`, `ids`, `ocsf`, `platform`, `records`, `registers`, `status`, `strategy`, `workflows`<!-- /hnx:gen -->. A schema may also be named
+Directories: <!-- hnx:gen:fact:schema-dirs -->`agent`, `broker`, `codemode`, `conform`, `events`, `ids`, `ocsf`, `platform`, `records`, `registers`, `runner`, `status`, `strategy`, `workflows`<!-- /hnx:gen -->. A schema may also be named
 `<name>.json` (`model_roles`, `decision_spec`, `service`) or `<class>.v1.json` (the OCSF subsets);
 `tests/schemas/test_schema_contracts.py` pins the exact set.
 JSON Schema draft 2020-12. Each schema file declares `title`, `description` and `$id`. Registers
@@ -565,6 +565,9 @@ change until its ADR is accepted):
 | `registers/lesson` | 2.2 | `schemas/registers/lesson.schema.json` | stable |
 | `registers/register_event` | 1.3 | `schemas/registers/register_event.schema.json` | stable |
 | `registers/runbook` | 2.3 | `schemas/registers/runbook.schema.json` | stable |
+| `runner/grants` | 1.0 | `schemas/runner/grants.schema.json` | draft |
+| `runner/session` | 1.0 | `schemas/runner/session.schema.json` | draft |
+| `runner/usage_record` | 1.0 | `schemas/runner/usage_record.schema.json` | draft |
 | `status/agent_activity` | 1.0 | `schemas/status/agent_activity.schema.json` | stable |
 | `status/agent_activity_detail` | 1.0 | `schemas/status/agent_activity_detail.schema.json` | stable |
 | `status/agents` | 1.4 | `schemas/status/agents.schema.json` | stable |
