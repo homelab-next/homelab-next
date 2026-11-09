@@ -1463,11 +1463,35 @@ def test_a_job_retry_pins_both_of_the_controllers_sources_for_the_overlap():
     assert packs_of([*CONTROLLER_SOURCES, "svc:status-hub"]) == {"agent-job-retry"}
 
 
+def test_an_arbitrary_two_producer_source_list_is_refused():
+    """``$event.source in:`` is accepted only as a declared overlap set (runner.OVERLAP_SOURCES):
+    a pack listing any two producers is a source problem, so a rule cannot widen its producers."""
+
+    def mutate(p):
+        p["agent-job-retry"]["trigger"]["where"][0] = {
+            "ref": "$event.source",
+            "in": ["svc:orchestrator", "svc:status-hub"],
+        }
+
+    packs = all_packs()
+    mutate(packs)
+    problems = {p for p in _problems(binding(), packs) if p[1] == "agent-job-retry"}
+    assert {c.split("-", 1)[1] for c, _ in problems} >= {"source", "bound"}, problems
+
+
 @pytest.mark.parametrize(
     ("where", "want"),
     [
         ([{"ref": "$event.source", "equals": "svc:a"}], ["svc:a"]),
-        ([{"ref": "$event.source", "in": ["svc:a", "svc:b"]}], ["svc:a", "svc:b"]),
+        ([{"ref": "$event.source", "in": list(CONTROLLER_SOURCES)}], list(CONTROLLER_SOURCES)),
+        (
+            [{"ref": "$event.source", "in": list(reversed(CONTROLLER_SOURCES))}],
+            list(reversed(CONTROLLER_SOURCES)),
+        ),
+        # two producers that are not one declared overlap set pin nothing
+        ([{"ref": "$event.source", "in": ["svc:a", "svc:b"]}], []),
+        ([{"ref": "$event.source", "in": [CONTROLLER_SOURCES[0]]}], []),
+        ([{"ref": "$event.source", "in": [*CONTROLLER_SOURCES, CONTROLLER_SOURCES[0]]}], []),
         ([{"ref": "$event.source", "in": []}], []),
         ([{"ref": "$event.source", "in": ["svc:a", ""]}], []),
         ([{"ref": "$event.source", "in": "svc:a"}], []),
@@ -1484,7 +1508,8 @@ def test_a_trigger_pins_its_producers_by_equals_or_an_overlap_list(where, want):
     ("source", "pinned"),
     [
         ({"type": "equals", "pattern": "svc:a"}, True),
-        ({"type": "inside", "pattern": ["svc:a", "svc:b"]}, True),
+        ({"type": "inside", "pattern": list(CONTROLLER_SOURCES)}, True),
+        ({"type": "inside", "pattern": ["svc:a", "svc:b"]}, False),
         ({"type": "inside", "pattern": []}, False),
         ({"type": "inside", "pattern": ["svc:a", ""]}, False),
         ({"type": "inside", "pattern": "svc:a"}, False),

@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 
 from homelabnext import broker
 from homelabnext.agent.digest import digest_of
+from homelabnext.orchestration.model import CONTROLLER_SOURCES
 
 MODEL_KINDS = ("decide", "prompt")
 #: a scheduler's firing: its producer is the schedule (``$event.data.schedule``), not a service
@@ -38,21 +39,34 @@ SCHEDULE_EVENT = "homelabnext.schedule.fired"
 RISKY_TIERS = ("execute", "privileged")
 
 
+#: the producer-id sets a trigger may pin with ``$event.source in:``: each is one producer's old and
+#: new id during a rename's overlap, declared here, never inferred from a pack.  The controller's
+#: (ADR-0026 decision 16) goes at cutover+1 with ``svc:llm-orchestrator``.
+OVERLAP_SOURCES: tuple[frozenset[str], ...] = (frozenset(CONTROLLER_SOURCES),)
+
+
+def is_overlap(ids: Any) -> bool:
+    """Whether ``ids`` is exactly one declared :data:`OVERLAP_SOURCES` set, as a list without
+    repeats: an ``in:`` list of any other producers pins nothing."""
+    return (
+        isinstance(ids, list)
+        and all(isinstance(v, str) for v in ids)
+        and len(set(ids)) == len(ids)
+        and frozenset(ids) in OVERLAP_SOURCES
+    )
+
+
 def pinned_sources(trigger: Mapping[str, Any]) -> list[str]:
-    """The producers a trigger pins: ``$event.source`` ``equals`` one id, or ``in`` a list of ids
-    (a producer's old and new id during a rename's overlap, ADR-0026 decision 16).  An ``in``
-    that is not a non-empty list of non-empty strings pins nothing."""
+    """The producers a trigger pins: ``$event.source`` ``equals`` one id, or ``in`` one declared
+    overlap set (:data:`OVERLAP_SOURCES`, a producer's old and new id during a rename).  Any other
+    ``in`` list pins nothing."""
     out: list[str] = []
     for c in trigger.get("where", []):
         if c["ref"] != "$event.source":
             continue
         if isinstance(c.get("equals"), str) and c["equals"]:
             out.append(c["equals"])
-        elif (
-            isinstance(c.get("in"), list)
-            and c["in"]
-            and all(isinstance(v, str) and v for v in c["in"])
-        ):
+        elif is_overlap(c.get("in")):
             out.extend(c["in"])
     return out
 

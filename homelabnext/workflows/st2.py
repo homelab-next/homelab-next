@@ -93,7 +93,7 @@ from homelabnext.agent.digest import digest_of
 from homelabnext.orchestration.model import CONTROLLER_SOURCE, CONTROLLER_SOURCES
 
 from .pack import WorkflowError, git_files, load_doc, schema_errors
-from .runner import MODEL_KINDS, is_risky
+from .runner import MODEL_KINDS, is_overlap, is_risky
 from .st2_runtime import (
     APPROVED_RUN,
     BROKER_SOURCE,
@@ -364,8 +364,8 @@ APPROVED_RUN_CRITERIA = {
 
 def pin_problems(rule: Mapping[str, Any], ref: str) -> list[tuple[str, str]]:
     """``(check, detail)`` for a rendered webhook rule that lost a pin: its producer
-    (``st2-source``: ``trigger.body.source`` equals one id, or is inside a producer's ids
-    during a rename's overlap) or, for the approved-run rule, a
+    (``st2-source``: ``trigger.body.source`` equals one id, or is inside one declared overlap
+    set, :data:`homelabnext.workflows.runner.OVERLAP_SOURCES`) or, for the approved-run rule, a
     person's ``accept`` (``st2-criteria``)."""
     if rule.get("trigger", {}).get("type") != WEBHOOK_TRIGGER:
         return []
@@ -374,12 +374,7 @@ def pin_problems(rule: Mapping[str, Any], ref: str) -> list[tuple[str, str]]:
     src = crit.get("trigger.body.source")
     pinned = isinstance(src, Mapping) and (
         (src.get("type") == "equals" and isinstance(src.get("pattern"), str) and src["pattern"])
-        or (
-            src.get("type") == "inside"
-            and isinstance(src.get("pattern"), list)
-            and src["pattern"]
-            and all(isinstance(v, str) and v for v in src["pattern"])
-        )
+        or (src.get("type") == "inside" and is_overlap(src.get("pattern")))
     )
     if not pinned:
         out.append(
@@ -890,15 +885,14 @@ def _check_rule(rule, pack, binding, tracked, bad) -> None:
         bad("st2-trigger", f"{name}: triggers on {SCHEDULE_EVENT} but the rule has no schedule")
     else:
         conds = [c for c in pack["trigger"].get("where", []) if c["ref"] == "$event.source"]
-        if (
-            not conds
-            or len(pinned_sources({"where": conds})) == 0
-            or any("equals" not in c and "in" not in c for c in conds)
+        if not conds or any(
+            not (isinstance(c.get("equals"), str) and c["equals"]) and not is_overlap(c.get("in"))
+            for c in conds
         ):
             bad(
                 "st2-source",
                 f"{name}: the trigger must pin its producer ($event.source equals one logical id,"
-                " or in a producer's ids during a rename's overlap)",
+                " or in one declared overlap set of a producer's ids, runner.OVERLAP_SOURCES)",
             )
     if rule["mode"] == "live":
         pr = rule.get("promotion")
