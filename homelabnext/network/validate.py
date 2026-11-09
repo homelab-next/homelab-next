@@ -613,12 +613,30 @@ def _semantic(doc: dict, reg: Any, r: Report) -> None:
             wrong_role(f"adapters.{key}", adapters[key], key)
 
 
-def _need_service(reg: Any, ref: str, where: str, r: Report) -> bool:
+#: the tiers a site's service exception may name by row name (ADR-0039 decision 2): an eval or
+#: retiring row answers by its row name, so the shadow lane and the conformance targets can be let
+#: through to it; every other site reference (a zone's resolvers, the router's management
+#: endpoint, a resolver host) is something the site uses, so it names a primary
+EXCEPTION_TIERS = ("primary", "eval", "retiring")
+
+
+def _need_service(
+    reg: Any, ref: str, where: str, r: Report, tiers: tuple[str, ...] = ("primary",)
+) -> bool:
     name = ref_id(ref)
-    if name not in reg.services:
+    if reg.row(name, *tiers) is not None:
+        return True
+    other = reg.row(name, "primary", "eval", "retiring", "legacy")
+    if other is None:
         r.error(f"{where}: {ref} is not in the service registry")
-        return False
-    return True
+    else:
+        article = "an" if other.standing[0] in "aeiou" else "a"
+        allowed = ", ".join(tiers[:-1]) + " or " + tiers[-1] if len(tiers) > 1 else tiers[0]
+        r.error(
+            f"{where}: {ref} is {article} {other.standing} row; only a {allowed} row may be "
+            "named here (ADR-0039)"
+        )
+    return False
 
 
 def _firewall(doc: dict, reg: Any, zone_ids: dict[str, dict], r: Report) -> None:
@@ -702,9 +720,9 @@ def _firewall(doc: dict, reg: Any, zone_ids: dict[str, dict], r: Report) -> None
         where = f"firewall.service_exceptions[{i}]"
         froms = exc["from"] if isinstance(exc["from"], list) else [exc["from"]]
         svc = ref_id(exc["to"])
-        if not _need_service(reg, exc["to"], f"{where}: to", r):
+        if not _need_service(reg, exc["to"], f"{where}: to", r, EXCEPTION_TIERS):
             continue
-        host = reg.hosts[reg.services[svc].host]
+        host = reg.hosts[reg.row(svc, *EXCEPTION_TIERS).host]
         for fref in froms:
             fz = ref_id(fref)
             if fz not in zone_ids:
