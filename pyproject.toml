@@ -136,7 +136,10 @@ suite_budgets = [
   # summed over the six shards on a 4-CPU box (2026-10-27) against CI's 1143.6s before, so about
   # 670s on CI, and 900 is about 1.3x that
   "tests/roles = 900",
-  "tools/tests = 240",
+  # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
+  # builds the controller and runs the whole suite against it: main measured 180-186 s summed
+  # over the shards (2026-11-09), and the pull request that added it 245.8 s, over 240
+  "tools/tests = 300",
   # the golden suites: run whole they take about 20 s (2026-10-26, a local 4-core box), but the
   # code-mode report fixture (module scope, about 13 s) runs once in every CI shard that draws a
   # test of its module, and the merge sums every shard's time: 34.2 s in four shards (2026-10-25),
