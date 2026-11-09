@@ -208,12 +208,21 @@ site, text = apply_switch(site, swap, mods, yaml_text, plan)  # write both in on
   switch step writes the selection and the registry in one commit.
 - The rollback window is bounded until ADR-0043's ledger row binds it: `rollback_days` is 1 to 90
   (`flip.MAX_ROLLBACK_DAYS`), and `apply_switch` refuses a promotion not dated the day it is
-  applied (`today`, default `HNX_TODAY` or the local date). It refuses `legacy` for an incumbent
+  applied (`today`, default `HNX_TODAY` or the local date) or dated after the real local date
+  (an overridden date cannot post-date the window). The window runs from the day the promotion
+  is computed and applied, not the day its pull request merges: merge lag shortens it, so a
+  pull request that waits is re-run on the day it merges. It refuses `legacy` for an incumbent
   whose outgoing provider is a module this repository deploys (that one goes `retiring`), and
   holds a `legacy` incumbent to the outgoing product too. A slot's name is its capability: the
   slot registry is keyed by capability.
 - `promote_text` writes a field that appears on one line, at the end of its row (or where it was,
   when it comes back), and refuses unless its inverse restores the text byte for byte.
+- **A promotion with no module swap** (one half): an old-lab switch, whose incumbent leaves as
+  `legacy` and whose candidate no module of this repository provides, moves no selection line.
+  `homelabnext.modules.swap.apply_promotion(yaml_text, plan, today=None)` runs every check of
+  `apply_switch`'s promotion half (the date and the real-date bound, the standing fields only,
+  the plan `plan_promote` recomputes) and returns the registry text; there is no selection to
+  write beside it. A switch that moves a selection line goes through `apply_switch`.
 
 ## Decommission check
 

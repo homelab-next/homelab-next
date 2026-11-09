@@ -532,7 +532,6 @@ def _promotion_problems(swap: Doc, mods: dict[str, Doc], doc: Doc, promotion: An
     selection diff moves, its row does not run the incoming provider's product (nor its
     incumbent the outgoing one's, for a ``retiring`` incumbent), or it changes anything but the
     standing fields of those two rows."""
-    from homelabnext.swap.flip import PROMOTION_FIELDS
 
     cap = promotion.capability
     # a slot's name is its capability: the slot registry (examples/modules/slots.yml) is keyed by
@@ -569,6 +568,14 @@ def _promotion_problems(swap: Doc, mods: dict[str, Doc], doc: Doc, promotion: An
                 f"the {promotion.incumbent_tier} row {promotion.incumbent} runs {was!r}, not the "
                 f"outgoing provider's product ({', '.join(sorted(outgoing))})"
             )
+    return out + _field_problems(promotion)
+
+
+def _field_problems(promotion: Any) -> list[str]:
+    """A promotion changes only the standing fields of its two rows."""
+    from homelabnext.swap.flip import PROMOTION_FIELDS
+
+    out = []
     for c in promotion.changes:
         parts = str(c.path).split(".")
         ok = (
@@ -605,29 +612,70 @@ def apply_switch(
     its promotion, or the reverse, leaves consumers bound to a row that no longer answers.  The
     promotion's inverse with the selection before the switch is the rollback.
 
-    The promotion must be dated ``today`` (default ``HNX_TODAY``, else the local date), so its
-    ``until`` runs from the day it is applied, and its window is at most
+    The promotion must be dated ``today`` (default ``HNX_TODAY``, else the local date) and never
+    after the real local date, so its ``until`` runs from the day it is computed and applied,
+    not the day the pull request merges (merge lag shortens the window: re-run it on the day a
+    waiting pull request merges), and its window is at most
     ``flip.MAX_ROLLBACK_DAYS``, until ADR-0043's ledger row binds both.  An incumbent leaving as
     ``legacy`` is refused when the swap's outgoing provider is one of ``mods`` (a module this
     repository deploys goes ``retiring``); an old-lab switch is a promotion without a module swap.
     A slot's name is its capability (the slot registry is keyed by capability)."""
-    from homelabnext.swap.flip import FlipError, PromotePlan, load_doc, plan_promote, promote_text
+    from homelabnext.swap.flip import FlipError, promote_text
+
+    _checked_promotion(registry_text, promotion, today, swap_problems=(swap, mods))
+    after_site = apply_selection_diff(site, swap, mods, models=models)
+    try:
+        after_text = promote_text(registry_text, promotion)
+    except FlipError as exc:
+        raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
+    return after_site, after_text
+
+
+def _checked_promotion(
+    registry_text: str, promotion: Any, today: Any, *, swap_problems: tuple | None = None
+) -> Doc:
+    """Every check a standing promotion meets before it is written, with or without a module
+    swap: it is ``plan_promote``'s (not its inverse), dated ``today`` (``HNX_TODAY``, else the
+    local date) and never after the real local date (an override may not post-date a window:
+    ``until`` stays within ``MAX_ROLLBACK_DAYS`` of the day it is really applied), it changes only
+    the standing fields of its two rows (and, with ``swap_problems=(swap, mods)``, it is that
+    swap's), and it is exactly the plan ``plan_promote`` computes from this registry.  Returns
+    the parsed registry; raises ``ValueError`` (``cutover refused: ...``)."""
+    import datetime
+
+    from homelabnext.registry.standing import today as judged_on
+    from homelabnext.swap.flip import FlipError, PromotePlan, load_doc, plan_promote
 
     if not isinstance(promotion, PromotePlan) or promotion.reverted:
         raise ValueError("the switch takes a promotion from plan_promote, not its inverse")
-    from homelabnext.registry.standing import today as judged_on
-
     on = judged_on(today).isoformat()
     if promotion.switched_on != on:
         raise ValueError(
             f"cutover refused: the promotion is dated {promotion.switched_on}, and the switch is "
             f"on {on}: its rollback window runs from the day it is applied (recompute it today)"
         )
+    real = datetime.date.today()  # hermetic: allow the bound is the real date, never an override
+    try:
+        dated = datetime.date.fromisoformat(promotion.switched_on)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"cutover refused: the promotion's date {promotion.switched_on!r} is not a date"
+        ) from None
+    if dated > real:
+        raise ValueError(
+            f"cutover refused: the promotion is dated {promotion.switched_on}, after today's "
+            f"real date {real.isoformat()}: an overridden date may not post-date its rollback "
+            "window (HNX_TODAY and today= do not move this bound)"
+        )
     try:
         doc = load_doc(registry_text)
     except FlipError as exc:
         raise ValueError(f"cutover refused: {exc}") from None
-    problems = _promotion_problems(swap, mods, doc, promotion)
+    problems = (
+        _promotion_problems(swap_problems[0], swap_problems[1], doc, promotion)
+        if swap_problems is not None
+        else _field_problems(promotion)
+    )
     if problems:
         raise ValueError("cutover refused: " + "; ".join(problems))
     why = next(
@@ -655,9 +703,21 @@ def apply_switch(
             "cutover refused: the promotion is not the one plan_promote computes from this "
             "registry (recompute it; a plan is never applied as given)"
         )
-    after_site = apply_selection_diff(site, swap, mods, models=models)
+    return doc
+
+
+def apply_promotion(registry_text: str, promotion: Any, *, today: Any = None) -> str:
+    """A standing promotion with no module swap (ADR-0039 decision 6): an old-lab switch, whose
+    incumbent leaves as ``legacy`` and whose candidate no module of this repository provides,
+    or any capability no selection slot names.  It meets every check :func:`apply_switch`'s
+    promotion half meets but the swap's (:func:`_checked_promotion`: the date, never after the
+    real date; the standing fields only; the plan ``plan_promote`` computes) and returns the
+    registry text ``promote_text`` writes, whose inverse is the rollback.  A switch that also
+    moves a selection line goes through :func:`apply_switch`, which writes both halves."""
+    from homelabnext.swap.flip import FlipError, promote_text
+
+    _checked_promotion(registry_text, promotion, today)
     try:
-        after_text = promote_text(registry_text, promotion)
+        return promote_text(registry_text, promotion)
     except FlipError as exc:
         raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
-    return after_site, after_text

@@ -344,3 +344,51 @@ def test_the_switch_refuses_legacy_for_a_module_this_repository_deploys(selectio
     with pytest.raises(ValueError, match=r"legacy row query-a runs '.+', not the outgoing"):
         ms.apply_switch({}, SWAP, swapped, text, p)
     assert selection == []
+
+
+def test_a_switch_may_not_post_date_its_window_with_an_overridden_date(monkeypatch):
+    """HNX_TODAY (or today=) set to a future day would start the rollback window there, so
+    `until` could sit up to MAX_ROLLBACK_DAYS past that day instead of past the real one."""
+    future = "2999-01-01"
+    monkeypatch.setenv("HNX_TODAY", future)
+    monkeypatch.setattr(ms, "apply_selection_diff", lambda site, swap, mods, *, models=None: {})
+    text = _text()
+    p = plan_promote(load_doc(text), "lake-query", "query-b", future, 14)
+    with pytest.raises(ValueError, match=f"dated {future}, after today's real date"):
+        ms.apply_switch({}, SWAP, MODS, text, p)
+    with pytest.raises(ValueError, match=f"dated {future}, after today's real date"):
+        ms.apply_switch({}, SWAP, MODS, text, p, today=dt.date(2999, 1, 1))
+
+
+def test_an_old_lab_promotion_meets_the_switch_checks_without_a_module_swap(monkeypatch):
+    """The four ADR-0039 step-10 switches move no selection line: apply_promotion runs the
+    promotion half's checks alone (the date, the standing fields, the recomputed plan)."""
+    monkeypatch.setenv("HNX_TODAY", "2026-11-08")
+    text = _idp_text()
+    p = plan_promote(load_doc(text), "idp", "sso-next", dt.date(2026, 11, 8), 30, old_lab=True)
+    after = ms.apply_promotion(text, p)
+    assert after == promote_text(text, p)
+    assert loads(after).by_capability("idp").name == "sso-next"
+    with pytest.raises(ValueError, match="not its inverse"):
+        ms.apply_promotion(after, p.inverse())
+    with pytest.raises(ValueError, match="standing promotion does not apply"):
+        ms.apply_promotion(after, p)  # already applied: stale
+    early = plan_promote(load_doc(text), "idp", "sso-next", "2026-10-01", 30, old_lab=True)
+    with pytest.raises(ValueError, match="dated 2026-10-01, and the switch is on 2026-11-08"):
+        ms.apply_promotion(text, early)
+    d = p.to_dict()
+    extra = {
+        **d,
+        "changes": [
+            *d["changes"],
+            {"path": "services.idp.owner", "before": None, "after": "x", "anchor": None},
+        ],
+    }
+    with pytest.raises(ValueError, match=r"changes services\.idp\.owner, which no promotion"):
+        ms.apply_promotion(text, PromotePlan.from_dict(extra))
+    with pytest.raises(ValueError, match="not the one plan_promote computes"):
+        ms.apply_promotion(text, PromotePlan.from_dict({**d, "until": "2027-06-01"}))
+    monkeypatch.setenv("HNX_TODAY", "2999-01-01")
+    future = plan_promote(load_doc(text), "idp", "sso-next", "2999-01-01", 30, old_lab=True)
+    with pytest.raises(ValueError, match="after today's real date"):
+        ms.apply_promotion(text, future)

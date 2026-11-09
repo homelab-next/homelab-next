@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- Swap: `apply_switch` refuses a standing promotion dated after the real local date (`HNX_TODAY` or `today=` set ahead would post-date its rollback window), and the new `apply_promotion(text, plan, today=)` runs the same date, field and recompute checks for a promotion with no module swap (an old-lab switch); [docs/swap.md](docs/swap.md) covers the one-half case and that merge lag shortens the window.
 - LLM gateway and `hnx registry bindings --gateway`: a spec's `roles:` path is refused when absolute, when it leaves the root the caller gives (`--root`; by default the working directory when the spec is in it, else the spec's directory; `..` inside it is fine), or when a symbolic link is on its path (each component opened without following one); both read it through one validator, `RoleTable.loads`.
 - LLM gateway: the spec's role table is read without following a symbolic link on its path, as `hnx registry bindings` reads its inputs.
 - **Breaking for overlay sites:** `hnx site validate` refuses a resolver `authoritative_for` a zone under the registry's alias zone, as it refuses a static record there (the alias zone itself, which the DNS zone generator renders with its own SOA and NS, may be served) ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 2).
