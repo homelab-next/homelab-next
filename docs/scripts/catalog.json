@@ -979,7 +979,7 @@
     {
       "exit": {
         "0": "the suite passed",
-        "1": "a check did not pass, or the controller did not come up",
+        "1": "a check did not pass (for verdict, a fault check did not), or the controller did not come up",
         "2": "usage error"
       },
       "id": "orchestration-conformance",

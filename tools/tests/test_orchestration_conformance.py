@@ -27,10 +27,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import orchestration_conformance as harness
 
 RUN = "0123456789abcdef0123456789abcdef"
-FAULT_CHECKS = (
-    "killed-worker-fails-run-and-frees-capacity",
-    "restart-reconciles-runs-and-capacity",
-)
+FAULT_CHECKS = harness.FAULT_CHECKS
 
 
 # no network in the test run: the module cache only (CI's Go leg fetches it before the namespace)
@@ -89,6 +86,7 @@ def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path)
     (run,) = json.loads(out.read_text())["runs"]
     results = {r["check"]: r["status"] for r in run["results"]}
     assert results == dict.fromkeys(FAULT_CHECKS, "pass"), f"{results}\n{_diagnose(work, out)}"
+    assert harness.main(["verdict", str(out)]) == 0  # the report CI's verdict step reads
     # a session that ended removed its pid file; one that was killed left it, and is not running
     for p in (tmp_path / "work" / "pids").glob("*.pid"):
         assert not harness.is_session(int(p.read_text()), p.name.removesuffix(".pid")), p
@@ -348,8 +346,12 @@ def test_the_ci_job_runs_the_check_and_the_strict_suite_on_loopback():
     assert not any("continue-on-error" in step or "if" in step for step in job["steps"])
     runs = [s.get("run", "") for s in job["steps"]]
     assert any("make controller-check" in r for r in runs)
-    last = runs[-1]
+    last, verdict = runs[-2:]
     assert "tools/orchestration_conformance.py run" in last and "--strict" in last
+    # the run writes its report, and the job fails unless both fault checks in it passed
+    assert '--out "$OUT"' in last and '"OUT=$RUNNER_TEMP/orchestration.json"' in last
+    assert "tools/orchestration_conformance.py verdict" in verdict
+    assert '"$RUNNER_TEMP/orchestration.json"' in verdict
     # loopback only, as the runner user under no_new_privs
     assert "unshare --net" in last and "setpriv --no-new-privs --reuid=" in last
     assert job["env"] == {"GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local", "GOWORK": "off"}
@@ -364,3 +366,69 @@ def test_go_ok_requires_the_orchestration_job():
     (step,) = ok["steps"]
     assert step["env"]["ORCHESTRATION"] == "${{ needs.orchestration-conformance.result }}"
     assert '[ "$ORCHESTRATION" = success ]' in step["run"]
+
+
+def test_a_kill_without_pidfds_does_not_claim_the_session_ended(tmp_path, monkeypatch, caplog):
+    """ENOSYS from pidfd_open says nothing about the session, so the skip must not say it ended."""
+    import errno
+
+    def no_pidfds(pid):
+        raise OSError(errno.ENOSYS, "Function not implemented")
+
+    monkeypatch.setattr(adapter.os, "pidfd_open", no_pidfds)
+    (tmp_path / f"{RUN}.pid").write_text("4242\n")
+    adapter.ProcessFaults(tmp_path, ["true"], lambda: True).kill(RUN)
+    assert "not signalled" in caplog.text and "already ended" not in caplog.text, caplog.text
+
+
+def test_the_harness_says_it_is_linux_only(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(harness.sys, "platform", "darwin")
+    work = tmp_path / "work"
+    assert harness.main(["run", "--controller", "/bin/true", "--work", str(work)]) == 2
+    assert harness.main(["restart", "--work", str(work)]) == 2
+    err = capsys.readouterr().err
+    assert err.count("Linux only") == 2 and not work.exists(), err
+
+
+def test_a_run_whose_stop_fails_says_so_in_one_line(tmp_path, monkeypatch, capsys):
+    """cmd_run's stop() raising in its finally is a one-line failure, as in cmd_restart, not a
+    traceback that hides the suite's verdict."""
+    monkeypatch.setattr(harness, "write_config", lambda work, port: None)
+    monkeypatch.setattr(harness, "free_port", lambda: 0)
+    monkeypatch.setattr(harness, "start", lambda work: (work / "endpoint").write_text("http://x\n"))
+
+    def stuck(work):
+        raise RuntimeError("the controller (pid 7) still runs")
+
+    monkeypatch.setattr(harness, "stop", stuck)
+    monkeypatch.setattr(
+        harness.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0)
+    )
+    rc = harness.main(["run", "--controller", "/bin/true", "--work", str(tmp_path / "w")])
+    err = capsys.readouterr().err
+    assert (
+        rc == 1 and err == "orchestration-conformance: run: the controller (pid 7) still runs\n"
+    ), err
+
+
+def _report(tmp_path, ok=True, **status) -> Path:
+    results = [{"check": c, "status": status.get(c, "pass")} for c in FAULT_CHECKS]
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps({"runs": [{"ok": ok, "results": results}]}))
+    return path
+
+
+def test_the_verdict_needs_both_fault_checks_passed(tmp_path, capsys):
+    """A strict run whose target lost fault_injection: true can pass with the fault checks
+    skipped; the verdict CI runs after it cannot."""
+    assert harness.main(["verdict", str(_report(tmp_path))]) == 0
+    skipped = {FAULT_CHECKS[1]: "skip"}
+    assert harness.main(["verdict", str(_report(tmp_path, **skipped))]) == 1
+    assert f"{FAULT_CHECKS[1]}: skip" in capsys.readouterr().err
+    assert harness.main(["verdict", str(_report(tmp_path, ok=False))]) == 1
+    absent = tmp_path / "absent.json"
+    absent.write_text(json.dumps({"runs": [{"ok": True, "results": []}]}))
+    assert harness.main(["verdict", str(absent)]) == 1
+    assert "not run" in capsys.readouterr().err
+    (tmp_path / "junk.json").write_text("{")
+    assert harness.main(["verdict", str(tmp_path / "junk.json")]) == 1

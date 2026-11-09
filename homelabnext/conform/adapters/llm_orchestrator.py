@@ -48,6 +48,10 @@ The mapping (docs/orchestration-controller.md has the whole table):
   an attempt ran on (``shadow``, ``constraints``, ``local-only``) and has no list route
   (``list-runs``).  Its check needs a reported limit, which ``capacity()`` never has, so it
   skips here.
+* ``deadline`` is not declared, so ``deadline-expiry-frees-capacity`` skips: the job API takes no
+  per-run deadline.  The controller does end a job at its deadline (``failed``, failure class
+  ``deadline``), but that deadline is the pool's ``runner.job_timeout_seconds`` from the
+  configuration, one value for every job, which ``submit(..., deadline_s=...)`` cannot set.
 * ``kill`` / ``restart`` (test hook ``fault-injection``) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -291,10 +295,11 @@ class ProcessFaults:
         # number be reused by another process
         try:
             fd = os.pidfd_open(pid) if pid > 1 else None
-        except OSError as exc:
-            _log.warning(
-                "kill %s: pid %d is gone (%s): the session had already ended", run_id, pid, exc
-            )
+        except ProcessLookupError:
+            _log.warning("kill %s: pid %d is gone: the session had already ended", run_id, pid)
+            return
+        except OSError as exc:  # ENOSYS (no pidfds in this kernel), EMFILE, ...: nothing is known
+            _log.warning("kill %s: no pidfd for pid %d (%s): not signalled", run_id, pid, exc)
             return
         if fd is None:
             _log.warning("kill %s: refused pid %d (not a session's)", run_id, pid)
