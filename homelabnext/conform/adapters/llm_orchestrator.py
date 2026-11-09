@@ -73,6 +73,8 @@ import os
 import re
 import secrets
 import shutil
+import signal
+import subprocess
 import tempfile
 import threading
 import time
@@ -91,6 +93,12 @@ __all__ = ["JOB_MARKER", "LLMOrchestrator", "encode_job", "make"]
 
 JOB_MARKER = "hnx-conform-job:"
 PROFILES_ENV = "HNX_ORCHESTRATION_PROFILES_DIR"
+#: fault injection on a real controller (``fault_injection: true``): the directory the runner
+#: body records each session's pid in (``<dir>/<run id>.pid``), and the JSON argv that restarts
+#: the controller in place (tools/orchestration_conformance.py restart)
+PID_DIR_ENV = "HNX_ORCHESTRATION_PID_DIR"
+RESTART_ENV = "HNX_ORCHESTRATION_RESTART"
+_RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 _LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the handler host is local by design
 #: the largest ``POST /run`` body the handler host reads (a job line's token, MAC and parameters)
 MAX_RUN_BODY = 1 << 20
@@ -223,6 +231,80 @@ class _HandlerHost:
         self._thread.join(timeout=5)
 
 
+def _is_session(pid: int, run_id: str) -> bool:
+    """Whether ``pid`` (never 0, 1 or a negative group) is still the session of ``run_id``."""
+    if pid <= 1:
+        return False
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            env = f.read().split(b"\0")
+    except OSError:
+        return False
+    return f"HNX_RUN_ID={run_id}".encode() in env
+
+
+class ProcessFaults:
+    """Fault injection on a controller the harness runs as a process: ``kill`` sends SIGKILL to
+    the session of a run (the pid its runner body recorded), as a crash would end it; ``restart``
+    runs the harness's restart command (which kills the controller and every session, then starts
+    the controller again on the same state) and waits for the API to answer."""
+
+    def __init__(
+        self,
+        pid_dir: str | Path,
+        restart: list[str],
+        healthy: Callable[[], bool],
+        *,
+        wait_s: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._dir = Path(pid_dir)
+        if not self._dir.is_dir():
+            raise AdapterConfigError(f"{PID_DIR_ENV} {pid_dir} is not a directory")
+        if not restart or not all(isinstance(a, str) and a for a in restart):
+            raise AdapterConfigError(f"{RESTART_ENV} must be a JSON list of strings (an argv)")
+        self._restart, self._healthy = list(restart), healthy
+        self._wait, self._clock, self._sleep = wait_s, clock, sleep
+
+    def _pid(self, run_id: str) -> int:
+        if not _RUN_ID.match(run_id):
+            raise ValueError(f"not a controller run id: {run_id!r}")
+        path = self._dir / f"{run_id}.pid"
+        deadline = self._clock() + self._wait
+        while True:
+            try:
+                return int(path.read_text(encoding="ascii").strip())
+            except FileNotFoundError:
+                if self._clock() > deadline:
+                    orch_error, _, _ = _protocol()
+                    raise orch_error(f"run {run_id} has no session pid in {self._dir}") from None
+                self._sleep(0.05)
+
+    def kill(self, run_id: str) -> None:
+        pid = self._pid(run_id)
+        # only a pid that is still the run's session (its environment carries the run id): the
+        # pid file can outlive the session and the number be reused by another process
+        if not _is_session(pid, run_id):
+            return
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+    def restart(self) -> None:
+        proc = subprocess.run(self._restart, capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0:
+            orch_error, _, _ = _protocol()
+            raise orch_error(
+                f"the restart command failed ({proc.returncode}): {proc.stderr[-300:]}"
+            )
+        deadline = self._clock() + self._wait
+        while not self._healthy():
+            if self._clock() > deadline:
+                orch_error, _, _ = _protocol()
+                raise orch_error(f"the controller did not answer within {self._wait}s of a restart")
+            self._sleep(0.1)
+
+
 class LLMOrchestrator:
     def __init__(
         self,
@@ -284,6 +366,15 @@ class LLMOrchestrator:
         if not _AGENT_KEY.match(key):
             raise ValueError(f"job name {name!r} cannot be an agent key")
         return key
+
+    def healthy(self) -> bool:
+        """Whether the controller answers ``GET /healthz`` with 200 (False when unreachable)."""
+        orch_error, _, _ = _protocol()
+        try:
+            status, _ = self._request("GET", "/healthz")
+        except orch_error:  # unreachable: not healthy yet
+            return False
+        return status == 200
 
     def _reload(self) -> None:
         status, raw = self._request("POST", "/admin/reload-profiles")
@@ -469,6 +560,7 @@ def make(
     priority: int = 50,
     poll: float = 0.2,
     wait_floor: float = 60.0,
+    fault_injection: bool = False,
 ) -> LLMOrchestrator | _Recorded:
     """An ``orchestration`` subject on a controller: the one ``HNX_ENDPOINT_<CAPABILITY>`` names,
     with its profiles directory, or (``recorded_fake``) a fresh loopback stand-in of its API,
@@ -484,9 +576,24 @@ def make(
             "the directory the controller loads its profiles from"
         )
     ep = resolve(capability, env_only=True, schemes=("http", "https"))
-    return LLMOrchestrator(
+    subject = LLMOrchestrator(
         ep.url, profiles_dir=directory, priority=priority, poll=poll, wait_floor=wait_floor
     )
+    if fault_injection:
+        pid_dir, raw = os.environ.get(PID_DIR_ENV), os.environ.get(RESTART_ENV)
+        if not pid_dir or not raw:
+            raise AdapterConfigError(
+                f"fault_injection needs {PID_DIR_ENV} and {RESTART_ENV} (a JSON argv): the "
+                "harness that runs the controller (tools/orchestration_conformance.py) sets both"
+            )
+        try:
+            argv = json.loads(raw)
+        except ValueError:
+            raise AdapterConfigError(f"{RESTART_ENV} is not JSON") from None
+        if not isinstance(argv, list):
+            raise AdapterConfigError(f"{RESTART_ENV} must be a JSON list of strings (an argv)")
+        subject._faults = ProcessFaults(pid_dir, argv, subject.healthy)
+    return subject
 
 
 class _Recorded:
