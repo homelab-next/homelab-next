@@ -38,6 +38,7 @@ def test_the_list_covers_everything_the_real_stack_reads():
         "constraints/ci.txt",
         "conformance/fakes/openai_server.py",
         "homelabnext/conform/adapters/s3.py",  # a target's adapter
+        "orchestrator",  # the orchestrator image's COPY of the Go module
     ):
         assert expected in inputs, expected
     assert lab_paths.uncovered() == []
@@ -54,6 +55,9 @@ def test_the_list_covers_everything_the_real_stack_reads():
         ("homelabnext/lake/client.py", True),
         ("conformance/events/suite.py", True),
         ("constraints/ci.txt", True),
+        # the controller image builds from the Go module, so a controller change starts the stack
+        ("orchestrator/cmd/controller/serve.go", True),
+        ("orchestrator/go.sum", True),
         ("pyproject.toml", True),
         # step-level inputs, hand-listed: the editable install and what `conform report` reads
         ("setup.py", True),

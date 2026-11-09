@@ -9,7 +9,7 @@ summary_generated: true
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-63 scripts: 25 check, 11 job, 2 service, 25 tool.
+64 scripts: 25 check, 11 job, 2 service, 26 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -42,6 +42,7 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `lab-broker-e2e` | [`compose/lab-in-a-box/broker_e2e.py`](../../compose/lab-in-a-box/broker_e2e.py) | tool | lab-in-a-box | The broker end to end on real processes - socket peers, MCP agent, hub approval, audit. | `script:lab-smoke`; `compose:lab-in-a-box/status-hub` | - | 0 every step passed; 1 some step failed; 2 usage |
 | `lab-fake-cases` | [`compose/lab-in-a-box/fakes/fake_cases.py`](../../compose/lab-in-a-box/fakes/fake_cases.py) | service | lab-in-a-box | Serve an in-memory fake case system for the cases capability. | `compose:lab-in-a-box/cases` | - | 0 stopped cleanly |
 | `lab-init` | [`compose/lab-in-a-box/fakes/lab_init.py`](../../compose/lab-in-a-box/fakes/lab_init.py) | job | lab-in-a-box | Initialise the lab object store and Iceberg catalog once (idempotent). | `compose:lab-in-a-box/lab-init` | - | 0 ready; 1 a step failed or a variable is missing |
+| `lab-orchestrator-entrypoint` | [`compose/lab-in-a-box/orchestrator/entrypoint.sh`](../../compose/lab-in-a-box/orchestrator/entrypoint.sh) | tool | lab-in-a-box | Start the lab controller with a tokens file written from the throwaway token's digest. | `compose:lab-in-a-box/orchestrator` | - | 0 the controller stopped cleanly; 1 no token, or the configuration's check failed |
 | `lab-paths` | [`tools/lab_paths.py`](../../tools/lab_paths.py) | tool | lab-in-a-box | Decide whether a change can affect the lab-in-a-box smoke, so CI runs the real stack on exactly those pull requests and pushes. | `ci:ci/lab-paths` | - | 0 decided (or, with --check, every stack input is covered); 1 with --check, a stack input no entry covers; 2 the changed paths could not be read |
 | `lab-postgres-litellm-role` | [`compose/lab-in-a-box/config/postgres/init/10-litellm.sh`](../../compose/lab-in-a-box/config/postgres/init/10-litellm.sh) | job | lab-in-a-box | Create the LLM gateway's own postgres role, owning only schema litellm, on a fresh lab volume. | `manual` | - | 0 created; 1 the password is unset or the SQL failed (postgres initialisation stops) |
 | `lab-rehearsal-swap-lake-query` | [`compose/lab-in-a-box/rehearsals/swap-lake-query.sh`](../../compose/lab-in-a-box/rehearsals/swap-lake-query.sh) | tool | lab-in-a-box | Rehearse the lake-query swap on the lab-in-a-box (fake lake to Trino) and roll it back. | `manual` | - | 0 the swap ran to cutover, rolled back, and the record validates; 1 a step, the rollback or the record check failed; 2 usage, or the candidate lake could not be reached |
