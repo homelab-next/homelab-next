@@ -429,6 +429,24 @@ def _registry_host_problem(registry: Any, host: str, service_domain: str, port: 
     return None
 
 
+def _role_table(base: Path, rel: str) -> tuple[RoleTable, Any]:
+    """The spec's role table and its raw ``roles``, read without following a symbolic link on
+    its path (as ``hnx registry bindings`` reads its inputs) and validated as
+    :meth:`RoleTable.load` does."""
+    from homelabnext.modules import loader as ld
+    from homelabnext.registry.models import schema_problems
+
+    data = ld.read_tree_file(base, rel)
+    if data is None:
+        raise OSError("no such file")
+    if isinstance(data, str):
+        raise OSError(data)
+    doc = json.loads(data.decode("utf-8"))
+    if problems := schema_problems(doc):
+        raise RoleTableError(f"{rel}: role table does not match model_roles.json", problems)
+    return RoleTable.from_dict(doc), doc["roles"]
+
+
 def load_spec(
     path: str | Path,
     *,
@@ -484,8 +502,7 @@ def spec_from_dict(
     if not isinstance(roles_path, str):
         raise GatewaySpecError(f"{source}: 'roles' (the role table path) is required")
     try:
-        table = RoleTable.load(base / roles_path)
-        raw_roles = json.loads((base / roles_path).read_text(encoding="utf-8"))["roles"]
+        table, raw_roles = _role_table(base, roles_path)
     except RoleTableError as exc:
         raise GatewaySpecError(f"{source}: role table invalid", exc.problems) from None
     except (OSError, ValueError) as exc:

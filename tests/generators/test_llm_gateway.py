@@ -1976,3 +1976,26 @@ def test_a_lab_check_refuses_a_test_only_render_and_the_reverse(tmp_path, capsys
 def test_the_test_only_audit_refuses_hand_edits(tmp_path, edit, words):
     problems = _audit_edit(_conformance_spec(tmp_path), edit)
     assert any(words in p for p in problems), problems
+
+
+def test_the_spec_s_role_table_is_not_read_through_a_symbolic_link(tmp_path):
+    spec = make_spec(tmp_path)
+    outside = tmp_path / "outside.json"
+    (tmp_path / "roles.json").rename(outside)
+    (tmp_path / "roles.json").symlink_to(outside)
+    with pytest.raises(gw.GatewaySpecError, match="a symbolic link on its path"):
+        gw.render_file(spec)
+    # a linked directory on the path is refused too
+    (tmp_path / "roles.json").unlink()
+    real = tmp_path / "real"
+    real.mkdir()
+    outside.rename(real / "roles.json")
+    (tmp_path / "linked").symlink_to(real, target_is_directory=True)
+    doc = yaml.safe_load(spec.read_text())
+    doc["roles"] = "linked/roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(gw.GatewaySpecError, match="a symbolic link on its path"):
+        gw.render_file(spec)
+    doc["roles"] = "real/roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    gw.render_file(spec)
