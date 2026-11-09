@@ -21,7 +21,7 @@ generated and checked the same way.
 
 - [Capabilities](capabilities/README.md) ([[capabilities/README|Capabilities]]): <!-- hnx:gen:summary:capabilities/README.md -->Every capability contract: what it is for, how many operations and checks it has, and which adapters and services provide it.<!-- /hnx:gen -->
 - [Conformance harness](conformance.md) ([[conformance]]): <!-- hnx:gen:summary:conformance.md -->The conformance harness: one suite per capability run against any target, how mutants prove a suite can fail, adding a suite, and the X-10 exporter.<!-- /hnx:gen -->
-- [Swap procedure](swap.md) ([[swap]]): <!-- hnx:gen:summary:swap.md -->The swap kit for replacing a product behind a capability: nine steps, swap record, parity tools, dual-write, registry flip, decommission check and rehearsal.<!-- /hnx:gen -->
+- [Swap procedure](swap.md) ([[swap]]): <!-- hnx:gen:summary:swap.md -->The swap kit for replacing a product behind a capability: nine steps, swap record, parity, dual-write, registry flip and promotion, decommission, rehearsal.<!-- /hnx:gen -->
 - [Interface index](interfaces.md) ([[interfaces]]): <!-- hnx:gen:summary:interfaces.md -->The interface index: ownership map, package layout and signatures, command line, library surfaces, registry naming, logical ids, schemas and version policy.<!-- /hnx:gen -->
 
 ## Running the systems

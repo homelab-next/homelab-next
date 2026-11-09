@@ -17,7 +17,7 @@ firewall_rules:
   outbound_allow:
     - {name: to-services, proto: tcp, ports: "443", dest: "zone:services"}
     - {name: to-idp, proto: tcp, ports: "9443", dest: "192.0.2.6/32"}
-capability: cap:edge
+capability: cap:edge-proxy
 capability_groups: [cap_edge]
 tags: [prod]
 owners: {primary: platform-team}
