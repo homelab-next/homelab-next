@@ -266,6 +266,47 @@ def test_a_registry_service_in_a_cloud_zone_is_not_local(tmp_path):
     assert "inference.svc.example.internal" in files["litellm/config.yaml"]
 
 
+def test_a_primary_alias_host_meets_the_registry_s_locality_check(tmp_path):
+    # the alias names the registry service: a self-declared host may not skip its zone check
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    port = doc["services"]["inference"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-alias": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": port,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-alias"
+    reg = registry_with(tmp_path, "cloud")
+    with pytest.raises(
+        gw.GatewaySpecError, match=r"registry service inference .*is not in a lab zone"
+    ):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    reg = registry_with(tmp_path, "compute")
+    gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_primary_alias_host_with_another_scheme_is_refused(tmp_path):
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    svc = doc["services"]["inference"]
+    other = "http" if svc.get("tls", "none") != "none" or svc["protocol"] == "https" else "https"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-alias": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": svc["port"],
+            "scheme": other,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-alias"
+    reg = registry_with(tmp_path, "compute")
+    with pytest.raises(gw.GatewaySpecError, match=f"scheme {other} is not registry service"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
 def test_a_cloud_api_domain_named_as_the_lab_domain_is_refused(tmp_path):
     # the spec's own domain cannot make a provider's API internal (review of #32)
     host = {"locality": "local", "host": "x.api.anthropic.com", "port": 443, "scheme": "https"}
@@ -358,7 +399,7 @@ def test_the_primary_alias_with_a_candidate_s_port_is_refused(tmp_path):
     }
     roles = copy.deepcopy(ROLES)
     roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
-    with pytest.raises(gw.GatewaySpecError, match="is not the primary's port"):
+    with pytest.raises(gw.GatewaySpecError, match=r"is not registry service inference's port"):
         gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
 
 
@@ -392,7 +433,7 @@ def test_a_backend_with_no_host_is_held_to_its_default_alias(tmp_path):
         if ok:
             gw.render_file(spec)
         else:
-            with pytest.raises(gw.GatewaySpecError, match="is not the primary's port"):
+            with pytest.raises(gw.GatewaySpecError, match=r"is not registry service \S+'s port"):
                 gw.render_file(spec)
 
 
@@ -1935,3 +1976,57 @@ def test_a_lab_check_refuses_a_test_only_render_and_the_reverse(tmp_path, capsys
 def test_the_test_only_audit_refuses_hand_edits(tmp_path, edit, words):
     problems = _audit_edit(_conformance_spec(tmp_path), edit)
     assert any(words in p for p in problems), problems
+
+
+def test_the_spec_s_role_table_is_not_read_through_a_symbolic_link(tmp_path):
+    spec = make_spec(tmp_path)
+    outside = tmp_path / "outside.json"
+    (tmp_path / "roles.json").rename(outside)
+    (tmp_path / "roles.json").symlink_to(outside)
+    with pytest.raises(gw.GatewaySpecError, match="a symbolic link on its path"):
+        gw.render_file(spec)
+    # a linked directory on the path is refused too
+    (tmp_path / "roles.json").unlink()
+    real = tmp_path / "real"
+    real.mkdir()
+    outside.rename(real / "roles.json")
+    (tmp_path / "linked").symlink_to(real, target_is_directory=True)
+    doc = yaml.safe_load(spec.read_text())
+    doc["roles"] = "linked/roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(gw.GatewaySpecError, match="a symbolic link on its path"):
+        gw.render_file(spec)
+    doc["roles"] = "real/roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    gw.render_file(spec)
+
+
+def test_the_spec_s_role_table_stays_inside_the_checkout(tmp_path):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    spec = make_spec(spec_dir)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (spec_dir / "roles.json").rename(outside / "roles.json")
+    # tmp_path is in no git checkout, so the spec's own directory is the root
+    for roles, words in (
+        (str(outside / "roles.json"), "an absolute path"),
+        ("../outside/roles.json", "outside the root"),
+    ):
+        doc = yaml.safe_load(spec.read_text())
+        doc["roles"] = roles
+        spec.write_text(yaml.safe_dump(doc))
+        with pytest.raises(gw.GatewaySpecError, match=words):
+            gw.render_file(spec)
+    # an absolute path through a linked directory is refused before any link is followed
+    (tmp_path / "linkdir").symlink_to(outside, target_is_directory=True)
+    doc["roles"] = str(tmp_path / "linkdir" / "roles.json")
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(gw.GatewaySpecError, match="an absolute path"):
+        gw.render_file(spec)
+
+
+def test_a_role_table_path_with_dotdot_inside_the_checkout_is_read():
+    # the lab-in-a-box spec names ../../../../schemas/...: inside the repository, so allowed
+    assert ".." in yaml.safe_load(LAB_SPEC.read_text())["roles"]
+    assert gw.render_file(LAB_SPEC)

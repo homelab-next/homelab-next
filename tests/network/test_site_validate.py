@@ -221,6 +221,10 @@ def _static_collides_with_host(d):
     d["dns"]["records"]["static"][0]["fqdn"] = "dns-core.example.internal"
 
 
+def _resolver_authoritative_under_the_alias_zone(d):
+    d["dns"]["resolvers"][0]["authoritative_for"] = ["shadow.svc.example.internal"]
+
+
 def _static_in_the_alias_zone(d):
     rec = d["dns"]["records"]["static"][0]
     rec.update({"fqdn": "shadow.svc.example.internal", "type": "CNAME"})
@@ -300,6 +304,7 @@ CASES = [
     (_static_collides_with_host, "one source per fact"),
     (_static_bad_a, "not an IPv4 address"),
     (_static_in_the_alias_zone, "in the registry's alias zone svc.example.internal"),
+    (_resolver_authoritative_under_the_alias_zone, "is under the registry's alias zone"),
     (_ip_in_notes, "IP literal"),
     (_url_in_notes, "URL literal"),
     (_registry_cidr_differs, "differs from registry cidr"),
@@ -387,3 +392,12 @@ def test_control_characters_are_refused_before_the_schema(doc, registry, value):
     d["zones"][0]["id"] = value
     errs = errors(d, registry)
     assert any(e.startswith("unsafe: zones/0/id: control character") for e in errs), errs
+
+
+def test_a_resolver_may_be_authoritative_for_the_alias_zone_itself(doc, registry):
+    # the dns_zone generator renders <svc_label>.<domain> as a zone of its own (SOA and NS), so
+    # a resolver serving it truthfully declares it; only a zone delegated under it is refused
+    doc["dns"]["resolvers"][0]["authoritative_for"] = [registry.alias_zone]
+    assert not [e for e in errors(doc, registry) if "alias zone" in e]
+    doc["dns"]["resolvers"][0]["authoritative_for"] = [f"shadow.{registry.alias_zone}"]
+    assert [e for e in errors(doc, registry) if "is under the registry's alias zone" in e]
