@@ -396,15 +396,17 @@ def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
                 "provisioning manual requires lifecycle.requires_root_steps (what to do by hand)",
             )
         )
-    if g.capability not in _known_caps():
+    placed = fleet.placement.get(g.name, frozenset())
+    if g.capability not in _known_caps() and g.capability.removeprefix("cap:") not in placed:
         out.append(
             Problem(
                 g.id,
                 f"capability {g.capability} is not a known capability (one the class table "
-                "homelabnext/agent/tool_classes.yml or the conformance harness names)",
+                "homelabnext/agent/tool_classes.yml or the conformance harness names, or, with a "
+                "registry, one a row on the guest's host serves)",
             )
         )
-    ok_groups = allowed_groups()
+    ok_groups = allowed_groups() | {group_for_capability(c) for c in placed}
     for grp in g.groups:
         if grp not in ok_groups:
             out.append(Problem(g.id, f"capability_groups: {grp} is not a known inventory group"))

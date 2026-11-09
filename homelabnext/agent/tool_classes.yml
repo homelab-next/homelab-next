@@ -93,6 +93,7 @@ capabilities:
   cap:agent-audit: [read]
   cap:hot-index: [read]
   cap:siem-source: [read]
+  cap:mail-gateway: [read]  # the mail relay that reports a suspected phish (workflows/packs/phishing-report.yml's producer)
   cap:automation: [exec]
   cap:agent-runtime: [exec]
   cap:dataflow: [exec]
