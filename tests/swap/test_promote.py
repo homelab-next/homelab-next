@@ -400,21 +400,95 @@ def test_an_old_lab_promotion_meets_the_switch_checks_without_a_module_swap(monk
         )
 
 
-def test_apply_promotion_refuses_a_promotion_apply_switch_would_refuse(monkeypatch):
-    """The security review's repro: the plan apply_switch refuses (query-a leaving as legacy
-    while query-mod-a is a deployed module) went through apply_promotion, dropping its backups;
-    and a capability the site selects was promoted with no selection diff."""
+def _sel(*lines: tuple[str, str]) -> dict:
+    """A site selecting ``(slot, provider)`` lines."""
+    slots: dict = {}
+    for slot, provider in lines:
+        slots.setdefault(slot, []).append({"provider": provider, "instance": "i"})
+    return {"slots": slots}
+
+
+@pytest.fixture
+def dated(monkeypatch):
     monkeypatch.setenv("HNX_TODAY", "2026-11-08")
     monkeypatch.setattr(ms, "_real_today", lambda: dt.date(2026, 11, 8), raising=False)
+
+
+def test_apply_promotion_refuses_a_promotion_apply_switch_would_refuse(dated):
+    """The security review's repro: the plan apply_switch refuses (query-a leaving as legacy
+    while query-mod-a is deployed) went through apply_promotion, dropping its backups; and a
+    capability the site selects was promoted with no selection diff."""
     text = _text()
+    deployed = _sel(("lake-query", "query-mod-a"))
     legacy = plan_promote(load_doc(text), "lake-query", "query-b", "2026-11-08", 14, old_lab=True)
-    with pytest.raises(ValueError, match=r"query-a runs .* the product of module query-mod-a"):
-        ms.apply_promotion(text, legacy, site={"slots": {}}, mods=MODS)
+    with pytest.raises(ValueError, match="incumbent query-a runs a product the site deploys"):
+        ms.apply_promotion(text, legacy, site=deployed, mods=MODS)
     retiring = plan_promote(load_doc(text), "lake-query", "query-b", "2026-11-08", 14)
     with pytest.raises(ValueError, match="lake-query is a slot this site selects"):
-        ms.apply_promotion(text, retiring, site=OLD_SITE, mods={})
-    with pytest.raises(ValueError, match=r"candidate query-b runs .* the product of module"):
-        ms.apply_promotion(text, retiring, site={"slots": {}}, mods=MODS)
+        ms.apply_promotion(text, retiring, site=deployed, mods=MODS)
+
+
+def test_a_selected_own_product_may_replace_an_old_lab_incumbent(dated):
+    """ADR-0039 step 10: the candidate's module is already selected (shadowed, ADR-0040) and no
+    selected provider runs the incumbent's product; only the standing moves."""
+    text = _text()
+    plan = plan_promote(load_doc(text), "lake-query", "query-b", "2026-11-08", 14, old_lab=True)
+    after = ms.apply_promotion(text, plan, site=_sel(("lake-query", "query-mod-b")), mods=MODS)
+    assert loads(after).by_capability("lake-query").name == "query-b"
+    # product names and aliases compare without case
+    shouting = {**MODS, "query-mod-b": {"product": {"name": "DuckDB"}}}
+    assert ms.apply_promotion(text, plan, site=_sel(("lake-query", "query-mod-b")), mods=shouting)
+
+
+@pytest.mark.parametrize(
+    ("site", "words"),
+    [
+        # the incumbent's provider still selected beside the candidate's
+        (
+            _sel(("lake-query", "query-mod-a"), ("lake-query", "query-mod-b")),
+            "lake-query is a slot this site selects",
+        ),
+        # the candidate's product selected for another capability
+        (_sel(("object-store", "query-mod-b")), "selects for another capability"),
+    ],
+)
+def test_the_neighbours_of_the_step_10_case_are_refused(dated, site, words):
+    text = _text()
+    plan = plan_promote(load_doc(text), "lake-query", "query-b", "2026-11-08", 14, old_lab=True)
+    with pytest.raises(ValueError, match=words):
+        ms.apply_promotion(text, plan, site=site, mods=MODS)
+
+
+def test_the_selection_not_the_mods_argument_says_what_is_deployed(dated):
+    text = _text()
+    plan = plan_promote(load_doc(text), "lake-query", "query-b", "2026-11-08", 14, old_lab=True)
+    with pytest.raises(ValueError, match="selects query-mod-a, which has no module manifest"):
+        ms.apply_promotion(text, plan, site=_sel(("lake-query", "query-mod-a")), mods={})
+    for bad, words in (
+        ({"slots": ["lake-query"]}, "slots is not a mapping"),
+        ({"slots": {"lake-query": [{"instance": "i"}]}}, "is not a list of lines with a provider"),
+        ([], "is not a mapping"),
+    ):
+        with pytest.raises(ValueError, match=words):
+            ms.apply_promotion(text, plan, site=bad, mods=MODS)
+
+
+def test_a_default_dated_plan_passes_east_of_utc(monkeypatch):
+    """One clock: with no HNX_TODAY and no today=, the day is today's real UTC date, so at
+    12:00 UTC (the next day in Auckland) a plan dated the UTC day is not refused."""
+    import time
+
+    monkeypatch.delenv("HNX_TODAY", raising=False)
+    monkeypatch.setenv("TZ", "Pacific/Auckland")
+    time.tzset()
+    try:
+        monkeypatch.setattr(ms, "_real_today", lambda: dt.date(2026, 11, 8), raising=False)
+        text = _idp_text()
+        p = plan_promote(load_doc(text), "idp", "sso-next", "2026-11-08", 30, old_lab=True)
+        assert ms.apply_promotion(text, p, site={"slots": {}}, mods={})
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 def test_a_promotion_dated_days_before_the_real_date_is_refused(monkeypatch):

@@ -182,6 +182,10 @@ The switch of a replacement ([ADR-0040](adr/0040-modules-are-replaceable-by-cons
 decision 5, step 6) is one reviewed change with two halves: the selection diff
 (`homelabnext.modules.swap.apply_selection_diff`) and the registry standing promotion
 (ADR-0039 decision 6). `homelabnext.modules.swap.apply_switch` applies both, or neither.
+`apply_switch`, and `apply_promotion` for a switch with no selection diff (below), are the only
+supported writers of a promotion: they hold it to every check. `plan_promote`, `promote_text`,
+`plan_flip` and `flip_text` are the low-level pieces they are built from and check nothing about
+the selection or the date on their own.
 
 ```python
 plan = plan_promote(doc, "idp", "sso-next", "2026-11-08", rollback_days=14, old_lab=True)
@@ -207,27 +211,31 @@ site, text = apply_switch(site, swap, mods, yaml_text, plan)  # write both in on
   the registry (`PromotePlan.from_dict` does not validate). It returns the registry *text*; the
   switch step writes the selection and the registry in one commit.
 - The rollback window is bounded until ADR-0043's ledger row binds it: `rollback_days` is 1 to 90
-  (`flip.MAX_ROLLBACK_DAYS`), and `apply_switch` refuses a promotion not dated the day it is
-  applied (`today`, default `HNX_TODAY` or the local date), dated after today's real date, or
-  dated more than 3 days before it (`MAX_PROMOTION_AGE_DAYS`): an overridden date can neither
-  post-date the window nor write one already spent. The real date is the UTC date, the same on
-  every machine whatever its timezone; `HNX_TODAY` and `today=` do not move it. The window runs from the day the promotion
-  is computed and applied, not the day its pull request merges: merge lag shortens it, so a
-  pull request that waits is re-run on the day it merges. It refuses `legacy` for an incumbent
-  whose outgoing provider is a module this repository deploys (that one goes `retiring`), and
-  holds a `legacy` incumbent to the outgoing product too. A slot's name is its capability: the
-  slot registry is keyed by capability.
+  (`flip.MAX_ROLLBACK_DAYS`), and `apply_switch` refuses a promotion not dated the day it is applied
+  (`today`, default `HNX_TODAY` or today's UTC date), dated after today's real date, or dated more
+  than 3 days before it (`MAX_PROMOTION_AGE_DAYS`): an overridden date can neither post-date the
+  window nor write one already spent. The real date is the UTC date, the same on every machine
+  whatever its timezone; `HNX_TODAY` and `today=` do not move it, and with neither set the
+  promotion's own day is that UTC date too (one clock). The window runs from the day the promotion
+  is computed and applied, not the day its pull request merges: merge lag shortens it, and a
+  promotion more than 3 days old is refused, so a pull request that waits is re-run on the day it
+  merges. It refuses `legacy` for an incumbent whose outgoing provider is a module this repository
+  deploys (that one goes `retiring`), and holds a `legacy` incumbent to the outgoing product too. A
+  slot's name is its capability: the slot registry is keyed by capability.
 - `promote_text` writes a field that appears on one line, at the end of its row (or where it was,
   when it comes back), and refuses unless its inverse restores the text byte for byte.
-- **A promotion with no module swap** (one half): an old-lab switch, whose incumbent leaves as
-  `legacy` and whose candidate no module of this repository provides, moves no selection line.
+- **A promotion with no selection diff** (one half): the ADR-0039 step-10 switches.
   `homelabnext.modules.swap.apply_promotion(yaml_text, plan, site=..., mods=..., today=None)`
   runs every check of `apply_switch`'s promotion half (the date and the real-date bounds, the
-  standing fields only, the plan `plan_promote` recomputes) and returns the registry text; there
-  is no selection to write beside it. It refuses what belongs to `apply_switch`: a capability
-  the site selects (promoting it alone would split the registry from what is deployed), and an
-  incumbent or candidate running the product of a module in `mods` (a deployed incumbent goes
-  `retiring` through its own swap, kept restorable with its backups).
+  standing fields only, the plan `plan_promote` recomputes) and returns the registry text. What is
+  deployed is read from the site's selection; `mods` are only the manifests its providers are
+  looked up in, and a selected provider with none is refused. It allows an old-lab switch (neither
+  row runs a selected provider's product, and the capability is no selected slot) and an
+  own-product candidate already selected (shadowed, ADR-0040) replacing an old-lab incumbent whose
+  product no selected provider runs. Everything else moves the selection and goes through
+  `apply_switch`: a deployed incumbent leaving as anything but `retiring`, a selected capability
+  whose candidate is not its selected product, a candidate selected for another capability.
+  Product names and aliases compare without case.
 
 ## Decommission check
 
