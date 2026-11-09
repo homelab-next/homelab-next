@@ -447,7 +447,9 @@ security audit:
    registry that may place no row of a capability it names (the controller's row reaches the
    examples only with the ADR-0026 amendment's PR 2.7c). Such a name is a note, not a problem,
    only where `bindings.UNPLACED` declares it for that pack, each entry with its reason and the
-   change that removes it; any other name with no row is refused. A registry that holds any row
+   change that removes it, and only over this repository's reference examples (`make check`
+   passes `--reference-examples`; a lab's check never does); any other name with no row is
+   refused. A registry that holds any row
    of the capability judges it by decision 3 as usual.
 3. **The overlay checks the packs that are deployed.** `make check` judges every pack in this
    repository; the overlay's `checks.yml` judges only the packs the pinned commit's deploy
