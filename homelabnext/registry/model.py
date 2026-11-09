@@ -21,7 +21,7 @@ import yaml
 
 from homelabnext import paths, sops, tlp
 from homelabnext._schema_text import safe_message
-from homelabnext._yaml import UniqueKeyLoader
+from homelabnext._yaml import UniqueKeyLoader, expanded_size
 from homelabnext.capability_names import platform_capabilities as _platform_capabilities
 
 
@@ -826,11 +826,26 @@ def build_registry(doc: dict) -> Registry:
     )
 
 
+#: the most nodes a registry document may construct into, aliases and merge keys expanded: far
+#: above any real lab (a few thousand), far below what nested aliases or merges reach in a few
+#: hundred bytes (billions), which would hang ``hnx registry validate`` and every CI job reading it
+MAX_EXPANDED_NODES = 200_000
+
+
 def loads(text: str) -> Registry:
     try:
+        node = yaml.compose(text, Loader=_UniqueKeyLoader)
+        size = expanded_size(node, MAX_EXPANDED_NODES)
+        if size > MAX_EXPANDED_NODES:
+            raise RegistryUnreadable(
+                f"registry expands to over {MAX_EXPANDED_NODES} YAML nodes (aliases and merge "
+                "keys included); refused before it is constructed"
+            )
         doc = yaml.load(text, Loader=_UniqueKeyLoader)
     except yaml.YAMLError as exc:
         raise RegistryUnreadable(f"registry is not valid YAML: {exc}") from exc
+    except RecursionError:
+        raise RegistryUnreadable("registry is nested too deeply") from None
     return build_registry(doc)
 
 

@@ -8,6 +8,9 @@ that; they used to carry four private copies of the same constructor.
 * :class:`UniqueKeyLoader` is ``SafeLoader`` refusing duplicate keys.
 * :class:`UniqueKeyStrDateLoader` also leaves ISO dates and timestamps as strings (the schemas
   type them as strings).
+* :func:`expanded_size` counts the nodes a composed document constructs into, aliases and merge
+  keys expanded, without constructing it: a reader refuses a document above its budget first
+  (a few hundred bytes of nested aliases or merges construct into billions of nodes).
 * :func:`load_unique` reads a file with :class:`UniqueKeyLoader`, turning an unreadable file or a
   YAML error into the caller's own error type.
 
@@ -21,7 +24,12 @@ from typing import Any
 
 import yaml
 
-__all__ = ["UniqueKeyLoader", "UniqueKeyStrDateLoader", "load_unique"]
+__all__ = [
+    "UniqueKeyLoader",
+    "UniqueKeyStrDateLoader",
+    "expanded_size",
+    "load_unique",
+]
 
 
 _MERGE = "tag:yaml.org,2002:merge"
@@ -87,3 +95,37 @@ def load_unique(path: Path, error: type[Exception]) -> Any:
         return yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
     except (OSError, yaml.YAMLError) as exc:
         raise error(f"cannot read {path}: {exc}") from exc
+
+
+def expanded_size(node: yaml.Node | None, limit: int) -> int:
+    """How many nodes ``node`` (from ``yaml.compose``) constructs into with every alias and merge
+    expanded, counting stops past ``limit`` (the result is then ``limit + 1``).  Linear in the
+    composed graph: each node's size is computed once and reused wherever an alias names it."""
+    if node is None:
+        return 0
+    sizes: dict[int, int] = {}
+    stack: list[tuple[yaml.Node, bool]] = [(node, False)]
+    while stack:
+        cur, done = stack.pop()
+        if id(cur) in sizes:
+            continue
+        if isinstance(cur, yaml.ScalarNode):
+            sizes[id(cur)] = 1
+            continue
+        children: list[yaml.Node] = (
+            [n for pair in cur.value for n in pair]
+            if isinstance(cur, yaml.MappingNode)
+            else list(cur.value)
+        )
+        if not done:
+            stack.append((cur, True))
+            stack.extend((c, False) for c in children if id(c) not in sizes)
+            continue
+        total = 1
+        for c in children:
+            total += sizes.get(id(c), 1)
+            if total > limit:
+                total = limit + 1
+                break
+        sizes[id(cur)] = total
+    return min(sizes[id(node)], limit + 1)
