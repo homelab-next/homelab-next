@@ -6,7 +6,7 @@
       "profile:reader": "sha256:95bc28892ec6c046d214dbcba91400b3df7a4adf50ff45be3d6c77287123ba83",
       "profile:responder": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e"
     },
-    "registry": "3fbd32f7190e8ab13aaf56946b787a2bfb91e4ebc0d7326a964a93a398744741"
+    "registry": "d34c8f061812f2cb27bfb79db8e7cac15ef9c42e8a3bf56127beade17b54b23b"
   },
   "keyring_version": 1,
   "principals": [
@@ -19,10 +19,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:agent-audit"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "cap:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
@@ -83,6 +79,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:object-store"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:orchestration"
         },
         {
           "reason": "not granted (default deny)",
@@ -155,10 +155,6 @@
         },
         {
           "reason": "not granted (default deny)",
-          "resource": "cap:agent-runtime"
-        },
-        {
-          "reason": "not granted (default deny)",
           "resource": "cap:auth-proxy"
         },
         {
@@ -212,6 +208,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:object-store"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:orchestration"
         },
         {
           "reason": "not granted (default deny)",
@@ -288,10 +288,6 @@
         },
         {
           "reason": "not granted (default deny)",
-          "resource": "cap:agent-runtime"
-        },
-        {
-          "reason": "not granted (default deny)",
           "resource": "cap:auth-proxy"
         },
         {
@@ -349,6 +345,10 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:object-store"
+        },
+        {
+          "reason": "not granted (default deny)",
+          "resource": "cap:orchestration"
         },
         {
           "reason": "not granted (default deny)",
@@ -470,12 +470,6 @@
       ],
       "grants": [
         {
-          "endpoint": "agent-runtime.svc.example.internal",
-          "kind": "service",
-          "level": "connect",
-          "resource": "svc:agent-runtime"
-        },
-        {
           "endpoint": "automation.svc.example.internal",
           "kind": "service",
           "level": "connect",
@@ -524,6 +518,12 @@
           "resource": "svc:notify"
         },
         {
+          "endpoint": "orchestration.svc.example.internal",
+          "kind": "service",
+          "level": "connect",
+          "resource": "svc:orchestrator"
+        },
+        {
           "endpoint": "secrets.svc.example.internal",
           "kind": "service",
           "level": "connect",
@@ -535,10 +535,6 @@
     },
     {
       "denials": [
-        {
-          "reason": "zone not a client (default deny)",
-          "resource": "svc:agent-runtime"
-        },
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:agentmetry"
@@ -570,6 +566,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:metrics"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:orchestrator"
         },
         {
           "reason": "zone not a client (default deny)",
@@ -649,10 +649,6 @@
       "denials": [
         {
           "reason": "zone not a client (default deny)",
-          "resource": "svc:agent-runtime"
-        },
-        {
-          "reason": "zone not a client (default deny)",
           "resource": "svc:agentmetry"
         },
         {
@@ -690,6 +686,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:object-store"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:orchestrator"
         },
         {
           "reason": "zone not a client (default deny)",
@@ -757,10 +757,6 @@
       "denials": [
         {
           "reason": "zone not a client (default deny)",
-          "resource": "svc:agent-runtime"
-        },
-        {
-          "reason": "zone not a client (default deny)",
           "resource": "svc:auth-proxy"
         },
         {
@@ -798,6 +794,10 @@
         {
           "reason": "zone not a client (default deny)",
           "resource": "svc:object-store"
+        },
+        {
+          "reason": "zone not a client (default deny)",
+          "resource": "svc:orchestrator"
         },
         {
           "reason": "zone not a client (default deny)",

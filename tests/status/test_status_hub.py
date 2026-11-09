@@ -166,7 +166,7 @@ def test_push_events_are_ingested_and_capped_by_the_registry(make_hub, clock):
         "summary": "done", "observed_at": "2026-09-21T13:33:20Z", "expires_at": "2027-01-01T00:00:00Z",
     }  # fmt: skip
     ev = build_event(
-        OBSERVED_EVENT, "svc:agent-runtime", data, dedupe_key="r1", time=data["observed_at"]
+        OBSERVED_EVENT, "svc:orchestrator", data, dedupe_key="r1", time=data["observed_at"]
     )
     obs = hub.ingest_event(ev)
     assert obs.expires_at == "2026-09-21T13:48:20Z"  # observed_at + 900, not the pusher's claim
@@ -224,19 +224,19 @@ def test_only_the_declaring_service_may_publish_a_push_source(make_hub, clock):
     # regression: the envelope source was ignored, so any publisher could feed any push source
     hub = _push_hub(make_hub)
     data = _push_data()
-    for publisher in ("svc:notify", "svc:agent-runtime-2"):
+    for publisher in ("svc:notify", "svc:orchestrator-2"):
         ev = build_event(
             OBSERVED_EVENT, publisher, data, dedupe_key=publisher, time=data["observed_at"]
         )
         with pytest.raises(HubError, match="may not report"):
             hub.ingest_event(ev)
-    ev = build_event(OBSERVED_EVENT, "svc:agent-runtime", {**data, "module": "metrics"},
+    ev = build_event(OBSERVED_EVENT, "svc:orchestrator", {**data, "module": "metrics"},
                      dedupe_key="m", time=data["observed_at"])  # fmt: skip
     with pytest.raises(HubError, match="reports module"):
         hub.ingest_event(ev)
     assert hub.observations() == []
     ok = build_event(
-        OBSERVED_EVENT, "svc:agent-runtime", data, dedupe_key="ok", time=data["observed_at"]
+        OBSERVED_EVENT, "svc:orchestrator", data, dedupe_key="ok", time=data["observed_at"]
     )
     assert hub.ingest_event(ok).item == "nightly"
 

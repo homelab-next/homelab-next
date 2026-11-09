@@ -26,8 +26,8 @@ The menu of the status hub ([status hub](../status.md) ([[status]]), [ADR-0013](
 | [`metrics-alerts`](#metrics-alerts) | metrics | poll-prometheus | 1 min | 3 min | Every firing alert of the metrics service, fail or warn by its severity label; resolved alerts drop out. |
 | [`metrics-targets`](#metrics-targets) | metrics | poll-prometheus | 1 min | 3 min | Whether each scrape job's targets answer (up is 1); a job whose target is down is fail. |
 | [`notify-health`](#notify-health) | notify | poll-http-json | 1 min | 3 min | Whether the notification service answers its own health endpoint. |
-| [`orchestrator-queues`](#orchestrator-queues) | agent-runtime | poll-http-json | 1 min | 3 min | Queued and running orchestrator jobs; the oldest queued job waiting over an hour is warn. |
-| [`orchestrator-runs`](#orchestrator-runs) | agent-runtime | push-event | 5 min | 15 min | Run outcomes the orchestrator publishes itself as status.observed events. |
+| [`orchestrator-queues`](#orchestrator-queues) | orchestrator | poll-http-json | 1 min | 3 min | Queued and running orchestrator jobs; the oldest queued job waiting over an hour is warn. |
+| [`orchestrator-runs`](#orchestrator-runs) | orchestrator | push-event | 5 min | 15 min | Run outcomes the orchestrator publishes itself as status.observed events. |
 | [`proposals`](#proposals) | records-db | poll-file | 5 min | 15 min | The proposal lanes - notes in the inbox and approved but not completed, with the oldest age. |
 | [`uptime-monitors`](#uptime-monitors) | uptime | poll-uptime-kuma | 1 min | 3 min | Every monitor on the uptime service's public status page (no login); down is fail, pending is warn. |
 
@@ -160,20 +160,20 @@ Whether the notification service answers its own health endpoint.
 
 Queued and running orchestrator jobs; the oldest queued job waiting over an hour is warn.
 
-- Declared by: [`svc:agent-runtime`](../systems/agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), capability `cap:agent-runtime`
-- Kind: `poll-http-json`; target: `agent-runtime` `/admin/queue-summary`
+- Declared by: [`svc:orchestrator`](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]]), capability `cap:orchestration`
+- Kind: `poll-http-json`; target: `orchestrator` `/admin/queue-summary`
 - Mapping: builtin orchestrator-queue
-- Module: `agent-runtime`; graph node `status:orchestrator-queues`
+- Module: `orchestrator`; graph node `status:orchestrator-queues`
 - Every 1 min, timeout 5 s; stale after 3 min without a reading; a failed poll reads as `fail`
 
 ### orchestrator-runs
 
 Run outcomes the orchestrator publishes itself as status.observed events.
 
-- Declared by: [`svc:agent-runtime`](../systems/agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), capability `cap:agent-runtime`
+- Declared by: [`svc:orchestrator`](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]]), capability `cap:orchestration`
 - Kind: `push-event`; target: pushed (`homelabnext.status.observed`)
 - Mapping: event (observation as published)
-- Module: `agent-runtime`; graph node `status:orchestrator-runs`
+- Module: `orchestrator`; graph node `status:orchestrator-runs`
 - Every 5 min, timeout 10 s; stale after 15 min without a reading; a failed poll reads as `unknown`
 
 ### proposals

@@ -235,17 +235,20 @@ services:
     tls: none
     tags: [compute, inference]
 
-  agent-runtime:
-    capability: agent-runtime
+  # this repository's controller (orchestrator/cmd/controller, ADR-0026), at this repository's
+  # version; the runner it starts sessions on is the agent-runtime slot, found by host role
+  orchestrator:
+    capability: orchestration
     impl: orchestrator
     host: runtime-core
     protocol: http
     port: 8088
     health: {kind: http, path: /healthz, expect_status: 200}
-    # no metrics block: the orchestrator at the pinned a52a1c4 serves no Prometheus endpoint
+    # no metrics block: the controller serves GET /metrics only to a token with the metrics scope,
+    # and the generated scrape job sends no credentials (issue 251)
     upstreams: [lake-query, llm-gateway, notify, events, secrets]
     owner: ml-team
-    version: "0.3.0"
+    version: "0.1.0"
     tls: none
     mcp: {name: agent-runtime, transport: sse, path: /sse}
     tags: [compute, agents]

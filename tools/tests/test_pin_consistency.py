@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from homelabnext._version import VERSION
+
 ROOT = Path(__file__).resolve().parents[2]
 CI = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
 COMPOSE = ROOT / "compose" / "lab-in-a-box" / "docker-compose.yml"
@@ -208,9 +210,11 @@ def test_the_example_registries_run_the_caddy_ci_checks_with():
 # --- metrics: the scrape target each pinned version really serves -------------------------------
 
 ISSUES = "https://github.com/homelab-next/homelab-next/issues/"
-#: the example registry's controller row, which still describes the private controller's pin until
-#: its rename to `orchestrator` moves it to this repository's (ADR-0026 decisions 15 and 16)
+#: the example registry's controller row: this repository's controller, at this repository's
+#: version (ADR-0026 decisions 15 and 16), so its facts are read from this checkout's source
 ORCHESTRATOR_ROW = "examples/services.yml"
+#: the route table the controller's GET /metrics is served from (nil Metrics: not served)
+ORCHESTRATOR_ROUTES = "orchestrator/internal/api/server.go"
 
 # What each product serves for Prometheus, read from its own source at the versions listed; a
 # registry metrics block for another version fails until that version is read and added here.
@@ -228,10 +232,10 @@ ORCHESTRATOR_ROW = "examples/services.yml"
 #     JmxOpenMetricsModule at 450 and 484, whose MetricsResource is @Path("/metrics");
 #     docs admin/openmetrics.md), behind the server's authentication: the generated job sends no
 #     credentials, so it gets 401 until scrape auth exists (issue 251)
-#   orchestrator: at the pinned a52a1c4 (the registry's 0.3.0; ORCHESTRATOR_ROW names the
-#     pin) the controller's routes are its job API and /admin/*, and homelabnext serves nothing
-#     for it (docs/orchestration-controller.md).  Upstream serves GET /metrics from 0803f0f on,
-#     so a newer pin is a new version here.
+#   orchestrator: this repository's controller at this repository's version (homelabnext
+#     VERSION): GET /metrics on its own port (ORCHESTRATOR_ROUTES, `handle("GET /metrics", ...)`),
+#     behind the job API's metrics scope, so the generated job, which sends no credentials, gets
+#     401 until scrape auth exists (issue 251), and the example row declares no metrics block
 METRICS_SERVED: dict[str, dict] = {
     "lakekeeper": {
         "versions": {"0.5.2", "0.14.1"},
@@ -241,7 +245,7 @@ METRICS_SERVED: dict[str, dict] = {
         "not": {"/health"},
     },
     "trino": {"versions": {"450.0", "484.0"}, "port": "own", "paths": {"/metrics"}},
-    "orchestrator": {"versions": {"0.3.0"}, "pin": "a52a1c4", "served": False},
+    "orchestrator": {"versions": {VERSION}, "port": "own", "paths": {"/metrics"}},
 }
 FACTS = "METRICS_SERVED in tools/tests/test_pin_consistency.py"
 
@@ -333,10 +337,15 @@ def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
     assert "METRICS_PORT" not in compose and "METRICS__PORT" not in compose, (
         f"{where} sets the metrics port; {FACTS} assumes the default"
     )
-    pin = METRICS_SERVED["orchestrator"]["pin"]
-    assert f"pinned {pin}" in read(ORCHESTRATOR_ROW), (
-        f"{ORCHESTRATOR_ROW} no longer pins {pin}: read what the new pin serves for metrics "
-        f"and update the orchestrator entry of {FACTS}"
+    # the controller is this repository's: its row carries this repository's version, and the
+    # fact is this checkout's route table
+    row = yaml.safe_load(read(ORCHESTRATOR_ROW))["services"]["orchestrator"]
+    assert (row["impl"], row["version"]) == ("orchestrator", VERSION), (
+        f"{ORCHESTRATOR_ROW}: the orchestrator row is this repository's controller, at {VERSION}"
+    )
+    assert 'handle("GET /metrics"' in read(ORCHESTRATOR_ROUTES), (
+        f"{ORCHESTRATOR_ROUTES} no longer serves GET /metrics: update the orchestrator entry of "
+        f"{FACTS}"
     )
 
 
@@ -390,11 +399,21 @@ def test_the_unscraped_metrics_link_their_issues():
         ),
         ({"impl": "trino", "version": "999.0", "port": 8443}, []),
         (
-            {"impl": "orchestrator", "version": "0.3.0", "port": 8088, "metrics": {"path": "/m"}},
-            ["serves no Prometheus endpoint"],
+            {"impl": "orchestrator", "version": VERSION, "port": 8088, "metrics": {"path": "/m"}},
+            ["path /m is not served"],
         ),
         (
-            {"impl": "orchestrator", "version": "0.4.0", "port": 8088, "metrics": {"path": "/m"}},
+            {
+                "impl": "orchestrator",
+                "version": VERSION,
+                "port": 8088,
+                "metrics": {"path": "/metrics"},
+            },
+            [],
+        ),
+        (
+            # the private controller's version: no fact here any more (decision 15)
+            {"impl": "orchestrator", "version": "0.3.0", "port": 8088, "metrics": {"path": "/m"}},
             ["has no fact for this version"],
         ),
         ({"impl": "unknown-product", "version": "1", "port": 1, "metrics": {"path": "/m"}}, []),
