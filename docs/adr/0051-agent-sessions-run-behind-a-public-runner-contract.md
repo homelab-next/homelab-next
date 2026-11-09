@@ -92,7 +92,9 @@ inputs must not thereby choose what runs as an agent's uid.
      (`Environment=HNX_GATEWAY_URL=`; the development launcher sets it the same way), and the
      body sends the run's key, tokens and prompt only there. A spec naming another gateway makes
      no call and ends `Internal`, so whoever writes the spec cannot choose where the key goes
-     (ADR-0045 decision 6);
+     (ADR-0045 decision 6). The launcher, which is trusted, refuses such a spec itself before it
+     starts the body, so the property does not rest on provider code; the body's own refusal
+     stays as a second line;
    - `limits` (`timeout_s`, `stall_timeout_s`, `max_turns`, `liveness`);
    - `gateway_tag`, `trace` (a `traceparent`), `budgets` (ADR-0047 decision 6, as data);
    - `credentials`: the names of the gateway key and of each run token, which decision 8 makes
@@ -192,9 +194,12 @@ inputs must not thereby choose what runs as an agent's uid.
        the job.
      - **How long the launcher waits.** Before it decides a corroborated class, the launcher waits
        up to `runner.agent.gateway_wait_s` (default 2 seconds) for the gateway's records to cover
-       the run's end, polling the usage API. Records still behind after that, or a gateway that
-       reports dropped records, leave the claim uncorroborated, so a slow gateway can delay a
-       class by that long and never turn it into an attributable one.
+       the run's end, polling the usage API. Records still behind after that, or records the
+       gateway dropped since the run started, leave the claim uncorroborated, so a slow gateway
+       can delay a class by that long and never turn it into an attributable one. The gateway's
+       `usage_records_dropped` is cumulative since the gateway started; the launcher reads it
+       when the run starts and counts only drops after, so one old drop never leaves every
+       later run unjudged.
      - `ConcurrencyLimited` is **not** corroborated. The gateway refuses `429 concurrency_limited`
        before the model call and writes no usage record for it, so requiring one would turn every
        such refusal into a fault and move the job, which the operator's decision of 2026-11-08
@@ -317,6 +322,12 @@ inputs must not thereby choose what runs as an agent's uid.
    `runner.env_allowlist` applies to this launcher only. The unit launcher's environment is the
    template's, fixed at deploy.
 
+   The body shares this launcher's uid, so it could write any file under the run's root. The
+   launcher therefore reads how the body ended from a pipe the run's supervisor inherits and the
+   body does not, never from a file the body could plant first; a supervisor that does not exit
+   0, or a record that is not one, is `Internal`. `runner/agent`'s development launcher keeps
+   this design.
+
 10. **The launcher decides how a unit ended, before the unit is collected.**
     - **Watching.** It subscribes to the service manager's `JobRemoved` and to the unit's
       `PropertiesChanged`. When the unit goes inactive or failed, it reads `Result`,
@@ -336,10 +347,18 @@ inputs must not thereby choose what runs as an agent's uid.
 
     - **Liveness.** `cpu` reads the unit's `cpu.stat`. `progress` counts the stream's new `call`
       records that the gateway corroborates (decision 4). While the gateway's records lag by more
-      than the gateway wait, or the gateway reports dropped records, nothing counts as progress:
-      the stall timer runs on. The launcher never falls back to CPU time there, because a body
-      could flood the gateway into dropping records and then busy-loop to stay alive. A run's
+      than the gateway wait, or the gateway dropped records since the run started, progress can
+      be judged neither way, so the stall timer is **frozen**: it neither advances nor resets.
+      The launcher never falls back to CPU time there, because a body could flood the gateway
+      into dropping records and then busy-loop to stay alive; such a body is bounded by its
+      ceiling (`timeout_s`). Nor does a stale window stall a run, because `Stalled` is
+      attributable and one gateway hiccup would then move every run of the fleet. A run's
       liveness mode is fixed by its spec, so no mode switch can reset the timer.
+    - **The timeouts are ordered.** A `stall_timeout_s` other than 0 must be at least twice the
+      launcher's gateway wait plus one poll interval (4.05 seconds with the default 2-second
+      wait), so records that are merely late are never what stalls a run. The launcher refuses
+      a shorter one before starting anything, and `controller check` does the same for a
+      configuration's limits (step 3).
     - **`ResourceLimit` end to end.**
       - It comes only from `Result=oom-kill` or the stream bound (decision 4), never from a signal
         kill. A `SIGKILL` the launcher did not cause is `KilledExternally`.
@@ -397,7 +416,8 @@ inputs must not thereby choose what runs as an agent's uid.
     - a fake local and a fake non-local MCP server;
     - a launcher. A provider's target supplies only its runner body's argv and its
       `exit_classes`, and is run under the reference launcher (later the controller's
-      `runner/agent`); a launcher is certified by its own target. So the checks of the
+      `runner/agent`); a launcher is certified by its own target, and `hnx modules check`
+      refuses an `agent-runtime` provider whose target names any other adapter. So the checks of the
       launcher's own rules (exit statuses, stream bounds, what reaches the body) always run,
       with a suite body in place of the provider's, and no target can skip them.
 

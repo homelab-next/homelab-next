@@ -36,5 +36,9 @@ and 10):
   - `ConcurrencyLimited` is never corroborated, since the gateway records no 429.
 
   The launcher waits up to its gateway wait (2 seconds in the reference) for the records to cover
-  the run's end. Records that still lag, or a gateway that dropped records, leave the claim
-  uncorroborated (`Internal`).
+  the run's end. Records that still lag, or records the gateway dropped since the run started
+  (its `usage_records_dropped` is cumulative), leave the claim uncorroborated (`Internal`).
+
+**Timeouts.** A `stall_timeout_s` other than 0 must be at least twice the launcher's gateway wait
+plus one poll interval, and a launcher refuses a shorter one. While the gateway's records cannot be
+judged, the stall timer is frozen and only `timeout_s` bounds the run.
