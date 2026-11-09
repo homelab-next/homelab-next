@@ -446,7 +446,8 @@
       "purpose": "Run the inference conformance suite against the repository's own gateway binary and the fake inference server on loopback, holding every check to a pass.",
       "status": "active",
       "trigger": [
-        "ci:ci/gateway-conformance"
+        "ci:ci/gateway-conformance",
+        "ci:ci/orchestration-conformance"
       ]
     },
     {
@@ -991,7 +992,8 @@
       "purpose": "Run the orchestration conformance suite against the repository's own controller binary on loopback, with process-level fault injection.",
       "status": "active",
       "trigger": [
-        "make:orchestration-conformance"
+        "make:orchestration-conformance",
+        "ci:ci/orchestration-conformance"
       ]
     },
     {

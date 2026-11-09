@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -333,3 +334,33 @@ def test_a_restart_fails_loudly_when_the_controller_outlives_its_kill(tmp_path, 
         for p in (controller, session):
             p.kill()
             p.wait()
+
+
+def _ci() -> dict:
+    import yaml
+
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+
+
+def test_the_ci_job_runs_the_check_and_the_strict_suite_on_loopback():
+    job = _ci()["jobs"]["orchestration-conformance"]
+    assert "if" not in job and "continue-on-error" not in job
+    assert not any("continue-on-error" in step or "if" in step for step in job["steps"])
+    runs = [s.get("run", "") for s in job["steps"]]
+    assert any("make controller-check" in r for r in runs)
+    last = runs[-1]
+    assert "tools/orchestration_conformance.py run" in last and "--strict" in last
+    # loopback only, as the runner user under no_new_privs
+    assert "unshare --net" in last and "setpriv --no-new-privs --reuid=" in last
+    assert job["env"] == {"GOFLAGS": "-mod=readonly", "GOTOOLCHAIN": "local", "GOWORK": "off"}
+    for step in job["steps"]:
+        if "uses" in step:
+            assert re.fullmatch(r"[\w-]+/[\w-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
+
+
+def test_go_ok_requires_the_orchestration_job():
+    ok = _ci()["jobs"]["go-ok"]
+    assert "orchestration-conformance" in ok["needs"] and ok["if"] == "always()"
+    (step,) = ok["steps"]
+    assert step["env"]["ORCHESTRATION"] == "${{ needs.orchestration-conformance.result }}"
+    assert '[ "$ORCHESTRATION" = success ]' in step["run"]

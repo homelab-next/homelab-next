@@ -5,7 +5,7 @@
 #   kind: tool
 #   purpose: Run the orchestration conformance suite against the repository's own controller binary on loopback, with process-level fault injection.
 #   owner: maintainers
-#   trigger: [make:orchestration-conformance]
+#   trigger: [make:orchestration-conformance, ci:ci/orchestration-conformance]
 #   inputs: a built orchestrator/cmd/controller; an absolute, empty or missing work directory
 #   outputs: the work directory (controller.yaml, controller.log, the state, the session pids); the suite's verdict
 #   exit:
