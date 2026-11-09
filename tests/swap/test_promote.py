@@ -194,6 +194,7 @@ MODS = {
 
 @pytest.fixture
 def selection(monkeypatch):
+    monkeypatch.setenv("HNX_TODAY", "2026-11-08")  # the day the plans below are dated
     calls = []
 
     def fake(site, swap, mods, *, models=None):
@@ -304,3 +305,42 @@ def test_an_egress_incumbent_is_lowered_to_the_new_primary_s_ceiling(ceiling):
     lowered = "services.notify-a.tlp_ceiling" in {c.path for c in p.changes}
     assert lowered == (ceiling == "amber")
     assert promote_text(after, p.inverse()) == text
+
+
+# ---- review follow-ups: the rollback window is bounded, legacy is the old lab's ----------------
+
+
+def test_the_switch_refuses_a_promotion_dated_another_day(selection):
+    """A plan dated earlier (or later) would start its rollback window on a day the switch did
+    not happen: the window ran from whatever date the caller chose."""
+    text = _text()
+    p = plan_promote(load_doc(text), "lake-query", "query-b", "2026-10-01", 14)
+    with pytest.raises(ValueError, match="dated 2026-10-01, and the switch is on 2026-11-08"):
+        ms.apply_switch({}, SWAP, MODS, text, p)
+    site, _ = ms.apply_switch({}, SWAP, MODS, text, _plan(text), today=dt.date(2026, 11, 8))
+    assert site == {"after": True}
+    assert selection == [{}]
+
+
+@pytest.mark.parametrize("days", [91, 365])
+def test_a_rollback_window_past_the_bound_is_refused(days):
+    with pytest.raises(FlipError, match="from 1 to 90"):
+        plan_promote(load_doc(_text()), "lake-query", "query-b", "2026-11-08", days)
+    assert plan_promote(load_doc(_text()), "lake-query", "query-b", "2026-11-08", 90).until == (
+        "2027-02-06"
+    )
+
+
+def test_the_switch_refuses_legacy_for_a_module_this_repository_deploys(selection):
+    """legacy is an old-lab product; the outgoing provider of a module swap is a module here, so
+    its incumbent goes retiring. The outgoing-product check now holds a legacy incumbent too."""
+    text = _text()
+    p = plan_promote(load_doc(text), "lake-query", "query-b", "2026-11-08", 14, old_lab=True)
+    with pytest.raises(
+        ValueError, match="promoted out as legacy, but the swap's outgoing provider"
+    ):
+        ms.apply_switch({}, SWAP, MODS, text, p)
+    swapped = {**MODS, "query-mod-a": {"product": {"name": "another-engine"}}}
+    with pytest.raises(ValueError, match=r"legacy row query-a runs '.+', not the outgoing"):
+        ms.apply_switch({}, SWAP, swapped, text, p)
+    assert selection == []
