@@ -473,7 +473,13 @@ role's `fallback` decide which modules need `grants.cloud_models`, and no pin sh
 overlay's swap gate is `hnx modules swap-gate --overlay .`, which `checks.yml`'s `swap-gate` job runs on every pull request; see [modules.md](modules.md)), and what
 vouches for a model a swap rebinds to (`lab/model-serving/model_store.json`,
 `lab/model_roles.eval.json` and `lab/model-evals/`, as the module tier rates the repository's).
-The `CODEOWNERS` template names all of them.
+The `CODEOWNERS` template names all of them. In the registry the review also names, field by
+field, the changes that move which row every consumer of a capability reaches
+([ADR-0039](adr/0039-one-primary-per-capability.md) decision 8): a row added or removed (a new row
+is a primary unless it says otherwise), and a row's `standing`, `capability` or `replica_of`
+added, removed or changed (deleting `standing` promotes the row). The date a non-primary row's
+standing runs to is checked by `hnx registry standing lab/services.yml --overdue` (checklist
+X-12), which fails once a row is past its `until`.
 
 A file new at the head or removed from it, one that does not read at either end (not YAML, an
 alias or a duplicate key, a symbolic link, not a regular file, over the size cap), a sealed one (a
