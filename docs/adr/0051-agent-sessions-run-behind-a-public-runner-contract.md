@@ -97,15 +97,21 @@ inputs must not thereby choose what runs as an agent's uid.
    prompt, a server command, an unknown key.
 
 3. **A session's MCP servers come from a deploy-rendered grants file, never from the spec.**
-   The deploy renders each compiled profile's servers (`grants.Catalog.Render`, both lanes) into
-   `/etc/hnx-agent/<slug>/grants.json`, root-owned `0644`, beside the unit template. It records
-   the digest of the compiled profile it came from, and the unit pins that digest. The runner body
-   loads that file, verifies the digest, and starts only servers whose ids are both in the spec
-   and in the file. An id the file does not list is refused, and the session ends `Internal`
-   before any server starts. Whoever writes a session's inputs can therefore narrow a run's
-   servers, never add one or change what one runs, and the `servers` of the internal seam stop
-   at the launcher. Under the development launcher, the controller writes the same file from its
-   own render into the run's directory.
+   `hnx gen agent-units`, run as root by the deploy, renders each compiled profile's servers
+   (`grants.Catalog.Render`, both lanes) into `/etc/hnx-agent/<slug>/grants.json`, root-owned
+   `0644`, beside the unit template. It refuses a server of a kind the profile is not granted.
+   The template pins the file in two ways:
+   - **The file's own bytes.** The sha256 of `grants.json` is pinned as
+     `Environment=HNX_GRANTS_SHA256=`. That is the integrity check: the runner body refuses a file
+     whose bytes do not match.
+   - **The compiled profile's digest.** The file also records the digest of the profile it came
+     from. That is only a staleness check, so a profile recompiled without a redeploy is refused.
+
+   The body starts only servers whose ids are both in the spec and in the file. An id the file
+   does not list is refused, and the session ends `Internal` before any server starts. Whoever
+   writes a session's inputs can therefore narrow a run's servers, never add one or change what
+   one runs, and the `servers` of the internal seam stop at the launcher. Under the development
+   launcher, the controller writes the same file from its own render into the run's directory.
 
 4. **The usage stream is append-only, closed, and names and numbers only.**
    `schemas/runner/usage_record.schema.json` 1.0 defines the records of one JSON Lines file:
@@ -117,8 +123,16 @@ inputs must not thereby choose what runs as an agent's uid.
    - `end`, written last: `session_id`, `turns`, `budget_exhausted` when the runtime received a
      budget refusal (ADR-0047 decision 7), and `class` (decision 6).
 
-   Records are written as they happen, so the stream's growth is the `progress` liveness signal
-   (decision 10). A stream with no `end` record is a session that did not finish its report. That
+   Records are written as they happen. A stream is bounded:
+   - at most `max_usage_bytes` in all, and each line at most 16 KiB and nested at most 8 deep;
+   - the launcher stops a unit whose stream passes the bound, as `ResourceLimit`;
+   - a stream over the bound when read is `Internal`;
+   - each output root is its own size-limited filesystem or quota (decision 8), so one run cannot
+     fill a disk another run needs.
+
+   `progress` liveness (decision 10) counts new `call` records the gateway's records corroborate,
+   not raw growth, so a body cannot keep a stalled session alive by writing. A stream with no
+   `end` record is a session that did not finish its report. That
    is fine for a killed session, and `Internal` for a clean exit. A record that does not validate
    is `Internal`, never silently skipped. No record holds a prompt, task text, tool input or
    output, or model text (ADR-0025 decision 2), and the negatives prove it.
@@ -151,15 +165,26 @@ inputs must not thereby choose what runs as an agent's uid.
    |---|---|
    | `BackendFault` | an exit status the manifest maps to it (`exit_classes`), for a connection or timeout signature the body saw on the gateway |
    | `ContextExceeded`, `ToolCallParse`, `TurnCap` | the `end` record's `class`, on any exit, a clean one included |
-   | `ConcurrencyLimited` | the `end` record's `class` or an exit status the manifest maps to it |
+   | `ConcurrencyLimited` | the `end` record's `class` or an exit status the manifest maps to it, uncorroborated (see below) |
    | `BudgetExhausted` | the `end` record's `budget_exhausted` (ADR-0047 decision 7) |
    | `Stalled`, `TimeoutCeiling`, `KilledByController`, `KilledExternally`, `ResourceLimit` | the launcher, from how the unit ended (decision 10) |
-   | `TurnFailed` | an exit status the manifest maps to it, or a non-zero exit with no other class |
+   | `TurnFailed` | an exit status the manifest maps to it |
 
-   - **The gateway corroborates.** A self-reported `ContextExceeded` or `ConcurrencyLimited` counts
-     only when the gateway's records for the run's tag show the matching refusal (a context error,
-     a `429 concurrency_limited`). Otherwise the class is `TurnFailed`. `BudgetExhausted` needs the
-     gateway's or the broker's records too (ADR-0047 decision 7).
+   - **The gateway corroborates what it records.**
+     - A self-reported `ContextExceeded` counts only when the gateway's usage records for the
+       run's tag hold a call with `error_code` `upstream_rejected` and `status` 400. That is the
+       gateway's envelope for an upstream 4xx. It proves the upstream refused the call, not that
+       the refusal was the context window, because the gateway does not tell those apart.
+     - An uncorroborated `ContextExceeded` is `Internal`, which moves nothing. That covers a claim
+       with no matching record, records that lag, and a window in which the gateway reported
+       `usage_records_dropped > 0`. It is never `TurnFailed`, which would be attributable and move
+       the job.
+     - `ConcurrencyLimited` is **not** corroborated. The gateway refuses `429 concurrency_limited`
+       before the model call and writes no usage record for it, so requiring one would turn every
+       such refusal into a fault and move the job, which the operator's decision of 2026-11-08
+       forbids. A false claim only makes the run wait on its own backend, and the pool bounds the
+       waits (`Policy.ConcurrencyWaits`).
+     - `BudgetExhausted` needs the gateway's or the broker's records (ADR-0047 decision 7).
    - **Retired text matching.** A `signal` record `backend_absent` (the backend answered that
      nothing serves it) is the typed form of `runner.MarkAbsent`. It prompts the pool's own health
      probe and is never a verdict on its own. The `AnswerChecker`, which read a clean exit's answer
@@ -167,7 +192,8 @@ inputs must not thereby choose what runs as an agent's uid.
      `class`. Its text matching moves nowhere, because the controller doc's rule that a failure's
      text may quote the model holds for the provider too.
    - **The default is non-attributable.** Under `runner.kind: agent`, an exit status the manifest
-     does not map is `Internal`, which moves no job to another backend or to the cloud.
+     does not map is `Internal`, whether the exit was zero or not, and `Internal` moves no job to
+     another backend or to the cloud.
 
 ### The launchers
 
@@ -184,13 +210,19 @@ inputs must not thereby choose what runs as an agent's uid.
        `ProtectHome=yes`, `NoNewPrivileges=yes`, `CapabilityBoundingSet=` (empty) and a
        `SystemCallFilter=`;
      - `IPAddressDeny=any`, with `IPAddressAllow=` the gateway's and each granted network MCP
-       server's addresses, rendered from the registry;
+       server's addresses. They are rendered as addresses at deploy, from the registry. A name that
+       does not resolve then fails the render (fail closed). If the body resolves names itself, the
+       local resolver's address is allowed too, and nothing else;
      - `MemoryMax=`, `TasksMax=`, `CPUQuota=` and `RuntimeMaxSec=` from the profile's limits, the
        last a backstop a grace past the controller's ceiling.
 
      The template uses `%i` (the escaped instance name), never `%I`, in every path. The instance
      name is the run id: 32 lower-case hex digits from the operating system's generator, which
      also makes it unguessable.
+
+     `PrivatePIDs=` needs systemd 257 or later. `controller check` under the unit launcher, and the
+     overlay's validation of a host that runs it, refuse an older systemd (operator decision 6),
+     rather than let the template start without its PID namespace.
    - **The polkit rule is exact.** It returns `YES` only when all of these hold, and everything
      else falls through to the default deny:
      - `action.id == "org.freedesktop.systemd1.manage-units"`;
@@ -218,23 +250,40 @@ inputs must not thereby choose what runs as an agent's uid.
      That directory is readable only by the run's uid, read-only, and gone when the unit stops.
      The agent cannot rewrite its spec after the controller validated it, and never sees another
      run's inputs.
-   - **Outputs.** The deploy creates one output root per profile,
-     `/var/lib/hnx-agent/<slug>/`, owned `root:hnx-agent-<slug>`, mode `2770` (setgid). The
-     profile's user and the controller's user are its group's only members. The body writes the
-     usage stream and its answer in `<run id>/` there, under `UMask=0007`. The controller reads
-     them and removes the directory when the run ends.
+   - **Outputs.** The deploy creates one output root per profile, `/var/lib/hnx-agent/<slug>/`,
+     owned `root:hnx-agent-<slug>`, mode `2770` (setgid), on its own size-limited filesystem or
+     quota.
+     - The profile's user and the controller's user are the group's only members. The deploy
+       guarantees that the `hnx-agent-<slug>` groups grant nothing beyond the output roots: no
+       other file or directory is group-owned by one.
+     - Before it starts the unit, the controller creates the run's `<run id>/` directory and sets
+       it to `2770` explicitly. The controller runs under `UMask=0077`, so the mode is a `chmod`,
+       never inherited.
+     - The body writes the usage stream and its answer there, under `UMask=0007`. The controller
+       reads them and removes the directory when the run ends.
+     - Removal never follows a link. Go's `os.RemoveAll` walks with `openat` and does not follow
+       symbolic links, and the tests hold it to that with a link planted in a run directory.
    - **Sibling runs of one profile.** They share the uid and the group, so each unit sees its own
      run only:
      - `TemporaryFileSystem=` hides the output root and `/run/credentials`;
      - `BindPaths=` maps back the run's own `<run id>/` directory;
+     - the unit's own `$CREDENTIALS_DIRECTORY` stays mounted over the hidden `/run/credentials`;
      - `PrivatePIDs=` hides the siblings' processes.
 
-     ADR-0047 decision 5 bounds what a sibling could do with a token if it got one.
+     Two checks of decision 13 hold this together. `sibling-runs-see-only-their-own` proves the
+     hiding works. `session-answers`, run under the unit launcher, proves the hiding does not also
+     hide the run's own credentials and directory, which a wrong mount order would. ADR-0047
+     decision 5 bounds what a sibling could do with a token if it got one.
    - **The home.** The runtime's home is built in the run's own directory, from the backend's
      home, which is a read-only template the deploy installs. No run writes a shared home.
-   - **The controller reads defensively.** It opens each output with `O_NOFOLLOW`, accepts only a
-     regular file, and reads at most the stream's bound (`max_usage_bytes`) and the answer's
+   - **The controller reads defensively.** It opens each output with `O_NOFOLLOW|O_NONBLOCK` (so a
+     FIFO planted in place of a file cannot block it), then checks that the open file is regular.
+     It reads at most the stream's bound (`max_usage_bytes`) and the answer's
      (`max_response_bytes`).
+   - **Facts commands run without the agent groups.** The controller is a member of every
+     `hnx-agent-<slug>` group. A facts command it runs (stage 2's facts block) drops those
+     supplementary groups first, so a facts command can never read a run's outputs. The controller
+     doc's trust boundary says so.
    - **Names for both launchers.** The body finds its inputs under `$CREDENTIALS_DIRECTORY` and
      its output directory under `$HNX_RUN_DIR`, under both launchers. The development launcher
      sets both to directories in the run's own tree.
@@ -269,7 +318,20 @@ inputs must not thereby choose what runs as an agent's uid.
       | `signal` the controller did not send, or `core-dump` | `KilledExternally` |
       | anything else | `Internal` |
 
-    - **Liveness.** `cpu` reads the unit's `cpu.stat`. `progress` is the usage stream's growth.
+    - **Liveness.** `cpu` reads the unit's `cpu.stat`. `progress` counts the stream's new `call`
+      records that the gateway corroborates (decision 4).
+    - **`ResourceLimit` end to end.**
+      - It comes only from `Result=oom-kill` or the stream bound (decision 4), never from a signal
+        kill. A `SIGKILL` the launcher did not cause is `KilledExternally`.
+      - In the queue it joins `spentBudget` (`queue/failure.go`), so `mayRetryAttempt` and
+        `mayAutoRequeue` refuse it: never retried by `max_attempts`, never requeued, never moved to
+        another backend or re-run on cloud.
+      - It is stored as failure class `resource-limit` and published as the failed event's
+        `reason`. It is not in `RetryableFailureClass`, so a caller's resubmit is refused as for
+        `budget` and `turn-cap`. A run under raised limits is a new submit with the new profile
+        revision, not a resubmit.
+      - `agent-job-retry`'s trigger reasons (capacity, stall, timeout, backend-down) exclude it.
+      - The telemetry's `failure_class` enum docs list it (operator decision 10).
 
 ### The provider, the patch and the suite
 
@@ -323,19 +385,30 @@ inputs must not thereby choose what runs as an agent's uid.
       reaches the pool as `BackendFault`;
     - `unmapped-exit-is-internal`;
     - `self-reported-class-needs-the-gateway`: a `ContextExceeded` the fake gateway never refused
-      is `TurnFailed`;
+      (no `upstream_rejected`/400 record for the tag) is `Internal`, and a `ConcurrencyLimited`
+      with no gateway record still waits on its own backend, never moving;
     - `per-run-credential` (ADR-0045 decision 6): every call carries the run's profile key, never
       another profile's or a backend's, and nothing of the key is left after the run;
     - `trace-propagation` (ADR-0047 decision 2), `gateway-tag-on-every-call`, `tool-call-records`
       and `budget-exhausted-is-typed`;
-    - `servers-come-from-the-grants-file`: the spec names a server id the grants file lacks, or
-      the spec carries a command, and nothing runs;
+    - `servers-come-from-the-grants-file`: the spec names a server id the grants file lacks, the
+      spec carries a command, or the grants file's bytes differ from `HNX_GRANTS_SHA256`, and
+      nothing runs;
+    - `usage-stream-is-bounded`: a stream past the bound, a line over 16 KiB or nesting past 8 is
+      refused, and records a body writes without model calls do not count as progress;
     - `spec-carries-no-secret`: the spec, argv and environment the body sees hold no key value.
 
     Under the unit launcher, in a CI job that has systemd and root, these MUST checks are added:
+    - `session-answers` again, here because a wrong mount order can hide the run's own
+      credentials and directory under the per-unit mounts;
     - `session-cannot-read-controller-state`;
     - `sibling-runs-see-only-their-own`: a session can neither read nor write another run's or
-      another profile's directory, and cannot see a sibling's processes;
+      another profile's directory, and cannot see a sibling's processes. It exists because
+      siblings share a uid and group, so only the per-unit mounts and PID namespace keep them
+      apart;
+    - `outputs-are-read-without-following`: a symbolic link or a FIFO planted in place of the
+      stream or the answer is refused without blocking, and removing the run directory leaves the
+      link's target untouched;
     - `oom-kill-is-a-resource-limit`;
     - `stop-ends-the-run-as-killed-by-controller`;
     - `polkit-allows-only-start-and-stop-of-run-units`.
