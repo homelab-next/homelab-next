@@ -68,7 +68,10 @@ var ErrArgumentsTooLong = errors.New("the command line is too long for the syste
 // SessionVariables are the variables the runner sets for every session itself, whatever the
 // controller's environment holds.
 var SessionVariables = []string{"HNX_RUN_ID", "HNX_AGENT_KEY", "HNX_LANE", "HNX_GATEWAY_TAG", "HNX_USAGE_PATH",
-	"HNX_HOME", "HNX_BACKEND", "HNX_TOOLSETS", "HNX_SERVERS_FILE"}
+	"HNX_HOME", "HNX_BACKEND", "HNX_TOOLSETS", serversFileVar}
+
+// serversFileVar names the session's rendered servers file, set only when it has servers.
+const serversFileVar = "HNX_SERVERS_FILE"
 
 // Config is the runner's command and bounds.
 type Config struct {
@@ -182,7 +185,7 @@ func (r *Runner) Run(ctx context.Context, s runner.Session) (*runner.Result, err
 		if err != nil {
 			return res, fmt.Errorf("exec runner: write the servers file: %w", err)
 		}
-		env = append(env, "HNX_SERVERS_FILE="+path)
+		env = append(env, serversFileVar+"="+path)
 	}
 
 	runCtx := ctx
@@ -386,14 +389,17 @@ func (r *Runner) environ(s runner.Session) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if _, mine := own[name]; mine || name == "HNX_SERVERS_FILE" || slices.Contains(r.cfg.DenyEnv, name) {
+		if _, mine := own[name]; mine || name == serversFileVar || slices.Contains(r.cfg.DenyEnv, name) {
 			continue
 		}
 		if r.allowed(name) {
 			env = append(env, kv)
 		}
 	}
-	for _, k := range SessionVariables[:len(SessionVariables)-1] { // HNX_SERVERS_FILE is set by Run
+	for _, k := range SessionVariables {
+		if k == serversFileVar { // set by Run, only for a session that has servers
+			continue
+		}
 		env = append(env, k+"="+own[k])
 	}
 	return env

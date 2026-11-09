@@ -525,6 +525,10 @@ The mapping (docs/orchestration-controller.md has the whole table):
   an attempt ran on (`shadow`, `constraints`, `local-only`) and has no list route
   (`list-runs`).  Its check needs a reported limit, which `capacity()` never has, so it
   skips here.
+* `deadline` is not declared, so `deadline-expiry-frees-capacity` skips: the job API takes no
+  per-run deadline.  The controller does end a job at its deadline (`failed`, failure class
+  `deadline`), but that deadline is the pool's `runner.job_timeout_seconds` from the
+  configuration, one value for every job, which `submit(..., deadline_s=...)` cannot set.
 * `kill` / `restart` (test hook `fault-injection`) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -599,6 +603,10 @@ The mapping (docs/orchestration-controller.md has the whole table):
   an attempt ran on (`shadow`, `constraints`, `local-only`) and has no list route
   (`list-runs`).  Its check needs a reported limit, which `capacity()` never has, so it
   skips here.
+* `deadline` is not declared, so `deadline-expiry-frees-capacity` skips: the job API takes no
+  per-run deadline.  The controller does end a job at its deadline (`failed`, failure class
+  `deadline`), but that deadline is the pool's `runner.job_timeout_seconds` from the
+  configuration, one value for every job, which `submit(..., deadline_s=...)` cannot set.
 * `kill` / `restart` (test hook `fault-injection`) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -674,6 +682,10 @@ The mapping (docs/orchestration-controller.md has the whole table):
   an attempt ran on (`shadow`, `constraints`, `local-only`) and has no list route
   (`list-runs`).  Its check needs a reported limit, which `capacity()` never has, so it
   skips here.
+* `deadline` is not declared, so `deadline-expiry-frees-capacity` skips: the job API takes no
+  per-run deadline.  The controller does end a job at its deadline (`failed`, failure class
+  `deadline`), but that deadline is the pool's `runner.job_timeout_seconds` from the
+  configuration, one value for every job, which `submit(..., deadline_s=...)` cannot set.
 * `kill` / `restart` (test hook `fault-injection`) exist only on the recorded stand-in, which
   models the controller's process kill and restart reconciliation.  On a live controller the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
