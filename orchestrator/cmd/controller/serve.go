@@ -218,11 +218,10 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 	go func() { serveErr <- srv.Serve(ln) }()
 	lg.Printf("controller: serving on %s (%d profiles, auth %v)", ln.Addr(), len(s.profiles.All()), auth != nil)
 
-	if interrupted(sigs, &heldHUPs, lg) {
-		heldHUPs = 0
-		sigs <- syscall.SIGTERM // the loop below stops at once, through the ordinary stop
-	}
-	for ; heldHUPs > 0; heldHUPs-- { // a reload asked for during the start happens now
+	// a stop asked for during the start skips the loop and takes the ordinary stop below; nothing
+	// is sent back into the signal channel, which could block on a full or unbuffered one
+	stopNow := interrupted(sigs, &heldHUPs, lg)
+	for ; heldHUPs > 0 && !stopNow; heldHUPs-- { // a reload asked for during the start happens now
 		select {
 		case sigs <- syscall.SIGHUP:
 		default:
@@ -230,7 +229,7 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 	}
 	code = exitOK
 loop:
-	for {
+	for !stopNow {
 		select {
 		case err := <-serveErr:
 			lg.Printf("controller: api: %v", err)
