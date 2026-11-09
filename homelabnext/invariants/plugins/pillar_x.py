@@ -74,8 +74,25 @@ def x11(ctx: Context) -> CheckResult:
 
 #: directories X-12 never looks in: test fixtures and vendored or generated trees
 _X12_SKIP_DIRS = frozenset({"tests", "node_modules", "__pycache__", "dist", "build"})
-#: a registry is a YAML document whose top level declares ``registry_version``
-_REGISTRY_DOC = re.compile(r"^registry_version[ \t]*:", re.M)
+_X12_SKIPPED = "hidden directories, " + ", ".join(sorted(_X12_SKIP_DIRS))
+
+
+def _is_registry_doc(text: str) -> bool | None:
+    """Whether a YAML (or JSON) text is a registry: its top level is a mapping with the key
+    ``registry_version``, however the key is spelled (plain, quoted, flow, ``? key``).  Read by
+    composing the node graph only, so no value is constructed and an alias is never expanded.
+    None when it does not parse: the caller cannot tell, and fails closed."""
+    try:
+        node = yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(node, yaml.MappingNode):
+        return False
+    return any(
+        isinstance(k, yaml.ScalarNode) and k.value == "registry_version" for k, _ in node.value
+    )
+
+
 _X12_MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -83,7 +100,9 @@ def _registries(root: pathlib.Path) -> tuple[list[pathlib.Path], list[str]]:
     """(the registries a tree holds, the paths it refused to read).
 
     A registry is a ``services.yml`` (at any depth) whose top level declares
-    ``registry_version``; a module's registry fragment, which has none, is not one.  The walk
+    ``registry_version`` (read from the parsed top-level keys, :func:`_is_registry_doc`); a
+    module's registry fragment, which has none, is not one, and one that does not parse is
+    refused.  The walk
     follows no symbolic link and skips hidden directories and :data:`_X12_SKIP_DIRS`.  A
     ``services.yml`` that is a symbolic link, resolves outside the tree, is no regular file or is
     over the size cap is refused (named, never read), so the check cannot be pointed at a file
@@ -110,7 +129,10 @@ def _registries(root: pathlib.Path) -> tuple[list[pathlib.Path], list[str]]:
         except (OSError, UnicodeDecodeError) as exc:
             refused.append(f"{rel}: {type(exc).__name__}")
             continue
-        if _REGISTRY_DOC.search(text):
+        is_reg = _is_registry_doc(text)
+        if is_reg is None:
+            refused.append(f"{rel}: not YAML, so it cannot be told from a registry")
+        elif is_reg:
             found.append(p)
     return sorted(found), refused
 
@@ -125,7 +147,11 @@ def x12(ctx: Context) -> CheckResult:
 
     paths, errors = _registries(ctx.root)
     if not paths and not errors:
-        return CheckResult(SKIP, "no registry (services.yml with registry_version) in this tree")
+        return CheckResult(
+            SKIP,
+            f"no registry (services.yml with registry_version) in this tree (not searched: "
+            f"{_X12_SKIPPED})",
+        )
     try:
         on = standing.today()
     except ValueError:
@@ -157,7 +183,7 @@ def x12(ctx: Context) -> CheckResult:
     return CheckResult(
         PASS,
         f"{len(paths)} registr{'y' if len(paths) == 1 else 'ies'}, {rows} non-primary row(s) in "
-        f"date on {when}",
+        f"date on {when} (not searched: {_X12_SKIPPED})",
     )
 
 

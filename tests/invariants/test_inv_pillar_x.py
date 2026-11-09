@@ -5,6 +5,7 @@ import json
 import pathlib
 
 import pytest
+import yaml
 
 from homelabnext.invariants import Context, default_registry
 from homelabnext.invariants.plugins import pillar_x
@@ -432,7 +433,7 @@ def test_x12_follows_no_link_out_of_the_tree_and_echoes_no_file_content(tmp_path
     write(root / "lab" / "services.yml", "registry_version: 1\nservices: [MARKER-INSIDE-TEXT\n")
     r = pillar_x.x12(ctx(root))
     assert r.status == "error" and "MARKER" not in r.evidence
-    assert "lab/services.yml: RegistryUnreadable" in r.evidence or "RegistryError" in r.evidence
+    assert "lab/services.yml: not YAML" in r.evidence  # named, its text not quoted
 
 
 def test_x12_selects_registries_by_content_at_any_depth(tmp_path, monkeypatch):
@@ -470,4 +471,42 @@ def test_x12_passes_with_the_date_it_judged_and_marks_an_override(tmp_path, monk
     _lab_registry(tmp_path, LATE)
     monkeypatch.setenv("HNX_TODAY", "2026-11-09")
     r = pillar_x.x12(ctx(tmp_path))
-    assert r.status == "pass" and r.evidence.endswith("in date on 2026-11-09 (HNX_TODAY)")
+    assert r.status == "pass" and "in date on 2026-11-09 (HNX_TODAY)" in r.evidence
+
+
+def _minimal_registry_doc() -> dict:
+    return yaml.safe_load((REPO / "examples" / "minimal" / "services.yml").read_text())
+
+
+@pytest.mark.parametrize("spelling", ["double", "single", "explicit", "json"])
+def test_x12_finds_a_registry_however_its_version_key_is_spelled(tmp_path, monkeypatch, spelling):
+    """A quoted, explicit-key or JSON registry loads like any other; X-12 used to read it as no
+    registry and skip, hiding its overdue rows."""
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    doc = _minimal_registry_doc()
+    doc["services"]["dns-trial"] = yaml.safe_load(LATE)["dns-trial"]
+    body = yaml.safe_dump({k: v for k, v in doc.items() if k != "registry_version"})
+    version = doc["registry_version"]
+    text = {
+        "double": f'"registry_version": {version}\n' + body,
+        "single": f"'registry_version': {version}\n" + body,
+        "explicit": f"? registry_version\n: {version}\n" + body,
+        "json": json.dumps(doc),
+    }[spelling]
+    write(tmp_path / "lab" / "services.yml", text)
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail", r.evidence
+    assert "lab/services.yml: dns-trial (eval dns) until 2026-11-30" in r.evidence
+
+
+def test_x12_refuses_a_services_file_it_cannot_parse_and_names_what_it_skipped(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    assert "not searched: hidden directories, __pycache__, build, dist, node_modules, tests" in (
+        pillar_x.x12(ctx(tmp_path)).evidence
+    )
+    write(tmp_path / "lab" / "services.yml", '"registry_version": [unclosed\n')
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "error" and "lab/services.yml: not YAML" in r.evidence
+    assert "unclosed" not in r.evidence
