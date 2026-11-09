@@ -1,17 +1,15 @@
 ---
-summary: 'The orchestration controller: adapter, holds, pinned result, gateway calls, optional features, its core in orchestrator/ and the controller binary.'
-summary_of: outline:sha256:c8902df8cd2a47c3
+summary: 'The orchestration controller: adapter, holds, history, gateway calls, optional features, its core in orchestrator/ and the controller binary.'
+summary_of: outline:sha256:3b6a434e9f8b6b93
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# The LLM orchestrator as the `orchestration` capability
+# The orchestration controller as the `orchestration` capability
 
-The maintainer's Go controller (the "LLM orchestrator", pinned here at commit `a52a1c4`) admits
-whole agent sessions. Each job is one `hermes -z` subprocess, admitted against live engine load,
-moved to another backend when it fails, and sent to cloud only when the failure is the backend's
-fault. File:line cites of the controller on this page are to that private repository at
-`a52a1c4`. Its `internal/hermesagent` package has since been split into `internal/runner/hermes`,
-`internal/prompt` and `internal/backends`, so those cites hold only at that commit; the in-repo
-successor of its `internal/store` is `orchestrator/internal/store`. This page covers two things:
+The orchestration controller (`orchestrator/cmd/controller`, ADR-0026) admits whole agent
+sessions: each job is one runner session, admitted against live engine load, moved to another
+backend when it fails, and sent to cloud only when the failure is the backend's fault. It started
+as the maintainer's private controller (the "LLM orchestrator", last pinned at `a52a1c4`), whose
+cites this page no longer uses: every path here is in `orchestrator/`. This page covers two things:
 
 - how the controller is measured against the `orchestration` contract;
 - how its model calls go through the [LLM gateway](llm-gateway.md) ([[llm-gateway]]).
@@ -21,36 +19,40 @@ roles, keys, limits and cloud egress.
 
 ## The adapter
 
-`homelabnext.conform.adapters.llm_orchestrator:make` is a stdlib adapter for the controller's job
-API (`internal/api/server.go:39-42`). The contract's job body is a Python callable, and the
-controller runs only `hermes`. So a conformance run puts a stand-in on the controller's `PATH` as
-`hermes`: `conformance/fakes/llm_orchestrator_hermes.py`. The stand-in calls back to a loopback
-*handler host* inside the adapter, which runs the handler.
+`homelabnext.conform.adapters.orchestrator:make` is a stdlib adapter for the controller's job API
+(`orchestrator/internal/api`). The contract's job body is a Python callable, and the controller
+runs only runner sessions. So a conformance run makes the session a runner body that calls back:
+`conformance/fakes/llm_orchestrator_hermes.py`, under the exec runner, asks a loopback *handler
+host* inside the adapter to run the handler.
 
 | Contract | Controller |
 |---|---|
 | `define(name, handler, retries=n)` | Writes the profile `<profiles_dir>/hnxconf-<run token>-<name>.yaml` (`local_only: true`, `max_attempts: n+1`), then `POST /admin/reload-profiles`. The handler stays in the handler host. |
-| `submit(name, params, idempotency_key=k)` | `POST /jobs` with that `agent_key`, `idempotency_key: hnxconf-<run token>-<k>`, and a task description that holds one job line (`hnx-conform-job:<base64url JSON>`: the handler host URL, a token issued for this submit and its HMAC, the job and its parameters; the HMAC key never leaves the adapter, since `GET /jobs/{id}` shows the description to any caller, and the handler host runs only an issued token for its own job and parameters, with a bounded body). `201`/`200` gives the run id. `404` raises `UnknownJob`. |
-| the job body | The controller runs `hermes -z PROMPT` (`internal/hermesagent/invoker.go:239-247`). The stand-in finds the job line and asks the handler host to run the handler; it posts only to the handler host's `/run` on IPv4 loopback and refuses any other callback (another scheme such as `file://`, host, userinfo or path). It prints the answer (exit 0) or the error (exit 1). |
-| `wait(run_id)` | Polls `GET /jobs/{id}`. `done` maps to `succeeded`; `failed` and `budget_killed` map to `failed`. `result` is decoded from `response_body`; `error` is `local_failed_reason`. The timeout is at least `wait_floor` (60 s), because the controller admits on a 2 s tick (`cmd/controller/main.go:225`). |
+| `submit(name, params, idempotency_key=k)` | `POST /jobs` with that `agent_key`, `idempotency_key: hnxconf-<run token>-<k>`, and a task description that holds one job line (`hnx-conform-job:<base64url JSON>`: the handler host URL, a token issued for this submit and its HMAC, the job and its parameters; the HMAC key never leaves the adapter, since a reader of the job sees the description, and the handler host runs only an issued token for its own job and parameters, with a bounded body). `201`/`200` gives the run id. `404` raises `UnknownJob`. |
+| the job body | The exec runner runs the runner body with the prompt on stdin. It finds the job line and asks the handler host to run the handler; it posts only to the handler host's `/run` on IPv4 loopback and refuses any other callback (another scheme such as `file://`, host, userinfo or path). It prints the answer (exit 0) or the error (exit 1). |
+| `wait(run_id)` | Polls `GET /jobs/{id}`. `done` maps to `succeeded`; `failed` and `budget_killed` map to `failed`. `result` is decoded from `response_body`; `error` is `local_failed_reason`. The timeout is at least `wait_floor` (60 s by default; 0 on the in-repository target, since the controller admits on a one-second tick and a floor turns a read into a wait). |
 | `cancel(run_id)` | `POST /jobs/{id}/cancel`. A `409` (no longer cancellable) reads the run back unchanged, which is what the contract expects for a finished run. |
-| `RunStatus.attempts` | The `attempts` field, when the controller reports one. `a52a1c4` reports none, so the adapter falls back to the number of executions the handler host saw for that run. |
-| `capacity()` (feature `admission`) | `GET /admin/backend-inflight` (`internal/api/server.go`, `WithBackendInFlight`, which serves `hermesagent.Policy.InFlightSnapshot`; the route landed after `a52a1c4`): `in_flight` summed over the backends, `holders` the union of their `reserved_runs`, `limit` `None` (the snapshot reports none). The adapter declares `admission` only when the route answers; a `404` means "no route" (the capacity checks skip), any other answer or none makes the run unmeasured. With no limit the checks judge a release by the run leaving `reserved_runs`, never by `in_flight`, which other traffic on a shared controller moves; and they cannot test capacity by its effect (admitting new runs into the freed slots), which they do wherever a limit is reported. With API authentication on, the route needs an admin token, which the adapter does not send. |
-| `kill(run_id)`, `restart()` (test hook `fault-injection`) | Only on the recorded stand-in, which models the hermes process dying (`signal: killed`) and a controller restart (`ReconcileOrphans`). On a live controller the adapter cannot kill one job's worker or restart the service honestly, so it never declares the hook. |
+| `RunStatus.attempts` | The `attempts` field. A controller that reports none gets the number of executions the handler host saw for that run. |
+| `capacity()` (feature `admission`) | `GET /admin/backend-inflight` (the pool's `InFlightSnapshot`): `in_flight` summed over the backends, `holders` the union of their `reserved_runs`, `limit` `None` (the snapshot reports none). The adapter declares `admission` only when the route answers; a `404` means "no route" (the capacity checks skip), any other answer or none makes the run unmeasured. With no limit the checks judge a release by the run leaving `reserved_runs`, never by `in_flight`, which other traffic on a shared controller moves; and they cannot test capacity by its effect (admitting new runs into the freed slots), which they do wherever a limit is reported. With API authentication on, the route needs an admin token, which the adapter does not send. |
+| `kill(run_id)`, `restart()` (test hook `fault-injection`) | Only with `fault_injection: true` and the harness that runs the controller as a process (`ProcessFaults`, "Fault injection against the binary" below). Elsewhere the adapter cannot kill one job's worker or restart the service honestly, so it never declares the hook. |
 
 The adapter never answers on the controller's behalf. It does not raise `UnknownJob` for a name it
 was never given, and it does not resubmit a failed run itself.
 
 Two target files ship with it:
 
-- `orchestration-llm-orchestrator` is a running controller: `HNX_ENDPOINT_ORCHESTRATION` and
-  `HNX_ORCHESTRATION_PROFILES_DIR`.
-- `orchestration-llm-orchestrator-recorded` is the loopback stand-in of the job API
-  (`conformance/fakes/llm_orchestrator_api.py`). Each shape in it cites the Go file and line it
-  came from.
+- `orchestration-orchestrator` is this repository's controller binary, run by
+  `tools/orchestration_conformance.py` (CI's `orchestration-conformance` job, strict).
+- `orchestration-llm-orchestrator` is a running controller elsewhere (the lab's private one until
+  its row is retired): `HNX_ENDPOINT_ORCHESTRATION` and `HNX_ORCHESTRATION_PROFILES_DIR`.
 
-`tests/conform/test_conform_orchestration_controller.py` runs the whole suite through the adapter
-on that stand-in, both as recorded and with the landed fixes turned on.
+The recorded stand-in of the private controller's job API and its
+`-recorded` target are retired (ADR-0026 decision 15): the binary is in this repository, and a
+recording of it would be a second thing to keep true. `tests/conform/test_conform_orchestration_controller.py`
+checks the adapter's mapping on the binary, and on a few lines of scripted HTTP
+(`tests/conform/controller_rig.py`) where a test breaks an answer on purpose; it also fails if a
+`-recorded` orchestration target or an `internal/hermesagent` cite comes back under
+`conformance/`.
 
 ## Holds: capacity is held only by live work
 
@@ -75,83 +77,27 @@ would let "released when the body returned" pass for "released on cancel".
 
 | Controller | Result |
 |---|---|
-| `a52a1c4` as recorded | No in-flight route, so no `admission`: all five skip (a missing product feature skips a check even when its hook is missing too). |
-| the stand-in with the upstream in-flight route (`fixes: [backend-inflight]`) | The four that need no `deadline` pass. A cancel cancels the job's context, which kills the `hermes` process; a defer releases the slot on every exit path (`scheduler.go:409-435`); a restart runs `ReconcileOrphans` (`running` becomes `failed`, `admitted` becomes `queued`) and starts with empty counters. |
-| a live controller with the route | `admission` is declared; the kill and restart checks are `untested` (the adapter has no honest hook), which fails the capability until a controller-side hook exists. `deadline-expiry-frees-capacity` skips: the API takes no per-run deadline. |
+| this repository's binary, with process fault injection (`orchestration-orchestrator`) | All five pass, strict: a cancel cancels the job's context, which ends the session's process group; the slot is released on every exit path; a killed session fails its run (and its one automatic retry runs the work again under a new run id); a restart runs `ReconcileOrphans` (`running` becomes `failed`, `admitted` becomes `queued`) and starts with empty counters. `deadline-expiry-frees-capacity` skips: the API takes no per-run deadline. |
+| a controller run elsewhere, with the in-flight route | `admission` is declared; the kill and restart checks are `untested` (the adapter has no honest hook there), which fails the capability. |
 
-The stand-in models slots only. The live controller also keeps token-weighted reservations and
-exclusive leases. The 2026-10-23 review found that its stale-reservation reaper returns the slot
-but not the token reservation, and that an exclusive lease is never recorded as a reservation, so
-`reserved_runs` does not show it. A live run of these checks, with a kill and restart hook on the
-controller host, is what would prove those paths.
+## History: the private controller at `a52a1c4`
 
-## Result: three MUST checks fail at `a52a1c4`
+Run live on 2026-10-22, the private controller at `a52a1c4` failed three MUST checks:
+`unknown-job-raises` (an unknown `agent_key` was queued as an HTTP passthrough job),
+`retries-until-success` and `retries-are-bounded` (a run was attempted once). The private fixes
+(a profile's `max_attempts` under one run id, an unknown agent key refused) landed that day; the
+controller in `orchestrator/` refuses an unknown `agent_key` unconditionally (no passthrough) and
+retries under one run id, and passes all three on the binary. Its idempotency keys were global
+and never expired; this repository's store scopes a key to its submitter.
 
-Live run on 2026-10-22: the controller built with Go 1.25, a dev config, the stand-in as `hermes`.
-Result: `FAIL orchestration ... 11 executed`, with 8 passing.
-
-| Check | What the controller does | Fix (landed privately on 2026-10-22) |
-|---|---|---|
-| `unknown-job-raises` | It accepts an `agent_key` that has no profile, answers `201`, and queues an HTTP passthrough job. That job fails later with `primary-local: unreachable`. A typo in `agent_key` silently changes the dispatch path. | `0002`: `reject_unknown_agent_keys: true` makes the API answer `404 unknown agent_key` unless the request carries an explicit `request_body`. It is opt-in, because passthrough callers still exist. |
-| `retries-until-success` | It attempts a run once. Its only requeues are the special cases (capacity kill, backend down), and each requeue creates a new run id. | `0003`: profile `max_attempts` re-runs the attempt chain under the same run id. It never retries after a cancel, a job deadline, a timeout ceiling or a turn cap. `GET /jobs/{id}` reports `attempts`. |
-| `retries-are-bounded` | Same cause as `retries-until-success`. | `0003`. |
-
-`0001` is not a contract fix, but the live run needs it. At `a52a1c4`, `main.go:160` reads the
-lessons register from a fixed production path and exits if it is missing, so the controller cannot
-start on a lab host. `0001` adds `lessons_path`/`runbooks_path` (the defaults are unchanged). The
-as-is run worked around it by giving the controller a private mount namespace with a stub file.
-
-The three patches apply in order with `git am` to `a52a1c4`. Each one has its own Go test
-(`internal/config`, `internal/api/unknown_agent_test.go`, `internal/queue/max_attempts_test.go`,
-`internal/api/attempts_test.go`). With all three applied, the same live run passes all 11 checks.
-All three landed on the private controller on 2026-10-22, after `a52a1c4`, so the result above
-is still the as-is one. ADR-0026 does not port the opt-in of `0002`: with no HTTP passthrough, the
-controller ported into `orchestrator/` refuses an unknown `agent_key` (404) unconditionally, and
-`request_body` and `reject_unknown_agent_keys` are not ported.
-
-Other findings, not MUST failures:
-
-- **Idempotency keys are global and never expire** in the private controller at `a52a1c4`. A
-  repeated key returns the first run even when the `agent_key` differs. The adapter therefore
-  namespaces every key per run. In this repository's store a key is scoped to its submitter
-  (`orchestrator/internal/store`, below).
-- **A submit cannot be held.** A cancel sent right after a submit races the next 2 s tick, so
-  `cancel-before-start-never-runs` can in principle flake against a live controller.
-- **No authentication**, and **no list or events endpoint**. Listing runs is now an optional
-  feature of the contract (`list-runs`, below), which the adapter does not declare; events and
-  authentication are not part of it.
-
-### Running it live
+### Running it
 
 ```bash
-# controller (with 0001 applied, or the as-is binary in a mount namespace with a stub register)
-mkdir -p lab/bin lab/profiles lab/homes/local lab/homes/cloud
-ln -s "$PWD/conformance/fakes/llm_orchestrator_hermes.py" lab/bin/hermes
-cat > lab/controller.yaml <<'EOF'
-db_path: lab/controller.db
-http_addr: 127.0.0.1:18088                # no-raw-endpoint: allow a dev controller on loopback
-lock_path: lab/gateway.lock
-profiles_dir: lab/profiles
-lessons_path: lab/lessons.yml          # "lessons: []" is enough
-runbooks_path: lab/runbooks.yml
-reject_unknown_agent_keys: true        # 0002
-backends:
-  local: {name: primary-local, base_url: "http://127.0.0.1:9", needs_interlock: false}  # no-raw-endpoint: allow a dead port on purpose
-  cloud: {name: cloud-fallback, base_url: "http://127.0.0.1:9"}  # no-raw-endpoint: allow a dead port on purpose
-hermes_local_home: lab/homes/local
-hermes_cloud_home: lab/homes/cloud
-hermes_agent_timeout_seconds: 60
-EOF
-PATH="$PWD/lab/bin:$PATH" ./controller -config lab/controller.yaml &
-
-export HNX_ENDPOINT_ORCHESTRATION=http://127.0.0.1:18088  # no-raw-endpoint: allow the dev controller above
-export HNX_ORCHESTRATION_PROFILES_DIR="$PWD/lab/profiles"
-hnx conform run orchestration --target orchestration-llm-orchestrator
+make orchestration-conformance   # builds orchestrator/cmd/controller, then the suite, strict
 ```
 
-Both backends point at a dead loopback port on purpose. A profiled job never reaches them, because
-the stand-in does not call a model. The passthrough path that an unknown `agent_key` falls into
-fails the way it does in production when no backend answers.
+`tools/orchestration_conformance.py run --controller BIN --work DIR [--check ID] [--strict]` is
+the same without the build; it needs no network beyond loopback.
 
 ## Model calls through the gateway
 
@@ -1246,15 +1192,11 @@ privileged test with a size-limited mount.
 
 PR 2.7a (#331) and PR 2.7b leave these, each with the reason it was not done:
 
-- **PR 2.7c, in two parts.** The first (this one) adds the `orchestration-conformance` job, which
-  `go-ok` requires: it builds `cmd/controller`, runs `make controller-check`, and runs
-  `tools/orchestration_conformance.py run --strict` in the network namespace, as the runner user
-  under no_new_privs (ADR-0026 decision 14). The second retires the recorded stand-in (decision
-  15): the stand-in, its target, the adapter's `fixes:` machinery and the adapter tests that
-  drive the stand-in, the adapter's rename to `orchestrator.py`, the priority proof moved onto the
-  binary, and the test that no `-recorded` orchestration target and no `internal/hermesagent`
-  cite remain under `conformance/`. It is separate because it rewrites the conformance tests that
-  run against the stand-in today.
+- **PR 2.7c, done in two parts:** the `orchestration-conformance` job, which `go-ok` requires
+  (ADR-0026 decision 14), and the recorded stand-in's retirement (decision 15). The example
+  registry's controller row (`agent-runtime`, version `0.3.0` at the pinned `a52a1c4`) moves to
+  this repository's controller with decision 16's rename of the row to `orchestrator`, so the
+  row, its goldens and `METRICS_SERVED` change once.
 - **After ADR-0039's `hnx registry bindings` (its step 5) merges: decision 16's wire names and the
   consumer check.** This covers the packs' `svc:orchestrator` target, the declared overlap source,
   the example registry row and the consumer check of `svc:llm-orchestrator`. The ADR makes PR 2.7
@@ -1383,15 +1325,13 @@ local-only moves to a cloud backend that satisfies the job's constraints.
 Each MUST check has a mutant that it catches and no other check catches
 (`orchestration-features` is in `ONLY_ITS_OWN` of `tests/conform_sweeps/test_conform_mutants.py`).
 
-The `llm_orchestrator` adapter declares `priority` and none of the others. The job API takes a
-priority from 1 to 100 and admits the lowest number first, then submit order (`handlers.go:97-111`
-and the scheduler's queue order, as the recorded stand-in models them). The adapter sends the
-number it is given and refuses one outside that range. Its `capacity()` reports no limit, so the
-priority check skips there, and no target file binds `orchestration-features`. The claim is
-proved offline instead: `tests/conform/test_conform_orchestration_features.py` drives the
-recorded stand-in at the controller's default concurrency of 1, queues a priority-9 job and then
-a priority-1 job behind a busy slot, and requires the priority-1 job to start first. Against a
-live controller it is still unmeasured. The job API reports neither the backend nor the lane an attempt ran
+The `orchestrator` adapter declares `priority` and none of the others. The job API takes a
+priority from 1 to 100 and admits the lowest number first, then submit order. The adapter sends
+the number it is given and refuses one outside that range. Its `capacity()` reports no limit, so
+the priority check skips there, and no target file binds `orchestration-features`. The claim is
+held on the binary instead: `tests/conform/test_conform_orchestration_features.py` starts the
+controller at concurrency 1, queues a priority-9 job and then a priority-1 job behind a busy slot,
+and requires the priority-1 job to start first. The job API reports neither the backend nor the lane an attempt ran
 on, so it cannot show `shadow`, `constraints` or `local-only` being honoured, even though the
 controller has shadow lanes and `local_only` profiles. It has no list route for `list-runs`. A
 controller-side route that reports placements is what would let the adapter declare those

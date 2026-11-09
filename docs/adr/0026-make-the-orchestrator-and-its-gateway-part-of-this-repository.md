@@ -436,7 +436,7 @@ release" is the release at which the controller cuts over, and "cutover+1" the r
       fact about one lab agent becomes an invariant criterion in the overlay's register, run by
       `homelabnext/invariants` and the overlay's checks job (ADR-0049). A test that fits neither
       is recorded on the ledger as dropped, with its reason. The overlay's checks job runs both.
-15. **The recorded stand-in retires in PR 2.7.** `conformance/fakes/llm_orchestrator_api.py`
+15. **The recorded stand-in retires in PR 2.7.** The stand-in (`llm_orchestrator_api.py` in `conformance/fakes/`, deleted by PR 2.7c)
     models a private commit and cites private `file:line` shapes; once the controller is built
     here it is a second thing to keep true.
     - **PR 2.6** (the API) moves the stand-in to the ported behaviour (no passthrough, an unknown
