@@ -3,13 +3,14 @@
 """The development launcher's per-run supervisor: what the unit's cgroup is under the unit
 launcher (ADR-0051 decisions 7 and 9), for a host with no systemd.
 
-    agent_runner_supervisor.py EXIT_FILE [--group-only] -- BODY [ARG...]
+    agent_runner_supervisor.py RECORD_FD [--group-only] -- BODY [ARG...]
 
 It makes itself a child subreaper (``PR_SET_CHILD_SUBREAPER``), so a descendant that calls
 ``setsid`` and whose parent exits is re-parented to it, and starts the body in a session of its
 own. When the body exits, or on SIGTERM (the launcher's stop), it kills every descendant left,
 the re-parented ones included, and reaps them, as a unit's stop ends its whole cgroup. It writes
-how the body ended to EXIT_FILE, a new file it creates (``{"code": N}`` or ``{"signal": N}``,
+how the body ended to the pipe RECORD_FD, an inherited descriptor the body never gets (no file
+under the run's root, where a body could plant one first): ``{"code": N}`` or ``{"signal": N}``,
 ``"stopped": true`` when the launcher stopped it, and ``"survivors"`` naming any process still
 alive after its sweep), then exits. It keeps the body's status whoever reaps it, and signals a
 process only through a pidfd after checking through it that the process is still its
@@ -121,7 +122,7 @@ def _reap() -> None:
 
 
 def main(argv: list[str]) -> int:
-    exit_file = argv[0]
+    record_fd = int(argv[0])
     group_only = "--group-only" in argv[: argv.index("--")]
     cmd = argv[argv.index("--") + 1 :]
     libc = ctypes.CDLL(None, use_errno=True)
@@ -156,9 +157,7 @@ def main(argv: list[str]) -> int:
         ended["code"] = os.WEXITSTATUS(status)
     if survivors:
         ended["survivors"] = sorted(set(survivors))
-    # a new file only: never through a link a body planted, never over one that is there
-    fd = os.open(exit_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w", encoding="ascii") as f:
+    with os.fdopen(record_fd, "w", encoding="ascii") as f:
         json.dump(ended, f)
     return 0
 

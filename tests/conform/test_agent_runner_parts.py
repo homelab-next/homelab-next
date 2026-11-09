@@ -27,7 +27,7 @@ class _NoGateway:
         return 0
 
     def watermark(self):
-        return time.time() + 60
+        return 2_000_000_000.0  # later than any run's end below
 
 
 def test_the_body_sends_the_run_token_in_the_shared_header():
@@ -35,13 +35,14 @@ def test_the_body_sends_the_run_token_in_the_shared_header():
     assert body.RUN_TOKEN_HEADER == RUN_TOKEN_HEADER == "X-HNX-Run-Token"
 
 
-def test_a_stop_keeps_the_bodys_status_when_the_sweep_reaps_it(tmp_path):
+def test_a_stop_keeps_the_bodys_status_when_the_sweep_reaps_it():
     """The SIGTERM handler's sweep reaps every child, the body included: the supervisor must
     record the body's own end (killed by the sweep's SIGKILL), never a clean exit."""
-    exit_file = tmp_path / "exit.json"
+    rd, wr = os.pipe()
     sup = subprocess.Popen(
-        [sys.executable, "-I", str(SUPERVISOR), str(exit_file), "--", "sleep", "30"]
+        [sys.executable, "-I", str(SUPERVISOR), str(wr), "--", "sleep", "30"], pass_fds=(wr,)
     )
+    os.close(wr)
     try:
         deadline = time.monotonic() + 10
         while not _has_child(sup.pid) and time.monotonic() < deadline:
@@ -50,7 +51,8 @@ def test_a_stop_keeps_the_bodys_status_when_the_sweep_reaps_it(tmp_path):
         assert sup.wait(30) == 0
     finally:
         sup.kill()
-    ended = json.loads(exit_file.read_text())
+    with os.fdopen(rd, "rb") as f:
+        ended = json.loads(f.read())
     assert ended == {"stopped": True, "signal": signal.SIGKILL}, ended
 
 
@@ -66,17 +68,58 @@ def _has_child(pid: int) -> bool:
     return False
 
 
-def test_the_exit_file_is_never_written_through_a_link(tmp_path):
-    target = tmp_path / "elsewhere"
-    target.write_text("untouched")
-    exit_file = tmp_path / "exit.json"
-    exit_file.symlink_to(target)
-    sup = subprocess.run(
-        [sys.executable, "-I", str(SUPERVISOR), str(exit_file), "--", "true"],
-        capture_output=True,
-        check=False,
-    )
-    assert sup.returncode != 0 and target.read_text() == "untouched"
+def _run(launcher, w, body=None, **kw):
+    from conformance.suites.agent_runner import _session
+
+    return _session(launcher, w, w.run(**kw), body=body)[1]
+
+
+def test_a_record_the_body_plants_is_never_read():
+    """The body shares the development launcher's uid and knows the run's root: a clean-exit
+    record it writes there must not hide how it really ended (exit 3, which nothing maps)."""
+    from conformance.fakes.agent_runner_launcher import DevLauncher
+    from conformance.suites.agent_runner import PROBE, World
+
+    w = World()
+    try:
+        out = _run(DevLauncher(gateway_wait_s=0.1), w, [sys.executable, "-I", str(PROBE), "plant"])
+    finally:
+        w.close()
+    assert (out.exit_code, out.cls) == (3, "Internal"), (out.exit_code, out.cls, out.detail)
+
+
+def test_the_launcher_refuses_a_spec_naming_another_gateway():
+    """The trusted launcher holds the pin itself, so the property does not rest on the body."""
+    from conformance.fakes.agent_runner_launcher import DevLauncher
+    from conformance.fakes.runner_world import FakeGateway
+    from conformance.suites.agent_runner import World
+
+    w, elsewhere = World(), FakeGateway()
+    try:
+        trusting = DevLauncher(
+            [sys.executable, "-I", str(body.__file__), "--mutant", "follows-spec-url"],
+            gateway_wait_s=0.1,
+        )
+        out = _run(trusting, w, gateway_url=elsewhere.url, pinned_gateway=w.gateway.url)
+    finally:
+        elsewhere.close()
+        w.close()
+    assert out.cls == "Internal" and "pinned" in out.detail, (out.cls, out.detail)
+    assert elsewhere.calls == []
+
+
+def test_a_supervisor_that_does_not_exit_0_loses_the_record():
+    """No record, or a supervisor that failed, is never read as a clean exit."""
+    from conformance.fakes.agent_runner_launcher import DevLauncher, _Run
+
+    rd, wr = os.pipe()
+    os.write(wr, b'{"stopped": false, "code": 0}')
+    os.close(wr)
+    proc = subprocess.Popen([sys.executable, "-c", "raise SystemExit(1)"])
+    proc.wait()
+    h = _Run(run=None, gateway=None, root=Path("/nonexistent"), proc=proc)  # type: ignore[arg-type]
+    h.record_fd = rd
+    assert DevLauncher()._record(h) == {"lost": True}
 
 
 @pytest.mark.parametrize(
@@ -86,7 +129,7 @@ def test_the_exit_file_is_never_written_through_a_link(tmp_path):
 def test_a_run_whose_end_is_not_clean_is_internal(ended, why):
     cls, detail = classify(
         stopped=None, ended=ended, records=[{"type": "end", "turns": 1}], why_invalid="",
-        exit_classes={}, gateway=_NoGateway(), tag="t", end_time=time.time(),
+        exit_classes={}, gateway=_NoGateway(), tag="t", end_time=1_000_000_000.0,
     )  # fmt: skip
     assert cls == "Internal" and why in detail, (cls, detail)
 
@@ -133,3 +176,29 @@ def test_every_launcher_rule_check_runs_on_every_target():
     from homelabnext.conform.registry import load_module
 
     assert [s.id for s in load_module("agent-runner").SUITE.specs if s.requires] == []
+
+
+def test_a_stall_timeout_under_twice_the_gateway_wait_is_refused():
+    """A stall shorter than the time records may take to arrive would stall runs whose records
+    are merely late: the launcher refuses it before starting anything (ADR-0051 decision 10)."""
+    from conformance.fakes.agent_runner_launcher import DevLauncher, min_stall_timeout
+    from conformance.suites.agent_runner import World
+
+    assert min_stall_timeout(2.0) == pytest.approx(4.05)
+    w = World()
+    try:
+        out = _run(DevLauncher(gateway_wait_s=1.0), w, limits={"stall_timeout_s": 1.5})
+    finally:
+        w.close()
+    assert out.cls == "Internal" and "stall_timeout_s" in out.detail, (out.cls, out.detail)
+    assert w.gateway.calls == []
+
+
+@pytest.mark.parametrize(
+    "check", ["stale-records-freeze-the-stall-timer", "an-old-drop-does-not-stale-a-new-run"]
+)
+def test_the_stale_record_checks_pass_on_the_fake(check):
+    from homelabnext.conform import run_capability
+
+    (res,) = run_capability("agent-runner", "fake", only=[check]).results
+    assert res.status == "pass", res.evidence

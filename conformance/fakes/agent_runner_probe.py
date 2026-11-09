@@ -15,6 +15,8 @@ The modes:
 - ``deep`` writes a record nested past 8;
 - ``spaced N`` makes N model calls 0.15 s apart, each written as a record in JSON with spaces
   (``json.dumps``'s default), then ends cleanly;
+- ``plant`` writes a clean-exit record where a launcher might read one (the run's root), then
+  exits 3;
 - ``claim CLASS`` ends with that class after the calls its following arguments ask for:
   ``ok`` (a call the gateway answers) or ``rejected`` (a call it refuses with 400
   ``upstream_rejected``), in order, then exits 1.
@@ -115,6 +117,13 @@ def main(argv: list[str]) -> int:
             deep = {"x": deep}
         _write(json.dumps(deep))
         return 0
+    if mode == "plant":
+        root = os.path.dirname(os.environ["HNX_RUN_DIR"].rstrip("/"))
+        planted = os.path.join(root, "exit.json")
+        with contextlib.suppress(OSError), open(planted, "w", encoding="ascii") as f:
+            json.dump({"stopped": False, "code": 0}, f)
+        _write(json.dumps({"type": "end", "turns": 0}))
+        return 3
     if mode == "spaced":
         key = _cred("gateway-key").decode().strip()
         for i in range(int(args[0])):

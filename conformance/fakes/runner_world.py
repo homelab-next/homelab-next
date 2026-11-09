@@ -13,8 +13,9 @@ Its refusals follow the gateway's wire format:
 - ``403 run_budget_exhausted`` names ``budget``, ``limit`` and ``used`` (ADR-0047 decision 7) and
   is recorded.
 
-``lag_s`` delays when a record becomes visible, and ``dropped`` stands for the gateway's
-``usage_records_dropped``. The run token travels in ``RUN_TOKEN_HEADER``
+``lag_s`` delays when a record becomes visible, and ``dropped_records`` stands for the gateway's
+``usage_records_dropped``, which is cumulative since the gateway started: the launcher counts only
+what was dropped after a run began. The run token travels in ``RUN_TOKEN_HEADER``
 (:mod:`homelabnext.orchestration.trace`), the one name ADR-0051 decision 13 fixes.
 
 :class:`FakeMCP` is an HTTP JSON-RPC MCP server that records each ``tools/call``'s params, its

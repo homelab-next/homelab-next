@@ -283,21 +283,61 @@ def _stall(r, w):
 
 @SUITE.check(
     "stall-counts-only-corroborated-progress",
-    "progress counts only gateway-corroborated calls: written records alone are no progress, "
-    "and records the gateway dropped or that lag are no progress either, however busy the body",
+    "progress counts only gateway-corroborated calls: written records alone are no progress; "
+    "while the gateway's records cannot be judged the stall timer is frozen, so a busy body is "
+    "bounded by its ceiling, never kept alive by CPU time",
 )
 @_with_world
-def _stall_fallback(r, w):
+def _stall_corroborated(r, w):
     lim = {"stall_timeout_s": 0.3, "liveness": "progress", "timeout_s": 0.9}
     _, out = _session(r, w, w.run(limits=lim), body=_probe("records", "40"))
     assert out.cls == "Stalled", (
         f"call records the gateway never answered counted as progress: {out.cls} ({out.detail})"
     )
-    w.gateway.dropped_records = 1
+    w.gateway.lag_s = 300.0  # the records cannot be judged for the whole run
     _, out = _session(r, w, w.run(limits=lim), body=_probe("spin"))
+    assert out.cls == "TimeoutCeiling", (
+        "a session burning CPU while the gateway's records could not be judged ended "
+        f"{out.cls} ({out.detail}), not at its ceiling"
+    )
+
+
+@SUITE.check(
+    "stale-records-freeze-the-stall-timer",
+    "a stale window longer than stall_timeout_s neither stalls a run nor resets its timer: a run "
+    "that makes progress once the records recover ends healthy",
+)
+@_with_world
+def _frozen(r, w):
+    import threading
+
+    w.gateway.lag_s = 300.0
+    threading.Timer(0.8, lambda: setattr(w.gateway, "lag_s", 0.0)).start()
+    lim = {"stall_timeout_s": 0.35, "liveness": "progress", "timeout_s": 10}
+    _, out = _session(r, w, w.run(limits=lim), body=_probe("spaced", "10"))
+    assert out.cls is None, (
+        f"a run whose records were late for longer than its stall timeout ended {out.cls} "
+        f"({out.detail})"
+    )
+
+
+@SUITE.check(
+    "an-old-drop-does-not-stale-a-new-run",
+    "dropped records count from the run's start: drops before it neither freeze its stall timer "
+    "nor leave its claims uncorroborated",
+)
+@_with_world
+def _old_drop(r, w):
+    w.gateway.dropped_records = 7  # cumulative since the gateway started, before this run
+    lim = {"stall_timeout_s": 0.3, "liveness": "progress", "timeout_s": 3}
+    _, out = _session(r, w, w.run(limits=lim), body=_probe("records", "40"))
     assert out.cls == "Stalled", (
-        "a session burning CPU while the gateway dropped records was judged alive: "
-        f"{out.cls} ({out.detail})"
+        f"an old drop kept a run without progress from stalling: {out.cls} ({out.detail})"
+    )
+    run = w.run(script=[{"status": 400}])
+    _, out = _session(r, w, run, body=_probe("claim", "ContextExceeded", "rejected"))
+    assert out.cls == "ContextExceeded", (
+        f"an old drop left a corroborated claim unjudged: {out.cls} ({out.detail})"
     )
 
 
@@ -415,13 +455,15 @@ def _corroborate(r, w):
     )
     _, out = _session(r, w, w.run(), body=_probe("claim", "ContextExceeded"))
     assert out.cls == "Internal", f"an uncorroborated claim ended {out.cls} ({out.detail})"
-    w.gateway.dropped_records = 1
     run = w.run(script=[{"status": 400}])
-    _, out = _session(r, w, run, body=_probe("claim", "ContextExceeded", "rejected"))
+    h = r.start(run, w.gateway, body=_probe("claim", "ContextExceeded", "rejected"))
+    w.handles.append((r, h))
+    w.gateway.dropped_records += 1  # a drop during the run
+    out = r.wait(h, WAIT_S)
     assert out.cls == "Internal", (
-        f"a claim judged while the gateway dropped records ended {out.cls} ({out.detail})"
+        f"a claim judged while the gateway dropped this run's records ended {out.cls} "
+        f"({out.detail})"
     )
-    w.gateway.dropped_records = 0
     w.gateway.lag_s = 300.0  # the records never cover the run's end within the wait
     run = w.run(script=[{"status": 400}])
     _, out = _session(r, w, run, body=_probe("claim", "ContextExceeded", "rejected"))
@@ -613,9 +655,20 @@ def _m(factory, check, description, features=()):
 
 MUTANTS = {
     "follows-spec-url": _m(
-        _body_mutant("follows-spec-url"),
+        lambda: DevLauncher(
+            [
+                sys.executable,
+                "-I",
+                str(HERE / "agent_runner_body.py"),
+                "--mutant",
+                "follows-spec-url",
+            ],
+            mutant="trusts-spec-gateway",
+            gateway_wait_s=FAKE_WAIT_S,
+        ),
         "gateway-url-is-pinned",
-        "the body sends the run's key to whatever gateway the spec names",
+        "a launcher that does not check the spec's gateway, and a body that sends the run's key "
+        "to whatever gateway the spec names",
     ),
     "drops-meta": _m(
         _body_mutant("drops-meta"),
@@ -652,6 +705,7 @@ MUTANTS = {
                 "runs-spec-command",
             ],
             mutant="no-spec-check",
+            gateway_wait_s=FAKE_WAIT_S,
         ),
         "servers-come-from-the-grants-file",
         "the launcher passes a spec with a server command and the body runs it",

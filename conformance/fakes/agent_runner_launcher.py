@@ -122,12 +122,15 @@ def parse_stream(raw: bytes | None, limit: int = MAX_USAGE_BYTES) -> tuple[list[
     return out, ""
 
 
-def _wait_records(gateway: GatewayView, tag: str, end: float, wait_s: float) -> list[dict] | None:
+def _wait_records(
+    gateway: GatewayView, tag: str, end: float, wait_s: float, drops_before: int = 0
+) -> list[dict] | None:
     """The gateway's records for ``tag`` once they cover ``end``, or None when they do not
-    within ``wait_s`` or the gateway dropped records (the claim cannot be judged)."""
+    within ``wait_s`` or the gateway dropped records since the run started (``dropped()`` is
+    cumulative; ``drops_before`` is its value then): the claim cannot be judged."""
     deadline = time.monotonic() + wait_s
     while True:
-        if gateway.dropped() > 0:
+        if gateway.dropped() > drops_before:
             return None
         if gateway.watermark() >= end:
             return gateway.records(tag)
@@ -158,12 +161,13 @@ def classify(
     tag: str,
     end_time: float,
     wait_s: float = GATEWAY_WAIT_S,
+    drops_before: int = 0,
 ) -> tuple[str | None, str]:
     """The attempt's class and why (ADR-0051 decisions 6 and 10)."""
     if ended.get("survivors"):
         return "Internal", f"{len(ended['survivors'])} process(es) of the run survived its end"
     if ended.get("lost"):
-        return "Internal", "the body's exit status was lost"
+        return "Internal", "the supervisor's record of how the body ended was lost"
     if stopped:
         return {
             "cancel": "KilledByController",
@@ -178,14 +182,14 @@ def classify(
     code = int(ended.get("code", -1))
     end = records[-1] if records and records[-1].get("type") == "end" else None
     if end is not None and end.get("budget_exhausted"):
-        seen = _wait_records(gateway, tag, end_time, wait_s)
+        seen = _wait_records(gateway, tag, end_time, wait_s, drops_before)
         if seen and any(
             r.get("status") == 403 and r.get("error_code") == "run_budget_exhausted" for r in seen
         ):
             return "BudgetExhausted", f"budget {end['budget_exhausted']}, refused by the gateway"
     claim = (end or {}).get("class")
     if claim == "ContextExceeded":
-        seen = _wait_records(gateway, tag, end_time, wait_s)
+        seen = _wait_records(gateway, tag, end_time, wait_s, drops_before)
         if seen is not None and corroborates_context(seen):
             return "ContextExceeded", "corroborated by the gateway's 400 upstream_rejected"
         return "Internal", "ContextExceeded claimed, not corroborated by the gateway's records"
@@ -200,6 +204,13 @@ def classify(
     return "Internal", f"exit status {code}, not mapped"
 
 
+def min_stall_timeout(gateway_wait_s: float) -> float:
+    """The shortest ``stall_timeout_s`` a launcher accepts: twice its gateway wait plus one poll
+    interval, so records that are merely late can never be what stalls a run (ADR-0051 decision
+    10)."""
+    return 2 * gateway_wait_s + POLL_S
+
+
 @dataclass
 class _Run:
     run: RunInputs
@@ -210,6 +221,9 @@ class _Run:
     stopped: str | None = None
     refused: str = ""
     progress: int = 0
+    record_fd: int = -1
+    #: the gateway's cumulative dropped-record count when the run started
+    drops_before: int = 0
     monitor: threading.Thread | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -296,7 +310,7 @@ class DevLauncher:
         self, run: RunInputs, gateway: GatewayView, *, body: Sequence[str] | None = None
     ) -> _Run:
         root = Path(tempfile.mkdtemp(prefix="hnx-run-"))
-        h = _Run(run, gateway, root, None)
+        h = _Run(run, gateway, root, None, drops_before=gateway.dropped())
         if self.mutant != "no-spec-check":
             from homelabnext.schema_registry import validator
 
@@ -304,6 +318,20 @@ class DevLauncher:
             if errors:
                 h.refused = "the session spec does not validate: " + errors[0].message[:200]
                 return h
+        stall = run.spec.get("limits", {}).get("stall_timeout_s", 0)
+        if stall and stall < min_stall_timeout(self.gateway_wait_s):
+            h.refused = (
+                f"stall_timeout_s {stall} is under {min_stall_timeout(self.gateway_wait_s):.2f}: "
+                "a stall must outlast twice the gateway wait and a poll"
+            )
+            return h
+        if self.mutant not in ("no-spec-check", "trusts-spec-gateway") and (
+            run.spec.get("target", {}).get("gateway_url") != run.gateway_url
+        ):
+            # the key, the tokens and the prompt go only to the gateway the deploy pinned, whatever
+            # the provider's body would do with the spec (ADR-0051 decision 2)
+            h.refused = "the session spec names a gateway other than the pinned one"
+            return h
         for d in (h.indir, h.outdir):
             d.mkdir(mode=0o700)
         files = {"spec": json.dumps(dict(run.spec)).encode(), **run.inputs}
@@ -323,7 +351,12 @@ class DevLauncher:
             "HNX_GATEWAY_URL": run.gateway_url,
         }
         argv = list(body) if body else list(self.body)
-        sup = [sys.executable, "-I", str(SUPERVISOR), str(root / "exit.json")]
+        # how the body ended comes back on a pipe the supervisor inherits and the body does not
+        # (Popen closes every other descriptor), never as a file under the run's root, where a
+        # body sharing the uid could plant one first
+        rd, wr = os.pipe()
+        h.record_fd = rd
+        sup = [sys.executable, "-I", str(SUPERVISOR), str(wr)]
         if self.mutant == "kills-only-process-group":
             sup.append("--group-only")
         log = open(root / "body.log", "wb")  # noqa: SIM115 - closed with the run
@@ -334,7 +367,9 @@ class DevLauncher:
             stderr=log,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
+            pass_fds=(wr,),
         )
+        os.close(wr)
         log.close()
         h.monitor = threading.Thread(target=self._watch, args=(h,), daemon=True)
         h.monitor.start()
@@ -355,7 +390,7 @@ class DevLauncher:
         if handle.monitor is not None:
             handle.monitor.join(5)
         end_time = time.time()
-        ended = json.loads(read_bounded(handle.root / "exit.json", 4096) or b"{}")
+        ended = self._record(handle)
         records, why = parse_stream(
             read_bounded(handle.outdir / "usage.jsonl", self.max_usage_bytes),
             self.max_usage_bytes,
@@ -371,11 +406,26 @@ class DevLauncher:
             tag=str(handle.run.spec.get("gateway_tag", "")),
             end_time=end_time,
             wait_s=self.gateway_wait_s,
+            drops_before=handle.drops_before,
         )
         if self.mutant != "keeps-inputs":
             shutil.rmtree(handle.indir, ignore_errors=True)
         answer = answer_raw.decode("utf-8", "replace") if answer_raw is not None else None
         return Outcome(cls, answer, records, ended.get("code"), detail)
+
+    def _record(self, h: _Run) -> dict[str, Any]:
+        """The supervisor's record of how the body ended, read from its pipe; a supervisor that
+        did not exit 0, or a record that is not one, is ``{"lost": True}`` (``Internal``)."""
+        assert h.proc is not None
+        with os.fdopen(h.record_fd, "rb") as f:
+            raw = f.read(4097)
+        if h.proc.returncode != 0 or len(raw) > 4096:
+            return {"lost": True}
+        try:
+            doc = json.loads(raw or b"null")
+        except ValueError:
+            return {"lost": True}
+        return doc if isinstance(doc, dict) else {"lost": True}
 
     def leftovers(self, handle: _Run) -> list[str]:
         return sorted(str(p) for p in handle.indir.glob("*")) if handle.indir.exists() else []
@@ -397,8 +447,10 @@ class DevLauncher:
         limits = h.run.spec["limits"]
         tag = str(h.run.spec["gateway_tag"])
         last, mark = None, time.monotonic()
+        tick = mark
         while h.proc.poll() is None:
             now = time.monotonic()
+            elapsed, tick = now - tick, now
             if now - h.started >= limits["timeout_s"]:
                 return self._stop(h, "ceiling")
             usage = h.outdir / "usage.jsonl"
@@ -410,24 +462,30 @@ class DevLauncher:
                 return self._stop(h, "resource")
             if limits["stall_timeout_s"]:
                 seen = self._progress(h, tag, limits["liveness"], usage)
-                if seen != last:
+                if seen is None:
+                    # the gateway's records cannot be judged: the stall timer is frozen, neither
+                    # advanced nor reset, and the ceiling still bounds the run
+                    mark += elapsed
+                elif seen != last:
                     last, mark = seen, now
                 elif now - mark >= limits["stall_timeout_s"]:
                     return self._stop(h, "stall")
             time.sleep(POLL_S)
         return None
 
-    def _progress(self, h: _Run, tag: str, liveness: str, usage: Path) -> tuple[str, int]:
+    def _progress(self, h: _Run, tag: str, liveness: str, usage: Path) -> tuple[str, int] | None:
+        """The run's progress mark, or None while the gateway's records cannot be judged."""
         assert h.proc is not None
         if liveness == "cpu":
             return ("cpu", _cpu_ticks(h.proc.pid))
         g = h.gateway
-        fresh = g.dropped() == 0 and g.watermark() >= time.time() - self.gateway_wait_s
+        fresh = g.dropped() <= h.drops_before and g.watermark() >= time.time() - self.gateway_wait_s
         if not fresh:
-            # records that lag past the gateway wait, or were dropped, are no progress: falling
-            # back to CPU would let a body that floods the gateway into dropping records then
-            # busy-loop to stay alive (ADR-0051 decision 10)
-            return ("progress", h.progress)
+            # records that lag past the gateway wait, or were dropped since the run started, can
+            # be judged neither way: no CPU fallback (a body could flood the gateway into
+            # dropping records, then busy-loop), and no stall either (one drop must not stall-
+            # kill every run); the timer is frozen (ADR-0051 decision 10)
+            return None
         calls = _count_calls(read_bounded(usage, self.max_usage_bytes) or b"")
         answered = sum(1 for r in g.records(tag) if r.get("status") == 200)
         h.progress = max(h.progress, min(calls, answered))
