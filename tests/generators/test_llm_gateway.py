@@ -266,6 +266,47 @@ def test_a_registry_service_in_a_cloud_zone_is_not_local(tmp_path):
     assert "inference.svc.example.internal" in files["litellm/config.yaml"]
 
 
+def test_a_primary_alias_host_meets_the_registry_s_locality_check(tmp_path):
+    # the alias names the registry service: a self-declared host may not skip its zone check
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    port = doc["services"]["inference"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-alias": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": port,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-alias"
+    reg = registry_with(tmp_path, "cloud")
+    with pytest.raises(
+        gw.GatewaySpecError, match=r"registry service inference .*is not in a lab zone"
+    ):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    reg = registry_with(tmp_path, "compute")
+    gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_primary_alias_host_with_another_scheme_is_refused(tmp_path):
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    svc = doc["services"]["inference"]
+    other = "http" if svc.get("tls", "none") != "none" or svc["protocol"] == "https" else "https"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-alias": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": svc["port"],
+            "scheme": other,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-alias"
+    reg = registry_with(tmp_path, "compute")
+    with pytest.raises(gw.GatewaySpecError, match=f"scheme {other} is not registry service"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
 def test_a_cloud_api_domain_named_as_the_lab_domain_is_refused(tmp_path):
     # the spec's own domain cannot make a provider's API internal (review of #32)
     host = {"locality": "local", "host": "x.api.anthropic.com", "port": 443, "scheme": "https"}
@@ -358,7 +399,7 @@ def test_the_primary_alias_with_a_candidate_s_port_is_refused(tmp_path):
     }
     roles = copy.deepcopy(ROLES)
     roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
-    with pytest.raises(gw.GatewaySpecError, match="is not the primary's port"):
+    with pytest.raises(gw.GatewaySpecError, match=r"is not registry service inference's port"):
         gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
 
 
@@ -392,7 +433,7 @@ def test_a_backend_with_no_host_is_held_to_its_default_alias(tmp_path):
         if ok:
             gw.render_file(spec)
         else:
-            with pytest.raises(gw.GatewaySpecError, match="is not the primary's port"):
+            with pytest.raises(gw.GatewaySpecError, match=r"is not registry service \S+'s port"):
                 gw.render_file(spec)
 
 

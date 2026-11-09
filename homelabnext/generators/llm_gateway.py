@@ -396,8 +396,9 @@ def _registry_host_problem(registry: Any, host: str, service_domain: str, port: 
     """Why a self-declared local ``host`` (with ``port``) in the registry's alias zone may not be
     a backend (ADR-0039 decision 3: a gateway backend binds only a primary):
 
-    * a capability's primary alias is allowed with the primary's own port only: a candidate
-      usually shares the primary's host, so the alias with another port reaches it;
+    * a capability's primary alias is that registry service, judged by the registry checks
+      (zone, port, scheme) before this is called: a candidate usually shares the primary's
+      host, so the alias with another port would reach it;
     * any other host with a label that names a registry row or capability is refused: a row's
       record (an ``eval`` or ``retiring`` row answers by its row name) or a made-up name under it.
 
@@ -406,15 +407,8 @@ def _registry_host_problem(registry: Any, host: str, service_domain: str, port: 
     from homelabnext.registry.model import STANDINGS
 
     prefix = host[: -len(service_domain) - 1]
-    primary = registry.by_capability(prefix)
-    if primary is not None:
-        if port != primary.port:
-            return (
-                f"host {host} is capability {prefix}'s primary alias, but port {port} is not the "
-                f"primary's port {primary.port}; another port on that host may be a candidate "
-                "(name the registry row as the backend)"
-            )
-        return None
+    if registry.by_capability(prefix) is not None:
+        return None  # a primary alias is the registry service (spec_from_dict's registry checks)
     rows = {r.name: r for r in registry.rows(*STANDINGS)}
     caps = {r.capability for r in rows.values()}
     for label in prefix.split("."):
@@ -562,23 +556,41 @@ def spec_from_dict(
                 "decision 3)"
             )
             continue
+        if svc is None and registry is not None:
+            # a self-declared host that is a capability's primary alias is that registry
+            # service: it meets the registry checks below (zone, port, scheme), never the
+            # self-declared path's, which does not know where the service runs
+            alias = str(b.get("host") or f"{name}.{svc_label}.{domain}").lower()
+            if alias.endswith("." + service_domain):
+                svc = registry.by_capability(alias[: -len(service_domain) - 1])
+            via = f" (host {alias} is its capability alias)" if svc is not None else ""
+        else:
+            via = ""
         if svc is not None:
             if _cloud_zone(registry, svc):
                 problems.append(
-                    f"{where}: registry service {name} is not in a lab zone, so it is not local"
+                    f"{where}: registry service {svc.name}{via} is not in a lab zone, so it is "
+                    "not local"
                 )
                 continue
             host = f"{svc.capability}.{svc_label}.{domain}".lower()
             if "port" in b and b["port"] != svc.port:
                 problems.append(
                     f"{where}: port {b['port']} (the spec or the serving plan) is not registry "
-                    f"service {name}'s port {svc.port}; the gateway would call one and the engine "
-                    "listen on the other (make them agree)"
+                    f"service {svc.name}'s port {svc.port}{via}; the gateway would call one and "
+                    "the engine listen on the other (make them agree; a second API port is a "
+                    "second registry row)"
                 )
                 continue
             if b.get("host") and str(b["host"]).lower() != host:
                 problems.append(
-                    f"{where}: host {b['host']} is not registry service {name}'s {host}"
+                    f"{where}: host {b['host']} is not registry service {svc.name}'s {host}"
+                )
+                continue
+            if "scheme" in b and str(b["scheme"]) != svc.scheme:
+                problems.append(
+                    f"{where}: scheme {b['scheme']} is not registry service {svc.name}'s "
+                    f"{svc.scheme}{via}"
                 )
                 continue
             port, scheme = svc.port, svc.scheme
