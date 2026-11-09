@@ -20,4 +20,14 @@ def test_agent_runner(check_id):
 
 
 def test_agent_runner_enough_checks_executed():
-    testing.assert_enough_executed(CAPABILITY)
+    """On the fake, no check can skip (none requires a feature), so the per-check tests above are
+    the run; another target is run whole, as every capability's is."""
+    if testing.target_name() != "fake":
+        testing.assert_enough_executed(CAPABILITY)
+        return
+    from homelabnext.conform.registry import load_module
+    from homelabnext.conform.runner import MIN_CHECKS
+
+    specs = load_module(CAPABILITY).SUITE.specs
+    assert len(specs) >= MIN_CHECKS
+    assert [s.id for s in specs if s.requires or s.skippable] == []

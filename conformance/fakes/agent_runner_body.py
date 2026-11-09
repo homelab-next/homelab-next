@@ -51,7 +51,11 @@ EXIT_CLASSES = {
     EXIT_REPORTED: "TurnFailed",
 }
 CALL_TIMEOUT_S = 60.0
+#: homelabnext.orchestration.trace.RUN_TOKEN_HEADER (this body imports nothing of the repository:
+#: tests/conform/test_agent_runner_parts.py holds the two equal)
+RUN_TOKEN_HEADER = "X-HNX-Run-Token"
 MUTANTS = (
+    "follows-spec-url",
     "drops-meta",
     "meta-to-non-local",
     "backend-key",
@@ -124,6 +128,11 @@ def main(argv: list[str]) -> int:
         token = _cred("run-token-gateway").decode().strip()
     out = os.environ["HNX_RUN_DIR"]
 
+    target = spec["target"]["gateway_url"]
+    if mutant != "follows-spec-url" and target != os.environ.get("HNX_GATEWAY_URL"):
+        # the key, the tokens and the prompt go only to the gateway the deploy pinned
+        print("agent_runner_body: the spec's gateway is not the pinned one", file=sys.stderr)
+        return EXIT_REFUSED
     raw = open(os.environ["HNX_GRANTS_FILE"], "rb").read()  # noqa: SIM115
     if "sha256:" + hashlib.sha256(raw).hexdigest() != os.environ.get("HNX_GRANTS_SHA256"):
         print("agent_runner_body: the grants file does not match its pin", file=sys.stderr)
@@ -145,7 +154,7 @@ def main(argv: list[str]) -> int:
     stream = Stream(os.path.join(out, "usage.jsonl"))
     trace_id = spec["trace"].split("-")[1]
     role = spec["target"]["model_role"]
-    url = spec["target"]["gateway_url"].rstrip("/") + "/v1/chat/completions"
+    url = target.rstrip("/") + "/v1/chat/completions"
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
     max_turns = spec["limits"]["max_turns"]
     turns = 0
@@ -162,7 +171,7 @@ def main(argv: list[str]) -> int:
             "traceparent": f"00-{trace_id}-{span}-01",
         }
         if token:
-            headers["X-HNX-Run-Token"] = token
+            headers[RUN_TOKEN_HEADER] = token
         req = urllib.request.Request(
             url,
             method="POST",

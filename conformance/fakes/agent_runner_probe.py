@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""A body the agent-runner suite runs under a launcher in place of the provider's (feature
-``body-override``), to check the launcher's own rules whatever the runtime does.
+"""A body the agent-runner suite runs under a launcher in place of the provider's, to check the
+launcher's own rules whatever the runtime does.
 
     agent_runner_probe.py MODE [ARG...]
 
@@ -13,6 +13,8 @@ The modes:
 - ``oversize N`` writes N bytes of valid records, then sleeps;
 - ``long-line`` writes one 17 KiB record;
 - ``deep`` writes a record nested past 8;
+- ``spaced N`` makes N model calls 0.15 s apart, each written as a record in JSON with spaces
+  (``json.dumps``'s default), then ends cleanly;
 - ``claim CLASS`` ends with that class after the calls its following arguments ask for:
   ``ok`` (a call the gateway answers) or ``rejected`` (a call it refuses with 400
   ``upstream_rejected``), in order, then exits 1.
@@ -22,6 +24,7 @@ Standard library only (``python3 -I``).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -60,30 +63,12 @@ def _call(spec: dict, key: str, answer: str) -> None:
             "traceparent": f"00-{spec['trace'].split('-')[1]}-{span}-01",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            r.read()
-        _write(
-            json.dumps(
-                {
-                    "type": "call",
-                    "role": spec["target"]["model_role"],
-                    "sized": False,
-                    "span_id": span,
-                }
-            )
-        )
-    except urllib.error.HTTPError:
-        _write(
-            json.dumps(
-                {
-                    "type": "call",
-                    "role": spec["target"]["model_role"],
-                    "sized": False,
-                    "span_id": span,
-                }
-            )
-        )
+    # a refusal is a call made all the same
+    with contextlib.suppress(urllib.error.HTTPError), urllib.request.urlopen(req, timeout=30) as r:
+        r.read()
+    # json.dumps's default spacing: the launcher must read records however they are spaced
+    rec = {"type": "call", "role": spec["target"]["model_role"], "sized": False, "span_id": span}
+    _write(json.dumps(rec))
 
 
 def main(argv: list[str]) -> int:
@@ -129,6 +114,13 @@ def main(argv: list[str]) -> int:
         for _ in range(9):
             deep = {"x": deep}
         _write(json.dumps(deep))
+        return 0
+    if mode == "spaced":
+        key = _cred("gateway-key").decode().strip()
+        for i in range(int(args[0])):
+            _call(spec, key, f"ok-{i}")
+            time.sleep(0.15)
+        _write(json.dumps({"type": "end", "turns": int(args[0])}))
         return 0
     if mode == "claim":
         key = _cred("gateway-key").decode().strip()

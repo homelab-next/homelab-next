@@ -14,8 +14,8 @@ Its refusals follow the gateway's wire format:
   is recorded.
 
 ``lag_s`` delays when a record becomes visible, and ``dropped`` stands for the gateway's
-``usage_records_dropped``. The run token travels as ``X-HNX-Run-Token``: ADR-0047 names the token
-but not its header, so this fake's header is the one its step 3 must match or change here.
+``usage_records_dropped``. The run token travels in ``RUN_TOKEN_HEADER``
+(:mod:`homelabnext.orchestration.trace`), the one name ADR-0051 decision 13 fixes.
 
 :class:`FakeMCP` is an HTTP JSON-RPC MCP server that records each ``tools/call``'s params, its
 ``_meta`` included.
@@ -32,6 +32,7 @@ from collections.abc import Callable
 from typing import Any
 
 from conformance.fakes._loopback import LOOPBACK
+from homelabnext.orchestration.trace import RUN_TOKEN_HEADER
 
 _IDS = itertools.count(1)
 
@@ -57,6 +58,24 @@ class _Server:
         self.httpd.server_close()
 
 
+def _request(h: http.server.BaseHTTPRequestHandler) -> bytes:
+    return h.rfile.read(int(h.headers.get("Content-Length") or 0))
+
+
+class _Fake:
+    """A loopback server whose requests go to the subclass's ``_handle``."""
+
+    def _serve(self) -> str:
+        self._server = _Server(self._handle)
+        return self._server.url
+
+    def _handle(self, h: http.server.BaseHTTPRequestHandler) -> None:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        self._server.close()
+
+
 def _reply(h: http.server.BaseHTTPRequestHandler, status: int, doc: Any) -> None:
     raw = json.dumps(doc).encode()
     try:
@@ -69,7 +88,7 @@ def _reply(h: http.server.BaseHTTPRequestHandler, status: int, doc: Any) -> None
         pass  # the session was stopped while the reply waited
 
 
-class FakeGateway:
+class FakeGateway(_Fake):
     """A scripted gateway: ``script(tag, [step, ...])`` answers that tag's calls in order, the
     last step repeating. A step is:
     - ``{"content": text}``, a final answer, sized unless ``"usage": False``;
@@ -84,8 +103,7 @@ class FakeGateway:
         self.dropped_records = 0
         self._scripts: dict[str, list[dict[str, Any]]] = {}
         self._lock = threading.Lock()
-        self._server = _Server(self._handle)
-        self.url = self._server.url
+        self.url = self._serve()
 
     def script(self, tag: str, steps: list[dict[str, Any]]) -> None:
         with self._lock:
@@ -103,13 +121,9 @@ class FakeGateway:
     def watermark(self) -> float:
         return time.time() - self.lag_s
 
-    def close(self) -> None:
-        self._server.close()
-
     # -- serving ----------------------------------------------------------------------------
     def _handle(self, h: http.server.BaseHTTPRequestHandler) -> None:
-        length = int(h.headers.get("Content-Length") or 0)
-        h.rfile.read(length)
+        _request(h)
         tag = h.headers.get("X-HNX-Tag") or ""
         tp = h.headers.get("traceparent") or ""
         auth = h.headers.get("Authorization") or ""
@@ -117,7 +131,7 @@ class FakeGateway:
             "tag": tag,
             "bearer": auth.removeprefix("Bearer "),
             "traceparent": tp,
-            "run_token": h.headers.get("X-HNX-Run-Token"),
+            "run_token": h.headers.get(RUN_TOKEN_HEADER),
         }
         with self._lock:
             self.calls.append(call)
@@ -189,20 +203,15 @@ class FakeGateway:
         _reply(h, 200, doc)
 
 
-class FakeMCP:
+class FakeMCP(_Fake):
     """An HTTP JSON-RPC MCP server answering every ``tools/call`` with ``ok``."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
-        self._server = _Server(self._handle)
-        self.url = self._server.url + "/mcp"
-
-    def close(self) -> None:
-        self._server.close()
+        self.url = self._serve() + "/mcp"
 
     def _handle(self, h: http.server.BaseHTTPRequestHandler) -> None:
-        length = int(h.headers.get("Content-Length") or 0)
-        req = json.loads(h.rfile.read(length) or b"{}")
+        req = json.loads(_request(h) or b"{}")
         self.calls.append(req.get("params") or {})
         _reply(
             h,

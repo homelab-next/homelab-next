@@ -5,7 +5,9 @@ The contract is a process contract (decision 1). A provider ships one **runner b
 **launcher** starts the body once per attempt and hands it these inputs:
 - the run's inputs as files under ``$CREDENTIALS_DIRECTORY``;
 - an output directory, ``$HNX_RUN_DIR``;
-- the deploy-rendered grants file, ``$HNX_GRANTS_FILE``, pinned by ``$HNX_GRANTS_SHA256``.
+- the deploy-rendered grants file, ``$HNX_GRANTS_FILE``, pinned by ``$HNX_GRANTS_SHA256``;
+- the gateway the deploy pins, ``$HNX_GATEWAY_URL``: the spec's ``target.gateway_url`` must be
+  exactly it, or the body makes no call and the session ends ``Internal``.
 
 The body appends one **usage stream** to ``$HNX_RUN_DIR/usage.jsonl``, writes its answer to
 ``$HNX_RUN_DIR/answer``, and exits. The launcher then decides the attempt's failure class from
@@ -18,9 +20,11 @@ controller, the deploy and the world. It builds:
 - the grants file and its pin (``schemas/runner/grants``);
 - a fake gateway and fake MCP servers.
 
-A target that declares ``body-override`` also runs a suite-supplied body under its launcher, so
-the launcher's own rules (exit statuses, stream bounds, what reaches the body) are checked
-whatever the provider's runtime does. The rules, one or more checks each:
+The subject is always a launcher with a body. A provider's target supplies only its body's argv
+and its ``exit_classes`` and runs under the reference launcher (later the controller's
+``runner/agent``); a launcher is certified by its own target. ``start`` also takes a suite body
+in place of the provider's, so the launcher's own rules (exit statuses, stream bounds, what
+reaches the body) are checked on every target, whatever the provider's runtime does. The rules, one or more checks each:
 
 a. *A session answers.* The answer and a valid stream ending in an ``end`` record come back, and
    a clean exit is no class (``None``).
@@ -98,6 +102,10 @@ class RunInputs:
     #: the grants file's exact bytes and the pin the deploy puts in the template
     grants: bytes
     grants_sha256: str
+    #: the gateway the deploy pins in the template (``$HNX_GATEWAY_URL``): the only place a body
+    #: sends the run's key, tokens and prompt; a spec naming another is refused (ADR-0051
+    #: decision 2)
+    gateway_url: str = ""
 
 
 @dataclass(frozen=True)

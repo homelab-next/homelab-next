@@ -14,12 +14,14 @@ it does:
 - **Supervision.** Each run is one `agent_runner_supervisor.py`, a child subreaper. Stopping the
   run (cancel, the ceiling, a stall, the stream bound) ends every descendant, as stopping a unit
   ends its cgroup.
-- **Liveness.** It stops a run with no progress for `stall_timeout_s`.
+- **Liveness.** It stops a run with no progress for `stall_timeout_s`. Its `cpu` reading is a
+  `/proc` scan, the development launcher's only: the unit launcher reads `cpu.stat`.
   - Progress is `call` records the gateway's records corroborate: the smaller of the stream's
     calls and the gateway's answered calls for the run's tag.
   - While the gateway's records lag (its watermark is more than `gateway_wait_s` behind) or it
-    dropped some, it falls back to `cpu` liveness: the run's processes' CPU time.
-  - `liveness: cpu` uses CPU time throughout.
+    dropped some, nothing counts as progress. It never falls back to CPU time, which a body that
+    floods the gateway into dropping records could keep busy.
+  - `liveness: cpu` uses the run's processes' CPU time throughout.
 - **Classification** (:func:`classify`): from why it stopped the run, how the body exited, the
   stream and the gateway's records, which it waits for up to `gateway_wait_s` (decisions 6 and
   10).
@@ -158,6 +160,10 @@ def classify(
     wait_s: float = GATEWAY_WAIT_S,
 ) -> tuple[str | None, str]:
     """The attempt's class and why (ADR-0051 decisions 6 and 10)."""
+    if ended.get("survivors"):
+        return "Internal", f"{len(ended['survivors'])} process(es) of the run survived its end"
+    if ended.get("lost"):
+        return "Internal", "the body's exit status was lost"
     if stopped:
         return {
             "cancel": "KilledByController",
@@ -203,6 +209,7 @@ class _Run:
     started: float = field(default_factory=time.monotonic)
     stopped: str | None = None
     refused: str = ""
+    progress: int = 0
     monitor: threading.Thread | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -215,7 +222,26 @@ class _Run:
         return self.root / "out"
 
 
+def _count_calls(raw: bytes) -> int:
+    """The ``call`` records of a growing stream, each line parsed within the stream's bounds (a
+    body may write JSON with any spacing); a line that is too long, too deep or not JSON (the last
+    one may still be being written) counts nothing."""
+    n = 0
+    for line in raw.splitlines():
+        if len(line) > MAX_LINE_BYTES:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("type") == "call" and _depth(rec) <= MAX_DEPTH:
+            n += 1
+    return n
+
+
 def _cpu_ticks(root: int) -> int:
+    """The run's processes' CPU time, by a ``/proc`` scan: the development launcher's only. The
+    unit launcher reads its unit's ``cpu.stat`` (ADR-0051 decision 10)."""
     total = 0
     for name in os.listdir("/proc"):
         if not name.isdigit():
@@ -258,7 +284,7 @@ class DevLauncher:
     ) -> None:
         from conformance.fakes.agent_runner_body import EXIT_CLASSES
 
-        self.features = frozenset({"body-override"})
+        self.features: frozenset[str] = frozenset()
         self.exit_classes = dict(EXIT_CLASSES if exit_classes is None else exit_classes)
         self.body = list(body) if body else [sys.executable, "-I", str(BODY)]
         self.mutant = mutant
@@ -294,6 +320,7 @@ class DevLauncher:
             "HNX_RUN_DIR": str(h.outdir),
             "HNX_GRANTS_FILE": str(grants),
             "HNX_GRANTS_SHA256": run.grants_sha256,
+            "HNX_GATEWAY_URL": run.gateway_url,
         }
         argv = list(body) if body else list(self.body)
         sup = [sys.executable, "-I", str(SUPERVISOR), str(root / "exit.json")]
@@ -391,15 +418,20 @@ class DevLauncher:
         return None
 
     def _progress(self, h: _Run, tag: str, liveness: str, usage: Path) -> tuple[str, int]:
+        assert h.proc is not None
+        if liveness == "cpu":
+            return ("cpu", _cpu_ticks(h.proc.pid))
         g = h.gateway
         fresh = g.dropped() == 0 and g.watermark() >= time.time() - self.gateway_wait_s
-        if liveness == "progress" and fresh:
-            raw = read_bounded(usage, self.max_usage_bytes) or b""
-            calls = raw.count(b'"type":"call"')
-            answered = sum(1 for r in g.records(tag) if r.get("status") == 200)
-            return ("progress", min(calls, answered))
-        assert h.proc is not None
-        return ("cpu", _cpu_ticks(h.proc.pid))
+        if not fresh:
+            # records that lag past the gateway wait, or were dropped, are no progress: falling
+            # back to CPU would let a body that floods the gateway into dropping records then
+            # busy-loop to stay alive (ADR-0051 decision 10)
+            return ("progress", h.progress)
+        calls = _count_calls(read_bounded(usage, self.max_usage_bytes) or b"")
+        answered = sum(1 for r in g.records(tag) if r.get("status") == 200)
+        h.progress = max(h.progress, min(calls, answered))
+        return ("progress", h.progress)
 
 
 def make(**config: Any) -> DevLauncher:

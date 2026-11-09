@@ -9,8 +9,11 @@ Each check plays the controller, the deploy and the world. It:
 - starts the session through the subject's launcher and judges the outcome, the gateway's and
   the MCP servers' records, and what is left behind.
 
-Checks marked ``body-override`` run a suite body (``conformance/fakes/agent_runner_probe.py``)
-under the launcher, to check the launcher's own rules whatever the runtime does.
+The subject is always a launcher. A provider's target supplies only its body's argv and its
+``exit_classes``, and runs under the reference launcher (later the controller's ``runner/agent``),
+which its own target certifies. So the checks of the launcher's own rules always run: they put a
+suite body (``conformance/fakes/agent_runner_probe.py``) under the launcher, whatever the
+provider's runtime does.
 
 These are the checks that need no systemd (ADR-0051 implementation step 2). The unit launcher's
 checks (isolation from the controller, sibling runs, an OOM kill, the polkit rule) come with that
@@ -47,7 +50,6 @@ PROBE = HERE / "agent_runner_probe.py"
 STDIO = HERE / "runner_mcp_stdio.py"
 WAIT_S = 60.0
 ROLE = "main-reasoner"
-OVERRIDE = ["body-override"]
 
 
 def _probe(*args: str) -> list[str]:
@@ -108,6 +110,7 @@ class World:
         script: list[dict] | None = None,
         limits: dict[str, Any] | None = None,
         gateway_url: str | None = None,
+        pinned_gateway: str | None = None,
         grants_pin: str | None = None,
         run_token: bool = True,
         **spec_extra: Any,
@@ -156,7 +159,8 @@ class World:
             }
         ).encode()
         pin = grants_pin or "sha256:" + hashlib.sha256(grants).hexdigest()
-        return RunInputs(spec, inputs, grants, pin)
+        url = gateway_url or self.gateway.url
+        return RunInputs(spec, inputs, grants, pin, pinned_gateway or url)
 
 
 def _session(
@@ -278,11 +282,9 @@ def _stall(r, w):
 
 
 @SUITE.check(
-    "stall-falls-back-to-cpu-while-records-lag",
-    "progress counts only gateway-"
-    "corroborated calls: written records alone are no progress, and while the gateway "
-    "dropped records the launcher judges cpu liveness instead",
-    requires=OVERRIDE,
+    "stall-counts-only-corroborated-progress",
+    "progress counts only gateway-corroborated calls: written records alone are no progress, "
+    "and records the gateway dropped or that lag are no progress either, however busy the body",
 )
 @_with_world
 def _stall_fallback(r, w):
@@ -293,13 +295,59 @@ def _stall_fallback(r, w):
     )
     w.gateway.dropped_records = 1
     _, out = _session(r, w, w.run(limits=lim), body=_probe("spin"))
-    assert out.cls == "TimeoutCeiling", (
-        "a session burning CPU while the gateway's records cannot be trusted was judged "
-        f"{out.cls} ({out.detail}), not left to its ceiling"
+    assert out.cls == "Stalled", (
+        "a session burning CPU while the gateway dropped records was judged alive: "
+        f"{out.cls} ({out.detail})"
     )
 
 
 # ----------------------------------------------------------------------------- e. classes
+@SUITE.check(
+    "progress-reads-any-json-spacing",
+    "a record is a record however its JSON is spaced: a body writing json.dumps's default "
+    "spacing makes progress and is not stopped as stalled",
+)
+@_with_world
+def _spacing(r, w):
+    lim = {"stall_timeout_s": 0.35, "liveness": "progress", "timeout_s": 5}
+    _, out = _session(r, w, w.run(limits=lim), body=_probe("spaced", "5"))
+    assert out.cls is None, f"a body making calls was judged {out.cls} ({out.detail})"
+
+
+@SUITE.check(
+    "context-refusal-is-context-exceeded",
+    "the provider's own body, refused 400 upstream_rejected by the gateway, ends ContextExceeded, "
+    "which the gateway's record corroborates",
+)
+@_with_world
+def _context(r, w):
+    _, out = _session(r, w, w.run(script=[{"status": 400}]))
+    assert out.cls == "ContextExceeded", f"a context refusal ended {out.cls} ({out.detail})"
+
+
+@SUITE.check(
+    "gateway-url-is-pinned",
+    "the body sends the run's key, tokens and prompt only to the gateway the deploy pinned: a "
+    "spec naming another gateway makes no call and ends Internal",
+)
+@_with_world
+def _pinned(r, w):
+    elsewhere = FakeGateway()
+    try:
+        run = w.run(gateway_url=elsewhere.url, pinned_gateway=w.gateway.url)
+        elsewhere.script(w.tag, [{"content": "the answer"}])
+        _, out = _session(r, w, run)
+        assert elsewhere.calls == [], (
+            f"the run's key went to a gateway the spec named and the deploy did not: "
+            f"{len(elsewhere.calls)} call(s)"
+        )
+        assert _calls(w) == [] and out.cls == "Internal", (
+            f"a spec naming another gateway ran: {out.cls} ({out.detail})"
+        )
+    finally:
+        elsewhere.close()
+
+
 @SUITE.check("turn-cap-is-a-class", "a session at max_turns ends TurnCap from its end record")
 @_with_world
 def _turn_cap(r, w):
@@ -312,7 +360,6 @@ def _turn_cap(r, w):
 @SUITE.check(
     "exit-status-maps-to-class",
     "every exit status the provider maps is its class",
-    requires=OVERRIDE,
 )
 @_with_world
 def _exit_maps(r, w):
@@ -325,7 +372,6 @@ def _exit_maps(r, w):
 @SUITE.check(
     "unmapped-exit-is-internal",
     "an exit status the provider does not map is Internal, which moves nothing",
-    requires=OVERRIDE,
 )
 @_with_world
 def _unmapped(r, w):
@@ -356,7 +402,6 @@ def _unreachable(r, w):
     "ContextExceeded counts only with a 400 "
     "upstream_rejected record later than every answered call, within the gateway wait; "
     "else Internal. ConcurrencyLimited is never corroborated",
-    requires=OVERRIDE,
 )
 @_with_world
 def _corroborate(r, w):
@@ -514,7 +559,6 @@ def _grants(r, w):
     "usage-stream-is-bounded",
     "a stream past its bound while running is ResourceLimit; "
     "a line over 16 KiB or nested past 8 is Internal",
-    requires=OVERRIDE,
 )
 @_with_world
 def _bounded(r, w):
@@ -529,7 +573,6 @@ def _bounded(r, w):
 @SUITE.check(
     "spec-carries-no-secret",
     "the spec, argv and environment the body sees hold no key or token value",
-    requires=OVERRIDE,
 )
 @_with_world
 def _no_secret(r, w):
@@ -544,8 +587,8 @@ def _no_secret(r, w):
 
 # --------------------------------------------------------------------------- subjects
 #: the reference launcher's gateway wait in these runs (the launcher's own default is
-#: GATEWAY_WAIT_S): the fake gateway's records are in memory, so half a second covers them
-FAKE_WAIT_S = 0.5
+#: GATEWAY_WAIT_S): the fake gateway's records are in memory, so a tenth of a second covers them
+FAKE_WAIT_S = 0.1
 
 
 def make_fake() -> DevLauncher:
@@ -569,6 +612,11 @@ def _m(factory, check, description, features=()):
 
 
 MUTANTS = {
+    "follows-spec-url": _m(
+        _body_mutant("follows-spec-url"),
+        "gateway-url-is-pinned",
+        "the body sends the run's key to whatever gateway the spec names",
+    ),
     "drops-meta": _m(
         _body_mutant("drops-meta"),
         "trace-propagation",
