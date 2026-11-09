@@ -17,6 +17,7 @@ import pytest
 from conformance.fakes import llm_orchestrator_hermes as body
 from homelabnext.conform.adapters import llm_orchestrator as adapter
 from homelabnext.conform.adapters._env import AdapterConfigError
+from tests.suite_policy import require_tool
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -29,15 +30,42 @@ FAULT_CHECKS = (
 )
 
 
-@pytest.mark.usefixtures("go_toolchain")
+# no network in the test run: the module cache only (CI's Go leg fetches it before the namespace)
+OFFLINE = dict(os.environ, GOFLAGS="-mod=readonly", GOWORK="off", GOPROXY="off")
+
+
+def _module_builds_offline() -> bool:
+    """Whether this Go can build the orchestrator module from the module cache alone: the
+    module's toolchain or newer, and every dependency cached."""
+    proc = subprocess.run(
+        ["go", "list", "-deps", "./cmd/controller"],
+        cwd=ROOT / "orchestrator",
+        env=OFFLINE,
+        capture_output=True,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
+@pytest.fixture
+def offline_go() -> str:
+    # skips ("not available", a registered reason) where Go or the cached module is missing, and
+    # fails instead under HNX_REQUIRE_GO=1, CI's Go leg, which fetches the module first
+    return require_tool(
+        "go",
+        available=_module_builds_offline,
+        unusable="the orchestrator module is not available offline (its toolchain or its cached dependencies)",
+    )
+
+
+@pytest.mark.usefixtures("offline_go")
 def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path):
     binary = tmp_path / "controller"
     subprocess.run(
         ["go", "build", "-o", str(binary), "./cmd/controller"],
         cwd=ROOT / "orchestrator",
         check=True,
-        # no network here: the module cache only (CI fetches it before the namespace)
-        env=dict(os.environ, GOFLAGS="-mod=readonly", GOWORK="off", GOPROXY="off"),
+        env=OFFLINE,
     )
     out = tmp_path / "result.json"
     args = [
