@@ -382,7 +382,8 @@ def test_x12_runs_green_over_the_repository_s_registries(monkeypatch):
     monkeypatch.setenv("HNX_TODAY", "2026-11-08")
     r = default_registry().get("X-12").fn(ctx(REPO))
     assert r.status == "pass", r.evidence
-    assert r.evidence.startswith("4 registries")  # examples/ and its three labs
+    # examples/ and its three labs; the four-box lab's dated eval row makes the green a judgement
+    assert r.evidence.startswith("4 registries, 1 non-primary row(s) in date on 2026-11-08")
 
 
 def test_x12_fails_on_a_row_past_its_until_and_passes_on_the_day(tmp_path, monkeypatch):
