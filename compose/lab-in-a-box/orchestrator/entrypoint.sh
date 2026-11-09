@@ -14,7 +14,9 @@
 #
 # The lab controller's start: write the job API's tokens file (the digest of
 # HNX_SECRET_ORCHESTRATOR_TOKEN, never the token) owner-only into the state directory, then run
-# the controller without the token in its environment.  The value is the lab's throwaway one
+# the controller with the token unset in its own environment, so its sessions and facts commands
+# cannot inherit it. The container's init (PID 1, the same uid) still holds it in its
+# environment, which a session could read through /proc: the lab's token is a throwaway one
 # (.env.example), which bind_guard.sh makes the operator change before any non-loopback bind.
 set -eu
 : "${HNX_SECRET_ORCHESTRATOR_TOKEN:?the job API token is required}"

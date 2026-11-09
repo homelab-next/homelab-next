@@ -388,3 +388,29 @@ func TestListJobs(t *testing.T) {
 }
 
 func itoa(n int64) string { b, _ := json.Marshal(n); return string(b) }
+
+// A job's cost is reported only when a usage report gave one: a known zero is 0, an unknown cost
+// is absent, never read as 0.
+func TestGetJob_AnUnknownCostIsAbsentAndAZeroCostIsZero(t *testing.T) {
+	a := newAPI(t, nil)
+	_, unknown, _ := a.submit("", map[string]any{"agent_key": "watcher", "idempotency_key": "k-unknown"})
+	_, zero, _ := a.submit("", map[string]any{"agent_key": "watcher", "idempotency_key": "k-zero"})
+	free := 0.0
+	if err := a.st.UpdateUsageFields(zero.RunID, store.UsageFields{CostUSD: &free}); err != nil {
+		t.Fatal(err)
+	}
+	read := func(id string) map[string]any {
+		_, out := a.do(http.MethodGet, "/jobs/"+id, "", nil)
+		var raw map[string]any
+		if err := json.Unmarshal(out, &raw); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	if _, ok := read(unknown.RunID)["cost_usd"]; ok {
+		t.Error("an unknown cost was reported")
+	}
+	if v, ok := read(zero.RunID)["cost_usd"]; !ok || v != 0.0 {
+		t.Errorf("a known zero cost = %v, %v", v, ok)
+	}
+}

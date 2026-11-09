@@ -110,6 +110,12 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 	}
 	dbPath := s.path(cfg.DBPath)
 
+	// A stop asked for during the start ends it at the next step, before anything is served: the
+	// one step it waits for is the migration, whose transaction a kill could not tear anyway.
+	var heldHUPs int
+	if interrupted(sigs, &heldHUPs, lg) {
+		return exitOK // a stop asked for is no failure
+	}
 	st, releaseLock, code := openStore(dbPath, *backup, lg)
 	if st == nil {
 		return code
@@ -121,6 +127,9 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 	if *migrateOnly {
 		lg.Printf("controller: --migrate-only: the database is at the current schema; not serving")
 		return exitOK
+	}
+	if interrupted(sigs, &heldHUPs, lg) {
+		return exitOK // a stop asked for is no failure
 	}
 
 	var sender *events.OutboxSender
@@ -209,9 +218,18 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 	go func() { serveErr <- srv.Serve(ln) }()
 	lg.Printf("controller: serving on %s (%d profiles, auth %v)", ln.Addr(), len(s.profiles.All()), auth != nil)
 
+	// a stop asked for during the start skips the loop and takes the ordinary stop below; nothing
+	// is sent back into the signal channel, which could block on a full or unbuffered one
+	stopNow := interrupted(sigs, &heldHUPs, lg)
+	for ; heldHUPs > 0 && !stopNow; heldHUPs-- { // a reload asked for during the start happens now
+		select {
+		case sigs <- syscall.SIGHUP:
+		default:
+		}
+	}
 	code = exitOK
 loop:
-	for {
+	for !stopNow {
 		select {
 		case err := <-serveErr:
 			lg.Printf("controller: api: %v", err)
@@ -251,6 +269,24 @@ loop:
 		sender.Close(sctx)
 	}
 	return code
+}
+
+// interrupted drains the signals that arrived during the start: a SIGTERM or SIGINT reports true
+// (the start ends there), a SIGHUP is counted in held, to be delivered once the controller serves.
+func interrupted(sigs chan os.Signal, held *int, lg *log.Logger) bool {
+	for {
+		select {
+		case sig := <-sigs:
+			if sig == syscall.SIGHUP {
+				*held++
+				continue
+			}
+			lg.Printf("controller: %v during the start: stopping before serving", sig)
+			return true
+		default:
+			return false
+		}
+	}
 }
 
 // openStore opens the database at path. A database whose schema must change is refused

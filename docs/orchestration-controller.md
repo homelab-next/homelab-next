@@ -1,6 +1,6 @@
 ---
 summary: 'The orchestration controller: adapter, holds, pinned result, gateway calls, optional features, its core in orchestrator/ and the controller binary.'
-summary_of: outline:sha256:791a9c3ae04dbbd7
+summary_of: outline:sha256:c8902df8cd2a47c3
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # The LLM orchestrator as the `orchestration` capability
@@ -633,6 +633,12 @@ not the public agent-runner contract stage 3 defines (which may reshape it); beh
 has the in-process fake (`runnertest`) and a generic subprocess runner (`runner/exec`, PR 2.7a),
 which is what the in-repository conformance job and the process tests drive.
 
+A clean exit whose output a descendant outside the session's group (one that called `setsid`)
+held open past the kill grace is `TurnFailed`, which is attributable: under a profile that may use
+the cloud, such a job moves to the cloud leg. A program that leaves a daemon behind on purpose
+therefore sends its local jobs to the cloud; it must close its standard output (or not detach)
+before it exits.
+
 `ConcurrencyLimited` is the class of a session the gateway refused with `429
 concurrency_limited` (its backend at the `max_in_flight` the gateway enforces, ADR-0026 decision
 10). It is a wait, never a fault: the pool pauses (`Policy.ConcurrencyWait`, one second, the
@@ -1182,25 +1188,65 @@ above says how.
   messages, the exit-0 retry report, a stalled sleep); they belong to the provider's tests, with
   its classifier, and the pool's tests here drive the classes instead.
 
+### Fault injection against the binary (PR 2.8)
+
+PR 2.8a puts the controller in the lab-in-a-box ("The controller binary" above). PR 2.8b runs the
+suite's two fault-injection MUST checks, `killed-worker-fails-run-and-frees-capacity` and
+`restart-reconciles-runs-and-capacity`, against this binary. Before, they were `untested` on every
+real target. `tools/orchestration_conformance.py run --controller BIN --work DIR --strict` (or
+`make orchestration-conformance`, which builds the binary first) sets it up:
+
+- **Configuration:** authentication off on loopback (the adapter sends no token), concurrency 1,
+  and the exec runner running `conformance/fakes/llm_orchestrator_hermes.py --stdin`, whose
+  sessions inherit only `HNX_CONFORM_PID_DIR`. Each session records its pid as
+  `<dir>/<run id>.pid`.
+- **Target:** `conformance/targets/orchestration-orchestrator.yml` (`wait_floor: 0`,
+  `fault_injection: true`).
+- **The adapter's `ProcessFaults`:** `kill(run_id)` sends SIGKILL to that session, as a crash
+  ends it: the run fails `KilledExternally` and its capacity is released. The check passes with
+  the controller's one automatic retry of the work after a kill (a new run, `retry_of_run_id`
+  set), which the check allows: it asks only that the killed run fail and free its capacity.
+  `restart()` runs the harness's `restart`, which kills the controller first (and waits for it),
+  then every recorded session, so no session's death is recorded by a live controller, then
+  starts the controller again on the same database. `ReconcileOrphans` fails the run that was
+  executing with `controller-restart-reconciliation` and no retry (the end-to-end test asserts
+  both from the database); a queued run and its idempotency key survive, and the body ran once.
+  The harness and the adapter signal only a pid that is still the process it names (a session's
+  environment carries its run id; the controller's command line is `serve` on the work
+  directory's configuration), never pid 1.
+
+Run locally, `--strict` passed all 16 executed checks, three runs out of three. Only
+`deadline-expiry-frees-capacity` skips: the job API takes no per-run deadline, a feature, not a
+hook. `tools/tests/test_orchestration_conformance.py` runs the two fault checks strict on a fresh
+build wherever a Go toolchain is present.
+
+The other crash cases have deterministic Go tests:
+
+- **A controller killed mid-claim:** reconciliation at start, never a second run of a body that
+  ran. The restart check above covers it on the real binary, and store's `ReconcileOrphans` tests
+  cover it at unit level.
+- **An interrupted migration** (simulated: a partial backup file, a failing step; `TestMigrate_AnInterruptedBackupOrMigrationRollsBackAndResumes`): a
+  partial backup is never taken for one, an interrupted migration commits nothing and its backup
+  still verifies, and the restart's migration completes.
+- **The gateway's `concurrency_limited` 429:** the pool's concurrency tests, PR 2.7a and 2.7b.
+
+Not done: a read-only or full disk under the store. Root (the tests' privileged run) ignores
+permission bits, and a full disk needs a size-limited mount, so neither is a test that holds
+unprivileged or deterministically; SQLite's own error (`SQLITE_READONLY`, `SQLITE_FULL`) fails
+the write and rolls back the transaction it is in, so nothing is half-recorded. Carried, for a
+privileged test with a size-limited mount.
+
 ### Carried past PR 2.7b
 
 PR 2.7a (#331) and PR 2.7b leave these, each with the reason it was not done:
 
 - **PR 2.7c: the `orchestration-conformance` job and the stand-in's retirement** (ADR-0026
-  decisions 14 and 15). The job builds `cmd/controller`, starts it on loopback in the network
-  namespace with `runner: {kind: exec}` running `conformance/fakes/llm_orchestrator_hermes.py`,
-  and runs `hnx conform run orchestration --target orchestration-orchestrator --strict`. The PR
-  also deletes the recorded stand-in, its target and the adapter's `fixes:` machinery, and renames
-  the adapter. It is a separate pull request because it changes the conformance tree and CI, not
-  the controller. A trial run of the suite against this binary (exec runner, the runner body
-  above, authentication off on loopback) passed all 14 checks it executed. It needed the
-  adapter's `wait_floor: 0`, because the floor turns the suite's `wait(timeout=0)` read into a
-  wait for the end, which fails `retrying-run-keeps-its-hold`. The two fault-injection checks stay
-  `untested` until PR 2.8. **Decided (operator default): PR 2.8's fault injection lands before
-  PR 2.7c, so 2.7c runs `--strict` with no exception.** The job also runs `make
-  controller-check`, and it is the controller's end-to-end test, which this PR has only at unit
-  level. A standalone `{prompt}` argument must now follow `--`, so the runner body takes its prompt
-  on stdin or after `--` there.
+  decisions 14 and 15). PR 2.8 (below) landed first, as decided, so the job is now only wiring:
+  it builds `cmd/controller` and runs `tools/orchestration_conformance.py run --strict` in the
+  network namespace, `go-ok` requires it, and it runs `make controller-check`. The PR also deletes
+  the recorded stand-in, its target and the adapter's `fixes:` machinery, and renames the adapter
+  and the runner body. It is a separate pull request because it changes the conformance tree and
+  CI, not the controller.
 - **After ADR-0039's `hnx registry bindings` (its step 5) merges: decision 16's wire names and the
   consumer check.** This covers the packs' `svc:orchestrator` target, the declared overlap source,
   the example registry row and the consumer check of `svc:llm-orchestrator`. The ADR makes PR 2.7
