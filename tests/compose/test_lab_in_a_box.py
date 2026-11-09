@@ -1998,7 +1998,9 @@ def _stub_judge(tmp_path: Path, config: dict, resolved: str) -> subprocess.Compl
 
 #: 32 characters, the minimum (not hex: a hex secret this long trips the leak scan)
 LONG_TOKEN = "a-job-api-token-of-32-characters"
-EXPOSED = {"orchestrator": {"ports": [{"host_ip": "0.0.0.0", "published": "8088"}]}}
+PORTS = [{"host_ip": "0.0.0.0", "published": "8088"}]
+MOUNT = {"source": "orchestrator-token", "target": "/run/secrets/orchestrator-token"}
+EXPOSED = {"orchestrator": {"ports": PORTS, "secrets": [MOUNT]}}
 
 
 def _config(**secret) -> dict:
@@ -2013,7 +2015,7 @@ def test_pass2_judges_the_job_api_token_compose_resolves(tmp_path):
     r = _stub_judge(tmp_path, config, "LAB_ORCHESTRATOR_TOKEN=x\n")  # what ${UNSET}x resolves to
     assert (
         r.returncode == 4
-        and "LAB_ORCHESTRATOR_TOKEN (the orchestrator-token secret) resolves to 1 characters"
+        and "LAB_ORCHESTRATOR_TOKEN (the orchestrator's orchestrator-token secret) resolves to 1 characters"
         in r.stderr
     ), r.stderr
     r = _stub_judge(tmp_path, config, f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n")
@@ -2027,10 +2029,43 @@ def test_pass2_measures_the_variable_the_token_secret_reads(tmp_path):
     long = LONG_TOKEN
     other = _config(environment="LAB_OTHER_TOKEN")
     r = _stub_judge(tmp_path, other, f"LAB_ORCHESTRATOR_TOKEN={long}\nLAB_OTHER_TOKEN=x\n")
-    assert r.returncode == 4 and "LAB_OTHER_TOKEN (the orchestrator-token secret)" in r.stderr, (
-        r.stderr
-    )
+    assert (
+        r.returncode == 4
+        and "LAB_OTHER_TOKEN (the orchestrator's orchestrator-token secret)" in r.stderr
+    ), r.stderr
     r = _stub_judge(tmp_path, other, f"LAB_ORCHESTRATOR_TOKEN=x\nLAB_OTHER_TOKEN={long}\n")
     assert r.returncode == 0, r.stderr
     r = _stub_judge(tmp_path, _config(file="./token"), f"LAB_ORCHESTRATOR_TOKEN={long}\n")
-    assert r.returncode == 4 and "not read from an environment variable" in r.stderr, r.stderr
+    assert r.returncode == 4 and "not one secret read from an environment variable" in r.stderr, (
+        r.stderr
+    )
+
+
+def test_pass2_judges_the_secret_the_orchestrator_mounts(tmp_path):
+    """The secret judged is the one the orchestrator service mounts at its entrypoint's path, not
+    the secret named orchestrator-token: a compose file that mounts a weak secret there, while
+    another service mounts the long orchestrator-token, is refused; and an orchestrator that
+    mounts nothing there cannot be measured, so it is refused too."""
+    weak = {"source": "weak", "target": "/run/secrets/orchestrator-token"}
+    config = {
+        "services": {
+            "orchestrator": {"ports": PORTS, "secrets": [weak]},
+            "other": {"secrets": [MOUNT]},
+        },
+        "secrets": {
+            "orchestrator-token": {"environment": "LAB_ORCHESTRATOR_TOKEN"},
+            "weak": {"environment": "LAB_WEAK"},
+        },
+    }
+    env = f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\nLAB_WEAK=x\n"
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 4 and "LAB_WEAK (the orchestrator's weak secret)" in r.stderr, r.stderr
+    config["services"]["orchestrator"]["secrets"] = []
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 4 and "not one secret read from an environment variable" in r.stderr, (
+        r.stderr
+    )
+    # a stack without the controller has no job API token to judge
+    config["services"] = {"other": {"ports": PORTS}}
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 0, r.stderr
