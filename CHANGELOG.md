@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- `hnx guests validate` with a registry ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) step 6, review follow-ups): addresses are compared as addresses (an IPv6 registry address written uncompressed escaped the renamed-guest check); `cap:agent-runtime` is accepted only on a registry host whose `role` is `agent-runtime` (a row-less guest took it anywhere, so a runner `hnx agent access` cannot find passed); a row-less guest may declare its registry host's own `role`, and a `planned` guest holds no row yet as a `retired` one does; the group of a capability no row serves is taken only by a guest declaring that capability. docs/compute-model.md, "Guests against the registry".
 - Orchestrator exec runner and controller: sessions inherit no unlisted variable and never the event token; no subreaper; a stop ends admission before the drain (`KillMode=mixed`); signals caught first (PR 2.7b review).
 - Orchestrator queue: admission compares tasks by a stored digest and reads no task text; a backend-down requeue uncounts its attempt in the same write; the submit window's count is index-bounded by time (PR 2.7a).
 - Gateway: the reply scanner reads a top-level key holding invalid UTF-8 as `json.Unmarshal` does (found by `FuzzJSONScan`).

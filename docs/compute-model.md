@@ -73,7 +73,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `network.zone` exists in the site model | no guest on an undeclared network |
 | `ip` inside the zone subnet, outside the DHCP pool, not network/broadcast/gateway | no collisions with leases |
 | a guest that is a host of the service registry (`--registry`, default the `services.yml` next to the site file when there is one) has the registry's `address` as its `ip` and the registry's `zone` as its zone | the router's service exceptions, DNS and DHCP read the registry, the hypervisor, cloud-init and the guest firewall read the guest file: one fact in two files |
-| with a registry (as above), a guest is judged as the registry host of its name, and a guest holding another registry host's address under a new name is refused; its `capability` is the capability of a registry row on its own host, of any standing (or `cap:agent-runtime` on a host whose registry `role` is `agent-runtime`: no row carries the runner slot); a guest whose host carries no row may not take a capability the registry places on another host, and must be a physical host (`kind: host`), retired, or declare a capability that serves no consumer (`cap:agent-runtime`, `cap:detonation`, `cap:exposure-management`, `cap:siem-source`; `ROW_FREE` in `homelabnext/compute/gen/registry_hosts.py`); a `cap_<capability>` group of a registry capability needs that capability's row on the guest's host ([ADR-0039](adr/0039-one-primary-per-capability.md) decision 7) | `cap:orchestration` fits only the guest that runs the orchestrator: a capability or group borrowed from another host is wrong data in every place it is read, and the inventory group is what that capability's playbooks target |
+| with a registry (as above), a guest's `capability` and capability groups are the ones the registry places on its host (see [Guests against the registry](#guests-against-the-registry)) | `cap:orchestration` fits only the guest that runs the orchestrator: a capability or group borrowed from another host is wrong data in every place it is read |
 | `vmid_scheme: freeform` is the default; `octet` pins `vmid` to the last octet of `ip` for a readable id | pick whichever reads better for your layout |
 | ids, `(node, vmid)` and ips are unique | |
 | each `network.extra_addresses` entry (guest 1.6) is canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, never an anycast address of its /64, and inside the guest's own zone's `subnet6` (site 1.4) and never inside another zone's, or, where the guest's zone has no `subnet6`, a unique-local or documentation address outside every zone's; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not the guest's own `ip` or an address (`ip` or extra) of any other guest, named once; a zone lookup that cannot list its zones (`ZoneLookup.all`) is itself a problem then | the log pipeline labels each one like `ip`, so it must name this guest and no other ([log pipeline](log-pipeline.md)); the network sensor counts each in `HOME_NET` and the topology map resolves each to its guest; nothing is configured from them |
@@ -89,6 +89,31 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 | a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
 | with `capacity` in `_nodes.yml`, a node's guests (every one not `retired`: a `planned` guest will be built) ask for no more cores than its threads after the reserve times `cpu_overcommit`, and no more memory than its reserve leaves; with `pools`, every disk names one of the node's pools and the disks fit in it | see [Node capacity and pools](#node-capacity-and-pools) |
+
+### Guests against the registry
+
+With a registry (`--registry`, or the `services.yml` beside the site file), every `hnx guests`
+subcommand judges each guest against the registry host of its name
+([ADR-0039](adr/0039-one-primary-per-capability.md) decision 7). `validate` refuses:
+
+- a guest holding another registry host's address under a new name (addresses are compared as
+  addresses, so `2001:DB8::0:14` and `2001:db8::14` are one);
+- on a host carrying rows, a `capability` that is not the capability of one of them, of any
+  standing;
+- `cap:agent-runtime` anywhere but on a registry host whose `role` is `agent-runtime`, rows or
+  not: no row carries the runner slot, and `hnx agent access` finds the runner by that role;
+- on a host carrying no row, a capability the registry places on another host, and any
+  capability unless the guest is a physical host (`kind: host`), `planned` or `retired`, declares
+  one that serves no consumer (`ROW_FREE` in `homelabnext/compute/gen/registry_hosts.py`:
+  `detonation`, `exposure-management`, `siem-source`), or declares its registry host's own
+  `role` (a site names its own row-free roles there);
+- a `cap_<capability>` group of a registry capability on a guest whose host carries no row of it,
+  and the group of a capability no row serves anywhere (other than a named role group of
+  docs/role-interface.md) on a guest that does not declare that capability.
+
+A capability or group the registry places on the guest's host (a row's capability, or a row-less
+host's role) is accepted even outside the platform vocabulary: a site's own capability names never
+enter the public class table. Every other guest is held to the vocabulary below.
 
 ### Node capacity and pools
 
