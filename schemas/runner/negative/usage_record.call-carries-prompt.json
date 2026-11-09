@@ -1,0 +1,10 @@
+{
+  "type": "call",
+  "role": "main-reasoner",
+  "sized": true,
+  "input_tokens": 1200,
+  "output_tokens": 180,
+  "cache_read_tokens": 0,
+  "span_id": "00f067aa0ba902b7",
+  "prompt": "the task text"
+}

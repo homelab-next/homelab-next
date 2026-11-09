@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/runner/session/1.0",
+  "x-draft": "ADR-0051 (proposed): the agent-runner contract's surface, step 2; not frozen, may change before acceptance",
+  "title": "Agent-runner session spec",
+  "description": "One attempt's session, as the controller hands it to a runner body (ADR-0051 decision 2). Closed: it holds no secret, no inline prompt, no engine URL and no server command. The prompt, the gateway key and the run tokens are credential names, files the launcher places under $CREDENTIALS_DIRECTORY; the session's MCP servers are ids only, which the body resolves in the deploy-rendered grants file (decision 3).",
+  "type": "object",
+  "properties": {
+    "spec_version": {
+      "const": "1.0"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$(?!\\n)",
+      "description": "The run id: 32 lower-case hex digits from the operating system's generator, also the unit's instance name."
+    },
+    "agent_key": {
+      "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+    },
+    "lane": {
+      "enum": [
+        "real",
+        "shadow"
+      ]
+    },
+    "prompt": {
+      "type": "object",
+      "properties": {
+        "credential": {
+          "const": "prompt"
+        }
+      },
+      "required": [
+        "credential"
+      ],
+      "additionalProperties": false,
+      "description": "The prompt by credential name, never inline: it can hold task text."
+    },
+    "toolsets": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true,
+      "maxItems": 64
+    },
+    "servers": {
+      "type": "array",
+      "items": {
+        "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+      },
+      "uniqueItems": true,
+      "maxItems": 64,
+      "description": "Server ids only; a server's command, arguments and environment are the grants file's."
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "gateway_url": {
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^https?://[a-z0-9.-]+(:[0-9]{1,5})?/?$(?!\\n)",
+          "description": "The gateway's base URL; never an engine's (ADR-0038)."
+        },
+        "model_role": {
+          "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+        },
+        "cloud": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "gateway_url",
+        "model_role",
+        "cloud"
+      ],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "timeout_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 86400
+        },
+        "stall_timeout_s": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 86400,
+          "description": "0: no stall detection."
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "liveness": {
+          "enum": [
+            "cpu",
+            "progress"
+          ]
+        }
+      },
+      "required": [
+        "timeout_s",
+        "stall_timeout_s",
+        "max_turns",
+        "liveness"
+      ],
+      "additionalProperties": false
+    },
+    "gateway_tag": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:/-]+$(?!\\n)"
+    },
+    "trace": {
+      "type": "string",
+      "pattern": "^00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}$(?!\\n)",
+      "description": "The run's W3C traceparent (ADR-0047 decision 1)."
+    },
+    "budgets": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "description": "The run's budgets, as data (ADR-0047 decision 6)."
+    },
+    "credentials": {
+      "type": "object",
+      "properties": {
+        "gateway_key": {
+          "const": "gateway-key"
+        },
+        "run_tokens": {
+          "type": "object",
+          "properties": {
+            "gateway": {
+              "const": "run-token-gateway"
+            },
+            "broker": {
+              "const": "run-token-broker"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "gateway_key"
+      ],
+      "additionalProperties": false,
+      "description": "Names, never values: each is a file under $CREDENTIALS_DIRECTORY."
+    }
+  },
+  "required": [
+    "spec_version",
+    "run_id",
+    "agent_key",
+    "lane",
+    "prompt",
+    "servers",
+    "target",
+    "limits",
+    "gateway_tag",
+    "trace",
+    "credentials"
+  ],
+  "additionalProperties": false
+}

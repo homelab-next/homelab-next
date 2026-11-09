@@ -1,0 +1,38 @@
+{
+  "spec_version": "1.0",
+  "run_id": "0123456789abcdef0123456789abcdef",
+  "agent_key": "triage",
+  "lane": "real",
+  "prompt": "Triage the alert in the attached case",
+  "toolsets": [
+    "lake-read"
+  ],
+  "servers": [
+    "lake"
+  ],
+  "target": {
+    "gateway_url": "https://llm-gateway.svc.example.internal",
+    "model_role": "main-reasoner",
+    "cloud": false
+  },
+  "limits": {
+    "timeout_s": 1800,
+    "stall_timeout_s": 300,
+    "max_turns": 40,
+    "liveness": "progress"
+  },
+  "gateway_tag": "hnx:0123456789abcdef0123456789abcdef",
+  "trace": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "budgets": {
+    "input_tokens": 200000,
+    "output_tokens": 20000,
+    "tool_calls": 60
+  },
+  "credentials": {
+    "gateway_key": "gateway-key",
+    "run_tokens": {
+      "gateway": "run-token-gateway",
+      "broker": "run-token-broker"
+    }
+  }
+}
