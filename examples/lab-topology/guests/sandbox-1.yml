@@ -14,7 +14,7 @@ firewall_rules:
   policy_out: DROP
   outbound_allow:
     - {name: telemetry, proto: tcp, ports: "4222", dest: "192.0.2.140/32"}
-capability: cap:detections
+capability: cap:detonation
 capability_groups: [cap_siem]
 tags: [lab]
 lifecycle:

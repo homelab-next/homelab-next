@@ -13,7 +13,7 @@ import sys
 from collections.abc import Sequence
 
 from .baselines import coverage, coverage_text
-from .loader import load_fleet
+from .loader import load_fleet, load_registry_for, registry_placement
 from .model import ComputeError, ComputeUnreadable
 from .plan import plan as make_plan
 from .plan import read_tree
@@ -40,10 +40,18 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--domain", help="DNS domain (default: the site's domain, else example.internal)"
     )
+    p.add_argument(
+        "--registry",
+        help="service registry the guests are judged against (default: services.yml next to "
+        "the site file, when there is one): a guest may declare a capability a row on its host "
+        "serves, and validate also holds each guest's address, zone and capability to it",
+    )
 
 
 def _fleet(args: argparse.Namespace):
     facts = site_facts(args.site)  # one read (and one SOPS decryption) of the site file
+    # every subcommand reads the same registry, so render and plan accept what validate accepts
+    args.registry_doc = load_registry_for(args.site, args.registry)
     return load_fleet(
         args.directory,
         facts["zones"],
@@ -59,6 +67,7 @@ def _fleet(args: argparse.Namespace):
         deploy=facts["deploy"],
         site_addresses=facts["site_addresses"],
         delegated6=facts["delegated6"],
+        placement=registry_placement(args.registry_doc),
     )
 
 
@@ -67,11 +76,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True)
     v = sub.add_parser("validate", help="schema and semantic validation")
     _common(v)
-    v.add_argument(
-        "--registry",
-        help="service registry whose hosts must agree with the guests on address and zone "
-        "(default: services.yml next to the site file, when there is one)",
-    )
     r = sub.add_parser("render", help="render one target")
     _common(r)
     r.add_argument("--target", required=True, choices=sorted(TARGETS))
@@ -143,24 +147,19 @@ def _baselines(args: argparse.Namespace, fleet) -> int:
 
 
 def _registry_problems(args: argparse.Namespace, fleet) -> list[str]:
-    """The registry's disagreements with the guests (none without a registry); an unreadable
-    registry is :class:`ComputeUnreadable`, an invalid one :class:`ComputeError`."""
-    from pathlib import Path
+    """The registry's disagreements with the guests (none without a registry): an address or a
+    zone, or a capability or capability group the registry does not place on the guest's host
+    (ADR-0039 decision 7).  The registry is the one :func:`_fleet` read."""
+    from homelabnext.registry.model import STANDINGS
 
-    from homelabnext.network.loader import SiteError, SiteUnreadable, load_registry
+    from .gen.registry_hosts import capability_problems, registry_problems
 
-    from .gen.registry_hosts import registry_problems
-
-    path = Path(args.registry) if args.registry else Path(args.site).parent / "services.yml"
-    if not args.registry and not path.is_file():
+    reg = args.registry_doc
+    if reg is None:
         return []
-    try:
-        reg = load_registry(path)
-    except SiteUnreadable as exc:
-        raise ComputeUnreadable(str(exc)) from exc
-    except SiteError as exc:
-        raise ComputeError(str(exc)) from exc
-    return registry_problems(fleet, reg.hosts)
+    return registry_problems(fleet, reg.hosts) + capability_problems(
+        fleet, reg.rows(*STANDINGS), reg.hosts
+    )
 
 
 def _key_problems(fleet) -> list[str]:

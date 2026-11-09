@@ -6,7 +6,7 @@ kind: host
 provisioning: host-only
 placement: {node: sensor-1}
 network: {zone: services, ip: 192.0.2.71}
-capability: cap:detections
+capability: cap:network-sensor
 capability_groups: [cap_sensor]
 power: {ups: ups-a}
 tags: [prod, sensor]
