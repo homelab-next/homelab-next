@@ -39,7 +39,7 @@ WHY = {
     "grants.relative-command": ("servers/notes/command", "does not match"),
     "grants.no-profile-digest": ("$", "'profile_digest' is a required property"),
     "grants.unknown-key": ("$", "'secret' was unexpected"),
-    "grants.env-sets-the-loader": ("servers/notes/env", "should not be valid"),
+    "grants.environment-sets-the-loader": ("servers/notes/env", "should not be valid"),
 }
 
 
