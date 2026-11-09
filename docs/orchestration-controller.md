@@ -319,8 +319,12 @@ registry's controller row (capability `orchestration`), and `hnx registry bindin
 
 `hnx registry consumers svc:llm-orchestrator` is the check that finds the consumers of the old
 source: every line of the checkout that names it, by kind, exit 1 while any remain (the changelog
-and the decision records quote history and are not read). The old source goes at cutover+1 only
-once it exits 0. Today it lists these, which move before the old name goes:
+and the decision records quote history and are not read). It lists the overlap's own deliberate
+lines too (the declaration that admits the source, `CONTROLLER_OLD_SOURCE`, the one event example
+kept under it), which the change that drops the source removes. The old source goes at cutover+1
+only once it exits 0 over this repository **and** over the overlay (`hnx registry consumers
+svc:llm-orchestrator --root <overlay checkout>`): the lab's dashboards, alert rules and packs are
+consumers there. Today it lists these here, which move before the old name goes:
 
 - `homelabnext.orchestration.model.CONTROLLER_OLD_SOURCE`, in the default of `hnx orchestration
   consume --source` ([orchestration telemetry](orchestration-telemetry.md)), with the store and
@@ -330,7 +334,8 @@ once it exits 0. Today it lists these, which move before the old name goes:
   `workflows/packs/agent-job-retry.yml`, its rule
   `workflows/stackstorm/homelabnext/rules/on_agent_job_retry.yaml` and the pinned render
   `workflows/stackstorm/homelabnext/pinned/agent_job_retry.json` (A02, [StackStorm](stackstorm.md));
-- the event examples and negatives under `schemas/events/` and its README;
+- `schemas/events/examples/agent.job.finished.controller.json`, the one positive event example
+  kept under the old source to show the overlap, and the negatives under `schemas/events/`;
 - the docs that quote the source: [StackStorm](stackstorm.md),
   [orchestration telemetry](orchestration-telemetry.md), `docs/checklist.md` (O-11),
   `docs/interfaces.md` and this page ([ADR-0025](adr/0025-orchestration-telemetry.md) quotes it

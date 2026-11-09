@@ -99,7 +99,11 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     p = sub.add_parser(
         "consumers",
         help="list every line of the checkout that names a svc: id, by kind; exit 1 while any "
-        "remain (an old id is dropped only when none do, ADR-0026 decision 16)",
+        "remain (an old id is dropped only when none do, ADR-0026 decision 16). During an "
+        "overlap it also lists the overlap's own deliberate lines (the id's declaration, the "
+        "constant that keeps it, the example kept to show it), which go in the change that ends "
+        "the overlap. Run it over the overlay too (--root <overlay checkout>): a lab's dashboards, "
+        "rules and packs consume the id there",
     )
     p.add_argument("svc_id", help="the id, e.g. svc:llm-orchestrator")
     p.add_argument("--root", default=".", help="the git checkout to read")

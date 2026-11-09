@@ -588,6 +588,10 @@ change until its ADR is accepted):
 
 - Distribution version: SemVer, `0.x` until the first stable drop. The single source is
   `homelabnext/_version.py`; `CHANGELOG.md` must hold a section for it (`tools/check_changelog.py`).
+  A release that bumps it bumps the example registry's `orchestrator` row (`examples/services.yml`,
+  and its copy `schemas/platform/examples/service.valid.yml`) to the same version in the same
+  change: that row is this repository's controller (ADR-0026 decision 15), and
+  `tools/tests/test_pin_consistency.py` fails while the two differ.
 - Schemas: the major version is in `$id` and, for versioned families, the filename
   (`<class>.v1.json`). Within a major version evolution is **additive only**: new optional
   properties, new enum values, relaxed bounds, a wider type. Every enum may grow within a major,
