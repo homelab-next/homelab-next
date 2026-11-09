@@ -1215,6 +1215,12 @@ real target. `tools/orchestration_conformance.py run --controller BIN --work DIR
   environment carries its run id; the controller's command line is `serve` on the work
   directory's configuration), never pid 1.
 
+A restart whose controller still runs after its SIGKILL and the wait (`GONE_WAIT_S`) fails
+loudly, with its sessions left alone, rather than killing them under a live controller that
+would record and retry them. Both the harness and the adapter check and signal a pid through one
+pidfd, and the adapter logs why it left a pid alone. A failing strict end-to-end test prints every
+job row, the failing checks' evidence and the controller log's tail.
+
 Run locally, `--strict` passed all 16 executed checks, three runs out of three. Only
 `deadline-expiry-frees-capacity` skips: the job API takes no per-run deadline, a feature, not a
 hook. `tools/tests/test_orchestration_conformance.py` runs the two fault checks strict on a fresh
@@ -1240,13 +1246,15 @@ privileged test with a size-limited mount.
 
 PR 2.7a (#331) and PR 2.7b leave these, each with the reason it was not done:
 
-- **PR 2.7c: the `orchestration-conformance` job and the stand-in's retirement** (ADR-0026
-  decisions 14 and 15). PR 2.8 (below) landed first, as decided, so the job is now only wiring:
-  it builds `cmd/controller` and runs `tools/orchestration_conformance.py run --strict` in the
-  network namespace, `go-ok` requires it, and it runs `make controller-check`. The PR also deletes
-  the recorded stand-in, its target and the adapter's `fixes:` machinery, and renames the adapter
-  and the runner body. It is a separate pull request because it changes the conformance tree and
-  CI, not the controller.
+- **PR 2.7c, in two parts.** The first (this one) adds the `orchestration-conformance` job, which
+  `go-ok` requires: it builds `cmd/controller`, runs `make controller-check`, and runs
+  `tools/orchestration_conformance.py run --strict` in the network namespace, as the runner user
+  under no_new_privs (ADR-0026 decision 14). The second retires the recorded stand-in (decision
+  15): the stand-in, its target, the adapter's `fixes:` machinery and the adapter tests that
+  drive the stand-in, the adapter's rename to `orchestrator.py`, the priority proof moved onto the
+  binary, and the test that no `-recorded` orchestration target and no `internal/hermesagent`
+  cite remain under `conformance/`. It is separate because it rewrites the conformance tests that
+  run against the stand-in today.
 - **After ADR-0039's `hnx registry bindings` (its step 5) merges: decision 16's wire names and the
   consumer check.** This covers the packs' `svc:orchestrator` target, the declared overlap source,
   the example registry row and the consumer check of `svc:llm-orchestrator`. The ADR makes PR 2.7
