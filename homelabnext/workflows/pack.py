@@ -37,8 +37,11 @@ class WorkflowError(Exception):
 def _yaml_loader():
     import yaml
 
-    class _StrLoader(yaml.SafeLoader):
-        """Timestamps stay strings: a pack is JSON data, and its digest must not depend on YAML."""
+    from homelabnext._yaml import BudgetedLoader
+
+    class _StrLoader(BudgetedLoader):
+        """Timestamps stay strings: a pack is JSON data, and its digest must not depend on YAML.
+        Held to the shared expansion budget before it is constructed (alias and merge bombs)."""
 
     _StrLoader.yaml_implicit_resolvers = {
         k: [(tag, rx) for tag, rx in v if tag != "tag:yaml.org,2002:timestamp"]

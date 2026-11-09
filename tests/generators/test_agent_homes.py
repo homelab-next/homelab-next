@@ -362,11 +362,14 @@ def test_a_home_that_is_not_utf8_or_not_yaml_could_not_be_measured(tmp_path, cap
         assert "homes: could not measure:" in err and "Traceback" not in err, err
 
 
-def test_a_self_referential_anchor_is_scanned_once_not_recursed(tmp_path, capsys):
+def test_a_self_referential_anchor_is_refused_as_unreadable_not_recursed(tmp_path, capsys):
+    """A node that contains itself constructs into a self-referencing value: the shared loader
+    refuses it before construction, so the scan cannot measure the file (exit 100) rather than
+    walking a loop."""
     home = _home(tmp_path, "loop", f"loop: &x [*x, {V4A}]\nmodel:\n  default: main-reasoner-a\n")
-    assert hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(home)]) == 1
+    assert hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(home)]) == 100
     err = capsys.readouterr().err
-    assert err.count(f"names the IP address {V4A}") == 1, err
+    assert "recursive alias" in err, err
 
 
 def test_the_scan_finds_keyed_and_userinfo_addresses_and_needs_no_checkout(monkeypatch, capsys):

@@ -21,7 +21,7 @@ import yaml
 
 from homelabnext import paths, sops, tlp
 from homelabnext._schema_text import safe_message
-from homelabnext._yaml import UniqueKeyLoader, expanded_size
+from homelabnext._yaml import ExpansionRefused, UniqueKeyLoader
 from homelabnext.capability_names import platform_capabilities as _platform_capabilities
 
 
@@ -38,8 +38,17 @@ class RegistryUnreadable(RegistryError):
     """The registry file cannot be read, decrypted or parsed: bad input, not an invalid registry."""
 
 
-# refuses duplicate mapping keys (a silent override is a bug); homelabnext.swap.flip uses it too
-_UniqueKeyLoader = UniqueKeyLoader
+class _RegistryLoader(UniqueKeyLoader):
+    """The registry's YAML reader: duplicate keys refused and every document held to the shared
+    expansion budget (:class:`homelabnext._yaml.UniqueKeyLoader`), and no alias at all: a
+    registry is plain data (no example uses one), so an alias is refused outright rather than
+    expanded."""
+
+    allow_aliases = False
+
+
+# homelabnext.swap.flip reads the registry through it too
+_UniqueKeyLoader = _RegistryLoader
 
 
 @dataclass(frozen=True)
@@ -826,27 +835,27 @@ def build_registry(doc: dict) -> Registry:
     )
 
 
-#: the most nodes a registry document may construct into, aliases and merge keys expanded: far
-#: above any real lab (a few thousand), far below what nested aliases or merges reach in a few
-#: hundred bytes (billions), which would hang ``hnx registry validate`` and every CI job reading it
-MAX_EXPANDED_NODES = 200_000
+#: the largest registry text read: far above any lab (a few hundred KB), and a bound on what one
+#: scalar can cost every reader that walks the document
+MAX_REGISTRY_BYTES = 4 * 1024 * 1024
+
+
+def read_registry_doc(text: str) -> Any:
+    """The parsed registry document, or :class:`RegistryUnreadable`: over
+    :data:`MAX_REGISTRY_BYTES`, invalid YAML, an alias, or past the shared expansion budget (the
+    loader refuses those before anything is constructed)."""
+    if len(text) > MAX_REGISTRY_BYTES:
+        raise RegistryUnreadable(f"registry is over {MAX_REGISTRY_BYTES} bytes")
+    try:
+        return yaml.load(text, Loader=_UniqueKeyLoader)
+    except ExpansionRefused as exc:
+        raise RegistryUnreadable(f"registry refused: {exc}") from None
+    except yaml.YAMLError as exc:
+        raise RegistryUnreadable(f"registry is not valid YAML: {exc}") from exc
 
 
 def loads(text: str) -> Registry:
-    try:
-        node = yaml.compose(text, Loader=_UniqueKeyLoader)
-        size = expanded_size(node, MAX_EXPANDED_NODES)
-        if size > MAX_EXPANDED_NODES:
-            raise RegistryUnreadable(
-                f"registry expands to over {MAX_EXPANDED_NODES} YAML nodes (aliases and merge "
-                "keys included); refused before it is constructed"
-            )
-        doc = yaml.load(text, Loader=_UniqueKeyLoader)
-    except yaml.YAMLError as exc:
-        raise RegistryUnreadable(f"registry is not valid YAML: {exc}") from exc
-    except RecursionError:
-        raise RegistryUnreadable("registry is nested too deeply") from None
-    return build_registry(doc)
+    return build_registry(read_registry_doc(text))
 
 
 def load(path: str | Path) -> Registry:

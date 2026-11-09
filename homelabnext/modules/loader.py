@@ -427,8 +427,13 @@ def load_yaml(path: str | Path, *, follow: bool = True) -> Any:
 
 def parse_yaml(text: str) -> Any:
     """YAML text with duplicate keys and aliases refused and deep nesting refused."""
+    from homelabnext._yaml import ExpansionRefused
+
     try:
         return yaml.load(text, Loader=_Loader)
+    except ExpansionRefused as exc:
+        why = str(getattr(exc, "problem", "") or exc)
+        raise Unreadable("nested too deeply" if "nested too deeply" in why else why) from None
     except yaml.YAMLError as exc:
         raise Unreadable(
             f"not valid YAML ({exc.__class__.__name__}: {getattr(exc, 'problem', '') or exc})"
