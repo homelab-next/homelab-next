@@ -427,3 +427,18 @@ def test_the_go_test_leg_builds_the_controller_once_for_its_shards():
     assert suite["env"]["HNX_CONTROLLER_BIN"] == (
         "${{ matrix.python.go && format('{0}/controller', runner.temp) || '' }}"
     )
+
+
+def test_a_prebuilt_controller_is_named_in_the_log(tmp_path, monkeypatch, caplog):
+    """Which binary a run used is part of its result: the prebuilt path is logged."""
+    import logging
+
+    import tests.conform.controller_rig as rig
+
+    prebuilt = tmp_path / "controller"
+    prebuilt.write_text("#!/bin/sh\n")
+    prebuilt.chmod(0o755)
+    monkeypatch.setenv(rig.PREBUILT_ENV, str(prebuilt))
+    with caplog.at_level(logging.INFO, logger=rig.__name__):
+        assert build_controller(tmp_path / "unused") == prebuilt
+    assert f"the controller: {prebuilt} (from HNX_CONTROLLER_BIN" in caplog.text, caplog.text
