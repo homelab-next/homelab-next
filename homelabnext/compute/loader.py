@@ -365,10 +365,15 @@ def load_registry_for(site_path: str | Path, explicit: str | Path | None = None)
 
 
 def registry_placement(reg: Any) -> dict[str, frozenset[str]]:
-    """Registry host -> the capabilities its rows serve, every standing (ADR-0039 decision 7)."""
+    """Registry host -> the capabilities a guest on it may declare: those its rows serve, every
+    standing (ADR-0039 decision 7), and a row-less host's own ``role`` (the runner's role on any
+    host), which ``registry_hosts.capability_problems`` accepts by name."""
     from homelabnext.registry.model import STANDINGS
 
     out: dict[str, set[str]] = {}
     for r in [] if reg is None else reg.rows(*STANDINGS):
         out.setdefault(r.host, set()).add(r.capability)
+    for name, h in ({} if reg is None else reg.hosts).items():
+        if h.role and (name not in out or h.role == "agent-runtime"):
+            out.setdefault(name, set()).add(h.role)
     return {h: frozenset(c) for h, c in out.items()}

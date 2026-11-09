@@ -206,6 +206,12 @@ site, text = apply_switch(site, swap, mods, yaml_text, plan)  # write both in on
   `env_var` and `tlp_ceiling`, or a plan that differs from the one `plan_promote` recomputes from
   the registry (`PromotePlan.from_dict` does not validate). It returns the registry *text*; the
   switch step writes the selection and the registry in one commit.
+- The rollback window is bounded until ADR-0043's ledger row binds it: `rollback_days` is 1 to 90
+  (`flip.MAX_ROLLBACK_DAYS`), and `apply_switch` refuses a promotion not dated the day it is
+  applied (`today`, default `HNX_TODAY` or the local date). It refuses `legacy` for an incumbent
+  whose outgoing provider is a module this repository deploys (that one goes `retiring`), and
+  holds a `legacy` incumbent to the outgoing product too. A slot's name is its capability: the
+  slot registry is keyed by capability.
 - `promote_text` writes a field that appears on one line, at the end of its row (or where it was,
   when it comes back), and refuses unless its inverse restores the text byte for byte.
 
