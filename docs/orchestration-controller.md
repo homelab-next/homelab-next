@@ -1193,10 +1193,12 @@ privileged test with a size-limited mount.
 PR 2.7a (#331) and PR 2.7b leave these, each with the reason it was not done:
 
 - **PR 2.7c, done in two parts:** the `orchestration-conformance` job, which `go-ok` requires
-  (ADR-0026 decision 14), and the recorded stand-in's retirement (decision 15). The example
-  registry's controller row (`agent-runtime`, version `0.3.0` at the pinned `a52a1c4`) moves to
-  this repository's controller with decision 16's rename of the row to `orchestrator`, so the
-  row, its goldens and `METRICS_SERVED` change once.
+  (ADR-0026 decision 14), and the recorded stand-in's retirement (decision 15). **Deferred to the
+  decision-16 work:** decision 15 also moves the example registry's controller row (`agent-runtime`,
+  version `0.3.0` at the pinned `a52a1c4`) and its pin in `tools/tests/test_pin_consistency.py`
+  (`ORCHESTRATOR_ROW`, the metrics facts for `a52a1c4`) to this repository's controller. Done with
+  decision 16's rename of the row to `orchestrator`, the row, its goldens and `METRICS_SERVED`
+  change once instead of twice.
 - **After ADR-0039's `hnx registry bindings` (its step 5) merges: decision 16's wire names and the
   consumer check.** This covers the packs' `svc:orchestrator` target, the declared overlap source,
   the example registry row and the consumer check of `svc:llm-orchestrator`. The ADR makes PR 2.7
