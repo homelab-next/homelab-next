@@ -448,6 +448,17 @@ def test_registry_hosts_feed_existing_generators(good):
     assert "198.51.100.40" in blob
 
 
+def test_the_registry_fragment_derives_no_host_role_from_a_guest(good):
+    """Merging the fragment used to write ``role: <guest capability>``, so a guest's claim (say
+    cap:agent-runtime) became the host role the runner is found by."""
+    frag = registry_hosts.fragment(good)
+    assert frag["hosts"] and all(set(h) == {"address", "zone"} for h in frag["hosts"].values())
+    merged = registry_hosts.merge_into_registry({"zones": {}, "hosts": {}}, frag)
+    assert all("role" not in h for h in merged["hosts"].values())
+    text = registry_hosts.render(good)["registry-hosts.yml"]
+    assert "role:" not in text
+
+
 def test_registry_merge_conflict_is_an_error(good):
     frag = registry_hosts.fragment(good)
     doc = {

@@ -3,6 +3,8 @@
 
 Merge it into a registry document with :func:`merge_into_registry`; the existing registry
 generators (DNS, proxy, monitoring, ...) then see every guest, so one guest file wires everything.
+A host's ``role`` is not derived: it is the registry's own fact (``hnx agent pack`` finds the
+runner's host by it), and a guest's ``capability`` is a claim the registry judges, never a role.
 """
 
 from __future__ import annotations
@@ -23,11 +25,10 @@ def fragment(fleet: Fleet) -> dict[str, Any]:
     for g in fleet.sorted():
         z = fleet.zone(g)
         zones[z.id] = {"cidr": z.subnet}
-        hosts[g.name] = {
-            "address": g.ip,
-            "zone": z.id,
-            "role": g.capability.removeprefix("cap:"),
-        }
+        # no ``role``: a host's role is the registry's own fact (the runner is found by it), and
+        # a guest's capability is a claim the registry judges, so merging this fragment must not
+        # turn one into the other
+        hosts[g.name] = {"address": g.ip, "zone": z.id}
     return {"zones": dict(sorted(zones.items())), "hosts": dict(sorted(hosts.items()))}
 
 
@@ -218,7 +219,5 @@ def render(fleet: Fleet) -> dict[str, str]:
         L.append(f"  {k}: {{cidr: {q(v['cidr'])}}}")
     L.append("hosts:")
     for k, v in f["hosts"].items():
-        L.append(
-            f"  {k}: {{address: {q(v['address'])}, zone: {q(v['zone'])}, role: {q(v['role'])}}}"
-        )
+        L.append(f"  {k}: {{address: {q(v['address'])}, zone: {q(v['zone'])}}}")
     return {"registry-hosts.yml": "\n".join(L) + "\n"}

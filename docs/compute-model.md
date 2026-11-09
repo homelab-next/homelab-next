@@ -814,7 +814,9 @@ writes it.
 `registry-hosts` produces the `zones:` and `hosts:` sections of a service registry.
 `homelabnext.compute.gen.registry_hosts.merge_into_registry(doc, fragment)` overlays them on a
 registry document (a conflicting entry is an error), and the existing registry generators (DNS,
-proxy, monitoring, firewall matrix) then see the guests. A registry kept by hand is held against
+proxy, monitoring, firewall matrix) then see the guests. The fragment carries no host `role`: a role is
+the registry's own fact (the agent runner's host is found by it), and a guest's `capability` is a
+claim the registry judges, so merging the fragment never turns one into the other. A registry kept by hand is held against
 the guests by `hnx guests validate` (`registry_hosts.registry_problems`): a host whose address or
 zone differs from its guest's is an error.
 
