@@ -344,6 +344,29 @@ def _rows(doc: Doc, mod_dir: Path, load) -> dict[str, Doc]:
     return rows
 
 
+#: the launcher an agent-runtime provider's conformance target runs its body under: a provider
+#: supplies only its runner body's argv and exit_classes, and never certifies its own launcher
+#: (ADR-0051 decision 13); the controller's runner/agent replaces it at ADR-0051's step 3
+REFERENCE_LAUNCHER = "conformance.fakes.agent_runner_launcher:make"
+
+
+def _runner_target_problems(target: Path, load) -> list[str]:
+    try:
+        doc = load(target)
+    except Exception:  # the file rules report an unreadable or missing target
+        return []
+    binding = ((doc or {}).get("capabilities") or {}).get("agent-runner")
+    if not isinstance(binding, dict):
+        return ["provides.slots.agent-runtime: its conformance target binds no agent-runner"]
+    if binding.get("adapter") != REFERENCE_LAUNCHER:
+        return [
+            "provides.slots.agent-runtime: its conformance target runs under "
+            f"{binding.get('adapter')!r}, not the reference launcher {REFERENCE_LAUNCHER}: a "
+            "provider supplies its body and exit_classes, never its own launcher"
+        ]
+    return []
+
+
 def module_problems(
     doc: Doc,
     mod_dir: Path,
@@ -662,6 +685,8 @@ def module_problems(
             desc.get("export_formats", [])
         ):
             out.append(f"provides.slots.{slot}: migration formats are the slot's export formats")
+        if slot == "agent-runtime" and "conformance" in e:
+            out += _runner_target_problems(mod_dir / e["conformance"]["target"], load)
     # edge, idp or remote-admin shared_config, root or opt-out units and broker, idp or remote-admin upstreams
     # are site rules: each needs the overlay's grant (site_problems), never a manifest's word
     return out
