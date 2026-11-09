@@ -15,7 +15,8 @@
 # The lab controller's start: write the job API's tokens file (the digest of the token compose
 # gives the container as the secret file /run/secrets/orchestrator-token, never the token)
 # owner-only into the state directory, then run the controller. The token is in no environment,
-# the container's init included; the lab's value is a throwaway one (.env.example), which
+# the container's init included, and not in docker inspect; a session of the controller's own uid
+# can still read the secret file (see the secrets: comment in docker-compose.yml). The lab's value is a throwaway one (.env.example), which
 # bind_guard.sh makes the operator change, to at least 32 characters, before a non-loopback bind.
 set -eu
 token_file=/run/secrets/orchestrator-token

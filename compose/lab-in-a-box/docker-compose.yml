@@ -53,7 +53,10 @@ volumes:
 
 # The controller's job API token, given to its container as a file (/run/secrets/...), never in an
 # environment: the container's init (PID 1) would hold it there, readable through /proc by a
-# session of the same uid.
+# session of the same uid, and docker inspect would show it. The file is no barrier to that same
+# uid, though: a session running as the controller's user can still read
+# /run/secrets/orchestrator-token. Starting as root to hash it and dropping to the controller's
+# user would need SETUID and SETGID back past cap_drop: [ALL], so the lab does not.
 secrets:
   orchestrator-token:
     environment: LAB_ORCHESTRATOR_TOKEN

@@ -522,6 +522,10 @@ mapping (docs/orchestration-controller.md has the whole table):
   `local-only`) and has no list route (`list-runs`).  Its check needs a reported limit, which
   `capacity()` never has, so it skips; the claim is held on the binary instead
   (tests/conform/test_conform_orchestration_features.py).
+* `deadline` is not declared, so `deadline-expiry-frees-capacity` skips: the job API takes no
+  per-run deadline.  The controller does end a job at its deadline (`failed`, failure class
+  `deadline`), but that deadline is the pool's `runner.job_timeout_seconds` from the
+  configuration, one value for every job, which `submit(..., deadline_s=...)` cannot set.
 * `kill` / `restart` (test hook `fault-injection`) only with `fault_injection: true` and
   the harness that runs the controller as a process (`ProcessFaults`). Elsewhere the
   adapter has no honest way to kill one job's worker or restart the service, so it does not
@@ -590,6 +594,10 @@ mapping (docs/orchestration-controller.md has the whole table):
   `local-only`) and has no list route (`list-runs`).  Its check needs a reported limit, which
   `capacity()` never has, so it skips; the claim is held on the binary instead
   (tests/conform/test_conform_orchestration_features.py).
+* `deadline` is not declared, so `deadline-expiry-frees-capacity` skips: the job API takes no
+  per-run deadline.  The controller does end a job at its deadline (`failed`, failure class
+  `deadline`), but that deadline is the pool's `runner.job_timeout_seconds` from the
+  configuration, one value for every job, which `submit(..., deadline_s=...)` cannot set.
 * `kill` / `restart` (test hook `fault-injection`) only with `fault_injection: true` and
   the harness that runs the controller as a process (`ProcessFaults`). Elsewhere the
   adapter has no honest way to kill one job's worker or restart the service, so it does not

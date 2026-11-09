@@ -10,7 +10,7 @@
 #   outputs: the work directory (controller.yaml, controller.log, the state, the session pids); the suite's verdict
 #   exit:
 #     "0": the suite passed
-#     "1": a check did not pass, or the controller did not come up
+#     "1": a check did not pass (for verdict, a fault check did not), or the controller did not come up
 #     "2": usage error
 """The ``orchestration`` suite against this repository's controller (ADR-0026 stage 2, PR 2.8).
 
@@ -28,6 +28,7 @@ fault injection wired to real processes:
 
 It needs no network beyond loopback.  ``--check`` (repeatable) runs single checks, ``--strict``
 fails a run on a failing SHOULD check; a check left ``untested`` fails a strict run too.
+``verdict REPORT`` reads a run's ``--out`` report and fails unless both fault checks passed.
 
     go build -o build/controller ./orchestrator/cmd/controller   # (from orchestrator/: ./cmd/controller)
     python3 tools/orchestration_conformance.py run --controller build/controller --work /tmp/oc --strict
@@ -234,7 +235,17 @@ def cmd_restart(work: Path) -> int:
     return 0
 
 
+def linux_only() -> str | None:
+    """Why this harness cannot run here, or None: it kills through pidfds and reads /proc."""
+    if sys.platform.startswith("linux") and hasattr(os, "pidfd_open"):
+        return None
+    return f"orchestration-conformance: Linux only (pidfd and /proc), not {sys.platform}"
+
+
 def cmd_run(binary: Path, work: Path, checks: list[str], strict: bool, out: Path | None) -> int:
+    if (why := linux_only()) is not None:
+        print(why, file=sys.stderr)
+        return 2
     if not work.is_absolute():
         print("orchestration-conformance: --work must be absolute", file=sys.stderr)
         return 2
@@ -250,6 +261,7 @@ def cmd_run(binary: Path, work: Path, checks: list[str], strict: bool, out: Path
     work.mkdir(mode=0o700, parents=True, exist_ok=True)
     write_config(work, free_port())
     (work / "controller.bin").write_text(f"{binary.resolve()}\n", encoding="utf-8")
+    rc = 1
     try:
         start(work)
         url = (work / "endpoint").read_text(encoding="ascii").strip()
@@ -279,9 +291,43 @@ def cmd_run(binary: Path, work: Path, checks: list[str], strict: bool, out: Path
             argv += ["--check", c]
         if out is not None:
             argv += ["--out", str(out)]
-        return subprocess.run(argv, cwd=REPO, env=env, check=False).returncode
+        rc = subprocess.run(argv, cwd=REPO, env=env, check=False).returncode
     finally:
-        stop(work)
+        try:
+            stop(work)
+        except RuntimeError as exc:
+            print(f"orchestration-conformance: run: {exc}", file=sys.stderr)
+            rc = 1
+    return rc
+
+
+#: the checks that need the fault-injection hook: a strict CI run must have passed both, so a
+#: target that stopped declaring the hook (a skip is not a failure) cannot pass without them
+FAULT_CHECKS = (
+    "killed-worker-fails-run-and-frees-capacity",
+    "restart-reconciles-runs-and-capacity",
+)
+
+
+def cmd_verdict(path: Path) -> int:
+    """0 when ``path`` (a ``run --out`` report) passed and both fault checks in it passed."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        runs = doc["runs"]
+        status = {r["check"]: r["status"] for run in runs for r in run["results"]}
+        ok = bool(runs) and all(run["ok"] is True for run in runs)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(
+            f"orchestration-conformance: verdict: {path} is not a report ({exc})", file=sys.stderr
+        )
+        return 1
+    missing = [c for c in FAULT_CHECKS if status.get(c) != "pass"]
+    if not ok or missing:
+        said = ", ".join(f"{c}: {status.get(c, 'not run')}" for c in missing) or "the run failed"
+        print(f"orchestration-conformance: verdict: {said}", file=sys.stderr)
+        return 1
+    print(f"orchestration-conformance: verdict: {' and '.join(FAULT_CHECKS)} passed")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -298,8 +344,15 @@ def main(argv: list[str] | None = None) -> int:
         help="the adapter's restart: kill the controller and its sessions, start it again",
     )
     s.add_argument("--work", type=Path, required=True)
+    v = sub.add_parser("verdict", help="whether a run's --out report passed both fault checks")
+    v.add_argument("report", type=Path)
     a = ap.parse_args(argv)
+    if a.cmd == "verdict":
+        return cmd_verdict(a.report)
     if a.cmd == "restart":
+        if (why := linux_only()) is not None:
+            print(why, file=sys.stderr)
+            return 2
         return cmd_restart(a.work)
     return cmd_run(a.controller, a.work, a.check, a.strict, a.out)
 

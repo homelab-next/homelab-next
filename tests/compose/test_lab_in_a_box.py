@@ -1957,3 +1957,50 @@ def test_the_lab_smoke_reads_the_orchestration_endpoint_and_token(checks):
     assert (
         bases["orchestration"] == f"http://{LOOPBACK}:8088" and bases["orchestration-token"] == "t"
     )
+
+
+def _resolved_judge() -> str:
+    text = GUARD.read_text()
+    return text.split("read -r -d '' _LAB_RESOLVED_JUDGE <<'PY' || true\n", 1)[1].split(
+        "\nPY\n", 1
+    )[0]
+
+
+def test_pass2_judges_the_job_api_token_compose_resolves(tmp_path):
+    """Pass 1 reads .env as written; compose expands ${VAR} there, so
+    `LAB_ORCHESTRATOR_TOKEN=${UNSET}x` is 9 characters to pass 1 and `x` to compose. The resolved
+    judge holds the resolved value to the 32-character minimum, with a stub docker that answers
+    as compose resolves such an .env."""
+    lab = tmp_path / "lab"
+    lab.mkdir()
+    (lab / ".env.example").write_text("LAB_ORCHESTRATOR_TOKEN=fake-placeholder\n")
+    (lab / ".env").write_text("LAB_ORCHESTRATOR_TOKEN=${UNSET}x\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    resolved = tmp_path / "resolved.env"
+    stub = bin_dir / "docker"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  *\'--format json\'*) echo \'{"services": {"orchestrator": {"ports": [{"host_ip": "0.0.0.0", "published": "8088"}]}}}\' ;;\n'
+        f"  *'.env -f'*) cat {resolved} ;;\n"
+        "  *) echo LAB_ORCHESTRATOR_TOKEN=fake-placeholder ;;\n"
+        "esac\n"
+    )
+    stub.chmod(0o755)
+
+    def judge(token: str) -> subprocess.CompletedProcess:
+        resolved.write_text(f"LAB_I_UNDERSTAND_UNAUTHENTICATED=1\nLAB_ORCHESTRATOR_TOKEN={token}\n")
+        return subprocess.run(
+            [sys.executable, "-I", "-c", _resolved_judge(), str(lab)],
+            env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+
+    r = judge("x")  # what ${UNSET}x resolves to
+    assert r.returncode == 4 and "LAB_ORCHESTRATOR_TOKEN resolves to 1 characters" in r.stderr, (
+        r.stderr
+    )
+    r = judge("a-job-api-token-of-32-characters")
+    assert r.returncode == 0, r.stderr
