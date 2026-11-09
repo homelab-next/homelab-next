@@ -51,6 +51,13 @@ volumes:
   broker-relay:    # <state>/relay: the relay's markers; the broker only reads them
   orchestrator-state:
 
+# The controller's job API token, given to its container as a file (/run/secrets/...), never in an
+# environment: the container's init (PID 1) would hold it there, readable through /proc by a
+# session of the same uid.
+secrets:
+  orchestrator-token:
+    environment: LAB_ORCHESTRATOR_TOKEN
+
 services:
   # --- object-store: S3 API ---------------------------------------------------------------
   object-store:
@@ -541,7 +548,7 @@ services:
   # --- orchestration: the controller (orchestrator/cmd/controller) -------------------------
   # Built from this checkout, with the exec runner running /bin/sh sessions (no model): the smoke
   # submits a job through the job API and waits for it to finish (smoke_checks.py: orchestration).
-  # The entrypoint writes the tokens file from HNX_SECRET_ORCHESTRATOR_TOKEN's digest.
+  # The entrypoint writes the tokens file from the token secret's digest.
   orchestrator:
     <<: [*restart, *hardened]
     image: hnx-lab-orchestrator:local
@@ -549,8 +556,8 @@ services:
       context: ../..
       dockerfile: compose/lab-in-a-box/orchestrator/Dockerfile
     command: ["/bin/sh", "/app/entrypoint.sh"]
+    secrets: [orchestrator-token]
     environment:
-      HNX_SECRET_ORCHESTRATOR_TOKEN: ${LAB_ORCHESTRATOR_TOKEN:?see .env.example}
       GOMEMLIMIT: 32MiB  # below mem_limit, so the collector works before the kernel kills it
     volumes:
       - orchestrator-state:/var/lib/orchestrator
