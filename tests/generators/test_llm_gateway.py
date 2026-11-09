@@ -2011,7 +2011,7 @@ def test_the_spec_s_role_table_stays_inside_the_checkout(tmp_path):
     # tmp_path is in no git checkout, so the spec's own directory is the root
     for roles, words in (
         (str(outside / "roles.json"), "an absolute path"),
-        ("../outside/roles.json", "outside the checkout"),
+        ("../outside/roles.json", "outside the root"),
     ):
         doc = yaml.safe_load(spec.read_text())
         doc["roles"] = roles

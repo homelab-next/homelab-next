@@ -429,14 +429,15 @@ def _registry_host_problem(registry: Any, host: str, service_domain: str, port: 
     return None
 
 
-def _role_table(base: Path, rel: str) -> tuple[RoleTable, Any]:
-    """The spec's role table and its raw ``roles``, read inside the checkout without following a
-    symbolic link (:func:`homelabnext.modules.loader.read_contained`, as ``hnx registry
-    bindings`` reads it) and validated by :meth:`RoleTable.loads`."""
+def _role_table(base: Path, rel: str, root: Path | None = None) -> tuple[RoleTable, Any]:
+    """The spec's role table and its raw ``roles``, read inside ``root`` (the caller's: default
+    the working directory ``hnx`` runs in, never one discovered from the spec's directory)
+    without following a symbolic link (:func:`homelabnext.modules.loader.read_contained`, as
+    ``hnx registry bindings`` reads it) and validated by :meth:`RoleTable.loads`."""
     from homelabnext.modules import loader as ld
 
     try:
-        data = ld.read_contained(base, rel)
+        data = ld.read_contained(base, rel, root)
     except ld.Unreadable as exc:
         raise OSError(str(exc)) from None
     table = RoleTable.loads(data, rel)
@@ -449,6 +450,7 @@ def load_spec(
     conformance: bool = False,
     conformance_host: str | None = None,
     registry: Any = None,
+    root: Path | None = None,
 ) -> Spec:
     """Read and validate a gateway spec; relative paths in it resolve against its directory.
     ``conformance`` (and ``conformance_host``) select the test-only render (module docstring);
@@ -462,6 +464,7 @@ def load_spec(
         conformance=conformance,
         conformance_host=conformance_host,
         registry=registry,
+        root=root,
     )
 
 
@@ -473,8 +476,10 @@ def spec_from_dict(
     conformance: bool = False,
     conformance_host: str | None = None,
     registry: Any = None,
+    root: Path | None = None,
 ) -> Spec:
-    """``registry`` (a loaded :class:`~homelabnext.registry.model.Registry`) is used instead of
+    """``root`` bounds the role table's path (default: the working directory when the spec is
+    in it, else the spec's directory).  ``registry`` (a loaded :class:`~homelabnext.registry.model.Registry`) is used instead of
     the spec's own ``registry:`` file when given (``hnx registry bindings --gateway``)."""
     problems: list[str] = []
     if not isinstance(doc, Mapping):
@@ -498,7 +503,7 @@ def spec_from_dict(
     if not isinstance(roles_path, str):
         raise GatewaySpecError(f"{source}: 'roles' (the role table path) is required")
     try:
-        table, raw_roles = _role_table(base, roles_path)
+        table, raw_roles = _role_table(base, roles_path, root)
     except RoleTableError as exc:
         raise GatewaySpecError(f"{source}: role table invalid", exc.problems) from None
     except (OSError, ValueError) as exc:

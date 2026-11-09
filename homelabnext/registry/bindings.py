@@ -403,7 +403,9 @@ def requires_problems(
     return out
 
 
-def gateway_problems(registry: Registry, path: str | Path) -> list[str]:
+def gateway_problems(
+    registry: Registry, path: str | Path, root: str | Path | None = None
+) -> list[str]:
     """An LLM gateway spec (and the role table it names) validated against ``registry`` by the
     gateway generator's own rules, so a backend that reaches a non-primary row is refused here as
     it is at render time.  A conformance spec is read in its test-only mode."""
@@ -413,16 +415,23 @@ def gateway_problems(registry: Registry, path: str | Path) -> list[str]:
     conformance = isinstance(doc, Mapping) and bool(doc.get("conformance"))
     out: list[str] = []
     try:
-        gw.load_spec(path, conformance=conformance, registry=registry)
+        gw.load_spec(
+            path,
+            conformance=conformance,
+            registry=registry,
+            root=Path(root) if root is not None else None,
+        )
     except gw.GatewaySpecError as exc:
         found = list(getattr(exc, "problems", None) or [])
         out += [f"{path}: {p}" for p in found] or [str(exc)]
     except (OSError, ValueError) as exc:
         raise BindingsInputError(f"{path}: {exc}") from None
-    return out + _gateway_role_problems(registry, Path(path), doc)
+    return out + _gateway_role_problems(registry, Path(path), doc, root)
 
 
-def _gateway_role_problems(registry: Registry, path: Path, doc: Any) -> list[str]:
+def _gateway_role_problems(
+    registry: Registry, path: Path, doc: Any, root: str | Path | None = None
+) -> list[str]:
     """The spec's role table: a binding naming a registry row or capability is judged as any
     role binding is; a name the registry does not hold is one of the spec's own backends, which
     the gateway rules above have judged."""
@@ -435,7 +444,7 @@ def _gateway_role_problems(registry: Registry, path: Path, doc: Any) -> list[str
         return []
     table_path = path.parent / rel
     try:
-        table = RoleTable.loads(ld.read_contained(path.parent, rel), str(table_path))
+        table = RoleTable.loads(ld.read_contained(path.parent, rel, root), str(table_path))
     except ld.Unreadable as exc:
         raise BindingsInputError(f"{table_path}: {exc}") from None
     except (RoleTableError, UnicodeDecodeError, ValueError) as exc:
@@ -466,6 +475,7 @@ def check(
     site: Mapping[str, Any] | None = None,
     mods: Mapping[str, Mapping[str, Any]] | None = None,
     reference_examples: bool = False,
+    root: str | Path | None = None,
 ) -> Report:
     """Every binding site over ``registry``: its upstreams, each ``(where, RoleTable)``, each
     ``(where, evaluation report)``, each ``(where, pack)``, each ``(where, conformance target)``,
@@ -482,7 +492,7 @@ def check(
     for where, doc in targets:
         rep.problems += target_problems(registry, doc, where)
     for path in gateways:
-        rep.problems += gateway_problems(registry, path)
+        rep.problems += gateway_problems(registry, path, root)
     if site is not None:
         rep.problems += requires_problems(registry, site, mods or {})
     return rep

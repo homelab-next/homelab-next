@@ -726,7 +726,7 @@ def test_a_gateway_spec_s_role_table_stays_inside_the_checkout(tmp_path, capsys,
     if kind == "absolute":
         doc["roles"], words = str(outside / "roles.json"), "an absolute path"
     elif kind == "outside":
-        doc["roles"], words = "../outside/roles.json", "outside the checkout"
+        doc["roles"], words = "../outside/roles.json", "outside the root"
     else:
         (spec_dir / "linked").symlink_to(outside, target_is_directory=True)
         doc["roles"], words = "linked/roles.json", "a symbolic link on its path"

@@ -66,7 +66,12 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         action="store_true",
         help="also read --eval-report from the base CI compares with",
     )
-    p.add_argument("--root", default=".", help="the git checkout --eval-report is relative to")
+    p.add_argument(
+        "--root",
+        help="the checkout the inputs belong to (default: the working directory): "
+        "--eval-report is relative to it, and a gateway spec's role table must stay inside it "
+        "(by default, inside the working directory when the spec is in it, else the spec's)",
+    )
     p.add_argument(
         "--packs", action="append", default=[], help="a workflow pack or a directory of packs"
     )
@@ -192,7 +197,7 @@ def _bindings(args: argparse.Namespace, reg, out, err) -> int:
         if bool(args.site) != bool(args.modules):
             raise bd.BindingsInputError("--site and --modules go together")
         tables = bd.load_role_tables(args.roles)
-        reports = bd.load_eval_reports(args.eval_report, root=args.root, base=_base(args))
+        reports = bd.load_eval_reports(args.eval_report, root=args.root or ".", base=_base(args))
         packs = bd.load_packs(args.packs, args.deployed)
         targets = bd.load_targets(args.target)
         gateways = bd.load_gateways(args.gateway)
@@ -209,6 +214,7 @@ def _bindings(args: argparse.Namespace, reg, out, err) -> int:
             site=site,
             mods=mods,
             reference_examples=args.reference_examples,
+            root=args.root,
         )
     except bd.BindingsInputError as exc:
         print(f"hnx registry bindings: {exc}", file=err)
@@ -237,7 +243,7 @@ def _base(args: argparse.Namespace) -> str | None:
     from homelabnext.registry.bindings import BindingsInputError
 
     try:
-        base, _why = ci_base_from_env(Path(args.root))
+        base, _why = ci_base_from_env(Path(args.root or "."))
     except ValueError as exc:
         raise BindingsInputError(f"--ci-base: {exc}") from None
     return base or None

@@ -7,7 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
-- LLM gateway and `hnx registry bindings --gateway`: a spec's `roles:` path is refused when absolute, when it leaves the checkout the spec is in (`..` inside it is fine), or when a symbolic link is on its path; both read it through one validator, `RoleTable.loads`.
+- LLM gateway and `hnx registry bindings --gateway`: a spec's `roles:` path is refused when absolute, when it leaves the root the caller gives (`--root`; by default the working directory when the spec is in it, else the spec's directory; `..` inside it is fine), or when a symbolic link is on its path (each component opened without following one); both read it through one validator, `RoleTable.loads`.
 - LLM gateway: the spec's role table is read without following a symbolic link on its path, as `hnx registry bindings` reads its inputs.
 - **Breaking for overlay sites:** `hnx site validate` refuses a resolver `authoritative_for` a zone under the registry's alias zone, as it refuses a static record there (the alias zone itself, which the DNS zone generator renders with its own SOA and NS, may be served) ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 2).
 - **Breaking for overlay sites:** LLM gateway: a self-declared backend host that is a capability's primary alias is that registry service and meets its checks (lab zone, port, scheme); it skipped the zone check, so a backend in a non-lab zone rendered as local. A primary that serves a second API port cannot be reached through its alias on that port: register the second port as a row of its own ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 3).
