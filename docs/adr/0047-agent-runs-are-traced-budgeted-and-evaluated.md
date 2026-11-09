@@ -607,7 +607,10 @@ gateway detector also on step 4), and may run in parallel with steps 3 to 9.
 3. **Gateway, trace and run tokens.** The Go package `orchestrator/internal/trace` reads the vectors
    in place. The gateway gains run-token verification, `run_binding: required|optional` and
    `run_binding_required_from` in `gateway.json` (rendered from key owners and the controller's
-   ledger row), the trace fields in the usage records and `traceparent` to local deployments. The
+   ledger row), the trace fields in the usage records and `traceparent` to local deployments
+   (*amended by ADR-0051 decision 13:* the token travels in `X-HNX-Run-Token`, the constant
+   `RUN_TOKEN_HEADER` of `homelabnext/orchestration/trace.py`, which the gateway imports and
+   redacts from its access logs as it does `Authorization`). The
    inference suite gains the feature `trace-context`, and `gateway-conformance` runs it. Its tests
    prove:
    - a missing, forged, expired or other-key token is refused with its code before the body is

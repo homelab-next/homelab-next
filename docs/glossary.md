@@ -9,7 +9,7 @@ summary_of: outline:sha256:050f5dfb3c4eafcd
 test. There are <!-- hnx:gen:fact:capability-count-word -->eighteen<!-- /hnx:gen --> core capabilities (<!-- hnx:gen:fact:capabilities -->`lake-query`, `lake-catalog`, `object-store`, `inference`, `fast-classifier`, `notify`, `cases`, `events`, `orchestration`, `broker`, `secrets`, `idp`, `records`, `detections`, `context`, `projects`, `codemode-executor`, `codemode-runner`<!-- /hnx:gen -->;
 `CAPABILITIES` in `homelabnext/capability_names.py`, also in `docs/interfaces.md` section 3);
 fourteen existed at the first drop and the rest were added by later decisions. The
-<!-- hnx:gen:fact:extended-count-word -->seven<!-- /hnx:gen --> **extended** suites (<!-- hnx:gen:fact:extended-suites -->`backup`, `dns`, `edge`, `broker-tokens`, `orchestration-features`, `migration`, `log-pipeline`<!-- /hnx:gen -->; `EXTENDED` in the same
+<!-- hnx:gen:fact:extended-count-word -->eight<!-- /hnx:gen --> **extended** suites (<!-- hnx:gen:fact:extended-suites -->`backup`, `dns`, `edge`, `broker-tokens`, `orchestration-features`, `migration`, `log-pipeline`, `agent-runner`<!-- /hnx:gen -->; `EXTENDED` in the same
 file) also carry a conformance directory without being core capabilities. Not to be confused with a **`cap:` id** (a grant class in
 `homelabnext/agent/tool_classes.yml`, what an agent profile may use), a **`cap_` group** (an
 inventory group that places a role on hosts, ADR-0004) or a **slot** (below).

@@ -1,0 +1,25 @@
+{
+  "grants_version": "1.0",
+  "profile": "triage",
+  "profile_digest": "sha256:abababababababababababababababababababababababababababababababab",
+  "servers": {
+    "lake": {
+      "kind": "lake-query",
+      "transport": "http",
+      "locality": "local",
+      "url": "https://lake-query.svc.example.internal/mcp"
+    },
+    "notes": {
+      "kind": "notes",
+      "transport": "stdio",
+      "locality": "local",
+      "command": "/usr/local/bin/notes-mcp",
+      "args": [
+        "--read-only"
+      ],
+      "env": {
+        "NOTES_PREFIX": "triage/"
+      }
+    }
+  }
+}

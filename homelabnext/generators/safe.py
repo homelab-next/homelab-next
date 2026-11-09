@@ -77,22 +77,29 @@ def check_fields(fmt: str | None, fields: Mapping[str, Any]) -> None:
             checked(value, name, fmt)
 
 
-def control_char_paths(node: Any, path: str = "") -> Iterable[str]:
+def control_char_paths(node: Any, path: str = "", _clean: set[int] | None = None) -> Iterable[str]:
     """Yield ``path: message`` for every string (key or value) holding a control character.
 
     Used by the document loaders as a schema-independent backstop: Python's ``re`` lets ``$`` match
-    before a trailing newline, so a pattern alone does not keep ``"name\\n"`` out.
+    before a trailing newline, so a pattern alone does not keep ``"name\\n"`` out.  A string
+    object already searched clean is not searched again (an alias makes one large value appear
+    at many paths; ``_clean`` holds the ids of the strings searched in this walk).
     """
+    clean = set() if _clean is None else _clean
     if isinstance(node, str):
+        if id(node) in clean:
+            return
         m = CONTROL_RE.search(node)
         if m:
             yield f"{path or '<root>'}: control character {m.group()!r} in {node!r}"
+        else:
+            clean.add(id(node))
     elif isinstance(node, Mapping):
         for k, v in node.items():
             sub = f"{path}/{k}" if path else str(k)
             if isinstance(k, str) and CONTROL_RE.search(k):
                 yield f"{sub}: control character in key {k!r}"
-            yield from control_char_paths(v, sub)
+            yield from control_char_paths(v, sub, clean)
     elif isinstance(node, list | tuple):
         for i, v in enumerate(node):
-            yield from control_char_paths(v, f"{path}/{i}" if path else str(i))
+            yield from control_char_paths(v, f"{path}/{i}" if path else str(i), clean)

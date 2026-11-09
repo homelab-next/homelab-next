@@ -58,6 +58,9 @@ uncalled:
 
 # checks that no invariants criterion runs
 not_in_runner:
+  yaml-loader-lint: >-
+    a review of the package source (which YAML loaders it calls), not a property of a running
+    fleet; make gates and CI run it on every change, and its baseline only shrinks
   licence-check: >-
     a review of the repository's own pins and compose images against tools/licences.yml (ADR-0011),
     not a property of a running fleet; make check and CI run it whenever either changes

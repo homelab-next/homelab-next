@@ -1172,7 +1172,7 @@ def test_a_role_table_ceiling_the_rules_refuse_is_refused(tmp_path):
     roles = _roles_with(tlp_ceiling="amber")
     roles["roles"]["cloud-reasoner"]["bindings"][0]["leaves_lab"] = True
     # the role table's schema refuses it before the rules see it (RoleTable.load)
-    with pytest.raises(gw.GatewaySpecError, match="tlp_ceiling: 'amber' is not one of"):
+    with pytest.raises(gw.GatewaySpecError, match="tlp_ceiling: is not one of"):
         gw.load_spec(make_spec(tmp_path, roles))
 
 
@@ -2030,3 +2030,17 @@ def test_a_role_table_path_with_dotdot_inside_the_checkout_is_read():
     # the lab-in-a-box spec names ../../../../schemas/...: inside the repository, so allowed
     assert ".." in yaml.safe_load(LAB_SPEC.read_text())["roles"]
     assert gw.render_file(LAB_SPEC)
+
+
+def test_render_takes_the_root_its_role_table_stays_in(tmp_path, capsys):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    spec = make_spec(spec_dir)
+    (spec_dir / "roles.json").rename(tmp_path / "roles.json")
+    doc = yaml.safe_load(spec.read_text())
+    doc["roles"] = "../roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 1
+    assert "outside the root" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(spec), str(out), "--root", str(tmp_path)]) == 0

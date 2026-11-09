@@ -282,18 +282,29 @@ def path_has_symlink(root: str | Path, rel: str) -> bool:
 
 
 def containment_root(base: str | Path) -> Path:
-    """The default root :func:`read_contained` keeps a path inside: the caller's working
-    directory when ``base`` is in it (the checkout ``hnx`` runs against), else ``base`` itself.
-    Nothing is discovered from ``base``: a directory a change controls could otherwise name a
-    root of its choosing (a planted bare-repository layout makes ``git rev-parse
-    --show-toplevel`` answer ``/``)."""
-    here = Path(os.path.abspath(os.getcwd()))
+    """The default root :func:`read_contained` keeps a path inside: the nearest directory, from
+    ``base`` up to (and no higher than) the caller's working directory, that holds a ``.git``
+    entry (a checkout; a change cannot commit a ``.git``, and a dotfiles checkout in a home
+    directory above the working directory is never reached); else this package's own verified
+    source checkout (:func:`homelabnext.paths.checkout_root`, which a ``git archive`` export
+    also is) when it holds ``base``; else ``base`` itself.  Nothing is asked of git: a directory a
+    change controls could otherwise name a root of its choosing (a planted bare-repository layout
+    makes ``git rev-parse --show-toplevel`` answer ``/``).  A root of ``/`` is refused by
+    :func:`read_contained` whichever way it was chosen."""
     target = Path(os.path.abspath(base))
-    try:
-        target.relative_to(here)
-    except ValueError:
-        return target
-    return here
+    here = Path(os.path.abspath(os.getcwd()))
+    if target == here or here in target.parents:
+        for d in (target, *target.parents):
+            if os.path.lexists(d / ".git"):
+                return d
+            if d == here:
+                break
+    own = paths.checkout_root()
+    if own is not None:
+        own = Path(os.path.abspath(own))
+        if target == own or own in target.parents:
+            return own
+    return target
 
 
 def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -> bytes:
@@ -307,21 +318,26 @@ def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -
     if Path(rel).is_absolute():
         raise Unreadable("an absolute path (give one relative to the file that names it)")
     root = Path(os.path.abspath(root)) if root is not None else containment_root(base)
+    if root == Path(root.anchor):
+        raise Unreadable(f"the root {root} is a filesystem root: give the checkout instead")
     target = Path(os.path.normpath(os.path.join(os.path.abspath(base), rel)))
     try:
         parts = target.relative_to(root).parts
     except ValueError:
-        raise Unreadable(f"outside the root {root}") from None
+        raise Unreadable(
+            f"outside the root {root}: pass --root <checkout> or run from the checkout"
+        ) from None
     if not parts:
         raise Unreadable("not a regular file")
-    if Path(root).is_symlink():
-        raise Unreadable("a symbolic link on its path")
+
     cloexec = getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     dirflags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow | cloexec
     try:
-        fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | cloexec)
+        fd = os.open(root, dirflags)  # O_NOFOLLOW: the root itself is no link either
     except OSError as exc:
+        if os.path.islink(root):
+            raise Unreadable("a symbolic link on its path") from None
         raise Unreadable(f"cannot be opened ({exc.strerror})") from None
     try:
         for n, part in enumerate(parts[:-1], start=1):
@@ -411,8 +427,14 @@ def load_yaml(path: str | Path, *, follow: bool = True) -> Any:
 
 def parse_yaml(text: str) -> Any:
     """YAML text with duplicate keys and aliases refused and deep nesting refused."""
+    from homelabnext._yaml import ExpansionRefused, NestedTooDeeply
+
     try:
         return yaml.load(text, Loader=_Loader)
+    except NestedTooDeeply:
+        raise Unreadable("nested too deeply") from None
+    except ExpansionRefused as exc:
+        raise Unreadable(str(getattr(exc, "problem", "") or exc)) from None
     except yaml.YAMLError as exc:
         raise Unreadable(
             f"not valid YAML ({exc.__class__.__name__}: {getattr(exc, 'problem', '') or exc})"

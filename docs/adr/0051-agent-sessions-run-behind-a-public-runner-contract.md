@@ -87,7 +87,14 @@ inputs must not thereby choose what runs as an agent's uid.
    - `toolsets`, and `servers` as **server ids only**. A server's command, arguments and
      environment are never in the spec (decision 3);
    - `target`: the gateway's base URL, the model role, and whether this is the cloud leg. There
-     is never an engine URL (ADR-0038; no passthrough, ADR-0026's amendment);
+     is never an engine URL (ADR-0038; no passthrough, ADR-0026's amendment). The URL is a
+     consistency check, not a choice: the deploy pins the gateway in the unit template
+     (`Environment=HNX_GATEWAY_URL=`; the development launcher sets it the same way), and the
+     body sends the run's key, tokens and prompt only there. A spec naming another gateway makes
+     no call and ends `Internal`, so whoever writes the spec cannot choose where the key goes
+     (ADR-0045 decision 6). The launcher, which is trusted, refuses such a spec itself before it
+     starts the body, so the property does not rest on provider code; the body's own refusal
+     stays as a second line;
    - `limits` (`timeout_s`, `stall_timeout_s`, `max_turns`, `liveness`);
    - `gateway_tag`, `trace` (a `traceparent`), `budgets` (ADR-0047 decision 6, as data);
    - `credentials`: the names of the gateway key and of each run token, which decision 8 makes
@@ -98,8 +105,12 @@ inputs must not thereby choose what runs as an agent's uid.
 
 3. **A session's MCP servers come from a deploy-rendered grants file, never from the spec.**
    `hnx gen agent-units`, run as root by the deploy, renders each compiled profile's servers
-   (`grants.Catalog.Render`, both lanes) into `/etc/hnx-agent/<slug>/grants.json`, root-owned
-   `0644`, beside the unit template. It refuses a server of a kind the profile is not granted.
+   (`grants.Catalog.Render`, both lanes) into `/etc/hnx-agent/<slug>/grants.json`, mode `0640`,
+   owned `root:hnx-agent-<slug>`, beside the unit template. It refuses a server of a kind the
+   profile is not granted. A server's `env` holds no credential and refuses every key the MCP
+   catalog refuses (its `DENIED_ENV`: the loader, the interpreters, the proxies, ...); a
+   server's `locality: local` is checked against the registry at render time, so a non-local
+   server is never given the trace by a wrong label.
    The template pins the file in two ways:
    - **The file's own bytes.** The sha256 of `grants.json` is pinned as
      `Environment=HNX_GRANTS_SHA256=`. That is the integrity check: the runner body refuses a file
@@ -172,13 +183,23 @@ inputs must not thereby choose what runs as an agent's uid.
 
    - **The gateway corroborates what it records.**
      - A self-reported `ContextExceeded` counts only when the gateway's usage records for the
-       run's tag hold a call with `error_code` `upstream_rejected` and `status` 400. That is the
-       gateway's envelope for an upstream 4xx. It proves the upstream refused the call, not that
+       run's tag hold a call with `error_code` `upstream_rejected` and `status` 400, recorded
+       later than every call the gateway answered in the run (a refusal followed by answered calls
+       is a turn the runtime recovered from, not the reason it stopped). That is the gateway's
+       envelope for an upstream 4xx. It proves the upstream refused the call, not that
        the refusal was the context window, because the gateway does not tell those apart.
      - An uncorroborated `ContextExceeded` is `Internal`, which moves nothing. That covers a claim
        with no matching record, records that lag, and a window in which the gateway reported
        `usage_records_dropped > 0`. It is never `TurnFailed`, which would be attributable and move
        the job.
+     - **How long the launcher waits.** Before it decides a corroborated class, the launcher waits
+       up to `runner.agent.gateway_wait_s` (default 2 seconds) for the gateway's records to cover
+       the run's end, polling the usage API. Records still behind after that, or records the
+       gateway dropped since the run started, leave the claim uncorroborated, so a slow gateway
+       can delay a class by that long and never turn it into an attributable one. The gateway's
+       `usage_records_dropped` is cumulative since the gateway started; the launcher reads it
+       when the run starts and counts only drops after, so one old drop never leaves every
+       later run unjudged.
      - `ConcurrencyLimited` is **not** corroborated. The gateway refuses `429 concurrency_limited`
        before the model call and writes no usage record for it, so requiring one would turn every
        such refusal into a fault and move the job, which the operator's decision of 2026-11-08
@@ -301,6 +322,12 @@ inputs must not thereby choose what runs as an agent's uid.
    `runner.env_allowlist` applies to this launcher only. The unit launcher's environment is the
    template's, fixed at deploy.
 
+   The body shares this launcher's uid, so it could write any file under the run's root. The
+   launcher therefore reads how the body ended from a pipe the run's supervisor inherits and the
+   body does not, never from a file the body could plant first; a supervisor that does not exit
+   0, or a record that is not one, is `Internal`. `runner/agent`'s development launcher keeps
+   this design.
+
 10. **The launcher decides how a unit ended, before the unit is collected.**
     - **Watching.** It subscribes to the service manager's `JobRemoved` and to the unit's
       `PropertiesChanged`. When the unit goes inactive or failed, it reads `Result`,
@@ -319,7 +346,19 @@ inputs must not thereby choose what runs as an agent's uid.
       | anything else | `Internal` |
 
     - **Liveness.** `cpu` reads the unit's `cpu.stat`. `progress` counts the stream's new `call`
-      records that the gateway corroborates (decision 4).
+      records that the gateway corroborates (decision 4). While the gateway's records lag by more
+      than the gateway wait, or the gateway dropped records since the run started, progress can
+      be judged neither way, so the stall timer is **frozen**: it neither advances nor resets.
+      The launcher never falls back to CPU time there, because a body could flood the gateway
+      into dropping records and then busy-loop to stay alive; such a body is bounded by its
+      ceiling (`timeout_s`). Nor does a stale window stall a run, because `Stalled` is
+      attributable and one gateway hiccup would then move every run of the fleet. A run's
+      liveness mode is fixed by its spec, so no mode switch can reset the timer.
+    - **The timeouts are ordered.** A `stall_timeout_s` other than 0 must be at least twice the
+      launcher's gateway wait plus one poll interval (4.05 seconds with the default 2-second
+      wait), so records that are merely late are never what stalls a run. The launcher refuses
+      a shorter one before starting anything, and `controller check` does the same for a
+      configuration's limits (step 3).
     - **`ResourceLimit` end to end.**
       - It comes only from `Result=oom-kill` or the stream bound (decision 4), never from a signal
         kill. A `SIGKILL` the launcher did not cause is `KilledExternally`.
@@ -370,9 +409,17 @@ inputs must not thereby choose what runs as an agent's uid.
 13. **The `agent-runner` suite proves the contract against a fake runtime and against each
     provider.** It runs with:
     - a fake gateway that records every call's headers and bearer, and speaks ADR-0047's wire
-      formats for run tokens and budget refusals (its steps 3 and 4);
+      formats for run tokens and budget refusals (its steps 3 and 4). The run token travels in
+      one header, `X-HNX-Run-Token` (`RUN_TOKEN_HEADER` in `homelabnext/orchestration/trace.py`),
+      which every party imports and ADR-0047's step 3 gateway verifies and, like
+      `Authorization`, never writes to a log;
     - a fake local and a fake non-local MCP server;
-    - the launcher a target names.
+    - a launcher. A provider's target supplies only its runner body's argv and its
+      `exit_classes`, and is run under the reference launcher (later the controller's
+      `runner/agent`); a launcher is certified by its own target, and `hnx modules check`
+      refuses an `agent-runtime` provider whose target names any other adapter. So the checks of the
+      launcher's own rules (exit statuses, stream bounds, what reaches the body) always run,
+      with a suite body in place of the provider's, and no target can skip them.
 
     Its MUST checks:
     - `session-answers`: a spec in, the answer and a valid stream with an `end` record out;
@@ -452,6 +499,10 @@ inputs must not thereby choose what runs as an agent's uid.
     - The conformance harness uses a throwaway token instead of an unauthenticated loopback bind.
     - The lab image moves to a slim or distroless runtime stage, read-only with a `tmpfs` `/tmp`.
 
+    - The gateway emits a distinct `error_code` for a context-window refusal (for example
+      `context_length_exceeded`), and `ContextExceeded` is corroborated on it, not on any 400
+      `upstream_rejected`.
+
     Two follow-ups are already on `main` and are not repeated: the `events.token_env` refusals
     (the facts commands' environment, the session's variables and the allowlist), and the `exec`
     runner's named exclusion of its servers-file variable.
@@ -464,6 +515,8 @@ inputs must not thereby choose what runs as an agent's uid.
     - ADR-0047's decision 2 table names PR 2.4 for the controller-to-runner hop. It now names this
       ADR's step 3 for the seam fields and ADR-0047's step 6 for the minting.
     - ADR-0047's step 6 lands after this ADR's step 3, and no longer adds `BudgetExhausted`.
+    - ADR-0047's step 3 carries the run token in `X-HNX-Run-Token` (decision 13), imports the
+      shared constant, and redacts the header from the gateway's access logs.
 
 ## Consequences
 
@@ -520,6 +573,11 @@ Each step is its own pull request and says what it proves.
 
    Proves, in that job: the unit launcher's MUST checks of decision 13, `per-run-credential` with
    its mutants, and every polkit mutant refused.
+
+   It also requires, each with a check: an agent user has no lingering user manager
+   (`loginctl` linger off), is denied `at` and `cron`, and gets nothing on the system bus beyond
+   polkit's default deny. `cancel-ends-the-whole-session` gains a variant whose body tries
+   `systemd-run --user` to leave a process outside the run's unit.
 5. **`patches` in the module schema and `hnx modules check`.** Proves: a listed patch with another
    digest is refused, an unlisted patch file is refused, a patched result that does not match
    `patched_sha256` fails the build, and a listed patch that matches passes.

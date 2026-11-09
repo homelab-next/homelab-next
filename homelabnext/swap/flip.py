@@ -29,7 +29,7 @@ from typing import Any
 
 import yaml
 
-from homelabnext.registry.model import RegistryError, _UniqueKeyLoader, build_registry
+from homelabnext.registry.model import RegistryError, build_registry
 
 FLIPPABLE = ("host", "port", "impl", "version")
 
@@ -134,10 +134,14 @@ def _changed(
 
 
 def load_doc(text: str) -> dict[str, Any]:
+    """A registry document, read as the registry loader reads it (``model.read_registry_doc``:
+    the size cap, no alias, the shared expansion budget, all before anything is constructed)."""
+    from homelabnext.registry.model import RegistryUnreadable, read_registry_doc
+
     try:
-        doc = yaml.load(text, Loader=_UniqueKeyLoader)
-    except yaml.YAMLError as exc:
-        raise FlipError(f"registry is not valid YAML: {exc}") from exc
+        doc = read_registry_doc(text)
+    except RegistryUnreadable as exc:
+        raise FlipError(str(exc)) from None
     if not isinstance(doc, dict):
         raise FlipError("registry root must be a mapping")
     return doc

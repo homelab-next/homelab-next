@@ -96,6 +96,7 @@ capabilities:
   cap:mail-gateway: [read]  # the mail relay that reports a suspected phish (workflows/packs/phishing-report.yml's producer)
   cap:automation: [exec]
   cap:agent-runtime: [exec]
+  cap:agent-runner: [exec]  # the agent-runtime slot's contract (ADR-0051): the same surface as cap:agent-runtime
   cap:dataflow: [exec]
   cap:log-pipeline: [exec]
   cap:dns: [exec]

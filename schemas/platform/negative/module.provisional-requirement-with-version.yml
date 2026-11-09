@@ -33,9 +33,9 @@ requires:
     version: '1.0'
     purpose: runs the agent's daily job in each lane
   - cap: cap:agent-runtime
-    provisional: true
-    purpose: the runtime the orchestrator dispatches the agent's job to (no contract yet)
     version: '1.0'
+    purpose: the runtime the orchestrator dispatches the agent's job to
+    provisional: true
   - cap: cap:records
     version: '1.0'
     purpose: the agent files one finding note per run

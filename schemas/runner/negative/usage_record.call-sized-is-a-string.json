@@ -1,0 +1,8 @@
+{
+  "type": "call",
+  "sized": "yes",
+  "prompt": "SECRET",
+  "arguments": {
+    "x": 1
+  }
+}
