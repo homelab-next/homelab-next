@@ -748,7 +748,7 @@ DECISION_16_CONSUMERS = (
     "schemas/status/examples/orchestration_export.header.json",
     "schemas/status/examples/orchestration_export.job.json",
     "workflows/packs/agent-job-retry.yml",
-    "schemas/events/examples/agent.job.failed.valid.json",
+    "schemas/events/examples/agent.job.finished.controller.json",
     "schemas/events/negative/agent.job.finished.bad-lane.json",
     "schemas/events/README.md",
     "docs/orchestration-telemetry.md",

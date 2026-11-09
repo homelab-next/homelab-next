@@ -714,8 +714,8 @@ def test_the_default_store_takes_both_of_the_controllers_sources(tmp_path):
     """ADR-0026 decision 16: for the one-release overlap the store takes the controller's
     svc:orchestrator and the private controller's svc:llm-orchestrator, each event once."""
     store = TelemetryStore(tmp_path / "s.db", clock=lambda: T0)
-    old, new = copy.deepcopy(examples()[0]), copy.deepcopy(examples()[1])
-    assert old["source"] == "svc:llm-orchestrator"
-    new["source"] = "svc:orchestrator"
+    new, old = copy.deepcopy(examples()[0]), copy.deepcopy(examples()[1])
+    assert new["source"] == "svc:orchestrator"  # the examples' source
+    old["source"] = "svc:llm-orchestrator"
     assert store.consume(body(old)).status == "processed"
     assert store.consume(body(new)).status == "processed"
