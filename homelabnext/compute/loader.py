@@ -284,6 +284,7 @@ def load_fleet(
     deploy: Mapping[str, Any] | None = None,
     site_addresses: Mapping[str, tuple[str, ...]] | None = None,
     delegated6: Any = None,
+    placement: Mapping[str, frozenset[str]] | None = None,
 ) -> Fleet:
     """Load, schema- and semantically validate; raise ComputeError listing every problem.
 
@@ -299,7 +300,8 @@ def load_fleet(
     (:func:`homelabnext.compute.zones.site_addresses`), which no extra address may claim.
     ``delegated6``: the site's ``delegated_prefixes6`` as read
     (:func:`homelabnext.compute.zones.site_delegated6`), the global IPv6 prefixes it declares its
-    own."""
+    own.  ``placement``: the service registry's capabilities per host
+    (:func:`registry_placement`), which widen the capabilities a guest on that host may declare."""
     from .validate import validate
 
     d = Path(directory)
@@ -329,8 +331,44 @@ def load_fleet(
         deploy=deploy,
         site_addresses=dict(site_addresses or {}),
         delegated6=delegated6,
+        placement=dict(placement or {}),
     )
     problems += validate(fleet, require_baselines=require_baselines)
     if problems:
         raise ComputeError(f"invalid guest set in {d}", problems)
     return fleet
+
+
+def registry_path(site_path: str | Path, explicit: str | Path | None = None) -> Path | None:
+    """The service registry the guests are judged against: ``explicit`` when given (it must
+    exist), else ``services.yml`` beside the site file when there is one, else None."""
+    if explicit:
+        return Path(explicit)
+    beside = Path(site_path).parent / "services.yml"
+    return beside if beside.is_file() else None
+
+
+def load_registry_for(site_path: str | Path, explicit: str | Path | None = None) -> Any:
+    """The registry of :func:`registry_path`, loaded, or None.  Unreadable is
+    :class:`ComputeUnreadable`, invalid :class:`ComputeError`."""
+    from homelabnext.network.loader import SiteError, SiteUnreadable, load_registry
+
+    path = registry_path(site_path, explicit)
+    if path is None:
+        return None
+    try:
+        return load_registry(path)
+    except SiteUnreadable as exc:
+        raise ComputeUnreadable(str(exc)) from exc
+    except SiteError as exc:
+        raise ComputeError(str(exc)) from exc
+
+
+def registry_placement(reg: Any) -> dict[str, frozenset[str]]:
+    """Registry host -> the capabilities its rows serve, every standing (ADR-0039 decision 7)."""
+    from homelabnext.registry.model import STANDINGS
+
+    out: dict[str, set[str]] = {}
+    for r in [] if reg is None else reg.rows(*STANDINGS):
+        out.setdefault(r.host, set()).add(r.capability)
+    return {h: frozenset(c) for h, c in out.items()}

@@ -165,3 +165,41 @@ def test_a_runner_beside_rows_declares_agent_runtime_where_the_host_role_says_so
         "zone: data,     role: agent-runtime}",
     )
     assert _validate(lab) == 0
+
+
+# ---- review follow-ups: a site's own capability names --------------------------------------
+
+
+def _own_capability(lab: Path) -> None:
+    """hub-1's only row answers for a capability no public vocabulary has."""
+    _edit(lab / "services.yml", "    capability: status-hub\n", "    capability: tide-gauge\n")
+    _set_capability(lab, "hub-1", "cap:tide-gauge")
+    _edit(
+        lab / "guests" / "hub-1.yml",
+        "capability_groups: [cap_monitoring]",
+        "capability_groups: [cap_monitoring, cap_tide_gauge]",
+    )
+
+
+def test_a_capability_only_the_registry_names_passes_with_it_and_fails_without(tmp_path, capsys):
+    lab = _lab(tmp_path)
+    _own_capability(lab)
+    assert _validate(lab) == 0
+    args = ["guests", "render", str(lab / "guests"), "--site", str(lab / "site.yml")]
+    assert hnx.main([*args, "--target", "inventory"]) == 0  # every subcommand reads it
+    assert hnx.main(["guests", "baselines", *args[2:]]) == 0
+    (lab / "services.yml").rename(lab / "elsewhere.yml")
+    capsys.readouterr()
+    assert _validate(lab) == 1
+    assert "capability cap:tide-gauge is not a known capability" in capsys.readouterr().err
+    assert hnx.main([*args, "--target", "inventory"]) == 1
+    assert _validate(lab, "--registry", str(lab / "elsewhere.yml")) == 0
+
+
+def test_a_registry_capability_widens_only_the_guests_on_its_host(tmp_path, capsys):
+    lab = _lab(tmp_path)
+    _own_capability(lab)
+    _set_capability(lab, "vault-1", "cap:tide-gauge")
+    assert _validate(lab) == 1
+    err = capsys.readouterr().err
+    assert "guest:vault-1: capability cap:tide-gauge is not a known capability" in err
