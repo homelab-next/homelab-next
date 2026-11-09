@@ -154,6 +154,23 @@ services:
     tls: none
     auth: idp
     description: The read-only status hub and its generated maps.
+  # An eval row (ADR-0039): the next status hub release in shadow beside the primary, answering by
+  # its row name only. Checklist X-12 fails once a non-primary row is past its until, so this date
+  # is real: promote the candidate, remove it, or move the date in a reviewed change.
+  hub-candidate:
+    capability: status-hub
+    impl: hnx-status
+    host: hub-1
+    protocol: http
+    port: 8091
+    health: {kind: http, path: /status.json, expect_status: 200}
+    upstreams: [events]
+    owner: platform-team
+    version: "0.2"
+    tls: none
+    auth: idp
+    description: The next status hub release, in shadow beside the primary.
+    standing: {tier: eval, until: "2027-11-30", why: the next hub release in shadow}
   events:
     capability: events
     impl: nats
