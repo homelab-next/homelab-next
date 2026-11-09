@@ -172,13 +172,20 @@ inputs must not thereby choose what runs as an agent's uid.
 
    - **The gateway corroborates what it records.**
      - A self-reported `ContextExceeded` counts only when the gateway's usage records for the
-       run's tag hold a call with `error_code` `upstream_rejected` and `status` 400. That is the
-       gateway's envelope for an upstream 4xx. It proves the upstream refused the call, not that
+       run's tag hold a call with `error_code` `upstream_rejected` and `status` 400, recorded
+       later than every call the gateway answered in the run (a refusal followed by answered calls
+       is a turn the runtime recovered from, not the reason it stopped). That is the gateway's
+       envelope for an upstream 4xx. It proves the upstream refused the call, not that
        the refusal was the context window, because the gateway does not tell those apart.
      - An uncorroborated `ContextExceeded` is `Internal`, which moves nothing. That covers a claim
        with no matching record, records that lag, and a window in which the gateway reported
        `usage_records_dropped > 0`. It is never `TurnFailed`, which would be attributable and move
        the job.
+     - **How long the launcher waits.** Before it decides a corroborated class, the launcher waits
+       up to `runner.agent.gateway_wait_s` (default 2 seconds) for the gateway's records to cover
+       the run's end, polling the usage API. Records still behind after that, or a gateway that
+       reports dropped records, leave the claim uncorroborated, so a slow gateway can delay a
+       class by that long and never turn it into an attributable one.
      - `ConcurrencyLimited` is **not** corroborated. The gateway refuses `429 concurrency_limited`
        before the model call and writes no usage record for it, so requiring one would turn every
        such refusal into a fault and move the job, which the operator's decision of 2026-11-08
@@ -319,7 +326,9 @@ inputs must not thereby choose what runs as an agent's uid.
       | anything else | `Internal` |
 
     - **Liveness.** `cpu` reads the unit's `cpu.stat`. `progress` counts the stream's new `call`
-      records that the gateway corroborates (decision 4).
+      records that the gateway corroborates (decision 4). While the gateway's records lag by more
+      than the gateway wait, or the gateway reports dropped records, `progress` cannot be judged,
+      so the launcher falls back to `cpu` liveness for the stall decision until they recover.
     - **`ResourceLimit` end to end.**
       - It comes only from `Result=oom-kill` or the stream bound (decision 4), never from a signal
         kill. A `SIGKILL` the launcher did not cause is `KilledExternally`.
