@@ -19,7 +19,7 @@ same change.
 | 2027-04-19 | lesson and runbook `review_by` | `examples/registers/lessons/`, `examples/registers/runbooks/` | the register review |
 | 2027-04-20 | strategy `review_by` | `examples/strategy/` (the strategy, its objectives and measures) | the strategy pages |
 | 2027-06-30 | module licence `expires`; runbook `review_by` | `examples/modules/other-object-store/module.yml`; `examples/registers/runbooks/` | the licence probe (when it exists); the register review |
-| 2027-11-30 | registry `standing.until` (`hub-candidate`, eval) | `examples/four-box-lab/services.yml`, once the X-12 follow-up lands | checklist X-12 (`hnx registry standing --overdue`), in the invariants job |
+| 2027-11-30 | registry `standing.until` (`hub-candidate`, eval) | `examples/four-box-lab/services.yml` | checklist X-12 (`hnx registry standing --overdue`), in the invariants job |
 
 Not listed: dates that are only shapes (schema examples validated by their schema, fixtures
 under `tests/` that pin `HNX_TODAY`), and the shipped customization profiles, which are

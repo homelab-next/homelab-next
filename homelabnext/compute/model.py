@@ -39,7 +39,11 @@ def guest_capabilities() -> frozenset[str]:
     return frozenset(known_capabilities())
 
 
-#: The capability inventory groups named in docs/role-interface.md section 5.
+#: The capability inventory groups named in docs/role-interface.md section 5.  One that is a
+#: capability's derived group (cap_secrets, cap_idp, ...) is bound to that capability's registry
+#: row when the registry places one, and free to join when it places none; the others name no
+#: registry capability and are always free to join (docs/role-interface.md, "Who may join a
+#: group"): the guest file's review, not the registry check, gates joining them.
 ROLE_GROUPS: tuple[str, ...] = (
     "cap_siem",
     "cap_lake",
