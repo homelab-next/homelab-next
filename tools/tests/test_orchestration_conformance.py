@@ -36,7 +36,8 @@ def test_the_fault_injection_checks_pass_strict_on_the_real_controller(tmp_path)
         ["go", "build", "-o", str(binary), "./cmd/controller"],
         cwd=ROOT / "orchestrator",
         check=True,
-        env=dict(os.environ, GOFLAGS="-mod=readonly", GOWORK="off"),
+        # no network here: the module cache only (CI fetches it before the namespace)
+        env=dict(os.environ, GOFLAGS="-mod=readonly", GOWORK="off", GOPROXY="off"),
     )
     out = tmp_path / "result.json"
     args = [
