@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- `hnx gen gateway homes` (A-14): a HERMES_HOME `config.yaml` that is UTF-8 but not YAML a reader takes (a recursive alias, an expansion bomb, a syntax error) has its raw text word-scanned: an IP address or engine model id there is a finding (exit 1); with none, it could not be measured (exit 100).
 - SOPS: the encrypted-file sniff (`sops.format_of`, which every registry, site, guest and customization read goes through first) reads the composed node graph only and refuses aliases, so an alias or merge bomb or deep nesting with a `sops:` line no longer costs minutes or raises `RecursionError` before the reader's own budget; `sops.read_text` refuses a file over 16 MiB.
 - Role tables: a file read as a role table that is not one (a spec's `roles:` pointed at a credentials JSON, say) has no value, and no key that is not a plain name, echoed by the problems that refuse it.
 - Invariant X-12: a `services.yml` nested (or merge-chained) too deeply to read is named as "cannot be read" instead of crashing the check with a `RecursionError`.

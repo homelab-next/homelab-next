@@ -362,14 +362,20 @@ def test_a_home_that_is_not_utf8_or_not_yaml_could_not_be_measured(tmp_path, cap
         assert "homes: could not measure:" in err and "Traceback" not in err, err
 
 
-def test_a_self_referential_anchor_is_refused_as_unreadable_not_recursed(tmp_path, capsys):
-    """A node that contains itself constructs into a self-referencing value: the shared loader
-    refuses it before construction, so the scan cannot measure the file (exit 100) rather than
-    walking a loop."""
+def test_a_self_referential_anchor_is_scanned_as_raw_text_not_recursed(tmp_path, capsys):
+    """A node that contains itself is refused by the shared loader before construction; the word
+    scan still reads the raw text, so the address it names is a finding (exit 1), not hidden."""
     home = _home(tmp_path, "loop", f"loop: &x [*x, {V4A}]\nmodel:\n  default: main-reasoner-a\n")
-    assert hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(home)]) == 100
+    assert hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(home)]) == 1
     err = capsys.readouterr().err
-    assert "recursive alias" in err, err
+    assert err.count(f"names the IP address {V4A}") == 1, err
+    assert "its raw text" in err
+
+
+def test_an_unparseable_home_with_nothing_in_its_raw_text_could_not_be_measured(tmp_path, capsys):
+    home = _home(tmp_path, "loop", "loop: &x [*x]\nmodel:\n  default: main-reasoner-a\n")
+    assert hnx(["gen", "gateway", "homes", "--roles", str(ROLES), str(home)]) == 100
+    assert "recursive alias" in capsys.readouterr().err
 
 
 def test_the_scan_finds_keyed_and_userinfo_addresses_and_needs_no_checkout(monkeypatch, capsys):
