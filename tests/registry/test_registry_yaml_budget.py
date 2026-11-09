@@ -167,3 +167,82 @@ def test_control_characters_are_searched_once_per_string():
     clean: set[int] = set()
     list(control_char_paths(doc, "", clean))
     assert id(big) in clean
+
+
+# ---------------------------------------------------------------- the SOPS sniff
+def _sops_tailed(body: str) -> str:
+    """A plain registry-shaped document with a bomb in it and a trailing ``sops:`` mapping, so
+    ``sops.read_text`` sniffs it before any reader's own budget: the sniff used to construct it
+    with ``yaml.safe_load``."""
+    base = (ROOT / "examples" / "minimal" / "services.yml").read_text(encoding="utf-8")
+    return base + body + "sops:\n  version: x\n"
+
+
+def _merge_chain(levels: int = 24) -> str:
+    out = ["x_m0: &m0 {k: 0}"]
+    for i in range(1, levels):
+        out.append(f"x_m{i}: &m{i} {{<<: [*m{i - 1}, *m{i - 1}]}}")
+    return "\n".join(out) + "\n"
+
+
+SOPS_BOMBS = {
+    "merge-chain": lambda: _sops_tailed(_merge_chain()),
+    "deep-nesting": lambda: _sops_tailed("x: " + "[" * 30000 + "]" * 30000 + "\n"),
+}
+#: each reader that calls sops.read_text first: exits 0 when it refuses the file in time
+SOPS_READERS = {
+    "registry": (
+        "from homelabnext.registry.model import load, RegistryUnreadable\n"
+        "try:\n    load(P)\nexcept RegistryUnreadable:\n    ok()\n"
+    ),
+    "site": (
+        "from homelabnext.network.loader import load_site, SiteUnreadable\n"
+        "try:\n    load_site(P)\nexcept SiteUnreadable:\n    ok()\n"
+    ),
+    "guests": (
+        "from homelabnext.compute.loader import load_guests\n"
+        "guests, problems = load_guests(P.parent)\n"
+        "if problems and not guests:\n    ok()\n"
+    ),
+    "customization": (
+        "import yaml\nfrom homelabnext.customization.loader import read_document\n"
+        "try:\n    read_document(P)\nexcept yaml.YAMLError:\n    ok()\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("reader", sorted(SOPS_READERS))
+@pytest.mark.parametrize("bomb", sorted(SOPS_BOMBS))
+def test_the_sops_sniff_constructs_nothing_before_a_reader_s_budget(bomb, reader, tmp_path):
+    d = tmp_path / "docs"
+    d.mkdir()
+    path = d / ("g1.yml" if reader == "guests" else "doc.yml")
+    path.write_text(SOPS_BOMBS[bomb]())
+    code = (
+        "import sys\nfrom pathlib import Path\n"
+        f"P = Path({str(path)!r})\n"
+        "def ok():\n    sys.exit(0)\n" + SOPS_READERS[reader] + "sys.exit(3)\n"
+    )
+    res = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60, cwd=ROOT
+    )
+    assert res.returncode == 0, (res.stdout, res.stderr[-2000:])
+
+
+def test_the_sops_sniff_still_finds_an_encrypted_document():
+    from homelabnext import sops
+
+    assert sops.format_of("a: ENC[AES256_GCM,data:x]\nsops:\n  mac: ENC[x]\n  version: 3.9.0\n")
+    assert sops.format_of(_sops_tailed(_merge_chain(4))) is None  # an alias: no SOPS file has one
+    assert sops.format_of("sops:\n  other: 1\n") is None
+    assert sops.format_of("x: " + "[" * 30000 + "]" * 30000 + "\nsops:\n  version: x\n") is None
+    assert sops.format_of('{"a": ' * 5000 + "1" + "}" * 5000) is None
+
+
+def test_read_text_refuses_an_oversized_file(tmp_path):
+    from homelabnext import sops
+
+    p = tmp_path / "big.yml"
+    p.write_text("# " + "x" * sops.MAX_TEXT_BYTES + "\n")
+    with pytest.raises(sops.SopsError, match="over"):
+        sops.read_text(p)

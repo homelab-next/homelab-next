@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- SOPS: the encrypted-file sniff (`sops.format_of`, which every registry, site, guest and customization read goes through first) reads the composed node graph only and refuses aliases, so an alias or merge bomb or deep nesting with a `sops:` line no longer costs minutes or raises `RecursionError` before the reader's own budget; `sops.read_text` refuses a file over 16 MiB.
 - Role tables: a file read as a role table that is not one (a spec's `roles:` pointed at a credentials JSON, say) has no value, and no key that is not a plain name, echoed by the problems that refuse it.
 - Invariant X-12: a `services.yml` nested (or merge-chained) too deeply to read is named as "cannot be read" instead of crashing the check with a `RecursionError`.
 - YAML: every reader built on the shared loaders (`homelabnext._yaml`: the registry, sites, guests, gateway specs and homes, workflow packs, module manifests and the other platform documents) refuses a document before constructing it when its aliases and merge keys expand past 200,000 nodes or 16 MiB of scalars, a node contains itself (`a: &a [*a]`), or it is nested too deeply; a few hundred bytes of either used to keep a reader busy for minutes or forever. **Breaking for overlay sites:** a registry (`services.yml`) takes no alias at all and no text over 4 MiB.
