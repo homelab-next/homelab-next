@@ -24,7 +24,9 @@ names a non-primary row, or a capability whose rows are all non-primary, is refu
 that starts with ``svc:`` but is not a lower-case kebab id (:data:`SVC_ID`) is refused as
 malformed, never skipped.  In a pack, an id that names no registry row and no capability is
 refused unless it is a declared platform source (:data:`PLATFORM_SOURCES`) or a declared
-unplaced capability of that pack (:data:`UNPLACED`, a note): the leniency is a list with a reason
+unplaced capability of that pack (:data:`UNPLACED`, a note) and the check runs over the
+reference examples (``--reference-examples``, which only ``make check`` passes; a lab's check
+never gets it): the leniency is a list with a reason
 and an end per entry, not a rule.
 
 Two exceptions are declared here (:data:`EXCEPTIONS`), never inferred from a file name or a call
@@ -119,8 +121,9 @@ EXCEPTIONS: tuple[Declared, ...] = (
         "primary in its rollback window, is proven by its row name",
     ),
 )
-#: platform capabilities a pack may name although the registry it is checked against places no
-#: row of them: a note, not a problem, for the packs listed only.  Each entry ends with the change
+#: platform capabilities a pack may name although the reference example registry places no row of
+#: them: a note, not a problem, for the packs listed only and only with ``reference_examples``
+#: (``make check``); against a lab registry they are refused like any other unplaced name.  Each entry ends with the change
 #: its reason names; a registry that holds any row of the capability judges it as usual.
 UNPLACED: tuple[Declared, ...] = (
     Declared(
@@ -276,10 +279,13 @@ def _malformed(where: str, path: str, doc: Any) -> str:
     return f"{where}: {path}: malformed svc: id (a lower-case kebab name follows svc:)"
 
 
-def pack_problems(registry: Registry, pack: Any, where: str) -> Report:
+def pack_problems(
+    registry: Registry, pack: Any, where: str, *, reference_examples: bool = False
+) -> Report:
     """Every ``svc:`` id in a workflow pack and its fixtures (step targets, event sources, the
     calls a fixture expects): a primary row, a capability with a primary or a declared platform
-    source; a declared :data:`UNPLACED` capability of this pack that the registry holds no row of
+    source; with ``reference_examples`` (``make check`` over this repository's examples, never a
+    lab), a declared :data:`UNPLACED` capability of this pack that the registry holds no row of
     is a note."""
     rep = Report([], [])
     pack_name = pack.get("pack") if isinstance(pack, Mapping) else None
@@ -294,7 +300,7 @@ def pack_problems(registry: Registry, pack: Any, where: str) -> Report:
         if why is None:
             continue
         if why == "unknown":
-            if pack_name in _UNPLACED.get(name, ()):
+            if reference_examples and pack_name in _UNPLACED.get(name, ()):
                 if name not in seen:
                     rep.notes.append(
                         f"{where}: svc:{name} is a declared unplaced capability of this pack "
@@ -404,14 +410,45 @@ def gateway_problems(registry: Registry, path: str | Path) -> list[str]:
 
     doc = _parse(read_input(path), str(path))
     conformance = isinstance(doc, Mapping) and bool(doc.get("conformance"))
+    out: list[str] = []
     try:
         gw.load_spec(path, conformance=conformance, registry=registry)
     except gw.GatewaySpecError as exc:
         found = list(getattr(exc, "problems", None) or [])
-        return [f"{path}: {p}" for p in found] or [str(exc)]
+        out += [f"{path}: {p}" for p in found] or [str(exc)]
     except (OSError, ValueError) as exc:
         raise BindingsInputError(f"{path}: {exc}") from None
-    return []
+    return out + _gateway_role_problems(registry, Path(path), doc)
+
+
+def _gateway_role_problems(registry: Registry, path: Path, doc: Any) -> list[str]:
+    """The spec's role table: a binding naming a registry row or capability is judged as any
+    role binding is; a name the registry does not hold is one of the spec's own backends, which
+    the gateway rules above have judged."""
+    from .models import RoleTable, RoleTableError
+
+    rel = doc.get("roles") if isinstance(doc, Mapping) else None
+    if not isinstance(rel, str):
+        return []
+    table_path = path.parent / rel
+    try:
+        read_input(table_path)
+        table = RoleTable.load(table_path)
+    except RoleTableError as exc:
+        raise BindingsInputError(f"{table_path}: {exc}") from None
+    known = {r.name for r in registry.rows(*STANDINGS)} | {
+        r.capability for r in registry.rows(*STANDINGS)
+    }
+    out = []
+    for rname, role in sorted(table.roles.items()):
+        for i, b in enumerate(role.bindings):
+            if b.backend not in known:
+                continue
+            at = f"{path}: {rel}: mdl:{rname} bindings[{i}]"
+            p = _backend_problem(registry, at, b.backend, ())
+            if p:
+                out.append(p)
+    return out
 
 
 def check(
@@ -424,6 +461,7 @@ def check(
     gateways: Iterable[str | Path] = (),
     site: Mapping[str, Any] | None = None,
     mods: Mapping[str, Mapping[str, Any]] | None = None,
+    reference_examples: bool = False,
 ) -> Report:
     """Every binding site over ``registry``: its upstreams, each ``(where, RoleTable)``, each
     ``(where, evaluation report)``, each ``(where, pack)``, each ``(where, conformance target)``,
@@ -434,7 +472,7 @@ def check(
     for where, doc in reports:
         rep.problems += canary_problems(registry, doc, where)
     for where, doc in packs:
-        found = pack_problems(registry, doc, where)
+        found = pack_problems(registry, doc, where, reference_examples=reference_examples)
         rep.problems += found.problems
         rep.notes += found.notes
     for where, doc in targets:

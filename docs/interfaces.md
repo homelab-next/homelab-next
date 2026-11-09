@@ -434,10 +434,13 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
   REGISTRY [--roles FILE] [--eval-report FILE [--base REV | --ci-base]] [--packs PATH [--deployed
   MANIFEST]] [--gateway SPEC] [--target FILE] [--site FILE --modules DIR]` refuses each one naming
   an `eval`, `retiring` or `legacy` row, a capability with no primary, a malformed `svc:` id, a
-  gateway backend whose host reaches a non-primary row, or (in a pack) a name that is no row, no
+  gateway backend whose host reaches a non-primary row (a self-declared host in the alias zone
+  is a capability's primary alias with the primary's port, or a name that answers nothing: `hnx
+  site validate` refuses a static record there), or (in a pack) a name that is no row, no
   capability and none of the declared platform sources (`svc:broker`, and the controller's old
   `svc:llm-orchestrator` for its overlap). A capability the registry places no row of is a note
-  only where `bindings.UNPLACED` declares it for that pack, with its reason and its end. Two
+  only where `bindings.UNPLACED` declares it for that pack, with its reason and its end, and only
+  over the reference examples (`--reference-examples`, which only `make check` passes). Two
   declared exceptions (`homelabnext/registry/bindings.py`): an evaluation report's `canary`
   bindings may name an `eval` row (the report is read from the change and, with a base, from the
   base too), and a conformance target file any non-legacy row. Status sources, the census,
@@ -447,7 +450,8 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
   `resolve_binding(..., allow_eval=True)` (the literal `True`), passed only by the egress canary
   runner, resolves an `eval` row by its row name. `make check` runs it over the examples, every
   pack and the example gateway specs (`bindings-check`); the overlay's `checks.yml` runs it over
-  `lab/` and the packs the pinned commit's deploy manifest pins.
+  `lab/` (its gateway spec too, when present) and the packs the pinned commit's deploy manifest
+  pins.
 - The platform's capability names (the conformance contracts and the capability-class table) are
   one list, `homelabnext.capability_names`; registry validation reads it without importing the
   MCP catalog or the conformance harness.

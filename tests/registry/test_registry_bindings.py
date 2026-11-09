@@ -112,6 +112,7 @@ def _run(*argv: str, capsys) -> tuple[int, str, str]:
 def test_the_current_examples_pass(site, capsys):
     rc, out, err = _run(
         str(ROOT / "examples/services.yml"),
+        "--reference-examples",
         "--roles",
         str(ROOT / "examples/model_roles.json"),
         "--eval-report",
@@ -135,7 +136,7 @@ def test_make_check_runs_the_bindings_check_over_the_examples():
     assert re.search(r"^check:.*\bbindings-check\b", make, re.M)
     recipe = make.split("\nbindings-check:\n", 1)[1].split("\n\n", 1)[0]
     for arg in (
-        "registry bindings examples/services.yml",
+        "registry bindings examples/services.yml --reference-examples",
         "--roles $(MODEL_ROLES)",
         "--eval-report $(MODEL_EVAL)",
         "--packs workflows/packs \\\n",
@@ -156,6 +157,8 @@ def test_the_overlay_template_runs_the_bindings_check_over_lab():
     assert "--eval-report lab/model_roles.eval.json --ci-base" in run
     assert "--roles lab/model_roles.json" in run
     assert "--packs hnx/workflows/packs --deployed hnx/workflows/deploy.yml" in run
+    assert "--gateway lab/llm-gateway/gateway.yml" in run
+    assert "--reference-examples" not in run  # a lab's check never gets the leniency
 
 
 def test_make_check_names_every_example_gateway_spec_and_checks_every_pack():
@@ -347,12 +350,17 @@ def test_a_declared_platform_source_passes(tmp_path, source, capsys):
     assert (rc, err) == (0, "")
 
 
-def test_a_declared_unplaced_capability_of_the_pack_is_a_note(tmp_path, capsys):
-    rc, out, err = _run(
-        str(_registry(tmp_path)), "--packs", str(_pack(tmp_path, "svc:cases")), capsys=capsys
-    )
+def test_a_declared_unplaced_capability_of_the_pack_is_a_note_for_the_examples_only(
+    tmp_path, capsys
+):
+    args = [str(_registry(tmp_path)), "--packs", str(_pack(tmp_path, "svc:cases"))]
+    rc, out, err = _run(*args, "--reference-examples", capsys=capsys)
     assert (rc, err) == (0, "")
     assert "svc:cases is a declared unplaced capability of this pack" in out
+    # a lab's check never gets the leniency
+    rc, _out, err = _run(*args, capsys=capsys)
+    assert rc == 1
+    assert "svc:cases names no registry row, capability or declared platform source" in err
 
 
 @pytest.mark.parametrize(
@@ -365,7 +373,9 @@ def test_an_undeclared_unplaced_capability_is_refused(tmp_path, capsys, target, 
         doc = yaml.safe_load(path.read_text())
         doc["pack"] = pack_name
         path.write_text(yaml.safe_dump(doc))
-    rc, _out, err = _run(str(_registry(tmp_path)), "--packs", str(path), capsys=capsys)
+    rc, _out, err = _run(
+        str(_registry(tmp_path)), "--packs", str(path), "--reference-examples", capsys=capsys
+    )
     assert rc == 1
     assert f"{target} names no registry row, capability or declared platform source" in err
 
@@ -375,7 +385,8 @@ def test_a_declared_unplaced_capability_the_registry_holds_rows_of_is_judged(tmp
     _candidate_row(doc, "cases-candidate", "notify", "eval", capability="cases")
     path = tmp_path / "services.yml"
     path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
-    rc, _out, err = _run(str(path), "--packs", str(_pack(tmp_path, "svc:cases")), capsys=capsys)
+    pack = str(_pack(tmp_path, "svc:cases"))
+    rc, _out, err = _run(str(path), "--packs", pack, "--reference-examples", capsys=capsys)
     assert rc == 1
     assert "svc:cases names capability cases, which has no primary" in err
 
@@ -553,6 +564,20 @@ def test_a_gateway_spec_reaching_a_non_primary_row_by_its_host_is_refused(tmp_pa
     assert _run(str(reg), "--gateway", str(ok), capsys=capsys)[0] == 0
 
 
+def test_a_gateway_role_table_binding_a_non_primary_row_is_refused(tmp_path, capsys):
+    reg = _registry(tmp_path, "eval")
+    spec = _gateway_spec(tmp_path, "unused.svc.example.internal", 9)
+    doc = yaml.safe_load(spec.read_text())
+    doc["backends"] = {f"svc:{CANDIDATE}": {"locality": "local", "port": 9}}
+    spec.write_text(yaml.safe_dump(doc))
+    roles = json.loads((tmp_path / "roles.json").read_text())
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = f"svc:{CANDIDATE}"
+    (tmp_path / "roles.json").write_text(json.dumps(roles))
+    rc, _out, err = _run(str(reg), "--gateway", str(spec), capsys=capsys)
+    assert rc == 1
+    assert f"roles.json: mdl:agent-local bindings[0]: svc:{CANDIDATE} names an eval row" in err
+
+
 @pytest.mark.parametrize(("tier", "ok"), [("eval", True), ("retiring", True), ("legacy", False)])
 def test_a_conformance_target_may_name_any_non_legacy_row(tmp_path, tier, ok, capsys):
     target = {
@@ -626,24 +651,27 @@ def test_allow_eval_resolves_the_row_by_its_name_never_through_the_capability(tm
         mr.resolve_binding(role, binding, allow_eval=True)  # the capability's variable is not used
 
 
-def _allow_eval_calls(tree: ast.AST) -> list[tuple[str, int]]:
-    """``(enclosing function, line)`` of every ``resolve_binding`` call that passes
-    ``allow_eval`` or a ``**`` mapping (which could carry it)."""
+def _allow_eval_uses(tree: ast.AST) -> list[tuple[str, int]]:
+    """``(enclosing top-level function, line)`` of every ``allow_eval=`` keyword in any call
+    (``functools.partial``, a ``getattr`` result, an alias), every string literal
+    ``"allow_eval"`` (a ``**{...}`` mapping, ``setattr``), and every ``resolve_binding`` call
+    passing a ``**`` mapping, whatever spelling reaches it."""
     out: list[tuple[str, int]] = []
 
     def visit(node: ast.AST, owner: str) -> None:
         for child in ast.iter_child_nodes(node):
             name = owner
-            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
-                name = child.name if owner == "<module>" else owner
-            if (
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and owner == "<module>":
+                name = child.name
+            if isinstance(child, ast.keyword) and child.arg == "allow_eval":
+                out.append((owner, child.value.lineno))
+            elif (isinstance(child, ast.Constant) and child.value == "allow_eval") or (
                 isinstance(child, ast.Call)
-                and isinstance(child.func, ast.Attribute | ast.Name)
                 and (getattr(child.func, "attr", None) or getattr(child.func, "id", None))
                 == "resolve_binding"
-                and any(k.arg in (None, "allow_eval") for k in child.keywords)
+                and any(k.arg is None for k in child.keywords)
             ):
-                out.append((name, child.lineno))
+                out.append((owner, child.lineno))
             visit(child, name)
 
     visit(tree, "<module>")
@@ -654,7 +682,7 @@ def test_only_the_egress_canary_runner_passes_allow_eval():
     found = []
     for p in sorted((ROOT / "homelabnext").rglob("*.py")):
         tree = ast.parse(p.read_text(encoding="utf-8"))
-        found += [(p.relative_to(ROOT).as_posix(), f) for f, _line in _allow_eval_calls(tree)]
+        found += [(p.relative_to(ROOT).as_posix(), f) for f, _line in _allow_eval_uses(tree)]
     assert found == [("homelabnext/golden/cli.py", "_binding_completer")]
 
 
@@ -666,10 +694,16 @@ def test_only_the_egress_canary_runner_passes_allow_eval():
         "def f(r, b):\n    r.resolve_binding(\n        'x',\n        b,  # a comment\n"
         "        allow_eval=True,\n    )\n",
         "def f(r, b, kw):\n    resolve_binding('x', b, **kw)\n",
+        "def f(r, b):\n    functools.partial(r.resolve_binding, allow_eval=True)\n",
+        "def f(r, b):\n    getattr(r, 'resolve_binding')('x', b, allow_eval=True)\n",
+        "def f(r, b):\n    rb = r.resolve_binding\n    rb('x', b, allow_eval=True)\n",
+        "def f(r, b):\n    kw = dict(allow_eval=True)\n",
+        "def f(r, b):\n    setattr(o, 'allow_eval', True)\n",
     ],
 )
 def test_the_allow_eval_scan_catches_every_spelling(src):
-    assert _allow_eval_calls(ast.parse(src)) == [("f", 2)]
+    found = _allow_eval_uses(ast.parse(src))
+    assert found and {f for f, _line in found} == {"f"}
 
 
 @pytest.mark.parametrize("value", [1, "yes", [True]])

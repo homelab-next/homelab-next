@@ -78,6 +78,12 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         "--target", action="append", default=[], help="a conformance target file (repeatable)"
     )
     p.add_argument(
+        "--reference-examples",
+        action="store_true",
+        help="this repository's reference examples (make check only): a pack may name a "
+        "capability bindings.UNPLACED declares for it; never for a lab",
+    )
+    p.add_argument(
         "--gateway",
         action="append",
         default=[],
@@ -202,6 +208,7 @@ def _bindings(args: argparse.Namespace, reg, out, err) -> int:
             gateways=gateways,
             site=site,
             mods=mods,
+            reference_examples=args.reference_examples,
         )
     except bd.BindingsInputError as exc:
         print(f"hnx registry bindings: {exc}", file=err)

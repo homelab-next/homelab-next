@@ -392,32 +392,46 @@ def _profile_slug(pid: str) -> str:
     return pid.removeprefix("profile:")
 
 
-def _registry_host_problem(registry: Any, host: str, service_domain: str) -> str | None:
-    """Why a self-declared local ``host`` under the service domain may not be a backend: its
-    first label names a registry row or capability, and it is not that capability's primary
-    alias.  An ``eval`` or ``retiring`` row answers by its row-name record, so a backend of
-    another name with an explicit ``host`` would reach it (ADR-0039 decision 3: a gateway
-    backend binds only a primary)."""
+def _registry_host_problem(registry: Any, host: str, service_domain: str, port: Any) -> str | None:
+    """Why a self-declared local ``host`` (with ``port``) in the registry's alias zone may not be
+    a backend (ADR-0039 decision 3: a gateway backend binds only a primary):
+
+    * a capability's primary alias is allowed with the primary's own port only: a candidate
+      usually shares the primary's host, so the alias with another port reaches it;
+    * any other host with a label that names a registry row or capability is refused: a row's
+      record (an ``eval`` or ``retiring`` row answers by its row name) or a made-up name under it.
+
+    Any other name in the alias zone answers nothing: the registry generates every record there
+    and site validation refuses a static one (``hnx site validate``)."""
     from homelabnext.registry.model import STANDINGS
 
     prefix = host[: -len(service_domain) - 1]
-    label = prefix.split(".", 1)[0]
-    rows = registry.rows(*STANDINGS)
-    if registry.by_capability(prefix) is not None:
-        return None  # a capability's primary alias
-    row = next((r for r in rows if r.name == label), None)
-    if row is not None and not row.is_primary:
-        article = "an" if row.standing == "eval" else "a"
-        return (
-            f"host {host} is {article} {row.standing} row's record ({row.name}); a gateway "
-            "backend binds only a primary (ADR-0039 decision 3)"
-        )
-    if row is not None or any(r.capability == label for r in rows):
-        return (
-            f"host {host} names registry {'row' if row is not None else 'capability'} {label} "
-            "but is not a capability's primary alias; name the registry row as the backend, "
-            "or use the capability alias"
-        )
+    primary = registry.by_capability(prefix)
+    if primary is not None:
+        if port != primary.port:
+            return (
+                f"host {host} is capability {prefix}'s primary alias, but port {port} is not the "
+                f"primary's port {primary.port}; another port on that host may be a candidate "
+                "(name the registry row as the backend)"
+            )
+        return None
+    rows = {r.name: r for r in registry.rows(*STANDINGS)}
+    caps = {r.capability for r in rows.values()}
+    for label in prefix.split("."):
+        row = rows.get(label)
+        if row is not None and not row.is_primary:
+            article = "an" if row.standing == "eval" else "a"
+            where = "is" if label == prefix else "is under"
+            return (
+                f"host {host} {where} {article} {row.standing} row's record ({row.name}); a "
+                "gateway backend binds only a primary (ADR-0039 decision 3)"
+            )
+        if row is not None or label in caps:
+            kind = "row" if row is not None else "capability"
+            return (
+                f"host {host} names registry {kind} {label} but is not a capability's primary "
+                "alias; name the registry row as the backend, or use the capability alias"
+            )
     return None
 
 
@@ -578,7 +592,7 @@ def spec_from_dict(
                     f"service nor under the lab's service domain {service_domain}"
                 )
                 continue
-            why = _registry_host_problem(registry, host, service_domain) if registry else None
+            why = _registry_host_problem(registry, host, service_domain, port) if registry else None
             if why:
                 problems.append(f"{where}: {why}")
                 continue

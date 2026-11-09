@@ -404,6 +404,7 @@ jobs:
           set -euo pipefail
           args=()
           if [ -e lab/model_roles.json ] || [ -L lab/model_roles.json ]; then args+=(--roles lab/model_roles.json); fi
+          if [ -e lab/llm-gateway/gateway.yml ] || [ -L lab/llm-gateway/gateway.yml ]; then args+=(--gateway lab/llm-gateway/gateway.yml); fi
           args+=(--eval-report lab/model_roles.eval.json --ci-base)
           # the packs the pinned commit's deploy manifest pins: the ones deployed against this lab
           args+=(--packs hnx/workflows/packs --deployed hnx/workflows/deploy.yml)

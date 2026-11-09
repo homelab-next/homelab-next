@@ -344,6 +344,58 @@ def test_a_self_declared_host_naming_a_registry_row_or_capability_is_refused(tmp
         gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
 
 
+def test_the_primary_alias_with_a_candidate_s_port_is_refused(tmp_path):
+    # a candidate engine shares the primary's host; the alias with its port reaches it
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    port = doc["services"]["inference-candidate"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": port,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match="is not the primary's port"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_made_up_name_under_a_non_primary_row_s_record_is_refused(tmp_path):
+    reg = registry_with_candidate(tmp_path, "eval")
+    host = "x.inference-candidate.svc.example.internal"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": 9}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match=f"host {re.escape(host)} is under an eval row"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_backend_with_no_host_is_held_to_its_default_alias(tmp_path):
+    # a backend named after a capability (not a row) defaults to that capability's alias: the
+    # primary's port only
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    caps = {v["capability"] for v in doc["services"].values()}
+    _row, svc = next(
+        (k, v) for k, v in doc["services"].items() if k not in caps and "standing" not in v
+    )
+    cap = svc["capability"]
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = f"svc:{cap}"
+    for port, ok in ((svc["port"] + 1, False), (svc["port"], True)):
+        backends = spec_doc()["backends"] | {f"svc:{cap}": {"locality": "local", "port": port}}
+        spec = make_spec(tmp_path, roles, registry=reg, backends=backends)
+        if ok:
+            gw.render_file(spec)
+        else:
+            with pytest.raises(gw.GatewaySpecError, match="is not the primary's port"):
+                gw.render_file(spec)
+
+
 def test_a_self_declared_host_at_a_capability_s_primary_alias_is_accepted(tmp_path):
     reg = registry_with_candidate(tmp_path, "eval")
     doc = yaml.safe_load((tmp_path / reg).read_text())

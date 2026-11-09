@@ -200,7 +200,8 @@ BINDINGS_GATEWAYS := $(GATEWAY_SPEC) $(CONFORMANCE_GATEWAY)/gateway.yml $(ORCH_G
 check: bindings-check
 bindings-check:
 	for site in examples/modules/sites/*.yml; do \
-	  $(PY) -m homelabnext.cli registry bindings examples/services.yml --roles $(MODEL_ROLES) \
+	  $(PY) -m homelabnext.cli registry bindings examples/services.yml --reference-examples \
+	    --roles $(MODEL_ROLES) \
 	    --eval-report $(MODEL_EVAL) --packs workflows/packs \
 	    $(foreach g,$(BINDINGS_GATEWAYS),--gateway $(g)) \
 	    --site "$$site" --modules examples/modules || exit 1; \
