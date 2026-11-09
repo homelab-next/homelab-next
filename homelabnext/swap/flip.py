@@ -385,6 +385,29 @@ def _primary_problem(capability: str, have: list[str], want: str) -> str:
     return f"the promotion would make {have[0]} the primary of {capability}, not {want}"
 
 
+def _lowered_ceiling(
+    capability: str, inc: Mapping[str, Any], cand: Mapping[str, Any]
+) -> str | None:
+    """The ``tlp_ceiling`` an egress incumbent takes as it leaves primacy, or None to keep its
+    own.  A non-primary egress row may not sit above the primary's ceiling (ADR-0033 decision 6),
+    and the incumbent is stopped, so it is lowered to the new primary's; the inverse restores it.
+    (A registry whose eval row declares a ceiling and whose primary declares none is refused
+    before any plan, so both are present here or the registry's own rule answers.)"""
+    from homelabnext import tlp
+    from homelabnext.registry.model import EGRESS_CAPABILITIES
+
+    if capability not in EGRESS_CAPABILITIES:
+        return None
+    mine, theirs = inc.get("tlp_ceiling"), cand.get("tlp_ceiling")
+    if not mine or not theirs:
+        return None
+    try:
+        above = tlp.parse_stored(mine) > tlp.parse_stored(theirs)
+    except ValueError:
+        return None
+    return theirs if above else None
+
+
 def _before_key(row: Mapping[str, Any], fld: str) -> str | None:
     keys = list(row)
     i = keys.index(fld) if fld in keys else 0
@@ -479,6 +502,11 @@ def plan_promote(
                 Change(f"services.{incumbent}.{fld}", inc[fld], None, _before_key(inc, fld))
             )
             changes.append(Change(f"services.{row}.{fld}", None, inc[fld]))
+        lowered = _lowered_ceiling(capability, inc, cand)
+        if lowered is not None:
+            changes.append(
+                Change(f"services.{incumbent}.tlp_ceiling", inc.get("tlp_ceiling"), lowered)
+            )
     elif old_lab:
         raise FlipError(f"{capability} has no primary: there is no old-lab incumbent to retire")
     plan = PromotePlan(

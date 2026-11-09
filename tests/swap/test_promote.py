@@ -186,3 +186,50 @@ def test_the_switch_applies_the_selection_diff_and_the_promotion_together(monkey
         ms.apply_switch({"before": True}, {}, {}, reg, p)  # already switched: stale
     with pytest.raises(ValueError, match="not its inverse"):
         ms.apply_switch({"before": True}, {}, {}, reg, p.inverse())
+
+
+# ---- review follow-up: an egress incumbent leaves primacy at the new primary's ceiling --------
+
+NOTIFY_B = """  notify-b:
+    capability: notify
+    impl: other-notify
+    host: lake-core-2
+    protocol: http
+    port: 8080
+    owner: platform-team
+    version: "1.0"
+    tls: none
+    auth: own
+    tlp_ceiling: green
+    standing: {tier: eval, until: "2026-12-31", why: the notify candidate}
+
+"""
+
+
+def _notify_text(ceiling: str | None = "amber") -> str:
+    text = registry_text()
+    old = "  notify:\n    capability: notify\n"
+    assert old in text
+    new = "  notify-a:\n    capability: notify\n"
+    text = text.replace(old, new, 1)
+    if ceiling:
+        text = text.replace(
+            "    tags: [ops, notify]\n", f"    tags: [ops, notify]\n    tlp_ceiling: {ceiling}\n", 1
+        )
+    return text.replace("  metrics:\n", NOTIFY_B + "  metrics:\n", 1)
+
+
+@pytest.mark.parametrize("ceiling", ["amber", "green"])
+def test_an_egress_incumbent_is_lowered_to_the_new_primary_s_ceiling(ceiling):
+    """A retiring egress row may not sit above the primary's ceiling: an amber incumbent behind a
+    green candidate made the registry refuse the promotion. It is stopped, so it takes the new
+    primary's ceiling, and the inverse gives its own back; one already at it is not touched."""
+    text = _notify_text(ceiling)
+    p = plan_promote(load_doc(text), "notify", "notify-b", "2026-11-08", 14)
+    after = promote_text(text, p)
+    reg = loads(after)
+    assert reg.by_capability("notify").name == "notify-b"
+    assert reg.non_primary["notify-a"].tlp_ceiling == "green"
+    lowered = "services.notify-a.tlp_ceiling" in {c.path for c in p.changes}
+    assert lowered == (ceiling == "amber")
+    assert promote_text(after, p.inverse()) == text

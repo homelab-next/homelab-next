@@ -196,6 +196,7 @@ site, registry = apply_switch(site, swap, mods, doc, plan)
   deploy), with `until` = the switch date + `rollback_days`: the ledger row's window
   ([ADR-0043](adr/0043-the-cutover-is-a-ledger-per-service.md)), so the date is never authored.
 - The fields only a primary carries, `public_hostname` and `env_var`, move to the new primary.
+- An egress incumbent (`notify`, `events`, `backup`, `webhook`) above the new primary's `tlp_ceiling` is lowered to it: it is stopped, and a non-primary egress row may not sit above the primary's ceiling (ADR-0033). The inverse restores it.
 - Refused: a row that is not an `eval` row of the capability, a result with two primaries or none,
   a `retiring` incumbent named like a capability (rename the row first; a `legacy` one may keep
   its name), and anything the registry's own rules refuse.
