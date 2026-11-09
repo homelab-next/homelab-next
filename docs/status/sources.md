@@ -163,6 +163,7 @@ Queued and running orchestrator jobs; the oldest queued job waiting over an hour
 - Declared by: [`svc:orchestrator`](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]]), capability `cap:orchestration`
 - Kind: `poll-http-json`; target: `orchestrator` `/admin/queue-summary`
 - Mapping: builtin orchestrator-queue
+- Credential: from the secret store (this source's `auth.secret`), sent as `Authorization: Bearer`
 - Module: `orchestrator`; graph node `status:orchestrator-queues`
 - Every 1 min, timeout 5 s; stale after 3 min without a reading; a failed poll reads as `fail`
 

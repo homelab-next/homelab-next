@@ -172,11 +172,9 @@ def test_systemd_dropin_lists_upstreams():
 
 def test_mcp_config_json():
     doc = json.loads(generate(REG, ["mcp_config"])["mcp_config"]["agents/mcp.json"])
-    assert set(doc["mcpServers"]) == {"lake", "agent-runtime"}
-    assert doc["mcpServers"]["agent-runtime"] == {
-        "type": "sse",
-        "url": "http://" + REG.alias("orchestration") + ":" + "8088/sse",
-    }
+    # the controller serves no MCP endpoint: its row declares none (ADR-0039 decision 7)
+    assert set(doc["mcpServers"]) == {"lake"}
+    assert doc["mcpServers"]["lake"]["type"] == "http"
 
 
 def test_firewall_rules_derive_from_registry():

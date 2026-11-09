@@ -1,12 +1,12 @@
 {
   "generated_from": {
     "broker": "sha256:329adee08662989613b59c3c85b509ad24a094c804dafa683f28b805d0ada2cc",
-    "classes": "sha256:b197e075244a8504c6f71bfa3bc7d7edaacee319c96d9214fb8b9eea7269f9a2",
+    "classes": "sha256:e8d4b40d58f7da11a42d0d95b7d51ef27e19b3dad2166431ec1be0b4e715e1ef",
     "profiles": {
       "profile:reader": "sha256:95bc28892ec6c046d214dbcba91400b3df7a4adf50ff45be3d6c77287123ba83",
       "profile:responder": "sha256:165cb64fbbf882c71e0697c3d2130f9f8bb7bf5217c42d0763c168f43e507d2e"
     },
-    "registry": "d34c8f061812f2cb27bfb79db8e7cac15ef9c42e8a3bf56127beade17b54b23b"
+    "registry": "5b15ffec214caa5aac42c7c5cb2367227944ef36eac9ee7395731c0c32a8d77a"
   },
   "keyring_version": 1,
   "principals": [
@@ -99,10 +99,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:uptime"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "mcp:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",
@@ -228,10 +224,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:uptime"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "mcp:agent-runtime"
         }
       ],
       "grants": [
@@ -365,10 +357,6 @@
         {
           "reason": "not granted (default deny)",
           "resource": "cap:uptime"
-        },
-        {
-          "reason": "not granted (default deny)",
-          "resource": "mcp:agent-runtime"
         },
         {
           "reason": "not granted (default deny)",

@@ -250,14 +250,15 @@ services:
     owner: ml-team
     version: "0.1.0"
     tls: none
-    mcp: {name: agent-runtime, transport: sse, path: /sse}
     tags: [compute, agents]
     status_sources:
-      # the LLM orchestrator's own queue summary (GET /admin/queue-summary); it has no other
-      # health endpoint, so a failed poll is the reading (on_error: fail)
+      # the controller's queue summary (GET /admin/queue-summary), which needs a token with the
+      # job API's read scope (the summary and job summaries, nothing else); its liveness is the
+      # row's health check (GET /healthz), and a failed poll here is the reading (on_error: fail)
       - id: orchestrator-queues
         kind: poll-http-json
         target: {path: /admin/queue-summary}
+        auth: {secret: "secret:orchestrator/status-token"}
         interval_s: 60
         timeout_s: 5
         on_error: fail
