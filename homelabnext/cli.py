@@ -120,7 +120,7 @@ def _gen(argv: list[str]) -> int:
 # name -> (one-line help, handler).  Order is the order shown in --help.
 COMMANDS: dict[str, tuple[str, Main]] = {
     "registry": (
-        "the service registry: validate|resolve|standing|generate|check|list-generators",
+        "the service registry: validate|resolve|bindings|standing|generate|check|list-generators",
         _registry,
     ),
     "new": ("scaffold a component: hnx new role|capability|detection|schema NAME", _new),

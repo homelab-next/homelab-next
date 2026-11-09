@@ -304,8 +304,18 @@ class ResolvedModel:
         return self.endpoint.url
 
 
+class NonPrimaryBinding(ResolutionError):
+    """A role binding names an ``eval``, ``retiring`` or ``legacy`` row (ADR-0039 decision 3): a
+    consumer binds only to a primary, so this is raised, never skipped over to the next binding
+    or the fallback, which would reroute the role silently."""
+
+
 class ModelResolver:
-    """Role alias -> backend endpoint through the registry and the capability resolver."""
+    """Role alias -> backend endpoint through the registry and the capability resolver.
+
+    A binding's ``svc:<name>`` names a primary row or a capability (meaning its primary).  One
+    naming a non-primary row raises :class:`NonPrimaryBinding`; only the egress canary runner
+    reaches an ``eval`` row, through :meth:`resolve_binding` with ``allow_eval=True``."""
 
     def __init__(self, registry: Registry, table: RoleTable, resolver: Resolver | None = None):
         self.registry = registry
@@ -315,6 +325,14 @@ class ModelResolver:
     def _capability_of(self, backend: str) -> str:
         svc = self.registry.services.get(backend) or self.registry.by_capability(backend)
         if svc is None:
+            other = self.registry.row(backend, "eval", "retiring", "legacy")
+            if other is not None:
+                article = "an" if other.standing[:1] in "aeiou" else "a"
+                raise NonPrimaryBinding(
+                    f"svc:{backend}",
+                    f"is {article} {other.standing} row; a role binding reaches only a primary "
+                    "(ADR-0039 decision 3)",
+                )
             raise ResolutionError(backend, "backend is not a service in the registry")
         return svc.capability
 
@@ -327,6 +345,8 @@ class ModelResolver:
             for b in r.bindings:
                 try:
                     ep = self.resolver.resolve(self._capability_of(b.backend))
+                except NonPrimaryBinding:
+                    raise  # never rerouted to the next binding or the fallback
                 except ResolutionError as exc:
                     trail.append(f"{cur}: svc:{b.backend} unresolved ({str(exc)[:80]})")
                     continue
@@ -336,11 +356,23 @@ class ModelResolver:
             cur = r.fallback
         raise ResolutionError(f"mdl:{asked}", "no binding or fallback resolved", trail)
 
-    def resolve_binding(self, role: str, binding: Binding) -> ResolvedModel:
+    def resolve_binding(
+        self, role: str, binding: Binding, *, allow_eval: bool = False
+    ) -> ResolvedModel:
         """One given binding of a role, with no fallback (the egress canary runs every binding
-        of a role, not the first that resolves)."""
+        of a role, not the first that resolves).
+
+        ``allow_eval`` is passed by the egress canary runner alone
+        (:func:`homelabnext.golden.cli._binding_completer`): it vets a candidate before its
+        switch, so a binding naming an ``eval`` row then resolves that row by its row name
+        (ADR-0039 decision 2), never through its capability.  Without it, and for a
+        ``retiring`` or ``legacy`` row always, :class:`NonPrimaryBinding` is raised."""
         asked = normalize_role(role)
         r = self.table.get(asked)
+        # only the literal True: a truthy stand-in (1, "yes") is no grant of the exception
+        candidate = self.registry.row(binding.backend, "eval") if allow_eval is True else None
+        if candidate is not None:
+            return _resolved(r, asked, binding, self.resolver.resolve_row(candidate.name), ())
         return _resolved(
             r, asked, binding, self.resolver.resolve(self._capability_of(binding.backend)), ()
         )

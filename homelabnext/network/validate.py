@@ -781,6 +781,13 @@ def _dns(doc: dict, reg: Any, r: Report) -> None:
             r.error(
                 f"{where}: {fq} is generated from the registry host of that name; one source per fact"
             )
+        if fq == reg.alias_zone or fq.endswith("." + reg.alias_zone):
+            # the alias zone answers only what the registry generates (ADR-0039 decision 2): a
+            # static name there could point a consumer of a made-up alias at a candidate row
+            r.error(
+                f"{where}: {fq} is in the registry's alias zone {reg.alias_zone}; only the "
+                "registry's own records live there"
+            )
         if rec["type"] == "A":
             try:
                 ipaddress.IPv4Address(rec["value"])

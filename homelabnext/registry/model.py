@@ -22,6 +22,7 @@ import yaml
 from homelabnext import paths, sops, tlp
 from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.capability_names import platform_capabilities as _platform_capabilities
 
 
 class RegistryError(Exception):
@@ -368,17 +369,7 @@ def semantic_problems(doc: dict) -> list[str]:
             problems.append(
                 f"service {sname}: front_door needs auth: idp and a public_hostname (the edge adds it)"
             )
-    for sname, s in services.items():
-        for up in s.get("upstreams", []):
-            if up not in caps:
-                problems.append(f"service {sname}: upstream {up!r} is not a registered capability")
-            elif up == s["capability"]:
-                problems.append(f"service {sname}: lists itself as upstream")
-            elif up not in primary:
-                problems.append(
-                    f"service {sname}: upstream {up!r} has no primary (a binding reaches only a "
-                    "primary)"
-                )
+    problems += upstream_problems(services)
     # a primary answers by its capability, an eval or retiring row by its row name (ADR-0039
     # decision 2): both the endpoint variables and the alias-zone names must stay unique, so a
     # row named like another capability is refused
@@ -412,16 +403,36 @@ def semantic_problems(doc: dict) -> list[str]:
     return problems
 
 
+def upstream_problems(services: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """A row's ``upstreams`` name capabilities of the registry, never its own, and each one with
+    a primary (ADR-0039 decision 3: an upstream is a binding, and a binding reaches only a
+    primary).  The one binding the registry holds itself; ``hnx registry bindings`` reuses it."""
+    caps = {s["capability"] for s in services.values()}
+    primary = {s["capability"] for s in services.values() if standing_of(s) == "primary"}
+    problems = []
+    for sname, s in services.items():
+        for up in s.get("upstreams", []):
+            if up not in caps:
+                problems.append(f"service {sname}: upstream {up!r} is not a registered capability")
+            elif up == s["capability"]:
+                problems.append(f"service {sname}: lists itself as upstream")
+            elif up not in primary:
+                problems.append(
+                    f"service {sname}: upstream {up!r} has no primary (a binding reaches only a "
+                    "primary)"
+                )
+    return problems
+
+
 def _a(word: str) -> str:
     return ("an " if word[:1] in "aeiou" else "a ") + word
 
 
 def platform_capabilities() -> frozenset[str]:
     """Every capability name the platform knows (the capability-class table, the conformance
-    contracts), without the ``cap:`` prefix: the names an eval or retiring row may never take."""
-    from homelabnext.mcp.servers import known_capabilities  # local: mcp imports the registry
-
-    return frozenset(c.removeprefix("cap:") for c in known_capabilities())
+    contracts), without the ``cap:`` prefix: the names an eval or retiring row may never take
+    (:func:`homelabnext.capability_names.platform_capabilities`)."""
+    return _platform_capabilities()
 
 
 def _name_claim_problems(services: Mapping[str, Any], caps: set[str]) -> list[str]:
