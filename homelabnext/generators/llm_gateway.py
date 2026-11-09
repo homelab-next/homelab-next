@@ -2185,7 +2185,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     rd.add_argument(
         "--root",
         help="the checkout the spec belongs to: its role table must stay inside it (default: the "
-        "working directory when it is a checkout holding the spec, else the spec's directory)",
+        "nearest checkout holding the spec, up to the working directory; then this package's "
+        "own checkout; a spec in no checkout gets its own directory, so pass --root for a spec "
+        "outside one)",
     )
     hm = sub.add_parser("homes", help=agent_homes.HOMES_HELP, description=agent_homes.HOMES_HELP)
     agent_homes.add_arguments(hm)

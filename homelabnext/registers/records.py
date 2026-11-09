@@ -73,6 +73,7 @@ from collections.abc import Mapping
 import yaml
 
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext._yaml import safe_load as _yaml_safe_load
 from homelabnext.identity.uid import is_uid
 
 from . import events as ev
@@ -638,7 +639,7 @@ def join_register(src_dir, out_file) -> pathlib.Path:
     text = "# SPDX-License-Identifier: Apache-2.0\n" + yaml.safe_dump(
         body, sort_keys=False, width=100, allow_unicode=True
     )
-    if _canonical(yaml.safe_load(text), kind) != doc:
+    if _canonical(_yaml_safe_load(text), kind) != doc:
         raise RegisterError(kind, [f"{out}: the joined file would not load back to {src}"])
     from homelabnext.state import atomic_write_text
 
@@ -656,7 +657,7 @@ def refresh_links(text: str, kind: str) -> str:
     if not m:
         return text
     try:
-        fm = yaml.safe_load(m.group("fm"))
+        fm = _yaml_safe_load(m.group("fm"))
     except yaml.YAMLError:
         return text
     if not isinstance(fm, dict):

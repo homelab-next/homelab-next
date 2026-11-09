@@ -30,12 +30,14 @@ __all__ = [
     "AliasRefused",
     "BudgetedLoader",
     "ExpansionRefused",
+    "NestedTooDeeply",
     "RecursiveAlias",
     "UniqueKeyLoader",
     "UniqueKeyStrDateLoader",
     "expanded_cost",
     "expanded_size",
     "load_unique",
+    "safe_load",
 ]
 
 
@@ -87,6 +89,10 @@ class ExpansionRefused(yaml.MarkedYAMLError):
 class RecursiveAlias(ExpansionRefused):
     """A node that contains itself through an alias (``a: &a [*a]``): it would construct into a
     self-referencing value, so a budgeted reader refuses it."""
+
+
+class NestedTooDeeply(ExpansionRefused):
+    """A document nested too deeply to compose or construct."""
 
 
 class AliasRefused(ExpansionRefused):
@@ -189,7 +195,7 @@ class BudgetedLoader(yaml.SafeLoader):
         try:
             node = super().get_single_node()
         except RecursionError:
-            raise ExpansionRefused(None, None, "nested too deeply to read", None) from None
+            raise NestedTooDeeply(None, None, "nested too deeply to read", None) from None
         expanded_cost(node, self.max_nodes, self.max_bytes, allow_aliases=self.allow_aliases)
         return node
 
@@ -197,7 +203,7 @@ class BudgetedLoader(yaml.SafeLoader):
         try:
             node = super().get_node()
         except RecursionError:
-            raise ExpansionRefused(None, None, "nested too deeply to read", None) from None
+            raise NestedTooDeeply(None, None, "nested too deeply to read", None) from None
         expanded_cost(node, self.max_nodes, self.max_bytes, allow_aliases=self.allow_aliases)
         return node
 
@@ -205,7 +211,7 @@ class BudgetedLoader(yaml.SafeLoader):
         try:
             return super().construct_document(node)
         except RecursionError:
-            raise ExpansionRefused(None, None, "nested too deeply to construct", None) from None
+            raise NestedTooDeeply(None, None, "nested too deeply to construct", None) from None
 
 
 class UniqueKeyLoader(BudgetedLoader):
@@ -232,3 +238,13 @@ def load_unique(path: Path, error: type[Exception]) -> Any:
         return yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
     except (OSError, yaml.YAMLError) as exc:
         raise error(f"cannot read {path}: {exc}") from exc
+
+
+def safe_load(stream: Any) -> Any:
+    """``yaml.safe_load`` held to the shared expansion budget (:class:`BudgetedLoader`): the same
+    types and the same behaviour on a well-formed document, and an :class:`ExpansionRefused` (a
+    ``yaml.YAMLError``) instead of minutes of work, a hang or a ``RecursionError`` on an alias or
+    merge bomb, a node that contains itself, or nesting too deep.  Every package reader of a file a
+    change can touch uses this or a loader built on :class:`BudgetedLoader`, never
+    ``yaml.safe_load`` (``tools/yaml_loader_lint.py``)."""
+    return yaml.load(stream, Loader=BudgetedLoader)

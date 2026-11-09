@@ -1341,6 +1341,26 @@
         "ci:ci/schemas",
         "make:workstation-lint"
       ]
+    },
+    {
+      "exit": {
+        "0": "every file at its count",
+        "1": "a file with more unbudgeted uses than its count (or one not listed), or fewer (lower the count)",
+        "2": "usage error or a malformed allowlist"
+      },
+      "id": "yaml-loader-lint",
+      "inputs": "homelabnext/**/*.py; tools/yaml_loader.allow.yml",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per file above or below its reviewed count",
+      "owner": "maintainers",
+      "path": "tools/yaml_loader_lint.py",
+      "purpose": "Fail when package code parses YAML with yaml.safe_load or SafeLoader instead of the budgeted loaders of homelabnext/_yaml.py, beyond the counts in tools/yaml_loader.allow.yml.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:gates"
+      ]
     }
   ]
 }

@@ -9,7 +9,7 @@ summary_generated: true
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-65 scripts: 25 check, 11 job, 2 service, 27 tool.
+66 scripts: 26 check, 11 job, 2 service, 27 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -78,3 +78,4 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `trivy-scan` | [`ansible/roles/trivy/templates/scan.sh.j2`](../../ansible/roles/trivy/templates/scan.sh.j2) | job | platform | Run one scheduled Trivy package scan (root filesystem, SBOM, optionally container images) and record its exit status. | `timer:trivy/scan`; `role:trivy` | - | 0 the run finished (the scanner's own status is in last-run) |
 | `workflow-broker-agent-job-submit` | [`workflows/handlers/agent-job-submit.sh`](../../workflows/handlers/agent-job-submit.sh) | tool | broker | Broker handler for agent.job.submit; puts one job on the orchestration controller's queue. | `manual` | - | 0 queued, already queued (an idempotent replay), already retried, or refused for good (logged on stderr); 1 no idempotency key or token, the controller could not be reached, refused the token (401, 403), or failed (400, 5xx) |
 | `workstation-refs` | [`tools/workstation_refs.py`](../../tools/workstation_refs.py) | check | maintainers | Fail when a runtime config, role, compose file, example or golden output points at the admin workstation. | `ci:ci/schemas`; `make:workstation-lint` | F-17 | 0 clean; 1 a workstation reference or a stale allowlist entry; 2 usage error or a missing dependency |
+| `yaml-loader-lint` | [`tools/yaml_loader_lint.py`](../../tools/yaml_loader_lint.py) | check | maintainers | Fail when package code parses YAML with yaml.safe_load or SafeLoader instead of the budgeted loaders of homelabnext/_yaml.py, beyond the counts in tools/yaml_loader.allow.yml. | `ci:ci/schemas`; `make:gates` | - | 0 every file at its count; 1 a file with more unbudgeted uses than its count (or one not listed), or fewer (lower the count); 2 usage error or a malformed allowlist |

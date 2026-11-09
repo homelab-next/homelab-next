@@ -82,6 +82,7 @@ CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) tools/product_name_lint.py .
+	$(PY) tools/yaml_loader_lint.py .
 	$(PY) tools/allowlist_ratchet.py .
 	$(PY) $(ROLE_LINT) $(ROLES)
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
