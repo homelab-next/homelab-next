@@ -192,15 +192,17 @@ gateway-check:
 	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway --check
 
 # consumers bind only to a primary (ADR-0039 decision 3): the example registry's upstreams, the
-# role table, the evaluation report's canary bindings, the packs the workflow deploy manifest pins
-# and each reference site's requires through its selection (docs/interfaces.md, "Registry and
-# naming")
+# role table, the evaluation report's canary bindings, every workflow pack, the example gateway
+# specs and each reference site's requires through its selection (docs/interfaces.md, "Registry
+# and naming")
+BINDINGS_GATEWAYS := $(GATEWAY_SPEC) $(CONFORMANCE_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway.yml
 .PHONY: bindings-check
 check: bindings-check
 bindings-check:
 	for site in examples/modules/sites/*.yml; do \
 	  $(PY) -m homelabnext.cli registry bindings examples/services.yml --roles $(MODEL_ROLES) \
-	    --eval-report $(MODEL_EVAL) --packs workflows/packs --deployed workflows/deploy.yml \
+	    --eval-report $(MODEL_EVAL) --packs workflows/packs \
+	    $(foreach g,$(BINDINGS_GATEWAYS),--gateway $(g)) \
 	    --site "$$site" --modules examples/modules || exit 1; \
 	done
 

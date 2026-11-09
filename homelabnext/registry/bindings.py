@@ -9,46 +9,67 @@ capability's primary:
   (:func:`homelabnext.registry.model.upstream_problems`, which loading a registry already runs),
   applied here to every tier;
 * a model-role binding's ``backend: svc:<name>`` (``model_roles.json``);
+* an LLM gateway spec's backends and the role table it renders (the gateway generator's own
+  rules, run against this registry: a backend named after a non-primary row, or a self-declared
+  host that reaches one, is refused);
 * a workflow pack step's ``target: svc:<name>`` and every other ``svc:`` id in a pack or its
   fixtures, event sources included (``workflows/packs/*.yml``);
-* a module's ``requires`` resolved through the site selection: the provider a site selects for a
-  required capability must be its primary's product, never a non-primary row's.
+* a module's ``requires`` resolved through the site selection.  The provider a site selects is
+  matched against a row by product name: a row's ``impl`` is the provider's product or one of its
+  aliases, by the same convention ``registry_impl_problems`` uses; a row whose ``impl`` follows
+  another spelling is not matched.
 
 A ``svc:`` id may name a row or a capability; a capability name means its primary.  An id that
-names a non-primary row, or a capability whose rows are all non-primary, is refused.  In a pack,
-an id that names no registry row, no capability and no :data:`PLATFORM_SOURCES` entry is refused
-too; a capability the platform knows (:func:`homelabnext.capability_names.platform_capabilities`)
-that this registry does not place is a note, not a problem, because a pack is platform content and
-a site that places none of a capability deploys no pack against it.
+names a non-primary row, or a capability whose rows are all non-primary, is refused.  A string
+that starts with ``svc:`` but is not a lower-case kebab id (:data:`SVC_ID`) is refused as
+malformed, never skipped.  In a pack, an id that names no registry row and no capability is
+refused unless it is a declared platform source (:data:`PLATFORM_SOURCES`) or a declared
+unplaced capability of that pack (:data:`UNPLACED`, a note): the leniency is a list with a reason
+and an end per entry, not a rule.
 
 Two exceptions are declared here (:data:`EXCEPTIONS`), never inferred from a file name or a call
 path: the evaluation report's ``canary`` bindings may name an ``eval`` row, and a conformance
-target file may name any non-legacy row.
+target file may name any non-legacy row.  The second checks only ``svc:`` strings in the target
+file; a target reaches a row through its adapter's configuration and ``HNX_ENDPOINT_<ROW>``, which
+this check does not see, and no target file names a row today.
 
 Not bindings, so not read: status sources, the census, ``hnx decommission`` and the ledger read
 every tier (watching a row is not depending on it), and an agent lane (``real``/``shadow``) names
 an executor, not a registry row.
+
+The inputs are read by :func:`read_input`, which refuses a symbolic link anywhere on a relative
+path (a lab's change cannot point the check at a file outside the checkout).
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-
-from homelabnext.capability_names import platform_capabilities
 
 from .model import STANDINGS, Registry, upstream_problems
 
 __all__ = [
     "EXCEPTIONS",
     "PLATFORM_SOURCES",
+    "UNPLACED",
+    "BindingsInputError",
     "Declared",
     "Report",
     "canary_problems",
     "check",
+    "gateway_problems",
+    "load_eval_reports",
+    "load_gateways",
+    "load_packs",
+    "load_role_tables",
+    "load_selection",
+    "load_targets",
     "pack_problems",
+    "read_input",
     "requires_problems",
     "role_problems",
     "row_upstream_problems",
@@ -64,6 +85,8 @@ class Declared:
 
     name: str
     why: str
+    #: for an :data:`UNPLACED` entry: the packs (by ``pack:`` name) it covers, and no other
+    packs: tuple[str, ...] = ()
 
 
 #: ``svc:`` ids a pack may name that are no registry row and no capability.  Each entry leaves
@@ -96,7 +119,44 @@ EXCEPTIONS: tuple[Declared, ...] = (
         "primary in its rollback window, is proven by its row name",
     ),
 )
+#: platform capabilities a pack may name although the registry it is checked against places no
+#: row of them: a note, not a problem, for the packs listed only.  Each entry ends with the change
+#: its reason names; a registry that holds any row of the capability judges it as usual.
+UNPLACED: tuple[Declared, ...] = (
+    Declared(
+        "orchestration",
+        "the controller's example row (capability orchestration) enters examples/services.yml "
+        "with the ADR-0026 amendment's PR 2.7c, which removes this entry",
+        ("agent-job-retry", "proposal-validate"),
+    ),
+    Declared(
+        "cases",
+        "example packs no deploy manifest pins: the reference registry places no case store "
+        "until ADR-0049 brings the cases provider module and its row",
+        ("case-opened-notify", "new-critical-alert", "phishing-report"),
+    ),
+    Declared(
+        "siem-source",
+        "example packs no deploy manifest pins: the reference registry places no SIEM source "
+        "until the SOC modules of ADR-0049 do",
+        ("new-critical-alert", "phishing-report"),
+    ),
+    Declared(
+        "mail-gateway",
+        "an example pack no deploy manifest pins: no reference registry places a mail relay; "
+        "the entry goes with the pack or when a reference registry places one",
+        ("phishing-report",),
+    ),
+)
 _PLATFORM = {d.name for d in PLATFORM_SOURCES}
+_UNPLACED = {d.name: set(d.packs) for d in UNPLACED}
+
+#: the start of a ``svc:`` id; a string with it that :data:`SVC_ID` does not match is malformed
+SVC_PREFIX = "svc:"
+
+
+class BindingsInputError(ValueError):
+    """An input of the check that cannot be read (the CLI's exit 2)."""
 
 
 @dataclass
@@ -198,39 +258,47 @@ def canary_problems(registry: Registry, report: Any, where: str = "model_roles.e
     return out
 
 
-def _svc_ids(doc: Any, path: str = "") -> Iterator[tuple[str, str]]:
-    """``(where, name)`` for every string in ``doc`` that is a whole ``svc:`` id."""
+def _svc_ids(doc: Any, path: str = "") -> Iterator[tuple[str, str | None]]:
+    """``(where, name)`` for every string in ``doc`` that starts with ``svc:``; ``name`` is None
+    when the rest is not a lower-case kebab id (malformed)."""
     if isinstance(doc, Mapping):
         for k in sorted(doc, key=str):
             yield from _svc_ids(doc[k], f"{path}.{k}" if path else str(k))
     elif isinstance(doc, list):
         for i, v in enumerate(doc):
             yield from _svc_ids(v, f"{path}[{i}]")
-    elif isinstance(doc, str):
+    elif isinstance(doc, str) and doc.startswith(SVC_PREFIX):
         m = SVC_ID.match(doc)
-        if m is not None:
-            yield path, m.group(1)
+        yield path, (m.group(1) if m is not None else None)
+
+
+def _malformed(where: str, path: str, doc: Any) -> str:
+    return f"{where}: {path}: malformed svc: id (a lower-case kebab name follows svc:)"
 
 
 def pack_problems(registry: Registry, pack: Any, where: str) -> Report:
     """Every ``svc:`` id in a workflow pack and its fixtures (step targets, event sources, the
     calls a fixture expects): a primary row, a capability with a primary or a declared platform
-    source.  A capability the platform knows and this registry does not place is a note."""
+    source; a declared :data:`UNPLACED` capability of this pack that the registry holds no row of
+    is a note."""
     rep = Report([], [])
-    known = platform_capabilities()
+    pack_name = pack.get("pack") if isinstance(pack, Mapping) else None
     seen: set[str] = set()
     for path, name in _svc_ids(pack):
+        if name is None:
+            rep.problems.append(_malformed(where, path, pack))
+            continue
         if name in _PLATFORM:
             continue
         why = _judge(registry, name, ())
         if why is None:
             continue
         if why == "unknown":
-            if name in known:
+            if pack_name in _UNPLACED.get(name, ()):
                 if name not in seen:
                     rep.notes.append(
-                        f"{where}: svc:{name} is a platform capability this registry does not "
-                        "place: the pack has no target here"
+                        f"{where}: svc:{name} is a declared unplaced capability of this pack "
+                        "(bindings.UNPLACED): the pack has no target here"
                     )
                     seen.add(name)
                 continue
@@ -242,9 +310,14 @@ def pack_problems(registry: Registry, pack: Any, where: str) -> Report:
 def target_problems(registry: Registry, target: Any, where: str) -> list[str]:
     """A conformance target file (the declared ``conformance-target`` exception): every ``svc:``
     id in it names a primary, an ``eval`` or a ``retiring`` row (or a capability with a primary),
-    never a legacy row and never a name the registry does not hold."""
+    never a legacy row and never a name the registry does not hold.  Only ``svc:`` strings are
+    read: an adapter that reaches a row through its configuration or ``HNX_ENDPOINT_<ROW>`` is
+    not seen here."""
     out = []
     for path, name in _svc_ids(target):
+        if name is None:
+            out.append(_malformed(where, path, target))
+            continue
         why = _judge(registry, name, ("eval", "retiring"))
         if why is None:
             continue
@@ -323,6 +396,24 @@ def requires_problems(
     return out
 
 
+def gateway_problems(registry: Registry, path: str | Path) -> list[str]:
+    """An LLM gateway spec (and the role table it names) validated against ``registry`` by the
+    gateway generator's own rules, so a backend that reaches a non-primary row is refused here as
+    it is at render time.  A conformance spec is read in its test-only mode."""
+    from homelabnext.generators import llm_gateway as gw
+
+    doc = _parse(read_input(path), str(path))
+    conformance = isinstance(doc, Mapping) and bool(doc.get("conformance"))
+    try:
+        gw.load_spec(path, conformance=conformance, registry=registry)
+    except gw.GatewaySpecError as exc:
+        found = list(getattr(exc, "problems", None) or [])
+        return [f"{path}: {p}" for p in found] or [str(exc)]
+    except (OSError, ValueError) as exc:
+        raise BindingsInputError(f"{path}: {exc}") from None
+    return []
+
+
 def check(
     registry: Registry,
     *,
@@ -330,12 +421,13 @@ def check(
     reports: Iterable[tuple[str, Any]] = (),
     packs: Iterable[tuple[str, Any]] = (),
     targets: Iterable[tuple[str, Any]] = (),
+    gateways: Iterable[str | Path] = (),
     site: Mapping[str, Any] | None = None,
     mods: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Report:
     """Every binding site over ``registry``: its upstreams, each ``(where, RoleTable)``, each
-    ``(where, evaluation report)``, each ``(where, pack)``, each ``(where, conformance target)``
-    and, with ``site`` and ``mods``, the selected modules' requirements."""
+    ``(where, evaluation report)``, each ``(where, pack)``, each ``(where, conformance target)``,
+    each gateway spec path and, with ``site`` and ``mods``, the selected modules' requirements."""
     rep = Report(row_upstream_problems(registry), [])
     for where, table in tables:
         rep.problems += role_problems(registry, table, where)
@@ -347,6 +439,148 @@ def check(
         rep.notes += found.notes
     for where, doc in targets:
         rep.problems += target_problems(registry, doc, where)
+    for path in gateways:
+        rep.problems += gateway_problems(registry, path)
     if site is not None:
         rep.problems += requires_problems(registry, site, mods or {})
     return rep
+
+
+# ---------------------------------------------------------------- inputs
+
+
+def read_input(path: str | Path) -> bytes:
+    """A regular file's bytes, never through a symbolic link: on a relative path, no component
+    may be a link (the overlay's ``lab/`` files); on an absolute one, the final component."""
+    from homelabnext.modules import loader as ld
+
+    p = Path(path)
+    try:
+        if not p.is_absolute() and ld.path_has_symlink(".", p.as_posix()):
+            raise BindingsInputError(f"{path}: a symbolic link on its path")
+        return ld.read_bytes(p, follow=False)
+    except (ld.Unreadable, OSError) as exc:
+        raise BindingsInputError(f"{path}: {exc}") from None
+
+
+def _parse(data: bytes, where: str) -> Any:
+    from homelabnext.modules import loader as ld
+
+    try:
+        text = data.decode("utf-8")
+        if where.endswith(".json"):
+            return json.loads(text)
+        return ld.parse_yaml(text)
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise BindingsInputError(f"{where}: cannot be parsed ({exc})") from None
+
+
+def load_doc(path: str | Path) -> Any:
+    """A YAML or JSON input (JSON by its suffix), read by :func:`read_input`."""
+    return _parse(read_input(path), str(path))
+
+
+def load_role_tables(paths: Iterable[str]) -> list[tuple[str, Any]]:
+    """Each role table, validated against ``model_roles.json`` as :meth:`RoleTable.load` does."""
+    from .models import RoleTable, RoleTableError, schema_problems
+
+    out = []
+    for path in paths:
+        doc = load_doc(path)
+        if problems := schema_problems(doc):
+            raise BindingsInputError(
+                f"{path}: role table does not match model_roles.json: " + "; ".join(problems[:5])
+            )
+        try:
+            out.append((path, RoleTable.from_dict(doc)))
+        except RoleTableError as exc:
+            raise BindingsInputError(f"{path}: {exc}") from None
+    return out
+
+
+def load_targets(paths: Iterable[str]) -> list[tuple[str, Any]]:
+    return [(path, load_doc(path)) for path in paths]
+
+
+def load_gateways(paths: Iterable[str]) -> list[str]:
+    for path in paths:
+        read_input(path)  # refused before the generator opens it
+    return list(paths)
+
+
+def load_eval_reports(
+    paths: Iterable[str], *, root: str | Path = ".", base: str | None = None
+) -> list[tuple[str, Any]]:
+    """Each evaluation report as the working tree has it and, with ``base``, also as that commit
+    has it (the copy the swap gate trusts).  A report absent from the tree or the base is skipped
+    there; one in neither is an input error."""
+    out = []
+    for rel in paths:
+        head = None
+        if Path(rel).exists() or Path(rel).is_symlink():
+            head = load_doc(rel)
+            out.append((rel, head))
+        if base is None:
+            if head is None:
+                raise BindingsInputError(f"{rel}: no such file")
+            continue
+        from homelabnext.modules.swap_evidence import EvidenceError, read_base
+
+        try:
+            data = read_base(Path(root), base, rel, missing_ok=True)
+        except EvidenceError as exc:
+            raise BindingsInputError(str(exc)) from None
+        if data is not None:
+            out.append((f"{rel}@{base[:12]}", _parse(data, rel)))
+    return out
+
+
+def load_packs(paths: Iterable[str], deployed: str | None = None) -> list[tuple[str, Any]]:
+    """The packs under ``paths`` (files, or directories of packs); with ``deployed`` (a workflow
+    deploy manifest) only the packs it pins, every one of which must be among them."""
+    from homelabnext.workflows.pack import WorkflowError, expand
+    from homelabnext.workflows.pack import load_doc as load_pack
+
+    packs = []
+    try:
+        for f in expand(Path(p) for p in paths):
+            read_input(f)  # refused through a link before the pack reader opens it
+            packs.append((str(f), load_pack(f)))  # the pack format's own YAML reader
+    except WorkflowError as exc:
+        raise BindingsInputError(str(exc)) from None
+    if deployed is None:
+        return packs
+    manifest = load_doc(deployed)
+    pins = manifest.get("pins") if isinstance(manifest, Mapping) else None
+    if not isinstance(pins, list):
+        raise BindingsInputError(f"{deployed}: no pins list")
+    names = {p.get("pack") for p in pins if isinstance(p, Mapping)}
+    held = {doc.get("pack") for _w, doc in packs if isinstance(doc, Mapping)}
+    missing = sorted(str(n) for n in names - held)
+    if missing:
+        raise BindingsInputError(
+            f"{deployed} pins {', '.join(missing)}, which --packs does not hold"
+        )
+    return [(w, d) for w, d in packs if isinstance(d, Mapping) and d.get("pack") in names]
+
+
+def load_selection(site_path: str, modules: Iterable[str]) -> tuple[dict, dict]:
+    """A site selection and the module manifests under ``modules`` (each read by the module
+    loader, which refuses a linked module directory or manifest)."""
+    from homelabnext.modules import loader as ld
+
+    site = load_doc(site_path)
+    if not isinstance(site, dict):
+        raise BindingsInputError(f"{site_path}: not a mapping")
+    mods: dict = {}
+    for d in modules:
+        tree, problems = ld.discover(public=Path(d))
+        if problems:
+            raise BindingsInputError("; ".join(str(p) for p in problems))
+        twice = sorted(set(mods) & set(tree.mods))
+        if twice:
+            raise BindingsInputError(
+                f"{d}: module(s) {', '.join(twice)} already under another --modules"
+            )
+        mods.update(tree.mods)
+    return site, mods

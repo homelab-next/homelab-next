@@ -4,6 +4,7 @@ non-primary row is refused, the two declared exceptions hold, and the current ex
 
 from __future__ import annotations
 
+import ast
 import copy
 import dataclasses
 import json
@@ -25,6 +26,11 @@ ROOT = Path(__file__).resolve().parents[2]
 NON_PRIMARY = ("eval", "retiring", "legacy")
 CANDIDATE = "inference-candidate"
 SITES = sorted((ROOT / "examples/modules/sites").glob("*.yml"))
+GATEWAYS = (
+    "compose/lab-in-a-box/config/llm-gateway/gateway.yml",
+    "compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml",
+    "examples/llm-orchestrator-gateway/gateway.yml",
+)
 
 
 def _url(host: str, port: int) -> str:
@@ -112,8 +118,7 @@ def test_the_current_examples_pass(site, capsys):
         str(ROOT / "examples/model_roles.eval.json"),
         "--packs",
         str(ROOT / "workflows/packs"),
-        "--deployed",
-        str(ROOT / "workflows/deploy.yml"),
+        *[a for g in GATEWAYS for a in ("--gateway", str(ROOT / g))],
         "--site",
         str(site),
         "--modules",
@@ -121,7 +126,8 @@ def test_the_current_examples_pass(site, capsys):
         capsys=capsys,
     )
     assert (rc, err) == (0, ""), err
-    assert "bindings: 0 problem(s); 1 role table(s), 1 report(s), 2 pack(s)" in out
+    assert "bindings: 0 problem(s); 1 role table(s), 1 report(s), 5 pack(s), 0 target(s), " in out
+    assert "3 gateway spec(s)" in out
 
 
 def test_make_check_runs_the_bindings_check_over_the_examples():
@@ -132,7 +138,8 @@ def test_make_check_runs_the_bindings_check_over_the_examples():
         "registry bindings examples/services.yml",
         "--roles $(MODEL_ROLES)",
         "--eval-report $(MODEL_EVAL)",
-        "--packs workflows/packs --deployed workflows/deploy.yml",
+        "--packs workflows/packs \\\n",
+        "$(foreach g,$(BINDINGS_GATEWAYS),--gateway $(g))",
         "examples/modules/sites/*.yml",
         "--modules examples/modules",
     ):
@@ -148,6 +155,20 @@ def test_the_overlay_template_runs_the_bindings_check_over_lab():
     assert "hnx registry bindings lab/services.yml" in run
     assert "--eval-report lab/model_roles.eval.json --ci-base" in run
     assert "--roles lab/model_roles.json" in run
+    assert "--packs hnx/workflows/packs --deployed hnx/workflows/deploy.yml" in run
+
+
+def test_make_check_names_every_example_gateway_spec_and_checks_every_pack():
+    make = (ROOT / "Makefile").read_text(encoding="utf-8")
+    line = next(x for x in make.splitlines() if x.startswith("BINDINGS_GATEWAYS :="))
+    for var, path in (
+        ("$(GATEWAY_SPEC)", GATEWAYS[0]),
+        ("$(CONFORMANCE_GATEWAY)/gateway.yml", GATEWAYS[1]),
+        ("$(ORCH_GATEWAY)/gateway.yml", GATEWAYS[2]),
+    ):
+        assert var in line and (ROOT / path).is_file()
+    recipe = make.split("\nbindings-check:\n", 1)[1].split("\n\n", 1)[0]
+    assert "--deployed" not in recipe
 
 
 # ---------------------------------------------------------------- each binding site, each tier
@@ -326,16 +347,78 @@ def test_a_declared_platform_source_passes(tmp_path, source, capsys):
     assert (rc, err) == (0, "")
 
 
-def test_a_platform_capability_the_registry_does_not_place_is_a_note(tmp_path, capsys):
+def test_a_declared_unplaced_capability_of_the_pack_is_a_note(tmp_path, capsys):
     rc, out, err = _run(
         str(_registry(tmp_path)), "--packs", str(_pack(tmp_path, "svc:cases")), capsys=capsys
     )
     assert (rc, err) == (0, "")
-    assert "svc:cases is a platform capability this registry does not place" in out
+    assert "svc:cases is a declared unplaced capability of this pack" in out
+
+
+@pytest.mark.parametrize(
+    ("target", "pack_name"),
+    [("svc:cases", "another-pack"), ("svc:orchestration", None), ("svc:projects", None)],
+)
+def test_an_undeclared_unplaced_capability_is_refused(tmp_path, capsys, target, pack_name):
+    path = _pack(tmp_path, target)
+    if pack_name:
+        doc = yaml.safe_load(path.read_text())
+        doc["pack"] = pack_name
+        path.write_text(yaml.safe_dump(doc))
+    rc, _out, err = _run(str(_registry(tmp_path)), "--packs", str(path), capsys=capsys)
+    assert rc == 1
+    assert f"{target} names no registry row, capability or declared platform source" in err
+
+
+def test_a_declared_unplaced_capability_the_registry_holds_rows_of_is_judged(tmp_path, capsys):
+    doc = _doc()
+    _candidate_row(doc, "cases-candidate", "notify", "eval", capability="cases")
+    path = tmp_path / "services.yml"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    rc, _out, err = _run(str(path), "--packs", str(_pack(tmp_path, "svc:cases")), capsys=capsys)
+    assert rc == 1
+    assert "svc:cases names capability cases, which has no primary" in err
+
+
+@pytest.mark.parametrize("bad", ["svc:Cases", "svc:cases_db", "svc:", "svc:-x", "svc:a b"])
+def test_a_malformed_svc_id_is_refused(tmp_path, capsys, bad):
+    rc, _out, err = _run(
+        str(_registry(tmp_path)), "--packs", str(_pack(tmp_path, bad)), capsys=capsys
+    )
+    assert rc == 1
+    assert "malformed svc: id" in err
+    tp = tmp_path / "target.yml"
+    tp.write_text(
+        yaml.safe_dump(
+            {
+                "name": "t",
+                "capabilities": {"inference": {"adapter": "x.y:z", "config": {"row": bad}}},
+            }
+        )
+    )
+    rc, _out, err = _run(str(_registry(tmp_path)), "--target", str(tp), capsys=capsys)
+    assert rc == 1 and "malformed svc: id" in err
+
+
+def test_every_unplaced_entry_is_a_platform_capability_scoped_to_existing_packs():
+    from homelabnext.capability_names import platform_capabilities
+
+    packs = {
+        yaml.safe_load(p.read_text())["pack"] for p in (ROOT / "workflows/packs").glob("*.yml")
+    }
+    for d in bd.UNPLACED:
+        assert d.name in platform_capabilities(), d.name
+        assert d.why.strip() and d.packs and set(d.packs) <= packs, d.name
 
 
 def test_the_declarations_are_listed_each_with_a_why():
     assert [d.name for d in bd.PLATFORM_SOURCES] == ["broker", "llm-orchestrator"]
+    assert [d.name for d in bd.UNPLACED] == [
+        "orchestration",
+        "cases",
+        "siem-source",
+        "mail-gateway",
+    ]
     assert [d.name for d in bd.EXCEPTIONS] == ["canary", "conformance-target"]
     assert all(d.why.strip() for d in (*bd.PLATFORM_SOURCES, *bd.EXCEPTIONS))
 
@@ -387,7 +470,9 @@ def _git(root: Path, *args: str) -> None:
     )
 
 
-def test_the_canary_report_is_read_from_the_base_commit(tmp_path, capsys):
+def test_the_canary_report_is_read_from_the_change_and_from_the_base_commit(
+    tmp_path, capsys, monkeypatch
+):
     repo = tmp_path / "repo"
     repo.mkdir()
     reg = str(_registry(tmp_path, "retiring"))
@@ -395,13 +480,77 @@ def test_the_canary_report_is_read_from_the_base_commit(tmp_path, capsys):
     _report(repo, "svc:inference", "eval.json")
     _git(repo, "add", "eval.json")
     _git(repo, "commit", "-q", "-m", "base")
-    _report(repo, f"svc:{CANDIDATE}", "eval.json")  # the change names the retiring row
-    head = ["--eval-report", "eval.json", "--root", str(repo)]
+    monkeypatch.chdir(repo)
+    head = ["--eval-report", "eval.json", "--root", "."]
     assert _run(reg, *head, "--base", "HEAD", capsys=capsys)[0] == 0
-    _git(repo, "commit", "-q", "-am", "change")
+    _report(repo, f"svc:{CANDIDATE}", "eval.json")  # the change names the retiring row
     rc, _out, err = _run(reg, *head, "--base", "HEAD", capsys=capsys)
-    assert rc == 1 and f"svc:{CANDIDATE} names a retiring row" in err
+    assert rc == 1 and f"eval.json: canary.fast-classifier.bindings[0]: svc:{CANDIDATE}" in err
+    _git(repo, "commit", "-q", "-am", "change")
+    _report(repo, "svc:inference", "eval.json")  # the tree is clean again, the base is not
+    rc, _out, err = _run(reg, *head, "--base", "HEAD", capsys=capsys)
+    assert rc == 1 and "eval.json@" in err and f"svc:{CANDIDATE} names a retiring row" in err
     assert _run(reg, *head, "--base", "HEAD~1", capsys=capsys)[0] == 0
+
+
+def test_a_lab_input_through_a_symbolic_link_is_refused(tmp_path, capsys, monkeypatch):
+    lab = tmp_path / "lab"
+    lab.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text((ROOT / "examples/model_roles.json").read_text())
+    (lab / "model_roles.json").symlink_to(outside)
+    monkeypatch.chdir(tmp_path)
+    reg = str(_registry(tmp_path))
+    rc, _out, err = _run(reg, "--roles", "lab/model_roles.json", capsys=capsys)
+    assert rc == 2 and "a symbolic link on its path" in err
+    (tmp_path / "linked").symlink_to(lab, target_is_directory=True)
+    (lab / "model_roles.json").unlink()
+    (lab / "model_roles.json").write_text(outside.read_text())
+    rc, _out, err = _run(reg, "--roles", "linked/model_roles.json", capsys=capsys)
+    assert rc == 2 and "a symbolic link on its path" in err
+    assert _run(reg, "--roles", "lab/model_roles.json", capsys=capsys)[0] == 0
+
+
+def _gateway_spec(tmp_path: Path, host: str, port: int) -> Path:
+    roles = {
+        "version": 1,
+        "roles": {
+            "agent-local": {
+                "tier": "large",
+                "bindings": [{"backend": "svc:llm-shadow", "model_id": "m-large"}],
+            }
+        },
+    }
+    (tmp_path / "roles.json").write_text(json.dumps(roles))
+    spec = {
+        "roles": "roles.json",
+        "master_key": "secret:llm-gateway/master-key",
+        "database_url": "secret:llm-gateway/database-url",
+        "backends": {"svc:llm-shadow": {"locality": "local", "host": host, "port": port}},
+        "keys": [
+            {
+                "name": "local-agent",
+                "key": "secret:llm-gateway/key-local-agent",
+                "roles": ["mdl:agent-local"],
+                "data_tier": "local-only",
+            }
+        ],
+    }
+    path = tmp_path / "gateway.yml"
+    path.write_text(yaml.safe_dump(spec))
+    return path
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring"])
+def test_a_gateway_spec_reaching_a_non_primary_row_by_its_host_is_refused(tmp_path, capsys, tier):
+    reg = _registry(tmp_path, tier)
+    row = yaml.safe_load(reg.read_text())["services"][CANDIDATE]
+    spec = _gateway_spec(tmp_path, f"{CANDIDATE}.svc.example.internal", row["port"])
+    rc, _out, err = _run(str(reg), "--gateway", str(spec), capsys=capsys)
+    assert rc == 1
+    assert re.search(rf"host {CANDIDATE}\.svc\.example\.internal is an? {tier} row's record", err)
+    ok = _gateway_spec(tmp_path, "inference-big.svc.example.internal", 8000)
+    assert _run(str(reg), "--gateway", str(ok), capsys=capsys)[0] == 0
 
 
 @pytest.mark.parametrize(("tier", "ok"), [("eval", True), ("retiring", True), ("legacy", False)])
@@ -477,14 +626,55 @@ def test_allow_eval_resolves_the_row_by_its_name_never_through_the_capability(tm
         mr.resolve_binding(role, binding, allow_eval=True)  # the capability's variable is not used
 
 
+def _allow_eval_calls(tree: ast.AST) -> list[tuple[str, int]]:
+    """``(enclosing function, line)`` of every ``resolve_binding`` call that passes
+    ``allow_eval`` or a ``**`` mapping (which could carry it)."""
+    out: list[tuple[str, int]] = []
+
+    def visit(node: ast.AST, owner: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            name = owner
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                name = child.name if owner == "<module>" else owner
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute | ast.Name)
+                and (getattr(child.func, "attr", None) or getattr(child.func, "id", None))
+                == "resolve_binding"
+                and any(k.arg in (None, "allow_eval") for k in child.keywords)
+            ):
+                out.append((name, child.lineno))
+            visit(child, name)
+
+    visit(tree, "<module>")
+    return out
+
+
 def test_only_the_egress_canary_runner_passes_allow_eval():
-    found = sorted(
-        str(p.relative_to(ROOT))
-        for p in (ROOT / "homelabnext").rglob("*.py")
-        if re.search(r"allow_eval\s*=\s*True\s*[,)]", p.read_text(encoding="utf-8"))
-    )
-    assert found == ["homelabnext/golden/cli.py"]
-    text = (ROOT / "homelabnext/golden/cli.py").read_text(encoding="utf-8")
-    body = text.split("def _binding_completer(", 1)[1].split("\ndef ", 1)[0]
-    calls = re.compile(r"allow_eval\s*=\s*True\s*[,)]")
-    assert len(calls.findall(text)) == len(calls.findall(body)) == 1
+    found = []
+    for p in sorted((ROOT / "homelabnext").rglob("*.py")):
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        found += [(p.relative_to(ROOT).as_posix(), f) for f, _line in _allow_eval_calls(tree)]
+    assert found == [("homelabnext/golden/cli.py", "_binding_completer")]
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "def f(r, b):\n    r.resolve_binding('x', b, allow_eval=1)\n",
+        "def f(r, b):\n    r.resolve_binding('x', b, **{'allow_eval': True})\n",
+        "def f(r, b):\n    r.resolve_binding(\n        'x',\n        b,  # a comment\n"
+        "        allow_eval=True,\n    )\n",
+        "def f(r, b, kw):\n    resolve_binding('x', b, **kw)\n",
+    ],
+)
+def test_the_allow_eval_scan_catches_every_spelling(src):
+    assert _allow_eval_calls(ast.parse(src)) == [("f", 2)]
+
+
+@pytest.mark.parametrize("value", [1, "yes", [True]])
+def test_a_truthy_stand_in_for_allow_eval_grants_nothing(tmp_path, value):
+    mr = _resolver(tmp_path, "eval", f"svc:{CANDIDATE}")
+    role = next(iter(mr.table.roles))
+    with pytest.raises(NonPrimaryBinding):
+        mr.resolve_binding(role, mr.table.get(role).bindings[0], allow_eval=value)

@@ -369,7 +369,8 @@ class ModelResolver:
         ``retiring`` or ``legacy`` row always, :class:`NonPrimaryBinding` is raised."""
         asked = normalize_role(role)
         r = self.table.get(asked)
-        candidate = self.registry.row(binding.backend, "eval") if allow_eval else None
+        # only the literal True: a truthy stand-in (1, "yes") is no grant of the exception
+        candidate = self.registry.row(binding.backend, "eval") if allow_eval is True else None
         if candidate is not None:
             return _resolved(r, asked, binding, self.resolver.resolve_row(candidate.name), ())
         return _resolved(

@@ -57,12 +57,14 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         action="append",
         default=[],
         help="an evaluation report whose canary bindings may name an eval row (repeatable); "
-        "with --base or --ci-base read from that commit, as the swap gate reads it",
+        "with --base or --ci-base also read from that commit, as the swap gate reads it",
     )
     which = p.add_mutually_exclusive_group()
-    which.add_argument("--base", help="read --eval-report from this commit")
+    which.add_argument("--base", help="also read --eval-report from this commit")
     which.add_argument(
-        "--ci-base", action="store_true", help="read --eval-report from the base CI compares with"
+        "--ci-base",
+        action="store_true",
+        help="also read --eval-report from the base CI compares with",
     )
     p.add_argument("--root", default=".", help="the git checkout --eval-report is relative to")
     p.add_argument(
@@ -74,6 +76,12 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     )
     p.add_argument(
         "--target", action="append", default=[], help="a conformance target file (repeatable)"
+    )
+    p.add_argument(
+        "--gateway",
+        action="append",
+        default=[],
+        help="an LLM gateway spec: its backends and role table against the registry (repeatable)",
     )
     p.add_argument("--site", help="a site selection: its modules' requires (with --modules)")
     p.add_argument(
@@ -169,140 +177,63 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
     return 1 if problems else 0
 
 
-class _Usage(Exception):
-    """An input of ``bindings`` that cannot be read (exit 2)."""
-
-
 def _bindings(args: argparse.Namespace, reg, out, err) -> int:
     """``hnx registry bindings``: exit 0 when every binding reaches a primary, 1 when one does
-    not, 2 when an input cannot be read."""
-    from homelabnext.registry.bindings import check
+    not, 2 when an input cannot be read (:mod:`homelabnext.registry.bindings`)."""
+    from homelabnext.registry import bindings as bd
 
     try:
         if bool(args.site) != bool(args.modules):
-            raise _Usage("--site and --modules go together")
-        tables = [(path, _role_table(path)) for path in args.roles]
-        reports = _eval_reports(args)
-        packs = _packs(args.packs, args.deployed)
-        targets = [(path, _doc(path)) for path in args.target]
+            raise bd.BindingsInputError("--site and --modules go together")
+        tables = bd.load_role_tables(args.roles)
+        reports = bd.load_eval_reports(args.eval_report, root=args.root, base=_base(args))
+        packs = bd.load_packs(args.packs, args.deployed)
+        targets = bd.load_targets(args.target)
+        gateways = bd.load_gateways(args.gateway)
         site = mods = None
         if args.site:
-            site, mods = _selection(args.site, args.modules)
-    except _Usage as exc:
+            site, mods = bd.load_selection(args.site, args.modules)
+        rep = bd.check(
+            reg,
+            tables=tables,
+            reports=reports,
+            packs=packs,
+            targets=targets,
+            gateways=gateways,
+            site=site,
+            mods=mods,
+        )
+    except bd.BindingsInputError as exc:
         print(f"hnx registry bindings: {exc}", file=err)
         return 2
-    rep = check(
-        reg, tables=tables, reports=reports, packs=packs, targets=targets, site=site, mods=mods
-    )
     for n in rep.notes:
         print(f"note: {n}", file=out)
     for p in rep.problems:
         print(p, file=err)
     print(
         f"bindings: {len(rep.problems)} problem(s); {len(tables)} role table(s), "
-        f"{len(reports)} report(s), {len(packs)} pack(s), {len(targets)} target(s)"
-        + (", the selection's requires" if site is not None else ""),
+        f"{len(reports)} report(s), {len(packs)} pack(s), {len(targets)} target(s), "
+        f"{len(gateways)} gateway spec(s)" + (", the selection's requires" if site else ""),
         file=out,
     )
     return 1 if rep.problems else 0
 
 
-def _doc(path: str):
-    from homelabnext.workflows.pack import WorkflowError, load_doc
-
-    try:
-        return load_doc(Path(path))
-    except WorkflowError as exc:
-        raise _Usage(str(exc)) from None
-
-
-def _role_table(path: str):
-    from homelabnext.registry.models import RoleTable, RoleTableError
-
-    try:
-        return RoleTable.load(path)
-    except (OSError, RoleTableError) as exc:
-        raise _Usage(f"{path}: {exc}") from None
-
-
-def _eval_reports(args: argparse.Namespace) -> list:
-    """Each ``--eval-report``: from the working tree, or with ``--base``/``--ci-base`` from that
-    commit (absent there: skipped, as the swap gate has no report from it either)."""
-    if not args.eval_report:
-        return []
-    if not (args.base or args.ci_base):
-        return [(path, _doc(path)) for path in args.eval_report]
-    import json
-
+def _base(args: argparse.Namespace) -> str | None:
+    """The commit ``--eval-report`` is also read from: ``--base``, or ``--ci-base``'s pick (None
+    for a root commit, which has no base)."""
+    if args.base:
+        return args.base
+    if not args.ci_base:
+        return None
     from homelabnext.gitbase import ci_base_from_env
-    from homelabnext.modules.swap_evidence import EvidenceError, read_base
-
-    root = Path(args.root)
-    base = args.base
-    if args.ci_base:
-        try:
-            base, _why = ci_base_from_env(root)
-        except ValueError as exc:
-            raise _Usage(f"--ci-base: {exc}") from None
-        if not base:
-            return []  # a root commit: no base, so no report the gate would trust
-    out = []
-    for rel in args.eval_report:
-        try:
-            data = read_base(root, base, rel, missing_ok=True)
-        except EvidenceError as exc:
-            raise _Usage(str(exc)) from None
-        if data is None:
-            continue
-        try:
-            out.append((f"{rel}@{base[:12]}", json.loads(data.decode("utf-8"))))
-        except (UnicodeDecodeError, ValueError) as exc:
-            why = f"not valid JSON ({exc.__class__.__name__})"
-            raise _Usage(f"{rel} at {base[:12]}: {why}") from None
-    return out
-
-
-def _packs(paths: list[str], deployed: str | None) -> list:
-    from homelabnext.workflows.pack import WorkflowError, expand
+    from homelabnext.registry.bindings import BindingsInputError
 
     try:
-        files = expand(Path(p) for p in paths)
-    except WorkflowError as exc:
-        raise _Usage(str(exc)) from None
-    packs = [(str(f), _doc(str(f))) for f in files]
-    if deployed is None:
-        return packs
-    manifest = _doc(deployed)
-    pins = manifest.get("pins") if isinstance(manifest, dict) else None
-    if not isinstance(pins, list):
-        raise _Usage(f"{deployed}: no pins list")
-    names = {p.get("pack") for p in pins if isinstance(p, dict)}
-    held = {doc.get("pack") for _w, doc in packs if isinstance(doc, dict)}
-    missing = sorted(str(n) for n in names - held)
-    if missing:
-        raise _Usage(f"{deployed} pins {', '.join(missing)}, which --packs does not hold")
-    return [(w, doc) for w, doc in packs if isinstance(doc, dict) and doc.get("pack") in names]
-
-
-def _selection(site_path: str, modules: list[str]):
-    from homelabnext.modules import loader as ld
-
-    try:
-        site = ld.load_input(site_path)
-    except (OSError, ValueError) as exc:
-        raise _Usage(f"{site_path}: {exc}") from None
-    if not isinstance(site, dict):
-        raise _Usage(f"{site_path}: not a mapping")
-    mods: dict = {}
-    for d in modules:
-        tree, problems = ld.discover(public=Path(d))
-        if problems:
-            raise _Usage("; ".join(str(p) for p in problems))
-        twice = sorted(set(mods) & set(tree.mods))
-        if twice:
-            raise _Usage(f"{d}: module(s) {', '.join(twice)} already under another --modules")
-        mods.update(tree.mods)
-    return site, mods
+        base, _why = ci_base_from_env(Path(args.root))
+    except ValueError as exc:
+        raise BindingsInputError(f"--ci-base: {exc}") from None
+    return base or None
 
 
 def _date(raw: str):

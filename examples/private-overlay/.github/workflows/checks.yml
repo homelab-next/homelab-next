@@ -346,8 +346,9 @@ jobs:
         run: hnx modules swap-gate --overlay . --ci-base
 
   # Consumers bind only to a primary (ADR-0039 decision 3): the lab registry's upstreams, its role
-  # table, the canary bindings of its evaluation report as the pull request's BASE has it (the
-  # report the swap gate trusts), and its selection's requires.  Each optional file is checked
+  # table, the canary bindings of its evaluation report as this change and the pull request's
+  # BASE have it (the base copy is the one the swap gate trusts), the workflow packs the pinned
+  # commit deploys, and its selection's requires.  Each optional file is checked
   # when present.  hnx is the pinned commit, the base is read through git, no secret.
   registry-bindings:
     name: registry bindings
@@ -394,7 +395,8 @@ jobs:
           python -m pip install --disable-pip-version-check --no-deps --no-build-isolation ./hnx
 
       - name: every binding reaches a primary
-        # optional inputs are checked when present (a link counts as present, and is refused)
+        # optional inputs are checked when present; a link counts as present, and the check
+        # refuses a symbolic link on a lab/ input's path
         env:
           HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
           HNX_PUSH_BEFORE: ${{ github.event.before }}
@@ -403,6 +405,8 @@ jobs:
           args=()
           if [ -e lab/model_roles.json ] || [ -L lab/model_roles.json ]; then args+=(--roles lab/model_roles.json); fi
           args+=(--eval-report lab/model_roles.eval.json --ci-base)
+          # the packs the pinned commit's deploy manifest pins: the ones deployed against this lab
+          args+=(--packs hnx/workflows/packs --deployed hnx/workflows/deploy.yml)
           if [ -e lab/modules.yml ] || [ -L lab/modules.yml ]; then args+=(--site lab/modules.yml --modules hnx/modules --modules lab/modules); fi
           hnx registry bindings lab/services.yml "${args[@]}"
 
