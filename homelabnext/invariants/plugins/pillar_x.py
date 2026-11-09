@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Pillar X - modularity. Eight criteria; five are checkable on a laptop, three need a server.
+"""Pillar X - modularity. The criteria here; X-02, X-07 and X-08 need a server.
 
     X-01  no raw endpoints outside the registry          (runs tools/no_raw_endpoints.py)
     X-02  registry completeness vs live listeners        SERVER (needs the live platform)
@@ -12,6 +12,8 @@
     X-07  every stateful product's export hook exercised SERVER (needs a restore drill)
     X-08  cutover-commit audit                           SERVER (needs a real cutover)
     X-11  product names only in their provider modules   (runs tools/product_name_lint.py)
+    X-12  no non-primary registry row past its ``until``  (``hnx registry standing --overdue``
+                                                         over each registry in the tree)
 
 X-09 (customizations) and X-10 (conformance has-a-passing-test) are registered through the
 ``homelabnext.invariants.checks`` entry-point group from
@@ -43,7 +45,7 @@ import yaml
 
 from ..api import ERROR, FAIL, PASS, SKIP, Check, CheckResult, Context, Registry
 
-__all__ = ["SERVER_ONLY", "register", "x01", "x03", "x04", "x05", "x06", "x11"]
+__all__ = ["SERVER_ONLY", "register", "x01", "x03", "x04", "x05", "x06", "x11", "x12"]
 
 SERVER_ONLY = {
     "X-02": "registry rows vs live listeners needs the running platform",
@@ -68,6 +70,55 @@ def x01(ctx: Context) -> CheckResult:
 
 def x11(ctx: Context) -> CheckResult:
     return _tool_check(ctx, "tools/product_name_lint.py", [], "product names in place")
+
+
+def _registries(root: pathlib.Path) -> list[pathlib.Path]:
+    """The registries a tree holds: ``services.yml`` at most two directories down (a repository's
+    ``examples/<lab>/``, an overlay's ``lab/``), never under ``tests/`` or a hidden directory."""
+    found = {
+        *root.glob("services.yml"),
+        *root.glob("*/services.yml"),
+        *root.glob("*/*/services.yml"),
+    }
+    return sorted(
+        p
+        for p in found
+        if p.is_file()
+        and not any(part == "tests" or part.startswith(".") for part in p.relative_to(root).parts)
+    )
+
+
+def x12(ctx: Context) -> CheckResult:
+    """ADR-0039 decision 8: an ``eval`` that never ends, or a ``retiring`` row nobody removed,
+    turns red here instead of lingering.  The date is ``HNX_TODAY``, else the local date: the
+    same rule as ``hnx registry standing --overdue``, through the same code."""
+    from homelabnext.registry import model, standing
+
+    paths = _registries(ctx.root)
+    if not paths:
+        return CheckResult(SKIP, "no services.yml registry in this tree")
+    try:
+        on = standing.today()
+    except ValueError as exc:
+        return CheckResult(ERROR, str(exc))
+    late, rows = [], 0
+    for path in paths:
+        rel = path.relative_to(ctx.root).as_posix()
+        try:
+            reg = model.load(path)
+        except model.RegistryError as exc:  # unreadable or invalid: this check cannot judge it
+            return CheckResult(ERROR, f"{rel}: {exc}"[:600])
+        found = standing.standings(reg, on)
+        rows += len(found)
+        late += [
+            f"{rel}: {r.row} ({r.tier} {r.capability}) until {r.until}" for r in found if r.overdue
+        ]
+    if late:
+        return CheckResult(FAIL, f"past their until on {on.isoformat()}: " + "; ".join(late)[:500])
+    return CheckResult(
+        PASS,
+        f"{len(paths)} registr{'y' if len(paths) == 1 else 'ies'}, {rows} non-primary row(s) in date",
+    )
 
 
 def x05(ctx: Context) -> CheckResult:
@@ -320,5 +371,6 @@ def register(reg: Registry) -> None:
     reg.register(
         Check("X-11", "product names only in their provider modules, site config and prose", x11)
     )
+    reg.register(Check("X-12", "no non-primary registry row is past its until", x12))
     for id_ in SERVER_ONLY:
         reg.register(Check(id_, SERVER_ONLY[id_], _server(id_)))

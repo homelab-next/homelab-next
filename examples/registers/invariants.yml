@@ -1593,3 +1593,11 @@ criteria:
     Name the slot (cap:object-store) or the capability alias, not the product; a product name in
     the core makes a swap a code change. Move product-specific code into the provider module, or
     update the baseline when a name moves or is gone (`make product-names-baseline`).
+- id: X-12
+  statement: No non-primary registry row is past its until.
+  evidence: plugin
+  plugin: X-12
+  remediation: >-
+    Run `hnx registry standing REGISTRY --overdue`, then promote each row it names (the switch's
+    plan_promote), remove it with the support code only it used, or give it a new until and why in
+    a reviewed change; a standing that outlives its date is a decision nobody made.

@@ -76,6 +76,8 @@ __all__ = [
     "FIELDS",
     "HUMAN",
     "OWNER",
+    "REGISTRY",
+    "REGISTRY_FIELDS",
     "SELECTION",
     "SELECTION_OWNER",
     "SITE",
@@ -84,6 +86,7 @@ __all__ = [
     "ZONE_OWNER",
     "Change",
     "Result",
+    "registry_changes",
     "review",
     "scope_changes",
     "site_changes",
@@ -145,6 +148,19 @@ TRUST_PATHS = {
     "lab/model-serving/model_store.json": "the model store: what a swap's rebind vouches for",
     "lab/model_roles.eval.json": "the evaluation report a rebind's live canary must pass",
     "lab/model-evals/": "the evaluation reports that vouch for a model a swap rebinds to",
+}
+#: the overlay's service registry, relative to its root (one of :data:`TRUST_PATHS`)
+REGISTRY = "lab/services.yml"
+#: the registry changes named field by field (ADR-0039 decision 8), and why each moves what
+#: every consumer reaches; the file stays human-approve as a whole for every other change
+REGISTRY_FIELDS = {
+    "services": "a row added or removed: a new row is a primary by default (standing absent), "
+    "with its IdP client, keyring rows and backups, and a removed one leaves its capability's "
+    "consumers",
+    "services[].standing": "the row's standing: which row is a capability's one primary; "
+    "deleting it promotes the row",
+    "services[].capability": "the capability the row answers for, and so the consumers it takes",
+    "services[].replica_of": "the primary whose data the row serves from a second place",
 }
 _FIREWALL_LISTS = ("zone_to_zone", "service_exceptions")
 LAB_NAMESPACES = "lab_table_namespaces"
@@ -574,6 +590,49 @@ def _grants(o: dict, n: dict) -> list[Change]:
 # ------------------------------------------------------------------------------- the review
 
 
+def registry_changes(old: Any, new: Any) -> list[Change]:
+    """The registry changes :data:`REGISTRY_FIELDS` names, each human-approve: a row added or
+    removed, and a row's ``standing``, ``capability`` or ``replica_of`` added, removed or changed.
+    A document whose ``services`` is not a mapping of mappings is judged by nothing here (the
+    file-level change already makes it human-approve)."""
+    o = (old or {}).get("services") if isinstance(old, dict) else None
+    n = (new or {}).get("services") if isinstance(new, dict) else None
+    o = o if isinstance(o, dict) else {}
+    n = n if isinstance(n, dict) else {}
+    out = []
+    for name in sorted(set(o) | set(n), key=str):
+        if name not in o or name not in n:
+            how = "added" if name not in o else "removed"
+            out.append(Change(f"services.{name}", HUMAN, f"{how}: {REGISTRY_FIELDS['services']}"))
+            continue
+        ro, rn = o[name], n[name]
+        if not isinstance(ro, dict) or not isinstance(rn, dict):
+            continue
+        for key in ("standing", "capability", "replica_of"):
+            why = REGISTRY_FIELDS[f"services[].{key}"]
+            was, now = ro.get(key), rn.get(key)
+            if (was is None) != (now is None):
+                how = "added" if was is None else "removed"
+                out.append(Change(f"services.{name}.{key}", HUMAN, f"{how}: {why}"))
+            else:
+                out += _human(was, now, f"services.{name}.{key}", why)
+    return out
+
+
+def _registry_fields(root: Path, sha: str | None) -> list[Change]:
+    """:func:`registry_changes` between the base and the head; nothing when either end cannot be
+    read, is sealed or is absent (the file-level change stands for it, fail closed)."""
+    old, old_err = _version(
+        lambda: se.read_base(root, sha, REGISTRY, missing_ok=True) if sha else None, REGISTRY
+    )
+    new, new_err = _version(lambda: se.read_head(root, REGISTRY), REGISTRY)
+    if old_err or new_err or (isinstance(new, dict) and "sops" in new):
+        return []
+    if isinstance(old, dict) and "sops" in old:
+        return []
+    return registry_changes(old, new)
+
+
 def _parse(data: bytes) -> Any:
     try:
         text = data.decode("utf-8")
@@ -627,7 +686,10 @@ def review(
             results.append(Result(rel, changes))
     for rel in se.changed_paths(root, sha, list(TRUST_PATHS)):
         why = next(w for p, w in TRUST_PATHS.items() if rel == p or rel.startswith(p))
-        results.append(Result(rel, [Change(rel, HUMAN, f"changed: {why}")]))
+        changes = [Change(rel, HUMAN, f"changed: {why}")]
+        if rel == REGISTRY:
+            changes += _registry_fields(root, sha)
+        results.append(Result(rel, changes))
     rules: list[tuple[str, list[str]]] = []
     owners_from = None
     for rel in rt.CODEOWNERS_PATHS:
