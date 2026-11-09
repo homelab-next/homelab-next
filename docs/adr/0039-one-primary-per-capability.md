@@ -1,6 +1,6 @@
 ---
 summary: Each capability has one primary product; other rows are eval, retiring or legacy with nothing bound to them; the registry refuses a second primary.
-summary_of: outline:sha256:124ff1aa3e498b62
+summary_of: outline:sha256:30267d991007fea5
 ---
 # ADR-0039: Give each capability one primary product
 
@@ -432,3 +432,23 @@ security audit:
    `eval` or `retiring` row may not be named like any capability (of the registry, any tier, or
    the platform's), may not declare `env_var`, and no row but a capability's primary may take
    its default variable.
+
+### Amendments (2026-11-09)
+
+Made while ADR-0039 is proposed, in the pull request for step 5 after its design review and
+security audit:
+
+1. **Step 4 places the runner by host role only.** An agent session's access block (`hnx
+   agent pack --profile`) finds the runner as the one host whose role is `agent-runtime`;
+   decision 7's second source, the selection's placement, is deferred because no caller of the
+   access block holds a selection. Follow-up: read the selection's `agent-runtime` placement
+   once a caller passes one, and refuse a host role that disagrees with it.
+2. **A pack may name an unplaced capability only by declaration.** A pack is checked against a
+   registry that may place no row of a capability it names (the controller's row reaches the
+   examples only with the ADR-0026 amendment's PR 2.7c). Such a name is a note, not a problem,
+   only where `bindings.UNPLACED` declares it for that pack, each entry with its reason and the
+   change that removes it; any other name with no row is refused. A registry that holds any row
+   of the capability judges it by decision 3 as usual.
+3. **The overlay checks the packs that are deployed.** `make check` judges every pack in this
+   repository; the overlay's `checks.yml` judges only the packs the pinned commit's deploy
+   manifest pins (`--deployed`), since those are the packs that run against the lab.
