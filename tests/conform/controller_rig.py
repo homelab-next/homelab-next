@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -27,6 +28,8 @@ from tests.suite_policy import require_tool
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import orchestration_conformance as harness
+
+_log = logging.getLogger(__name__)
 
 #: no network in a test run: the module cache only (CI's Go leg fetches it first)
 OFFLINE = dict(os.environ, GOFLAGS="-mod=readonly", GOWORK="off", GOPROXY="off")
@@ -59,6 +62,8 @@ def build_controller(dest: Path) -> Path:
         path = Path(prebuilt)
         if not (path.is_absolute() and path.is_file() and os.access(path, os.X_OK)):
             pytest.fail(f"{PREBUILT_ENV}={prebuilt} is not an absolute path to an executable file")
+        # which binary ran is part of the result: a failure's captured log names it
+        _log.info("the controller: %s (from %s, not built here)", path, PREBUILT_ENV)
         return path
     require_tool(
         "go",
@@ -105,7 +110,10 @@ class FakeJobAPI:
     """The job API's answers, scripted: ``inflight`` is the backend in-flight route's (status,
     body); ``job`` makes a GET /jobs/{id} body from the run's stored submit. A submit's job runs
     its handler through the runner body in-process on its first read, so the handler host sees
-    the execution, as the controller's session would make it. ``cancel_runs_anyway`` is a mutant:
+    the execution, as the controller's session would make it. That read runs the handler while
+    the fake holds its lock (so two reads never run one job twice): a handler that calls back into
+    this fake's API would deadlock, and a slow one holds every other request until it returns.
+    ``cancel_runs_anyway`` is a mutant:
     a cancel answers 200 and the job runs all the same, which the suite's cancel check must
     fail."""
 
