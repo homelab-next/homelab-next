@@ -5,6 +5,7 @@ import json
 import pathlib
 
 import pytest
+import yaml
 
 from homelabnext.invariants import Context, default_registry
 from homelabnext.invariants.plugins import pillar_x
@@ -382,7 +383,8 @@ def test_x12_runs_green_over_the_repository_s_registries(monkeypatch):
     monkeypatch.setenv("HNX_TODAY", "2026-11-08")
     r = default_registry().get("X-12").fn(ctx(REPO))
     assert r.status == "pass", r.evidence
-    assert r.evidence.startswith("4 registries")  # examples/ and its three labs
+    # examples/ and its three labs; the four-box lab's dated eval row makes the green a judgement
+    assert r.evidence.startswith("4 registries, 1 non-primary row(s) in date on 2026-11-08")
 
 
 def test_x12_fails_on_a_row_past_its_until_and_passes_on_the_day(tmp_path, monkeypatch):
@@ -402,8 +404,144 @@ def test_x12_skips_an_empty_tree_ignores_tests_and_errors_on_what_it_cannot_judg
     assert pillar_x.x12(ctx(tmp_path)).status == "skip"
     _lab_registry(tmp_path / "tests", LATE)  # a test fixture is no registry of the tree
     assert pillar_x.x12(ctx(tmp_path)).status == "skip"
-    write(tmp_path / "lab" / "services.yml", "services: [unclosed\n")
+    write(tmp_path / "lab" / "services.yml", "registry_version: 1\nservices: [unclosed\n")
     assert pillar_x.x12(ctx(tmp_path)).status == "error"
     _lab_registry(tmp_path)
     monkeypatch.setenv("HNX_TODAY", "tomorrow")
     assert pillar_x.x12(ctx(tmp_path)).status == "error"
+
+
+# ---- X-12 review follow-ups -------------------------------------------------------------------
+
+
+def test_x12_follows_no_link_out_of_the_tree_and_echoes_no_file_content(tmp_path, monkeypatch):
+    """A symlinked services.yml (or a symlinked directory holding one) pointed the check at a file
+    outside the repository, and an unparseable registry's error quoted its lines."""
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    outside = tmp_path / "outside"
+    write(outside / "services.yml", "registry_version: 1\nservices: [MARKER-OUTSIDE-TEXT\n")
+    root = tmp_path / "repo"
+    (root / "lab").mkdir(parents=True)
+    (root / "lab" / "services.yml").symlink_to(outside / "services.yml")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    r = pillar_x.x12(ctx(root))
+    assert r.status == "error"
+    assert "lab/services.yml: a symbolic link" in r.evidence
+    assert "linked/" not in r.evidence  # a linked directory is not walked
+    assert "MARKER" not in r.evidence
+    (root / "lab" / "services.yml").unlink()
+    write(root / "lab" / "services.yml", "registry_version: 1\nservices: [MARKER-INSIDE-TEXT\n")
+    r = pillar_x.x12(ctx(root))
+    assert r.status == "error" and "MARKER" not in r.evidence
+    assert "lab/services.yml: cannot be read as one YAML document" in r.evidence  # text not quoted
+
+
+def test_x12_selects_registries_by_content_at_any_depth(tmp_path, monkeypatch):
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    deep = tmp_path / "a" / "b" / "c" / "services.yml"
+    write(deep, (REPO / "examples" / "minimal" / "services.yml").read_text() + LATE)
+    write(tmp_path / "mod" / "services.yml", "services: {}\n")  # a module fragment: no version
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail" and "a/b/c/services.yml: dns-trial" in r.evidence
+    assert "mod/services.yml" not in r.evidence
+
+
+def test_x12_judges_every_registry_and_names_what_it_could_not(tmp_path, monkeypatch):
+    """An invalid registry no longer stops the check before an overdue row elsewhere."""
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    write(tmp_path / "a" / "services.yml", "registry_version: 1\nservices: [unclosed\n")
+    _lab_registry(tmp_path, LATE)
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail"
+    assert "lab/services.yml: dns-trial (eval dns) until 2026-11-30" in r.evidence
+    assert "could not judge: a/services.yml:" in r.evidence
+
+
+def test_x12_names_a_registry_whose_until_is_no_date_as_unjudged(tmp_path, monkeypatch):
+    """The registry refuses an until that is no calendar date, so X-12 cannot judge that
+    registry: an error naming it, never "overdue by 1 day"."""
+    monkeypatch.setenv("HNX_TODAY", "2026-11-01")
+    _lab_registry(tmp_path, LATE.replace("2026-11-30", "2026-02-30"))
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "error" and "lab/services.yml: RegistryError" in r.evidence
+    assert "overdue" not in r.evidence
+
+
+def test_x12_passes_with_the_date_it_judged_and_marks_an_override(tmp_path, monkeypatch):
+    _lab_registry(tmp_path, LATE)
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "pass" and "in date on 2026-11-09 (HNX_TODAY)" in r.evidence
+
+
+def _minimal_registry_doc() -> dict:
+    return yaml.safe_load((REPO / "examples" / "minimal" / "services.yml").read_text())
+
+
+@pytest.mark.parametrize("spelling", ["double", "single", "explicit", "json"])
+def test_x12_finds_a_registry_however_its_version_key_is_spelled(tmp_path, monkeypatch, spelling):
+    """A quoted, explicit-key or JSON registry loads like any other; X-12 used to read it as no
+    registry and skip, hiding its overdue rows."""
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    doc = _minimal_registry_doc()
+    doc["services"]["dns-trial"] = yaml.safe_load(LATE)["dns-trial"]
+    body = yaml.safe_dump({k: v for k, v in doc.items() if k != "registry_version"})
+    version = doc["registry_version"]
+    text = {
+        "double": f'"registry_version": {version}\n' + body,
+        "single": f"'registry_version': {version}\n" + body,
+        "explicit": f"? registry_version\n: {version}\n" + body,
+        "json": json.dumps(doc),
+    }[spelling]
+    write(tmp_path / "lab" / "services.yml", text)
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail", r.evidence
+    assert "lab/services.yml: dns-trial (eval dns) until 2026-11-30" in r.evidence
+
+
+def test_x12_refuses_a_services_file_it_cannot_parse_and_names_what_it_skipped(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    assert "not searched: hidden directories, __pycache__, build, dist, node_modules, tests" in (
+        pillar_x.x12(ctx(tmp_path)).evidence
+    )
+    write(tmp_path / "lab" / "services.yml", '"registry_version": [unclosed\n')
+    r = pillar_x.x12(ctx(tmp_path))
+    assert (
+        r.status == "error"
+        and "lab/services.yml: cannot be read as one YAML document" in r.evidence
+    )
+    assert "unclosed" not in r.evidence
+
+
+@pytest.mark.parametrize("form", ["mapping", "anchor", "list"])
+def test_x12_finds_a_registry_whose_version_comes_through_a_merge_key(tmp_path, monkeypatch, form):
+    """``<<: {registry_version: 1}`` (or through an anchor) loads as a registry; X-12 read it as
+    none and skipped, hiding its overdue rows."""
+    monkeypatch.setenv("HNX_TODAY", "2026-12-01")
+    doc = _minimal_registry_doc()
+    doc["services"]["dns-trial"] = yaml.safe_load(LATE)["dns-trial"]
+    version = doc.pop("registry_version")
+    body = yaml.safe_dump(doc)
+    text = {
+        "mapping": f"<<: {{registry_version: {version}}}\n" + body,
+        "anchor": f"<<: [&base {{registry_version: {version}}}, *base]\n" + body,
+        "list": f"<<: [{{registry_version: {version}}}]\n" + body,
+    }[form]
+    from homelabnext.registry import model
+
+    path = tmp_path / "lab" / "services.yml"
+    write(path, text)
+    model.load(path)  # the registry loader reads it as a registry
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "fail", r.evidence
+    assert "lab/services.yml: dns-trial (eval dns) until 2026-11-30" in r.evidence
+
+
+def test_x12_names_a_multi_document_services_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("HNX_TODAY", "2026-11-09")
+    write(tmp_path / "lab" / "services.yml", "registry_version: 1\n---\nservices: {}\n")
+    r = pillar_x.x12(ctx(tmp_path))
+    assert r.status == "error"
+    assert "lab/services.yml: cannot be read as one YAML document" in r.evidence
