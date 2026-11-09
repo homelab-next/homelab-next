@@ -282,25 +282,28 @@ def path_has_symlink(root: str | Path, rel: str) -> bool:
 
 
 def containment_root(base: str | Path) -> Path:
-    """The default root :func:`read_contained` keeps a path inside, the first that holds
-    ``base``: the caller's working directory when it is a checkout (it holds a ``.git`` entry),
-    then this package's own verified source checkout (:func:`homelabnext.paths.checkout_root`,
-    which also holds in a ``git archive`` export); else ``base`` itself.  Nothing is discovered
-    from ``base``: a directory a change controls could otherwise name a root of its choosing (a
-    planted bare-repository layout makes ``git rev-parse --show-toplevel`` answer ``/``).  A
-    root of ``/`` is refused by :func:`read_contained` whichever way it was chosen."""
+    """The default root :func:`read_contained` keeps a path inside: the nearest directory, from
+    ``base`` up to (and no higher than) the caller's working directory, that holds a ``.git``
+    entry (a checkout; a change cannot commit a ``.git``, and a dotfiles checkout in a home
+    directory above the working directory is never reached); else this package's own verified
+    source checkout (:func:`homelabnext.paths.checkout_root`, which a ``git archive`` export
+    also is) when it holds ``base``; else ``base`` itself.  Nothing is asked of git: a directory a
+    change controls could otherwise name a root of its choosing (a planted bare-repository layout
+    makes ``git rev-parse --show-toplevel`` answer ``/``).  A root of ``/`` is refused by
+    :func:`read_contained` whichever way it was chosen."""
     target = Path(os.path.abspath(base))
     here = Path(os.path.abspath(os.getcwd()))
-    candidates = [here] if os.path.lexists(here / ".git") else []
+    if target == here or here in target.parents:
+        for d in (target, *target.parents):
+            if os.path.lexists(d / ".git"):
+                return d
+            if d == here:
+                break
     own = paths.checkout_root()
     if own is not None:
-        candidates.append(Path(os.path.abspath(own)))
-    for root in candidates:
-        try:
-            target.relative_to(root)
-        except ValueError:
-            continue
-        return root
+        own = Path(os.path.abspath(own))
+        if target == own or own in target.parents:
+            return own
     return target
 
 
@@ -321,7 +324,9 @@ def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -
     try:
         parts = target.relative_to(root).parts
     except ValueError:
-        raise Unreadable(f"outside the root {root}") from None
+        raise Unreadable(
+            f"outside the root {root}: pass --root <checkout> or run from the checkout"
+        ) from None
     if not parts:
         raise Unreadable("not a regular file")
 

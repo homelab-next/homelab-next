@@ -90,7 +90,10 @@ def test_a_filesystem_root_is_refused_as_the_root(tmp_path, monkeypatch):
     with pytest.raises(ld.Unreadable, match="is a filesystem root"):
         ld.read_contained(tmp_path, "t.json", "/")
     monkeypatch.chdir("/")
-    monkeypatch.setattr(ld.os.path, "lexists", lambda p: True)  # as if / held a .git entry
+    real = ld.os.path.lexists
+    monkeypatch.setattr(
+        ld.os.path, "lexists", lambda p: str(p) == "/.git" or real(p)
+    )  # / a checkout
     with pytest.raises(ld.Unreadable, match="is a filesystem root"):
         ld.read_contained(tmp_path, "t.json")
 
@@ -112,3 +115,25 @@ def test_this_package_s_own_checkout_is_a_default_root_without_git(tmp_path, mon
     monkeypatch.setattr(ld.paths, "checkout_root", lambda: own)
     monkeypatch.chdir(tmp_path)
     assert ld.containment_root(base) == own
+
+
+def test_the_root_is_the_nearest_checkout_at_or_below_the_working_directory(tmp_path, monkeypatch):
+    # a dotfiles checkout in the home directory above the working directory is never reached,
+    # and a checkout nested under the working directory bounds its own files
+    home = tmp_path / "home"
+    work = home / "work"
+    repo = work / "repo"
+    spec = repo / "compose" / "cfg"
+    spec.mkdir(parents=True)
+    (home / ".git").mkdir()
+    (repo / ".git").mkdir()
+    (work / "outside.json").write_text("{}")
+    (repo / "t.json").write_text("{}")
+    monkeypatch.setattr(ld.paths, "checkout_root", lambda: None)
+    monkeypatch.chdir(work)
+    assert ld.containment_root(spec) == repo
+    assert ld.read_contained(spec, "../../t.json") == b"{}"
+    with pytest.raises(ld.Unreadable, match="pass --root <checkout> or run from the checkout"):
+        ld.read_contained(spec, "../../../outside.json")
+    (repo / ".git").rmdir()
+    assert ld.containment_root(spec) == spec  # no checkout between the spec and work/
