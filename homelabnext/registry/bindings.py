@@ -23,7 +23,8 @@ A ``svc:`` id may name a row or a capability; a capability name means its primar
 names a non-primary row, or a capability whose rows are all non-primary, is refused.  A string
 that starts with ``svc:`` but is not a lower-case kebab id (:data:`SVC_ID`) is refused as
 malformed, never skipped.  In a pack, an id that names no registry row and no capability is
-refused unless it is a declared platform source (:data:`PLATFORM_SOURCES`) or a declared
+refused unless it is a declared platform source (:data:`PLATFORM_SOURCES`; one declared an event
+source only is refused as a ``target``) or a declared
 unplaced capability of that pack (:data:`UNPLACED`, a note) and the check runs over the
 reference examples (``--reference-examples``, which only ``make check`` passes; a lab's check
 never gets it): the leniency is a list with a reason
@@ -89,6 +90,9 @@ class Declared:
     why: str
     #: for an :data:`UNPLACED` entry: the packs (by ``pack:`` name) it covers, and no other
     packs: tuple[str, ...] = ()
+    #: for a :data:`PLATFORM_SOURCES` entry: an event source only, refused as a step's or an
+    #: expected call's ``target``
+    source_only: bool = False
 
 
 #: ``svc:`` ids a pack may name that are no registry row and no capability.  Each entry leaves
@@ -102,8 +106,9 @@ PLATFORM_SOURCES: tuple[Declared, ...] = (
     Declared(
         "llm-orchestrator",
         "the controller's old event source, kept for the length of its one-release overlap "
-        "(ADR-0026 amendment, decision 16); removed by the change that drops that source at "
-        "cutover+1",
+        "(ADR-0026 amendment, decision 16); an event source only, never a target; removed by "
+        "the change that drops that source at cutover+1",
+        source_only=True,
     ),
 )
 
@@ -127,12 +132,6 @@ EXCEPTIONS: tuple[Declared, ...] = (
 #: its reason names; a registry that holds any row of the capability judges it as usual.
 UNPLACED: tuple[Declared, ...] = (
     Declared(
-        "orchestration",
-        "the controller's example row (capability orchestration) enters examples/services.yml "
-        "with the ADR-0026 amendment's PR 2.7c, which removes this entry",
-        ("agent-job-retry", "proposal-validate"),
-    ),
-    Declared(
         "cases",
         "example packs no deploy manifest pins: the reference registry places no case store "
         "until ADR-0049 brings the cases provider module and its row",
@@ -152,6 +151,7 @@ UNPLACED: tuple[Declared, ...] = (
     ),
 )
 _PLATFORM = {d.name for d in PLATFORM_SOURCES}
+_SOURCE_ONLY = {d.name for d in PLATFORM_SOURCES if d.source_only}
 _UNPLACED = {d.name: set(d.packs) for d in UNPLACED}
 
 #: the start of a ``svc:`` id; a string with it that :data:`SVC_ID` does not match is malformed
@@ -295,6 +295,11 @@ def pack_problems(
             rep.problems.append(_malformed(where, path, pack))
             continue
         if name in _PLATFORM:
+            if name in _SOURCE_ONLY and path.rsplit(".", 1)[-1] == "target":
+                rep.problems.append(
+                    f"{where}: {path}: svc:{name} is a declared platform source, an event source "
+                    "only: it is never a target"
+                )
             continue
         why = _judge(registry, name, ())
         if why is None:

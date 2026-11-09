@@ -40,7 +40,10 @@ def test_each_example_is_stored_once_and_a_redelivery_is_a_duplicate(store):
             ),
             "gateway tag 'run-0001' already joins run 'run-0001'",
         ),
-        (lambda e: e.update(id="evt-other", source="svc:status-hub"), "only svc:llm-orchestrator"),
+        (
+            lambda e: e.update(id="evt-other", source="svc:status-hub"),
+            "only svc:orchestrator, svc:llm-orchestrator",
+        ),
         (lambda e: e["data"].update(prompt="fake task text"), "invalid"),
         (lambda e: e.update(type="homelabnext.agent.job.failed"), ""),
     ],
@@ -538,7 +541,9 @@ def test_the_job_source_is_configuration_and_every_other_source_is_refused(tmp_p
     is given (the example's controller id is only the default) and refuses every other one."""
     ev = copy.deepcopy(examples()[0]) | {"source": "svc:job-runner"}
     default = TelemetryStore(tmp_path / "a.db", clock=lambda: T0)
-    with pytest.raises(EventError, match="only svc:llm-orchestrator reports jobs"):
+    with pytest.raises(
+        EventError, match="only svc:orchestrator, svc:llm-orchestrator reports jobs"
+    ):
         default.consume(body(ev))
     other = TelemetryStore(tmp_path / "b.db", clock=lambda: T0, sources=["svc:job-runner"])
     assert other.consume(body(ev)).status == "processed"
@@ -703,3 +708,14 @@ def test_a_served_model_name_the_runtimes_report_never_poisons_the_job(store, mo
     ev = examples()[0]
     ev["data"] = ev["data"] | {"model": model}
     assert store.consume(body(ev)).status == "processed"
+
+
+def test_the_default_store_takes_both_of_the_controllers_sources(tmp_path):
+    """ADR-0026 decision 16: for the one-release overlap the store takes the controller's
+    svc:orchestrator and the private controller's svc:llm-orchestrator, each event once."""
+    store = TelemetryStore(tmp_path / "s.db", clock=lambda: T0)
+    old, new = copy.deepcopy(examples()[0]), copy.deepcopy(examples()[1])
+    assert old["source"] == "svc:llm-orchestrator"
+    new["source"] = "svc:orchestrator"
+    assert store.consume(body(old)).status == "processed"
+    assert store.consume(body(new)).status == "processed"

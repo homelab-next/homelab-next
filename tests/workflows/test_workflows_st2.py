@@ -26,6 +26,7 @@ from conformance.fakes.event_bus import FakeEventBus
 from conformance.protocols.broker import Denied
 from homelabnext.broker.service import BrokerService
 from homelabnext.events.envelope import event_problems
+from homelabnext.orchestration.model import CONTROLLER_SOURCES
 from homelabnext.workflows import (
     cli,
     load_doc,
@@ -451,7 +452,7 @@ SCHED_PACK = {
             "id": "dispatch",
             "kind": "action",
             "action": "agent.job.submit",
-            "target": "svc:orchestration",
+            "target": "svc:orchestrator",
             "params": {"agent_key": "digest", "idempotency_key": "$event.id", "priority": 70},
         }
     ],
@@ -634,7 +635,10 @@ def test_every_event_triggered_pack_pins_its_producer():
     a01 = rules["homelabnext/rules/on_proposal_validate.yaml"]
     a02 = rules["homelabnext/rules/on_agent_job_retry.yaml"]
     assert a01["criteria"]["trigger.body.source"] == {"type": "equals", "pattern": "svc:broker"}
-    assert a02["criteria"]["trigger.body.source"]["pattern"] == st2.ORCHESTRATOR_SOURCE
+    assert a02["criteria"]["trigger.body.source"] == {
+        "type": "inside",
+        "pattern": list(CONTROLLER_SOURCES),  # both, for the overlap (ADR-0026 decision 16)
+    }
     ev = pack("proposal-validate")["fixtures"][0]["event"]
     assert st2_matches(a01, ev)
     assert not st2_matches(a01, ev | {"source": "profile:triage"})
@@ -698,7 +702,7 @@ def test_live_calls_or_submits_through_the_broker_only(tmp_path):
     )
     [rec] = calls_of(out)
     assert rec["result"] == "executed" and fb.calls == [
-        ("agent.job.submit", rec["params"], "svc:orchestration")
+        ("agent.job.submit", rec["params"], "svc:orchestrator")
     ]
     assert rec["params"]["retry_of_run_id"] == "run-0001"
     out = st2_runtime.step(
@@ -759,7 +763,7 @@ def test_proposal_lane_to_a01_end_to_end_through_a_real_broker(tmp_path):
         broker=fb,
     )
     [(action, params, target)] = fb.calls
-    assert (action, target) == ("agent.job.submit", "svc:orchestration")
+    assert (action, target) == ("agent.job.submit", "svc:orchestrator")
     assert params["task_description"] == event["data"]["note"]  # the controller takes no input
     assert params["idempotency_key"] == event["id"]
 
@@ -1440,6 +1444,63 @@ def test_dispatch_sends_only_what_the_controller_takes():
     assert _bound_problems(a02_payload) == {a02}  # 422 payload_override
     assert _bound_problems(a02_resubmits) == {a02}  # the controller counts the lineage
     assert _bound_problems(a01_reason) == {a01}  # reason only with retry_of_run_id
+
+
+def test_a_job_retry_pins_both_of_the_controllers_sources_for_the_overlap():
+    """ADR-0026 decision 16: the retry rule accepts svc:orchestrator and svc:llm-orchestrator for
+    the one-release overlap; pinning only one of them, or a third, is a bound problem."""
+    assert CONTROLLER_SOURCES == ("svc:orchestrator", "svc:llm-orchestrator")
+
+    def packs_of(ids):
+        def mutate(p):
+            p["agent-job-retry"]["trigger"]["where"][0] = {"ref": "$event.source", "in": ids}
+
+        return {name for _, name in _bound_problems(mutate)}
+
+    assert packs_of(["svc:llm-orchestrator", "svc:orchestrator"]) == set()
+    assert packs_of(["svc:orchestrator"]) == {"agent-job-retry"}
+    assert packs_of(["svc:llm-orchestrator"]) == {"agent-job-retry"}
+    assert packs_of([*CONTROLLER_SOURCES, "svc:status-hub"]) == {"agent-job-retry"}
+
+
+@pytest.mark.parametrize(
+    ("where", "want"),
+    [
+        ([{"ref": "$event.source", "equals": "svc:a"}], ["svc:a"]),
+        ([{"ref": "$event.source", "in": ["svc:a", "svc:b"]}], ["svc:a", "svc:b"]),
+        ([{"ref": "$event.source", "in": []}], []),
+        ([{"ref": "$event.source", "in": ["svc:a", ""]}], []),
+        ([{"ref": "$event.source", "in": "svc:a"}], []),
+        ([{"ref": "$event.data.x", "equals": "svc:a"}], []),
+    ],
+)
+def test_a_trigger_pins_its_producers_by_equals_or_an_overlap_list(where, want):
+    from homelabnext.workflows.runner import pinned_sources
+
+    assert pinned_sources({"where": where}) == want
+
+
+@pytest.mark.parametrize(
+    ("source", "pinned"),
+    [
+        ({"type": "equals", "pattern": "svc:a"}, True),
+        ({"type": "inside", "pattern": ["svc:a", "svc:b"]}, True),
+        ({"type": "inside", "pattern": []}, False),
+        ({"type": "inside", "pattern": ["svc:a", ""]}, False),
+        ({"type": "inside", "pattern": "svc:a"}, False),
+        ({"type": "contains", "pattern": "svc"}, False),
+    ],
+)
+def test_a_rendered_rule_pins_its_producer_by_equals_or_an_overlap_list(source, pinned):
+    import inspect
+
+    renderer = inspect.getmodule(render)
+    rule = {
+        "trigger": {"type": renderer.WEBHOOK_TRIGGER},
+        "criteria": {"trigger.body.source": source},
+    }
+    got = [c for c, _ in renderer.pin_problems(rule, "r") if c.endswith("-source")]
+    assert len(got) == (0 if pinned else 1), got
 
 
 def test_every_fixture_request_is_one_the_handler_schema_accepts():

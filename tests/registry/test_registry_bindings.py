@@ -350,6 +350,32 @@ def test_a_declared_platform_source_passes(tmp_path, source, capsys):
     assert (rc, err) == (0, "")
 
 
+def test_the_overlap_source_passes_as_a_source_and_fails_as_a_target(tmp_path, capsys):
+    """ADR-0026 decision 16: svc:llm-orchestrator is admitted for its overlap as an event source
+    only; as a step's target it is refused (the target moved to svc:orchestrator at once)."""
+    reg = str(_registry(tmp_path))
+    ok = _pack(tmp_path, "svc:notify", source="svc:llm-orchestrator")
+    rc, _out, err = _run(reg, "--packs", str(ok), capsys=capsys)
+    assert (rc, err) == (0, "")
+    bad = _pack(tmp_path, "svc:llm-orchestrator")
+    rc, _out, err = _run(reg, "--packs", str(bad), capsys=capsys)
+    assert rc == 1
+    assert "svc:llm-orchestrator is a declared platform source, an event source only" in err
+
+
+def test_the_controller_packs_target_its_row(capsys):
+    """The packs' broker target is svc:orchestrator, the example controller row, with no
+    leniency: the unplaced entry for orchestration is gone."""
+    for name in ("agent-job-retry", "proposal-validate"):
+        doc = yaml.safe_load((ROOT / "workflows/packs" / f"{name}.yml").read_text())
+        targets = {s["target"] for s in doc["steps"] if "target" in s}
+        assert targets == {"svc:orchestrator"}, (name, targets)
+    reg = yaml.safe_load((ROOT / "examples/services.yml").read_text())["services"]
+    assert reg["orchestrator"]["capability"] == "orchestration"
+    assert "agent-runtime" not in reg  # the runner slot: found by host role, no service row
+    assert "orchestration" not in {d.name for d in bd.UNPLACED}
+
+
 def test_a_declared_unplaced_capability_of_the_pack_is_a_note_for_the_examples_only(
     tmp_path, capsys
 ):
@@ -365,7 +391,7 @@ def test_a_declared_unplaced_capability_of_the_pack_is_a_note_for_the_examples_o
 
 @pytest.mark.parametrize(
     ("target", "pack_name"),
-    [("svc:cases", "another-pack"), ("svc:orchestration", None), ("svc:projects", None)],
+    [("svc:cases", "another-pack"), ("svc:siem-source", None), ("svc:projects", None)],
 )
 def test_an_undeclared_unplaced_capability_is_refused(tmp_path, capsys, target, pack_name):
     path = _pack(tmp_path, target)
@@ -425,7 +451,6 @@ def test_every_unplaced_entry_is_a_platform_capability_scoped_to_existing_packs(
 def test_the_declarations_are_listed_each_with_a_why():
     assert [d.name for d in bd.PLATFORM_SOURCES] == ["broker", "llm-orchestrator"]
     assert [d.name for d in bd.UNPLACED] == [
-        "orchestration",
         "cases",
         "siem-source",
         "mail-gateway",

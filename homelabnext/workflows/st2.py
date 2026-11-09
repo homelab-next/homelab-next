@@ -62,7 +62,7 @@ Rules (``<path>: <rule>: <detail>``, exit 1 on any):
                  :data:`MAX_RESUBMITS`, and the dispatch carries ``retry_of_run_id`` from
                  ``$event.data.run_id`` (so the next failure counts one more resubmit) and the
                  same run id as its idempotency key; its trigger pins ``$event.source`` to
-                 :data:`ORCHESTRATOR_SOURCE` and skips a run already retried
+                 :data:`ORCHESTRATOR_SOURCES` (both) and skips a run already retried
                  (``auto_retry_scheduled`` or ``retried_by_run_id`` present).  Every dispatch
                  step sends only what the controller takes: no ``input`` or ``resubmits``, no
                  ``task_description`` on a resubmit, ``reason`` only with ``retry_of_run_id``.
@@ -90,7 +90,7 @@ from pathlib import Path
 from typing import Any
 
 from homelabnext.agent.digest import digest_of
-from homelabnext.orchestration.model import CONTROLLER_SOURCE
+from homelabnext.orchestration.model import CONTROLLER_SOURCE, CONTROLLER_SOURCES
 
 from .pack import WorkflowError, git_files, load_doc, schema_errors
 from .runner import MODEL_KINDS, is_risky
@@ -110,10 +110,12 @@ from .validate import Problem, Universe, handler_problem, load_universe, validat
 DEFAULT_BINDING = Path("workflows") / "stackstorm.yml"
 DEFAULT_OUT = Path("workflows") / "stackstorm"
 JOB_FAILED_EVENT = "homelabnext.agent.job.failed"
-#: the orchestration controller's event source (its default ``events.source``): the one producer
-#: a pack reacting to ``agent.job.failed`` may pin.  One constant with the telemetry's default
-#: (``homelabnext.orchestration.CONTROLLER_SOURCE``), so the two cannot drift apart
+#: the orchestration controller's event sources, the only producers a pack reacting to
+#: ``agent.job.failed`` may pin, and it pins both: its default ``events.source`` and, for the
+#: one-release overlap, the private controller's (ADR-0026 decision 16).  The telemetry's own
+#: constants (``homelabnext.orchestration.CONTROLLER_SOURCES``), so the two cannot drift apart
 ORCHESTRATOR_SOURCE = CONTROLLER_SOURCE
+ORCHESTRATOR_SOURCES = CONTROLLER_SOURCES
 DISPATCH_ACTIONS = ("agent.job.submit",)
 #: params ``agent.job.submit`` never carries: the controller refuses ``input`` (400) and ignores
 #: ``resubmits`` (it counts a run's lineage itself)
@@ -362,20 +364,30 @@ APPROVED_RUN_CRITERIA = {
 
 def pin_problems(rule: Mapping[str, Any], ref: str) -> list[tuple[str, str]]:
     """``(check, detail)`` for a rendered webhook rule that lost a pin: its producer
-    (``st2-source``: ``trigger.body.source`` equals one id) or, for the approved-run rule, a
+    (``st2-source``: ``trigger.body.source`` equals one id, or is inside a producer's ids
+    during a rename's overlap) or, for the approved-run rule, a
     person's ``accept`` (``st2-criteria``)."""
     if rule.get("trigger", {}).get("type") != WEBHOOK_TRIGGER:
         return []
     crit = rule.get("criteria") or {}
     out = []
     src = crit.get("trigger.body.source")
-    if not (
-        isinstance(src, Mapping)
-        and src.get("type") == "equals"
-        and isinstance(src.get("pattern"), str)
-        and src["pattern"]
-    ):
-        out.append(("st2-source", "no equality criterion on trigger.body.source: any producer"))
+    pinned = isinstance(src, Mapping) and (
+        (src.get("type") == "equals" and isinstance(src.get("pattern"), str) and src["pattern"])
+        or (
+            src.get("type") == "inside"
+            and isinstance(src.get("pattern"), list)
+            and src["pattern"]
+            and all(isinstance(v, str) and v for v in src["pattern"])
+        )
+    )
+    if not pinned:
+        out.append(
+            (
+                "st2-source",
+                "no equality (or overlap inside) criterion on trigger.body.source: any producer",
+            )
+        )
     if rule.get("action", {}).get("ref") == f"{ref}.{st2_name(APPROVED_RUN)}":
         for key, want in APPROVED_RUN_CRITERIA.items():
             if crit.get(key) != want:
@@ -877,15 +889,14 @@ def _check_rule(rule, pack, binding, tracked, bad) -> None:
     elif event == SCHEDULE_EVENT:
         bad("st2-trigger", f"{name}: triggers on {SCHEDULE_EVENT} but the rule has no schedule")
     else:
-        sources = [
-            c.get("equals")
-            for c in pack["trigger"].get("where", [])
-            if c["ref"] == "$event.source" and "equals" in c
-        ]
-        if not sources or not all(isinstance(v, str) and v for v in sources):
+        conds = [c for c in pack["trigger"].get("where", []) if c["ref"] == "$event.source"]
+        if not conds or len(pinned_sources({"where": conds})) == 0 or any(
+            "equals" not in c and "in" not in c for c in conds
+        ):
             bad(
                 "st2-source",
-                f"{name}: the trigger must pin its producer ($event.source equals one logical id)",
+                f"{name}: the trigger must pin its producer ($event.source equals one logical id,"
+                " or in a producer's ids during a rename's overlap)",
             )
     if rule["mode"] == "live":
         pr = rule.get("promotion")
@@ -937,11 +948,11 @@ def _check_rule(rule, pack, binding, tracked, bad) -> None:
                 f"{name}: a run the controller already retried is not resubmitted: the trigger "
                 "requires $event.data.auto_retry_scheduled and retried_by_run_id to be absent",
             )
-        if pinned_sources(pack["trigger"]) != [ORCHESTRATOR_SOURCE]:
+        if sorted(pinned_sources(pack["trigger"])) != sorted(ORCHESTRATOR_SOURCES):
             bad(
                 "st2-bound",
-                f"{name}: retries of failed jobs pin $event.source to the controller's "
-                f"{ORCHESTRATOR_SOURCE}",
+                f"{name}: retries of failed jobs pin $event.source to the controller's sources "
+                f"({', '.join(ORCHESTRATOR_SOURCES)})",
             )
     for s in dispatch:
         params = s.get("params") or {}

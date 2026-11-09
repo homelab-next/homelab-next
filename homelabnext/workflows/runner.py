@@ -39,12 +39,22 @@ RISKY_TIERS = ("execute", "privileged")
 
 
 def pinned_sources(trigger: Mapping[str, Any]) -> list[str]:
-    """The producers a trigger pins (``$event.source`` ``equals``)."""
-    return [
-        c["equals"]
-        for c in trigger.get("where", [])
-        if c["ref"] == "$event.source" and isinstance(c.get("equals"), str)
-    ]
+    """The producers a trigger pins: ``$event.source`` ``equals`` one id, or ``in`` a list of ids
+    (a producer's old and new id during a rename's overlap, ADR-0026 decision 16).  An ``in``
+    that is not a non-empty list of non-empty strings pins nothing."""
+    out: list[str] = []
+    for c in trigger.get("where", []):
+        if c["ref"] != "$event.source":
+            continue
+        if isinstance(c.get("equals"), str) and c["equals"]:
+            out.append(c["equals"])
+        elif (
+            isinstance(c.get("in"), list)
+            and c["in"]
+            and all(isinstance(v, str) and v for v in c["in"])
+        ):
+            out.extend(c["in"])
+    return out
 
 
 # ---------------------------------------------------------------- references and conditions
