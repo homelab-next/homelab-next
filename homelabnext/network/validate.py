@@ -767,11 +767,12 @@ def _dns(doc: dict, reg: Any, r: Report) -> None:
                 r.error(
                     f"dns.resolvers[{res['id']}]: authoritative_for {zone!r} is outside site domain {domain!r}"
                 )
-            if zone == reg.alias_zone or zone.endswith("." + reg.alias_zone):
-                # the alias zone's records come from the registry alone (ADR-0039 decision 2):
-                # a resolver authoritative for it or a zone under it would serve its own
+            if zone.endswith("." + reg.alias_zone):
+                # the alias zone's records come from the registry alone (ADR-0039 decision 2): a
+                # resolver may serve the zone itself (the dns_zone generator renders it, with its
+                # SOA and NS), but a zone delegated under it would hold names of its own
                 r.error(
-                    f"dns.resolvers[{res['id']}]: authoritative_for {zone!r} is at or under the "
+                    f"dns.resolvers[{res['id']}]: authoritative_for {zone!r} is under the "
                     f"registry's alias zone {reg.alias_zone}; only the registry's records live there"
                 )
     generated = {f"{h}.{domain}" for h in reg.hosts}
