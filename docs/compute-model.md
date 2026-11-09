@@ -816,7 +816,11 @@ writes it.
 registry document (a conflicting entry is an error), and the existing registry generators (DNS,
 proxy, monitoring, firewall matrix) then see the guests. The fragment carries no host `role`: a role is
 the registry's own fact (the agent runner's host is found by it), and a guest's `capability` is a
-claim the registry judges, so merging the fragment never turns one into the other. A registry kept by hand is held against
+claim the registry judges, so merging the fragment never turns one into the other. A host's
+`role` is read by the agent session's access block (`hnx agent pack`: the one host with role
+`agent-runtime` is the runner's), by `hnx guests validate --registry` (a row-free host's own role,
+and `cap:agent-runtime` only on a host with that role) and, as a label only, by the topology map
+and the knowledge graph. A registry kept by hand is held against
 the guests by `hnx guests validate` (`registry_hosts.registry_problems`): a host whose address or
 zone differs from its guest's is an error.
 

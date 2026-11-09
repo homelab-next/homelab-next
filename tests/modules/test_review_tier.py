@@ -977,6 +977,12 @@ def test_governance_lists_every_module_the_tiers_and_the_gate_import():
         "homelabnext/compute/loader.py",
         "homelabnext/compute/gen/registry_hosts.py",
         "homelabnext/invariants/plugins/pillar_x.py",
+        "homelabnext/compute/cli.py",
+        "homelabnext/registry/cli.py",
+        "homelabnext/registry/model.py",
+        "examples/registers/invariants.yml",
+        "homelabnext/invariants/runner.py",
+        "homelabnext/invariants/api.py",
     ],
 )
 def test_the_adr_0039_registry_judges_are_governance(path):

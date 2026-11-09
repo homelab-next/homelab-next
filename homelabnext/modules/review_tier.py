@@ -137,6 +137,15 @@ GOVERNANCE = (
     "homelabnext/compute/loader.py",
     "homelabnext/compute/gen/registry_hosts.py",
     "homelabnext/invariants/plugins/pillar_x.py",
+    # and what switches those checks on: the guests command that runs the registry check, the
+    # registry command's standing report, the standing fields it reads, the X-12 row of the
+    # invariants register, and the runner that turns a check into a result
+    "homelabnext/compute/cli.py",
+    "homelabnext/registry/cli.py",
+    "homelabnext/registry/model.py",
+    "examples/registers/invariants.yml",
+    "homelabnext/invariants/runner.py",
+    "homelabnext/invariants/api.py",
     "homelabnext/modules/rules.py",
     "homelabnext/golden/pins.py",
     "homelabnext/models/store.py",
