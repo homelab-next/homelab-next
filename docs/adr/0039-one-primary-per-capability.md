@@ -449,8 +449,7 @@ security audit:
    only where `bindings.UNPLACED` declares it for that pack, each entry with its reason and the
    change that removes it, and only over this repository's reference examples (`make check`
    passes `--reference-examples`; a lab's check never does); any other name with no row is
-   refused. A registry that holds any row
-   of the capability judges it by decision 3 as usual.
+   refused. A registry that holds any row of the capability judges it by decision 3 as usual.
 3. **The overlay checks the packs that are deployed.** `make check` judges every pack in this
    repository; the overlay's `checks.yml` judges only the packs the pinned commit's deploy
    manifest pins (`--deployed`), since those are the packs that run against the lab.

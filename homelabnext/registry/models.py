@@ -243,11 +243,18 @@ class RoleTable:
 
     @classmethod
     def load(cls, path: str | Path) -> RoleTable:
-        """Read a role table file: it must satisfy ``schemas/platform/model_roles.json`` (so a key
-        the schema refuses is an error, not silently ignored), then :meth:`from_dict`."""
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        """Read a role table file (:meth:`loads`)."""
+        return cls.loads(Path(path).read_bytes(), str(path))
+
+    @classmethod
+    def loads(cls, data: bytes | str, where: str = "<role table>") -> RoleTable:
+        """A role table from its JSON text: it must satisfy ``schemas/platform/model_roles.json``
+        (so a key the schema refuses is an error, not silently ignored), then :meth:`from_dict`.
+        Every reader of a role table file goes through here, so their validation cannot drift."""
+        text = data.decode("utf-8") if isinstance(data, bytes) else data
+        doc = json.loads(text)
         if problems := schema_problems(doc):
-            raise RoleTableError(f"{path}: role table does not match model_roles.json", problems)
+            raise RoleTableError(f"{where}: role table does not match model_roles.json", problems)
         return cls.from_dict(doc)
 
     def unpinned(self) -> list[str]:

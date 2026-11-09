@@ -246,6 +246,12 @@ def read_bytes(path: str | Path, *, follow: bool = True) -> bytes:
         fd = os.open(path, flags)
     except OSError as exc:
         raise Unreadable(f"cannot be opened ({exc.strerror})") from None
+    return _read_fd(fd)
+
+
+def _read_fd(fd: int) -> bytes:
+    """A regular file's bytes from an open descriptor (closed here), at most
+    :data:`MAX_BYTES`."""
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
@@ -273,6 +279,72 @@ def path_has_symlink(root: str | Path, rel: str) -> bool:
         if cur.is_symlink():
             return True
     return False
+
+
+def containment_root(base: str | Path) -> Path:
+    """The default root :func:`read_contained` keeps a path inside: the caller's working
+    directory when ``base`` is in it (the checkout ``hnx`` runs against), else ``base`` itself.
+    Nothing is discovered from ``base``: a directory a change controls could otherwise name a
+    root of its choosing (a planted bare-repository layout makes ``git rev-parse
+    --show-toplevel`` answer ``/``)."""
+    here = Path(os.path.abspath(os.getcwd()))
+    target = Path(os.path.abspath(base))
+    try:
+        target.relative_to(here)
+    except ValueError:
+        return target
+    return here
+
+
+def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -> bytes:
+    """The bytes of ``rel``, a path relative to directory ``base``, that must stay inside
+    ``root`` (default :func:`containment_root`).  ``..`` is allowed while the normalised path
+    stays inside the root; an absolute ``rel``, a path that leaves the root, and a symbolic link
+    on any component between the root and the file (the file included) are refused with
+    :class:`Unreadable`, as is anything :func:`read_bytes` refuses.  The walk opens each
+    component relative to the one before with ``O_NOFOLLOW``, so a link swapped in after a check
+    is refused too."""
+    if Path(rel).is_absolute():
+        raise Unreadable("an absolute path (give one relative to the file that names it)")
+    root = Path(os.path.abspath(root)) if root is not None else containment_root(base)
+    target = Path(os.path.normpath(os.path.join(os.path.abspath(base), rel)))
+    try:
+        parts = target.relative_to(root).parts
+    except ValueError:
+        raise Unreadable(f"outside the root {root}") from None
+    if not parts:
+        raise Unreadable("not a regular file")
+    if Path(root).is_symlink():
+        raise Unreadable("a symbolic link on its path")
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    dirflags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow | cloexec
+    try:
+        fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | cloexec)
+    except OSError as exc:
+        raise Unreadable(f"cannot be opened ({exc.strerror})") from None
+    try:
+        for n, part in enumerate(parts[:-1], start=1):
+            try:
+                nxt = os.open(part, dirflags, dir_fd=fd)
+            except OSError as exc:
+                raise Unreadable(_open_failure(root, parts[:n], exc)) from None
+            os.close(fd)
+            fd = nxt
+        try:
+            ffd = os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | nofollow | cloexec, dir_fd=fd)
+        except OSError as exc:
+            raise Unreadable(_open_failure(root, parts, exc)) from None
+    finally:
+        os.close(fd)
+    return _read_fd(ffd)
+
+
+def _open_failure(root: Path, parts: tuple[str, ...], exc: OSError) -> str:
+    """Why an ``O_NOFOLLOW`` open of ``root/parts`` failed: a link there, or the OS error."""
+    if os.path.islink(os.path.join(root, *parts)):
+        return "a symbolic link on its path"
+    return f"cannot be opened ({exc.strerror})"
 
 
 def read_tree_file(root: str | Path, rel: str) -> bytes | str | None:

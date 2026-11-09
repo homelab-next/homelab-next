@@ -804,3 +804,44 @@ def test_the_consumer_check_matches_the_whole_id_and_skips_history(tmp_path, cap
     assert rc in (0, 1)
     rc, _, err = _run_consumers("svc:x", capsys, tmp_path.parent / "no-such-dir")
     assert rc == 2 and "not a git checkout" in err
+
+
+@pytest.mark.parametrize("kind", ["absolute", "outside", "link"])
+def test_a_gateway_spec_s_role_table_stays_inside_the_checkout(tmp_path, capsys, kind):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    spec = _gateway_spec(spec_dir, "inference-big.svc.example.internal", 8000)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (spec_dir / "roles.json").rename(outside / "roles.json")
+    doc = yaml.safe_load(spec.read_text())
+    if kind == "absolute":
+        doc["roles"], words = str(outside / "roles.json"), "an absolute path"
+    elif kind == "outside":
+        doc["roles"], words = "../outside/roles.json", "outside the root"
+    else:
+        (spec_dir / "linked").symlink_to(outside, target_is_directory=True)
+        doc["roles"], words = "linked/roles.json", "a symbolic link on its path"
+    spec.write_text(yaml.safe_dump(doc))
+    rc, _out, err = _run(str(_registry(tmp_path)), "--gateway", str(spec), capsys=capsys)
+    assert rc == 2 and words in err, err
+
+
+def test_every_role_table_reader_validates_through_role_table_loads(tmp_path, monkeypatch):
+    from homelabnext.generators import llm_gateway as gw
+    from homelabnext.registry import models
+
+    calls = []
+    real = models.RoleTable.loads.__func__
+
+    def spy(cls, data, where="<role table>"):
+        calls.append(where)
+        return real(cls, data, where)
+
+    monkeypatch.setattr(models.RoleTable, "loads", classmethod(spy))
+    path = ROOT / "examples/model_roles.json"
+    models.RoleTable.load(path)
+    bd.load_role_tables([str(path)])
+    spec = _gateway_spec(tmp_path, "inference-big.svc.example.internal", 8000)
+    gw.load_spec(spec)
+    assert len(calls) == 3, calls

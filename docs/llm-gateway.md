@@ -184,6 +184,12 @@ not a publicly routable network), or when its host is under the lab's internal s
 api.example.com}` is refused, and the `--check` audit counts such a host as cloud even if the spec
 was edited to let it through.
 
+With a registry loaded, a self-declared host in the service domain is held to the registry
+(ADR-0039 decision 3): a host that is a capability's primary alias is that registry service, with
+its zone, port and scheme; a host that names any other registry row or capability, or a name under
+one, is refused. So a primary that serves a second API port is not a backend through its alias on
+that port: register the second port as a row of its own.
+
 `--check` then audits the rendered files themselves. It decides locality from each file, not from
 the spec:
 
