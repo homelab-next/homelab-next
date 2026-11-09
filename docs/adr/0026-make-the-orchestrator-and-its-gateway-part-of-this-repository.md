@@ -15,7 +15,9 @@ summary_of: outline:sha256:07f8a62fd60cb6e2
   Decision and its consequences); and 2026-11-07 by ADR-0043 (decision 8): stage 6's archive
   waits for the revocation ledger and the scoped archive gate (decision 19 here), and by ADR-0044
   (decision 13): decision 6's vault, tasking-queue and deconfliction MCP servers are not ported,
-  the broker's records actions replace them (decision 20 here)
+  the broker's records actions replace them (decision 20 here); and 2026-11-09 by ADR-0051
+  (decision 17): `Session.Trace` and `Session.RunTokens`, which PR 2.4 did not deliver, move to
+  ADR-0051's step 3
 - **Related:** ADR-0005, ADR-0017, ADR-0021, ADR-0022, ADR-0024, ADR-0027, ADR-0030, ADR-0033,
   ADR-0039 to ADR-0049,
   [LLM gateway](../llm-gateway.md), [the lab's own gateway](../gateway.md),
@@ -23,7 +25,7 @@ summary_of: outline:sha256:07f8a62fd60cb6e2
   [private overlay](../private-overlay.md), `tools/go_modules.py`, `tools/go_test_policy.py`
 - **Depends-on:** ADR-0038
 - **Amends:** ADR-0011, ADR-0038
-- **Amended-by:** ADR-0043, ADR-0044
+- **Amended-by:** ADR-0043, ADR-0044, ADR-0051
 
 ## Context
 
@@ -573,7 +575,8 @@ lab's agent profiles to compiled profiles (stage 5, with ADR-0043's roster of re
 **Requirements other ADRs put on these stages.** ADR-0045 and ADR-0047 do not amend this ADR, but
 their decisions land inside its stages, and each stage's pull request carries them as written
 there: controller authentication on by default in stage 2's controller pull request (ADR-0045
-decision 9); `Session.Trace` and `Session.RunTokens` on the runner seam and the facts block's
+decision 9); `Session.Trace` and `Session.RunTokens` on the runner seam (*amended by ADR-0051
+decision 17:* PR 2.4 did not deliver them; they land in ADR-0051's step 3) and the facts block's
 budget in PR 2.4, and the run deadline in PR 2.6 (ADR-0047); per-run agent credentials and trace
 propagation in stage 3's agent-runner ADR, which must cite ADR-0045 decision 6 and ADR-0047's
 runner requirements.

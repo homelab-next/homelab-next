@@ -6,6 +6,9 @@ summary_of: outline:sha256:49cc9b22fad466de
 
 - **Status:** proposed
 - **Date:** 2026-11-07
+- **Amended:** 2026-11-09 by ADR-0051 (decision 17): the seam's `Trace` and `RunTokens` and the
+  class `BudgetExhausted` land in ADR-0051's step 3, not in stage 2's PR 2.4; step 6 here mints
+  and issues them, after ADR-0051's step 3
 - **Related:** ADR-0006 (detections as code), ADR-0009 (telemetry stays direct), ADR-0013 (agent
   activity tiers), ADR-0017 (the broker), ADR-0029 (holds released by liveness), ADR-0030 (agents
   act only through the broker), ADR-0031 (Code Mode tokens), ADR-0033 (TLP), ADR-0035 (the
@@ -22,6 +25,7 @@ summary_of: outline:sha256:49cc9b22fad466de
   `homelabnext/golden/`, `homelabnext/registry/limits.py`, `homelabnext/agent/compiler.py`
 - **Depends-on:** ADR-0025, ADR-0026, ADR-0038, ADR-0044, ADR-0045
 - **Amends:** ADR-0025, ADR-0038, ADR-0042
+- **Amended-by:** ADR-0051
 
 ## Context
 
@@ -108,7 +112,7 @@ Context).
 
    | Hop | Carrier | Test that proves it |
    |---|---|---|
-   | controller to runner | `Session.Trace` and `Session.RunTokens` on the internal runner seam (ADR-0026's amendment; stage 2 PR 2.4), then the public agent-runner contract (stage 3) | runner seam unit test; the runner suite's `trace-propagation` check (below) |
+   | controller to runner | `Session.Trace` and `Session.RunTokens` on the internal runner seam (*amended by ADR-0051:* its step 3 adds the fields, step 6 here mints them), then the public agent-runner contract (stage 3) | runner seam unit test; the runner suite's `trace-propagation` check (below) |
    | runner to gateway | one `traceparent` header on every model call, beside `X-HNX-Tag` | inference suite feature `trace-context` |
    | gateway to model | a fresh `traceparent` whose parent is the gateway's span, sent **only** to deployments with locality `local`; never to a deployment that leaves the lab | `traceparent-local-only`: the fake inference server records the headers it receives |
    | runner to MCP server | the MCP request's `_meta` object, key `traceparent`, sent **only** to MCP servers whose catalog locality is `local` | runner suite `trace-propagation`: a fake local MCP server records `_meta` of every call, and a fake non-local one records none |
@@ -633,10 +637,12 @@ gateway detector also on step 4), and may run in parallel with steps 3 to 9.
    an agent with no token on and after `run_binding_required_from`. Its tests prove each refusal,
    its audit record, that a finding is still filed past `max_tool_calls`, and that an unverified
    trace never changes the caller.
-6. **Controller** (after ADR-0026 stage 2 PR 2.7). The controller mints the trace and tokens per
-   run, on the job row (migration behind a backup). It carries them through `Session`, turns
-   `max_runtime_s` into the deadline, and gains the runner class `BudgetExhausted`, set only from
-   the usage report's `budget_exhausted` or the gateway's records, never retried and never moved. It
+6. **Controller** (after ADR-0026 stage 2 PR 2.7 and, *amended by ADR-0051 decision 17*, after
+   ADR-0051's step 3, which adds the seam's `Trace`, `RunTokens` and the class `BudgetExhausted`).
+   The controller mints the trace and tokens per run, on the job row (migration behind a backup).
+   It carries them through `Session`, turns `max_runtime_s` into the deadline, and sets
+   `BudgetExhausted` only from the usage stream's `budget_exhausted` or the gateway's records,
+   never retried and never moved. It
    reads usage for the backstop and emits `agent.job.finished` 1.3. `orchestration-features` gains
    `budgets` and `trace`, each check with its mutant, run by `orchestration-conformance`:
    - `budget-exhausted-run-is-never-retried-or-moved`;
