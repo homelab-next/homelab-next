@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- A gateway spec's role table: the default containment root is the working directory only when it is a checkout (a `.git` entry), then this package's own source checkout, else the spec's directory; a filesystem root (`/`) is refused as the root, and the root itself is opened without following a link. `hnx gen gateway render` takes `--root`.
 - LLM gateway and `hnx registry bindings --gateway`: a spec's `roles:` path is refused when absolute, when it leaves the root the caller gives (`--root`; by default the working directory when the spec is in it, else the spec's directory; `..` inside it is fine), or when a symbolic link is on its path (each component opened without following one); both read it through one validator, `RoleTable.loads`.
 - LLM gateway: the spec's role table is read without following a symbolic link on its path, as `hnx registry bindings` reads its inputs.
 - **Breaking for overlay sites:** `hnx site validate` refuses a resolver `authoritative_for` a zone under the registry's alias zone, as it refuses a static record there (the alias zone itself, which the DNS zone generator renders with its own SOA and NS, may be served) ([ADR-0039](docs/adr/0039-one-primary-per-capability.md) decision 2).

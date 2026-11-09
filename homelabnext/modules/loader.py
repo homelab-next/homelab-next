@@ -282,18 +282,26 @@ def path_has_symlink(root: str | Path, rel: str) -> bool:
 
 
 def containment_root(base: str | Path) -> Path:
-    """The default root :func:`read_contained` keeps a path inside: the caller's working
-    directory when ``base`` is in it (the checkout ``hnx`` runs against), else ``base`` itself.
-    Nothing is discovered from ``base``: a directory a change controls could otherwise name a
-    root of its choosing (a planted bare-repository layout makes ``git rev-parse
-    --show-toplevel`` answer ``/``)."""
-    here = Path(os.path.abspath(os.getcwd()))
+    """The default root :func:`read_contained` keeps a path inside, the first that holds
+    ``base``: the caller's working directory when it is a checkout (it holds a ``.git`` entry),
+    then this package's own verified source checkout (:func:`homelabnext.paths.checkout_root`,
+    which also holds in a ``git archive`` export); else ``base`` itself.  Nothing is discovered
+    from ``base``: a directory a change controls could otherwise name a root of its choosing (a
+    planted bare-repository layout makes ``git rev-parse --show-toplevel`` answer ``/``).  A
+    root of ``/`` is refused by :func:`read_contained` whichever way it was chosen."""
     target = Path(os.path.abspath(base))
-    try:
-        target.relative_to(here)
-    except ValueError:
-        return target
-    return here
+    here = Path(os.path.abspath(os.getcwd()))
+    candidates = [here] if os.path.lexists(here / ".git") else []
+    own = paths.checkout_root()
+    if own is not None:
+        candidates.append(Path(os.path.abspath(own)))
+    for root in candidates:
+        try:
+            target.relative_to(root)
+        except ValueError:
+            continue
+        return root
+    return target
 
 
 def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -> bytes:
@@ -307,6 +315,8 @@ def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -
     if Path(rel).is_absolute():
         raise Unreadable("an absolute path (give one relative to the file that names it)")
     root = Path(os.path.abspath(root)) if root is not None else containment_root(base)
+    if root == Path(root.anchor):
+        raise Unreadable(f"the root {root} is a filesystem root: give the checkout instead")
     target = Path(os.path.normpath(os.path.join(os.path.abspath(base), rel)))
     try:
         parts = target.relative_to(root).parts
@@ -314,14 +324,15 @@ def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -
         raise Unreadable(f"outside the root {root}") from None
     if not parts:
         raise Unreadable("not a regular file")
-    if Path(root).is_symlink():
-        raise Unreadable("a symbolic link on its path")
+
     cloexec = getattr(os, "O_CLOEXEC", 0)
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     dirflags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow | cloexec
     try:
-        fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | cloexec)
+        fd = os.open(root, dirflags)  # O_NOFOLLOW: the root itself is no link either
     except OSError as exc:
+        if os.path.islink(root):
+            raise Unreadable("a symbolic link on its path") from None
         raise Unreadable(f"cannot be opened ({exc.strerror})") from None
     try:
         for n, part in enumerate(parts[:-1], start=1):

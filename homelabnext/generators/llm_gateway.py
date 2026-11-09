@@ -2182,6 +2182,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         metavar="HOST",
         help=f"with --conformance: move every deployment to HOST ({', '.join(CONFORMANCE_HOSTS)})",
     )
+    rd.add_argument(
+        "--root",
+        help="the checkout the spec belongs to: its role table must stay inside it (default: the "
+        "working directory when it is a checkout holding the spec, else the spec's directory)",
+    )
     hm = sub.add_parser("homes", help=agent_homes.HOMES_HELP, description=agent_homes.HOMES_HELP)
     agent_homes.add_arguments(hm)
     pv = sub.add_parser("provision", help="create the virtual keys of litellm/keys.json")
@@ -2225,7 +2230,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
     try:
         spec = load_spec(
-            args.spec, conformance=args.conformance, conformance_host=args.conformance_host
+            args.spec,
+            conformance=args.conformance,
+            conformance_host=args.conformance_host,
+            root=Path(args.root) if args.root else None,
         )
         files = render(spec)
     except GatewaySpecError as exc:

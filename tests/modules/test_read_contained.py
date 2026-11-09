@@ -51,6 +51,7 @@ def test_the_default_root_is_the_working_directory_when_the_base_is_in_it(tmp_pa
     (tmp_path / "schemas" / "t.json").write_text("{}")
     base = tmp_path / "compose" / "cfg"
     base.mkdir(parents=True)
+    (tmp_path / ".git").mkdir()  # the working directory is a checkout
     monkeypatch.chdir(tmp_path)
     assert ld.containment_root(base) == tmp_path
     assert ld.read_contained(base, "../../schemas/t.json") == b"{}"
@@ -71,3 +72,43 @@ def test_a_link_on_the_path_is_refused_by_the_walk(tmp_path):
             ld.read_contained(tmp_path, rel, tmp_path)
     with pytest.raises(ld.Unreadable, match="an absolute path"):
         ld.read_contained(tmp_path, str(real / "t.json"), tmp_path)
+
+
+def test_a_working_directory_that_is_no_checkout_is_not_the_root(tmp_path, monkeypatch):
+    base = tmp_path / "compose" / "cfg"
+    base.mkdir(parents=True)
+    (tmp_path / "schemas").mkdir()
+    (tmp_path / "schemas" / "t.json").write_text("{}")
+    monkeypatch.chdir(tmp_path)  # no .git here, and outside this package's checkout
+    assert ld.containment_root(base) == base
+    with pytest.raises(ld.Unreadable, match="outside the root"):
+        ld.read_contained(base, "../../schemas/t.json")
+
+
+def test_a_filesystem_root_is_refused_as_the_root(tmp_path, monkeypatch):
+    (tmp_path / "t.json").write_text("{}")
+    with pytest.raises(ld.Unreadable, match="is a filesystem root"):
+        ld.read_contained(tmp_path, "t.json", "/")
+    monkeypatch.chdir("/")
+    monkeypatch.setattr(ld.os.path, "lexists", lambda p: True)  # as if / held a .git entry
+    with pytest.raises(ld.Unreadable, match="is a filesystem root"):
+        ld.read_contained(tmp_path, "t.json")
+
+
+def test_a_root_that_is_a_symbolic_link_is_refused(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "t.json").write_text("{}")
+    (tmp_path / "linked").symlink_to(real, target_is_directory=True)
+    with pytest.raises(ld.Unreadable, match="a symbolic link on its path"):
+        ld.read_contained(tmp_path / "linked", "t.json", tmp_path / "linked")
+
+
+def test_this_package_s_own_checkout_is_a_default_root_without_git(tmp_path, monkeypatch):
+    # a `git archive` export has no .git: the package's verified checkout still bounds its specs
+    own = tmp_path / "export"
+    base = own / "compose" / "cfg"
+    base.mkdir(parents=True)
+    monkeypatch.setattr(ld.paths, "checkout_root", lambda: own)
+    monkeypatch.chdir(tmp_path)
+    assert ld.containment_root(base) == own
