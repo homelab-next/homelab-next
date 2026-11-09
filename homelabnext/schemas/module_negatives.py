@@ -278,7 +278,7 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
     ),
     "provisional-requirement-with-version": (
         F,
-        lambda d: d["requires"]["capabilities"][3].__setitem__("version", "1.0"),
+        lambda d: d["requires"]["capabilities"][3].__setitem__("provisional", True),
         "A provisional requirement has no contract to version.",
     ),
     "prefers-without-fallback": (

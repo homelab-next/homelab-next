@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider's contracted slots.
+name: example-agent-runtime
+capabilities:
+  agent-runner:
+    adapter: hnx_modules.example_agent_runtime.agent_runtime:make
+    features: [body-override]
