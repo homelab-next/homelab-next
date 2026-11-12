@@ -40,7 +40,9 @@ approver reads the page (token and digest from the form) and approves through
 uid) publishes the request's ``decision.requested`` and ``decision.returned`` to the bus, in order,
 as ``svc:broker`` with the event id as the message id, and a second relay pass publishes nothing;
 on that bus (``bus-acl``) a client without a user is refused, the StackStorm bridge's user can
-neither forge a ``decision.returned`` nor purge the stream, and its acks on its own durable take;
+neither forge a ``decision.returned``, purge or update the stream, nor create a consumer (a push
+durable delivering to another user's inbox), and its acks on the pull durable the admin
+provisioned for it take;
 the audit trail holds every step, each with the peer's ``via``.
 
 ``tests/compose/test_lab_broker_e2e.py`` runs :func:`run_scenario` against local processes.
@@ -180,6 +182,32 @@ class Relay:
             return nj.provision_streams(
                 wire, stream=self.stream, subject_prefix=self.prefix, max_bytes=STREAM_MAX_BYTES
             )
+        finally:
+            wire.close()
+
+    def provision_durable(self, *, replay_s: float = 86400.0) -> list[str]:
+        """The not-broker user's durable on decision.returned, as the provisioner creates it: a
+        PULL durable (no ``deliver_subject``), created as ``admin`` when missing.  No other user
+        may create a consumer (a create can push the stream to any subject).  When the
+        not-broker user already sees it (the events bus role provisioned it), nothing is asked
+        of ``admin``.  ``replay_s``: it starts that far back (the lab runs no bridge, so a
+        durable created now still sees what the relay published)."""
+        from homelabnext.conform.adapters import nats_jetstream as nj
+
+        durable = nj.durable_name(self.not_broker_durable)
+        wire = self.wire(self.not_broker)
+        try:
+            seen = nj._api(wire, f"CONSUMER.INFO.{self.stream}.{durable}", None, timeout=5.0,
+                           missing="consumer")  # fmt: skip
+        finally:
+            wire.close()
+        if seen is not None:
+            return []
+        wire = self.wire(self.admin)
+        try:
+            return nj.provision_consumers(wire, stream=self.stream, durables=[{
+                "durable": durable, "filter": f"{self.prefix}.homelabnext.decision.returned",
+                "ack_wait": 30.0, "max_deliver": 5, "replay_s": replay_s}])  # fmt: skip
         finally:
             wire.close()
 
@@ -627,6 +655,27 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
             pass
         else:
             raise StepFailed(f"{relay.not_broker} purged the stream")
+        # a consumer create could push the stream to any subject (the broker's own _INBOX
+        # here): refused by the ACL, whose consumer creates are the provisioner's alone
+        evil = f"e2e-push-{secrets.token_hex(3)}"
+        push = {"durable_name": evil, "deliver_subject": f"_INBOX.{relay.admin}.e2e-{evil}",
+                "ack_policy": "explicit", "deliver_policy": "all"}  # fmt: skip
+        for create in (f"CONSUMER.CREATE.{relay.stream}.{evil}",
+                       f"CONSUMER.DURABLE.CREATE.{relay.stream}.{evil}"):  # fmt: skip
+            try:
+                bus.api(create, {"stream_name": relay.stream, "config": push})
+            except Exception as exc:
+                if not getattr(exc, "permanent", False):
+                    raise StepFailed(f"{create} failed, but not as refused: {exc}") from None
+            else:
+                raise StepFailed(f"{relay.not_broker} created a push consumer ({create})")
+        try:
+            bus.api(f"STREAM.UPDATE.{relay.stream}", {"name": relay.stream, "max_msgs": 1})
+        except Exception as exc:
+            if not getattr(exc, "permanent", False):
+                raise StepFailed(f"the stream update failed, but not as refused: {exc}") from None
+        else:
+            raise StepFailed(f"{relay.not_broker} updated the stream (it can shrink it)")
     finally:
         bus.close()
     after = last_returned()
@@ -634,8 +683,9 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
         raise StepFailed(f"the last decision.returned moved: {before} -> {after}")
     acked = check_bridge_acks(relay)
     return (
-        f"no user: refused ({anonymous}); {relay.not_broker}: forged decision.returned and "
-        f"purge refused; last decision.returned still seq {after}; {acked}"
+        f"no user: refused ({anonymous}); {relay.not_broker}: forged decision.returned, purge, "
+        f"push consumer to another inbox and stream update refused; last decision.returned still "
+        f"seq {after}; {acked}"
     )
 
 
@@ -643,19 +693,22 @@ def check_bridge_acks(relay: Relay) -> str:
     """What the bus ACL must still allow: the bridge's user reads ``decision.returned`` through its
     own durable and its acks take, in whichever ack reply-subject form the server sends (ADR-15;
     the ACL grants both).  A refused ack is a publish violation the client never hears about, so
-    the step reads the consumer back: nothing it was handed may still be pending.  The step owns
-    the durable and settles real deliveries on it, which is safe only because the lab runs no bridge;
-    on a real bus name a scratch durable (and stream, ``run --bus-not-broker-durable``,
+    the step reads the consumer back: nothing it was handed may still be pending.  The bridge's
+    user creates no consumer: the durable is a pull durable the provisioner made
+    (:meth:`Relay.provision_durable`, as the admin when it is missing), and the bridge's user
+    binds to it.  The step settles real deliveries on it, which is safe only because the lab runs
+    no bridge; on a real bus name a scratch durable (and stream, ``run --bus-not-broker-durable``,
     ``--stream``), never one a real bridge uses; that durable is deleted again at the end
     (``relay.delete_durable``), whether or not the step passed."""
     from homelabnext.conform.adapters import nats_jetstream as nj
 
-    wire = relay.wire(relay.not_broker)
     done = False
+    wire = None
     try:
-        # replay: the lab runs no bridge, so a durable created now still sees the relay's events
+        relay.provision_durable()
+        wire = relay.wire(relay.not_broker)
         bus = nj.JetStreamBus(wire, stream=relay.stream, subject_prefix=relay.prefix,
-                              provision=False, replay_s=86400.0)  # fmt: skip
+                              provision=False)  # fmt: skip
         consumer = bus.consumer(relay.not_broker_durable, "homelabnext.decision.returned")
         got = consumer.fetch(16)
         if not got:
@@ -675,7 +728,8 @@ def check_bridge_acks(relay: Relay) -> str:
             )
         done = True
     finally:
-        wire.close()
+        if wire is not None:
+            wire.close()
         if relay.delete_durable:
             _delete_durable(relay, report=done)  # a failure of the step itself is not masked
     gone = "; scratch durable deleted" if relay.delete_durable else ""

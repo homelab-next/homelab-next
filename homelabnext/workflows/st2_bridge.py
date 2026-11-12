@@ -6,6 +6,10 @@ type, the bus subject, a durable consumer name, the rules it feeds and the produ
 those rules pin.  The bridge is one long-running process that, for each entry, is a durable
 consumer on the subject (``homelabnext.<type>``; with NATS JetStream under the stream's subject
 prefix, :mod:`homelabnext.conform.adapters.nats_jetstream`) and POSTs each event to the webhook.
+On a standing bus it creates no durable: it binds to the pull durables the bus's provisioner
+created (role ``events_bus``, ``events_bus_durables``), and a missing or push one is a
+configuration error (exit 2), since a client that may create a consumer may also point a push
+``deliver_subject`` anywhere.
 
 * **Validated before forwarding.**  Every body is parsed and checked against the envelope and its
   type's schema (:func:`homelabnext.events.consumer.decode_event`), its type must be the subject's
@@ -91,13 +95,15 @@ MAX_REPLY_BYTES = 64 << 10
 #: an event body larger than this is poison before it is parsed (the envelope is small; a body this
 #: size is a flood or a parser bomb, never an event a rule takes)
 MAX_EVENT_BYTES = 256 << 10
-#: the bus's lease on a delivery (JetStream ``ack_wait``) the bridge asks for when it creates a
-#: durable; it must outlast a POST (the webhook's timeout) plus :data:`LEASE_MARGIN_S` to settle,
-#: or the bus hands the delivery out again while it is still being posted
+#: the bus's lease on a delivery (JetStream ``ack_wait``) the bridge's durables need (declare it
+#: on each, events_bus_durables ``ack_wait``); it must outlast a POST (the webhook's timeout)
+#: plus :data:`LEASE_MARGIN_S` to settle, or the bus hands the delivery out again while it is
+#: still being posted
 ACK_WAIT_S = 30.0
 LEASE_MARGIN_S = 15.0
-#: how far back a durable the bridge creates starts (JetStream ``by_start_time``): what the relay
-#: published before the durable existed is forwarded, but never more than ``admit`` remembers
+#: how far back the bridge's durables should start (JetStream ``by_start_time``; the provisioner
+#: creates them: events_bus_durables ``replay_s``): what the relay published before the durable
+#: existed is forwarded, but never more than ``admit`` remembers
 #: (:data:`~homelabnext.workflows.st2_runtime.DEDUPE_WINDOW_S`), so a replay of anything an
 #: earlier durable already forwarded ends ``duplicate`` and a long-retention stream's history is
 #: never replayed
@@ -313,12 +319,19 @@ class Bridge:
         self._stats_written = float("-inf")
 
     def open(self) -> None:
-        """Create (or reopen) one durable consumer per subscription; refuse one whose lease
-        (``ack_wait``, when the bus reports it) a POST could outlast."""
-        consumers = [
-            (s, self.bus.consumer(s.durable, s.subject, max_deliver=self.max_deliver))
-            for s in self.config.subscriptions
-        ]
+        """Bind to one durable consumer per subscription (on a bus opened with
+        ``provision=False``, the provisioner's pull durables: a missing or push one is a
+        configuration error); refuse one whose lease (``ack_wait``, when the bus reports it) a
+        POST could outlast."""
+        from homelabnext.conform.adapters.nats_jetstream import NotProvisioned
+
+        try:
+            consumers = [
+                (s, self.bus.consumer(s.durable, s.subject, max_deliver=self.max_deliver))
+                for s in self.config.subscriptions
+            ]
+        except NotProvisioned as exc:
+            raise BridgeError(str(exc)) from None
         need = float(getattr(self.webhook, "timeout", 0.0)) + LEASE_MARGIN_S
         for s, cons in consumers:
             lease = getattr(cons, "ack_wait", None)

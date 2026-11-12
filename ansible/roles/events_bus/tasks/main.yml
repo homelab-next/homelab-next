@@ -130,7 +130,7 @@
 
 - name: Wait for the bus to answer its health endpoint
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ events_bus_monitor_port | int }}/healthz?js-enabled-only=true"  # no-raw-endpoint: allow the monitor listens on loopback only
+    url: "{{ events_bus_monitor_url }}/healthz?js-enabled-only=true"
     status_code: 200
   register: events_bus_up
   until: events_bus_up.status == 200
@@ -139,18 +139,24 @@
   changed_when: false
   when: events_bus_start | bool
 
-- name: Provision the standing streams (created only when missing)
+# The streams always (when missing); the durables only once events_bus_provision_durables says
+# so: creating one fixes where it starts, the operator's decision on a stream that holds events.
+- name: Provision the standing streams and the durables (created only when missing)
   ansible.builtin.command:
     argv: ["{{ events_bus_hnx_python }}", "{{ events_bus_provision_bin }}",
            "nats://{{ events_bus_listen_address | hnx_nats_hostport(events_bus_port) }}",
-           "{{ events_bus_admin_user }}", "{{ item.name }}", "{{ item.subject_prefix }}",
-           "{{ item.max_bytes | int }}"]
+           "{{ events_bus_admin_user }}"]
+    stdin: >-
+      {{ {'streams': events_bus_streams,
+          'durables': (events_bus_durables if events_bus_provision_durables | bool else [])}
+         | to_json }}
   environment:
     HNX_EVENTS_ADMIN_PASSWORD: "{{ lookup('hnx_secret', events_bus_admin_password_ref) }}"
-  loop: "{{ events_bus_streams }}"
-  loop_control:
-    label: "{{ item.name }}"
   register: events_bus_provisioned
   changed_when: (events_bus_provisioned.stdout | from_json).created | length > 0
   no_log: true
+  when: events_bus_start | bool and (events_bus_streams | length > 0 or (events_bus_provision_durables | bool and events_bus_durables | length > 0))
+
+- name: Refuse any push consumer on the bus (the provisioner creates pull durables only)
+  ansible.builtin.include_tasks: push_consumers.yml
   when: events_bus_start | bool

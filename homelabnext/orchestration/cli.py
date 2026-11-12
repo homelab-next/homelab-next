@@ -103,7 +103,9 @@ _FLAG_OPTIONS = {
 }
 #: the controller's service id(s), comma-separated, when --source is not given
 SOURCE_ENV = "HNX_ORCHESTRATION_SOURCE"
-REPLAY_S = 7 * 86400  # a new durable reads the last week, not only what arrives after it
+#: where the provisioner should start this consumer's durable (events_bus_durables replay_s): the
+#: last week, not only what arrives after it exists; the consumer itself creates no durable
+REPLAY_S = 7 * 86400
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -295,11 +297,10 @@ def _consume(a, store: TelemetryStore) -> int:
 def _connect(nats_jetstream, a):
     return nats_jetstream.make(
         scratch=False,
-        provision=False,  # read the stream, manage the durable, nothing else
+        provision=False,  # read the stream, bind to the provisioner's durable, nothing else
         stream=a.stream,
         subject_prefix=a.subject_prefix,
         ack_wait=30.0,
-        replay_s=REPLAY_S,
         user=a.events_user,
         password_secret=a.events_password_secret,
         ca_file=a.events_ca_file,

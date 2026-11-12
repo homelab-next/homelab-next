@@ -280,7 +280,12 @@ How the contract maps onto JetStream:
   start of a consumer, or one recreated) is not skipped, while a long-retention stream still does
   not replay its whole history.  A literal filter is created with the 2.9+ form
   `CONSUMER.CREATE.<stream>.<durable>.<filter>`: the server holds the request to the filter in
-  its subject, so a user granted exactly that subject can create that durable and no other shape.
+  its subject.  With `provision=False` the bus creates no durable either: it binds to one that
+  exists (a pull durable on that filter, with explicit acks) and refuses a missing one
+  (`NotProvisioned`) or a push one.  A consumer create takes any configuration, a push
+  `deliver_subject` included, and the server delivers a push consumer's messages as itself,
+  whatever the creator may publish to, so creating a durable is the provisioner's step
+  (`provision_consumers`, role `events_bus`), never a client's.
 * **fetch** is one `CONSUMER.MSG.NEXT` pull with `no_wait`: the server answers with what is
   deliverable now and a `404`/`408` status, so an empty consumer returns at once.  The attempt
   number is the delivery count from the ack reply subject, in either of its formats (ADR-15):

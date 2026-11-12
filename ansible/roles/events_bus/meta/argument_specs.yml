@@ -75,8 +75,17 @@ argument_specs:
         default: []
       events_bus_admin_user: &admin
         type: str
-        description: "The user that provisions the streams (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of them; the only user validation lets hold STREAM.CREATE/UPDATE, CONSUMER.DELETE and CONSUMER.NAMES of a named stream); empty: provision nothing."
+        description: "The user that provisions the streams and durables (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of the streams, CONSUMER.INFO and CONSUMER.CREATE of the durables; the only user validation lets hold STREAM.CREATE, CONSUMER.CREATE, CONSUMER.DURABLE.CREATE and CONSUMER.DELETE of a named stream and durable; no user may hold STREAM.UPDATE); empty: provision nothing."
         default: ""
+      events_bus_durables: &durables
+        type: list
+        elements: dict
+        description: "The pull durables clients bind to: [{stream, durable, user, filter (the full subject), ack_policy (explicit), ack_wait (s, default 30), max_deliver (default 5), deliver_policy (new|all, default new), replay_s (start that many seconds back) or start_seq (start at that stream sequence)}]. Never a deliver_subject. Each <stream>.<durable> a user's CONSUMER.* or $JS.ACK grant names must be declared here for that user, and for one user only."
+        default: []
+      events_bus_provision_durables: &provdur
+        type: bool
+        description: "Create the declared durables that are missing (as events_bus_admin_user, which then needs each one's CONSUMER.INFO and CONSUMER.CREATE). Off by default: creating a durable fixes its start position, the operator's decision on a stream that already holds events."
+        default: false
       events_bus_admin_password_ref:
         type: str
         description: "The reference (secret:<name>) of that user's bus credential, as in events_bus_users."
@@ -94,7 +103,7 @@ argument_specs:
         description: "Enable, start and restart the unit (false: write it only)."
         default: true
   health:
-    short_description: Fail unless the server answers its loopback /healthz with JetStream enabled.
+    short_description: Fail unless the server answers its loopback /healthz with JetStream enabled and reports no push consumer (one with a deliver_subject) in /jsz.
     options:
       events_bus_monitor_port: *mport
   readiness:
@@ -109,11 +118,13 @@ argument_specs:
       events_bus_store_dir: *store
       events_bus_config_dir: *confdir
   restore:
-    short_description: Restore JetStream's store from events_bus_restore_source with the server stopped, then start it again (data only; configuration and unit untouched).
+    short_description: Restore JetStream's store from events_bus_restore_source with the server stopped (whenever its unit exists), then start it again unless events_bus_start is false (data only; configuration and unit untouched).
     options:
       events_bus_store_dir: *store
       events_bus_user: *user
       events_bus_group: *group
+      events_bus_systemd_dir: *units
+      events_bus_start: *start
       events_bus_restore_source:
         type: path
         description: A directory holding a copy of the store directory.

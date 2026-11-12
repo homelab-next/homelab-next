@@ -801,9 +801,13 @@ for the run (one relay per state directory; the scenario's own `--once` passes t
 **Use scratch names on a real bus**: a stream and prefix of the run's own (granted to the bus users
 for the run only) and `--bus-not-broker-durable` a durable no real consumer uses, so the real
 bridge never inherits the run's ack floor and the standing stream holds none of its events. The
-run deletes that durable again at the end, as `--bus-admin` (grant it
+not-broker user may not create a consumer (nobody but the provisioner may), so the durable is a
+pull durable `--bus-admin` creates: declare it in `events_bus_durables` for the not-broker user
+(the role then creates it when `events_bus_provision_durables` is on), or let the run create it
+as `--bus-admin` (grant that user its `CONSUMER.INFO` and filtered `CONSUMER.CREATE`). The run
+deletes that durable again at the end, as `--bus-admin` (grant it
 `$JS.API.CONSUMER.DELETE.<stream>.<durable>` for the run; the events bus role lets only its
-`events_bus_admin_user` hold a consumer delete).
+`events_bus_admin_user` hold a consumer create or delete).
 The hub's steps must reach it from a trusted proxy's address (the registry's edge-proxy host), as
 the edge would.
 
@@ -981,10 +985,15 @@ passwords, ideally bcrypt hashes from `nats server passwd`), and its broker scen
 (the `bus-acl` step). Every user has an allow-list and nothing else: no `$JS.API.>` wildcard (so
 no `STREAM.PURGE`, `STREAM.UPDATE`, `STREAM.DELETE` or `MSG.DELETE`), no `STREAM.CREATE` for the
 relay or the bridge (an operator provisions both streams with limits; the relay connects with
-`provision=False` and refuses a missing or unbounded stream), and replies on the user's own inbox
-prefix (`_INBOX.<user>`, the adapter's default for a `user`), never a shared `_INBOX.>` where one
-client could read another's replies. The broker's relay and the bridge, verbatim from the lab
-(`tests/compose` fails when this excerpt and the lab drift apart):
+`provision=False` and refuses a missing or unbounded stream), **no consumer create for anyone but
+the provisioner** (below), and replies on the user's own inbox prefix (`_INBOX.<user>`, the
+adapter's default for a `user`), never a shared `_INBOX.>`. That protects a user's replies from
+being READ by another client; it does not protect them from forged replies: the reply subject of
+a request is not checked against anyone's allow-list, so any client that learns an inbox subject
+can publish to it. A client must therefore match each reply by an unguessable token of its own,
+as the adapter does (nats-py's `new_inbox()`: a random token per request under the user's prefix,
+and it reads only the reply to the inbox it made). The broker's relay and the bridge, verbatim
+from the lab (`tests/compose` fails when this excerpt and the lab drift apart):
 
 ```text
 # compose/lab-in-a-box/config/nats/nats.conf (excerpt: account HNX, the relay and the bridge)
@@ -1000,17 +1009,14 @@ client could read another's replies. The broker's relay and the bridge, verbatim
    "publish": {"allow": ["$JS.API.STREAM.INFO.HNXLAB_BROKER",
                          "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed.hnxlab.homelabnext.agent.job.failed",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
                          "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-agent-job-failed.*.*.*.*.>",
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned.hnxlab.homelabnext.decision.returned",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
                          "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-decision-returned.*.*.*.*.>",
                          "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created.hnxlab.homelabnext.proposal.created",
                          "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
                          "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-proposal-created.*.*.*.*.>"]},
@@ -1019,33 +1025,77 @@ client could read another's replies. The broker's relay and the bridge, verbatim
 ```
 
 The lab's other users: `hnx-lab-admin` (the operator: `STREAM.INFO`/`STREAM.CREATE` of the stream
-and its DLQ, `STREAM.MSG.GET` of the stream; it provisions them, with
-`homelabnext.conform.adapters.nats_jetstream.provision_streams`, and reads back what the relay
-published), and `hnx-conformance` in an account of its own (`CONFORM`), where `hnx conform run
-events` creates and deletes its scratch streams without any way to reach the `HNX` account's
-subjects or streams. No client connects without a user.
+and its DLQ, `STREAM.MSG.GET` of the stream, `CONSUMER.INFO` and the filtered `CONSUMER.CREATE` of
+the bridge's three durables; it provisions them, with
+`homelabnext.conform.adapters.nats_jetstream.provision_streams` and `provision_consumers`, and
+reads back what the relay published), and `hnx-conformance` in an account of its own (`CONFORM`),
+where `hnx conform run events` creates and deletes its scratch streams without any way to reach
+the `HNX` account's subjects or streams. No client connects without a user.
 
-**The `events_bus` role enforces the same shape on every deployment** (filter
-`hnx_bus_subject_problems`, `ansible/plugins/filter/hnx_bus.py`). The server's own subjects are an
-allow-list, not a deny-list: anything under `$JS`, `$KV`, `$O`, `$SYS` (any subject whose first
-token starts with `$`) is refused unless it is one of `$JS.API.INFO`, `STREAM.INFO.<stream>`,
-`STREAM.MSG.GET.<stream>`, `CONSUMER.INFO|CREATE|MSG.NEXT.<stream>.<durable>` (a create may carry
-its filter), `CONSUMER.DURABLE.CREATE.<stream>.<durable>` or `$JS.ACK.<stream>.<durable>.>` (the v2
-ack form has the same shape), each on a named stream and durable; the provisioner
-(`events_bus_admin_user`) alone may also hold `STREAM.CREATE|UPDATE.<stream>`,
-`CONSUMER.DELETE.<stream>.<durable>` and `CONSUMER.NAMES.<stream>`. No user may hold a stream
-delete, purge, message delete, snapshot or restore, or anything of the key-value or object
-stores. A user's publish list may be empty only when it says `subscribe_only: true`, and is then
-rendered deny-all (`"deny": [">"]`): NATS reads an empty `allow` list as no restriction at all.
+**Only the provisioner creates consumers.** A consumer create (`CONSUMER.CREATE`, the filtered
+`CONSUMER.CREATE.<stream>.<durable>.<filter>`, `CONSUMER.DURABLE.CREATE`) takes any configuration,
+a push `deliver_subject` included, and the server delivers a push consumer's messages as itself:
+the creator's publish allow-list never applies to the deliver subject. A user who may create a
+durable can have the stream delivered to any subject, another user's `_INBOX` included (verified
+on nats-server 2.15.1: a push durable with `deliver_subject` `_INBOX.<victim>.x` delivered the
+stream to the victim's subscription). So the role's provisioner pre-creates every durable a user
+reads, a PULL durable (no `deliver_subject`, explicit acks), declared in `events_bus_durables`
+(`{stream, durable, user, filter, ack_wait, max_deliver, deliver_policy | replay_s | start_seq}`),
+and the
+user holds only that durable's `CONSUMER.INFO`, `CONSUMER.MSG.NEXT` and its acks; the clients
+(`provision=False`: the relay, the StackStorm bridge, `hnx orchestration consume`) bind to it and
+refuse a missing or push durable. The role refuses a declared durable with a `deliver_subject`,
+any consumer grant that names a durable not declared for that user, two users naming one durable,
+and its `health` hook (and every `main` run) fails when `/jsz?consumers=true` on the loopback
+monitor lists any consumer with a `deliver_subject`.
+
+**Creating durables is gated: `events_bus_provision_durables` is false by default.** A durable
+starts where its `deliver_policy` says at the moment it is created (`new`: only what is published
+after it; `all`: the whole stream; `replay_s`: that many seconds back; `start_seq`: from that
+stream sequence), so creating one on a
+stream that already holds events decides what its consumer will be handed. Turn it on once that
+is decided for the stream; until then the role validates the declared durables and creates none.
+
+**The `events_bus` role enforces the same shape on every deployment** (filters
+`hnx_bus_subject_problems` and `hnx_bus_durable_problems`, `ansible/plugins/filter/hnx_bus.py`).
+The server's own subjects are an allow-list, not a deny-list: anything under `$JS`, `$KV`, `$O`,
+`$SYS` (any subject whose first token starts with `$`) is refused unless it is one of
+`$JS.API.INFO`, `STREAM.INFO.<stream>`, `STREAM.MSG.GET.<stream>`,
+`CONSUMER.INFO|MSG.NEXT.<stream>.<durable>`, or an ack grant in exactly one of the two reply-subject
+forms, `$JS.ACK.<stream>.<durable>.*.*.*.*.*` (v1, exactly nine tokens) or
+`$JS.ACK.<domain>.<account hash>.<stream>.<durable>.*.*.*.*.>` (v2, eleven or more), each on a
+named stream and durable. (A looser `$JS.ACK.<stream>.<durable>.>` reads as the v2 domain and
+hash `<stream>.<durable>` and reaches the acks, and with them `+NXT` pulls, of every stream and
+durable.) The provisioner (`events_bus_admin_user`) alone may also hold `STREAM.CREATE.<stream>`,
+`CONSUMER.CREATE.<stream>.<durable>[.<filter>]`, `CONSUMER.DURABLE.CREATE.<stream>.<durable>` and
+`CONSUMER.DELETE.<stream>.<durable>`. **No user may hold `STREAM.UPDATE`, the provisioner
+included**, nor a stream delete, purge, message delete, snapshot or restore, a consumer listing,
+or anything of the key-value or object stores. A user's publish list may be empty only when it
+says `subscribe_only: true`, and is then rendered deny-all (`"deny": [">"]`): NATS reads an empty
+`allow` list as no restriction at all.
+
 The streams the role provisions are created with `deny_delete` and `deny_purge`, so the server
 refuses a message delete or a purge to every user whatever its grants; nats-server refuses to
-clear either flag on an existing stream ("can not cancel deny message deletes"), so they are
-final. A stream created before them keeps its own settings (the role never changes an existing
-stream); the operator adds them in place, messages kept, with one `STREAM.UPDATE` of the stream's
-current configuration plus both flags (`nats stream edit`, as the provisioner with a temporary
-`STREAM.UPDATE.<stream>` grant), after any purge the stream still needs, since none is possible
-after. (They do not stop `STREAM.DELETE` of the whole stream; that call the role grants no user,
-the provisioner included.)
+clear either flag on an existing stream ("can not cancel deny message deletes"). **They do not
+make the messages final on their own: `STREAM.UPDATE` can still delete messages** by shrinking the
+stream's limits (`max_msgs`, `max_bytes`, `max_age`, `max_msgs_per_subject`: the server discards
+the oldest to fit) or by dropping subjects, deny flags or not. The evidence a stream holds is
+final only while nobody holds `STREAM.UPDATE`, which is why the role grants it to no one. (Nor do
+the flags stop `STREAM.DELETE` of the whole stream; that call too the role grants no user.)
+
+A stream created before the flags keeps its own settings (the role never changes an existing
+stream). Adding them in place is a **break-glass step**, done by hand and undone in the same
+sitting:
+
+1. after any purge the stream still needs (none is possible after), create a temporary bus
+   credential that holds `$JS.API.STREAM.INFO.<stream>` and `$JS.API.STREAM.UPDATE.<stream>` (and
+   `_DLQ`), kept OUTSIDE the inventory (a one-off user in a scratch copy of the server
+   configuration, or the provisioner's grant added for this run only, never committed);
+2. `STREAM.UPDATE` each stream with its current configuration plus `deny_delete: true` and
+   `deny_purge: true` (`nats stream edit`; the messages are kept) and check `STREAM.INFO` shows
+   both flags and the same message count;
+3. remove the grant (or the temporary user), re-run the role, and `grep -c UPDATE
+   /etc/hnx-events/nats.conf`: it must print 0. Until it does, the evidence is not final.
 
 ### Agents: the MCP tools
 

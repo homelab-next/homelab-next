@@ -168,9 +168,10 @@ argument_specs:
       broker_config_dir: *confdir
       broker_backup_dir: *backupdir
   restore:
-    short_description: Restore the state and the data root from broker_restore_source (state/ and agents/) with the units stopped, then start them again (data only; configuration and units untouched). A merge, never a delete; onto an empty state directory it re-arms every approval consumed after the backup (docs/broker.md "Backup and restore").
+    short_description: Restore the state and the data root from broker_restore_source (state/ and agents/) with the units stopped (each whose unit exists, whatever broker_start says), then start them again when broker_start is true (data only; configuration and units untouched). A merge, never a delete; onto an empty state directory it re-arms every approval consumed after the backup (docs/broker.md "Backup and restore").
     options:
       broker_start: *start
+      broker_systemd_dir: *units
       broker_state_root: *stateroot
       broker_data_root: *data
       broker_user: *user

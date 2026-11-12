@@ -58,18 +58,22 @@
       the standing stream (upper-case) and its subject prefix, and a positive duplicate window
   when: broker_relay | bool
 
-# A loopback endpoint reaches the bus only when the bus runs on this host: the registry's row for
-# it must name this host (its inventory name or the short form), or the relay would publish to
-# whatever listens on that port here while the registry says the bus is elsewhere.
-- name: Validate that a loopback bus is this host's own
+# A loopback endpoint reaches the bus only when the bus runs on this host, on the registry's port:
+# the registry's row for it must name this host (compared in short form on both sides, so an
+# FQDN row matches a short inventory name and the other way round) and the endpoint's port must
+# be the row's, or the relay would publish to whatever listens on that port here while the
+# registry says the bus is elsewhere.
+- name: Validate that a loopback bus is this host's own, on the registry's port
   ansible.builtin.assert:
     that:
-      - lookup('hnx_registry', broker_relay_events_id, field='host') in [inventory_hostname, inventory_hostname_short]
+      - (lookup('hnx_registry', broker_relay_events_id, field='host') | split('.') | first) == (inventory_hostname | split('.') | first)
+      - (broker_relay_events_endpoint | regex_replace('^.*:([0-9]+)$', '\\1') | int) == (lookup('hnx_registry', broker_relay_events_id, field='port') | int)
     fail_msg: >-
       broker: the relay's endpoint {{ broker_relay_events_endpoint }} is loopback, but the registry
-      puts {{ broker_relay_events_id }} on {{ lookup('hnx_registry', broker_relay_events_id, field='host') }},
-      not on {{ inventory_hostname }}: run the relay beside the bus, or give the bus a TLS listener
-      and the relay a tls:// endpoint
+      puts {{ broker_relay_events_id }} on {{ lookup('hnx_registry', broker_relay_events_id, field='host') }}
+      port {{ lookup('hnx_registry', broker_relay_events_id, field='port') }}: it must be this host
+      ({{ inventory_hostname }}) and the endpoint's port; run the relay beside the bus, or give the
+      bus a TLS listener and the relay a tls:// endpoint
   when: broker_relay | bool and broker_relay_events_endpoint is match('^nats://')
 
 # Handlers run as the broker's own uid today (docs/broker.md "Handlers and the broker's uid"): a

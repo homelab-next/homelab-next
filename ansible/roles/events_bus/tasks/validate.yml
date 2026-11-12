@@ -68,3 +68,21 @@
       events_bus: distinct user names; streams named [A-Z0-9_] with a lower-case subject prefix
       and a positive max_bytes, provisioned by one of the users (events_bus_admin_user) whose
       password is a secret: reference
+
+# Only the provisioner creates a consumer: a create takes a push deliver_subject too, which the
+# server delivers as itself to any subject (another user's _INBOX included). Every durable a user
+# reads is declared here, a pull durable owned by that one user, and its grants name it alone.
+- name: Validate the durables and who holds each
+  ansible.builtin.assert:
+    that:
+      - events_bus_durables is sequence and events_bus_durables is not string
+      - events_bus_provision_durables is boolean
+      - >-
+        events_bus_durables | hnx_bus_durable_problems(events_bus_users, events_bus_admin_user,
+        events_bus_streams, events_bus_provision_durables) | length == 0
+      - not (events_bus_provision_durables and events_bus_durables | length > 0) or events_bus_admin_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+    fail_msg: >-
+      events_bus: {{ (events_bus_durables | hnx_bus_durable_problems(events_bus_users,
+      events_bus_admin_user, events_bus_streams, events_bus_provision_durables | bool)) | join('; ')
+      or 'events_bus_durables is a list, events_bus_provision_durables a boolean, and provisioning
+      needs events_bus_admin_password_ref' }}

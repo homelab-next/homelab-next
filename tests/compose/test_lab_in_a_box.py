@@ -1781,8 +1781,10 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
         for other in hnx:
             if other != name:
                 assert not nats_allowed(user, "subscribe", f"_INBOX.{other}.x.y"), (name, other)
-    # the bridge reads its own durables only, and creates no stream
+    # the bridge reads its own durables only, and creates no stream and no consumer: a consumer
+    # create takes a push deliver_subject, which the server delivers to any subject
     bridge = hnx["hnx-st2-bridge"]
+    admin = hnx["hnx-lab-admin"]
     bridge_json = json.loads((ROOT / "workflows" / "stackstorm" / "bridge.json").read_text())
     prefix = e2e.LAB_EVENTS_PREFIX
     # the bus-acl step reads and acks through the bridge's own durable on decision.returned
@@ -1792,11 +1794,15 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
         d = sub["durable"]
         for what in ("INFO", "MSG.NEXT"):
             assert nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.{what}.{stream}.{d}")
-        # only the filtered create (nats 2.9+): the server holds the request to that filter
         create = f"$JS.API.CONSUMER.CREATE.{stream}.{d}"
-        assert nats_allowed(bridge, "publish", f"{create}.{prefix}.{sub['subject']}")
-        assert not nats_allowed(bridge, "publish", create)  # any filter, any shape
-        assert not nats_allowed(bridge, "publish", f"{create}.{prefix}.homelabnext.other")
+        for user, may in ((bridge, False), (admin, True)):
+            # the provisioner pre-creates it through the filtered create (nats 2.9+) alone
+            assert nats_allowed(user, "publish", f"{create}.{prefix}.{sub['subject']}") is may
+            assert not nats_allowed(user, "publish", create)  # any filter, any shape
+            assert not nats_allowed(user, "publish", f"{create}.{prefix}.homelabnext.other")
+            assert not nats_allowed(
+                user, "publish", f"$JS.API.CONSUMER.DURABLE.CREATE.{stream}.{d}"
+            )
         assert nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.{d}.1.2.3.4.5")
     assert not nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.other.1.2.3.4.5")
     assert not nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.CREATE.{stream}.other")

@@ -27,6 +27,17 @@ events_bus_max_file_store: 1073741824
 events_bus_streams: []
 events_bus_admin_user: ""
 events_bus_admin_password_ref: ""
+# The durables clients bind to: [{stream, durable, user, filter, ack_wait, max_deliver,
+# deliver_policy | replay_s | start_seq}], each a PULL durable (no deliver_subject) owned by one user, who is
+# granted its CONSUMER.INFO, CONSUMER.MSG.NEXT and acks and nothing that creates a consumer: a
+# consumer create takes a push deliver_subject too, which the server delivers as itself to any
+# subject, so only events_bus_admin_user creates them. Validated always; created only when
+# events_bus_provision_durables is true.
+events_bus_durables: []
+# Off by default: a durable's start position is fixed when it is created (deliver_policy new sees
+# only what is published after it exists), so the first creation on a stream that already holds
+# events is the operator's decision. Turn it on once that is decided (docs/broker.md).
+events_bus_provision_durables: false
 # The interpreter of a homelab-next release with the nats extra (role hnx_runtime): provisioning
 # uses the project's own adapter.
 events_bus_hnx_python: /opt/hnx/current/bin/python

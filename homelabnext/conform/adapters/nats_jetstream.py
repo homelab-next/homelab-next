@@ -38,7 +38,12 @@ How the contract maps onto JetStream:
   start of a consumer, or one recreated) is not skipped, while a long-retention stream still does
   not replay its whole history.  A literal filter is created with the 2.9+ form
   ``CONSUMER.CREATE.<stream>.<durable>.<filter>``: the server holds the request to the filter in
-  its subject, so a user granted exactly that subject can create that durable and no other shape.
+  its subject.  With ``provision=False`` the bus creates no durable either: it binds to one that
+  exists (a pull durable on that filter, with explicit acks) and refuses a missing one
+  (:class:`NotProvisioned`) or a push one.  A consumer create takes any configuration, a push
+  ``deliver_subject`` included, and the server delivers a push consumer's messages as itself,
+  whatever the creator may publish to, so creating a durable is the provisioner's step
+  (:func:`provision_consumers`, role ``events_bus``), never a client's.
 * **fetch** is one ``CONSUMER.MSG.NEXT`` pull with ``no_wait``: the server answers with what is
   deliverable now and a ``404``/``408`` status, so an empty consumer returns at once.  The attempt
   number is the delivery count from the ack reply subject, in either of its formats (ADR-15):
@@ -97,11 +102,13 @@ __all__ = [
     "JetStreamBus",
     "JetStreamConsumer",
     "NatsPyWire",
+    "NotProvisioned",
     "PublishRefused",
     "Wire",
     "WireError",
     "WireMsg",
     "make",
+    "provision_consumers",
     "provision_streams",
 ]
 
@@ -130,6 +137,13 @@ class WireError(EventsError):
 
 class PublishRefused(EventsError):
     """The message itself cannot be published (an invalid subject or message id): permanent."""
+
+    permanent = True
+
+
+class NotProvisioned(EventsError):
+    """A client opened with ``provision=False`` found no durable to bind to (or one it must not
+    use): the provisioner creates it.  A configuration error, never retried."""
 
     permanent = True
 
@@ -311,6 +325,120 @@ def provision_streams(
     return created
 
 
+def _consumer_config(
+    durable: str,
+    filt: str,
+    *,
+    ack_wait: float,
+    max_deliver: int,
+    deliver_policy: str = "new",
+    start: float | None = None,
+    start_seq: int | None = None,
+) -> dict[str, Any]:
+    """A pull durable's configuration: explicit acks, one filter, never a ``deliver_subject``."""
+    config: dict[str, Any] = {
+        "durable_name": durable,
+        "deliver_policy": deliver_policy,
+        "ack_policy": "explicit",
+        "ack_wait": int(ack_wait * _NS),
+        "max_deliver": max_deliver,
+        "filter_subject": filt,
+        "replay_policy": "instant",
+    }
+    if start_seq is not None:
+        config["deliver_policy"] = "by_start_sequence"
+        config["opt_start_seq"] = int(start_seq)
+    elif start is not None:
+        config["deliver_policy"] = "by_start_time"
+        config["opt_start_time"] = datetime.fromtimestamp(start, UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+    return config
+
+
+def _create_subject(stream: str, durable: str, filt: str) -> str:
+    create = f"CONSUMER.CREATE.{stream}.{durable}"
+    if "*" not in filt and ">" not in filt:
+        create += f".{filt}"  # the server refuses any other filter for this request
+    return create
+
+
+def _bindable(info: Mapping[str, Any], stream: str, durable: str, filt: str) -> None:
+    """Refuse an existing durable a client must not use: a push one, another filter, or acks
+    other than explicit."""
+    cfg = info.get("config", {}) or {}
+    where = f"durable {durable!r} on stream {stream!r}"
+    if cfg.get("deliver_subject"):
+        raise NotProvisioned(
+            f"{where} is a push consumer (deliver_subject set): only pull durables are used; "
+            "delete it as the provisioner and let it recreate it"
+        )
+    if cfg.get("filter_subject") != filt:
+        raise NotProvisioned(f"{where} exists on another subject; delete it to change it")
+    if cfg.get("ack_policy", "explicit") != "explicit":
+        raise NotProvisioned(f"{where} does not take explicit acks")
+
+
+def provision_consumers(
+    wire: Wire,
+    *,
+    stream: str,
+    durables: list[Mapping[str, Any]],
+    timeout: float = 5.0,
+    wall: Callable[[], float] = time.time,
+) -> list[str]:
+    """The provisioner's step for the durables clients bind to (``provision=False``): create each
+    one missing on ``stream`` as a PULL durable -- no ``deliver_subject``, explicit acks -- and
+    check an existing one is such a durable on its filter.  ``durables``: ``{durable, filter}``
+    (``filter`` the full NATS subject, prefix included) with optional ``ack_wait`` (seconds,
+    default 30), ``max_deliver`` (default 5), and where it starts: ``deliver_policy`` (``new``,
+    the default, or ``all``), ``replay_s`` (that many seconds back) or ``start_seq`` (that stream
+    sequence).  An existing durable is never changed.  Returns the names it created.
+
+    Only the provisioner may create a consumer: a create takes any configuration, a push
+    ``deliver_subject`` included, and the server delivers a push consumer as itself, so a user
+    holding the create could have the stream delivered to any subject."""
+    if not _NAME_RE.match(stream or ""):
+        raise EventsError("stream name must be 1-64 of [A-Za-z0-9_-]")
+    created = []
+    for d in durables:
+        name, filt = str(d.get("durable", "")), str(d.get("filter", ""))
+        if not _NAME_RE.match(name):
+            raise EventsError(f"durable name {name!r}: 1-64 of [A-Za-z0-9_-]")
+        _check_subject(filt, pattern=True)
+        if set(d) - {"durable", "filter", "ack_wait", "max_deliver", "deliver_policy",
+                     "replay_s", "start_seq", "stream", "user", "ack_policy"}:  # fmt: skip
+            raise EventsError(f"durable {name}: unknown settings (a pull durable takes no others)")
+        if d.get("ack_policy", "explicit") != "explicit":
+            raise EventsError(f"durable {name}: ack_policy must be explicit")
+        if d.get("deliver_policy", "new") not in ("new", "all"):
+            raise EventsError(f"durable {name}: deliver_policy must be new or all")
+        info = _api(
+            wire, f"CONSUMER.INFO.{stream}.{name}", None, timeout=timeout, missing="consumer"
+        )
+        if info is not None:
+            _bindable(info, stream, name, filt)
+            continue
+        replay = d.get("replay_s")
+        config = _consumer_config(
+            name,
+            filt,
+            ack_wait=float(d.get("ack_wait", 30.0)),
+            max_deliver=int(d.get("max_deliver", 5)),
+            deliver_policy=str(d.get("deliver_policy", "new")),
+            start=None if replay is None else wall() - float(replay),
+            start_seq=None if d.get("start_seq") is None else int(d["start_seq"]),
+        )
+        _api(
+            wire,
+            _create_subject(stream, name, filt),
+            {"stream_name": stream, "config": config, "action": "create"},
+            timeout=timeout,
+        )
+        created.append(name)
+    return created
+
+
 # --------------------------------------------------------------------------- the bus
 class JetStreamBus:
     """:class:`conformance.protocols.events.EventBus` on one JetStream stream (see module doc)."""
@@ -361,6 +489,7 @@ class JetStreamBus:
         self._generation: dict[str, int] = {}
         self._closed = False
         self._opened_at = clock()  # a durable's earlier leases were all granted before this
+        self._provision = provision  # False: bind to the stream and durables, create nothing
         base = {
             "retention": "limits",
             "storage": storage,
@@ -453,25 +582,23 @@ class JetStreamBus:
         durable = durable_name(name)
         filt = f"{self.prefix}.{subject}"
         info = self.api(f"CONSUMER.INFO.{self.stream}.{durable}", missing="consumer")
+        if info is None and not self._provision:
+            raise NotProvisioned(
+                f"durable {durable!r} does not exist on stream {self.stream!r}: this client "
+                f"creates no consumer; the provisioner creates it (role events_bus, "
+                f"events_bus_durables: a pull durable on {filt})"
+            )
         if info is None:
-            config: dict[str, Any] = {
-                "durable_name": durable,
-                "deliver_policy": "new",
-                "ack_policy": "explicit",
-                "ack_wait": int(self.ack_wait * _NS),
-                "max_deliver": max_deliver,
-                "filter_subject": filt,
-                "replay_policy": "instant",
-            }
-            if self.replay_s is not None:
-                start = datetime.fromtimestamp(self._wall() - self.replay_s, UTC)
-                config["deliver_policy"] = "by_start_time"
-                config["opt_start_time"] = start.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            create = f"CONSUMER.CREATE.{self.stream}.{durable}"
-            if "*" not in filt and ">" not in filt:
-                create += f".{filt}"  # the server refuses any other filter for this request
+            config = _consumer_config(
+                durable,
+                filt,
+                ack_wait=self.ack_wait,
+                max_deliver=max_deliver,
+                start=None if self.replay_s is None else self._wall() - self.replay_s,
+            )
             info = self.api(
-                create, {"stream_name": self.stream, "config": config, "action": "create"}
+                _create_subject(self.stream, durable, filt),
+                {"stream_name": self.stream, "config": config, "action": "create"},
             )
         else:
             have = info.get("config", {}).get("filter_subject")
@@ -479,6 +606,8 @@ class JetStreamBus:
                 raise EventsError(
                     f"consumer {name!r} exists on another subject; delete it to change it"
                 )
+            if not self._provision:
+                _bindable(info, self.stream, durable, filt)
             if int(info.get("num_ack_pending", 0)) > 0:
                 # the previous incarnation's deliveries are leased for the durable's ack_wait;
                 # let them lapse.  One this bus has not opened yet was leased before the bus
@@ -838,17 +967,18 @@ def make(
     """A bus on the ``events`` endpoint.  ``scratch`` (the conformance default) gives every
     subject its own stream and subject prefix, deleted on ``close()``, so checks never see each
     other or an earlier run; otherwise ``stream`` and ``subject_prefix`` name a standing stream.
-    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit.
     ``user`` and ``password_secret`` (a secret name, never a value) authenticate the connection;
     the password goes only over ``tls://`` (``ca_file``: a private CA), to a loopback ``nats://``,
     or with an explicit ``allow_plaintext``.
-    ``provision=False`` creates no stream: both must exist, each with a ``max_bytes`` limit, and a
-    stream whose ``duplicate_window`` is shorter than a given ``duplicate_window`` is refused
-    (a stream this bus provisions gets ``duplicate_window``, by default one hour).
+    ``provision=False`` creates no stream and no durable: both streams must exist, each with a
+    ``max_bytes`` limit, a stream whose ``duplicate_window`` is shorter than a given
+    ``duplicate_window`` is refused (a stream this bus provisions gets ``duplicate_window``, by
+    default one hour), and :meth:`JetStreamBus.consumer` binds to a pull durable the provisioner
+    created (:func:`provision_consumers`), refusing a missing one (:class:`NotProvisioned`).
     A ``user``'s replies arrive on ``inbox_prefix``, by default ``_INBOX.<user>``, so the server
     can grant each user its own inbox instead of ``_INBOX.>`` (where one could read another's).
-    ``replay_s``: a durable this bus creates starts that many seconds back (default: only what is
-    published after it exists)."""
+    ``replay_s``: a durable this bus creates (``provision=True`` only) starts that many seconds
+    back (default: only what is published after it exists)."""
     password = None
     if user is not None or password_secret is not None:
         if not user or not isinstance(password_secret, str) or not password_secret:

@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Data only (role interface section 2): the configuration and the units are main's and are left as
-# they are. The units are stopped for the copy (a live broker would write beside it) and started
-# again after (broker_start: false leaves them alone, as main does), and every ownership and mode
+# they are. Every unit of the two that exists is stopped for the copy, whatever broker_start says
+# (a live broker would write beside it; broker_start: false means main never started them, not
+# that nothing else did), and started again after only when broker_start is true, as main
+# does; every ownership and mode
 # main sets on the state is put back: the copy gives what it writes the broker's user and group
 # and the backup's modes, the state directory included, and the relay can only reach outbox/
 # through that directory while it is the relay's group, 0710.
@@ -12,12 +14,18 @@
 # unconsumed again and a run-once action can run a second time (docs/broker.md "Backup and
 # restore").
 - block:
-    - name: Stop the relay and the broker
+    - name: Look for the relay's and the broker's units
+      ansible.builtin.stat:
+        path: "{{ broker_systemd_dir }}/{{ item }}"
+      loop: [hnx-broker-relay.service, hnx-broker.service]
+      register: broker_restore_units
+    - name: Stop the relay and the broker, each whose unit exists
       ansible.builtin.systemd_service:
-        name: "{{ item }}"
+        name: "{{ item.item }}"
         state: stopped
-      loop: "{{ (['hnx-broker-relay.service'] if broker_relay | bool else []) + ['hnx-broker.service'] }}"
-      when: broker_start | bool
+      loop: "{{ broker_restore_units.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
     - name: Restore the state directory and the data root
       ansible.builtin.copy:
         src: "{{ broker_restore_source }}/{{ item.src }}/"

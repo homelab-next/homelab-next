@@ -40,6 +40,17 @@ USER = "hnx-broker"
         "$JS.API.STREAM.NAMES", "$JS.API.STREAM.INFO.*", "$JS.API.CONSUMER.INFO.LAB.*",
         "$JS.API.CONSUMER.MSG.NEXT.*.bridge-x", "$JS.API.CONSUMER.CREATE.LAB.>",
         "$JS.API.CONSUMER.CREATE.LAB", "$JS.ACK.LAB.>", "$JS.ACK.*.bridge-x.>",
+        # creating a consumer is the provisioner's: a create can push the stream to any subject
+        "$JS.API.CONSUMER.CREATE.LAB.bridge-x",
+        "$JS.API.CONSUMER.CREATE.LAB.bridge-x.lab.homelabnext.decision.returned",
+        "$JS.API.CONSUMER.CREATE.LAB.bridge-x.>", "$JS.API.CONSUMER.DURABLE.CREATE.LAB.bridge-x",
+        "$JS.API.CONSUMER.NAMES.LAB",
+        # the ack forms are exact: v1 9 tokens, v2 11 or more; `.>` after two names would read
+        # them as the v2 domain and hash and reach every stream's and durable's acks
+        "$JS.ACK.LAB.bridge-x.>", "$JS.ACK.LAB.bridge-x.*.*.*.*", "$JS.ACK.LAB.bridge-x.*.*.*.*.*.*",
+        "$JS.ACK.LAB.bridge-x.1.*.*.*.*", "$JS.ACK.LAB.bridge-x.*.*.*.*.>",
+        "$JS.ACK._.ACCOUNTHASH.LAB.bridge-x.*.*.*.*", "$JS.ACK._.ACCOUNTHASH.LAB.bridge-x.>",
+        "$JS.ACK._.ACCOUNTHASH.LAB.bridge-x.*.*.*.*.*", "$JS.ACK._.ACCOUNTHASH.*.bridge-x.*.*.*.*.>",
         "$JS.API.STREAM.LEADER.STEPDOWN.LAB", "$JS.API.STREAM.PEER.REMOVE.LAB",
         "$JS.API.ACCOUNT.PURGE.HNX", "$JS.EVENT.ADVISORY.>", "$JS.API.DIRECT.GET.LAB",
         "$KV.>", "$KV.bucket.key", "$O.>", "$O.store.C.x", "$JSC.>", "$NRG.>", "$G",
@@ -58,24 +69,24 @@ def test_refused(subject):
         "$JS.API.INFO",
         "$JS.API.STREAM.INFO.LAB", "$JS.API.STREAM.INFO.LAB_DLQ",
         "$JS.API.STREAM.MSG.GET.LAB", "$JS.API.CONSUMER.INFO.LAB.bridge-x",
-        "$JS.API.CONSUMER.CREATE.LAB.bridge-x",
-        "$JS.API.CONSUMER.CREATE.LAB.bridge-x.lab.homelabnext.decision.returned",
-        "$JS.API.CONSUMER.CREATE.LAB.bridge-x.>", "$JS.API.CONSUMER.DURABLE.CREATE.LAB.bridge-x",
         "$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x", "$JS.ACK.LAB.bridge-x.*.*.*.*.*",
-        "$JS.ACK._.ACCOUNTHASH.LAB.bridge-x.*.*.*.*.>", "$JS.ACK.LAB.bridge-x.>",
+        "$JS.ACK._.ACCOUNTHASH.LAB.bridge-x.*.*.*.*.>",
     ],
 )  # fmt: skip
 def test_allowed(subject):
     assert bus.hnx_bus_subject_problems([subject], USER) == []
 
 
-ADMIN_ONLY = ("$JS.API.STREAM.CREATE.LAB", "$JS.API.STREAM.UPDATE.LAB_DLQ",
-              "$JS.API.CONSUMER.DELETE.LAB.e2e-scratch", "$JS.API.CONSUMER.NAMES.LAB")  # fmt: skip
+ADMIN_ONLY = ("$JS.API.STREAM.CREATE.LAB", "$JS.API.CONSUMER.CREATE.LAB.bridge-x",
+              "$JS.API.CONSUMER.CREATE.LAB.bridge-x.lab.homelabnext.decision.returned",
+              "$JS.API.CONSUMER.DURABLE.CREATE.LAB.bridge-x",
+              "$JS.API.CONSUMER.DELETE.LAB.e2e-scratch")  # fmt: skip
 
 
 @pytest.mark.parametrize("subject", ADMIN_ONLY)
-def test_the_provisioner_alone_creates_updates_and_deletes_consumers(subject):
-    assert bus.hnx_bus_subject_problems([subject], USER)
+def test_the_provisioner_alone_creates_streams_and_creates_and_deletes_consumers(subject):
+    got = bus.hnx_bus_subject_problems([subject], USER)
+    assert got and "the provisioner's call alone" in got[0], got
     assert bus.hnx_bus_subject_problems([subject], "hnx-events-admin", admin=True) == []
 
 
@@ -83,6 +94,9 @@ def test_the_provisioner_alone_creates_updates_and_deletes_consumers(subject):
     "subject",
     ["$JS.API.STREAM.DELETE.LAB", "$JS.API.STREAM.PURGE.LAB", "$JS.API.STREAM.MSG.DELETE.LAB",
      "$JS.API.STREAM.CREATE.*", "$JS.API.CONSUMER.DELETE.LAB.*", "$JS.API.STREAM.RESTORE.LAB",
+     # UPDATE deletes messages by shrinking limits or subjects, deny flags or not
+     "$JS.API.STREAM.UPDATE.LAB", "$JS.API.STREAM.UPDATE.LAB_DLQ", "$JS.API.CONSUMER.NAMES.LAB",
+     "$JS.API.CONSUMER.CREATE.*.bridge-x", "$JS.API.CONSUMER.CREATE.LAB.*",
      "$KV.>", "$JS.API.>"],
 )  # fmt: skip
 def test_the_provisioner_still_cannot_destroy(subject):
@@ -105,15 +119,19 @@ REFUSED = [
     "$JS.API.CONSUMER.CREATE.S", "$JS.API.CONSUMER.CREATE.Q",
     "$JS.API.CONSUMER.PAUSE.S.D", "$JS.API.CONSUMER.UNPIN.S.D", "$JS.API.CONSUMER.LIST.S",
     "$JS.API.STREAM.LEADER.STEPDOWN.S", "$JS.API.STREAM.PEER.REMOVE.S",
-    "$JS.API.CONSUMER.LEADER.STEPDOWN.S.D",
+    "$JS.API.CONSUMER.LEADER.STEPDOWN.S.D", "$JS.API.CONSUMER.NAMES.S",
+    # acks of a durable no pattern may name (Q), in both forms: a loose ack grant reaches them
+    "$JS.ACK._.H.Q.Q.1.2.3.4.5.6", "$JS.ACK.Q.Q.1.2.3.4.5",
 ] + [
-    f"$JS.API.STREAM.{verb}.{s}" for verb in ("DELETE", "PURGE", "SNAPSHOT", "RESTORE")
+    f"$JS.API.STREAM.{verb}.{s}" for verb in ("DELETE", "PURGE", "SNAPSHOT", "RESTORE", "UPDATE")
     for s in ("S", "Q")
 ] + [f"$JS.API.STREAM.MSG.DELETE.{s}" for s in ("S", "Q")]  # fmt: skip
-ADMIN = [
-    f"$JS.API.STREAM.{verb}.{s}" for verb in ("CREATE", "UPDATE") for s in ("S", "Q")
-] + ["$JS.API.CONSUMER.DELETE.S.D", "$JS.API.CONSUMER.DELETE.Q.Q",
-     "$JS.API.CONSUMER.NAMES.S"]  # fmt: skip
+ADMIN = [f"$JS.API.STREAM.CREATE.{s}" for s in ("S", "Q")] + [
+    "$JS.API.CONSUMER.DELETE.S.D", "$JS.API.CONSUMER.DELETE.Q.Q",
+    "$JS.API.CONSUMER.CREATE.S.D", "$JS.API.CONSUMER.CREATE.Q.Q",
+    "$JS.API.CONSUMER.CREATE.S.D.lab.x", "$JS.API.CONSUMER.DURABLE.CREATE.S.D",
+    "$JS.API.CONSUMER.DURABLE.CREATE.Q.Q",
+]  # fmt: skip
 #: every literal token a refused call or an allowed form names, a user's own, and stand-ins; a
 #: literal outside this set matches exactly what "other" matches
 ALPHABET = [
@@ -185,14 +203,86 @@ def test_every_short_pattern_is_refused_or_reaches_no_refused_call():
 
 
 def test_the_allowed_forms_reach_their_own_calls():
-    """And the other way: the forms the filter allows are exactly the calls the clients make
-    (the adapter's stream lookups, a durable's create/info/next and acks in both ack formats)."""
-    allowed = [
+    """And the other way: the grants the filter allows reach exactly the calls the clients make
+    (the adapter's stream lookups, a durable's info and next, its acks in both reply-subject
+    forms; the provisioner's creates), checked with the NATS matcher."""
+    user = [
         "$JS.API.STREAM.INFO.S", "$JS.API.STREAM.MSG.GET.S", "$JS.API.CONSUMER.INFO.S.D",
-        "$JS.API.CONSUMER.CREATE.S.D.lab.homelabnext.decision.returned",
-        "$JS.API.CONSUMER.MSG.NEXT.S.D", "$JS.ACK.S.D.1.2.3.4.5", "$JS.ACK._.HASH.S.D.1.2.3.4.5.6",
+        "$JS.API.CONSUMER.MSG.NEXT.S.D", "$JS.ACK.S.D.*.*.*.*.*", "$JS.ACK._.HASH.S.D.*.*.*.*.>",
     ]  # fmt: skip
-    assert bus.hnx_bus_subject_problems(allowed, USER) == []
+    admin = ["$JS.API.CONSUMER.CREATE.S.D.lab.homelabnext.decision.returned",
+             "$JS.API.STREAM.CREATE.S"]  # fmt: skip
+    assert bus.hnx_bus_subject_problems(user, USER) == []
+    assert bus.hnx_bus_subject_problems(admin + user, "hnx-events-admin", admin=True) == []
+    calls = {
+        "$JS.API.STREAM.INFO.S": True, "$JS.API.CONSUMER.MSG.NEXT.S.D": True,
+        "$JS.ACK.S.D.1.2.3.4.5": True, "$JS.ACK._.HASH.S.D.1.2.3.4.5.6": True,
+        "$JS.ACK._.HASH.S.D.1.2.3.4.5.6.7": True,  # a later v2 may append tokens
+        "$JS.ACK.S.Q.1.2.3.4.5": False, "$JS.ACK._.HASH.Q.D.1.2.3.4.5.6": False,
+        "$JS.ACK.S.D.1.2.3.4": False, "$JS.ACK._.HASH.S.D.1.2.3.4": False,
+    }  # fmt: skip
+    for call, reached in calls.items():
+        assert any(subject_matches(g, call) for g in user) is reached, call
+
+
+def test_durables_are_declared_once_for_one_user_and_granted_to_it_alone():
+    durable = {"stream": "LAB", "durable": "bridge-x", "user": "hnx-bridge",
+               "filter": "lab.homelabnext.decision.returned"}  # fmt: skip
+    grants = ["$JS.API.CONSUMER.INFO.LAB.bridge-x", "$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x",
+              "$JS.ACK.LAB.bridge-x.*.*.*.*.*", "$JS.ACK._.H.LAB.bridge-x.*.*.*.*.>"]  # fmt: skip
+    users = [{"user": "hnx-bridge", "publish": grants},
+             {"user": "hnx-admin", "publish": bus.hnx_bus_durable_create_subjects(durable)},
+             {"user": "hnx-other", "publish": ["lab.x"]}]  # fmt: skip
+    streams = [{"name": "LAB", "subject_prefix": "lab"}]
+
+    def problems(ds=(durable,), us=users, provision=True):
+        return bus.hnx_bus_durable_problems(list(ds), us, "hnx-admin", streams, provision)
+
+    assert problems() == []
+    assert problems(ds=[dict(durable, start_seq=4)]) == []
+    assert bus.hnx_bus_durable_create_subjects(durable) == [
+        "$JS.API.CONSUMER.INFO.LAB.bridge-x",
+        "$JS.API.CONSUMER.CREATE.LAB.bridge-x.lab.homelabnext.decision.returned",
+    ]
+    # a second user naming the same durable, by any of its calls
+    for g in grants:
+        thief = [*users[:2], {"user": "hnx-other", "publish": [g]}]
+        got = problems(us=thief)
+        assert any("one user each" in p for p in got) and any("hnx-other" in p for p in got), g
+    # a grant on a durable nobody declared, or declared for someone else
+    stray = [*users[:2], {"user": "hnx-other", "publish": ["$JS.API.CONSUMER.MSG.NEXT.LAB.y"]}]
+    assert any("not a durable declared" in p for p in problems(us=stray))
+    assert any(
+        "not a durable declared" in p for p in problems(ds=[dict(durable, user="hnx-other")])
+    )
+    # the declaration itself
+    for bad in (
+        dict(durable, deliver_subject="_INBOX.hnx-other.x"),  # a push durable
+        dict(durable, ack_policy="none"), dict(durable, max_deliver=0), dict(durable, ack_wait=-1),
+        dict(durable, deliver_policy="last"), dict(durable, replay_s=60, deliver_policy="all"),
+        dict(durable, start_seq=0), dict(durable, start_seq=4, replay_s=60),
+        dict(durable, user="hnx-admin"), dict(durable, user="nobody"),
+        dict(durable, filter="other.homelabnext.x"), dict(durable, filter=">"),
+        dict(durable, durable="a.b"), {k: v for k, v in durable.items() if k != "filter"},
+    ):  # fmt: skip
+        assert problems(ds=[bad]), bad
+    assert any("declared twice" in p for p in problems(ds=[durable, durable]))
+    # provisioning needs the provisioner's two calls; without provisioning they are not required
+    lacking = [users[0], {"user": "hnx-admin", "publish": ["$JS.API.STREAM.CREATE.LAB"]}]
+    assert any("needs" in p for p in problems(us=lacking))
+    assert problems(us=lacking, provision=False) == []
+
+
+def test_a_push_consumer_in_jsz_is_reported():
+    def doc(*consumers):
+        return {"account_details": [{"name": "HNX", "stream_detail": [
+            {"name": "LAB", "consumer_detail": list(consumers)}]}]}  # fmt: skip
+
+    pull = {"name": "bridge-x", "config": {"durable_name": "bridge-x", "ack_policy": "explicit"}}
+    push = {"name": "evil", "config": {"durable_name": "evil", "deliver_subject": "_INBOX.v.x"}}
+    assert bus.hnx_bus_push_consumers(doc(pull)) == []
+    assert bus.hnx_bus_push_consumers(doc(pull, push)) == ["HNX/LAB/evil -> _INBOX.v.x"]
+    assert bus.hnx_bus_push_consumers({}) == [] and bus.hnx_bus_push_consumers(None) == []
 
 
 def test_the_labs_grants_are_within_the_ceiling():

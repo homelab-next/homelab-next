@@ -214,7 +214,10 @@ def test_the_scenario_passes_every_step(lab, e2e):
     assert [r["step"] for r in rows] == list(e2e.steps(s)), rows
     assert {"bus-relay", "bus-acl"} <= set(e2e.steps(s)) and "bus-relay" not in e2e.STEPS
     acl = next(r for r in rows if r["step"] == "bus-acl")["detail"]
-    assert "hnx-st2-bridge: forged decision.returned and purge refused" in acl
+    assert (
+        "hnx-st2-bridge: forged decision.returned, purge, push consumer to another inbox and stream update refused"
+        in acl
+    )
     assert all(r["ok"] for r in rows), [r for r in rows if not r["ok"]]
     # what the steps claim, checked here against the broker's own state
     vias = {r["via"] for r in svc.audit_documents()}
@@ -308,7 +311,23 @@ def test_the_acl_check_fails_on_a_bus_anyone_may_publish_to(e2e, tmp_path):
     setup.relay = _relay(e2e, state.root, shared)
     setup.relay.provision()
     setup.relay.run_once()
-    assert "forged decision.returned and purge refused" in e2e.check_bus_acl(setup, "req-1")
+    got = e2e.check_bus_acl(setup, "req-1")
+    assert (
+        "forged decision.returned, purge, push consumer to another inbox and stream update refused"
+        in got
+    )
+    # round 4: a bridge that may create a consumer could push the stream to another's inbox
+    lab_wire = setup.relay.wire_as
+
+    class CreateAllowed(_AclWire):
+        def _check(self, subject):
+            if not subject.startswith("$JS.API.CONSUMER.CREATE."):
+                super()._check(subject)
+
+    setup.relay.wire_as = lambda user: CreateAllowed(shared, user)
+    with pytest.raises(e2e.StepFailed, match=r"CONSUMER\.CREATE\."):
+        e2e.check_bus_acl(setup, "req-1")
+    setup.relay.wire_as = lab_wire
     setup.relay = _relay(e2e, state.root, shared, acl=False)
     with pytest.raises(e2e.StepFailed, match="a client without a user connected"):
         e2e.check_bus_acl(setup, "req-1")

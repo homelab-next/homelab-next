@@ -5,7 +5,9 @@
 # `hnx broker validate` with the release the broker runs, and only then copied over the live
 # handlers/ and manifest.yml. A manifest or handler that fails validation stops the play and
 # leaves the running broker's manifest, its handlers (and the broker) untouched. The staged
-# copies stay, so a re-run with nothing changed is changed=0.
+# copies stay, so a re-run with nothing changed is changed=0. A handler no longer in
+# broker_handlers is removed from staged/handlers/ before the validation and from handlers/ once
+# the validated manifest is installed.
 - name: Create the staging directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -27,6 +29,25 @@
   loop: "{{ broker_handlers }}"
   register: broker_handlers_staged
 
+# a handler dropped from broker_handlers must not stay beside the manifest that is validated, nor
+# among the live ones the broker can run
+- name: Find the staged handlers
+  ansible.builtin.find:
+    paths: "{{ broker_config_dir }}/staged/handlers"
+    file_type: any
+    hidden: true
+  register: broker_staged_found
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Remove the staged handlers no longer listed
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ broker_staged_found.files | rejectattr('path', 'in', broker_handlers | map('basename') | map('regex_replace', '^', broker_config_dir ~ '/staged/handlers/') | list) | list }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: broker_staged_pruned
+
 - name: Stage the manifest beside them
   ansible.builtin.copy:
     src: "{{ broker_manifest }}"
@@ -40,7 +61,7 @@
 # nothing new to validate; an unchanged set is validated as it stands
 - name: Note whether --check left anything unstaged
   ansible.builtin.set_fact:
-    broker_staging_pending: "{{ ansible_check_mode and (broker_manifest_staged is changed or broker_handlers_staged is changed) }}"
+    broker_staging_pending: "{{ ansible_check_mode and (broker_manifest_staged is changed or broker_handlers_staged is changed or broker_staged_pruned is changed) }}"
 
 - name: Validate the staged manifest and its handlers with the running release
   ansible.builtin.command:
@@ -70,6 +91,25 @@
     group: "{{ broker_group }}"
     mode: "0640"
   register: broker_manifest_file
+  when: not broker_staging_pending | bool
+
+- name: Find the live handlers
+  ansible.builtin.find:
+    paths: "{{ broker_config_dir }}/handlers"
+    file_type: any
+    hidden: true
+  register: broker_live_found
+  check_mode: false  # read-only: it runs in --check too
+  when: not broker_staging_pending | bool
+
+- name: Remove the live handlers no longer listed (the validated manifest is in place)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ broker_live_found.files | rejectattr('path', 'in', broker_handlers | map('basename') | map('regex_replace', '^', broker_config_dir ~ '/handlers/') | list) | list }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: broker_live_pruned
   when: not broker_staging_pending | bool
 
 - name: Report the manifest and handlers as changing (--check, new ones are not staged)

@@ -146,11 +146,10 @@ def _st2_bridge(args) -> int:
         def connect():
             return nats_jetstream.make(
                 scratch=False,
-                provision=False,  # read the stream, manage durables, nothing else
+                provision=False,  # read the stream, bind to the provisioner's durables
                 stream=args.stream,
                 subject_prefix=args.subject_prefix,
                 ack_wait=sb.ACK_WAIT_S,
-                replay_s=sb.REPLAY_S,  # a new durable forwards the last day, not only what is new
                 user=args.events_user,
                 password_secret=args.events_password_secret,
                 ca_file=args.events_ca_file,
