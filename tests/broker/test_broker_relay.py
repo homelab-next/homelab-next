@@ -406,6 +406,75 @@ def test_a_refused_default_api_call_names_the_prefix_to_pass():
         assert "api_prefix" not in nj.permission_denied(other), other
 
 
+def test_a_relay_at_the_default_api_prefix_logs_the_hint_and_holds_the_outbox(
+    tmp_path, caplog, monkeypatch
+):
+    """Round 7 (design B1): the refused ``$JS.API`` call is the connect's first stream lookup
+    (``make()``), so it reaches the relay as a CONNECT failure.  The relay logs the subject and
+    the prefix to pass (rebuilt from the subject: nothing else the error carries), keeps every
+    event in the outbox with backoff, and marks none undeliverable however long it lasts."""
+    monkeypatch.setenv("HNX_SECRET_EVENTS_BROKER", SECRET)
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    ids = emit(state, 3)
+    real = bus.wire.request
+
+    def refusing(subject, payload=b"", *, headers=None, timeout):
+        if subject.startswith("$JS.API."):  # NatsPyWire's refusal, plus a tail that must not leak
+            raise nj.WireError(f"{nj.permission_denied(subject)} [{SECRET}@bus.invalid]",
+                               permanent=True)  # fmt: skip
+        return real(subject, payload, headers=headers, timeout=timeout)
+
+    bus.wire.request = refusing
+    stats = tmp_path / "relay-stats.json"
+    r = relay(state, bus, clock, max_attempts=1, max_undeliverable_run=1, stats_file=stats)
+    caplog.set_level(logging.DEBUG, logger="homelabnext.broker.relay")
+    run_until_idle(r, clock, 10)
+    assert bus.connects == 10 and r.failures == 10  # every pass retried the connect
+    hint = (
+        "connect failed (WireError): permission denied: publish $JS.API.STREAM.INFO.HNX; "
+        "on an events_bus-managed bus pass api_prefix JS.<account>.API"
+    )
+    assert hint in caplog.text and "events stay in the outbox" in caplog.text
+    assert SECRET not in caplog.text and "bus.invalid" not in caplog.text
+    # held, not drained: nothing undeliverable, every event still pending, in order
+    assert [e["id"] for e in pending(state)] == ids
+    assert RelayStore(state.root).count("undeliverable") == 0 and not r.holding
+    doc = json.loads(stats.read_text())
+    assert doc["state"] == "warn" and doc["pending"] == 3 and doc["undeliverable"] == 0
+    assert doc["last_error"].endswith("connect: WireError") and SECRET not in stats.read_text()
+    # any other permanent refusal is logged by its class alone, as before
+    caplog.clear()
+    bus.wire.request = real
+    bus.wire.down = True
+    clock.t = r.pause_until
+    r.pass_once()
+    assert "connect failed (WireError); retrying" in caplog.text and "api_prefix" not in caplog.text
+    # once the target names the prefix (here: the refusal gone), the outbox drains in order
+    bus.wire.down = False
+    clock.t = r.pause_until
+    assert r.pass_once() == 3 and [ev["id"] for _, ev, _ in bus.stored()] == ids
+
+
+def test_only_a_refused_api_call_is_logged_with_its_subject():
+    from homelabnext.broker.relay import _refused_api_call
+
+    def err(msg, permanent=True):
+        return nj.WireError(msg, permanent=permanent)
+
+    assert _refused_api_call(err(nj.permission_denied("$JS.API.STREAM.INFO.S"))) == (
+        nj.permission_denied("$JS.API.STREAM.INFO.S")
+    )
+    for other in (
+        err(nj.permission_denied("$JS.API.STREAM.INFO.S"), permanent=False),  # an outage
+        err(nj.permission_denied("lab.homelabnext.decision.x")),  # not an API call
+        err("permission denied: publish $JS.API.STREAM.INFO.S nats://u:p@h:4222"),  # not literal
+        err("permission denied: publish $JS.API.*"),
+        err("cannot connect: permission denied: publish $JS.API.STREAM.INFO.S"),  # not the start
+        ValueError("permission denied: publish $JS.API.STREAM.INFO.S"),  # no permanent flag
+    ):
+        assert _refused_api_call(other) is None, other
+
+
 def test_relay_cli_once(tmp_path, monkeypatch, capsys):
     shared = FakeJetStreamWire()
     mod = tmp_path / "mods" / "relay_fake_bus.py"
