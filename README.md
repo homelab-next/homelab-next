@@ -98,9 +98,13 @@ seams (object store, Iceberg REST catalog with Postgres, a single-node query eng
 secrets in dev mode, notifications) plus the project's own fakes (an
 OpenAI-compatible inference server and a case system). It needs Docker with the compose plugin and
 about 2 GB of free RAM (the stack is capped well inside 4 GB); every credential in it is a
-throwaway placeholder from `compose/lab-in-a-box/.env.example`.
+throwaway placeholder from `compose/lab-in-a-box/.env.example`. `make lab-smoke` also runs the
+conformance suites, and the `events` suite needs the NATS client, so install the `core` and
+`nats` extras first (the nightly workflow installs the same two); without them that one suite
+fails as could-not-measure.
 
 ```bash
+pip install -e ".[dev,core,nats]"
 make lab-up       # build the fakes, start everything, wait until every healthcheck passes
 make lab-smoke    # up, check each service end to end, run `hnx conform` if present, tear down
 make lab-broker   # only the broker end to end: broker, hub and edge containers, the scenario, down
