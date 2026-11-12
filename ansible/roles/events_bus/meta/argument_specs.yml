@@ -75,7 +75,7 @@ argument_specs:
         default: []
       events_bus_admin_user: &admin
         type: str
-        description: "The user that provisions the streams and durables (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of the streams, CONSUMER.INFO and CONSUMER.CREATE of the durables; the only user validation lets hold STREAM.CREATE, CONSUMER.CREATE, CONSUMER.DURABLE.CREATE and CONSUMER.DELETE of a named stream and durable, and STREAM.MSG.GET, which reads any stored message; no user may hold STREAM.UPDATE); the only user in events_bus_account itself; empty: provision nothing."
+        description: "The user that provisions the streams and durables (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of the streams, CONSUMER.INFO and CONSUMER.CREATE of the durables; the only user validation lets hold STREAM.CREATE (of a declared stream or its _DLQ), CONSUMER.CREATE, CONSUMER.DURABLE.CREATE and CONSUMER.DELETE of a named stream and durable, and STREAM.MSG.GET, which reads any stored message; no user may hold STREAM.UPDATE; it may hold nothing outside its JetStream calls and its own _INBOX.<user>, and subscribe to that inbox alone); the only user in events_bus_account itself; empty: provision nothing. Its credential is the operator's: the server does not limit a STREAM.CREATE body (a republish into $JS.API can delete another stream), which the health hook detects and nothing prevents."
         default: ""
       events_bus_durables: &durables
         type: list
@@ -111,7 +111,7 @@ argument_specs:
         description: "Enable, start and restart the unit (false: write it only)."
         default: true
   health:
-    short_description: "Read-only, from the loopback monitor: fail unless the server answers /healthz with JetStream enabled, reports no push consumer in /jsz, holds every declared stream (and, with provisioning on, durable), and runs the account split (/accountz and /connz?auth=true: the bus account alone with JetStream and the provisioner, every other user in an account of its own importing from the bus account only); warn about a stream without deny_delete or deny_purge (never changed)."
+    short_description: "Read-only, from the loopback monitor: fail unless the server answers /healthz with JetStream enabled, reports no push consumer in /jsz, holds every declared stream (and, with provisioning on, durable), has no stream in the bus account with a republish, mirror, sources or subject transform (one can aim its messages at $JS.API), and runs the account split (/accountz and /connz?auth=true: the bus account alone with JetStream and the provisioner, every other user in an account of its own importing from the bus account exactly the subjects the role renders for it; a connection not yet authenticated is skipped, and /connz returning fewer connections than its total fails); warn about a stream without deny_delete or deny_purge (never changed)."
     options:
       events_bus_monitor_port: *mport
       events_bus_account: *account

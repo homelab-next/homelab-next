@@ -107,6 +107,7 @@ __all__ = [
     "Wire",
     "WireError",
     "WireMsg",
+    "check_stream_config",
     "make",
     "provision_consumers",
     "provision_streams",
@@ -297,6 +298,35 @@ def _api(
 
 #: a standing stream's messages leave only by its limits (provision_streams)
 _EVIDENCE = {"deny_delete": True, "deny_purge": True}
+#: the keys a standing stream's configuration may carry (provision_streams renders no other):
+#: never a republish, mirror, sources or subject transform, any of which can send the stream's
+#: messages to ``$JS.API.*``, where the server takes them as JetStream requests
+_STREAM_KEYS = frozenset(
+    {"name", "subjects", "duplicate_window", "max_bytes", "retention", "storage", "discard",
+     "num_replicas", "max_age", "max_msgs_per_subject", "discard_new_per_subject",
+     "deny_delete", "deny_purge"}
+)  # fmt: skip
+
+
+def check_stream_config(config: Mapping[str, Any]) -> None:
+    """Refuse a stream configuration :func:`provision_streams` would not render: a key outside
+    its own (a ``republish``, ``mirror``, ``sources`` or ``subject_transform`` above all: aimed
+    at ``$JS.API.STREAM.DELETE.<other>``, a republish deletes that stream; homelab-next #361
+    security F1), a subject outside a literal prefix's ``>`` or the dead-letter advisories, or a
+    missing deny flag.  The provisioner checks its own request before it sends it; the server
+    does not check the body against any grant."""
+    extra = sorted(set(config) - _STREAM_KEYS)
+    if extra:
+        raise EventsError(f"stream {config.get('name')!r}: refused keys {extra} (a standing stream "
+                          "is created with its limits and deny flags only)")  # fmt: skip
+    for subject in config.get("subjects") or []:
+        toks = str(subject).split(".")
+        if toks[0].startswith(("$", "_")) and not str(subject).startswith(
+            (_ADVISORY_MAX + ".", _ADVISORY_TERM + ".")
+        ):
+            raise EventsError(f"stream {config.get('name')!r}: subject {subject!r} is the server's")
+    if not all(config.get(k) is True for k in _EVIDENCE):
+        raise EventsError(f"stream {config.get('name')!r}: deny_delete and deny_purge are required")
 
 
 def provision_streams(
@@ -378,6 +408,7 @@ def provision_streams(
     created = []
     for config in configs:
         name = config["name"]
+        check_stream_config(config)
         if _api(wire, f"STREAM.INFO.{name}", None, timeout=timeout, missing="stream") is None:
             _api(wire, f"STREAM.CREATE.{name}", config, timeout=timeout)
             created.append(name)

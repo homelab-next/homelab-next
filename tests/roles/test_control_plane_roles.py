@@ -220,6 +220,19 @@ def test_events_bus_refuses_bad_inputs(tmp_path):
         # the provisioner neither pulls nor acks (it lives in the JetStream account)
         {**BRIDGE_CASE, "events_bus_users": [BUS_USERS[0], dict(PROVISIONER, publish=[
             *PROVISIONER["publish"], "$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x"]), BRIDGE_USER]},
+        # round 7: the provisioner holds its JetStream calls and its own _INBOX alone (no _R_,
+        # whose replies carry the clients' PubAcks and deliveries in the bus account; no stream
+        # subject; no subscription but its replies) and creates the declared streams alone
+        {"events_bus_users": [BUS_USERS[0], dict(BUS_USERS[1], publish=[
+            *BUS_USERS[1]["publish"], "_R_.>"])]},
+        {"events_bus_users": [BUS_USERS[0], dict(BUS_USERS[1], subscribe=[
+            "_INBOX.hnx-events-admin.>", "_R_.>"])]},
+        {"events_bus_users": [BUS_USERS[0], dict(BUS_USERS[1], publish=[
+            *BUS_USERS[1]["publish"], "lab.homelabnext.decision.x"])]},
+        {"events_bus_users": [BUS_USERS[0], dict(BUS_USERS[1], subscribe=[
+            "_INBOX.hnx-events-admin.>", "$JS.API.STREAM.INFO.LAB"])]},
+        {"events_bus_users": [BUS_USERS[0], dict(BUS_USERS[1], publish=[
+            *BUS_USERS[1]["publish"], "$JS.API.STREAM.CREATE.TESTX"])]},
         # the monitor: a name of its own (not one of the users) and a secret: reference
         {"events_bus_monitor_user": "hnx-broker", "events_bus_monitor_password_ref": "secret:events/w"},
         {"events_bus_monitor_user": "hnx-watch"},
@@ -882,7 +895,33 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
         assert hnx_bus.hnx_bus_account_problems(
             mon("/accountz"), details, users, "hnx-broker", "HNX", "hnx-watch",
             mon("/connz?auth=true"))  # fmt: skip
+        # round 7: the import subjects too, as the server reports them (local names under
+        # JS.HNX.API, the monitor's stream imports): exactly what the role renders
+        imports = hnx_bus.hnx_bus_expected_imports(users, "hnx-events-admin", "HNX", API,
+                                                   "hnx-watch")  # fmt: skip
+        assert imports["HNX-hnx-broker"] and imports["HNX-hnx-watch"], imports
+        # round 7 (design 2, security F3): a connection the server accepted that has not sent
+        # its CONNECT (a client mid-handshake, a TCP probe) is listed without a user and skipped;
+        # a /connz that returns fewer connections than its total cannot be checked, and fails
+        import socket
+
+        probe = socket.create_connection((LOOP, port), timeout=5)
+        try:
+            raw = mon("/connz?auth=true")
+            assert [c for c in raw["connections"] if not c.get("authorized_user")], raw
+            assert hnx_bus.hnx_bus_account_problems(
+                mon("/accountz"), details, users, "hnx-events-admin", "HNX", "hnx-watch", raw,
+                API) == []  # fmt: skip
+            short = mon("/connz?auth=true&limit=1")
+            assert short["total"] > len(short["connections"]) == 1, short
+            got = hnx_bus.hnx_bus_account_problems(
+                mon("/accountz"), details, users, "hnx-events-admin", "HNX", "hnx-watch", short,
+                API)  # fmt: skip
+            assert got and all("cannot see every connection" in p for p in got), got
+        finally:
+            probe.close()
         assert hnx_bus.hnx_bus_unprotected_streams(jsz, "HNX") == []
+        assert hnx_bus.hnx_bus_stream_redirects(jsz, "HNX") == []
         # and the monitor saw what a deletion leaves: the provisioner deletes a scratch durable
         made = admin.request("$JS.API.CONSUMER.CREATE.LAB.e2e-scratch", {"stream_name": "LAB",
             "config": {"durable_name": "e2e-scratch", "ack_policy": "explicit"}})  # fmt: skip
@@ -892,6 +931,39 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
     finally:
         for c in clients:
             c.close()
+        proc.terminate()
+        proc.wait(timeout=10)
+
+    # round 7: the split check's negative cases on the real server's own answers. The same
+    # configuration with the relay's account given JetStream and a STREAM.DELETE import (what a
+    # hand edit or another tool would leave): /accountz shows both, and the check names both
+    tampered = _nats_conf({"nats.conf": conf.read_text()})
+    relay_acc = tampered["accounts"]["HNX-hnx-broker"]
+    relay_acc["jetstream"] = "enabled"
+    relay_acc["imports"].append({"service": {"account": "HNX", "subject": "$JS.API.STREAM.DELETE.LAB"},
+                                 "to": f"{API}.STREAM.DELETE.LAB"})  # fmt: skip
+    tampered["accounts"]["HNX"]["exports"].append(
+        {"service": "$JS.API.STREAM.DELETE.LAB", "accounts": ["HNX-hnx-broker"]}
+    )
+    bad_conf = tmp_path / "tampered.conf"
+    bad_conf.write_text(json.dumps(tampered))
+    proc = _start(server, bad_conf, port)
+    try:
+
+        def mon2(path):
+            with urllib.request.urlopen(f"http://{LOOP}:{monitor}{path}", timeout=5) as r:
+                return json.load(r)
+
+        details = [mon2(f"/accountz?acc={name}") for name in want]
+        got = hnx_bus.hnx_bus_account_problems(mon2("/accountz"), details, users,
+                                               "hnx-events-admin", "HNX", "hnx-watch",
+                                               mon2("/connz?auth=true"), API)  # fmt: skip
+        assert got == [
+            "account HNX-hnx-broker: JetStream on; it is on in HNX alone",
+            "account HNX-hnx-broker: imports $JS.API.STREAM.DELETE.LAB from HNX as "
+            f"{API}.STREAM.DELETE.LAB, which the role does not render",
+        ], got
+    finally:
         proc.terminate()
         proc.wait(timeout=10)
 
@@ -938,6 +1010,33 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
             assert hnx_bus.hnx_bus_push_consumers(jsz) == [
                 "HNX/LAB/evil -> _INBOX.hnx-broker.stolen"
             ]
+            # round 7, security F1: a STREAM.CREATE body is not checked against any grant, and a
+            # republish into $JS.API is taken as a request: the provisioner's credential can
+            # delete a stream this way. The adapter never sends such a body (it checks its
+            # own), and the health hook names any stream that carries a redirect
+            from conformance.protocols.events import EventsError
+
+            body = {
+                "name": "TESTX",
+                "subjects": ["tx.>"],
+                "storage": "memory",
+                "republish": {"src": "tx.a", "dest": "$JS.API.STREAM.DELETE.LAB_DLQ"},
+            }
+            with pytest.raises(EventsError):
+                nj.check_stream_config(body)
+            assert "error" not in anyone.request("$JS.API.STREAM.CREATE.TESTX", body)
+            srcs = {"name": "TESTS", "storage": "memory", "sources": [{"name": "LAB"}]}
+            assert "error" not in anyone.request("$JS.API.STREAM.CREATE.TESTS", srcs)
+            with urllib.request.urlopen(jsz_url, timeout=5) as resp:
+                jsz = json.load(resp)
+            assert sorted(hnx_bus.hnx_bus_stream_redirects(jsz, "HNX")) == [
+                "TESTS: sources LAB",
+                "TESTX: republish tx.a -> $JS.API.STREAM.DELETE.LAB_DLQ",
+            ]
+            assert anyone.publish("tx.a", b"{}") == []
+            time.sleep(0.3)
+            gone = anyone.request("$JS.API.STREAM.INFO.LAB_DLQ", None)
+            assert gone["error"]["description"] == "stream not found", gone
             # and why the clients live in accounts of their own: in the stream's account, a
             # pull whose reply is STREAM.DELETE deletes the stream, deny_delete notwithstanding
             # (here the 404 of a durable with nothing to deliver is the server's "request")
@@ -955,7 +1054,8 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
         proc.wait(timeout=10)
 
 
-def test_broker_e2e_reply_attacks_change_nothing_on_the_pinned_server(tmp_path, monkeypatch):
+def test_broker_e2e_reply_attacks_change_nothing_on_the_pinned_server(tmp_path, monkeypatch,
+                                                                     caplog):  # fmt: skip
     """The broker scenario's bus-acl checks (compose/lab-in-a-box/broker_e2e.py, what a real
     deployment runs) against the role's account split on the real server: the bridge's user binds
     to the provisioner's durable, pulls and acks across its imports, and every reply-subject
@@ -1007,6 +1107,38 @@ def test_broker_e2e_reply_attacks_change_nothing_on_the_pinned_server(tmp_path, 
                     user="hnx-broker", password_secret="secret:t/broker")  # fmt: skip
         assert refused.value.permanent and "$JS.API.STREAM.INFO.LAB" in str(refused.value)
         assert "pass api_prefix JS.<account>.API" in str(refused.value), refused.value
+        # round 7 (design B1): the relay at that prefix meets the refusal at connect: it logs
+        # the subject and the prefix to pass, and holds its outbox (nothing undeliverable)
+        import logging
+
+        from homelabnext.broker.relay import BROKER_SOURCE, OutboxRelay, RelayStore
+        from homelabnext.broker.state import StateDir
+        from homelabnext.events.envelope import build_event
+
+        state = StateDir(tmp_path / "broker-state")
+        ev = build_event("homelabnext.decision.requested", BROKER_SOURCE, {
+            "decision_id": "req-0001", "spec": "broker-approval", "subject": "requests/req-0001.json",
+            "action": "service.restart", "actor": "profile:triage",
+            "request_digest": "sha256:" + "0" * 64}, dedupe_key="r7", subject="req-0001")  # fmt: skip
+        assert state.put_outbox(ev)
+
+        def connect():
+            return nj.make(scratch=False, provision=False, stream="LAB", subject_prefix="lab",
+                           user="hnx-broker", password_secret="secret:t/broker")  # fmt: skip
+
+        caplog.set_level(logging.INFO, logger="homelabnext.broker.relay")
+        held = OutboxRelay(state, connect, max_attempts=1, max_undeliverable_run=1)
+        try:
+            assert held.pass_once() == 0
+        finally:
+            held.close()
+        assert (
+            "connect failed (WireError): permission denied: publish $JS.API.STREAM.INFO.LAB; "
+            "on an events_bus-managed bus pass api_prefix JS.<account>.API"
+        ) in caplog.text
+        store = RelayStore(state.root)
+        assert [e["id"] for _, e in store.entries()] == [ev["id"]]
+        assert store.count("undeliverable") == 0 and not held.holding
     finally:
         sys.modules.pop("broker_e2e_r", None)
         proc.terminate()

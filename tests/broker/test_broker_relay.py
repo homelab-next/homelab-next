@@ -366,6 +366,40 @@ def test_a_new_stream_can_refuse_rather_than_evict():
                                  max_bytes=1 << 20, **bad)  # fmt: skip
 
 
+def test_the_provisioner_checks_its_own_stream_bodies_before_sending():
+    """Round 7 (security F1): the server does not check a STREAM.CREATE body against any grant,
+    and a republish, mirror, sources or subject transform aimed at ``$JS.API.*`` turns the
+    stream into a JetStream client.  ``provision_streams`` checks every configuration it renders
+    before it sends one; a body carrying any of them (or lacking a deny flag) is refused."""
+    sent: list[tuple[str, dict]] = []
+
+    class Spy(Wire):
+        def request(self, subject, payload=b"", *, headers=None, timeout):
+            if ".STREAM.CREATE." in subject:
+                sent.append((subject, json.loads(payload)))
+            return super().request(subject, payload, headers=headers, timeout=timeout)
+
+    nj.provision_streams(Spy(FakeJetStreamWire()), stream=STREAM, subject_prefix=PREFIX,
+                         max_bytes=1 << 20, discard="new", max_msgs_per_subject=10)  # fmt: skip
+    assert [s for s, _ in sent] == [f"$JS.API.STREAM.CREATE.{STREAM}",
+                                    f"$JS.API.STREAM.CREATE.{STREAM}_DLQ"]  # fmt: skip
+    for _, body in sent:
+        nj.check_stream_config(body)  # what it rendered passes its own check
+    good = sent[0][1]
+    for bad in (
+        {**good, "republish": {"src": f"{PREFIX}.a", "dest": "$JS.API.STREAM.DELETE.X"}},
+        {**good, "mirror": {"name": "OTHER"}},
+        {**good, "sources": [{"name": "OTHER"}]},
+        {**good, "subject_transform": {"src": f"{PREFIX}.>", "dest": "$JS.API.>"}},
+        {**good, "subjects": ["$JS.API.STREAM.DELETE.X"]},
+        {**good, "subjects": ["_R_.>"]},
+        {**good, "deny_delete": False},
+        {k: v for k, v in good.items() if k != "deny_purge"},
+    ):
+        with pytest.raises(EventsError):
+            nj.check_stream_config(bad)
+
+
 def test_a_client_account_names_its_calls_under_the_import_prefix():
     """Round 5: a client of the events bus role lives in an account of its own that imports the
     bus account's JetStream calls under ``JS.<account>.API``: with ``api_prefix`` every API call
