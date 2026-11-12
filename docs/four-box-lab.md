@@ -13,7 +13,7 @@ instead of from empty files. `tests/integration/test_four_box_lab.py` keeps it w
 
 | Machine | Role | Modelled as |
 |---|---|---|
-| `main-1` | one large hypervisor: every guest but the detonation box | `kind: host`, and a node in `guests/_nodes.yml` with `capacity`, `pools` and a `mirror` |
+| `main-1` | one large hypervisor: every guest but the detonation box | `kind: host`, and a node in `guests/_nodes.yml` with `capacity`, `pools`, a `mirror` and a `notify` |
 | `sensor-1` | network sensor (IDS) and DFIR server | `kind: host` in `services`: a management NIC, and two capture NICs with no address |
 | `detonation-1` | anything that might be malicious | `kind: host`, alone in the one-way `sandbox` zone |
 | `dns-2` | secondary DNS on a single-board computer | `kind: host` in `mgmt`, service `dns-secondary` |
@@ -83,7 +83,7 @@ Guest-to-internet traffic therefore arrives on both NICs. What neither copy show
 hnx site validate examples/four-box-lab/site.yml
 hnx guests validate examples/four-box-lab/guests --site examples/four-box-lab/site.yml
 hnx site render examples/four-box-lab/site.yml --adapter unifi --out /tmp/four-box/site
-for t in terraform-proxmox cloudinit firewall-rules inventory backup-jobs node-mirror; do
+for t in terraform-proxmox cloudinit firewall-rules inventory backup-jobs node-mirror node-notify; do
   hnx guests render examples/four-box-lab/guests --site examples/four-box-lab/site.yml \
     --target "$t" --out "/tmp/four-box/$t"
 done

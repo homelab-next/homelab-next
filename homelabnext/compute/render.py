@@ -13,6 +13,7 @@ from .gen import (
     inventory,
     libvirt,
     node_mirror,
+    node_notify,
     registry_hosts,
     runtime_labels,
     tailscale_acl,
@@ -31,6 +32,7 @@ TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
     "baseline-playbook": baseline_playbook.render,
     "tailscale-acl": tailscale_acl.render,
     "node-mirror": node_mirror.render,
+    "node-notify": node_notify.render,
     "runtime-labels": runtime_labels.render,
 }
 
