@@ -1675,6 +1675,7 @@ def lego_mirror(pki, tmp_path):
 
     srv = http.server.ThreadingHTTPServer((LOOPBACK, 0), Handler)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(pki / "cert.pem", pki / "key.pem")
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
