@@ -13,7 +13,7 @@
 #     "0": the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid
 #     "1": with --check, the installed certificate is missing, invalid or due
 #     "2": lego failed, or what it stored is not a valid certificate for the names; nothing was installed
-#     "3": the certificate was installed but the running server could not be reloaded (retried next run)
+#     "3": the certificate was installed but the server could not be reloaded, or is starting or stopping (retried next run)
 #     "100": could not measure (openssl cannot be run); nothing was checked or installed
 """Managed by Ansible (role openbao); local changes are overwritten.
 
@@ -256,12 +256,18 @@ def renew():
             return 2
         print(f"openbao-acme: installed a new certificate for {', '.join(CONF['domains'])}")
     clean = dict(os.environ)
-    active = subprocess.run([CONF["systemctl"], "is-active", "--quiet", CONF["service"]],
-                            env=clean, check=False)  # fmt: skip
-    if active.returncode != 0:
+    # ActiveState, not `is-active`, which is non-zero for "activating" too: a server still starting
+    # may have read the old pair, so only a stopped (inactive or failed) one clears what is owed.
+    show = subprocess.run([CONF["systemctl"], "show", "-p", "ActiveState", "--value", CONF["service"]],
+                          env=clean, capture_output=True, text=True, check=False)  # fmt: skip
+    state = show.stdout.strip() if show.returncode == 0 else ""
+    if state in ("inactive", "failed"):
         print(f"openbao-acme: {CONF['service']} is not running; it reads the new certificate when it starts")
         os.unlink(RELOAD_OWED)
         return 0
+    if state != "active":
+        print(f"openbao-acme: {CONF['service']} is {state or 'in an unknown state'}; the reload is retried next run")
+        return 3
     r = subprocess.run([CONF["systemctl"], "reload", CONF["service"]], env=clean, check=False)
     if r.returncode != 0:
         print(f"openbao-acme: systemctl reload {CONF['service']} failed (exit {r.returncode}); retried next run")

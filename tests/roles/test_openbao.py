@@ -1624,13 +1624,18 @@ os.unlink(crt + ".leaf")
 """
 
 # systemctl as the ACME tasks and the renewal script use it: `start` of the renewal unit runs its
-# ExecStart= with its EnvironmentFile= (as systemd would); openbao.service is active with MARK.
+# ExecStart= with its EnvironmentFile= (as systemd would); openbao.service is active with MARK.active,
+# and its ActiveState is MARK.state's content when that exists.
 FAKE_SYSTEMCTL = r"""
 import os, subprocess, sys
 a = sys.argv[1:]
 open(LOG, "a").write("systemctl " + " ".join(a) + "\n")
 if a[0] == "is-active":
     sys.exit(0 if os.path.exists(MARK + ".active") else 3)
+if a[:4] == ["show", "-p", "ActiveState", "--value"]:
+    st = MARK + ".state"  # a transitional state (activating, ...) when present
+    print(open(st).read() if os.path.exists(st) else "active" if os.path.exists(MARK + ".active") else "inactive")
+    sys.exit(0)
 if a[0] == "reload":
     sys.exit(1 if os.path.exists(MARK + ".reloadfail") else 0)
 if a[0] == "start":
@@ -1983,6 +1988,24 @@ def test_a_missing_openssl_is_its_own_error_and_starts_nothing(tmp_path, pki):
     assert "cannot check the installed certificate, so nothing was started" in r.stdout, r.stdout
     assert "exit 100: openbao-acme: cannot run openssl" in r.stdout, r.stdout
     assert not [c for c in calls(tmp_path) if c.startswith(("systemctl start", "lego "))]
+
+
+@pytest.mark.parametrize("state", ["activating", "reloading", "deactivating"])
+def test_a_server_still_starting_keeps_the_reload_owed(tmp_path, pki, state, capsys):
+    """N7: `systemctl is-active` is non-zero while the server is "activating", which used to read
+    as "not running" and clear the owed reload, though a server still starting may have read the
+    old pair. Only inactive or failed clears it; a transitional state keeps it (exit 3), and no
+    reload is sent into the transition."""
+    mod = acme_installed(tmp_path, pki)
+    (tmp_path / "openbao.state").write_text(state)
+    (tmp_path / "lego.force").write_text("")
+    (tmp_path / "calls.log").unlink(missing_ok=True)
+    assert mod.renew() == 3
+    assert f"openbao.service is {state}; the reload is retried next run" in capsys.readouterr().out
+    assert Path(mod.RELOAD_OWED).exists()
+    assert not [c for c in calls(tmp_path) if c.startswith("systemctl reload")]
+    (tmp_path / "openbao.state").write_text("failed")  # stopped: it reads the pair when it starts
+    assert mod.renew() == 0 and not Path(mod.RELOAD_OWED).exists()
 
 
 def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
