@@ -132,6 +132,24 @@ def test_chrony_refuses_bad_inputs(first):
     assert not (tmp_path / "chrony.conf").exists()
 
 
+def _first(tmp_path):
+    v = {
+        **chrony_vars(tmp_path),
+        "chrony_server_ids": [],
+        "chrony_pools": ["pool.example.internal"],
+    }
+    return {"role": "chrony", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_chrony_accepts_a_pool_alone_when_the_lab_has_no_time_server(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    conf = (tmp_path / "chrony.conf").read_text()
+    assert "pool pool.example.internal iburst" in conf
+    assert "\nserver " not in conf
+
+
 CHRONY_TRACKING = [
     ("C0000201,time-01,3,1792500000.1,-0.000012,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", True),
     ("C0000201,time-01,3,1792500000.1,1.5,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", False),

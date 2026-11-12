@@ -16,4 +16,6 @@ package_update: true
 packages:
   - "chrony"
   - "qemu-guest-agent"
+runcmd:
+  - [systemctl, start, qemu-guest-agent]
 ssh_pwauth: false

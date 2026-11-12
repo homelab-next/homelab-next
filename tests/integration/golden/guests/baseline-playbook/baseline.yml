@@ -6,6 +6,7 @@
 # ---- layer: identity
 - name: "control ssh-hardening (identity)"
   hosts: control_ssh_hardening
+  become: true
   tags: ["control_ssh_hardening", "layer_identity"]
   # verify: sshd -T shows passwordauthentication no
   roles:

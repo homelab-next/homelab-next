@@ -57,10 +57,7 @@ resource "proxmox_virtual_environment_vm" "lake_core" {
         gateway = "198.51.100.1"
       }
     }
-    user_account {
-      username = "ansible"
-      keys     = [var.ssh_keys["operator"], var.ssh_keys["automation"]]
-    }
+    user_data_file_id = var.cloudinit_user_data["lake-core"]
   }
 
   lifecycle {

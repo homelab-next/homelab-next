@@ -6,12 +6,14 @@
 # ---- layer: identity
 - name: "control remote-access (identity)"
   hosts: control_remote_access
+  become: true
   tags: ["control_remote_access", "layer_identity"]
   # verify: the guest is online in the tailnet with its zone tag
   roles:
     - role: tailscale_node
 - name: "control ssh-hardening (identity)"
   hosts: control_ssh_hardening
+  become: true
   tags: ["control_ssh_hardening", "layer_identity"]
   # verify: sshd -T shows passwordauthentication no and permitrootlogin no
   roles:
@@ -26,6 +28,7 @@
 #   roles: [<role>]
 - name: "control time-sync (host)"
   hosts: control_time_sync
+  become: true
   tags: ["control_time_sync", "layer_host"]
   # verify: the time daemon reports synchronised
   roles:
@@ -42,6 +45,7 @@
 # ---- layer: detection
 - name: "control network-sensor (detection, central)"
   hosts: cap_sensor
+  become: true
   tags: ["control_network_sensor", "layer_detection"]
   # verify: the sensor shows flows for the guest in the last hour
   # enrolls each guest that needs the control on the central product host
@@ -58,6 +62,7 @@
 #   roles: [<role>]
 - name: "control vuln-scan (detection, central)"
   hosts: cap_scanner
+  become: true
   tags: ["control_vuln_scan", "layer_detection"]
   # verify: the last completed scan of the guest is under seven days old
   # NO HOST: no guest of the model is in cap_scanner; this play is a no-op
