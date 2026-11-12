@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# One release into <install_dir>/<version>/: fetched over https, refused unless its sha256 is the
+# pinned one, unpacked (the command only), and asked for its version. Shared by main (the pin) and
+# upgrade (the target, staged beside the running one). Takes openbao_release_version and
+# openbao_release_checksums.
+- name: Create the release directory
+  ansible.builtin.file:
+    path: "{{ openbao_install_dir }}/{{ openbao_release_version }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0755"
+
+- name: Fetch the release archive, refused unless its sha256 is the pinned one
+  ansible.builtin.get_url:
+    url: "{{ openbao_release_repository }}/v{{ openbao_release_version }}/openbao_{{ openbao_release_version }}_linux_{{ openbao_arch }}.tar.gz"
+    dest: "{{ openbao_install_dir }}/{{ openbao_release_version }}/openbao_{{ openbao_release_version }}_linux_{{ openbao_arch }}.tar.gz"
+    checksum: "sha256:{{ openbao_release_checksums[openbao_arch] }}"
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0644"
+    use_proxy: true
+
+- name: Unpack the command
+  ansible.builtin.unarchive:
+    src: "{{ openbao_install_dir }}/{{ openbao_release_version }}/openbao_{{ openbao_release_version }}_linux_{{ openbao_arch }}.tar.gz"
+    dest: "{{ openbao_install_dir }}/{{ openbao_release_version }}"
+    remote_src: true
+    include: [bao, LICENSE]
+    creates: "{{ openbao_install_dir }}/{{ openbao_release_version }}/bao"
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+
+- name: Ask the unpacked command for its version
+  ansible.builtin.command:
+    argv: ["{{ openbao_install_dir }}/{{ openbao_release_version }}/bao", version]
+  register: openbao_release_found
+  changed_when: false
+
+- name: Refuse a command that is not the release asked for
+  ansible.builtin.assert:
+    that: openbao_release_found.stdout is search('^OpenBao v' ~ (openbao_release_version | regex_escape) ~ ' ')
+    fail_msg: "openbao: {{ openbao_install_dir }}/{{ openbao_release_version }}/bao reports {{ openbao_release_found.stdout | trim }}"

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The secret store in server mode on the secrets capability's host (role openbao, ADR-0042
+# decision 6). It installs and starts the server; it never initialises or unseals it. The
+# operator's procedure (initialise, unseal, KV v2 at secret/, seed, revoke the root token) is in
+# ansible/roles/openbao/README.md.
+#
+# The overlay sets openbao_api_addr, openbao_listen_address and the TLS PEMs (the key sealed) in
+# the cap_secrets group's variables. A hook instead of main:
+#   ansible-playbook openbao.yml -e openbao_hook=readiness   # uninitialised / sealed / unsealed
+#   ansible-playbook openbao.yml -e openbao_hook=health      # fails while sealed
+#   ansible-playbook openbao.yml -e openbao_hook=backup      # needs openbao_snapshot_token (README.md)
+- name: Run the secret store in server mode on the secrets capability
+  hosts: cap_secrets
+  become: true
+  tasks:
+    - name: Converge the server, or run one hook (openbao_hook)
+      ansible.builtin.include_role:
+        name: openbao
+        tasks_from: "{{ openbao_hook | default('main') }}"
+      vars:
+        openbao_logical_id: secrets

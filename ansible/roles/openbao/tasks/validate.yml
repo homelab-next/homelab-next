@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse inputs that would render a server other than the one the role promises: TLS always, a
+# real listen address, a pinned release with a checksum for every architecture it may install.
+- name: Refuse inputs the role cannot render safely
+  ansible.builtin.assert:
+    that:
+      - openbao_logical_id is match('^[a-z0-9][a-z0-9-]{0,62}\Z')
+      - openbao_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - openbao_checksums is mapping and openbao_checksums | length > 0
+      - openbao_checksums.values() | reject('match', '^[0-9a-f]{64}\Z') | list | length == 0
+      - openbao_checksums.keys() | difference(['amd64', 'arm64']) | length == 0
+      - openbao_release_repository is match('^https://[^\s?#]+[^/\s?#]\Z')
+      - openbao_api_addr is match('^https://[^/\s?#@]+\Z')
+      - openbao_cluster_url is match('^https://[^/\s?#@]+\Z')
+      - openbao_listen_address is match('^[0-9A-Fa-f.:]+\Z')
+      - openbao_listen_address not in ['0.0.0.0', '::', '[::]']
+      - openbao_port | int > 0 and openbao_port | int < 65536
+      - openbao_cluster_port | int > 0 and openbao_cluster_port | int < 65536
+      - openbao_port | int != openbao_cluster_port | int
+      - openbao_node_id is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}\Z')
+      - openbao_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and openbao_user != 'root'
+      - openbao_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and openbao_group != 'root'
+      - openbao_log_level in ['trace', 'debug', 'info', 'warn', 'error']
+      - openbao_tls_min_protocol in ['tls12', 'tls13']
+      - openbao_data_dir is match('^/[^\s"]+\Z') and openbao_data_dir not in ['/', '/var', '/var/lib', '/etc']
+      - openbao_audit_dir is match('^/[^\s"]+\Z') and openbao_audit_dir not in ['/', '/var', '/var/log', '/etc']
+      - openbao_config_dir is match('^/[^\s"]+\Z') and openbao_config_dir != '/etc'
+    fail_msg: >-
+      openbao: refused input. Needs an https api_addr and cluster_addr (no path), a concrete listen
+      address (never a wildcard), a pinned x.y.z version with a sha256 per architecture, a
+      non-root user and group, and dedicated data, audit and configuration directories.
+
+- name: Refuse a TLS input that is neither supplied nor the test-only self-signed option
+  ansible.builtin.assert:
+    that: >-
+      openbao_tls_selfsigned_for_tests | bool or
+      (openbao_tls_cert_pem is match('^\s*-----BEGIN CERTIFICATE-----')
+       and openbao_tls_ca_pem is match('^\s*-----BEGIN CERTIFICATE-----')
+       and openbao_tls_private_key_pem is match('^\s*-----BEGIN [A-Z ]*PRIVATE KEY-----'))
+    fail_msg: >-
+      openbao: TLS is mandatory. Supply openbao_tls_cert_pem, openbao_tls_private_key_pem and
+      openbao_tls_ca_pem (the internal CA's), or, for a throwaway test server only,
+      openbao_tls_selfsigned_for_tests: true.
+  no_log: true
+
+- name: Refuse supplied PEMs together with the self-signed test option
+  ansible.builtin.assert:
+    that: not (openbao_tls_selfsigned_for_tests | bool and (openbao_tls_cert_pem | length > 0 or openbao_tls_private_key_pem | length > 0))
+    fail_msg: "openbao: openbao_tls_selfsigned_for_tests generates its own certificate; drop the supplied PEMs or the option"
+  no_log: true
+
+- name: Refuse a self-signed SAN that is not a plain host name or address
+  ansible.builtin.assert:
+    that: openbao_tls_selfsigned_sans | reject('match', '^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}\Z') | list | length == 0
+    fail_msg: "openbao: openbao_tls_selfsigned_sans holds names and addresses only"

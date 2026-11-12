@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings.
+# The unit's name, and the files main writes under openbao_config_dir.
+openbao_service: openbao
+openbao_config_file: "{{ openbao_config_dir }}/openbao.hcl"
+openbao_tls_dir: "{{ openbao_config_dir }}/tls"
+openbao_tls_cert_file: "{{ openbao_tls_dir }}/server.pem"
+openbao_tls_key_file: "{{ openbao_tls_dir }}/server-key.pem"
+# The CA the server's certificate chains to: clients (and the hooks, on the host) verify with it.
+openbao_tls_ca_file: "{{ openbao_tls_dir }}/ca.pem"
+openbao_audit_file: "{{ openbao_audit_dir }}/audit.log"
+# Debian/Ubuntu machine names to the release's architecture names.
+openbao_arch_names:
+  x86_64: amd64
+  amd64: amd64
+  aarch64: arm64
+  arm64: arm64
+# sys/health answers with a status per state; asking with these codes makes every state a 200
+# and the body says which (readiness reads it; health asks without them, so only active is 200).
+openbao_health_query: "standbyok=true&perfstandbyok=true&sealedcode=200&uninitcode=200&drsecondarycode=200"
+# The listen address as it is written before a port (an IPv6 address in brackets).
+openbao_listen_address_hostport: "{{ ('[' ~ openbao_listen_address ~ ']') if ':' in openbao_listen_address else openbao_listen_address }}"
+# Who owns what the service account must read but never write (the releases, the configuration,
+# the TLS files, the snapshots): root. Tests running unprivileged override it as extra variables.
+openbao_owner: root
+openbao_owner_group: root
+# The cluster URL the configuration carries: openbao_cluster_addr, else the listen address.
+openbao_cluster_url: "{{ openbao_cluster_addr or ('https://' ~ openbao_listen_address_hostport ~ ':' ~ (openbao_cluster_port | int)) }}"

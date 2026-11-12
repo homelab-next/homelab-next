@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means initialised, unsealed and serving (active, or an unsealed standby of a cluster),
+# running the pinned release. Sealed or uninitialised fails, by name.
+- block:
+    - name: Ask the server for its health (verified against the internal CA)
+      ansible.builtin.uri:
+        url: "{{ openbao_api_addr }}/v1/sys/health"
+        ca_path: "{{ openbao_tls_ca_file }}"
+        status_code: [200, 429, 472, 473, 501, 503]
+        return_content: true
+        follow_redirects: none
+        use_proxy: false
+        timeout: "{{ openbao_health_timeout | int }}"
+      register: openbao_health
+      changed_when: false
+    - name: Fail unless it is initialised, unsealed and running the pinned release
+      ansible.builtin.assert:
+        that:
+          - openbao_health.status in [200, 429]
+          - openbao_health.json.initialized | default(false) | bool
+          - not openbao_health.json.sealed | default(true) | bool
+          - openbao_health.json.version | default('') == openbao_version
+        fail_msg: >-
+          openbao {{ openbao_logical_id }}: unhealthy:
+          {{ 'UNINITIALISED (the operator initialises it: README.md)' if not openbao_health.json.initialized | default(false)
+             else 'SEALED (the operator unseals it with the key shares)' if openbao_health.json.sealed | default(true)
+             else 'runs ' ~ openbao_health.json.version | default('?') ~ ', the pin is ' ~ openbao_version ~ ' (a restart is owed)'
+             if openbao_health.json.version | default('') != openbao_version
+             else 'HTTP ' ~ openbao_health.status }}
+        success_msg: "openbao {{ openbao_logical_id }}: unsealed, {{ 'standby' if openbao_health.json.standby | default(false) else 'active' }}, {{ openbao_health.json.version }}"
+  tags: [health]

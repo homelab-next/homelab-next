@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore a raft snapshot into the running, unsealed server. A snapshot of this same cluster is
+# restored as is; one from another cluster (a rebuilt server, the restore zone) needs
+# openbao_restore_force, and afterwards the server answers to THAT cluster's unseal keys. Restoring
+# replaces every secret written since the snapshot.
+- block:
+    - name: Refuse a restore without a token
+      ansible.builtin.assert:
+        that: openbao_snapshot_token is string and openbao_snapshot_token | length > 0
+        fail_msg: "openbao: a restore needs openbao_snapshot_token (a short-lived token allowed sys/storage/raft/snapshot)"
+      no_log: true
+    - name: Read the snapshot to restore
+      ansible.builtin.stat:
+        path: "{{ openbao_restore_source }}"
+        checksum_algorithm: sha256
+      register: openbao_restore_file
+    - name: Refuse a source that is not a non-empty file
+      ansible.builtin.assert:
+        that: openbao_restore_file.stat.exists and openbao_restore_file.stat.isreg and openbao_restore_file.stat.size > 0
+        fail_msg: "openbao: {{ openbao_restore_source }} is not a non-empty snapshot file on the host"
+    - name: Restore the snapshot
+      ansible.builtin.command:
+        argv: >-
+          {{ [openbao_bin, 'operator', 'raft', 'snapshot', 'restore']
+             + (['-force'] if openbao_restore_force | bool else [])
+             + [openbao_restore_source] }}
+      environment:
+        BAO_ADDR: "{{ openbao_api_addr }}"
+        BAO_CACERT: "{{ openbao_tls_ca_file }}"
+        BAO_TOKEN: "{{ openbao_snapshot_token }}"
+      changed_when: true
+      no_log: true
+    - name: Report what was restored
+      ansible.builtin.debug:
+        msg: "openbao {{ openbao_logical_id }}: restored {{ openbao_restore_source }} (sha256 {{ openbao_restore_file.stat.checksum }}); run the health hook"
+  tags: [restore]

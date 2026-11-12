@@ -99,6 +99,24 @@ def test_the_ci_nats_server_is_the_lab_image_version():
     )
 
 
+def test_the_server_mode_secret_store_role_installs_the_lab_image_version():
+    """The secrets role installs the release the lab-in-a-box secrets image runs, and pins its
+    checksums in its defaults and its argument spec alike (ansible/roles/openbao)."""
+    (tag,) = {t for r, t, _ in image_pins(COMPOSE.read_text()) if r == "openbao/openbao"}
+    role = ROOT / "ansible" / "roles" / "openbao"
+    defaults = yaml.safe_load((role / "defaults" / "main.yml").read_text())
+    spec = yaml.safe_load((role / "meta" / "argument_specs.yml").read_text())
+    main = spec["argument_specs"]["main"]["options"]
+    assert defaults["openbao_version"] == tag, (
+        f"compose runs openbao {tag}, the role installs {defaults['openbao_version']}: move "
+        "openbao_version and openbao_checksums (from the release's signed checksums.txt) with it"
+    )
+    assert main["openbao_version"]["default"] == defaults["openbao_version"]
+    assert main["openbao_checksums"]["default"] == defaults["openbao_checksums"]
+    assert set(defaults["openbao_checksums"]) == {"amd64", "arm64"}
+    assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in defaults["openbao_checksums"].values())
+
+
 def _image_sources() -> list[Path]:
     return [
         COMPOSE,

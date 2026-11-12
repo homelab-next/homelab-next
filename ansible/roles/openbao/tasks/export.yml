@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy is a raft snapshot as well: the format every release of this product (and the
+# product it forked from) restores. A plaintext dump of every secret is deliberately not offered;
+# moving the secrets to another store reads them by name through the secrets contract instead
+# (hnx secrets plan lists every name the lab uses).
+- name: Take a raft snapshot into the export directory
+  ansible.builtin.include_tasks:
+    file: snapshot.yml
+    apply:
+      tags: [export]
+  vars:
+    openbao_snapshot_dir: "{{ openbao_export_dir }}"
+    openbao_snapshot_name: "{{ openbao_logical_id }}.snap"
+  tags: [export]

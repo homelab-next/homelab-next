@@ -160,7 +160,9 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
 2. **Keys offline first.** Generate the operator's age identity on the workstation
    (`age-keygen`); store it in the password manager and print a paper copy. Put its public
    recipient in `.sops.yaml`. Choose the ansible-vault password the same way.
-3. **OpenBao.** Install it in server mode (raft storage, TLS from the internal CA). Initialise it:
+3. **OpenBao.** Install it in server mode (raft storage, TLS from the internal CA): the
+   [`openbao` role](../ansible/roles/openbao/README.md) and `ansible/playbooks/openbao.yml` on the
+   `cap_secrets` host, whose README has the commands for this step. Initialise it:
    the unseal key shares and the initial root token go to the password manager and to paper,
    split as you decided, never into a repository, a chat or an Actions secret. Unseal, create the
    KV v2 mount (`secret/`), write the lab's credentials under the names the registry and roles use

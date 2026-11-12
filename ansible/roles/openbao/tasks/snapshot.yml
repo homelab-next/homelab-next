@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# One raft snapshot into openbao_snapshot_dir/openbao_snapshot_name, with a manifest beside it
+# naming the release that wrote it (ADR-0042 decision 10) and its sha256. Shared by backup, export
+# and upgrade. The token is openbao_snapshot_token: a short-lived token of a principal whose policy
+# covers sys/storage/raft/snapshot only, passed in from the hnx_secret lookup, never logged.
+- name: Refuse a snapshot without a token
+  ansible.builtin.assert:
+    that: openbao_snapshot_token is string and openbao_snapshot_token | length > 0
+    fail_msg: "openbao: a snapshot needs openbao_snapshot_token (the snapshot principal's short-lived token)"
+  no_log: true
+
+- name: Refuse a snapshot name that is not a plain file name
+  ansible.builtin.assert:
+    that: openbao_snapshot_name is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.snap\Z')
+    fail_msg: "openbao: {{ openbao_snapshot_name }} is not a plain *.snap file name"
+
+- name: Ask the server which release is writing the snapshot
+  ansible.builtin.uri:
+    url: "{{ openbao_api_addr }}/v1/sys/health?{{ openbao_health_query }}"
+    ca_path: "{{ openbao_tls_ca_file }}"
+    status_code: 200
+    return_content: true
+    follow_redirects: none
+    use_proxy: false
+    timeout: "{{ openbao_health_timeout | int }}"
+  register: openbao_snapshot_writer
+
+- name: Create the snapshot directory (root's alone)
+  ansible.builtin.file:
+    path: "{{ openbao_snapshot_dir }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0700"
+
+- name: Save the raft snapshot (to a partial file first)
+  ansible.builtin.command:
+    argv:
+      - "{{ openbao_bin }}"
+      - operator
+      - raft
+      - snapshot
+      - save
+      - "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial"
+  environment:
+    BAO_ADDR: "{{ openbao_api_addr }}"
+    BAO_CACERT: "{{ openbao_tls_ca_file }}"
+    BAO_TOKEN: "{{ openbao_snapshot_token }}"
+  changed_when: true
+  no_log: true
+
+- name: Hash the snapshot
+  ansible.builtin.stat:
+    path: "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial"
+    checksum_algorithm: sha256
+  register: openbao_snapshot_file
+
+- name: Refuse an empty snapshot
+  ansible.builtin.assert:
+    that: openbao_snapshot_file.stat.exists and openbao_snapshot_file.stat.size > 0
+    fail_msg: "openbao: the snapshot at {{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial is missing or empty"
+
+- name: Put the snapshot in place
+  ansible.builtin.command:
+    argv: [mv, -f, "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial", "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}"]
+  changed_when: true
+
+- name: Write the snapshot's manifest
+  ansible.builtin.copy:
+    dest: "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.json"
+    content: >-
+      {{ {'service': openbao_logical_id, 'kind': 'raft-snapshot',
+          'file': openbao_snapshot_dir ~ '/' ~ openbao_snapshot_name,
+          'sha256': openbao_snapshot_file.stat.checksum, 'bytes': openbao_snapshot_file.stat.size,
+          'written_by': openbao_snapshot_writer.json.version | default('unknown'),
+          'restore': 'bao operator raft snapshot restore (role openbao, tasks_from: restore); the unseal keys are the ones of the cluster that wrote it'}
+         | to_nice_json }}
+    mode: "0600"

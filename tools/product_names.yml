@@ -81,3 +81,9 @@ allow:
     reason: "generated (hnx gen gateway render, ADR-0038) for the gateway examples: the upstream table of backend svc names and model ids, exactly what each example's role table and gateway spec name, counted where those live"
   - path: "tools/tests/test_product_name_lint.py"
     reason: the lint's own tests plant product names on purpose
+  - path: "ansible/roles/openbao/**"
+    reason: "the secret store's server-mode role (ADR-0042 decision 6) installs, configures and snapshots that one product, so its name, binary, configuration format and release URL are the role itself; reviewed as an exemption until provider modules ship (docs/modules.md, modules/<id>/roles/), where it moves and this entry goes"
+  - path: "ansible/playbooks/openbao.yml"
+    reason: "the playbook that runs the role above on cap_secrets names it; moves with it into the provider module"
+  - path: "tests/roles/test_openbao.py"
+    reason: "the role's own tests name the role and the product's CLI and API they fake; move with it into the provider module"

@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create the TLS directory (anyone reads the certificates; the key file is 0640)
+  ansible.builtin.file:
+    path: "{{ openbao_tls_dir }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_group }}"
+    mode: "0755"
+
+- name: Install the supplied certificate, key and CA
+  when: not openbao_tls_selfsigned_for_tests | bool
+  block:
+    - name: Install the server certificate (with its chain, leaf first)
+      ansible.builtin.copy:
+        dest: "{{ openbao_tls_cert_file }}"
+        content: "{{ openbao_tls_cert_pem | trim }}\n"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_group }}"
+        mode: "0644"
+      register: openbao_tls_cert_copy
+    - name: Install the internal CA's certificate
+      ansible.builtin.copy:
+        dest: "{{ openbao_tls_ca_file }}"
+        content: "{{ openbao_tls_ca_pem | trim }}\n"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_group }}"
+        mode: "0644"
+    - name: Install the server key (readable by the service account only)
+      ansible.builtin.copy:
+        dest: "{{ openbao_tls_key_file }}"
+        content: "{{ openbao_tls_private_key_pem | trim }}\n"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_group }}"
+        mode: "0640"
+      register: openbao_tls_key_copy
+      no_log: true
+      diff: false
+
+- name: "TEST RUNS ONLY: generate a throwaway CA and server certificate"
+  when: openbao_tls_selfsigned_for_tests | bool
+  block:
+    - name: "TEST RUNS ONLY: say so"
+      ansible.builtin.debug:
+        msg: >-
+          openbao: openbao_tls_selfsigned_for_tests is on. The CA key lives on this host beside
+          the server. Never keep a real secret in this server.
+    - name: "TEST RUNS ONLY: the names and addresses the certificate covers"
+      ansible.builtin.set_fact:
+        openbao_test_sans: >-
+          {{ ([openbao_listen_address, 'localhost',
+               openbao_api_addr | urlsplit('hostname'), openbao_cluster_url | urlsplit('hostname')]
+              + openbao_tls_selfsigned_sans) | unique }}
+    - name: "TEST RUNS ONLY: create the throwaway CA"
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:prime256v1
+          - -nodes
+          - -days
+          - "30"
+          - -subj
+          - "/CN=TEST ONLY throwaway CA (role openbao)"
+          - -addext
+          - basicConstraints=critical,CA:TRUE
+          - -addext
+          - keyUsage=critical,keyCertSign,cRLSign
+          - -keyout
+          - "{{ openbao_tls_dir }}/test-ca-key.pem"
+          - -out
+          - "{{ openbao_tls_ca_file }}"
+        creates: "{{ openbao_tls_ca_file }}"
+    - name: "TEST RUNS ONLY: issue the server certificate from it"
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:prime256v1
+          - -nodes
+          - -days
+          - "30"
+          - -subj
+          - "/CN={{ openbao_api_addr | urlsplit('hostname') }}"
+          - -CA
+          - "{{ openbao_tls_ca_file }}"
+          - -CAkey
+          - "{{ openbao_tls_dir }}/test-ca-key.pem"
+          - -addext
+          - "subjectAltName={{ openbao_test_sans | map('regex_replace', '^([0-9.]+|.*:.*)$', 'IP:\\1') | map('regex_replace', '^(?!IP:)(.+)$', 'DNS:\\1') | join(',') }}"
+          - -addext
+          - basicConstraints=critical,CA:FALSE
+          - -addext
+          - extendedKeyUsage=serverAuth
+          - -keyout
+          - "{{ openbao_tls_key_file }}"
+          - -out
+          - "{{ openbao_tls_cert_file }}"
+        creates: "{{ openbao_tls_cert_file }}"
+      register: openbao_tls_test_cert
+    - name: "TEST RUNS ONLY: keep the throwaway CA key to root"
+      ansible.builtin.file:
+        path: "{{ openbao_tls_dir }}/test-ca-key.pem"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_owner_group }}"
+        mode: "0600"
+    - name: "TEST RUNS ONLY: let the service account read the server key"
+      ansible.builtin.file:
+        path: "{{ openbao_tls_key_file }}"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_group }}"
+        mode: "0640"
+      register: openbao_tls_test_key
+    - name: "TEST RUNS ONLY: let everyone read the CA and server certificates"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_group }}"
+        mode: "0644"
+      loop: ["{{ openbao_tls_ca_file }}", "{{ openbao_tls_cert_file }}"]

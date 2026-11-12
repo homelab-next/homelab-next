@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+# Start a stopped server; never restart a running one unless openbao_allow_restart, because a
+# restart seals it and only the operator can unseal. A change that needs a restart is recorded in
+# <state_dir>/restart-owed, which readiness reports, until a restart clears it.
+- name: Reload systemd when the unit changed
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", daemon-reload]
+  when: (openbao_unit | default({})) is changed
+  changed_when: true
+
+- name: Ask whether the unit is enabled
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", is-enabled, "{{ openbao_service }}.service"]
+  register: openbao_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Enable the unit
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", enable, "{{ openbao_service }}.service"]
+  when: (openbao_enabled.stdout | trim) != 'enabled'
+  changed_when: true
+
+- name: Ask whether the server is running
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", is-active, "{{ openbao_service }}.service"]
+  register: openbao_active
+  changed_when: false
+  failed_when: false
+
+- name: Note what changed under a running server
+  ansible.builtin.set_fact:
+    openbao_running: "{{ (openbao_active.stdout | trim) == 'active' }}"
+    openbao_restart_reasons: >-
+      {{ (['release'] if (openbao_link | default({})) is changed else [])
+         + (['configuration'] if (openbao_config | default({})) is changed else [])
+         + (['unit'] if (openbao_unit | default({})) is changed else [])
+         + (['TLS certificate or key'] if ([openbao_tls_cert_copy | default({}), openbao_tls_key_copy | default({}), openbao_tls_test_cert | default({}), openbao_tls_test_key | default({})] | select('changed') | list | length > 0) else []) }}
+
+- name: Create the state directory
+  ansible.builtin.file:
+    path: "{{ openbao_state_dir }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0750"
+
+- name: Read whether an earlier run left a restart owed
+  ansible.builtin.stat:
+    path: "{{ openbao_state_dir }}/restart-owed"
+  register: openbao_owed_before
+
+- name: Decide whether a running server needs a restart
+  ansible.builtin.set_fact:
+    openbao_needs_restart: "{{ openbao_running | bool and (openbao_restart_reasons | length > 0 or openbao_owed_before.stat.exists) }}"
+
+- name: Start the server (it starts sealed, or uninitialised on first install)
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", start, "{{ openbao_service }}.service"]
+  when: not openbao_running | bool
+  changed_when: true
+
+- name: Restart the server for the change (it comes back SEALED; the operator unseals)
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", restart, "{{ openbao_service }}.service"]
+  when: openbao_needs_restart | bool and openbao_allow_restart | bool
+  changed_when: true
+
+- name: Record the restart a running server owes
+  ansible.builtin.copy:
+    dest: "{{ openbao_state_dir }}/restart-owed"
+    content: "{{ {'reasons': openbao_restart_reasons} | to_nice_json }}\n"
+    mode: "0640"
+  when: openbao_restart_reasons | length > 0 and openbao_running | bool and not openbao_allow_restart | bool
+
+- name: Say a restart is owed
+  ansible.builtin.debug:
+    msg: >-
+      openbao: the running server has not loaded a change
+      ({{ openbao_restart_reasons | join(', ') if openbao_restart_reasons else 'recorded by an earlier run' }}).
+      A restart SEALS it: restart when the operator can unseal (re-run with
+      openbao_allow_restart: true while they are there).
+  when: openbao_needs_restart | bool and not openbao_allow_restart | bool
+
+- name: Clear a recorded restart once the server started fresh
+  ansible.builtin.file:
+    path: "{{ openbao_state_dir }}/restart-owed"
+    state: absent
+  when: not openbao_running | bool or (openbao_needs_restart | bool and openbao_allow_restart | bool)
+
+- name: Wait for the listener
+  ansible.builtin.wait_for:
+    host: "{{ openbao_listen_address }}"
+    port: "{{ openbao_port | int }}"
+    timeout: 30
