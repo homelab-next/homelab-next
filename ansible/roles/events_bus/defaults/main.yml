@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # The events capability's bus (docs/events.md; the lab runs the same server in a container,
-# compose/lab-in-a-box/config/nats/nats.conf): the pinned server release, one account whose users
-# each get an allow-list and nothing else, JetStream on disk, the standing streams provisioned
-# with limits by the operator's user (never by a client). Passwords are stored as bcrypt hashes.
+# compose/lab-in-a-box/config/nats/nats.conf): the pinned server release, the bus account (the
+# streams and the operator's user) and one account per client user that imports exactly its own
+# calls from it (a reply subject is not permission-checked: homelab-next #360 round 5), every
+# user an allow-list and nothing else, JetStream on disk, the standing streams provisioned with
+# limits by the operator's user (never by a client). Passwords are stored as bcrypt hashes.
 #
 # It listens on loopback only, and validation refuses any other address: a client on another host
 # needs TLS (the adapter refuses a password over plaintext nats:// to anything but loopback), which

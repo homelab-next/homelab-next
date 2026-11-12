@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# A handler no longer in broker_handlers leaves handlers/ only after the broker restarted onto the
+# validated manifest (tasks/main.yml includes this after the restart): until then the running
+# broker serves the previous manifest, which may still name it. In --check with new files not
+# staged (broker_staging_pending), nothing is removed.
+- name: Find the live handlers
+  ansible.builtin.find:
+    paths: "{{ broker_config_dir }}/handlers"
+    file_type: any
+    hidden: true
+  register: broker_live_found
+  check_mode: false  # read-only: it runs in --check too
+  when: not broker_staging_pending | default(false) | bool
+
+- name: Remove the live handlers no longer listed (after the restart, the new manifest is loaded)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ broker_live_found.files | rejectattr('path', 'in', broker_handlers | map('basename') | map('regex_replace', '^', broker_config_dir ~ '/handlers/') | list) | list }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: broker_live_pruned
+  when: not broker_staging_pending | default(false) | bool

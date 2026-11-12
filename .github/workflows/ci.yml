@@ -191,7 +191,7 @@ jobs:
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
-          extras: test,ansible  # the events bus role's configuration, rendered for the real server
+          extras: test,ansible,nats  # the events bus role's configuration, rendered for the real server; nats-py for the broker scenario's bus checks against it
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -243,6 +243,7 @@ jobs:
           python -m pytest -q -m "not live" -rs
           tests/overlay/test_private_overlay_example.py tests/compose/test_lab_in_a_box.py
           tests/roles/test_control_plane_roles.py::test_events_bus_config_is_enforced_by_the_pinned_server
+          tests/roles/test_control_plane_roles.py::test_broker_e2e_reply_attacks_change_nothing_on_the_pinned_server
 
   # The tests that call the real nft (`nft -c` on the rendered firewall, the nftables_host role's
   # refusal of a ruleset nft rejects) and dnsmasq (`dnsmasq --test`), and the one that needs root

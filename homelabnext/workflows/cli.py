@@ -63,6 +63,12 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="allow the NATS password over nats:// to a host that is not loopback (the lab only)",
     )
+    br.add_argument(
+        "--events-api-prefix",
+        default="$JS.API",
+        help="where the bridge's account reaches JetStream: JS.<account>.API for a user of the "
+        "events bus role (its own account imports its calls; docs/broker.md, 'The bus ACL')",
+    )
     args = ap.parse_args(argv)
     try:
         if args.cmd == "st2":
@@ -155,6 +161,7 @@ def _st2_bridge(args) -> int:
                 ca_file=args.events_ca_file,
                 allow_plaintext=args.events_allow_plaintext,
                 client_name="hnx-st2-bridge",
+                api_prefix=args.events_api_prefix,
             )
 
         bus = connect()  # the first connect is checked here; later ones are the bridge's

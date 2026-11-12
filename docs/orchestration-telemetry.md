@@ -152,7 +152,24 @@ controller ── outbox ──▶ bus: homelabnext.agent.job.finished
   the bus protocol takes a positive count, and poison is always `term`-ed, so it bounds retries
   only. The consumer's NATS user needs the same pull-consumer grant shape as the
   StackStorm bridge's, on `<prefix>.homelabnext.agent.job.finished`; publishing on
-  `homelabnext.agent.job.>` stays the controller's alone.
+  `homelabnext.agent.job.>` stays the controller's alone. **`consume` creates no durable**
+  (`provision=False`): the events bus role's provisioner creates it, so declare it in
+  `events_bus_durables`, with the start and the attempt count the consumer assumes, or both are
+  lost: `replay_s: 604800` (seven days back, the CLI's `REPLAY_S`; without it the durable starts at
+  `new` and every record the controller published before it existed is never seen) and
+  `max_deliver: 5` (the `drain` default above):
+
+  ```yaml
+  events_bus_durables:
+    - {stream: HNX_BROKER, durable: hnx-orchestration-telemetry, user: hnx-orchestration,
+       filter: "<prefix>.homelabnext.agent.job.finished", ack_wait: 30, max_deliver: 5,
+       replay_s: 604800}
+  ```
+
+  A durable that does not exist is a configuration error: `consume` exits 2 and names the
+  provisioner. On the events bus role the user lives in an account of its own (homelab-next #360
+  round 5, docs/broker.md "The bus ACL"), so pass `--events-api-prefix JS.<account>.API`
+  (`JS.HNX.API` for the role's default account).
 - **Ingest** (`hnx orchestration ingest FILE|-`): the same consumer over a JSON-lines file, for a
   backfill or a replay of the outbox.
 - **Turns** (`hnx orchestration turns --turn-source ...`): for every job whose turns are not

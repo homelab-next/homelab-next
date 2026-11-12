@@ -39,6 +39,11 @@
       - >-
         (item.publish | default([]) + item.subscribe | default([]))
         | hnx_bus_subject_problems(item.user, admin=(item.user == events_bus_admin_user)) | length == 0
+      # a client lives in an account of its own (the account split): it reaches the bus only
+      # through its imports and subscribes to nothing but its own replies
+      - >-
+        item.subscribe | default([]) | hnx_bus_subscribe_problems(item.user,
+        admin=(item.user == events_bus_admin_user)) | length == 0
       # NATS reads an empty publish allow-list as NO restriction (publish anything, the
       # stream-deleting API included): a user without publish subjects must say it is
       # subscribe-only, and is then rendered deny-all
@@ -51,7 +56,8 @@
       events_bus: user {{ item.user | default('?') }}: a name, a secret: reference for its
       password, a non-empty publish allow-list (or none at all with subscribe_only: true), and
       allow-lists of plain subjects within one user's reach:
-      {{ (item.publish | default([]) + item.subscribe | default([])) | hnx_bus_subject_problems(item.user | default('?'), admin=(item.user | default('') == events_bus_admin_user)) | join('; ') }}
+      {{ (((item.publish | default([]) + item.subscribe | default([])) | hnx_bus_subject_problems(item.user | default('?'), admin=(item.user | default('') == events_bus_admin_user)))
+         + (item.subscribe | default([]) | hnx_bus_subscribe_problems(item.user | default('?'), admin=(item.user | default('') == events_bus_admin_user)))) | join('; ') }}
   loop: "{{ events_bus_users }}"
   loop_control:
     label: "{{ item.user | default('?') }}"
@@ -64,10 +70,19 @@
       - events_bus_streams | length == 0 or events_bus_admin_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
       - events_bus_streams | selectattr('name', 'match', '^[A-Z][A-Z0-9_]{0,31}\Z') | selectattr('subject_prefix', 'match', '^[a-z][a-z0-9_-]{0,31}\Z') | list | length == events_bus_streams | length
       - events_bus_streams | map(attribute='max_bytes') | map('int') | select('gt', 0) | list | length == events_bus_streams | length
+      # discard new (refuse when full, never evict) and a per-subject cap, for a stream created
+      # from now on; an existing stream is never changed
+      - events_bus_streams | rejectattr('discard', 'undefined') | rejectattr('discard', 'in', ['old', 'new']) | list | length == 0
+      - >-
+        events_bus_streams | selectattr('max_msgs_per_subject', 'defined') | list | length ==
+        events_bus_streams | selectattr('max_msgs_per_subject', 'defined') | selectattr('discard', 'defined')
+        | selectattr('discard', 'eq', 'new') | map(attribute='max_msgs_per_subject') | select('integer') | select('gt', 0) | list | length
+      - events_bus_streams | map('list') | flatten | difference(['name', 'subject_prefix', 'max_bytes', 'discard', 'max_msgs_per_subject']) | length == 0
     fail_msg: >-
       events_bus: distinct user names; streams named [A-Z0-9_] with a lower-case subject prefix
-      and a positive max_bytes, provisioned by one of the users (events_bus_admin_user) whose
-      password is a secret: reference
+      and a positive max_bytes (optional: discard old|new, and max_msgs_per_subject, a positive
+      integer, with discard new only; no other keys), provisioned by one of the users
+      (events_bus_admin_user) whose password is a secret: reference
 
 # Only the provisioner creates a consumer: a create takes a push deliver_subject too, which the
 # server delivers as itself to any subject (another user's _INBOX included). Every durable a user

@@ -114,6 +114,8 @@ __all__ = [
 
 _ADVISORY_MAX = "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES"
 _ADVISORY_TERM = "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED"
+#: the server's JetStream API subjects, as the account that holds the streams sees them
+API_PREFIX = "$JS.API"
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SETTLE = {"ack": b"+ACK", "nack": b"-NAK", "term": b"+TERM"}
 _NS = 1_000_000_000
@@ -240,11 +242,28 @@ def _noop(_how: str) -> None:
     return None
 
 
+def check_api_prefix(prefix: str) -> str:
+    """``$JS.API`` (the server's own, in the account that holds the streams) or the prefix a
+    client account imports the bus account's JetStream calls under (``JS.HNX.API``: the events
+    bus role's account split, docs/broker.md "The bus ACL"): literal tokens, no wildcard."""
+    if prefix != API_PREFIX:
+        toks = _check_subject(prefix, pattern=False) if isinstance(prefix, str) and prefix else []
+        if not toks or any(not re.fullmatch(r"[A-Za-z0-9_-]+", t) for t in toks):
+            raise EventsError(f"api_prefix {prefix!r}: $JS.API or literal tokens of [A-Za-z0-9_-]")
+    return prefix
+
+
 def _api(
-    wire: Wire, what: str, body: Mapping[str, Any] | None, *, timeout: float, missing: str = ""
+    wire: Wire,
+    what: str,
+    body: Mapping[str, Any] | None,
+    *,
+    timeout: float,
+    missing: str = "",
+    prefix: str = "$JS.API",
 ) -> Any:
     payload = b"" if body is None else json.dumps(body).encode("utf-8")
-    msg = wire.request(f"$JS.API.{what}", payload, timeout=timeout)
+    msg = wire.request(f"{prefix}.{what}", payload, timeout=timeout)
     try:
         doc = json.loads(msg.data or b"{}")
     except ValueError:
@@ -275,6 +294,8 @@ def provision_streams(
     duplicate_window: float = 86400.0,
     storage: str = "file",
     timeout: float = 5.0,
+    discard: str = "old",
+    max_msgs_per_subject: int | None = None,
 ) -> list[str]:
     """The operator's one-time step for a standing bus: create the stream (``<prefix>.>``) and
     its DLQ (the dead-letter advisories), each bounded (``max_bytes``, ``max_age``), when missing.
@@ -287,9 +308,27 @@ def provision_streams(
     leaves only by its limits (``max_bytes``, ``max_age``).  nats-server refuses to relax either
     on an existing stream (``STREAM.UPDATE``: "can not cancel deny message deletes" / "deny
     purge"), so they are final; a stream that already exists is left as it is (an operator adds
-    them in place with one ``STREAM.UPDATE``, which keeps the messages)."""
+    them in place with one ``STREAM.UPDATE``, which keeps the messages).
+
+    ``discard`` is what the stream does when a limit is reached: ``old`` (the default) evicts the
+    oldest messages, so whoever can publish enough evicts the evidence; ``new`` refuses the
+    publish instead (the relay keeps the event in its outbox and retries, and the stream fills
+    up until ``max_age`` frees room or an operator raises the limit), so nothing stored is ever
+    pushed out.  ``max_msgs_per_subject`` (with ``discard: new`` only: it sets
+    ``discard_new_per_subject``) bounds each subject on its own, so a flood on one subject is
+    refused without starving the others.  The DLQ always discards old (a refused advisory is
+    lost silently).  Both apply to a stream this creates; an existing one is never changed."""
     if not _NAME_RE.match(stream or "") or max_bytes <= 0:
         raise EventsError("a stream name and a positive max_bytes are required")
+    if discard not in ("old", "new"):
+        raise EventsError("discard must be 'old' or 'new'")
+    if max_msgs_per_subject is not None and (
+        isinstance(max_msgs_per_subject, bool)
+        or not isinstance(max_msgs_per_subject, int)
+        or max_msgs_per_subject < 1
+        or discard != "new"
+    ):
+        raise EventsError("max_msgs_per_subject is a positive int, with discard 'new' only")
     _check_subject(subject_prefix, pattern=False)
     base = {
         "retention": "limits",
@@ -299,6 +338,9 @@ def provision_streams(
         "max_age": int(max_age * _NS),
     }
     dlq = f"{stream}_DLQ"
+    limits: dict[str, Any] = {"discard": discard}
+    if max_msgs_per_subject is not None:
+        limits.update(max_msgs_per_subject=max_msgs_per_subject, discard_new_per_subject=True)
     configs = [
         {
             "name": stream,
@@ -306,6 +348,7 @@ def provision_streams(
             "duplicate_window": int(duplicate_window * _NS),
             "max_bytes": int(max_bytes),
             **base,
+            **limits,
             **_EVIDENCE,
         },
         {
@@ -460,6 +503,7 @@ class JetStreamBus:
         delete_on_close: bool = False,
         provision: bool = True,
         replay_s: float | None = None,
+        api_prefix: str = API_PREFIX,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         wall: Callable[[], float] = time.time,
@@ -474,6 +518,7 @@ class JetStreamBus:
         if replay_s is not None and replay_s <= 0:
             raise EventsError("replay_s must be positive (or None: deliver what is new)")
         self.replay_s = replay_s
+        self.api_prefix = check_api_prefix(api_prefix)
         self._wall = wall
         self._wire = wire
         self.stream = stream
@@ -521,9 +566,17 @@ class JetStreamBus:
 
     # ---------------------------------------------------------------- JetStream API
     def api(self, what: str, body: Mapping[str, Any] | None = None, *, missing: str = "") -> Any:
-        """One ``$JS.API.<what>`` request.  Returns the decoded reply, or None when it is the
-        ``missing`` kind's not-found error (``stream``, ``consumer`` or ``message``)."""
-        return _api(self._wire, what, body, timeout=self.request_timeout, missing=missing)
+        """One ``$JS.API.<what>`` request (under :attr:`api_prefix`).  Returns the decoded reply,
+        or None when it is the ``missing`` kind's not-found error (``stream``, ``consumer`` or
+        ``message``)."""
+        return _api(
+            self._wire,
+            what,
+            body,
+            timeout=self.request_timeout,
+            missing=missing,
+            prefix=self.api_prefix,
+        )
 
     def _ensure_stream(self, config: Mapping[str, Any]) -> None:
         name = config["name"]
@@ -671,7 +724,7 @@ class JetStreamConsumer:
         bus = self.bus
         req = json.dumps({"batch": int(n), "no_wait": True}).encode("utf-8")
         msgs = bus._wire.pull(
-            f"$JS.API.CONSUMER.MSG.NEXT.{bus.stream}.{self.durable}",
+            f"{bus.api_prefix}.CONSUMER.MSG.NEXT.{bus.stream}.{self.durable}",
             req,
             max_msgs=n,
             timeout=bus.fetch_timeout,
@@ -898,6 +951,20 @@ class NatsPyWire:
                 raise WireError("permission denied: publish", permanent=True) from None
             raise
 
+    def publish(self, subject: str, payload: bytes = b"", *, reply: str = "") -> bool:
+        """A plain publish with a reply subject of the caller's choosing, flushed: what any
+        client can send with any one grant (a reply subject is not checked against anyone's
+        allow-list).  Not part of :class:`Wire`: broker_e2e's reply-subject checks use it.
+        False when the server refused this user the subject itself."""
+
+        async def go() -> None:
+            await self._nc.publish(subject, payload, reply=reply)
+            await self._nc.flush(timeout=5)  # a refusal (-ERR) arrives before the PONG
+
+        self._denied.discard(subject.lower())
+        self._run(go(), 10)
+        return subject.lower() not in self._denied
+
     def pull(self, subject: str, payload: bytes, *, max_msgs: int, timeout: float) -> list[WireMsg]:
         async def go() -> list[WireMsg]:
             loop = asyncio.get_running_loop()
@@ -964,6 +1031,7 @@ def make(
     ca_file: str | None = None,
     inbox_prefix: str | None = None,
     replay_s: float | None = None,
+    api_prefix: str = API_PREFIX,
 ) -> JetStreamBus:
     """A bus on the ``events`` endpoint.  ``scratch`` (the conformance default) gives every
     subject its own stream and subject prefix, deleted on ``close()``, so checks never see each
@@ -979,7 +1047,12 @@ def make(
     A ``user``'s replies arrive on ``inbox_prefix``, by default ``_INBOX.<user>``, so the server
     can grant each user its own inbox instead of ``_INBOX.>`` (where one could read another's).
     ``replay_s``: a durable this bus creates (``provision=True`` only) starts that many seconds
-    back (default: only what is published after it exists)."""
+    back (default: only what is published after it exists).
+    ``api_prefix``: where this connection's account reaches the JetStream API.  ``$JS.API`` in
+    the account that holds the streams; a client of the events bus role lives in an account of
+    its own that imports its few calls from the bus account under ``JS.<account>.API`` (no
+    reply it sets can then reach the bus account's API: docs/broker.md, "The bus ACL")."""
+    check_api_prefix(api_prefix)
     password = None
     if user is not None or password_secret is not None:
         if not user or not isinstance(password_secret, str) or not password_secret:
@@ -1028,6 +1101,7 @@ def make(
             delete_on_close=scratch,
             provision=provision or scratch,
             replay_s=replay_s,
+            api_prefix=api_prefix,
         )
     except Exception:
         if own:

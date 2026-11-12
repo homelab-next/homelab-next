@@ -18,7 +18,7 @@ argument_specs:
       events_bus_users: &users
         type: list
         elements: dict
-        description: "The account's users: [{user, password_ref (secret:<name>), publish: [subjects], subscribe: [subjects], subscribe_only: bool}]. Every user gets exactly these allow-lists and nothing else; replies come on _INBOX.<user>. publish may be empty only for a user marked subscribe_only: true, whose publish is then deny-all (NATS reads an empty allow-list as no restriction). Subjects under $JS/$KV/$O/$SYS are refused except the named-stream JetStream calls of the hnx_bus_subject_problems filter."
+        description: "The account's users: [{user, password_ref (secret:<name>), publish: [subjects], subscribe: [subjects], subscribe_only: bool}]. Every user gets exactly these allow-lists and nothing else; replies come on _INBOX.<user>. publish may be empty only for a user marked subscribe_only: true, whose publish is then deny-all (NATS reads an empty allow-list as no restriction). Subjects under $JS/$KV/$O/$SYS are refused except the named-stream JetStream calls of the hnx_bus_subject_problems filter. Every user but events_bus_admin_user lives in an account of its own (<events_bus_account>-<user>, JetStream off) that imports exactly its publish subjects from events_bus_account as services, its $JS.API calls under JS.<events_bus_account>.API (the client's api_prefix); such a user subscribes to its own _INBOX.<user>.> only (hnx_bus_accounts, hnx_bus_subscribe_problems)."
         required: true
       events_bus_version: &version
         type: str
@@ -58,7 +58,7 @@ argument_specs:
         default: 8222
       events_bus_account: &account
         type: str
-        description: "The one account the users live in (upper-case)."
+        description: "The bus account (upper-case): it holds the streams and events_bus_admin_user; every other user lives in <account>-<user> and imports its calls from it (JetStream API under JS.<account>.API)."
         default: HNX
       events_bus_max_memory_store: &mem
         type: int
@@ -71,11 +71,11 @@ argument_specs:
       events_bus_streams: &streams
         type: list
         elements: dict
-        description: "Standing streams: [{name, subject_prefix, max_bytes}], provisioned with a DLQ by the admin user when missing."
+        description: "Standing streams: [{name, subject_prefix, max_bytes[, discard, max_msgs_per_subject]}], provisioned with a DLQ by the admin user when missing (an existing stream is never changed). discard: old (the default: a full stream evicts its oldest messages) or new (it refuses the publish: nothing stored is pushed out, the relay keeps the event and retries); max_msgs_per_subject (discard new only) caps each subject on its own."
         default: []
       events_bus_admin_user: &admin
         type: str
-        description: "The user that provisions the streams and durables (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of the streams, CONSUMER.INFO and CONSUMER.CREATE of the durables; the only user validation lets hold STREAM.CREATE, CONSUMER.CREATE, CONSUMER.DURABLE.CREATE and CONSUMER.DELETE of a named stream and durable; no user may hold STREAM.UPDATE); empty: provision nothing."
+        description: "The user that provisions the streams and durables (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of the streams, CONSUMER.INFO and CONSUMER.CREATE of the durables; the only user validation lets hold STREAM.CREATE, CONSUMER.CREATE, CONSUMER.DURABLE.CREATE and CONSUMER.DELETE of a named stream and durable, and STREAM.MSG.GET, which reads any stored message; no user may hold STREAM.UPDATE); the only user in events_bus_account itself; empty: provision nothing."
         default: ""
       events_bus_durables: &durables
         type: list

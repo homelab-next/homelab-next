@@ -1245,7 +1245,7 @@
    "iceberg": 1,
    "litellm": 17,
    "prometheus": 3,
-   "stackstorm": 7,
+   "stackstorm": 6,
    "trino": 3,
    "uptime-kuma": 2
   },

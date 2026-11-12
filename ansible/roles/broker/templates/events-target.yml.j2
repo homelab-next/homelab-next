@@ -11,6 +11,7 @@ capabilities:
       user: {{ broker_relay_events_user | to_json }}
       password_secret: {{ broker_relay_password_ref | to_json }}
       client_name: {{ broker_relay_user | to_json }}
+      api_prefix: {{ broker_relay_api_prefix | to_json }}
 {% if broker_relay_ca_file %}
       ca_file: {{ broker_relay_ca_file | to_json }}
 {% endif %}

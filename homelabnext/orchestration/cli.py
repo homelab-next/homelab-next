@@ -4,6 +4,7 @@
     hnx orchestration consume --db FILE --stream S --subject-prefix P [--durable NAME]
                               [--events-user U --events-password-secret secret:NAME]
                               [--events-ca-file F] [--events-allow-plaintext]
+                              [--events-api-prefix JS.<account>.API]
     hnx orchestration ingest --db FILE EVENTS.jsonl|-
     hnx orchestration turns --db FILE --turn-source none|MODULE:FACTORY [--gateway-url URL]
                             [--key secret:NAME] [--ca-file F] [--allow-plaintext] [--settle-s N]
@@ -146,6 +147,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow the NATS password over nats:// to a host that is not loopback (the lab only)",
     )
+    p.add_argument(
+        "--events-api-prefix",
+        default="$JS.API",
+        help="where the consumer's account reaches JetStream: JS.<account>.API for a user of the "
+        "events bus role (its own account imports its calls; docs/broker.md, 'The bus ACL')",
+    )
     p = sub.add_parser("ingest", help="store agent.job.finished events from a JSON-lines file")
     store_opts(p)
     p.add_argument("events", help="the file, or - for stdin")
@@ -284,6 +291,11 @@ def _consume(a, store: TelemetryStore) -> int:
         return 2
     try:
         counts = drain(bus, store, durable=a.durable or DURABLE)
+    except (
+        nats_jetstream.NotProvisioned
+    ) as exc:  # no durable to bind to: configuration, not a fault
+        print(f"hnx orchestration consume: {exc}", file=sys.stderr)
+        return 2
     except EventsError as exc:  # a fetch or a settle on a bus that went away mid-pass
         print(f"hnx orchestration consume: the bus failed: {exc}", file=sys.stderr)
         return 1
@@ -306,6 +318,7 @@ def _connect(nats_jetstream, a):
         ca_file=a.events_ca_file,
         allow_plaintext=a.events_allow_plaintext,
         client_name="hnx-orchestration-telemetry",
+        api_prefix=a.events_api_prefix,
     )
 
 

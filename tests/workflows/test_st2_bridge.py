@@ -676,6 +676,25 @@ def test_the_lease_outlasts_a_post(hook):
     bridge(standing(provisioned()), hook)
 
 
+def test_a_durable_that_dead_letters_before_the_bridge_would_is_warned_about(caplog):
+    """The server dead-letters at the DURABLE's max_deliver: one provisioned with the
+    provisioner's default (5) under the bridge's --max-deliver (100) loses an event after five
+    failed POSTs, so the bridge says so when it binds (its docs: declare 100)."""
+    import logging
+
+    logger = sb.log.name
+    wire = provisioned(durables=False)
+    nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(max_deliver=5))
+    with caplog.at_level(logging.WARNING, logger=logger):
+        bridge(standing(wire), lambda _ev: 202)
+    warned = [r.getMessage() for r in caplog.records if "max_deliver 5" in r.getMessage()]
+    assert len(warned) == 3 and "--max-deliver 100" in warned[0], warned
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger=logger):
+        bridge(standing(provisioned()), lambda _ev: 202)  # declared with 100: nothing to say
+    assert not [r for r in caplog.records if "max_deliver" in r.getMessage()]
+
+
 def test_reopening_several_durables_waits_out_one_lease_not_one_each():
     """A restarted bridge (a new bus) whose three durables each hold an unsettled delivery: their
     leases were all granted before the new bus existed, so it waits one lease in all."""

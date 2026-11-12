@@ -47,13 +47,16 @@ def test_the_tests_require_the_installed_tools():
 
 
 def test_the_pinned_server_test_runs_with_ansible_installed():
-    """The events bus role's real-server test (its rendered configuration, run by the pinned
-    nats-server) runs in this job: its node id is on the pytest line, and the job installs the
-    ``ansible`` extra it renders the role with.  Either one missing, and the test skips, or is not
+    """The events bus role's real-server tests (its rendered configuration, run by the pinned
+    nats-server; the broker scenario's bus checks against it) run in this job: their node ids are
+    on the pytest line, and the job installs the ``ansible`` extra it renders the role with and
+    the ``nats`` extra the scenario's wire needs.  Either one missing, and the test skips, or is not
     collected, in the one job whose server makes it mean anything."""
     (step,) = [s for s in JOB["steps"] if "HNX_REQUIRE_TOOLS" in (s.get("env") or {})]
-    node = "tests/roles/test_control_plane_roles.py::test_events_bus_config_is_enforced_by_the_pinned_server"
-    assert node in step["run"].split()
+    for test in ("test_events_bus_config_is_enforced_by_the_pinned_server",
+                 "test_broker_e2e_reply_attacks_change_nothing_on_the_pinned_server"):  # fmt: skip
+        assert f"tests/roles/test_control_plane_roles.py::{test}" in step["run"].split(), test
     (deps,) = [s for s in JOB["steps"] if s.get("uses") == "./.github/actions/python-deps"]
     extras = [e.strip() for e in str(deps["with"]["extras"]).split(",")]
-    assert "ansible" in extras and "test" in extras, extras
+    # nats: the broker scenario's reply-subject checks speak nats-py (else they skip there)
+    assert {"ansible", "test", "nats"} <= set(extras), extras

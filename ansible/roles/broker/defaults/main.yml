@@ -42,6 +42,10 @@ broker_relay_events_endpoint: "nats://127.0.0.1:{{ lookup('hnx_registry', broker
 broker_relay_events_user: hnx-broker
 broker_relay_password_ref: ""
 broker_relay_ca_file: ""
+# Where the relay's bus account reaches JetStream: the events bus role puts every client in an
+# account of its own that imports its calls under JS.<events_bus_account>.API (docs/broker.md,
+# "The bus ACL"; the adapter's api_prefix).
+broker_relay_api_prefix: JS.HNX.API
 broker_relay_stream: ""
 broker_relay_subject_prefix: ""
 broker_relay_duplicate_window: 86400

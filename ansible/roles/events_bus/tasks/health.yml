@@ -8,4 +8,31 @@
       changed_when: false
     - name: And for its consumers, none of them a push consumer
       ansible.builtin.include_tasks: push_consumers.yml
+    # read-only, from the same /jsz: a standing stream that is gone is what a STREAM.DELETE
+    # leaves (no user holds one; the detection backstop if one ever got through), so it fails;
+    # a declared durable the provisioner has not created yet is events_bus_provision_durables
+    # still off, so it is reported, and fails only once provisioning is on
+    - name: Compare the bus with what is declared (streams, their DLQs, the durables)
+      ansible.builtin.set_fact:
+        events_bus_missing: "{{ events_bus_jsz.json | hnx_bus_missing(events_bus_account, events_bus_streams, events_bus_durables) }}"
+    - name: Fail on a declared stream that is not on the bus
+      ansible.builtin.assert:
+        that: events_bus_missing.streams | length == 0
+        fail_msg: >-
+          events_bus: declared streams missing from account {{ events_bus_account }}:
+          {{ events_bus_missing.streams | join(', ') }} (deleted? check the server log and the
+          $JS.EVENT.ADVISORY.STREAM.DELETED advisory; main re-creates a missing one, empty)
+    - name: Report the declared durables not provisioned
+      ansible.builtin.debug:
+        msg: >-
+          events_bus: declared, not provisioned: {{ events_bus_missing.durables | join(', ') }}
+          (events_bus_provision_durables is {{ events_bus_provision_durables }})
+      when: events_bus_missing.durables | length > 0
+    - name: Fail on a declared durable missing while provisioning is on
+      ansible.builtin.assert:
+        that: events_bus_missing.durables | length == 0
+        fail_msg: >-
+          events_bus: provisioned durables missing: {{ events_bus_missing.durables | join(', ') }}
+          (deleted? $JS.EVENT.ADVISORY.CONSUMER.DELETED; main re-creates them)
+      when: events_bus_provision_durables | bool
   tags: [health]

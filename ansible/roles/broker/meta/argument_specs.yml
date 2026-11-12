@@ -113,6 +113,10 @@ argument_specs:
         type: str
         description: "The bus's CA on the host, for a tls:// endpoint; empty: the system CAs."
         default: ""
+      broker_relay_api_prefix: &apiprefix
+        type: str
+        description: "Where the relay's bus account reaches JetStream: the events bus role puts every client in an account of its own that imports its calls under JS.<account>.API (docs/broker.md, 'The bus ACL'); $JS.API only in the account that holds the streams."
+        default: JS.HNX.API
       broker_relay_stream: &stream
         type: str
         description: "The standing stream the relay publishes to (provisioned by the bus's operator; the relay creates nothing)."

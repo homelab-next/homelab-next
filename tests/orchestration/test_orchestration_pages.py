@@ -297,6 +297,52 @@ def test_cli_consume_maps_a_bus_failure_mid_pass_to_exit_1(tmp_path, monkeypatch
     assert "the bus failed: fetch timed out" in capsys.readouterr().err and DeadBus.closed
 
 
+def test_cli_consume_with_no_provisioned_durable_is_exit_2(tmp_path, monkeypatch, capsys):
+    """The stream is there but the provisioner has not created the durable (it is declared in
+    events_bus_durables, or it is not): a configuration error, exit 2, not a bus fault (1).  The
+    bus is reached under the client account's import prefix (``--events-api-prefix``)."""
+    import json
+
+    from conformance.fakes.jetstream_wire import FakeJetStreamWire
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    fake = FakeJetStreamWire()
+    adv = "$JS.EVENT.ADVISORY.CONSUMER"
+    for name, subjects in (("S", ["p.>"]), ("S_DLQ", [f"{adv}.MAX_DELIVERIES.S.*",
+                                                      f"{adv}.MSG_TERMINATED.S.*"])):  # fmt: skip
+        body = {"name": name, "subjects": subjects, "retention": "limits", "max_bytes": 1 << 20}
+        fake.request(f"$JS.API.STREAM.CREATE.{name}", json.dumps(body).encode(), timeout=1)
+
+    class Imported:  # the client account's view: its calls under JS.HNX.API
+        def request(self, subject, *a, **kw):
+            assert not subject.startswith("$JS.API."), subject
+            return fake.request(subject.replace("JS.HNX.API.", "$JS.API.", 1), *a, **kw)
+
+        def pull(self, subject, *a, **kw):
+            return fake.pull(subject.replace("JS.HNX.API.", "$JS.API.", 1), *a, **kw)
+
+        def close(self):
+            pass
+
+    asked = {}
+
+    class Adapter:
+        @staticmethod
+        def make(**kw):
+            asked.update(kw)
+            return nj.make(wire=Imported(), **{k: v for k, v in kw.items()
+                                               if k not in ("user", "password_secret")})  # fmt: skip
+
+    real = cli._connect
+    monkeypatch.setattr(cli, "_connect", lambda _mod, a: real(Adapter, a))
+    argv = ["consume", "--db", str(tmp_path / "t.db"), "--stream", "S", "--subject-prefix", "p",
+            "--events-api-prefix", "JS.HNX.API"]  # fmt: skip
+    assert cli.main(argv, clock=lambda: T0) == 2
+    err = capsys.readouterr().err
+    assert "does not exist on stream 'S'" in err and "provisioner" in err, err
+    assert asked["api_prefix"] == "JS.HNX.API" and asked["provision"] is False
+
+
 def test_cli_consume_with_a_broken_environment_is_exit_2_before_the_bus(
     tmp_path, monkeypatch, capsys
 ):

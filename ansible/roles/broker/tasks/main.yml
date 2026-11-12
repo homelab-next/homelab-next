@@ -185,6 +185,11 @@
          or broker_handler_files is changed or broker_handler_env is changed) else 'started' }}
   when: broker_start | bool
 
+# Pruned only now: until the restart above, the running broker still serves the PREVIOUS
+# manifest, which may name a handler the new one dropped.
+- name: Remove the live handlers no longer listed
+  ansible.builtin.include_tasks: prune_handlers.yml
+
 - name: Enable and start the relay, restarting it when its unit, target or credential changed
   ansible.builtin.systemd_service:
     name: hnx-broker-relay.service

@@ -21,7 +21,9 @@ any configuration, a push ``deliver_subject`` included, which the server deliver
 whatever the creator may publish to; so only this step creates durables, and only pull ones.
 
 Usage: hnx-events-provision URL USER < SPEC  (password in the environment, never in argv; SPEC is
-{"streams": [{name, subject_prefix, max_bytes}], "durables": [{stream, durable, filter, ...}]})."""
+{"streams": [{name, subject_prefix, max_bytes[, discard, max_msgs_per_subject]}], "durables":
+[{stream, durable, filter, ...}]}).  discard and max_msgs_per_subject are passed only when a stream
+sets them, so a release whose adapter predates them still provisions the rest."""
 
 import json
 import os
@@ -56,11 +58,13 @@ def main(argv: list[str]) -> int:
         )  # fmt: skip
         try:
             for s in streams:
+                limits = {k: s[k] for k in ("discard", "max_msgs_per_subject") if k in s}
                 created += nj.provision_streams(
                     wire,
                     stream=s["name"],
                     subject_prefix=s["subject_prefix"],
                     max_bytes=int(s["max_bytes"]),
+                    **limits,
                 )
             by_stream: dict[str, list[dict]] = {}
             for d in durables:

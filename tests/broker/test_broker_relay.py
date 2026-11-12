@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from conformance.fakes.jetstream_wire import FakeJetStreamWire
+from conformance.protocols.events import EventsError
 from homelabnext.broker import cli as broker_cli
 from homelabnext.broker.relay import (
     BROKER_SOURCE,
@@ -343,6 +344,51 @@ def provision(server: FakeJetStreamWire, *, max_bytes: int = 1 << 30) -> None:
             assert config["deny_delete"] is True and config["deny_purge"] is True, name
     else:
         nj.make(wire=Wire(server), scratch=False, stream=STREAM, subject_prefix=PREFIX).close()
+
+
+def test_a_new_stream_can_refuse_rather_than_evict():
+    """Round 5: ``discard: new`` (and with it a per-subject cap) on a stream the provisioner
+    creates, so a full stream refuses a publish instead of evicting the evidence; the DLQ keeps
+    discarding old; a cap without ``discard: new`` is refused."""
+    server = FakeJetStreamWire()
+    made = nj.provision_streams(Wire(server), stream=STREAM, subject_prefix=PREFIX,
+                                max_bytes=1 << 20, discard="new", max_msgs_per_subject=1000)  # fmt: skip
+    assert made == [STREAM, f"{STREAM}_DLQ"]
+    cfg = server.streams[STREAM].config
+    assert cfg["discard"] == "new" and cfg["max_msgs_per_subject"] == 1000
+    assert cfg["discard_new_per_subject"] is True and cfg["deny_delete"] is True
+    assert server.streams[f"{STREAM}_DLQ"].config["discard"] == "old"
+    for bad in ({"discard": "oldest"}, {"max_msgs_per_subject": 10},
+                {"discard": "new", "max_msgs_per_subject": 0},
+                {"discard": "new", "max_msgs_per_subject": True}):  # fmt: skip
+        with pytest.raises(EventsError):
+            nj.provision_streams(Wire(FakeJetStreamWire()), stream=STREAM, subject_prefix=PREFIX,
+                                 max_bytes=1 << 20, **bad)  # fmt: skip
+
+
+def test_a_client_account_names_its_calls_under_the_import_prefix():
+    """Round 5: a client of the events bus role lives in an account of its own that imports the
+    bus account's JetStream calls under ``JS.<account>.API``: with ``api_prefix`` every API call
+    the bus makes is named there (none under ``$JS.API``), its publishes and acks are not."""
+    server = FakeJetStreamWire()
+    provision(server)
+    seen = []
+
+    class Imported(Wire):
+        def request(self, subject, *a, **kw):
+            seen.append(subject)
+            return super().request(subject.replace("JS.HNX.API.", "$JS.API.", 1), *a, **kw)
+
+    bus = nj.make(wire=Imported(server), scratch=False, provision=False, stream=STREAM,
+                  subject_prefix=PREFIX, api_prefix="JS.HNX.API")  # fmt: skip
+    assert bus.publish("homelabnext.decision.returned", b"{}", msg_id="m-1") == 1
+    assert bus.api(f"STREAM.INFO.{STREAM}")["config"]["name"] == STREAM
+    assert [s.split(".")[:3] for s in seen if "API" in s] == [["JS", "HNX", "API"]] * 3
+    assert not [s for s in seen if s.startswith("$JS.API.")]
+    for bad in ("", "JS.*.API", "JS..API", "$JS.HNX.API", "JS.H NX"):
+        with pytest.raises(EventsError):
+            nj.make(wire=Imported(server), scratch=False, provision=False, stream=STREAM,
+                    subject_prefix=PREFIX, api_prefix=bad)  # fmt: skip
 
 
 def test_relay_cli_once(tmp_path, monkeypatch, capsys):

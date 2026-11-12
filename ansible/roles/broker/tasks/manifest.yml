@@ -6,8 +6,9 @@
 # handlers/ and manifest.yml. A manifest or handler that fails validation stops the play and
 # leaves the running broker's manifest, its handlers (and the broker) untouched. The staged
 # copies stay, so a re-run with nothing changed is changed=0. A handler no longer in
-# broker_handlers is removed from staged/handlers/ before the validation and from handlers/ once
-# the validated manifest is installed.
+# broker_handlers is removed from staged/handlers/ before the validation, and from handlers/ only
+# after the broker has restarted onto the new manifest (tasks/main.yml): until then the running
+# broker serves the previous manifest, which may still name it.
 - name: Create the staging directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -91,25 +92,6 @@
     group: "{{ broker_group }}"
     mode: "0640"
   register: broker_manifest_file
-  when: not broker_staging_pending | bool
-
-- name: Find the live handlers
-  ansible.builtin.find:
-    paths: "{{ broker_config_dir }}/handlers"
-    file_type: any
-    hidden: true
-  register: broker_live_found
-  check_mode: false  # read-only: it runs in --check too
-  when: not broker_staging_pending | bool
-
-- name: Remove the live handlers no longer listed (the validated manifest is in place)
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: absent
-  loop: "{{ broker_live_found.files | rejectattr('path', 'in', broker_handlers | map('basename') | map('regex_replace', '^', broker_config_dir ~ '/handlers/') | list) | list }}"
-  loop_control:
-    label: "{{ item.path }}"
-  register: broker_live_pruned
   when: not broker_staging_pending | bool
 
 - name: Report the manifest and handlers as changing (--check, new ones are not staged)

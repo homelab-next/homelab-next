@@ -342,6 +342,16 @@ class Bridge:
                     f"out again mid-POST; raise its lease in place (nats consumer edit <stream> "
                     f"{s.durable} --wait {ACK_WAIT_S:g}s), which keeps what it has pending"
                 )
+            # the durable's own max_deliver dead-letters first: a provisioner default (5) under the
+            # bridge's --max-deliver (100) dead-letters an event after five failed POSTs
+            have = getattr(cons, "max_deliver", None)
+            if isinstance(have, int) and 0 < have < self.max_deliver:
+                log.warning(
+                    "durable %s: max_deliver %d is below the bridge's --max-deliver %d; the "
+                    "server dead-letters a delivery after %d attempts (declare max_deliver: %d in "
+                    "events_bus_durables)",
+                    s.durable, have, self.max_deliver, have, self.max_deliver,
+                )  # fmt: skip
         self._consumers = consumers
 
     @property

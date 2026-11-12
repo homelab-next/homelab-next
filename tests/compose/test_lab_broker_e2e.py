@@ -143,7 +143,9 @@ class _SharedWire:
 class _AclWire:
     """The fake behind the lab's own NATS permissions (config/nats/nats.conf, parsed): a
     connection as ``user`` may publish (and pull) what that user may on the lab's server, and a
-    connection without a known user is refused, as nats-server refuses it."""
+    connection without a known user is refused, as nats-server refuses it.  A client account
+    names its JetStream calls under the import prefix (``JS.HNX.API``): the fake, which models
+    one account, gets them as the bus account's ``$JS.API`` calls they import."""
 
     def __init__(self, shared: _SharedWire, user: str | None, *, permissive: bool = False):
         from test_lab_in_a_box import nats_users
@@ -163,12 +165,16 @@ class _AclWire:
             raise self._nj.WireError("permission denied: publish", permanent=True)
 
     def request(self, subject, *a, **kw):
+        from test_lab_in_a_box import bus_subject
+
         self._check(subject)
-        return self.shared.request(subject, *a, **kw)
+        return self.shared.request(bus_subject(subject), *a, **kw)
 
     def pull(self, subject, *a, **kw):
+        from test_lab_in_a_box import bus_subject
+
         self._check(subject)
-        return self.shared.pull(subject, *a, **kw)
+        return self.shared.pull(bus_subject(subject), *a, **kw)
 
     def close(self):
         pass
@@ -190,7 +196,7 @@ def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False
 
     def relay_bus():  # the relay's: provisions nothing
         return nj.make(wire=wire_as("hnx-broker"), scratch=False, provision=False, stream=stream,
-                       subject_prefix=prefix)  # fmt: skip
+                       subject_prefix=prefix, api_prefix=e2e.LAB_API_PREFIX)  # fmt: skip
 
     def once():
         r = OutboxRelay(state_root, relay_bus)
@@ -321,7 +327,9 @@ def test_the_acl_check_fails_on_a_bus_anyone_may_publish_to(e2e, tmp_path):
 
     class CreateAllowed(_AclWire):
         def _check(self, subject):
-            if not subject.startswith("$JS.API.CONSUMER.CREATE."):
+            from test_lab_in_a_box import bus_subject
+
+            if not bus_subject(subject).startswith("$JS.API.CONSUMER.CREATE."):
                 super()._check(subject)
 
     setup.relay.wire_as = lambda user: CreateAllowed(shared, user)

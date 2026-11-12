@@ -63,11 +63,11 @@ EVENTS = {
 DURABLE = {"stream": "LAB", "durable": "bridge-x", "user": "hnx-bus-bridge",
            "filter": "lab.homelabnext.decision.returned", "ack_wait": 30, "max_deliver": 5}  # fmt: skip
 BRIDGE_USER = {"user": "hnx-bus-bridge", "password_ref": "secret:events/bus-bridge",
-               "publish": ["$JS.API.STREAM.INFO.LAB", "$JS.API.STREAM.MSG.GET.LAB",
+               "publish": ["$JS.API.STREAM.INFO.LAB",
                            "$JS.API.CONSUMER.INFO.LAB.bridge-x",
                            "$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x",
                            "$JS.ACK.LAB.bridge-x.*.*.*.*.*",
-                           "$JS.ACK._.ACCOUNTHASH.LAB.bridge-x.*.*.*.*.>"],
+                           "$JS.ACK._.hKkTAyOX.LAB.bridge-x.*.*.*.*.>"],
                "subscribe": ["_INBOX.hnx-bus-bridge.>"]}  # fmt: skip
 PROVISIONER = dict(BUS_USERS[1], publish=[
     *BUS_USERS[1]["publish"], "$JS.API.CONSUMER.INFO.LAB.bridge-x",
@@ -197,6 +197,17 @@ def test_events_bus_refuses_bad_inputs(tmp_path):
         {**BRIDGE_CASE, "events_bus_provision_durables": True,
          "events_bus_users": [*BRIDGE_CASE["events_bus_users"][:1], BUS_USERS[1],
                               BRIDGE_CASE["events_bus_users"][2]]},
+        # a boolean, not a string that merely reads as one
+        {**BRIDGE_CASE, "events_bus_provision_durables": "yes"},
+        # round 5: a client lives in an account of its own and subscribes to its own replies
+        # alone (it reads the stream through a durable); MSG.GET reads every stored message (the
+        # provisioner's alone); a v2 ack names the domain "_" and the account's 8-character hash
+        {"events_bus_users": [BUS_USERS[0], BUS_USERS[1], dict(READER, subscribe=[
+            "lab.homelabnext.decision.>", "_INBOX.hnx-reader.>"])]},
+        {**BRIDGE_CASE, "events_bus_users": [BUS_USERS[0], PROVISIONER, dict(BRIDGE_USER, publish=[
+            *BRIDGE_USER["publish"], "$JS.API.STREAM.MSG.GET.LAB"])]},
+        {**BRIDGE_CASE, "events_bus_users": [BUS_USERS[0], PROVISIONER, dict(BRIDGE_USER, publish=[
+            *BRIDGE_USER["publish"][:-1], "$JS.ACK.dom.hKkTAyOX.LAB.bridge-x.*.*.*.*.>"])]},
     ])  # fmt: skip
 
 
@@ -204,8 +215,7 @@ def test_events_bus_accepts_the_narrow_grants_a_bridge_needs(tmp_path):
     """Single JetStream calls inside the refused sets stay allowed: the ceiling refuses reach, not
     the API's prefix (the StackStorm bridge's grants in docs/broker.md), with its durable declared
     for it; the provisioner may create and delete a named durable."""
-    reader = {"user": "hnx-reader", "password_ref": "secret:events/reader", "subscribe_only": True,
-              "subscribe": ["lab.homelabnext.decision.>", "_INBOX.hnx-reader.>"]}  # fmt: skip
+    reader = READER  # subscribe-only: its own replies, nothing to publish
     admin = dict(PROVISIONER, publish=[*PROVISIONER["publish"],
                                        "$JS.API.CONSUMER.DELETE.LAB.e2e-scratch"])  # fmt: skip
     results = run_cases(tmp_path, "events_bus", "validate", EVENTS, [
@@ -406,7 +416,7 @@ def test_status_hub_on_loopback_needs_no_remote_flag(tmp_path):
 
 #: a user that only reads (no publish subjects at all): rendered deny-all, never {"allow": []}
 READER = {"user": "hnx-reader", "password_ref": "secret:events/reader", "subscribe_only": True,
-          "subscribe": ["lab.homelabnext.decision.>", "_INBOX.hnx-reader.>"]}  # fmt: skip
+          "subscribe": ["_INBOX.hnx-reader.>"]}  # fmt: skip
 
 
 def _rendered_users(users, password=None):
@@ -427,13 +437,32 @@ def test_events_bus_config_grants_each_user_its_allow_lists_only(tmp_path):
                                              "inventory_hostname": "bus-01.example.internal"})  # fmt: skip
     conf = _nats_conf(files)
     assert conf["listen"].startswith(LOOP + ":") and conf["http"].startswith(LOOP + ":")
-    got = conf["accounts"]["HNX"]["users"]
+    accounts = conf["accounts"]
+    # the account split: the provisioner alone with the streams, each client in its own account
+    assert list(accounts) == ["HNX", "HNX-hnx-broker", "HNX-hnx-reader"]
+    assert accounts["HNX"]["jetstream"] == "enabled"
+    assert [u["user"] for u in accounts["HNX"]["users"]] == ["hnx-events-admin"]
+    got = [a["users"][0] for a in accounts.values()]
     assert [set(u) for u in got] == [{"user", "password", "permissions"}] * 3
-    assert got[0]["permissions"] == {"publish": {"allow": BUS_USERS[0]["publish"]},
-                                     "subscribe": {"allow": BUS_USERS[0]["subscribe"]}}  # fmt: skip
-    # the subscribe-only user: deny-all, since NATS reads an empty allow-list as no restriction
+    # the broker's calls under the client prefix, its stream subjects as they are; the bus
+    # account exports exactly those, to that account alone
+    broker = accounts["HNX-hnx-broker"]
+    assert "jetstream" not in broker
+    assert broker["users"][0]["permissions"] == {
+        "publish": {"allow": ["lab.homelabnext.decision.>", "JS.HNX.API.STREAM.INFO.LAB"]},
+        "subscribe": {"allow": BUS_USERS[0]["subscribe"]}}  # fmt: skip
+    assert broker["imports"] == [
+        {"service": {"account": "HNX", "subject": "lab.homelabnext.decision.>"}},
+        {"service": {"account": "HNX", "subject": "$JS.API.STREAM.INFO.LAB"},
+         "to": "JS.HNX.API.STREAM.INFO.LAB"}]  # fmt: skip
+    assert accounts["HNX"]["exports"] == [
+        {"service": "$JS.API.STREAM.INFO.LAB", "accounts": ["HNX-hnx-broker"]},
+        {"service": "lab.homelabnext.decision.>", "accounts": ["HNX-hnx-broker"]}]  # fmt: skip
+    # the subscribe-only user: deny-all, since NATS reads an empty allow-list as no restriction,
+    # and it imports nothing
     assert got[2]["permissions"] == {"publish": {"deny": [">"]},
                                      "subscribe": {"allow": READER["subscribe"]}}  # fmt: skip
+    assert accounts["HNX-hnx-reader"]["imports"] == []
     assert '"allow": []' not in files["nats.conf"]
     assert all(u["password"].startswith("$2a$") for u in got)
     unit = _directives(files["hnx-events.service"])
@@ -541,32 +570,35 @@ class _Nats:
         self.sock.close()
 
 
-def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
-    """The rendered configuration, run by the real nats-server (CI's external-tools job installs
-    the pinned release): a subscribe-only user is refused every publish (an empty allow-list
-    would have let it publish anything, STREAM.DELETE included), the relay's user is refused what
-    its list does not name, and a stream provisioned the adapter's way can be neither purged nor
-    have a message deleted, nor have either flag cleared."""
-    from tests.suite_policy import require_tool
+API = "JS.HNX.API"  # a client account's JetStream calls (role var events_bus_api_prefix)
 
-    server = require_tool("nats-server")
-    port, monitor = _free_port(), _free_port()
-    provisioner = dict(BUS_USERS[1], publish=[
-        *(f"$JS.API.STREAM.{v}.{s}" for v in ("INFO", "CREATE") for s in ("LAB", "LAB_DLQ")),
-        *PROVISIONER["publish"][1:]])  # fmt: skip
-    users = [BUS_USERS[0], provisioner, READER, BRIDGE_USER]
-    # what the role validates: the ceiling, and the durable declared for the bridge alone
+
+def _start(server, conf, port):
+    import socket
+    import time
+
+    proc = subprocess.Popen([server, "-c", str(conf)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)  # fmt: skip
+    for _ in range(100):
+        try:
+            socket.create_connection((LOOP, port), timeout=0.2).close()
+            break
+        except OSError:
+            time.sleep(0.05)
+    return proc
+
+
+def _hnx_bus():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("hnx_bus", ANSIBLE / "plugins/filter/hnx_bus.py")
-    hnx_bus = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(hnx_bus)
-    for u in users:
-        subjects = u.get("publish", []) + u["subscribe"]
-        assert hnx_bus.hnx_bus_subject_problems(subjects, u["user"],
-                                                admin=u is provisioner) == [], u  # fmt: skip
-    assert hnx_bus.hnx_bus_durable_problems([DURABLE], users, provisioner["user"],
-                                            EVENTS["events_bus_streams"], True) == []  # fmt: skip
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _rendered_split_bus(tmp_path, server, users, port, monitor):
+    """The role's configuration for ``users`` (the account split), checked by the server."""
     files = _render(tmp_path, "events_bus", {
         **EVENTS, "events_bus_rendered_users": _rendered_users(users, password="pw"),
         "events_bus_users": users, "events_bus_port": port, "events_bus_monitor_port": monitor,
@@ -576,28 +608,59 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
     conf.write_text(files["nats.conf"])
     check = subprocess.run([server, "-c", str(conf), "-t"], capture_output=True, text=True)
     assert check.returncode == 0, check.stdout + check.stderr
-    proc = subprocess.Popen([server, "-c", str(conf)], stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)  # fmt: skip
+    return conf
+
+
+def _denied(errs) -> bool:
+    return any("Permissions Violation" in e for e in errs)
+
+
+def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
+    """The rendered configuration, run by the real nats-server (CI's external-tools job installs
+    the pinned release): the provisioner alone in the bus account, every client in an account of
+    its own that imports its few calls (round 5). A subscribe-only user is refused every publish,
+    the relay's user what its list does not name; a stream provisioned the adapter's way can be
+    neither purged nor have a message deleted, nor either flag cleared; the bridge pulls and acks
+    its own durable across the import -- and no reply subject a client sets reaches the bus
+    account's API or its streams: a pull, an ack and every JetStream call answered to
+    ``$JS.API.STREAM.DELETE``, ``CONSUMER.DELETE`` or a stream subject deletes, changes and
+    stores nothing (the same calls in one account delete the stream: the last block)."""
+    import time
+
+    from tests.suite_policy import require_tool
+
+    server = require_tool("nats-server")
+    port, monitor = _free_port(), _free_port()
+    provisioner = dict(BUS_USERS[1], publish=[
+        *(f"$JS.API.STREAM.{v}.{s}" for v in ("INFO", "CREATE") for s in ("LAB", "LAB_DLQ")),
+        *PROVISIONER["publish"][1:]])  # fmt: skip
+    users = [BUS_USERS[0], provisioner, READER, BRIDGE_USER]
+    # what the role validates: the ceiling, and the durable declared for the bridge alone
+    hnx_bus = _hnx_bus()
+    for u in users:
+        subjects = u.get("publish", []) + u["subscribe"]
+        assert hnx_bus.hnx_bus_subject_problems(subjects, u["user"],
+                                                admin=u is provisioner) == [], u  # fmt: skip
+    assert hnx_bus.hnx_bus_durable_problems([DURABLE], users, provisioner["user"],
+                                            EVENTS["events_bus_streams"], True) == []  # fmt: skip
+    conf = _rendered_split_bus(tmp_path, server, users, port, monitor)
+    accounts = _nats_conf({"nats.conf": conf.read_text()})["accounts"]
+    assert sorted(accounts) == ["HNX", "HNX-hnx-broker", "HNX-hnx-bus-bridge", "HNX-hnx-reader"]
+    assert [u["user"] for u in accounts["HNX"]["users"]] == ["hnx-events-admin"]
+    assert all("jetstream" not in a for n, a in accounts.items() if n != "HNX")
+    proc = _start(server, conf, port)
     clients = []
     try:
-        import socket
-        import time
-
-        for _ in range(100):
-            try:
-                socket.create_connection((LOOP, port), timeout=0.2).close()
-                break
-            except OSError:
-                time.sleep(0.05)
         reader = _Nats(port, "hnx-reader", "pw")
         relay = _Nats(port, "hnx-broker", "pw")
         admin = _Nats(port, "hnx-events-admin", "pw")
         clients += [reader, relay, admin]
         for subject in ("anything", "$JS.API.STREAM.DELETE.LAB", "lab.homelabnext.decision.x"):
-            assert any("Permissions Violation" in e for e in reader.publish(subject)), subject
+            assert _denied(reader.publish(subject)), subject
         assert relay.publish("lab.homelabnext.decision.returned") == []
-        assert any("Permissions Violation" in e for e in relay.publish("$JS.API.STREAM.DELETE.LAB"))
-        assert any("Permissions Violation" in e for e in relay.publish("lab.homelabnext.agent.x"))
+        for subject in ("$JS.API.STREAM.DELETE.LAB", f"{API}.STREAM.DELETE.LAB",
+                        "lab.homelabnext.agent.x"):  # fmt: skip
+            assert _denied(relay.publish(subject)), subject
 
         # the standing stream as provision_streams creates it (the admin's grants: CREATE, INFO)
         from homelabnext.conform.adapters import nats_jetstream as nj
@@ -611,7 +674,6 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
         assert made == ["LAB", "LAB_DLQ"]
         cfg = admin.request("$JS.API.STREAM.INFO.LAB", None)["config"]
         assert cfg["deny_delete"] is True and cfg["deny_purge"] is True
-
         # round 4, security F1: no user but the provisioner may create a consumer, in any form;
         # here the bridge tries a push durable delivering to the relay's own inbox
         bridge = _Nats(port, "hnx-bus-bridge", "pw")
@@ -619,16 +681,14 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
         push = json.dumps({"stream_name": "LAB", "config": {
             "durable_name": "evil", "deliver_subject": "_INBOX.hnx-broker.stolen",
             "ack_policy": "none", "deliver_policy": "all"}}).encode()  # fmt: skip
-        for create in ("$JS.API.CONSUMER.CREATE.LAB.evil", "$JS.API.CONSUMER.DURABLE.CREATE.LAB.evil",
-                       "$JS.API.CONSUMER.CREATE.LAB.bridge-x.lab.homelabnext.decision.returned"):  # fmt: skip
-            assert any(
-                "Permissions Violation" in e
-                for e in bridge.publish(create, push, "_INBOX.hnx-bus-bridge.r")
-            ), create
+        for api in ("$JS.API", API):
+            for create in (f"{api}.CONSUMER.CREATE.LAB.evil", f"{api}.CONSUMER.DURABLE.CREATE.LAB.evil",
+                           f"{api}.CONSUMER.CREATE.LAB.bridge-x.lab.homelabnext.decision.returned"):  # fmt: skip
+                assert _denied(bridge.publish(create, push, "_INBOX.hnx-bus-bridge.r")), create
         # round 4, security F2: STREAM.UPDATE is no one's, the provisioner's included
         for who in (admin, bridge, relay):
-            assert any("Permissions Violation" in e
-                       for e in who.publish("$JS.API.STREAM.UPDATE.LAB", b"{}")), who  # fmt: skip
+            for api in ("$JS.API", API):
+                assert _denied(who.publish(f"{api}.STREAM.UPDATE.LAB", b"{}")), who
         # the provisioner pre-creates the bridge's pull durable (once), the way the role does
         assert nj.provision_consumers(Raw(), stream="LAB", durables=[DURABLE]) == ["bridge-x"]
         assert nj.provision_consumers(Raw(), stream="LAB", durables=[DURABLE]) == []
@@ -636,25 +696,56 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
         assert (
             "deliver_subject" not in info["config"] and info["config"]["ack_policy"] == "explicit"
         )
-        # and the bridge binds: it pulls what the relay published and its v1 ack takes
-        # a request, so the PubAck says it is stored before the pull asks for it (a plain
-        # publish raced the no_wait pull on CI's runners)
+        # the bridge binds across its account's imports: it pulls what the relay published (a
+        # request, so the PubAck says it is stored first) and its v1 ack takes
         stored = relay.request("lab.homelabnext.decision.returned", {"one": 1})
         assert stored.get("stream") == "LAB" and stored.get("seq") == 1, stored
-        got = bridge.pull("$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x", {"batch": 1, "no_wait": True})
-        assert got is not None and json.loads(got[1]) == {"one": 1}, got
-        assert got[0].startswith("$JS.ACK.LAB.bridge-x.") and len(got[0].split(".")) == 9, got
+        nxt = f"{API}.CONSUMER.MSG.NEXT.LAB.bridge-x"
+        got = bridge.pull(nxt, {"batch": 1, "no_wait": True})
+        assert got is not None and got[0].startswith("$JS.ACK.LAB.bridge-x."), got
+        assert len(got[0].split(".")) == 9, got
         assert bridge.publish(got[0], b"+ACK") == []
-        info = bridge.request("$JS.API.CONSUMER.INFO.LAB.bridge-x", None)
-        assert info["num_ack_pending"] == 0 and info["ack_floor"]["stream_seq"] == 1, info
-        assert (
-            bridge.pull("$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x", {"batch": 1, "no_wait": True})
-            is None
-        )
+        info = bridge.request(f"{API}.CONSUMER.INFO.LAB.bridge-x", None)
+        assert info["num_ack_pending"] == 0 and info["ack_floor"]["stream_seq"] >= 1, info
+        assert bridge.pull(nxt, {"batch": 1, "no_wait": True}) is None
+        assert bridge.request(f"{API}.STREAM.INFO.LAB", None)["config"]["name"] == "LAB"
         # its grants reach its own durable alone
-        for other in ("$JS.API.CONSUMER.MSG.NEXT.LAB.other", "$JS.ACK.LAB.other.1.1.1.1.0",
-                      "$JS.API.CONSUMER.DELETE.LAB.bridge-x"):  # fmt: skip
-            assert any("Permissions Violation" in e for e in bridge.publish(other)), other
+        for other in (f"{API}.CONSUMER.MSG.NEXT.LAB.other", "$JS.ACK.LAB.other.1.1.1.1.0",
+                      f"{API}.CONSUMER.DELETE.LAB.bridge-x", "$JS.API.CONSUMER.INFO.LAB.bridge-x",
+                      "$JS.API.STREAM.MSG.GET.LAB", f"{API}.STREAM.MSG.GET.LAB"):  # fmt: skip
+            assert _denied(bridge.publish(other)), other
+
+        # round 5, the CRITICAL finding: a reply subject is not permission-checked, and JetStream
+        # takes its own internal client's messages (a delivery, an ack's answer) as API requests.
+        # One more message to hand out, then every reply a client can set: none may delete,
+        # change or store anything in the bus account
+        relay.request("lab.homelabnext.decision.returned", {"two": 2})
+        held = bridge.pull(nxt, {"batch": 1, "no_wait": True})
+        assert held is not None
+        before = admin.request("$JS.API.STREAM.INFO.LAB", None)["state"]["messages"]
+        targets = ("$JS.API.STREAM.DELETE.LAB", "$JS.API.CONSUMER.DELETE.LAB.bridge-x",
+                   "$JS.API.STREAM.PURGE.LAB", "lab.homelabnext.agent.job.failed",
+                   "lab.homelabnext.decision.returned")  # fmt: skip
+        for reply in targets:
+            sends = [(bridge, nxt, b'{"batch":1,"no_wait":true}'),  # a pull: the delivery or 404
+                     (bridge, held[0], b"+WPI"),  # an ack's answer (in progress: still held)
+                     (bridge, f"{API}.CONSUMER.INFO.LAB.bridge-x", b""),
+                     (bridge, f"{API}.STREAM.INFO.LAB", b""),
+                     (relay, f"{API}.STREAM.INFO.LAB", b""),
+                     (relay, "lab.homelabnext.decision.returned", b"{}")]  # its PubAck  # fmt: skip
+            for who, subject, body in sends:
+                for _ in range(3):
+                    assert who.publish(subject, body, reply) == [], (subject, reply)
+        time.sleep(0.5)  # anything the server would do with them, done
+        after = admin.request("$JS.API.STREAM.INFO.LAB", None)
+        assert "error" not in after, after  # the stream is there
+        assert after["config"]["deny_delete"] and after["config"]["deny_purge"], after
+        # only the relay's own publishes landed (its PubAck went nowhere): nothing injected
+        assert after["state"]["messages"] == before + 3 * len(targets), (before, after["state"])
+        info = admin.request("$JS.API.CONSUMER.INFO.LAB.bridge-x", None)
+        assert "error" not in info and "deliver_subject" not in info["config"], info
+        dlq = admin.request("$JS.API.STREAM.INFO.LAB_DLQ", None)
+        assert "error" not in dlq, dlq
         # the monitor lists the durable, and it is no push consumer
         import urllib.request
 
@@ -677,18 +768,18 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
     open_conf.write_text(json.dumps({"listen": f"{LOOP}:{port}", "http": f"{LOOP}:{monitor}",
         "jetstream": {"store_dir": str(tmp_path / "store")}, "accounts": {"HNX": {
         "jetstream": "enabled", "users": [{"user": "root-ish", "password": "pw"}]}}}))  # fmt: skip
-    proc = subprocess.Popen([server, "-c", str(open_conf)], stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)  # fmt: skip
-    try:
-        import socket
-        import time
+    from homelabnext.conform.adapters import nats_jetstream as nj
 
-        for _ in range(100):
-            try:
-                socket.create_connection((LOOP, port), timeout=0.2).close()
-                break
-            except OSError:
-                time.sleep(0.05)
+    class Raw2:
+        def __init__(self, c):
+            self.c = c
+
+        def request(self, subject, payload, *, timeout, headers=None):
+            got = self.c.request(subject, json.loads(payload) if payload else None)
+            return nj.WireMsg(subject, json.dumps(got).encode(), {}, "")
+
+    proc = _start(server, open_conf, port)
+    try:
         anyone = _Nats(port, "root-ish", "pw")
         try:
             purge = anyone.request("$JS.API.STREAM.PURGE.LAB", None)
@@ -715,9 +806,68 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
             assert hnx_bus.hnx_bus_push_consumers(jsz) == [
                 "HNX/LAB/evil -> _INBOX.hnx-broker.stolen"
             ]
+            # and why the clients live in accounts of their own: in the stream's account, a
+            # pull whose reply is STREAM.DELETE deletes the stream, deny_delete notwithstanding
+            # (here the 404 of a durable with nothing to deliver is the server's "request")
+            probe = dict(DURABLE, durable="probe", deliver_policy="new")
+            assert nj.provision_consumers(Raw2(anyone), stream="LAB", durables=[probe]) == ["probe"]
+            assert anyone.publish("$JS.API.CONSUMER.MSG.NEXT.LAB.probe",
+                                  b'{"batch":1,"no_wait":true}', "$JS.API.STREAM.DELETE.LAB") == []  # fmt: skip
+            time.sleep(0.3)
+            gone = anyone.request("$JS.API.STREAM.INFO.LAB", None)
+            assert gone["error"]["description"] == "stream not found", gone
         finally:
             anyone.close()
     finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_broker_e2e_reply_attacks_change_nothing_on_the_pinned_server(tmp_path, monkeypatch):
+    """The broker scenario's bus-acl checks (compose/lab-in-a-box/broker_e2e.py, what a real
+    deployment runs) against the role's account split on the real server: the bridge's user binds
+    to the provisioner's durable, pulls and acks across its imports, and every reply-subject
+    attack (a pull, an ack, consumer and stream info, as the bridge and as the relay) leaves the
+    stream, its flags, its last sequence and the durable as they were."""
+    pytest.importorskip("nats")  # CI's external-tools job installs the nats extra
+    import importlib.util
+
+    from tests.suite_policy import require_tool
+
+    server = require_tool("nats-server")
+    port, monitor = _free_port(), _free_port()
+    broker = dict(BUS_USERS[0], publish=[*BUS_USERS[0]["publish"], "$JS.API.STREAM.INFO.LAB_DLQ"])
+    provisioner = dict(PROVISIONER, publish=[
+        *(f"$JS.API.STREAM.{v}.{s}" for v in ("INFO", "CREATE") for s in ("LAB", "LAB_DLQ")),
+        *PROVISIONER["publish"][1:], "$JS.API.STREAM.MSG.GET.LAB"])  # fmt: skip
+    bridge = dict(BRIDGE_USER, publish=[*BRIDGE_USER["publish"], "$JS.API.STREAM.INFO.LAB_DLQ"])
+    conf = _rendered_split_bus(tmp_path, server, [broker, provisioner, bridge], port, monitor)
+    spec = importlib.util.spec_from_file_location(
+        "broker_e2e_r", ROOT / "compose/lab-in-a-box/broker_e2e.py"
+    )
+    e2e = importlib.util.module_from_spec(spec)
+    sys.modules["broker_e2e_r"] = e2e
+    spec.loader.exec_module(e2e)
+    users = {"hnx-broker": "HNX_SECRET_T_BROKER", "hnx-events-admin": "HNX_SECRET_T_ADMIN",
+             "hnx-bus-bridge": "HNX_SECRET_T_BRIDGE"}  # fmt: skip
+    for var in users.values():
+        monkeypatch.setenv(var, "pw")
+    monkeypatch.setenv("HNX_ENDPOINT_EVENTS", f"nats://{LOOP}:{port}")
+    relay = e2e.Relay("", "", "LAB", "lab", admin="hnx-events-admin", not_broker="hnx-bus-bridge",
+                      not_broker_durable="bridge-x", bus_users=users, api_prefix=API)  # fmt: skip
+    proc = _start(server, conf, port)
+    try:
+        assert relay.provision() == ["LAB", "LAB_DLQ"]
+        bus = relay.bus_as("hnx-broker")
+        try:
+            assert bus.publish("homelabnext.decision.returned", b"{}", msg_id="r5-1") == 1
+        finally:
+            bus.close()
+        got = e2e.check_bridge_acks(relay)
+        assert "acked 1 delivery(ies)" in got and "changed nothing" in got, got
+        assert "reply attacks not sent" not in got
+    finally:
+        sys.modules.pop("broker_e2e_r", None)
         proc.terminate()
         proc.wait(timeout=10)
 
@@ -898,7 +1048,8 @@ if sys.argv[1] == "show":
 
 def test_broker_prunes_handlers_no_longer_listed(tmp_path):
     """Round 4: a handler dropped from broker_handlers leaves staged/handlers/ before the
-    validation and handlers/ once the validated manifest is in place; a re-run is changed=0."""
+    validation, and (round 5) handlers/ only after the broker restarted onto the validated
+    manifest; a re-run is changed=0."""
     user, group = _me()
     conf = tmp_path / "etc"
     (conf / "handlers").mkdir(parents=True)  # main's
@@ -920,10 +1071,20 @@ def test_broker_prunes_handlers_no_longer_listed(tmp_path):
     (conf / "handlers" / ".stray").write_text("x")  # anything else there goes too
     r = run_role(tmp_path, "broker", "manifest", {**base, "broker_handlers": [str(keep)]})
     assert r.returncode == 0, r.stdout + r.stderr
-    for d in ("handlers", "staged/handlers"):
-        assert {p.name for p in (conf / d).iterdir()} == {"keep.sh"}, d
-    again = run_role(tmp_path, "broker", "manifest", {**base, "broker_handlers": [str(keep)]})
-    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+    assert {p.name for p in (conf / "staged/handlers").iterdir()} == {"keep.sh"}
+    # round 5: the live one stays until the broker has restarted onto the new manifest (main
+    # prunes after the restart: the running broker may still name it until then)
+    assert {p.name for p in (conf / "handlers").iterdir()} == {"keep.sh", "drop.sh", ".stray"}
+    r = run_role(tmp_path, "broker", "prune_handlers", {**base, "broker_handlers": [str(keep)]})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert {p.name for p in (conf / "handlers").iterdir()} == {"keep.sh"}
+    for entry in ("manifest", "prune_handlers"):
+        again = run_role(tmp_path, "broker", entry, {**base, "broker_handlers": [str(keep)]})
+        assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+    main = yaml.safe_load((ROLES / "broker/tasks/main.yml").read_text())
+    names = [t.get("name", "") for t in main]
+    start = names.index(next(n for n in names if n.startswith("Enable and start the broker,")))
+    assert names.index("Remove the live handlers no longer listed") > start
 
 
 def _runtime_vars(tmp_path, python):

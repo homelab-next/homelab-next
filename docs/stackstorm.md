@@ -471,6 +471,7 @@ ExecStart=/opt/hnx/bin/hnx workflows st2 bridge \
   --stream HOMELABNEXT --subject-prefix lab \
   --events-user hnx-st2-bridge --events-password-secret secret:events/st2-bridge-password \
   --events-ca-file /etc/hnx-st2-bridge/nats-ca.pem \
+  --events-api-prefix JS.HNX.API \
   --stats-file /var/lib/hnx-st2-bridge/stats.json
 StateDirectory=hnx-st2-bridge
 Restart=on-failure
@@ -507,8 +508,16 @@ refuses a `CREATE` grant to any other user and a consumer grant that names a dur
 for that user, and its health hook fails on any consumer with a `deliver_subject`. A durable
 starts where its `deliver_policy` says when it is created (`new`: what is published after;
 `replay_s`: that many seconds back, the bridge's `REPLAY_S` for a first start that should forward
-what the relay published before it). The bridge holds `CONSUMER.INFO` and `CONSUMER.MSG.NEXT` of
-each and its acks. Its
+what the relay published before it). **Declare each with `max_deliver: 100`**, the bridge's
+`--max-deliver`: the server dead-letters at the durable's own count, and the provisioner's default
+(5) would dead-letter an event after five failed POSTs (the bridge warns at bind when a durable's
+`max_deliver` is below its own), and `ack_wait: 30` (the bridge's `ACK_WAIT_S`; it refuses a
+shorter lease). The bridge holds `CONSUMER.INFO` and `CONSUMER.MSG.NEXT` of
+each and its acks, through imports: on the events bus role it lives in an account of its own
+(`HNX-hnx-st2-bridge`, JetStream off) that imports those calls from the bus account, its
+JetStream calls under `JS.HNX.API` (run it with `--events-api-prefix JS.HNX.API`), because a
+reply subject is not permission-checked and in the stream's own account a pull or an ack answered
+to `$JS.API.STREAM.DELETE.<stream>` deleted the stream (docs/broker.md, "The bus ACL"). Its
 acks go to the delivery's reply subject, in one of ADR-15's two forms: v1
 `$JS.ACK.<stream>.<durable>.<delivered>.<stream seq>.<consumer seq>.<timestamp>.<pending>`
 (nats-server 2.15.1 sends this) or v2, with `<domain>.<account hash>` after `ACK` (upstream main
@@ -516,8 +525,10 @@ enables it, the `js_ack_fc_v2` feature flag, in 2.16 and removes the flag in 2.1
 each token for token as the consumer subscribes to it:
 `$JS.ACK.<stream>.<durable>.*.*.*.*.*` (exactly nine tokens) and
 `$JS.ACK.<domain>.<account hash>.<stream>.<durable>.*.*.*.*.>`, the domain `_` when the server
-sets none and the account hash as the server computes it (`server/events.go` `getHash`: the
-first 8 bytes of the SHA-256 of the account name, each mod 62 into `0-9A-Za-z`). Never put a
+sets none and the hash of the account that holds the stream (the bus account, not the bridge's)
+as the server computes it (`server/events.go` `getHash`: the first 8 bytes of the SHA-256 of the
+account name, each mod 62 into `0-9A-Za-z`; the role refuses any other domain token, and a hash
+token that is not 8 of `[A-Za-z0-9]`). Never put a
 wildcard in the domain, hash, stream or durable token, nor end the v1 grant in `>`:
 `$JS.ACK.*.*.<stream>.<durable>.>` also matches the nine-token v1 ack subject of *another*
 stream's consumer (`$JS.ACK.<other stream>.<other consumer>.<stream>.<durable>...`), and an ack
@@ -528,22 +539,23 @@ lab-in-a-box enforces exactly this (stream `HNXLAB_BROKER`; `tests/compose` fail
 excerpt drifts from it):
 
 ```text
-# compose/lab-in-a-box/config/nats/nats.conf (excerpt: account HNX, the bridge)
+# compose/lab-in-a-box/config/nats/nats.conf (excerpt: the bridge's user, in its own
+# account HNX-hnx-st2-bridge, its JetStream calls under the import prefix JS.HNX.API)
 [
 {"user": "hnx-st2-bridge", "password": $LAB_EVENTS_ST2_BRIDGE_PASSWORD,
  "permissions": {
-   "publish": {"allow": ["$JS.API.STREAM.INFO.HNXLAB_BROKER",
-                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
-                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
-                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
+   "publish": {"allow": ["JS.HNX.API.STREAM.INFO.HNXLAB_BROKER",
+                         "JS.HNX.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
+                         "JS.HNX.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
+                         "JS.HNX.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
                          "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-agent-job-failed.*.*.*.*.>",
-                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
-                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
+                         "JS.HNX.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
+                         "JS.HNX.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
                          "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-decision-returned.*.*.*.*.>",
-                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
-                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
+                         "JS.HNX.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
+                         "JS.HNX.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
                          "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-proposal-created.*.*.*.*.>"]},
    "subscribe": {"allow": ["_INBOX.hnx-st2-bridge.>"]}}}
