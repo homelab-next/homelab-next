@@ -11,8 +11,8 @@ A node that declares ``notify: {url, topic, severities, priority, default_mail}`
 ``notify/<node>/``:
 
 * ``hnx-notify.sh``: run once on the node (as root), it creates or updates a webhook target
-  ``hnx-ntfy`` that POSTs each notification as ntfy JSON (``topic``, ``title``, ``message``,
-  ``priority``, ``tags``) to ``url``, and a matcher ``hnx-ntfy-route`` that routes the listed severities
+  ``hnx-notify`` that POSTs each notification as ntfy JSON (``topic``, ``title``, ``message``,
+  ``priority``, ``tags``) to ``url``, and a matcher ``hnx-notify-route`` that routes the listed severities
   to it.  No MTA is involved.  Unless ``default_mail: true``, it also turns off the built-in
   ``default-matcher``, so nothing is sent to ``mail-to-root`` any more.  A re-run changes nothing
   that is already right.  ``--test`` asks Proxmox to send a test notification through the target;
@@ -44,8 +44,8 @@ RENDERS_GUESTS = False
 
 #: the webhook target and the matcher the script owns on the node.  Targets and matchers share
 #: one namespace in notifications.cfg, so the two names must differ.
-NAME = "hnx-ntfy"
-MATCHER = "hnx-ntfy-route"
+NAME = "hnx-notify"
+MATCHER = "hnx-notify-route"
 #: the Proxmox built-in matcher that sends everything to ``mail-to-root``
 DEFAULT_MATCHER = "default-matcher"
 #: the guest schema's placement.node pattern: the node name becomes a directory of the render
@@ -59,7 +59,7 @@ def body(node: str, topic: str, priority: int) -> str:
         "title": f"[{node}] {{{{ escape title }}}}",
         "message": "{{ escape message }}",
         "priority": priority,
-        "tags": ["proxmox", "{{ severity }}"],
+        "tags": ["hypervisor", "{{ severity }}"],
     }
     return json.dumps(doc, separators=(",", ":"))
 
@@ -81,7 +81,7 @@ def script(node: str, spec: dict) -> str:
     L = [
         "#!/bin/sh",
         f"# {HEADER}",
-        f"# Node {node}: send Proxmox notifications of severity {sev} to ntfy topic {topic}",
+        f"# Node {node}: send hypervisor notifications of severity {sev} to topic {topic}",
         f"# at {url} (webhook target {NAME}, matcher {MATCHER}).",
         "# Idempotent.  --test sends a test notification; --remove takes the target and matcher off.",
         "set -eu",
@@ -89,11 +89,11 @@ def script(node: str, spec: dict) -> str:
         f'MATCHER="{MATCHER}"',
         f'URL="{url}"',
         f'SEVERITIES="{sev}"',
-        "# the ntfy JSON body, base64 as pvesh takes it: " + body(node, topic, spec["priority"]),
+        "# the JSON publish body, base64 as pvesh takes it: " + body(node, topic, spec["priority"]),
         f'BODY="{payload}"',
         f'CTYPE="{ctype}"',
         f'DEFAULT_MATCHER="{DEFAULT_MATCHER}"',
-        f'COMMENT="hnx: {sev} to ntfy topic {topic}"',
+        f'COMMENT="hnx: {sev} to notify topic {topic}"',
         "WEBHOOKS=/cluster/notifications/endpoints/webhook",
         "MATCHERS=/cluster/notifications/matchers",
         "",
@@ -162,12 +162,12 @@ def readme(notifies: dict[str, dict]) -> str:
         L.append("No node declares `notify` in `_nodes.yml`.")
     else:
         L += [
-            "Each node below sends its Proxmox notifications of the listed severities to ntfy.",
+            "Each node below sends its hypervisor notifications of the listed severities to the notifier.",
             "Copy `<node>/hnx-notify.sh` to the node and run it as root; `hnx-notify.sh --test`",
             "then sends a test notification. A backup job sends through this only with",
             "`notification-mode notification-system` (or `auto` with no `mailto`).",
             "",
-            "| Node | ntfy server | Topic | Severities | Built-in mail matcher |",
+            "| Node | Notify server | Topic | Severities | Built-in mail matcher |",
             "|---|---|---|---|---|",
         ]
         for node, n in notifies.items():

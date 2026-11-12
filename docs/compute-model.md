@@ -1,6 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, generators for IaC, cloud-init, inventory, firewall and baselines, and applying them.'
-summary_of: outline:sha256:3beba5117c11a6cc
+summary_of: outline:sha256:e44d0871696e8680
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -203,9 +203,9 @@ nodes:
 ```
 
 `hnx guests render --target node-notify` writes `notify/<node>/hnx-notify.sh`. Run once on the
-node as root, it creates or updates a webhook target `hnx-ntfy` that POSTs each notification to
+node as root, it creates or updates a webhook target `hnx-notify` that POSTs each notification to
 `url` as ntfy JSON (`topic`, `title` prefixed with the node name, `message`, `priority`, and the
-tags `proxmox` and the severity), and a matcher `hnx-ntfy-route` that sends the listed severities
+tags `hypervisor` and the severity), and a matcher `hnx-notify-route` that sends the listed severities
 to it; with `default_mail: false` it also disables Proxmox's built-in `default-matcher`. A re-run
 leaves a correct config unchanged and undoes a hand edit of the two entries (a `disable`, an
 `invert-match`, extra match rules). `hnx-notify.sh --test` asks Proxmox to send a test

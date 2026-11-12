@@ -224,12 +224,12 @@ def _mirror(p: Path, name: Any, raw: Any) -> dict[str, Any]:
 
 
 #: an ntfy server: http(s), an ASCII host name or IPv4 address, an optional port and base path
-_NTFY_URL_RE = re.compile(
+_NOTIFY_URL_RE = re.compile(
     r"^https?://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?"
     r"(?:/[A-Za-z0-9._~-]+)*/?\Z"
 )
 #: an ntfy topic name (ntfy's own rule)
-_NTFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
+_NOTIFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 #: the severities a Proxmox notification matcher can match
 PVE_SEVERITIES = ("info", "notice", "warning", "error", "unknown")
 
@@ -246,10 +246,10 @@ def _notify(p: Path, name: Any, raw: Any) -> dict[str, Any]:
             f"{where}: takes url and topic (required), severities, priority and default_mail"
         )
     url, topic = raw["url"], raw["topic"]
-    if not isinstance(url, str) or not _NTFY_URL_RE.match(url):
+    if not isinstance(url, str) or not _NOTIFY_URL_RE.match(url):
         raise ComputeError(f"{where}.url: {url!r} is not an http(s) server URL (no query, no user)")
-    if not isinstance(topic, str) or not _NTFY_TOPIC_RE.match(topic):
-        raise ComputeError(f"{where}.topic: {topic!r} is not an ntfy topic ([A-Za-z0-9_-], 1-64)")
+    if not isinstance(topic, str) or not _NOTIFY_TOPIC_RE.match(topic):
+        raise ComputeError(f"{where}.topic: {topic!r} is not a topic ([A-Za-z0-9_-], 1-64)")
     sev = raw.get("severities", ["warning", "error", "unknown"])
     if (
         not isinstance(sev, list)

@@ -30,7 +30,7 @@ STUB = MappingZones(
     ]
 )
 
-NOTIFY = {"url": "https://ntfy.example.org", "topic": "proxmox-alerts"}
+NOTIFY = {"url": "https://notify.example.org", "topic": "node-alerts"}
 
 
 def nodes_file(tmp_path: Path, nodes: dict) -> Path:
@@ -46,8 +46,8 @@ def fleet_with(tmp_path: Path, nodes: dict):
 def test_defaults_fill_in(tmp_path):
     got = load_nodes(nodes_file(tmp_path, {"hv-a": {"notify": NOTIFY}}))["hv-a"]["notify"]
     assert got == {
-        "url": "https://ntfy.example.org/",
-        "topic": "proxmox-alerts",
+        "url": "https://notify.example.org/",
+        "topic": "node-alerts",
         "severities": ["warning", "error", "unknown"],
         "priority": 4,
         "default_mail": False,
@@ -57,14 +57,14 @@ def test_defaults_fill_in(tmp_path):
 @pytest.mark.parametrize(
     ("notify", "needle"),
     [
-        ({"url": "https://ntfy.example.org"}, "url and topic"),
+        ({"url": "https://notify.example.org"}, "url and topic"),
         ({**NOTIFY, "token": "x"}, "url and topic"),
-        ({**NOTIFY, "url": "ftp://ntfy.example.org"}, "not an http"),
-        ({**NOTIFY, "url": "https://user:pw@ntfy.example.org"}, "not an http"),
-        ({**NOTIFY, "url": "https://ntfy.example.org/?a=1"}, "not an http"),
+        ({**NOTIFY, "url": "ftp://notify.example.org"}, "not an http"),
+        ({**NOTIFY, "url": "https://user:pw@notify.example.org"}, "not an http"),
+        ({**NOTIFY, "url": "https://notify.example.org/?a=1"}, "not an http"),
         ({**NOTIFY, "url": 'https://x"$(id)'}, "not an http"),
-        ({**NOTIFY, "topic": "a/b"}, "not an ntfy topic"),
-        ({**NOTIFY, "topic": "a" * 65}, "not an ntfy topic"),
+        ({**NOTIFY, "topic": "a/b"}, "not a topic"),
+        ({**NOTIFY, "topic": "a" * 65}, "not a topic"),
         ({**NOTIFY, "severities": []}, "non-empty list"),
         ({**NOTIFY, "severities": ["critical"]}, "non-empty list"),
         ({**NOTIFY, "severities": ["error", "error"]}, "listed twice"),
@@ -88,15 +88,15 @@ def test_a_notifying_node_gets_a_script(tmp_path):
     out = render(fleet_with(tmp_path, {"hv-a": {"notify": NOTIFY}, "hv-b": {}}), "node-notify")
     assert sorted(out) == ["notify/README.md", "notify/hv-a/hnx-notify.sh"]
     sh = out["notify/hv-a/hnx-notify.sh"]
-    assert 'URL="https://ntfy.example.org/"' in sh
+    assert 'URL="https://notify.example.org/"' in sh
     assert 'SEVERITIES="warning,error,unknown"' in sh
     assert (
-        "| `hv-a` | `https://ntfy.example.org/` | `proxmox-alerts` "
+        "| `hv-a` | `https://notify.example.org/` | `node-alerts` "
         "| `warning`, `error`, `unknown` | turned off |" in out["notify/README.md"]
     )
 
 
-def test_the_body_is_ntfy_json_once_proxmox_fills_it(tmp_path):
+def test_the_body_is_json_once_the_hypervisor_fills_it(tmp_path):
     sh = render(fleet_with(tmp_path, {"hv-a": {"notify": NOTIFY}}), "node-notify")[
         "notify/hv-a/hnx-notify.sh"
     ]
@@ -110,11 +110,11 @@ def test_the_body_is_ntfy_json_once_proxmox_fills_it(tmp_path):
     )
     doc = json.loads(filled)
     assert doc == {
-        "topic": "proxmox-alerts",
+        "topic": "node-alerts",
         "title": '[hv-a] backup "failed"',
         "message": "line 1\nline 2",
         "priority": 4,
-        "tags": ["proxmox", "error"],
+        "tags": ["hypervisor", "error"],
     }
 
 
@@ -225,8 +225,8 @@ def test_a_rerun_updates_in_place(node):
     r, calls = run()
     assert r.returncode == 0, r.stderr
     assert _verbs(calls) == [
-        "pvesh set /cluster/notifications/endpoints/webhook/hnx-ntfy",
-        "pvesh set /cluster/notifications/matchers/hnx-ntfy-route",
+        "pvesh set /cluster/notifications/endpoints/webhook/hnx-notify",
+        "pvesh set /cluster/notifications/matchers/hnx-notify-route",
         "pvesh set /cluster/notifications/matchers/default-matcher",
     ]
 
@@ -246,8 +246,8 @@ def test_remove_takes_the_matcher_off_before_the_target(node):
     r, calls = run("--remove")
     assert r.returncode == 0, r.stderr
     assert _verbs(calls) == [
-        "pvesh delete /cluster/notifications/matchers/hnx-ntfy-route",
-        "pvesh delete /cluster/notifications/endpoints/webhook/hnx-ntfy",
+        "pvesh delete /cluster/notifications/matchers/hnx-notify-route",
+        "pvesh delete /cluster/notifications/endpoints/webhook/hnx-notify",
         "pvesh set /cluster/notifications/matchers/default-matcher",
     ]
     assert calls[-1].endswith("--delete disable")
@@ -257,7 +257,7 @@ def test_test_sends_through_the_target(node):
     run = node(NOTIFY)
     r, calls = run("--test")
     assert r.returncode == 0 and calls == [
-        "pvesh create /cluster/notifications/targets/hnx-ntfy/test"
+        "pvesh create /cluster/notifications/targets/hnx-notify/test"
     ]
 
 
