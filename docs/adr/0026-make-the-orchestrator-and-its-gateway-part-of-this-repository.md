@@ -76,7 +76,7 @@ private sources, so bringing that generic code in needs an amendment to it (deci
    - `cmd/gateway` and `internal/gateway` now; the controller's `cmd/` and `internal/` packages
      later (decision 8, stage 2). `internal/` is private to the module, as Go enforces: no other
      module imports it.
-   - The `go` line of `orchestrator/go.mod` is the Go of CI's `GO_VERSION` (1.27.3 today), raised
+   - The `go` line of `orchestrator/go.mod` is the Go of CI's `GO_VERSION` (1.27.4 today), raised
      with it, by hand, to a release past the 14-day cooldown (CONTRIBUTING.md, "Keeping pins
      current"). CI's `go` job installs that version (`GOTOOLCHAIN=local`) and runs with
      `GOFLAGS=-mod=readonly` and `GOWORK=off`.
