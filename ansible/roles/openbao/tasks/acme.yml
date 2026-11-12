@@ -75,31 +75,31 @@
     mode: "0700"
   loop: ["{{ openbao_acme_dir }}", "{{ openbao_acme_env_file | dirname }}"]
 
-- name: Read the DNS provider's token (secret reference, never a value in the inventory)
-  ansible.builtin.set_fact:
-    openbao_acme_token: "{{ lookup('hnx_secret', openbao_acme_dns_token_ref) }}"
-  no_log: true
-
-- name: Refuse a token that would not survive an environment file unchanged
-  ansible.builtin.assert:
-    that: openbao_acme_token is match('^[A-Za-z0-9._~+/=-]{1,512}\Z')
-    fail_msg: "openbao: the token behind {{ openbao_acme_dns_token_ref }} is not a single printable word"
-  no_log: true
-
-- name: Write the token into the renewal unit's environment file (root only, 0600)
-  ansible.builtin.copy:
-    dest: "{{ openbao_acme_env_file }}"
-    content: "{{ openbao_acme_token_env[openbao_acme_dns_provider] }}={{ openbao_acme_token }}\n"
-    owner: "{{ openbao_owner }}"
-    group: "{{ openbao_owner_group }}"
-    mode: "0600"
-  no_log: true
-  diff: false
-
-- name: Forget the token
-  ansible.builtin.set_fact:
-    openbao_acme_token: ""
-  no_log: true
+- name: Write the DNS provider's token into the root-only environment file (0600)
+  block:
+    - name: Read the DNS provider's token (secret reference, never a value in the inventory)
+      ansible.builtin.set_fact:
+        openbao_acme_token: "{{ lookup('hnx_secret', openbao_acme_dns_token_ref) }}"
+      no_log: true
+    - name: Refuse a token that would not survive an environment file unchanged
+      ansible.builtin.assert:
+        that: openbao_acme_token is match('^[A-Za-z0-9._~+/=-]{1,512}\Z')
+        fail_msg: "openbao: the token behind {{ openbao_acme_dns_token_ref }} is not a single printable word ([A-Za-z0-9._~+/=-])"
+      no_log: true
+    - name: Write the token (read by the renewal script, never by the unit's environment)
+      ansible.builtin.copy:
+        dest: "{{ openbao_acme_env_file }}"
+        content: "{{ openbao_acme_token_env[openbao_acme_dns_provider] }}={{ openbao_acme_token }}\n"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_owner_group }}"
+        mode: "0600"
+      no_log: true
+      diff: false
+  always:
+    - name: Forget the token, whatever happened above
+      ansible.builtin.set_fact:
+        openbao_acme_token: ""
+      no_log: true
 
 - name: Create the script directory
   ansible.builtin.file:
@@ -153,6 +153,12 @@
   failed_when: openbao_acme_check.rc not in [0, 1]
   check_mode: false  # read-only
   when: openbao_acme_script_stat.stat.exists
+
+- name: "--check: say a certificate would be obtained (no renewal script yet, or the installed one is not valid)"
+  ansible.builtin.debug:
+    msg: "openbao: would start {{ openbao_acme_unit }}.service to obtain or renew the certificate"
+  changed_when: true
+  when: ansible_check_mode and openbao_acme_check.rc | default(1) != 0
 
 - name: Obtain or renew the certificate now (the renewal unit, so the run is in its journal)
   ansible.builtin.command:

@@ -166,7 +166,9 @@ ACME_BAD = [
     {"openbao_acme_email": "a b@example.internal"},
     {"openbao_acme_propagation_wait": "30"},
     {"openbao_acme_propagation_wait": "0s"},
-    {"openbao_acme_renew_days": 90},
+    {"openbao_acme_renew_days": 46},  # past the cap: a reissue loop on a shorter-lived certificate
+    {"openbao_acme_email": "-x@example.internal"},
+    {"openbao_acme_dir": "/var/lib/acme%n"},
     {"openbao_acme_health_min_days": 30},  # not below renew_days
     {"openbao_acme_key_type": "ec256"},
     {"openbao_acme_schedule": "daily"},
@@ -1589,6 +1591,14 @@ if sys.argv[1:] == ["--version"]:
     print("lego version 5.6.0 linux/amd64")
     sys.exit(0)
 a = sys.argv[1:]
+# the flags `lego --help` and `lego run --help` of the real 5.6.0 list (the ones the role uses):
+# any other spelling is refused, as the real binary refuses it
+KNOWN = {"--log.format", "run", "--accept-tos", "--server", "--path", "--cert.name", "--key-type",
+         "--dns", "--dns.propagation.wait", "--renew-days", "--no-random-sleep", "--email",
+         "--domains"}
+unknown = [x for x in a if x.startswith("-") and x not in KNOWN]
+if unknown or a[2:3] != ["run"]:
+    sys.exit("lego: flag provided but not defined: " + " ".join(unknown or a[:3]))
 token = os.environ.get("CF_DNS_API_TOKEN", "")
 open(LOG, "a").write("lego " + " ".join(a) + (" TOKEN-IN-ENV" if token else "") + "\n")
 if os.path.exists(MARK + ".fail"):
@@ -1621,11 +1631,13 @@ a = sys.argv[1:]
 open(LOG, "a").write("systemctl " + " ".join(a) + "\n")
 if a[0] == "is-active":
     sys.exit(0 if os.path.exists(MARK + ".active") else 3)
+if a[0] == "reload":
+    sys.exit(1 if os.path.exists(MARK + ".reloadfail") else 0)
 if a[0] == "start":
     unit = open(os.path.join(UNITS, a[1])).read().splitlines()
     val = lambda k: [l.split("=", 1)[1] for l in unit if l.startswith(k + "=")][-1]
+    assert not [l for l in unit if l.startswith("EnvironmentFile=")]  # the script reads the token
     env = {"PATH": os.environ["PATH"], "SSL_CERT_FILE": os.environ.get("SSL_CERT_FILE", "")}
-    env.update(l.split("=", 1) for l in open(val("EnvironmentFile")).read().splitlines() if l)
     assert val("ExecStart") == "/usr/local/libexec/homelabnext/openbao-acme-renew"
     sys.exit(subprocess.run([sys.executable, SCRIPT], env=env).returncode)  # installed under tmp
 """
@@ -1708,6 +1720,10 @@ def test_acme_obtains_installs_and_reloads_and_a_rerun_changes_nothing(tmp_path,
     (tmp_path / "openbao.active").write_text("")
     with lego_mirror(pki, tmp_path) as (mirror, sha):
         v = acme_vars(tmp_path, pki, mirror, sha)
+        dry = run_role(tmp_path, ROLE, "tls", v, env=acme_env(pki), check=True)
+        assert dry.returncode == 0, dry.stdout[-4000:] + dry.stderr
+        assert "would start hnx-openbao-acme.service" in dry.stdout  # a fresh host is not converged
+        assert not [c for c in calls(tmp_path) if c.startswith("lego --log")]
         r = verbose_run(tmp_path, "tls", v, env=acme_env(pki))
         assert r.returncode == 0, r.stdout[-4000:] + r.stderr
         log = calls(tmp_path)
@@ -1742,13 +1758,14 @@ def test_acme_obtains_installs_and_reloads_and_a_rerun_changes_nothing(tmp_path,
 
     unit = (tmp_path / "units" / "hnx-openbao-acme.service").read_text()
     for line in (
-        f"EnvironmentFile={env}",
         "ExecStart=/usr/local/libexec/homelabnext/openbao-acme-renew",
         "OnFailure=hnx-page@%n.service",
         "Type=oneshot",
         "NoNewPrivileges=yes",
         "ProtectSystem=strict",
         "CapabilityBoundingSet=CAP_CHOWN",
+        "ProtectProc=invisible",
+        "SystemCallFilter=@system-service",
         f"ReadWritePaths={tmp_path}/acme {tls} {tmp_path}/records",
     ):
         assert f"\n{line}\n" in unit, line
@@ -1776,7 +1793,7 @@ def test_the_renewal_script_installs_only_a_valid_certificate(tmp_path, pki):
 
     def renew(env=None):
         (tmp_path / "calls.log").unlink(missing_ok=True)
-        e = {"PATH": os.environ["PATH"], "CF_DNS_API_TOKEN": DNS_TOKEN} if env is None else env
+        e = {"PATH": os.environ["PATH"]} if env is None else env
         return subprocess.run([sys.executable, script], env=e, capture_output=True, text=True)
 
     assert subprocess.run([sys.executable, script, "--check"], capture_output=True).returncode == 0
@@ -1790,15 +1807,30 @@ def test_the_renewal_script_installs_only_a_valid_certificate(tmp_path, pki):
     assert r.returncode == 2 and f"does not verify for {HOST}" in r.stdout, r.stdout
     assert cert.read_bytes() == first
     (tmp_path / "lego.wrong").unlink()
-    r = renew(env={"PATH": os.environ["PATH"]})
-    assert r.returncode == 2 and "CF_DNS_API_TOKEN is not set" in r.stdout
+    dns_env = tmp_path / "etc" / "acme" / "dns.env"
+    dns_env.rename(dns_env.with_suffix(".off"))
+    r = renew()
+    assert r.returncode == 2 and "no CF_DNS_API_TOKEN in" in r.stdout, r.stdout
+    dns_env.with_suffix(".off").rename(dns_env)
     # a renewal: installed; the server is stopped, so nothing is reloaded
     r = renew()
     assert r.returncode == 0 and "installed a new certificate" in r.stdout, r.stdout
     assert cert.read_bytes() != first
     assert not [c for c in calls(tmp_path) if "reload" in c]
-    # again, with the server running: reloaded, never restarted
+    # the server running and its reload failing: exit 3, and the reload stays owed
     (tmp_path / "openbao.active").write_text("")
+    (tmp_path / "openbao.reloadfail").write_text("")
+    r = renew()
+    assert r.returncode == 3 and "retried next run" in r.stdout, r.stdout
+    check = subprocess.run([sys.executable, script, "--check"], capture_output=True, text=True)
+    assert check.returncode == 1 and "has not reloaded" in check.stdout, check.stdout
+    (tmp_path / "openbao.reloadfail").unlink()
+    (tmp_path / "lego.force").unlink()  # nothing new from lego: the owed reload alone is retried
+    r = renew()
+    assert r.returncode == 0 and "retrying" in r.stdout and "reloaded openbao.service" in r.stdout
+    assert subprocess.run([sys.executable, script, "--check"], capture_output=True).returncode == 0
+    # a renewal with the server running: reloaded, never restarted
+    (tmp_path / "lego.force").write_text("")
     r = renew()
     assert r.returncode == 0 and "reloaded openbao.service" in r.stdout, r.stdout
     assert "systemctl reload openbao.service" in calls(tmp_path)
@@ -1836,3 +1868,24 @@ def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
     assert got[1][0] and "expires within 14 days" in got[1][1], got[1]
     assert got[2][0] and "CERTIFICATE_VERIFY_FAILED" in got[2][1], got[2]
     assert ready.returncode == 0 and "unsealed-active" in ready.stdout, ready.stdout
+
+
+def test_going_back_to_supplied_pems_removes_the_acme_renewal(tmp_path, pki):
+    """Left in place, the renewal timer would overwrite the supplied PEMs and keep the DNS token
+    on the host: switching back to provided stops and removes the timer, units, script and token."""
+    with lego_mirror(pki, tmp_path) as (mirror, sha):
+        v = acme_vars(tmp_path, pki, mirror, sha)
+        r = run_role(tmp_path, ROLE, "tls", v, env=acme_env(pki))
+        assert r.returncode == 0, r.stdout[-4000:] + r.stderr
+    (tmp_path / "calls.log").unlink()
+    back = {
+        k: base(tmp_path)[k]
+        for k in ("openbao_tls_cert_pem", "openbao_tls_private_key_pem", "openbao_tls_ca_pem")
+    }
+    r = run_role(tmp_path, ROLE, "tls", dict(v, openbao_tls_source="provided", **back))
+    assert r.returncode == 0, r.stdout[-4000:] + r.stderr
+    assert "systemctl disable --now hnx-openbao-acme.timer" in calls(tmp_path)
+    for gone in ("units/hnx-openbao-acme.timer", "units/hnx-openbao-acme.service",
+                 "bin/openbao-acme-renew", "etc/acme"):  # fmt: skip
+        assert not (tmp_path / gone).exists(), gone
+    assert (tmp_path / "etc" / "tls" / "ca.pem").read_text() == CERT_PEM

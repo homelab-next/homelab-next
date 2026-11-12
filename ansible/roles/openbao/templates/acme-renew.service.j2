@@ -13,8 +13,9 @@ OnFailure={{ openbao_acme_on_failure }}
 
 [Service]
 Type=oneshot
-# The DNS provider's token, from a root-only file: never an argument, never in the unit.
-EnvironmentFile={{ openbao_acme_env_file }}
+# The DNS provider's token is in {{ openbao_acme_env_file }} (root, 0600): the script reads it
+# itself and hands it to lego alone, so it is never an argument, never in the unit, and never in
+# the environment of the last-run writer or systemctl.
 # (the paths are openbao_acme_script and openbao_last_run_writer, vars/main.yml: fixed)
 # the job's last-run record (role last_run), written on start and again on stop, whatever
 # the outcome; a writer problem never changes the job's own result (the - prefix)
@@ -39,9 +40,11 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
+ProtectProc=invisible
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service

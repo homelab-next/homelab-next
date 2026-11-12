@@ -174,7 +174,7 @@ argument_specs:
         default: "30s"
       openbao_acme_renew_days:
         type: int
-        description: "acme: renew when fewer days than this remain (1 to 89)."
+        description: "acme: renew when fewer days than this remain (1 to 45: a margin at or past the certificate lifetime would reissue every run)."
         default: 30
       openbao_acme_key_type:
         type: str

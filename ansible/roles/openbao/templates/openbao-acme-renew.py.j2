@@ -6,14 +6,14 @@
 #   purpose: Renew OpenBao's public server certificate over ACME (DNS-01) when due, install it and reload the server with SIGHUP.
 #   owner: platform
 #   trigger: [timer:openbao/acme-renew, role:openbao]
-#   inputs: the DNS provider's token (environment, from the unit's root-only EnvironmentFile); lego's stored certificate
+#   inputs: the DNS provider's token (the root-only environment file, read by the script itself); lego's stored certificate
 #   outputs: the server certificate and key in the TLS directory; a reload (SIGHUP) of a running server
 #   installs_to: /usr/local/libexec/homelabnext/openbao-acme-renew
 #   exit:
 #     "0": the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid
 #     "1": with --check, the installed certificate is missing, invalid or due
 #     "2": lego failed, or what it stored is not a valid certificate for the names; nothing was installed
-#     "3": the certificate was installed but the running server could not be reloaded
+#     "3": the certificate was installed but the running server could not be reloaded (retried next run)
 """Managed by Ansible (role openbao); local changes are overwritten.
 
 Without arguments (the renewal unit): run lego, which renews only when fewer than the configured
@@ -24,8 +24,8 @@ group only) and reload a running server with ``systemctl reload`` (SIGHUP: it st
 restart would seal it). ``--check``: is the INSTALLED certificate valid and not yet due? The role
 asks this before it starts the unit, so a converged host is left alone.
 
-The token reaches lego in its environment only (never an argument); nothing here prints it, and
-the reload runs without it."""
+The token is read from the root-only environment file by this script and reaches lego in its
+environment only (never an argument, never the unit's environment); nothing here prints it."""
 
 import json
 import os
@@ -40,6 +40,7 @@ CONF = json.loads({{ {
     'email': openbao_acme_email,
     'provider': openbao_acme_dns_provider,
     'token_env': openbao_acme_token_env[openbao_acme_dns_provider],
+    'env_file': openbao_acme_env_file,
     'wait': openbao_acme_propagation_wait,
     'renew_days': openbao_acme_renew_days | int,
     'key_type': openbao_acme_key_type,
@@ -55,6 +56,9 @@ CONF = json.loads({{ {
 NAME = "openbao"  # lego's --cert.name: <path>/certificates/openbao.{crt,key}
 STORED_CERT = os.path.join(CONF["path"], "certificates", NAME + ".crt")
 STORED_KEY = os.path.join(CONF["path"], "certificates", NAME + ".key")
+# A reload that failed after an install: the next run (and --check) retries it until it succeeds,
+# so a listener still serving the old certificate is never mistaken for a current one.
+RELOAD_OWED = os.path.join(CONF["path"], "reload-owed")
 PASS_ENV = ("PATH", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE")
 
 
@@ -91,25 +95,69 @@ def problem(cert_path, key_path, due_days):
     return None
 
 
-def install(src, dest, mode):
-    """Copy ``src`` over ``dest`` atomically, owned by the owner and the service account's group."""
+def stage(data, dest, mode):
+    """A temporary file beside ``dest`` holding ``data``, owned by the owner and the service
+    account's group, written and synced: renamed over ``dest`` by ``install_pair``."""
     import grp
     import pwd
 
     uid, gid = pwd.getpwnam(CONF["owner"]).pw_uid, grp.getgrnam(CONF["group"]).gr_gid
-    with open(src, "rb") as f:
-        data = f.read()
     fd, tmp = tempfile.mkstemp(prefix=".acme-", dir=os.path.dirname(dest))
     try:
+        os.fchmod(fd, mode)  # the mode first: fchown needs only CAP_CHOWN, whoever the owner is
         os.fchown(fd, uid, gid)
-        os.fchmod(fd, mode)
         os.write(fd, data)
         os.fsync(fd)
-        os.close(fd)
-        os.replace(tmp, dest)
     except BaseException:
+        os.close(fd)
         os.unlink(tmp)
         raise
+    os.close(fd)
+    return tmp
+
+
+def read(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def install_pair():
+    """Replace the key and the certificate as a pair: both are staged and synced first, renamed
+    back to back, and checked; a pair that does not check out is put back as it was."""
+    old = {CONF["key"]: read(CONF["key"]), CONF["cert"]: read(CONF["cert"])}
+    staged = {CONF["key"]: stage(read(STORED_KEY), CONF["key"], 0o640),
+              CONF["cert"]: stage(read(STORED_CERT), CONF["cert"], 0o644)}  # fmt: skip
+    try:
+        for dest, tmp in staged.items():
+            os.replace(tmp, dest)
+        why = problem(CONF["cert"], CONF["key"], 0)
+    except OSError as e:
+        why = f"install failed: {e.strerror}"
+    if why:
+        for dest, data in old.items():
+            if data is not None:
+                os.replace(stage(data, dest, 0o640 if dest == CONF["key"] else 0o644), dest)
+        for tmp in staged.values():
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    return why
+
+
+def load_token():
+    """The DNS provider's token from the root-only environment file (never this process's
+    environment, so the unit's other commands never see it)."""
+    try:
+        with open(CONF["env_file"], encoding="utf-8") as f:
+            for line in f:
+                k, _, v = line.rstrip("\n").partition("=")
+                if k == CONF["token_env"] and v:
+                    return v
+    except OSError:
+        pass
+    return ""
 
 
 def same(a, b):
@@ -122,10 +170,11 @@ def same(a, b):
 
 def renew():
     env = {k: os.environ[k] for k in PASS_ENV if k in os.environ}
-    if not os.environ.get(CONF["token_env"]):
-        print(f"openbao-acme: {CONF['token_env']} is not set (the unit's EnvironmentFile)")
+    token = load_token()
+    if not token:
+        print(f"openbao-acme: no {CONF['token_env']} in {CONF['env_file']}")
         return 2
-    env[CONF["token_env"]] = os.environ[CONF["token_env"]]
+    env[CONF["token_env"]] = token
     argv = [CONF["lego"], "--log.format", "text", "run", "--accept-tos",
             "--server", CONF["server"], "--path", CONF["path"], "--cert.name", NAME,
             "--key-type", CONF["key_type"], "--dns", CONF["provider"],
@@ -144,21 +193,34 @@ def renew():
         print(f"openbao-acme: refusing what lego stored: {why}; nothing installed")
         return 2
     if same(STORED_CERT, CONF["cert"]) and same(STORED_KEY, CONF["key"]):
-        print("openbao-acme: the installed certificate is current")
-        return 0
-    install(STORED_KEY, CONF["key"], 0o640)
-    install(STORED_CERT, CONF["cert"], 0o644)
-    print(f"openbao-acme: installed a new certificate for {', '.join(CONF['domains'])}")
-    clean = {k: v for k, v in os.environ.items() if k != CONF["token_env"]}
+        if not os.path.exists(RELOAD_OWED):
+            print("openbao-acme: the installed certificate is current")
+            return 0
+        print("openbao-acme: the installed certificate is current; an earlier reload failed, retrying")
+    else:
+        # The server reads the pair only on the reload below (or a start). A crash between the
+        # two renames leaves a pair that differs from what lego stored: the next run installs
+        # both again.
+        with open(RELOAD_OWED, "w"):
+            pass
+        why = install_pair()
+        if why:
+            os.unlink(RELOAD_OWED)
+            print(f"openbao-acme: the new pair did not check out ({why}); the old pair is back")
+            return 2
+        print(f"openbao-acme: installed a new certificate for {', '.join(CONF['domains'])}")
+    clean = dict(os.environ)
     active = subprocess.run([CONF["systemctl"], "is-active", "--quiet", CONF["service"]],
                             env=clean, check=False)  # fmt: skip
     if active.returncode != 0:
         print(f"openbao-acme: {CONF['service']} is not running; it reads the new certificate when it starts")
+        os.unlink(RELOAD_OWED)
         return 0
     r = subprocess.run([CONF["systemctl"], "reload", CONF["service"]], env=clean, check=False)
     if r.returncode != 0:
-        print(f"openbao-acme: systemctl reload {CONF['service']} failed (exit {r.returncode})")
+        print(f"openbao-acme: systemctl reload {CONF['service']} failed (exit {r.returncode}); retried next run")
         return 3
+    os.unlink(RELOAD_OWED)
     print(f"openbao-acme: reloaded {CONF['service']} (SIGHUP; it stays unsealed)")
     return 0
 
@@ -166,6 +228,8 @@ def renew():
 def main(argv):
     if argv == ["--check"]:
         why = problem(CONF["cert"], CONF["key"], CONF["renew_days"])
+        if not why and os.path.exists(RELOAD_OWED):
+            why = "the server has not reloaded the installed certificate (a reload failed)"
         print(f"openbao-acme: {why}" if why else "openbao-acme: the installed certificate is valid")
         return 1 if why else 0
     if argv:

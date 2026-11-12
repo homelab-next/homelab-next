@@ -1002,10 +1002,10 @@
         "0": "the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid",
         "1": "with --check, the installed certificate is missing, invalid or due",
         "2": "lego failed, or what it stored is not a valid certificate for the names; nothing was installed",
-        "3": "the certificate was installed but the running server could not be reloaded"
+        "3": "the certificate was installed but the running server could not be reloaded (retried next run)"
       },
       "id": "openbao-acme-renew",
-      "inputs": "the DNS provider's token (environment, from the unit's root-only EnvironmentFile); lego's stored certificate",
+      "inputs": "the DNS provider's token (the root-only environment file, read by the script itself); lego's stored certificate",
       "installs_to": "/usr/local/libexec/homelabnext/openbao-acme-renew",
       "kind": "job",
       "language": "python",

@@ -238,13 +238,20 @@ the challenge's TXT record is published). What `main` does:
   release's `lego_<version>_checksums.txt`; `openbao_lego_checksums_release` must equal the
   version), fetched over https into `<openbao_install_dir>/lego/<version>/`, refused on a
   checksum mismatch or a binary that reports another version. `tools/pin_freshness.py` watches it.
+  lego publishes no signature over its checksums file, so the pin proves the archive is the one
+  reviewed when it was pinned (integrity), not who built it: re-check a new pin against the
+  release page and its SBOM before moving it.
 * **The token.** `openbao_acme_dns_token_ref` names it (`secret:<name>`), resolved through the
   `hnx_secret` lookup under `no_log` and written only to `<openbao_config_dir>/acme/dns.env`
-  (root, 0600, in a 0700 directory) as `CF_DNS_API_TOKEN=...`, the renewal unit's
-  `EnvironmentFile=`. It is never an argument (lego reads it from its environment), never in a
-  unit, a script or a log line; the renewal script passes it to lego alone and runs `systemctl`
-  without it. A Cloudflare API token needs Zone:DNS:Edit on the zone that holds the names, and
-  nothing else.
+  (root, 0600, in a 0700 directory) as `CF_DNS_API_TOKEN=...`, which the renewal script reads
+  itself. It is never an argument (lego reads it from its environment), never in a unit (so not in
+  the environment of the unit's other commands), a script or a log line; the script passes it to
+  lego alone. A Cloudflare API token needs Zone:DNS:Edit and Zone:Zone:Read (lego looks the zone
+  up) on the zone that holds the names, and nothing else. Such a token can edit every record of
+  that zone, and so obtain a certificate for any name in it: keep it to its own zone where you can
+  (delegate `_acme-challenge.<name>` by CNAME to a zone that holds nothing else, and scope the
+  token to that zone; lego follows the CNAME), restrict it to the host's egress address in
+  Cloudflare, and publish a CAA record naming the CA (and the account, `accounturi`).
 * **The challenge.** DNS-01 through the provider's API, then a **fixed wait**
   (`openbao_acme_propagation_wait`, 30s) instead of lego's propagation check. That check asks the
   zone's authoritative servers, which it finds through the host's own resolvers: behind
@@ -255,14 +262,20 @@ the challenge's TXT record is published). What `main` does:
 * **Renewal.** The unit `hnx-openbao-acme.service`, started by `hnx-openbao-acme.timer` daily
   (`openbao_acme_schedule`, `Persistent=true`, a random delay of up to 30 minutes), runs
   `/usr/local/libexec/homelabnext/openbao-acme-renew`: lego renews when fewer than
-  `openbao_acme_renew_days` (30) remain or the names changed (and when the CA's renewal-info
+  `openbao_acme_renew_days` (30, at most 45: a margin at or past the certificate's lifetime would
+  reissue on every run, into the CA's rate limits) remain or the names changed (and when the CA's renewal-info
   endpoint asks for it); the script then checks what lego stored (every name verified against
   `openbao_acme_trust_bundle`, the key matching the certificate, not expired) and, when it differs
   from what the listener reads, installs the key (0640, group `openbao_group`) and the
-  certificate (0644) atomically and reloads a running server with `systemctl reload` (SIGHUP: it
-  stays unsealed). **It never restarts the server**, which would seal it. The unit runs as root,
+  certificate (0644) atomically, checks the installed pair again, and reloads a running server
+  with `systemctl reload` (SIGHUP: it stays unsealed). A reload that fails is recorded
+  (`<openbao_acme_dir>/reload-owed`) and retried by every later run, and `--check` reports it, so
+  a server still serving the old certificate is never taken for a current one. **It never restarts the server**, which would seal it. The unit runs as root,
   sandboxed (`ProtectSystem=strict` with only the ACME directory, the TLS directory and its
   last-run record writable, no capability but `CAP_CHOWN`).
+* **Taking it back.** Setting `openbao_tls_source: provided` again stops and removes the renewal
+  timer, its unit, the script and the token file (left in place, the timer would overwrite the
+  supplied PEMs); the ACME account directory stays.
 * **Idempotent.** `main` runs the script's `--check` first and starts the unit only when the
   installed certificate is missing, names other domains, does not verify, does not match its key
   or is due; a converged host with a valid certificate reports `changed=0`, and nothing is

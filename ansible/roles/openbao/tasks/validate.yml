@@ -97,29 +97,30 @@
           - openbao_acme_domains | unique | length == openbao_acme_domains | length
           - (openbao_api_addr | urlsplit('hostname')) in openbao_acme_domains
           - openbao_acme_server is match('^https://[^\s?#@]+\Z')
-          - openbao_acme_email == '' or openbao_acme_email is match('^[^@\s"]+@[A-Za-z0-9.-]+\Z')
+          - openbao_acme_email == '' or openbao_acme_email is match('^[A-Za-z0-9._+][A-Za-z0-9._+-]*@[A-Za-z0-9.-]+\Z')
           - openbao_acme_dns_provider in openbao_acme_token_env
           - openbao_acme_dns_token_ref is match('^secret:[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*\Z')
           - openbao_acme_propagation_wait is match('^[1-9][0-9]{0,3}(s|m)\Z')
-          - openbao_acme_renew_days | int > 0 and openbao_acme_renew_days | int < 90
+          - openbao_acme_renew_days | int > 0 and openbao_acme_renew_days | int <= 45
           - openbao_acme_health_min_days | int >= 0 and openbao_acme_health_min_days | int < openbao_acme_renew_days | int
           - openbao_acme_key_type in ['EC256', 'EC384', 'RSA2048', 'RSA3072', 'RSA4096']
           - openbao_acme_schedule is match('^[0-9*][0-9*:/,. -]*[0-9*] UTC\Z')
-          - openbao_acme_trust_bundle is match('^/[^\s"]+\Z')
+          - openbao_acme_trust_bundle is match('^/[A-Za-z0-9._/-]+\Z')
           - openbao_acme_on_failure == '' or openbao_acme_on_failure is match('^[A-Za-z0-9][A-Za-z0-9@%_.:-]*\.service\Z')
-          - openbao_acme_dir is match('^/[^\s"]+\Z') and openbao_acme_dir not in ['/', '/var', '/var/lib', '/etc']
+          - openbao_acme_dir is match('^/[A-Za-z0-9._/-]+\Z') and openbao_acme_dir not in ['/', '/var', '/var/lib', '/etc']
           - openbao_lego_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
           - openbao_lego_checksums is mapping and openbao_lego_checksums | length > 0
           - openbao_lego_checksums.values() | reject('match', '^[0-9a-f]{64}\Z') | list | length == 0
           - openbao_lego_checksums.keys() | difference(['amd64', 'arm64']) | length == 0
           - openbao_lego_checksums_release == openbao_lego_version
           - openbao_lego_release_repository is match('^https://[^\s?#]+[^/\s?#]\Z')
-          - openbao_last_run_dir is match('^/[^\s"]+\Z')
+          - openbao_last_run_dir is match('^/[A-Za-z0-9._/-]+\Z')
           - openbao_last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
         fail_msg: >-
           openbao: refused ACME input. Needs openbao_acme_domains (lower-case DNS names, no
           wildcard) naming the host of openbao_api_addr, an https openbao_acme_server, a
           secret:<name> openbao_acme_dns_token_ref for a supported provider (cloudflare), a
-          propagation wait such as 30s, 0 <= openbao_acme_health_min_days < openbao_acme_renew_days < 90,
+          propagation wait such as 30s, 0 <= openbao_acme_health_min_days < openbao_acme_renew_days <= 45
+          (a margin at or past the certificate's lifetime would reissue on every run),
           an OnCalendar schedule ending in UTC, a pinned lego x.y.z with a sha256 per architecture
-          taken for that version, and absolute paths.
+          taken for that version, and absolute paths of letters, digits and ._/- only.
