@@ -7,6 +7,7 @@ has no section below.
 ## [Unreleased]
 
 ### Fixed
+- Go 1.27.4 (was 1.27.3) in CI's `GO_VERSION`, `orchestrator/go.mod`, `orchestrator/tools/go.mod` and the lab-in-a-box orchestrator image (`golang:1.27.4-bookworm`, digest-pinned): govulncheck reports GO-2026-6859 in `net/http@go1.27.3`, fixed in 1.27.4, reachable from the gateway, scrape and api packages. It failed the required `go-ok` check on main and every open pull request.
 - Lab-in-a-box: `broker-edge`'s memory limit is 192 MiB (was 144 MiB, with 48 MiB moved from `secrets`, 256 → 208, so the stack still sums to 3584 MB). The broker scenario holds the MCP client and server (~65 MB each) plus one CLI, ~150-156 MB; on a host without swap, the first run on real hardware, the kernel killed the MCP server and `run-once` failed with `MCPError: Connection closed`. CI stayed green because its runners have swap and each container could spill into it. Every service now sets `memswap_limit` equal to `mem_limit`, so a limit behaves the same with or without host swap and CI catches an undersized one.
 - README "Try it": install the `core` and `nats` extras before `make lab-smoke` (as the nightly workflow does); without `nats` the `events` conformance suite failed as could-not-measure.
 - Events: `parse_json` refuses nesting deeper than `MAX_JSON_DEPTH` (512) on every Python. Python 3.14's parser accepts a 20,000-deep object that 3.11-3.13 refuse, so the same body was "not JSON" on one version and a schema failure on another.
