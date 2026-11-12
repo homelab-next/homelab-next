@@ -116,6 +116,11 @@ def stage(data, dest, mode):
     return tmp
 
 
+def contents(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def read(path):
     try:
         with open(path, "rb") as f:
@@ -124,25 +129,37 @@ def read(path):
         return None
 
 
+def discard(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
 def install_pair():
     """Replace the key and the certificate as a pair: both are staged and synced first, renamed
-    back to back, and checked; a pair that does not check out is put back as it was."""
+    back to back, and checked; a pair that does not check out is put back as it was, and on a
+    first install (no earlier pair) removed, so no half-installed pair is ever left behind. No
+    staged temporary file outlives the call."""
     old = {CONF["key"]: read(CONF["key"]), CONF["cert"]: read(CONF["cert"])}
-    staged = {CONF["key"]: stage(read(STORED_KEY), CONF["key"], 0o640),
-              CONF["cert"]: stage(read(STORED_CERT), CONF["cert"], 0o644)}  # fmt: skip
+    staged, replaced = {}, []
     try:
+        staged[CONF["key"]] = stage(contents(STORED_KEY), CONF["key"], 0o640)
+        staged[CONF["cert"]] = stage(contents(STORED_CERT), CONF["cert"], 0o644)
         for dest, tmp in staged.items():
             os.replace(tmp, dest)
+            replaced.append(dest)
         why = problem(CONF["cert"], CONF["key"], 0)
     except OSError as e:
         why = f"install failed: {e.strerror}"
+    for tmp in staged.values():
+        discard(tmp)
     if why:
-        for dest, data in old.items():
-            if data is not None:
-                os.replace(stage(data, dest, 0o640 if dest == CONF["key"] else 0o644), dest)
-        for tmp in staged.values():
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+        for dest in replaced:
+            if old[dest] is not None:
+                os.replace(stage(old[dest], dest, 0o640 if dest == CONF["key"] else 0o644), dest)
+            else:
+                discard(dest)
     return why
 
 
@@ -209,7 +226,8 @@ def renew():
         if why:
             if not owed_before:
                 os.unlink(RELOAD_OWED)
-            print(f"openbao-acme: the new pair did not check out ({why}); the old pair is back")
+            back = "the old pair is back" if os.path.exists(CONF["cert"]) else "nothing is installed"
+            print(f"openbao-acme: the new pair did not check out ({why}); {back}")
             return 2
         print(f"openbao-acme: installed a new certificate for {', '.join(CONF['domains'])}")
     clean = dict(os.environ)

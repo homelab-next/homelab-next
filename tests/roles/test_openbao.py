@@ -1883,6 +1883,54 @@ def test_a_rolled_back_pair_keeps_a_reload_an_earlier_run_owed(tmp_path, pki, ow
     ), check.stdout
 
 
+def failing(real, when, err=28):
+    """``real`` that raises OSError(``err``, ENOSPC by default) on a call ``when(args)`` accepts."""
+
+    def call(*args, **kw):
+        if when(args):
+            raise OSError(err, os.strerror(err))
+        return real(*args, **kw)
+
+    return call
+
+
+@pytest.mark.parametrize("first", [False, True])
+def test_a_failed_cert_staging_leaves_no_temporary_key_and_no_half_pair(tmp_path, pki, first):
+    """N2: the key is staged, then staging the certificate fails (a full disk). The staged key
+    (key material) is not left in the TLS directory, and the installed pair is the old one, or on
+    a first install nothing at all."""
+    mod = acme_installed(tmp_path, pki)
+    tls = tmp_path / "etc" / "tls"
+    old = {p: (tls / p).read_bytes() for p in ("server.pem", "server-key.pem")}
+    if first:
+        for p in old:
+            (tls / p).unlink()
+    mod.stage = failing(mod.stage, lambda a: a[1] == mod.CONF["cert"])
+    assert mod.install_pair() == "install failed: No space left on device"
+    assert staged_leftovers(tmp_path) == []
+    for p, data in old.items():
+        assert (not (tls / p).exists()) if first else (tls / p).read_bytes() == data, p
+
+
+def test_a_first_install_that_fails_its_check_is_removed_and_the_run_fails(tmp_path, pki, capsys):
+    """N2: on a first install there is no old pair to put back; a pair that fails the check after
+    it was installed is removed (never left half-installed for the server to start on), and the
+    run fails, saying nothing is installed."""
+    mod = acme_installed(tmp_path, pki)
+    tls = tmp_path / "etc" / "tls"
+    for p in ("server.pem", "server-key.pem"):
+        (tls / p).unlink()
+    real = mod.problem
+    mod.problem = lambda c, *a: (
+        "the installed pair did not verify" if c == mod.CONF["cert"] else real(c, *a)
+    )
+    assert mod.renew() == 2
+    out = capsys.readouterr().out
+    assert "did not check out (the installed pair did not verify); nothing is installed" in out, out
+    assert sorted(p.name for p in tls.iterdir()) == []
+    assert not Path(mod.RELOAD_OWED).exists()
+
+
 def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
     tmp_path, pki, tmp_path_factory
 ):
