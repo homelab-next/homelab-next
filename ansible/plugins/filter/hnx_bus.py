@@ -655,6 +655,119 @@ def hnx_bus_missing(jsz, account, streams=(), durables=()) -> dict:
     }
 
 
+_NS = 1_000_000_000
+
+
+def _declared_consumer(d) -> dict:
+    """The configuration the provisioner creates for one declared durable (the adapter's
+    ``_consumer_config``: its defaults are ``ack_wait`` 30s and ``max_deliver`` 5), in the fields
+    :func:`hnx_bus_durable_drift` compares."""
+    want = {
+        "ack_wait": int(float(d.get("ack_wait", 30)) * _NS),
+        "max_deliver": int(d.get("max_deliver", 5)),
+        "deliver_policy": str(d.get("deliver_policy", "new")),
+        "ack_policy": "explicit",
+        "replay_policy": "instant",
+        "filter_subject": str(d.get("filter", "")),
+    }
+    if d.get("start_seq") is not None:
+        want.update(deliver_policy="by_start_sequence", opt_start_seq=int(d["start_seq"]))
+    elif d.get("replay_s") is not None:
+        want["deliver_policy"] = "by_start_time"  # the time itself is fixed when it is created
+    return want
+
+
+def _secs(ns) -> str:
+    try:
+        return f"{int(ns) / _NS:g}s"
+    except (TypeError, ValueError):
+        return repr(ns)
+
+
+def _consumer_drift(have, want) -> list:
+    """``have`` (a consumer's live config) against ``want`` (:func:`_declared_consumer`), one
+    ``"<field> is <live>, declared <declared>"`` per field that differs (absent fields read as
+    nats-server's defaults where it has one)."""
+    diffs = []
+    if have.get("deliver_subject"):
+        diffs.append(f"deliver_subject is {have['deliver_subject']!r}, declared none (push)")
+    compared = [
+        ("filter_subject", None, repr),
+        ("ack_wait", None, _secs),
+        ("max_deliver", None, str),
+        ("deliver_policy", "all", str),
+        ("ack_policy", "explicit", str),
+        ("replay_policy", "instant", str),
+    ]
+    if want.get("opt_start_seq") is not None or have.get("opt_start_seq"):
+        compared.insert(4, ("opt_start_seq", None, str))  # right after deliver_policy
+    for field, default, show in compared:
+        got, declared = have.get(field, default), want.get(field)
+        if got != declared:
+            live = "unset" if got is None else show(got)
+            diffs.append(
+                f"{field} is {live}, declared {'none' if declared is None else show(declared)}"
+            )
+    # never set on a provisioned durable
+    for field, why in (
+        ("headers_only", " (a client would read empty bodies)"),
+        ("backoff", " (it replaces ack_wait)"),
+        ("filter_subjects", ""),
+    ):
+        value = have.get(field)
+        if not value:
+            continue
+        if field == "headers_only":
+            shown, declared = "true", "false"
+        elif field == "backoff":
+            shown, declared = "[" + ", ".join(_secs(b) for b in value) + "]", "none"
+        else:
+            shown, declared = repr(list(value)), "none"
+        diffs.append(f"{field} is {shown}, declared {declared}{why}")
+    return diffs
+
+
+def hnx_bus_durable_drift(jsz, account, durables=()) -> list:
+    """One message per declared durable (``events_bus_durables``) that is on the bus in
+    ``account`` with a configuration other than the one the provisioner creates from its
+    declaration, from a ``/jsz?accounts=true&streams=true&consumers=true&config=true`` document:
+    ``<stream>/<durable>: <field> is <live>, declared <declared>; ...``.  The provisioner never
+    changes an existing durable (the adapter's ``provision_consumers`` refuses one that drifted,
+    naming the same fields), so a durable created once with a wrong value would keep it silently;
+    this is the health hook's read of it.  Compared: ``filter_subject``, ``ack_wait``,
+    ``max_deliver``, ``deliver_policy`` (``opt_start_seq`` with a start sequence; a start time is
+    computed at creation, so only its policy), ``ack_policy``, ``replay_policy``, and never set:
+    ``deliver_subject``, ``headers_only``, ``backoff``, ``filter_subjects``.  A declared durable
+    not on the bus is :func:`hnx_bus_missing`'s.  Mirrors the adapter's ``durable_drift``
+    (tests/roles/test_hnx_bus_filter.py holds the two to the same verdicts)."""
+    doc = jsz if isinstance(jsz, dict) else {}
+    live: dict[tuple[str, str], dict] = {}
+    for acc in doc.get("account_details") or []:
+        if (acc or {}).get("name") != str(account):
+            continue
+        for st in acc.get("stream_detail") or []:
+            for c in (st or {}).get("consumer_detail") or []:
+                live[(str(st.get("name")), str((c or {}).get("name")))] = (c or {}).get(
+                    "config"
+                ) or {}
+    out = []
+    for d in durables or []:
+        if not isinstance(d, dict):
+            continue
+        key = (str(d.get("stream")), str(d.get("durable")))
+        if key not in live:
+            continue
+        try:
+            want = _declared_consumer(d)
+        except (TypeError, ValueError):
+            out.append(f"{key[0]}/{key[1]}: its declaration is not valid (validate says why)")
+            continue
+        diffs = _consumer_drift(live[key], want)
+        if diffs:
+            out.append(f"{key[0]}/{key[1]}: {'; '.join(diffs)}")
+    return out
+
+
 def hnx_bus_expected_accounts(users, admin_user, account, monitor_user="") -> dict:
     """``{account name: [its users]}`` the role's configuration gives the server: the bus account
     with ``admin_user`` alone, one ``<account>-<user>`` per other user (and the monitor's)."""
@@ -875,6 +988,7 @@ class FilterModule:
             "hnx_bus_stream_redirects": hnx_bus_stream_redirects,
             "hnx_bus_expected_imports": hnx_bus_expected_imports,
             "hnx_bus_missing": hnx_bus_missing,
+            "hnx_bus_durable_drift": hnx_bus_durable_drift,
             "hnx_is_loopback": hnx_is_loopback,
             "hnx_nats_hostport": hnx_nats_hostport,
         }

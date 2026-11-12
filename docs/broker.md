@@ -1097,6 +1097,24 @@ stream sequence), so creating one on a
 stream that already holds events decides what its consumer will be handed. Turn it on once that
 is decided for the stream; until then the role validates the declared durables and creates none.
 
+**A durable keeps the configuration it was created with, and its declaration must keep describing
+it.** The provisioner never changes or recreates an existing durable. When one's configuration on
+the server differs from its declaration, `provision_consumers` (so `main`, through
+`hnx-events-provision`) fails, and so does the `health` hook (filter `hnx_bus_durable_drift`, from
+the same `/jsz?config=true`, whatever `events_bus_provision_durables` says). Each names the
+durable and every field that differs, with the live and the declared value. The fields compared
+are `filter_subject`, `ack_wait`, `max_deliver`, `deliver_policy`, `opt_start_seq` (with
+`start_seq`), `ack_policy` and `replay_policy`, and the fields a provisioned durable never sets:
+`deliver_subject`, `headers_only`, `backoff` and `filter_subjects`. A `replay_s` start time is
+computed at creation, so only its `by_start_time` policy is compared. `ack_wait`, `max_deliver`,
+`backoff` and `headers_only` can be changed in place (`nats consumer edit`, which keeps what the
+durable has pending). nats-server refuses to change `deliver_policy`, `opt_start_seq`,
+`ack_policy` or `replay_policy` on an existing consumer, so for those, delete the durable as the
+provisioner and let the next run recreate it, starting where its declaration says. Or correct the
+declaration. A durable created for one run with `start_seq` (to recover events published before
+it existed) keeps that `start_seq` declared afterwards; switching the declaration back to
+`deliver_policy: new` fails the next run.
+
 **The `events_bus` role enforces the same shape on every deployment** (filters
 `hnx_bus_subject_problems` and `hnx_bus_durable_problems`, `ansible/plugins/filter/hnx_bus.py`).
 The server's own subjects are an allow-list, not a deny-list: anything under `$JS`, `$KV`, `$O`,

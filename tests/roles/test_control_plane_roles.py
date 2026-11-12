@@ -885,6 +885,19 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
         names = [c["name"] for a in jsz["account_details"] for st in a.get("stream_detail", [])
                  for c in st.get("consumer_detail", [])]  # fmt: skip
         assert names == ["bridge-x"] and hnx_bus.hnx_bus_push_consumers(jsz) == []
+        # the durable as the server records it is its declaration (the health hook's read), and
+        # one declared otherwise is named, field by field, by the hook and by the provisioner,
+        # which neither recreates nor changes it (overlay #19 security finding 3)
+        assert hnx_bus.hnx_bus_durable_drift(jsz, "HNX", [DURABLE]) == []
+        other = dict(DURABLE, ack_wait=60, max_deliver=100, start_seq=2)
+        assert hnx_bus.hnx_bus_durable_drift(jsz, "HNX", [other]) == [
+            "LAB/bridge-x: ack_wait is 30s, declared 60s; max_deliver is 5, declared 100; "
+            "deliver_policy is new, declared by_start_sequence; opt_start_seq is unset, declared 2"
+        ]  # fmt: skip
+        with pytest.raises(nj.NotProvisioned, match="ack_wait is 30s, declared 60s; max_deliver "
+                           "is 5, declared 100; deliver_policy is new, declared by_start_sequence"):  # fmt: skip
+            nj.provision_consumers(Raw(), stream="LAB", durables=[other])
+        assert admin.request("$JS.API.CONSUMER.INFO.LAB.bridge-x", None)["config"] == info["config"]
 
         # the health hook's backstops, read the way it reads them: the account split as the
         # server runs it, and both streams with their deny flags

@@ -11,7 +11,7 @@
 #   installs_to: /usr/local/libexec/homelabnext/hnx-events-provision
 #   exit:
 #     "0": every stream, its DLQ and every durable exist (each durable a pull durable on its filter)
-#     "1": the bus refused or could not be reached, or an existing durable is not one a client may bind to
+#     "1": the bus refused or could not be reached, or an existing durable is not one a client may bind to or differs from its declaration (each field named)
 #     "2": usage error
 """Provision the standing streams and the durables (role events_bus) through the project's own
 adapter, ``homelabnext.conform.adapters.nats_jetstream.provision_streams`` and

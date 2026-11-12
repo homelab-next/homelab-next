@@ -108,6 +108,7 @@ __all__ = [
     "WireError",
     "WireMsg",
     "check_stream_config",
+    "durable_drift",
     "make",
     "provision_consumers",
     "provision_streams",
@@ -477,9 +478,68 @@ def _create_subject(stream: str, durable: str, filt: str) -> str:
     return create
 
 
-def _bindable(info: Mapping[str, Any], stream: str, durable: str, filt: str) -> None:
-    """Refuse an existing durable a client must not use: a push one, another filter, or acks
-    other than explicit."""
+#: a durable's fields the server keeps for good: ``CONSUMER.CREATE`` with ``action: update``
+#: refuses a change to any of them (nats-server ``checkNewConsumerConfig``), so the durable must be
+#: deleted and created again; ``ack_wait``, ``max_deliver``, ``backoff`` and ``headers_only`` can
+#: be changed in place (``nats consumer edit``), which keeps what the durable has pending
+_FIXED_AT_CREATION = ("deliver_policy", "opt_start_seq", "ack_policy", "replay_policy")
+
+
+def _seconds(ns: Any) -> str:
+    try:
+        return f"{int(ns) / _NS:g}s"
+    except (TypeError, ValueError):
+        return repr(ns)
+
+
+def durable_drift(have: Mapping[str, Any], want: Mapping[str, Any]) -> list[str]:
+    """How an existing durable's configuration (``have``: ``CONSUMER.INFO``'s ``config``) differs
+    from the one the provisioner would create (``want``: :func:`_consumer_config`'s), one
+    ``"<field> is <live>, declared <declared>"`` per field, [] when none does.  Compared: the lease
+    (``ack_wait``), ``max_deliver``, where it starts (``deliver_policy``; ``opt_start_seq`` for a
+    start sequence; a start time is computed when the durable is created, so only its policy is
+    compared), ``ack_policy``, ``replay_policy``, and the fields a durable the provisioner creates
+    never sets: ``headers_only`` (a client would read every body as empty), ``backoff`` (it
+    replaces ``ack_wait`` between redeliveries) and ``filter_subjects`` (several filters, where a
+    durable has one).  The push ``deliver_subject`` and the filter are :func:`_bindable`'s."""
+    out: list[str] = []
+
+    def differs(field: str, live: Any, declared: Any, show=repr) -> None:
+        if live != declared:
+            shown = "unset" if live is None else show(live)
+            out.append(
+                f"{field} is {shown}, declared {'none' if declared is None else show(declared)}"
+            )
+
+    differs("ack_wait", have.get("ack_wait"), want["ack_wait"], _seconds)
+    differs("max_deliver", have.get("max_deliver"), want["max_deliver"], str)
+    # nats-server's default policy is all (it always reports the field; an absent one reads so)
+    differs("deliver_policy", have.get("deliver_policy", "all"), want["deliver_policy"], str)
+    if want.get("opt_start_seq") is not None or have.get("opt_start_seq"):
+        differs("opt_start_seq", have.get("opt_start_seq"), want.get("opt_start_seq"), str)
+    differs("ack_policy", have.get("ack_policy", "explicit"), want["ack_policy"], str)
+    differs("replay_policy", have.get("replay_policy", "instant"), want["replay_policy"], str)
+    if have.get("headers_only"):
+        out.append("headers_only is true, declared false (a client would read empty bodies)")
+    if have.get("backoff"):
+        backoff = ", ".join(_seconds(b) for b in have["backoff"])
+        out.append(f"backoff is [{backoff}], declared none (it replaces ack_wait)")
+    if have.get("filter_subjects"):
+        out.append(f"filter_subjects is {list(have['filter_subjects'])!r}, declared none")
+    return out
+
+
+def _bindable(
+    info: Mapping[str, Any],
+    stream: str,
+    durable: str,
+    filt: str,
+    want: Mapping[str, Any] | None = None,
+) -> None:
+    """Refuse an existing durable a client must not use: a push one, another filter, acks other
+    than explicit, or bodies left out (``headers_only``).  With ``want`` (the provisioner's
+    declared configuration, :func:`_consumer_config`), also one whose configuration differs from
+    it in any field :func:`durable_drift` compares: never changed or recreated here, named."""
     cfg = info.get("config", {}) or {}
     where = f"durable {durable!r} on stream {stream!r}"
     if cfg.get("deliver_subject"):
@@ -491,6 +551,26 @@ def _bindable(info: Mapping[str, Any], stream: str, durable: str, filt: str) -> 
         raise NotProvisioned(f"{where} exists on another subject; delete it to change it")
     if cfg.get("ack_policy", "explicit") != "explicit":
         raise NotProvisioned(f"{where} does not take explicit acks")
+    if cfg.get("headers_only"):
+        raise NotProvisioned(
+            f"{where} delivers headers only (headers_only set): a client would read every event "
+            "as empty; change it in place (nats consumer edit) or delete it as the provisioner"
+        )
+    drift = [] if want is None else durable_drift(cfg, want)
+    if drift:
+        fixed = [f for f in _FIXED_AT_CREATION if any(d.startswith(f + " ") for d in drift)]
+        how = (
+            f"{', '.join(fixed)} cannot be changed on an existing durable: delete it as the "
+            "provisioner and let the next run recreate it from its declaration (it then starts "
+            "where the declaration says)"
+            if fixed
+            else "change it in place (nats consumer edit), which keeps what it has pending, or "
+            "correct the declaration"
+        )
+        raise NotProvisioned(
+            f"{where} differs from its declaration: {'; '.join(drift)}. The provisioner never "
+            f"changes or recreates an existing durable; {how}"
+        )
 
 
 def provision_consumers(
@@ -507,7 +587,9 @@ def provision_consumers(
     (``filter`` the full NATS subject, prefix included) with optional ``ack_wait`` (seconds,
     default 30), ``max_deliver`` (default 5), and where it starts: ``deliver_policy`` (``new``,
     the default, or ``all``), ``replay_s`` (that many seconds back) or ``start_seq`` (that stream
-    sequence).  An existing durable is never changed.  Returns the names it created.
+    sequence).  An existing durable is never changed or recreated: one whose configuration differs
+    from its declaration in any field :func:`durable_drift` compares raises
+    :class:`NotProvisioned` naming each field.  Returns the names it created.
 
     Only the provisioner may create a consumer: a create takes any configuration, a push
     ``deliver_subject`` included, and the server delivers a push consumer as itself, so a user
@@ -530,9 +612,6 @@ def provision_consumers(
         info = _api(
             wire, f"CONSUMER.INFO.{stream}.{name}", None, timeout=timeout, missing="consumer"
         )
-        if info is not None:
-            _bindable(info, stream, name, filt)
-            continue
         replay = d.get("replay_s")
         config = _consumer_config(
             name,
@@ -543,6 +622,9 @@ def provision_consumers(
             start=None if replay is None else wall() - float(replay),
             start_seq=None if d.get("start_seq") is None else int(d["start_seq"]),
         )
+        if info is not None:
+            _bindable(info, stream, name, filt, want=config)
+            continue
         _api(
             wire,
             _create_subject(stream, name, filt),
