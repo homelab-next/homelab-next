@@ -19,8 +19,10 @@ A node that declares ``notify: {url, topic, severities, priority, default_mail}`
   fails; only after a delivered test, and unless ``default_mail: true``, does it turn off the
   built-in ``default-matcher``, so mail is never turned off in favour of a path that does not
   work.  A re-run changes nothing that is already right (and sends one more test).  ``--test``
-  sends only the test; ``--remove`` deletes this node's matcher and target and, when the node
-  declares ``default_mail: false``, turns ``default-matcher`` back on.
+  sends only the test; ``--remove`` first turns ``default-matcher`` back on (whatever
+  ``default_mail`` says: the Proxmox default, harmless when it is already on), then deletes this
+  node's matcher and target.  A node whose ``notify`` is deleted from ``_nodes.yml`` renders no
+  script, so nothing rendered later can undo an apply: run the old script's ``--remove`` first.
 
 ``notifications.cfg`` is shared by every node of a cluster: the names and the ``hostname`` match
 are per node so two nodes never overwrite or answer for each other, but ``default-matcher`` is
@@ -142,13 +144,9 @@ def script(node: str, spec: dict) -> str:
         "fi",
         "",
         'if [ "$mode" = remove ]; then',
-    ]
-    if not keep_mail:
-        L += [
-            "  # mail back on first: a delete that fails below (set -e) then leaves two routes, not none",
-            '  pvesh set "$MATCHERS/$DEFAULT_MATCHER" --delete disable',
-        ]
-    L += [
+        "  # mail back on first, whatever default_mail says now (it may have been false at apply):",
+        "  # a delete that fails below (set -e) then leaves two routes, not none",
+        '  pvesh set "$MATCHERS/$DEFAULT_MATCHER" --delete disable',
         "  # the matcher names the target, so it goes before it",
         '  if exists "$MATCHERS/$MATCHER"; then pvesh delete "$MATCHERS/$MATCHER"; fi',
         '  if exists "$WEBHOOKS/$NAME"; then pvesh delete "$WEBHOOKS/$NAME"; fi',
@@ -197,6 +195,9 @@ def readme(notifies: dict[str, dict]) -> str:
             "it was delivered. The server must accept publishing with no credential. A backup job",
             "sends through this only with `notification-mode notification-system` (or `auto` with",
             "no `mailto`). The node keeps no other route: watch the topic for the test.",
+            "`hnx-notify.sh --remove` turns the built-in mail matcher back on and deletes the",
+            "node's target and matcher. Deleting a node's `notify` renders no script for it, so",
+            "run the old script's `--remove` on the node before deleting the key.",
             "",
             "| Node | Notify server | Topic | Severities | Built-in mail matcher |",
             "|---|---|---|---|---|",

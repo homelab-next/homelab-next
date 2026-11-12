@@ -273,13 +273,28 @@ def test_a_rerun_updates_in_place(node):
     ]
 
 
-def test_default_mail_leaves_the_built_in_matcher_alone(node):
+def test_default_mail_leaves_the_built_in_matcher_alone_on_apply(node):
     run = node({**NOTIFY, "default_mail": True})
     r, calls = run()
     assert r.returncode == 0, r.stderr
     assert not any("default-matcher" in c for c in calls)
-    r, calls = run("--remove")
-    assert not any("default-matcher" in c for c in calls)
+
+
+def test_remove_turns_mail_on_whatever_default_mail_says_now(node, tmp_path):
+    # applied with mail off, then the entry edited to default_mail: true and re-rendered:
+    # the new script's --remove must still turn the mail matcher back on
+    node(NOTIFY)()
+    r, calls = node({**NOTIFY, "default_mail": True})("--remove")
+    assert r.returncode == 0, r.stderr
+    assert _verbs(calls)[0] == "pvesh set /cluster/notifications/matchers/default-matcher"
+    assert next(c for c in calls if "default-matcher" in c).endswith("--delete disable")
+
+
+def test_the_readme_says_how_to_undo_before_the_key_goes(tmp_path):
+    readme = render(fleet_with(tmp_path, {"hv-a": {"notify": NOTIFY}}), "node-notify")[
+        "notify/README.md"
+    ]
+    assert "old script's `--remove`" in readme
 
 
 def test_remove_turns_mail_on_then_takes_the_matcher_off_before_the_target(node):

@@ -212,8 +212,12 @@ delivered test, and with `default_mail: false`, does it disable Proxmox's built-
 `default-matcher`, so mail is never turned off in favour of a path that does not work. A re-run
 leaves a correct config unchanged (and sends one more test) and undoes a hand edit of the two
 entries: a `disable`, an `invert-match`, a calendar rule, and any header or secret added to the
-target. `hnx-notify.sh --test` sends only the test; `--remove` deletes this node's matcher and
-target and, when the node declares `default_mail: false`, enables `default-matcher` again.
+target. `hnx-notify.sh --test` sends only the test; `--remove` first enables `default-matcher`
+again, whatever `default_mail` says now (it is the Proxmox default, and enabling an enabled matcher
+is harmless), then deletes this node's matcher and target, so a delete that fails leaves the node
+two routes, not none. Deleting `notify` from a node's entry renders no script for it at all, so
+nothing rendered afterwards can undo an earlier apply: to undo, run the old script's `--remove` on
+the node first, then delete the key.
 
 `notifications.cfg` is one file for every node of a Proxmox cluster. The names and the `hostname`
 match are per node, so two nodes never overwrite or answer for each other, but `default-matcher`
