@@ -100,11 +100,12 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
 
 def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
     """Read ``{nodes: {name: {firewall: enabled|disabled, power: {...}, capacity: {...},
-    pools: {...}, mirror: {...}}}}``: what each hypervisor enforces, what feeds it (``power``,
+    pools: {...}, mirror: {...}, notify: {...}}}}``: what each hypervisor enforces, what feeds it (``power``,
     checked against the site by :func:`homelabnext.power.fleet_problems`), what it holds
     (``capacity`` and ``pools``, checked against its guests by
     :func:`homelabnext.compute.validate.validate`), and where it copies its guests' traffic for a
-    network sensor (``mirror``, rendered by the ``node-mirror`` target)."""
+    network sensor (``mirror``, rendered by the ``node-mirror`` target), and where its own
+    notifications go (``notify``, rendered by the ``node-notify`` target)."""
     p = Path(path)
     try:
         doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
@@ -128,6 +129,8 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
             out[str(name)]["pools"] = _pools(p, name, spec["pools"])
         if isinstance(spec, dict) and "mirror" in spec:
             out[str(name)]["mirror"] = _mirror(p, name, spec["mirror"])
+        if isinstance(spec, dict) and "notify" in spec:
+            out[str(name)]["notify"] = _notify(p, name, spec["notify"])
     return out
 
 
@@ -218,6 +221,57 @@ def _mirror(p: Path, name: Any, raw: Any) -> dict[str, Any]:
     if to == "lo":
         raise ComputeError(f"{where}.to: the loopback interface cannot carry a mirror")
     return {"to": to, "bridges": list(bridges)}
+
+
+#: an ntfy server: http(s), an ASCII host name or IPv4 address, an optional port and base path
+_NTFY_URL_RE = re.compile(
+    r"^https?://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?"
+    r"(?:/[A-Za-z0-9._~-]+)*/?\Z"
+)
+#: an ntfy topic name (ntfy's own rule)
+_NTFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
+#: the severities a Proxmox notification matcher can match
+PVE_SEVERITIES = ("info", "notice", "warning", "error", "unknown")
+
+
+def _notify(p: Path, name: Any, raw: Any) -> dict[str, Any]:
+    """``{url, topic, severities, priority, default_mail}``: send the node's own Proxmox
+    notifications of these severities (default warning, error and unknown, which is the mail the
+    node forwards to root) to an ntfy topic at priority 1 to 5 (default 4).  ``default_mail``
+    (default false) keeps Proxmox's built-in matcher that mails everything to root@pam."""
+    where = f"{p}: node {name!r}: notify"
+    keys = {"url", "topic", "severities", "priority", "default_mail"}
+    if not isinstance(raw, dict) or set(raw) - keys or not {"url", "topic"} <= set(raw):
+        raise ComputeError(
+            f"{where}: takes url and topic (required), severities, priority and default_mail"
+        )
+    url, topic = raw["url"], raw["topic"]
+    if not isinstance(url, str) or not _NTFY_URL_RE.match(url):
+        raise ComputeError(f"{where}.url: {url!r} is not an http(s) server URL (no query, no user)")
+    if not isinstance(topic, str) or not _NTFY_TOPIC_RE.match(topic):
+        raise ComputeError(f"{where}.topic: {topic!r} is not an ntfy topic ([A-Za-z0-9_-], 1-64)")
+    sev = raw.get("severities", ["warning", "error", "unknown"])
+    if (
+        not isinstance(sev, list)
+        or not sev
+        or not all(isinstance(s, str) and s in PVE_SEVERITIES for s in sev)
+    ):
+        raise ComputeError(f"{where}.severities: a non-empty list of {', '.join(PVE_SEVERITIES)}")
+    if len(set(sev)) != len(sev):
+        raise ComputeError(f"{where}.severities: a severity is listed twice")
+    prio = raw.get("priority", 4)
+    if isinstance(prio, bool) or not isinstance(prio, int) or not 1 <= prio <= 5:
+        raise ComputeError(f"{where}.priority: a whole number from 1 to 5")
+    mail = raw.get("default_mail", False)
+    if not isinstance(mail, bool):
+        raise ComputeError(f"{where}.default_mail: true or false")
+    return {
+        "url": url if url.endswith("/") else url + "/",
+        "topic": topic,
+        "severities": list(sev),
+        "priority": prio,
+        "default_mail": mail,
+    }
 
 
 #: one OpenSSH public key line: a known key type, base64 material, an optional comment
