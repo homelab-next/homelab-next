@@ -1974,7 +1974,7 @@ def path_without(tmp_path, name: str) -> str:
     for d in os.environ["PATH"].split(os.pathsep):
         if os.path.isdir(d):
             for e in os.scandir(d):
-                if e.name != name and not (farm / e.name).exists():
+                if e.name != name and not os.path.lexists(farm / e.name):
                     (farm / e.name).symlink_to(e.path)
     return str(farm)
 
