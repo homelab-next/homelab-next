@@ -87,18 +87,24 @@
       ansible.builtin.assert:
         that: openbao_restore_inputs.results[1].stat.exists and openbao_restore_inputs.results[1].stat.isreg
         fail_msg: "openbao: {{ openbao_restore_source }}.json, the snapshot's manifest, is missing (or not a regular file): a restore checks the snapshot against it"
-    - name: Refuse a snapshot or manifest someone other than the owner could have written
+    - name: Refuse a snapshot someone other than the owner could have written
       ansible.builtin.assert:
         that:
-          - item.stat.pw_name == openbao_owner or item.stat.uid | string == openbao_owner | string
-          - not item.stat.wgrp and not item.stat.woth
+          - openbao_restore_inputs.results[0].stat.pw_name == openbao_owner or openbao_restore_inputs.results[0].stat.uid | string == openbao_owner | string
+          - not openbao_restore_inputs.results[0].stat.wgrp and not openbao_restore_inputs.results[0].stat.woth
         fail_msg: >-
-          openbao: {{ item.item }} is owned by {{ item.stat.pw_name }} (not {{ openbao_owner }}) or is
-          writable by its group or by others (mode {{ item.stat.mode }}): refused
-        quiet: true
-      loop: "{{ openbao_restore_inputs.results }}"
-      loop_control:
-        label: "{{ item.item }}"
+          openbao: {{ openbao_restore_inputs.results[0].item }} is owned by {{ openbao_restore_inputs.results[0].stat.pw_name }} (not
+          {{ openbao_owner }}) or is writable by its group or by others (mode
+          {{ openbao_restore_inputs.results[0].stat.mode }}): refused
+    - name: Refuse a manifest someone other than the owner could have written
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_inputs.results[1].stat.pw_name == openbao_owner or openbao_restore_inputs.results[1].stat.uid | string == openbao_owner | string
+          - not openbao_restore_inputs.results[1].stat.wgrp and not openbao_restore_inputs.results[1].stat.woth
+        fail_msg: >-
+          openbao: {{ openbao_restore_inputs.results[1].item }} is owned by {{ openbao_restore_inputs.results[1].stat.pw_name }} (not
+          {{ openbao_owner }}) or is writable by its group or by others (mode
+          {{ openbao_restore_inputs.results[1].stat.mode }}): refused
     - name: Resolve the source and the backup and export directories
       ansible.builtin.command:
         argv: [realpath, -m, --, "{{ openbao_restore_source }}", "{{ openbao_restore_source }}.json", "{{ openbao_backup_dir }}", "{{ openbao_export_dir }}"]

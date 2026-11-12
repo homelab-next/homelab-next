@@ -285,6 +285,8 @@ def service_vars(tmp_path: Path, port: int, active: bool, **kw) -> dict:
     body = SYSTEMCTL.replace("LOG", repr(str(tmp_path / "calls.log"))).replace(
         "STATE", repr(str(marker))
     )
+    # what service.yml asks after the start (release_seen.yml): a refused port, not a DNS lookup
+    kw.setdefault("openbao_api_addr", f"https://{LOOPBACK}:{closed_port()}")
     return base(
         tmp_path,
         openbao_listen_address=LOOPBACK,
@@ -478,53 +480,56 @@ def test_main_refuses_a_pin_older_than_the_running_release(tmp_path, pki, runnin
         assert r.returncode == 0, r.stdout + r.stderr
 
 
-def linked_to(tmp_path, version):
-    """openbao_bin pointing at <install_dir>/<version>/bao, as main leaves it."""
-    target = tmp_path / "opt" / version / "bao"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("")
-    link = tmp_path / "bin" / "bao"
-    link.parent.mkdir(exist_ok=True)
-    link.unlink(missing_ok=True)
-    link.symlink_to(target)
-    return str(link)
+def closed_port() -> int:
+    """A loopback port nothing listens on: a request to it is refused at once."""
+    with socket.socket() as sock:
+        sock.bind((LOOPBACK, 0))
+        return sock.getsockname()[1]
 
 
-@pytest.mark.parametrize(
-    ("linked", "recorded", "allow", "refused"),
-    [
-        ("2.8.0", None, False, "linked 2.8.0"),  # the command points at a newer release
-        (None, "2.8.0", False, "recorded 2.8.0"),  # a newer release answered here once
-        ("2.8.0", "2.9.0", True, None),  # the operator's explicit downgrade
-        ("2.7.1", "2.7.1", False, None),  # the pin itself
-        ("2.7.0", "2.7.0", False, None),  # an upgrade
-        (None, None, False, None),  # a fresh host
-    ],
-)
-def test_a_stopped_server_does_not_let_a_lower_pin_through(
-    tmp_path, pki, linked, recorded, allow, refused
-):
-    """sys/health says nothing while the server is stopped: the link and the record still do."""
-    with listener() as port:  # nothing answers
-        v = hook_vars(tmp_path, pki, f"https://{LOOPBACK}:{port}", openbao_health_timeout=2,
-                      openbao_allow_downgrade=allow, openbao_bin=str(tmp_path / "bin" / "bao"))  # fmt: skip
+STOPPED = [
+    # (the release the command points at, the recorded highest, allow, refused: by which witness)
+    ("2.8.0", None, False, "linked 2.8.0"),  # the command points at a newer release
+    (None, "2.8.0", False, "recorded 2.8.0"),  # a newer release answered here once
+    ("2.8.0", "2.9.0", True, None),  # the operator's explicit downgrade
+    ("2.7.1", "2.7.1", False, None),  # the pin itself
+    ("2.7.0", "2.7.0", False, None),  # an upgrade
+    (None, None, False, None),  # a fresh host
+]
+
+
+def test_a_stopped_server_does_not_let_a_lower_pin_through(tmp_path, pki):
+    """sys/health says nothing while the server is stopped: the link and the record still do.
+    One process for every case (run_cases); each case has its own link and state directory."""
+    v = hook_vars(tmp_path, pki, f"https://{LOOPBACK}:{closed_port()}", openbao_health_timeout=2)
+    cases = []
+    for i, (linked, recorded, allow, _) in enumerate(STOPPED):
+        d = tmp_path / f"case{i}"
+        (d / "state").mkdir(parents=True)
         if linked:
-            linked_to(tmp_path, linked)
+            target = d / "opt" / linked / "bao"
+            target.parent.mkdir(parents=True)
+            target.write_text("")
+            (d / "bao").symlink_to(target)
         if recorded:
-            (tmp_path / "state").mkdir()
-            (tmp_path / "state" / "highest-release").write_text(json.dumps({"version": recorded}))
-        r = run_role(tmp_path, ROLE, "downgrade", v)
-    if refused:
-        assert (
-            r.returncode != 0
-            and f"the pin is 2.7.1, older than what this host has run ({refused}" in r.stdout
-        ), r.stdout
-    else:
-        assert r.returncode == 0, r.stdout + r.stderr
+            (d / "state" / "highest-release").write_text(json.dumps({"version": recorded}))
+        cases.append(
+            {"openbao_bin": str(d / "bao"), "openbao_state_dir": str(d / "state"),
+             "openbao_allow_downgrade": allow}
+        )  # fmt: skip
+    got = run_cases(tmp_path, ROLE, "downgrade", v, cases)
+    for (failed, message), (*_, refused) in zip(got, STOPPED, strict=True):
+        if refused:
+            assert (
+                failed
+                and f"the pin is 2.7.1, older than what this host has run ({refused}" in message
+            )
+        else:
+            assert not failed, message
 
 
 def test_main_and_health_record_the_highest_release_that_answered(tmp_path, pki):
-    for answered, kept in (("2.8.0", "2.8.0"), ("2.7.1", "2.8.0"), ("2.9.0", "2.9.0")):
+    for answered, kept in (("2.8.0", "2.8.0"), ("2.7.1", "2.8.0")):  # raised, never lowered
         with fake_openbao(pki, 200, dict(ACTIVE, version=answered)) as url:
             r = run_role(tmp_path, ROLE, "health", hook_vars(tmp_path, pki, url))
         record = json.loads((tmp_path / "state" / "highest-release").read_text())
@@ -532,8 +537,7 @@ def test_main_and_health_record_the_highest_release_that_answered(tmp_path, pki)
     # the service step records what answered after the start, too
     with fake_openbao(pki, 200, dict(ACTIVE, version="3.0.0")) as url:
         port = int(url.rsplit(":", 1)[1])
-        v = service_vars(tmp_path, port, active=False)
-        v.update(openbao_api_addr=url)
+        v = service_vars(tmp_path, port, active=False, openbao_api_addr=url)
         r = run_service(tmp_path, v, changed=False)
     assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads((tmp_path / "state" / "highest-release").read_text()) == {"version": "3.0.0"}
@@ -1048,56 +1052,70 @@ def test_the_bytes_restored_are_the_bytes_checked_even_if_the_source_is_swapped(
     assert not list((tmp_path / "backup").glob(".restore-staging-*"))
 
 
-@pytest.mark.parametrize(
-    ("case", "says"),
-    [
-        ("world-writable", "writable by its group or by others (mode 0666)"),
-        ("group-writable manifest", "writable by its group or by others (mode 0664)"),
-        ("symlink", "is not a non-empty snapshot file on the host (a symbolic link is refused)"),
-        ("through a linked directory", "is reached through a symbolic link"),
-        ("outside", "is not under"),
-    ],
-)
-def test_restore_refuses_a_source_someone_else_could_have_written(tmp_path, pki, case, says):
-    src = restore_case(tmp_path)
-    if case == "world-writable":
-        src.chmod(0o666)
-    elif case == "group-writable manifest":
-        src.with_name("raft.snap.json").chmod(0o664)
-    elif case == "symlink":
-        real = tmp_path / "export" / "real.snap"
-        src.rename(real)
-        src.symlink_to(real)
-    elif case == "through a linked directory":
-        (tmp_path / "export" / "via").symlink_to(tmp_path / "export")
-        src = tmp_path / "export" / "via" / "raft.snap"
-    elif case == "outside":
-        (tmp_path / "elsewhere").mkdir()
-        for f in (src, src.with_name("raft.snap.json")):
-            f.rename(tmp_path / "elsewhere" / f.name)
-        src = tmp_path / "elsewhere" / "raft.snap"
-    with fake_api(pki) as (url, api):
-        r = run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, pki, url, src))
-        if case == "outside":  # only the location is waived, and only explicitly
-            ok = run_role(
-                tmp_path, ROLE, "restore",
-                restore_vars(tmp_path, pki, url, src, openbao_restore_source_unrestricted=True),
-            )  # fmt: skip
-            assert ok.returncode == 0, ok.stdout + ok.stderr
-            assert api.restored == [("snapshot", SNAP)]
-            return
-    assert r.returncode != 0 and says in r.stdout, r.stdout
-    assert api.restored == []
-    assert not [q for q in api.requests if q[1] == "/v1/sys/storage/raft/snapshot"]
+REFUSED_SOURCES = {
+    "world-writable": "writable by its group or by others (mode 0666)",
+    "group-writable manifest": "writable by its group or by others (mode 0664)",
+    "symlink": "is not a non-empty snapshot file on the host (a symbolic link is refused)",
+    "through a linked directory": "is reached through a symbolic link",
+    "outside": "is not under",
+    "unknown token": "the server does not know it",
+}
 
 
-def test_restore_refuses_a_token_the_server_does_not_know(tmp_path, pki):
-    src = restore_case(tmp_path)
+def test_restore_refuses_a_source_someone_else_could_have_written(tmp_path, pki):
+    """Each case its own source (one process for all of them: run_cases); none reaches the
+    snapshot endpoint. Outside the two directories is accepted only with the explicit switch."""
+    exp = tmp_path / "export"
+    cases = []
+    for i, case in enumerate(REFUSED_SOURCES):
+        d = exp / f"case{i}"
+        d.mkdir(parents=True)
+        src = d / "raft.snap"
+        src.write_bytes(SNAP)
+        m = {
+            "kind": "raft-snapshot",
+            "sha256": hashlib.sha256(SNAP).hexdigest(),
+            "written_by": "2.7.1",
+        }
+        src.with_name("raft.snap.json").write_text(json.dumps(m))
+        over = {}
+        if case == "world-writable":
+            src.chmod(0o666)
+        elif case == "group-writable manifest":
+            src.with_name("raft.snap.json").chmod(0o664)
+        elif case == "symlink":
+            src.rename(d / "real.snap")
+            src.symlink_to(d / "real.snap")
+        elif case == "through a linked directory":
+            (d / "via").symlink_to(d)
+            src = d / "via" / "raft.snap"
+        elif case == "outside":
+            out = tmp_path / "elsewhere"
+            out.mkdir()
+            for f in (src, src.with_name("raft.snap.json")):
+                f.rename(out / f.name)
+            src = out / "raft.snap"
+        elif case == "unknown token":
+            over["openbao_restore_token"] = UNKNOWN
+        # vars/main.yml's openbao_owner outranks run_cases' play variables: set it per case
+        owner = {"openbao_owner": USER, "openbao_owner_group": GROUP}
+        cases.append({"openbao_restore_source": str(src), **owner, **over})
     with fake_api(pki) as (url, api):
-        v = restore_vars(tmp_path, pki, url, src, openbao_restore_token=UNKNOWN)
-        r = run_role(tmp_path, ROLE, "restore", v)
-    assert r.returncode != 0 and "the server does not know it" in r.stdout, r.stdout
-    assert api.restored == [] and UNKNOWN not in r.stdout + r.stderr
+        v = restore_vars(tmp_path, pki, url, exp / "unset")
+        got = run_cases(tmp_path, ROLE, "restore", v, cases)
+        assert api.restored == []
+        assert not [q for q in api.requests if q[1] == "/v1/sys/storage/raft/snapshot"]
+        # only the location is waived, and only explicitly
+        outside = cases[list(REFUSED_SOURCES).index("outside")]["openbao_restore_source"]
+        ok = run_role(
+            tmp_path, ROLE, "restore",
+            restore_vars(tmp_path, pki, url, outside, openbao_restore_source_unrestricted=True),
+        )  # fmt: skip
+    for (failed, message), (case, says) in zip(got, REFUSED_SOURCES.items(), strict=True):
+        assert failed and says in message, (case, message)
+    assert UNKNOWN not in "".join(m for _, m in got)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    assert api.restored == [("snapshot", SNAP)]
 
 
 @pytest.mark.parametrize(
