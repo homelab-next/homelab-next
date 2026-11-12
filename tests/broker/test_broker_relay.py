@@ -762,6 +762,32 @@ def test_the_adapter_marks_a_permission_violation_permanent():
     assert m and m.group(1) == "a.b.c"
 
 
+def test_a_denied_jetstream_api_call_is_permanent_though_nats_py_lowercases_it():
+    """Found live (round 4): nats-py hands the server's -ERR over lowercased
+    (``permissions violation for publish to "$js.api.consumer.create..."``), so a denied
+    ``$JS.API`` request timed out as an outage instead of a permanent refusal.  (The error
+    callback lives inside the connection; its lowering is checked in the source.)"""
+    w = object.__new__(nj.NatsPyWire)
+    w._denied = set()
+    subject = "$JS.API.CONSUMER.CREATE.HNXE2E.evil"
+    seen = []
+
+    def run(coro, timeout):
+        coro.close()
+        # what nats-py's error_cb receives: the -ERR text, lowercased
+        seen.append(f'nats: permissions violation for publish to "{subject.lower()}"')
+        m = nj._PERMISSION_DENIED.search(seen[-1])
+        w._denied.add(m.group(1).lower())
+        raise nj.WireError("no reply within 6.0s")
+
+    w._run = run
+    with pytest.raises(nj.WireError) as err:
+        w.request(subject, b"{}", timeout=5.0)
+    assert err.value.permanent
+    src = Path(nj.__file__).read_text()
+    assert "self._denied.add(m.group(1).lower())" in src
+
+
 def _nats_py_raises(error_name: str) -> nj.WireError:
     """What NatsPyWire._run turns nats-py's ``error_name`` into (a stand-in errors module, an
     event loop on a thread: no server, no extra needed)."""

@@ -809,8 +809,8 @@ class NatsPyWire:
         async def note(exc: Exception) -> None:  # nats-py reports connection errors here
             self.last_error = f"{type(exc).__name__}: {exc}"
             m = _PERMISSION_DENIED.search(str(exc))
-            if m:
-                self._denied.add(m.group(1))
+            if m:  # nats-py lowercases the server's -ERR text, the subject included
+                self._denied.add(m.group(1).lower())
 
         auth: dict[str, Any] = {"user": user, "password": password()} if user and password else {}
         if inbox_prefix is not None:
@@ -888,12 +888,13 @@ class NatsPyWire:
             )
             return WireMsg(msg.subject, msg.data, dict(msg.headers or {}), msg.reply or "")
 
-        self._denied.discard(subject)
+        self._denied.discard(subject.lower())
         try:
             return self._run(go(), timeout + 1)
         except WireError:
-            # the server drops a publish this user may not make and says so out of band
-            if subject in self._denied:
+            # the server drops a publish this user may not make and says so out of band (nats-py
+            # hands the text over lowercased, so $JS.API... subjects compare in lower case)
+            if subject.lower() in self._denied:
                 raise WireError("permission denied: publish", permanent=True) from None
             raise
 
