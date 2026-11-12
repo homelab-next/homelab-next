@@ -47,8 +47,11 @@ tests on a laptop with no network and no private context.
    scratch output only under `homelabnext.runs.run_dir(run_id)` or `build/`
    (`make run-output-lint`).
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
-8. Python >= 3.11, standard library first. New dependencies go in an extra in `pyproject.toml`,
-   must be permissively licensed (LGPL only as an unmodified dependency; a separately run tool
+8. Python >= 3.11, standard library first. CI tests 3.11 and 3.12 (the pyproject classifiers);
+   3.13 and 3.14 are best-effort: nothing in CI runs them, and a defect only they show is fixed
+   when it is found (as 3.14's `fromisoformat` and JSON depth were), with a test that pins the
+   verdict on every version rather than a newer interpreter's. New dependencies go in an extra in
+   `pyproject.toml`, must be permissively licensed (LGPL only as an unmodified dependency; a separately run tool
    such as ansible-core is the ADR-0011 decision 4 exception), and are justified in the PR. Each
    package `constraints/` pins and each image a compose stack runs has a reviewed licence entry
    in `tools/licences.yml` (`make licence-check`).
@@ -304,7 +307,14 @@ constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
   a pull request. A new pin of that kind needs its upstream in `SOURCES` in that file
   (`python3 tools/pin_freshness.py inventory --check`, also a unit test).
 - **Security releases waiting out the cooldown**: a release that carries a security fix is still
-  held for 14 days, and the bump is its own pull request once the cooldown clears. Pending as of
+  held for 14 days, and the bump is its own pull request once the cooldown clears.  **The one
+  exception:** a toolchain or dependency release that fixes an advisory `govulncheck` or
+  `pip-audit` reports as reachable, and so fails a required check (on main or every open pull
+  request), is taken at once, past no cooldown.  Its digest or checksum is verified as for any
+  bump (below, "Bumping by hand"), and its CHANGELOG entry names the advisory id and says the
+  cooldown was waived for it.  Go 1.27.4 is the precedent: released 2026-11-10, taken 2026-11-11
+  for GO-2026-6859, which failed `go-ok`.  A fix that no required check reports waits out the
+  cooldown like any other release. Pending as of
   2026-11-08:
   - NATS 2.15.2 (security fixes, among them bounds on stream-state recovery) for the lab events
     image and CI's `NATS_SERVER_VERSION`; it clears about 2026-11-09.

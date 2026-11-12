@@ -55,16 +55,30 @@ def iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-#: an hour of 24 (``T24:00:00``): Python 3.14's fromisoformat rolls it over to the next day,
-#: 3.11-3.13 refuse it. Refuse it on every version, so a record's verdict does not depend on
-#: which Python reads it (RFC 3339 has no hour 24).
-_HOUR_24 = re.compile(r"\d[T t]24:")
+#: the timestamp forms :func:`parse_iso` reads: an RFC 3339 date-time (``T``, ``t`` or a space
+#: between date and time; seconds, a fraction of any length and the offset optional, the offset
+#: ``Z``/``z`` or ``+HH:MM``), or a bare date.  Matched before ``fromisoformat``, whose grammar is
+#: wider than RFC 3339 (the basic format, ``+0000``, ``,5``, any single character between date and
+#: time) and not the same on every Python: 3.14 also reads hour 24 in every one of those spellings
+#: (``T24``, ``T2400``, ``T24Z``, ``20260101T240000Z``, ``_24:00:00``) and rolls it over to the
+#: next day, where 3.11-3.13 refuse it, so a record's verdict depended on the interpreter.  Every
+#: form here parses to the same instant on 3.11-3.14; anything else is refused on all of them.
+_ISO = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    r"(?:[Tt ](?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]+)?)?"
+    r"(?:[Zz]|[+-][0-9]{2}:[0-9]{2})?)?"
+)
 
 
 def parse_iso(text: str) -> float:
-    if _HOUR_24.search(str(text)):
-        raise ValueError(f"{text!r}: hour 24 is not a time of day")
-    dt = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    """``text`` (see :data:`_ISO`) as a POSIX timestamp, UTC when it names no offset;
+    :class:`ValueError` for anything else, hour 24 included (RFC 3339 has no hour 24)."""
+    text = str(text)
+    if not _ISO.fullmatch(text):
+        raise ValueError(f"{text[:80]!r}: not an RFC 3339 date-time")
+    if text[-1] in "Zz":
+        text = text[:-1] + "+00:00"
+    dt = datetime.fromisoformat(text)
     return (dt if dt.tzinfo else dt.replace(tzinfo=UTC)).timestamp()
 
 

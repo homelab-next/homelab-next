@@ -78,7 +78,9 @@ private sources, so bringing that generic code in needs an amendment to it (deci
      module imports it.
    - The `go` line of `orchestrator/go.mod` is the Go of CI's `GO_VERSION` (1.27.4 today), raised
      with it, by hand, to a release past the 14-day cooldown (CONTRIBUTING.md, "Keeping pins
-     current"). CI's `go` job installs that version (`GOTOOLCHAIN=local`) and runs with
+     current"), or at once when the release fixes an advisory `govulncheck` reports as reachable
+     and that fails the required `go-ok` check: digest and checksum verified, the advisory id in
+     the CHANGELOG (1.27.4, for GO-2026-6859, was taken the day after its release). CI's `go` job installs that version (`GOTOOLCHAIN=local`) and runs with
      `GOFLAGS=-mod=readonly` and `GOWORK=off`.
    - Standard library first. The gateway imports nothing else; the controller's core adds the
      module's first third-party dependencies in stage 2, and with them the module's `go.sum`

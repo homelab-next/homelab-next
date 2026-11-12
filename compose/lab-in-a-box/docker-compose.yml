@@ -284,7 +284,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-    mem_limit: 208m
+    mem_limit: 208m  # measured peak 36 MB (cgroup memory.peak, swapless, over a full lab-smoke, 2026-11-11)
     memswap_limit: 208m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
@@ -554,9 +554,10 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
-    mem_limit: 192m  # the scenario holds the MCP client and server (~65 MB each) plus one CLI: ~150-156 MB
+    # the scenario holds the MCP client and server (~65 MB each) plus one CLI: ~150-156 MB,
+    # measured on a swapless host (2026-11-11), where 144m OOM-killed the server
+    mem_limit: 192m
     memswap_limit: 192m  # = mem_limit: no swap headroom, same result with or without host swap
-                     # measured on a swapless host (2026-11-11); 144m OOM-killed the server there
     networks:
       lab:
         ipv4_address: ${LAB_BROKER_EDGE_ADDRESS:?see .env.example}
