@@ -9,7 +9,7 @@
       - openbao_checksums is mapping and openbao_checksums | length > 0
       - openbao_checksums.values() | reject('match', '^[0-9a-f]{64}\Z') | list | length == 0
       - openbao_checksums.keys() | difference(['amd64', 'arm64']) | length == 0
-      - openbao_checksums_version == openbao_version
+      - openbao_checksums_release == openbao_version
       - openbao_release_repository is match('^https://[^\s?#]+[^/\s?#]\Z')
       - openbao_api_addr is match('^https://[^/\s?#@]+\Z')
       - openbao_cluster_url is match('^https://[^/\s?#@]+\Z')
@@ -29,7 +29,7 @@
     fail_msg: >-
       openbao: refused input. Needs an https api_addr and cluster_addr (no path), a concrete listen
       address (never a wildcard), a pinned x.y.z version with a sha256 per architecture taken for
-      that version (openbao_checksums_version equal to openbao_version), a
+      that version (openbao_checksums_release equal to openbao_version), a
       non-root user and group, and dedicated data, audit and configuration directories.
 
 - name: Refuse a TLS input that is neither supplied nor the test-only self-signed option

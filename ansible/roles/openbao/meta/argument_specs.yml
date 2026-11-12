@@ -25,7 +25,7 @@ argument_specs:
         default:
           amd64: "0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243"
           arm64: "2b3807d90f224df05d4fe1fdede7f052d2227596c648a56bd291381f8fd01840"
-      openbao_checksums_version: &checksumsver
+      openbao_checksums_release: &checksumsver
         type: str
         description: "The release openbao_checksums were taken for; refused unless it equals openbao_version (move them together)."
         default: "2.7.1"

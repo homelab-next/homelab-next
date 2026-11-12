@@ -114,11 +114,11 @@ def test_the_server_mode_secret_store_role_installs_the_lab_image_version():
     assert main["openbao_version"]["default"] == defaults["openbao_version"]
     assert main["openbao_checksums"]["default"] == defaults["openbao_checksums"]
     # the checksums record the release they were taken for, which must be the pinned one
-    assert defaults["openbao_checksums_version"] == defaults["openbao_version"], (
+    assert defaults["openbao_checksums_release"] == defaults["openbao_version"], (
         "openbao_checksums were taken for a different release than openbao_version: take the "
-        "pinned release's pair from its signed checksums.txt and move openbao_checksums_version"
+        "pinned release's pair from its signed checksums.txt and move openbao_checksums_release"
     )
-    assert main["openbao_checksums_version"]["default"] == defaults["openbao_checksums_version"]
+    assert main["openbao_checksums_release"]["default"] == defaults["openbao_checksums_release"]
     assert set(defaults["openbao_checksums"]) == {"amd64", "arm64"}
     assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in defaults["openbao_checksums"].values())
 

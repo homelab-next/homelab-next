@@ -27,7 +27,7 @@ restart: the server reloads them on `SIGHUP` (`systemctl reload`) and stays unse
   unless its sha256 is the pinned one (`openbao_checksums`, per architecture), then unpacked into
   `<openbao_install_dir>/<version>/` with `openbao_bin` pointing at it. The unpack has no
   `creates:`: every run compares the archive with what is on disk and unpacks again when they
-  differ (a re-pinned archive, a changed `bao`). `openbao_checksums_version` records the release
+  differ (a re-pinned archive, a changed `bao`). `openbao_checksums_release` records the release
   the checksums were taken for, and validate refuses it unequal to `openbao_version`, so the
   version and its checksums move together. The checksums come from
   the release's `checksums.txt` after checking its detached signature against the project's
@@ -104,7 +104,7 @@ wrote it.
 running one) and takes `pre-upgrade-<running version>.snap`; it switches nothing. Take the
 target's checksums from its signed `checksums.txt` (check the signature against the fingerprint
 above), run the `upgrade` hook, move `openbao_version`, `openbao_checksums` and
-`openbao_checksums_version` together (and the lab-in-a-box image with them), then run `main` with
+`openbao_checksums_release` together (and the lab-in-a-box image with them), then run `main` with
 `openbao_allow_restart: true` while the operator is there: the server comes back sealed on the new
 release. Unseal it, then run `health`. **Rolling back is not just pointing the pin back**: the new
 release may have rewritten the raft storage in a format the old one cannot read, which is why

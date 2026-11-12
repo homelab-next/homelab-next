@@ -2,7 +2,7 @@
 # A release bump, staged, not switched: refuse a downgrade or a no-op (against the pin and against
 # the RUNNING release), take a pre-upgrade raft snapshot, fetch and verify the target release
 # beside the running one, and record it as pending. The switch itself is main with the moved pin
-# (openbao_version, openbao_checksums and openbao_checksums_version), which needs a restart: run
+# (openbao_version, openbao_checksums and openbao_checksums_release), which needs a restart: run
 # it with openbao_allow_restart: true while the operator is there to unseal, then the health hook.
 # Rollback is NOT pointing the pin back: the new release may already have rewritten the raft
 # storage. Restore pre-upgrade-<old version>.snap with the old release (README.md, "Upgrading").

@@ -16,7 +16,7 @@ openbao_checksums:
   arm64: "2b3807d90f224df05d4fe1fdede7f052d2227596c648a56bd291381f8fd01840"
 # The release the checksums above were taken for. validate refuses it unequal to openbao_version,
 # so moving the version without its checksums (or the reverse) fails before anything is fetched.
-openbao_checksums_version: "2.7.1"
+openbao_checksums_release: "2.7.1"
 # Where the release archives are fetched from (<repository>/v<version>/<archive>); a mirror must
 # serve byte-identical archives, since the checksum above is checked either way.
 openbao_release_repository: "https://github.com/openbao/openbao/releases/download"

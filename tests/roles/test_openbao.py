@@ -135,7 +135,7 @@ BAD = [
     },
     {"openbao_tls_selfsigned_confirm_throwaway": True},
     # checksums taken for another release than the pin
-    {"openbao_checksums_version": "2.7.0"},
+    {"openbao_checksums_release": "2.7.0"},
 ]
 
 
