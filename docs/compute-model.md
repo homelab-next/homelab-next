@@ -1,6 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, generators for IaC, cloud-init, inventory, firewall and baselines, and applying them.'
-summary_of: outline:sha256:3beba5117c11a6cc
+summary_of: outline:sha256:e44d0871696e8680
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -182,6 +182,72 @@ bridge's MTU. Cable `to` to the sensor only; on an ordinary switch port it would
 traffic onto the network. Interface names are checked (Linux names,
 at most 15 characters), and a mirroring node's name must be one a guest can name.
 
+### Node notifications
+
+Proxmox VE sends its own notifications (a failed backup job, fencing, replication, and the mail
+the node forwards to root from cron, smartd and ZFS) through `/etc/pve/notifications.cfg`. Out of
+the box one matcher sends all of them to `mail-to-root`, the email address of `root@pam`, through
+the node's own MTA; a node with no relay host delivers that nowhere (an external mailbox rejects
+mail from a residential address), so a failed backup reaches no one. A node can send them to an
+ntfy topic instead, with no MTA involved:
+
+```yaml
+nodes:
+  hv-1:
+    notify:
+      url: https://ntfy.example.org/         # the ntfy server (http or https, no query, no user)
+      topic: proxmox-alerts
+      severities: [warning, error, unknown]  # the default; unknown is forwarded system mail
+      priority: 4                            # ntfy priority 1-5, default 4
+      default_mail: false                    # the default: turn off the built-in mail matcher
+```
+
+`hnx guests render --target node-notify` writes `notify/<node>/hnx-notify.sh`. Run on the node as
+root, it creates or updates a webhook target `hnx-notify-<node>` that POSTs each notification to
+`url` as ntfy JSON (`topic`, `title` prefixed with the node name, `message`, `priority`, and the
+tags `hypervisor` and the severity), and a matcher `hnx-notify-<node>-route` that sends the listed
+severities raised on this node (`match-field exact:hostname=<node>`) to it. It then sends a test
+notification through the target and exits non-zero (with `pvesh`'s status) if that is not
+delivered; only after a delivered test, and with `default_mail: false`, does it disable Proxmox's
+built-in `default-matcher`, so mail is never turned off in favour of a target that does not
+deliver. The test goes straight to the target and does not pass through the matcher: it proves the
+URL, the topic and the server, not that a real notification satisfies the severity and `hostname`
+match. The evidence that the matcher works is a live run on a Proxmox VE 9.2 node: a real failed
+`vzdump` job was routed through `hnx-notify-<node>-route` and arrived on the topic, and so did
+root's mail forwarded by `proxmox-mail-forward`. Replication, fencing and ZFS (ZED) notifications
+were not checked against the `hostname` match. A re-run leaves a correct config unchanged but sends
+one more test, so the script is meant for a manual run or a deploy, not for cron; a re-run also
+undoes a hand edit of the two entries: a `disable`, an `invert-match`, a calendar rule, and any
+header or secret added to the target. `hnx-notify.sh --test` sends only the test; `--remove` first
+enables `default-matcher` again, whatever `default_mail` says now (it is the Proxmox default, and
+enabling an enabled matcher is harmless), then deletes this node's matcher and target, so a delete
+that fails leaves the node two routes, not none. Deleting `notify` from a node's entry renders no
+script for it at all, so nothing rendered afterwards can undo an earlier apply: to undo, run the
+old script's `--remove` on the node first, then delete the key.
+
+`notifications.cfg` is one file for every node of a Proxmox cluster. The names and the `hostname`
+match are per node, so two nodes never overwrite or answer for each other, but `default-matcher`
+is one cluster-wide entry: in a cluster, give every node a `notify` before any of them turns it
+off, and know that `--remove` on one node turns mail back on for all. Once mail is off the node
+has no other route, so a server that is down drops its alerts; the test on every apply is the
+check, and the topic is worth an uptime probe of its own.
+
+The body is rendered here and carried base64-encoded, the form `pvesh` takes, so no value of the
+node entry reaches the shell outside double quotes; Proxmox fills its `{{ escape title }}`,
+`{{ escape message }}` and `{{ severity }}` when it sends. A backup job uses this only with
+`notification-mode notification-system` (or the default `auto` with no `mailto`). A backup log can
+be long: the server's message size limit must allow it (ntfy's default is 4 KB). The URL is plain
+`http` or `https` with a host name or IPv4 address, an optional port and base path, and no user,
+query or fragment; with `http` the notification (backup logs, host names) crosses the network in
+clear. Publishing needs no credential: a server that requires a token to publish is not supported
+yet. Targets and matchers share one namespace in `notifications.cfg`, so the two names differ.
+
+This target is deliberately not a client of the [notify capability](capabilities/notify.md): a
+hypervisor must be able to alert when no guest, the notify service included, is up. The node
+talks to the server its own entry names, in ntfy's JSON publish shape (a POST of the whole message
+to the server root, where the capability's sender posts to `<endpoint>/<topic>`), and `hnx swap`
+of the notify product does not move it: a swap re-points `url` by hand.
+
 The guest model (`homelabnext.compute.model`, `validate`) reads zones through a small protocol:
 
 ```python
@@ -205,8 +271,8 @@ validation uses the network validator's IPv6 prefix rules. It does not validate 
 validated: a standalone hypervisor's Terraform (one provider endpoint) must not carry another
 node's guests, and one directory of state per node keeps a plan from proposing to destroy them.
 It is taken only by the **per-node** targets, whose output one node applies: `terraform-proxmox`,
-`libvirt`, `cloudinit`, `firewall-rules` (the node's `/etc/pve/firewall`) and `node-mirror` (that
-node's `mirror/<node>/`). The **fleet-wide** targets (`inventory`, `registry-hosts`,
+`libvirt`, `cloudinit`, `firewall-rules` (the node's `/etc/pve/firewall`), `node-mirror` (that
+node's `mirror/<node>/`) and `node-notify` (that node's `notify/<node>/`). The **fleet-wide** targets (`inventory`, `registry-hosts`,
 `tailscale-acl`, `backup-jobs`, `baseline-playbook`, `runtime-labels`) are one document for every
 node, so narrowed to one they would silently drop the others' guests: `--node` with one of them is
 a usage error (exit 2); render them without it. A node that no guest and no `_nodes.yml` entry
@@ -233,6 +299,7 @@ another target's files as stale.
 | `runtime-labels` | `runtime-labels.json`: each guest's addresses (`network.ip` and `network.extra_addresses`) and its `hnx_runtime` label (`model` for a model runtime, else `none`), which the log pipeline joins on ([log pipeline](log-pipeline.md)) |
 | `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows, the deploy tag's declared access with policy tests); see [Bound products](#bound-products) |
 | `node-mirror` | `mirror/<node>/hnx-mirror.sh`, `.service` and `.timer` for each node with a `mirror` in `_nodes.yml`, and `mirror/README.md`; see [Node mirror](#node-mirror) |
+| `node-notify` | `notify/<node>/hnx-notify.sh` for each node with a `notify` in `_nodes.yml` (a webhook target and matcher sending its Proxmox notifications to ntfy), and `notify/README.md`; see [Node notifications](#node-notifications) |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
@@ -898,7 +965,8 @@ its own runbook with its addresses.
    guest-disk storage, a cloud-init drive, `agent: enabled=1`, a serial console, `qm template`;
    never booted, so every clone generates its own SSH host keys. Its vmid is the
    `vm_templates` entry for the image's `logical` name.
-3. **Render** the per-node targets (`terraform-proxmox`, `cloudinit`, `firewall-rules`) with
+3. **Render** the per-node targets (`terraform-proxmox`, `cloudinit`, `firewall-rules`, and
+   `node-mirror`/`node-notify` for a node that declares them) with
    `--node <node>`, each into its own directory, **one directory per node** (`tf/<node>/`,
    `cloudinit/<node>/`, ...): each `tf/<node>/` is that node's own Terraform root and state, so a
    plan in it never proposes to destroy another node's guests. Render the fleet-wide targets

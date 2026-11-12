@@ -73,7 +73,8 @@ def _fleet(args: argparse.Namespace):
 
 #: targets whose output belongs to one hypervisor node, so ``--node`` may narrow them to it: the
 #: hypervisor's IaC (one provider endpoint, one state), its ``virt-install`` scripts, the seeds of
-#: the VMs it runs, the ``.fw`` files its firewall directory reads, and its own traffic mirror.
+#: the VMs it runs, the ``.fw`` files its firewall directory reads, its own traffic mirror and its
+#: notification target.
 #: Each generator module says so itself (``PER_NODE = True``); every other target is fleet-wide.
 PER_NODE_TARGETS = frozenset(
     name for name, fn in TARGETS.items() if getattr(sys.modules[fn.__module__], "PER_NODE", False)
