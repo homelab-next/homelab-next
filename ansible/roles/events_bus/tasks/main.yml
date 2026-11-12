@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Create the service group
+  ansible.builtin.group:
+    name: "{{ events_bus_group }}"
+    system: true
+
+- name: Create the service account
+  ansible.builtin.user:
+    name: "{{ events_bus_user }}"
+    group: "{{ events_bus_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+- name: Create the directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ events_bus_cache_dir }}", owner: root, group: root, mode: "0755"}
+    - {path: "{{ events_bus_bin | dirname }}", owner: root, group: root, mode: "0755"}
+    - {path: "{{ events_bus_config_dir }}", owner: root, group: "{{ events_bus_group }}", mode: "0750"}
+    - {path: "{{ events_bus_store_dir }}", owner: "{{ events_bus_user }}", group: "{{ events_bus_group }}", mode: "0700"}
+
+- name: Download the pinned server release (checked against its sha256)
+  ansible.builtin.get_url:
+    url: "{{ events_bus_archive_url }}"
+    dest: "{{ events_bus_cache_dir }}/{{ events_bus_archive_url | basename }}"
+    checksum: "sha256:{{ events_bus_archive_sha256 }}"
+    mode: "0644"
+
+- name: Unpack it
+  ansible.builtin.unarchive:
+    src: "{{ events_bus_cache_dir }}/{{ events_bus_archive_url | basename }}"
+    dest: "{{ events_bus_cache_dir }}"
+    remote_src: true
+    creates: "{{ events_bus_cache_dir }}/{{ events_bus_archive_url | basename | regex_replace('\\.tar\\.gz$', '') }}/nats-server"
+
+- name: Install the server binary
+  ansible.builtin.copy:
+    src: "{{ events_bus_cache_dir }}/{{ events_bus_archive_url | basename | regex_replace('\\.tar\\.gz$', '') }}/nats-server"
+    dest: "{{ events_bus_bin }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  register: events_bus_binary
+
+- name: Ask the binary for its version
+  ansible.builtin.command:
+    argv: ["{{ events_bus_bin }}", --version]
+  register: events_bus_found
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Refuse any server but the pinned one
+  ansible.builtin.assert:
+    that: (events_bus_found.stdout | trim) is search('v' ~ events_bus_version ~ '$')
+    fail_msg: "events_bus: {{ events_bus_bin }} reports {{ events_bus_found.stdout | trim }}, the pin is {{ events_bus_version }}"
+
+- name: Start from no rendered users
+  ansible.builtin.set_fact:
+    events_bus_rendered_users: []
+
+# bcrypt with a salt derived from the reference, the host and the account: the same password
+# hashes the same way on every run (idempotent), and the server never holds a plain password.
+- name: Hash every user's password
+  ansible.builtin.set_fact:
+    events_bus_rendered_users: >-
+      {{ events_bus_rendered_users + [{
+           'user': item.user,
+           'password_hash': lookup('hnx_secret', item.password_ref)
+              | password_hash('bcrypt', rounds=11, ident='2a',
+                  salt=((item.password_ref ~ '|' ~ inventory_hostname ~ '|' ~ events_bus_account) | hash('sha256') | truncate(21, true, '')) ~ 'e'),
+           'publish': item.publish | default([]),
+           'subscribe': item.subscribe | default([])}] }}
+  loop: "{{ events_bus_users }}"
+  loop_control:
+    label: "{{ item.user }}"
+  no_log: true
+
+- name: Write the server configuration
+  ansible.builtin.template:
+    src: nats.conf.j2
+    dest: "{{ events_bus_config_dir }}/nats.conf"
+    owner: root
+    group: "{{ events_bus_group }}"
+    mode: "0640"
+  register: events_bus_config
+  no_log: true
+
+- name: Check the configuration with the server itself
+  ansible.builtin.command:
+    argv: ["{{ events_bus_bin }}", -c, "{{ events_bus_config_dir }}/nats.conf", -t]
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Write the unit
+  ansible.builtin.template:
+    src: hnx-events.service.j2
+    dest: "{{ events_bus_systemd_dir }}/hnx-events.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: events_bus_unit
+
+- name: Install the stream provisioner
+  ansible.builtin.copy:
+    src: hnx-events-provision.py
+    dest: "{{ events_bus_provision_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Enable and start the bus, restarting it when its binary, configuration or unit changed
+  ansible.builtin.systemd_service:
+    name: hnx-events.service
+    enabled: true
+    state: "{{ 'restarted' if (events_bus_binary is changed or events_bus_config is changed or events_bus_unit is changed) else 'started' }}"
+    daemon_reload: "{{ events_bus_unit is changed }}"
+  when: events_bus_start | bool
+
+- name: Wait for the bus to answer its health endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ events_bus_monitor_port | int }}/healthz?js-enabled-only=true"  # no-raw-endpoint: allow the monitor listens on loopback only
+    status_code: 200
+  register: events_bus_up
+  until: events_bus_up.status == 200
+  retries: 20
+  delay: 1
+  changed_when: false
+  when: events_bus_start | bool
+
+- name: Provision the standing streams (created only when missing)
+  ansible.builtin.command:
+    argv: ["{{ events_bus_hnx_python }}", "{{ events_bus_provision_bin }}",
+           "nats://{{ ('[' ~ events_bus_listen_address ~ ']') if ':' in events_bus_listen_address else events_bus_listen_address }}:{{ events_bus_port | int }}",
+           "{{ events_bus_admin_user }}", "{{ item.name }}", "{{ item.subject_prefix }}",
+           "{{ item.max_bytes | int }}"]
+  environment:
+    HNX_EVENTS_ADMIN_PASSWORD: "{{ lookup('hnx_secret', events_bus_admin_password_ref) }}"
+  loop: "{{ events_bus_streams }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: events_bus_provisioned
+  changed_when: (events_bus_provisioned.stdout | from_json).created | length > 0
+  no_log: true
+  when: events_bus_start | bool

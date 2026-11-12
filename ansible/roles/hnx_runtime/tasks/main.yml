@@ -1,0 +1,151 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+# One release per (wheel, lock, extras, interpreter): a changed input is a new virtualenv beside
+# the running one, switched to only once it installed and passed pip check, so a failed install
+# never leaves the services on a half-built environment.
+- name: Name this release
+  ansible.builtin.set_fact:
+    hnx_runtime_release: >-
+      {{ (hnx_runtime_wheel_sha256 ~ '|' ~ (lookup('file', hnx_runtime_constraints) | hash('sha256'))
+          ~ '|' ~ (lookup('file', hnx_runtime_bootstrap) | hash('sha256'))
+          ~ '|' ~ (hnx_runtime_extras | join(',')) ~ '|' ~ hnx_runtime_python) | hash('sha256') | truncate(16, true, '') }}
+
+- name: Install what a virtualenv needs
+  ansible.builtin.apt:
+    name: "{{ hnx_runtime_os_packages }}"
+    state: present
+  when: hnx_runtime_os_packages | length > 0
+
+- name: Create the release directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ hnx_runtime_prefix }}"
+    - "{{ hnx_runtime_prefix }}/bin"
+    - "{{ hnx_runtime_prefix }}/releases"
+    - "{{ hnx_runtime_dir }}"
+    - "{{ hnx_runtime_dir }}/dist"
+
+- name: Copy the wheel
+  ansible.builtin.copy:
+    src: "{{ hnx_runtime_wheel }}"
+    dest: "{{ hnx_runtime_dir }}/dist/{{ hnx_runtime_wheel | basename }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Hash the wheel on the host
+  ansible.builtin.stat:
+    path: "{{ hnx_runtime_dir }}/dist/{{ hnx_runtime_wheel | basename }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: hnx_runtime_wheel_stat
+
+- name: Refuse a wheel that is not the pinned one
+  ansible.builtin.assert:
+    that: hnx_runtime_wheel_stat.stat.checksum == hnx_runtime_wheel_sha256
+    fail_msg: >-
+      hnx_runtime: {{ hnx_runtime_wheel | basename }} hashes to {{ hnx_runtime_wheel_stat.stat.checksum }},
+      the pin is {{ hnx_runtime_wheel_sha256 }}
+
+- name: Copy the dependency lock and pip's own pin
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ hnx_runtime_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - {src: "{{ hnx_runtime_constraints }}", dest: constraints.txt}
+    - {src: "{{ hnx_runtime_bootstrap }}", dest: bootstrap.txt}
+
+- name: Write the release's one requirement, the wheel by hash
+  ansible.builtin.copy:
+    dest: "{{ hnx_runtime_dir }}/requirements.txt"
+    content: |
+      homelabnext[{{ hnx_runtime_extras | join(',') }}] @ file://{{ hnx_runtime_dir }}/dist/{{ hnx_runtime_wheel | basename }} --hash=sha256:{{ hnx_runtime_wheel_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Look for a finished install of this release
+  ansible.builtin.stat:
+    path: "{{ hnx_runtime_dir }}/installed"
+  register: hnx_runtime_done
+
+- name: Build the release's virtualenv
+  when: not hnx_runtime_done.stat.exists
+  block:
+    - name: Create the virtualenv (cleared, so an interrupted install starts again)
+      ansible.builtin.command:
+        argv: ["{{ hnx_runtime_python }}", -m, venv, --clear, "{{ hnx_runtime_dir }}/venv"]
+      changed_when: true
+    - name: Install pip from its hash pin
+      ansible.builtin.command:
+        argv: ["{{ hnx_runtime_dir }}/venv/bin/python", -m, pip, install, --no-cache-dir,
+               --disable-pip-version-check, --require-hashes, --no-deps,
+               -r, "{{ hnx_runtime_dir }}/bootstrap.txt"]
+      changed_when: true
+    # --require-hashes: the wheel by its pin, every dependency by the lock's hashes (pip refuses
+    # a requirement the lock does not hash); --only-binary: nothing is built on the host
+    - name: Install homelab-next and its dependencies, every one by hash
+      ansible.builtin.command:
+        argv: ["{{ hnx_runtime_dir }}/venv/bin/python", -m, pip, install, --no-cache-dir,
+               --disable-pip-version-check, --require-hashes, "--only-binary=:all:",
+               -c, "{{ hnx_runtime_dir }}/constraints.txt",
+               -r, "{{ hnx_runtime_dir }}/requirements.txt"]
+      changed_when: true
+    - name: Check the installed set
+      ansible.builtin.command:
+        argv: ["{{ hnx_runtime_dir }}/venv/bin/python", -m, pip, check]
+      changed_when: false
+    - name: Mark the release installed
+      ansible.builtin.copy:
+        dest: "{{ hnx_runtime_dir }}/installed"
+        content: "{{ {'release': hnx_runtime_release, 'wheel': hnx_runtime_wheel | basename,
+                      'wheel_sha256': hnx_runtime_wheel_sha256, 'extras': hnx_runtime_extras,
+                      'source_commit': hnx_runtime_source_commit or none} | to_nice_json }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+- name: Switch the current link to this release
+  ansible.builtin.file:
+    src: "{{ hnx_runtime_dir }}/venv"
+    dest: "{{ hnx_runtime_prefix }}/current"
+    state: link
+    force: true
+    owner: root
+    group: root
+
+- name: Link the command the units run
+  ansible.builtin.file:
+    src: ../current/bin/hnx
+    dest: "{{ hnx_runtime_prefix }}/bin/hnx"
+    state: link
+    force: true
+    owner: root
+    group: root
+
+- name: Find the releases
+  ansible.builtin.find:
+    paths: "{{ hnx_runtime_prefix }}/releases"
+    file_type: directory
+    recurse: false
+  register: hnx_runtime_releases
+
+- name: Remove releases past the ones kept (never the current one)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: >-
+    {{ (hnx_runtime_releases.files | rejectattr('path', 'equalto', hnx_runtime_dir)
+        | sort(attribute='mtime', reverse=true) | list)[hnx_runtime_keep_releases | int:] }}
+  loop_control:
+    label: "{{ item.path | basename }}"

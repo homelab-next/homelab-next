@@ -1,0 +1,17 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role broker); local changes are overwritten.
+# The relay's binding of the events capability (docs/broker.md "Publishing events"): the broker's
+# bus user, its password by reference (HNX_SECRET_<NAME> from relay.env), never a value. The
+# endpoint is HNX_ENDPOINT_EVENTS ({{ broker_relay_events_endpoint | regex_replace('^([a-z]+)://.*$', '\\1') }}://): a password goes only over tls:// or to loopback.
+name: {{ (broker_logical_id ~ '-relay') | to_json }}
+capabilities:
+  events:
+    adapter: homelabnext.conform.adapters.nats_jetstream:make
+    config:
+      user: {{ broker_relay_events_user | to_json }}
+      password_secret: {{ broker_relay_password_ref | to_json }}
+      client_name: {{ broker_relay_user | to_json }}
+{% if broker_relay_ca_file %}
+      ca_file: {{ broker_relay_ca_file | to_json }}
+{% endif %}
+      duplicate_window: {{ (broker_relay_duplicate_window | int) | float }}

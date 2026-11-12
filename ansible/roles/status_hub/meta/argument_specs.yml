@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Serve the status hub (and the broker's Approvals page) from the lab's registry as its own user.
+    options:
+      status_hub_logical_id: &id
+        type: str
+        description: "The hub's service id in the registry (its capability, status-hub); its row's front_door, roles and public_hostname configure the private tier."
+        required: true
+      status_hub_registry: &registry
+        type: path
+        description: "The lab's registry (services.yml) on the controller; the hub reads its own row and the edge-proxy hosts (its trusted proxies) from it."
+        required: true
+      status_hub_hnx_bin: &bin
+        type: path
+        description: "The hnx command (role hnx_runtime's <prefix>/bin/hnx)."
+        default: /opt/hnx/bin/hnx
+      status_hub_runtime_release: &release
+        type: str
+        description: "The homelab-next release the unit runs (hnx_runtime_release): a change restarts it; empty: not tracked."
+        default: ""
+      status_hub_user: &user
+        type: str
+        description: "The hub's own account (the broker manifest's approval relay)."
+        default: hnx-hub
+      status_hub_group: &group
+        type: str
+        description: "Its group."
+        default: hnx-hub
+      status_hub_config_dir: &confdir
+        type: path
+        description: "The registry copy, agents.yml, views.yml and the secrets file."
+        default: /etc/hnx-hub
+      status_hub_state_dir: &state
+        type: path
+        description: "The hub's state, activity store and access log (its working directory)."
+        default: /var/lib/hnx-hub
+      status_hub_bind_address: &bind
+        type: str
+        description: "The one address the hub listens on: loopback, or the host's own address when the edge is another host (never a wildcard)."
+        default: 127.0.0.1  # no-raw-endpoint: allow loopback default
+      status_hub_port: &port
+        type: int
+        description: "The port (the registry row's)."
+        default: 8099
+      status_hub_allowed_hosts: &hosts
+        type: list
+        elements: str
+        description: "Host names clients send besides loopback (the row's public_hostname); required for a non-loopback bind."
+        default: []
+      status_hub_secret_refs: &secrets
+        type: list
+        elements: str
+        description: "secret:<name> references the hub reads at run time (the front door's, the form-token key), delivered as HNX_SECRET_<NAME>."
+        default: []
+      status_hub_retention_days: &ret
+        type: int
+        description: "Days of agent activity kept."
+        default: 30
+      status_hub_detail: &detail
+        type: bool
+        description: "Keep agent activity's detail tier (prompts, commands, tool input and output)."
+        default: false
+      status_hub_approvals_socket: &sock
+        type: str
+        description: "The broker's socket (absolute): serve the Approvals page. Empty: no page."
+        default: ""
+      status_hub_approvals_issuer: &issuer
+        type: str
+        description: "The issuer the broker manifest lists the hub's user under (approval_relays)."
+        default: sso
+      status_hub_approvals_csrf_key_ref: &csrf
+        type: str
+        description: "secret:<name> of the form tokens' HMAC key (at least 32 characters, not the front door's); also list it in status_hub_secret_refs."
+        default: ""
+      status_hub_public_origin: &origin
+        type: str
+        description: "The page's origin in people's browsers (https://<public_hostname>); required with the Approvals page."
+        default: ""
+      status_hub_broker_clients_group: &clients
+        type: str
+        description: "The broker socket's group, which the hub's user joins for the Approvals page."
+        default: hnx-broker-clients
+      status_hub_title: &title
+        type: str
+        description: "The page title."
+        default: homelab-next status
+      status_hub_systemd_dir: &units
+        type: path
+        description: "Where the unit is written."
+        default: /etc/systemd/system
+      status_hub_start: &start
+        type: bool
+        description: "Enable, start and restart the unit (false: write it only)."
+        default: true
+      status_hub_backup_dir: &backupdir
+        type: path
+        description: "Where the backup hook writes its manifest."
+        default: /var/backups/hnx-hub
+      status_hub_export_dir: &export
+        type: path
+        description: "Where the export hook writes the agent-activity export."
+        default: /var/backups/hnx-hub/export
+  health:
+    short_description: Fail unless the hub answers /status.json with its contract on its bind address.
+    options:
+      status_hub_bind_address: *bind
+      status_hub_port: *port
+      status_hub_allowed_hosts: *hosts
+  readiness:
+    short_description: Fail unless the broker's socket (with the Approvals page) is there and the registry copy validates.
+    options:
+      status_hub_hnx_bin: *bin
+      status_hub_config_dir: *confdir
+      status_hub_approvals_socket: *sock
+  backup:
+    short_description: Write the backup manifest (the activity store, the access log, the configuration).
+    options:
+      status_hub_logical_id: *id
+      status_hub_state_dir: *state
+      status_hub_config_dir: *confdir
+      status_hub_backup_dir: *backupdir
+  restore:
+    short_description: Restore the hub's state directory from status_hub_restore_source with the unit stopped.
+    options:
+      status_hub_state_dir: *state
+      status_hub_user: *user
+      status_hub_restore_source:
+        type: path
+        description: A directory holding a copy of the state directory.
+        required: true
+  upgrade:
+    short_description: Nothing of the hub's own to upgrade; its code is hnx_runtime's. Validates the target registry and records it as pending.
+    options:
+      status_hub_hnx_bin: *bin
+      status_hub_config_dir: *confdir
+      status_hub_target_registry:
+        type: path
+        description: The new registry on the host.
+        required: true
+  export:
+    short_description: Write the state directory (JSON state, the SQLite activity store, the JSONL access log) as tar.gz.
+    options:
+      status_hub_logical_id: *id
+      status_hub_state_dir: *state
+      status_hub_export_dir: *export

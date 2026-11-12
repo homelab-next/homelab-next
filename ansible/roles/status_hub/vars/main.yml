@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the loopback names (a non-loopback bind needs --allow-remote).
+status_hub_loopback: [127.0.0.1, "::1", localhost]  # no-raw-endpoint: allow the loopback names themselves

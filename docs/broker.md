@@ -1,6 +1,6 @@
 ---
 summary: 'The broker service: named actions decided allow, deny or needs-approval, lanes, exec handlers, approvals, state, Code Mode tokens, running it and its MCP tools.'
-summary_of: outline:sha256:e6b2fa713f21b880
+summary_of: outline:sha256:f26c5779087d854d
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Broker service
@@ -558,8 +558,8 @@ none of its pages yet, so a ceiling below `red` turns every page into that notic
 `HNX_NOTIFY_PAIRS_DIR`), the notifier writes the pairs it holds to `DIR/broker/pairs.json` for the
 module census ([modules](modules/loader-deploy.md#the-loader-at-deploy-time), "Notify pairs"). The census reads
 `/var/lib/homelabnext/notify-pairs`; `DIR` (root's, `0755`) and `DIR/broker` (the broker user's,
-`0755`) are the operator's to make, since no role here deploys the broker, and a unit adds
-`DIR/broker` to its `ReadWritePaths`. Either one writable by anyone else, or reached through a
+`0755`) are the operator's to make (the `broker` role, [below](#deploying-with-ansible), does not
+configure notifications yet), and a unit adds `DIR/broker` to its `ReadWritePaths`. Either one writable by anyone else, or reached through a
 link, stops the broker at start.
 
 A peer is listed once, in exactly one role: a caller, a relay, an operator, a Code Mode runner
@@ -644,7 +644,16 @@ bounded by the token's own call cap instead.
 ### A systemd unit
 
 A dedicated user owns the state; each agent runs as its own user in `hnx-broker-clients`; the hub
-runs as `hnx-hub`, also in that group.
+runs as `hnx-hub`, also in that group. The socket's directory and the state root are made once,
+as root, not by systemd: `RuntimeDirectory=` and `StateDirectory=` are reset to `User:Group` for
+every command the unit starts, so an `ExecStartPre=+/bin/chgrp` to the clients' (or the relay's)
+group is undone before `ExecStart` runs, and the peers then cannot reach the socket (the relay
+its `outbox/`). A `tmpfiles.d` line keeps the socket's directory across reboots:
+
+```text
+# /etc/tmpfiles.d/hnx-broker.conf
+d /run/hnx-broker 0750 hnx-broker hnx-broker-clients -
+```
 
 ```ini
 # /etc/systemd/system/hnx-broker.service
@@ -656,21 +665,22 @@ After=network.target
 User=hnx-broker
 Group=hnx-broker
 SupplementaryGroups=hnx-broker-clients
-RuntimeDirectory=hnx-broker
-RuntimeDirectoryMode=0750
-StateDirectory=hnx-broker
-StateDirectoryMode=0710
-ExecStartPre=+/bin/chgrp hnx-broker-clients /run/hnx-broker
-ExecStartPre=+/bin/chgrp hnx-broker-relay /var/lib/hnx-broker
 ExecStart=/opt/hnx/bin/hnx broker serve --manifest /etc/hnx-broker/manifest.yml \
   --state /var/lib/hnx-broker/state --data-root /srv/agents \
   --socket /run/hnx-broker/broker.sock --socket-mode 660 --socket-group hnx-broker-clients
 EnvironmentFile=-/etc/hnx-broker/secrets.env
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/hnx-broker /srv/agents
+ReadWritePaths=/var/lib/hnx-broker /srv/agents /run/hnx-broker
 ProtectHome=yes
 PrivateTmp=yes
+# serve needs no network: the socket is its only door (its handlers then get none either)
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+# not ~@privileged: it holds @chown, and --socket-group chowns the socket (the process is killed
+# with SIGSYS at start)
+SystemCallFilter=~@resources
 
 [Install]
 WantedBy=multi-user.target
@@ -680,6 +690,39 @@ WantedBy=multi-user.target
 memory there if the operator grants it, never write. Handler secrets come from
 `HNX_BROKER_SECRET_<NAME>` in the service's environment (here an environment file readable by
 root and the service user only).
+
+### Deploying with Ansible
+
+`ansible/playbooks/control_plane.yml` deploys this section's units on the capability groups
+(`cap_broker`, `cap_status_hub`, `cap_events`; [role interface](role-interface.md)):
+
+| Role | Installs |
+|---|---|
+| `hnx_runtime` | homelab-next itself: a wheel pinned by sha256 and every dependency by the hashes of the same commit's `constraints/ci.txt` (`pip --require-hashes --only-binary=:all:`), one virtualenv per release under `/opt/hnx/releases/`, switched to (`/opt/hnx/current`, `/opt/hnx/bin/hnx`) only after it installed and passed `pip check` |
+| `events_bus` | the events bus ([events](events.md)): the pinned NATS server release (sha256), one account whose users each get an allow-list and nothing else (the lab's grants, [below](#publishing-events-the-outbox-relay)), bcrypt-hashed passwords, loopback only until a TLS listener exists, the standing stream and its DLQ provisioned with limits by the operator's user |
+| `broker` | the unit above and the relay's, the users and groups, the directories with the modes [State](#state) names, the operator's manifest and handlers (checked by `hnx broker validate` on the host), the handler secrets and the relay's bus password resolved from their references into 0640 environment files |
+| `status_hub` | `hnx status serve` under `hnx-hub` over the lab's registry, the private tier and the [Approvals page](#front-door-approvals), bound to one address (the edge reaches it, [status hub](status.md#the-private-tier-caddy--auth-proxy--idp-setup)) |
+
+Every secret is a `secret:<name>` reference resolved on the controller by the `hnx_secret` lookup
+(OpenBao in a private overlay's deploy). A changed release, manifest, handler, secret or unit
+restarts the service it belongs to; a re-run with nothing changed reports `changed=0`, and so does
+`--check --diff`. Build the wheel from the commit you deploy, with the commit's time as
+`SOURCE_DATE_EPOCH` so the bytes (and the pinned sha256) are reproducible:
+
+```sh
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) python -m pip wheel --no-deps --no-build-isolation -w dist .
+sha256sum dist/homelabnext-*.whl   # -> hnx_runtime_wheel_sha256
+```
+
+To run [the scenario](#testing) against the deployed units, run `broker_e2e.py run` as root on
+the broker host with the release's interpreter, naming the real peers (`--peer agent=hnx-agent-triage
+--peer relay=hnx-hub --peer stranger=65534 --clients-group hnx-broker-clients --relay-user
+hnx-broker-relay`), the hub's public name, approver and groups (`--hub-host`, `--approver`,
+`--approver-group`, `--viewer-group`), the bus users (`--bus-admin`, `--bus-not-broker`) and the
+relay's `--events-target`, `--stream` and `--subject-prefix`; stop `hnx-broker-relay.service`
+for the run (one relay per state directory; the scenario's own `--once` passes take its place).
+The hub's steps must reach it from a trusted proxy's address (the registry's edge-proxy host), as
+the edge would.
 
 ### Publishing events: the outbox relay
 

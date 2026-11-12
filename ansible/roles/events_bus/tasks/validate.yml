@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values land in a systemd unit and the server's configuration (JSON strings): refuse anything
+# that could add a line, a key or a directive, and every grant broader than one user's own.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - events_bus_logical_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - events_bus_archive_url is match('^https://[A-Za-z0-9./_+-]+\.tar\.gz\Z')
+      - events_bus_archive_sha256 is match('^[0-9a-f]{64}\Z')
+      - events_bus_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - ('v' ~ events_bus_version ~ '-') in (events_bus_archive_url | basename)
+      - events_bus_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and events_bus_user != 'root'
+      - events_bus_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and events_bus_group != 'root'
+      - events_bus_bin is match('^/[A-Za-z0-9._/-]+\Z')
+      - events_bus_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - events_bus_store_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - events_bus_listen_address is match('^[0-9a-f.:]+\Z')
+      - events_bus_listen_address not in ['0.0.0.0', '::']  # no-raw-endpoint: allow refused wildcards
+      - events_bus_port | int > 1023 and events_bus_port | int < 65536
+      - events_bus_monitor_port | int > 1023 and events_bus_monitor_port | int < 65536
+      - events_bus_port | int != events_bus_monitor_port | int
+      - events_bus_account is match('^[A-Z][A-Z0-9_]{0,31}\Z')
+      - events_bus_max_memory_store | int > 0 and events_bus_max_file_store | int > 0
+    fail_msg: >-
+      events_bus: a logical id, an https .tar.gz archive of the pinned version and its 64-hex
+      sha256, a non-root user and group, absolute paths, an address that is not a wildcard,
+      unprivileged distinct ports, an upper-case account name and positive store caps
+
+- name: Validate the users and their allow-lists
+  ansible.builtin.assert:
+    that:
+      - item.user is defined and item.user is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - item.password_ref is defined and item.password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - (item.publish | default([])) is sequence and (item.subscribe | default([])) is sequence
+      - (item.publish | default([]) + item.subscribe | default([])) | select('match', '^[A-Za-z0-9_.*>$-]+\Z') | list | length
+        == (item.publish | default([]) + item.subscribe | default([])) | length
+      - (item.publish | default([]) + item.subscribe | default([])) | intersect(events_bus_refused_subjects) | length == 0
+      - item.keys() | difference(['user', 'password_ref', 'publish', 'subscribe']) | length == 0
+    fail_msg: >-
+      events_bus: user {{ item.user | default('?') }}: a name, a secret: reference for its
+      password, and allow-lists of plain subjects, none of them {{ events_bus_refused_subjects | join(' ') }}
+  loop: "{{ events_bus_users }}"
+  loop_control:
+    label: "{{ item.user | default('?') }}"
+
+- name: Validate the streams and their provisioner
+  ansible.builtin.assert:
+    that:
+      - events_bus_users | map(attribute='user') | unique | length == events_bus_users | length
+      - events_bus_streams | length == 0 or events_bus_admin_user in (events_bus_users | map(attribute='user'))
+      - events_bus_streams | length == 0 or events_bus_admin_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - events_bus_streams | selectattr('name', 'match', '^[A-Z][A-Z0-9_]{0,31}\Z') | selectattr('subject_prefix', 'match', '^[a-z][a-z0-9_-]{0,31}\Z') | list | length == events_bus_streams | length
+      - events_bus_streams | map(attribute='max_bytes') | map('int') | select('gt', 0) | list | length == events_bus_streams | length
+    fail_msg: >-
+      events_bus: distinct user names; streams named [A-Z0-9_] with a lower-case subject prefix
+      and a positive max_bytes, provisioned by one of the users (events_bus_admin_user) whose
+      password is a secret: reference

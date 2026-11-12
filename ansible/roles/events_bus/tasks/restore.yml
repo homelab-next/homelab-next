@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Stop the bus
+      ansible.builtin.systemd_service:
+        name: hnx-events.service
+        state: stopped
+    - name: Restore JetStream's store
+      ansible.builtin.copy:
+        src: "{{ events_bus_restore_source }}/"
+        dest: "{{ events_bus_store_dir }}/"
+        remote_src: true
+        owner: "{{ events_bus_user }}"
+        group: "{{ events_bus_group }}"
+        mode: preserve
+    - name: Start the bus
+      ansible.builtin.systemd_service:
+        name: hnx-events.service
+        state: started
+  tags: [restore]

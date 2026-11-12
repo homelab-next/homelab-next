@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# The status hub (docs/status.md) as a hardened systemd unit under its own user: `hnx status serve`
+# over the lab's registry, with the private tier and the broker's Approvals page behind the front
+# door (docs/status.md "The private tier", "The Approvals page"). It binds one address: loopback,
+# or the host's own address when the edge (another host) fronts it, which the host firewall then
+# opens to the edge alone. The hub trusts only the registry's edge-proxy hosts as proxies.
+status_hub_hnx_bin: /opt/hnx/bin/hnx
+status_hub_runtime_release: ""
+status_hub_user: hnx-hub
+status_hub_group: hnx-hub
+status_hub_config_dir: /etc/hnx-hub
+status_hub_state_dir: /var/lib/hnx-hub
+status_hub_bind_address: 127.0.0.1  # no-raw-endpoint: allow loopback default, the edge address comes from the host
+status_hub_port: 8099
+# The hostnames clients (the edge) send besides loopback: the hub row's public_hostname.
+status_hub_allowed_hosts: []
+# Secrets the hub reads at run time ([secret:<name>]), delivered as HNX_SECRET_<NAME> through a
+# 0640 environment file: the front door's (the registry row's front_door.secret) and the
+# Approvals page's form-token key.
+status_hub_secret_refs: []
+# agents.yml: the private tier is on whenever the registry row has a front door.
+status_hub_retention_days: 30
+status_hub_detail: false
+# The broker's Approvals page: the socket (empty: no page), the issuer the manifest lists the
+# hub's user under (approval_relays), the form-token key and the page's public origin.
+status_hub_approvals_socket: ""
+status_hub_approvals_issuer: sso
+status_hub_approvals_csrf_key_ref: ""
+status_hub_public_origin: ""
+# The socket's group (the hub's user joins it when the Approvals page is on).
+status_hub_broker_clients_group: hnx-broker-clients
+status_hub_title: homelab-next status
+status_hub_systemd_dir: /etc/systemd/system
+status_hub_start: true
+status_hub_backup_dir: /var/backups/hnx-hub
+status_hub_export_dir: /var/backups/hnx-hub/export

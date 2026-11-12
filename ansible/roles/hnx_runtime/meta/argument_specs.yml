@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install a pinned homelab-next wheel and its hash-locked dependencies into a per-release virtualenv.
+    options:
+      hnx_runtime_wheel: &wheel
+        type: path
+        description: "The homelabnext wheel on the controller (homelabnext-<version>-py3-none-any.whl), built from the pinned commit or downloaded from a release."
+        required: true
+      hnx_runtime_wheel_sha256: &sha
+        type: str
+        description: "The wheel's sha256 (64 hex): the bytes on the host must hash to it, and pip installs it under --require-hashes."
+        required: true
+      hnx_runtime_constraints: &constraints
+        type: path
+        description: "constraints/ci.txt of the same commit on the controller: every dependency pinned with its hashes (pip runs with --require-hashes)."
+        required: true
+      hnx_runtime_bootstrap: &bootstrap
+        type: path
+        description: "constraints/bootstrap.txt of the same commit on the controller: pip itself, pinned by hash."
+        required: true
+      hnx_runtime_extras: &extras
+        type: list
+        elements: str
+        description: "The package extras to install (core: the schemas and YAML; mcp: the agents' MCP tools; nats: the outbox relay)."
+        default: [core, mcp, nats]
+      hnx_runtime_prefix: &prefix
+        type: path
+        description: "Where releases, the current link and bin/hnx live."
+        default: /opt/hnx
+      hnx_runtime_python: &python
+        type: path
+        description: "The interpreter the virtualenvs are made from."
+        default: /usr/bin/python3
+      hnx_runtime_os_packages: &pkgs
+        type: list
+        elements: str
+        description: "Distribution packages the virtualenv needs."
+        default: [python3-venv]
+      hnx_runtime_source_commit: &commit
+        type: str
+        description: "The commit the wheel was built from (40 hex), recorded beside the release; empty: not recorded."
+        default: ""
+      hnx_runtime_keep_releases: &keep
+        type: int
+        description: "Older releases kept besides the current one."
+        default: 2
+  health:
+    short_description: Fail unless the current release's hnx runs and its installed set satisfies its own requirements (pip check).
+    options:
+      hnx_runtime_prefix: *prefix
+  readiness:
+    short_description: Fail unless the interpreter the virtualenvs are made from exists.
+    options:
+      hnx_runtime_python: *python
+  backup:
+    short_description: Nothing to back up; a release is rebuilt from the wheel and the lock.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-run main with the pinned wheel.
+    options: {}
+  upgrade:
+    short_description: Validate a wheel bump (a new sha256) and record it as pending.
+    options:
+      hnx_runtime_prefix: *prefix
+      hnx_runtime_wheel_sha256: *sha
+      hnx_runtime_target_wheel_sha256:
+        type: str
+        description: The sha256 of the wheel to move to.
+        required: true
+  export:
+    short_description: Nothing to export; the wheel and the lock are the open-format copy.
+    options: {}

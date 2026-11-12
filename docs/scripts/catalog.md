@@ -9,7 +9,7 @@ summary_generated: true
 Every script in the tree, read from its `# hnx-script:` header. What counts as a script,
 the header fields and the checks that keep this page honest: [docs/scripts.md](../scripts.md).
 
-66 scripts: 26 check, 11 job, 2 service, 27 tool.
+67 scripts: 26 check, 11 job, 2 service, 28 tool.
 
 | id | path | kind | owner | purpose | triggers | invariant | exit codes |
 |---|---|---|---|---|---|---|---|
@@ -31,6 +31,7 @@ the header fields and the checks that keep this page honest: [docs/scripts.md](.
 | `coverage-floor` | [`tools/coverage_floor.py`](../../tools/coverage_floor.py) | check | maintainers | Fail when a security-critical unit drops below its line-coverage floor from its own tests. | `ci:ci/coverage`; `make:coverage` | Q-07 | 0 every unit at or above the floor; 1 some unit below it or not measured; 2 coverage could not be run |
 | `decommission-check` | [`tools/decommission_check.py`](../../tools/decommission_check.py) | tool | maintainers | Report every remaining reference to a service retired by a swap (ADR-0005 step 8). | `manual` | - | 0 no reference remains; 1 references remain; 2 usage error |
 | `dup-check` | [`tools/dup_check.py`](../../tools/dup_check.py) | check | maintainers | Fail when copy-pasted Python appears that the committed duplication baseline does not hold; the baseline only shrinks. | `ci:ci/schemas`; `ci:ci/trusted-gates`; `make:dup-baseline`; `make:dup-check` | M-03 | 0 no clone beyond the baseline and no stale entry; 1 a new or grown clone, a stale baseline entry, or a baseline loosened against the base; 2 usage error, a bad baseline, an unusable base, or an update that would raise the total |
+| `events-provision` | [`ansible/roles/events_bus/files/hnx-events-provision.py`](../../ansible/roles/events_bus/files/hnx-events-provision.py) | tool | platform | Create a standing events stream and its DLQ, bounded, when missing (the operator's one-time step). | `role:events_bus` | - | 0 the stream and its DLQ exist; 1 the bus refused or could not be reached; 2 usage error |
 | `experimental` | [`tools/experimental.py`](../../tools/experimental.py) | tool | maintainers | Run the gates and tests of the experimental and frozen components listed in tools/experimental.yml, outside the blocking set. | `make:experimental`; `ci:ci/schemas`; `ci:ci/trusted-gates` | - | 0 every gate and test of every listed component passed (list and validate, the file is valid; ratchet, the list did not grow or the operator allowed it); 1 a gate or a test failed (ratchet, the list grew against the base); 2 the list is invalid or unreadable (ratchet, or the base is not a commit) |
 | `fake-openai-server` | [`conformance/fakes/openai_server.py`](../../conformance/fakes/openai_server.py) | service | conformance | Serve the deterministic fake OpenAI-compatible inference API. | `compose:lab-in-a-box/inference`; `script:gateway-conformance` | - | 0 stopped cleanly; 2 a host other than loopback without --allow-any-host |
 | `fix-has-test` | [`tools/fix_has_test.py`](../../tools/fix_has_test.py) | check | maintainers | Fail when a bugfix commit (a fix subject or a Fixes trailer) ships no regression test; with --prove, also when that test passes on the parent commit. | `ci:ci/regression-tests`; `make:fix-check` | Q-08 | 0 clean; 1 a fix lacks a regression test; 2 usage error or an unresolvable range |

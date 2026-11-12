@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role status_hub); local changes are overwritten.
+# schemas/status/agents.schema.json; secrets are references, read at run time from HNX_SECRET_*.
+{{ ({'agents_version': 1,
+     'store': 'activity.db',
+     'retention_days': status_hub_retention_days | int,
+     'detail': status_hub_detail | bool,
+     'private': {'service': status_hub_logical_id, 'access_log': 'access.jsonl'}}
+    | combine({'approvals': {'socket': status_hub_approvals_socket, 'issuer': status_hub_approvals_issuer,
+                             'public_origin': status_hub_public_origin}
+                            | combine({'csrf_key': status_hub_approvals_csrf_key_ref} if status_hub_approvals_csrf_key_ref else {})}
+              if status_hub_approvals_socket else {})) | to_nice_yaml(indent=2, sort_keys=true) }}

@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ask systemd whether the units are active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, hnx-broker.service]
+      changed_when: false
+    - name: Ask systemd whether the relay is active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, hnx-broker-relay.service]
+      changed_when: false
+      when: broker_relay | bool
+    - name: Look at the socket
+      ansible.builtin.stat:
+        path: "{{ broker_socket_dir }}/broker.sock"
+      register: broker_health_socket
+    - name: Fail unless it is the broker's socket, in the clients' group, with the declared mode
+      ansible.builtin.assert:
+        that:
+          - broker_health_socket.stat.exists and broker_health_socket.stat.issock
+          - broker_health_socket.stat.pw_name == broker_user
+          - broker_health_socket.stat.gr_name == broker_clients_group
+          - broker_health_socket.stat.mode | int(base=8) == broker_socket_mode | int(base=8)
+        fail_msg: >-
+          broker: {{ broker_socket_dir }}/broker.sock is not a socket owned by {{ broker_user }}:{{ broker_clients_group }}
+          with mode {{ broker_socket_mode }} ({{ broker_health_socket.stat | default({}) | dict2items | selectattr('key', 'in', ['issock', 'pw_name', 'gr_name', 'mode']) | items2dict }})
+    - name: Validate the installed manifest and its handlers' digests
+      ansible.builtin.command:
+        argv: ["{{ broker_hnx_bin }}", broker, validate, "{{ broker_config_dir }}/manifest.yml"]
+      changed_when: false
+    - name: Read the relay's stats
+      ansible.builtin.slurp:
+        src: "{{ broker_relay_state_dir }}/stats.json"
+      register: broker_health_relay
+      when: broker_relay | bool
+    - name: Fail when the relay holds, quarantined or could not deliver an event
+      ansible.builtin.assert:
+        that: (broker_health_relay.content | b64decode | from_json).state in ['ok', 'warn']
+        fail_msg: "broker: the outbox relay reports {{ broker_health_relay.content | b64decode | from_json }}"
+      when: broker_relay | bool
+  tags: [health]

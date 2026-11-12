@@ -1,0 +1,219 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+# ---- accounts: the broker, the socket's clients, the relay, and the peers the manifest maps
+- name: Create the groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    system: true
+  loop: "{{ [broker_group, broker_clients_group] + ([broker_relay_group] if broker_relay | bool else []) + broker_client_users }}"
+
+- name: Create the broker's account
+  ansible.builtin.user:
+    name: "{{ broker_user }}"
+    group: "{{ broker_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+- name: Create the relay's account
+  ansible.builtin.user:
+    name: "{{ broker_relay_user }}"
+    group: "{{ broker_relay_group }}"
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  when: broker_relay | bool
+
+- name: Create each peer's account, in the socket's group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    group: "{{ item }}"
+    groups: ["{{ broker_clients_group }}"]
+    append: true
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+  loop: "{{ broker_client_users }}"
+
+# ---- directories (docs/broker.md "State" and "Publishing events": the state root and the state
+# directory are the relay's group 0710, outbox/ is 2750 in that group, relay/ is the relay's 2750
+# in the broker's group; everything else the broker creates 0700/0600 itself)
+- name: Create the configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ broker_group }}"
+    mode: "0750"
+  loop:
+    - "{{ broker_config_dir }}"
+    - "{{ broker_config_dir }}/handlers"
+
+- name: Create the state and data directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop: >-
+    {{ [
+         {'path': broker_state_root, 'owner': broker_user, 'group': broker_relay_group if broker_relay | bool else broker_group, 'mode': '0710' if broker_relay | bool else '0700'},
+         {'path': broker_state_dir, 'owner': broker_user, 'group': broker_relay_group if broker_relay | bool else broker_group, 'mode': '0710' if broker_relay | bool else '0700'},
+         {'path': broker_data_root, 'owner': broker_user, 'group': broker_group, 'mode': '0750'},
+       ] + ([
+         {'path': broker_state_dir ~ '/outbox', 'owner': broker_user, 'group': broker_relay_group, 'mode': '2750'},
+         {'path': broker_state_dir ~ '/relay', 'owner': broker_relay_user, 'group': broker_group, 'mode': '2750'},
+         {'path': broker_relay_config_dir, 'owner': 'root', 'group': broker_relay_group, 'mode': '0750'},
+         {'path': broker_relay_state_dir, 'owner': broker_relay_user, 'group': broker_relay_group, 'mode': '0750'},
+       ] if broker_relay | bool else []) }}
+  loop_control:
+    label: "{{ item.path }}"
+
+# the socket's directory: the broker's, in the clients' group, 0750 (the server refuses anything
+# group-writable or open to others); tmpfiles.d recreates it at boot, /run being a tmpfs
+- name: Declare the socket's directory to systemd-tmpfiles
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/hnx-broker.conf
+    content: |
+      # Managed by homelabnext (role broker): the broker socket's directory.
+      d {{ broker_socket_dir }} 0750 {{ broker_user }} {{ broker_clients_group }} -
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the socket's directory now
+  ansible.builtin.file:
+    path: "{{ broker_socket_dir }}"
+    state: directory
+    owner: "{{ broker_user }}"
+    group: "{{ broker_clients_group }}"
+    mode: "0750"
+
+# ---- the operator's manifest and handlers
+- name: Install the handlers (scripts executable, documents read-only; root-owned, the broker reads them)
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ broker_config_dir }}/handlers/{{ item | basename }}"
+    owner: root
+    group: "{{ broker_group }}"
+    mode: "{{ '0640' if item is match('.*\\.(json|ya?ml)$') else '0750' }}"
+  loop: "{{ broker_handlers }}"
+  register: broker_handler_files
+
+- name: Install the manifest
+  ansible.builtin.copy:
+    src: "{{ broker_manifest }}"
+    dest: "{{ broker_config_dir }}/manifest.yml"
+    owner: root
+    group: "{{ broker_group }}"
+    mode: "0640"
+  register: broker_manifest_file
+
+- name: Validate the installed manifest and its handlers with the running release
+  ansible.builtin.command:
+    argv: ["{{ broker_hnx_bin }}", broker, validate, "{{ broker_config_dir }}/manifest.yml"]
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Write the handlers' secrets (HNX_BROKER_SECRET_<NAME>, readable by root and the broker)
+  ansible.builtin.copy:
+    dest: "{{ broker_config_dir }}/secrets.env"
+    content: |
+      # Managed by homelabnext (role broker): the handlers' secrets, resolved from their references.
+      {% for name, ref in broker_secret_refs | dictsort %}
+      {% set value = lookup('hnx_secret', ref) %}
+      {% if value is search("['\\\\\n\r]") %}{{ 0 / 0 }}{% endif %}
+      HNX_BROKER_SECRET_{{ name }}='{{ value }}'
+      {% endfor %}
+    owner: root
+    group: "{{ broker_group }}"
+    mode: "0640"
+  register: broker_handler_env
+  no_log: true
+  diff: false
+
+# ---- the relay's bus binding
+- name: Write the relay's events target
+  ansible.builtin.template:
+    src: events-target.yml.j2
+    dest: "{{ broker_relay_config_dir }}/events-target.yml"
+    owner: root
+    group: "{{ broker_relay_group }}"
+    mode: "0640"
+  register: broker_relay_target
+  when: broker_relay | bool
+
+- name: Write the relay's bus password (the relay's environment holds nothing else)
+  ansible.builtin.copy:
+    dest: "{{ broker_relay_config_dir }}/relay.env"
+    content: |
+      # Managed by homelabnext (role broker): the relay's bus credential, from its reference.
+      {% set value = lookup('hnx_secret', broker_relay_password_ref) %}
+      {% if value is search("['\\\\\n\r]") %}{{ 0 / 0 }}{% endif %}
+      HNX_SECRET_{{ broker_relay_password_ref | regex_replace('^secret:', '') | regex_replace('[^A-Za-z0-9]', '_') | upper }}='{{ value }}'
+    owner: root
+    group: "{{ broker_relay_group }}"
+    mode: "0640"
+  register: broker_relay_env
+  no_log: true
+  diff: false
+  when: broker_relay | bool
+
+# ---- units
+- name: Write the broker's unit
+  ansible.builtin.template:
+    src: hnx-broker.service.j2
+    dest: "{{ broker_systemd_dir }}/hnx-broker.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: broker_unit
+
+- name: Write the relay's unit
+  ansible.builtin.template:
+    src: hnx-broker-relay.service.j2
+    dest: "{{ broker_systemd_dir }}/hnx-broker-relay.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: broker_relay_unit
+  when: broker_relay | bool
+
+- name: Remove the relay's unit when the relay is off
+  ansible.builtin.systemd_service:
+    name: hnx-broker-relay.service
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: not (broker_relay | bool) and broker_start | bool
+
+- name: Enable and start the broker, restarting it when its unit, manifest, handlers or secrets changed
+  ansible.builtin.systemd_service:
+    name: hnx-broker.service
+    enabled: true
+    daemon_reload: "{{ broker_unit is changed or broker_relay_unit is changed }}"
+    state: >-
+      {{ 'restarted' if (broker_unit is changed or broker_manifest_file is changed
+         or broker_handler_files is changed or broker_handler_env is changed) else 'started' }}
+  when: broker_start | bool
+
+- name: Enable and start the relay, restarting it when its unit, target or credential changed
+  ansible.builtin.systemd_service:
+    name: hnx-broker-relay.service
+    enabled: true
+    state: >-
+      {{ 'restarted' if (broker_relay_unit is changed or broker_relay_target is changed
+         or broker_relay_env is changed) else 'started' }}
+  when: broker_relay | bool and broker_start | bool
+
+- name: Wait for the socket
+  ansible.builtin.wait_for:
+    path: "{{ broker_socket }}"
+    timeout: 30
+  when: broker_start | bool

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Ask the bus for its health, JetStream included
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ events_bus_monitor_port | int }}/healthz?js-enabled-only=true"  # no-raw-endpoint: allow the monitor listens on loopback only
+    status_code: 200
+    timeout: 5
+  changed_when: false
+  tags: [health]

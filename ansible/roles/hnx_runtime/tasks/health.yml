@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Run the current release's hnx
+      ansible.builtin.command:
+        argv: ["{{ hnx_runtime_prefix }}/bin/hnx", --help]
+      changed_when: false
+    - name: Check the current release's installed set
+      ansible.builtin.command:
+        argv: ["{{ hnx_runtime_prefix }}/current/bin/python", -m, pip, check]
+      changed_when: false
+  tags: [health]

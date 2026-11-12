@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Data only: the configuration comes from main. Ownership is the broker's, as main sets it; run
+# main again afterwards so outbox/ and relay/ get the relay's group back.
+- block:
+    - name: Stop the relay and the broker
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+      loop: "{{ (['hnx-broker-relay.service'] if broker_relay | bool else []) + ['hnx-broker.service'] }}"
+    - name: Restore the state directory and the data root
+      ansible.builtin.copy:
+        src: "{{ broker_restore_source }}/{{ item.src }}/"
+        dest: "{{ item.dest }}/"
+        remote_src: true
+        owner: "{{ broker_user }}"
+        mode: preserve
+      loop:
+        - {src: state, dest: "{{ broker_state_root }}/state"}
+        - {src: agents, dest: "{{ broker_data_root }}"}
+  tags: [restore]

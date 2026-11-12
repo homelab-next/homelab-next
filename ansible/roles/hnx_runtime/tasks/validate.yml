@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values land in paths, a requirements line and pip's argv: refuse anything that could add a
+# requirement, an option or a path component.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - hnx_runtime_wheel_sha256 is match('^[0-9a-f]{64}\Z')
+      - hnx_runtime_wheel | basename is match('^homelabnext-[0-9][0-9A-Za-z.+]*-py3-none-any\.whl\Z')
+      - hnx_runtime_extras | length > 0
+      - hnx_runtime_extras | select('match', '^[a-z][a-z0-9-]{0,31}\Z') | list | length == hnx_runtime_extras | length
+      - hnx_runtime_prefix is match('^/[A-Za-z0-9._/-]+\Z') and '..' not in hnx_runtime_prefix
+      - hnx_runtime_python is match('^/[A-Za-z0-9._/-]+\Z')
+      - hnx_runtime_os_packages | select('match', '^[a-z0-9][a-z0-9.+-]*\Z') | list | length == hnx_runtime_os_packages | length
+      - hnx_runtime_source_commit == '' or hnx_runtime_source_commit is match('^[0-9a-f]{40}\Z')
+      - hnx_runtime_keep_releases | int >= 0
+    fail_msg: >-
+      hnx_runtime: a 64-hex sha256, a homelabnext-<version>-py3-none-any.whl wheel, extras named
+      [a-z0-9-], an absolute prefix and interpreter without '..', package names, a 40-hex commit
+      or nothing, and a release count of 0 or more

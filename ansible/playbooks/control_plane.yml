@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# The control plane on its capability groups (docs/broker.md "Deploying with Ansible"): homelab-next
+# itself (a pinned wheel, every dependency by hash), the events bus, the broker with its outbox
+# relay, and the status hub with the broker's Approvals page. Every value that names the lab
+# (the wheel and its sha256, the manifest, the registry, addresses, secret references) comes from
+# the private overlay's inventory; secrets are references, resolved by the hnx_secret lookup
+# (OpenBao in the overlay's deploy).
+#
+# Each play installs homelab-next first (hnx_runtime: a no-op once the pinned release is in place),
+# so a capability moved to a host of its own still gets it.
+#
+#   ansible-playbook -i <overlay inventory> ansible/playbooks/control_plane.yml
+- name: The events bus
+  hosts: cap_events
+  become: true
+  vars:
+    # the server release the lab-in-a-box runs (compose/lab-in-a-box/docker-compose.yml), its
+    # sha256 from the release's SHA256SUMS
+    events_bus_version: "2.15.1"
+    events_bus_archive_url: "https://github.com/nats-io/nats-server/releases/download/v2.15.1/nats-server-v2.15.1-linux-amd64.tar.gz"
+    events_bus_archive_sha256: "bf5edc7b1ce98e885c368cb43a886eb148dc5d0551d99f3cf6141fb5e1954c70"
+  roles:
+    - role: hnx_runtime
+    - role: events_bus
+      events_bus_logical_id: events
+
+- name: The broker and its outbox relay
+  hosts: cap_broker
+  become: true
+  roles:
+    - role: hnx_runtime
+    - role: broker
+      broker_logical_id: broker
+      broker_runtime_release: "{{ hnx_runtime_release }}"
+
+- name: The status hub
+  hosts: cap_status_hub
+  become: true
+  roles:
+    - role: hnx_runtime
+    - role: status_hub
+      status_hub_logical_id: status-hub
+      status_hub_runtime_release: "{{ hnx_runtime_release }}"

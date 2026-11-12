@@ -127,6 +127,12 @@ class Relay:
     #: the only ``HNX_SECRET_*`` variables the relay's process gets (its bus password)
     secrets: Sequence[str] = ("HNX_SECRET_EVENTS_BROKER",)
     wire_as: Callable[[str | None], Any] | None = None
+    #: the bus users by part: the operator (provisions, reads back), the consumer that must not be
+    #: able to forge a decision, and each user's password variable (the lab's by default; a real
+    #: deployment names its own users: ``run --bus-admin``, ``--bus-not-broker``)
+    admin: str = LAB_ADMIN
+    not_broker: str = LAB_NOT_BROKER
+    bus_users: Mapping[str, str] = field(default_factory=lambda: dict(LAB_BUS_USERS))
 
     def wire(self, user: str | None) -> Any:
         if self.wire_as is not None:
@@ -141,7 +147,7 @@ class Relay:
             url,
             name=user,
             user=user,
-            password=env_secret(LAB_BUS_USERS[user]),
+            password=env_secret(self.bus_users[user]),
             inbox_prefix=f"_INBOX.{user}",
         )
 
@@ -163,7 +169,7 @@ class Relay:
         never creates them (its bus user may not)."""
         from homelabnext.conform.adapters import nats_jetstream as nj
 
-        wire = self.wire(LAB_ADMIN)
+        wire = self.wire(self.admin)
         try:
             return nj.provision_streams(
                 wire, stream=self.stream, subject_prefix=self.prefix, max_bytes=STREAM_MAX_BYTES
@@ -183,7 +189,7 @@ class Relay:
                 "--once"]  # fmt: skip
 
     def bus(self) -> Any:
-        return self.bus_as(LAB_ADMIN)
+        return self.bus_as(self.admin)
 
 
 @dataclass
@@ -204,13 +210,24 @@ class Setup:
     env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
     tag: str = field(default_factory=lambda: secrets.token_hex(4))
     relay: Relay | None = None  # None: no events bus here, the bus-relay step is not run
+    #: what the edge passes on: the hub's public name and the approver's username and groups (the
+    #: lab's by default; a real deployment's hub row and broker manifest name their own)
+    hub_host: str = HUB_HOST
+    approver: str = APPROVER
+    groups: Sequence[str] = (VIEWER_GROUP, APPROVER_GROUP)
 
     def role_env(self, role: str) -> dict[str, str]:
         return {**self.env, ROLE_ENV: role}
 
 
 # ---------------------------------------------------------------- the edge's HTTP
-def edge_headers(secret: str | None, user: str = APPROVER) -> dict[str, str]:
+def edge_headers(
+    secret: str | None,
+    user: str = APPROVER,
+    *,
+    host: str = HUB_HOST,
+    groups: Sequence[str] = (VIEWER_GROUP, APPROVER_GROUP),
+) -> dict[str, str]:
     """What the lab's edge adds after a login: the front-door secret and the identity.
 
     The names come from the platform's one declared set (``homelabnext.edge_identity``), so a
@@ -220,10 +237,10 @@ def edge_headers(secret: str | None, user: str = APPROVER) -> dict[str, str]:
     from homelabnext.edge_identity import IDENTITY_HEADERS as ids
 
     out = {
-        "Host": HUB_HOST,
+        "Host": host,
         ids.user: f"{user}@lab.example",
         ids.username: user,
-        ids.groups: ids.groups_separator.join((VIEWER_GROUP, APPROVER_GROUP)),
+        ids.groups: ids.groups_separator.join(groups),
     }
     if secret is not None:
         out["X-Hnx-Front-Door"] = secret
@@ -345,6 +362,9 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
     tag = setup.tag
     target = f"svc:lab-e2e-{tag}"
 
+    def edge(secret: str | None) -> dict[str, str]:
+        return edge_headers(secret, setup.approver, host=setup.hub_host, groups=setup.groups)
+
     def slug() -> str:
         return str(ctx["profile"]).split(":", 1)[1]
 
@@ -399,14 +419,14 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
         return _refusal(proc, "not-an-approval-relay")
 
     def front_door() -> str:
-        code, _ = http("GET", f"{setup.hub}/approvals?request={ctx['rid']}", edge_headers(None))
+        code, _ = http("GET", f"{setup.hub}/approvals?request={ctx['rid']}", edge(None))
         if code != 403:
             raise StepFailed(f"without the front-door secret: HTTP {code}")
         return "no front-door secret: 403"
 
     def approve() -> str:
         rid = ctx["rid"]
-        head = edge_headers(setup.secret)
+        head = edge(setup.secret)
         code, page = http("GET", f"{setup.hub}/approvals?request={rid}", head)
         if code != 200:
             raise StepFailed(f"GET /approvals: HTTP {code} {page[:200]}")
@@ -414,7 +434,7 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
         form = {**fields, "decision": "approve", "note": f"lab e2e {tag}"}
         post = {
             **head,
-            "Origin": f"https://{HUB_HOST}",
+            "Origin": f"https://{setup.hub_host}",
             "Sec-Fetch-Site": "same-origin",
             "Content-Type": "application/x-www-form-urlencoded",
         }
@@ -422,7 +442,7 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
         code, page = http("POST", f"{setup.hub}/approvals/decide", post, body)
         if code != 200:
             raise StepFailed(f"POST /approvals/decide: HTTP {code} {page[:200]}")
-        return f"approved as sso:{APPROVER} with the page's token, digest {fields['digest'][:19]}"
+        return f"approved as sso:{setup.approver} with the page's token, digest {fields['digest'][:19]}"
 
     async def run_once(s: Any) -> str:
         out = await _tool(s, "broker_run", {"request_id": ctx["rid"]})
@@ -586,7 +606,7 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
         dedupe_key=f"forged-{secrets.token_hex(4)}",
         subject=rid,
     )
-    bus = relay.bus_as(LAB_NOT_BROKER)
+    bus = relay.bus_as(relay.not_broker)
     try:
         try:
             seq = bus.publish(forged["type"], canonical_body(forged), msg_id=forged["id"])
@@ -594,13 +614,13 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
             if not getattr(exc, "permanent", False):
                 raise StepFailed(f"the forged publish failed, but not as refused: {exc}") from None
         else:
-            raise StepFailed(f"{LAB_NOT_BROKER} published a decision.returned (seq {seq})")
+            raise StepFailed(f"{relay.not_broker} published a decision.returned (seq {seq})")
         try:
             bus.api(f"STREAM.PURGE.{relay.stream}", {})
         except Exception:
             pass
         else:
-            raise StepFailed(f"{LAB_NOT_BROKER} purged the stream")
+            raise StepFailed(f"{relay.not_broker} purged the stream")
     finally:
         bus.close()
     after = last_returned()
@@ -608,7 +628,7 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
         raise StepFailed(f"the last decision.returned moved: {before} -> {after}")
     acked = check_bridge_acks(relay)
     return (
-        f"no user: refused ({anonymous}); {LAB_NOT_BROKER}: forged decision.returned and "
+        f"no user: refused ({anonymous}); {relay.not_broker}: forged decision.returned and "
         f"purge refused; last decision.returned still seq {after}; {acked}"
     )
 
@@ -622,7 +642,7 @@ def check_bridge_acks(relay: Relay) -> str:
     never point it at a bus where a real bridge uses that durable."""
     from homelabnext.conform.adapters import nats_jetstream as nj
 
-    wire = relay.wire(LAB_NOT_BROKER)
+    wire = relay.wire(relay.not_broker)
     try:
         # replay: the lab runs no bridge, so a durable created now still sees the relay's events
         bus = nj.JetStreamBus(wire, stream=relay.stream, subject_prefix=relay.prefix,
@@ -630,23 +650,23 @@ def check_bridge_acks(relay: Relay) -> str:
         consumer = bus.consumer(LAB_NOT_BROKER_DURABLE, "homelabnext.decision.returned")
         got = consumer.fetch(16)
         if not got:
-            raise StepFailed(f"{LAB_NOT_BROKER}'s durable was handed no decision.returned")
+            raise StepFailed(f"{relay.not_broker}'s durable was handed no decision.returned")
         for d in got:
             try:
                 d.ack()
             except Exception as exc:
-                raise StepFailed(f"{LAB_NOT_BROKER}'s ack of seq {d.seq} failed: {exc}") from None
+                raise StepFailed(f"{relay.not_broker}'s ack of seq {d.seq} failed: {exc}") from None
         info = bus.api(f"CONSUMER.INFO.{relay.stream}.{consumer.durable}")
         pending = int(info.get("num_ack_pending", -1))
         floor = (info.get("ack_floor") or {}).get("stream_seq")
         if pending != 0 or (floor is not None and int(floor) < max(d.seq for d in got)):
             raise StepFailed(
-                f"{LAB_NOT_BROKER}'s acks did not take: {pending} pending, ack floor {floor}, "
+                f"{relay.not_broker}'s acks did not take: {pending} pending, ack floor {floor}, "
                 f"acked up to seq {max(d.seq for d in got)} (is each ack form granted?)"
             )
     finally:
         wire.close()
-    return f"{LAB_NOT_BROKER} acked {len(got)} delivery(ies) on its durable, none pending"
+    return f"{relay.not_broker} acked {len(got)} delivery(ies) on its durable, none pending"
 
 
 def check_audit(setup: Setup, rid: str, profile: str) -> str:
@@ -689,7 +709,7 @@ def check_audit(setup: Setup, rid: str, profile: str) -> str:
         raise StepFailed(f"not in the audit trail: {missing}")
     mine = [r for r in records if r.get("request_id") == rid]
     if any(
-        r.get("caller") not in (profile, f"sso:{APPROVER}")
+        r.get("caller") not in (profile, f"sso:{setup.approver}")
         for r in mine
         if r.get("outcome") == "ok"
     ):
@@ -783,16 +803,38 @@ def _as(spec: str, argv: list[str]) -> int:
     return 127  # not reached
 
 
-def lab_launch(role: str) -> list[str]:
-    """Inside the broker-edge container: run as the role's uid, in the socket's group."""
-    uid = LAB_UIDS[role]
-    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{uid}:{LAB_CLIENTS_GID}", "--"]
+def lab_launch(
+    role: str,
+    ids: Mapping[str, tuple[int, int]] | None = None,
+    clients_gid: int = LAB_CLIENTS_GID,
+) -> list[str]:
+    """Inside the broker-edge container (or as root on a broker host, with the peers' real
+    ``ids``, role -> (uid, gid)): run as the role's uid and group, in the socket's group."""
+    uid, gid = (ids or {}).get(role) or (LAB_UIDS[role], LAB_UIDS[role])
+    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{gid}:{clients_gid}", "--"]
 
 
-def relay_launch() -> list[str]:
-    """Inside the broker-edge container: run as the outbox relay's own uid."""
-    uid = LAB_RELAY_UID
-    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{uid}", "--"]
+def relay_launch(ids: tuple[int, int] | None = None) -> list[str]:
+    """Inside the broker-edge container (or with the relay user's real ``ids``): run as the
+    outbox relay's own uid."""
+    uid, gid = ids or (LAB_RELAY_UID, LAB_RELAY_UID)
+    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{gid}", "--"]
+
+
+def _ids(spec: str) -> tuple[int, int]:
+    """A user name (its uid and primary group) or a bare uid (that uid as its group too)."""
+    import pwd
+
+    if spec.isdigit():
+        return int(spec), int(spec)
+    entry = pwd.getpwnam(spec)
+    return entry.pw_uid, entry.pw_gid
+
+
+def _gid(spec: str) -> int:
+    import grp
+
+    return int(spec) if spec.isdigit() else grp.getgrnam(spec).gr_gid
 
 
 def _ready(args) -> int:
@@ -821,6 +863,21 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--state", default=LAB_STATE, help="the broker's state directory")
     r.add_argument("--stream", default=LAB_EVENTS_STREAM)
     r.add_argument("--subject-prefix", default=LAB_EVENTS_PREFIX)
+    # a real broker host (run as root there): the peers' users instead of the lab's fixed uids
+    r.add_argument("--peer", action="append", default=[], metavar="ROLE=USER",
+                   help="agent, relay (the hub's user) or stranger (an unmapped uid): a user name "
+                        "or a bare uid (default: the lab's uids)")  # fmt: skip
+    r.add_argument("--clients-group", help="the socket's group (default: the lab's gid)")
+    r.add_argument("--relay-user", help="the outbox relay's user (default: the lab's uid)")
+    r.add_argument("--hub-host", default=HUB_HOST, help="the hub's public name (Host, Origin)")
+    r.add_argument("--approver", default=APPROVER, help="the approver's username at the IdP")
+    r.add_argument("--approver-group", default=APPROVER_GROUP)
+    r.add_argument("--viewer-group", default=VIEWER_GROUP)
+    r.add_argument(
+        "--bus-admin", default=LAB_ADMIN, help="the bus user that provisions and reads back"
+    )
+    r.add_argument("--bus-not-broker", default=LAB_NOT_BROKER,
+                   help="a bus user that reads decisions and must not forge one")  # fmt: skip
     h = sub.add_parser("serve-hub", help="write the hub's configuration and run the hub")
     h.add_argument("--dir", required=True)
     h.add_argument("--edge-address", default=os.environ.get("LAB_BROKER_EDGE_ADDRESS"))
@@ -850,22 +907,38 @@ def main(argv: list[str] | None = None) -> int:
                        port=args.port)  # fmt: skip
         os.chdir(directory)  # the agents config's store and access log are relative to it
         os.execvp(cmd[0], cmd)
+    ids: dict[str, tuple[int, int]] = {}
+    for spec in args.peer:
+        role, _, who = spec.partition("=")
+        if role not in LAB_UIDS or not who:
+            ap.error(f"--peer {spec}: ROLE=USER with ROLE one of {sorted(LAB_UIDS)}")
+        ids[role] = _ids(who)
+    clients = _gid(args.clients_group) if args.clients_group else LAB_CLIENTS_GID
     setup = Setup(
         socket=Path(args.socket),
         hub=args.hub,
         data_root=Path(args.data_root),
-        uids=LAB_UIDS,
+        uids={**LAB_UIDS, **{role: uid for role, (uid, _) in ids.items()}},
         secret=os.environ.get(SECRET_ENV, ""),
-        launch=lab_launch,
+        launch=lambda role: lab_launch(role, ids, clients),
         env={**os.environ, "HOME": "/tmp"},
+        hub_host=args.hub_host,
+        approver=args.approver,
+        groups=(args.viewer_group, args.approver_group),
     )
     if args.events_target:
+        users = {**LAB_BUS_USERS}
+        users[args.bus_admin] = LAB_BUS_USERS[LAB_ADMIN]
+        users[args.bus_not_broker] = LAB_BUS_USERS[LAB_NOT_BROKER]
         setup.relay = Relay(
             args.state,
             args.events_target,
             args.stream,
             args.subject_prefix,
-            launch=relay_launch(),
+            launch=relay_launch(_ids(args.relay_user) if args.relay_user else None),
+            admin=args.bus_admin,
+            not_broker=args.bus_not_broker,
+            bus_users=users,
         )
     rows = run_scenario(setup)
     ok = [r["step"] for r in rows] == list(steps(setup)) and all(r["ok"] for r in rows)

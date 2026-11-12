@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# A homelab-next bump is a new wheel (a new sha256): record it as pending, then move
+# hnx_runtime_wheel and hnx_runtime_wheel_sha256 and re-run the playbook; the services restart on
+# the new release (their units name it) and the old release stays until it ages out.
+- block:
+    - name: Refuse a no-op or a malformed pin
+      ansible.builtin.assert:
+        that:
+          - hnx_runtime_target_wheel_sha256 is match('^[0-9a-f]{64}\Z')
+          - hnx_runtime_target_wheel_sha256 != hnx_runtime_wheel_sha256
+        fail_msg: "hnx_runtime: the target is not a new 64-hex sha256"
+    - name: Record the pending wheel
+      ansible.builtin.copy:
+        dest: "{{ hnx_runtime_prefix }}/pending-wheel-sha256"
+        content: "{{ hnx_runtime_target_wheel_sha256 }}\n"
+        mode: "0644"
+  tags: [upgrade]

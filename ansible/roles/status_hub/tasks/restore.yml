@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Stop the hub
+      ansible.builtin.systemd_service:
+        name: hnx-hub.service
+        state: stopped
+    - name: Restore the state directory
+      ansible.builtin.copy:
+        src: "{{ status_hub_restore_source }}/"
+        dest: "{{ status_hub_state_dir }}/"
+        remote_src: true
+        owner: "{{ status_hub_user }}"
+        mode: preserve
+    - name: Start the hub
+      ansible.builtin.systemd_service:
+        name: hnx-hub.service
+        state: started
+  tags: [restore]

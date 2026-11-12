@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: the layout docs/broker.md describes under the state root.
+broker_state_dir: "{{ broker_state_root }}/state"
+broker_socket: "{{ broker_socket_dir }}/broker.sock"

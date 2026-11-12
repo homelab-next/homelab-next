@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: where the release archive is unpacked and the provisioning tool installed.
+events_bus_cache_dir: /var/cache/homelabnext/events-bus
+events_bus_provision_bin: /usr/local/libexec/homelabnext/hnx-events-provision
+# Upper bound on what any user's allow-list may name: no wildcard over the JetStream API (no
+# STREAM.PURGE/UPDATE/DELETE or MSG.DELETE for anyone) and no shared _INBOX.>.
+events_bus_refused_subjects: [">", "$JS.API.>", "$JS.>", "_INBOX.>", "$SYS.>"]

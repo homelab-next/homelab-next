@@ -304,7 +304,7 @@ service as follows:
 | `inference`, `cases` | the project's fakes | the real inference server and case system behind the same aliases |
 | `metrics` (Prometheus) | no authentication, 2-hour retention, rules that always fire | the real metrics service with its own rules, behind the forward-auth proxy |
 | `uptime` (Uptime Kuma) | a known admin password, a public status page | a generated admin password, 2FA, behind the forward-auth proxy; only the monitors the hub should see on the public page |
-| `broker`, `status-hub`, `broker-edge` | a known front-door secret, an edge that asserts the approver's identity without a login, the example handlers | the systemd unit in [broker](broker.md#a-systemd-unit) with the operator's manifest and handlers, the hub behind Caddy, the auth proxy and the IdP (ADR-0034) with the front-door secret from the secrets capability |
+| `broker`, `status-hub`, `broker-edge` | a known front-door secret, an edge that asserts the approver's identity without a login, the example handlers | the systemd unit in [broker](broker.md#a-systemd-unit) with the operator's manifest and handlers (`ansible/playbooks/control_plane.yml`: [deploying with Ansible](broker.md#deploying-with-ansible)), the hub behind Caddy, the auth proxy and the IdP (ADR-0034) with the front-door secret from the secrets capability |
 | `orchestration` (the controller) | a known job API token, `/bin/sh` sessions, one backend name and no model | the example unit (`orchestrator/deploy/systemd/orchestrator.service`) with the site's runner, backends and tokens file, behind the gateway (docs/orchestration-controller.md) |
 
 ## Ansible host trust

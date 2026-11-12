@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values land in a systemd unit and YAML (rendered through to_nice_yaml): refuse anything that
+# could add a directive or an argument, and a wildcard bind.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - status_hub_logical_id is match('^[a-z][a-z0-9-]{1,62}\Z')
+      - status_hub_hnx_bin is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_runtime_release is match('^[0-9a-f]{0,64}\Z')
+      - status_hub_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and status_hub_user != 'root'
+      - status_hub_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and status_hub_group != 'root'
+      - status_hub_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_state_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_bind_address is match('^[0-9a-f.:]+\Z') or status_hub_bind_address == 'localhost'
+      - status_hub_bind_address not in ['0.0.0.0', '::']  # no-raw-endpoint: allow refused wildcards
+      - status_hub_port | int > 1023 and status_hub_port | int < 65536
+      - status_hub_allowed_hosts | select('match', '^[a-z0-9][a-z0-9.-]{0,252}\Z') | list | length == status_hub_allowed_hosts | length
+      - status_hub_bind_address in status_hub_loopback or status_hub_allowed_hosts | length > 0
+      - status_hub_secret_refs | select('match', '^secret:[a-z0-9][a-z0-9/_.-]*\Z') | list | length == status_hub_secret_refs | length
+      - status_hub_retention_days | int > 0
+      - status_hub_title is match('^[^\n\r]{1,80}\Z')
+      - status_hub_systemd_dir is match('^/[A-Za-z0-9._/-]+\Z')
+    fail_msg: >-
+      status_hub: a logical id, absolute paths, a non-root user and group, a bind address that is
+      not a wildcard (and the allowed host names it needs off loopback), an unprivileged port,
+      secrets as secret: references, a positive retention and a one-line title
+
+- name: Validate the Approvals page's settings
+  ansible.builtin.assert:
+    that:
+      - status_hub_approvals_socket is match('^/[A-Za-z0-9._/-]+\Z')
+      - status_hub_approvals_issuer is match('^[a-z][a-z0-9._-]{0,63}\Z')
+      - status_hub_public_origin is match('^https://[a-z0-9.-]+(:[0-9]{1,5})?\Z')
+      - status_hub_broker_clients_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - status_hub_approvals_csrf_key_ref == '' or status_hub_approvals_csrf_key_ref in status_hub_secret_refs
+    fail_msg: >-
+      status_hub: the Approvals page needs the broker's socket (absolute), the issuer the manifest
+      lists the hub under, the page's https origin, the socket's group, and its form-token key
+      (when set) among status_hub_secret_refs so it is delivered
+  when: status_hub_approvals_socket | length > 0

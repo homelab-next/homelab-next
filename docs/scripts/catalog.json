@@ -370,6 +370,26 @@
     },
     {
       "exit": {
+        "0": "the stream and its DLQ exist",
+        "1": "the bus refused or could not be reached",
+        "2": "usage error"
+      },
+      "id": "events-provision",
+      "inputs": "the bus URL, the admin user, its password in HNX_EVENTS_ADMIN_PASSWORD, the stream, its subject prefix and size",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-events-provision",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line: the streams it created, under the key created",
+      "owner": "platform",
+      "path": "ansible/roles/events_bus/files/hnx-events-provision.py",
+      "purpose": "Create a standing events stream and its DLQ, bounded, when missing (the operator's one-time step).",
+      "status": "active",
+      "trigger": [
+        "role:events_bus"
+      ]
+    },
+    {
+      "exit": {
         "0": "every gate and test of every listed component passed (list and validate, the file is valid; ratchet, the list did not grow or the operator allowed it)",
         "1": "a gate or a test failed (ratchet, the list grew against the base)",
         "2": "the list is invalid or unreadable (ratchet, or the base is not a commit)"

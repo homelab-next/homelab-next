@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# The events capability's bus (docs/events.md; the lab runs the same server in a container,
+# compose/lab-in-a-box/config/nats/nats.conf): the pinned server release, one account whose users
+# each get an allow-list and nothing else, JetStream on disk, the standing streams provisioned
+# with limits by the operator's user (never by a client). Passwords are stored as bcrypt hashes.
+#
+# It listens on loopback by default: a client on another host needs TLS (the adapter refuses a
+# password over plaintext nats:// to anything but loopback), which this role does not set up yet.
+# events_bus_archive_url and _sha256 pin the server (no default: the playbook pins the release).
+events_bus_version: "2.15.1"
+events_bus_user: hnx-events
+events_bus_group: hnx-events
+events_bus_bin: /usr/local/libexec/homelabnext/nats-server
+events_bus_config_dir: /etc/hnx-events
+events_bus_store_dir: /var/lib/hnx-events
+events_bus_listen_address: 127.0.0.1  # no-raw-endpoint: allow loopback default, the bus has no TLS listener yet
+events_bus_port: 4222
+# The monitoring endpoint (/healthz, /varz): loopback only, for the health hook.
+events_bus_monitor_port: 8222
+events_bus_account: HNX
+events_bus_max_memory_store: 33554432
+events_bus_max_file_store: 1073741824
+# The standing streams: [{name, subject_prefix, max_bytes}], each with a DLQ of a quarter its
+# size (homelabnext.conform.adapters.nats_jetstream.provision_streams), created by
+# events_bus_admin_user when missing; an existing one is left alone.
+events_bus_streams: []
+events_bus_admin_user: ""
+events_bus_admin_password_ref: ""
+# The interpreter of a homelab-next release with the nats extra (role hnx_runtime): provisioning
+# uses the project's own adapter.
+events_bus_hnx_python: /opt/hnx/current/bin/python
+events_bus_systemd_dir: /etc/systemd/system
+events_bus_start: true

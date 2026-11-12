@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Create the hub's group
+  ansible.builtin.group:
+    name: "{{ status_hub_group }}"
+    system: true
+
+- name: Create the broker socket's group (the Approvals page)
+  ansible.builtin.group:
+    name: "{{ status_hub_broker_clients_group }}"
+    system: true
+  when: status_hub_approvals_socket | length > 0
+
+- name: Create the hub's account
+  ansible.builtin.user:
+    name: "{{ status_hub_user }}"
+    group: "{{ status_hub_group }}"
+    groups: "{{ [status_hub_broker_clients_group] if status_hub_approvals_socket else [] }}"
+    append: true
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+- name: Create the directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ status_hub_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ status_hub_config_dir }}", owner: root, mode: "0750"}
+    - {path: "{{ status_hub_state_dir }}", owner: "{{ status_hub_user }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the registry
+  ansible.builtin.copy:
+    src: "{{ status_hub_registry }}"
+    dest: "{{ status_hub_config_dir }}/services.yml"
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0640"
+  register: status_hub_registry_file
+
+- name: Write agents.yml and views.yml
+  ansible.builtin.template:
+    src: "{{ item }}.yml.j2"
+    dest: "{{ status_hub_config_dir }}/{{ item }}.yml"
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0640"
+  loop: [agents, views]
+  register: status_hub_config
+
+- name: Check the views against their schema and the registry
+  ansible.builtin.command:
+    argv: ["{{ status_hub_hnx_bin }}", status, views, check, "{{ status_hub_config_dir }}/views.yml",
+           --registry, "{{ status_hub_config_dir }}/services.yml"]
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Write the secrets the hub reads at run time (HNX_SECRET_<NAME>, root and the hub only)
+  ansible.builtin.copy:
+    dest: "{{ status_hub_config_dir }}/secrets.env"
+    content: |
+      # Managed by homelabnext (role status_hub): resolved from their references.
+      {% for ref in status_hub_secret_refs | sort %}
+      {% set value = lookup('hnx_secret', ref) %}
+      {% if value is search("['\\\\\n\r]") %}{{ 0 / 0 }}{% endif %}
+      HNX_SECRET_{{ ref | regex_replace('^secret:', '') | regex_replace('[^A-Za-z0-9]', '_') | upper }}='{{ value }}'
+      {% endfor %}
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0640"
+  register: status_hub_env
+  no_log: true
+  diff: false
+
+- name: Write the unit
+  ansible.builtin.template:
+    src: hnx-hub.service.j2
+    dest: "{{ status_hub_systemd_dir }}/hnx-hub.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: status_hub_unit
+
+- name: Enable and start the hub, restarting it when its unit, configuration or secrets changed
+  ansible.builtin.systemd_service:
+    name: hnx-hub.service
+    enabled: true
+    daemon_reload: "{{ status_hub_unit is changed }}"
+    state: >-
+      {{ 'restarted' if (status_hub_unit is changed or status_hub_registry_file is changed
+         or status_hub_config is changed or status_hub_env is changed) else 'started' }}
+  when: status_hub_start | bool
+
+- name: Wait for the hub to answer
+  ansible.builtin.uri:
+    url: "http://{{ ('[' ~ status_hub_bind_address ~ ']') if ':' in status_hub_bind_address else status_hub_bind_address }}:{{ status_hub_port | int }}/status.json"
+    headers:
+      Host: "{{ status_hub_allowed_hosts | first if status_hub_bind_address not in status_hub_loopback else 'localhost' }}"
+    status_code: 200
+  register: status_hub_up
+  until: status_hub_up.status == 200
+  retries: 30
+  delay: 1
+  changed_when: false
+  when: status_hub_start | bool

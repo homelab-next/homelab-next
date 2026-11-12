@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the wheel and the lock are the open-format copy)
+  ansible.builtin.debug:
+    msg: hnx_runtime keeps no data
+  tags: [export]

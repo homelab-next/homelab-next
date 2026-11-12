@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# homelab-next itself on a host that runs its services (the broker, the status hub): one
+# virtualenv per release under hnx_runtime_prefix, built from a wheel whose sha256 is pinned and
+# from the dependency lock with hashes of the same commit (constraints/ci.txt), so nothing is
+# installed that the lock does not name by hash. The wheel is built from the pinned commit
+# (docs/broker.md "Deploying with Ansible") or taken from a release; the role never builds.
+# The running release is <prefix>/current, and the command every unit runs is <prefix>/bin/hnx.
+hnx_runtime_extras: [core, mcp, nats]
+hnx_runtime_prefix: /opt/hnx
+hnx_runtime_python: /usr/bin/python3
+hnx_runtime_os_packages: [python3-venv]
+# The commit the wheel was built from (recorded beside the release; informational).
+hnx_runtime_source_commit: ""
+# Releases kept besides the current one (older ones are removed).
+hnx_runtime_keep_releases: 2

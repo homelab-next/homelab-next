@@ -75,6 +75,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     "ci:ZIZMOR_VERSION": ("pypi", "zizmor"),
     "ci:CADDY_VERSION": ("github", "caddyserver/caddy"),
     "ci:GITLEAKS_VERSION": ("github", "gitleaks/gitleaks"),
+    "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
     "role:tailscale_node/tailscale_node_version": ("github", "tailscale/tailscale"),
