@@ -48,10 +48,7 @@ resource "proxmox_virtual_environment_vm" "bus_core" {
         gateway = "198.51.100.1"
       }
     }
-    user_account {
-      username = "ansible"
-      keys     = [var.ssh_keys["operator"]]
-    }
+    user_data_file_id = var.cloudinit_user_data["bus-core"]
   }
 
   lifecycle {

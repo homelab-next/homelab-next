@@ -1,6 +1,6 @@
 ---
-summary: 'The compute model: one vendor-neutral file per guest, its validation, and generators that render IaC, cloud-init, inventory, firewall, backups and baselines.'
-summary_of: outline:sha256:d469c71927cf9eaa
+summary: 'The compute model: one vendor-neutral file per guest, its validation, generators for IaC, cloud-init, inventory, firewall and baselines, and applying them.'
+summary_of: outline:sha256:1169a5e22376a9d7
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -199,7 +199,13 @@ validation uses the network validator's IPv6 prefix rules. It does not validate 
 
 ## Rendering
 
-`hnx guests render DIR --site SITE --target T [--out OUT [--prune]] [--keys KEYS] [--policies FILE] [--baselines FILE]`
+`hnx guests render DIR --site SITE --target T [--node NODE] [--out OUT [--prune]] [--keys KEYS] [--policies FILE] [--baselines FILE]`
+
+`--node NODE` (also on `plan`) renders only the guests placed on `NODE`, after the whole set has
+validated: a standalone hypervisor's Terraform (one provider endpoint) must not carry another
+node's guests, and one directory of state per node keeps a plan from proposing to destroy them.
+A node that no guest and no `_nodes.yml` entry names is refused, so a typo never renders an empty
+plan (which Terraform would read as "destroy everything in state").
 
 `--out` writes only the files that differ, with the same writer as `hnx site render`. A file in
 `--out` that carries the generated-file header but is no longer rendered (a removed guest's
@@ -249,10 +255,17 @@ is usually what an automation account needs, so it is allowed, but it is an expl
 guest file rather than a blanket default for every account. A restricted rule (named commands
 only) belongs in the configuration-management role that knows the commands.
 
-The `terraform-proxmox` target configures the user through the provider's `user_account` block,
-which does not set sudo: the image's default-user policy applies there (many cloud images grant
-passwordless sudo to it). To apply `cloudinit.sudo` on that path, upload the `cloudinit` target's
-`user-data` as a snippet and point the VM's `initialization.user_data_file_id` at it.
+The `terraform-proxmox` target configures a user that only needs a name and keys through the
+provider's `user_account` block. That block cannot carry a sudo rule or packages, so a VM whose
+`cloudinit` sets `sudo` (other than `none`) or `packages` is rendered with
+`initialization.user_data_file_id = var.cloudinit_user_data["<name>"]` instead: upload the
+`cloudinit` target's `<name>/user-data` as a snippet (Proxmox: a storage with the `snippets`
+content type, for example `local:snippets/<name>-user-data.yaml`) and map the guest's name to it
+in that variable. It is an index, not a lookup with a default: a missing entry fails the plan
+rather than booting a guest without its sudo rule or packages. The `cloudinit` user-data starts
+`qemu-guest-agent` when it installs it (Debian's unit is bound to a device that appeared before the
+package was installed, so nothing else starts it until a reboot, and the provider's `agent` block
+waits for an agent that never answers).
 
 ### libvirt
 
@@ -313,7 +326,10 @@ cost of listing what it needs (resolvers, package mirrors, time, the services it
 the accept default and switch a guest to `DROP` once its outbound needs are known.
 
 Guest rules only take effect while the datacenter firewall is on (`enable: 1` under `[OPTIONS]` in
-`cluster.fw`). That file also holds the operator's own cluster rules, so it is not generated;
+`cluster.fw`). Install a guest's `<vmid>.fw` **after** Terraform has created the guest, and again
+after any replacement: Proxmox deletes `/etc/pve/firewall/<vmid>.fw` when it destroys the guest (a
+tainted resource's replace included), so a file installed first is gone by the time the new guest
+boots. `verify-datacenter.sh` reports it missing. That file also holds the operator's own cluster rules, so it is not generated;
 `firewall/verify-datacenter.sh`, run on a cluster node after installing the files, exits non-zero
 if the switch is off or any rendered `<vmid>.fw` is missing or differs.
 
@@ -833,7 +849,44 @@ change, as `hnx site plan --exit-code` does (2 is an input that cannot be read).
 is not a swap seam (ADR-0012): another hypervisor's target, rendered from the same files, is what
 a rebuild on new hardware applies, compared with this plan before the move.
 
-## SERVER (not implemented)
+## Applying to a real node
 
-Applying the output (`terraform apply`, `virt-install`, `virsh autostart`) needs a hypervisor.
-The generators only produce text; the plan command is the review step.
+The generators only produce text; `plan` is the review step and applying is the environment's.
+The path below was first proven end to end on a standalone Proxmox VE 9.2 node with bpg/proxmox
+0.116.1 (a canary VM rendered, applied, baselined, checked and destroyed); a private overlay keeps
+its own runbook with its addresses.
+
+1. **An identity for Terraform.** A Proxmox user and API token (privilege separation on, the ACLs
+   given to both the user and the token, since a separated token gets the intersection) with
+   custom roles: `VM.Allocate`, `VM.Clone`, `VM.Audit`, `VM.Config.{CPU,Memory,Disk,Network,
+   Options,Cloudinit,CDROM,HWType}`, `VM.PowerMgmt` and `VM.GuestAgent.Audit` (the provider reads
+   addresses through the agent; Proxmox VE 9 has no `VM.Monitor`) on `/vms`;
+   `Datastore.AllocateSpace` and `Datastore.Audit` on the guest-disk storage and on the storage
+   holding the snippets (referencing a snippet in `cicustom` needs `AllocateSpace` there, not only
+   `Audit`); `SDN.Use` on `/sdn/zones/localnetwork/<bridge>`; `Sys.Audit` on `/nodes/<node>`.
+   Nothing on `/` and no `Sys.Modify`, `Permissions.Modify` or `Datastore.Allocate`.
+2. **A template** per logical image: the cloud image imported as the template's `scsi0` on the
+   guest-disk storage, a cloud-init drive, `agent: enabled=1`, a serial console, `qm template`;
+   never booted, so every clone generates its own SSH host keys. Its vmid is the
+   `vm_templates` entry for the image's `logical` name.
+3. **Render** each target into its own directory with `--node`; keep the hand-written
+   `terraform.tfvars` (endpoint, `default_bridge`, `pools`, `vm_templates`, `ssh_keys`,
+   `cloudinit_user_data`) and a `*_override.tf` pinning the provider build beside the render (a
+   module has one `required_providers` block; an override file narrows the rendered constraint
+   without editing a generated file). The token reaches Terraform as `TF_VAR_proxmox_api_token`,
+   never a file in the directory.
+4. **Upload** the snippets the plan's `cloudinit_user_data` names, then `terraform init`, `plan`
+   (read it), `apply`, and `plan` again (no changes).
+5. **Install** the `firewall-rules` output into `/etc/pve/firewall/` (after the apply, see
+   [Firewall on by default](#firewall-on-by-default)) and run `verify-datacenter.sh`.
+6. **Trust the host key out of band**: read its fingerprint through the guest agent
+   (`qm guest exec <vmid> -- ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), compare it with
+   `ssh-keyscan`, then record it in the `known_hosts` the inventory uses.
+7. **Baselines**: `ansible-playbook` the `baseline-playbook` render against the `inventory` render;
+   a second run must report `changed=0`.
+
+What this does not give yet: the remote, encrypted, locked state backend the provider section
+above asks for (state stays local to the render directory), credentials from the secrets store
+instead of a local file, the firewall rules under Terraform (they are a separate install that a
+replace deletes), DNS resolvers in the rendered cloud-init (Proxmox falls back to the node's own
+`resolv.conf` when `initialization.dns` is unset), and the CI deploy that runs these steps.

@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-# A changed configuration is parsed by chronyd -p (print the configuration and exit) on the staged
-# file before it replaces the live one, so a bad value never reaches the daemon. Replacing the
-# live file leaves a restart-pending marker that only a successful restart removes, so a failed
-# (or disabled) restart is retried on the next run even though the file no longer changes.
+# A changed configuration is parsed by chronyd -p (print the configuration and exit) on a staged
+# copy beside the live file before it replaces the live one, so a bad value never reaches the
+# daemon. Replacing the live file leaves a restart-pending marker that only a successful restart
+# removes, so a failed (or disabled) restart is retried on the next run even though the file no
+# longer changes.
 - name: Resolve and validate the time sources
   ansible.builtin.include_tasks: validate.yml
 
@@ -12,12 +13,33 @@
     state: directory
     mode: "0750"
 
-- name: Write the configuration, checked by chronyd before it goes live
+# Staged beside the live file, not in Ansible's temporary directory: Debian's AppArmor profile for
+# chronyd lets it read /etc/chrony but not the connecting user's home (where a `validate:` copy
+# sits), so a check there fails on every real Debian 13 guest whatever the configuration says.
+- name: Stage the configuration beside the live file
   ansible.builtin.template:
     src: chrony.conf.j2
-    dest: "{{ chrony_config_file }}"
+    dest: "{{ chrony_staged_file }}"
     mode: "0644"
-    validate: "{{ chrony_daemon_cli }} -p -f %s"
+  register: chrony_staged
+
+- name: Read the live configuration's checksum
+  ansible.builtin.stat:
+    path: "{{ chrony_config_file }}"
+  register: chrony_live
+
+- name: Check the staged configuration with chronyd before it can go live
+  ansible.builtin.command:
+    argv: ["{{ chrony_daemon_cli }}", "-p", "-f", "{{ chrony_staged_file }}"]
+  changed_when: false
+  when: not chrony_live.stat.exists or chrony_live.stat.checksum != chrony_staged.checksum
+
+- name: Install the checked configuration
+  ansible.builtin.copy:
+    src: "{{ chrony_staged_file }}"
+    dest: "{{ chrony_config_file }}"
+    remote_src: true
+    mode: "0644"
   register: chrony_written
 
 - name: Mark a restart as owed

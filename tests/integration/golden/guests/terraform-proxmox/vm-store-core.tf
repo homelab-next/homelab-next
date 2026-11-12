@@ -48,9 +48,6 @@ resource "proxmox_virtual_environment_vm" "store_core" {
         gateway = "192.0.2.65"
       }
     }
-    user_account {
-      username = "ansible"
-      keys     = [var.ssh_keys["operator"]]
-    }
+    user_data_file_id = var.cloudinit_user_data["store-core"]
   }
 }

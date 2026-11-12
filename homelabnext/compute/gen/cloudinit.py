@@ -39,6 +39,11 @@ def user_data(fleet: Fleet, g: Guest) -> str:
     pk = ci.get("packages", [])
     if pk:
         L += ["package_update: true", "packages:"] + [f"  - {q(p)}" for p in sorted(pk)]
+    if "qemu-guest-agent" in pk:
+        # Debian's unit is static and bound to the virtio port's device, which appeared at boot,
+        # before cloud-init installed the package: nothing starts it until the next boot, and a
+        # hypervisor that waits for the agent (the terraform-proxmox target's agent block) stalls.
+        L += ["runcmd:", "  - [systemctl, start, qemu-guest-agent]"]
     L += ["ssh_pwauth: false"]
     return "\n".join(L) + "\n"
 

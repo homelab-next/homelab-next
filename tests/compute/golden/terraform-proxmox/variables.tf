@@ -34,3 +34,9 @@ variable "ssh_keys" {
   sensitive   = true
   description = "Key name -> public key line."
 }
+
+variable "cloudinit_user_data" {
+  type        = map(string)
+  default     = {}
+  description = "Guest name -> snippet file id (datastore:snippets/file) holding the cloudinit target's user-data; needed by every VM whose cloudinit sets sudo or packages."
+}

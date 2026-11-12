@@ -64,6 +64,12 @@ variable "ssh_keys" {{
   sensitive   = true
   description = "Key name -> public key line."
 }}
+
+variable "cloudinit_user_data" {{
+  type        = map(string)
+  default     = {{}}
+  description = "Guest name -> snippet file id (datastore:snippets/file) holding the cloudinit target's user-data; needed by every VM whose cloudinit sets sudo or packages."
+}}
 """
 
 
@@ -149,18 +155,34 @@ def _vm(fleet: Fleet, g: Guest) -> str:
             f"        gateway = {hq(fleet.gateway(g))}",
             "      }",
             "    }",
-            "    user_account {",
-            f"      username = {hq(ci['user'])}",
         ]
-        keys = ci.get("ssh_authorized_keys", [])
-        if keys:
-            L.append("      keys     = [" + ", ".join(f"var.ssh_keys[{hq(k)}]" for k in keys) + "]")
-        L += ["    }", "  }"]
+        if needs_user_data(g):
+            # The user_account block cannot carry a sudo rule or packages: the cloudinit target's
+            # user-data, uploaded as a snippet, replaces it (it creates the user, keys included).
+            # An index, not a lookup: a missing snippet fails the plan instead of silently booting
+            # a guest without its sudo rule or packages (qemu-guest-agent among them).
+            L.append(f"    user_data_file_id = var.cloudinit_user_data[{hq(g.name)}]")
+        else:
+            L += ["    user_account {", f"      username = {hq(ci['user'])}"]
+            keys = ci.get("ssh_authorized_keys", [])
+            if keys:
+                L.append(
+                    "      keys     = [" + ", ".join(f"var.ssh_keys[{hq(k)}]" for k in keys) + "]"
+                )
+            L.append("    }")
+        L.append("  }")
     ign = g.lifecycle.get("ignore_changes", [])
     if ign:
         L += ["", "  lifecycle {", "    ignore_changes = [" + ", ".join(ign) + "]", "  }"]
     L.append("}")
     return hcl_align("\n".join(L)) + "\n"
+
+
+def needs_user_data(g: Guest) -> bool:
+    """Whether the VM's cloud-init asks for what the provider's ``user_account`` block cannot
+    express (a sudo rule, packages), so its user-data must come from the ``cloudinit`` target."""
+    ci = g.cloudinit
+    return bool(ci) and (ci.get("sudo", "none") != "none" or bool(ci.get("packages")))
 
 
 def _pve_ostype(os_type: str) -> str:

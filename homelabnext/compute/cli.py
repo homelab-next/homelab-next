@@ -71,6 +71,30 @@ def _fleet(args: argparse.Namespace):
     )
 
 
+def _node_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--node",
+        help="render only the guests placed on this node (validation still covers every guest): "
+        "a standalone hypervisor's Terraform must not carry another node's guests",
+    )
+
+
+def _on_node(fleet, node: str | None):
+    """The fleet narrowed to one node's guests, after the whole set validated.  A node no guest
+    and no ``_nodes.yml`` entry names is refused: a typo must not render an empty, harmless-looking
+    plan (Terraform would then destroy everything that state still holds)."""
+    if node is None:
+        return fleet
+    import dataclasses
+
+    guests = tuple(g for g in fleet.guests if g.node == node)
+    if not guests and node not in fleet.nodes:
+        raise ComputeError(
+            f"--node {node!r}: no guest is placed on it and _nodes.yml lists no such node"
+        )
+    return dataclasses.replace(fleet, guests=guests)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="hnx guests", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -79,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("render", help="render one target")
     _common(r)
     r.add_argument("--target", required=True, choices=sorted(TARGETS))
+    _node_arg(r)
     r.add_argument("--out", help="write files here (default: print a file list)")
     r.add_argument(
         "--prune",
@@ -89,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl = sub.add_parser("plan", help="diff a fresh render against a previous render directory")
     _common(pl)
     pl.add_argument("--target", required=True, choices=sorted(TARGETS))
+    _node_arg(pl)
     pl.add_argument("--against", required=True, help="directory holding the previous render")
     pl.add_argument("--exit-code", action="store_true", help="exit 3 when there are changes")
     b = sub.add_parser("baselines", help="guest x defense-layer baseline coverage")
@@ -178,6 +204,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         problems = _registry_problems(args, fleet) if args.cmd == "validate" else []
         if args.cmd == "validate" and args.keys:
             problems += _key_problems(fleet)
+        if args.cmd in ("render", "plan"):
+            fleet = _on_node(fleet, args.node)
     except ComputeUnreadable as exc:  # docs/interfaces.md: bad input is 2, a failed check 1
         print(f"hnx guests: {exc}", file=sys.stderr)
         return 2
