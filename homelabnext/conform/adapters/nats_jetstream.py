@@ -312,21 +312,44 @@ def check_stream_config(config: Mapping[str, Any]) -> None:
     """Refuse a stream configuration :func:`provision_streams` would not render: a key outside
     its own (a ``republish``, ``mirror``, ``sources`` or ``subject_transform`` above all: aimed
     at ``$JS.API.STREAM.DELETE.<other>``, a republish deletes that stream; homelab-next #361
-    security F1), a subject outside a literal prefix's ``>`` or the dead-letter advisories, or a
-    missing deny flag.  The provisioner checks its own request before it sends it; the server
-    does not check the body against any grant."""
+    security F1), a subject that is neither a literal prefix's ``>`` (``lab.>``: every token
+    before the ``>`` literal, the first not the server's ``$`` or ``_``) nor one of the
+    dead-letter advisories of a named stream (``<advisory>.<stream>.*``), or a missing deny
+    flag.  The provisioner checks its own request before it sends it; the server does not check
+    the body against any grant."""
+    name = config.get("name")
     extra = sorted(set(config) - _STREAM_KEYS)
     if extra:
-        raise EventsError(f"stream {config.get('name')!r}: refused keys {extra} (a standing stream "
+        raise EventsError(f"stream {name!r}: refused keys {extra} (a standing stream "
                           "is created with its limits and deny flags only)")  # fmt: skip
-    for subject in config.get("subjects") or []:
-        toks = str(subject).split(".")
-        if toks[0].startswith(("$", "_")) and not str(subject).startswith(
-            (_ADVISORY_MAX + ".", _ADVISORY_TERM + ".")
-        ):
-            raise EventsError(f"stream {config.get('name')!r}: subject {subject!r} is the server's")
+    subjects = config.get("subjects")
+    if not isinstance(subjects, list) or not subjects:
+        raise EventsError(f"stream {name!r}: a list of subjects is required")
+    for subject in subjects:
+        if not _stream_subject_ok(subject):
+            raise EventsError(
+                f"stream {name!r}: subject {subject!r} is neither a literal prefix's '>' "
+                "nor a named stream's dead-letter advisory"
+            )
     if not all(config.get(k) is True for k in _EVIDENCE):
         raise EventsError(f"stream {config.get('name')!r}: deny_delete and deny_purge are required")
+
+
+def _stream_subject_ok(subject: Any) -> bool:
+    """``<literal>[.<literal>...].>`` (not under ``$`` or ``_``), or ``<advisory>.<stream>.*``
+    for one of the two dead-letter advisories and a literal stream name."""
+    if not isinstance(subject, str):
+        return False
+    try:
+        toks = _check_subject(subject, pattern=True)
+    except EventsError:
+        return False
+    for advisory in (_ADVISORY_MAX, _ADVISORY_TERM):
+        if subject.startswith(advisory + "."):
+            rest = subject[len(advisory) + 1 :].split(".")
+            return len(rest) == 2 and bool(_NAME_RE.match(rest[0])) and rest[1] == "*"
+    # _check_subject allows ">" last only: the tokens before it are literal unless one is "*"
+    return len(toks) >= 2 and toks[-1] == ">" and "*" not in toks and toks[0][0] not in "$_"
 
 
 def provision_streams(
@@ -405,10 +428,11 @@ def provision_streams(
             **_EVIDENCE,
         },
     ]
+    for config in configs:  # every body checked before the first request: none half-provisioned
+        check_stream_config(config)
     created = []
     for config in configs:
         name = config["name"]
-        check_stream_config(config)
         if _api(wire, f"STREAM.INFO.{name}", None, timeout=timeout, missing="stream") is None:
             _api(wire, f"STREAM.CREATE.{name}", config, timeout=timeout)
             created.append(name)

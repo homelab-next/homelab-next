@@ -395,9 +395,48 @@ def test_the_provisioner_checks_its_own_stream_bodies_before_sending():
         {**good, "subjects": ["_R_.>"]},
         {**good, "deny_delete": False},
         {k: v for k, v in good.items() if k != "deny_purge"},
+        # round 7 follow-up (N3): a literal prefix's ">" or a named stream's dead-letter
+        # advisory, nothing else (the docstring's promise, now the code's)
+        {**good, "subjects": [">"]},
+        {**good, "subjects": ["*.>"]},
+        {**good, "subjects": [f"{PREFIX}.*.>"]},
+        {**good, "subjects": [f"{PREFIX}.a"]},
+        {**good, "subjects": [f"{PREFIX}..>"]},
+        {**good, "subjects": []},
+        {k: v for k, v in good.items() if k != "subjects"},
+        {**good, "subjects": "hnx.>"},
+        {**good, "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.>"]},
+        {**good, "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.*.*"]},
+        {**good, "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.HNX.x"]},
+        {**good, "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.HNX.*.>"]},
     ):
         with pytest.raises(EventsError):
             nj.check_stream_config(bad)
+    nj.check_stream_config({**good, "subjects": [f"{PREFIX}.a.b.>"]})
+
+
+def test_the_provisioner_checks_every_body_before_creating_any(monkeypatch):
+    """Round 7 follow-up (N3): a refused dead-letter configuration is refused before the main
+    stream is created, not after it: no request at all is sent."""
+    sent: list[str] = []
+
+    class Spy(Wire):
+        def request(self, subject, payload=b"", *, headers=None, timeout):
+            sent.append(subject)
+            return super().request(subject, payload, headers=headers, timeout=timeout)
+
+    real = nj.check_stream_config
+
+    def refuse_the_dlq(config):
+        if config["name"].endswith("_DLQ"):
+            raise EventsError("refused")
+        real(config)
+
+    monkeypatch.setattr(nj, "check_stream_config", refuse_the_dlq)
+    with pytest.raises(EventsError):
+        nj.provision_streams(Spy(FakeJetStreamWire()), stream=STREAM, subject_prefix=PREFIX,
+                             max_bytes=1 << 20)  # fmt: skip
+    assert sent == []
 
 
 def test_a_client_account_names_its_calls_under_the_import_prefix():
