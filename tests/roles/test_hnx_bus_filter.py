@@ -789,8 +789,25 @@ DRIFTS = [
     ({"deliver_policy": "by_start_sequence", "opt_start_seq": 4},
      ["deliver_policy is by_start_sequence, declared new", "opt_start_seq is 4, declared none"]),
     ({"replay_policy": "original"}, ["replay_policy is original, declared instant"]),
-    ({"headers_only": True}, ["headers_only is true, declared false"]),
+    ({"headers_only": True}, ["headers_only is true, declared none"]),
     ({"backoff": [10**9, 5 * 10**9]}, ["backoff is [1s, 5s], declared none"]),
+    # absent fields read as the server's defaults
+    ({"deliver_policy": None}, ["deliver_policy is all, declared new"]),
+    ({"ack_wait": None}, ["ack_wait is unset, declared 30s"]),
+    ({"ack_policy": None, "replay_policy": None}, []),
+    # the security audit's: each stops, empties or loses delivery silently
+    ({"pause_until": "2099-01-01T00:00:00Z"}, ["pause_until is '2099-01-01T00:00:00Z', declared none"]),
+    ({"inactive_threshold": 60 * 10**9}, ["inactive_threshold is 60s, declared none"]),
+    ({"priority_policy": "pinned_client", "priority_groups": ["g"]},
+     ["priority_groups is ['g'], declared none", "priority_policy is pinned_client, declared none"]),
+    ({"priority_policy": "none"}, []),
+    ({"mem_storage": True}, ["mem_storage is true, declared none"]),
+    ({"deliver_subject": "_INBOX.x", "idle_heartbeat": 5 * 10**9, "flow_control": True},
+     ["deliver_subject is '_INBOX.x', declared none", "flow_control is true, declared none",
+      "idle_heartbeat is 5s, declared none"]),
+    ({"filter_subject": "lab.>", "filter_subjects": ["lab.a", "lab.b"]},
+     ["filter_subject is 'lab.>', declared 'lab.homelabnext.decision.returned'",
+      "filter_subjects is ['lab.a', 'lab.b'], declared none"]),
 ]  # fmt: skip
 
 
@@ -822,11 +839,11 @@ def test_a_durable_that_drifted_from_its_declaration_is_named(changes, named):
     """Security audit of overlay #19 (finding 3): the provisioner never changes an existing
     durable, so one created with another lease, max_deliver or start keeps it silently; the health
     hook names every such field, the adapter's provisioner refuses it with the same words."""
-    (got,) = bus.hnx_bus_durable_drift(_jsz(_live(changes)), "HNX", [DECLARED])
-    assert got.startswith("LAB/bridge-x: "), got
-    for n in named:
-        assert n in got, (n, got)
-    assert got.count("; ") == len(named) - 1, got
+    got = bus.hnx_bus_durable_drift(_jsz(_live(changes)), "HNX", [DECLARED])
+    if not named:
+        assert got == [], got
+        return
+    assert got == [f"LAB/bridge-x: {'; '.join(named)}"], got
 
 
 def test_the_start_a_durable_declares_is_compared():
@@ -849,15 +866,25 @@ def test_the_start_a_durable_declares_is_compared():
     assert bus.hnx_bus_durable_drift(_jsz(CREATED), "HNX", [dict(DECLARED, deliver_policy="all")])
 
 
-def test_a_push_or_refiltered_durable_is_drift_too():
-    got = bus.hnx_bus_durable_drift(
-        _jsz(_live({"deliver_subject": "_INBOX.x", "filter_subject": "lab.>",
-                    "filter_subjects": ["lab.a", "lab.b"]})), "HNX", [DECLARED])  # fmt: skip
-    assert len(got) == 1 and "deliver_subject is '_INBOX.x'" in got[0], got
-    assert "filter_subject is 'lab.>'" in got[0] and "filter_subjects is" in got[0], got
+def test_an_invalid_declaration_or_a_hostile_value_is_named_safely():
+    """A declaration validate refuses is named, not compared; a server-reported value lands in
+    an Ansible failure message cut to 200 characters with its braces replaced."""
     assert bus.hnx_bus_durable_drift(_jsz(CREATED), "HNX", [dict(DECLARED, ack_wait="x")]) == [
         "LAB/bridge-x: its declaration is not valid (validate says why)"
     ]
+    (got,) = bus.hnx_bus_durable_drift(
+        _jsz(_live({"filter_subjects": ["{{ lookup('pipe', 'id') }}"] * 50})), "HNX", [DECLARED]
+    )
+    assert "{" not in got and "}" not in got and "...(cut)" in got and len(got) < 300, got
+
+
+def test_the_two_copies_compare_the_same_fields():
+    """The filter cannot import homelabnext on the controller, so it carries a copy of the
+    adapter's field lists; they are held equal here."""
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    assert bus.DURABLE_COMPARED == nj.DRIFT_COMPARED
+    assert bus.DURABLE_NEVER_SET == nj.DRIFT_NEVER_SET
 
 
 @pytest.mark.parametrize(

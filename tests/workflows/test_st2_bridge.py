@@ -832,6 +832,15 @@ def test_the_provisioner_names_a_durable_that_drifted_from_its_declaration():
                                durables=bridge_durables(3.0, deliver_policy="all")[:1])  # fmt: skip
     # as declared: nothing to say, nothing created
     assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0)) == []
+    # every drifted durable is named in one error, and a missing one is still created first
+    new = {"durable": "st2-new", "filter": "hnx.homelabnext.new", "ack_wait": 3.0,
+           "max_deliver": 100}  # fmt: skip
+    with pytest.raises(nj.NotProvisioned) as exc:
+        nj.provision_consumers(wire, stream="HNX", durables=[*bridge_durables(), new])
+    msg = str(exc.value)
+    assert msg.count("differs from its declaration") == 3 and msg.endswith(
+        "(created first: st2-new)"), msg  # fmt: skip
+    assert "st2-new" in wire.streams["HNX"].consumers
     # fields a provisioned durable never sets, made some other way (the fake's config edited)
     cfg = wire.streams["HNX"].consumers[first[0]["durable"]].config
     cfg["backoff"] = [10**9, 5 * 10**9]
@@ -840,7 +849,7 @@ def test_the_provisioner_names_a_durable_that_drifted_from_its_declaration():
     del cfg["backoff"]
     cfg["headers_only"] = True
     # headers_only is refused at the client's bind too: every body would read as empty
-    with pytest.raises(nj.NotProvisioned, match="headers only"):
+    with pytest.raises(nj.NotProvisioned, match="headers_only is true, declared none"):
         nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0)[:1])
     with pytest.raises(sb.BridgeError, match="headers only"):
         bridge(standing(wire, ack_wait=3.0), lambda _ev: 202)

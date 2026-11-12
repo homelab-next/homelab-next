@@ -45,10 +45,14 @@
         fail_msg: >-
           events_bus: durables differ from events_bus_durables:
           {{ events_bus_jsz.json | hnx_bus_durable_drift(events_bus_account, events_bus_durables) | join(' | ') }}.
-          Nothing is changed or recreated: ack_wait, max_deliver, backoff and headers_only can be
-          changed in place (nats consumer edit, keeping what is pending); deliver_policy,
-          opt_start_seq, ack_policy and replay_policy cannot, so delete the durable as the
-          provisioner and let main recreate it from its declaration; or correct the declaration
+          Nothing is changed or recreated. deliver_policy, opt_start_seq, ack_policy,
+          replay_policy, deliver_subject, flow_control, idle_heartbeat, mem_storage, direct and
+          sourcing cannot be changed on an existing durable: delete it as the provisioner (its
+          ack floor and pending deliveries go with it; deliver_policy new skips what is published
+          until it exists again) and run main with events_bus_provision_durables on to recreate
+          it. Every other field can be changed in place (nats consumer edit, keeping what is
+          pending). Or correct the declaration (docs/broker.md, "A durable keeps the
+          configuration it was created with")
     # the account split as the server runs it (read-only): /accountz names the accounts and,
     # per account, JetStream and imports; it does not list an account's users, so /connz?auth=true
     # gives the account every connected user authenticated into

@@ -1081,7 +1081,9 @@ durable can have the stream delivered to any subject, another user's `_INBOX` in
 on nats-server 2.15.1: a push durable with `deliver_subject` `_INBOX.<victim>.x` delivered the
 stream to the victim's subscription). So the role's provisioner pre-creates every durable a user
 reads, a PULL durable (no `deliver_subject`, explicit acks), declared in `events_bus_durables`
-(`{stream, durable, user, filter, ack_wait, max_deliver, deliver_policy | replay_s | start_seq}`),
+(`{stream, durable, user, filter, ack_wait, max_deliver, deliver_policy | replay_s | start_seq}`;
+the declaration must keep describing the durable once it exists, a one-run `start_seq` included:
+see "A durable keeps the configuration it was created with" below),
 and the
 user holds only that durable's `CONSUMER.INFO`, `CONSUMER.MSG.NEXT` and its acks; the clients
 (`provision=False`: the relay, the StackStorm bridge, `hnx orchestration consume`) bind to it and
@@ -1099,21 +1101,41 @@ is decided for the stream; until then the role validates the declared durables a
 
 **A durable keeps the configuration it was created with, and its declaration must keep describing
 it.** The provisioner never changes or recreates an existing durable. When one's configuration on
-the server differs from its declaration, `provision_consumers` (so `main`, through
-`hnx-events-provision`) fails, and so does the `health` hook (filter `hnx_bus_durable_drift`, from
-the same `/jsz?config=true`, whatever `events_bus_provision_durables` says). Each names the
-durable and every field that differs, with the live and the declared value. The fields compared
-are `filter_subject`, `ack_wait`, `max_deliver`, `deliver_policy`, `opt_start_seq` (with
-`start_seq`), `ack_policy` and `replay_policy`, and the fields a provisioned durable never sets:
-`deliver_subject`, `headers_only`, `backoff` and `filter_subjects`. A `replay_s` start time is
-computed at creation, so only its `by_start_time` policy is compared. `ack_wait`, `max_deliver`,
-`backoff` and `headers_only` can be changed in place (`nats consumer edit`, which keeps what the
-durable has pending). nats-server refuses to change `deliver_policy`, `opt_start_seq`,
-`ack_policy` or `replay_policy` on an existing consumer, so for those, delete the durable as the
-provisioner and let the next run recreate it, starting where its declaration says. Or correct the
-declaration. A durable created for one run with `start_seq` (to recover events published before
-it existed) keeps that `start_seq` declared afterwards; switching the declaration back to
-`deliver_policy: new` fails the next run.
+the server differs from its declaration, two things fail. `provision_consumers` (so `main`,
+through `hnx-events-provision`) still creates the declared durables that are missing, then fails
+with one message naming every drifted durable. The `health` hook fails too (filter
+`hnx_bus_durable_drift`, read from the same `/jsz?config=true`, whatever
+`events_bus_provision_durables` says). Each names every field that differs, with the live and the
+declared value.
+
+- Compared with the declaration: `filter_subject`, `ack_wait`, `max_deliver`, `deliver_policy`,
+  `opt_start_seq` (with `start_seq`), `ack_policy`, `replay_policy`. A `replay_s` start time is
+  computed at creation, so only its `by_start_time` policy is compared.
+- Never set by the provisioner, so any value is drift: `deliver_subject`, `deliver_group`,
+  `flow_control`, `idle_heartbeat` and `rate_limit_bps` (a push consumer); `headers_only` (empty
+  bodies); `backoff` (replaces `ack_wait`); `filter_subjects`; `pause_until` (delivery stops);
+  `inactive_threshold` (the server deletes an idle durable; the role's streams set no
+  `consumer_limits` default, so a stream that did would flag every durable); `priority_groups` and
+  `priority_policy` (deliveries go to one pinned client); `mem_storage` (the cursor is lost on a
+  restart); `direct`, `sourcing`, `sample_freq`.
+- Deliberately not compared: the fields the server fills with its own default (`max_ack_pending`,
+  `max_waiting`, `num_replicas`, `max_batch`, `max_expires`, `max_bytes`: throughput, not what is
+  delivered), `description` and `metadata`.
+
+To fix a drifted durable:
+
+- nats-server refuses to change `deliver_policy`, `opt_start_seq`, `ack_policy`, `replay_policy`,
+  `deliver_subject`, `flow_control`, `idle_heartbeat`, `mem_storage`, `direct` or `sourcing` on an
+  existing consumer. Delete the durable as the provisioner, then run `main` with
+  `events_bus_provision_durables` on to recreate it from its declaration. Its ack floor and
+  pending deliveries go with it, and a `deliver_policy: new` durable skips whatever is published
+  until it exists again.
+- Every other field can be changed in place (`nats consumer edit`, which keeps what is pending).
+- Or correct the declaration to match the durable.
+
+A durable created with `start_seq` (to recover events published before it existed) keeps that
+`start_seq` declared for good. Switching the declaration back to `deliver_policy: new` fails `main`
+and `health`, and the only way to clear that is the recreate above.
 
 **The `events_bus` role enforces the same shape on every deployment** (filters
 `hnx_bus_subject_problems` and `hnx_bus_durable_problems`, `ansible/plugins/filter/hnx_bus.py`).

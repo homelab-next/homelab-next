@@ -677,6 +677,21 @@ def _declared_consumer(d) -> dict:
     return want
 
 
+#: the adapter's ``DRIFT_COMPARED`` and ``DRIFT_NEVER_SET`` (nats_jetstream.py, which says why
+#: each is there and what is deliberately left out); a test holds the copies equal
+DURABLE_COMPARED = (
+    "filter_subject", "ack_wait", "max_deliver", "deliver_policy", "opt_start_seq",
+    "ack_policy", "replay_policy",
+)  # fmt: skip
+DURABLE_NEVER_SET = (
+    "deliver_subject", "deliver_group", "flow_control", "idle_heartbeat", "rate_limit_bps",
+    "headers_only", "backoff", "filter_subjects", "pause_until", "inactive_threshold",
+    "priority_groups", "priority_policy", "mem_storage", "direct", "sourcing", "sample_freq",
+)  # fmt: skip
+_DEFAULTS = {"deliver_policy": "all", "ack_policy": "explicit", "replay_policy": "instant"}
+_SHOWN_MAX = 200  # a server-reported value is cut there in the health hook's message
+
+
 def _secs(ns) -> str:
     try:
         return f"{int(ns) / _NS:g}s"
@@ -684,46 +699,41 @@ def _secs(ns) -> str:
         return repr(ns)
 
 
+def _render(field, value) -> str:
+    """One value as the message shows it, the way the adapter's ``_shown`` does; cut to
+    :data:`_SHOWN_MAX` with braces replaced, since it lands in an Ansible failure message."""
+    if value is None:
+        text = "unset"
+    elif field in ("ack_wait", "idle_heartbeat", "inactive_threshold"):
+        text = _secs(value)
+    elif field == "backoff" and isinstance(value, list):
+        text = "[" + ", ".join(map(_secs, value)) + "]"
+    elif isinstance(value, bool):
+        text = "true" if value else "false"
+    elif isinstance(value, str) and field.endswith("_policy"):
+        text = value
+    else:
+        text = repr(value)
+    if len(text) > _SHOWN_MAX:
+        text = text[:_SHOWN_MAX] + "...(cut)"
+    return text.replace("{", "(").replace("}", ")")
+
+
 def _consumer_drift(have, want) -> list:
     """``have`` (a consumer's live config) against ``want`` (:func:`_declared_consumer`), one
-    ``"<field> is <live>, declared <declared>"`` per field that differs (absent fields read as
-    nats-server's defaults where it has one)."""
+    ``"<field> is <live>, declared <declared>"`` per field that differs."""
     diffs = []
-    if have.get("deliver_subject"):
-        diffs.append(f"deliver_subject is {have['deliver_subject']!r}, declared none (push)")
-    compared = [
-        ("filter_subject", None, repr),
-        ("ack_wait", None, _secs),
-        ("max_deliver", None, str),
-        ("deliver_policy", "all", str),
-        ("ack_policy", "explicit", str),
-        ("replay_policy", "instant", str),
-    ]
-    if want.get("opt_start_seq") is not None or have.get("opt_start_seq"):
-        compared.insert(4, ("opt_start_seq", None, str))  # right after deliver_policy
-    for field, default, show in compared:
-        got, declared = have.get(field, default), want.get(field)
-        if got != declared:
-            live = "unset" if got is None else show(got)
-            diffs.append(
-                f"{field} is {live}, declared {'none' if declared is None else show(declared)}"
-            )
-    # never set on a provisioned durable
-    for field, why in (
-        ("headers_only", " (a client would read empty bodies)"),
-        ("backoff", " (it replaces ack_wait)"),
-        ("filter_subjects", ""),
-    ):
+    for field in DURABLE_COMPARED:
+        got = have[field] if field in have else _DEFAULTS.get(field)
+        declared = want.get(field)
+        skip = field == "opt_start_seq" and declared is None and not got
+        if not skip and got != declared:
+            shown = "none" if declared is None else _render(field, declared)
+            diffs.append(f"{field} is {_render(field, got)}, declared {shown}")
+    for field in DURABLE_NEVER_SET:
         value = have.get(field)
-        if not value:
-            continue
-        if field == "headers_only":
-            shown, declared = "true", "false"
-        elif field == "backoff":
-            shown, declared = "[" + ", ".join(_secs(b) for b in value) + "]", "none"
-        else:
-            shown, declared = repr(list(value)), "none"
-        diffs.append(f"{field} is {shown}, declared {declared}{why}")
+        if value and value != "none":
+            diffs.append(f"{field} is {_render(field, value)}, declared none")
     return diffs
 
 
@@ -734,12 +744,10 @@ def hnx_bus_durable_drift(jsz, account, durables=()) -> list:
     ``<stream>/<durable>: <field> is <live>, declared <declared>; ...``.  The provisioner never
     changes an existing durable (the adapter's ``provision_consumers`` refuses one that drifted,
     naming the same fields), so a durable created once with a wrong value would keep it silently;
-    this is the health hook's read of it.  Compared: ``filter_subject``, ``ack_wait``,
-    ``max_deliver``, ``deliver_policy`` (``opt_start_seq`` with a start sequence; a start time is
-    computed at creation, so only its policy), ``ack_policy``, ``replay_policy``, and never set:
-    ``deliver_subject``, ``headers_only``, ``backoff``, ``filter_subjects``.  A declared durable
-    not on the bus is :func:`hnx_bus_missing`'s.  Mirrors the adapter's ``durable_drift``
-    (tests/roles/test_hnx_bus_filter.py holds the two to the same verdicts)."""
+    this is the health hook's read of it.  Compared: :data:`DURABLE_COMPARED` (a start time is
+    computed at creation, so only its policy) and any of :data:`DURABLE_NEVER_SET` that is set.
+    A declared durable not on the bus is :func:`hnx_bus_missing`'s.  Mirrors the adapter's
+    ``durable_drift`` (tests/roles/test_hnx_bus_filter.py holds the two to the same verdicts)."""
     doc = jsz if isinstance(jsz, dict) else {}
     live: dict[tuple[str, str], dict] = {}
     for acc in doc.get("account_details") or []:
