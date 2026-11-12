@@ -117,6 +117,10 @@ argument_specs:
         type: str
         description: "Where the relay's bus account reaches JetStream: the events bus role puts every client in an account of its own that imports its calls under JS.<account>.API (docs/broker.md, 'The bus ACL'); $JS.API only in the account that holds the streams."
         default: JS.HNX.API
+      events_bus_account:
+        type: str
+        description: "Optional: the events bus role's account (events_bus_account) when the relay's loopback bus is that role's on this host. Read from the inventory, never from this role's defaults (the events_bus role's own default, HNX, runs in another play and is invisible here); set, validate requires broker_relay_api_prefix to be JS.<account>.API. Unset or empty (the default): that comparison is skipped, and validate says so."
+        default: ""
       broker_relay_stream: &stream
         type: str
         description: "The standing stream the relay publishes to (provisioned by the bus's operator; the relay creates nothing)."

@@ -281,6 +281,8 @@ def test_broker_refuses_bad_inputs(tmp_path):
         # the events bus role's account on this host: the relay's prefix must be its import's
         {"events_bus_account": "HNX", "broker_relay_api_prefix": "$JS.API"},
         {"events_bus_account": "LAB", "broker_relay_api_prefix": "JS.HNX.API"},
+        # round 7: the account declared in the broker's argspec, checked as the bus role does
+        {"events_bus_account": "hnx", "broker_relay_api_prefix": "JS.hnx.API"},
     ])  # fmt: skip
 
 
