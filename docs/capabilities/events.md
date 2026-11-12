@@ -224,7 +224,7 @@ Each is a deliberately broken fake (`hnx conform run events --target broken:<mut
 The `events` contract on NATS JetStream (pinned: nats 2.15 with `-js`).
 
 - Target file: [`compose/lab-in-a-box/targets/events.yml`](../../compose/lab-in-a-box/targets/events.yml) (target `lab-events`)
-- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float | None=None, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`
+- Factory: `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float | None=None, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None, api_prefix: str=API_PREFIX) -> JetStreamBus`
 - Config in the target: `{user: hnx-conformance, password_secret: 'secret:events/conformance', allow_plaintext: true, ack_wait: 3.0, duplicate_window: 3600.0, dlq_wait: 3.0}`
 
 **Product limits recorded by the adapter:**
@@ -347,7 +347,7 @@ Depended on by: [orchestrator](../systems/orchestrator.md) ([[systems/orchestrat
    def make(**config) -> EventBus: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float | None=None, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None) -> JetStreamBus`.
+   The factory this repository ships: `homelabnext.conform.adapters.nats_jetstream:make` is `make(*, stream: str | None=None, subject_prefix: str | None=None, scratch: bool=True, ack_wait: float=3.0, duplicate_window: float | None=None, storage: str='file', request_timeout: float=5.0, fetch_timeout: float=1.0, dlq_wait: float=3.0, capability: str='events', provision: bool=True, wire: Wire | None=None, user: str | None=None, password_secret: str | None=None, client_name: str='hnx-conform', allow_plaintext: bool=False, ca_file: str | None=None, inbox_prefix: str | None=None, replay_s: float | None=None, api_prefix: str=API_PREFIX) -> JetStreamBus`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; `waive:` takes SHOULD check ids with a reason, never a MUST):
 
