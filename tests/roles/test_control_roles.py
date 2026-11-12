@@ -150,6 +150,58 @@ def test_chrony_accepts_a_pool_alone_when_the_lab_has_no_time_server(first):
     assert "\nserver " not in conf
 
 
+def _first(tmp_path):
+    v = chrony_vars(tmp_path)
+    return {"role": "chrony", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_chrony_leaves_nothing_beside_the_live_file(first):
+    """The check runs on a copy beside the live file (AppArmor lets chronyd read there, not
+    Ansible's temporary directory), and the copy is gone afterwards, refused or not; so is the
+    staged file an earlier version of the role left."""
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not list(tmp_path.glob(".homelabnext*"))
+    (tmp_path / ".homelabnext-staged.conf").write_text("server old iburst\n")
+    assert run_role(tmp_path, "chrony", "config", {**v, "chrony_max_offset": 2.0}).returncode == 0
+    bad = run_role(tmp_path, "chrony", "config", {**v, "chrony_pools": ["bogus.example.internal"]})
+    assert bad.returncode != 0
+    assert not list(tmp_path.glob(".homelabnext*"))
+
+
+def _first(tmp_path):
+    etc = tmp_path / "etc-chrony"  # not there yet: the package that creates it is not installed
+    v = chrony_vars(tmp_path, chrony_config_file=str(etc / "chrony.conf"))
+    return {
+        "role": "chrony",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "check": True,
+        "setup": {"v": v, "etc": etc},
+    }
+
+
+@first_run(_first)
+def test_chrony_config_runs_in_check_mode_against_an_empty_target(first):
+    """--check on a guest the role never ran on: it reports the configuration it would write and
+    the restart it would owe, and writes, runs and leaves nothing (no staged file to be missing on
+    the first run, or stale on later ones)."""
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Write the configuration" in r.stdout and "changed=" in r.stdout
+    assert not first.setup["etc"].exists() and not (tmp_path / "state").exists()
+    assert calls(tmp_path) == []
+    # and against a target that already holds the configuration: nothing to change
+    (first.setup["etc"]).mkdir()
+    assert run_role(tmp_path, "chrony", "config", v).returncode == 0
+    again = run_role(tmp_path, "chrony", "config", v, check=True)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "changed=0" in again.stdout and not list(first.setup["etc"].glob(".homelabnext*"))
+
+
 CHRONY_TRACKING = [
     ("C0000201,time-01,3,1792500000.1,-0.000012,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", True),
     ("C0000201,time-01,3,1792500000.1,1.5,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", False),

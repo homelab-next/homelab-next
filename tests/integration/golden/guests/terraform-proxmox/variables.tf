@@ -5,8 +5,10 @@ variable "proxmox_endpoint" {
 }
 
 variable "proxmox_api_token" {
-  type      = string
-  sensitive = true
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+  description = "API token (TF_VAR_proxmox_api_token): ephemeral, so never in a saved plan or state."
 }
 
 variable "default_bridge" {
@@ -38,5 +40,10 @@ variable "ssh_keys" {
 variable "cloudinit_user_data" {
   type        = map(string)
   default     = {}
-  description = "Guest name -> snippet file id (datastore:snippets/file) holding the cloudinit target's user-data; needed by every VM whose cloudinit sets sudo or packages."
+  description = "Guest name -> snippet file id (datastore:snippets/file) holding the cloudinit target's user-data; needed by every VM whose cloudinit sets sudo or packages (USER_DATA.md)."
+
+  validation {
+    condition     = length(setsubtract(["batch-core", "proxy-core", "store-core"], keys(var.cloudinit_user_data))) == 0
+    error_message = "cloudinit_user_data needs a snippet file id for each of batch-core, proxy-core, store-core (USER_DATA.md)."
+  }
 }

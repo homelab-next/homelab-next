@@ -71,18 +71,53 @@ def _fleet(args: argparse.Namespace):
     )
 
 
+#: targets whose output belongs to one hypervisor node, so ``--node`` may narrow them to it: its
+#: Terraform (one provider endpoint, one state), its ``virt-install`` scripts, the seeds of the VMs
+#: it runs, the ``.fw`` files its ``/etc/pve/firewall`` reads, and its own traffic mirror
+PER_NODE_TARGETS = frozenset(
+    {"terraform-proxmox", "libvirt", "cloudinit", "firewall-rules", "node-mirror"}
+)
+#: per-node targets whose output is made of the node's guests (node-mirror is made of the node's
+#: ``_nodes.yml`` entry): rendered for a node with none, they are empty, and an empty Terraform
+#: render applied to that node's state destroys everything in it
+GUEST_TARGETS = PER_NODE_TARGETS - {"node-mirror"}
+
+
 def _node_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--node",
-        help="render only the guests placed on this node (validation still covers every guest): "
-        "a standalone hypervisor's Terraform must not carry another node's guests",
+        help="render only what belongs to this node (validation still covers every guest): a "
+        "standalone hypervisor's Terraform must not carry another node's guests.  Only for the "
+        f"per-node targets ({', '.join(sorted(PER_NODE_TARGETS))}); the fleet-wide targets "
+        "render without it",
+    )
+    p.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="with --node, render a node that no guest is placed on (an empty Terraform render "
+        "destroys everything in that node's state; refused without this flag)",
     )
 
 
-def _on_node(fleet, node: str | None):
-    """The fleet narrowed to one node's guests, after the whole set validated.  A node no guest
-    and no ``_nodes.yml`` entry names is refused: a typo must not render an empty, harmless-looking
-    plan (Terraform would then destroy everything that state still holds)."""
+def _node_usage(args: argparse.Namespace) -> str | None:
+    """Why ``--node``/``--allow-empty`` cannot be used as given (a usage error), or None."""
+    if args.node is None:
+        return "--allow-empty needs --node" if args.allow_empty else None
+    if args.target not in PER_NODE_TARGETS:
+        return (
+            f"--node is for the per-node targets ({', '.join(sorted(PER_NODE_TARGETS))}); "
+            f"{args.target} is fleet-wide (one inventory, registry, policy or playbook for every "
+            "node): render it without --node"
+        )
+    return None
+
+
+def _on_node(fleet, node: str | None, target: str, allow_empty: bool = False):
+    """The fleet narrowed to one node (its guests, and its own ``_nodes.yml`` entry), after the
+    whole set validated.  A node that no guest and no ``_nodes.yml`` entry names is refused: a
+    typo must not render an empty, harmless-looking plan.  So is a known node that holds none of
+    the guests ``target`` renders, unless ``allow_empty``: Terraform would read that render as
+    "destroy everything this node's state holds"."""
     if node is None:
         return fleet
     import dataclasses
@@ -92,7 +127,28 @@ def _on_node(fleet, node: str | None):
         raise ComputeError(
             f"--node {node!r}: no guest is placed on it and _nodes.yml lists no such node"
         )
-    return dataclasses.replace(fleet, guests=guests)
+    nodes = {node: fleet.nodes[node]} if node in fleet.nodes else {}
+    narrowed = dataclasses.replace(fleet, guests=guests, nodes=nodes)
+    if target in GUEST_TARGETS and not narrowed.iac() and not allow_empty:
+        raise ComputeError(
+            f"--node {node!r}: no guest this target renders is placed on it, so the render "
+            "would be empty (applied, an empty Terraform render destroys everything in the "
+            "node's state); pass --allow-empty if that is what you mean"
+        )
+    return narrowed
+
+
+def _print_user_data(fleet) -> None:
+    """The VMs whose plan needs a ``cloudinit_user_data`` entry, with each user-data's digest."""
+    from .gen.terraform_proxmox import USER_DATA_FILE, user_data_guests
+
+    rows = user_data_guests(fleet)
+    if not rows:
+        return
+    print(f"{len(rows)} VMs need a cloudinit_user_data snippet ({USER_DATA_FILE}):")
+    for g, digest in rows:
+        shown = f"sha256 {digest}" if digest else "unresolved key names: render with --keys"
+        print(f"  {g.name} (node {g.node}): {shown}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -199,13 +255,16 @@ def _key_problems(fleet) -> list[str]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
+    if args.cmd in ("render", "plan") and (usage := _node_usage(args)):
+        print(f"hnx guests: {usage}", file=sys.stderr)
+        return 2
     try:
         fleet = _fleet(args)
         problems = _registry_problems(args, fleet) if args.cmd == "validate" else []
         if args.cmd == "validate" and args.keys:
             problems += _key_problems(fleet)
         if args.cmd in ("render", "plan"):
-            fleet = _on_node(fleet, args.node)
+            fleet = _on_node(fleet, args.node, args.target, args.allow_empty)
     except ComputeUnreadable as exc:  # docs/interfaces.md: bad input is 2, a failed check 1
         print(f"hnx guests: {exc}", file=sys.stderr)
         return 2
@@ -250,6 +309,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             touched = write_rendered(files, out, prune=args.prune, markers=markers)
             removed = sorted(set(touched) - set(files))
             print(f"wrote {len(files)} files to {args.out}")
+            if args.target == "terraform-proxmox":
+                _print_user_data(fleet)
             if removed:
                 print(f"pruned {len(removed)} stale files: {', '.join(removed)}")
             if left:

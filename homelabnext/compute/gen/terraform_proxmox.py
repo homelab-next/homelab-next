@@ -8,12 +8,17 @@ keys, the default bridge, the API endpoint) are provider variables, never litera
 
 from __future__ import annotations
 
+import hashlib
+
 from homelabnext.compute.model import Fleet, Guest
 
+from . import cloudinit
 from ._text import HEADER, hcl_align, hq, hqlist, tf_ident
 
 PROVIDERS = f"""# {HEADER}
 terraform {{
+  # 1.10: the API token is an ephemeral variable, so it never lands in a saved plan or in state
+  required_version = "~> 1.10"
   required_providers {{
     proxmox = {{
       source  = "bpg/proxmox"
@@ -35,8 +40,10 @@ variable "proxmox_endpoint" {{
 }}
 
 variable "proxmox_api_token" {{
-  type      = string
-  sensitive = true
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+  description = "API token (TF_VAR_proxmox_api_token): ephemeral, so never in a saved plan or state."
 }}
 
 variable "default_bridge" {{
@@ -64,13 +71,83 @@ variable "ssh_keys" {{
   sensitive   = true
   description = "Key name -> public key line."
 }}
-
-variable "cloudinit_user_data" {{
-  type        = map(string)
-  default     = {{}}
-  description = "Guest name -> snippet file id (datastore:snippets/file) holding the cloudinit target's user-data; needed by every VM whose cloudinit sets sudo or packages."
-}}
 """
+
+USER_DATA_FILE = "USER_DATA.md"
+
+
+def _user_data_variable(names: list[str]) -> str:
+    """The ``cloudinit_user_data`` variable: with a validation block naming every VM that needs
+    an entry, so a missing one fails before the plan, listed by name."""
+    L = [
+        "",
+        'variable "cloudinit_user_data" {',
+        "  type        = map(string)",
+        "  default     = {}",
+        '  description = "Guest name -> snippet file id (datastore:snippets/file) holding the '
+        "cloudinit target's user-data; needed by every VM whose cloudinit sets sudo or packages "
+        f'({USER_DATA_FILE})."',
+    ]
+    if names:
+        L += [
+            "",
+            "  validation {",
+            f"    condition     = length(setsubtract({hqlist(names)}, "
+            "keys(var.cloudinit_user_data))) == 0",
+            '    error_message = "cloudinit_user_data needs a snippet file id for each of '
+            f'{", ".join(names)} ({USER_DATA_FILE})."',
+            "  }",
+        ]
+    return "\n".join([*L, "}", ""])
+
+
+def user_data_guests(fleet: Fleet) -> list[tuple[Guest, str | None]]:
+    """``(guest, sha256 of its user-data)`` for every VM this target renders with a
+    ``user_data_file_id``, by name.  The digest is of the ``cloudinit`` target's
+    ``<name>/user-data`` with the same keys file; None while a key name is unresolved (that render
+    holds a placeholder, not the snippet to upload)."""
+    out = []
+    for g in fleet.iac():
+        if g.kind == "vm" and needs_user_data(g):
+            text = cloudinit.user_data(fleet, g)
+            digest = None if "<ssh-key:" in text else hashlib.sha256(text.encode()).hexdigest()
+            out.append((g, digest))
+    return sorted(out, key=lambda t: t[0].name)
+
+
+def user_data_steps(fleet: Fleet) -> str:
+    """``USER_DATA.md``: the snippets this render's ``cloudinit_user_data`` must name."""
+    L = [f"<!-- {HEADER} -->", "# Cloud-init user-data snippets", ""]
+    rows = user_data_guests(fleet)
+    if not rows:
+        return "\n".join([*L, "None: no VM here needs one.", ""])
+    width = max(len(hq(g.name)) for g, _ in rows)
+    L += [
+        "The provider's `user_account` block cannot carry a sudo rule or packages, so each VM",
+        "below boots from the `cloudinit` target's `<name>/user-data`, uploaded as a snippet (a",
+        "datastore with the `snippets` content type) and named in `terraform.tfvars`:",
+        "",
+        "```hcl",
+        "cloudinit_user_data = {",
+        *[
+            f'  {hq(g.name):<{width}} = "<datastore>:snippets/{g.name}-user-data.yaml"'
+            for g, _ in rows
+        ],
+        "}",
+        "```",
+        "",
+        "Its SSH keys come from that render's `--keys`, not from `var.ssh_keys`.  Compare each",
+        "uploaded snippet with the digest below (`sha256sum` on the node) before `terraform apply`;",
+        "re-upload it whenever the cloudinit render changes, since a changed snippet replaces no",
+        "VM by itself.",
+        "",
+        "| guest | node | vmid | sha256 of `<name>/user-data` |",
+        "|---|---|---|---|",
+    ]
+    for g, digest in rows:
+        shown = f"`{digest}`" if digest else "unresolved key names: render with `--keys`"
+        L.append(f"| `{g.name}` | `{g.node}` | {g.vmid} | {shown} |")
+    return "\n".join([*L, ""])
 
 
 def _bridge(fleet: Fleet, g: Guest) -> tuple[str, str | None]:
@@ -282,7 +359,13 @@ def manual_steps(fleet: Fleet) -> str:
 
 
 def render(fleet: Fleet) -> dict[str, str]:
-    out = {"providers.tf": PROVIDERS, "variables.tf": VARIABLES, "MANUAL.md": manual_steps(fleet)}
+    names = [g.name for g, _ in user_data_guests(fleet)]
+    out = {
+        "providers.tf": PROVIDERS,
+        "variables.tf": VARIABLES + _user_data_variable(names),
+        "MANUAL.md": manual_steps(fleet),
+        USER_DATA_FILE: user_data_steps(fleet),
+    }
     for g in fleet.iac():
         if g.kind == "vm":
             out[f"vm-{g.name}.tf"] = _vm(fleet, g)
