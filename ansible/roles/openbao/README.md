@@ -57,8 +57,9 @@ restart: the server reloads them on `SIGHUP` (`systemctl reload`) and stays unse
   with active swap unless `openbao_allow_swap: true` (for encrypted swap).
 * **Audit.** Two audit devices are declared in the configuration, so they exist from the first
   unseal and the API cannot remove them: a `file` device (`<openbao_audit_dir>/audit.log`, mode
-  0600, rotated daily or past 256 MiB as the service account, with a `SIGHUP` whose failure fails
-  the rotation) and a `syslog` device (facility `AUTH`, tag `openbao`: the journal, and the log
+  0600, rotated daily as the service account, with a `SIGHUP` whose failure fails the rotation;
+  its `maxsize 256M` is checked only when logrotate runs, which is once a day on Debian
+  (`logrotate.timer`), so within a day the file can grow past it) and a `syslog` device (facility `AUTH`, tag `openbao`: the journal, and the log
   pipeline from there). The server answers a request while at least one device records it, so one
   failing device does not stop the store. Put `openbao_audit_dir` on its own filesystem, or
   monitor its free space: a full disk silences the file device.
@@ -75,13 +76,13 @@ restart: the server reloads them on `SIGHUP` (`systemctl reload`) and stays unse
 
 | Hook | Needs | Does |
 |---|---|---|
-| `main` | `openbao_logical_id`, `openbao_api_addr`, `openbao_listen_address`, TLS | converge; start a stopped server; reload it for new TLS; never restart a running one unless allowed; refuse a pin older than the running release unless `openbao_allow_downgrade` |
+| `main` | `openbao_logical_id`, `openbao_api_addr`, `openbao_listen_address`, TLS | converge; start a stopped server; reload it for new TLS; never restart a running one unless allowed; refuse a pin older than a release this host has run (below) unless `openbao_allow_downgrade` |
 | `readiness` | | fails only when the API does not answer; reports `uninitialised`, `sealed`, `unsealed-active` or `unsealed-standby`, and an owed restart |
 | `health` | | fails unless initialised, unsealed and running the pinned release, and says which; a `WARN` line for an owed restart |
 | `backup` | the snapshot principal | raft snapshot to `<openbao_backup_dir>/raft.snap` (0600) plus `raft.snap.json` (sha256, the release that wrote it) |
 | `export` | the snapshot principal | the same, to `<openbao_export_dir>/<logical_id>.snap`: **not an open format** (below) |
-| `restore` | the snapshot principal, `openbao_restore_token`, `openbao_restore_source` | refuse without the manifest `<source>.json`, on a sha256 mismatch, or when a newer release wrote it; take `pre-restore-<UTC time>.snap`; restore (`openbao_restore_force`: `snapshot-force`, for another cluster's snapshot) |
-| `upgrade` | the snapshot principal, `openbao_target_version`, `openbao_target_checksums` | stage only: refuse a downgrade (against the pin and the running release); pre-upgrade snapshot; fetch and verify the target release; record it as pending |
+| `restore` | the snapshot principal, `openbao_restore_token`, `openbao_restore_source` | refuse a token whose policies are not exactly `hnx-restore`; refuse a source or manifest that is not a regular file owned by `openbao_owner` and writable by nobody else, or that is outside the backup and export directories (`openbao_restore_source_unrestricted`); stage a root-only copy and check THAT (manifest present, sha256, not written by a newer release); take `pre-restore-<UTC time>.snap`; restore the staged copy (`openbao_restore_force`: `snapshot-force`, for another cluster's snapshot) |
+| `upgrade` | the snapshot principal, `openbao_target_version`, `openbao_target_checksums` | stage only: refuse a downgrade (against the pin and every release this host has run); pre-upgrade snapshot; fetch and verify the target release; record it as pending |
 
 The playbook accepts these seven hook names and nothing else (`openbao_hook`).
 
@@ -90,15 +91,55 @@ The hooks call the API with `ansible.builtin.uri`, verified against
 module's arguments, under `no_log`: never on a command line or in an environment variable, where
 `ps`, the sudo and auth logs, the journal (and the SIEM it feeds) and `-vvv` output would show it.
 
-**The snapshot principal** is what backup, export, upgrade and the pre-restore copy use. Hand in
-its AppRole, `openbao_snapshot_approle_role_id` and `openbao_snapshot_approle_secret_id` (for
-instance `"{{ lookup('hnx_secret', 'secret:openbao/snapshot-secret-id') }}"`): the hook logs in,
-uses the token for this run and revokes it, so no token is ever stored. A caller that minted a
-token itself may pass `openbao_snapshot_token` instead. Its policy is read-only: it can save a
-snapshot and cannot restore one. **The restore principal** is separate: the operator mints its
-token for one restore, while present, and hands it in as `openbao_restore_token` (refused if it
-equals the snapshot token). A snapshot is only as readable as the unseal keys of the cluster that
-wrote it.
+**The snapshot principal** is what backup, export, upgrade and the pre-restore copy use. Its
+AppRole is `openbao_snapshot_approle_role_id` (not a secret: the overlay's variables) and the
+secret_id named by `openbao_snapshot_approle_secret_id_ref` (the overlay sets
+`secret:openbao/snapshot-secret-id`), which the role resolves once per run through the
+`hnx_secret` lookup, under `no_log`, as every other role reads a credential: there is no variable
+that takes the secret_id's value. The hook logs in, uses the token for this run and revokes it,
+so no token is ever stored. A caller that minted a token itself may pass `openbao_snapshot_token`
+instead. Its policy is read-only: it can save a snapshot and cannot restore one. **The restore
+principal** is separate: the operator mints its token for one restore, while present, and hands it
+in as `openbao_restore_token`; the hook asks the server whose it is (`auth/token/lookup-self`) and
+refuses it unless its policies are exactly `hnx-restore` (and `default`), and refuses it equal to
+the snapshot token. A snapshot is only as readable as the unseal keys of the cluster that wrote
+it.
+
+**Handing in a token** (`openbao_restore_token`, `openbao_snapshot_token`): never as
+`-e name=value`, which puts it in the controller's process list (`ps`) and the shell's history.
+Write it to a file in memory, owner-only, pass the file, and destroy it afterwards:
+
+```sh
+umask 077
+bao token create -policy=hnx-restore -ttl=15m -orphan -use-limit=2 -field=token \
+  | sed 's/^/openbao_restore_token: /' > /dev/shm/hnx-restore.yml
+ansible-playbook openbao.yml -e openbao_hook=restore -e openbao_restore_source=<file> \
+  -e @/dev/shm/hnx-restore.yml
+shred -u /dev/shm/hnx-restore.yml
+```
+
+(or `vars_prompt`, or `"{{ lookup('env', 'HNX_RESTORE_TOKEN') }}"` from a variable set by
+`read -rs`; never typed onto a command line). `-use-limit=2` is what a restore spends: the
+`lookup-self` check and the restore itself; the token is useless afterwards even within its TTL.
+
+**What the restore checks, and what it does not.** The source and its manifest must each be a
+regular file (a symbolic link is refused, and so is a path through one), owned by `openbao_owner`
+(root), writable by nobody else, and under `openbao_backup_dir` or `openbao_export_dir` unless
+`openbao_restore_source_unrestricted: true`. They are then copied into a fresh root-only (0700)
+staging directory under `openbao_backup_dir`; the sha256, the manifest checks and the restore all
+read that copy, which is removed afterwards, so the bytes restored are the bytes checked even if
+the source changes meanwhile. The manifest's sha256 protects against **corruption, not
+tampering**: the manifest is unauthenticated, and whoever can rewrite a snapshot can rewrite its
+manifest too. What protects a snapshot from tampering is where it lives (root's alone) and the
+barrier: a snapshot is encrypted with this cluster's keys, and a forged one does not restore
+without `openbao_restore_force`.
+
+**Downgrades.** main and upgrade refuse a pin older than any release this host has run unless
+`openbao_allow_downgrade: true`, and they do not trust `sys/health` alone, which says nothing
+while the server is stopped. Three witnesses: the release the server runs (`sys/health`), the
+release `openbao_bin` points at (`<openbao_install_dir>/<version>/bao`: what a stopped server, a
+crash restart or a reboot would start), and the highest release that ever answered here, which
+main and the health hook record in `<openbao_state_dir>/highest-release` (only ever raised).
 
 **Upgrading.** The `upgrade` hook stages the target release (fetched and verified beside the
 running one) and takes `pre-upgrade-<running version>.snap`; it switches nothing. Take the
@@ -108,10 +149,29 @@ above), run the `upgrade` hook, move `openbao_version`, `openbao_checksums` and
 `openbao_allow_restart: true` while the operator is there: the server comes back sealed on the new
 release. Unseal it, then run `health`. **Rolling back is not just pointing the pin back**: the new
 release may have rewritten the raft storage in a format the old one cannot read, which is why
-main refuses a pin older than the running release unless `openbao_allow_downgrade: true`. Roll
-back by pointing the pin back with `openbao_allow_downgrade: true`, restarting, unsealing, and
-then restoring `pre-upgrade-<old version>.snap` with the old release (the `restore` hook); the old
-release's directory stays for that.
+main refuses a pin older than a release this host has run unless `openbao_allow_downgrade: true`.
+A rollback needs **both**: point the pin back with `openbao_allow_downgrade: true` (and
+`openbao_allow_restart: true`), unseal, and then restore `pre-upgrade-<old version>.snap` with the
+old release (the `restore` hook); the old release's directory stays for that. The switch alone,
+without the restore, leaves the old release on storage the new one may have rewritten.
+
+If the old release cannot start or unseal on the newer storage, start it on empty storage instead
+and restore into that:
+
+1. Stop the server (`systemctl stop openbao`) and move the data directory aside
+   (`mv <openbao_data_dir> <openbao_data_dir>.newer`; keep it until the rollback is proven).
+2. Run main with the old pin, `openbao_allow_downgrade: true` and `openbao_allow_restart: true`: it
+   recreates an empty data directory and starts the old release, uninitialised.
+3. Initialise a **throwaway** cluster (`bao operator init -key-shares=1 -key-threshold=1`, its share
+   and root token in `/dev/shm` only), unseal it with that share, and from its root token create
+   the two policies (`hnx-snapshot`, and `hnx-restore` with `snapshot-force`) and mint **two
+   distinct** tokens: one for `openbao_snapshot_token` (the pre-restore copy of the empty cluster)
+   and one `-use-limit=2` token for `openbao_restore_token`.
+4. Run the `restore` hook on `pre-upgrade-<old version>.snap` with `openbao_restore_force: true`
+   and the two tokens (handed in as above).
+5. The server now holds the original cluster's data and is sealed with the **original** keys:
+   unseal it with the original shares (threshold times), run `health`, and destroy the throwaway
+   share and tokens (they belonged to the cluster the restore replaced).
 
 **Leaving this product (export).** Role interface v1 asks `export` for an open-format exit copy
 (ADR-0008 decisions 1 and 4). This role does not provide one: the export is a raft snapshot,
@@ -151,10 +211,10 @@ Then, in this order, with the root token still set:
    `hnx secrets seed ... --spec lab/secrets.yml`).
 2. **The deploy's AppRole** (step 4 of the same list).
 3. **The snapshot principal**, read-only: it saves snapshots (backup, export, upgrade, the
-   pre-restore copy) and cannot restore one. Bind it to the backup host, keep its tokens short,
-   and store only its `role_id` and `secret_id`, never a token (the hooks log in per run). The
-   hooks run on the secret store's host, so the bound address is that host's as the server sees
-   it:
+   pre-restore copy) and cannot restore one. Bind it to the secret store's own address (the hooks
+   run on the secret store's host, so the address that logs in is the secret store's own address
+   as the server sees it), keep its tokens short and two uses long (the save and the revoke), and
+   store only its `role_id` and `secret_id`, never a token (the hooks log in per run):
 
    ```sh
    bao policy write hnx-snapshot - <<'EOF'
@@ -162,12 +222,27 @@ Then, in this order, with the root token still set:
    EOF
    bao auth enable approle                   # if step 2 has not already
    bao write auth/approle/role/hnx-snapshot token_policies=hnx-snapshot \
-     token_ttl=5m token_max_ttl=10m token_type=service \
+     token_ttl=5m token_max_ttl=10m token_type=service token_num_uses=2 \
      secret_id_ttl=720h secret_id_num_uses=0 \
-     secret_id_bound_cidrs=<the backup host>/32 token_bound_cidrs=<the backup host>/32
-   bao read -field=role_id auth/approle/role/hnx-snapshot/role-id           # the overlay's variables
-   bao write -f -field=secret_id auth/approle/role/hnx-snapshot/secret-id   # secret:openbao/snapshot-secret-id
+     secret_id_bound_cidrs=<the secret store's own address>/32 \
+     token_bound_cidrs=<the secret store's own address>/32
+   bao read -field=role_id auth/approle/role/hnx-snapshot/role-id   # openbao_snapshot_approle_role_id
+   bao write -f -field=secret_id auth/approle/role/hnx-snapshot/secret-id \
+     | bao kv put -mount=secret openbao/snapshot-secret-id value=-   # stdin: never on a command line
    ```
+
+   The `secret_id` expires after `secret_id_ttl` (30 days): **backups fail on day 30 unless it is
+   rotated**. It is not use-limited (`secret_id_num_uses=0`): every backup, export, upgrade and
+   restore logs in once, and a count would run out on a schedule nobody chose; the TTL and the
+   rotation bound it instead. Rotation is the same `secret-id` write piped into
+   `bao kv put` (a new KV version), then destroying the old one
+   (`bao write auth/approle/role/hnx-snapshot/secret-id-accessor/destroy secret_id_accessor=<old>`;
+   `bao list auth/approle/role/hnx-snapshot/secret-id` lists the accessors). So that ADR-0045's
+   rotate-by audit sees it, the overlay declares it ([private-overlay.md, step 4](../../../docs/private-overlay.md#bootstrapping-a-new-server)):
+   a `lab/secrets.yml` rule (`kind: external`, `how:` the command above, a `max_age` of at most
+   30 days, 21 leaving a week's margin), the name in the deploy's owner map (the spec's `also:`:
+   the deploy reads it), and `read` on `secret/data/openbao/snapshot-secret-id` in the deploy's
+   policy (`hnx-deploy`), since the lookup runs with the deploy's AppRole.
 
 4. **The restore policy**, with no standing credential: a restore is rare and deliberate, done
    while the operator is present, so its token is minted then and revoked afterwards:
@@ -179,7 +254,8 @@ Then, in this order, with the root token still set:
    # only to restore ANOTHER cluster's snapshot (openbao_restore_force), add to it:
    #   path "sys/storage/raft/snapshot-force" { capabilities = ["update"] }
    # at restore time, from a root token generated from the shares (revoked afterwards):
-   #   bao token create -policy=hnx-restore -ttl=15m -orphan
+   #   bao token create -policy=hnx-restore -ttl=15m -orphan -use-limit=2
+   # (two uses: the hook's lookup-self check and the restore; hand it in as a file, above)
    ```
 
 5. **Revoke the root token**: `bao token revoke -self`. A later repair that needs root generates

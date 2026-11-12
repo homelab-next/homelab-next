@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Record the highest release that ever answered on this host (<state_dir>/highest-release), one of
+# the witnesses downgrade.yml compares a pin with: it outlives a stopped server and a moved link.
+# Takes openbao_release_answered (what sys/health said; empty when nothing answered). Only ever
+# raised, never lowered: a deliberate rollback (openbao_allow_downgrade) leaves it at the newer
+# release, so the next run refuses the older pin again until the operator decides otherwise.
+- name: Read the highest release recorded so far
+  ansible.builtin.slurp:
+    src: "{{ openbao_state_dir }}/highest-release"
+  register: openbao_highest_record
+  failed_when: false
+  when: openbao_release_answered is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+
+- name: Create the state directory
+  ansible.builtin.file:
+    path: "{{ openbao_state_dir }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0750"
+  when: openbao_release_answered is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+
+- name: Raise the record when a newer release answered
+  ansible.builtin.copy:
+    dest: "{{ openbao_state_dir }}/highest-release"
+    content: "{{ {'version': openbao_release_answered} | to_nice_json }}\n"
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0640"
+  vars:
+    openbao_highest_before: >-
+      {{ ((openbao_highest_record.content | b64decode | from_json).version | default('0.0.0'))
+         if openbao_highest_record.content is defined else '0.0.0' }}
+  when:
+    - openbao_release_answered is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+    - openbao_highest_before is not match('^[0-9]+\.[0-9]+\.[0-9]+\Z') or openbao_release_answered is version(openbao_highest_before, '>')

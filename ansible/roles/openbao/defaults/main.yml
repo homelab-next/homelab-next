@@ -42,8 +42,11 @@ openbao_cluster_addr: ""
 # ignores it), so with swap on, unsealed keys and secrets can be paged to disk. main refuses a host
 # with active swap unless openbao_allow_swap (README.md, "Memory and swap").
 openbao_allow_swap: false
-# main refuses a pin older than the release the server is RUNNING (sys/health) unless this is true:
-# a downgrade may meet raft storage a newer release has already rewritten (README.md, "Upgrading").
+# main (and upgrade) refuse a pin older than a release this host has run unless this is true: the
+# one the server RUNS (sys/health), the one openbao_bin points at (what a stopped server would
+# start), and the highest one that ever answered (<openbao_state_dir>/highest-release). A downgrade
+# may meet raft storage a newer release has already rewritten: a rollback needs this AND the
+# restore of the pre-upgrade snapshot with the old release (README.md, "Upgrading").
 openbao_allow_downgrade: false
 openbao_ui: false
 openbao_log_level: info
@@ -70,11 +73,13 @@ openbao_export_dir: /var/backups/openbao/export
 # The snapshot principal (policy hnx-snapshot: read on sys/storage/raft/snapshot, nothing else;
 # README.md). The hooks that save a snapshot (backup, export, upgrade, restore's pre-restore copy)
 # log in with its AppRole and revoke the token afterwards, so no token is ever stored:
-# openbao_snapshot_approle_role_id and openbao_snapshot_approle_secret_id (from the hnx_secret
-# lookup), or else openbao_snapshot_token, a token the caller minted for this run.
+# openbao_snapshot_approle_role_id (not a secret: the overlay's variables) with the secret_id named
+# by openbao_snapshot_approle_secret_id_ref, which the role resolves once per run through the
+# hnx_secret lookup, under no_log; or else openbao_snapshot_token, a token the caller minted for
+# this run (README.md, "Handing in a token": never as -e name=value).
 openbao_snapshot_approle_mount: approle
 openbao_snapshot_approle_role_id: ""
-openbao_snapshot_approle_secret_id: ""
+openbao_snapshot_approle_secret_id_ref: ""   # the overlay: secret:openbao/snapshot-secret-id
 openbao_snapshot_token: ""
 openbao_snapshot_timeout: 300
 # The restore hook takes openbao_restore_token (no default): a token of the restore principal
@@ -82,3 +87,7 @@ openbao_snapshot_timeout: 300
 # It restores a snapshot another cluster wrote only with this set (the server then answers to THAT
 # cluster's unseal keys, and hnx-restore must also allow snapshot-force).
 openbao_restore_force: false
+# The restore hook restores only a file under openbao_backup_dir or openbao_export_dir unless this
+# is true; either way the source must be a regular file owned by openbao_owner and writable by
+# nobody else, and what is checked and restored is a root-only staged copy of it.
+openbao_restore_source_unrestricted: false

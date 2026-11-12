@@ -170,12 +170,20 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    ([Seeding the credentials](#seeding-the-credentials)). Keep the root token until the deploy's
    AppRole (step 4) and the role's snapshot principal and restore policy exist; revoke it then, in
    the order the [role's README](../ansible/roles/openbao/README.md#the-operators-procedure-first-start)
-   gives (seed, AppRole, snapshot principal, revoke).
+   gives (seed, AppRole, snapshot principal, restore policy, revoke). The snapshot principal's
+   `secret_id` is issued by OpenBao itself, so `seed` lists `openbao/snapshot-secret-id` as an
+   external value still missing until that step stores it.
 4. **An identity for the deploy.** Create an AppRole for the deploy with a policy that can read
    only the paths the deploy needs (and the vault password at `secret/data/ansible/vault-password`
-   if you keep it there), for example:
+   if you keep it there; and the snapshot principal's `secret_id`, which the `openbao` role reads
+   by name on the deploy's behalf), for example:
 
    ```sh
+   bao policy write hnx-deploy - <<'EOF'
+   path "secret/data/ansible/vault-password"     { capabilities = ["read"] }
+   path "secret/data/openbao/snapshot-secret-id" { capabilities = ["read"] }
+   # ...one line per name the deploy reads (hnx secrets plan lists them)
+   EOF
    bao write auth/approle/role/hnx-deploy token_policies=hnx-deploy \
      token_ttl=5m token_max_ttl=15m token_type=service \
      secret_id_ttl=720h secret_id_num_uses=0 \
@@ -190,6 +198,24 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    mid-deploy), so keep that TTL short and rotate it (below). Bound the CIDRs to the tailnet range
    the deploy node gets, or the runner VM's subnet. Generate a second age identity for the deploy
    and add its recipient to `.sops.yaml` (`sops updatekeys` on existing files).
+
+   The snapshot principal's `secret_id` (the role's README, step 3) also expires after 30 days, and
+   backups fail the day it does. Declare it in `lab/secrets.yml`, so that `hnx secrets plan` knows
+   how it is made and ADR-0045's rotate-by audit sees it, and put it in the deploy's owner map (the
+   spec's `also:`, the deploy's own names: the deploy reads it):
+
+   ```yaml
+   also: [ansible/vault-password, openbao/snapshot-secret-id]
+   rules:
+     - match: "openbao/snapshot-secret-id"
+       kind: external
+       how: >-
+         bao write -f -field=secret_id auth/approle/role/hnx-snapshot/secret-id
+         | bao kv put -mount=secret openbao/snapshot-secret-id value=-
+         (then destroy the old secret_id's accessor)
+       # max_age: 21d   ADR-0045 decision 10's key (at most 30 days: the secret_id_ttl), once hnx
+       #                reads it; today's loader refuses unknown keys, so it stays a comment until then
+   ```
 5. **A path into the lab.** Either
    * **Tailscale** (no inbound exposure): declare the deploy's access in `lab/site.yml`
      (`tailnet.deploy`, [below](#tailscale-the-deploy-tag-least-access)), including an exception

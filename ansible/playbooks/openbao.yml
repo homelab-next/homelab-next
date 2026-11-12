@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # The secret store in server mode on the secrets capability's host (role openbao, ADR-0042
 # decision 6). It installs and starts the server; it never initialises or unseals it. The
-# operator's procedure (initialise, unseal, KV v2 at secret/, seed, the deploy's AppRole, the
-# snapshot principal, then revoke the root token) is in ansible/roles/openbao/README.md.
+# operator's procedure (initialise, unseal, KV v2 at secret/, then seed, AppRole, snapshot
+# principal, restore policy, revoke the root token) is in ansible/roles/openbao/README.md.
 #
 # The overlay sets openbao_api_addr, openbao_listen_address and the TLS PEMs (the key sealed) in
 # the cap_secrets group's variables. A hook instead of main (only the seven entry points of role

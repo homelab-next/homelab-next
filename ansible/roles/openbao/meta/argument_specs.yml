@@ -99,7 +99,7 @@ argument_specs:
         default: false
       openbao_allow_downgrade: &downgrade
         type: bool
-        description: "Accept a pin (or an upgrade target) older than the release the server is running (sys/health). Storage a newer release rewrote may not read: prefer restoring the pre-upgrade snapshot with the old release."
+        description: "Accept a pin (or an upgrade target) older than a release this host has run: the one the server runs (sys/health), the one openbao_bin points at, or the highest one that ever answered (<openbao_state_dir>/highest-release). Storage a newer release rewrote may not read: a rollback needs this AND the restore of the pre-upgrade snapshot with the old release (README.md)."
         default: false
       openbao_ui:
         type: bool
@@ -157,6 +157,10 @@ argument_specs:
         type: path
         description: "Where the export hook writes <logical_id>.snap and its manifest."
         default: /var/backups/openbao/export
+      openbao_restore_source_unrestricted: &unrestricted
+        type: bool
+        description: "restore hook: restore from a file outside openbao_backup_dir and openbao_export_dir. The source must still be a regular file owned by openbao_owner and writable by nobody else; it is copied into a root-only staging directory, and that copy is what is checked and restored."
+        default: false
       openbao_restore_force: &force
         type: bool
         description: "restore hook: restore a snapshot another cluster wrote, through sys/storage/raft/snapshot-force (hnx-restore must allow it; the server then answers to that cluster's unseal keys)."
@@ -169,11 +173,10 @@ argument_specs:
         type: str
         description: "The SNAPSHOT principal's AppRole role_id (policy hnx-snapshot: read on sys/storage/raft/snapshot only). With its secret_id, the hook logs in for the run and revokes the token afterwards."
         default: ""
-      openbao_snapshot_approle_secret_id: &secretid
+      openbao_snapshot_approle_secret_id_ref: &secretid
         type: str
-        description: "The SNAPSHOT principal's AppRole secret_id, from the hnx_secret lookup (bound to the backup host's CIDR). Never logged."
+        description: "The reference (secret:<name>, the overlay's secret:openbao/snapshot-secret-id) of the SNAPSHOT principal's AppRole secret_id, resolved once per run through the hnx_secret lookup under no_log (the deploy's AppRole needs read on it). Used with openbao_snapshot_approle_role_id; rotate it before its secret_id_ttl (README.md). There is no variable for the value itself."
         default: ""
-        no_log: true
       openbao_snapshot_token: &token
         type: str
         description: "Instead of the AppRole: a token of the SNAPSHOT principal the caller minted for this run (read on sys/storage/raft/snapshot only; it cannot restore). Never a stored token. Never logged."
@@ -210,7 +213,7 @@ argument_specs:
       openbao_health_timeout: *htimeout
       openbao_snapshot_approle_mount: *amount
       openbao_snapshot_approle_role_id: *roleid
-      openbao_snapshot_approle_secret_id: *secretid
+      openbao_snapshot_approle_secret_id_ref: *secretid
       openbao_snapshot_token: *token
       openbao_snapshot_timeout: *stimeout
   restore:
@@ -223,7 +226,7 @@ argument_specs:
       openbao_health_timeout: *htimeout
       openbao_snapshot_approle_mount: *amount
       openbao_snapshot_approle_role_id: *roleid
-      openbao_snapshot_approle_secret_id: *secretid
+      openbao_snapshot_approle_secret_id_ref: *secretid
       openbao_snapshot_token: *token
       openbao_snapshot_timeout: *stimeout
       openbao_restore_token:
@@ -236,6 +239,8 @@ argument_specs:
         description: "The snapshot file on the host; its manifest <source>.json (written by backup, export and upgrade) must be beside it."
         required: true
       openbao_restore_force: *force
+      openbao_export_dir: *exportdir
+      openbao_restore_source_unrestricted: *unrestricted
   upgrade:
     short_description: Refuse a downgrade (against the pin and the running release), take a pre-upgrade snapshot, stage and verify the target release, record it as pending.
     options:
@@ -251,7 +256,7 @@ argument_specs:
       openbao_allow_downgrade: *downgrade
       openbao_snapshot_approle_mount: *amount
       openbao_snapshot_approle_role_id: *roleid
-      openbao_snapshot_approle_secret_id: *secretid
+      openbao_snapshot_approle_secret_id_ref: *secretid
       openbao_snapshot_token: *token
       openbao_snapshot_timeout: *stimeout
       openbao_target_version:
@@ -272,6 +277,6 @@ argument_specs:
       openbao_health_timeout: *htimeout
       openbao_snapshot_approle_mount: *amount
       openbao_snapshot_approle_role_id: *roleid
-      openbao_snapshot_approle_secret_id: *secretid
+      openbao_snapshot_approle_secret_id_ref: *secretid
       openbao_snapshot_token: *token
       openbao_snapshot_timeout: *stimeout

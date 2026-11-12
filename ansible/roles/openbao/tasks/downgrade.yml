@@ -1,8 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-# Refuse a pin older than the release the server is RUNNING. The pin and openbao_target_version
-# are only what was asked for; sys/health says what runs, and a release may rewrite raft storage
-# in a format an older one cannot read. Nothing answers on a fresh host (or a stopped server):
-# there is nothing to downgrade then.
+# Refuse a pin older than a release this host has already run. A release may rewrite raft storage
+# in a format an older one cannot read, so the pin (or openbao_target_version) is compared with
+# three witnesses, and any one of them newer refuses it unless openbao_allow_downgrade:
+#   * the release the server RUNS (sys/health), when it answers;
+#   * the release openbao_bin points at (<install_dir>/<version>/bao): what a stopped server, a
+#     crash restart or a reboot would start;
+#   * the highest release that ever answered here (<state_dir>/highest-release, which main and the
+#     health hook record: release_seen.yml).
+# A stopped server answers nothing, so sys/health alone would let a lower pin through; the link and
+# the record do not depend on it. A fresh host has none of the three: nothing to downgrade then.
 - name: Ask the running server for its release
   ansible.builtin.uri:
     url: "{{ openbao_api_addr }}/v1/sys/health?{{ openbao_health_query }}"
@@ -17,14 +23,36 @@
   failed_when: false
   check_mode: false  # read-only
 
-- name: Refuse a pin older than the running release unless openbao_allow_downgrade
+- name: Read which release the command points at
+  ansible.builtin.stat:
+    path: "{{ openbao_bin }}"
+    follow: false
+    get_checksum: false
+  register: openbao_linked_release
+
+- name: Read the highest release that ever answered here
+  ansible.builtin.slurp:
+    src: "{{ openbao_state_dir }}/highest-release"
+  register: openbao_recorded_release
+  failed_when: false
+
+- name: Note the releases this host has run
+  ansible.builtin.set_fact:
+    openbao_releases_seen: >-
+      {{ {'running': openbao_running_release.json.version | default('') | regex_search('^[0-9]+\.[0-9]+\.[0-9]+') or '',
+          'linked': (openbao_linked_release.stat.lnk_target | default('') | regex_search('/([0-9]+\.[0-9]+\.[0-9]+)/bao$', '\1') or [''])[0]
+                    if openbao_linked_release.stat.islnk | default(false) else '',
+          'recorded': (((openbao_recorded_release.content | b64decode | from_json).version | default(''))
+                       if openbao_recorded_release.content is defined else '') | regex_search('^[0-9]+\.[0-9]+\.[0-9]+\Z') or ''}
+         | dict2items | selectattr('value') | items2dict }}
+
+- name: Refuse a pin older than a release this host has run, unless openbao_allow_downgrade
   ansible.builtin.assert:
-    that: >-
-      openbao_allow_downgrade | bool
-      or openbao_running_release.json.version | default('') is not match('^[0-9]+\.[0-9]+\.[0-9]+')
-      or openbao_version is version(openbao_running_release.json.version | regex_search('^[0-9]+\.[0-9]+\.[0-9]+'), '>=')
+    that: openbao_allow_downgrade | bool or openbao_releases_seen.values() | select('version', openbao_version, '>') | list | length == 0
     fail_msg: >-
-      openbao: the server runs {{ openbao_running_release.json.version | default('?') }} and the pin
-      is {{ openbao_version }}, older. A downgrade can meet storage the newer release already
-      rewrote: restore its pre-upgrade snapshot with the old release instead (README.md,
-      "Upgrading"), or set openbao_allow_downgrade: true if you know the formats match.
+      openbao: the pin is {{ openbao_version }}, older than what this host has run
+      ({{ openbao_releases_seen.items() | map('join', ' ') | join(', ') }}; running: sys/health,
+      linked: what {{ openbao_bin }} points at, recorded: the highest release that ever answered).
+      A downgrade can meet storage the newer release already rewrote. To roll back, follow
+      README.md, "Upgrading": it needs BOTH the restore of the pre-upgrade snapshot with the old
+      release AND openbao_allow_downgrade: true; never set the switch alone.

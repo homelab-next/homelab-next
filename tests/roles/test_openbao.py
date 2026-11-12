@@ -472,9 +472,71 @@ def test_main_refuses_a_pin_older_than_the_running_release(tmp_path, pki, runnin
             v = hook_vars(tmp_path, pki, url, openbao_allow_downgrade=allow)
             r = run_role(tmp_path, ROLE, "downgrade", v)
     if refused:
-        assert r.returncode != 0 and "the server runs 2.8.0 and the pin" in r.stdout, r.stdout
+        assert r.returncode != 0 and "older than what this host has run (running 2.8.0" in r.stdout
+        assert "BOTH the restore" in r.stdout and "openbao_allow_downgrade: true" in r.stdout
     else:
         assert r.returncode == 0, r.stdout + r.stderr
+
+
+def linked_to(tmp_path, version):
+    """openbao_bin pointing at <install_dir>/<version>/bao, as main leaves it."""
+    target = tmp_path / "opt" / version / "bao"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("")
+    link = tmp_path / "bin" / "bao"
+    link.parent.mkdir(exist_ok=True)
+    link.unlink(missing_ok=True)
+    link.symlink_to(target)
+    return str(link)
+
+
+@pytest.mark.parametrize(
+    ("linked", "recorded", "allow", "refused"),
+    [
+        ("2.8.0", None, False, "linked 2.8.0"),  # the command points at a newer release
+        (None, "2.8.0", False, "recorded 2.8.0"),  # a newer release answered here once
+        ("2.8.0", "2.9.0", True, None),  # the operator's explicit downgrade
+        ("2.7.1", "2.7.1", False, None),  # the pin itself
+        ("2.7.0", "2.7.0", False, None),  # an upgrade
+        (None, None, False, None),  # a fresh host
+    ],
+)
+def test_a_stopped_server_does_not_let_a_lower_pin_through(
+    tmp_path, pki, linked, recorded, allow, refused
+):
+    """sys/health says nothing while the server is stopped: the link and the record still do."""
+    with listener() as port:  # nothing answers
+        v = hook_vars(tmp_path, pki, f"https://{LOOPBACK}:{port}", openbao_health_timeout=2,
+                      openbao_allow_downgrade=allow, openbao_bin=str(tmp_path / "bin" / "bao"))  # fmt: skip
+        if linked:
+            linked_to(tmp_path, linked)
+        if recorded:
+            (tmp_path / "state").mkdir()
+            (tmp_path / "state" / "highest-release").write_text(json.dumps({"version": recorded}))
+        r = run_role(tmp_path, ROLE, "downgrade", v)
+    if refused:
+        assert (
+            r.returncode != 0
+            and f"the pin is 2.7.1, older than what this host has run ({refused}" in r.stdout
+        ), r.stdout
+    else:
+        assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_main_and_health_record_the_highest_release_that_answered(tmp_path, pki):
+    for answered, kept in (("2.8.0", "2.8.0"), ("2.7.1", "2.8.0"), ("2.9.0", "2.9.0")):
+        with fake_openbao(pki, 200, dict(ACTIVE, version=answered)) as url:
+            r = run_role(tmp_path, ROLE, "health", hook_vars(tmp_path, pki, url))
+        record = json.loads((tmp_path / "state" / "highest-release").read_text())
+        assert record == {"version": kept}, (answered, record)
+    # the service step records what answered after the start, too
+    with fake_openbao(pki, 200, dict(ACTIVE, version="3.0.0")) as url:
+        port = int(url.rsplit(":", 1)[1])
+        v = service_vars(tmp_path, port, active=False)
+        v.update(openbao_api_addr=url)
+        r = run_service(tmp_path, v, changed=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads((tmp_path / "state" / "highest-release").read_text()) == {"version": "3.0.0"}
 
 
 def test_upgrade_refuses_a_target_older_than_the_running_release(tmp_path, pki):
@@ -484,7 +546,9 @@ def test_upgrade_refuses_a_target_older_than_the_running_release(tmp_path, pki):
             {"openbao_target_version": "2.8.0", "openbao_target_checksums": {"amd64": "a" * 64}}
         )
         r = run_role(tmp_path, ROLE, "upgrade", v)
-    assert r.returncode != 0 and "the server runs 2.9.0" in r.stdout, r.stdout
+    assert r.returncode != 0 and "older than what this host has run (running 2.9.0" in r.stdout, (
+        r.stdout
+    )
     assert [q for q in api.requests if q[1] != "/v1/sys/health"] == []
 
 
@@ -680,8 +744,16 @@ RESTORE_TOKEN = "s.fake-restore-token-9876543210"  # the restore principal's
 ROLE_ID = "fake-role-id-1111"
 SECRET_ID = "fake-secret-id-2222-never-shown"
 MINTED = "s.fake-minted-by-approle-login-3333"
+UNKNOWN = "s.fake-revoked-or-expired-4444"  # a token the server does not know
 SNAP = b"raft-snapshot-bytes"
 SECRETS = (TOKEN, RESTORE_TOKEN, SECRET_ID, MINTED)
+# openbao_snapshot_approle_secret_id_ref (the overlay's secret:openbao/snapshot-secret-id) resolves
+# through hnx_secret; without BAO_ADDR its backend is this environment variable
+APPROLE_ENV = {"HNX_SECRET_OPENBAO_SNAPSHOT_SECRET_ID": SECRET_ID}
+APPROLE = {
+    "openbao_snapshot_approle_role_id": ROLE_ID,
+    "openbao_snapshot_approle_secret_id_ref": "secret:openbao/snapshot-secret-id",
+}
 
 
 class Api:
@@ -693,6 +765,7 @@ class Api:
         self.requests: list[tuple[str, str, str]] = []
         self.restored: list[tuple[str, bytes]] = []
         self.save_fails = False  # the server fails the save mid-stream (an internal error)
+        self.on_save = None  # called before a snapshot is served (the swap test mutates a file)
 
     def who(self, h) -> str:
         return {TOKEN: "snapshot", MINTED: "minted", RESTORE_TOKEN: "restore"}.get(
@@ -711,7 +784,13 @@ class Api:
         if method == "GET" and path == "/v1/sys/storage/raft/snapshot" and self.save_fails:
             return 500, {"errors": ["internal error"]}
         if method == "GET" and path == "/v1/sys/storage/raft/snapshot":
+            if who in ("snapshot", "minted") and self.on_save:
+                self.on_save()
             return (200, SNAP) if who in ("snapshot", "minted") else (403, {"errors": ["denied"]})
+        if method == "GET" and path == "/v1/auth/token/lookup-self":
+            policies = {"restore": ["default", "hnx-restore"], "minted": ["default", "hnx-snapshot"],
+                        "snapshot": ["hnx-snapshot"]}.get(who)  # fmt: skip
+            return (200, {"data": {"policies": policies}}) if policies else (403, {"errors": ["x"]})
         if method == "POST" and path.startswith("/v1/sys/storage/raft/snapshot"):
             if who != "restore":
                 return 403, {"errors": ["permission denied"]}
@@ -765,11 +844,8 @@ def test_snapshot_hooks_write_the_snapshot_and_a_manifest_naming_its_writer(
 
 def test_a_snapshot_logs_in_with_the_approle_and_revokes_the_token_it_minted(tmp_path, pki):
     with fake_api(pki) as (url, api):
-        v = snap_vars(
-            tmp_path, pki, url,
-            openbao_snapshot_approle_role_id=ROLE_ID, openbao_snapshot_approle_secret_id=SECRET_ID,
-        )  # fmt: skip
-        r = run_role(tmp_path, ROLE, "backup", v)
+        v = snap_vars(tmp_path, pki, url, **APPROLE)
+        r = run_role(tmp_path, ROLE, "backup", v, env=APPROLE_ENV)
     assert r.returncode == 0, r.stdout + r.stderr
     assert not any(x in r.stdout + r.stderr for x in SECRETS)
     assert [q for q in api.requests if q[1] != "/v1/sys/health"] == [
@@ -789,11 +865,8 @@ def test_a_failed_snapshot_leaves_no_partial_file_and_still_revokes(tmp_path, pk
         # the AppRole path: the minted token is revoked even though the save failed
         api.requests.clear()
         api.save_fails = True
-        v = snap_vars(
-            tmp_path, pki, url,
-            openbao_snapshot_approle_role_id=ROLE_ID, openbao_snapshot_approle_secret_id=SECRET_ID,
-        )  # fmt: skip
-        r = run_role(tmp_path, ROLE, "backup", v)
+        v = snap_vars(tmp_path, pki, url, **APPROLE)
+        r = run_role(tmp_path, ROLE, "backup", v, env=APPROLE_ENV)
     assert r.returncode != 0
     assert list((tmp_path / "backup").iterdir()) == []
     assert ("POST", "/v1/auth/token/revoke-self", "minted") in api.requests
@@ -804,16 +877,22 @@ def test_a_snapshot_needs_the_snapshot_principal(tmp_path, pki):
     with fake_api(pki) as (url, api):
         v = snap_vars(tmp_path, pki, url)
         missing = run_role(tmp_path, ROLE, "backup", v)
-        half = run_role(tmp_path, ROLE, "backup", dict(v, openbao_snapshot_approle_role_id=ROLE_ID))
-    for r in (missing, half):
+        no_ref = dict(v, **APPROLE)
+        half = run_role(
+            tmp_path, ROLE, "backup", dict(no_ref, openbao_snapshot_approle_secret_id_ref="")
+        )
+        raw = run_role(
+            tmp_path, ROLE, "backup", dict(no_ref, openbao_snapshot_approle_secret_id_ref=SECRET_ID)
+        )
+    for r in (missing, half, raw):  # a value where the reference goes is refused, never sent
         assert r.returncode != 0 and "needs the snapshot principal" in r.stdout, r.stdout
     assert [q for q in api.requests if q[1] != "/v1/sys/health"] == []
 
 
-def verbose_run(tmp_path, hook, v):
+def verbose_run(tmp_path, hook, v, env=None):
     """run_role at -vvv: what an operator debugging a run would see (module arguments included,
     where a task is not under no_log, and every remote command line)."""
-    cmd, env = _invocation(tmp_path, ROLE, hook, v)
+    cmd, env = _invocation(tmp_path, ROLE, hook, v, env)
     return subprocess.run([*cmd, "-vvv"], capture_output=True, text=True, env=env, cwd=tmp_path)
 
 
@@ -821,7 +900,7 @@ def test_no_token_reaches_a_command_line_or_the_output_even_at_vvv(tmp_path, pki
     """The tokens travel in uri headers under no_log. At -vvv Ansible prints every remote command
     line (where an `environment:` token used to appear: BAO_TOKEN=... python3 AnsiballZ_...) and
     every module invocation not under no_log: none of them may carry a token or the secret_id."""
-    src = tmp_path / "in" / "raft.snap"
+    src = tmp_path / "export" / "raft.snap"
     src.parent.mkdir()
     src.write_bytes(SNAP)
     src.with_name("raft.snap.json").write_text(
@@ -831,8 +910,7 @@ def test_no_token_reaches_a_command_line_or_the_output_even_at_vvv(tmp_path, pki
         runs = [
             verbose_run(tmp_path, "backup", snap_vars(tmp_path, pki, url, openbao_snapshot_token=TOKEN)),
             verbose_run(tmp_path, "backup", snap_vars(
-                tmp_path, pki, url,
-                openbao_snapshot_approle_role_id=ROLE_ID, openbao_snapshot_approle_secret_id=SECRET_ID)),
+                tmp_path, pki, url, **APPROLE), env=APPROLE_ENV),
             verbose_run(tmp_path, "restore", snap_vars(
                 tmp_path, pki, url, openbao_snapshot_token=TOKEN, openbao_restore_token=RESTORE_TOKEN,
                 openbao_restore_source=str(src))),
@@ -849,7 +927,7 @@ def test_no_token_reaches_a_command_line_or_the_output_even_at_vvv(tmp_path, pki
 
 
 def restore_case(tmp_path, *, manifest="good", data=SNAP):
-    src = tmp_path / "in" / "raft.snap"
+    src = tmp_path / "export" / "raft.snap"  # under openbao_export_dir
     src.parent.mkdir(exist_ok=True)
     src.write_bytes(data)
     m = {"kind": "raft-snapshot", "sha256": hashlib.sha256(SNAP).hexdigest(), "written_by": "2.7.1"}
@@ -875,8 +953,9 @@ def test_restore_checks_the_manifest_takes_a_pre_restore_snapshot_then_restores(
     assert not any(x in r.stdout + r.stderr for x in SECRETS)
     calls_ = [q for q in api.requests if q[1] != "/v1/sys/health"]
     endpoint = "snapshot-force" if force else "snapshot"
-    # the pre-restore snapshot (snapshot principal) comes first, then the restore (restore principal)
+    # who the restore token is, the pre-restore snapshot (snapshot principal), then the restore
     assert calls_ == [
+        ("GET", "/v1/auth/token/lookup-self", "restore"),
         ("GET", "/v1/sys/storage/raft/snapshot", "snapshot"),
         ("POST", f"/v1/sys/storage/raft/{endpoint}", "restore"),
     ]
@@ -885,6 +964,7 @@ def test_restore_checks_the_manifest_takes_a_pre_restore_snapshot_then_restores(
     assert re.fullmatch(r"pre-restore-\d{8}T\d{6}Z\.snap", pre.name)
     assert pre.read_bytes() == SNAP and json.loads(pre.with_name(pre.name + ".json").read_text())
     assert f"the state before it is in {tmp_path}/backup/{pre.name}" in r.stdout
+    assert not list((tmp_path / "backup").glob(".restore-staging-*"))  # the staged copy is gone
 
 
 @pytest.mark.parametrize(
@@ -906,8 +986,12 @@ def test_restore_refuses_a_snapshot_without_a_matching_manifest_or_from_a_newer_
         )  # fmt: skip
         r = run_role(tmp_path, ROLE, "restore", v)
     assert r.returncode != 0 and says in r.stdout, r.stdout
-    assert [q for q in api.requests if q[1] != "/v1/sys/health"] == []  # no snapshot, no restore
-    assert not (tmp_path / "backup").exists()
+    asked = [
+        q for q in api.requests if q[1] not in ("/v1/sys/health", "/v1/auth/token/lookup-self")
+    ]
+    assert asked == []  # no snapshot, no restore
+    backup = tmp_path / "backup"
+    assert not backup.exists() or list(backup.iterdir()) == []  # the staged copy is gone too
 
 
 def test_restore_needs_the_restore_principal_not_the_snapshot_one(tmp_path, pki):
@@ -921,14 +1005,14 @@ def test_restore_needs_the_restore_principal_not_the_snapshot_one(tmp_path, pki)
         # a token that differs but is still only a snapshot principal's: the server refuses it
         other = run_role(
             tmp_path, ROLE, "restore",
-            dict(v, openbao_restore_token=MINTED, openbao_snapshot_approle_role_id=ROLE_ID,
-                 openbao_snapshot_approle_secret_id=SECRET_ID, openbao_snapshot_token=""),
+            dict(v, openbao_restore_token=MINTED, openbao_snapshot_token="", **APPROLE),
         )  # fmt: skip
     assert missing.returncode != 0 and "openbao_restore_token" in missing.stdout
     assert same.returncode != 0 and "never the snapshot principal" in same.stdout, same.stdout
-    assert other.returncode != 0
+    # the server says whose it is: hnx-snapshot, so it never reaches the restore endpoint
+    assert other.returncode != 0 and "its policies are default, hnx-snapshot" in other.stdout
     assert api.restored == []
-    assert ("POST", "/v1/sys/storage/raft/snapshot", "minted") in api.requests  # refused: 403
+    assert [q for q in api.requests if q[0] == "POST" and "raft" in q[1]] == []
 
 
 def test_restore_refuses_a_missing_or_empty_snapshot(tmp_path, pki):
@@ -941,7 +1025,79 @@ def test_restore_refuses_a_missing_or_empty_snapshot(tmp_path, pki):
             )  # fmt: skip
             r = run_role(tmp_path, ROLE, "restore", v)
             assert r.returncode != 0 and "not a non-empty snapshot file" in r.stdout
-    assert [q for q in api.requests if q[1] != "/v1/sys/health"] == []
+    assert [q for q in api.requests if "/raft/" in q[1]] == []
+
+
+def restore_vars(tmp_path, pki, url, src, **kw):
+    v = {"openbao_snapshot_token": TOKEN, "openbao_restore_token": RESTORE_TOKEN,
+         "openbao_restore_source": str(src)}  # fmt: skip
+    return snap_vars(tmp_path, pki, url, **{**v, **kw})
+
+
+def test_the_bytes_restored_are_the_bytes_checked_even_if_the_source_is_swapped(tmp_path, pki):
+    """The source is copied into a root-only staging directory before it is hashed, and that copy
+    is what is posted: a source rewritten after the check (here: while the pre-restore snapshot is
+    taken, between the check and the restore) never reaches the server."""
+    src = restore_case(tmp_path)
+    with fake_api(pki) as (url, api):
+        api.on_save = lambda: src.write_bytes(b"swapped-after-the-check")
+        r = run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, pki, url, src))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert src.read_bytes() == b"swapped-after-the-check"  # the swap really happened
+    assert api.restored == [("snapshot", SNAP)]  # ...and what was posted is what was hashed
+    assert not list((tmp_path / "backup").glob(".restore-staging-*"))
+
+
+@pytest.mark.parametrize(
+    ("case", "says"),
+    [
+        ("world-writable", "writable by its group or by others (mode 0666)"),
+        ("group-writable manifest", "writable by its group or by others (mode 0664)"),
+        ("symlink", "is not a non-empty snapshot file on the host (a symbolic link is refused)"),
+        ("through a linked directory", "is reached through a symbolic link"),
+        ("outside", "is not under"),
+    ],
+)
+def test_restore_refuses_a_source_someone_else_could_have_written(tmp_path, pki, case, says):
+    src = restore_case(tmp_path)
+    if case == "world-writable":
+        src.chmod(0o666)
+    elif case == "group-writable manifest":
+        src.with_name("raft.snap.json").chmod(0o664)
+    elif case == "symlink":
+        real = tmp_path / "export" / "real.snap"
+        src.rename(real)
+        src.symlink_to(real)
+    elif case == "through a linked directory":
+        (tmp_path / "export" / "via").symlink_to(tmp_path / "export")
+        src = tmp_path / "export" / "via" / "raft.snap"
+    elif case == "outside":
+        (tmp_path / "elsewhere").mkdir()
+        for f in (src, src.with_name("raft.snap.json")):
+            f.rename(tmp_path / "elsewhere" / f.name)
+        src = tmp_path / "elsewhere" / "raft.snap"
+    with fake_api(pki) as (url, api):
+        r = run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, pki, url, src))
+        if case == "outside":  # only the location is waived, and only explicitly
+            ok = run_role(
+                tmp_path, ROLE, "restore",
+                restore_vars(tmp_path, pki, url, src, openbao_restore_source_unrestricted=True),
+            )  # fmt: skip
+            assert ok.returncode == 0, ok.stdout + ok.stderr
+            assert api.restored == [("snapshot", SNAP)]
+            return
+    assert r.returncode != 0 and says in r.stdout, r.stdout
+    assert api.restored == []
+    assert not [q for q in api.requests if q[1] == "/v1/sys/storage/raft/snapshot"]
+
+
+def test_restore_refuses_a_token_the_server_does_not_know(tmp_path, pki):
+    src = restore_case(tmp_path)
+    with fake_api(pki) as (url, api):
+        v = restore_vars(tmp_path, pki, url, src, openbao_restore_token=UNKNOWN)
+        r = run_role(tmp_path, ROLE, "restore", v)
+    assert r.returncode != 0 and "the server does not know it" in r.stdout, r.stdout
+    assert api.restored == [] and UNKNOWN not in r.stdout + r.stderr
 
 
 @pytest.mark.parametrize(
@@ -964,6 +1120,146 @@ def test_upgrade_refuses_a_downgrade_a_no_op_or_a_bad_checksum(tmp_path, pki, ta
         r = run_role(tmp_path, ROLE, "upgrade", v)
     assert r.returncode != 0 and "is not a release newer than" in r.stdout, r.stdout
     assert [q for q in api.requests if q[1] != "/v1/sys/health"] == []  # before the snapshot
+
+
+# ---------------------------------------------------------------- the real server (optional)
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind((LOOPBACK, 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.requires_tool("bao")
+def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(tmp_path, pki):
+    """With a `bao` on PATH (the role's own pinned release, checksum-verified: README.md), the
+    rendered configuration starts the real server, both declared audit devices exist after the
+    first unseal, the listener negotiates TLS 1.2 only with the AEAD suites it names, and the
+    backup, restore, health and downgrade paths work against it: the snapshot principal's AppRole
+    as README.md creates it (token_num_uses=2) logs in, saves and revokes its token, a two-use
+    hnx-restore token passes lookup-self and restores the staged copy (an hnx-snapshot token is
+    refused), and a stopped server with a lower pin is refused. A throwaway cluster: its share
+    and root token live only in this process's memory. CI has no `bao`, so this skips there."""
+    bao = subprocess.run(["bao", "version"], capture_output=True, text=True, check=True).stdout
+    assert bao.startswith("OpenBao v2.7.1 "), bao  # the pin, nothing else
+    port, cport = free_port(), free_port()
+    url = f"https://{LOOPBACK}:{port}"
+    v = hook_vars(tmp_path, pki, url, openbao_listen_address=LOOPBACK, openbao_port=port,
+                  openbao_cluster_port=cport, openbao_bin=str(tmp_path / "bin" / "bao"))  # fmt: skip
+    r = run_role(tmp_path, ROLE, "config", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    tls = tmp_path / "etc" / "tls"
+    (tls / "server.pem").write_bytes((pki / "cert.pem").read_bytes())
+    (tls / "server-key.pem").write_bytes((pki / "key.pem").read_bytes())
+    env = dict(os.environ, BAO_ADDR=url, BAO_CACERT=str(tls / "ca.pem"))
+    env.pop("BAO_TOKEN", None)
+
+    def cli(*args, token=None, data=None):
+        e = dict(env, BAO_TOKEN=token) if token else env
+        p = subprocess.run(["bao", *args], input=data, capture_output=True, text=True, env=e)
+        assert p.returncode == 0, (args, p.stderr)
+        return p.stdout.strip()
+
+    server = subprocess.Popen(
+        ["bao", "server", f"-config={tmp_path / 'etc' / 'openbao.hcl'}"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+    )  # fmt: skip
+    try:
+        for _ in range(100):
+            try:
+                with socket.create_connection((LOOPBACK, port), timeout=1):
+                    break
+            except OSError:
+                assert server.poll() is None, server.stdout.read()
+                threading.Event().wait(0.1)
+        # TLS 1.2: only the configured forward-secret AEAD suites
+        ctx12 = ssl.create_default_context(cafile=str(tls / "ca.pem"))
+        ctx12.maximum_version = ssl.TLSVersion.TLSv1_2
+        with (
+            socket.create_connection((LOOPBACK, port)) as raw,
+            ctx12.wrap_socket(raw, server_hostname=LOOPBACK) as t,
+        ):
+            name, proto, _ = t.cipher()
+        assert (
+            proto == "TLSv1.2"
+            and name.startswith("ECDHE-")
+            and ("GCM" in name or "CHACHA20" in name)
+        )
+        ctx12.set_ciphers("ECDHE-ECDSA-AES128-SHA256")  # CBC, no AEAD: refused
+        with pytest.raises(ssl.SSLError), socket.create_connection((LOOPBACK, port)) as raw:
+            ctx12.wrap_socket(raw, server_hostname=LOOPBACK).close()
+
+        init = json.loads(
+            cli("operator", "init", "-key-shares=1", "-key-threshold=1", "-format=json")
+        )
+        cli("operator", "unseal", init["unseal_keys_b64"][0])
+        root = init["root_token"]
+        threading.Event().wait(2)  # the node becomes active
+        audit = json.loads(cli("audit", "list", "-format=json", token=root))
+        assert set(audit) == {"file/", "syslog/"}, audit
+        cli("secrets", "enable", "-path=secret", "-version=2", "kv", token=root)
+        cli("policy", "write", "hnx-snapshot", "-", token=root,
+            data='path "sys/storage/raft/snapshot" { capabilities = ["read"] }\n')  # fmt: skip
+        cli("policy", "write", "hnx-restore", "-", token=root,
+            data='path "sys/storage/raft/snapshot" { capabilities = ["update"] }\n')  # fmt: skip
+        cli("kv", "put", "-mount=secret", "probe", "v=before", token=root)
+
+        def token(policy, uses):
+            return cli("token", "create", f"-policy={policy}", "-ttl=10m", "-orphan",
+                       f"-use-limit={uses}", "-field=token", token=root)  # fmt: skip
+
+        # the snapshot principal as README.md step 3 creates it (token_num_uses=2: save, revoke)
+        cli("auth", "enable", "approle", token=root)
+        cli("write", "auth/approle/role/hnx-snapshot", "token_policies=hnx-snapshot", "token_ttl=5m",
+            "token_max_ttl=10m", "token_type=service", "token_num_uses=2", "secret_id_ttl=720h",
+            "secret_id_num_uses=0", token=root)  # fmt: skip
+        role_id = cli(
+            "read", "-field=role_id", "auth/approle/role/hnx-snapshot/role-id", token=root
+        )
+        secret_id = cli(
+            "write",
+            "-f",
+            "-field=secret_id",
+            "auth/approle/role/hnx-snapshot/secret-id",
+            token=root,
+        )
+        snap = {**v, **APPROLE, "openbao_snapshot_approle_role_id": role_id}
+        r = run_role(
+            tmp_path, ROLE, "backup", snap, env={"HNX_SECRET_OPENBAO_SNAPSHOT_SECRET_ID": secret_id}
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert secret_id not in r.stdout + r.stderr
+        accessors = json.loads(cli("list", "-format=json", "auth/token/accessors", token=root))
+        assert len(accessors) == 1  # the root token alone: the login's token revoked itself
+        cli("kv", "put", "-mount=secret", "probe", "v=after", token=root)
+
+        src = tmp_path / "backup" / "raft.snap"
+        restore = dict(v, openbao_snapshot_token=token("hnx-snapshot", 1),
+                       openbao_restore_token=token("hnx-restore", 2), openbao_restore_source=str(src))  # fmt: skip
+        wrong = dict(restore, openbao_restore_token=token("hnx-snapshot", 2))
+        r = run_role(tmp_path, ROLE, "restore", wrong)
+        assert r.returncode != 0 and "its policies are default, hnx-snapshot" in r.stdout, r.stdout
+        r = run_role(tmp_path, ROLE, "restore", restore)
+        assert r.returncode == 0, r.stdout + r.stderr
+        threading.Event().wait(2)
+        assert cli("kv", "get", "-mount=secret", "-field=v", "probe", token=root) == "before"
+
+        r = run_role(tmp_path, ROLE, "health", v)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert json.loads((tmp_path / "state" / "highest-release").read_text()) == {
+            "version": "2.7.1"
+        }
+    finally:
+        server.terminate()
+        server.wait(timeout=30)
+    # the server is stopped: sys/health says nothing, the record still refuses a lower pin
+    r = run_role(
+        tmp_path, ROLE, "downgrade", dict(v, openbao_version="2.7.0", openbao_health_timeout=2)
+    )
+    assert r.returncode != 0 and "older than what this host has run (recorded 2.7.1" in r.stdout, (
+        r.stdout
+    )
 
 
 def test_no_hook_ever_initialises_unseals_or_reads_a_share():
