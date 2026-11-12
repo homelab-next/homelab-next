@@ -370,6 +370,26 @@
     },
     {
       "exit": {
+        "0": "every stream, its DLQ and every durable exist (each durable a pull durable on its filter)",
+        "1": "the bus refused or could not be reached, or an existing durable is not one a client may bind to",
+        "2": "usage error"
+      },
+      "id": "events-provision",
+      "inputs": "the bus URL and the admin user as arguments, its password in HNX_EVENTS_ADMIN_PASSWORD, the streams and durables as JSON on stdin",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-events-provision",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line: the streams and durables (stream/durable) it created, under the key created",
+      "owner": "platform",
+      "path": "ansible/roles/events_bus/files/hnx-events-provision.py",
+      "purpose": "Create the standing events streams (each with its DLQ, bounded) and the pull durables clients bind to, when missing.",
+      "status": "active",
+      "trigger": [
+        "role:events_bus"
+      ]
+    },
+    {
+      "exit": {
         "0": "every gate and test of every listed component passed (list and validate, the file is valid; ratchet, the list did not grow or the operator allowed it)",
         "1": "a gate or a test failed (ratchet, the list grew against the base)",
         "2": "the list is invalid or unreadable (ratchet, or the base is not a commit)"

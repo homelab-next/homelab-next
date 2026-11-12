@@ -1,0 +1,21 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role events_bus); local changes are overwritten.
+# Two kinds of account (homelab-next #360 round 5: a reply subject is not permission-checked, and
+# JetStream treats its own deliveries and answers as requests when they land on $JS.API.*):
+# {{ events_bus_account }} holds the streams and the provisioner alone; every other user lives in
+# an account of its own, JetStream off, that imports from {{ events_bus_account }} exactly the
+# services its allow-list names (its JetStream calls under {{ events_bus_api_prefix }}), so an
+# answer can only ever reach that one user's own imports. Every user has an allow-list and nothing
+# else (no wildcard over $JS.API, replies on its own _INBOX.<user>); a subscribe-only user's
+# publish is deny-all (an empty allow-list would be no restriction at all); passwords are bcrypt
+# hashes. The client port listens on {{ events_bus_listen_address }} only, the monitoring port
+# on loopback only.
+{
+  "listen": {{ events_bus_listen_address | hnx_nats_hostport(events_bus_port) | to_json }},
+  "http": {{ ('127.0.0.1:' ~ (events_bus_monitor_port | int)) | to_json }},  {# no-raw-endpoint: allow the monitor is loopback only #}
+  "server_name": {{ ('hnx-events-' ~ (inventory_hostname | regex_replace('[^A-Za-z0-9-]', '-'))) | to_json }},
+  "max_payload": 1048576,
+  # JetStream keeps its data under <store_dir>/jetstream
+  "jetstream": {"store_dir": {{ events_bus_store_dir | to_json }}, "max_memory_store": {{ events_bus_max_memory_store | int }}, "max_file_store": {{ events_bus_max_file_store | int }}},
+  "accounts": {{ events_bus_rendered_users | hnx_bus_accounts(events_bus_admin_user, events_bus_account, events_bus_api_prefix) | to_nice_json(indent=2, sort_keys=false) | indent(2) }}
+}

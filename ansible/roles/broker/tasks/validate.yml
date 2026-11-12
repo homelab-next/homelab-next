@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values land in systemd units and the relay's target file: refuse anything that could add a line,
+# a directive or a key, and a bus endpoint that would carry a password in clear off the host.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - broker_logical_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - broker_hnx_bin is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_runtime_release is match('^[0-9a-f]{0,64}\Z')
+      - broker_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and broker_user != 'root'
+      - broker_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and broker_group != 'root'
+      - broker_clients_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and broker_clients_group not in ['root', broker_group]
+      - broker_client_users | select('match', '^[a-z_][a-z0-9_-]{0,31}\Z') | list | length == broker_client_users | length
+      - broker_client_users | intersect(['root', broker_user, broker_relay_user]) | length == 0
+      - broker_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_state_root is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_data_root is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_socket_dir is match('^/run/[A-Za-z0-9._-]+\Z')
+      - broker_socket_mode is match('^[0-7]?[0-7][0-7]0\Z')
+      - broker_handlers | map('basename') | select('match', '^[A-Za-z0-9][A-Za-z0-9._-]*\Z') | list | length == broker_handlers | length
+      - broker_handlers | map('basename') | unique | length == broker_handlers | length
+      - broker_secret_refs.keys() | select('match', '^[A-Z][A-Z0-9_]{0,63}\Z') | list | length == broker_secret_refs | length
+      - broker_secret_refs.values() | select('match', '^secret:[a-z0-9][a-z0-9/_.-]*\Z') | list | length == broker_secret_refs | length
+      - broker_approvals_url == '' or broker_approvals_url is match('^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._/-]*\Z')
+      - broker_backup_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_export_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_systemd_dir is match('^/[A-Za-z0-9._/-]+\Z')
+    fail_msg: >-
+      broker: a logical id, absolute paths ([A-Za-z0-9._/-]), a socket directory under /run, a
+      socket mode that grants others nothing, non-root users and groups (the clients' group is not
+      the broker's own), handler files with plain distinct names, secrets as {NAME: secret:<name>},
+      and an https Approvals URL without query or credentials (or none)
+
+- name: Validate the relay's settings
+  ansible.builtin.assert:
+    that:
+      - broker_relay_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and broker_relay_user not in ['root', broker_user]
+      - broker_relay_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and broker_relay_group not in ['root', broker_group, broker_clients_group]
+      - broker_relay_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_relay_state_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      # a password goes only over tls:// or to loopback (the adapter refuses it otherwise): an
+      # address the events bus role's own check calls loopback (127/8, [::1]), never a name
+      - >-
+        broker_relay_events_endpoint is match('^tls://[A-Za-z0-9.-]+:[0-9]{1,5}\Z')
+        or (broker_relay_events_endpoint is match('^nats://([0-9.]+|\[[0-9a-fA-F:]+\]):[0-9]{1,5}\Z')
+            and broker_relay_events_endpoint | regex_replace('^nats://\[?([0-9a-fA-F.:]+?)\]?:[0-9]+$', '\\1') | hnx_is_loopback)
+      - broker_relay_events_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - lookup('hnx_registry', broker_relay_events_id, field='capability') == 'events'
+      - broker_relay_events_user is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - broker_relay_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - broker_relay_ca_file == '' or broker_relay_ca_file is match('^/[A-Za-z0-9._/-]+\Z')
+      - broker_relay_api_prefix == '$JS.API' or broker_relay_api_prefix is match('^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*\Z')
+      - broker_relay_stream is match('^[A-Z][A-Z0-9_]{0,31}\Z')
+      - broker_relay_subject_prefix is match('^[a-z][a-z0-9_-]{0,31}\Z')
+      - broker_relay_duplicate_window | int > 0
+    fail_msg: >-
+      broker: the relay needs its own non-root user and group, absolute paths, a bus endpoint that
+      is tls://host:port or nats://<loopback address>:port (an explicit port required: the relay
+      never guesses one), the bus's registry id (capability events), a bus user, its password as a secret: reference,
+      an API prefix of literal tokens ($JS.API or JS.<account>.API), the standing stream
+      (upper-case) and its subject prefix, and a positive duplicate window
+  when: broker_relay | bool
+
+# A loopback endpoint reaches the bus only when the bus runs on this host, on the registry's port:
+# the registry's row for it must name this host (compared in short form on both sides, so an
+# FQDN row matches a short inventory name and the other way round) and the endpoint's port must
+# be the row's, or the relay would publish to whatever listens on that port here while the
+# registry says the bus is elsewhere.
+- name: Validate that a loopback bus is this host's own, on the registry's port
+  ansible.builtin.assert:
+    that:
+      - (lookup('hnx_registry', broker_relay_events_id, field='host') | split('.') | first) == (inventory_hostname | split('.') | first)
+      - (broker_relay_events_endpoint | regex_replace('^.*:([0-9]+)$', '\\1') | int) == (lookup('hnx_registry', broker_relay_events_id, field='port') | int)
+    fail_msg: >-
+      broker: the relay's endpoint {{ broker_relay_events_endpoint }} is loopback, but the registry
+      puts {{ broker_relay_events_id }} on {{ lookup('hnx_registry', broker_relay_events_id, field='host') }}
+      port {{ lookup('hnx_registry', broker_relay_events_id, field='port') }}: it must be this host
+      ({{ inventory_hostname }}) and the endpoint's explicit port (required: never a default);
+      run the relay beside the bus, or give the bus a TLS listener and the relay a tls:// endpoint
+  when: broker_relay | bool and broker_relay_events_endpoint is match('^nats://')
+
+# Handlers run as the broker's own uid today (docs/broker.md "Handlers and the broker's uid"): a
+# handler can read and write the broker's state and audit trail. Until each handler runs under a
+# uid of its own, the role deploys an exec handler only in a proof manifest (manifest_id ending
+# -proof: the stand-ins that report what they would do); any other manifest that declares one is
+# refused here, before anything on the host changes. Built-in handlers (builtin/...) run in the
+# broker itself and are not affected.
+- name: Read the manifest's id and actions (on the controller)
+  ansible.builtin.set_fact:
+    broker_manifest_doc: "{{ lookup('ansible.builtin.file', broker_manifest) | from_yaml }}"
+
+- name: Refuse an exec handler outside a proof manifest while handlers share the broker's uid
+  ansible.builtin.assert:
+    that: >-
+      (broker_manifest_doc.manifest_id | default('') | string) is match('.*-proof\Z')
+      or (broker_manifest_doc.actions | default([]) | map(attribute='handler', default='')
+          | reject('match', '^builtin/') | list | length == 0)
+    fail_msg: >-
+      broker: manifest {{ broker_manifest_doc.manifest_id | default('?') }} declares exec handlers
+      ({{ broker_manifest_doc.actions | default([]) | map(attribute='handler', default='') | reject('match', '^builtin/') | join(', ') }}),
+      which would run as {{ broker_user }} with the broker's state and audit trail. Handlers must
+      run under a uid of their own first (docs/broker.md "Handlers and the broker's uid"); only a
+      proof manifest (manifest_id ending -proof) may declare one until then.

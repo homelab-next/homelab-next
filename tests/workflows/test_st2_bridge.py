@@ -595,8 +595,18 @@ def test_a_transport_failure_reconnects_and_reopens_the_durables(hook):
     assert b.stats()["state"] == "ok"
 
 
-def provisioned(limits: bool = True) -> FakeJetStreamWire:
-    """A server where the operator created the stream and its DLQ (docs/stackstorm.md)."""
+def bridge_durables(ack_wait: float = sb.ACK_WAIT_S, **kw) -> list[dict]:
+    """The bridge's durables as the provisioner declares them (events_bus_durables)."""
+    return [{"durable": s.durable, "filter": f"hnx.{s.subject}", "ack_wait": ack_wait,
+             "max_deliver": 100, **kw} for s in sb.load_bridge(BRIDGE).subscriptions]  # fmt: skip
+
+
+def provisioned(
+    limits: bool = True, *, durables: bool = True, ack_wait: float = sb.ACK_WAIT_S
+) -> FakeJetStreamWire:
+    """A server where the operator created the stream and its DLQ (docs/stackstorm.md) and,
+    unless ``durables`` is false, the bridge's pull durables, as the events bus role's
+    provisioner does (the bridge creates neither)."""
     wire = FakeJetStreamWire()
     cap = {"max_bytes": 1 << 30, "max_age": 30 * 86400 * 10**9} if limits else {}
     adv = "$JS.EVENT.ADVISORY.CONSUMER"
@@ -606,6 +616,8 @@ def provisioned(limits: bool = True) -> FakeJetStreamWire:
     ):
         body = {"name": name, "subjects": subjects, "retention": "limits", **cap}
         wire.request(f"$JS.API.STREAM.CREATE.{name}", json.dumps(body).encode(), timeout=1)
+    if durables:
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(ack_wait))
     return wire
 
 
@@ -621,7 +633,7 @@ def standing(wire: FakeJetStreamWire, ack_wait: float = sb.ACK_WAIT_S):
 
 
 def test_the_bridge_creates_no_stream_and_refuses_an_unbounded_one():
-    """It reads the stream and manages its durables, nothing else: a missing stream, or one a
+    """It reads the stream and binds to its durables, nothing else: a missing stream, or one a
     poison flood could grow without bound, is a configuration error, never created."""
     with pytest.raises(EventsError, match="does not exist"):
         standing(FakeJetStreamWire())
@@ -629,21 +641,58 @@ def test_the_bridge_creates_no_stream_and_refuses_an_unbounded_one():
         standing(provisioned(limits=False))
     wire = provisioned()
     before = len(wire.log)
-    standing(wire)
-    assert not [s for s, _p, _h in wire.log[before:] if ".STREAM.CREATE." in s]
+    bridge(standing(wire), lambda _ev: 202)
+    assert not [s for s, _p, _h in wire.log[before:] if ".CREATE." in s]
+
+
+def test_the_bridge_creates_no_durable_and_refuses_a_missing_or_push_one():
+    """Round 4 (security F1): a client that may create a consumer may point a push
+    deliver_subject anywhere, so the bridge only binds; a durable the provisioner has not
+    created, or one that is a push consumer, is a configuration error (exit 2), never created
+    or used."""
+    wire = provisioned(durables=False)
+    before = len(wire.log)
+    with pytest.raises(sb.BridgeError, match=r"does not exist.*provisioner"):
+        bridge(standing(wire), lambda _ev: 202)
+    assert not [s for s, _p, _h in wire.log[before:] if ".CONSUMER.CREATE." in s]
+    # one made some other way as a push consumer (the fake models pull consumers only, so its
+    # recorded configuration is edited): never bound to, never taken as provisioned
+    wire = provisioned()
+    [first, *_] = sb.load_bridge(BRIDGE).subscriptions
+    wire.streams["HNX"].consumers[first.durable].config["deliver_subject"] = "_INBOX.other.x"
+    with pytest.raises(sb.BridgeError, match="push consumer"):
+        bridge(standing(wire), lambda _ev: 202)
+    with pytest.raises(EventsError, match="push consumer"):  # nor does the provisioner take it
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables()[:1])
 
 
 def test_the_lease_outlasts_a_post(hook):
     """A delivery leased for less than the POST timeout would be handed out again mid-POST."""
     hook = webhook(hook)
     assert hook.timeout + sb.LEASE_MARGIN_S <= sb.ACK_WAIT_S
-    wire = provisioned()
-    with pytest.raises(sb.BridgeError, match="ack_wait 3s"):
-        bridge(standing(wire, ack_wait=3.0), hook)
-    # the durable keeps the lease it was created with: a reopen with a longer one still refuses
-    with pytest.raises(sb.BridgeError, match="nats consumer edit"):
-        bridge(standing(wire), hook)
+    # the durable keeps the lease it was provisioned with, whatever the client asks for
+    with pytest.raises(sb.BridgeError, match=r"ack_wait 3s.*nats consumer edit"):
+        bridge(standing(provisioned(ack_wait=3.0)), hook)
     bridge(standing(provisioned()), hook)
+
+
+def test_a_durable_that_dead_letters_before_the_bridge_would_is_warned_about(caplog):
+    """The server dead-letters at the DURABLE's max_deliver: one provisioned with the
+    provisioner's default (5) under the bridge's --max-deliver (100) loses an event after five
+    failed POSTs, so the bridge says so when it binds (its docs: declare 100)."""
+    import logging
+
+    logger = sb.log.name
+    wire = provisioned(durables=False)
+    nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(max_deliver=5))
+    with caplog.at_level(logging.WARNING, logger=logger):
+        bridge(standing(wire), lambda _ev: 202)
+    warned = [r.getMessage() for r in caplog.records if "max_deliver 5" in r.getMessage()]
+    assert len(warned) == 3 and "--max-deliver 100" in warned[0], warned
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger=logger):
+        bridge(standing(provisioned()), lambda _ev: 202)  # declared with 100: nothing to say
+    assert not [r for r in caplog.records if "max_deliver" in r.getMessage()]
 
 
 def test_reopening_several_durables_waits_out_one_lease_not_one_each():
@@ -682,8 +731,8 @@ class Wall:
 def test_a_new_durable_forwards_what_was_published_before_it_existed(hook):
     """The reviewer's r4: durables were created deliver_policy new, so whatever the relay
     published before the bridge's first start (or after a durable was recreated) was skipped for
-    good.  A durable the bridge creates now starts REPLAY_S back: no further, so a
-    long-retention stream does not replay its history."""
+    good.  A durable the provisioner creates with replay_s REPLAY_S starts that far back: no
+    further, so a long-retention stream does not replay its history."""
     wall = Wall()
     wire = FakeJetStreamWire(wall=wall)
     for name, subjects in (
@@ -695,12 +744,15 @@ def test_a_new_durable_forwards_what_was_published_before_it_existed(hook):
         wire.request(f"$JS.API.STREAM.CREATE.{name}", json.dumps(body).encode(), timeout=1)
     bus = nj.JetStreamBus(
         wire, stream="HNX", subject_prefix="hnx", ack_wait=sb.ACK_WAIT_S, provision=False,
-        replay_s=sb.REPLAY_S, wall=wall,
+        wall=wall,
     )  # fmt: skip
     publish(bus, proposal(0))  # ancient: older than admit's memory
     wall.t += sb.REPLAY_S + 3600
     publish(bus, proposal(1))  # the relay published it before the bridge's first start
     wall.t += 60
+    # the provisioner creates the durables just before the bridge first starts
+    nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(replay_s=sb.REPLAY_S),
+                           wall=wall)  # fmt: skip
     b = bridge(bus, webhook(hook))
     publish(bus, proposal(2))
     while b.poll():
@@ -710,13 +762,15 @@ def test_a_new_durable_forwards_what_was_published_before_it_existed(hook):
     assert got == ["evt-bridge-1", "evt-bridge-2"]
 
 
-def test_the_bridge_creates_pull_durables_through_the_filtered_create_only():
+def test_the_provisioner_creates_pull_durables_through_the_filtered_create_only():
     """SEC5: CONSUMER.CREATE.<stream>.<durable> takes any config, a push deliver_subject or
-    another filter included.  The adapter creates pull durables only, through the 2.9+ form whose
-    subject carries the filter, so the bus ACL can grant exactly that."""
-    wire = provisioned()
+    another filter included.  The provisioner creates pull durables only, through the 2.9+ form
+    whose subject carries the filter; the bridge then binds to them and creates nothing."""
+    wire = provisioned(durables=False)
     before = len(wire.log)
-    bridge(standing(wire), lambda _ev: 202)
+    assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables()) == [
+        s.durable for s in sb.load_bridge(BRIDGE).subscriptions
+    ]
     creates = [(s, json.loads(p)) for s, p, _h in wire.log[before:] if ".CONSUMER.CREATE." in s]
     assert len(creates) == 3
     for subject, body in creates:
@@ -725,6 +779,15 @@ def test_the_bridge_creates_pull_durables_through_the_filtered_create_only():
             subject == f"$JS.API.CONSUMER.CREATE.HNX.{cfg['durable_name']}.{cfg['filter_subject']}"
         )
         assert "deliver_subject" not in cfg and cfg["ack_policy"] == "explicit"
+    # a second run creates nothing; the bridge binds and creates nothing either
+    assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables()) == []
+    before = len(wire.log)
+    bridge(standing(wire), lambda _ev: 202)
+    assert not [s for s, _p, _h in wire.log[before:] if ".CONSUMER.CREATE." in s]
+    for bad in ({"deliver_subject": "_INBOX.x.y"}, {"ack_policy": "none"},
+                {"deliver_policy": "last"}):  # fmt: skip
+        with pytest.raises(EventsError):
+            nj.provision_consumers(wire, stream="HNX", durables=[dict(bridge_durables()[0], **bad)])
     with pytest.raises(EventsError, match="did not match filtered subject"):
         nj._api(
             wire,
@@ -781,5 +844,6 @@ def test_the_bridge_command_passes_its_bus_credentials(monkeypatch):
     assert seen["password_secret"] == "secret:events/st2-bridge-password"
     assert seen["ca_file"] == "/etc/fake/nats-ca.pem"
     assert seen["allow_plaintext"] is False
-    assert seen["provision"] is False
-    assert seen["replay_s"] == sb.REPLAY_S == 86400.0  # what admit remembers, no more
+    assert seen["provision"] is False  # binds to the provisioner's durables, creates none
+    assert "replay_s" not in seen  # where a durable starts is the provisioner's (REPLAY_S)
+    assert sb.REPLAY_S == 86400.0  # what admit remembers, no more

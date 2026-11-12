@@ -1,0 +1,55 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role status_hub, service {{ status_hub_logical_id }}); local changes are overwritten.
+# docs/status.md: the hub observes and never acts; its one write is the Approvals page, which it
+# relays to the broker over the socket as its own user ({{ status_hub_user }}, an approval relay).
+[Unit]
+Description=homelab-next status hub ({{ status_hub_logical_id }})
+After=network.target{{ ' hnx-broker.service' if status_hub_approvals_socket else '' }}
+
+[Service]
+Type=simple
+User={{ status_hub_user }}
+Group={{ status_hub_group }}
+{% if status_hub_approvals_socket %}
+SupplementaryGroups={{ status_hub_broker_clients_group }}
+{% endif %}
+WorkingDirectory={{ status_hub_state_dir }}
+ExecStart={{ status_hub_hnx_bin }} status serve --registry {{ status_hub_config_dir }}/services.yml --agents {{ status_hub_config_dir }}/agents.yml --views {{ status_hub_config_dir }}/views.yml --state {{ status_hub_state_dir }}/state.json --bind {{ status_hub_bind_address }} --port {{ status_hub_port | int }}{{ ' --allow-remote' if status_hub_bind_address not in status_hub_loopback else '' }}{% for h in status_hub_allowed_hosts %} --allowed-host {{ h }}{% endfor %}
+
+{% if status_hub_runtime_release %}
+Environment=HNX_RUNTIME_RELEASE={{ status_hub_runtime_release }}
+{% endif %}
+EnvironmentFile=-{{ status_hub_config_dir }}/secrets.env
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths={{ status_hub_state_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main with the pinned wheel)
+  ansible.builtin.debug:
+    msg: hnx_runtime keeps no data a restore hook must handle
+  tags: [restore]

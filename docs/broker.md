@@ -1,6 +1,6 @@
 ---
 summary: 'The broker service: named actions decided allow, deny or needs-approval, lanes, exec handlers, approvals, state, Code Mode tokens, running it and its MCP tools.'
-summary_of: outline:sha256:e6b2fa713f21b880
+summary_of: outline:sha256:71e701a0a3652dd3
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Broker service
@@ -558,8 +558,8 @@ none of its pages yet, so a ceiling below `red` turns every page into that notic
 `HNX_NOTIFY_PAIRS_DIR`), the notifier writes the pairs it holds to `DIR/broker/pairs.json` for the
 module census ([modules](modules/loader-deploy.md#the-loader-at-deploy-time), "Notify pairs"). The census reads
 `/var/lib/homelabnext/notify-pairs`; `DIR` (root's, `0755`) and `DIR/broker` (the broker user's,
-`0755`) are the operator's to make, since no role here deploys the broker, and a unit adds
-`DIR/broker` to its `ReadWritePaths`. Either one writable by anyone else, or reached through a
+`0755`) are the operator's to make (the `broker` role, [below](#deploying-with-ansible), does not
+configure notifications yet), and a unit adds `DIR/broker` to its `ReadWritePaths`. Either one writable by anyone else, or reached through a
 link, stops the broker at start.
 
 A peer is listed once, in exactly one role: a caller, a relay, an operator, a Code Mode runner
@@ -603,7 +603,10 @@ hnx broker serve --manifest /etc/hnx-broker/manifest.yml --state /var/lib/hnx-br
 The socket is created `0600` (or `--socket-mode`, which may grant nothing to others) and owned by
 the service user, `--socket-group` its group; its directory is created `0750` (`0700` without a
 group) and the server refuses a directory owned by another user (other than root), one that is
-group-writable or open to others, and a file at the socket path that is not a stale socket.
+group-writable or open to others, and a file at the socket path that is not a stale socket. A
+directory that already exists may be setgid (`2750`, in the clients' group): the socket is then
+born in that group and `--socket-group` is not needed, so the server never calls `chown` (the
+[systemd unit](#a-systemd-unit) relies on this to deny all of `@privileged`).
 Bounds: one request per connection, at most 1 MiB (`--max-request-bytes`) read within 10 s
 (`--timeout`, for the whole request, not each read); 32 connections at once for callers, plus 4
 kept for approval relays so agents cannot crowd out the hub; more get `busy`.
@@ -644,7 +647,17 @@ bounded by the token's own call cap instead.
 ### A systemd unit
 
 A dedicated user owns the state; each agent runs as its own user in `hnx-broker-clients`; the hub
-runs as `hnx-hub`, also in that group.
+runs as `hnx-hub`, also in that group. The socket's directory and the state root are made once,
+as root, not by systemd: `RuntimeDirectory=` and `StateDirectory=` are reset to `User:Group` for
+every command the unit starts, so an `ExecStartPre=+/bin/chgrp` to the clients' (or the relay's)
+group is undone before `ExecStart` runs, and the peers then cannot reach the socket (the relay
+its `outbox/`). A `tmpfiles.d` line keeps the socket's directory across reboots, **setgid** so
+the socket is born in the clients' group and the broker never chowns it:
+
+```text
+# /etc/tmpfiles.d/hnx-broker.conf
+d /run/hnx-broker 2750 hnx-broker hnx-broker-clients -
+```
 
 ```ini
 # /etc/systemd/system/hnx-broker.service
@@ -655,22 +668,28 @@ After=network.target
 [Service]
 User=hnx-broker
 Group=hnx-broker
-SupplementaryGroups=hnx-broker-clients
-RuntimeDirectory=hnx-broker
-RuntimeDirectoryMode=0750
-StateDirectory=hnx-broker
-StateDirectoryMode=0710
-ExecStartPre=+/bin/chgrp hnx-broker-clients /run/hnx-broker
-ExecStartPre=+/bin/chgrp hnx-broker-relay /var/lib/hnx-broker
 ExecStart=/opt/hnx/bin/hnx broker serve --manifest /etc/hnx-broker/manifest.yml \
   --state /var/lib/hnx-broker/state --data-root /srv/agents \
-  --socket /run/hnx-broker/broker.sock --socket-mode 660 --socket-group hnx-broker-clients
+  --socket /run/hnx-broker/broker.sock --socket-mode 660
 EnvironmentFile=-/etc/hnx-broker/secrets.env
+# 0027, not 0077: the broker creates outbox files 0640 for the relay's group (open's mode is
+# masked by the umask), and 0600 ones are quarantined by the relay as unreadable; everything else
+# it creates 0600/0700 itself
+UMask=0027
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/hnx-broker /srv/agents
+ReadWritePaths=/var/lib/hnx-broker /srv/agents /run/hnx-broker
 ProtectHome=yes
 PrivateTmp=yes
+# other users' processes are invisible, and /proc holds processes only
+ProtectProc=invisible
+ProcSubset=pid
+# serve needs no network: the socket is its only door (its handlers then get none either)
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+# all of @privileged (it holds @chown): the socket takes its group from the setgid directory
+SystemCallFilter=~@privileged @resources
 
 [Install]
 WantedBy=multi-user.target
@@ -679,7 +698,121 @@ WantedBy=multi-user.target
 `/srv/agents` (the lanes' data root) is writable by `hnx-broker` only; agents read their own
 memory there if the operator grants it, never write. Handler secrets come from
 `HNX_BROKER_SECRET_<NAME>` in the service's environment (here an environment file readable by
-root and the service user only).
+root and the service user only). `ProcSubset=pid` hides `/proc/sys`, so a run claim records no
+boot id; that does not weaken the claim. Every claim records the broker `instance` that made it,
+and whether that instance lives is read from its `live/<id>` lock (an exclusive `flock` held for
+the process's whole life, released by the kernel when it dies, across a reboot too). Only a claim
+written before claims named their instance falls back to the claimant's pid and its start time;
+without the boot id a recycled pid can at worst make such a claim read `running` when it is not,
+never let it run again (`homelabnext.broker.state`).
+
+### Handlers and the broker's uid
+
+**An exec handler runs as the broker's own user**, inside the broker's unit: it can read and write
+everything the broker can, the state directory and the audit trail included. The digest pin and
+the sandboxing of the unit bound *which* bytes run and what the host lets them touch, not what
+they may do to the broker's own evidence. So **before the first real handler** (one that acts,
+rather than a stand-in that reports what it would do), handlers MUST run under a uid of their own:
+a transient unit per run (`systemd-run --uid=` / `DynamicUser=yes`, with the run directory handed
+over) or a small setuid-free helper (`setpriv --reuid --regid --clear-groups`) started with that
+one capability. That change is to execution itself and is not made yet, and **per-handler uids
+remain a MUST before any real handler is deployed**.
+
+Until it is, the `broker` role ([Deploying with Ansible](#deploying-with-ansible)) **refuses** a
+manifest that declares an exec handler (an action whose `handler` is not `builtin/...`) unless
+its `manifest_id` ends in `-proof`: the marker of proof content whose handlers are stand-ins. The
+refusal is at validate time, on the controller, before anything on the host changes; built-in
+handlers (the lanes) run in the broker itself and are not affected. A deployment that uses the
+`-proof` marker must not carry it past its proof (the private overlay's own checks refuse a
+deploy-relevant run while its manifest still has it).
+
+This gate is a stop-gap keyed on a *name*, not on what the handlers are. Its planned follow-up is
+content-based: the role accepts an exec handler only when its digest matches one of the stand-ins
+the project ships (`examples/broker/handlers/`), or when the operator sets an explicit, reviewed
+`broker_accept_shared_uid_handlers: true`. Neither replaces per-handler uids; both only narrow
+what may run under the shared one until then.
+
+### Deploying with Ansible
+
+`ansible/playbooks/control_plane.yml` deploys this section's units on the capability groups
+(`cap_broker`, `cap_status_hub`, `cap_events`; [role interface](role-interface.md)):
+
+| Role | Installs |
+|---|---|
+| `hnx_runtime` | homelab-next itself: a wheel pinned by sha256 and every dependency by the hashes of the same commit's `constraints/ci.txt` (`pip --require-hashes --only-binary=:all:`), one virtualenv per release under `/opt/hnx/releases/`, switched to (`/opt/hnx/current`, `/opt/hnx/bin/hnx`) only after it installed and passed `pip check` |
+| `events_bus` | the events bus ([events](events.md)): the pinned NATS server release (sha256), the streams and the operator's user in the bus account and every client in an account of its own that imports only its own calls (a reply subject is not permission-checked: [The bus ACL](#publishing-events-the-outbox-relay)), each user an allow-list and nothing else (the lab's grants), bcrypt-hashed passwords, loopback only until a TLS listener exists, the standing stream and its DLQ provisioned with limits by the operator's user |
+| `broker` | the unit above and the relay's, the users and groups, the directories with the modes [State](#state) names, the operator's manifest and handlers (checked by `hnx broker validate` on the host), the handler secrets and the relay's bus password resolved from their references into 0640 environment files |
+| `status_hub` | `hnx status serve` under `hnx-hub` over the lab's registry, the private tier and the [Approvals page](#front-door-approvals), bound to one address (the edge reaches it, [status hub](status.md#the-private-tier-caddy--auth-proxy--idp-setup)) |
+
+Every secret is a `secret:<name>` reference resolved on the controller by the `hnx_secret` lookup
+(OpenBao in a private overlay's deploy). A changed release, manifest, handler, secret or unit
+restarts the service it belongs to; a re-run with nothing changed reports `changed=0`, and so does
+`--check --diff`. Other services are named by registry id (role interface section 4): the relay's
+bus by `broker_relay_events_id` (capability `events`; the endpoint defaults to that row's port on
+loopback, the bus having no TLS listener yet), the hub's allowed host by its own row's
+`public_hostname`.
+
+* **The manifest and its handlers are validated before they are installed.** Both are staged
+  under `<config>/staged/` (`manifest.yml` and `handlers/`, so the staged manifest's `handlers/`
+  paths and digests resolve against the staged handlers), checked by the release's own `hnx
+  broker validate`, and only then copied over the live `handlers/` and `manifest.yml`; a set that
+  fails stops the play with the running broker's manifest and handlers untouched.
+* **Handlers share the broker's uid**, so the role refuses a non-proof manifest with an exec
+  handler ([Handlers and the broker's uid](#handlers-and-the-brokers-uid)).
+* **The release names the interpreter's full version** (`sys.version`) besides its path, so a
+  distribution's Python upgrade builds a new virtualenv instead of running the old one on it.
+* **`restore` is data only** in all four roles' sense of it: the units are stopped for the copy and
+  started again after, ownership and modes are put back as `main` makes them (the state directory
+  the relay's group, `0710`, so the relay still reaches `outbox/`), and configuration and unit
+  files are left alone.
+* **Backup and restore: a restore can re-arm a consumed approval.** The copy merges the backup
+  into the state directory and deletes nothing, so restored over a surviving state directory the
+  claims and `consumed/` markers written after the backup stay, and nothing runs twice. Restored
+  onto an **empty** state directory (the original lost), every approval consumed after the backup
+  is unconsumed again: an approved run-once action that ran after the backup was taken can run a
+  second time. Before starting the broker on such a restore (`broker_start: false` restores
+  without starting it), compare `consumed/` and `claims/` with the audit trail of what ran after
+  the backup (a shipped copy, the targets themselves) and deny the requests that already ran
+  (`hnx broker deny`), or take backups often enough that the window is acceptable.
+
+**The wheel**, from the commit you deploy and nothing else: a fresh clone (or `git clean -xdf`),
+the build backend pinned by hash (`constraints/build.txt`, setuptools from the same lock as
+`constraints/ci.txt`) in a throwaway virtualenv, and the commit's time as `SOURCE_DATE_EPOCH`, so
+the bytes, and the pinned sha256, are reproducible. Record the backend's version next to the sha:
+
+```sh
+git clone --quiet --no-checkout https://github.com/homelab-next/homelab-next.git hnx-build
+git -C hnx-build checkout --quiet <commit>          # a fresh tree: nothing untracked is packaged
+python3 -m venv /tmp/hnx-build-venv
+/tmp/hnx-build-venv/bin/pip install --require-hashes --no-deps -r hnx-build/constraints/bootstrap.txt
+/tmp/hnx-build-venv/bin/pip install --require-hashes --no-deps --only-binary=:all: -r hnx-build/constraints/build.txt
+cd hnx-build && SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) \
+  /tmp/hnx-build-venv/bin/python -m pip wheel --no-deps --no-build-isolation -w dist .
+sha256sum dist/homelabnext-*.whl   # -> hnx_runtime_wheel_sha256 (built with setuptools 84.2.1)
+```
+
+To run [the scenario](#testing) against the deployed units, run `broker_e2e.py run` as root on
+the broker host with the release's interpreter, naming the real peers (`--peer agent=hnx-agent-triage
+--peer relay=hnx-hub --peer stranger=65534 --clients-group hnx-broker-clients --relay-user
+hnx-broker-relay`), the hub's public name, approver and groups (`--hub-host`, `--approver`,
+`--approver-group`, `--viewer-group`), the bus users (`--bus-admin`, `--bus-not-broker`) and the
+relay's `--events-target`, `--stream` and `--subject-prefix`; stop `hnx-broker-relay.service`
+for the run (one relay per state directory; the scenario's own `--once` passes take its place).
+**Use scratch names on a real bus**: a stream and prefix of the run's own (granted to the bus users
+for the run only) and `--bus-not-broker-durable` a durable no real consumer uses, so the real
+bridge never inherits the run's ack floor and the standing stream holds none of its events. The
+not-broker user may not create a consumer (nobody but the provisioner may), so the durable is a
+pull durable `--bus-admin` creates: declare it in `events_bus_durables` for the not-broker user
+(the role then creates it when `events_bus_provision_durables` is on), or let the run create it
+as `--bus-admin` (grant that user its `CONSUMER.INFO` and filtered `CONSUMER.CREATE`). The run
+deletes that durable again at the end, as `--bus-admin` (grant it
+`$JS.API.CONSUMER.DELETE.<stream>.<durable>` for the run; the events bus role lets only its
+`events_bus_admin_user` hold a consumer create or delete). On the events bus role every user but
+the provisioner lives in an account of its own and names its JetStream calls under
+`JS.<account>.API` (`--bus-api-prefix`, default `JS.HNX.API`): grant the run's scratch calls in
+`events_bus_users` like any other, and the role renders the imports.
+The hub's steps must reach it from a trusted proxy's address (the registry's edge-proxy host), as
+the edge would.
 
 ### Publishing events: the outbox relay
 
@@ -782,6 +915,7 @@ capabilities:
       password_secret: secret:events/broker   # read from HNX_SECRET_EVENTS_BROKER when connecting
       ca_file: /etc/hnx-broker-relay/events-ca.pem  # the bus's CA (tls:// endpoint)
       client_name: hnx-broker-relay
+      api_prefix: JS.HNX.API  # its account's import of the bus's JetStream calls (The bus ACL)
       duplicate_window: 86400.0
 ```
 
@@ -855,49 +989,168 @@ passwords, ideally bcrypt hashes from `nats server passwd`), and its broker scen
 (the `bus-acl` step). Every user has an allow-list and nothing else: no `$JS.API.>` wildcard (so
 no `STREAM.PURGE`, `STREAM.UPDATE`, `STREAM.DELETE` or `MSG.DELETE`), no `STREAM.CREATE` for the
 relay or the bridge (an operator provisions both streams with limits; the relay connects with
-`provision=False` and refuses a missing or unbounded stream), and replies on the user's own inbox
-prefix (`_INBOX.<user>`, the adapter's default for a `user`), never a shared `_INBOX.>` where one
-client could read another's replies. The broker's relay and the bridge, verbatim from the lab
+`provision=False` and refuses a missing or unbounded stream), **no consumer create for anyone but
+the provisioner** (below), and replies on the user's own inbox prefix (`_INBOX.<user>`, the
+adapter's default for a `user`), never a shared `_INBOX.>`. That protects a user's replies from
+being READ by another client; it does not protect them from forged replies: the reply subject of
+a request is not checked against anyone's allow-list, so any client that learns an inbox subject
+can publish to it. A client must therefore match each reply by an unguessable token of its own,
+as the adapter does (nats-py's `new_inbox()`: a random token per request under the user's prefix,
+and it reads only the reply to the inbox it made).
+
+**Clients live in accounts of their own (homelab-next #360, round 5).** The reply subject of a
+request is not permission-checked, and JetStream takes a message its own internal client
+publishes (a pull's delivery, even a `404` status; an ack's answer; an API response) as a request
+when it lands on `$JS.API.*`. In one account a user holding nothing but its own durable's
+`CONSUMER.MSG.NEXT` could send `PUB $JS.API.CONSUMER.MSG.NEXT.<stream>.<durable>
+$JS.API.STREAM.DELETE.<stream> {"batch":1,"no_wait":true}` and the server deleted the stream,
+`deny_delete` notwithstanding (verified on 2.15.1; an ack or `CONSUMER.DELETE.<s>.<other>` as the
+reply alike), and a `STREAM.INFO` or `CONSUMER.INFO` answered to a stream subject stored the
+answer in the stream. Subject permissions cannot say "deliver, but never to the API"; an account
+boundary can. So the streams and the provisioner live in the bus account (`HNX`, JetStream on);
+every other user lives in an account of its own (`HNX-<user>`, JetStream off) that imports from
+`HNX`, as services, exactly the subjects its allow-list names, and `HNX` exports each to that
+account alone. Across a service import the server rewrites the reply to a private `_R_.` subject
+and routes the answer back into the client's own account, where no JetStream API listens and
+nothing but that client's own imports can be reached. A client names its JetStream calls under
+`JS.HNX.API` (the import's `to`: an account without JetStream answers `$JS.API.*` itself, "JetStream
+not enabled for account"), so the adapter takes `api_prefix: JS.HNX.API` (the relay's events
+target, the bridge's and `hnx orchestration consume`'s `--events-api-prefix`); acks
+(`$JS.ACK.<...>`, a delivery's reply subject) and stream subjects keep their names. `MSG.NEXT` is
+exported with `response_type: stream` (a batch answers one request with several messages). The
+events bus role renders this from the same `events_bus_users` lists (`hnx_bus_accounts` in
+`ansible/plugins/filter/hnx_bus.py`; the lab's block is exactly what it renders, tested), the
+broker scenario's `bus-acl` step sends the reply attacks against a real bus, and
+`tests/roles` runs them against the pinned server. The relay and the bridge, verbatim from the lab
 (`tests/compose` fails when this excerpt and the lab drift apart):
 
 ```text
-# compose/lab-in-a-box/config/nats/nats.conf (excerpt: account HNX, the relay and the bridge)
+# compose/lab-in-a-box/config/nats/nats.conf (excerpt: the relay's and the bridge's users,
+# each in its own account, HNX-hnx-broker and HNX-hnx-st2-bridge)
 [
 {"user": "hnx-broker", "password": $LAB_EVENTS_BROKER_PASSWORD,
  "permissions": {
-   "publish": {"allow": ["hnxlab.homelabnext.decision.>", "hnxlab.homelabnext.proposal.>",
-                         "$JS.API.STREAM.INFO.HNXLAB_BROKER",
-                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ"]},
+   "publish": {"allow": ["hnxlab.homelabnext.decision.>",
+                         "hnxlab.homelabnext.proposal.>",
+                         "JS.HNX.API.STREAM.INFO.HNXLAB_BROKER",
+                         "JS.HNX.API.STREAM.INFO.HNXLAB_BROKER_DLQ"]},
    "subscribe": {"allow": ["_INBOX.hnx-broker.>"]}}},
 {"user": "hnx-st2-bridge", "password": $LAB_EVENTS_ST2_BRIDGE_PASSWORD,
  "permissions": {
-   "publish": {"allow": ["$JS.API.STREAM.INFO.HNXLAB_BROKER",
-                         "$JS.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
-                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-agent-job-failed.hnxlab.homelabnext.agent.job.failed",
-                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
+   "publish": {"allow": ["JS.HNX.API.STREAM.INFO.HNXLAB_BROKER",
+                         "JS.HNX.API.STREAM.INFO.HNXLAB_BROKER_DLQ",
+                         "JS.HNX.API.CONSUMER.INFO.HNXLAB_BROKER.st2-agent-job-failed",
+                         "JS.HNX.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-agent-job-failed",
                          "$JS.ACK.HNXLAB_BROKER.st2-agent-job-failed.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-agent-job-failed.*.*.*.*.>",
-                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-decision-returned.hnxlab.homelabnext.decision.returned",
-                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
+                         "JS.HNX.API.CONSUMER.INFO.HNXLAB_BROKER.st2-decision-returned",
+                         "JS.HNX.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-decision-returned",
                          "$JS.ACK.HNXLAB_BROKER.st2-decision-returned.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-decision-returned.*.*.*.*.>",
-                         "$JS.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
-                         "$JS.API.CONSUMER.CREATE.HNXLAB_BROKER.st2-proposal-created.hnxlab.homelabnext.proposal.created",
-                         "$JS.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
+                         "JS.HNX.API.CONSUMER.INFO.HNXLAB_BROKER.st2-proposal-created",
+                         "JS.HNX.API.CONSUMER.MSG.NEXT.HNXLAB_BROKER.st2-proposal-created",
                          "$JS.ACK.HNXLAB_BROKER.st2-proposal-created.*.*.*.*.*",
                          "$JS.ACK._.hKkTAyOX.HNXLAB_BROKER.st2-proposal-created.*.*.*.*.>"]},
    "subscribe": {"allow": ["_INBOX.hnx-st2-bridge.>"]}}}
 ]
 ```
 
-The lab's other users: `hnx-lab-admin` (the operator: `STREAM.INFO`/`STREAM.CREATE` of the stream
-and its DLQ, `STREAM.MSG.GET` of the stream; it provisions them, with
-`homelabnext.conform.adapters.nats_jetstream.provision_streams`, and reads back what the relay
-published), and `hnx-conformance` in an account of its own (`CONFORM`), where `hnx conform run
-events` creates and deletes its scratch streams without any way to reach the `HNX` account's
-subjects or streams. No client connects without a user.
+The lab's other users: `hnx-lab-admin` in `HNX` itself (the operator: `STREAM.INFO`/`STREAM.CREATE`
+of the stream and its DLQ, `STREAM.MSG.GET` of the stream -- which reads any stored message, every
+subject's and every durable's, so no client holds it -- `CONSUMER.INFO` and the filtered `CONSUMER.CREATE` of
+the bridge's three durables; it provisions them, with
+`homelabnext.conform.adapters.nats_jetstream.provision_streams` and `provision_consumers`, and
+reads back what the relay published), and `hnx-conformance` in an account of its own (`CONFORM`),
+where `hnx conform run events` creates and deletes its scratch streams without any way to reach
+the `HNX` account's subjects or streams. No client connects without a user.
+
+**Only the provisioner creates consumers.** A consumer create (`CONSUMER.CREATE`, the filtered
+`CONSUMER.CREATE.<stream>.<durable>.<filter>`, `CONSUMER.DURABLE.CREATE`) takes any configuration,
+a push `deliver_subject` included, and the server delivers a push consumer's messages as itself:
+the creator's publish allow-list never applies to the deliver subject. A user who may create a
+durable can have the stream delivered to any subject, another user's `_INBOX` included (verified
+on nats-server 2.15.1: a push durable with `deliver_subject` `_INBOX.<victim>.x` delivered the
+stream to the victim's subscription). So the role's provisioner pre-creates every durable a user
+reads, a PULL durable (no `deliver_subject`, explicit acks), declared in `events_bus_durables`
+(`{stream, durable, user, filter, ack_wait, max_deliver, deliver_policy | replay_s | start_seq}`),
+and the
+user holds only that durable's `CONSUMER.INFO`, `CONSUMER.MSG.NEXT` and its acks; the clients
+(`provision=False`: the relay, the StackStorm bridge, `hnx orchestration consume`) bind to it and
+refuse a missing or push durable. The role refuses a declared durable with a `deliver_subject`,
+any consumer grant that names a durable not declared for that user, two users naming one durable,
+and its `health` hook (and every `main` run) fails when `/jsz?consumers=true` on the loopback
+monitor lists any consumer with a `deliver_subject`.
+
+**Creating durables is gated: `events_bus_provision_durables` is false by default.** A durable
+starts where its `deliver_policy` says at the moment it is created (`new`: only what is published
+after it; `all`: the whole stream; `replay_s`: that many seconds back; `start_seq`: from that
+stream sequence), so creating one on a
+stream that already holds events decides what its consumer will be handed. Turn it on once that
+is decided for the stream; until then the role validates the declared durables and creates none.
+
+**The `events_bus` role enforces the same shape on every deployment** (filters
+`hnx_bus_subject_problems` and `hnx_bus_durable_problems`, `ansible/plugins/filter/hnx_bus.py`).
+The server's own subjects are an allow-list, not a deny-list: anything under `$JS`, `$KV`, `$O`,
+`$SYS` (any subject whose first token starts with `$`) is refused unless it is one of
+`$JS.API.INFO`, `STREAM.INFO.<stream>`,
+`CONSUMER.INFO|MSG.NEXT.<stream>.<durable>`, or an ack grant in exactly one of the two reply-subject
+forms, `$JS.ACK.<stream>.<durable>.*.*.*.*.*` (v1, exactly nine tokens) or
+`$JS.ACK._.<account hash>.<stream>.<durable>.*.*.*.*.>` (v2, eleven or more: the domain token is
+`_`, the server's when no JetStream domain is set, and the hash 8 of `[A-Za-z0-9]`, so tokens 2-3
+can never be a stream and a durable), each on a named stream and durable. (A looser `$JS.ACK.<stream>.<durable>.>` reads as the v2 domain and
+hash `<stream>.<durable>` and reaches the acks, and with them `+NXT` pulls, of every stream and
+durable.) The provisioner (`events_bus_admin_user`) alone may also hold `STREAM.MSG.GET.<stream>`
+(it reads any stored message, every subject's and every durable's), `STREAM.CREATE.<stream>`,
+`CONSUMER.CREATE.<stream>.<durable>[.<filter>]`, `CONSUMER.DURABLE.CREATE.<stream>.<durable>` and
+`CONSUMER.DELETE.<stream>.<durable>`. **No user may hold `STREAM.UPDATE`, the provisioner
+included**, nor a stream delete, purge, message delete, snapshot or restore, a consumer listing,
+or anything of the key-value or object stores. A user's publish list may be empty only when it
+says `subscribe_only: true`, and is then rendered deny-all (`"deny": [">"]`): NATS reads an empty
+`allow` list as no restriction at all.
+
+The streams the role provisions are created with `deny_delete` and `deny_purge`, so the server
+refuses a message delete or a purge to every user whatever its grants; nats-server refuses to
+clear either flag on an existing stream ("can not cancel deny message deletes"). **They do not
+make the messages final on their own: `STREAM.UPDATE` can still delete messages** by shrinking the
+stream's limits (`max_msgs`, `max_bytes`, `max_age`, `max_msgs_per_subject`: the server discards
+the oldest to fit) or by dropping subjects, deny flags or not. The evidence a stream holds is
+final only while nobody holds `STREAM.UPDATE`, which is why the role grants it to no one. (Nor do
+the flags stop `STREAM.DELETE` of the whole stream; that call too the role grants no user.)
+
+**When a stream is full** it does what its `discard` says, and the role leaves the choice to the
+stream's declaration (`events_bus_streams`: `discard`, `max_msgs_per_subject`; applied when the
+role creates the stream, never to an existing one). `old` (the default, and the existing
+`HNX_BROKER`) evicts the oldest messages: whoever can get enough into the stream pushes the
+evidence out (the round-5 reply injection did exactly that before the account split). `new`
+refuses the publish instead: nothing stored is ever evicted, the relay keeps the event in its
+outbox and retries, and the cost is availability, since a full stream refuses every new event
+until `max_age` frees room or an operator raises `max_bytes`. `max_msgs_per_subject` (with
+`discard: new` only; it sets `discard_new_per_subject`) bounds each subject on its own, so a flood
+on one subject is refused without starving the others; size it above the busiest subject's
+volume over `max_age`. For an evidence stream created from now on, `discard: new` is the
+recommendation. The DLQ always discards old (a refused advisory would be lost silently).
+
+**Detection backstop.** The `health` hook compares `/jsz` with the declaration: a declared stream
+or DLQ that is not on the bus fails it (a deleted stream is what a successful `STREAM.DELETE`
+leaves), a declared durable that is missing fails it once `events_bus_provision_durables` is on
+and is reported until then ("declared, not provisioned"). For alerting between health runs,
+subscribe the monitoring side (in the bus account) to the server's own advisories,
+`$JS.EVENT.ADVISORY.STREAM.DELETED.>` and `$JS.EVENT.ADVISORY.CONSUMER.DELETED.>` (and
+`...STREAM.UPDATED.>`): none should ever fire outside a break-glass step.
+
+A stream created before the flags keeps its own settings (the role never changes an existing
+stream). Adding them in place is a **break-glass step**, done by hand and undone in the same
+sitting:
+
+1. after any purge the stream still needs (none is possible after), create a temporary bus
+   credential that holds `$JS.API.STREAM.INFO.<stream>` and `$JS.API.STREAM.UPDATE.<stream>` (and
+   `_DLQ`), kept OUTSIDE the inventory (a one-off user in a scratch copy of the server
+   configuration, or the provisioner's grant added for this run only, never committed);
+2. `STREAM.UPDATE` each stream with its current configuration plus `deny_delete: true` and
+   `deny_purge: true` (`nats stream edit`; the messages are kept) and check `STREAM.INFO` shows
+   both flags and the same message count;
+3. remove the grant (or the temporary user), re-run the role, and `grep -c UPDATE
+   /etc/hnx-events/nats.conf`: it must print 0. Until it does, the evidence is not final.
 
 ### Agents: the MCP tools
 
@@ -1199,8 +1452,14 @@ The scenario's steps, each a line of the report (`broker_e2e.py run --json`, and
 11. `bus-acl` (with a bus): a client without a user is refused; the StackStorm bridge's NATS user
     (`hnx-st2-bridge`) tries to publish a forged `decision.returned` for the request with source
     `svc:broker`, `verdict: accept`, `tier_used: human` and is refused by the server (a permission
-    violation), as is its `STREAM.PURGE`; the stream's last `decision.returned` is still the
-    broker's;
+    violation), as are its `STREAM.PURGE`, a push consumer create in every form (the filtered
+    `CONSUMER.CREATE.<stream>.<durable>.<filter>` included) and `STREAM.UPDATE`; the stream's last
+    `decision.returned` is still the broker's; the bridge's user binds to its durable, pulls and
+    acks; and the reply-subject attacks (round 5): a pull, an ack and the bridge's and the
+    relay's `CONSUMER.INFO`/`STREAM.INFO`, each sent with reply `$JS.API.STREAM.DELETE.<stream>`,
+    `CONSUMER.DELETE.<stream>.<durable>`, `STREAM.PURGE.<stream>` and two stream subjects, leave
+    the stream, its flags, its last sequence and the durable as they were (on a wire that can set
+    a reply subject, nats-py's; `run --bus-api-prefix` names the client accounts' import prefix);
 12. `audit`: the relay's `hnx broker audit` holds a record of every step, each with the peer's
     `via: uid:<n>` (agent, unmapped uid and relay).
 

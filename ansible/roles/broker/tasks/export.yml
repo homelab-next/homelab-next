@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Create the export directory
+      ansible.builtin.file:
+        path: "{{ broker_export_dir }}"
+        state: directory
+        mode: "0700"
+    - name: Export the audit trail (one JSON record per file, schemas/broker/audit) as tar.gz
+      ansible.builtin.command:
+        argv: [tar, -czf, "{{ broker_export_dir }}/{{ broker_logical_id }}-audit.tar.gz", -C, "{{ broker_state_root }}/state", audit]
+      changed_when: true
+  tags: [export]

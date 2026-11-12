@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Look up every peer user (the broker refuses to start with an unknown one)
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ item }}"
+      loop: "{{ broker_client_users }}"
+    - name: Wait for the bus to accept connections
+      ansible.builtin.wait_for:
+        host: "{{ broker_relay_events_endpoint | regex_replace('^[a-z]+://\\[?([^\\]]+?)\\]?:[0-9]+$', '\\1') }}"
+        port: "{{ broker_relay_events_endpoint | regex_replace('^.*:([0-9]+)$', '\\1') | int }}"
+        timeout: 10
+      when: broker_relay | bool
+  tags: [readiness]

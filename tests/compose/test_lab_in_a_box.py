@@ -74,10 +74,31 @@ def nats_users() -> dict[str, dict]:
     }
 
 
+#: where a client account imports the bus account's JetStream calls (role events_bus's
+#: events_bus_api_prefix for the account HNX; the adapter's api_prefix)
+LAB_API_PREFIX = "JS.HNX.API"
+
+
+def bus_subject(subject: str) -> str:
+    """A client's grant as the bus account sees it: ``JS.HNX.API.<call>`` is the import of
+    ``$JS.API.<call>``; anything else is imported as it is."""
+    head = LAB_API_PREFIX + "."
+    return "$JS.API." + subject[len(head) :] if subject.startswith(head) else subject
+
+
+def client_subject(user: dict, subject: str) -> str:
+    """``subject`` (a ``$JS.API`` call or any other) as ``user`` names it: a client account
+    names its JetStream calls under the import prefix, the bus account (HNX) as they are."""
+    if user.get("account") != "HNX" and subject.startswith("$JS.API."):
+        return f"{LAB_API_PREFIX}.{subject[len('$JS.API.') :]}"
+    return subject
+
+
 def nats_allowed(user: dict, direction: str, subject: str) -> bool:
     """Does ``user`` (a :func:`nats_users` entry) may ``direction`` (publish / subscribe) on
     ``subject``: allow-list semantics, deny wins; a user with no permissions may do anything in
-    its own account."""
+    its own account.  As nats-server reads it, a missing or EMPTY ``allow`` is no restriction
+    (only ``deny`` then limits the user): ``{"allow": []}`` grants everything."""
     from conformance.fakes.jetstream_wire import subject_matches
 
     perms = (user.get("permissions") or {}).get(direction)
@@ -85,7 +106,8 @@ def nats_allowed(user: dict, direction: str, subject: str) -> bool:
         return "permissions" not in user
     if any(subject_matches(p, subject) for p in perms.get("deny", [])):
         return False
-    return any(subject_matches(p, subject) for p in perms.get("allow", []))
+    allow = perms.get("allow") or []
+    return not allow or any(subject_matches(p, subject) for p in allow)
 
 
 @pytest.fixture(scope="module")
@@ -1723,19 +1745,24 @@ def test_the_events_service_requires_a_user_and_reads_the_lab_config(compose, en
         assert events["environment"][var] == f"${{{var}:?see .env.example}}"
         assert "fake" in env_vars[var]
     users = nats_users()
+    # the account split (round 5): the provisioner alone with the streams, a client per account
+    bridge = load_module("broker_e2e", LAB / "broker_e2e.py").LAB_NOT_BROKER
     assert {u: v["account"] for u, v in users.items()} == {
-        "hnx-broker": "HNX",
-        "hnx-st2-bridge": "HNX",
+        "hnx-broker": "HNX-hnx-broker",
+        bridge: f"HNX-{bridge}",
         "hnx-lab-admin": "HNX",
         "hnx-conformance": "CONFORM",
     }
+    clients = [v["account"] for v in users.values() if v["account"].startswith("HNX-")]
+    assert conf["accounts"]["HNX"]["jetstream"] == "enabled" and len(clients) == 2
+    assert all("jetstream" not in conf["accounts"][a] for a in clients)
 
 
 @pytest.mark.parametrize("kind", ["decision.returned", "decision.requested", "proposal.created"])
 def test_only_the_broker_may_publish_the_brokers_subjects(kind):
     e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
     subject = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.{kind}"
-    hnx = {n: u for n, u in nats_users().items() if u["account"] == "HNX"}
+    hnx = {n: u for n, u in nats_users().items() if u["account"].startswith("HNX")}
     assert [n for n, u in hnx.items() if nats_allowed(u, "publish", subject)] == ["hnx-broker"]
     broker = hnx["hnx-broker"]
     other = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.agent.job.failed"
@@ -1749,7 +1776,7 @@ def test_nobody_but_the_controller_may_publish_agent_job_events():
     for kind in ("failed", "other"):
         subject = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.agent.job.{kind}"
         allowed = [n for n, u in nats_users().items()
-                   if u["account"] == "HNX" and nats_allowed(u, "publish", subject)]  # fmt: skip
+                   if u["account"].startswith("HNX") and nats_allowed(u, "publish", subject)]  # fmt: skip
         assert allowed == [], subject
 
 
@@ -1768,19 +1795,22 @@ def test_the_conformance_account_has_its_own_jetstream_limits():
 def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
     stream = e2e.LAB_EVENTS_STREAM
-    hnx = {n: u for n, u in nats_users().items() if u["account"] == "HNX"}
+    hnx = {n: u for n, u in nats_users().items() if u["account"].startswith("HNX")}
     for name, user in hnx.items():
         assert "permissions" in user, name  # an allow-list for everyone in HNX
         for what in ("STREAM.PURGE", "STREAM.UPDATE", "STREAM.DELETE", "STREAM.MSG.DELETE",
                      "CONSUMER.DELETE"):  # fmt: skip
-            assert not nats_allowed(user, "publish", f"$JS.API.{what}.{stream}"), (name, what)
+            for call in (f"$JS.API.{what}.{stream}", f"{LAB_API_PREFIX}.{what}.{stream}"):
+                assert not nats_allowed(user, "publish", call), (name, what)
         subs = user["permissions"]["subscribe"]["allow"]
         assert subs == [f"_INBOX.{name}.>"], name
         for other in hnx:
             if other != name:
                 assert not nats_allowed(user, "subscribe", f"_INBOX.{other}.x.y"), (name, other)
-    # the bridge reads its own durables only, and creates no stream
+    # the bridge reads its own durables only, and creates no stream and no consumer: a consumer
+    # create takes a push deliver_subject, which the server delivers to any subject
     bridge = hnx["hnx-st2-bridge"]
+    admin = hnx["hnx-lab-admin"]
     bridge_json = json.loads((ROOT / "workflows" / "stackstorm" / "bridge.json").read_text())
     prefix = e2e.LAB_EVENTS_PREFIX
     # the bus-acl step reads and acks through the bridge's own durable on decision.returned
@@ -1789,17 +1819,25 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     for sub in bridge_json["subscriptions"]:
         d = sub["durable"]
         for what in ("INFO", "MSG.NEXT"):
-            assert nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.{what}.{stream}.{d}")
-        # only the filtered create (nats 2.9+): the server holds the request to that filter
-        create = f"$JS.API.CONSUMER.CREATE.{stream}.{d}"
-        assert nats_allowed(bridge, "publish", f"{create}.{prefix}.{sub['subject']}")
-        assert not nats_allowed(bridge, "publish", create)  # any filter, any shape
-        assert not nats_allowed(bridge, "publish", f"{create}.{prefix}.homelabnext.other")
+            call = f"$JS.API.CONSUMER.{what}.{stream}.{d}"
+            assert nats_allowed(bridge, "publish", client_subject(bridge, call))
+            assert not nats_allowed(bridge, "publish", call)  # its account answers $JS.API itself
+        for user, may in ((bridge, False), (admin, True)):
+            create = client_subject(user, f"$JS.API.CONSUMER.CREATE.{stream}.{d}")
+            # the provisioner pre-creates it through the filtered create (nats 2.9+) alone
+            assert nats_allowed(user, "publish", f"{create}.{prefix}.{sub['subject']}") is may
+            assert not nats_allowed(user, "publish", create)  # any filter, any shape
+            assert not nats_allowed(user, "publish", f"{create}.{prefix}.homelabnext.other")
+            assert not nats_allowed(user, "publish", client_subject(
+                user, f"$JS.API.CONSUMER.DURABLE.CREATE.{stream}.{d}"))  # fmt: skip
         assert nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.{d}.1.2.3.4.5")
     assert not nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.other.1.2.3.4.5")
-    assert not nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.CREATE.{stream}.other")
-    assert not nats_allowed(bridge, "publish", f"$JS.API.STREAM.CREATE.{stream}")
-    assert not nats_allowed(hnx["hnx-broker"], "publish", f"$JS.API.STREAM.CREATE.{stream}")
+    for user in (bridge, hnx["hnx-broker"]):
+        for call in (f"$JS.API.CONSUMER.CREATE.{stream}.other", f"$JS.API.STREAM.CREATE.{stream}",
+                     f"$JS.API.STREAM.MSG.GET.{stream}"):  # fmt: skip
+            assert not nats_allowed(user, "publish", client_subject(user, call)), call
+    # reading a stored message back reads every subject's: the provisioner's alone
+    assert nats_allowed(admin, "publish", f"$JS.API.STREAM.MSG.GET.{stream}")
 
 
 def nats_account_hash(account: str) -> str:
@@ -1834,7 +1872,7 @@ def test_acks_are_granted_token_exact_in_both_reply_subject_forms():
         if not acks:
             continue
         ackers += 1  # the bridge: the one user granted acks on the standing stream
-        h = nats_account_hash(user["account"])
+        h = nats_account_hash("HNX")  # the stream's account, not the client's
         durables = {s.split(".")[3] for s in acks if s.split(".")[2] == stream}
         assert durables
         assert sorted(acks) == sorted(

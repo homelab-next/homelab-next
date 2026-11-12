@@ -865,7 +865,8 @@ same-origin` (the rest of the hub sends `no-referrer`, under which a browser pos
 approval expired shows its form again, and one whose approval was consumed (it ran) is no longer
 awaiting approval (`409`).
 
-**The broker side.** Run the hub as its own system user (`hnx-hub`) in the broker socket's group
+**The broker side.** The `status_hub` role ([deploying with Ansible](broker.md#deploying-with-ansible))
+does what this paragraph says. Run the hub as its own system user (`hnx-hub`) in the broker socket's group
 and list it in the broker manifest's `approval_relays` with the same `issuer`; add each person who
 may approve to the manifest's `approvers` (`{issuer: sso, subject: <username>, kind: human}`).
 **Caddy:** the generated site for the hub's service (the `caddy` generator, `caddy/sites.caddy`)

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# A push consumer (one with a deliver_subject) is delivered by the server as itself, to any
+# subject: no user of this role can create one, and the provisioner creates pull durables only, so
+# one that exists was made some other way. The monitor's /jsz lists every account's consumers.
+- name: Ask the bus for every consumer and its configuration
+  ansible.builtin.uri:
+    url: "{{ events_bus_monitor_url }}/jsz?accounts=true&streams=true&consumers=true&config=true"
+    return_content: true
+    status_code: 200
+    timeout: 5
+  register: events_bus_jsz
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Fail on any consumer with a deliver_subject
+  ansible.builtin.assert:
+    that: events_bus_jsz.json | hnx_bus_push_consumers | length == 0
+    fail_msg: >-
+      events_bus: push consumers on the bus (a deliver_subject reaches any subject, around every
+      user's allow-list): {{ events_bus_jsz.json | hnx_bus_push_consumers | join(', ') }}; delete
+      them as the provisioner and declare pull durables in events_bus_durables

@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values land in a systemd unit and the server's configuration (JSON strings): refuse anything
+# that could add a line, a key or a directive, and every grant broader than one user's own.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - events_bus_logical_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - events_bus_archive_url is match('^https://[A-Za-z0-9./_+-]+\.tar\.gz\Z')
+      - events_bus_archive_sha256 is match('^[0-9a-f]{64}\Z')
+      - events_bus_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - ('v' ~ events_bus_version ~ '-') in (events_bus_archive_url | basename)
+      - events_bus_user is match('^[a-z_][a-z0-9_-]{0,31}\Z') and events_bus_user != 'root'
+      - events_bus_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and events_bus_group != 'root'
+      - events_bus_bin is match('^/[A-Za-z0-9._/-]+\Z')
+      - events_bus_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      - events_bus_store_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      # loopback only (the 127/8 block, ::1) until the role sets up a TLS listener: the adapter
+      # refuses a password over plaintext nats:// to anything else, and the bus has no TLS yet
+      - events_bus_listen_address is match('^[0-9a-f.:]+\Z')
+      - events_bus_listen_address | hnx_is_loopback
+      - events_bus_port | int > 1023 and events_bus_port | int < 65536
+      - events_bus_monitor_port | int > 1023 and events_bus_monitor_port | int < 65536
+      - events_bus_port | int != events_bus_monitor_port | int
+      - events_bus_account is match('^[A-Z][A-Z0-9_]{0,31}\Z')
+      - events_bus_max_memory_store | int > 0 and events_bus_max_file_store | int > 0
+    fail_msg: >-
+      events_bus: a logical id, an https .tar.gz archive of the pinned version and its 64-hex
+      sha256, a non-root user and group, absolute paths, a loopback listen address (no TLS listener yet),
+      unprivileged distinct ports, an upper-case account name and positive store caps
+
+- name: Validate the users and their allow-lists
+  ansible.builtin.assert:
+    that:
+      - item.user is defined and item.user is match('^[a-z][a-z0-9-]{0,31}\Z')
+      - item.password_ref is defined and item.password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - (item.publish | default([])) is sequence and (item.subscribe | default([])) is sequence
+      - (item.publish | default([]) + item.subscribe | default([])) | select('match', '^[A-Za-z0-9_.*>$-]+\Z') | list | length
+        == (item.publish | default([]) + item.subscribe | default([])) | length
+      - >-
+        (item.publish | default([]) + item.subscribe | default([]))
+        | hnx_bus_subject_problems(item.user, admin=(item.user == events_bus_admin_user)) | length == 0
+      # a client lives in an account of its own (the account split): it reaches the bus only
+      # through its imports and subscribes to nothing but its own replies
+      - >-
+        item.subscribe | default([]) | hnx_bus_subscribe_problems(item.user,
+        admin=(item.user == events_bus_admin_user)) | length == 0
+      # NATS reads an empty publish allow-list as NO restriction (publish anything, the
+      # stream-deleting API included): a user without publish subjects must say it is
+      # subscribe-only, and is then rendered deny-all
+      - item.subscribe_only | default(false) is boolean
+      - >-
+        (item.subscribe_only | default(false))
+        | ternary((item.publish | default([])) | length == 0, (item.publish | default([])) | length > 0)
+      - item.keys() | difference(['user', 'password_ref', 'publish', 'subscribe', 'subscribe_only']) | length == 0
+    fail_msg: >-
+      events_bus: user {{ item.user | default('?') }}: a name, a secret: reference for its
+      password, a non-empty publish allow-list (or none at all with subscribe_only: true), and
+      allow-lists of plain subjects within one user's reach:
+      {{ (((item.publish | default([]) + item.subscribe | default([])) | hnx_bus_subject_problems(item.user | default('?'), admin=(item.user | default('') == events_bus_admin_user)))
+         + (item.subscribe | default([]) | hnx_bus_subscribe_problems(item.user | default('?'), admin=(item.user | default('') == events_bus_admin_user)))) | join('; ') }}
+  loop: "{{ events_bus_users }}"
+  loop_control:
+    label: "{{ item.user | default('?') }}"
+
+- name: Validate the streams and their provisioner
+  ansible.builtin.assert:
+    that:
+      - events_bus_users | map(attribute='user') | unique | length == events_bus_users | length
+      - events_bus_streams | length == 0 or events_bus_admin_user in (events_bus_users | map(attribute='user'))
+      - events_bus_streams | length == 0 or events_bus_admin_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - events_bus_streams | selectattr('name', 'match', '^[A-Z][A-Z0-9_]{0,31}\Z') | selectattr('subject_prefix', 'match', '^[a-z][a-z0-9_-]{0,31}\Z') | list | length == events_bus_streams | length
+      - events_bus_streams | map(attribute='max_bytes') | map('int') | select('gt', 0) | list | length == events_bus_streams | length
+      # discard new (refuse when full, never evict) and a per-subject cap, for a stream created
+      # from now on; an existing stream is never changed
+      - events_bus_streams | rejectattr('discard', 'undefined') | rejectattr('discard', 'in', ['old', 'new']) | list | length == 0
+      - >-
+        events_bus_streams | selectattr('max_msgs_per_subject', 'defined') | list | length ==
+        events_bus_streams | selectattr('max_msgs_per_subject', 'defined') | selectattr('discard', 'defined')
+        | selectattr('discard', 'eq', 'new') | map(attribute='max_msgs_per_subject') | select('integer') | select('gt', 0) | list | length
+      - events_bus_streams | map('list') | flatten | difference(['name', 'subject_prefix', 'max_bytes', 'discard', 'max_msgs_per_subject']) | length == 0
+    fail_msg: >-
+      events_bus: distinct user names; streams named [A-Z0-9_] with a lower-case subject prefix
+      and a positive max_bytes (optional: discard old|new, and max_msgs_per_subject, a positive
+      integer, with discard new only; no other keys), provisioned by one of the users
+      (events_bus_admin_user) whose password is a secret: reference
+
+# Only the provisioner creates a consumer: a create takes a push deliver_subject too, which the
+# server delivers as itself to any subject (another user's _INBOX included). Every durable a user
+# reads is declared here, a pull durable owned by that one user, and its grants name it alone.
+- name: Validate the durables and who holds each
+  ansible.builtin.assert:
+    that:
+      - events_bus_durables is sequence and events_bus_durables is not string
+      - events_bus_provision_durables is boolean
+      - >-
+        events_bus_durables | hnx_bus_durable_problems(events_bus_users, events_bus_admin_user,
+        events_bus_streams, events_bus_provision_durables) | length == 0
+      - not (events_bus_provision_durables and events_bus_durables | length > 0) or events_bus_admin_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+    fail_msg: >-
+      events_bus: {{ (events_bus_durables | hnx_bus_durable_problems(events_bus_users,
+      events_bus_admin_user, events_bus_streams, events_bus_provision_durables | bool)) | join('; ')
+      or 'events_bus_durables is a list, events_bus_provision_durables a boolean, and provisioning
+      needs events_bus_admin_password_ref' }}

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Look for the interpreter the virtualenvs are made from
+      ansible.builtin.stat:
+        path: "{{ hnx_runtime_python }}"
+      register: hnx_runtime_interp
+    - name: Fail unless it exists
+      ansible.builtin.assert:
+        that: hnx_runtime_interp.stat.exists
+        fail_msg: "hnx_runtime: no interpreter at {{ hnx_runtime_python }}"
+  tags: [readiness]

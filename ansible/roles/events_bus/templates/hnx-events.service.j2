@@ -1,0 +1,48 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role events_bus, service {{ events_bus_logical_id }}); local changes are overwritten.
+[Unit]
+Description=homelab-next events bus ({{ events_bus_logical_id }}: NATS JetStream {{ events_bus_version }})
+After=network.target
+
+[Service]
+Type=simple
+User={{ events_bus_user }}
+Group={{ events_bus_group }}
+ExecStart={{ events_bus_bin }} -c {{ events_bus_config_dir }}/nats.conf
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+# lame-duck shutdown on SIGTERM can take a while with many clients; JetStream flushes on stop
+TimeoutStopSec=60
+LimitNOFILE=65536
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths={{ events_bus_store_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

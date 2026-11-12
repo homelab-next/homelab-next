@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the events bus (NATS JetStream) from a pinned release with per-user allow-lists, and provision the standing streams.
+    options:
+      events_bus_logical_id: &id
+        type: str
+        description: "The service's id in the registry (its capability, events)."
+        required: true
+      events_bus_archive_url: &url
+        type: str
+        description: "The server release archive (https), nats-server-v<version>-linux-amd64.tar.gz."
+        required: true
+      events_bus_archive_sha256: &sha
+        type: str
+        description: "The archive's sha256 (64 hex), from the release's SHA256SUMS."
+        required: true
+      events_bus_users: &users
+        type: list
+        elements: dict
+        description: "The account's users: [{user, password_ref (secret:<name>), publish: [subjects], subscribe: [subjects], subscribe_only: bool}]. Every user gets exactly these allow-lists and nothing else; replies come on _INBOX.<user>. publish may be empty only for a user marked subscribe_only: true, whose publish is then deny-all (NATS reads an empty allow-list as no restriction). Subjects under $JS/$KV/$O/$SYS are refused except the named-stream JetStream calls of the hnx_bus_subject_problems filter. Every user but events_bus_admin_user lives in an account of its own (<events_bus_account>-<user>, JetStream off) that imports exactly its publish subjects from events_bus_account as services, its $JS.API calls under JS.<events_bus_account>.API (the client's api_prefix); such a user subscribes to its own _INBOX.<user>.> only (hnx_bus_accounts, hnx_bus_subscribe_problems)."
+        required: true
+      events_bus_version: &version
+        type: str
+        description: "The server version the archive holds; main refuses a binary that reports another."
+        default: "2.15.1"
+      events_bus_user: &user
+        type: str
+        description: "Unprivileged account the server runs as."
+        default: hnx-events
+      events_bus_group: &group
+        type: str
+        description: "Its group."
+        default: hnx-events
+      events_bus_bin: &bin
+        type: path
+        description: "Where the server binary is installed (root-owned, read-only to the service)."
+        default: /usr/local/libexec/homelabnext/nats-server
+      events_bus_config_dir: &confdir
+        type: path
+        description: "The configuration directory (root:group 0750; the config holds bcrypt hashes only)."
+        default: /etc/hnx-events
+      events_bus_store_dir: &store
+        type: path
+        description: "JetStream's store directory."
+        default: /var/lib/hnx-events
+      events_bus_listen_address: &listen
+        type: str
+        description: "Address the client port binds: loopback only (the 127/8 block or ::1); the role refuses any other until it sets up a TLS listener (a client password would cross the network in clear)."
+        default: 127.0.0.1  # no-raw-endpoint: allow loopback default
+      events_bus_port: &port
+        type: int
+        description: "The client port."
+        default: 4222
+      events_bus_monitor_port: &mport
+        type: int
+        description: "The monitoring port, always on loopback (the health hook's /healthz)."
+        default: 8222
+      events_bus_account: &account
+        type: str
+        description: "The bus account (upper-case): it holds the streams and events_bus_admin_user; every other user lives in <account>-<user> and imports its calls from it (JetStream API under JS.<account>.API)."
+        default: HNX
+      events_bus_max_memory_store: &mem
+        type: int
+        description: "JetStream's memory store cap, bytes."
+        default: 33554432
+      events_bus_max_file_store: &file
+        type: int
+        description: "JetStream's file store cap, bytes."
+        default: 1073741824
+      events_bus_streams: &streams
+        type: list
+        elements: dict
+        description: "Standing streams: [{name, subject_prefix, max_bytes[, discard, max_msgs_per_subject]}], provisioned with a DLQ by the admin user when missing (an existing stream is never changed). discard: old (the default: a full stream evicts its oldest messages) or new (it refuses the publish: nothing stored is pushed out, the relay keeps the event and retries); max_msgs_per_subject (discard new only) caps each subject on its own."
+        default: []
+      events_bus_admin_user: &admin
+        type: str
+        description: "The user that provisions the streams and durables (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of the streams, CONSUMER.INFO and CONSUMER.CREATE of the durables; the only user validation lets hold STREAM.CREATE, CONSUMER.CREATE, CONSUMER.DURABLE.CREATE and CONSUMER.DELETE of a named stream and durable, and STREAM.MSG.GET, which reads any stored message; no user may hold STREAM.UPDATE); the only user in events_bus_account itself; empty: provision nothing."
+        default: ""
+      events_bus_durables: &durables
+        type: list
+        elements: dict
+        description: "The pull durables clients bind to: [{stream, durable, user, filter (the full subject), ack_policy (explicit), ack_wait (s, default 30), max_deliver (default 5), deliver_policy (new|all, default new), replay_s (start that many seconds back) or start_seq (start at that stream sequence)}]. Never a deliver_subject. Each <stream>.<durable> a user's CONSUMER.* or $JS.ACK grant names must be declared here for that user, and for one user only."
+        default: []
+      events_bus_provision_durables: &provdur
+        type: bool
+        description: "Create the declared durables that are missing (as events_bus_admin_user, which then needs each one's CONSUMER.INFO and CONSUMER.CREATE). Off by default: creating a durable fixes its start position, the operator's decision on a stream that already holds events."
+        default: false
+      events_bus_admin_password_ref:
+        type: str
+        description: "The reference (secret:<name>) of that user's bus credential, as in events_bus_users."
+        default: ""
+      events_bus_hnx_python: &py
+        type: path
+        description: "The interpreter of a homelab-next release with the nats extra (role hnx_runtime), used to provision the streams."
+        default: /opt/hnx/current/bin/python
+      events_bus_systemd_dir: &units
+        type: path
+        description: "Where the unit is written."
+        default: /etc/systemd/system
+      events_bus_start: &start
+        type: bool
+        description: "Enable, start and restart the unit (false: write it only)."
+        default: true
+  health:
+    short_description: Fail unless the server answers its loopback /healthz with JetStream enabled and reports no push consumer (one with a deliver_subject) in /jsz.
+    options:
+      events_bus_monitor_port: *mport
+  readiness:
+    short_description: Fail unless the server binary and its configuration are in place (the bus depends on nothing else).
+    options:
+      events_bus_bin: *bin
+      events_bus_config_dir: *confdir
+  backup:
+    short_description: Write the backup manifest (JetStream's store directory and the configuration).
+    options:
+      events_bus_logical_id: *id
+      events_bus_store_dir: *store
+      events_bus_config_dir: *confdir
+  restore:
+    short_description: Restore JetStream's store from events_bus_restore_source with the server stopped (whenever its unit exists), then start it again unless events_bus_start is false (data only; configuration and unit untouched).
+    options:
+      events_bus_store_dir: *store
+      events_bus_user: *user
+      events_bus_group: *group
+      events_bus_systemd_dir: *units
+      events_bus_start: *start
+      events_bus_restore_source:
+        type: path
+        description: A directory holding a copy of the store directory.
+        required: true
+  upgrade:
+    short_description: Validate a server version bump and record it as pending.
+    options:
+      events_bus_version: *version
+      events_bus_config_dir: *confdir
+      events_bus_target_version:
+        type: str
+        description: The release to move to.
+        required: true
+  export:
+    short_description: Nothing to export beyond the streams themselves (consumers read them over the bus).
+    options: {}

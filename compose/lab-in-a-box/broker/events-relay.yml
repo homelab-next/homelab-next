@@ -2,8 +2,10 @@
 # The broker's outbox relay's events binding in the lab (broker_e2e.py, the bus-relay step): the
 # broker's NATS user (config/nats/nats.conf grants it the broker's subjects and two stream
 # lookups, nothing else), its password from HNX_SECRET_EVENTS_BROKER.  The relay connects with
-# provision=False: hnx-lab-admin provisioned the stream.  Production: tls:// and a ca_file instead
-# of allow_plaintext (docs/broker.md, "Publishing events").
+# provision=False: hnx-lab-admin provisioned the stream.  The broker's user lives in an account of
+# its own (HNX-hnx-broker) that imports its two stream lookups under JS.HNX.API (api_prefix;
+# docs/broker.md, "The bus ACL").  Production: tls:// and a ca_file instead of allow_plaintext
+# (docs/broker.md, "Publishing events").
 name: lab-broker-relay
 capabilities:
   events:
@@ -12,5 +14,6 @@ capabilities:
       user: hnx-broker
       password_secret: secret:events/broker
       client_name: hnx-broker-relay
+      api_prefix: JS.HNX.API
       allow_plaintext: true  # the lab's own network
       duplicate_window: 86400.0

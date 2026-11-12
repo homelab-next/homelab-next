@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Check the installed views against the registry copy (it loads and validates)
+      ansible.builtin.command:
+        argv: ["{{ status_hub_hnx_bin }}", status, views, check, "{{ status_hub_config_dir }}/views.yml",
+               --registry, "{{ status_hub_config_dir }}/services.yml"]
+      changed_when: false
+    - name: Look for the broker's socket
+      ansible.builtin.stat:
+        path: "{{ status_hub_approvals_socket }}"
+      register: status_hub_socket
+      when: status_hub_approvals_socket | length > 0
+    - name: Fail unless the broker's socket is there (the Approvals page's one dependency)
+      ansible.builtin.assert:
+        that: status_hub_socket.stat.exists and status_hub_socket.stat.issock
+        fail_msg: "status_hub: no broker socket at {{ status_hub_approvals_socket }}"
+      when: status_hub_approvals_socket | length > 0
+  tags: [readiness]

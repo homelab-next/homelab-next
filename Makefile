@@ -510,6 +510,7 @@ constraints:
 	  $(foreach e,$(CONSTRAINTS_FRESH),--exclude-newer-package $(e)) \
 	  -o constraints/ci.txt
 	awk '/^pip==/{p=1} p{print} p&&!/\\$$/{exit}' constraints/ci.txt > constraints/bootstrap.txt
+	awk '/^setuptools==/{p=1} p{print} p&&!/\\$$/{exit}' constraints/ci.txt > constraints/build.txt
 
 clean:
 	rm -rf build dist .pytest_cache .ruff_cache *.egg-info .coverage .coverage.*

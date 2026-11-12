@@ -40,7 +40,9 @@ approver reads the page (token and digest from the form) and approves through
 uid) publishes the request's ``decision.requested`` and ``decision.returned`` to the bus, in order,
 as ``svc:broker`` with the event id as the message id, and a second relay pass publishes nothing;
 on that bus (``bus-acl``) a client without a user is refused, the StackStorm bridge's user can
-neither forge a ``decision.returned`` nor purge the stream, and its acks on its own durable take;
+neither forge a ``decision.returned``, purge or update the stream, nor create a consumer (a push
+durable delivering to another user's inbox), and its acks on the pull durable the admin
+provisioned for it take;
 the audit trail holds every step, each with the peer's ``via``.
 
 ``tests/compose/test_lab_broker_e2e.py`` runs :func:`run_scenario` against local processes.
@@ -82,8 +84,12 @@ LAB_EVENTS_TARGET = "/src/compose/lab-in-a-box/broker/events-relay.yml"
 LAB_EVENTS_STREAM, LAB_EVENTS_PREFIX = "HNXLAB_BROKER", "hnxlab"
 BROKER_SOURCE = "svc:broker"  # homelabnext.broker.relay.BROKER_SOURCE (tests/compose pins it)
 STREAM_MAX_BYTES = 64 << 20  # the lab's standing stream (its DLQ gets a quarter)
-#: the lab's NATS users in the HNX account (config/nats/nats.conf) -> their password variables
+#: the lab's NATS users (config/nats/nats.conf) -> their password variables: the provisioner in
+#: the bus account HNX, each client in an account of its own that imports its calls from HNX
 LAB_ADMIN = "hnx-lab-admin"
+#: where a client account names its JetStream calls (the import prefix; role events_bus's
+#: events_bus_api_prefix): the provisioner, in the bus account, uses $JS.API itself
+LAB_API_PREFIX = "JS.HNX.API"
 #: a consumer of the broker's decisions that must not be able to forge one
 LAB_NOT_BROKER = "hnx-st2-bridge"
 #: its durable on decision.returned (workflows/stackstorm/bridge.json; tests/compose pins it)
@@ -127,6 +133,25 @@ class Relay:
     #: the only ``HNX_SECRET_*`` variables the relay's process gets (its bus password)
     secrets: Sequence[str] = ("HNX_SECRET_EVENTS_BROKER",)
     wire_as: Callable[[str | None], Any] | None = None
+    #: the bus users by part: the operator (provisions, reads back), the consumer that must not be
+    #: able to forge a decision, and each user's password variable (the lab's by default; a real
+    #: deployment names its own users: ``run --bus-admin``, ``--bus-not-broker``)
+    admin: str = LAB_ADMIN
+    not_broker: str = LAB_NOT_BROKER
+    #: the durable the step creates and acks on as ``not_broker``: a scratch name on a real bus,
+    #: never one a real consumer uses (it would inherit this step's ack floor)
+    not_broker_durable: str = LAB_NOT_BROKER_DURABLE
+    #: delete that durable again (as ``admin``) once the step is done: a scratch durable on a real
+    #: bus (``run --bus-not-broker-durable``) must not outlive the run
+    delete_durable: bool = False
+    bus_users: Mapping[str, str] = field(default_factory=lambda: dict(LAB_BUS_USERS))
+    #: where every user but ``admin`` names its JetStream calls (its account's import prefix)
+    api_prefix: str = LAB_API_PREFIX
+
+    def api_of(self, user: str) -> str:
+        """The JetStream API prefix ``user`` names its calls under: ``$JS.API`` for the
+        provisioner (the bus account's own), the import prefix for every client."""
+        return "$JS.API" if user == self.admin else self.api_prefix
 
     def wire(self, user: str | None) -> Any:
         if self.wire_as is not None:
@@ -141,7 +166,7 @@ class Relay:
             url,
             name=user,
             user=user,
-            password=env_secret(LAB_BUS_USERS[user]),
+            password=env_secret(self.bus_users[user]),
             inbox_prefix=f"_INBOX.{user}",
         )
 
@@ -152,7 +177,11 @@ class Relay:
         wire = self.wire(user)
         try:
             return nj.JetStreamBus(
-                wire, stream=self.stream, subject_prefix=self.prefix, provision=False
+                wire,
+                stream=self.stream,
+                subject_prefix=self.prefix,
+                provision=False,
+                api_prefix=self.api_of(user),
             )
         except Exception:
             wire.close()
@@ -163,11 +192,37 @@ class Relay:
         never creates them (its bus user may not)."""
         from homelabnext.conform.adapters import nats_jetstream as nj
 
-        wire = self.wire(LAB_ADMIN)
+        wire = self.wire(self.admin)
         try:
             return nj.provision_streams(
                 wire, stream=self.stream, subject_prefix=self.prefix, max_bytes=STREAM_MAX_BYTES
             )
+        finally:
+            wire.close()
+
+    def provision_durable(self, *, replay_s: float = 86400.0) -> list[str]:
+        """The not-broker user's durable on decision.returned, as the provisioner creates it: a
+        PULL durable (no ``deliver_subject``), created as ``admin`` when missing.  No other user
+        may create a consumer (a create can push the stream to any subject).  When the
+        not-broker user already sees it (the events bus role provisioned it), nothing is asked
+        of ``admin``.  ``replay_s``: it starts that far back (the lab runs no bridge, so a
+        durable created now still sees what the relay published)."""
+        from homelabnext.conform.adapters import nats_jetstream as nj
+
+        durable = nj.durable_name(self.not_broker_durable)
+        wire = self.wire(self.not_broker)
+        try:
+            seen = nj._api(wire, f"CONSUMER.INFO.{self.stream}.{durable}", None, timeout=5.0,
+                           missing="consumer", prefix=self.api_of(self.not_broker))  # fmt: skip
+        finally:
+            wire.close()
+        if seen is not None:
+            return []
+        wire = self.wire(self.admin)
+        try:
+            return nj.provision_consumers(wire, stream=self.stream, durables=[{
+                "durable": durable, "filter": f"{self.prefix}.homelabnext.decision.returned",
+                "ack_wait": 30.0, "max_deliver": 5, "replay_s": replay_s}])  # fmt: skip
         finally:
             wire.close()
 
@@ -183,7 +238,7 @@ class Relay:
                 "--once"]  # fmt: skip
 
     def bus(self) -> Any:
-        return self.bus_as(LAB_ADMIN)
+        return self.bus_as(self.admin)
 
 
 @dataclass
@@ -204,13 +259,24 @@ class Setup:
     env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
     tag: str = field(default_factory=lambda: secrets.token_hex(4))
     relay: Relay | None = None  # None: no events bus here, the bus-relay step is not run
+    #: what the edge passes on: the hub's public name and the approver's username and groups (the
+    #: lab's by default; a real deployment's hub row and broker manifest name their own)
+    hub_host: str = HUB_HOST
+    approver: str = APPROVER
+    groups: Sequence[str] = (VIEWER_GROUP, APPROVER_GROUP)
 
     def role_env(self, role: str) -> dict[str, str]:
         return {**self.env, ROLE_ENV: role}
 
 
 # ---------------------------------------------------------------- the edge's HTTP
-def edge_headers(secret: str | None, user: str = APPROVER) -> dict[str, str]:
+def edge_headers(
+    secret: str | None,
+    user: str = APPROVER,
+    *,
+    host: str = HUB_HOST,
+    groups: Sequence[str] = (VIEWER_GROUP, APPROVER_GROUP),
+) -> dict[str, str]:
     """What the lab's edge adds after a login: the front-door secret and the identity.
 
     The names come from the platform's one declared set (``homelabnext.edge_identity``), so a
@@ -220,10 +286,10 @@ def edge_headers(secret: str | None, user: str = APPROVER) -> dict[str, str]:
     from homelabnext.edge_identity import IDENTITY_HEADERS as ids
 
     out = {
-        "Host": HUB_HOST,
+        "Host": host,
         ids.user: f"{user}@lab.example",
         ids.username: user,
-        ids.groups: ids.groups_separator.join((VIEWER_GROUP, APPROVER_GROUP)),
+        ids.groups: ids.groups_separator.join(groups),
     }
     if secret is not None:
         out["X-Hnx-Front-Door"] = secret
@@ -345,6 +411,9 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
     tag = setup.tag
     target = f"svc:lab-e2e-{tag}"
 
+    def edge(secret: str | None) -> dict[str, str]:
+        return edge_headers(secret, setup.approver, host=setup.hub_host, groups=setup.groups)
+
     def slug() -> str:
         return str(ctx["profile"]).split(":", 1)[1]
 
@@ -399,14 +468,14 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
         return _refusal(proc, "not-an-approval-relay")
 
     def front_door() -> str:
-        code, _ = http("GET", f"{setup.hub}/approvals?request={ctx['rid']}", edge_headers(None))
+        code, _ = http("GET", f"{setup.hub}/approvals?request={ctx['rid']}", edge(None))
         if code != 403:
             raise StepFailed(f"without the front-door secret: HTTP {code}")
         return "no front-door secret: 403"
 
     def approve() -> str:
         rid = ctx["rid"]
-        head = edge_headers(setup.secret)
+        head = edge(setup.secret)
         code, page = http("GET", f"{setup.hub}/approvals?request={rid}", head)
         if code != 200:
             raise StepFailed(f"GET /approvals: HTTP {code} {page[:200]}")
@@ -414,7 +483,7 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
         form = {**fields, "decision": "approve", "note": f"lab e2e {tag}"}
         post = {
             **head,
-            "Origin": f"https://{HUB_HOST}",
+            "Origin": f"https://{setup.hub_host}",
             "Sec-Fetch-Site": "same-origin",
             "Content-Type": "application/x-www-form-urlencoded",
         }
@@ -422,7 +491,7 @@ def run_scenario(setup: Setup) -> list[dict[str, Any]]:
         code, page = http("POST", f"{setup.hub}/approvals/decide", post, body)
         if code != 200:
             raise StepFailed(f"POST /approvals/decide: HTTP {code} {page[:200]}")
-        return f"approved as sso:{APPROVER} with the page's token, digest {fields['digest'][:19]}"
+        return f"approved as sso:{setup.approver} with the page's token, digest {fields['digest'][:19]}"
 
     async def run_once(s: Any) -> str:
         out = await _tool(s, "broker_run", {"request_id": ctx["rid"]})
@@ -586,7 +655,7 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
         dedupe_key=f"forged-{secrets.token_hex(4)}",
         subject=rid,
     )
-    bus = relay.bus_as(LAB_NOT_BROKER)
+    bus = relay.bus_as(relay.not_broker)
     try:
         try:
             seq = bus.publish(forged["type"], canonical_body(forged), msg_id=forged["id"])
@@ -594,13 +663,35 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
             if not getattr(exc, "permanent", False):
                 raise StepFailed(f"the forged publish failed, but not as refused: {exc}") from None
         else:
-            raise StepFailed(f"{LAB_NOT_BROKER} published a decision.returned (seq {seq})")
+            raise StepFailed(f"{relay.not_broker} published a decision.returned (seq {seq})")
         try:
             bus.api(f"STREAM.PURGE.{relay.stream}", {})
         except Exception:
             pass
         else:
-            raise StepFailed(f"{LAB_NOT_BROKER} purged the stream")
+            raise StepFailed(f"{relay.not_broker} purged the stream")
+        # a consumer create could push the stream to any subject (the broker's own _INBOX
+        # here): refused by the ACL, whose consumer creates are the provisioner's alone
+        evil = f"e2e-push-{secrets.token_hex(3)}"
+        push = {"durable_name": evil, "deliver_subject": f"_INBOX.{relay.admin}.e2e-{evil}",
+                "ack_policy": "explicit", "deliver_policy": "all"}  # fmt: skip
+        for create in (f"CONSUMER.CREATE.{relay.stream}.{evil}",
+                       f"CONSUMER.CREATE.{relay.stream}.{evil}.{subject}",  # the filtered form
+                       f"CONSUMER.DURABLE.CREATE.{relay.stream}.{evil}"):  # fmt: skip
+            try:
+                bus.api(create, {"stream_name": relay.stream, "config": push})
+            except Exception as exc:
+                if not getattr(exc, "permanent", False):
+                    raise StepFailed(f"{create} failed, but not as refused: {exc}") from None
+            else:
+                raise StepFailed(f"{relay.not_broker} created a push consumer ({create})")
+        try:
+            bus.api(f"STREAM.UPDATE.{relay.stream}", {"name": relay.stream, "max_msgs": 1})
+        except Exception as exc:
+            if not getattr(exc, "permanent", False):
+                raise StepFailed(f"the stream update failed, but not as refused: {exc}") from None
+        else:
+            raise StepFailed(f"{relay.not_broker} updated the stream (it can shrink it)")
     finally:
         bus.close()
     after = last_returned()
@@ -608,8 +699,9 @@ def check_bus_acl(setup: Setup, rid: str) -> str:
         raise StepFailed(f"the last decision.returned moved: {before} -> {after}")
     acked = check_bridge_acks(relay)
     return (
-        f"no user: refused ({anonymous}); {LAB_NOT_BROKER}: forged decision.returned and "
-        f"purge refused; last decision.returned still seq {after}; {acked}"
+        f"no user: refused ({anonymous}); {relay.not_broker}: forged decision.returned, purge, "
+        f"push consumer to another inbox and stream update refused; last decision.returned still "
+        f"seq {after}; {acked}"
     )
 
 
@@ -617,36 +709,157 @@ def check_bridge_acks(relay: Relay) -> str:
     """What the bus ACL must still allow: the bridge's user reads ``decision.returned`` through its
     own durable and its acks take, in whichever ack reply-subject form the server sends (ADR-15;
     the ACL grants both).  A refused ack is a publish violation the client never hears about, so
-    the step reads the consumer back: nothing it was handed may still be pending.  The step owns
-    the durable and settles real deliveries on it, which is safe only because the lab runs no bridge;
-    never point it at a bus where a real bridge uses that durable."""
+    the step reads the consumer back: nothing it was handed may still be pending.  The bridge's
+    user creates no consumer: the durable is a pull durable the provisioner made
+    (:meth:`Relay.provision_durable`, as the admin when it is missing), and the bridge's user
+    binds to it.  The step settles real deliveries on it, which is safe only because the lab runs
+    no bridge; on a real bus name a scratch durable (and stream, ``run --bus-not-broker-durable``,
+    ``--stream``), never one a real bridge uses; that durable is deleted again at the end
+    (``relay.delete_durable``), whether or not the step passed."""
     from homelabnext.conform.adapters import nats_jetstream as nj
 
-    wire = relay.wire(LAB_NOT_BROKER)
+    done = False
+    wire = None
     try:
-        # replay: the lab runs no bridge, so a durable created now still sees the relay's events
+        relay.provision_durable()
+        wire = relay.wire(relay.not_broker)
         bus = nj.JetStreamBus(wire, stream=relay.stream, subject_prefix=relay.prefix,
-                              provision=False, replay_s=86400.0)  # fmt: skip
-        consumer = bus.consumer(LAB_NOT_BROKER_DURABLE, "homelabnext.decision.returned")
+                              provision=False, api_prefix=relay.api_of(relay.not_broker))  # fmt: skip
+        consumer = bus.consumer(relay.not_broker_durable, "homelabnext.decision.returned")
         got = consumer.fetch(16)
         if not got:
-            raise StepFailed(f"{LAB_NOT_BROKER}'s durable was handed no decision.returned")
+            raise StepFailed(f"{relay.not_broker}'s durable was handed no decision.returned")
         for d in got:
             try:
                 d.ack()
             except Exception as exc:
-                raise StepFailed(f"{LAB_NOT_BROKER}'s ack of seq {d.seq} failed: {exc}") from None
+                raise StepFailed(f"{relay.not_broker}'s ack of seq {d.seq} failed: {exc}") from None
         info = bus.api(f"CONSUMER.INFO.{relay.stream}.{consumer.durable}")
         pending = int(info.get("num_ack_pending", -1))
         floor = (info.get("ack_floor") or {}).get("stream_seq")
         if pending != 0 or (floor is not None and int(floor) < max(d.seq for d in got)):
             raise StepFailed(
-                f"{LAB_NOT_BROKER}'s acks did not take: {pending} pending, ack floor {floor}, "
+                f"{relay.not_broker}'s acks did not take: {pending} pending, ack floor {floor}, "
                 f"acked up to seq {max(d.seq for d in got)} (is each ack form granted?)"
             )
+        replies = check_reply_attacks(relay, wire, consumer.durable, max(d.seq for d in got))
+        done = True
     finally:
-        wire.close()
-    return f"{LAB_NOT_BROKER} acked {len(got)} delivery(ies) on its durable, none pending"
+        if wire is not None:
+            wire.close()
+        if relay.delete_durable:
+            _delete_durable(relay, report=done)  # a failure of the step itself is not masked
+    gone = "; scratch durable deleted" if relay.delete_durable else ""
+    return (
+        f"{relay.not_broker} acked {len(got)} delivery(ies) on its durable, none pending; "
+        f"{replies}{gone}"
+    )
+
+
+#: every reply subject a client aims a server answer at (``{s}`` the stream, ``{d}`` the durable,
+#: ``{p}`` the subject prefix): the bus account's API and stream subjects the client may not
+#: publish itself
+REPLY_TARGETS = (
+    "$JS.API.STREAM.DELETE.{s}",
+    "$JS.API.CONSUMER.DELETE.{s}.{d}",
+    "$JS.API.STREAM.PURGE.{s}",
+    "{p}.homelabnext.agent.job.failed",
+    "{p}.homelabnext.decision.returned",
+)
+
+
+def check_reply_attacks(relay: Relay, wire: Any, durable: str, acked_seq: int) -> str:
+    """The reply-subject attacks (homelab-next #360, round 5): a reply subject is not checked
+    against anyone's allow-list, and JetStream takes its own internal client's messages (a pull's
+    delivery or 404, an ack's answer, an API response) as requests when they land on
+    ``$JS.API.*``.  As the not-broker user, a pull on its own durable, an ack of stream sequence
+    ``acked_seq`` (acked already: ``+ACK`` again is a no-op the server still answers) and its
+    ``CONSUMER.INFO`` and ``STREAM.INFO``, and as
+    the broker's user its ``STREAM.INFO``, are each sent with every reply of
+    :data:`REPLY_TARGETS`; then the stream, its flags, its last sequence and the durable must be
+    as they were (nothing deleted, purged or injected).  Needs a wire with a raw ``publish``
+    (nats-py's); on one without (the offline fakes) the attacks are not sent, and the detail
+    says so."""
+    if not callable(getattr(wire, "publish", None)):
+        return "reply attacks not sent (this wire cannot set a reply subject)"
+    stream, p = relay.stream, relay.prefix
+    api = relay.api_of(relay.not_broker)
+
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    def state() -> tuple[int, bool, bool]:
+        admin = relay.wire(relay.admin)  # a raw read: a bus would refuse to open on no stream
+        try:
+            info = nj._api(admin, f"STREAM.INFO.{stream}", None, timeout=5.0, missing="stream",
+                           prefix=relay.api_of(relay.admin))  # fmt: skip
+        finally:
+            admin.close()
+        if info is None:
+            raise StepFailed(f"the stream {stream} is gone (a reply-subject attack deleted it)")
+        cfg = info.get("config") or {}
+        return (int((info.get("state") or {}).get("last_seq", 0)),
+                bool(cfg.get("deny_delete")), bool(cfg.get("deny_purge")))  # fmt: skip
+
+    before = state()
+    pull = json.dumps({"batch": 1, "no_wait": True}).encode()
+    sends = [(wire, f"{api}.CONSUMER.MSG.NEXT.{stream}.{durable}", pull),
+             (wire, f"$JS.ACK.{stream}.{durable}.1.{acked_seq}.1.0.0", b"+ACK"),
+             (wire, f"{api}.CONSUMER.INFO.{stream}.{durable}", b""),
+             (wire, f"{api}.STREAM.INFO.{stream}", b"")]  # fmt: skip
+    broker = relay.wire("hnx-broker") if "hnx-broker" in relay.bus_users else None
+    try:
+        if broker is not None and callable(getattr(broker, "publish", None)):
+            sends.append((broker, f"{relay.api_of('hnx-broker')}.STREAM.INFO.{stream}", b""))
+        sent = 0
+        for target in REPLY_TARGETS:
+            reply = target.format(s=stream, d=durable, p=p)
+            for w, subject, body in sends:
+                if not w.publish(subject, body, reply=reply):
+                    raise StepFailed(f"{subject} was refused outright (the step needs it allowed)")
+                sent += 1
+        time.sleep(0.5)  # whatever the server would do with them, done
+    finally:
+        if broker is not None:
+            broker.close()
+    after = state()
+    if after != before:
+        raise StepFailed(f"a reply-subject attack changed the stream: {before} -> {after} "
+                         "(last seq, deny_delete, deny_purge)")  # fmt: skip
+    try:
+        info = nj._api(wire, f"CONSUMER.INFO.{stream}.{durable}", None, timeout=5.0,
+                       missing="consumer", prefix=api)  # fmt: skip
+    except Exception as exc:
+        raise StepFailed(
+            f"reading the durable back after the reply attacks failed: {exc}"
+        ) from None
+    if info is None:
+        raise StepFailed(f"the durable {durable} is gone (a reply-subject attack deleted it)")
+    return (
+        f"{sent} reply-subject attacks (pull, ack, consumer and stream info answered to "
+        f"STREAM.DELETE, CONSUMER.DELETE, PURGE and stream subjects) changed nothing"
+    )
+
+
+def _delete_durable(relay: Relay, *, report: bool) -> None:
+    """Delete the step's scratch durable as the bus admin (the only user the events bus role lets
+    hold ``CONSUMER.DELETE``); ``report``: a refusal fails the step."""
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    durable = nj.durable_name(relay.not_broker_durable)
+    try:
+        bus = nj.JetStreamBus(relay.wire(relay.admin), stream=relay.stream,
+                              subject_prefix=relay.prefix, provision=False,
+                              api_prefix=relay.api_of(relay.admin))  # fmt: skip
+        try:
+            bus.api(f"CONSUMER.DELETE.{relay.stream}.{durable}", missing="consumer")
+        finally:
+            bus.close()
+    except Exception as exc:
+        if report:
+            raise StepFailed(
+                f"deleting the scratch durable {durable} as {relay.admin} failed: {exc} (grant it "
+                f"$JS.API.CONSUMER.DELETE.{relay.stream}.{durable} for the run)"
+            ) from None
 
 
 def check_audit(setup: Setup, rid: str, profile: str) -> str:
@@ -689,7 +902,7 @@ def check_audit(setup: Setup, rid: str, profile: str) -> str:
         raise StepFailed(f"not in the audit trail: {missing}")
     mine = [r for r in records if r.get("request_id") == rid]
     if any(
-        r.get("caller") not in (profile, f"sso:{APPROVER}")
+        r.get("caller") not in (profile, f"sso:{setup.approver}")
         for r in mine
         if r.get("outcome") == "ok"
     ):
@@ -783,16 +996,38 @@ def _as(spec: str, argv: list[str]) -> int:
     return 127  # not reached
 
 
-def lab_launch(role: str) -> list[str]:
-    """Inside the broker-edge container: run as the role's uid, in the socket's group."""
-    uid = LAB_UIDS[role]
-    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{uid}:{LAB_CLIENTS_GID}", "--"]
+def lab_launch(
+    role: str,
+    ids: Mapping[str, tuple[int, int]] | None = None,
+    clients_gid: int = LAB_CLIENTS_GID,
+) -> list[str]:
+    """Inside the broker-edge container (or as root on a broker host, with the peers' real
+    ``ids``, role -> (uid, gid)): run as the role's uid and group, in the socket's group."""
+    uid, gid = (ids or {}).get(role) or (LAB_UIDS[role], LAB_UIDS[role])
+    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{gid}:{clients_gid}", "--"]
 
 
-def relay_launch() -> list[str]:
-    """Inside the broker-edge container: run as the outbox relay's own uid."""
-    uid = LAB_RELAY_UID
-    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{uid}", "--"]
+def relay_launch(ids: tuple[int, int] | None = None) -> list[str]:
+    """Inside the broker-edge container (or with the relay user's real ``ids``): run as the
+    outbox relay's own uid."""
+    uid, gid = ids or (LAB_RELAY_UID, LAB_RELAY_UID)
+    return [sys.executable, os.path.abspath(__file__), "as", f"{uid}:{gid}", "--"]
+
+
+def _ids(spec: str) -> tuple[int, int]:
+    """A user name (its uid and primary group) or a bare uid (that uid as its group too)."""
+    import pwd
+
+    if spec.isdigit():
+        return int(spec), int(spec)
+    entry = pwd.getpwnam(spec)
+    return entry.pw_uid, entry.pw_gid
+
+
+def _gid(spec: str) -> int:
+    import grp
+
+    return int(spec) if spec.isdigit() else grp.getgrnam(spec).gr_gid
 
 
 def _ready(args) -> int:
@@ -821,6 +1056,27 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--state", default=LAB_STATE, help="the broker's state directory")
     r.add_argument("--stream", default=LAB_EVENTS_STREAM)
     r.add_argument("--subject-prefix", default=LAB_EVENTS_PREFIX)
+    # a real broker host (run as root there): the peers' users instead of the lab's fixed uids
+    r.add_argument("--peer", action="append", default=[], metavar="ROLE=USER",
+                   help="agent, relay (the hub's user) or stranger (an unmapped uid): a user name "
+                        "or a bare uid (default: the lab's uids)")  # fmt: skip
+    r.add_argument("--clients-group", help="the socket's group (default: the lab's gid)")
+    r.add_argument("--relay-user", help="the outbox relay's user (default: the lab's uid)")
+    r.add_argument("--hub-host", default=HUB_HOST, help="the hub's public name (Host, Origin)")
+    r.add_argument("--approver", default=APPROVER, help="the approver's username at the IdP")
+    r.add_argument("--approver-group", default=APPROVER_GROUP)
+    r.add_argument("--viewer-group", default=VIEWER_GROUP)
+    r.add_argument(
+        "--bus-admin", default=LAB_ADMIN, help="the bus user that provisions and reads back"
+    )
+    r.add_argument("--bus-not-broker", default=LAB_NOT_BROKER,
+                   help="a bus user that reads decisions and must not forge one")  # fmt: skip
+    r.add_argument("--bus-api-prefix", default=LAB_API_PREFIX,
+                   help="where the bus's client accounts import its JetStream calls (role "
+                        "events_bus: JS.<account>.API)")  # fmt: skip
+    r.add_argument("--bus-not-broker-durable", default=LAB_NOT_BROKER_DURABLE,
+                   help="the durable that user acks on in the bus-acl step: on a real bus a "
+                        "scratch name, never one a real consumer uses")  # fmt: skip
     h = sub.add_parser("serve-hub", help="write the hub's configuration and run the hub")
     h.add_argument("--dir", required=True)
     h.add_argument("--edge-address", default=os.environ.get("LAB_BROKER_EDGE_ADDRESS"))
@@ -850,22 +1106,41 @@ def main(argv: list[str] | None = None) -> int:
                        port=args.port)  # fmt: skip
         os.chdir(directory)  # the agents config's store and access log are relative to it
         os.execvp(cmd[0], cmd)
+    ids: dict[str, tuple[int, int]] = {}
+    for spec in args.peer:
+        role, _, who = spec.partition("=")
+        if role not in LAB_UIDS or not who:
+            ap.error(f"--peer {spec}: ROLE=USER with ROLE one of {sorted(LAB_UIDS)}")
+        ids[role] = _ids(who)
+    clients = _gid(args.clients_group) if args.clients_group else LAB_CLIENTS_GID
     setup = Setup(
         socket=Path(args.socket),
         hub=args.hub,
         data_root=Path(args.data_root),
-        uids=LAB_UIDS,
+        uids={**LAB_UIDS, **{role: uid for role, (uid, _) in ids.items()}},
         secret=os.environ.get(SECRET_ENV, ""),
-        launch=lab_launch,
+        launch=lambda role: lab_launch(role, ids, clients),
         env={**os.environ, "HOME": "/tmp"},
+        hub_host=args.hub_host,
+        approver=args.approver,
+        groups=(args.viewer_group, args.approver_group),
     )
     if args.events_target:
+        users = {**LAB_BUS_USERS}
+        users[args.bus_admin] = LAB_BUS_USERS[LAB_ADMIN]
+        users[args.bus_not_broker] = LAB_BUS_USERS[LAB_NOT_BROKER]
         setup.relay = Relay(
             args.state,
             args.events_target,
             args.stream,
             args.subject_prefix,
-            launch=relay_launch(),
+            launch=relay_launch(_ids(args.relay_user) if args.relay_user else None),
+            admin=args.bus_admin,
+            not_broker=args.bus_not_broker,
+            not_broker_durable=args.bus_not_broker_durable,
+            delete_durable=args.bus_not_broker_durable != LAB_NOT_BROKER_DURABLE,
+            bus_users=users,
+            api_prefix=args.bus_api_prefix,
         )
     rows = run_scenario(setup)
     ok = [r["step"] for r in rows] == list(steps(setup)) and all(r["ok"] for r in rows)

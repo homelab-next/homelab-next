@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ask the hub for status.json on its bind address
+      ansible.builtin.uri:
+        url: "http://{{ ('[' ~ status_hub_bind_address ~ ']') if ':' in status_hub_bind_address else status_hub_bind_address }}:{{ status_hub_port | int }}/status.json"
+        # the hub answers only the host names it was given (its DNS-rebinding guard)
+        headers:
+          Host: "{{ status_hub_allowed_hosts | first if status_hub_bind_address not in status_hub_loopback else 'localhost' }}"
+        return_content: true
+        status_code: 200
+        timeout: 5
+        use_proxy: false
+      register: status_hub_health
+      changed_when: false
+    - name: Fail unless it is the status contract
+      ansible.builtin.assert:
+        that:
+          - status_hub_health.json is mapping
+          - status_hub_health.json.schema_version is defined or status_hub_health.json.generated_at is defined
+        fail_msg: "status_hub: /status.json is not the hub's status document"
+  tags: [health]

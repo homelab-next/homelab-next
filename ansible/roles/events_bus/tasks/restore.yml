@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Data only (role interface section 2): the configuration and the unit are main's and are left as
+# they are. The bus is stopped for the copy whenever its unit exists (JetStream writes its store
+# while it runs; events_bus_start: false means main never started it, not that nothing else did)
+# and started again after only when events_bus_start is true, as main does; the store is the bus
+# user's, as main makes it.
+- block:
+    - name: Look for the bus's unit
+      ansible.builtin.stat:
+        path: "{{ events_bus_systemd_dir }}/hnx-events.service"
+      register: events_bus_restore_unit
+    - name: Stop the bus
+      ansible.builtin.systemd_service:
+        name: hnx-events.service
+        state: stopped
+      when: events_bus_restore_unit.stat.exists
+    - name: Restore JetStream's store
+      ansible.builtin.copy:
+        src: "{{ events_bus_restore_source }}/"
+        dest: "{{ events_bus_store_dir }}/"
+        remote_src: true
+        owner: "{{ events_bus_user }}"
+        group: "{{ events_bus_group }}"
+        mode: preserve
+    - name: Start the bus again
+      ansible.builtin.systemd_service:
+        name: hnx-events.service
+        state: started
+      when: events_bus_start | bool
+  tags: [restore]

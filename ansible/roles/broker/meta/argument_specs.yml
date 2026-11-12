@@ -1,0 +1,204 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the broker on its Unix socket and its outbox relay, each as its own user, from the operator's manifest and handlers.
+    options:
+      broker_logical_id: &id
+        type: str
+        description: "The service's id in the registry (its capability, broker)."
+        required: true
+      broker_manifest: &manifest
+        type: path
+        description: "The operator's broker manifest (schemas/broker/manifest) on the controller; installed as <config_dir>/manifest.yml and checked with hnx broker validate."
+        required: true
+      broker_handlers: &handlers
+        type: list
+        elements: path
+        description: "Files on the controller installed under <config_dir>/handlers/ (handler documents and the scripts they pin by digest; the manifest's handler_docs name them as handlers/<file>)."
+        default: []
+      broker_hnx_bin: &bin
+        type: path
+        description: "The hnx command (role hnx_runtime's <prefix>/bin/hnx)."
+        default: /opt/hnx/bin/hnx
+      broker_runtime_release: &release
+        type: str
+        description: "The homelab-next release the units run (hnx_runtime_release): a change restarts them; empty: not tracked."
+        default: ""
+      broker_user: &user
+        type: str
+        description: "The broker's own account: it owns the state and the data root."
+        default: hnx-broker
+      broker_group: &group
+        type: str
+        description: "Its group."
+        default: hnx-broker
+      broker_clients_group: &clients
+        type: str
+        description: "The socket's group: every peer (agents, the hub) is in it."
+        default: hnx-broker-clients
+      broker_client_users: &peers
+        type: list
+        elements: str
+        description: "System users that are peers of the socket (agents, the hub's relay user): created when missing, put in broker_clients_group. The manifest maps each one."
+        default: []
+      broker_config_dir: &confdir
+        type: path
+        description: "The manifest, the handlers and the secrets file (root-owned, readable by the broker's group)."
+        default: /etc/hnx-broker
+      broker_state_root: &stateroot
+        type: path
+        description: "The broker's state root; the state directory is <root>/state."
+        default: /var/lib/hnx-broker
+      broker_data_root: &data
+        type: path
+        description: "The lanes' data root (writable by the broker only)."
+        default: /srv/agents
+      broker_socket_dir: &sockdir
+        type: path
+        description: "The socket's directory under /run, made by the role and kept across reboots by tmpfiles.d (2750, the broker's, in the clients' group: setgid, so the socket is born in that group); the socket is broker.sock in it."
+        default: /run/hnx-broker
+      broker_socket_mode: &sockmode
+        type: str
+        description: "The socket's mode (octal, nothing for others)."
+        default: "660"
+      broker_secret_refs: &secrets
+        type: dict
+        description: "Handler secrets: {NAME: secret:<name>}, resolved on the controller and delivered to the service as HNX_BROKER_SECRET_<NAME> through a 0640 environment file."
+        default: {}
+      broker_approvals_url: &approvals
+        type: str
+        description: "The status hub's Approvals page (https URL, no query); requests' events and pages link to it. Empty: none."
+        default: ""
+      broker_network: &network
+        type: bool
+        description: "Give the broker and its handlers a network (false: PrivateNetwork, the socket is its only door)."
+        default: false
+      broker_relay: &relay
+        type: bool
+        description: "Run the outbox relay (hnx broker relay) that publishes the broker's events to the bus."
+        default: true
+      broker_relay_user: &ruser
+        type: str
+        description: "The relay's own account (reads the outbox, owns relay/)."
+        default: hnx-broker-relay
+      broker_relay_group: &rgroup
+        type: str
+        description: "Its group (the state directory's group, so it can traverse it and read outbox/)."
+        default: hnx-broker-relay
+      broker_relay_config_dir: &rconf
+        type: path
+        description: "The relay's events target file and its environment file."
+        default: /etc/hnx-broker-relay
+      broker_relay_state_dir: &rstate
+        type: path
+        description: "The relay's own state (its stats file)."
+        default: /var/lib/hnx-broker-relay
+      broker_relay_events_id: &eventsid
+        type: str
+        description: "The bus's logical id in the registry (capability events); its port names the default endpoint."
+        default: events
+      broker_relay_events_endpoint: &endpoint
+        type: str
+        description: "The bus endpoint (HNX_ENDPOINT_EVENTS): nats:// to loopback on the registry row's port by default (the bus listens on loopback only until it has a TLS listener), or tls://<host>:<port>."
+        default: "nats://127.0.0.1:{{ lookup('hnx_registry', broker_relay_events_id, field='port') | int }}"  # no-raw-endpoint: allow loopback, the bus has no TLS listener yet
+      broker_relay_events_user: &euser
+        type: str
+        description: "The broker's user on the bus."
+        default: hnx-broker
+      broker_relay_password_ref: &epw
+        type: str
+        description: "secret:<name> of that user's password (delivered as HNX_SECRET_<NAME> to the relay only); required with broker_relay."
+        default: ""
+      broker_relay_ca_file: &ca
+        type: str
+        description: "The bus's CA on the host, for a tls:// endpoint; empty: the system CAs."
+        default: ""
+      broker_relay_api_prefix: &apiprefix
+        type: str
+        description: "Where the relay's bus account reaches JetStream: the events bus role puts every client in an account of its own that imports its calls under JS.<account>.API (docs/broker.md, 'The bus ACL'); $JS.API only in the account that holds the streams."
+        default: JS.HNX.API
+      broker_relay_stream: &stream
+        type: str
+        description: "The standing stream the relay publishes to (provisioned by the bus's operator; the relay creates nothing)."
+        default: ""
+      broker_relay_subject_prefix: &prefix
+        type: str
+        description: "The stream's subject prefix."
+        default: ""
+      broker_relay_duplicate_window: &dup
+        type: int
+        description: "Seconds of the stream's duplicate window the relay requires (it refuses a shorter one)."
+        default: 86400
+      broker_backup_dir: &backupdir
+        type: path
+        description: "Where the backup hook writes its manifest."
+        default: /var/backups/hnx-broker
+      broker_export_dir: &export
+        type: path
+        description: "Where the export hook writes the audit trail."
+        default: /var/backups/hnx-broker/export
+      broker_systemd_dir: &units
+        type: path
+        description: "Where the units are written."
+        default: /etc/systemd/system
+      broker_start: &start
+        type: bool
+        description: "Enable, start and restart the units (false: write them only)."
+        default: true
+  health:
+    short_description: Fail unless the broker's units are active, its socket is a socket with the declared owner, group and mode, the installed manifest validates, and the relay reports a state other than fail.
+    options:
+      broker_hnx_bin: *bin
+      broker_user: *user
+      broker_clients_group: *clients
+      broker_config_dir: *confdir
+      broker_socket_dir: *sockdir
+      broker_socket_mode: *sockmode
+      broker_relay: *relay
+      broker_relay_state_dir: *rstate
+  readiness:
+    short_description: Fail unless every peer user exists and, with the relay, the bus accepts connections.
+    options:
+      broker_client_users: *peers
+      broker_relay: *relay
+      broker_relay_events_id: *eventsid
+      broker_relay_events_endpoint: *endpoint
+  backup:
+    short_description: Write the backup manifest (the state directory, the data root, the configuration).
+    options:
+      broker_logical_id: *id
+      broker_state_root: *stateroot
+      broker_data_root: *data
+      broker_config_dir: *confdir
+      broker_backup_dir: *backupdir
+  restore:
+    short_description: Restore the state and the data root from broker_restore_source (state/ and agents/) with the units stopped (each whose unit exists, whatever broker_start says), then start them again when broker_start is true (data only; configuration and units untouched). A merge, never a delete; onto an empty state directory it re-arms every approval consumed after the backup (docs/broker.md "Backup and restore").
+    options:
+      broker_start: *start
+      broker_systemd_dir: *units
+      broker_state_root: *stateroot
+      broker_data_root: *data
+      broker_user: *user
+      broker_group: *group
+      broker_relay: *relay
+      broker_relay_user: *ruser
+      broker_relay_group: *rgroup
+      broker_restore_source:
+        type: path
+        description: A directory holding state/ (a copy of <state_root>/state) and agents/ (a copy of the data root).
+        required: true
+  upgrade:
+    short_description: Validate a new manifest with the running release's hnx broker validate and record its sha256 as pending (the broker's code is hnx_runtime's).
+    options:
+      broker_hnx_bin: *bin
+      broker_config_dir: *confdir
+      broker_target_manifest:
+        type: path
+        description: The new manifest on the host.
+        required: true
+  export:
+    short_description: Write the audit trail (one JSON record per file, schemas/broker/audit) as a tar.gz to broker_export_dir.
+    options:
+      broker_logical_id: *id
+      broker_state_root: *stateroot
+      broker_export_dir: *export

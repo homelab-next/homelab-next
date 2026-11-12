@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# A server bump: record it as pending, move events_bus_version, _archive_url and _archive_sha256
+# together, re-run main (the binary is replaced and the unit restarted), then the health hook and
+# `hnx conform run events` against a scratch account.
+- block:
+    - name: Refuse a downgrade or a no-op
+      ansible.builtin.assert:
+        that:
+          - events_bus_target_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+          - events_bus_target_version is version(events_bus_version, '>')
+        fail_msg: "events_bus: target {{ events_bus_target_version }} is not a release newer than {{ events_bus_version }}"
+    - name: Record the pending version
+      ansible.builtin.copy:
+        dest: "{{ events_bus_config_dir }}/pending-version"
+        content: "{{ events_bus_target_version }}\n"
+        mode: "0640"
+  tags: [upgrade]
