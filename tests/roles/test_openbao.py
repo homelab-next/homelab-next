@@ -1839,6 +1839,50 @@ def test_the_renewal_script_installs_only_a_valid_certificate(tmp_path, pki):
     assert DNS_TOKEN not in r.stdout + r.stderr
 
 
+def acme_installed(tmp_path, pki, **kw):
+    """The role's ACME path run once (lego and systemd faked): a certificate installed and the
+    renewal script rendered; returns the script loaded as a module, so a test can fail one of
+    its steps (an I/O error) and call the rest as the unit would."""
+    from importlib.machinery import SourceFileLoader
+    from importlib.util import module_from_spec, spec_from_loader
+
+    with lego_mirror(pki, tmp_path) as (mirror, sha):
+        r = run_role(tmp_path, ROLE, "tls", acme_vars(tmp_path, pki, mirror, sha, **kw),
+                     env=acme_env(pki))  # fmt: skip
+    assert r.returncode == 0, r.stdout[-4000:] + r.stderr
+    loader = SourceFileLoader(
+        f"acme_renew_{id(tmp_path)}", str(tmp_path / "bin" / "openbao-acme-renew")
+    )
+    mod = module_from_spec(spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+def staged_leftovers(tmp_path) -> list[str]:
+    return sorted(p.name for p in (tmp_path / "etc" / "tls").glob(".acme-*"))
+
+
+@pytest.mark.parametrize("owed_before", [True, False])
+def test_a_rolled_back_pair_keeps_a_reload_an_earlier_run_owed(tmp_path, pki, owed_before):
+    """N1: a run whose new pair fails its check puts the old pair back. If an earlier run's reload
+    of that old pair had failed, the reload is still owed (the server serves an even older
+    certificate): the marker stays. Without an earlier owed reload, none is left behind."""
+    mod = acme_installed(tmp_path, pki)
+    owed = Path(mod.RELOAD_OWED)
+    if owed_before:
+        owed.write_text("")
+    (tmp_path / "lego.force").write_text("")  # lego stores a new pair: the script installs it
+    mod.install_pair = lambda: "the installed pair did not verify"
+    assert mod.renew() == 2
+    assert owed.exists() is owed_before
+    check = subprocess.run(
+        [sys.executable, mod.__file__, "--check"], capture_output=True, text=True
+    )
+    assert (check.returncode, "has not reloaded" in check.stdout) == (
+        (1, True) if owed_before else (0, False)
+    ), check.stdout
+
+
 def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
     tmp_path, pki, tmp_path_factory
 ):

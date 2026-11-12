@@ -200,12 +200,15 @@ def renew():
     else:
         # The server reads the pair only on the reload below (or a start). A crash between the
         # two renames leaves a pair that differs from what lego stored: the next run installs
-        # both again.
+        # both again. A reload owed from an earlier run stays owed when this pair is rolled back:
+        # the pair put back is the one that reload never loaded.
+        owed_before = os.path.exists(RELOAD_OWED)
         with open(RELOAD_OWED, "w"):
             pass
         why = install_pair()
         if why:
-            os.unlink(RELOAD_OWED)
+            if not owed_before:
+                os.unlink(RELOAD_OWED)
             print(f"openbao-acme: the new pair did not check out ({why}); the old pair is back")
             return 2
         print(f"openbao-acme: installed a new certificate for {', '.join(CONF['domains'])}")
