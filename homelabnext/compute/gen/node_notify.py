@@ -142,13 +142,16 @@ def script(node: str, spec: dict) -> str:
         "fi",
         "",
         'if [ "$mode" = remove ]; then',
-        "  # the matcher names the target, so it goes first",
-        '  if exists "$MATCHERS/$MATCHER"; then pvesh delete "$MATCHERS/$MATCHER"; fi',
-        '  if exists "$WEBHOOKS/$NAME"; then pvesh delete "$WEBHOOKS/$NAME"; fi',
     ]
     if not keep_mail:
-        L.append('  pvesh set "$MATCHERS/$DEFAULT_MATCHER" --delete disable')
+        L += [
+            "  # mail back on first: a delete that fails below (set -e) then leaves two routes, not none",
+            '  pvesh set "$MATCHERS/$DEFAULT_MATCHER" --delete disable',
+        ]
     L += [
+        "  # the matcher names the target, so it goes before it",
+        '  if exists "$MATCHERS/$MATCHER"; then pvesh delete "$MATCHERS/$MATCHER"; fi',
+        '  if exists "$WEBHOOKS/$NAME"; then pvesh delete "$WEBHOOKS/$NAME"; fi',
         "  exit 0",
         "fi",
         "",

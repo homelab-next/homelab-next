@@ -195,7 +195,9 @@ case "$verb" in
       case "$1" in --delete) case "$2" in *,*) echo "invalid configuration ID" >&2; exit 255 ;; esac ;; esac
       shift
     done ;;
-  delete) rm "$f" ;;
+  delete)
+    [ -e "$STATE.deletefail" ] && { echo "500 could not delete" >&2; exit 255; }
+    rm "$f" ;;
 esac
 """
 
@@ -280,17 +282,30 @@ def test_default_mail_leaves_the_built_in_matcher_alone(node):
     assert not any("default-matcher" in c for c in calls)
 
 
-def test_remove_takes_the_matcher_off_before_the_target(node):
+def test_remove_turns_mail_on_then_takes_the_matcher_off_before_the_target(node):
     run = node(NOTIFY)
     run()
     r, calls = run("--remove")
     assert r.returncode == 0, r.stderr
     assert _verbs(calls) == [
+        "pvesh set /cluster/notifications/matchers/default-matcher",
         "pvesh delete /cluster/notifications/matchers/hnx-notify-hv-a-route",
         "pvesh delete /cluster/notifications/endpoints/webhook/hnx-notify-hv-a",
-        "pvesh set /cluster/notifications/matchers/default-matcher",
     ]
-    assert calls[-1].endswith("--delete disable")
+    assert next(c for c in calls if "default-matcher" in c).endswith("--delete disable")
+
+
+def test_a_failed_delete_on_remove_leaves_mail_on(node, tmp_path):
+    # set -e stops at the failed delete: the mail matcher must already be back on by then
+    run = node(NOTIFY)
+    run()
+    Path(f"{tmp_path / 'state'}.deletefail").touch()
+    r, calls = run("--remove")
+    assert r.returncode != 0
+    verbs = _verbs(calls)
+    assert verbs[0] == "pvesh set /cluster/notifications/matchers/default-matcher"
+    assert verbs[1].startswith("pvesh delete")
+    assert any("default-matcher" in c and c.endswith("--delete disable") for c in calls)
 
 
 def test_test_sends_through_the_target(node):
