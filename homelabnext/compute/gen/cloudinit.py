@@ -17,6 +17,9 @@ from homelabnext.compute.model import Fleet, Guest
 
 from ._text import HEADER, q
 
+#: one hypervisor node applies this output: ``hnx guests render --node`` may narrow it to one
+PER_NODE = True
+
 #: ``cloudinit.sudo`` -> sudoers rule (``None`` = no rule)
 SUDO_RULES = {"none": None, "password": "ALL=(ALL) ALL", "nopasswd": "ALL=(ALL) NOPASSWD:ALL"}
 

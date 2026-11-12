@@ -15,6 +15,9 @@ from homelabnext.compute.model import Fleet, Guest
 from . import cloudinit
 from ._text import HEADER, hcl_align, hq, hqlist, tf_ident
 
+#: one hypervisor node applies this output: ``hnx guests render --node`` may narrow it to one
+PER_NODE = True
+
 PROVIDERS = f"""# {HEADER}
 terraform {{
   # 1.10: the API token is an ephemeral variable, so it never lands in a saved plan or in state
@@ -43,7 +46,7 @@ variable "proxmox_api_token" {{
   type        = string
   sensitive   = true
   ephemeral   = true
-  description = "API token (TF_VAR_proxmox_api_token): ephemeral, so never in a saved plan or state."
+  description = "API token, from the environment (TF_VAR_*): ephemeral, so never in a saved plan or state."
 }}
 
 variable "default_bridge" {{

@@ -71,16 +71,21 @@ def _fleet(args: argparse.Namespace):
     )
 
 
-#: targets whose output belongs to one hypervisor node, so ``--node`` may narrow them to it: its
-#: Terraform (one provider endpoint, one state), its ``virt-install`` scripts, the seeds of the VMs
-#: it runs, the ``.fw`` files its ``/etc/pve/firewall`` reads, and its own traffic mirror
+#: targets whose output belongs to one hypervisor node, so ``--node`` may narrow them to it: the
+#: hypervisor's IaC (one provider endpoint, one state), its ``virt-install`` scripts, the seeds of
+#: the VMs it runs, the ``.fw`` files its firewall directory reads, and its own traffic mirror.
+#: Each generator module says so itself (``PER_NODE = True``); every other target is fleet-wide.
 PER_NODE_TARGETS = frozenset(
-    {"terraform-proxmox", "libvirt", "cloudinit", "firewall-rules", "node-mirror"}
+    name for name, fn in TARGETS.items() if getattr(sys.modules[fn.__module__], "PER_NODE", False)
 )
 #: per-node targets whose output is made of the node's guests (node-mirror is made of the node's
 #: ``_nodes.yml`` entry): rendered for a node with none, they are empty, and an empty Terraform
 #: render applied to that node's state destroys everything in it
-GUEST_TARGETS = PER_NODE_TARGETS - {"node-mirror"}
+GUEST_TARGETS = frozenset(
+    name
+    for name in PER_NODE_TARGETS
+    if getattr(sys.modules[TARGETS[name].__module__], "RENDERS_GUESTS", True)
+)
 
 
 def _node_arg(p: argparse.ArgumentParser) -> None:
@@ -138,14 +143,12 @@ def _on_node(fleet, node: str | None, target: str, allow_empty: bool = False):
     return narrowed
 
 
-def _print_user_data(fleet) -> None:
+def _print_user_data(fleet, user_data_guests, file: str) -> None:
     """The VMs whose plan needs a ``cloudinit_user_data`` entry, with each user-data's digest."""
-    from .gen.terraform_proxmox import USER_DATA_FILE, user_data_guests
-
     rows = user_data_guests(fleet)
     if not rows:
         return
-    print(f"{len(rows)} VMs need a cloudinit_user_data snippet ({USER_DATA_FILE}):")
+    print(f"{len(rows)} VMs need a cloudinit_user_data snippet ({file}):")
     for g, digest in rows:
         shown = f"sha256 {digest}" if digest else "unresolved key names: render with --keys"
         print(f"  {g.name} (node {g.node}): {shown}")
@@ -309,8 +312,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             touched = write_rendered(files, out, prune=args.prune, markers=markers)
             removed = sorted(set(touched) - set(files))
             print(f"wrote {len(files)} files to {args.out}")
-            if args.target == "terraform-proxmox":
-                _print_user_data(fleet)
+            gen = sys.modules[TARGETS[args.target].__module__]
+            if hasattr(gen, "user_data_guests"):  # the hypervisor IaC target
+                _print_user_data(fleet, gen.user_data_guests, gen.USER_DATA_FILE)
             if removed:
                 print(f"pruned {len(removed)} stale files: {', '.join(removed)}")
             if left:

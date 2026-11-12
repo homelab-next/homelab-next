@@ -36,6 +36,8 @@ SITE = HERE / "site.yml"
 KEYS = HERE / "keys.yml"
 #: the Terraform target, named by its prefix (the slot, not the product: X-11)
 TF = next(t for t in TARGETS if t.startswith("terraform-"))
+#: the tailnet policy target, likewise
+ACL = next(t for t in TARGETS if t.endswith("-acl"))
 
 
 @pytest.fixture(scope="module")
@@ -94,7 +96,7 @@ def test_the_per_node_and_fleet_wide_targets_are_every_target():
     assert set(FLEET_WIDE) == {
         "inventory",
         "registry-hosts",
-        "tailscale-acl",
+        ACL,
         "backup-jobs",
         "baseline-playbook",
         "runtime-labels",
@@ -183,7 +185,7 @@ def test_user_data_snippet_replaces_user_account_when_it_cannot_express_the_gues
 def test_the_api_token_is_ephemeral(good):
     """Never in a saved plan or in state: an ephemeral variable, so Terraform >= 1.10."""
     tf = render(good, TF)
-    token = tf["variables.tf"].split('variable "proxmox_api_token" {', 1)[1].split("}", 1)[0]
+    token = tf["variables.tf"].split('_api_token" {', 1)[1].split("}", 1)[0]
     assert "ephemeral   = true" in token and "sensitive   = true" in token
     assert 'required_version = "~> 1.10"' in tf["providers.tf"]
 
