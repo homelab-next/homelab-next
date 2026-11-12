@@ -90,6 +90,18 @@ SHIPPED = [
     "vllm_server",
     "wazuh_agent",
 ]
+# Roles named after their product live under a reviewed exemption of the product-name lint
+# (tools/product_names.yml, `ansible/roles/<role>/**`) until provider modules ship; they are
+# shipped roles all the same, so a role added without either entry still fails here.
+EXEMPT = yaml.safe_load((ROOT / "tools" / "product_names.yml").read_text())["allow"]
+SHIPPED = sorted(
+    SHIPPED
+    + [
+        e["path"].split("/")[2]
+        for e in EXEMPT
+        if e["path"].startswith("ansible/roles/") and e["path"].endswith("/**")
+    ]
+)
 
 
 @pytest.mark.parametrize("role", SHIPPED)

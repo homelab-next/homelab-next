@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: Apache-2.0
+# One raft snapshot into openbao_snapshot_dir/openbao_snapshot_name, with a manifest beside it
+# naming the release that wrote it (ADR-0042 decision 10) and its sha256. Shared by backup,
+# export, upgrade and restore (its pre-restore copy).
+#
+# The snapshot principal (policy hnx-snapshot: read on sys/storage/raft/snapshot only) logs in
+# with its AppRole for this run and revokes the token afterwards (two uses: the save and the
+# revoke, so the role's token_num_uses=2 suffices); or the caller hands in a token it minted
+# (openbao_snapshot_token). The AppRole's secret_id is never a variable of its own: the role reads
+# it by reference (openbao_snapshot_approle_secret_id_ref, secret:<name>) through the hnx_secret
+# lookup, once per run, under no_log. The token travels in an X-Vault-Token header of a uri
+# request, inside the module's arguments: never on a command line or in an environment variable,
+# where `ps`, the sudo log, the journal and -vvv output would show it. Every task that holds it
+# carries no_log.
+- name: Refuse a snapshot name that is not a plain file name
+  ansible.builtin.assert:
+    that: openbao_snapshot_name is match('^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.snap\Z')
+    fail_msg: "openbao: {{ openbao_snapshot_name }} is not a plain *.snap file name"
+
+- name: Note whether the snapshot principal's token or AppRole was handed in
+  ansible.builtin.set_fact:
+    openbao_snapshot_auth_given: >-
+      {{ (openbao_snapshot_token is string and openbao_snapshot_token | length > 0)
+         or (openbao_snapshot_approle_role_id is string and openbao_snapshot_approle_role_id | length > 0
+             and openbao_snapshot_approle_secret_id_ref is string
+             and openbao_snapshot_approle_secret_id_ref is match('^secret:[^\s]+$')) }}
+    openbao_snapshot_login_needed: "{{ not (openbao_snapshot_token is string and openbao_snapshot_token | length > 0) }}"
+  no_log: true
+
+- name: Refuse a snapshot without the snapshot principal
+  ansible.builtin.assert:
+    that: openbao_snapshot_auth_given | bool
+    fail_msg: >-
+      openbao: a snapshot needs the snapshot principal: openbao_snapshot_approle_role_id with
+      openbao_snapshot_approle_secret_id_ref (its AppRole and the secret:<name> of its secret_id,
+      README.md), or openbao_snapshot_token (a token minted for this run)
+
+- name: Resolve the snapshot principal's secret_id once, by reference
+  ansible.builtin.set_fact:
+    openbao_snapshot_approle_secret: "{{ lookup('hnx_secret', openbao_snapshot_approle_secret_id_ref) }}"
+  when: openbao_snapshot_login_needed | bool
+  no_log: true
+
+- name: Ask the server which release is writing the snapshot
+  ansible.builtin.uri:
+    url: "{{ openbao_api_addr }}/v1/sys/health?{{ openbao_health_query }}"
+    ca_path: "{{ openbao_tls_ca_file }}"
+    status_code: 200
+    return_content: true
+    follow_redirects: none
+    use_proxy: false
+    timeout: "{{ openbao_health_timeout | int }}"
+  register: openbao_snapshot_writer
+
+- name: Create the snapshot directory (root's alone)
+  ansible.builtin.file:
+    path: "{{ openbao_snapshot_dir }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0700"
+
+- name: Save the snapshot, check it and put it in place
+  block:
+    - name: Log in as the snapshot principal (AppRole; the token lives for this run)
+      ansible.builtin.uri:
+        url: "{{ openbao_api_addr }}/v1/auth/{{ openbao_snapshot_approle_mount }}/login"
+        method: POST
+        body_format: json
+        body:
+          role_id: "{{ openbao_snapshot_approle_role_id }}"
+          secret_id: "{{ openbao_snapshot_approle_secret }}"
+        ca_path: "{{ openbao_tls_ca_file }}"
+        status_code: 200
+        return_content: true
+        follow_redirects: none
+        use_proxy: false
+        timeout: "{{ openbao_health_timeout | int }}"
+      register: openbao_snapshot_login
+      when: openbao_snapshot_login_needed | bool
+      no_log: true
+
+    # no retries: the AppRole's token has 2 uses (this save and the revoke below), so a retried
+    # save would spend the revoke's use and leave the token to its TTL
+    - name: Save the raft snapshot (to a partial file first, owner-only)
+      ansible.builtin.uri:
+        url: "{{ openbao_api_addr }}/v1/sys/storage/raft/snapshot"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ openbao_snapshot_login.json.auth.client_token if openbao_snapshot_login_needed | bool else openbao_snapshot_token }}"
+        dest: "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_owner_group }}"
+        mode: "0600"
+        ca_path: "{{ openbao_tls_ca_file }}"
+        status_code: 200
+        follow_redirects: none
+        use_proxy: false
+        timeout: "{{ openbao_snapshot_timeout | int }}"
+      changed_when: true
+      no_log: true
+
+    - name: Hash the snapshot
+      ansible.builtin.stat:
+        path: "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial"
+        checksum_algorithm: sha256
+      register: openbao_snapshot_file
+
+    - name: Refuse an empty snapshot
+      ansible.builtin.assert:
+        that: openbao_snapshot_file.stat.exists and openbao_snapshot_file.stat.size > 0
+        fail_msg: "openbao: the snapshot at {{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial is missing or empty"
+
+    - name: Put the snapshot in place
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial", "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}"]
+      changed_when: true
+
+    - name: Keep the snapshot owner-only
+      ansible.builtin.file:
+        path: "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_owner_group }}"
+        mode: "0600"
+
+    - name: Write the snapshot's manifest
+      ansible.builtin.copy:
+        dest: "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.json"
+        content: >-
+          {{ {'service': openbao_logical_id, 'kind': 'raft-snapshot',
+              'file': openbao_snapshot_dir ~ '/' ~ openbao_snapshot_name,
+              'sha256': openbao_snapshot_file.stat.checksum, 'bytes': openbao_snapshot_file.stat.size,
+              'written_by': openbao_snapshot_writer.json.version | default('unknown'),
+              'format': 'raft snapshot: encrypted by the barrier, readable only by this product with the unseal keys of the cluster that wrote it (not an open format)',
+              'restore': 'role openbao, tasks_from: restore (needs this manifest beside the snapshot)'}
+             | to_nice_json }}
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_owner_group }}"
+        mode: "0600"
+  always:
+    - name: Remove a partial snapshot a failed run left
+      ansible.builtin.file:
+        path: "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial"
+        state: absent
+
+    # 403: the token is already dead (its two uses spent, e.g. by a save that failed after the
+    # server counted it, or its TTL passed), which is the state the revoke is for
+    - name: Revoke the token this run minted
+      ansible.builtin.uri:
+        url: "{{ openbao_api_addr }}/v1/auth/token/revoke-self"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ openbao_snapshot_login.json.auth.client_token }}"
+        ca_path: "{{ openbao_tls_ca_file }}"
+        status_code: [200, 204, 403]
+        follow_redirects: none
+        use_proxy: false
+        timeout: "{{ openbao_health_timeout | int }}"
+      when: openbao_snapshot_login.json.auth.client_token is defined
+      changed_when: true
+      no_log: true

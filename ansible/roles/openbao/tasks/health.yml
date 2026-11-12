@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means initialised, unsealed and serving (active, or an unsealed standby of a cluster),
+# running the pinned release. Sealed or uninitialised fails, by name. A restart owed (a change the
+# running server has not loaded: <openbao_state_dir>/restart-owed) does not fail it, since the
+# server is serving, but is reported as a WARN line naming the reasons: role interface v1 has
+# pass and fail only, so the warning is the message. It changes nothing (role interface v1): the
+# release record downgrade.yml reads is main's to write (release_seen.yml).
+- block:
+    - name: Ask the server for its health (verified against the internal CA)
+      ansible.builtin.uri:
+        url: "{{ openbao_api_addr }}/v1/sys/health"
+        ca_path: "{{ openbao_tls_ca_file }}"
+        status_code: [200, 429, 472, 473, 501, 503]
+        return_content: true
+        follow_redirects: none
+        use_proxy: false
+        timeout: "{{ openbao_health_timeout | int }}"
+      register: openbao_health
+      changed_when: false
+    - name: Fail unless it is initialised, unsealed and running the pinned release
+      ansible.builtin.assert:
+        that:
+          - openbao_health.status in [200, 429]
+          - openbao_health.json.initialized | default(false) | bool
+          - not openbao_health.json.sealed | default(true) | bool
+          - openbao_health.json.version | default('') == openbao_version
+        fail_msg: >-
+          openbao {{ openbao_logical_id }}: unhealthy:
+          {{ 'UNINITIALISED (the operator initialises it: README.md)' if not openbao_health.json.initialized | default(false)
+             else 'SEALED (the operator unseals it with the key shares)' if openbao_health.json.sealed | default(true)
+             else 'runs ' ~ openbao_health.json.version | default('?') ~ ', the pin is ' ~ openbao_version ~ ' (a restart is owed)'
+             if openbao_health.json.version | default('') != openbao_version
+             else 'HTTP ' ~ openbao_health.status }}
+        success_msg: "openbao {{ openbao_logical_id }}: unsealed, {{ 'standby' if openbao_health.json.standby | default(false) else 'active' }}, {{ openbao_health.json.version }}"
+    - name: Read whether a restart is owed
+      ansible.builtin.stat:
+        path: "{{ openbao_state_dir }}/restart-owed"
+      register: openbao_health_owed
+    - name: Read the reasons
+      ansible.builtin.slurp:
+        src: "{{ openbao_state_dir }}/restart-owed"
+      register: openbao_health_owed_record
+      when: openbao_health_owed.stat.exists
+    - name: Warn that a restart is owed
+      ansible.builtin.debug:
+        msg: >-
+          WARN openbao {{ openbao_logical_id }}: a restart is owed
+          ({{ ((openbao_health_owed_record.content | b64decode | from_json).reasons | default([])) | join(', ') or 'reasons not recorded' }}):
+          the running server has not loaded them. A restart SEALS it; restart while the operator can
+          unseal (main with openbao_allow_restart: true). A crash restart (Restart=on-failure) or a
+          reboot would load them too, sealed.
+      when: openbao_health_owed.stat.exists
+  tags: [health]

@@ -294,7 +294,7 @@ service as follows:
 
 | Lab service | Lab shortcut | Production replacement |
 |---|---|---|
-| `secrets` (OpenBao) | dev mode: in memory, no TLS, a known root token, starts unsealed | server mode with integrated (raft) storage, TLS, Shamir unseal shares held offline (ADR-0042 decision 6; no auto-unseal), root token revoked after initialisation, short-lived per-client tokens |
+| `secrets` (OpenBao) | dev mode: in memory, no TLS, a known root token, starts unsealed | server mode with integrated (raft) storage, TLS, Shamir unseal shares held offline (ADR-0042 decision 6; no auto-unseal), root token revoked after initialisation, short-lived per-client tokens: the [`openbao` role](../ansible/roles/openbao/README.md) |
 | `object-store` (Garage) | known RPC secret and admin token, single node, plain HTTP | generated secrets from the secrets capability, replicated layout, TLS at the edge, admin API on the management zone only |
 | `postgres` | known password, `fsync=off` | generated password, `fsync` on, TLS, backups in the restore drill |
 | `lake-catalog` (Lakekeeper) | no authentication, known encryption key | OIDC through the IdP, encryption key from the secrets capability |

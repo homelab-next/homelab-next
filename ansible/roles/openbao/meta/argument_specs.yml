@@ -1,0 +1,282 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install and run the secret store in server mode (raft, TLS, audit); never initialise or unseal it.
+    options:
+      openbao_logical_id: &id
+        type: str
+        description: The service's id in the registry (secrets).
+        required: true
+      openbao_api_addr: &api
+        type: str
+        description: "The https URL clients use (scheme://host:port, no path); its host is on the server certificate."
+        required: true
+      openbao_listen_address: &listen
+        type: str
+        description: "The address the listener binds: the host's zone address, never a wildcard."
+        required: true
+      openbao_version: &version
+        type: str
+        description: "The pinned release (the lab-in-a-box pin; tools/tests/test_pin_consistency.py holds them equal)."
+        default: "2.7.1"
+      openbao_checksums: &checksums
+        type: dict
+        description: "sha256 of the pinned release archive per architecture (amd64, arm64), from the release's signed checksums.txt."
+        default:
+          amd64: "0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243"
+          arm64: "2b3807d90f224df05d4fe1fdede7f052d2227596c648a56bd291381f8fd01840"
+      openbao_checksums_release: &checksumsver
+        type: str
+        description: "The release openbao_checksums were taken for; refused unless it equals openbao_version (move them together)."
+        default: "2.7.1"
+      openbao_release_repository: &repo
+        type: str
+        description: "Base https URL of the release archives (<repository>/v<version>/<archive>)."
+        default: "https://github.com/openbao/openbao/releases/download"
+      openbao_user: &user
+        type: str
+        description: "The unprivileged account the server runs as (created, no shell)."
+        default: openbao
+      openbao_group: &group
+        type: str
+        description: "The service account's group (reads the configuration and the TLS key)."
+        default: openbao
+      openbao_install_dir: &install
+        type: path
+        description: "Each release is unpacked into <install_dir>/<version>/."
+        default: /opt/openbao
+      openbao_bin: &bin
+        type: path
+        description: "The command, a link to the pinned release's (the unit and the hooks run it)."
+        default: /usr/local/bin/bao
+      openbao_config_dir: &confdir
+        type: path
+        description: "The configuration and TLS directory."
+        default: /etc/openbao
+      openbao_data_dir: &datadir
+        type: path
+        description: "The raft storage directory (dedicated; the service account's alone)."
+        default: /var/lib/openbao/raft
+      openbao_audit_dir: &auditdir
+        type: path
+        description: "Where the file audit device writes audit.log."
+        default: /var/log/openbao
+      openbao_unit_dir: &unitdir
+        type: path
+        description: "Where the unit is written."
+        default: /etc/systemd/system
+      openbao_logrotate_dir: &logrotate
+        type: path
+        description: "Where the audit log's rotation is written."
+        default: /etc/logrotate.d
+      openbao_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command."
+        default: systemctl
+      openbao_state_dir: &state
+        type: path
+        description: "Where main records an owed restart and upgrade a pending release."
+        default: /var/lib/homelabnext/openbao
+      openbao_port: &port
+        type: int
+        description: "The API port."
+        default: 8200
+      openbao_cluster_port: &cport
+        type: int
+        description: "The raft cluster port."
+        default: 8201
+      openbao_node_id:
+        type: str
+        description: "The raft node id, unique per server."
+        default: "{{ inventory_hostname_short }}"
+      openbao_cluster_addr:
+        type: str
+        description: "The https URL other raft members reach this one on; empty: the listen address and the cluster port."
+        default: ""
+      openbao_allow_swap:
+        type: bool
+        description: "Accept a host with active swap (only when swap is encrypted): the release never locks its memory."
+        default: false
+      openbao_allow_downgrade: &downgrade
+        type: bool
+        description: "Accept a pin (or an upgrade target) older than a release this host has run: the one the server runs (sys/health), the one openbao_bin points at, or the one recorded in <openbao_state_dir>/highest-release (main records what answers; with this switch, once the pin answers, the record is lowered to it, so the switch is needed for that one run). Storage a newer release rewrote may not read: a rollback needs this AND the restore of the pre-upgrade snapshot with the old release (README.md)."
+        default: false
+      openbao_ui:
+        type: bool
+        description: "Serve the web UI."
+        default: false
+      openbao_log_level:
+        type: str
+        description: "Server log level."
+        choices: [trace, debug, info, warn, error]
+        default: info
+      openbao_tls_cert_pem:
+        type: str
+        description: "The server certificate (PEM, leaf first, then any intermediates), issued by the internal CA."
+        default: ""
+      openbao_tls_private_key_pem:
+        type: str
+        description: "The server certificate's private key (PEM). From the overlay's sealed variables, never a literal."
+        default: ""
+        no_log: true
+      openbao_tls_ca_pem:
+        type: str
+        description: "The internal CA's certificate (PEM): written beside the server's for the hooks and clients (BAO_CACERT)."
+        default: ""
+      openbao_tls_selfsigned_for_tests:
+        type: bool
+        description: "TEST RUNS ONLY: generate a throwaway CA and server certificate on the host. Never for a server that will hold a real secret. Refused without openbao_tls_selfsigned_confirm_throwaway, and with any supplied PEM (the CA's included)."
+        default: false
+      openbao_tls_selfsigned_confirm_throwaway:
+        type: bool
+        description: "TEST RUNS ONLY: the second, explicit confirmation openbao_tls_selfsigned_for_tests needs (both true, or both false)."
+        default: false
+      openbao_tls_selfsigned_sans:
+        type: list
+        elements: str
+        description: "TEST RUNS ONLY: extra names and addresses for the generated certificate (the listen address and the api/cluster hosts are always on it)."
+        default: []
+      openbao_tls_min_protocol: &tlsmin
+        type: str
+        description: "The listener's minimum TLS version."
+        choices: [tls12, tls13]
+        default: tls12
+      openbao_allow_restart:
+        type: bool
+        description: "Restart a running server whose release, configuration or unit changed (a new TLS certificate or key is reloaded with SIGHUP instead, and the server stays unsealed). A restart SEALS it: set only while the operator can unseal."
+        default: false
+      openbao_health_timeout: &htimeout
+        type: int
+        description: "Seconds per health request."
+        default: 10
+      openbao_backup_dir: &backupdir
+        type: path
+        description: "Where the backup hook writes raft.snap and its manifest (and upgrade its pre-upgrade snapshot)."
+        default: /var/backups/openbao
+      openbao_export_dir: &exportdir
+        type: path
+        description: "Where the export hook writes <logical_id>.snap and its manifest."
+        default: /var/backups/openbao/export
+      openbao_restore_source_unrestricted: &unrestricted
+        type: bool
+        description: "restore hook: restore from a file outside openbao_backup_dir and openbao_export_dir, but on openbao_backup_dir's own filesystem (the same device), and that not a FUSE or user mount (findmnt). The source must still be a regular file with one name, owned by openbao_owner and writable by nobody else, under directories (from / down) owned by openbao_owner or root and writable by nobody else (or root's with the sticky bit); it is copied into a root-only staging directory, and that copy is what is checked and restored."
+        default: false
+      openbao_restore_force: &force
+        type: bool
+        description: "restore hook: restore a snapshot another cluster wrote, through sys/storage/raft/snapshot-force (hnx-restore must allow it; the server then answers to that cluster's unseal keys)."
+        default: false
+      openbao_snapshot_approle_mount: &amount
+        type: str
+        description: "The AppRole auth mount the snapshot principal logs in on."
+        default: approle
+      openbao_snapshot_approle_role_id: &roleid
+        type: str
+        description: "The SNAPSHOT principal's AppRole role_id (policy hnx-snapshot: read on sys/storage/raft/snapshot only). With its secret_id, the hook logs in for the run and revokes the token afterwards."
+        default: ""
+      openbao_snapshot_approle_secret_id_ref: &secretid
+        type: str
+        description: "The reference (secret:<name>, the overlay's secret:openbao/snapshot-secret-id) of the SNAPSHOT principal's AppRole secret_id, resolved once per run through the hnx_secret lookup under no_log (the deploy's AppRole needs read on it). Used with openbao_snapshot_approle_role_id; rotate it before its secret_id_ttl (README.md). There is no variable for the value itself."
+        default: ""
+      openbao_snapshot_token: &token
+        type: str
+        description: "Instead of the AppRole: a token of the SNAPSHOT principal the caller minted for this run (read on sys/storage/raft/snapshot only; it cannot restore). Never a stored token. Never logged."
+        default: ""
+        no_log: true
+      openbao_snapshot_timeout: &stimeout
+        type: int
+        description: "Seconds a snapshot save or restore request may take."
+        default: 300
+  health:
+    short_description: Fail unless the server is initialised, unsealed and running the pinned release (sealed and uninitialised fail by name).
+    options:
+      openbao_logical_id: *id
+      openbao_api_addr: *api
+      openbao_version: *version
+      openbao_config_dir: *confdir
+      openbao_health_timeout: *htimeout
+      openbao_state_dir: *state
+  readiness:
+    short_description: Fail unless the API answers; report uninitialised, sealed or unsealed, and an owed restart.
+    options:
+      openbao_logical_id: *id
+      openbao_api_addr: *api
+      openbao_config_dir: *confdir
+      openbao_state_dir: *state
+      openbao_health_timeout: *htimeout
+  backup:
+    short_description: Take a raft snapshot (raft.snap) and its manifest into openbao_backup_dir.
+    options:
+      openbao_logical_id: *id
+      openbao_api_addr: *api
+      openbao_config_dir: *confdir
+      openbao_backup_dir: *backupdir
+      openbao_health_timeout: *htimeout
+      openbao_snapshot_approle_mount: *amount
+      openbao_snapshot_approle_role_id: *roleid
+      openbao_snapshot_approle_secret_id_ref: *secretid
+      openbao_snapshot_token: *token
+      openbao_snapshot_timeout: *stimeout
+  restore:
+    short_description: Restore a raft snapshot (manifest and sha256 checked, a pre-restore snapshot first) into the running, unsealed server.
+    options:
+      openbao_logical_id: *id
+      openbao_api_addr: *api
+      openbao_config_dir: *confdir
+      openbao_backup_dir: *backupdir
+      openbao_health_timeout: *htimeout
+      openbao_snapshot_approle_mount: *amount
+      openbao_snapshot_approle_role_id: *roleid
+      openbao_snapshot_approle_secret_id_ref: *secretid
+      openbao_snapshot_token: *token
+      openbao_snapshot_timeout: *stimeout
+      openbao_restore_token:
+        type: str
+        description: "A token of the RESTORE principal (policy hnx-restore: update on sys/storage/raft/snapshot, and snapshot-force only if needed), minted by the operator for this one restore while present (minted with -use-limit=2, -ttl=15m: refused with identity policies, unless lookup-self reports exactly one use left (the server spends one answering it, so a -use-limit=2 token reports 1), or with a TTL over 900 s). Never the snapshot principal's token (refused when equal). Never logged. A refused restore needs a freshly minted token."
+        required: true
+        no_log: true
+      openbao_restore_source:
+        type: path
+        description: "The snapshot file on the host; its manifest <source>.json (written by backup, export and upgrade) must be beside it."
+        required: true
+      openbao_restore_force: *force
+      openbao_export_dir: *exportdir
+      openbao_restore_source_unrestricted: *unrestricted
+  upgrade:
+    short_description: Refuse a downgrade (against the pin and the running release), take a pre-upgrade snapshot, stage and verify the target release, record it as pending.
+    options:
+      openbao_logical_id: *id
+      openbao_api_addr: *api
+      openbao_version: *version
+      openbao_config_dir: *confdir
+      openbao_install_dir: *install
+      openbao_release_repository: *repo
+      openbao_backup_dir: *backupdir
+      openbao_state_dir: *state
+      openbao_health_timeout: *htimeout
+      openbao_allow_downgrade: *downgrade
+      openbao_snapshot_approle_mount: *amount
+      openbao_snapshot_approle_role_id: *roleid
+      openbao_snapshot_approle_secret_id_ref: *secretid
+      openbao_snapshot_token: *token
+      openbao_snapshot_timeout: *stimeout
+      openbao_target_version:
+        type: str
+        description: "The release to move to."
+        required: true
+      openbao_target_checksums:
+        type: dict
+        description: "sha256 of the target release archive per architecture (from its signed checksums.txt)."
+        required: true
+  export:
+    short_description: "Write a raft snapshot (<logical_id>.snap) and its manifest into openbao_export_dir: NOT an open format; the exit path is the secrets contract (hnx secrets plan)."
+    options:
+      openbao_logical_id: *id
+      openbao_api_addr: *api
+      openbao_config_dir: *confdir
+      openbao_export_dir: *exportdir
+      openbao_health_timeout: *htimeout
+      openbao_snapshot_approle_mount: *amount
+      openbao_snapshot_approle_role_id: *roleid
+      openbao_snapshot_approle_secret_id_ref: *secretid
+      openbao_snapshot_token: *token
+      openbao_snapshot_timeout: *stimeout

@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# A release bump, staged, not switched: refuse a downgrade or a no-op (against the pin and against
+# the RUNNING release), take a pre-upgrade raft snapshot, fetch and verify the target release
+# beside the running one, and record it as pending. The switch itself is main with the moved pin
+# (openbao_version, openbao_checksums and openbao_checksums_release), which needs a restart: run
+# it with openbao_allow_restart: true while the operator is there to unseal, then the health hook.
+# Rollback is NOT pointing the pin back: the new release may already have rewritten the raft
+# storage. Restore pre-upgrade-<old version>.snap with the old release (README.md, "Upgrading").
+- block:
+    - name: Refuse a downgrade, a no-op or a target without a checksum
+      ansible.builtin.assert:
+        that:
+          - openbao_target_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+          - openbao_target_version is version(openbao_version, '>')
+          - openbao_target_checksums is mapping
+          - openbao_target_checksums.values() | reject('match', '^[0-9a-f]{64}\Z') | list | length == 0
+          - openbao_target_checksums.keys() | difference(['amd64', 'arm64']) | length == 0
+        fail_msg: >-
+          openbao: target {{ openbao_target_version }} is not a release newer than
+          {{ openbao_version }} with a sha256 per architecture (openbao_target_checksums)
+    - name: Refuse a target older than the running release
+      ansible.builtin.include_tasks:
+        file: downgrade.yml
+        apply:
+          tags: [upgrade]
+      vars:
+        openbao_version: "{{ openbao_target_version }}"
+    - name: Check the platform (architecture, swap)
+      ansible.builtin.include_tasks:
+        file: platform.yml
+        apply:
+          tags: [upgrade]
+      vars:
+        openbao_checksums: "{{ openbao_target_checksums }}"
+    - name: Take the pre-upgrade raft snapshot
+      ansible.builtin.include_tasks:
+        file: snapshot.yml
+        apply:
+          tags: [upgrade]
+      vars:
+        openbao_snapshot_dir: "{{ openbao_backup_dir }}"
+        openbao_snapshot_name: "pre-upgrade-{{ openbao_version }}.snap"
+    - name: Fetch and verify the target release beside the running one
+      ansible.builtin.include_tasks:
+        file: release.yml
+        apply:
+          tags: [upgrade]
+      vars:
+        openbao_release_version: "{{ openbao_target_version }}"
+        openbao_release_checksums: "{{ openbao_target_checksums }}"
+    - name: Create the state directory
+      ansible.builtin.file:
+        path: "{{ openbao_state_dir }}"
+        state: directory
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_owner_group }}"
+        mode: "0750"
+    - name: Record the pending release
+      ansible.builtin.copy:
+        dest: "{{ openbao_state_dir }}/pending-version"
+        content: "{{ {'from': openbao_version, 'to': openbao_target_version, 'snapshot': openbao_backup_dir ~ '/pre-upgrade-' ~ openbao_version ~ '.snap'} | to_nice_json }}\n"
+        mode: "0640"
+  tags: [upgrade]

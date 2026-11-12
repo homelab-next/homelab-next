@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a pin older than a release this host has already run. A release may rewrite raft storage
+# in a format an older one cannot read, so the pin (or openbao_target_version) is compared with
+# three witnesses, and any one of them newer refuses it unless openbao_allow_downgrade:
+#   * the release the server RUNS (sys/health), when it answers;
+#   * the release openbao_bin points at (<install_dir>/<version>/bao): what a stopped server, a
+#     crash restart or a reboot would start;
+#   * the release recorded in <state_dir>/highest-release (main records what answers after its
+#     start: release_seen.yml; an explicit rollback lowers it to the pin). A file there that is
+#     not a release record fails, by name (release_record.yml).
+# A stopped server answers nothing, so sys/health alone would let a lower pin through; the link and
+# the record do not depend on it. A fresh host has none of the three: nothing to downgrade then.
+- name: Ask the running server for its release
+  ansible.builtin.uri:
+    url: "{{ openbao_api_addr }}/v1/sys/health?{{ openbao_health_query }}"
+    ca_path: "{{ openbao_tls_ca_file }}"
+    status_code: 200
+    return_content: true
+    follow_redirects: none
+    use_proxy: false
+    timeout: "{{ openbao_health_timeout | int }}"
+  register: openbao_running_release
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only
+
+- name: Read which release the command points at
+  ansible.builtin.stat:
+    path: "{{ openbao_bin }}"
+    follow: false
+    get_checksum: false
+  register: openbao_linked_release
+
+- name: Read the release recorded here
+  ansible.builtin.include_tasks: release_record.yml
+
+- name: Note the releases this host has run
+  ansible.builtin.set_fact:
+    openbao_releases_seen: >-
+      {{ {'running': openbao_running_release.json.version | default('') | regex_search('^[0-9]+\.[0-9]+\.[0-9]+') or '',
+          'linked': (openbao_linked_release.stat.lnk_target | default('') | regex_search('/([0-9]+\.[0-9]+\.[0-9]+)/bao$', '\1') or [''])[0]
+                    if openbao_linked_release.stat.islnk | default(false) else '',
+          'recorded': openbao_release_recorded}
+         | dict2items | selectattr('value') | items2dict }}
+
+- name: Refuse a pin older than a release this host has run, unless openbao_allow_downgrade
+  ansible.builtin.assert:
+    that: openbao_allow_downgrade | bool or openbao_releases_seen.values() | select('version', openbao_version, '>') | list | length == 0
+    fail_msg: >-
+      openbao: the pin is {{ openbao_version }}, older than what this host has run
+      ({{ openbao_releases_seen.items() | map('join', ' ') | join(', ') }}; running: sys/health,
+      linked: what {{ openbao_bin }} points at, recorded: {{ openbao_state_dir }}/highest-release).
+      A downgrade can meet storage the newer release already rewrote. To roll back, follow
+      README.md, "Upgrading": it needs BOTH the restore of the pre-upgrade snapshot with the old
+      release AND openbao_allow_downgrade: true; never set the switch alone.

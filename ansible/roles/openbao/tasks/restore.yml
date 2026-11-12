@@ -1,0 +1,442 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore a raft snapshot into the running, unsealed server. Restoring replaces every secret
+# written since the snapshot, so it is refused unless the snapshot's manifest (<source>.json, which
+# backup, export and upgrade write) is beside it, its sha256 matches, and the release that wrote
+# it is not newer than the one running; and a pre-restore snapshot of the current state is taken
+# first (<openbao_backup_dir>/pre-restore-<UTC time>.snap), so the restore itself can be undone.
+#
+# The bytes checked are the bytes restored. The source and its manifest are copied (cp -P: a
+# symbolic link is copied as a link and then refused, never followed) into a fresh root-only
+# staging directory under openbao_backup_dir; the hash, the manifest checks and the POST all read
+# that copy, and the copy is removed afterwards (always; a staging directory a killed run left is
+# swept at the start of the next restore). Changing the source after the copy changes nothing that
+# is restored, and a change DURING the copy is caught: the source and the manifest are stat'ed
+# again afterwards and must be the same file (device, inode, size, mtime, ctime). Before the copy
+# the source and the manifest must each be a regular file (not a link) with one name (nlink 1),
+# owned by openbao_owner, writable by nobody else, under the backup or the export directory
+# (resolved: no symbolic link on the way) unless openbao_restore_source_unrestricted; and every
+# directory from / down to it must be owned by openbao_owner or root and writable by nobody else
+# (or root's with the sticky bit, as /tmp), so nobody else can swap a name on the way either. The
+# manifest's sha256 catches corruption, not tampering: it is unauthenticated, and whoever can
+# rewrite the snapshot can rewrite it too (README.md).
+#
+# Two principals: the pre-restore snapshot is the snapshot principal's (read only, as backup);
+# the restore is the restore principal's, openbao_restore_token, which the operator mints for this
+# one restore while present (policy hnx-restore, -use-limit=2, -ttl=15m: README.md). Its two uses
+# are spent last, after every local check: auth/token/lookup-self just before the pre-restore
+# snapshot (refused unless its policies are exactly hnx-restore (and default), it carries no
+# identity policies, it has exactly one use left (the server spends a use before it answers
+# lookup-self, so a -use-limit=2 token reports 1) and its TTL is at most 900 s), then the POST.
+# Once the lookup has said it is the restore principal's, a run whose POST did not succeed
+# revokes it (always:, after the staging directory is gone; a failed revoke is reported, never
+# fatal: a sealed or unreachable server must not skip the cleanup); a run refused before the
+# lookup leaves it unused. Either way a refused restore needs a freshly minted token. The snapshot principal cannot restore. A snapshot of this same cluster is
+# restored as is; one from another cluster (a rebuilt server, the restore zone) needs
+# openbao_restore_force (sys/storage/raft/snapshot-force), and afterwards the server answers to
+# THAT cluster's unseal keys.
+- block:
+    - name: Note whether a restore token was handed in, distinct from the snapshot token
+      ansible.builtin.set_fact:
+        openbao_restore_auth_given: "{{ openbao_restore_token is defined and openbao_restore_token is string and openbao_restore_token | length > 0 }}"
+        openbao_restore_auth_distinct: "{{ openbao_restore_token is not defined or openbao_restore_token != openbao_snapshot_token }}"
+      no_log: true
+    - name: Start with no restore token confirmed and nothing posted (facts outlive an include)
+      ansible.builtin.set_fact:
+        openbao_restore_confirmed: false
+        openbao_restore_posted: false
+    # Created (and its mode set) before any check refuses the run, deliberately: the sweep below
+    # and the staging directory need it, and it is root's alone either way.
+    - name: Create the backup directory (root's alone; the staging directory goes under it)
+      ansible.builtin.file:
+        path: "{{ openbao_backup_dir }}"
+        state: directory
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_owner_group }}"
+        mode: "0700"
+    # Only a staging directory older than any restore can still be running is swept: a concurrent
+    # restore's (its last file is copied in before its health and lookup requests, its pre-restore
+    # snapshot and its POST, each bounded by a timeout) is left alone.
+    - name: Find staging directories an earlier, killed restore left
+      ansible.builtin.find:
+        paths: ["{{ openbao_backup_dir }}"]
+        patterns: [".restore-staging-*"]
+        file_type: directory
+        hidden: true
+        recurse: false
+        age: "{{ 2 * (openbao_snapshot_timeout | int) + 10 * (openbao_health_timeout | int) }}s"
+      register: openbao_restore_stale
+    - name: Remove them (the root-only ones, owned by openbao_owner with mode 0700)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ openbao_restore_stale.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when:
+        - not item.islnk | default(false)
+        - item.pw_name == openbao_owner or item.uid | string == openbao_owner | string
+        - item.mode == '0700'
+    - name: Refuse a restore without the restore principal's token
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_auth_given | bool
+          - openbao_restore_auth_distinct | bool
+        fail_msg: >-
+          openbao: a restore needs openbao_restore_token, a token of the restore principal
+          (hnx-restore) minted for this restore, never the snapshot principal's token
+    - name: Refuse a source that is not an absolute, normalised path
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_source is string
+          - openbao_restore_source is match('^/')
+          - openbao_restore_source == openbao_restore_source | normpath
+        fail_msg: "openbao: openbao_restore_source must be an absolute, normalised path (not {{ openbao_restore_source }})"
+    - name: Read the snapshot and its manifest without following a link
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        get_checksum: false
+      loop: ["{{ openbao_restore_source }}", "{{ openbao_restore_source }}.json"]
+      register: openbao_restore_inputs
+    - name: Refuse a source that is not a non-empty file
+      ansible.builtin.assert:
+        that: >-
+          openbao_restore_inputs.results[0].stat.exists and openbao_restore_inputs.results[0].stat.isreg
+          and openbao_restore_inputs.results[0].stat.size > 0
+        fail_msg: "openbao: {{ openbao_restore_source }} is not a non-empty snapshot file on the host (a symbolic link is refused)"
+    - name: Refuse a snapshot without its manifest
+      ansible.builtin.assert:
+        that: openbao_restore_inputs.results[1].stat.exists and openbao_restore_inputs.results[1].stat.isreg
+        fail_msg: "openbao: {{ openbao_restore_source }}.json, the snapshot's manifest, is missing (or not a regular file): a restore checks the snapshot against it"
+    - name: Refuse a snapshot someone other than the owner could have written
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_inputs.results[0].stat.pw_name == openbao_owner or openbao_restore_inputs.results[0].stat.uid | string == openbao_owner | string
+          - not openbao_restore_inputs.results[0].stat.wgrp and not openbao_restore_inputs.results[0].stat.woth
+        fail_msg: >-
+          openbao: {{ openbao_restore_inputs.results[0].item }} is owned by {{ openbao_restore_inputs.results[0].stat.pw_name }} (not
+          {{ openbao_owner }}) or is writable by its group or by others (mode
+          {{ openbao_restore_inputs.results[0].stat.mode }}): refused
+    - name: Refuse a manifest someone other than the owner could have written
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_inputs.results[1].stat.pw_name == openbao_owner or openbao_restore_inputs.results[1].stat.uid | string == openbao_owner | string
+          - not openbao_restore_inputs.results[1].stat.wgrp and not openbao_restore_inputs.results[1].stat.woth
+        fail_msg: >-
+          openbao: {{ openbao_restore_inputs.results[1].item }} is owned by {{ openbao_restore_inputs.results[1].stat.pw_name }} (not
+          {{ openbao_owner }}) or is writable by its group or by others (mode
+          {{ openbao_restore_inputs.results[1].stat.mode }}): refused
+    - name: Refuse a snapshot or manifest with another name (a hard link someone else could hold)
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_inputs.results[0].stat.nlink == 1
+          - openbao_restore_inputs.results[1].stat.nlink == 1
+        fail_msg: >-
+          openbao: {{ openbao_restore_source }} or its manifest has more than one name (links:
+          {{ openbao_restore_inputs.results[0].stat.nlink }}, {{ openbao_restore_inputs.results[1].stat.nlink }}):
+          refused
+    - name: Resolve the source and the backup and export directories
+      ansible.builtin.command:
+        argv: [realpath, -m, --, "{{ openbao_restore_source }}", "{{ openbao_restore_source }}.json", "{{ openbao_backup_dir }}", "{{ openbao_export_dir }}"]
+      register: openbao_restore_real
+      changed_when: false
+      check_mode: false  # read-only
+    - name: Refuse a source outside the backup and export directories, or reached through a link
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_real.stdout_lines[0] == openbao_restore_source
+          - openbao_restore_real.stdout_lines[1] == openbao_restore_source ~ '.json'
+          - >-
+            openbao_restore_source_unrestricted | bool
+            or openbao_restore_source is match('^' ~ (openbao_restore_real.stdout_lines[2] | regex_escape) ~ '/')
+            or openbao_restore_source is match('^' ~ (openbao_restore_real.stdout_lines[3] | regex_escape) ~ '/')
+        fail_msg: >-
+          openbao: {{ openbao_restore_source }} {{ 'is reached through a symbolic link ('
+          ~ openbao_restore_real.stdout_lines[0] ~ ')' if openbao_restore_real.stdout_lines[0] != openbao_restore_source
+          or openbao_restore_real.stdout_lines[1] != openbao_restore_source ~ '.json'
+          else 'is not under ' ~ openbao_restore_real.stdout_lines[2] ~ ' or ' ~ openbao_restore_real.stdout_lines[3]
+          ~ ' (set openbao_restore_source_unrestricted: true to restore from elsewhere)' }}
+    # Unrestricted: the role cannot vouch for an arbitrary filesystem (a FUSE daemon or a user's
+    # mount serves whatever bytes its owner likes, whatever the modes say), so the source must be
+    # on openbao_backup_dir's own filesystem, and that not a FUSE or user mount (README.md).
+    - name: Read the backup directory's filesystem (an unrestricted source must be on it)
+      ansible.builtin.stat:
+        path: "{{ openbao_backup_dir }}"
+        follow: false
+        get_checksum: false
+      register: openbao_restore_backup_stat
+      when: openbao_restore_source_unrestricted | bool
+    - name: Read the mount an unrestricted source is on
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, "FSTYPE,OPTIONS", -T, "{{ openbao_restore_source }}"]
+      register: openbao_restore_mount
+      changed_when: false
+      check_mode: false  # read-only
+      when: openbao_restore_source_unrestricted | bool
+    - name: Refuse an unrestricted source on another filesystem, a FUSE mount or a user mount
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_same_fs | bool
+          - not openbao_restore_fs[0] | default('') is match('fuse')
+          - (openbao_restore_fs[1] | default('')).split(',') | select('match', '^(user|users|user_id)(=|$)') | list | length == 0
+        fail_msg: >-
+          openbao: {{ openbao_restore_source }} is {{ 'not on the filesystem of ' ~ openbao_backup_dir
+          if not openbao_restore_same_fs | bool else 'on a FUSE or user mount' }}: an unrestricted
+          source must be on openbao_backup_dir's own filesystem, and that not a FUSE or user mount:
+          refused
+      vars:
+        openbao_restore_fs: "{{ (openbao_restore_mount.stdout | default('')).split() }}"
+        openbao_restore_same_fs: >-
+          {{ openbao_restore_inputs.results[0].stat.dev == openbao_restore_backup_stat.stat.dev
+             and openbao_restore_inputs.results[1].stat.dev == openbao_restore_backup_stat.stat.dev }}
+      when: openbao_restore_source_unrestricted | bool
+    - name: Read every directory from / down to the source
+      ansible.builtin.stat:
+        path: "{{ '/' ~ (openbao_restore_source.split('/')[1:-1][:item] | join('/')) }}"
+        follow: false
+        get_checksum: false
+      loop: "{{ range(0, (openbao_restore_source.split('/')[1:-1] | length) + 1) | list }}"
+      register: openbao_restore_dirs
+    - name: Note the directories someone other than openbao_owner or root could change
+      ansible.builtin.set_fact:
+        openbao_restore_unsafe_dirs: >-
+          {%- for r in openbao_restore_dirs.results -%}
+          {%- set st = r.stat -%}
+          {%- if not (st.exists and st.isdir and not st.islnk
+                      and (st.uid == 0 or st.pw_name == openbao_owner or st.uid | string == openbao_owner | string)
+                      and ((not st.wgrp and not st.woth)
+                           or (st.uid == 0 and (st.mode | int(base=8)) // 512 % 2 == 1))) -%}
+          {{ '/' ~ (openbao_restore_source.split('/')[1:-1][:r.item] | join('/')) }} ({{ st.pw_name | default('?') }}, mode {{ st.mode | default('?') }}); {% endif -%}
+          {%- endfor -%}
+    - name: Refuse a source on a path someone else could change
+      ansible.builtin.assert:
+        that: openbao_restore_unsafe_dirs | default('', true) | length == 0
+        fail_msg: >-
+          openbao: {{ openbao_restore_source }} lies under a directory that is not owned by
+          {{ openbao_owner }} or root, or is writable by others (and not root's with the sticky
+          bit): {{ openbao_restore_unsafe_dirs | default('', true) | trim }} refused
+    - name: Create a staging directory for the copy that is checked and restored
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ openbao_backup_dir }}"
+        prefix: .restore-staging-
+      register: openbao_restore_staging
+    - name: Check and restore the staged copy
+      block:
+        - name: Copy the snapshot and its manifest into the staging directory (a link stays a link)
+          ansible.builtin.command:
+            argv: [cp, -P, --, "{{ item.src }}", "{{ openbao_restore_staging.path }}/{{ item.dest }}"]
+          loop:
+            - {src: "{{ openbao_restore_source }}", dest: raft.snap}
+            - {src: "{{ openbao_restore_source }}.json", dest: raft.snap.json}
+          loop_control:
+            label: "{{ item.src }}"
+          changed_when: true
+        - name: Read the source and its manifest again (the same files they were before the copy?)
+          ansible.builtin.stat:
+            path: "{{ item }}"
+            follow: false
+            get_checksum: false
+          loop: ["{{ openbao_restore_source }}", "{{ openbao_restore_source }}.json"]
+          register: openbao_restore_inputs_after
+        - name: Refuse a source or manifest that changed while it was copied
+          ansible.builtin.assert:
+            that:
+              - >-
+                (openbao_restore_inputs_after.results[0].stat | dict2items | selectattr('key', 'in', openbao_restore_identity) | items2dict)
+                == (openbao_restore_inputs.results[0].stat | dict2items | selectattr('key', 'in', openbao_restore_identity) | items2dict)
+              - >-
+                (openbao_restore_inputs_after.results[1].stat | dict2items | selectattr('key', 'in', openbao_restore_identity) | items2dict)
+                == (openbao_restore_inputs.results[1].stat | dict2items | selectattr('key', 'in', openbao_restore_identity) | items2dict)
+            fail_msg: "openbao: {{ openbao_restore_source }} or its manifest changed while it was copied: refused (run the restore again)"
+          vars:
+            openbao_restore_identity: [exists, dev, inode, size, mtime, ctime]
+        - name: Hash the staged copy
+          ansible.builtin.stat:
+            path: "{{ openbao_restore_staging.path }}/raft.snap"
+            follow: false
+            checksum_algorithm: sha256
+          register: openbao_restore_file
+        - name: Read the staged manifest
+          ansible.builtin.stat:
+            path: "{{ openbao_restore_staging.path }}/raft.snap.json"
+            follow: false
+            get_checksum: false
+          register: openbao_restore_manifest_file
+        - name: Refuse a source that changed into something else while it was copied
+          ansible.builtin.assert:
+            that:
+              - openbao_restore_file.stat.isreg | default(false) and openbao_restore_file.stat.size > 0
+              - openbao_restore_manifest_file.stat.isreg | default(false)
+            fail_msg: "openbao: {{ openbao_restore_source }} or its manifest is no longer a non-empty regular file"
+        - name: Load the manifest
+          ansible.builtin.slurp:
+            src: "{{ openbao_restore_staging.path }}/raft.snap.json"
+          register: openbao_restore_manifest_raw
+        - name: Ask the server which release is running
+          ansible.builtin.uri:
+            url: "{{ openbao_api_addr }}/v1/sys/health?{{ openbao_health_query }}"
+            ca_path: "{{ openbao_tls_ca_file }}"
+            status_code: 200
+            return_content: true
+            follow_redirects: none
+            use_proxy: false
+            timeout: "{{ openbao_health_timeout | int }}"
+          register: openbao_restore_running
+        - name: Note the manifest and the running release
+          ansible.builtin.set_fact:
+            openbao_restore_manifest: "{{ openbao_restore_manifest_raw.content | b64decode | from_json }}"
+            openbao_restore_running_version: "{{ openbao_restore_running.json.version | default('') | regex_search('^[0-9]+\\.[0-9]+\\.[0-9]+') or '' }}"
+        - name: Refuse a snapshot the manifest does not describe, or that a newer release wrote
+          ansible.builtin.assert:
+            that:
+              - openbao_restore_manifest is mapping
+              - openbao_restore_manifest.kind | default('') == 'raft-snapshot'
+              - openbao_restore_manifest.sha256 | default('') == openbao_restore_file.stat.checksum
+              - openbao_restore_manifest.written_by | default('') is match('^[0-9]+\.[0-9]+\.[0-9]+')
+              - openbao_restore_running_version | length > 0
+              - not (openbao_restore_manifest.written_by | regex_search('^[0-9]+\.[0-9]+\.[0-9]+') is version(openbao_restore_running_version, '>'))
+            fail_msg: >-
+              openbao: refused to restore {{ openbao_restore_source }}:
+              {{ 'its sha256 ' ~ openbao_restore_file.stat.checksum ~ ' is not the one in its manifest, ' ~ (openbao_restore_manifest.sha256 | default('?'))
+                 if openbao_restore_manifest.sha256 | default('') != openbao_restore_file.stat.checksum
+                 else 'release ' ~ (openbao_restore_manifest.written_by | default('?')) ~ ' wrote it and '
+                      ~ (openbao_restore_running_version or '?') ~ ' runs (restore with that release or newer)' }}
+        - name: Ask the server whose the restore token is (the first of its two uses, README.md)
+          ansible.builtin.uri:
+            url: "{{ openbao_api_addr }}/v1/auth/token/lookup-self"
+            method: GET
+            headers:
+              X-Vault-Token: "{{ openbao_restore_token }}"
+            ca_path: "{{ openbao_tls_ca_file }}"
+            status_code: [200, 403]
+            return_content: true
+            follow_redirects: none
+            use_proxy: false
+            timeout: "{{ openbao_health_timeout | int }}"
+          register: openbao_restore_whoami
+          no_log: true
+        - name: Note what the server says of the restore token
+          ansible.builtin.set_fact:
+            openbao_restore_lookup: >-
+              {{ {'known': openbao_restore_whoami.status == 200,
+                  'policies': openbao_restore_whoami.json.data.policies | default([]),
+                  'identity_policies': openbao_restore_whoami.json.data.identity_policies | default([], true),
+                  'num_uses': openbao_restore_whoami.json.data.num_uses | default(0) | int,
+                  'ttl': openbao_restore_whoami.json.data.ttl | default(0) | int}
+                 if openbao_restore_whoami.status == 200 else {'known': false} }}
+          no_log: true
+        - name: Refuse a restore token that is not exactly the restore principal, for this one restore
+          ansible.builtin.assert:
+            that:
+              - openbao_restore_lookup.known
+              - openbao_restore_lookup.policies is sequence and openbao_restore_lookup.policies is not string
+              - openbao_restore_lookup.policies | difference(['default']) | sort == ['hnx-restore']
+              - openbao_restore_lookup.identity_policies | length == 0
+              - openbao_restore_lookup.num_uses == 1
+              - openbao_restore_lookup.ttl > 0 and openbao_restore_lookup.ttl <= 900
+            fail_msg: >-
+              openbao: openbao_restore_token is not a token of the restore principal alone, for this
+              one restore ({{
+                'the server does not know it' if not openbao_restore_lookup.known
+                else 'its policies are ' ~ (((openbao_restore_shown | join(', '))
+                     ~ (' and ' if openbao_restore_shown and openbao_restore_others | int else '')
+                     ~ ((openbao_restore_others ~ (' other' if openbao_restore_others | int == 1 else ' others'))
+                        if openbao_restore_others | int else '')) or 'none')
+                  if openbao_restore_lookup.policies | difference(['default']) | sort != ['hnx-restore']
+                else 'it carries ' ~ (openbao_restore_lookup.identity_policies | length) ~ ' identity policies'
+                  if openbao_restore_lookup.identity_policies | length > 0
+                else ('it has no use limit' if not openbao_restore_lookup.num_uses
+                      else 'it has ' ~ openbao_restore_lookup.num_uses ~ ' uses left after the lookup, not 1')
+                     ~ ' (mint it with -use-limit=2)'
+                  if openbao_restore_lookup.num_uses != 1
+                else 'its TTL is ' ~ ((openbao_restore_lookup.ttl ~ ' s') if openbao_restore_lookup.ttl else 'unlimited')
+                     ~ ', over 900 s (mint it with -ttl=15m)' }}):
+              mint one with `bao token create -policy=hnx-restore -ttl=15m -orphan -use-limit=2` (README.md)
+          vars:
+            # only the two expected names are ever printed: whatever else the server says (another
+            # policy, or the token itself echoed back transformed) is counted, never echoed
+            openbao_restore_policy_list: >-
+              {{ openbao_restore_lookup.policies | default([])
+                 if openbao_restore_lookup.policies | default([]) is sequence
+                    and openbao_restore_lookup.policies | default([]) is not string else [] }}
+            openbao_restore_shown: "{{ openbao_restore_policy_list | select('in', ['default', 'hnx-restore']) | unique | sort | list }}"
+            openbao_restore_others: "{{ openbao_restore_policy_list | reject('in', ['default', 'hnx-restore']) | list | length }}"
+        - name: Note that the restore token is the restore principal's (revoked below unless the restore spends it)
+          ansible.builtin.set_fact:
+            openbao_restore_confirmed: true
+        - name: Name the pre-restore snapshot (the time is read once, here)
+          ansible.builtin.set_fact:
+            openbao_restore_pre_name: "pre-restore-{{ now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}.snap"
+        - name: Take the pre-restore snapshot (the snapshot principal)
+          ansible.builtin.include_tasks:
+            file: snapshot.yml
+            apply:
+              tags: [restore]
+          vars:
+            openbao_snapshot_dir: "{{ openbao_backup_dir }}"
+            openbao_snapshot_name: "{{ openbao_restore_pre_name }}"
+        - name: Restore the staged copy (the restore principal, the second of its two uses)
+          ansible.builtin.uri:
+            url: "{{ openbao_api_addr }}/v1/sys/storage/raft/{{ 'snapshot-force' if openbao_restore_force | bool else 'snapshot' }}"
+            method: POST
+            headers:
+              X-Vault-Token: "{{ openbao_restore_token }}"
+              Content-Type: application/octet-stream
+            src: "{{ openbao_restore_staging.path }}/raft.snap"
+            remote_src: true
+            ca_path: "{{ openbao_tls_ca_file }}"
+            status_code: [200, 204]
+            follow_redirects: none
+            use_proxy: false
+            timeout: "{{ openbao_snapshot_timeout | int }}"
+          changed_when: true
+          no_log: true
+        # only now: after a POST that failed (it may or may not have landed) the token is revoked
+        - name: Note that the restore token was spent on the restore
+          ansible.builtin.set_fact:
+            openbao_restore_posted: true
+        - name: Report what was restored
+          ansible.builtin.debug:
+            msg: >-
+              openbao {{ openbao_logical_id }}: restored {{ openbao_restore_source }} (sha256
+              {{ openbao_restore_file.stat.checksum }}, written by {{ openbao_restore_manifest.written_by }});
+              the state before it is in {{ openbao_backup_dir }}/{{ openbao_restore_pre_name }}.
+              Run the health hook.
+      always:
+        # first: nothing the server does (sealed, unreachable) may keep the staged copy on disk
+        - name: Remove the staging directory
+          ansible.builtin.file:
+            path: "{{ openbao_restore_staging.path }}"
+            state: absent
+          when: openbao_restore_staging.path is defined
+        # 403: already dead (its TTL passed, or its uses spent by a POST that landed): what the
+        # revoke is for. Any other answer, or none, is reported below and fails nothing.
+        - name: Revoke the restore token a refused or failed run did not spend on the restore
+          ansible.builtin.uri:
+            url: "{{ openbao_api_addr }}/v1/auth/token/revoke-self"
+            method: POST
+            headers:
+              X-Vault-Token: "{{ openbao_restore_token }}"
+            ca_path: "{{ openbao_tls_ca_file }}"
+            status_code: [200, 204, 403]
+            follow_redirects: none
+            use_proxy: false
+            timeout: "{{ openbao_health_timeout | int }}"
+          register: openbao_restore_revoke
+          when: openbao_restore_confirmed | bool and not openbao_restore_posted | bool
+          failed_when: false
+          changed_when: true
+          no_log: true
+        - name: Report a restore token the server did not revoke
+          ansible.builtin.debug:
+            msg: >-
+              openbao {{ openbao_logical_id }}: could not revoke the restore token
+              ({{ ('HTTP ' ~ openbao_restore_revoke.status) if openbao_restore_revoke.status | default(-1) | int > 0
+              else 'no answer' }}); it stays live until its TTL (15 minutes at most): revoke it
+              (bao token revoke) once the server answers
+          when:
+            - openbao_restore_confirmed | bool and not openbao_restore_posted | bool
+            - openbao_restore_revoke is not skipped
+            - openbao_restore_revoke.status | default(-1) | int not in [200, 204, 403]
+  tags: [restore]

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Converge the server: the pinned, checksum-verified release, TLS, configuration and a hardened
+# unit, then start it if it is not running. It never initialises or unseals (README.md), and it
+# restarts a running server only with openbao_allow_restart, because a restart seals it.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Check the platform (architecture, swap)
+  ansible.builtin.include_tasks: platform.yml
+
+- name: Create the service account
+  ansible.builtin.include_tasks: account.yml
+
+- name: Refuse a pin older than the running release
+  ansible.builtin.include_tasks: downgrade.yml
+
+- name: Install the pinned release
+  ansible.builtin.include_tasks: release.yml
+  vars:
+    openbao_release_version: "{{ openbao_version }}"
+    openbao_release_checksums: "{{ openbao_checksums }}"
+
+- name: Point the command at the pinned release
+  ansible.builtin.file:
+    src: "{{ openbao_install_dir }}/{{ openbao_version }}/bao"
+    dest: "{{ openbao_bin }}"
+    state: link
+    force: true
+  register: openbao_link
+
+- name: Install the TLS certificate, key and CA
+  ansible.builtin.include_tasks: tls.yml
+
+- name: Write the configuration, the unit and the audit log rotation
+  ansible.builtin.include_tasks: config.yml
+
+- name: Start the server, or record the restart a change needs
+  ansible.builtin.include_tasks: service.yml

@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# One release into <install_dir>/<version>/: fetched over https, refused unless its sha256 is the
+# pinned one, unpacked (the command only), and asked for its version. Shared by main (the pin) and
+# upgrade (the target, staged beside the running one). Takes openbao_release_version and
+# openbao_release_checksums.
+#
+# The unpack has no `creates:`: unarchive compares the archive's members with what is on disk
+# (tar --diff) on every run, so an archive that changed (a re-pinned checksum for the same
+# version) or a `bao` that differs from the verified archive is unpacked again, and a converged
+# host reports no change.
+- name: Create the release directory
+  ansible.builtin.file:
+    path: "{{ openbao_install_dir }}/{{ openbao_release_version }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0755"
+
+- name: Look for the release directory, the archive and the command (a --check run on a fresh host has none)
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+  loop:
+    - "{{ openbao_install_dir }}/{{ openbao_release_version }}/openbao_{{ openbao_release_version }}_linux_{{ openbao_arch }}.tar.gz"
+    - "{{ openbao_install_dir }}/{{ openbao_release_version }}/bao"
+    - "{{ openbao_install_dir }}/{{ openbao_release_version }}"
+  register: openbao_release_files
+
+- name: Fetch the release archive, refused unless its sha256 is the pinned one
+  ansible.builtin.get_url:
+    url: "{{ openbao_release_repository }}/v{{ openbao_release_version }}/openbao_{{ openbao_release_version }}_linux_{{ openbao_arch }}.tar.gz"
+    dest: "{{ openbao_install_dir }}/{{ openbao_release_version }}/openbao_{{ openbao_release_version }}_linux_{{ openbao_arch }}.tar.gz"
+    checksum: "sha256:{{ openbao_release_checksums[openbao_arch] }}"
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0644"
+    use_proxy: true
+  register: openbao_release_archive
+  when: not ansible_check_mode or openbao_release_files.results[2].stat.exists
+
+- name: Unpack the command (again whenever the archive and the command differ)
+  ansible.builtin.unarchive:
+    src: "{{ openbao_install_dir }}/{{ openbao_release_version }}/openbao_{{ openbao_release_version }}_linux_{{ openbao_arch }}.tar.gz"
+    dest: "{{ openbao_install_dir }}/{{ openbao_release_version }}"
+    remote_src: true
+    include: [bao, LICENSE]
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+  when: not ansible_check_mode or openbao_release_files.results[0].stat.exists
+
+- name: Ask the unpacked command for its version
+  ansible.builtin.command:
+    argv: ["{{ openbao_install_dir }}/{{ openbao_release_version }}/bao", version]
+  register: openbao_release_found
+  changed_when: false
+  check_mode: false  # read-only
+  when: not ansible_check_mode or openbao_release_files.results[1].stat.exists
+
+- name: Refuse a command that is not the release asked for
+  ansible.builtin.assert:
+    that: openbao_release_found.stdout is search('^OpenBao v' ~ (openbao_release_version | regex_escape) ~ ' ')
+    fail_msg: "openbao: {{ openbao_install_dir }}/{{ openbao_release_version }}/bao reports {{ openbao_release_found.stdout | trim }}"
+  when: not ansible_check_mode or openbao_release_files.results[1].stat.exists

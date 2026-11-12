@@ -134,8 +134,16 @@ suite_budgets = [
   # (2026-10-24/25), over 1080 with no test changed; 900 since a test's first run starts beside
   # the others of its module (rolerun.first_run, one ansible-playbook per CPU): 1194s -> 700s
   # summed over the six shards on a 4-CPU box (2026-10-27) against CI's 1143.6s before, so about
-  # 670s on CI, and 900 is about 1.3x that
-  "tests/roles = 900",
+  # 670s on CI, and 900 is about 1.3x that; 1100 since the openbao role's restore staging,
+  # downgrade witnesses and their refusal cases (pull request #358): CI measured 761s/884s (3.11/3.12)
+  # before them and 942s/1169s with them as first written; the cases then moved into run_cases
+  # (one ansible-playbook for many) and the service tests stopped resolving a name, 176s -> 150s
+  # for the module locally against 116s before the change (3.12's runners already sat at 884s of
+  # 900 before it). After that batching the pull request's CI measured 937.2s (3.11) and 844.1s
+  # (3.12) summed over the six shards (2026-11-12, head 6d70f118), then 986.5s and 1055.2s with
+  # the round-4 restore and record cases (head 95a9e1cc; one 3.12 shard alone took 569s): 1320
+  # since, about 1.25x the slower figure
+  "tests/roles = 1320",
   # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
   # builds the controller and runs the whole suite against it: main measured 180-186 s summed
   # over the shards (2026-11-09), and the pull request that added it 245.8 s, over 240
