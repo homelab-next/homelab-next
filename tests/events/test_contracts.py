@@ -158,3 +158,16 @@ def test_consumer_refuses_an_id_collision_and_retries_after_a_handler_failure():
         c.handle(canonical_body(other))
     with pytest.raises(ValueError):
         Consumer({})
+
+
+def test_the_depth_limit_is_the_same_on_every_python():
+    """Python 3.14's parser takes a 20,000-deep object that 3.11-3.13 refuse; the consumer's own
+    limit makes the verdict version-independent: MAX_JSON_DEPTH levels parse, one more does not."""
+    from homelabnext.events.consumer import MAX_JSON_DEPTH, parse_json
+
+    def nested(n):
+        return b'{"a":' * n + b"1" + b"}" * n
+
+    parse_json(nested(MAX_JSON_DEPTH))
+    with pytest.raises(ValueError, match="nested too deeply"):
+        parse_json(nested(MAX_JSON_DEPTH + 1))

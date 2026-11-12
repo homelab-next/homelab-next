@@ -10,6 +10,7 @@ RFC 3339 UTC strings (``...Z``) in every document it writes.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -54,7 +55,15 @@ def iso(ts: float) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+#: an hour of 24 (``T24:00:00``): Python 3.14's fromisoformat rolls it over to the next day,
+#: 3.11-3.13 refuse it. Refuse it on every version, so a record's verdict does not depend on
+#: which Python reads it (RFC 3339 has no hour 24).
+_HOUR_24 = re.compile(r"\d[T t]24:")
+
+
 def parse_iso(text: str) -> float:
+    if _HOUR_24.search(str(text)):
+        raise ValueError(f"{text!r}: hour 24 is not a time of day")
     dt = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
     return (dt if dt.tzinfo else dt.replace(tzinfo=UTC)).timestamp()
 

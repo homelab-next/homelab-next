@@ -42,9 +42,33 @@ def parse_json(body: bytes | str) -> Any:
     past Python's digit limit, or nesting deeper than the parser's stack (never a
     :class:`RecursionError`)."""
     try:
-        return json.loads(body, parse_constant=_no_constant, parse_float=_finite)
+        value = json.loads(body, parse_constant=_no_constant, parse_float=_finite)
     except RecursionError:  # nested deeper than the parser's stack: never a valid document
         raise ValueError("nested too deeply") from None
+    # The parser's stack is not a portable limit: Python 3.14's scanner parses a 20,000-deep
+    # object that 3.11-3.13 refuse, so the same body was "not JSON" on one version and a schema
+    # failure on another. Refuse past a fixed depth on every version (no event nests near it).
+    if _depth_exceeds(value, MAX_JSON_DEPTH):
+        raise ValueError("nested too deeply")
+    return value
+
+
+#: Deepest nesting a consumer accepts. Below the ~1000 frames at which 3.11's parser gives up,
+#: far above any event this platform defines.
+MAX_JSON_DEPTH = 512
+
+
+def _depth_exceeds(value: Any, limit: int) -> bool:
+    """True when ``value`` nests containers deeper than ``limit``. Walked without recursion."""
+    stack = [(value, 1)]
+    while stack:
+        v, depth = stack.pop()
+        if isinstance(v, dict | list):
+            if depth > limit:
+                return True
+            children = v.values() if isinstance(v, dict) else v
+            stack.extend((c, depth + 1) for c in children if isinstance(c, dict | list))
+    return False
 
 
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
