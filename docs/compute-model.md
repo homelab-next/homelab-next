@@ -209,7 +209,13 @@ tags `hypervisor` and the severity), and a matcher `hnx-notify-<node>-route` tha
 severities raised on this node (`match-field exact:hostname=<node>`) to it. It then sends a test
 notification through the target and stops (exit 1) if that is not delivered; only after a
 delivered test, and with `default_mail: false`, does it disable Proxmox's built-in
-`default-matcher`, so mail is never turned off in favour of a path that does not work. A re-run
+`default-matcher`, so mail is never turned off in favour of a target that does not deliver. The
+test goes straight to the target and does not pass through the matcher: it proves the URL, the
+topic and the server, not that a real notification satisfies the severity and `hostname` match.
+The evidence that the matcher works is a live run on a Proxmox VE 9.2 node: a real failed `vzdump`
+job was routed through `hnx-notify-<node>-route` and arrived on the topic, and so did root's mail
+forwarded by `proxmox-mail-forward`. Replication, fencing and ZFS (ZED) notifications were not
+checked against the `hostname` match. A re-run
 leaves a correct config unchanged (and sends one more test) and undoes a hand edit of the two
 entries: a `disable`, an `invert-match`, a calendar rule, and any header or secret added to the
 target. `hnx-notify.sh --test` sends only the test; `--remove` first enables `default-matcher`

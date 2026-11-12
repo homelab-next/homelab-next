@@ -17,8 +17,10 @@ A node that declares ``notify: {url, topic, severities, priority, default_mail}`
   routes the listed severities raised on this node (``hostname`` field) to it.  No MTA is
   involved.  It then sends a test notification through the target and stops (exit 1) if that
   fails; only after a delivered test, and unless ``default_mail: true``, does it turn off the
-  built-in ``default-matcher``, so mail is never turned off in favour of a path that does not
-  work.  A re-run changes nothing that is already right (and sends one more test).  ``--test``
+  built-in ``default-matcher``, so mail is never turned off in favour of a target that does not
+  deliver.  The test goes straight to the target, not through the matcher: it proves the server,
+  not the severity and ``hostname`` match (a real failed vzdump on a live node proved that).
+  A re-run changes nothing that is already right (and sends one more test).  ``--test``
   sends only the test; ``--remove`` first turns ``default-matcher`` back on (whatever
   ``default_mail`` says: the Proxmox default, harmless when it is already on), then deletes this
   node's matcher and target.  A node whose ``notify`` is deleted from ``_nodes.yml`` renders no
