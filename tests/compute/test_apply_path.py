@@ -168,6 +168,19 @@ def test_node_narrows_the_mirror_to_that_node(tmp_path):
     assert {p.name for p in (tmp_path / "m" / "mirror").iterdir()} == {"README.md", "hv-a"}
 
 
+def test_node_narrows_the_notify_target_to_that_node(tmp_path):
+    guests = _empty_node(tmp_path)
+    notify = {"url": "https://notify.example.org/", "topic": "node-alerts"}
+    nodes = {"nodes": {"hv-a": {"notify": notify}, "hv-empty": {"notify": notify}}}
+    (guests / "_nodes.yml").write_text(
+        "# SPDX-License-Identifier: Apache-2.0\n" + yaml.safe_dump(nodes), encoding="utf-8"
+    )
+    args = ["guests", "render", str(guests), "--site", str(SITE), "--target", "node-notify"]
+    # made of the node's own entry, so a node with no guests renders without --allow-empty
+    assert hnx.main([*args, "--node", "hv-empty", "--out", str(tmp_path / "n")]) == 0
+    assert {p.name for p in (tmp_path / "n" / "notify").iterdir()} == {"README.md", "hv-empty"}
+
+
 def test_user_data_snippet_replaces_user_account_when_it_cannot_express_the_guest(good):
     tf = render(good, TF)
     # sudo: password, packages, and both: user_account would silently drop them

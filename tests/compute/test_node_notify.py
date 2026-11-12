@@ -63,6 +63,15 @@ def test_defaults_fill_in(tmp_path):
         ({**NOTIFY, "url": "https://user:pw@notify.example.org"}, "not an http"),
         ({**NOTIFY, "url": "https://notify.example.org/?a=1"}, "not an http"),
         ({**NOTIFY, "url": 'https://x"$(id)'}, "not an http"),
+        ({**NOTIFY, "url": "https://notify.example.org\n"}, "not an http"),
+        ({**NOTIFY, "url": "https://a..b/"}, "not an http"),
+        ({**NOTIFY, "url": "https://notify.example.org/../x"}, "not an http"),
+        ({**NOTIFY, "url": "https://notify.example.org:0/"}, "not an http"),
+        ({**NOTIFY, "url": "https://notify.example.org:65536/"}, "not an http"),
+        ({**NOTIFY, "url": "https://notify.example.org/#x"}, "not an http"),
+        ({**NOTIFY, "url": 443}, "not an http"),
+        ({**NOTIFY, "topic": "alerts\n"}, "not a topic"),
+        ({**NOTIFY, "topic": 7}, "not a topic"),
         ({**NOTIFY, "topic": "a/b"}, "not a topic"),
         ({**NOTIFY, "topic": "a" * 65}, "not a topic"),
         ({**NOTIFY, "severities": []}, "non-empty list"),
@@ -127,9 +136,30 @@ def test_the_target_is_per_node_and_not_made_of_guests():
     assert node_notify.PER_NODE is True and node_notify.RENDERS_GUESTS is False
 
 
-def test_the_target_and_the_matcher_have_different_names():
-    # one namespace for both in notifications.cfg: creating the second would fail
-    assert node_notify.NAME != node_notify.MATCHER
+def test_the_names_carry_the_node_and_differ():
+    # one namespace for both in notifications.cfg, and one file for every node of a cluster
+    target, matcher = node_notify.names("hv-a")
+    assert target != matcher
+    assert set(node_notify.names("hv-a")).isdisjoint(node_notify.names("hv-b"))
+
+
+def test_the_matcher_answers_only_for_its_node(tmp_path):
+    sh = render(fleet_with(tmp_path, {"hv-a": {"notify": NOTIFY}}), "node-notify")[
+        "notify/hv-a/hnx-notify.sh"
+    ]
+    assert 'NODE="hv-a"' in sh and '--match-field "exact:hostname=$NODE"' in sh
+
+
+def test_a_good_url_with_port_and_path_loads(tmp_path):
+    url = "http://192.0.2.10:8080/notify"
+    got = load_nodes(nodes_file(tmp_path, {"hv-a": {"notify": {**NOTIFY, "url": url}}}))
+    assert got["hv-a"]["notify"]["url"] == url + "/"
+
+
+def test_the_target_is_a_per_node_target_not_made_of_guests():
+    from homelabnext.compute.cli import GUEST_TARGETS, PER_NODE_TARGETS
+
+    assert "node-notify" in PER_NODE_TARGETS and "node-notify" not in GUEST_TARGETS
 
 
 @pytest.mark.requires_tool("shellcheck")
@@ -152,7 +182,7 @@ f="$STATE$(printf '%s' "$path" | tr / _)"
 case "$verb" in
   get) [ -e "$f" ] ;;
   create)
-    case "$path" in */test) exit 0 ;; esac
+    case "$path" in */test) [ -e "$STATE.testfail" ] && { echo "500 Could not test target" >&2; exit 115; }; exit 0 ;; esac
     name=""
     while [ "$#" -gt 0 ]; do [ "$1" = --name ] && name="$2"; shift; done
     for e in "$STATE"*_"$name"; do
@@ -214,9 +244,18 @@ def test_the_first_run_creates_and_turns_off_the_mail_matcher(node):
     assert _verbs(calls) == [
         "pvesh create /cluster/notifications/endpoints/webhook",
         "pvesh create /cluster/notifications/matchers",
+        "pvesh create /cluster/notifications/targets/hnx-notify-hv-a/test",
         "pvesh set /cluster/notifications/matchers/default-matcher",
     ]
     assert calls[-1].endswith("--disable 1")
+
+
+def test_a_failed_test_leaves_the_mail_matcher_on(node, tmp_path):
+    run = node(NOTIFY)
+    Path(f"{tmp_path / 'state'}.testfail").touch()
+    r, calls = run()
+    assert r.returncode != 0
+    assert not any("default-matcher" in c for c in calls)
 
 
 def test_a_rerun_updates_in_place(node):
@@ -225,8 +264,9 @@ def test_a_rerun_updates_in_place(node):
     r, calls = run()
     assert r.returncode == 0, r.stderr
     assert _verbs(calls) == [
-        "pvesh set /cluster/notifications/endpoints/webhook/hnx-notify",
-        "pvesh set /cluster/notifications/matchers/hnx-notify-route",
+        "pvesh set /cluster/notifications/endpoints/webhook/hnx-notify-hv-a",
+        "pvesh set /cluster/notifications/matchers/hnx-notify-hv-a-route",
+        "pvesh create /cluster/notifications/targets/hnx-notify-hv-a/test",
         "pvesh set /cluster/notifications/matchers/default-matcher",
     ]
 
@@ -246,8 +286,8 @@ def test_remove_takes_the_matcher_off_before_the_target(node):
     r, calls = run("--remove")
     assert r.returncode == 0, r.stderr
     assert _verbs(calls) == [
-        "pvesh delete /cluster/notifications/matchers/hnx-notify-route",
-        "pvesh delete /cluster/notifications/endpoints/webhook/hnx-notify",
+        "pvesh delete /cluster/notifications/matchers/hnx-notify-hv-a-route",
+        "pvesh delete /cluster/notifications/endpoints/webhook/hnx-notify-hv-a",
         "pvesh set /cluster/notifications/matchers/default-matcher",
     ]
     assert calls[-1].endswith("--delete disable")
@@ -257,7 +297,7 @@ def test_test_sends_through_the_target(node):
     run = node(NOTIFY)
     r, calls = run("--test")
     assert r.returncode == 0 and calls == [
-        "pvesh create /cluster/notifications/targets/hnx-notify/test"
+        "pvesh create /cluster/notifications/targets/hnx-notify-hv-a/test"
     ]
 
 

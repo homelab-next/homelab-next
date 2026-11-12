@@ -202,20 +202,41 @@ nodes:
       default_mail: false                    # the default: turn off the built-in mail matcher
 ```
 
-`hnx guests render --target node-notify` writes `notify/<node>/hnx-notify.sh`. Run once on the
-node as root, it creates or updates a webhook target `hnx-notify` that POSTs each notification to
-`url` as ntfy JSON (`topic`, `title` prefixed with the node name, `message`, `priority`, and the
-tags `hypervisor` and the severity), and a matcher `hnx-notify-route` that sends the listed severities
-to it; with `default_mail: false` it also disables Proxmox's built-in `default-matcher`. A re-run
-leaves a correct config unchanged and undoes a hand edit of the two entries (a `disable`, an
-`invert-match`, extra match rules). `hnx-notify.sh --test` asks Proxmox to send a test
-notification through the target; `--remove` deletes the matcher and the target and enables
-`default-matcher` again. The body is rendered here and carried base64-encoded, the form `pvesh`
-takes, so no value of the node entry reaches the shell outside double quotes; Proxmox fills its
-`{{ escape title }}`, `{{ escape message }}` and `{{ severity }}` when it sends. A backup job uses
-this only with `notification-mode notification-system` (or the default `auto` with no `mailto`).
-Publishing needs no credential: an ntfy server that requires a token to publish is not supported
+`hnx guests render --target node-notify` writes `notify/<node>/hnx-notify.sh`. Run on the node
+as root, it creates or updates a webhook target `hnx-notify-<node>` that POSTs each notification
+to `url` as ntfy JSON (`topic`, `title` prefixed with the node name, `message`, `priority`, and the
+tags `hypervisor` and the severity), and a matcher `hnx-notify-<node>-route` that sends the listed
+severities raised on this node (`match-field exact:hostname=<node>`) to it. It then sends a test
+notification through the target and stops (exit 1) if that is not delivered; only after a
+delivered test, and with `default_mail: false`, does it disable Proxmox's built-in
+`default-matcher`, so mail is never turned off in favour of a path that does not work. A re-run
+leaves a correct config unchanged (and sends one more test) and undoes a hand edit of the two
+entries: a `disable`, an `invert-match`, a calendar rule, and any header or secret added to the
+target. `hnx-notify.sh --test` sends only the test; `--remove` deletes this node's matcher and
+target and, when the node declares `default_mail: false`, enables `default-matcher` again.
+
+`notifications.cfg` is one file for every node of a Proxmox cluster. The names and the `hostname`
+match are per node, so two nodes never overwrite or answer for each other, but `default-matcher`
+is one cluster-wide entry: in a cluster, give every node a `notify` before any of them turns it
+off, and know that `--remove` on one node turns mail back on for all. Once mail is off the node
+has no other route, so a server that is down drops its alerts; the test on every apply is the
+check, and the topic is worth an uptime probe of its own.
+
+The body is rendered here and carried base64-encoded, the form `pvesh` takes, so no value of the
+node entry reaches the shell outside double quotes; Proxmox fills its `{{ escape title }}`,
+`{{ escape message }}` and `{{ severity }}` when it sends. A backup job uses this only with
+`notification-mode notification-system` (or the default `auto` with no `mailto`). A backup log can
+be long: the server's message size limit must allow it (ntfy's default is 4 KB). The URL is plain
+`http` or `https` with a host name or IPv4 address, an optional port and base path, and no user,
+query or fragment; with `http` the notification (backup logs, host names) crosses the network in
+clear. Publishing needs no credential: a server that requires a token to publish is not supported
 yet. Targets and matchers share one namespace in `notifications.cfg`, so the two names differ.
+
+This target is deliberately not a client of the [notify capability](capabilities/notify.md): a
+hypervisor must be able to alert when no guest, the notify service included, is up. The node
+talks to the server its own entry names, in ntfy's JSON publish shape (a POST of the whole message
+to the server root, where the capability's sender posts to `<endpoint>/<topic>`), and `hnx swap`
+of the notify product does not move it: a swap re-points `url` by hand.
 
 The guest model (`homelabnext.compute.model`, `validate`) reads zones through a small protocol:
 
@@ -934,7 +955,8 @@ its own runbook with its addresses.
    guest-disk storage, a cloud-init drive, `agent: enabled=1`, a serial console, `qm template`;
    never booted, so every clone generates its own SSH host keys. Its vmid is the
    `vm_templates` entry for the image's `logical` name.
-3. **Render** the per-node targets (`terraform-proxmox`, `cloudinit`, `firewall-rules`) with
+3. **Render** the per-node targets (`terraform-proxmox`, `cloudinit`, `firewall-rules`, and
+   `node-mirror`/`node-notify` for a node that declares them) with
    `--node <node>`, each into its own directory, **one directory per node** (`tf/<node>/`,
    `cloudinit/<node>/`, ...): each `tf/<node>/` is that node's own Terraform root and state, so a
    plan in it never proposes to destroy another node's guests. Render the fleet-wide targets

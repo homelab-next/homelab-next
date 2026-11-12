@@ -100,10 +100,10 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
 
 def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
     """Read ``{nodes: {name: {firewall: enabled|disabled, power: {...}, capacity: {...},
-    pools: {...}, mirror: {...}, notify: {...}}}}``: what each hypervisor enforces, what feeds it (``power``,
-    checked against the site by :func:`homelabnext.power.fleet_problems`), what it holds
-    (``capacity`` and ``pools``, checked against its guests by
-    :func:`homelabnext.compute.validate.validate`), and where it copies its guests' traffic for a
+    pools: {...}, mirror: {...}, notify: {...}}}}``: what each hypervisor enforces, what feeds it
+    (``power``, checked against the site by :func:`homelabnext.power.fleet_problems`), what it
+    holds (``capacity`` and ``pools``, checked against its guests by
+    :func:`homelabnext.compute.validate.validate`), where it copies its guests' traffic for a
     network sensor (``mirror``, rendered by the ``node-mirror`` target), and where its own
     notifications go (``notify``, rendered by the ``node-notify`` target)."""
     p = Path(path)
@@ -223,10 +223,12 @@ def _mirror(p: Path, name: Any, raw: Any) -> dict[str, Any]:
     return {"to": to, "bridges": list(bridges)}
 
 
-#: an ntfy server: http(s), an ASCII host name or IPv4 address, an optional port and base path
+#: a notify server: http(s), an ASCII host name (dot-separated labels) or IPv4 address, an optional
+#: port and base path; no user, query or fragment
 _NOTIFY_URL_RE = re.compile(
-    r"^https?://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?"
-    r"(?:/[A-Za-z0-9._~-]+)*/?\Z"
+    r"^https?://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)"
+    r"(?::(?P<port>[0-9]{1,5}))?(?P<path>(?:/[A-Za-z0-9._~-]+)*)/?\Z"
 )
 #: an ntfy topic name (ntfy's own rule)
 _NOTIFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
@@ -246,7 +248,12 @@ def _notify(p: Path, name: Any, raw: Any) -> dict[str, Any]:
             f"{where}: takes url and topic (required), severities, priority and default_mail"
         )
     url, topic = raw["url"], raw["topic"]
-    if not isinstance(url, str) or not _NOTIFY_URL_RE.match(url):
+    m = _NOTIFY_URL_RE.match(url) if isinstance(url, str) else None
+    if (
+        m is None
+        or not 1 <= int(m["port"] or 80) <= 65535
+        or any(seg in (".", "..") for seg in m["path"].split("/"))
+    ):
         raise ComputeError(f"{where}.url: {url!r} is not an http(s) server URL (no query, no user)")
     if not isinstance(topic, str) or not _NOTIFY_TOPIC_RE.match(topic):
         raise ComputeError(f"{where}.topic: {topic!r} is not a topic ([A-Za-z0-9_-], 1-64)")
