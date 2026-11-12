@@ -8,7 +8,7 @@
     mode: "0755"
 
 - name: Install the supplied certificate, key and CA
-  when: not openbao_tls_selfsigned_for_tests | bool
+  when: openbao_tls_source == 'provided' and not openbao_tls_selfsigned_for_tests | bool
   block:
     - name: Install the server certificate (with its chain, leaf first)
       ansible.builtin.copy:
@@ -41,6 +41,44 @@
     path: "{{ openbao_tls_dir }}/test-ca-key.pem"
     state: absent
   when: not openbao_tls_selfsigned_for_tests | bool
+
+- name: Remove the internal CA a supplied-PEM run wrote (ACME clients verify against the public chain)
+  ansible.builtin.file:
+    path: "{{ openbao_tls_dir }}/ca.pem"
+    state: absent
+  when: openbao_tls_source == 'acme'
+
+- name: "Back to supplied PEMs: remove the ACME renewal (it would overwrite them), its script and the DNS token"
+  when: openbao_tls_source == 'provided'
+  block:
+    - name: Look for the renewal timer
+      ansible.builtin.stat:
+        path: "{{ openbao_unit_dir }}/{{ openbao_acme_unit }}.timer"
+      register: openbao_acme_leftover
+    - name: Stop and disable the renewal timer
+      ansible.builtin.command:
+        argv: ["{{ openbao_systemctl_cli }}", disable, --now, "{{ openbao_acme_unit }}.timer"]
+      changed_when: true
+      when: openbao_acme_leftover.stat.exists
+    - name: Remove the renewal units, script and token
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ openbao_unit_dir }}/{{ openbao_acme_unit }}.timer"
+        - "{{ openbao_unit_dir }}/{{ openbao_acme_unit }}.service"
+        - "{{ openbao_acme_script }}"
+        - "{{ openbao_acme_env_file | dirname }}"
+      register: openbao_acme_removed
+    - name: Reload systemd after removing the units
+      ansible.builtin.command:
+        argv: ["{{ openbao_systemctl_cli }}", daemon-reload]
+      changed_when: true
+      when: openbao_acme_leftover.stat.exists
+
+- name: Obtain the certificate over ACME and install its renewal (README.md, "A public certificate (ACME)")
+  ansible.builtin.include_tasks: acme.yml
+  when: openbao_tls_source == 'acme'
 
 - name: "TEST RUNS ONLY: generate a throwaway CA and server certificate"
   when: openbao_tls_selfsigned_for_tests | bool

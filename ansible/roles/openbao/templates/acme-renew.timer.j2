@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role openbao) for {{ openbao_logical_id }}. Do not edit.
+[Unit]
+Description=OpenBao ACME certificate renewal, daily ({{ openbao_logical_id }})
+
+[Timer]
+OnCalendar={{ openbao_acme_schedule }}
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

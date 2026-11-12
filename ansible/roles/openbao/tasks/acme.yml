@@ -1,0 +1,195 @@
+# SPDX-License-Identifier: Apache-2.0
+# openbao_tls_source: acme. A public-trust certificate for openbao_acme_domains, obtained and
+# renewed ON THE HOST by the pinned ACME client (lego) with a DNS-01 challenge, so nothing the
+# deploy supplies ever overwrites a renewed certificate. The renewal unit (a daily timer) runs
+# the renewal script, which asks lego to renew when fewer than openbao_acme_renew_days remain,
+# checks what lego stored (names, chain against openbao_acme_trust_bundle, key), installs it
+# where the listener reads it, and reloads a running server with SIGHUP (systemctl reload; never
+# a restart, which would seal it). A converged host with a valid certificate reports no change:
+# the role starts the unit only when the installed certificate is missing, names other domains,
+# does not verify, or is due.
+- name: Create the ACME client's release directory
+  ansible.builtin.file:
+    path: "{{ openbao_install_dir }}/lego/{{ openbao_lego_version }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0755"
+
+- name: Look for the ACME client's archive and command (a --check run on a fresh host has neither)
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+  loop:
+    - "{{ openbao_install_dir }}/lego/{{ openbao_lego_version }}/lego_v{{ openbao_lego_version }}_linux_{{ openbao_arch }}.tar.gz"
+    - "{{ openbao_install_dir }}/lego/{{ openbao_lego_version }}/lego"
+    - "{{ openbao_install_dir }}/lego/{{ openbao_lego_version }}"
+  register: openbao_lego_files
+
+- name: Refuse an architecture the pinned ACME client has no checksum for
+  ansible.builtin.assert:
+    that: openbao_arch in openbao_lego_checksums
+    fail_msg: "openbao: no pinned lego checksum for {{ openbao_arch }} (openbao_lego_checksums)"
+
+- name: Fetch the ACME client's release archive, refused unless its sha256 is the pinned one
+  ansible.builtin.get_url:
+    url: "{{ openbao_lego_release_repository }}/v{{ openbao_lego_version }}/lego_v{{ openbao_lego_version }}_linux_{{ openbao_arch }}.tar.gz"
+    dest: "{{ openbao_install_dir }}/lego/{{ openbao_lego_version }}/lego_v{{ openbao_lego_version }}_linux_{{ openbao_arch }}.tar.gz"
+    checksum: "sha256:{{ openbao_lego_checksums[openbao_arch] }}"
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0644"
+    use_proxy: true
+  when: not ansible_check_mode or openbao_lego_files.results[2].stat.exists
+
+- name: Unpack the ACME client (again whenever the archive and the command differ)
+  ansible.builtin.unarchive:
+    src: "{{ openbao_install_dir }}/lego/{{ openbao_lego_version }}/lego_v{{ openbao_lego_version }}_linux_{{ openbao_arch }}.tar.gz"
+    dest: "{{ openbao_install_dir }}/lego/{{ openbao_lego_version }}"
+    remote_src: true
+    include: [lego, LICENSE]
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+  when: not ansible_check_mode or openbao_lego_files.results[0].stat.exists
+
+- name: Ask the unpacked ACME client for its version
+  ansible.builtin.command:
+    argv: ["{{ openbao_install_dir }}/lego/{{ openbao_lego_version }}/lego", --version]
+  register: openbao_lego_found
+  changed_when: false
+  check_mode: false  # read-only
+  when: not ansible_check_mode or openbao_lego_files.results[1].stat.exists
+
+- name: Refuse an ACME client that is not the release asked for
+  ansible.builtin.assert:
+    that: openbao_lego_found.stdout is search('^lego version ' ~ (openbao_lego_version | regex_escape) ~ ' ')
+    fail_msg: "openbao: the unpacked lego reports {{ openbao_lego_found.stdout | trim }}, the pin is {{ openbao_lego_version }}"
+  when: not ansible_check_mode or openbao_lego_files.results[1].stat.exists
+
+- name: Create the ACME directories (root only, for the account key, the certificates and the token)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0700"
+  loop: ["{{ openbao_acme_dir }}", "{{ openbao_acme_env_file | dirname }}"]
+
+- name: Write the DNS provider's token into the root-only environment file (0600)
+  block:
+    - name: Read the DNS provider's token (secret reference, never a value in the inventory)
+      ansible.builtin.set_fact:
+        openbao_acme_token: "{{ lookup('hnx_secret', openbao_acme_dns_token_ref) }}"
+      no_log: true
+    - name: Refuse a token that would not survive an environment file unchanged
+      ansible.builtin.assert:
+        that: openbao_acme_token is match('^[A-Za-z0-9._~+/=-]{1,512}\Z')
+        fail_msg: "openbao: the token behind {{ openbao_acme_dns_token_ref }} is not a single printable word ([A-Za-z0-9._~+/=-])"
+      no_log: true
+    - name: Write the token (read by the renewal script, never by the unit's environment)
+      ansible.builtin.copy:
+        dest: "{{ openbao_acme_env_file }}"
+        content: "{{ openbao_acme_token_env[openbao_acme_dns_provider] }}={{ openbao_acme_token }}\n"
+        owner: "{{ openbao_owner }}"
+        group: "{{ openbao_owner_group }}"
+        mode: "0600"
+      no_log: true
+      diff: false
+  always:
+    - name: Forget the token, whatever happened above
+      ansible.builtin.set_fact:
+        openbao_acme_token: ""
+      no_log: true
+
+- name: Create the script directory
+  ansible.builtin.file:
+    path: "{{ openbao_acme_script | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the renewal script
+  ansible.builtin.template:
+    src: openbao-acme-renew.py.j2
+    dest: "{{ openbao_acme_script }}"
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_owner_group }}"
+    mode: "0700"
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ openbao_last_run_dir }}"
+    last_run_group: "{{ openbao_last_run_group }}"
+    last_run_writer: "{{ openbao_last_run_writer }}"
+
+- name: Write the renewal service and timer
+  ansible.builtin.template:
+    src: "acme-renew.{{ item }}.j2"
+    dest: "{{ openbao_unit_dir }}/{{ openbao_acme_unit }}.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: openbao_acme_units
+
+- name: Reload systemd and enable the timer when the units changed
+  ansible.builtin.command:
+    argv: "{{ [openbao_systemctl_cli] + item }}"
+  loop: "{{ [['daemon-reload'], ['enable', '--now', openbao_acme_unit ~ '.timer']] if openbao_acme_units is changed else [] }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true
+
+- name: Look for the renewal script (a --check run on a fresh host has none)
+  ansible.builtin.stat:
+    path: "{{ openbao_acme_script }}"
+    get_checksum: false
+  register: openbao_acme_script_stat
+
+- name: Ask whether the installed certificate is valid (names, chain, key, not yet due)
+  ansible.builtin.command:
+    argv: ["{{ openbao_acme_script }}", --check]
+  register: openbao_acme_check
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only
+  when: openbao_acme_script_stat.stat.exists
+
+# 0 valid, 1 missing, invalid or due (start the unit). Anything else, 100 above all (openssl cannot
+# be run), means the certificate could not be checked: starting the unit would not help.
+- name: Fail when the installed certificate could not be checked at all (not the same as invalid)
+  ansible.builtin.assert:
+    that: openbao_acme_check.rc in [0, 1]
+    fail_msg: >-
+      openbao: cannot check the installed certificate, so nothing was started
+      (exit {{ openbao_acme_check.rc }}: {{ (openbao_acme_check.stdout | default('') + ' ' + openbao_acme_check.stderr | default('')) | trim }})
+  when: openbao_acme_script_stat.stat.exists
+
+- name: "--check: say a certificate would be obtained (no renewal script yet, or the installed one is not valid)"
+  ansible.builtin.debug:
+    msg: "openbao: would start {{ openbao_acme_unit }}.service to obtain or renew the certificate"
+  changed_when: true
+  when: ansible_check_mode and openbao_acme_check.rc | default(1) != 0
+
+- name: Obtain or renew the certificate now (the renewal unit, so the run is in its journal)
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", start, "{{ openbao_acme_unit }}.service"]
+  when: openbao_acme_check.rc | default(1) != 0
+  changed_when: true
+  register: openbao_acme_issue
+
+- name: Ask again (refuse to continue without a valid certificate)
+  ansible.builtin.command:
+    argv: ["{{ openbao_acme_script }}", --check]
+  register: openbao_acme_recheck
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only
+  when: openbao_acme_issue is changed and not ansible_check_mode
+
+- name: Fail unless the certificate is now installed and valid
+  ansible.builtin.assert:
+    that: openbao_acme_recheck.rc == 0
+    fail_msg: >-
+      openbao: no valid ACME certificate after the renewal unit ran
+      ({{ openbao_acme_recheck.stdout | default('') | trim }}): journalctl -u {{ openbao_acme_unit }}.service
+  when: openbao_acme_issue is changed and not ansible_check_mode

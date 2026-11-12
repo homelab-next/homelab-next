@@ -744,6 +744,7 @@
         "timer:clamav/scan",
         "timer:lynis/scan",
         "timer:needrestart/check",
+        "timer:openbao/acme-renew",
         "timer:rkhunter/scan",
         "timer:trivy/scan"
       ]
@@ -994,6 +995,29 @@
       "status": "active",
       "trigger": [
         "role:module_census"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid",
+        "1": "with --check, the installed certificate is missing, invalid or due",
+        "100": "could not measure (openssl cannot be run); nothing was checked or installed",
+        "2": "lego failed, or what it stored is not a valid certificate for the names; nothing was installed",
+        "3": "the certificate was installed but the server could not be reloaded, or is starting or stopping (retried next run)"
+      },
+      "id": "openbao-acme-renew",
+      "inputs": "the DNS provider's token (the root-only environment file, read by the script itself); lego's stored certificate",
+      "installs_to": "/usr/local/libexec/homelabnext/openbao-acme-renew",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the server certificate and key in the TLS directory; a reload (SIGHUP) of a running server",
+      "owner": "platform",
+      "path": "ansible/roles/openbao/templates/openbao-acme-renew.py.j2",
+      "purpose": "Renew OpenBao's public server certificate over ACME (DNS-01) when due, install it and reload the server with SIGHUP.",
+      "status": "active",
+      "trigger": [
+        "timer:openbao/acme-renew",
+        "role:openbao"
       ]
     },
     {
