@@ -104,6 +104,7 @@ argument_specs:
   health:
     short_description: Fail unless the hub answers /status.json with its contract on its bind address.
     options:
+      status_hub_logical_id: *id
       status_hub_bind_address: *bind
       status_hub_port: *port
       status_hub_allowed_hosts: *hosts
