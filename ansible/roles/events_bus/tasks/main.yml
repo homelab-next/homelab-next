@@ -80,7 +80,8 @@
               | password_hash('bcrypt', rounds=11, ident='2a',
                   salt=((item.password_ref ~ '|' ~ inventory_hostname ~ '|' ~ events_bus_account) | hash('sha256') | truncate(21, true, '')) ~ 'e'),
            'publish': item.publish | default([]),
-           'subscribe': item.subscribe | default([])}] }}
+           'subscribe': item.subscribe | default([]),
+           'subscribe_only': item.subscribe_only | default(false) | bool}] }}
   loop: "{{ events_bus_users }}"
   loop_control:
     label: "{{ item.user }}"
@@ -141,7 +142,7 @@
 - name: Provision the standing streams (created only when missing)
   ansible.builtin.command:
     argv: ["{{ events_bus_hnx_python }}", "{{ events_bus_provision_bin }}",
-           "nats://{{ ('[' ~ events_bus_listen_address ~ ']') if ':' in events_bus_listen_address else events_bus_listen_address }}:{{ events_bus_port | int }}",
+           "nats://{{ events_bus_listen_address | hnx_nats_hostport(events_bus_port) }}",
            "{{ events_bus_admin_user }}", "{{ item.name }}", "{{ item.subject_prefix }}",
            "{{ item.max_bytes | int }}"]
   environment:

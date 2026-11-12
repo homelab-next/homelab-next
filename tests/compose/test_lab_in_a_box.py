@@ -77,7 +77,8 @@ def nats_users() -> dict[str, dict]:
 def nats_allowed(user: dict, direction: str, subject: str) -> bool:
     """Does ``user`` (a :func:`nats_users` entry) may ``direction`` (publish / subscribe) on
     ``subject``: allow-list semantics, deny wins; a user with no permissions may do anything in
-    its own account."""
+    its own account.  As nats-server reads it, a missing or EMPTY ``allow`` is no restriction
+    (only ``deny`` then limits the user): ``{"allow": []}`` grants everything."""
     from conformance.fakes.jetstream_wire import subject_matches
 
     perms = (user.get("permissions") or {}).get(direction)
@@ -85,7 +86,8 @@ def nats_allowed(user: dict, direction: str, subject: str) -> bool:
         return "permissions" not in user
     if any(subject_matches(p, subject) for p in perms.get("deny", [])):
         return False
-    return any(subject_matches(p, subject) for p in perms.get("allow", []))
+    allow = perms.get("allow") or []
+    return not allow or any(subject_matches(p, subject) for p in allow)
 
 
 @pytest.fixture(scope="module")

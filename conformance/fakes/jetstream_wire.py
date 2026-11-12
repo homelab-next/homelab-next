@@ -5,7 +5,7 @@ It answers the requests :mod:`homelabnext.conform.adapters.nats_jetstream` sends
 nats-server shapes them (read from the server source, ``server/consumer.go``, ``stream.go``,
 ``jetstream_api.go``, at v2.10.22 and again at v2.15.1, the lab's version):
 
-* ``$JS.API.STREAM.{INFO,CREATE,DELETE,MSG.GET}`` (``seq``, ``next_by_subj``, ``last_by_subj``) and ``$JS.API.CONSUMER.{INFO,CREATE}`` (also the
+* ``$JS.API.STREAM.{INFO,CREATE,DELETE,MSG.GET}`` (``seq``, ``next_by_subj``, ``last_by_subj``) and ``$JS.API.CONSUMER.{INFO,CREATE,DELETE}`` (also the
   2.9+ ``CONSUMER.CREATE.<stream>.<durable>.<filter>`` form, whose filter must be the config's;
   pull consumers only, ``deliver_policy`` ``new``, ``all`` or ``by_start_time``) with the
   server's error objects (``stream not found`` 10059, ``consumer not found`` 10014, ``no message
@@ -321,6 +321,13 @@ class FakeJetStreamWire:
             if c is None:
                 return _err(404, 10014, "consumer not found")
             return self._consumer_info(t[2], c)
+        if t[0] == "CONSUMER" and t[1] == "DELETE":
+            st = self.streams.get(t[2])
+            if st is None:
+                return _err(404, 10059, "stream not found")
+            if st.consumers.pop(t[3], None) is None:
+                return _err(404, 10014, "consumer not found")
+            return {"success": True}
         if t[0] == "CONSUMER" and t[1] == "CREATE":
             cfg = body.get("config") or {}
             if len(t) > 4 and cfg.get("filter_subject") != ".".join(t[4:]):

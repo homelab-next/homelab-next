@@ -368,7 +368,7 @@ def test_the_acl_check_reads_and_acks_as_the_bridge(e2e, tmp_path, ack_format):
 def test_the_ack_check_uses_the_durable_it_is_given(e2e, tmp_path):
     """On a real bus the scenario acks on a scratch durable (``run --bus-not-broker-durable``):
     the bridge's real durable is never created, so a real bridge never inherits the run's ack
-    floor."""
+    floor, and the scratch one is deleted again at the end (as the bus admin)."""
     from homelabnext.broker.relay import BROKER_SOURCE
     from homelabnext.broker.state import StateDir
     from homelabnext.events.envelope import build_event
@@ -382,9 +382,15 @@ def test_the_ack_check_uses_the_durable_it_is_given(e2e, tmp_path):
     relay.not_broker_durable = "e2e-scratch-decision-returned"
     relay.provision()
     relay.run_once()
-    assert "acked 1 delivery(ies)" in e2e.check_bridge_acks(relay)
-    consumers = shared.server.streams[e2e.LAB_EVENTS_STREAM].consumers
-    assert set(consumers) == {"e2e-scratch-decision-returned"}
+    asked = []
+    real = shared.request
+    shared.request = lambda subject, *a, **kw: asked.append(subject) or real(subject, *a, **kw)
+    relay.delete_durable = True
+    got = e2e.check_bridge_acks(relay)
+    assert "acked 1 delivery(ies)" in got and "scratch durable deleted" in got
+    made = [s for s in asked if s.startswith("$JS.API.CONSUMER.CREATE.")]
+    assert made and all(".e2e-scratch-decision-returned." in s for s in made)
+    assert shared.server.streams[e2e.LAB_EVENTS_STREAM].consumers == {}  # gone again
     with pytest.raises(SystemExit) as done:
         e2e.main(["run", "--bus-not-broker-durable", "x", "--help"])
     assert done.value.code == 0

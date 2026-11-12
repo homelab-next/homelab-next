@@ -135,6 +135,9 @@ class Relay:
     #: the durable the step creates and acks on as ``not_broker``: a scratch name on a real bus,
     #: never one a real consumer uses (it would inherit this step's ack floor)
     not_broker_durable: str = LAB_NOT_BROKER_DURABLE
+    #: delete that durable again (as ``admin``) once the step is done: a scratch durable on a real
+    #: bus (``run --bus-not-broker-durable``) must not outlive the run
+    delete_durable: bool = False
     bus_users: Mapping[str, str] = field(default_factory=lambda: dict(LAB_BUS_USERS))
 
     def wire(self, user: str | None) -> Any:
@@ -643,10 +646,12 @@ def check_bridge_acks(relay: Relay) -> str:
     the step reads the consumer back: nothing it was handed may still be pending.  The step owns
     the durable and settles real deliveries on it, which is safe only because the lab runs no bridge;
     on a real bus name a scratch durable (and stream, ``run --bus-not-broker-durable``,
-    ``--stream``), never one a real bridge uses."""
+    ``--stream``), never one a real bridge uses; that durable is deleted again at the end
+    (``relay.delete_durable``), whether or not the step passed."""
     from homelabnext.conform.adapters import nats_jetstream as nj
 
     wire = relay.wire(relay.not_broker)
+    done = False
     try:
         # replay: the lab runs no bridge, so a durable created now still sees the relay's events
         bus = nj.JetStreamBus(wire, stream=relay.stream, subject_prefix=relay.prefix,
@@ -668,9 +673,34 @@ def check_bridge_acks(relay: Relay) -> str:
                 f"{relay.not_broker}'s acks did not take: {pending} pending, ack floor {floor}, "
                 f"acked up to seq {max(d.seq for d in got)} (is each ack form granted?)"
             )
+        done = True
     finally:
         wire.close()
-    return f"{relay.not_broker} acked {len(got)} delivery(ies) on its durable, none pending"
+        if relay.delete_durable:
+            _delete_durable(relay, report=done)  # a failure of the step itself is not masked
+    gone = "; scratch durable deleted" if relay.delete_durable else ""
+    return f"{relay.not_broker} acked {len(got)} delivery(ies) on its durable, none pending{gone}"
+
+
+def _delete_durable(relay: Relay, *, report: bool) -> None:
+    """Delete the step's scratch durable as the bus admin (the only user the events bus role lets
+    hold ``CONSUMER.DELETE``); ``report``: a refusal fails the step."""
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    durable = nj.durable_name(relay.not_broker_durable)
+    try:
+        bus = nj.JetStreamBus(relay.wire(relay.admin), stream=relay.stream,
+                              subject_prefix=relay.prefix, provision=False)  # fmt: skip
+        try:
+            bus.api(f"CONSUMER.DELETE.{relay.stream}.{durable}", missing="consumer")
+        finally:
+            bus.close()
+    except Exception as exc:
+        if report:
+            raise StepFailed(
+                f"deleting the scratch durable {durable} as {relay.admin} failed: {exc} (grant it "
+                f"$JS.API.CONSUMER.DELETE.{relay.stream}.{durable} for the run)"
+            ) from None
 
 
 def check_audit(setup: Setup, rid: str, profile: str) -> str:
@@ -946,6 +976,7 @@ def main(argv: list[str] | None = None) -> int:
             admin=args.bus_admin,
             not_broker=args.bus_not_broker,
             not_broker_durable=args.bus_not_broker_durable,
+            delete_durable=args.bus_not_broker_durable != LAB_NOT_BROKER_DURABLE,
             bus_users=users,
         )
     rows = run_scenario(setup)

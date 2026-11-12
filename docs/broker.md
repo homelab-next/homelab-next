@@ -699,7 +699,12 @@ WantedBy=multi-user.target
 memory there if the operator grants it, never write. Handler secrets come from
 `HNX_BROKER_SECRET_<NAME>` in the service's environment (here an environment file readable by
 root and the service user only). `ProcSubset=pid` hides `/proc/sys`, so a run claim records no
-boot id and a claimant is told live or gone by its pid's start time alone (`homelabnext.broker.state`).
+boot id; that does not weaken the claim. Every claim records the broker `instance` that made it,
+and whether that instance lives is read from its `live/<id>` lock (an exclusive `flock` held for
+the process's whole life, released by the kernel when it dies, across a reboot too). Only a claim
+written before claims named their instance falls back to the claimant's pid and its start time;
+without the boot id a recycled pid can at worst make such a claim read `running` when it is not,
+never let it run again (`homelabnext.broker.state`).
 
 ### Handlers and the broker's uid
 
@@ -710,7 +715,8 @@ they may do to the broker's own evidence. So **before the first real handler** (
 rather than a stand-in that reports what it would do), handlers MUST run under a uid of their own:
 a transient unit per run (`systemd-run --uid=` / `DynamicUser=yes`, with the run directory handed
 over) or a small setuid-free helper (`setpriv --reuid --regid --clear-groups`) started with that
-one capability. That change is to execution itself and is not made yet.
+one capability. That change is to execution itself and is not made yet, and **per-handler uids
+remain a MUST before any real handler is deployed**.
 
 Until it is, the `broker` role ([Deploying with Ansible](#deploying-with-ansible)) **refuses** a
 manifest that declares an exec handler (an action whose `handler` is not `builtin/...`) unless
@@ -719,6 +725,12 @@ refusal is at validate time, on the controller, before anything on the host chan
 handlers (the lanes) run in the broker itself and are not affected. A deployment that uses the
 `-proof` marker must not carry it past its proof (the private overlay's own checks refuse a
 deploy-relevant run while its manifest still has it).
+
+This gate is a stop-gap keyed on a *name*, not on what the handlers are. Its planned follow-up is
+content-based: the role accepts an exec handler only when its digest matches one of the stand-ins
+the project ships (`examples/broker/handlers/`), or when the operator sets an explicit, reviewed
+`broker_accept_shared_uid_handlers: true`. Neither replaces per-handler uids; both only narrow
+what may run under the shared one until then.
 
 ### Deploying with Ansible
 
@@ -740,18 +752,28 @@ bus by `broker_relay_events_id` (capability `events`; the endpoint defaults to t
 loopback, the bus having no TLS listener yet), the hub's allowed host by its own row's
 `public_hostname`.
 
-* **The manifest is validated before it is installed.** It is staged as `manifest.yml.new` beside
-  the live one (so its `handlers/` resolve against the installed handlers), checked by the
-  release's own `hnx broker validate`, and only then copied over `manifest.yml`; one that fails
-  stops the play with the running broker's manifest untouched. (The handlers are installed first:
-  a new handler with a refused manifest leaves the old manifest refusing it by digest.)
+* **The manifest and its handlers are validated before they are installed.** Both are staged
+  under `<config>/staged/` (`manifest.yml` and `handlers/`, so the staged manifest's `handlers/`
+  paths and digests resolve against the staged handlers), checked by the release's own `hnx
+  broker validate`, and only then copied over the live `handlers/` and `manifest.yml`; a set that
+  fails stops the play with the running broker's manifest and handlers untouched.
 * **Handlers share the broker's uid**, so the role refuses a non-proof manifest with an exec
   handler ([Handlers and the broker's uid](#handlers-and-the-brokers-uid)).
 * **The release names the interpreter's full version** (`sys.version`) besides its path, so a
   distribution's Python upgrade builds a new virtualenv instead of running the old one on it.
 * **`restore` is data only** in all four roles' sense of it: the units are stopped for the copy and
-  started again after, ownership is put back as `main` makes it, and configuration and unit files
-  are left alone.
+  started again after, ownership and modes are put back as `main` makes them (the state directory
+  the relay's group, `0710`, so the relay still reaches `outbox/`), and configuration and unit
+  files are left alone.
+* **Backup and restore: a restore can re-arm a consumed approval.** The copy merges the backup
+  into the state directory and deletes nothing, so restored over a surviving state directory the
+  claims and `consumed/` markers written after the backup stay, and nothing runs twice. Restored
+  onto an **empty** state directory (the original lost), every approval consumed after the backup
+  is unconsumed again: an approved run-once action that ran after the backup was taken can run a
+  second time. Before starting the broker on such a restore (`broker_start: false` restores
+  without starting it), compare `consumed/` and `claims/` with the audit trail of what ran after
+  the backup (a shipped copy, the targets themselves) and deny the requests that already ran
+  (`hnx broker deny`), or take backups often enough that the window is acceptable.
 
 **The wheel**, from the commit you deploy and nothing else: a fresh clone (or `git clean -xdf`),
 the build backend pinned by hash (`constraints/build.txt`, setuptools from the same lock as
@@ -763,7 +785,7 @@ git clone --quiet --no-checkout https://github.com/homelab-next/homelab-next.git
 git -C hnx-build checkout --quiet <commit>          # a fresh tree: nothing untracked is packaged
 python3 -m venv /tmp/hnx-build-venv
 /tmp/hnx-build-venv/bin/pip install --require-hashes --no-deps -r hnx-build/constraints/bootstrap.txt
-/tmp/hnx-build-venv/bin/pip install --require-hashes --no-deps -r hnx-build/constraints/build.txt
+/tmp/hnx-build-venv/bin/pip install --require-hashes --no-deps --only-binary=:all: -r hnx-build/constraints/build.txt
 cd hnx-build && SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) \
   /tmp/hnx-build-venv/bin/python -m pip wheel --no-deps --no-build-isolation -w dist .
 sha256sum dist/homelabnext-*.whl   # -> hnx_runtime_wheel_sha256 (built with setuptools 84.2.1)
@@ -778,7 +800,10 @@ relay's `--events-target`, `--stream` and `--subject-prefix`; stop `hnx-broker-r
 for the run (one relay per state directory; the scenario's own `--once` passes take its place).
 **Use scratch names on a real bus**: a stream and prefix of the run's own (granted to the bus users
 for the run only) and `--bus-not-broker-durable` a durable no real consumer uses, so the real
-bridge never inherits the run's ack floor and the standing stream holds none of its events.
+bridge never inherits the run's ack floor and the standing stream holds none of its events. The
+run deletes that durable again at the end, as `--bus-admin` (grant it
+`$JS.API.CONSUMER.DELETE.<stream>.<durable>` for the run; the events bus role lets only its
+`events_bus_admin_user` hold a consumer delete).
 The hub's steps must reach it from a trusted proxy's address (the registry's edge-proxy host), as
 the edge would.
 
@@ -999,6 +1024,28 @@ and its DLQ, `STREAM.MSG.GET` of the stream; it provisions them, with
 published), and `hnx-conformance` in an account of its own (`CONFORM`), where `hnx conform run
 events` creates and deletes its scratch streams without any way to reach the `HNX` account's
 subjects or streams. No client connects without a user.
+
+**The `events_bus` role enforces the same shape on every deployment** (filter
+`hnx_bus_subject_problems`, `ansible/plugins/filter/hnx_bus.py`). The server's own subjects are an
+allow-list, not a deny-list: anything under `$JS`, `$KV`, `$O`, `$SYS` (any subject whose first
+token starts with `$`) is refused unless it is one of `$JS.API.INFO`, `STREAM.INFO.<stream>`,
+`STREAM.MSG.GET.<stream>`, `CONSUMER.INFO|CREATE|MSG.NEXT.<stream>.<durable>` (a create may carry
+its filter), `CONSUMER.DURABLE.CREATE.<stream>.<durable>` or `$JS.ACK.<stream>.<durable>.>` (the v2
+ack form has the same shape), each on a named stream and durable; the provisioner
+(`events_bus_admin_user`) alone may also hold `STREAM.CREATE|UPDATE.<stream>`,
+`CONSUMER.DELETE.<stream>.<durable>` and `CONSUMER.NAMES.<stream>`. No user may hold a stream
+delete, purge, message delete, snapshot or restore, or anything of the key-value or object
+stores. A user's publish list may be empty only when it says `subscribe_only: true`, and is then
+rendered deny-all (`"deny": [">"]`): NATS reads an empty `allow` list as no restriction at all.
+The streams the role provisions are created with `deny_delete` and `deny_purge`, so the server
+refuses a message delete or a purge to every user whatever its grants; nats-server refuses to
+clear either flag on an existing stream ("can not cancel deny message deletes"), so they are
+final. A stream created before them keeps its own settings (the role never changes an existing
+stream); the operator adds them in place, messages kept, with one `STREAM.UPDATE` of the stream's
+current configuration plus both flags (`nats stream edit`, as the provisioner with a temporary
+`STREAM.UPDATE.<stream>` grant), after any purge the stream still needs, since none is possible
+after. (They do not stop `STREAM.DELETE` of the whole stream; that call the role grants no user,
+the provisioner included.)
 
 ### Agents: the MCP tools
 

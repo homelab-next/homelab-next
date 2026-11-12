@@ -284,21 +284,18 @@ def _run_case_chunk(tmp_path, tag, role, tasks_from, base_vars, overrides, env):
             "hosts": "localhost",
             "connection": "local",
             "gather_facts": False,
-            "vars": base_vars,
+            # the registry a role resolves ids in: a play variable too, so a case may name another
+            "vars": {
+                "hnx_registry_file": str(ANSIBLE / "inventory/example/registry.yml"),
+                **base_vars,
+            },
             "tasks": tasks,
         }
     ]
     pb = tmp_path / f"cases{tag}.yml"
     pb.write_text(yaml.safe_dump(play))
     ev = tmp_path / f"vars{tag}.json"
-    ev.write_text(
-        json.dumps(
-            {
-                "hnx_registry_file": str(ANSIBLE / "inventory/example/registry.yml"),
-                "ansible_python_interpreter": sys.executable,
-            }
-        )
-    )
+    ev.write_text(json.dumps({"ansible_python_interpreter": sys.executable}))
     run_env = dict(
         os.environ,
         ANSIBLE_CONFIG=str(ANSIBLE / "ansible.cfg"),

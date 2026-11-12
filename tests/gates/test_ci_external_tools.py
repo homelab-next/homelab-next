@@ -42,5 +42,5 @@ def test_each_go_tool_is_pinned_then_checked_against_its_build_info():
 def test_the_tests_require_the_installed_tools():
     (step,) = [s for s in JOB["steps"] if "HNX_REQUIRE_TOOLS" in (s.get("env") or {})]
     assert set(step["env"]["HNX_REQUIRE_TOOLS"].split(",")) == {
-        "actionlint", "zizmor", "nats-server", "docker",
+        "actionlint", "zizmor", "nats-server", "docker", "ansible-playbook",
     }  # fmt: skip

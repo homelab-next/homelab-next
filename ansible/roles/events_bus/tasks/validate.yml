@@ -36,12 +36,22 @@
       - (item.publish | default([])) is sequence and (item.subscribe | default([])) is sequence
       - (item.publish | default([]) + item.subscribe | default([])) | select('match', '^[A-Za-z0-9_.*>$-]+\Z') | list | length
         == (item.publish | default([]) + item.subscribe | default([])) | length
-      - (item.publish | default([]) + item.subscribe | default([])) | hnx_bus_subject_problems(item.user) | length == 0
-      - item.keys() | difference(['user', 'password_ref', 'publish', 'subscribe']) | length == 0
+      - >-
+        (item.publish | default([]) + item.subscribe | default([]))
+        | hnx_bus_subject_problems(item.user, admin=(item.user == events_bus_admin_user)) | length == 0
+      # NATS reads an empty publish allow-list as NO restriction (publish anything, the
+      # stream-deleting API included): a user without publish subjects must say it is
+      # subscribe-only, and is then rendered deny-all
+      - item.subscribe_only | default(false) is boolean
+      - >-
+        (item.subscribe_only | default(false))
+        | ternary((item.publish | default([])) | length == 0, (item.publish | default([])) | length > 0)
+      - item.keys() | difference(['user', 'password_ref', 'publish', 'subscribe', 'subscribe_only']) | length == 0
     fail_msg: >-
       events_bus: user {{ item.user | default('?') }}: a name, a secret: reference for its
-      password, and allow-lists of plain subjects within one user's reach:
-      {{ (item.publish | default([]) + item.subscribe | default([])) | hnx_bus_subject_problems(item.user | default('?')) | join('; ') }}
+      password, a non-empty publish allow-list (or none at all with subscribe_only: true), and
+      allow-lists of plain subjects within one user's reach:
+      {{ (item.publish | default([]) + item.subscribe | default([])) | hnx_bus_subject_problems(item.user | default('?'), admin=(item.user | default('') == events_bus_admin_user)) | join('; ') }}
   loop: "{{ events_bus_users }}"
   loop_control:
     label: "{{ item.user | default('?') }}"

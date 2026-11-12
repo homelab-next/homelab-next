@@ -4,5 +4,7 @@ events_bus_cache_dir: /var/cache/homelabnext/events-bus
 events_bus_provision_bin: /usr/local/libexec/homelabnext/hnx-events-provision
 # The upper bound on what any user's allow-list may name is the hnx_bus_subject_problems filter
 # (ansible/plugins/filter/hnx_bus.py), compared token by token: no subject starting with a
-# wildcard, nothing reaching $SYS, another client's _INBOX or a destructive stream call
-# (STREAM.DELETE/PURGE/UPDATE, STREAM.MSG.DELETE), nothing covering $JS.API.> or $JS.API.STREAM.>.
+# wildcard, no other client's _INBOX, and nothing under the server's own $-subjects ($JS, $KV, $O,
+# $SYS ...) but an allow-list of JetStream calls on named streams and consumers (stream info, one
+# durable's create/info/next/acks, a message read-back; and, for events_bus_admin_user only, stream
+# create/update and consumer delete/names). An empty publish list is subscribe_only or refused.

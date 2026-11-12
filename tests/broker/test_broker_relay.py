@@ -337,6 +337,10 @@ def provision(server: FakeJetStreamWire, *, max_bytes: int = 1 << 30) -> None:
         )
         assert made == [STREAM, f"{STREAM}_DLQ"]
         assert server.streams[f"{STREAM}_DLQ"].config["max_bytes"] == max_bytes // 4
+        # the evidence leaves only by the limits: no user may purge or delete a message
+        for name in made:
+            config = server.streams[name].config
+            assert config["deny_delete"] is True and config["deny_purge"] is True, name
     else:
         nj.make(wire=Wire(server), scratch=False, stream=STREAM, subject_prefix=PREFIX).close()
 

@@ -246,6 +246,10 @@ def _api(
     return doc
 
 
+#: a standing stream's messages leave only by its limits (provision_streams)
+_EVIDENCE = {"deny_delete": True, "deny_purge": True}
+
+
 def provision_streams(
     wire: Wire,
     *,
@@ -262,7 +266,14 @@ def provision_streams(
     its DLQ (the dead-letter advisories), each bounded (``max_bytes``, ``max_age``), when missing.
     Returns the names it created.  Clients opened with ``provision=False`` (the broker's relay,
     the StackStorm bridge) then need no ``STREAM.CREATE`` at all.  The same as ``nats stream add``
-    with these settings."""
+    with these settings.
+
+    Both are created with ``deny_delete`` and ``deny_purge``: the server refuses ``MSG.DELETE``
+    and ``PURGE`` on them to every user, whatever its grants, so the evidence a stream holds
+    leaves only by its limits (``max_bytes``, ``max_age``).  nats-server refuses to relax either
+    on an existing stream (``STREAM.UPDATE``: "can not cancel deny message deletes" / "deny
+    purge"), so they are final; a stream that already exists is left as it is (an operator adds
+    them in place with one ``STREAM.UPDATE``, which keeps the messages)."""
     if not _NAME_RE.match(stream or "") or max_bytes <= 0:
         raise EventsError("a stream name and a positive max_bytes are required")
     _check_subject(subject_prefix, pattern=False)
@@ -281,12 +292,14 @@ def provision_streams(
             "duplicate_window": int(duplicate_window * _NS),
             "max_bytes": int(max_bytes),
             **base,
+            **_EVIDENCE,
         },
         {
             "name": dlq,
             "subjects": [f"{_ADVISORY_MAX}.{stream}.*", f"{_ADVISORY_TERM}.{stream}.*"],
             "max_bytes": int(dlq_max_bytes or max(1, max_bytes // 4)),
             **base,
+            **_EVIDENCE,
         },
     ]
     created = []

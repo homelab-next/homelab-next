@@ -98,18 +98,9 @@
     group: "{{ broker_clients_group }}"
     mode: "2750"
 
-# ---- the operator's manifest and handlers
-- name: Install the handlers (scripts executable, documents read-only; root-owned, the broker reads them)
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "{{ broker_config_dir }}/handlers/{{ item | basename }}"
-    owner: root
-    group: "{{ broker_group }}"
-    mode: "{{ '0640' if item is match('.*\\.(json|ya?ml)$') else '0750' }}"
-  loop: "{{ broker_handlers }}"
-  register: broker_handler_files
-
-- name: Install the manifest, validated before it replaces the live one
+# ---- the operator's manifest and handlers: staged and validated together, then installed
+# (handlers root-owned, scripts executable, documents read-only; the broker reads them)
+- name: Install the manifest and its handlers, validated before they replace the live ones
   ansible.builtin.include_tasks: manifest.yml
 
 - name: Write the handlers' secrets (HNX_BROKER_SECRET_<NAME>, readable by root and the broker)

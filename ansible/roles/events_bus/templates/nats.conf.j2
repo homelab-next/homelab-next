@@ -1,10 +1,11 @@
 {# SPDX-License-Identifier: Apache-2.0 -#}
 # Managed by homelabnext (role events_bus); local changes are overwritten.
 # One account; every user has an allow-list and nothing else (no wildcard over $JS.API, replies
-# on its own _INBOX.<user>); passwords are bcrypt hashes. The client port listens on
+# on its own _INBOX.<user>); a subscribe-only user's publish is deny-all (an empty allow-list
+# would be no restriction at all); passwords are bcrypt hashes. The client port listens on
 # {{ events_bus_listen_address }} only, the monitoring port on loopback only.
 {
-  "listen": {{ (events_bus_listen_address ~ ':' ~ (events_bus_port | int)) | to_json }},
+  "listen": {{ events_bus_listen_address | hnx_nats_hostport(events_bus_port) | to_json }},
   "http": {{ ('127.0.0.1:' ~ (events_bus_monitor_port | int)) | to_json }},  {# no-raw-endpoint: allow the monitor is loopback only #}
   "server_name": {{ ('hnx-events-' ~ (inventory_hostname | regex_replace('[^A-Za-z0-9-]', '-'))) | to_json }},
   "max_payload": 1048576,
@@ -17,7 +18,8 @@
 {% for u in events_bus_rendered_users %}
         {"user": {{ u.user | to_json }}, "password": {{ u.password_hash | to_json }},
          "permissions": {
-           "publish": {"allow": {{ u.publish | to_json }}},
+           {# never {"allow": []}: NATS reads an empty allow-list as no restriction #}
+           "publish": {{ ({'allow': u.publish} if (u.publish | length > 0 and not (u.subscribe_only | default(false))) else {'deny': ['>']}) | to_json }},
            "subscribe": {"allow": {{ (u.subscribe if u.subscribe | length > 0 else ['_INBOX.' ~ u.user ~ '.>']) | to_json }}}}}{{ ',' if not loop.last else '' }}
 {% endfor %}
       ]

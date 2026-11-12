@@ -38,10 +38,12 @@
       - broker_relay_group is match('^[a-z_][a-z0-9_-]{0,31}\Z') and broker_relay_group not in ['root', broker_group, broker_clients_group]
       - broker_relay_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
       - broker_relay_state_dir is match('^/[A-Za-z0-9._/-]+\Z')
-      # a password goes only over tls:// or to loopback (the adapter refuses it otherwise)
+      # a password goes only over tls:// or to loopback (the adapter refuses it otherwise): an
+      # address the events bus role's own check calls loopback (127/8, [::1]), never a name
       - >-
         broker_relay_events_endpoint is match('^tls://[A-Za-z0-9.-]+:[0-9]{1,5}\Z')
-        or broker_relay_events_endpoint is match('^nats://(127\.[0-9.]+|\[::1\]|localhost):[0-9]{1,5}\Z')
+        or (broker_relay_events_endpoint is match('^nats://([0-9.]+|\[[0-9a-fA-F:]+\]):[0-9]{1,5}\Z')
+            and broker_relay_events_endpoint | regex_replace('^nats://\[?([0-9a-fA-F.:]+?)\]?:[0-9]+$', '\\1') | hnx_is_loopback)
       - broker_relay_events_id is match('^[a-z0-9][a-z0-9-]*\Z')
       - lookup('hnx_registry', broker_relay_events_id, field='capability') == 'events'
       - broker_relay_events_user is match('^[a-z][a-z0-9-]{0,31}\Z')
@@ -55,6 +57,20 @@
       is tls://host:port or nats:// to loopback, the bus's registry id (capability events), a bus user, its password as a secret: reference,
       the standing stream (upper-case) and its subject prefix, and a positive duplicate window
   when: broker_relay | bool
+
+# A loopback endpoint reaches the bus only when the bus runs on this host: the registry's row for
+# it must name this host (its inventory name or the short form), or the relay would publish to
+# whatever listens on that port here while the registry says the bus is elsewhere.
+- name: Validate that a loopback bus is this host's own
+  ansible.builtin.assert:
+    that:
+      - lookup('hnx_registry', broker_relay_events_id, field='host') in [inventory_hostname, inventory_hostname_short]
+    fail_msg: >-
+      broker: the relay's endpoint {{ broker_relay_events_endpoint }} is loopback, but the registry
+      puts {{ broker_relay_events_id }} on {{ lookup('hnx_registry', broker_relay_events_id, field='host') }},
+      not on {{ inventory_hostname }}: run the relay beside the bus, or give the bus a TLS listener
+      and the relay a tls:// endpoint
+  when: broker_relay | bool and broker_relay_events_endpoint is match('^nats://')
 
 # Handlers run as the broker's own uid today (docs/broker.md "Handlers and the broker's uid"): a
 # handler can read and write the broker's state and audit trail. Until each handler runs under a

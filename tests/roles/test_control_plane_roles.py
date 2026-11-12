@@ -29,6 +29,11 @@ SHA = "a" * 64
 HUB_ADDR = "198.51.100.7"  # no-raw-endpoint: allow a documentation address the hub binds under test
 LOOP = "127.0.0.1"  # no-raw-endpoint: allow loopback, what the bus and the hub may bind
 PLAIN_REMOTE_BUS = "nats://events.lab.example:4222"  # no-raw-endpoint: allow the refused endpoint
+NAMED_LOOP_BUS = "nats://localhost:4222"  # no-raw-endpoint: allow refused, a name is not an address
+LOOKALIKE_BUS = "nats://127.0.0.1.10:4222"  # no-raw-endpoint: allow refused, not an address
+V6_OTHER_BUS = "nats://[::2]:4222"  # no-raw-endpoint: allow refused, not loopback
+V6_LOOP_BUS = "nats://[::1]:4222"  # no-raw-endpoint: allow the IPv6 loopback bus
+TLS_BUS = "tls://events.lab.example:4222"  # no-raw-endpoint: allow a remote bus over TLS
 REGISTRY = ANSIBLE / "inventory/example/registry.yml"
 
 RUNTIME = {
@@ -148,6 +153,19 @@ def test_events_bus_refuses_bad_inputs(tmp_path):
         {"events_bus_users": broker_grant(publish=["lab..decision"])},
         {"events_bus_users": broker_grant(publish=["lab.>.decision"])},
         {"events_bus_users": [dict(BUS_USERS[0], password_ref="hunter2")]},
+        # an allow-list, not a deny-list, under $JS/$KV/$O: nothing but the named-stream calls
+        {"events_bus_users": broker_grant(publish=["$JS.API.CONSUMER.DELETE.LAB.bridge-x"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.CREATE.LAB"])},  # not the admin
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.SNAPSHOT.LAB"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.CONSUMER.MSG.NEXT.LAB.*"])},
+        {"events_bus_users": broker_grant(publish=["$KV.>"])},
+        {"events_bus_users": broker_grant(publish=["$O.store.>"])},
+        {"events_bus_users": [BUS_USERS[0], dict(BUS_USERS[1], publish=["$JS.API.STREAM.DELETE.LAB"])]},
+        # NATS reads an empty publish allow-list as no restriction: refused unless subscribe-only
+        {"events_bus_users": broker_grant(publish=[])},
+        {"events_bus_users": [{k: v for k, v in BUS_USERS[0].items() if k != "publish"}, BUS_USERS[1]]},
+        {"events_bus_users": broker_grant(subscribe_only=True)},  # but it publishes
+        {"events_bus_users": broker_grant(publish=[], subscribe_only="yes")},
         {"events_bus_admin_user": "nobody"},
         {"events_bus_streams": [{"name": "lab", "subject_prefix": "lab", "max_bytes": 1}]},
     ])  # fmt: skip
@@ -162,17 +180,40 @@ def test_events_bus_accepts_the_narrow_grants_a_bridge_needs(tmp_path):
                           "$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x", "$JS.ACK.LAB.bridge-x.*.*.*.*.*",
                           "$JS.ACK._.ACCOUNTHASH.LAB.bridge-x.*.*.*.*.>"],
               "subscribe": ["_INBOX.hnx-bus-bridge.>"]}  # fmt: skip
+    reader = {"user": "hnx-reader", "password_ref": "secret:events/reader", "subscribe_only": True,
+              "subscribe": ["lab.homelabnext.decision.>", "_INBOX.hnx-reader.>"]}  # fmt: skip
+    admin = dict(BUS_USERS[1], publish=[*BUS_USERS[1]["publish"], "$JS.API.STREAM.UPDATE.LAB",
+                                        "$JS.API.CONSUMER.DELETE.LAB.e2e-scratch"])  # fmt: skip
     results = run_cases(tmp_path, "events_bus", "validate", EVENTS, [
         {"events_bus_users": [*BUS_USERS, bridge]},
+        {"events_bus_users": [*BUS_USERS, reader]},
+        {"events_bus_users": [BUS_USERS[0], admin]},
     ])  # fmt: skip
-    assert results == [(False, "")], results
+    assert results == [(False, "")] * 3, results
+
+
+def _here_registry(tmp_path) -> str:
+    """The example registry with the events bus on the host the tests run the role on
+    (``localhost``): a loopback relay endpoint is accepted only when the bus is this host's."""
+    doc = yaml.safe_load(REGISTRY.read_text())
+    doc["services"]["events"]["host"] = "localhost"
+    path = tmp_path / "registry-here.yml"
+    path.write_text(yaml.safe_dump(doc))
+    return str(path)
 
 
 def test_broker_refuses_bad_inputs(tmp_path):
-    proof = {**BROKER, "broker_manifest": _manifest(tmp_path, "lab-broker-proof")}
+    proof = {**BROKER, "broker_manifest": _manifest(tmp_path, "lab-broker-proof"),
+             "hnx_registry_file": _here_registry(tmp_path)}  # fmt: skip
     _refusals(tmp_path, "broker", proof, [
         # a password over plaintext to another host
         {"broker_relay_events_endpoint": PLAIN_REMOTE_BUS},
+        # loopback is an address the bus role calls loopback, never a name or a look-alike
+        {"broker_relay_events_endpoint": NAMED_LOOP_BUS},
+        {"broker_relay_events_endpoint": LOOKALIKE_BUS},
+        {"broker_relay_events_endpoint": V6_OTHER_BUS},
+        # a loopback endpoint while the registry puts the bus on another host
+        {"hnx_registry_file": str(REGISTRY)},
         # the bus by its registry id: a row that is not the events capability
         {"broker_relay_events_id": "query-core"},
         {"broker_socket_mode": "666"},
@@ -189,11 +230,16 @@ def test_broker_refuses_bad_inputs(tmp_path):
 
 
 def test_broker_deploys_builtin_only_manifests_under_any_id(tmp_path):
-    """The handler-uid gate refuses exec handlers only: lanes (builtin/) run in the broker."""
-    results = run_cases(tmp_path, "broker", "validate", BROKER, [
+    """The handler-uid gate refuses exec handlers only: lanes (builtin/) run in the broker.  And
+    a loopback bus is accepted in either family when the registry puts it on this host."""
+    here = {**BROKER, "hnx_registry_file": _here_registry(tmp_path)}
+    proof = _manifest(tmp_path, "lab-broker-proof")
+    results = run_cases(tmp_path, "broker", "validate", here, [
         {"broker_manifest": _manifest(tmp_path, "lab-broker", builtin_only=True)},
+        {"broker_manifest": proof, "broker_relay_events_endpoint": V6_LOOP_BUS},
+        {"broker_manifest": proof, "broker_relay_events_endpoint": TLS_BUS},
     ])  # fmt: skip
-    assert results == [(False, "")], results
+    assert results == [(False, "")] * 3, results
 
 
 def test_status_hub_refuses_bad_inputs(tmp_path):
@@ -328,23 +374,218 @@ def test_status_hub_on_loopback_needs_no_remote_flag(tmp_path):
     assert "approvals" not in yaml.safe_load(files["agents.yml"])
 
 
+#: a user that only reads (no publish subjects at all): rendered deny-all, never {"allow": []}
+READER = {"user": "hnx-reader", "password_ref": "secret:events/reader", "subscribe_only": True,
+          "subscribe": ["lab.homelabnext.decision.>", "_INBOX.hnx-reader.>"]}  # fmt: skip
+
+
+def _rendered_users(users, password=None):
+    return [{"user": u["user"], "password_hash": password or "$2a$11$" + "x" * 53,
+             "publish": u.get("publish", []), "subscribe": u["subscribe"],
+             "subscribe_only": u.get("subscribe_only", False)} for u in users]  # fmt: skip
+
+
+def _nats_conf(files) -> dict:
+    return json.loads("\n".join(
+        line for line in files["nats.conf"].splitlines() if not line.lstrip().startswith("#")
+    ))  # fmt: skip
+
+
 def test_events_bus_config_grants_each_user_its_allow_lists_only(tmp_path):
-    users = [{"user": u["user"], "password_hash": "$2a$11$" + "x" * 53, "publish": u["publish"],
-              "subscribe": u["subscribe"]} for u in BUS_USERS]  # fmt: skip
+    users = _rendered_users([*BUS_USERS, READER])
     files = _render(tmp_path, "events_bus", {**EVENTS, "events_bus_rendered_users": users,
                                              "inventory_hostname": "bus-01.example.internal"})  # fmt: skip
-    text = "\n".join(
-        line for line in files["nats.conf"].splitlines() if not line.lstrip().startswith("#")
-    )
-    conf = json.loads(text)
+    conf = _nats_conf(files)
     assert conf["listen"].startswith(LOOP + ":") and conf["http"].startswith(LOOP + ":")
     got = conf["accounts"]["HNX"]["users"]
-    assert [set(u) for u in got] == [{"user", "password", "permissions"}] * 2
+    assert [set(u) for u in got] == [{"user", "password", "permissions"}] * 3
     assert got[0]["permissions"] == {"publish": {"allow": BUS_USERS[0]["publish"]},
                                      "subscribe": {"allow": BUS_USERS[0]["subscribe"]}}  # fmt: skip
+    # the subscribe-only user: deny-all, since NATS reads an empty allow-list as no restriction
+    assert got[2]["permissions"] == {"publish": {"deny": [">"]},
+                                     "subscribe": {"allow": READER["subscribe"]}}  # fmt: skip
+    assert '"allow": []' not in files["nats.conf"]
     assert all(u["password"].startswith("$2a$") for u in got)
     unit = _directives(files["hnx-events.service"])
     assert unit["User"] == ["hnx-events"] and unit["ReadWritePaths"] == ["/var/lib/hnx-events"]
+
+
+def test_events_bus_listens_on_ipv6_loopback_in_brackets(tmp_path):
+    files = _render(tmp_path, "events_bus", {**EVENTS, "events_bus_listen_address": "::1",
+                                             "events_bus_rendered_users": _rendered_users(BUS_USERS),
+                                             "inventory_hostname": "bus-01.example.internal"})  # fmt: skip
+    assert _nats_conf(files)["listen"] == "[::1]:4222"
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind((LOOP, 0))
+        return s.getsockname()[1]
+
+
+class _Nats:
+    """A minimal NATS client over the text protocol (no client library in this job): connect
+    as a user, publish, request, and read back the -ERR lines the server sends."""
+
+    def __init__(self, port: int, user: str, password: str):
+        import socket
+
+        self.sock = socket.create_connection((LOOP, port), timeout=5)
+        self.buf = b""
+        self._line()  # INFO
+        hello = {"user": user, "pass": password, "verbose": False, "pedantic": False,
+                 "headers": True, "no_responders": True}  # fmt: skip
+        self.sock.sendall(f"CONNECT {json.dumps(hello)}\r\nPING\r\n".encode())
+        line = self._line()
+        assert line == "PONG", line
+        self._inbox = f"_INBOX.{user}.r"  # its own inbox: the replies to request()
+        self.sock.sendall(f"SUB {self._inbox} 1\r\n".encode())
+
+    def _line(self) -> str:
+        while b"\r\n" not in self.buf:
+            chunk = self.sock.recv(65536)
+            assert chunk, "the server closed the connection"
+            self.buf += chunk
+        line, self.buf = self.buf.split(b"\r\n", 1)
+        return line.decode()
+
+    def _payload(self, n: int) -> bytes:
+        while len(self.buf) < n + 2:
+            self.buf += self.sock.recv(65536)
+        data, self.buf = self.buf[:n], self.buf[n + 2 :]
+        return data
+
+    def publish(self, subject: str, data: bytes = b"x", reply: str = "") -> list[str]:
+        """The -ERR lines the server answers this publish with (none: it was let through)."""
+        self.sock.sendall(
+            f"PUB {subject} {reply} {len(data)}\r\n".encode() + data + b"\r\nPING\r\n"
+        )
+        errs = []
+        while (line := self._line()) != "PONG":
+            if line.startswith("-ERR"):
+                errs.append(line)
+            elif line.startswith(("MSG", "HMSG")):
+                self._payload(int(line.split()[-1]))
+        return errs
+
+    def request(self, subject: str, body: dict | None) -> dict:
+        data = b"" if body is None else json.dumps(body).encode()
+        self.sock.sendall(f"PUB {subject} {self._inbox} {len(data)}\r\n".encode() + data + b"\r\n")
+        while True:
+            line = self._line()
+            if line.startswith("MSG"):
+                return json.loads(self._payload(int(line.split()[-1])) or b"{}")
+            if line.startswith("HMSG"):
+                parts = line.split()
+                raw = self._payload(int(parts[-1]))
+                return json.loads(raw[int(parts[-2]) :] or b"{}")
+            if line.startswith("-ERR"):
+                raise AssertionError(line)
+            if line == "PING":
+                self.sock.sendall(b"PONG\r\n")
+
+    def close(self):
+        self.sock.close()
+
+
+def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
+    """The rendered configuration, run by the real nats-server (CI's external-tools job installs
+    the pinned release): a subscribe-only user is refused every publish (an empty allow-list
+    would have let it publish anything, STREAM.DELETE included), the relay's user is refused what
+    its list does not name, and a stream provisioned the adapter's way can be neither purged nor
+    have a message deleted, nor have either flag cleared."""
+    from tests.suite_policy import require_tool
+
+    server = require_tool("nats-server")
+    port, monitor = _free_port(), _free_port()
+    provisioner = dict(BUS_USERS[1], publish=[f"$JS.API.STREAM.{v}.{s}" for v in ("INFO", "CREATE")
+                                              for s in ("LAB", "LAB_DLQ")])  # fmt: skip
+    users = [BUS_USERS[0], provisioner, READER]
+    files = _render(tmp_path, "events_bus", {
+        **EVENTS, "events_bus_rendered_users": _rendered_users(users, password="pw"),
+        "events_bus_users": users, "events_bus_port": port, "events_bus_monitor_port": monitor,
+        "events_bus_store_dir": str(tmp_path / "store"), "inventory_hostname": "bus-01.example.internal",
+    })  # fmt: skip
+    conf = tmp_path / "nats.conf"
+    conf.write_text(files["nats.conf"])
+    check = subprocess.run([server, "-c", str(conf), "-t"], capture_output=True, text=True)
+    assert check.returncode == 0, check.stdout + check.stderr
+    proc = subprocess.Popen([server, "-c", str(conf)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)  # fmt: skip
+    clients = []
+    try:
+        import socket
+        import time
+
+        for _ in range(100):
+            try:
+                socket.create_connection((LOOP, port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.05)
+        reader = _Nats(port, "hnx-reader", "pw")
+        relay = _Nats(port, "hnx-broker", "pw")
+        admin = _Nats(port, "hnx-events-admin", "pw")
+        clients += [reader, relay, admin]
+        for subject in ("anything", "$JS.API.STREAM.DELETE.LAB", "lab.homelabnext.decision.x"):
+            assert any("Permissions Violation" in e for e in reader.publish(subject)), subject
+        assert relay.publish("lab.homelabnext.decision.returned") == []
+        assert any("Permissions Violation" in e for e in relay.publish("$JS.API.STREAM.DELETE.LAB"))
+        assert any("Permissions Violation" in e for e in relay.publish("lab.homelabnext.agent.x"))
+
+        # the standing stream as provision_streams creates it (the admin's grants: CREATE, INFO)
+        from homelabnext.conform.adapters import nats_jetstream as nj
+
+        class Raw:  # the adapter's Wire over this client
+            def request(self, subject, payload, *, timeout, headers=None):
+                return nj.WireMsg(subject, json.dumps(admin.request(subject, json.loads(payload)
+                                  if payload else None)).encode(), {}, "")  # fmt: skip
+
+        made = nj.provision_streams(Raw(), stream="LAB", subject_prefix="lab", max_bytes=1 << 20)
+        assert made == ["LAB", "LAB_DLQ"]
+        cfg = admin.request("$JS.API.STREAM.INFO.LAB", None)["config"]
+        assert cfg["deny_delete"] is True and cfg["deny_purge"] is True
+    finally:
+        for c in clients:
+            c.close()
+        proc.terminate()
+        proc.wait(timeout=10)
+
+    # the flags hold against any user, and cannot be cleared: a server with no permissions at all
+    open_conf = tmp_path / "open.conf"
+    open_conf.write_text(json.dumps({"listen": f"{LOOP}:{port}", "jetstream": {
+        "store_dir": str(tmp_path / "store")}, "accounts": {"HNX": {"jetstream": "enabled",
+        "users": [{"user": "root-ish", "password": "pw"}]}}}))  # fmt: skip
+    proc = subprocess.Popen([server, "-c", str(open_conf)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)  # fmt: skip
+    try:
+        import socket
+        import time
+
+        for _ in range(100):
+            try:
+                socket.create_connection((LOOP, port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.05)
+        anyone = _Nats(port, "root-ish", "pw")
+        try:
+            purge = anyone.request("$JS.API.STREAM.PURGE.LAB", None)
+            assert purge["error"]["description"] == "stream purge not permitted", purge
+            delete = anyone.request("$JS.API.STREAM.MSG.DELETE.LAB", {"seq": 1})
+            assert delete["error"]["description"] == "message delete not permitted", delete
+            cfg = anyone.request("$JS.API.STREAM.INFO.LAB", None)["config"]
+            for flag, why in (("deny_delete", "can not cancel deny message deletes"),
+                              ("deny_purge", "can not cancel deny purge")):  # fmt: skip
+                got = anyone.request("$JS.API.STREAM.UPDATE.LAB", {**cfg, flag: False})
+                assert why in got["error"]["description"], got
+        finally:
+            anyone.close()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
 
 
 def test_the_playbook_parses_and_targets_capability_groups():
@@ -362,32 +603,103 @@ def _me():
 
 
 def test_broker_bad_manifest_never_replaces_the_live_one(tmp_path):
-    """The manifest is staged beside the live one and validated by the release's own
-    ``hnx broker validate`` before it is copied over it: a manifest that fails validation stops
-    the play and the running broker's manifest is untouched."""
+    """The manifest and its handlers are staged together (``staged/``, so the manifest's
+    ``handlers/`` resolve against the staged handlers) and validated by the release's own
+    ``hnx broker validate`` before either is copied over the live ones: a set that fails
+    validation stops the play and the running broker's manifest and handlers are untouched."""
     user, group = _me()
     conf = tmp_path / "etc"
-    conf.mkdir()
+    (conf / "handlers").mkdir(parents=True)
     (conf / "manifest.yml").write_text("manifest_id: live\n")
-    # the release's hnx: `broker validate PATH` refuses a manifest that says bad
-    hnx = fake(tmp_path / "hnx", "import sys\n"
+    # the release's hnx: `broker validate PATH` refuses a manifest that says bad, or whose
+    # handler (beside it, in handlers/) says bad
+    hnx = fake(tmp_path / "hnx", "import os, sys\n"
                "assert sys.argv[1:3] == ['broker', 'validate'], sys.argv\n"
-               "sys.exit(1 if 'bad' in open(sys.argv[3]).read() else 0)\n")  # fmt: skip
+               "h = os.path.join(os.path.dirname(sys.argv[3]), 'handlers', 'run.sh')\n"
+               "texts = [open(sys.argv[3]).read()] + ([open(h).read()] if os.path.exists(h) else [])\n"
+               "sys.exit(1 if any('bad' in t for t in texts) else 0)\n")  # fmt: skip
+    src = tmp_path / "src"
+    src.mkdir()
+    handler = src / "run.sh"
     base = {"broker_config_dir": str(conf), "broker_hnx_bin": hnx, "broker_group": group,
-            "broker_config_owner": user}  # fmt: skip
+            "broker_config_owner": user, "broker_handlers": [str(handler)]}  # fmt: skip
     good, bad = tmp_path / "good.yml", tmp_path / "bad.yml"
     good.write_text("manifest_id: next\n")
     bad.write_text("manifest_id: bad\n")
+    handler.write_text("#!/bin/sh\necho v1\n")
 
     r = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(good)})
     assert r.returncode == 0, r.stdout + r.stderr
     assert (conf / "manifest.yml").read_text() == "manifest_id: next\n"
+    assert (conf / "handlers" / "run.sh").read_text() == "#!/bin/sh\necho v1\n"
     again = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(good)})
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+    check = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(good)},
+                     check=True)  # fmt: skip
+    assert check.returncode == 0 and "changed=0" in check.stdout, check.stdout
 
     r = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(bad)})
     assert r.returncode != 0, r.stdout
     assert (conf / "manifest.yml").read_text() == "manifest_id: next\n"
+    # a handler the new set fails on never reaches handlers/ either
+    handler.write_text("#!/bin/sh\necho bad\n")
+    r = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(good)})
+    assert r.returncode != 0, r.stdout
+    assert (conf / "handlers" / "run.sh").read_text() == "#!/bin/sh\necho v1\n"
+    assert (conf / "manifest.yml").read_text() == "manifest_id: next\n"
+
+
+def test_broker_restore_keeps_the_relay_reaching_the_outbox(tmp_path):
+    """``restore`` copies the backup over the state directory (giving what it writes the broker's
+    user and group and the backup's modes, the directory itself included), then puts back what
+    main sets: the state directory in the relay's group, 0710 (else the relay cannot reach
+    outbox/), outbox/ and relay/ setgid 2750.  The copy is a merge: a consumed approval the
+    backup does not have is not undone."""
+    user, group = _me()
+    # the relay's group: a second group of this user when it has one (CI's runner does), so the
+    # test tells the relay's group from the broker's; otherwise the same, and the modes decide
+    others = [grp.getgrgid(g).gr_name for g in os.getgroups() if g != os.getgid()]
+    relay_group = others[0] if others else group
+    root, data = tmp_path / "lib", tmp_path / "agents"
+    state = root / "state"
+    for d, mode in ((root, 0o710), (state, 0o710), (state / "outbox", 0o2750),
+                    (state / "relay", 0o2750), (state / "consumed", 0o700), (data, 0o750)):  # fmt: skip
+        d.mkdir(parents=True, exist_ok=True)
+        os.chown(
+            d,
+            -1,
+            grp.getgrnam(relay_group if d in (root, state, state / "outbox") else group).gr_gid,
+        )
+        d.chmod(mode)
+    (state / "consumed" / "req-after-the-backup").write_text("{}")
+    backup = tmp_path / "backup"
+    for d in (backup / "state" / "outbox", backup / "state" / "consumed", backup / "agents"):
+        d.mkdir(parents=True)
+    (backup / "state").chmod(0o700)
+    (backup / "state" / "outbox" / "0001.json").write_text("{}")
+    (backup / "state" / "consumed" / "req-before").write_text("{}")
+    (backup / "agents" / "note.md").write_text("x")
+    r = run_role(tmp_path, "broker", "restore", {
+        "broker_start": False, "broker_state_root": str(root), "broker_data_root": str(data),
+        "broker_user": user, "broker_group": group, "broker_relay_user": user,
+        "broker_relay_group": relay_group, "broker_restore_source": str(backup),
+    })  # fmt: skip
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    def mode_group(p):
+        st = p.stat()
+        return oct(st.st_mode & 0o7777), grp.getgrgid(st.st_gid).gr_name
+
+    assert mode_group(state) == ("0o710", relay_group)
+    assert mode_group(state / "outbox") == ("0o2750", relay_group)
+    assert mode_group(state / "relay")[0] == "0o2750"
+    assert mode_group(data) == ("0o750", group)
+    assert (state / "outbox" / "0001.json").is_file() and (data / "note.md").is_file()
+    # a merge, never a delete: what was consumed after the backup stays consumed
+    assert {p.name for p in (state / "consumed").iterdir()} == {
+        "req-before",
+        "req-after-the-backup",
+    }
 
 
 def _runtime_vars(tmp_path, python):

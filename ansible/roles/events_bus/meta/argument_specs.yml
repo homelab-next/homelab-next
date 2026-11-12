@@ -18,7 +18,7 @@ argument_specs:
       events_bus_users: &users
         type: list
         elements: dict
-        description: "The account's users: [{user, password_ref (secret:<name>), publish: [subjects], subscribe: [subjects]}]. Every user gets exactly these allow-lists and nothing else; replies come on _INBOX.<user>."
+        description: "The account's users: [{user, password_ref (secret:<name>), publish: [subjects], subscribe: [subjects], subscribe_only: bool}]. Every user gets exactly these allow-lists and nothing else; replies come on _INBOX.<user>. publish may be empty only for a user marked subscribe_only: true, whose publish is then deny-all (NATS reads an empty allow-list as no restriction). Subjects under $JS/$KV/$O/$SYS are refused except the named-stream JetStream calls of the hnx_bus_subject_problems filter."
         required: true
       events_bus_version: &version
         type: str
@@ -75,7 +75,7 @@ argument_specs:
         default: []
       events_bus_admin_user: &admin
         type: str
-        description: "The user that provisions the streams (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of them); empty: provision nothing."
+        description: "The user that provisions the streams (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of them; the only user validation lets hold STREAM.CREATE/UPDATE, CONSUMER.DELETE and CONSUMER.NAMES of a named stream); empty: provision nothing."
         default: ""
       events_bus_admin_password_ref:
         type: str
