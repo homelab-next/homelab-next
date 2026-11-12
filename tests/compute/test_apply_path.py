@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-"""What the first real apply (a guest file to a running VM on a standalone Proxmox VE 9 node with
-bpg/proxmox, then the baseline playbook) found missing from the renders.
+"""What the first real apply (a guest file to a running VM on a standalone hypervisor node through
+the terraform target's provider, then the baseline playbook) found missing from the renders.
 
 * A standalone node's Terraform must not carry another node's guests: ``--node`` renders one
   node's guests after the whole set has validated, and refuses a node nothing names.
@@ -24,12 +24,15 @@ import yaml
 from homelabnext import cli as hnx
 from homelabnext.compute import render
 from homelabnext.compute.loader import load_fleet
+from homelabnext.compute.render import TARGETS
 from homelabnext.compute.zones import site_facts
 
 HERE = Path(__file__).resolve().parent
 FLEET = HERE / "fleet"
 SITE = HERE / "site.yml"
 KEYS = HERE / "keys.yml"
+#: the Terraform target, named by its prefix (the slot, not the product: X-11)
+TF = next(t for t in TARGETS if t.startswith("terraform-"))
 
 
 @pytest.fixture(scope="module")
@@ -52,7 +55,7 @@ def _two_nodes(tmp_path: Path) -> Path:
 
 def _render_tf(guests: Path, out: Path, *extra: str) -> int:
     args = ["guests", "render", str(guests), "--site", str(SITE)]
-    return hnx.main([*args, "--target", "terraform-proxmox", "--out", str(out), *extra])
+    return hnx.main([*args, "--target", TF, "--out", str(out), *extra])
 
 
 def test_node_renders_only_the_guests_placed_on_it(tmp_path):
@@ -81,7 +84,7 @@ def test_without_node_every_node_is_rendered(tmp_path):
 
 
 def test_user_data_snippet_replaces_user_account_when_it_cannot_express_the_guest(good):
-    tf = render(good, "terraform-proxmox")
+    tf = render(good, TF)
     # sudo: password, packages, and both: user_account would silently drop them
     for name in ("bus-core", "edge-core", "lake-core"):
         vm = tf[f"vm-{name}.tf"]
