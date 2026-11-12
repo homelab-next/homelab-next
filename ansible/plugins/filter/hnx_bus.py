@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import string
 
 _NAME = re.compile(r"[A-Za-z0-9_-]+\Z")
 #: one literal stream or consumer name
@@ -89,7 +90,7 @@ DOMAIN = "_"
 #: a v2 ack subject's account hash: the bus account's (:func:`hnx_bus_account_hash`)
 HASH = "<hash>"
 #: nats-server's getHash alphabet (server/accounts.go ``digits``, ``base`` 62)
-_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_DIGITS = string.digits + string.ascii_uppercase + string.ascii_lowercase
 
 
 def hnx_bus_account_hash(account) -> str:
