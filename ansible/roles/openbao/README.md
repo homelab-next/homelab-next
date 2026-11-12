@@ -102,9 +102,12 @@ instead. Its policy is read-only: it can save a snapshot and cannot restore one.
 principal** is separate: the operator mints its token for one restore, while present, and hands it
 in as `openbao_restore_token`; once every local check has passed, the hook asks the server whose
 it is (`auth/token/lookup-self`) and refuses it unless its policies are exactly `hnx-restore` (and
-`default`), it carries no identity policies, its use limit is 1 or 2 and its TTL at most 900
-seconds; it refuses it equal to the snapshot token. A refusal message names only plain policy
-names (`[a-z0-9_-]`, at most 64 characters) and counts the rest. A snapshot is only as readable as the unseal keys of the cluster that wrote
+`default`), it carries no identity policies, it has exactly one use left (it was minted with
+`-use-limit=2`: the server spends a use before it answers `lookup-self`, so such a token reports 1,
+and a `-use-limit=3` one, which would leave a spare restore after this one, reports 2 and is
+refused) and its TTL is at most 900 seconds; it refuses it equal to the snapshot token. A refusal
+message names only `hnx-restore` and `default` and counts any other policy, so a hostile server
+cannot have a token (or anything else) echoed into the logs. A snapshot is only as readable as the unseal keys of the cluster that wrote
 it.
 
 **Handing in a token** (`openbao_restore_token`, `openbao_snapshot_token`): never as
@@ -123,8 +126,11 @@ shred -u /dev/shm/hnx-restore.yml
 (or `vars_prompt`, or `"{{ lookup('env', 'HNX_RESTORE_TOKEN') }}"` from a variable set by
 `read -rs`; never typed onto a command line). `-use-limit=2` is what a restore spends: the
 `lookup-self` check and the restore itself; the token is useless afterwards even within its TTL.
-Both uses come after every local check, and a run the lookup confirmed that then does not reach
-the restore (the pre-restore snapshot failed) revokes the token itself (`auth/token/revoke-self`).
+Both uses come after every local check, and a run the lookup confirmed whose restore then does
+not succeed (the pre-restore snapshot failed, or the restore request itself, which may or may not
+have landed) revokes the token itself (`auth/token/revoke-self`; a 403 means it is already spent).
+The staged copy is removed before that, and a revoke the server does not answer (sealed,
+unreachable) is reported, not fatal: revoke the token by hand once it answers, or let its TTL end.
 **A refused restore needs a freshly minted token**: a run refused before the lookup leaves the
 token unused but live until its TTL (the role does not revoke a token it has not confirmed is the
 restore principal's: it could be anyone's), so destroy it and mint another.
@@ -136,12 +142,17 @@ link: another name is another way to rewrite it), owned by `openbao_owner` (root
 "Writable by nobody else" holds for the whole path: every directory from `/` down to the source
 must be owned by `openbao_owner` or root and writable by neither its group nor others (or be
 root's with the sticky bit, as `/tmp`), so nobody else can swap a name on the way either; this
-matters most with `openbao_restore_source_unrestricted`. They are then copied into a fresh
+matters most with `openbao_restore_source_unrestricted`, which waives the location but not the
+filesystem: the source and its manifest must be on `openbao_backup_dir`'s own filesystem (the same
+device), and that not a FUSE or user mount (`findmnt`: a FUSE type, or a `user`, `users` or
+`user_id` option), since a mount someone else controls serves whatever bytes they like whatever the
+modes say. Beyond that the role cannot vouch for the filesystem; it is the operator's. They are then copied into a fresh
 root-only (0700) staging directory under `openbao_backup_dir`, and stat'ed again: a source or
 manifest that is no longer the same file (device, inode, size, mtime, ctime) was changed during
 the copy and is refused. The sha256, the manifest checks and the restore all read that copy, which
-is removed afterwards (and a staging directory a killed run left is swept at the start of the
-next restore), so the bytes restored are the bytes checked even if the source changes meanwhile. The manifest's sha256 protects against **corruption, not
+is removed afterwards (and a staging directory a killed run left is swept at the start of a later
+restore, once it is older than any restore can still be running, `2 x openbao_snapshot_timeout +
+10 x openbao_health_timeout`, so a concurrent restore's is left alone), so the bytes restored are the bytes checked even if the source changes meanwhile. The manifest's sha256 protects against **corruption, not
 tampering**: the manifest is unauthenticated, and whoever can rewrite a snapshot can rewrite its
 manifest too. What protects a snapshot from tampering is where it lives (root's alone) and the
 barrier: a snapshot is encrypted with this cluster's keys, and a forged one does not restore
@@ -175,7 +186,9 @@ A rollback needs **both**: point the pin back with `openbao_allow_downgrade: tru
 old release (the `restore` hook); the old release's directory stays for that. The switch alone,
 without the restore, leaves the old release on storage the new one may have rewritten. That run
 lowers the release record to the old pin once the old release answers, so leave
-`openbao_allow_downgrade` off again afterwards: later runs need it no more.
+`openbao_allow_downgrade` off again afterwards: later runs need it no more. The lowered record is
+not tied to proof that the pre-upgrade snapshot was restored: the role cannot tell a rollback that
+did the restore from one that skipped it, so the restore is the operator's step to confirm.
 
 If the old release cannot start or unseal on the newer storage, start it on empty storage instead
 and restore into that:

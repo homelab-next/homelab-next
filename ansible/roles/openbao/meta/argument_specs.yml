@@ -159,7 +159,7 @@ argument_specs:
         default: /var/backups/openbao/export
       openbao_restore_source_unrestricted: &unrestricted
         type: bool
-        description: "restore hook: restore from a file outside openbao_backup_dir and openbao_export_dir. The source must still be a regular file with one name, owned by openbao_owner and writable by nobody else, under directories (from / down) owned by openbao_owner or root and writable by nobody else (or root's with the sticky bit); it is copied into a root-only staging directory, and that copy is what is checked and restored."
+        description: "restore hook: restore from a file outside openbao_backup_dir and openbao_export_dir, but on openbao_backup_dir's own filesystem (the same device), and that not a FUSE or user mount (findmnt). The source must still be a regular file with one name, owned by openbao_owner and writable by nobody else, under directories (from / down) owned by openbao_owner or root and writable by nobody else (or root's with the sticky bit); it is copied into a root-only staging directory, and that copy is what is checked and restored."
         default: false
       openbao_restore_force: &force
         type: bool
@@ -231,7 +231,7 @@ argument_specs:
       openbao_snapshot_timeout: *stimeout
       openbao_restore_token:
         type: str
-        description: "A token of the RESTORE principal (policy hnx-restore: update on sys/storage/raft/snapshot, and snapshot-force only if needed), minted by the operator for this one restore while present (-use-limit=2, -ttl=15m: refused with identity policies, without a use limit of 1 or 2, or with a TTL over 900 s). Never the snapshot principal's token (refused when equal). Never logged. A refused restore needs a freshly minted token."
+        description: "A token of the RESTORE principal (policy hnx-restore: update on sys/storage/raft/snapshot, and snapshot-force only if needed), minted by the operator for this one restore while present (minted with -use-limit=2, -ttl=15m: refused with identity policies, unless lookup-self reports exactly one use left (the server spends one answering it, so a -use-limit=2 token reports 1), or with a TTL over 900 s). Never the snapshot principal's token (refused when equal). Never logged. A refused restore needs a freshly minted token."
         required: true
         no_log: true
       openbao_restore_source:

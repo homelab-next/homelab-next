@@ -25,10 +25,12 @@
 # one restore while present (policy hnx-restore, -use-limit=2, -ttl=15m: README.md). Its two uses
 # are spent last, after every local check: auth/token/lookup-self just before the pre-restore
 # snapshot (refused unless its policies are exactly hnx-restore (and default), it carries no
-# identity policies, its use limit is 1 or 2 and its TTL at most 900 s), then the POST. Once the
-# lookup has said it is the restore principal's, a run that does not reach the POST revokes it
-# (always:); a run refused before the lookup leaves it unused. Either way a refused restore needs
-# a freshly minted token. The snapshot principal cannot restore. A snapshot of this same cluster is
+# identity policies, it has exactly one use left (the server spends a use before it answers
+# lookup-self, so a -use-limit=2 token reports 1) and its TTL is at most 900 s), then the POST.
+# Once the lookup has said it is the restore principal's, a run whose POST did not succeed
+# revokes it (always:, after the staging directory is gone; a failed revoke is reported, never
+# fatal: a sealed or unreachable server must not skip the cleanup); a run refused before the
+# lookup leaves it unused. Either way a refused restore needs a freshly minted token. The snapshot principal cannot restore. A snapshot of this same cluster is
 # restored as is; one from another cluster (a rebuilt server, the restore zone) needs
 # openbao_restore_force (sys/storage/raft/snapshot-force), and afterwards the server answers to
 # THAT cluster's unseal keys.
@@ -42,6 +44,8 @@
       ansible.builtin.set_fact:
         openbao_restore_confirmed: false
         openbao_restore_posted: false
+    # Created (and its mode set) before any check refuses the run, deliberately: the sweep below
+    # and the staging directory need it, and it is root's alone either way.
     - name: Create the backup directory (root's alone; the staging directory goes under it)
       ansible.builtin.file:
         path: "{{ openbao_backup_dir }}"
@@ -49,6 +53,9 @@
         owner: "{{ openbao_owner }}"
         group: "{{ openbao_owner_group }}"
         mode: "0700"
+    # Only a staging directory older than any restore can still be running is swept: a concurrent
+    # restore's (its last file is copied in before its health and lookup requests, its pre-restore
+    # snapshot and its POST, each bounded by a timeout) is left alone.
     - name: Find staging directories an earlier, killed restore left
       ansible.builtin.find:
         paths: ["{{ openbao_backup_dir }}"]
@@ -56,6 +63,7 @@
         file_type: directory
         hidden: true
         recurse: false
+        age: "{{ 2 * (openbao_snapshot_timeout | int) + 10 * (openbao_health_timeout | int) }}s"
       register: openbao_restore_stale
     - name: Remove them (the root-only ones, owned by openbao_owner with mode 0700)
       ansible.builtin.file:
@@ -148,6 +156,40 @@
           or openbao_restore_real.stdout_lines[1] != openbao_restore_source ~ '.json'
           else 'is not under ' ~ openbao_restore_real.stdout_lines[2] ~ ' or ' ~ openbao_restore_real.stdout_lines[3]
           ~ ' (set openbao_restore_source_unrestricted: true to restore from elsewhere)' }}
+    # Unrestricted: the role cannot vouch for an arbitrary filesystem (a FUSE daemon or a user's
+    # mount serves whatever bytes its owner likes, whatever the modes say), so the source must be
+    # on openbao_backup_dir's own filesystem, and that not a FUSE or user mount (README.md).
+    - name: Read the backup directory's filesystem (an unrestricted source must be on it)
+      ansible.builtin.stat:
+        path: "{{ openbao_backup_dir }}"
+        follow: false
+        get_checksum: false
+      register: openbao_restore_backup_stat
+      when: openbao_restore_source_unrestricted | bool
+    - name: Read the mount an unrestricted source is on
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, "FSTYPE,OPTIONS", -T, "{{ openbao_restore_source }}"]
+      register: openbao_restore_mount
+      changed_when: false
+      check_mode: false  # read-only
+      when: openbao_restore_source_unrestricted | bool
+    - name: Refuse an unrestricted source on another filesystem, a FUSE mount or a user mount
+      ansible.builtin.assert:
+        that:
+          - openbao_restore_same_fs | bool
+          - not openbao_restore_fs[0] | default('') is match('fuse')
+          - (openbao_restore_fs[1] | default('')).split(',') | select('match', '^(user|users|user_id)(=|$)') | list | length == 0
+        fail_msg: >-
+          openbao: {{ openbao_restore_source }} is {{ 'not on the filesystem of ' ~ openbao_backup_dir
+          if not openbao_restore_same_fs | bool else 'on a FUSE or user mount' }}: an unrestricted
+          source must be on openbao_backup_dir's own filesystem, and that not a FUSE or user mount:
+          refused
+      vars:
+        openbao_restore_fs: "{{ (openbao_restore_mount.stdout | default('')).split() }}"
+        openbao_restore_same_fs: >-
+          {{ openbao_restore_inputs.results[0].stat.dev == openbao_restore_backup_stat.stat.dev
+             and openbao_restore_inputs.results[1].stat.dev == openbao_restore_backup_stat.stat.dev }}
+      when: openbao_restore_source_unrestricted | bool
     - name: Read every directory from / down to the source
       ansible.builtin.stat:
         path: "{{ '/' ~ (openbao_restore_source.split('/')[1:-1][:item] | join('/')) }}"
@@ -291,29 +333,35 @@
               - openbao_restore_lookup.policies is sequence and openbao_restore_lookup.policies is not string
               - openbao_restore_lookup.policies | difference(['default']) | sort == ['hnx-restore']
               - openbao_restore_lookup.identity_policies | length == 0
-              - openbao_restore_lookup.num_uses in [1, 2]
+              - openbao_restore_lookup.num_uses == 1
               - openbao_restore_lookup.ttl > 0 and openbao_restore_lookup.ttl <= 900
             fail_msg: >-
               openbao: openbao_restore_token is not a token of the restore principal alone, for this
               one restore ({{
                 'the server does not know it' if not openbao_restore_lookup.known
-                else 'its policies are ' ~ (openbao_restore_shown | join(', ') or 'none')
-                     ~ ((' and ' ~ (openbao_restore_lookup.policies | length - openbao_restore_shown | length) ~ ' not shown')
-                        if openbao_restore_shown | length != openbao_restore_lookup.policies | length else '')
+                else 'its policies are ' ~ (((openbao_restore_shown | join(', '))
+                     ~ (' and ' if openbao_restore_shown and openbao_restore_others | int else '')
+                     ~ ((openbao_restore_others ~ (' other' if openbao_restore_others | int == 1 else ' others'))
+                        if openbao_restore_others | int else '')) or 'none')
                   if openbao_restore_lookup.policies | difference(['default']) | sort != ['hnx-restore']
                 else 'it carries ' ~ (openbao_restore_lookup.identity_policies | length) ~ ' identity policies'
                   if openbao_restore_lookup.identity_policies | length > 0
-                else 'its use limit is ' ~ (openbao_restore_lookup.num_uses or 'none') ~ ' (mint it with -use-limit=2)'
-                  if openbao_restore_lookup.num_uses not in [1, 2]
+                else ('it has no use limit' if not openbao_restore_lookup.num_uses
+                      else 'it has ' ~ openbao_restore_lookup.num_uses ~ ' uses left after the lookup, not 1')
+                     ~ ' (mint it with -use-limit=2)'
+                  if openbao_restore_lookup.num_uses != 1
                 else 'its TTL is ' ~ ((openbao_restore_lookup.ttl ~ ' s') if openbao_restore_lookup.ttl else 'unlimited')
                      ~ ', over 900 s (mint it with -ttl=15m)' }}):
               mint one with `bao token create -policy=hnx-restore -ttl=15m -orphan -use-limit=2` (README.md)
           vars:
-            # a policy name is printed only if it is a plain one: whatever else the server says
-            # is counted, never echoed
-            openbao_restore_shown: >-
-              {{ (openbao_restore_lookup.policies | default([]) | select('string') | select('match', '^[a-z0-9_-]{1,64}\Z') | list)
-                 if openbao_restore_lookup.policies | default([]) is sequence else [] }}
+            # only the two expected names are ever printed: whatever else the server says (another
+            # policy, or the token itself echoed back transformed) is counted, never echoed
+            openbao_restore_policy_list: >-
+              {{ openbao_restore_lookup.policies | default([])
+                 if openbao_restore_lookup.policies | default([]) is sequence
+                    and openbao_restore_lookup.policies | default([]) is not string else [] }}
+            openbao_restore_shown: "{{ openbao_restore_policy_list | select('in', ['default', 'hnx-restore']) | unique | sort | list }}"
+            openbao_restore_others: "{{ openbao_restore_policy_list | reject('in', ['default', 'hnx-restore']) | list | length }}"
         - name: Note that the restore token is the restore principal's (revoked below unless the restore spends it)
           ansible.builtin.set_fact:
             openbao_restore_confirmed: true
@@ -328,9 +376,6 @@
           vars:
             openbao_snapshot_dir: "{{ openbao_backup_dir }}"
             openbao_snapshot_name: "{{ openbao_restore_pre_name }}"
-        - name: Note that the restore token is spent on the restore from here on
-          ansible.builtin.set_fact:
-            openbao_restore_posted: true
         - name: Restore the staged copy (the restore principal, the second of its two uses)
           ansible.builtin.uri:
             url: "{{ openbao_api_addr }}/v1/sys/storage/raft/{{ 'snapshot-force' if openbao_restore_force | bool else 'snapshot' }}"
@@ -347,6 +392,10 @@
             timeout: "{{ openbao_snapshot_timeout | int }}"
           changed_when: true
           no_log: true
+        # only now: after a POST that failed (it may or may not have landed) the token is revoked
+        - name: Note that the restore token was spent on the restore
+          ansible.builtin.set_fact:
+            openbao_restore_posted: true
         - name: Report what was restored
           ansible.builtin.debug:
             msg: >-
@@ -355,7 +404,14 @@
               the state before it is in {{ openbao_backup_dir }}/{{ openbao_restore_pre_name }}.
               Run the health hook.
       always:
-        # 403: already dead (its TTL passed, or its uses spent): what the revoke is for
+        # first: nothing the server does (sealed, unreachable) may keep the staged copy on disk
+        - name: Remove the staging directory
+          ansible.builtin.file:
+            path: "{{ openbao_restore_staging.path }}"
+            state: absent
+          when: openbao_restore_staging.path is defined
+        # 403: already dead (its TTL passed, or its uses spent by a POST that landed): what the
+        # revoke is for. Any other answer, or none, is reported below and fails nothing.
         - name: Revoke the restore token a refused or failed run did not spend on the restore
           ansible.builtin.uri:
             url: "{{ openbao_api_addr }}/v1/auth/token/revoke-self"
@@ -367,12 +423,20 @@
             follow_redirects: none
             use_proxy: false
             timeout: "{{ openbao_health_timeout | int }}"
+          register: openbao_restore_revoke
           when: openbao_restore_confirmed | bool and not openbao_restore_posted | bool
+          failed_when: false
           changed_when: true
           no_log: true
-        - name: Remove the staging directory
-          ansible.builtin.file:
-            path: "{{ openbao_restore_staging.path }}"
-            state: absent
-          when: openbao_restore_staging.path is defined
+        - name: Report a restore token the server did not revoke
+          ansible.builtin.debug:
+            msg: >-
+              openbao {{ openbao_logical_id }}: could not revoke the restore token
+              ({{ ('HTTP ' ~ openbao_restore_revoke.status) if openbao_restore_revoke.status | default(-1) | int > 0
+              else 'no answer' }}); it stays live until its TTL (15 minutes at most): revoke it
+              (bao token revoke) once the server answers
+          when:
+            - openbao_restore_confirmed | bool and not openbao_restore_posted | bool
+            - openbao_restore_revoke is not skipped
+            - openbao_restore_revoke.status | default(-1) | int not in [200, 204, 403]
   tags: [restore]

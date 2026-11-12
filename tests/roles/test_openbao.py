@@ -18,10 +18,12 @@ import json
 import os
 import pwd
 import re
+import shutil
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -798,6 +800,7 @@ ODD_TOKENS = {
     "s.fake-restore-unlimited-6666": "unlimited",  # no use limit
     "s.fake-restore-long-ttl-7777": "long",  # a TTL over 15 minutes
     "s.fake-restore-odd-policy-8888": "odd",  # a policy name a message must not print
+    "s.fake-restore-spare-use-9999": "spare",  # -use-limit=3: a use would be left after the POST
 }
 ODD_POLICY = "evil\n{{ name }} <x>"
 SNAP = b"raft-snapshot-bytes"
@@ -821,6 +824,7 @@ LOOKUP = {
     "unlimited": {"policies": ["default", "hnx-restore"], "num_uses": 0, "ttl": 899},
     "long": {"policies": ["default", "hnx-restore"], "num_uses": 1, "ttl": 86400},
     "odd": {"policies": ["default", "hnx-restore", ODD_POLICY], "num_uses": 1, "ttl": 899},
+    "spare": {"policies": ["default", "hnx-restore"], "num_uses": 2, "ttl": 899},
 }  # fmt: skip
 
 
@@ -834,6 +838,8 @@ class Api:
         self.restored: list[tuple[str, bytes]] = []
         self.save_fails = False  # the server fails the save mid-stream (an internal error)
         self.on_save = None  # called before a snapshot is served (the swap test mutates a file)
+        self.restore_fails = False  # the server fails the restore POST (it may have landed)
+        self.revoke_status = None  # what revoke-self answers instead (503: sealed)
 
     def who(self, h) -> str:
         tokens = {TOKEN: "snapshot", MINTED: "minted", RESTORE_TOKEN: "restore", **ODD_TOKENS}
@@ -864,8 +870,12 @@ class Api:
         if method == "POST" and path.startswith("/v1/sys/storage/raft/snapshot"):
             if who != "restore":
                 return 403, {"errors": ["permission denied"]}
+            if self.restore_fails:
+                return 500, {"errors": ["internal error"]}
             self.restored.append((path.rsplit("/", 1)[1], data))
             return 204, None
+        if method == "POST" and path == "/v1/auth/token/revoke-self" and self.revoke_status:
+            return self.revoke_status, {"errors": ["Vault is sealed"]}
         if method == "POST" and path == "/v1/auth/token/revoke-self":
             return (204, None) if who in ("minted", "restore") else (403, {"errors": ["x"]})
         return 404, {"errors": []}
@@ -1013,10 +1023,13 @@ def test_restore_checks_the_manifest_takes_a_pre_restore_snapshot_then_restores(
     tmp_path, pki, force
 ):
     src = restore_case(tmp_path)
-    stale = tmp_path / "backup" / ".restore-staging-killed"  # what a killed run left
-    stale.mkdir(parents=True)
-    (stale / "raft.snap").write_bytes(SNAP)
-    stale.chmod(0o700)
+    stale = tmp_path / "backup" / ".restore-staging-killed"  # what a killed run left, a day ago
+    running = tmp_path / "backup" / ".restore-staging-running"  # a concurrent restore's, just made
+    for d in (stale, running):
+        d.mkdir(parents=True)
+        (d / "raft.snap").write_bytes(SNAP)
+        d.chmod(0o700)
+    os.utime(stale, (stale.stat().st_atime - 86400, stale.stat().st_mtime - 86400))
     with fake_api(pki) as (url, api):
         v = snap_vars(
             tmp_path, pki, url, openbao_snapshot_token=TOKEN, openbao_restore_token=RESTORE_TOKEN,
@@ -1038,9 +1051,9 @@ def test_restore_checks_the_manifest_takes_a_pre_restore_snapshot_then_restores(
     assert re.fullmatch(r"pre-restore-\d{8}T\d{6}Z\.snap", pre.name)
     assert pre.read_bytes() == SNAP and json.loads(pre.with_name(pre.name + ".json").read_text())
     assert f"the state before it is in {tmp_path}/backup/{pre.name}" in r.stdout
-    assert not list(
-        (tmp_path / "backup").glob(".restore-staging-*")
-    )  # staged and stale copies gone
+    # the staged and the stale copies are gone; a concurrent restore's (younger than
+    # 2 x openbao_snapshot_timeout + 10 x openbao_health_timeout) is left alone
+    assert list((tmp_path / "backup").glob(".restore-staging-*")) == [running]
 
 
 @pytest.mark.parametrize(
@@ -1085,7 +1098,8 @@ def test_restore_needs_the_restore_principal_not_the_snapshot_one(tmp_path, pki)
     assert missing.returncode != 0 and "openbao_restore_token" in missing.stdout
     assert same.returncode != 0 and "never the snapshot principal" in same.stdout, same.stdout
     # the server says whose it is: hnx-snapshot, so it never reaches the restore endpoint
-    assert other.returncode != 0 and "its policies are default, hnx-snapshot" in other.stdout
+    # (only default and hnx-restore are ever named: anything else is counted)
+    assert other.returncode != 0 and "its policies are default and 1 other)" in other.stdout
     assert api.restored == []
     assert [q for q in api.requests if q[0] == "POST" and "raft" in q[1]] == []
 
@@ -1163,7 +1177,69 @@ def test_a_confirmed_restore_token_is_revoked_when_the_restore_is_not_reached(tm
     assert api.restored == [] and not any(x in r.stdout + r.stderr for x in SECRETS)
 
 
+def test_a_failed_restore_post_still_revokes_and_a_sealed_server_skips_no_cleanup(tmp_path, pki):
+    """The restore POST fails (it may or may not have landed), so the token is not known spent:
+    it is revoked. The server then answers the revoke sealed (503): that is reported, not fatal,
+    and the staged copy is already gone (removed first)."""
+    src = restore_case(tmp_path)
+    with fake_api(pki) as (url, api):
+        api.restore_fails = True
+        api.revoke_status = 503
+        r = run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, pki, url, src))
+    assert r.returncode != 0
+    assert [q for q in api.requests if q[1] != "/v1/sys/health"] == [
+        ("GET", "/v1/auth/token/lookup-self", "restore"),
+        ("GET", "/v1/sys/storage/raft/snapshot", "snapshot"),
+        ("POST", "/v1/sys/storage/raft/snapshot", "restore"),
+        ("POST", "/v1/auth/token/revoke-self", "restore"),
+    ]
+    assert "could not revoke the restore token (HTTP 503)" in r.stdout, r.stdout
+    assert not list((tmp_path / "backup").glob(".restore-staging-*"))
+    assert not any(x in r.stdout + r.stderr for x in SECRETS)
+
+
+def test_an_unrestricted_source_on_another_filesystem_is_refused(tmp_path, pki):
+    """openbao_restore_source_unrestricted waives the location, not the filesystem: a source on
+    another one than openbao_backup_dir's (here: /dev/shm) is refused before the token is used."""
+    shm = Path("/dev/shm")
+    if not shm.is_dir() or shm.stat().st_dev == tmp_path.stat().st_dev:
+        pytest.skip("no /dev/shm on a filesystem of its own")
+    (tmp_path / "backup").mkdir()
+    d = Path(tempfile.mkdtemp(prefix="hnx-openbao-", dir=shm))
+    try:
+        src = d / "raft.snap"
+        src.write_bytes(SNAP)
+        m = {
+            "kind": "raft-snapshot",
+            "sha256": hashlib.sha256(SNAP).hexdigest(),
+            "written_by": "2.7.1",
+        }
+        src.with_name("raft.snap.json").write_text(json.dumps(m))
+        with fake_api(pki) as (url, api):
+            v = restore_vars(tmp_path, pki, url, src, openbao_restore_source_unrestricted=True)
+            r = run_role(tmp_path, ROLE, "restore", v)
+    finally:
+        shutil.rmtree(d)
+    assert r.returncode != 0 and f"is not on the filesystem of {tmp_path}/backup" in r.stdout, (
+        r.stdout
+    )
+    assert [q for q in api.requests if q[1] != "/v1/sys/health"] == []
+
+
 UNSAFE_DIR = "lies under a directory that is not owned by"
+# findmnt as it answers for a FUSE and a user mount (a source under a directory so named); the real
+# one for every other path
+FINDMNT = r"""
+import os, sys
+path = sys.argv[-1]
+mounts = {"/fuse-mount/": "fuse.sshfs rw,nosuid,nodev,user_id=1000,group_id=1000",
+          "/user-mount/": "ext4 rw,nosuid,nodev,relatime,user=alice"}
+for k, v in mounts.items():
+    if k in path:
+        print(v)
+        sys.exit(0)
+os.execv(REAL, [REAL, *sys.argv[1:]])
+"""
 REFUSED_SOURCES = {
     "world-writable": "writable by its group or by others (mode 0666)",
     "group-writable manifest": "writable by its group or by others (mode 0664)",
@@ -1176,9 +1252,12 @@ REFUSED_SOURCES = {
     "sticky directory not root's": UNSAFE_DIR,
     "unknown token": "the server does not know it",
     "identity": "it carries 1 identity policies",
-    "unlimited": "its use limit is none (mint it with -use-limit=2)",
+    "unlimited": "it has no use limit (mint it with -use-limit=2)",
     "long": "its TTL is 86400 s, over 900",
-    "odd": "its policies are default, hnx-restore and 1 not shown",
+    "odd": "its policies are default, hnx-restore and 1 other)",
+    "spare": "it has 2 uses left after the lookup, not 1 (mint it with -use-limit=2)",
+    "fuse mount": "is on a FUSE or user mount",
+    "user mount": "is on a FUSE or user mount",
 }
 
 
@@ -1227,12 +1306,22 @@ def test_restore_refuses_a_source_someone_else_could_have_written(tmp_path, pki)
             over["openbao_restore_token"] = UNKNOWN
         elif case in ODD_TOKENS.values():
             over["openbao_restore_token"] = next(t for t, w in ODD_TOKENS.items() if w == case)
+        elif case in ("fuse mount", "user mount"):  # FINDMNT answers for these directories
+            sub = d / case.replace(" ", "-")
+            sub.mkdir(mode=0o700)
+            for f in (src, src.with_name("raft.snap.json")):
+                f.rename(sub / f.name)
+            src = sub / "raft.snap"
+            over["openbao_restore_source_unrestricted"] = True
         # vars/main.yml's openbao_owner outranks run_cases' play variables: set it per case
         owner = {"openbao_owner": USER, "openbao_owner_group": GROUP}
         cases.append({"openbao_restore_source": str(src), **owner, **over})
+    (tmp_path / "bin").mkdir()
+    fake(tmp_path / "bin" / "findmnt", FINDMNT.replace("REAL", repr(shutil.which("findmnt"))))
+    env = {"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
     with fake_api(pki) as (url, api):
         v = restore_vars(tmp_path, pki, url, exp / "unset")
-        got = run_cases(tmp_path, ROLE, "restore", v, cases)
+        got = run_cases(tmp_path, ROLE, "restore", v, cases, env=env)
         assert api.restored == []
         assert not [q for q in api.requests if q[1] == "/v1/sys/storage/raft/snapshot"]
         # only the location is waived, and only explicitly
@@ -1398,7 +1487,13 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
                        openbao_restore_token=token("hnx-restore", 2), openbao_restore_source=str(src))  # fmt: skip
         wrong = dict(restore, openbao_restore_token=token("hnx-snapshot", 2))
         r = run_role(tmp_path, ROLE, "restore", wrong)
-        assert r.returncode != 0 and "its policies are default, hnx-snapshot" in r.stdout, r.stdout
+        assert r.returncode != 0 and "its policies are default and 1 other)" in r.stdout, r.stdout
+        # -use-limit=3: lookup-self answers 2 (it spent one), and a use would outlive the restore
+        spare = dict(restore, openbao_restore_token=token("hnx-restore", 3))
+        r = run_role(tmp_path, ROLE, "restore", spare)
+        assert r.returncode != 0 and "it has 2 uses left after the lookup, not 1" in r.stdout, (
+            r.stdout
+        )
         r = run_role(tmp_path, ROLE, "restore", restore)
         assert r.returncode == 0, r.stdout + r.stderr
         threading.Event().wait(2)

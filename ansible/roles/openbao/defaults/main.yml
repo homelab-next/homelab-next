@@ -89,7 +89,8 @@ openbao_snapshot_timeout: 300
 # cluster's unseal keys, and hnx-restore must also allow snapshot-force).
 openbao_restore_force: false
 # The restore hook restores only a file under openbao_backup_dir or openbao_export_dir unless this
-# is true; either way the source must be a regular file with one name, owned by openbao_owner and
+# is true (and even then only one on openbao_backup_dir's filesystem, not a FUSE or user mount);
+# either way the source must be a regular file with one name, owned by openbao_owner and
 # writable by nobody else, on a path whose every directory is openbao_owner's or root's and
 # writable by nobody else (or root's with the sticky bit), and what is checked and restored is a
 # root-only staged copy of it.
