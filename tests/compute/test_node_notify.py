@@ -173,16 +173,40 @@ def test_the_script_passes_shellcheck(tmp_path):
 # ------------------------------------------------------- the script against a fake pvesh
 # Each config entry is a file named after its API path; ``create`` refuses a name any target or
 # matcher already has (they share one namespace in notifications.cfg), ``set`` and ``delete`` need
-# the entry to exist (the built-in default-matcher is seeded), and ``--delete`` takes one key per
-# flag (pvesh 9 refuses ``--delete a,b``: "invalid configuration ID 'a,b'").
+# the entry to exist (the built-in default-matcher is seeded), ``--delete`` takes one key per
+# flag and may repeat (pvesh 9 refuses ``--delete a,b``: "invalid configuration ID 'a,b'"), each
+# key one the entry has, and ``--match-severity`` is one comma-joined list of Proxmox severities
+# (the form the live node took).  ``$STATE.testfail`` fails the test, ``$STATE.deletefail`` every
+# delete.
 PVESH_STUB = r"""#!/bin/sh
 echo "pvesh $*" >> "$LOG"
 verb="$1" path="$2"; shift 2
 f="$STATE$(printf '%s' "$path" | tr / _)"
+check_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --delete)
+        case "$2" in
+          disable|secret|header|comment|invert-match|match-calendar|match-field|match-severity) ;;
+          *) echo "invalid configuration ID '$2'" >&2; exit 255 ;;
+        esac ;;
+      --match-severity)
+        [ -n "$2" ] || { echo "match-severity: empty" >&2; exit 255; }
+        for s in $(printf '%s' "$2" | tr , ' '); do
+          case "$s" in info|notice|warning|error|unknown) ;;
+            *) echo "match-severity: value '$s' does not match the regex" >&2; exit 255 ;;
+          esac
+        done
+        case "$2" in ,*|*,|*,,*) echo "match-severity: empty item" >&2; exit 255 ;; esac ;;
+    esac
+    shift
+  done
+}
 case "$verb" in
   get) [ -e "$f" ] ;;
   create)
     case "$path" in */test) [ -e "$STATE.testfail" ] && { echo "500 Could not test target" >&2; exit 115; }; exit 0 ;; esac
+    check_args "$@"
     name=""
     while [ "$#" -gt 0 ]; do [ "$1" = --name ] && name="$2"; shift; done
     for e in "$STATE"*_"$name"; do
@@ -191,10 +215,7 @@ case "$verb" in
     touch "$f"_"$name" ;;
   set)
     [ -e "$f" ] || { echo "not found" >&2; exit 255; }
-    while [ "$#" -gt 0 ]; do
-      case "$1" in --delete) case "$2" in *,*) echo "invalid configuration ID" >&2; exit 255 ;; esac ;; esac
-      shift
-    done ;;
+    check_args "$@" ;;
   delete)
     [ -e "$STATE.deletefail" ] && { echo "500 could not delete" >&2; exit 255; }
     rm "$f" ;;
@@ -232,6 +253,8 @@ def node(tmp_path):
 
         return run
 
+    setup.bin = str(bin_)
+    setup.state = str(state)
     return setup
 
 
@@ -336,3 +359,43 @@ def test_the_script_refuses_bad_arguments(node, args):
     run = node(NOTIFY)
     r, calls = run(*args)
     assert r.returncode == 2 and calls == []
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("--match-severity", "warning,crit"),
+        ("--match-severity", "warning,,error"),
+        ("--match-severity", ""),
+        ("--delete", "disable,secret"),
+        ("--delete", "bogus"),
+    ],
+)
+def test_the_stub_refuses_what_pvesh_refuses(node, args):
+    # the stub is only evidence for the script if it refuses what the real node refuses
+    node(NOTIFY)
+    r = subprocess.run(
+        ["pvesh", "set", "/cluster/notifications/matchers/default-matcher", *args],
+        env={
+            **os.environ,
+            "PATH": f"{node.bin}:{os.environ['PATH']}",
+            "LOG": os.devnull,
+            "STATE": node.state,
+        },
+        capture_output=True,
+    )
+    assert r.returncode == 255
+
+
+def test_a_rerun_sends_a_comma_joined_severity_list_and_one_key_per_delete(node):
+    run = node(NOTIFY)
+    run()
+    r, calls = run()
+    assert r.returncode == 0, r.stderr
+    matcher = next(
+        c for c in calls if c.startswith("pvesh set /cluster/notifications/matchers/hnx")
+    )
+    assert "--match-severity warning,error,unknown " in matcher
+    assert matcher.count("--delete ") == 3
+    target = next(c for c in calls if c.startswith("pvesh set /cluster/notifications/endpoints"))
+    assert target.count("--delete ") == 2

@@ -202,28 +202,28 @@ nodes:
       default_mail: false                    # the default: turn off the built-in mail matcher
 ```
 
-`hnx guests render --target node-notify` writes `notify/<node>/hnx-notify.sh`. Run on the node
-as root, it creates or updates a webhook target `hnx-notify-<node>` that POSTs each notification
-to `url` as ntfy JSON (`topic`, `title` prefixed with the node name, `message`, `priority`, and the
+`hnx guests render --target node-notify` writes `notify/<node>/hnx-notify.sh`. Run on the node as
+root, it creates or updates a webhook target `hnx-notify-<node>` that POSTs each notification to
+`url` as ntfy JSON (`topic`, `title` prefixed with the node name, `message`, `priority`, and the
 tags `hypervisor` and the severity), and a matcher `hnx-notify-<node>-route` that sends the listed
 severities raised on this node (`match-field exact:hostname=<node>`) to it. It then sends a test
-notification through the target and stops (exit 1) if that is not delivered; only after a
-delivered test, and with `default_mail: false`, does it disable Proxmox's built-in
-`default-matcher`, so mail is never turned off in favour of a target that does not deliver. The
-test goes straight to the target and does not pass through the matcher: it proves the URL, the
-topic and the server, not that a real notification satisfies the severity and `hostname` match.
-The evidence that the matcher works is a live run on a Proxmox VE 9.2 node: a real failed `vzdump`
-job was routed through `hnx-notify-<node>-route` and arrived on the topic, and so did root's mail
-forwarded by `proxmox-mail-forward`. Replication, fencing and ZFS (ZED) notifications were not
-checked against the `hostname` match. A re-run
-leaves a correct config unchanged (and sends one more test) and undoes a hand edit of the two
-entries: a `disable`, an `invert-match`, a calendar rule, and any header or secret added to the
-target. `hnx-notify.sh --test` sends only the test; `--remove` first enables `default-matcher`
-again, whatever `default_mail` says now (it is the Proxmox default, and enabling an enabled matcher
-is harmless), then deletes this node's matcher and target, so a delete that fails leaves the node
-two routes, not none. Deleting `notify` from a node's entry renders no script for it at all, so
-nothing rendered afterwards can undo an earlier apply: to undo, run the old script's `--remove` on
-the node first, then delete the key.
+notification through the target and exits non-zero (with `pvesh`'s status) if that is not
+delivered; only after a delivered test, and with `default_mail: false`, does it disable Proxmox's
+built-in `default-matcher`, so mail is never turned off in favour of a target that does not
+deliver. The test goes straight to the target and does not pass through the matcher: it proves the
+URL, the topic and the server, not that a real notification satisfies the severity and `hostname`
+match. The evidence that the matcher works is a live run on a Proxmox VE 9.2 node: a real failed
+`vzdump` job was routed through `hnx-notify-<node>-route` and arrived on the topic, and so did
+root's mail forwarded by `proxmox-mail-forward`. Replication, fencing and ZFS (ZED) notifications
+were not checked against the `hostname` match. A re-run leaves a correct config unchanged but sends
+one more test, so the script is meant for a manual run or a deploy, not for cron; a re-run also
+undoes a hand edit of the two entries: a `disable`, an `invert-match`, a calendar rule, and any
+header or secret added to the target. `hnx-notify.sh --test` sends only the test; `--remove` first
+enables `default-matcher` again, whatever `default_mail` says now (it is the Proxmox default, and
+enabling an enabled matcher is harmless), then deletes this node's matcher and target, so a delete
+that fails leaves the node two routes, not none. Deleting `notify` from a node's entry renders no
+script for it at all, so nothing rendered afterwards can undo an earlier apply: to undo, run the
+old script's `--remove` on the node first, then delete the key.
 
 `notifications.cfg` is one file for every node of a Proxmox cluster. The names and the `hostname`
 match are per node, so two nodes never overwrite or answer for each other, but `default-matcher`

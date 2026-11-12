@@ -14,17 +14,18 @@ A node that declares ``notify: {url, topic, severities, priority, default_mail}`
 * ``hnx-notify.sh``: run on the node (as root), it creates or updates a webhook target
   ``hnx-notify-<node>`` that POSTs each notification as ntfy JSON (``topic``, ``title``,
   ``message``, ``priority``, ``tags``) to ``url``, and a matcher ``hnx-notify-<node>-route`` that
-  routes the listed severities raised on this node (``hostname`` field) to it.  No MTA is
-  involved.  It then sends a test notification through the target and stops (exit 1) if that
+  routes the listed severities raised on this node (``hostname`` field) to it.  No MTA is involved.
+  It then sends a test notification through the target and exits non-zero (pvesh's status) if that
   fails; only after a delivered test, and unless ``default_mail: true``, does it turn off the
   built-in ``default-matcher``, so mail is never turned off in favour of a target that does not
   deliver.  The test goes straight to the target, not through the matcher: it proves the server,
-  not the severity and ``hostname`` match (a real failed vzdump on a live node proved that).
-  A re-run changes nothing that is already right (and sends one more test).  ``--test``
-  sends only the test; ``--remove`` first turns ``default-matcher`` back on (whatever
-  ``default_mail`` says: the Proxmox default, harmless when it is already on), then deletes this
-  node's matcher and target.  A node whose ``notify`` is deleted from ``_nodes.yml`` renders no
-  script, so nothing rendered later can undo an apply: run the old script's ``--remove`` first.
+  not the severity and ``hostname`` match (a real failed vzdump on a live node proved that). A
+  re-run changes nothing that is already right but sends one more test, so the script is for a
+  manual run or a deploy, not for cron.  ``--test`` sends only the test; ``--remove`` first turns
+  ``default-matcher`` back on (whatever ``default_mail`` says: the Proxmox default, harmless when
+  it is already on), then deletes this node's matcher and target.  A node whose ``notify`` is
+  deleted from ``_nodes.yml`` renders no script, so nothing rendered later can undo an apply: run
+  the old script's ``--remove`` first.
 
 ``notifications.cfg`` is shared by every node of a cluster: the names and the ``hostname`` match
 are per node so two nodes never overwrite or answer for each other, but ``default-matcher`` is
@@ -108,8 +109,9 @@ def script(node: str, spec: dict) -> str:
         f"# {HEADER}",
         f"# Node {node}: send hypervisor notifications of severity {sev} to topic {topic}",
         f"# at {url} (webhook target {name}, matcher {matcher}).",
-        "# Idempotent; each apply ends with a test notification.  --test sends only the test;",
-        "# --remove takes this node's target and matcher off.",
+        "# Idempotent, but each apply ends with a test notification: run it by hand or from a",
+        "# deploy, not from cron.  --test sends only the test; --remove takes this node's target",
+        "# and matcher off and turns the built-in mail matcher back on.",
         "set -eu",
         f'NODE="{node}"',
         f'NAME="{name}"',
@@ -193,13 +195,14 @@ def readme(notifies: dict[str, dict]) -> str:
         L += [
             "Each node below sends its hypervisor notifications of the listed severities to the",
             "server's topic. Copy `<node>/hnx-notify.sh` to the node and run it as root; each run",
-            "ends with a test notification, and the built-in mail matcher is turned off only after",
-            "it was delivered. The server must accept publishing with no credential. A backup job",
-            "sends through this only with `notification-mode notification-system` (or `auto` with",
-            "no `mailto`). The node keeps no other route: watch the topic for the test.",
-            "`hnx-notify.sh --remove` turns the built-in mail matcher back on and deletes the",
-            "node's target and matcher. Deleting a node's `notify` renders no script for it, so",
-            "run the old script's `--remove` on the node before deleting the key.",
+            "ends with a test notification (so run it by hand or from a deploy, not from cron),",
+            "and the built-in mail matcher is turned off only after it was delivered. The server",
+            "must accept publishing with no credential. A backup job sends through this only with",
+            "`notification-mode notification-system` (or `auto` with no `mailto`). The node keeps",
+            "no other route: watch the topic for the test. `hnx-notify.sh --remove` turns the",
+            "built-in mail matcher back on and deletes the node's target and matcher. Deleting a",
+            "node's `notify` renders no script for it, so run the old script's `--remove` on the",
+            "node before deleting the key.",
             "",
             "| Node | Notify server | Topic | Severities | Built-in mail matcher |",
             "|---|---|---|---|---|",
