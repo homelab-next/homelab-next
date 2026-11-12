@@ -521,16 +521,17 @@ def test_the_monitor_imports_the_deletion_advisories_alone():
 def _detail(name, js=False, imports=()):
     """An ``/accountz?acc=`` answer as nats-server 2.15.1 gives it (its own $SYS imports, the
     $JS.API import from $SYS of an account without JetStream, then ``(account, subject[,
-    local subject])`` rows)."""
+    local subject[, type]])`` rows, a service import unless the row says otherwise)."""
     sys_ = [{"subject": f"$SYS.REQ.ACCOUNT.{name}.CONNZ", "account": "$SYS", "type": "service",
              "local_subject": "$SYS.REQ.ACCOUNT.PING.CONNZ"},
             {"subject": "$JS.API.>", "account": "$SYS", "type": "service",
              "local_subject": "$JS.API.>"}]  # fmt: skip
-    rows = [(r[0], r[1], r[2] if len(r) > 2 else r[1]) for r in imports]
+    rows = [(r[0], r[1], r[2] if len(r) > 2 else r[1], r[3] if len(r) > 3 else "service")
+            for r in imports]  # fmt: skip
     return {"account_detail": {"account_name": name, "jetstream_enabled": js,
                                "imports": sys_ + [{"subject": s, "account": a, "to": loc,
-                                                   "local_subject": loc, "type": "service"}
-                                                  for a, s, loc in rows]}}  # fmt: skip
+                                                   "local_subject": loc, "type": kind}
+                                                  for a, s, loc, kind in rows]}}  # fmt: skip
 
 
 def test_the_account_split_is_read_back_from_the_running_server():
@@ -547,7 +548,8 @@ def test_the_account_split_is_read_back_from_the_running_server():
                      ("HNX", "$JS.API.STREAM.INFO.LAB", "JS.HNX.API.STREAM.INFO.LAB")]  # fmt: skip
     details = [_detail("HNX", js=True), _detail("HNX-relay", imports=relay_imports),
                _detail("HNX-bridge", imports=[("HNX", "$JS.ACK.LAB.b.*.*.*.*.*")]),
-               _detail("HNX-watch", imports=[("HNX", s) for s in bus.MONITOR_SUBJECTS])]  # fmt: skip
+               _detail("HNX-watch", imports=[("HNX", s, s, "stream")
+                                             for s in bus.MONITOR_SUBJECTS])]  # fmt: skip
     connz = {"total": 2, "offset": 0,
              "connections": [{"cid": 1, "authorized_user": "adm", "account": "HNX"},
                              {"cid": 2, "authorized_user": "relay", "account": "HNX-relay"}]}  # fmt: skip
@@ -570,6 +572,10 @@ def test_the_account_split_is_read_back_from_the_running_server():
     assert any("imports from" in p for p in check(details=cross))
     bus_imports = [_detail("HNX", js=True, imports=[("HNX-relay", "x")]), *details[1:]]
     assert any("account HNX: imports" in p for p in check(details=bus_imports))
+    # the monitor's imports are streams: the same subjects imported as services are not them
+    as_services = [*details[:3], _detail("HNX-watch", imports=[("HNX", s)
+                                                               for s in bus.MONITOR_SUBJECTS])]  # fmt: skip
+    assert any("lacks" in p for p in check(details=as_services))
 
 
 def test_the_split_check_reads_the_import_subjects_too():
@@ -578,8 +584,8 @@ def test_the_split_check_reads_the_import_subjects_too():
     users = [{"user": "adm", "publish": ["$JS.API.STREAM.CREATE.LAB"]},
              {"user": "relay", "publish": ["lab.>", "$JS.API.STREAM.INFO.LAB"]}]  # fmt: skip
     rendered = [
-        ("HNX", "$JS.API.STREAM.INFO.LAB", "JS.HNX.API.STREAM.INFO.LAB"),
-        ("HNX", "lab.>", "lab.>"),
+        ("HNX", "$JS.API.STREAM.INFO.LAB", "JS.HNX.API.STREAM.INFO.LAB", "service"),
+        ("HNX", "lab.>", "lab.>", "service"),
     ]
     assert bus.hnx_bus_expected_imports(users, "adm", "HNX", "JS.HNX.API") == {
         "HNX": [], "HNX-relay": rendered}  # fmt: skip
@@ -605,6 +611,37 @@ def test_the_split_check_reads_the_import_subjects_too():
     assert check(rendered, "JS.OTHER.API")
 
 
+def test_the_split_check_compares_the_import_type_too():
+    """Round 7 follow-up (security N1): a hand-added STREAM import that mimics a service import
+    the role renders (same account, subject and local subject) would deliver every event the
+    other clients publish on that subject to this client; it is named, by its type."""
+    users = [{"user": "adm", "publish": ["$JS.API.STREAM.CREATE.LAB"]},
+             {"user": "relay", "publish": ["lab.homelabnext.>", "$JS.API.STREAM.INFO.LAB"]}]  # fmt: skip
+    rendered = [("HNX", "$JS.API.STREAM.INFO.LAB", "JS.HNX.API.STREAM.INFO.LAB", "service"),
+                ("HNX", "lab.homelabnext.>", "lab.homelabnext.>", "service")]  # fmt: skip
+    accountz = {"accounts": ["$G", "$SYS", "HNX", "HNX-relay"]}
+
+    def check(relay_imports):
+        details = [_detail("HNX", js=True), _detail("HNX-relay", imports=relay_imports)]
+        return bus.hnx_bus_account_problems(accountz, details, users, "adm", "HNX", "", {})
+
+    assert check(rendered) == []
+    mimic = ("HNX", "lab.homelabnext.>", "lab.homelabnext.>", "stream")
+    assert check([*rendered, mimic]) == [
+        "account HNX-relay: imports lab.homelabnext.> from HNX (a stream import), which the "
+        "role does not render"]  # fmt: skip
+    # the stream import instead of the service one: named, and the service one is missing
+    got = check([rendered[0], mimic])
+    assert any("(a stream import), which the role" in p for p in got), got
+    assert "account HNX-relay: lacks the imports lab.homelabnext.> from HNX" in got, got
+    # a server that does not say which type an import is is not taken for the rendered one
+    untyped = [{**i, "type": None} for i in _detail("HNX-relay", imports=rendered)[
+        "account_detail"]["imports"]]  # fmt: skip
+    details = [_detail("HNX", js=True),
+               {"account_detail": {"account_name": "HNX-relay", "imports": untyped}}]  # fmt: skip
+    assert bus.hnx_bus_account_problems(accountz, details, users, "adm", "HNX", "", {})
+
+
 def test_the_split_check_skips_a_connection_mid_handshake_and_sees_every_connection():
     """Round 7 (design 2, security F3): /connz lists a connection from the moment the server
     accepts it, before its CONNECT (no user, no account: what nats-server 2.15.1 shows for it);
@@ -627,6 +664,11 @@ def test_the_split_check_skips_a_connection_mid_handshake_and_sees_every_connect
     assert check({"total": 2, "connections": [pending, dict(adm, account="HNX-x")]}) == [
         "user adm: connected in account HNX-x, expected HNX"]  # fmt: skip
     assert check(None) == [] and check({}) == []
+    # round 7 follow-up (N2): only the first page is a view of every connection; a later page,
+    # complete as it may be from its offset on, never saw the ones before it
+    got = check({"total": 2, "offset": 1, "limit": 1, "connections": [adm]})
+    assert got == ["/connz returned a page from offset 1: the check cannot see the connections "
+                   "before it; read the first page (offset 0)"], got  # fmt: skip
 
 
 def test_a_stream_that_sends_its_messages_elsewhere_is_named():
@@ -646,9 +688,7 @@ def test_a_stream_that_sends_its_messages_elsewhere_is_named():
     assert bus.hnx_bus_stream_redirects(doc, "HNX") == [
         "TESTX: republish tx.a -> $JS.API.STREAM.DELETE.LAB", "M: mirror LAB",
         "S: sources LAB", "T: subject_transform t.> -> $JS.API.>"]  # fmt: skip
-    # one the inventory declares is not named (none does today); another account's is not ours
-    assert bus.hnx_bus_stream_redirects(doc, "HNX", ["M.mirror", "S.sources", "T.subject_transform",
-                                                     "TESTX.republish"]) == []  # fmt: skip
+    # another account's is not ours
     assert bus.hnx_bus_stream_redirects(doc, "HNX-x") == []
     assert bus.hnx_bus_stream_redirects(None, "HNX") == []
     # empty values are what a server without them may print: not a redirect

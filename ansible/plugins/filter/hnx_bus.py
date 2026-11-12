@@ -667,9 +667,12 @@ def hnx_bus_expected_accounts(users, admin_user, account, monitor_user="") -> di
 
 
 def hnx_bus_expected_imports(users, admin_user, account, api_prefix, monitor_user="") -> dict:
-    """``{account name: sorted [(from account, subject, local subject)]}``: the imports
+    """``{account name: sorted [(from account, subject, local subject, type)]}``: the imports
     :func:`hnx_bus_accounts` renders for ``users`` (``events_bus_users``: their publish lists),
-    the way ``/accountz?acc=<name>`` reports them (``account``, ``subject``, ``local_subject``)."""
+    the way ``/accountz?acc=<name>`` reports them (``account``, ``subject``, ``local_subject``,
+    ``type``: ``service`` or ``stream``).  The type is part of the import: a stream import of a
+    client's service subject (``lab.homelabnext.>``) would deliver it every event the others
+    publish there."""
     rendered = [
         {**u, "password_hash": ""} for u in users or [] if isinstance(u, dict) and "user" in u
     ]
@@ -678,9 +681,10 @@ def hnx_bus_expected_imports(users, admin_user, account, api_prefix, monitor_use
     for name, acc in hnx_bus_accounts(rendered, admin_user, account, api_prefix, monitor).items():
         rows = []
         for imp in acc.get("imports") or []:
-            src = imp.get("service") or imp.get("stream") or {}
+            kind = "service" if "service" in imp else "stream"
+            src = imp.get(kind) or {}
             subject = str(src.get("subject"))
-            rows.append((str(src.get("account")), subject, str(imp.get("to", subject))))
+            rows.append((str(src.get("account")), subject, str(imp.get("to", subject)), kind))
         out[name] = sorted(rows)
     return out
 
@@ -696,15 +700,18 @@ def hnx_bus_account_problems(accountz, details, users, admin_user, account, moni
       besides its own ``$G`` and ``$SYS``;
     * JetStream is on in the bus account alone; the bus account imports nothing, and every
       other account imports from the bus account exactly the subjects the role renders for its
-      user (:func:`hnx_bus_expected_imports`; the server's own ``$SYS`` imports aside): a
-      hand-added ``$JS.API.>`` import is named, not only one from another account;
+      user (:func:`hnx_bus_expected_imports`; the server's own ``$SYS`` imports aside), by
+      subject, local subject and type: a hand-added ``$JS.API.>`` import is named, not only one
+      from another account, and so is a stream import of a subject the role imports as a
+      service;
     * every connected user is in its own account: ``admin_user`` in the bus account, any other in
       ``<account>-<user>`` (``/accountz`` does not list an account's users; ``/connz`` shows
       the account each connection authenticated into).  A connection without a user has not
       finished its CONNECT yet (the server lists it from the moment it accepts it; it is closed
       unless it authenticates within the auth timeout) and is skipped: it can do nothing.
-      ``/connz`` returns at most its ``limit`` connections: when its ``total`` is more than it
-      returned, the check cannot see every connection and says so (a problem: it fails)."""
+      ``/connz`` returns at most its ``limit`` connections from its ``offset``: unless it is the
+      first page (offset 0) and its ``total`` is no more than it returned, the check cannot see
+      every connection and says so (a problem: it fails)."""
     out: list[str] = []
     prefix = api_prefix or f"JS.{account}.API"
     imports = hnx_bus_expected_imports(users, admin_user, account, prefix, monitor_user)
@@ -731,7 +738,7 @@ def hnx_bus_account_problems(accountz, details, users, admin_user, account, moni
             continue
         got = sorted(
             (str(i.get("account")), str(i.get("subject")),
-             str(i.get("local_subject") or i.get("to") or i.get("subject")))
+             str(i.get("local_subject") or i.get("to") or i.get("subject")), str(i.get("type")))
             for i in d.get("imports") or [] if i.get("account") != "$SYS"
         )  # fmt: skip
         extra = [r for r in got if r not in imports[name]]
@@ -748,7 +755,13 @@ def hnx_bus_account_problems(accountz, details, users, admin_user, account, moni
     doc = connz if isinstance(connz, dict) else {}
     conns = doc.get("connections") or []
     total = doc.get("total")
-    if isinstance(total, int) and total > int(doc.get("offset") or 0) + len(conns):
+    offset = doc.get("offset") or 0
+    if offset != 0:
+        out.append(
+            f"/connz returned a page from offset {offset}: the check cannot see the "
+            "connections before it; read the first page (offset 0)"
+        )
+    elif isinstance(total, int) and total > len(conns):
         out.append(
             f"/connz lists {total} connections and returned {len(conns)} (its limit): the "
             "check cannot see every connection; raise the limit in the health hook"
@@ -768,8 +781,9 @@ def hnx_bus_account_problems(accountz, details, users, admin_user, account, moni
 
 
 def _import_text(row) -> str:
-    acc, subject, local = row
-    return f"{subject} from {acc}" + (f" as {local}" if local != subject else "")
+    acc, subject, local, kind = row
+    text = f"{subject} from {acc}" + (f" as {local}" if local != subject else "")
+    return text if kind == "service" else f"{text} (a {kind} import)"
 
 
 #: a stream configuration that moves messages somewhere else: a republish, a mirror, sources, a
@@ -779,20 +793,18 @@ def _import_text(row) -> str:
 STREAM_REDIRECTS = ("republish", "mirror", "sources", "subject_transform")
 
 
-def hnx_bus_stream_redirects(jsz, account, declared=()) -> list[str]:
+def hnx_bus_stream_redirects(jsz, account) -> list[str]:
     """The streams of ``account`` (``/jsz?accounts=true&streams=true&config=true``) whose
-    configuration carries one of :data:`STREAM_REDIRECTS`: ``<stream>: <key> <what>`` for each.
-    ``declared``: the ``<stream>.<key>`` pairs the inventory declares (none today: the role's
-    streams take no such key), which are not reported.  The provisioner's ``STREAM.CREATE``
+    configuration carries one of :data:`STREAM_REDIRECTS`: ``<stream>: <key> <what>`` for each
+    (the role's streams take no such key, so every one is reported).  The provisioner's ``STREAM.CREATE``
     names the stream, and the server does not limit the body: whoever holds the provisioner's
     credential can create a declared stream that is missing with a republish into
     ``$JS.API``.  The health hook fails on any."""
     out: list[str] = []
-    allowed = {str(x) for x in declared or ()}
     for name, cfg in _stream_configs(jsz, account):
         for key in STREAM_REDIRECTS:
             value = cfg.get(key)
-            if value and f"{name}.{key}" not in allowed:
+            if value:
                 out.append(f"{name}: {key} {_redirect_text(value)}")
     return out
 
