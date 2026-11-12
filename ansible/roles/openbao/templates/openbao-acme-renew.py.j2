@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: openbao-acme-renew
+#   kind: job
+#   purpose: Renew OpenBao's public server certificate over ACME (DNS-01) when due, install it and reload the server with SIGHUP.
+#   owner: platform
+#   trigger: [timer:openbao/acme-renew, role:openbao]
+#   inputs: the DNS provider's token (environment, from the unit's root-only EnvironmentFile); lego's stored certificate
+#   outputs: the server certificate and key in the TLS directory; a reload (SIGHUP) of a running server
+#   installs_to: /usr/local/libexec/homelabnext/openbao-acme-renew
+#   exit:
+#     "0": the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid
+#     "1": with --check, the installed certificate is missing, invalid or due
+#     "2": lego failed, or what it stored is not a valid certificate for the names; nothing was installed
+#     "3": the certificate was installed but the running server could not be reloaded
+"""Managed by Ansible (role openbao); local changes are overwritten.
+
+Without arguments (the renewal unit): run lego, which renews only when fewer than the configured
+days remain (or the names changed); check what it stored (every name verified against the trust
+bundle, the key matching the certificate, not expired); when that differs from what the listener
+reads, install the key and the certificate (atomically, the key readable by the service account's
+group only) and reload a running server with ``systemctl reload`` (SIGHUP: it stays unsealed; a
+restart would seal it). ``--check``: is the INSTALLED certificate valid and not yet due? The role
+asks this before it starts the unit, so a converged host is left alone.
+
+The token reaches lego in its environment only (never an argument); nothing here prints it, and
+the reload runs without it."""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+CONF = json.loads({{ {
+    'lego': openbao_install_dir ~ '/lego/' ~ openbao_lego_version ~ '/lego',
+    'path': openbao_acme_dir,
+    'server': openbao_acme_server,
+    'email': openbao_acme_email,
+    'provider': openbao_acme_dns_provider,
+    'token_env': openbao_acme_token_env[openbao_acme_dns_provider],
+    'wait': openbao_acme_propagation_wait,
+    'renew_days': openbao_acme_renew_days | int,
+    'key_type': openbao_acme_key_type,
+    'domains': openbao_acme_domains,
+    'bundle': openbao_acme_trust_bundle,
+    'cert': openbao_tls_cert_file,
+    'key': openbao_tls_key_file,
+    'owner': openbao_owner,
+    'group': openbao_group,
+    'systemctl': openbao_systemctl_cli,
+    'service': openbao_service ~ '.service',
+} | to_json | to_json }})
+NAME = "openbao"  # lego's --cert.name: <path>/certificates/openbao.{crt,key}
+STORED_CERT = os.path.join(CONF["path"], "certificates", NAME + ".crt")
+STORED_KEY = os.path.join(CONF["path"], "certificates", NAME + ".key")
+PASS_ENV = ("PATH", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE")
+
+
+def openssl(*args, data=None):
+    return subprocess.run(["openssl", *args], input=data, capture_output=True, check=False)
+
+
+def problem(cert_path, key_path, due_days):
+    """Why the certificate at ``cert_path`` (leaf first, then its chain) is not usable, or None."""
+    try:
+        with open(cert_path, "rb") as f:
+            pem = f.read()
+    except OSError as e:
+        return f"cannot read {cert_path}: {e.strerror}"
+    end = b"-----END CERTIFICATE-----"
+    if end not in pem:
+        return f"{cert_path} holds no certificate"
+    leaf = pem[: pem.index(end) + len(end)] + b"\n"
+    with tempfile.NamedTemporaryFile(prefix="leaf-", suffix=".pem") as t:
+        t.write(leaf)
+        t.flush()
+        for name in CONF["domains"]:
+            r = openssl("verify", "-CAfile", CONF["bundle"], "-untrusted", cert_path,
+                        "-verify_hostname", name, "-purpose", "sslserver", t.name)  # fmt: skip
+            if r.returncode != 0:
+                return f"{cert_path} does not verify for {name} against {CONF['bundle']}"
+    r = openssl("x509", "-noout", "-checkend", str(due_days * 86400), data=leaf)
+    if r.returncode != 0:
+        return f"{cert_path} expires within {due_days} days"
+    want = openssl("x509", "-noout", "-pubkey", data=leaf).stdout
+    got = openssl("pkey", "-pubout", "-in", key_path)
+    if got.returncode != 0 or not want or got.stdout != want:
+        return f"{key_path} is not the key of {cert_path}"
+    return None
+
+
+def install(src, dest, mode):
+    """Copy ``src`` over ``dest`` atomically, owned by the owner and the service account's group."""
+    import grp
+    import pwd
+
+    uid, gid = pwd.getpwnam(CONF["owner"]).pw_uid, grp.getgrnam(CONF["group"]).gr_gid
+    with open(src, "rb") as f:
+        data = f.read()
+    fd, tmp = tempfile.mkstemp(prefix=".acme-", dir=os.path.dirname(dest))
+    try:
+        os.fchown(fd, uid, gid)
+        os.fchmod(fd, mode)
+        os.write(fd, data)
+        os.fsync(fd)
+        os.close(fd)
+        os.replace(tmp, dest)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+def same(a, b):
+    try:
+        with open(a, "rb") as x, open(b, "rb") as y:
+            return x.read() == y.read()
+    except OSError:
+        return False
+
+
+def renew():
+    env = {k: os.environ[k] for k in PASS_ENV if k in os.environ}
+    if not os.environ.get(CONF["token_env"]):
+        print(f"openbao-acme: {CONF['token_env']} is not set (the unit's EnvironmentFile)")
+        return 2
+    env[CONF["token_env"]] = os.environ[CONF["token_env"]]
+    argv = [CONF["lego"], "--log.format", "text", "run", "--accept-tos",
+            "--server", CONF["server"], "--path", CONF["path"], "--cert.name", NAME,
+            "--key-type", CONF["key_type"], "--dns", CONF["provider"],
+            "--dns.propagation.wait", CONF["wait"], "--renew-days", str(CONF["renew_days"]),
+            "--no-random-sleep"]  # fmt: skip
+    if CONF["email"]:
+        argv += ["--email", CONF["email"]]
+    for name in CONF["domains"]:
+        argv += ["--domains", name]
+    r = subprocess.run(argv, env=env, check=False)
+    if r.returncode != 0:
+        print(f"openbao-acme: lego failed (exit {r.returncode}); nothing installed")
+        return 2
+    why = problem(STORED_CERT, STORED_KEY, 0)
+    if why:
+        print(f"openbao-acme: refusing what lego stored: {why}; nothing installed")
+        return 2
+    if same(STORED_CERT, CONF["cert"]) and same(STORED_KEY, CONF["key"]):
+        print("openbao-acme: the installed certificate is current")
+        return 0
+    install(STORED_KEY, CONF["key"], 0o640)
+    install(STORED_CERT, CONF["cert"], 0o644)
+    print(f"openbao-acme: installed a new certificate for {', '.join(CONF['domains'])}")
+    clean = {k: v for k, v in os.environ.items() if k != CONF["token_env"]}
+    active = subprocess.run([CONF["systemctl"], "is-active", "--quiet", CONF["service"]],
+                            env=clean, check=False)  # fmt: skip
+    if active.returncode != 0:
+        print(f"openbao-acme: {CONF['service']} is not running; it reads the new certificate when it starts")
+        return 0
+    r = subprocess.run([CONF["systemctl"], "reload", CONF["service"]], env=clean, check=False)
+    if r.returncode != 0:
+        print(f"openbao-acme: systemctl reload {CONF['service']} failed (exit {r.returncode})")
+        return 3
+    print(f"openbao-acme: reloaded {CONF['service']} (SIGHUP; it stays unsealed)")
+    return 0
+
+
+def main(argv):
+    if argv == ["--check"]:
+        why = problem(CONF["cert"], CONF["key"], CONF["renew_days"])
+        print(f"openbao-acme: {why}" if why else "openbao-acme: the installed certificate is valid")
+        return 1 if why else 0
+    if argv:
+        print("usage: openbao-acme-renew [--check]")
+        return 2
+    return renew()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

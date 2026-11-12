@@ -50,6 +50,11 @@ restart: the server reloads them on `SIGHUP` (`systemctl reload`) and stays unse
   the same disk). It is refused without the second confirmation
   `openbao_tls_selfsigned_confirm_throwaway: true` and with any supplied PEM (the CA's too); with
   the option off, a test run's CA key is deleted.
+* **A public certificate (ACME)**, `openbao_tls_source: acme` (the default, `provided`, is the
+  PEMs above). For a server with a public DNS name, the role obtains a certificate from a public
+  CA (Let's Encrypt by default, `openbao_acme_server`) for `openbao_acme_domains` and renews it
+  **on the host**, so nothing the deploy supplies ever overwrites a renewed certificate. Details
+  in [A public certificate (ACME)](#a-public-certificate-acme) below.
 * **Memory and swap.** This release never locks its memory (2.7 reads `disable_mlock` as an
   unknown field), so the unit needs no `CAP_IPC_LOCK` and the configuration does not set it.
   Unsealed keys could therefore be paged out: the unit sets `MemorySwapMax=0` (cgroup v2), so the
@@ -87,7 +92,8 @@ restart: the server reloads them on `SIGHUP` (`systemctl reload`) and stays unse
 The playbook accepts these seven hook names and nothing else (`openbao_hook`).
 
 The hooks call the API with `ansible.builtin.uri`, verified against
-`<openbao_config_dir>/tls/ca.pem`, and pass every token in an `X-Vault-Token` header inside the
+`<openbao_config_dir>/tls/ca.pem` (with ACME: `openbao_acme_trust_bundle`, the host's public trust
+store, and by the name in `openbao_api_addr`), and pass every token in an `X-Vault-Token` header inside the
 module's arguments, under `no_log`: never on a command line or in an environment variable, where
 `ps`, the sudo and auth logs, the journal (and the SIEM it feeds) and `-vvv` output would show it.
 
@@ -221,11 +227,69 @@ open-format dump is an open operator decision.
 a different one. ADR-0042 decision 2 plans moving kv-snapshot into `compose_app`; the two should
 converge on one schema then.
 
+## A public certificate (ACME)
+
+`openbao_tls_source: acme` replaces the internal CA's PEMs with a public-trust certificate, for a
+server whose name lives in a public DNS zone the lab controls (it need not RESOLVE publicly: only
+the challenge's TXT record is published). What `main` does:
+
+* **The client.** [lego](https://go-acme.github.io/lego/), pinned like the server's release:
+  `openbao_lego_version` with `openbao_lego_checksums` (sha256 per architecture, from the
+  release's `lego_<version>_checksums.txt`; `openbao_lego_checksums_release` must equal the
+  version), fetched over https into `<openbao_install_dir>/lego/<version>/`, refused on a
+  checksum mismatch or a binary that reports another version. `tools/pin_freshness.py` watches it.
+* **The token.** `openbao_acme_dns_token_ref` names it (`secret:<name>`), resolved through the
+  `hnx_secret` lookup under `no_log` and written only to `<openbao_config_dir>/acme/dns.env`
+  (root, 0600, in a 0700 directory) as `CF_DNS_API_TOKEN=...`, the renewal unit's
+  `EnvironmentFile=`. It is never an argument (lego reads it from its environment), never in a
+  unit, a script or a log line; the renewal script passes it to lego alone and runs `systemctl`
+  without it. A Cloudflare API token needs Zone:DNS:Edit on the zone that holds the names, and
+  nothing else.
+* **The challenge.** DNS-01 through the provider's API, then a **fixed wait**
+  (`openbao_acme_propagation_wait`, 30s) instead of lego's propagation check. That check asks the
+  zone's authoritative servers, which it finds through the host's own resolvers: behind
+  split-horizon DNS those resolvers answer for the zone themselves (naming an internal server),
+  and a host whose firewall blocks outbound DNS cannot reach the public ones, so the check would
+  never pass. The CA checks the TXT record itself, publicly, after the wait; that check is not
+  weakened. The host needs outbound https to the CA and to the provider's API only.
+* **Renewal.** The unit `hnx-openbao-acme.service`, started by `hnx-openbao-acme.timer` daily
+  (`openbao_acme_schedule`, `Persistent=true`, a random delay of up to 30 minutes), runs
+  `/usr/local/libexec/homelabnext/openbao-acme-renew`: lego renews when fewer than
+  `openbao_acme_renew_days` (30) remain or the names changed (and when the CA's renewal-info
+  endpoint asks for it); the script then checks what lego stored (every name verified against
+  `openbao_acme_trust_bundle`, the key matching the certificate, not expired) and, when it differs
+  from what the listener reads, installs the key (0640, group `openbao_group`) and the
+  certificate (0644) atomically and reloads a running server with `systemctl reload` (SIGHUP: it
+  stays unsealed). **It never restarts the server**, which would seal it. The unit runs as root,
+  sandboxed (`ProtectSystem=strict` with only the ACME directory, the TLS directory and its
+  last-run record writable, no capability but `CAP_CHOWN`).
+* **Idempotent.** `main` runs the script's `--check` first and starts the unit only when the
+  installed certificate is missing, names other domains, does not verify, does not match its key
+  or is due; a converged host with a valid certificate reports `changed=0`, and nothing is
+  reissued. A run that started the unit fails unless the certificate is valid afterwards.
+* **A failed renewal is visible**: the unit is left failed (`systemctl --failed`), its last-run
+  record says so (the status hub's Schedule page), `openbao_acme_on_failure` (empty by default)
+  names a unit to start on failure (`OnFailure=`, e.g. a paging template unit where the host has
+  one; this repository ships none, so that is the gap), and the `health` hook fails once fewer
+  than `openbao_acme_health_min_days` (14) remain, which is renewal having failed for 16 days.
+* **Clients** verify against the public chain: no CA file is written (`<openbao_config_dir>/tls/ca.pem`
+  from an earlier supplied-PEM run is removed), the hooks verify against
+  `openbao_acme_trust_bundle` by the name in `openbao_api_addr`, and `BAO_CACERT` stays unset on
+  a client whose system trust store holds the public roots (or points at that store). So the host
+  of `openbao_api_addr` must be one of `openbao_acme_domains` (validate refuses otherwise) and
+  must resolve, **on this host too**, to `openbao_listen_address`: an internal DNS record.
+
+Tests and dry runs set `openbao_acme_server` to the staging directory
+(`https://acme-staging-v02.api.letsencrypt.org/directory`): its certificates chain to a root no
+client trusts, so point `openbao_acme_trust_bundle` at a bundle holding the staging roots for such
+a run. The role's own tests run lego and systemd as fakes; the path through a real CA is proven on
+a real host.
+
 ## The operator's procedure (first start)
 
 This is step 3 of [bootstrapping a new server](../../../docs/private-overlay.md#bootstrapping-a-new-server);
 the commands below are the role-specific part. On a workstation that has the `bao` CLI and the
-internal CA's certificate:
+internal CA's certificate (with ACME: leave `BAO_CACERT` unset, the system trust store verifies it):
 
 ```sh
 export BAO_ADDR=https://<openbao>:8200 BAO_CACERT=ca.pem

@@ -1,0 +1,47 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role openbao) for {{ openbao_logical_id }}. Do not edit.
+# Renews the server certificate over ACME (DNS-01) when it is due, installs it where the listener
+# reads it and reloads the server with SIGHUP (it stays unsealed; never a restart). A failed run
+# leaves this unit failed and its last-run record failed{{ ', and starts ' ~ openbao_acme_on_failure if openbao_acme_on_failure else '' }}.
+[Unit]
+Description=OpenBao ACME certificate renewal ({{ openbao_logical_id }})
+Wants=network-online.target
+After=network-online.target
+{% if openbao_acme_on_failure %}
+OnFailure={{ openbao_acme_on_failure }}
+{% endif %}
+
+[Service]
+Type=oneshot
+# The DNS provider's token, from a root-only file: never an argument, never in the unit.
+EnvironmentFile={{ openbao_acme_env_file }}
+# (the paths are openbao_acme_script and openbao_last_run_writer, vars/main.yml: fixed)
+# the job's last-run record (role last_run), written on start and again on stop, whatever
+# the outcome; a writer problem never changes the job's own result (the - prefix)
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ openbao_last_run_dir }} --group {{ openbao_last_run_group }} --job timer:openbao/acme-renew --unit %n --calendar "{{ openbao_acme_schedule }}" --delay 1800
+ExecStart=/usr/local/libexec/homelabnext/openbao-acme-renew
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ openbao_last_run_dir }} --group {{ openbao_last_run_group }} --job timer:openbao/acme-renew --unit %n --calendar "{{ openbao_acme_schedule }}" --delay 1800
+TimeoutStartSec=15min
+UMask=0077
+# Root, for the key and the reload, but confined: it writes only the ACME directory, the TLS
+# directory and its last-run record, and keeps only the capability to give a file to the
+# service account's group.
+CapabilityBoundingSet=CAP_CHOWN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ openbao_acme_dir }} {{ openbao_tls_dir }} {{ openbao_last_run_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+SystemCallArchitectures=native

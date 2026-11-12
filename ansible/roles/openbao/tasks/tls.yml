@@ -8,7 +8,7 @@
     mode: "0755"
 
 - name: Install the supplied certificate, key and CA
-  when: not openbao_tls_selfsigned_for_tests | bool
+  when: openbao_tls_source == 'provided' and not openbao_tls_selfsigned_for_tests | bool
   block:
     - name: Install the server certificate (with its chain, leaf first)
       ansible.builtin.copy:
@@ -41,6 +41,16 @@
     path: "{{ openbao_tls_dir }}/test-ca-key.pem"
     state: absent
   when: not openbao_tls_selfsigned_for_tests | bool
+
+- name: Remove the internal CA a supplied-PEM run wrote (ACME clients verify against the public chain)
+  ansible.builtin.file:
+    path: "{{ openbao_tls_dir }}/ca.pem"
+    state: absent
+  when: openbao_tls_source == 'acme'
+
+- name: Obtain the certificate over ACME and install its renewal (README.md, "A public certificate (ACME)")
+  ansible.builtin.include_tasks: acme.yml
+  when: openbao_tls_source == 'acme'
 
 - name: "TEST RUNS ONLY: generate a throwaway CA and server certificate"
   when: openbao_tls_selfsigned_for_tests | bool

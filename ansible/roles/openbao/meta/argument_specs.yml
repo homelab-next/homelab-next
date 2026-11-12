@@ -141,6 +141,92 @@ argument_specs:
         description: "The listener's minimum TLS version."
         choices: [tls12, tls13]
         default: tls12
+      openbao_tls_source: &tlssource
+        type: str
+        description: "Where the server certificate comes from: provided (openbao_tls_*_pem, or the test-only self-signed option) or acme (a public-trust certificate for openbao_acme_domains, obtained and renewed on the host over ACME DNS-01; the hooks then verify against openbao_acme_trust_bundle)."
+        choices: [provided, acme]
+        default: provided
+      openbao_acme_domains:
+        type: list
+        elements: str
+        description: "acme: the DNS names on the certificate (no wildcard); the host of openbao_api_addr must be one, and must resolve on this host and for clients to openbao_listen_address."
+        default: []
+      openbao_acme_server:
+        type: str
+        description: "acme: the ACME directory URL (https). Let's Encrypt's production directory by default; its staging directory for tests."
+        default: "https://acme-v02.api.letsencrypt.org/directory"
+      openbao_acme_email:
+        type: str
+        description: "acme: the account's contact address (optional)."
+        default: ""
+      openbao_acme_dns_provider:
+        type: str
+        description: "acme: the DNS-01 provider (lego's code); only cloudflare is implemented."
+        choices: [cloudflare]
+        default: cloudflare
+      openbao_acme_dns_token_ref:
+        type: str
+        description: "acme: the reference (secret:<name>) of the DNS provider's API token (Cloudflare: Zone:DNS:Edit on the zone), resolved through the hnx_secret lookup under no_log and written only to a root-only (0600) environment file the renewal unit reads. There is no variable for the value itself."
+        default: ""
+      openbao_acme_propagation_wait:
+        type: str
+        description: "acme: a fixed wait (e.g. 30s) after the challenge record is written, instead of the client's own propagation check (which split-horizon DNS or a host without outbound DNS would defeat); the CA checks the record publicly after it."
+        default: "30s"
+      openbao_acme_renew_days:
+        type: int
+        description: "acme: renew when fewer days than this remain (1 to 89)."
+        default: 30
+      openbao_acme_key_type:
+        type: str
+        description: "acme: the certificate key's type."
+        choices: [EC256, EC384, RSA2048, RSA3072, RSA4096]
+        default: EC256
+      openbao_acme_schedule:
+        type: str
+        description: "acme: the renewal timer's OnCalendar (ending in UTC); it renews only when due."
+        default: "*-*-* 03:17:00 UTC"
+      openbao_acme_health_min_days: &acmemin
+        type: int
+        description: "acme: the health hook fails when fewer days than this remain on the installed certificate (renewal has been failing); below openbao_acme_renew_days."
+        default: 14
+      openbao_acme_trust_bundle: &bundle
+        type: path
+        description: "acme: the CA bundle the hooks and the renewal's checks verify the server against (the host's system trust store)."
+        default: /etc/ssl/certs/ca-certificates.crt
+      openbao_acme_on_failure:
+        type: str
+        description: "acme: a unit the renewal unit starts when a run fails (OnFailure=, e.g. a paging template unit); empty: none."
+        default: ""
+      openbao_acme_dir:
+        type: path
+        description: "acme: the ACME client's account, key and stored certificates (root only, 0700)."
+        default: /var/lib/openbao-acme
+      openbao_lego_version:
+        type: str
+        description: "acme: the pinned ACME client (lego) release."
+        default: "5.6.0"
+      openbao_lego_checksums:
+        type: dict
+        description: "acme: sha256 of the pinned lego release archive per architecture (amd64, arm64), from the release's checksums.txt."
+        default:
+          amd64: "f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a"
+          arm64: "34d87a6552d69390c4a4560237045c47713a8e148d899e16db0e97040894ed1f"
+      openbao_lego_checksums_release:
+        type: str
+        description: "acme: the lego release openbao_lego_checksums were taken for; refused unless it equals openbao_lego_version."
+        default: "5.6.0"
+      openbao_lego_release_repository:
+        type: str
+        description: "acme: base https URL of lego's release archives (<repository>/v<version>/<archive>)."
+        default: "https://github.com/go-acme/lego/releases/download"
+      openbao_last_run_dir:
+        type: path
+        description: "acme: where the renewal unit's last-run record is written (role last_run)."
+        default: /var/lib/homelabnext/last-run
+      openbao_last_run_group:
+        type: str
+        description: "acme: the group that may read the last-run records."
+        default: root
       openbao_allow_restart:
         type: bool
         description: "Restart a running server whose release, configuration or unit changed (a new TLS certificate or key is reloaded with SIGHUP instead, and the server stays unsealed). A restart SEALS it: set only while the operator can unseal."
@@ -189,6 +275,9 @@ argument_specs:
   health:
     short_description: Fail unless the server is initialised, unsealed and running the pinned release (sealed and uninitialised fail by name).
     options:
+      openbao_tls_source: *tlssource
+      openbao_acme_trust_bundle: *bundle
+      openbao_acme_health_min_days: *acmemin
       openbao_logical_id: *id
       openbao_api_addr: *api
       openbao_version: *version
@@ -198,6 +287,8 @@ argument_specs:
   readiness:
     short_description: Fail unless the API answers; report uninitialised, sealed or unsealed, and an owed restart.
     options:
+      openbao_tls_source: *tlssource
+      openbao_acme_trust_bundle: *bundle
       openbao_logical_id: *id
       openbao_api_addr: *api
       openbao_config_dir: *confdir
@@ -206,6 +297,8 @@ argument_specs:
   backup:
     short_description: Take a raft snapshot (raft.snap) and its manifest into openbao_backup_dir.
     options:
+      openbao_tls_source: *tlssource
+      openbao_acme_trust_bundle: *bundle
       openbao_logical_id: *id
       openbao_api_addr: *api
       openbao_config_dir: *confdir
@@ -219,6 +312,8 @@ argument_specs:
   restore:
     short_description: Restore a raft snapshot (manifest and sha256 checked, a pre-restore snapshot first) into the running, unsealed server.
     options:
+      openbao_tls_source: *tlssource
+      openbao_acme_trust_bundle: *bundle
       openbao_logical_id: *id
       openbao_api_addr: *api
       openbao_config_dir: *confdir
@@ -244,6 +339,8 @@ argument_specs:
   upgrade:
     short_description: Refuse a downgrade (against the pin and the running release), take a pre-upgrade snapshot, stage and verify the target release, record it as pending.
     options:
+      openbao_tls_source: *tlssource
+      openbao_acme_trust_bundle: *bundle
       openbao_logical_id: *id
       openbao_api_addr: *api
       openbao_version: *version
@@ -270,6 +367,8 @@ argument_specs:
   export:
     short_description: "Write a raft snapshot (<logical_id>.snap) and its manifest into openbao_export_dir: NOT an open format; the exit path is the secrets contract (hnx secrets plan)."
     options:
+      openbao_tls_source: *tlssource
+      openbao_acme_trust_bundle: *bundle
       openbao_logical_id: *id
       openbao_api_addr: *api
       openbao_config_dir: *confdir

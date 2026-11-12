@@ -79,6 +79,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
+    "role:openbao/openbao_lego_version": ("github", "go-acme/lego"),
     "role:tailscale_node/tailscale_node_version": ("github", "tailscale/tailscale"),
     "role:trivy/trivy_version": ("github", "aquasecurity/trivy"),
     "role:vllm_server/vllm_server_version": ("pypi", "vllm"),
@@ -94,6 +95,10 @@ NOTES: dict[str, str] = {
     "ci:ZIZMOR_VERSION": "docs/private-overlay.md names it",
     "role:wazuh_agent/wazuh_agent_version": "never newer than the manager it reports to",
     "role:open_webui/open_webui_image": "an image: bump the tag and its digest together",
+    "role:openbao/openbao_lego_version": (
+        "moves with openbao_lego_checksums and openbao_lego_checksums_release, taken from the "
+        "release's lego_<version>_checksums.txt"
+    ),
     "role:openbao/openbao_version": (
         "moves with the lab-in-a-box `secrets` image (dependabot raises that one) and with "
         "openbao_checksums, taken from the release's signed checksums.txt"

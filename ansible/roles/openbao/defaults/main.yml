@@ -62,6 +62,63 @@ openbao_tls_selfsigned_for_tests: false
 openbao_tls_selfsigned_confirm_throwaway: false
 openbao_tls_selfsigned_sans: []
 openbao_tls_min_protocol: tls12
+# Where the server certificate comes from: provided (the three PEMs above, or the test-only
+# self-signed option) or acme (a public-trust certificate for openbao_acme_domains, obtained and
+# renewed on the host over ACME with a DNS-01 challenge: README.md, "A public certificate (ACME)").
+openbao_tls_source: provided
+# acme: the names on the certificate. The host of openbao_api_addr must be one of them (the hooks
+# verify the server by that name against the public chain), and it must resolve, on this host
+# and for the clients, to openbao_listen_address (an internal record: nothing needs to resolve
+# publicly, only the challenge's TXT record is published).
+openbao_acme_domains: []
+# acme: the ACME directory. The default is Let's Encrypt's production one; tests and dry runs use
+# its staging directory (https://acme-staging-v02.api.letsencrypt.org/directory), whose
+# certificates no client trusts.
+openbao_acme_server: "https://acme-v02.api.letsencrypt.org/directory"
+# acme: the account's contact address (optional; empty registers without one).
+openbao_acme_email: ""
+# acme: the DNS-01 provider. Only cloudflare is implemented (an API token with Zone:DNS:Edit on
+# the zone that holds the names).
+openbao_acme_dns_provider: cloudflare
+# acme: the reference (secret:<name>) of the DNS provider's API token, resolved through the
+# hnx_secret lookup under no_log and written only to a root-only environment file the renewal
+# unit reads (never an argument, never a log line).
+openbao_acme_dns_token_ref: ""
+# acme: a fixed wait after the challenge record is written, INSTEAD of the client's own
+# propagation check. That check asks the zone's authoritative servers, found through the host's
+# resolvers: behind split-horizon DNS those answer for the zone themselves, and a host without
+# outbound DNS cannot reach the public ones, so the check would never pass. The CA checks the
+# record itself, publicly, after the wait.
+openbao_acme_propagation_wait: "30s"
+# acme: renew when fewer days than this remain on the certificate.
+openbao_acme_renew_days: 30
+openbao_acme_key_type: EC256
+# acme: when the renewal unit runs (it renews only when due, so a daily run is cheap).
+openbao_acme_schedule: "*-*-* 03:17:00 UTC"
+# acme: the health hook fails when fewer days than this remain on the installed certificate,
+# which means renewal has been failing for (openbao_acme_renew_days - this) days.
+openbao_acme_health_min_days: 14
+# acme: the CA bundle the hooks (and the renewal's own checks) verify the server against: the
+# host's system trust store, since the certificate chains to a public root.
+openbao_acme_trust_bundle: /etc/ssl/certs/ca-certificates.crt
+# acme: a unit to start when a renewal run fails (OnFailure=), e.g. a paging template unit such
+# as hnx-page@%n.service where the host has one. Empty: none (the failure is the unit's failed
+# state, its last-run record and, before expiry, the health hook).
+openbao_acme_on_failure: ""
+# acme: the ACME client's account, key and certificates (root only).
+openbao_acme_dir: /var/lib/openbao-acme
+# acme: the ACME client, lego, pinned like the server's release: sha256 of the release archive
+# per architecture from the release's lego_<version>_checksums.txt (5.6.0 was published
+# 2026-10-28), moved together with lego_checksums_release.
+openbao_lego_version: "5.6.0"
+openbao_lego_checksums:
+  amd64: "f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a"
+  arm64: "34d87a6552d69390c4a4560237045c47713a8e148d899e16db0e97040894ed1f"
+openbao_lego_checksums_release: "5.6.0"
+openbao_lego_release_repository: "https://github.com/go-acme/lego/releases/download"
+# acme: the renewal unit's last-run record (role last_run, docs/role-interface.md section 8).
+openbao_last_run_dir: /var/lib/homelabnext/last-run
+openbao_last_run_group: root
 # A running server whose binary, configuration or unit changed is restarted only when this is true:
 # a restart seals it, and only the operator can unseal. Otherwise main records the restart as owed
 # (readiness reports it) and leaves the server running.

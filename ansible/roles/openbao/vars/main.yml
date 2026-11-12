@@ -7,7 +7,18 @@ openbao_tls_dir: "{{ openbao_config_dir }}/tls"
 openbao_tls_cert_file: "{{ openbao_tls_dir }}/server.pem"
 openbao_tls_key_file: "{{ openbao_tls_dir }}/server-key.pem"
 # The CA the server's certificate chains to: clients (and the hooks, on the host) verify with it.
-openbao_tls_ca_file: "{{ openbao_tls_dir }}/ca.pem"
+# Supplied PEMs: the internal CA's, written here. ACME: the host's public trust store.
+openbao_tls_ca_file: "{{ openbao_acme_trust_bundle if openbao_tls_source == 'acme' else openbao_tls_dir ~ '/ca.pem' }}"
+# ACME: the root-only environment file holding the DNS provider's token (the renewal unit's
+# EnvironmentFile=), the renewal script, and the unit's name.
+openbao_acme_env_file: "{{ openbao_config_dir }}/acme/dns.env"
+openbao_acme_script: /usr/local/libexec/homelabnext/openbao-acme-renew
+openbao_acme_unit: hnx-openbao-acme
+# The DNS provider's environment variable for its token (lego's provider documentation).
+openbao_acme_token_env:
+  cloudflare: CF_DNS_API_TOKEN
+# The shared last-run writer (role last_run); the renewal unit's ExecStartPre= and ExecStopPost=.
+openbao_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
 openbao_audit_file: "{{ openbao_audit_dir }}/audit.log"
 # Debian/Ubuntu machine names to the release's architecture names.
 openbao_arch_names:

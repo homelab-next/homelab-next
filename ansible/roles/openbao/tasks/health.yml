@@ -6,7 +6,7 @@
 # pass and fail only, so the warning is the message. It changes nothing (role interface v1): the
 # release record downgrade.yml reads is main's to write (release_seen.yml).
 - block:
-    - name: Ask the server for its health (verified against the internal CA)
+    - name: Ask the server for its health (verified against the internal CA, or with ACME the public chain, by name)
       ansible.builtin.uri:
         url: "{{ openbao_api_addr }}/v1/sys/health"
         ca_path: "{{ openbao_tls_ca_file }}"
@@ -32,6 +32,22 @@
              if openbao_health.json.version | default('') != openbao_version
              else 'HTTP ' ~ openbao_health.status }}
         success_msg: "openbao {{ openbao_logical_id }}: unsealed, {{ 'standby' if openbao_health.json.standby | default(false) else 'active' }}, {{ openbao_health.json.version }}"
+    - name: "ACME: ask whether the installed certificate outlives the renewal margin"
+      ansible.builtin.command:
+        argv: [openssl, x509, -noout, -in, "{{ openbao_tls_cert_file }}", -checkend, "{{ (openbao_acme_health_min_days | int) * 86400 }}"]
+      register: openbao_health_cert
+      changed_when: false
+      failed_when: false
+      check_mode: false  # read-only
+      when: openbao_tls_source == 'acme'
+    - name: "ACME: fail when renewal has not kept the certificate ahead of its expiry"
+      ansible.builtin.assert:
+        that: openbao_health_cert.rc == 0
+        fail_msg: >-
+          openbao {{ openbao_logical_id }}: the server certificate expires within
+          {{ openbao_acme_health_min_days }} days (or cannot be read): renewal is failing
+          (systemctl status {{ openbao_acme_unit }}.service; journalctl -u {{ openbao_acme_unit }}.service)
+      when: openbao_tls_source == 'acme'
     - name: Read whether a restart is owed
       ansible.builtin.stat:
         path: "{{ openbao_state_dir }}/restart-owed"
