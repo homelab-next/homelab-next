@@ -637,9 +637,12 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
             "deliver_subject" not in info["config"] and info["config"]["ack_policy"] == "explicit"
         )
         # and the bridge binds: it pulls what the relay published and its v1 ack takes
-        assert relay.publish("lab.homelabnext.decision.returned", b"one") == []
+        # a request, so the PubAck says it is stored before the pull asks for it (a plain
+        # publish raced the no_wait pull on CI's runners)
+        stored = relay.request("lab.homelabnext.decision.returned", {"one": 1})
+        assert stored.get("stream") == "LAB" and stored.get("seq") == 1, stored
         got = bridge.pull("$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x", {"batch": 1, "no_wait": True})
-        assert got is not None and got[1] == b"one", got
+        assert got is not None and json.loads(got[1]) == {"one": 1}, got
         assert got[0].startswith("$JS.ACK.LAB.bridge-x.") and len(got[0].split(".")) == 9, got
         assert bridge.publish(got[0], b"+ACK") == []
         info = bridge.request("$JS.API.CONSUMER.INFO.LAB.bridge-x", None)
