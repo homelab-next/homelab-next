@@ -945,6 +945,15 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
     tampered["accounts"]["HNX"]["exports"].append(
         {"service": "$JS.API.STREAM.DELETE.LAB", "accounts": ["HNX-hnx-broker"]}
     )
+    # round 7 follow-up (security N1): a STREAM import that mimics the emitter's rendered service
+    # import (same account, subject and local subject) would hand it every event the others
+    # publish under lab.homelabnext.>; only the import's type tells them apart
+    tampered["accounts"]["HNX-hnx-emitter"]["imports"].append(
+        {"stream": {"account": "HNX", "subject": "lab.homelabnext.>"}}
+    )
+    tampered["accounts"]["HNX"]["exports"].append(
+        {"stream": "lab.homelabnext.>", "accounts": ["HNX-hnx-emitter"]}
+    )
     bad_conf = tmp_path / "tampered.conf"
     bad_conf.write_text(json.dumps(tampered))
     proc = _start(server, bad_conf, port)
@@ -962,7 +971,13 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
             "account HNX-hnx-broker: JetStream on; it is on in HNX alone",
             "account HNX-hnx-broker: imports $JS.API.STREAM.DELETE.LAB from HNX as "
             f"{API}.STREAM.DELETE.LAB, which the role does not render",
+            "account HNX-hnx-emitter: imports lab.homelabnext.> from HNX (a stream import), "
+            "which the role does not render",
         ], got
+        emitter_imports = [i for d in details if d["account_detail"]["account_name"] ==
+                           "HNX-hnx-emitter" for i in d["account_detail"]["imports"]
+                           if i["account"] == "HNX"]  # fmt: skip
+        assert sorted(i["type"] for i in emitter_imports) == ["service", "stream"], emitter_imports
     finally:
         proc.terminate()
         proc.wait(timeout=10)
