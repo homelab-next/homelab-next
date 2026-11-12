@@ -75,7 +75,7 @@ argument_specs:
         default: []
       events_bus_admin_user: &admin
         type: str
-        description: "The user that provisions the streams and durables (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of the streams, CONSUMER.INFO and CONSUMER.CREATE of the durables; the only user validation lets hold STREAM.CREATE, CONSUMER.CREATE, CONSUMER.DURABLE.CREATE and CONSUMER.DELETE of a named stream and durable, and STREAM.MSG.GET, which reads any stored message; no user may hold STREAM.UPDATE); the only user in events_bus_account itself; empty: provision nothing."
+        description: "The user that provisions the streams and durables (one of events_bus_users, granted STREAM.INFO and STREAM.CREATE of the streams, CONSUMER.INFO and CONSUMER.CREATE of the durables; the only user validation lets hold STREAM.CREATE (of a declared stream or its _DLQ), CONSUMER.CREATE, CONSUMER.DURABLE.CREATE and CONSUMER.DELETE of a named stream and durable, and STREAM.MSG.GET, which reads any stored message; no user may hold STREAM.UPDATE; it may hold nothing outside its JetStream calls and its own _INBOX.<user>, and subscribe to that inbox alone); the only user in events_bus_account itself; empty: provision nothing. Its credential is the operator's: the server does not limit a STREAM.CREATE body (a republish into $JS.API can delete another stream), which the health hook detects and nothing prevents."
         default: ""
       events_bus_durables: &durables
         type: list
@@ -90,6 +90,14 @@ argument_specs:
         type: str
         description: "The reference (secret:<name>) of that user's bus credential, as in events_bus_users."
         default: ""
+      events_bus_monitor_user: &monuser
+        type: str
+        description: "Optional: a user that watches for a stream or durable deleted or a stream changed ($JS.EVENT.ADVISORY.STREAM.DELETED.>, .CONSUMER.DELETED.>, .STREAM.UPDATED.>), in an account of its own (<events_bus_account>-<user>) importing exactly those advisories from the bus account as streams; it publishes nothing and holds no JetStream call. Not one of events_bus_users. Empty: none (the health hook's missing-stream check is the backstop)."
+        default: ""
+      events_bus_monitor_password_ref:
+        type: str
+        description: "The reference (secret:<name>) of the monitor user's bus credential."
+        default: ""
       events_bus_hnx_python: &py
         type: path
         description: "The interpreter of a homelab-next release with the nats extra (role hnx_runtime), used to provision the streams."
@@ -103,9 +111,16 @@ argument_specs:
         description: "Enable, start and restart the unit (false: write it only)."
         default: true
   health:
-    short_description: Fail unless the server answers its loopback /healthz with JetStream enabled and reports no push consumer (one with a deliver_subject) in /jsz.
+    short_description: "Read-only, from the loopback monitor: fail unless the server answers /healthz with JetStream enabled, reports no push consumer in /jsz, holds every declared stream (and, with provisioning on, durable), has no stream in the bus account with a republish, mirror, sources or subject transform (one can aim its messages at $JS.API), and runs the account split (/accountz and /connz?auth=true: the bus account alone with JetStream and the provisioner, every other user in an account of its own importing from the bus account exactly the subjects the role renders for it; a connection not yet authenticated is skipped, and /connz returning fewer connections than its total fails); warn about a stream without deny_delete or deny_purge (never changed)."
     options:
       events_bus_monitor_port: *mport
+      events_bus_account: *account
+      events_bus_users: *users
+      events_bus_admin_user: *admin
+      events_bus_streams: *streams
+      events_bus_durables: *durables
+      events_bus_provision_durables: *provdur
+      events_bus_monitor_user: *monuser
   readiness:
     short_description: Fail unless the server binary and its configuration are in place (the bus depends on nothing else).
     options:

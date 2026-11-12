@@ -992,16 +992,21 @@ relay or the bridge (an operator provisions both streams with limits; the relay 
 `provision=False` and refuses a missing or unbounded stream), **no consumer create for anyone but
 the provisioner** (below), and replies on the user's own inbox prefix (`_INBOX.<user>`, the
 adapter's default for a `user`), never a shared `_INBOX.>`. That protects a user's replies from
-being READ by another client; it does not protect them from forged replies: the reply subject of
-a request is not checked against anyone's allow-list, so any client that learns an inbox subject
-can publish to it. A client must therefore match each reply by an unguessable token of its own,
+being READ by another client; it does not protect them from forged replies: an arbitrary reply
+subject is not checked against the sender's allow-list (nats-server 2.15.1 refuses only the
+reserved `_R_`, `_GR_` and `$JS.ACK` replies from a client connection), and a user's inbox is a
+subject someone else may be allowed to publish to, so any client that learns an inbox subject
+can send a forged reply to it. A client must therefore match each reply by an unguessable token of its own,
 as the adapter does (nats-py's `new_inbox()`: a random token per request under the user's prefix,
 and it reads only the reply to the inbox it made).
 
-**Clients live in accounts of their own (homelab-next #360, round 5).** The reply subject of a
-request is not permission-checked, and JetStream takes a message its own internal client
-publishes (a pull's delivery, even a `404` status; an ack's answer; an API response) as a request
-when it lands on `$JS.API.*`. In one account a user holding nothing but its own durable's
+**Clients live in accounts of their own (homelab-next #360, round 5).** An arbitrary reply
+subject such as `$JS.API.STREAM.DELETE.<stream>` is not permission-checked (only the reserved
+`_R_`, `_GR_` and `$JS.ACK` replies are refused to a client), and JetStream takes a message its own
+internal client publishes (a pull's delivery, even a `404` status; an ack's answer) as a request
+when it lands on `$JS.API.*`. (An API response aimed there did not reproduce on 2.15.1:
+`STREAM.INFO` answered to `STREAM.DELETE` left the stream in place. The account split does not
+depend on whether it does.) In one account a user holding nothing but its own durable's
 `CONSUMER.MSG.NEXT` could send `PUB $JS.API.CONSUMER.MSG.NEXT.<stream>.<durable>
 $JS.API.STREAM.DELETE.<stream> {"batch":1,"no_wait":true}` and the server deleted the stream,
 `deny_delete` notwithstanding (verified on 2.15.1; an ack or `CONSUMER.DELETE.<s>.<other>` as the
@@ -1015,7 +1020,11 @@ and routes the answer back into the client's own account, where no JetStream API
 nothing but that client's own imports can be reached. A client names its JetStream calls under
 `JS.HNX.API` (the import's `to`: an account without JetStream answers `$JS.API.*` itself, "JetStream
 not enabled for account"), so the adapter takes `api_prefix: JS.HNX.API` (the relay's events
-target, the bridge's and `hnx orchestration consume`'s `--events-api-prefix`); acks
+target, the bridge's and `hnx orchestration consume`'s `--events-api-prefix`; a client left at
+the default `$JS.API` is refused its first call, and the adapter's error says "on an
+events_bus-managed bus pass api_prefix JS.<account>.API"; the broker role refuses a loopback relay
+whose `broker_relay_api_prefix` is not `JS.<events_bus_account>.API` when the bus role's account
+is set on the host); acks
 (`$JS.ACK.<...>`, a delivery's reply subject) and stream subjects keep their names. `MSG.NEXT` is
 exported with `response_type: stream` (a batch answers one request with several messages). The
 events bus role renders this from the same `events_bus_users` lists (`hnx_bus_accounts` in
@@ -1096,17 +1105,34 @@ The server's own subjects are an allow-list, not a deny-list: anything under `$J
 `CONSUMER.INFO|MSG.NEXT.<stream>.<durable>`, or an ack grant in exactly one of the two reply-subject
 forms, `$JS.ACK.<stream>.<durable>.*.*.*.*.*` (v1, exactly nine tokens) or
 `$JS.ACK._.<account hash>.<stream>.<durable>.*.*.*.*.>` (v2, eleven or more: the domain token is
-`_`, the server's when no JetStream domain is set, and the hash 8 of `[A-Za-z0-9]`, so tokens 2-3
-can never be a stream and a durable), each on a named stream and durable. (A looser `$JS.ACK.<stream>.<durable>.>` reads as the v2 domain and
+`_`, the server's when no JetStream domain is set, and the hash is exactly the bus account's,
+nats-server's `getHash` of `events_bus_account` -- the sha256 of the name, its first eight bytes
+each mod 62 into `0-9A-Za-z`, so `HNX` is `hKkTAyOX` -- so tokens 2-3 can never be a stream and a
+durable, nor another account's acks), each on a named stream and durable. (A looser `$JS.ACK.<stream>.<durable>.>` reads as the v2 domain and
 hash `<stream>.<durable>` and reaches the acks, and with them `+NXT` pulls, of every stream and
 durable.) The provisioner (`events_bus_admin_user`) alone may also hold `STREAM.MSG.GET.<stream>`
 (it reads any stored message, every subject's and every durable's), `STREAM.CREATE.<stream>`,
 `CONSUMER.CREATE.<stream>.<durable>[.<filter>]`, `CONSUMER.DURABLE.CREATE.<stream>.<durable>` and
-`CONSUMER.DELETE.<stream>.<durable>`. **No user may hold `STREAM.UPDATE`, the provisioner
-included**, nor a stream delete, purge, message delete, snapshot or restore, a consumer listing,
-or anything of the key-value or object stores. A user's publish list may be empty only when it
+`CONSUMER.DELETE.<stream>.<durable>`, and it alone may NOT hold `CONSUMER.MSG.NEXT` or an ack:
+it lives in the account JetStream runs in, where a delivery or an ack's answer sent to a reply
+subject of its choosing is taken as that request (the deputy the account split closes for every
+other user; a reader is a client user with a durable of its own). Its `STREAM.CREATE` must name a
+declared stream or its `_DLQ`, and it holds nothing outside its JetStream calls and its own
+`_INBOX.<user>`: no stream subject (it publishes no event), no `_R_`/`_GR_`/`_SYS_` subject (in the
+bus account `_R_.>` carries every service-import reply: a client's PubAcks and pull deliveries),
+and it subscribes to its own `_INBOX` alone (a subscription to `$JS.API.*` in the bus account would
+receive the clients' requests). **No user may hold
+`STREAM.UPDATE`, the provisioner included**, nor a stream delete, purge, message delete, snapshot
+or restore, a consumer listing, or anything of the key-value or object stores. A client's other
+grants sit under a declared stream's subject prefix (`<subject_prefix>.<...>`: it publishes events
+and nothing else; the rule bounds a client to the declared streams, not to subjects that are "its
+own": a client granted `hnx.>` may publish under another client's event types, so keep each
+client's list to its own types, as the lab's relay holds `decision.>` and `proposal.>` alone), and none but its own `_INBOX.<user>` may start with `_` (`_R_`, `_GR_`, `_SYS_`
+are the server's reply and routing subjects). A user's publish list may be empty only when it
 says `subscribe_only: true`, and is then rendered deny-all (`"deny": [">"]`): NATS reads an empty
-`allow` list as no restriction at all.
+`allow` list as no restriction at all. Only the provisioner may say it: a client in an account of
+its own subscribes to its own `_INBOX` alone, so a client that publishes nothing could receive
+nothing either.
 
 The streams the role provisions are created with `deny_delete` and `deny_purge`, so the server
 refuses a message delete or a purge to every user whatever its grants; nats-server refuses to
@@ -1133,10 +1159,44 @@ recommendation. The DLQ always discards old (a refused advisory would be lost si
 **Detection backstop.** The `health` hook compares `/jsz` with the declaration: a declared stream
 or DLQ that is not on the bus fails it (a deleted stream is what a successful `STREAM.DELETE`
 leaves), a declared durable that is missing fails it once `events_bus_provision_durables` is on
-and is reported until then ("declared, not provisioned"). For alerting between health runs,
-subscribe the monitoring side (in the bus account) to the server's own advisories,
-`$JS.EVENT.ADVISORY.STREAM.DELETED.>` and `$JS.EVENT.ADVISORY.CONSUMER.DELETED.>` (and
-`...STREAM.UPDATED.>`): none should ever fire outside a break-glass step.
+and is reported until then ("declared, not provisioned"). It also reads the account split back
+from the running server (`/accountz`: the accounts, JetStream on in the bus account alone, every
+other account importing from the bus account only; `/connz?auth=true`, since `/accountz` lists no
+users: every connected user in its own account, the provisioner in the bus account) and fails on
+any departure: an account that imports from anywhere but the bus account, or imports a subject
+(a `$JS.API.>` added by hand, say) the role does not render for its user. A connection the server
+lists before its CONNECT is processed (no user yet: a client mid-handshake, or a TCP probe of the
+port) is skipped, since it can do nothing and is closed unless it authenticates; and when
+`/connz` reports more connections (`total`) than it returned, the hook fails, because it could not
+check them all. It fails as well on any stream in the bus account whose configuration has a
+`republish`, `mirror`, `sources` or `subject_transform` (filter `hnx_bus_stream_redirects`; see
+below), and it warns, without changing anything, about a stream in the bus account that
+lacks `deny_delete` or `deny_purge` (a stream created before the adapter set them, such as
+`HNX_BROKER`; the break-glass step below adds them). For alerting between health runs, the role
+can add a monitor user (`events_bus_monitor_user`, its password `events_bus_monitor_password_ref`):
+an account of its own (`<account>-<user>`) that imports exactly
+`$JS.EVENT.ADVISORY.STREAM.DELETED.>`, `$JS.EVENT.ADVISORY.CONSUMER.DELETED.>` and
+`$JS.EVENT.ADVISORY.STREAM.UPDATED.>` from the bus account as STREAM imports, may subscribe to
+those three alone and publish nothing (tested against the pinned server: a durable the
+provisioner deletes reaches it as `CONSUMER.DELETED`). None should ever fire outside a
+break-glass step. What subscribes as that user and pages is the site's (the role ships no
+watcher); without one, the health hook is the backstop.
+
+**What the ACL cannot close: the provisioner's request bodies.** A grant names a call's subject,
+never its body, and nats-server does not stop a stream's `republish.dest` (nor a `mirror`,
+`sources` or a `subject_transform`) from pointing into `$JS.API`: what the stream then sends there
+is taken as a JetStream request. So whoever holds the provisioner's credential can create a
+declared stream that is missing at that moment (the first deploy, a newly declared stream, or one
+that went missing and has not been re-created yet) with a republish to
+`$JS.API.STREAM.DELETE.<other stream>` and delete that stream, `deny_delete` notwithstanding
+(security F1 of #361, reproduced on 2.15.1). Three controls narrow it and none closes it: the
+provisioner may create a declared stream (or its DLQ) only; the adapter's `provision_streams`
+refuses to send a stream configuration with a republish, mirror, sources or subject transform;
+and the `health` hook fails on any stream in the bus account that carries one (none is ever
+declared: the role's streams take no such key). The provisioner's credential is the operator's,
+and its compromise is detected after the fact (that health failure, the missing-stream check, the
+monitor's `STREAM.DELETED` advisory), not prevented. Keep `events_bus_admin_password_ref` out of
+every client's reach.
 
 A stream created before the flags keeps its own settings (the role never changes an existing
 stream). Adding them in place is a **break-glass step**, done by hand and undone in the same

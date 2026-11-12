@@ -8,10 +8,14 @@ events_bus_monitor_url: "http://127.0.0.1:{{ events_bus_monitor_port | int }}"  
 # (ansible/plugins/filter/hnx_bus.py), compared token by token: no subject starting with a
 # wildcard, no other client's _INBOX, and nothing under the server's own $-subjects ($JS, $KV, $O,
 # $SYS ...) but an allow-list of JetStream calls on named streams and consumers (stream info, one
-# durable's info/next and its acks in their exact v1 and v2 forms, a message read-back; and, for
-# events_bus_admin_user only, stream create and consumer create/delete). No one may hold
-# STREAM.UPDATE. hnx_bus_durable_problems ties every consumer grant to a durable declared for that
-# one user (events_bus_durables). An empty publish list is subscribe_only or refused.
+# durable's info/next and its acks in their exact v1 and v2 forms, the v2 hash the bus account's
+# own; and, for events_bus_admin_user only, a message read-back, stream create and consumer
+# create/delete, never a pull or an ack; its stream create names a declared stream). No one may
+# hold STREAM.UPDATE. No grant starts with _ but the user's own _INBOX; a client's other grants
+# sit under a declared stream's subject prefix, and the provisioner holds none (its JetStream
+# calls and its own _INBOX alone). hnx_bus_durable_problems ties every consumer grant to a
+# durable declared for that one user (events_bus_durables). An empty publish list is
+# subscribe_only or refused.
 # Where a client account imports the bus account's JetStream calls (hnx_bus_accounts): the
 # client names them under this prefix (the adapter's api_prefix, the relay's events target and
 # the bridge's and orchestration's --events-api-prefix), never $JS.API, which an account

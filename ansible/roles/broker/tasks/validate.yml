@@ -79,6 +79,34 @@
       run the relay beside the bus, or give the bus a TLS listener and the relay a tls:// endpoint
   when: broker_relay | bool and broker_relay_events_endpoint is match('^nats://')
 
+# The bus on this host is the events bus role's: the relay's user lives in an account of its own
+# and reaches JetStream under JS.<account>.API only ($JS.API is refused, and the relay holds its
+# outbox until the prefix is right). The account is events_bus_account, which this role reads
+# from the inventory: events_bus's own default (HNX) is not visible here, so a host that relies on
+# it is not checked, and says so.
+- name: Validate that a loopback relay names the bus account's API prefix
+  ansible.builtin.assert:
+    that:
+      - events_bus_account is string and events_bus_account is match('^[A-Z][A-Z0-9_]{0,31}\Z')
+      - broker_relay_api_prefix == 'JS.' ~ events_bus_account ~ '.API'
+    fail_msg: >-
+      broker: the events bus role's account on this host is {{ events_bus_account }}, so the
+      relay's user lives in an account of its own that reaches JetStream under
+      JS.{{ events_bus_account }}.API only; broker_relay_api_prefix is
+      {{ broker_relay_api_prefix }} (the relay would be refused its first call and hold its
+      outbox): set it to JS.{{ events_bus_account }}.API
+  when: broker_relay | bool and broker_relay_events_endpoint is match('^nats://') and (events_bus_account | default('')) != ''
+
+- name: Say the relay's API prefix is not checked against the bus account
+  ansible.builtin.debug:
+    msg: >-
+      broker: NOT CHECKED: events_bus_account is not set (or empty) in this host's inventory (the events
+      bus role's default runs in another play and is invisible to this role), so broker_relay_api_prefix
+      ({{ broker_relay_api_prefix }}) is not compared with the bus account's
+      JS.<account>.API; set events_bus_account for the host (group_vars of the bus's group) to
+      check it
+  when: broker_relay | bool and broker_relay_events_endpoint is match('^nats://') and (events_bus_account | default('')) == ''
+
 # Handlers run as the broker's own uid today (docs/broker.md "Handlers and the broker's uid"): a
 # handler can read and write the broker's state and audit trail. Until each handler runs under a
 # uid of its own, the role deploys an exec handler only in a proof manifest (manifest_id ending

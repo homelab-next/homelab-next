@@ -107,6 +107,7 @@ __all__ = [
     "Wire",
     "WireError",
     "WireMsg",
+    "check_stream_config",
     "make",
     "provision_consumers",
     "provision_streams",
@@ -123,6 +124,22 @@ _NS = 1_000_000_000
 _DEFAULT_DUPLICATE_WINDOW_NS = 120 * _NS
 _NOT_FOUND = {"stream": 10059, "consumer": 10014, "message": 10037}
 _PERMISSION_DENIED = re.compile(r'Permissions Violation for Publish to "([^"]+)"', re.I)
+#: what a refused ``$JS.API.*`` call most often means: a client of the events bus role (which lives
+#: in an account of its own and reaches JetStream under ``JS.<account>.API``) left at the default
+API_PREFIX_HINT = (
+    "on an events_bus-managed bus pass api_prefix JS.<account>.API "
+    "(--events-api-prefix; the relay's broker_relay_api_prefix): a client account reaches "
+    "JetStream under that prefix, never $JS.API (docs/broker.md, 'The bus ACL')"
+)
+
+
+def permission_denied(subject: str) -> str:
+    """The message of a publish the server refused this user: ``subject`` named, and for a
+    ``$JS.API.*`` call (a client at the default ``api_prefix``) :data:`API_PREFIX_HINT`."""
+    msg = f"permission denied: publish {subject}"
+    if subject.startswith(API_PREFIX + "."):
+        msg += f"; {API_PREFIX_HINT}"
+    return msg
 
 
 class WireError(EventsError):
@@ -281,6 +298,35 @@ def _api(
 
 #: a standing stream's messages leave only by its limits (provision_streams)
 _EVIDENCE = {"deny_delete": True, "deny_purge": True}
+#: the keys a standing stream's configuration may carry (provision_streams renders no other):
+#: never a republish, mirror, sources or subject transform, any of which can send the stream's
+#: messages to ``$JS.API.*``, where the server takes them as JetStream requests
+_STREAM_KEYS = frozenset(
+    {"name", "subjects", "duplicate_window", "max_bytes", "retention", "storage", "discard",
+     "num_replicas", "max_age", "max_msgs_per_subject", "discard_new_per_subject",
+     "deny_delete", "deny_purge"}
+)  # fmt: skip
+
+
+def check_stream_config(config: Mapping[str, Any]) -> None:
+    """Refuse a stream configuration :func:`provision_streams` would not render: a key outside
+    its own (a ``republish``, ``mirror``, ``sources`` or ``subject_transform`` above all: aimed
+    at ``$JS.API.STREAM.DELETE.<other>``, a republish deletes that stream; homelab-next #361
+    security F1), a subject outside a literal prefix's ``>`` or the dead-letter advisories, or a
+    missing deny flag.  The provisioner checks its own request before it sends it; the server
+    does not check the body against any grant."""
+    extra = sorted(set(config) - _STREAM_KEYS)
+    if extra:
+        raise EventsError(f"stream {config.get('name')!r}: refused keys {extra} (a standing stream "
+                          "is created with its limits and deny flags only)")  # fmt: skip
+    for subject in config.get("subjects") or []:
+        toks = str(subject).split(".")
+        if toks[0].startswith(("$", "_")) and not str(subject).startswith(
+            (_ADVISORY_MAX + ".", _ADVISORY_TERM + ".")
+        ):
+            raise EventsError(f"stream {config.get('name')!r}: subject {subject!r} is the server's")
+    if not all(config.get(k) is True for k in _EVIDENCE):
+        raise EventsError(f"stream {config.get('name')!r}: deny_delete and deny_purge are required")
 
 
 def provision_streams(
@@ -362,6 +408,7 @@ def provision_streams(
     created = []
     for config in configs:
         name = config["name"]
+        check_stream_config(config)
         if _api(wire, f"STREAM.INFO.{name}", None, timeout=timeout, missing="stream") is None:
             _api(wire, f"STREAM.CREATE.{name}", config, timeout=timeout)
             created.append(name)
@@ -948,7 +995,7 @@ class NatsPyWire:
             # the server drops a publish this user may not make and says so out of band (nats-py
             # hands the text over lowercased, so $JS.API... subjects compare in lower case)
             if subject.lower() in self._denied:
-                raise WireError("permission denied: publish", permanent=True) from None
+                raise WireError(permission_denied(subject), permanent=True) from None
             raise
 
     def publish(self, subject: str, payload: bytes = b"", *, reply: str = "") -> bool:

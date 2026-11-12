@@ -21,6 +21,107 @@ _spec = importlib.util.spec_from_file_location("hnx_bus", PLUGIN)
 bus = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bus)
 USER = "hnx-broker"
+#: the bus account (its v2 ack hash, nats-server's getHash, is pinned below) and its stream
+ACCOUNT = "HNX"
+STREAMS = [{"name": "LAB", "subject_prefix": "lab"}]
+
+
+def problems(subjects, user=USER, admin=False):
+    """The role's call: the bus account and its declared streams given."""
+    return bus.hnx_bus_subject_problems(subjects, user, admin=admin, account=ACCOUNT,
+                                        streams=STREAMS)  # fmt: skip
+
+
+def test_the_v2_ack_hash_is_nats_servers_get_hash_of_the_account():
+    """server/events.go getHash (2.15.1): sha256 of the name, its first 8 bytes each mod 62 into
+    0-9A-Za-z; the hash the server puts in a v2 ack of a consumer in account HNX."""
+    assert bus.hnx_bus_account_hash("HNX") == "hKkTAyOX"
+    assert bus.hnx_bus_account_hash("HNX-x") != "hKkTAyOX"
+    assert len(bus.hnx_bus_account_hash("ANY_ACCOUNT")) == 8
+
+
+def test_a_v2_ack_grant_carries_the_bus_accounts_own_hash():
+    v2 = "$JS.ACK._.{}.LAB.bridge-x.*.*.*.*.>"
+    assert problems([v2.format("hKkTAyOX")]) == []
+    for other in ("ABCDEFGH", bus.hnx_bus_account_hash("HNX-hnx-broker"), "hKkTAyOx"):
+        got = problems([v2.format(other)])
+        assert got and "hKkTAyOX" in got[0], (other, got)
+    # without the account no v2 grant passes: its hash cannot be checked
+    assert bus.hnx_bus_subject_problems([v2.format("hKkTAyOX")], USER, streams=STREAMS)
+    assert bus.hnx_bus_subject_problems([v2.format("hKkTAyOX")], USER, account="OTHER",
+                                        streams=STREAMS)  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "subject",
+    ["_R_.abc.>", "_R_.x", "_GR_.srv.x", "_SYS_.x", "_X.y", "other.homelabnext.decision.>",
+     "lab", "lab_DLQ.x", "LAB.x"],
+)  # fmt: skip
+def test_a_client_publishes_under_a_declared_stream_or_its_own_inbox_alone(subject):
+    """Security F1 (round 5): no server _ subject but the client's own _INBOX, and every other
+    grant under a declared stream's subject prefix."""
+    assert problems([subject]), subject
+
+
+def test_with_no_stream_declared_a_client_holds_no_event_subject():
+    assert bus.hnx_bus_subject_problems(["lab.homelabnext.x"], USER, account=ACCOUNT) != []
+    assert problems(["lab.homelabnext.x", f"_INBOX.{USER}.r"]) == []
+
+
+ADMIN_USER = "hnx-events-admin"
+
+
+@pytest.mark.parametrize(
+    "subject",
+    ["_R_.>", "_R_.abc.>", "_GR_.>", "_GR_.srv.x", "_SYS_.x", "_X.y", "lab.homelabnext.x",
+     "lab.>", "tx.>", "other.x", f"_INBOX.{USER}.>"],
+)  # fmt: skip
+def test_the_provisioner_holds_its_jetstream_calls_and_its_own_inbox_alone(subject):
+    """Round 7 (security F2, design 3): the provisioner lives in the bus account, where ``_R_.>``
+    carries every service-import reply (a client's PubAcks and pull deliveries) and a stream
+    subject it publishes is stored as an event (the republish trigger of F1): no _ subject but
+    its own _INBOX, and no subject outside $JS at all."""
+    got = problems([subject], ADMIN_USER, admin=True)
+    assert got, subject
+    assert problems([f"_INBOX.{ADMIN_USER}.>", "$JS.API.STREAM.CREATE.LAB"], ADMIN_USER,
+                    admin=True) == []  # fmt: skip
+
+
+def test_r_subjects_name_why_they_are_refused_for_either():
+    for admin, who in ((True, ADMIN_USER), (False, USER)):
+        [got] = problems(["_R_.>"], who, admin=admin)
+        assert "a server subject (_R_, _GR_, _SYS_" in got and f"_INBOX.{who}.>" in got, got
+    [got] = problems(["lab.homelabnext.x"], ADMIN_USER, admin=True)
+    assert "not the provisioner's" in got and "nothing else" in got, got
+
+
+def test_the_provisioner_creates_the_declared_streams_alone():
+    """Round 7 (security F1): the server does not check a STREAM.CREATE body, so the subject is
+    narrowed to what is declared: a stream or its DLQ, never a stream that would only ever exist
+    to carry a republish."""
+    assert problems(["$JS.API.STREAM.CREATE.LAB", "$JS.API.STREAM.CREATE.LAB_DLQ"], ADMIN_USER,
+                    admin=True) == []  # fmt: skip
+    for other in ("TESTX", "LAB_X", "LABDLQ", "OTHER_DLQ"):
+        [got] = problems([f"$JS.API.STREAM.CREATE.{other}"], ADMIN_USER, admin=True)
+        assert f"creates {other}, which is not a declared stream" in got, got
+    # with no stream declared (or its prefix alone) the provisioner creates none
+    assert bus.hnx_bus_subject_problems(["$JS.API.STREAM.CREATE.LAB"], ADMIN_USER, admin=True,
+                                        account=ACCOUNT)  # fmt: skip
+    assert bus.hnx_bus_subject_problems(["$JS.API.STREAM.CREATE.LAB"], ADMIN_USER, admin=True,
+                                        account=ACCOUNT, streams=["lab"])  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "subject",
+    ["$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x", "$JS.ACK.LAB.bridge-x.*.*.*.*.*",
+     "$JS.ACK._.hKkTAyOX.LAB.bridge-x.*.*.*.*.>"],
+)  # fmt: skip
+def test_the_provisioner_neither_pulls_nor_acks(subject):
+    """Security F2 (round 5): the provisioner lives in the JetStream account, where a delivery or
+    an ack's answer sent to a reply of its choosing is taken as a JetStream request."""
+    got = problems([subject], "hnx-events-admin", admin=True)
+    assert got and "not the provisioner's" in got[0], got
+    assert problems([subject]) == []  # a client's own durable
 
 
 @pytest.mark.parametrize(
@@ -65,7 +166,7 @@ USER = "hnx-broker"
     ],
 )  # fmt: skip
 def test_refused(subject):
-    assert bus.hnx_bus_subject_problems([subject], USER), subject
+    assert problems([subject]), subject
 
 
 @pytest.mark.parametrize(
@@ -81,7 +182,7 @@ def test_refused(subject):
     ],
 )  # fmt: skip
 def test_allowed(subject):
-    assert bus.hnx_bus_subject_problems([subject], USER) == []
+    assert problems([subject]) == []
 
 
 ADMIN_ONLY = ("$JS.API.STREAM.CREATE.LAB", "$JS.API.STREAM.MSG.GET.LAB",
@@ -93,9 +194,9 @@ ADMIN_ONLY = ("$JS.API.STREAM.CREATE.LAB", "$JS.API.STREAM.MSG.GET.LAB",
 
 @pytest.mark.parametrize("subject", ADMIN_ONLY)
 def test_the_provisioner_alone_creates_streams_and_creates_and_deletes_consumers(subject):
-    got = bus.hnx_bus_subject_problems([subject], USER)
+    got = problems([subject])
     assert got and "the provisioner's call alone" in got[0], got
-    assert bus.hnx_bus_subject_problems([subject], "hnx-events-admin", admin=True) == []
+    assert problems([subject], "hnx-events-admin", admin=True) == []
 
 
 @pytest.mark.parametrize(
@@ -108,11 +209,11 @@ def test_the_provisioner_alone_creates_streams_and_creates_and_deletes_consumers
      "$KV.>", "$JS.API.>"],
 )  # fmt: skip
 def test_the_provisioner_still_cannot_destroy(subject):
-    assert bus.hnx_bus_subject_problems([subject], "hnx-events-admin", admin=True)
+    assert problems([subject], "hnx-events-admin", admin=True)
 
 
 def test_every_problem_is_named():
-    got = bus.hnx_bus_subject_problems(["$JS.API.>", "lab.ok", "_INBOX.>"], USER)
+    got = problems(["$JS.API.>", "lab.ok", "_INBOX.>"])
     assert len(got) == 2 and got[0].startswith("$JS.API.>") and got[1].startswith("_INBOX.>")
 
 
@@ -134,6 +235,10 @@ REFUSED = [
     f"$JS.API.STREAM.{verb}.{s}" for verb in ("DELETE", "PURGE", "SNAPSHOT", "RESTORE", "UPDATE")
     for s in ("S", "Q")
 ] + [f"$JS.API.STREAM.MSG.DELETE.{s}" for s in ("S", "Q")]  # fmt: skip
+#: a client's own reads, never the provisioner's (it lives in the JetStream account); the v2 ack
+#: (11 tokens: it would double the walk) is test_the_provisioner_neither_pulls_nor_acks's, and no
+#: $JS.ACK form is in the provisioner's list at all
+READS = ["$JS.API.CONSUMER.MSG.NEXT.S.D", "$JS.ACK.S.D.1.2.3.4.5"]
 ADMIN = [f"$JS.API.STREAM.{v}.{s}" for v in ("CREATE", "MSG.GET") for s in ("S", "Q")] + [
     "$JS.API.CONSUMER.DELETE.S.D", "$JS.API.CONSUMER.DELETE.Q.Q",
     "$JS.API.CONSUMER.CREATE.S.D", "$JS.API.CONSUMER.CREATE.Q.Q",
@@ -146,7 +251,12 @@ ALPHABET = [
     *sorted(
         (
             {t for s in REFUSED + ADMIN for t in s.split(".")}
-            | {t for f in bus._JS_FORMS + bus._JS_ADMIN_FORMS for t in f if not t.startswith("<")}
+            | {
+                t
+                for f in bus._JS_FORMS + bus._JS_READ_FORMS + bus._JS_ADMIN_FORMS
+                for t in f
+                if not t.startswith("<")
+            }
             | {USER, "other", "S", "D", "hKkTAyOX"}
         )
         - {"Q"}
@@ -187,13 +297,13 @@ def _reaching(targets: list[str]):
 def test_no_pattern_that_reaches_a_refused_call_is_allowed(admin):
     """Exhaustive over the alphabet: every pattern a NATS matcher says reaches a refused call
     (for the provisioner, the refused calls but its own) is refused by the filter."""
-    targets = REFUSED if admin else REFUSED + ADMIN
+    targets = REFUSED + READS if admin else REFUSED + ADMIN
     seen = 0
     for pattern in _reaching(targets):
         seen += 1
         hits = [t for t in targets if subject_matches(pattern, t)]
         assert hits, pattern  # the walk yields only patterns that reach something
-        assert bus.hnx_bus_subject_problems([pattern], USER, admin=admin), (pattern, hits)
+        assert problems([pattern], admin=admin), (pattern, hits)
     assert seen > 1_000, seen  # the walk really explored (a broken walk proves nothing)
 
 
@@ -206,7 +316,7 @@ def test_every_short_pattern_is_refused_or_reaches_no_refused_call():
             if ">" in toks[:-1]:
                 continue
             pattern = ".".join(toks)
-            if bus.hnx_bus_subject_problems([pattern], USER) == []:
+            if problems([pattern]) == []:
                 assert not [t for t in targets if subject_matches(pattern, t)], pattern
 
 
@@ -219,9 +329,9 @@ def test_the_allowed_forms_reach_their_own_calls():
         "$JS.API.CONSUMER.MSG.NEXT.S.D", "$JS.ACK.S.D.*.*.*.*.*", "$JS.ACK._.hKkTAyOX.S.D.*.*.*.*.>",
     ]  # fmt: skip
     admin = ["$JS.API.CONSUMER.CREATE.S.D.lab.homelabnext.decision.returned",
-             "$JS.API.STREAM.CREATE.S", "$JS.API.STREAM.MSG.GET.S"]  # fmt: skip
-    assert bus.hnx_bus_subject_problems(user, USER) == []
-    assert bus.hnx_bus_subject_problems(admin + user, "hnx-events-admin", admin=True) == []
+             "$JS.API.STREAM.CREATE.LAB", "$JS.API.STREAM.MSG.GET.S"]  # fmt: skip
+    assert problems(user) == []
+    assert problems(admin + user[:2], "hnx-events-admin", admin=True) == []
     calls = {
         "$JS.API.STREAM.INFO.S": True, "$JS.API.CONSUMER.MSG.NEXT.S.D": True,
         "$JS.ACK.S.D.1.2.3.4.5": True, "$JS.ACK._.hKkTAyOX.S.D.1.2.3.4.5.6": True,
@@ -310,7 +420,9 @@ def test_the_labs_grants_are_within_the_ceiling():
         subjects = publish + perms["subscribe"]["allow"]
         assert subjects and publish, name
         admin = name == "hnx-lab-admin"
-        got = bus.hnx_bus_subject_problems(subjects, name, admin=admin)
+        got = bus.hnx_bus_subject_problems(subjects, name, admin=admin, account="HNX",
+                                           streams=[{"name": "HNXLAB_BROKER",
+                                                     "subject_prefix": "hnxlab"}])  # fmt: skip
         got += bus.hnx_bus_subscribe_problems(perms["subscribe"]["allow"], name, admin=admin)
         assert got == [], (name, got)
 
@@ -380,22 +492,199 @@ def test_every_client_lives_in_an_account_of_its_own_and_imports_its_grants_alon
         "permissions"
     ]["publish"]["allow"]
     assert all(i["service"]["account"] == "HNX" for i in rd["imports"])
-    # a subscribe-only client imports nothing and may publish nothing
-    quiet = bus.hnx_bus_accounts([{"user": "q", "password_hash": "h", "publish": [],
+    # subscribe_only is the provisioner's alone (the role refuses it for a client, which could
+    # receive nothing): rendered deny-all, never {"allow": []} (no restriction at all)
+    quiet = bus.hnx_bus_accounts([{"user": "adm", "password_hash": "h", "publish": [],
                                    "subscribe": [], "subscribe_only": True}], "adm", "HNX", "P")  # fmt: skip
-    assert quiet["HNX-q"] == {"users": [{"user": "q", "password": "h", "permissions": {
-        "publish": {"deny": [">"]}, "subscribe": {"allow": ["_INBOX.q.>"]}}}], "imports": []}  # fmt: skip
+    assert quiet["HNX"]["users"] == [{"user": "adm", "password": "h", "permissions": {
+        "publish": {"deny": [">"]}, "subscribe": {"allow": ["_INBOX.adm.>"]}}}]  # fmt: skip
+
+
+def test_the_monitor_imports_the_deletion_advisories_alone():
+    """Optional events_bus_monitor_user: an account of its own importing exactly the stream and
+    consumer deletion and stream update advisories, as STREAMS; it publishes nothing."""
+    got = bus.hnx_bus_accounts([{"user": "adm", "password_hash": "h", "publish": ["$JS.API.INFO"],
+                                 "subscribe": []}], "adm", "HNX", "JS.HNX.API",
+                               {"user": "hnx-watch", "password_hash": "m"})  # fmt: skip
+    subjects = ["$JS.EVENT.ADVISORY.STREAM.DELETED.>", "$JS.EVENT.ADVISORY.CONSUMER.DELETED.>",
+                "$JS.EVENT.ADVISORY.STREAM.UPDATED.>"]  # fmt: skip
+    assert list(bus.MONITOR_SUBJECTS) == subjects
+    assert got["HNX-hnx-watch"] == {
+        "users": [{"user": "hnx-watch", "password": "m", "permissions": {
+            "publish": {"deny": [">"]}, "subscribe": {"allow": subjects}}}],
+        "imports": [{"stream": {"account": "HNX", "subject": s}} for s in subjects]}  # fmt: skip
+    assert [e for e in got["HNX"]["exports"] if "stream" in e] == [
+        {"stream": s, "accounts": ["HNX-hnx-watch"]} for s in subjects]  # fmt: skip
+    assert "jetstream" not in got["HNX-hnx-watch"]
+
+
+def _detail(name, js=False, imports=()):
+    """An ``/accountz?acc=`` answer as nats-server 2.15.1 gives it (its own $SYS imports, the
+    $JS.API import from $SYS of an account without JetStream, then ``(account, subject[,
+    local subject])`` rows)."""
+    sys_ = [{"subject": f"$SYS.REQ.ACCOUNT.{name}.CONNZ", "account": "$SYS", "type": "service",
+             "local_subject": "$SYS.REQ.ACCOUNT.PING.CONNZ"},
+            {"subject": "$JS.API.>", "account": "$SYS", "type": "service",
+             "local_subject": "$JS.API.>"}]  # fmt: skip
+    rows = [(r[0], r[1], r[2] if len(r) > 2 else r[1]) for r in imports]
+    return {"account_detail": {"account_name": name, "jetstream_enabled": js,
+                               "imports": sys_ + [{"subject": s, "account": a, "to": loc,
+                                                   "local_subject": loc, "type": "service"}
+                                                  for a, s, loc in rows]}}  # fmt: skip
+
+
+def test_the_account_split_is_read_back_from_the_running_server():
+    """Security F3 (round 5): the health hook reads /accountz (accounts, JetStream, imports) and
+    /connz?auth=true (which account each connected user is in) and names every departure."""
+    users = [{"user": "adm", "publish": ["$JS.API.STREAM.CREATE.LAB"]},
+             {"user": "relay", "publish": ["lab.>", "$JS.API.STREAM.INFO.LAB"]},
+             {"user": "bridge", "publish": ["$JS.ACK.LAB.b.*.*.*.*.*"]}]  # fmt: skip
+    want = bus.hnx_bus_expected_accounts(users, "adm", "HNX", "watch")
+    assert want == {"HNX": ["adm"], "HNX-relay": ["relay"], "HNX-bridge": ["bridge"],
+                    "HNX-watch": ["watch"]}  # fmt: skip
+    accountz = {"accounts": ["$G", "$SYS", *want]}
+    relay_imports = [("HNX", "lab.>"),
+                     ("HNX", "$JS.API.STREAM.INFO.LAB", "JS.HNX.API.STREAM.INFO.LAB")]  # fmt: skip
+    details = [_detail("HNX", js=True), _detail("HNX-relay", imports=relay_imports),
+               _detail("HNX-bridge", imports=[("HNX", "$JS.ACK.LAB.b.*.*.*.*.*")]),
+               _detail("HNX-watch", imports=[("HNX", s) for s in bus.MONITOR_SUBJECTS])]  # fmt: skip
+    connz = {"total": 2, "offset": 0,
+             "connections": [{"cid": 1, "authorized_user": "adm", "account": "HNX"},
+                             {"cid": 2, "authorized_user": "relay", "account": "HNX-relay"}]}  # fmt: skip
+
+    def check(**kw):
+        args = {"accountz": accountz, "details": details, "connz": connz, **kw}
+        return bus.hnx_bus_account_problems(args["accountz"], args["details"], users, "adm",
+                                            "HNX", "watch", args["connz"])  # fmt: skip
+
+    assert check() == []
+    # the one-account shape the split replaced: the relay connected in HNX itself
+    one = {"connections": [{"cid": 2, "authorized_user": "relay", "account": "HNX"}]}
+    assert check(connz=one) == ["user relay: connected in account HNX, expected HNX-relay"]
+    assert check(connz={"connections": [{"cid": 3, "authorized_user": "ghost"}]})
+    assert check(accountz={"accounts": ["$G", "HNX"]})  # the client accounts missing
+    assert check(accountz={"accounts": [*accountz["accounts"], "HNX-old"]})
+    js_client = [*details[:1], _detail("HNX-relay", js=True), *details[2:]]
+    assert any("JetStream on" in p for p in check(details=js_client))
+    cross = [*details[:1], _detail("HNX-relay", imports=[("HNX-bridge", "x.>")]), *details[2:]]
+    assert any("imports from" in p for p in check(details=cross))
+    bus_imports = [_detail("HNX", js=True, imports=[("HNX-relay", "x")]), *details[1:]]
+    assert any("account HNX: imports" in p for p in check(details=bus_imports))
+
+
+def test_the_split_check_reads_the_import_subjects_too():
+    """Round 7 (security F3): an import from the bus account is checked subject by subject
+    against what the role renders for that account's user, not only by where it comes from."""
+    users = [{"user": "adm", "publish": ["$JS.API.STREAM.CREATE.LAB"]},
+             {"user": "relay", "publish": ["lab.>", "$JS.API.STREAM.INFO.LAB"]}]  # fmt: skip
+    rendered = [
+        ("HNX", "$JS.API.STREAM.INFO.LAB", "JS.HNX.API.STREAM.INFO.LAB"),
+        ("HNX", "lab.>", "lab.>"),
+    ]
+    assert bus.hnx_bus_expected_imports(users, "adm", "HNX", "JS.HNX.API") == {
+        "HNX": [], "HNX-relay": rendered}  # fmt: skip
+    accountz = {"accounts": ["$G", "$SYS", "HNX", "HNX-relay"]}
+
+    def check(relay_imports, api_prefix=None):
+        details = [_detail("HNX", js=True), _detail("HNX-relay", imports=relay_imports)]
+        return bus.hnx_bus_account_problems(accountz, details, users, "adm", "HNX", "", {},
+                                            api_prefix)  # fmt: skip
+
+    assert check(rendered) == [] and check(rendered, "JS.HNX.API") == []
+    # a hand-added $JS.API.> (every call, STREAM.DELETE included) from the bus account itself
+    got = check([*rendered, ("HNX", "$JS.API.>", "JS.HNX.API.>")])
+    assert got == ["account HNX-relay: imports $JS.API.> from HNX as JS.HNX.API.>, which the "
+                   "role does not render"], got  # fmt: skip
+    got = check([*rendered, ("HNX", "lab.homelabnext.>")])
+    assert got and "lab.homelabnext.> from HNX" in got[0], got
+    # the same subject under another local name, or one the role renders missing
+    got = check([rendered[1], ("HNX", "$JS.API.STREAM.INFO.LAB", "x.STREAM.INFO.LAB")])
+    assert any("x.STREAM.INFO.LAB" in p for p in got) and any("lacks" in p for p in got), got
+    assert check(rendered[:1]) == ["account HNX-relay: lacks the imports lab.> from HNX"]
+    # under another API prefix, the rendered import is not the one the server holds
+    assert check(rendered, "JS.OTHER.API")
+
+
+def test_the_split_check_skips_a_connection_mid_handshake_and_sees_every_connection():
+    """Round 7 (design 2, security F3): /connz lists a connection from the moment the server
+    accepts it, before its CONNECT (no user, no account: what nats-server 2.15.1 shows for it);
+    it can do nothing and is skipped.  /connz returns at most ``limit`` connections: when its
+    ``total`` is more than it returned, the check could not see them all, and fails."""
+    users = [{"user": "adm", "publish": ["$JS.API.STREAM.CREATE.LAB"]}]
+    accountz = {"accounts": ["$G", "$SYS", "HNX"]}
+    details = [_detail("HNX", js=True)]
+    pending = {"cid": 7, "kind": "Client", "type": "nats", "name_tag": "$G"}
+    adm = {"cid": 8, "authorized_user": "adm", "account": "HNX"}
+
+    def check(connz):
+        return bus.hnx_bus_account_problems(accountz, details, users, "adm", "HNX", "", connz)
+
+    assert check({"total": 2, "offset": 0, "connections": [pending, adm]}) == []
+    got = check({"total": 2, "offset": 0, "limit": 1, "connections": [pending]})
+    assert got == ["/connz lists 2 connections and returned 1 (its limit): the check cannot see "
+                   "every connection; raise the limit in the health hook"], got  # fmt: skip
+    # a user in the wrong account is still named, whatever else is mid-handshake
+    assert check({"total": 2, "connections": [pending, dict(adm, account="HNX-x")]}) == [
+        "user adm: connected in account HNX-x, expected HNX"]  # fmt: skip
+    assert check(None) == [] and check({}) == []
+
+
+def test_a_stream_that_sends_its_messages_elsewhere_is_named():
+    """Round 7 (security F1): a republish, mirror, sources or subject transform can aim a
+    stream's messages at $JS.API.*; the role's streams never carry one, so each is named."""
+
+    def jsz(*cfgs, account="HNX"):
+        return {"account_details": [{"name": account, "stream_detail": [
+            {"name": n, "config": c} for n, c in cfgs]}]}  # fmt: skip
+
+    plain = {"subjects": ["lab.>"], "deny_delete": True, "deny_purge": True}
+    assert bus.hnx_bus_stream_redirects(jsz(("LAB", plain), ("LAB_DLQ", plain)), "HNX") == []
+    doc = jsz(("LAB", plain),
+              ("TESTX", {"republish": {"src": "tx.a", "dest": "$JS.API.STREAM.DELETE.LAB"}}),
+              ("M", {"mirror": {"name": "LAB"}}), ("S", {"sources": [{"name": "LAB"}]}),
+              ("T", {"subject_transform": {"src": "t.>", "dest": "$JS.API.>"}}))  # fmt: skip
+    assert bus.hnx_bus_stream_redirects(doc, "HNX") == [
+        "TESTX: republish tx.a -> $JS.API.STREAM.DELETE.LAB", "M: mirror LAB",
+        "S: sources LAB", "T: subject_transform t.> -> $JS.API.>"]  # fmt: skip
+    # one the inventory declares is not named (none does today); another account's is not ours
+    assert bus.hnx_bus_stream_redirects(doc, "HNX", ["M.mirror", "S.sources", "T.subject_transform",
+                                                     "TESTX.republish"]) == []  # fmt: skip
+    assert bus.hnx_bus_stream_redirects(doc, "HNX-x") == []
+    assert bus.hnx_bus_stream_redirects(None, "HNX") == []
+    # empty values are what a server without them may print: not a redirect
+    assert bus.hnx_bus_stream_redirects(jsz(("LAB", {**plain, "sources": [], "mirror": None})),
+                                        "HNX") == []  # fmt: skip
+
+
+def test_streams_without_deny_flags_are_reported():
+    def jsz(*cfgs, account="HNX"):
+        return {"account_details": [{"name": account, "stream_detail": [
+            {"name": n, "config": c} for n, c in cfgs]}]}  # fmt: skip
+
+    flagged = {"deny_delete": True, "deny_purge": True}
+    assert bus.hnx_bus_unprotected_streams(jsz(("LAB", flagged)), "HNX") == []
+    assert bus.hnx_bus_unprotected_streams(
+        jsz(("LAB", {}), ("LAB_DLQ", {"deny_delete": True})), "HNX"
+    ) == ["LAB (no deny_delete or deny_purge)", "LAB_DLQ (no deny_purge)"]
+    assert bus.hnx_bus_unprotected_streams(jsz(("LAB", {}), account="HNX-x"), "HNX") == []
+    assert bus.hnx_bus_unprotected_streams(None, "HNX") == []
 
 
 @pytest.mark.parametrize(
     ("subject", "ok"),
     [("_INBOX.hnx-broker.>", True), ("_INBOX.hnx-broker.r.1", True), ("_INBOX.hnx-broker", False),
      ("_INBOX.other.>", False), ("lab.homelabnext.decision.>", False), ("$JS.ACK.S.d.>", False),
-     (">", False)],
+     (">", False), ("_R_.>", False)],
 )  # fmt: skip
-def test_a_client_subscribes_to_its_own_replies_alone(subject, ok):
+def test_every_user_subscribes_to_its_own_replies_alone(subject, ok):
+    """A client (round 5), and the provisioner too (round 7: in the bus account ``_R_.>`` would
+    receive every service-import reply and ``$JS.API.*`` the clients' requests)."""
     assert (bus.hnx_bus_subscribe_problems([subject], USER) == []) is ok
-    assert bus.hnx_bus_subscribe_problems([subject], USER, admin=True) == []
+    got = bus.hnx_bus_subscribe_problems([subject], USER, admin=True)
+    assert (got == []) is ok
+    assert not got or "the provisioner subscribes to its own replies only" in got[0]
+    for sub in ("_R_.>", "$JS.API.STREAM.INFO.LAB", "$JS.API.>"):
+        assert bus.hnx_bus_subscribe_problems([sub], ADMIN_USER, admin=True), sub
 
 
 LOOPBACK = ("127.0.0.1", "127.1.2.3", "::1")  # no-raw-endpoint: allow the loopback cases

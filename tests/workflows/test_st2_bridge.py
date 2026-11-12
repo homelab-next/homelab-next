@@ -808,6 +808,36 @@ def test_the_bridge_over_the_jetstream_adapter(hook):
     assert b.poll() == 0
 
 
+#: ``hnx workflows <slot> bridge`` on the repository's bridge file and a stand-in webhook URL
+BRIDGE_ARGV = ["st2", "bridge", "--bridge-file", str(BRIDGE), "--st2-url",
+               "https://st2.example.internal", "--stream", "HOMELABNEXT", "--subject-prefix", "lab"]  # fmt: skip
+
+
+def test_the_bridge_at_the_default_prefix_on_a_client_account_names_the_flag(monkeypatch, capsys):
+    """Round 6: on the events bus role's bus the bridge left at --events-api-prefix's default is
+    refused its first $JS.API call: exit 2, and the message names the prefix to pass."""
+    from homelabnext.workflows import cli
+
+    class ClientAccount:  # the server: $JS.API.* is not in this user's allow-list
+        def request(self, subject, *a, **kw):
+            raise nj.WireError(nj.permission_denied(subject), permanent=True)
+
+        def pull(self, *a, **kw):
+            raise AssertionError("never reached")
+
+        def close(self):
+            pass
+
+    real = nj.make
+    monkeypatch.setattr(nj, "make", lambda **kw: real(wire=ClientAccount(), **{
+        k: v for k, v in kw.items() if k not in ("user", "password_secret")}))  # fmt: skip
+    rc = cli.main(BRIDGE_ARGV)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "permission denied: publish $JS.API.STREAM.INFO.HOMELABNEXT" in err, err
+    assert "pass api_prefix JS.<account>.API (--events-api-prefix" in err, err
+
+
 def test_the_bridge_command_passes_its_bus_credentials(monkeypatch):
     """On an authenticated bus the bridge connects as its own user, with the password by name."""
     from homelabnext.workflows import cli
@@ -821,16 +851,7 @@ def test_the_bridge_command_passes_its_bus_credentials(monkeypatch):
     monkeypatch.setattr(nj, "make", fake_make)
     rc = cli.main(
         [
-            "st2",
-            "bridge",
-            "--bridge-file",
-            str(ROOT / "workflows" / "stackstorm" / "bridge.json"),
-            "--st2-url",
-            "https://st2.example.internal",
-            "--stream",
-            "HOMELABNEXT",
-            "--subject-prefix",
-            "lab",
+            *BRIDGE_ARGV,
             "--events-user",
             "hnx-st2-bridge",
             "--events-password-secret",
