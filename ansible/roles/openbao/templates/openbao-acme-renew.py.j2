@@ -220,6 +220,7 @@ def same(a, b):
 
 
 def renew():
+    openssl("version")  # no openssl: CannotMeasure before lego orders what could not be checked
     env = {k: os.environ[k] for k in PASS_ENV if k in os.environ}
     token = load_token()
     if not token:

@@ -1818,7 +1818,7 @@ def test_the_renewal_script_installs_only_a_valid_certificate(tmp_path, pki):
     (tmp_path / "lego.force").write_text("")
     (tmp_path / "lego.wrong").write_text("")
     r = renew()
-    assert r.returncode == 2 and f"does not verify for {HOST}" in r.stdout, r.stdout
+    assert r.returncode == 2 and f"names wrong.example.internal, not exactly {HOST}" in r.stdout
     assert cert.read_bytes() == first
     (tmp_path / "lego.wrong").unlink()
     dns_env = tmp_path / "etc" / "acme" / "dns.env"
