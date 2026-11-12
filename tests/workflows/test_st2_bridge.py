@@ -797,6 +797,79 @@ def test_the_provisioner_creates_pull_durables_through_the_filtered_create_only(
         )
 
 
+def test_the_provisioner_names_a_durable_that_drifted_from_its_declaration():
+    """Security audit of overlay #19 (finding 3): an existing durable is never changed, so one
+    created with another lease, max_deliver or start keeps it silently.  The provisioner now
+    refuses it, naming each field (live and declared) and whether it can be edited in place; it
+    never recreates or edits it, and the bridge's own bind is unchanged."""
+    wire = provisioned(ack_wait=3.0)
+    before = len(wire.log)
+    first = bridge_durables()[:1]
+    with pytest.raises(nj.NotProvisioned) as exc:
+        nj.provision_consumers(wire, stream="HNX", durables=first)
+    msg = str(exc.value)
+    assert f"durable {first[0]['durable']!r} on stream 'HNX' differs from its declaration" in msg
+    assert "ack_wait is 3s, declared 30s" in msg and "nats consumer edit" in msg, msg
+    assert "max_deliver" not in msg and "cannot be changed" not in msg, msg
+    # nothing was created, updated or deleted: INFO only
+    assert [s for s, _p, _h in wire.log[before:]] == [
+        f"$JS.API.CONSUMER.INFO.HNX.{first[0]['durable']}"
+    ]
+    with pytest.raises(nj.NotProvisioned, match=r"ack_wait is 3s, declared 30s; max_deliver is "
+                       r"100, declared 5"):  # fmt: skip
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(max_deliver=5)[:1])
+    # where it starts is fixed at creation: delete and recreate, never in place
+    with pytest.raises(nj.NotProvisioned) as exc:
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0, start_seq=4)[:1])
+    msg = str(exc.value)
+    assert "deliver_policy is new, declared by_start_sequence" in msg, msg
+    assert "opt_start_seq is unset, declared 4" in msg, msg
+    assert "deliver_policy, opt_start_seq cannot be changed on an existing durable" in msg, msg
+    with pytest.raises(nj.NotProvisioned, match="deliver_policy is new, declared by_start_time"):
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0, replay_s=60)[:1])
+    with pytest.raises(nj.NotProvisioned, match="deliver_policy is new, declared all"):
+        nj.provision_consumers(wire, stream="HNX",
+                               durables=bridge_durables(3.0, deliver_policy="all")[:1])  # fmt: skip
+    # as declared: nothing to say, nothing created
+    assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0)) == []
+    # every drifted durable is named in one error, and a missing one is still created first
+    new = {"durable": "bridge-new", "filter": "hnx.homelabnext.new", "ack_wait": 3.0,
+           "max_deliver": 100}  # fmt: skip
+    with pytest.raises(nj.NotProvisioned) as exc:
+        nj.provision_consumers(wire, stream="HNX", durables=[*bridge_durables(), new])
+    msg = str(exc.value)
+    assert msg.count("differs from its declaration") == 3 and msg.endswith(
+        "(created first: bridge-new)"), msg  # fmt: skip
+    assert "bridge-new" in wire.streams["HNX"].consumers
+    # fields a provisioned durable never sets, made some other way (the fake's config edited)
+    cfg = wire.streams["HNX"].consumers[first[0]["durable"]].config
+    cfg["backoff"] = [10**9, 5 * 10**9]
+    with pytest.raises(nj.NotProvisioned, match=r"backoff is \[1s, 5s\], declared none"):
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0)[:1])
+    del cfg["backoff"]
+    cfg["headers_only"] = True
+    # headers_only is refused at the client's bind too: every body would read as empty
+    with pytest.raises(nj.NotProvisioned, match="headers_only is true, declared none"):
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0)[:1])
+    with pytest.raises(sb.BridgeError, match="headers only"):
+        bridge(standing(wire, ack_wait=3.0), lambda _ev: 202)
+
+
+def test_a_durable_started_at_a_sequence_matches_only_that_sequence():
+    """A durable created at a start sequence (the fake creates new/all/by_start_time only, so its
+    recorded configuration is edited the way the server records one) matches that declaration."""
+    wire = provisioned()
+    for d in bridge_durables():
+        cfg = wire.streams["HNX"].consumers[d["durable"]].config
+        cfg.update(deliver_policy="by_start_sequence", opt_start_seq=4)
+    assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(start_seq=4)) == []
+    with pytest.raises(nj.NotProvisioned, match="opt_start_seq is 4, declared 9"):
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(start_seq=9))
+    with pytest.raises(nj.NotProvisioned, match="deliver_policy is by_start_sequence, declared "
+                       "new; opt_start_seq is 4, declared none"):  # fmt: skip
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables())
+
+
 def test_the_bridge_over_the_jetstream_adapter(hook):
     """The subject the broker publishes (the event type) is the subject the bridge consumes."""
     bus = standing(provisioned())

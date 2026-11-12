@@ -768,3 +768,143 @@ def test_what_is_declared_but_not_on_the_bus_is_named():
     assert bus.hnx_bus_missing(jsz(("LAB", ["bridge-x"]), ("LAB_DLQ", []), account="HNX-x"),
                                "HNX", streams, durables)["streams"] == ["LAB", "LAB_DLQ"]  # fmt: skip
     assert bus.hnx_bus_missing(None, "HNX") == {"streams": [], "durables": []}
+
+
+#: a durable as events_bus_durables declares it, and as the provisioner creates it on the bus
+DECLARED = {"stream": "LAB", "durable": "bridge-x", "user": "hnx-bus-bridge",
+            "filter": "lab.homelabnext.decision.returned", "ack_wait": 30, "max_deliver": 100}  # fmt: skip
+CREATED = {"durable_name": "bridge-x", "deliver_policy": "new", "ack_policy": "explicit",
+           "ack_wait": 30 * 10**9, "max_deliver": 100,
+           "filter_subject": "lab.homelabnext.decision.returned", "replay_policy": "instant",
+           "max_waiting": 512, "max_ack_pending": 1000, "num_replicas": 0}  # fmt: skip
+#: (what differs on the bus, the field each message names); a start sequence or policy is fixed
+#: when the durable is created, a lease and max_deliver can be edited in place
+DRIFTS = [
+    ({"ack_wait": 3 * 10**9}, ["ack_wait is 3s, declared 30s"]),
+    ({"max_deliver": 5}, ["max_deliver is 5, declared 100"]),
+    ({"max_deliver": None}, ["max_deliver is unset, declared 100"]),
+    ({"ack_wait": 3 * 10**9, "max_deliver": -1},
+     ["ack_wait is 3s, declared 30s", "max_deliver is -1, declared 100"]),
+    ({"deliver_policy": "all"}, ["deliver_policy is all, declared new"]),
+    ({"deliver_policy": "by_start_sequence", "opt_start_seq": 4},
+     ["deliver_policy is by_start_sequence, declared new", "opt_start_seq is 4, declared none"]),
+    ({"replay_policy": "original"}, ["replay_policy is original, declared instant"]),
+    ({"headers_only": True}, ["headers_only is true, declared none"]),
+    ({"backoff": [10**9, 5 * 10**9]}, ["backoff is [1s, 5s], declared none"]),
+    # absent fields read as the server's defaults
+    ({"deliver_policy": None}, ["deliver_policy is all, declared new"]),
+    ({"ack_wait": None}, ["ack_wait is unset, declared 30s"]),
+    ({"ack_policy": None, "replay_policy": None}, []),
+    # the security audit's: each stops, empties or loses delivery silently
+    ({"pause_until": "2099-01-01T00:00:00Z"}, ["pause_until is '2099-01-01T00:00:00Z', declared none"]),
+    ({"inactive_threshold": 60 * 10**9}, ["inactive_threshold is 60s, declared none"]),
+    ({"priority_policy": "pinned_client", "priority_groups": ["g"]},
+     ["priority_groups is ['g'], declared none", "priority_policy is pinned_client, declared none"]),
+    ({"priority_policy": "none"}, []),
+    ({"mem_storage": True}, ["mem_storage is true, declared none"]),
+    ({"deliver_subject": "_INBOX.x", "idle_heartbeat": 5 * 10**9, "flow_control": True},
+     ["deliver_subject is '_INBOX.x', declared none", "flow_control is true, declared none",
+      "idle_heartbeat is 5s, declared none"]),
+    ({"filter_subject": "lab.>", "filter_subjects": ["lab.a", "lab.b"]},
+     ["filter_subject is 'lab.>', declared 'lab.homelabnext.decision.returned'",
+      "filter_subjects is ['lab.a', 'lab.b'], declared none"]),
+]  # fmt: skip
+
+
+def _jsz(config, account="HNX"):
+    return {"account_details": [{"name": account, "stream_detail": [
+        {"name": "LAB", "consumer_detail": [{"name": "bridge-x", "config": config}]},
+        {"name": "LAB_DLQ", "consumer_detail": []}]}]}  # fmt: skip
+
+
+def _live(changes):
+    return {k: v for k, v in {**CREATED, **changes}.items() if v is not None}
+
+
+def test_a_durable_as_declared_is_no_drift():
+    """What the provisioner creates (with the fields the server adds) reads back as no drift;
+    a declared durable not on the bus is hnx_bus_missing's, not this filter's."""
+    assert bus.hnx_bus_durable_drift(_jsz(CREATED), "HNX", [DECLARED]) == []
+    assert bus.hnx_bus_durable_drift(_jsz(CREATED), "HNX", [dict(DECLARED, durable="o")]) == []
+    assert bus.hnx_bus_durable_drift(None, "HNX", [DECLARED]) == []
+    # another account's durable of the same name is not the bus's
+    assert bus.hnx_bus_durable_drift(_jsz(_live({"ack_wait": 1}), "HNX-x"), "HNX", [DECLARED]) == []
+    # the declaration's defaults are the adapter's: ack_wait 30s, max_deliver 5, deliver new
+    bare = {k: v for k, v in DECLARED.items() if k not in ("ack_wait", "max_deliver")}
+    assert bus.hnx_bus_durable_drift(_jsz(_live({"max_deliver": 5})), "HNX", [bare]) == []
+
+
+@pytest.mark.parametrize(("changes", "named"), DRIFTS)
+def test_a_durable_that_drifted_from_its_declaration_is_named(changes, named):
+    """Security audit of overlay #19 (finding 3): the provisioner never changes an existing
+    durable, so one created with another lease, max_deliver or start keeps it silently; the health
+    hook names every such field, the adapter's provisioner refuses it with the same words."""
+    got = bus.hnx_bus_durable_drift(_jsz(_live(changes)), "HNX", [DECLARED])
+    if not named:
+        assert got == [], got
+        return
+    assert got == [f"LAB/bridge-x: {'; '.join(named)}"], got
+
+
+def test_the_start_a_durable_declares_is_compared():
+    seq = dict(DECLARED, start_seq=4)
+    on_seq = _live({"deliver_policy": "by_start_sequence", "opt_start_seq": 4})
+    assert bus.hnx_bus_durable_drift(_jsz(on_seq), "HNX", [seq]) == []
+    assert bus.hnx_bus_durable_drift(_jsz(_live({"deliver_policy": "by_start_sequence",
+                                                 "opt_start_seq": 9})), "HNX", [seq]) == [
+        "LAB/bridge-x: opt_start_seq is 9, declared 4"]  # fmt: skip
+    assert bus.hnx_bus_durable_drift(_jsz(CREATED), "HNX", [seq]) == [
+        "LAB/bridge-x: deliver_policy is new, declared by_start_sequence; opt_start_seq is "
+        "unset, declared 4"]  # fmt: skip
+    # a start time is computed at creation: only the policy can be compared
+    back = dict(DECLARED, replay_s=604800)
+    on_time = _live({"deliver_policy": "by_start_time", "opt_start_time": "2026-11-05T00:00:00Z"})
+    assert bus.hnx_bus_durable_drift(_jsz(on_time), "HNX", [back]) == []
+    assert bus.hnx_bus_durable_drift(_jsz(CREATED), "HNX", [back]) == [
+        "LAB/bridge-x: deliver_policy is new, declared by_start_time"
+    ]
+    assert bus.hnx_bus_durable_drift(_jsz(CREATED), "HNX", [dict(DECLARED, deliver_policy="all")])
+
+
+def test_an_invalid_declaration_or_a_hostile_value_is_named_safely():
+    """A declaration validate refuses is named, not compared; a server-reported value lands in
+    an Ansible failure message cut to 200 characters with its braces replaced."""
+    assert bus.hnx_bus_durable_drift(_jsz(CREATED), "HNX", [dict(DECLARED, ack_wait="x")]) == [
+        "LAB/bridge-x: its declaration is not valid (validate says why)"
+    ]
+    (got,) = bus.hnx_bus_durable_drift(
+        _jsz(_live({"filter_subjects": ["{{ lookup('pipe', 'id') }}"] * 50})), "HNX", [DECLARED]
+    )
+    assert "{" not in got and "}" not in got and "...(cut)" in got and len(got) < 300, got
+
+
+def test_the_two_copies_compare_the_same_fields():
+    """The filter cannot import homelabnext on the controller, so it carries a copy of the
+    adapter's field lists; they are held equal here."""
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    assert bus.DURABLE_COMPARED == nj.DRIFT_COMPARED
+    assert bus.DURABLE_NEVER_SET == nj.DRIFT_NEVER_SET
+
+
+@pytest.mark.parametrize(
+    "decl",
+    [DECLARED, dict(DECLARED, start_seq=4), dict(DECLARED, replay_s=60),
+     dict(DECLARED, deliver_policy="all", ack_wait=2.5, max_deliver=1)],
+)  # fmt: skip
+@pytest.mark.parametrize(("changes", "_named"), [({}, []), *DRIFTS])
+def test_the_health_hook_and_the_provisioner_agree(decl, changes, _named):
+    """The filter (Ansible's controller, no homelabnext import) mirrors the adapter's
+    ``durable_drift``: over every declaration shape and every drift, the same fields."""
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    have = _live(changes)
+    want = nj._consumer_config(
+        decl["durable"], decl["filter"], ack_wait=float(decl.get("ack_wait", 30)),
+        max_deliver=int(decl.get("max_deliver", 5)),
+        deliver_policy=str(decl.get("deliver_policy", "new")),
+        start=None if decl.get("replay_s") is None else 1.0, start_seq=decl.get("start_seq"),
+    )  # fmt: skip
+    adapter = nj.durable_drift(have, want)
+    got = bus.hnx_bus_durable_drift(_jsz(have), "HNX", [decl])
+    assert got == ([f"LAB/bridge-x: {'; '.join(adapter)}"] if adapter else []), (adapter, got)

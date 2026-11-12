@@ -98,6 +98,8 @@ from homelabnext._http import check_plaintext
 from ._env import env_secret, resolve
 
 __all__ = [
+    "DRIFT_COMPARED",
+    "DRIFT_NEVER_SET",
     "JetStreamApiError",
     "JetStreamBus",
     "JetStreamConsumer",
@@ -108,6 +110,7 @@ __all__ = [
     "WireError",
     "WireMsg",
     "check_stream_config",
+    "durable_drift",
     "make",
     "provision_consumers",
     "provision_streams",
@@ -477,11 +480,99 @@ def _create_subject(stream: str, durable: str, filt: str) -> str:
     return create
 
 
-def _bindable(info: Mapping[str, Any], stream: str, durable: str, filt: str) -> None:
-    """Refuse an existing durable a client must not use: a push one, another filter, or acks
-    other than explicit."""
+#: the fields :func:`durable_drift` compares with the declaration (the adapter's defaults:
+#: :func:`_consumer_config`); an absent one reads as nats-server's default where it has one
+DRIFT_COMPARED = (
+    "filter_subject", "ack_wait", "max_deliver", "deliver_policy", "opt_start_seq",
+    "ack_policy", "replay_policy",
+)  # fmt: skip
+#: the fields a durable the provisioner creates never sets; any value is drift.  ``pause_until``
+#: stops delivery, ``inactive_threshold`` has the server delete an idle durable, ``priority_*``
+#: hand deliveries to one pinned client, ``mem_storage`` loses the cursor on a restart,
+#: ``headers_only`` empties every body, ``backoff`` replaces ``ack_wait``; the push fields mean a
+#: push consumer.  Deliberately not compared: what the server fills with its own default
+#: (``max_ack_pending``, ``max_waiting``, ``num_replicas``, ``max_batch``, ``max_expires``,
+#: ``max_bytes``: throughput, not delivery), ``description`` and ``metadata``.
+DRIFT_NEVER_SET = (
+    "deliver_subject", "deliver_group", "flow_control", "idle_heartbeat", "rate_limit_bps",
+    "headers_only", "backoff", "filter_subjects", "pause_until", "inactive_threshold",
+    "priority_groups", "priority_policy", "mem_storage", "direct", "sourcing", "sample_freq",
+)  # fmt: skip
+#: what ``CONSUMER.CREATE`` with ``action: update`` refuses to change (nats-server 2.15.1
+#: ``checkNewConsumerConfig``): such a durable must be deleted and created again; every other
+#: field above can be changed in place (``nats consumer edit``), which keeps what is pending
+_FIXED_AT_CREATION = (
+    "deliver_policy", "opt_start_seq", "ack_policy", "replay_policy", "deliver_subject",
+    "flow_control", "idle_heartbeat", "mem_storage", "direct", "sourcing",
+)  # fmt: skip
+_DURATIONS = ("ack_wait", "idle_heartbeat", "inactive_threshold")
+_SERVER_DEFAULT = {"deliver_policy": "all", "ack_policy": "explicit", "replay_policy": "instant"}
+
+
+def _seconds(ns: Any) -> str:
+    try:
+        return f"{int(ns) / _NS:g}s"
+    except (TypeError, ValueError):
+        return repr(ns)
+
+
+def _shown(key: str, value: Any) -> str:
+    if value is None:
+        return "unset"
+    if key in _DURATIONS:
+        return _seconds(value)
+    if key == "backoff" and isinstance(value, list):
+        return "[" + ", ".join(_seconds(b) for b in value) + "]"
+    if isinstance(value, bool):
+        return str(value).lower()
+    return value if isinstance(value, str) and key.endswith("_policy") else repr(value)
+
+
+def durable_drift(have: Mapping[str, Any], want: Mapping[str, Any]) -> list[str]:
+    """How an existing durable's configuration (``have``: ``CONSUMER.INFO``'s ``config``) differs
+    from the one the provisioner would create (``want``: :func:`_consumer_config`'s), one
+    ``"<field> is <live>, declared <declared>"`` per field, [] when none does: each of
+    :data:`DRIFT_COMPARED` (``opt_start_seq`` only when either side has one; a ``replay_s`` start
+    time is computed when the durable is created, so only its policy is compared) and any of
+    :data:`DRIFT_NEVER_SET` that is set.  The events bus role's health filter
+    ``hnx_bus_durable_drift`` gives the same verdicts (tests/roles/test_hnx_bus_filter.py)."""
+    out = []
+    for key in DRIFT_COMPARED:
+        live, declared = have.get(key, _SERVER_DEFAULT.get(key)), want.get(key)
+        if key == "opt_start_seq" and not live and declared is None:
+            continue
+        if live != declared:
+            out.append(
+                f"{key} is {_shown(key, live)}, declared "
+                f"{'none' if declared is None else _shown(key, declared)}"
+            )
+    out.extend(
+        f"{key} is {_shown(key, have[key])}, declared none"
+        for key in DRIFT_NEVER_SET
+        if have.get(key) and have.get(key) != "none"
+    )
+    return out
+
+
+def _bindable(
+    info: Mapping[str, Any],
+    stream: str,
+    durable: str,
+    filt: str,
+    want: Mapping[str, Any] | None = None,
+) -> None:
+    """Refuse an existing durable a client must not use: a push one, another filter, acks other
+    than explicit, or bodies left out (``headers_only``).  With ``want`` (the provisioner's
+    declared configuration, :func:`_consumer_config`), refuse one whose configuration differs
+    from it in any field :func:`durable_drift` reads, every such field named; it is never changed
+    or recreated here."""
     cfg = info.get("config", {}) or {}
     where = f"durable {durable!r} on stream {stream!r}"
+    if want is not None:
+        drift = durable_drift(cfg, want)
+        if drift:
+            raise NotProvisioned(_drift_message(where, drift))
+        return
     if cfg.get("deliver_subject"):
         raise NotProvisioned(
             f"{where} is a push consumer (deliver_subject set): only pull durables are used; "
@@ -491,6 +582,29 @@ def _bindable(info: Mapping[str, Any], stream: str, durable: str, filt: str) -> 
         raise NotProvisioned(f"{where} exists on another subject; delete it to change it")
     if cfg.get("ack_policy", "explicit") != "explicit":
         raise NotProvisioned(f"{where} does not take explicit acks")
+    if cfg.get("headers_only"):
+        raise NotProvisioned(
+            f"{where} delivers headers only (headers_only set): a client would read every event "
+            "as empty; change it in place (nats consumer edit) or delete it as the provisioner"
+        )
+
+
+def _drift_message(where: str, drift: list[str]) -> str:
+    fixed = [f for f in _FIXED_AT_CREATION if any(d.startswith(f + " ") for d in drift)]
+    push = " (a push consumer)" if any(d.startswith("deliver_subject ") for d in drift) else ""
+    how = (
+        f"{', '.join(fixed)} cannot be changed on an existing durable: delete it as the "
+        "provisioner (its ack floor and pending deliveries go with it; deliver_policy new skips "
+        "what is published until it exists again) and run the provisioner to recreate it from "
+        "its declaration (events_bus_provision_durables on)"
+        if fixed
+        else "change it in place (nats consumer edit), which keeps what it has pending, or "
+        "correct the declaration"
+    )
+    return (
+        f"{where} differs from its declaration{push}: {'; '.join(drift)}. The provisioner never "
+        f"changes or recreates an existing durable; {how}"
+    )
 
 
 def provision_consumers(
@@ -507,14 +621,18 @@ def provision_consumers(
     (``filter`` the full NATS subject, prefix included) with optional ``ack_wait`` (seconds,
     default 30), ``max_deliver`` (default 5), and where it starts: ``deliver_policy`` (``new``,
     the default, or ``all``), ``replay_s`` (that many seconds back) or ``start_seq`` (that stream
-    sequence).  An existing durable is never changed.  Returns the names it created.
+    sequence).  An existing durable is never changed or recreated: when any differs from its
+    declaration in a field :func:`durable_drift` reads, the missing ones are still created and
+    then one :class:`NotProvisioned` names every drifted durable and field.  Returns the names it
+    created.
 
     Only the provisioner may create a consumer: a create takes any configuration, a push
     ``deliver_subject`` included, and the server delivers a push consumer as itself, so a user
     holding the create could have the stream delivered to any subject."""
     if not _NAME_RE.match(stream or ""):
         raise EventsError("stream name must be 1-64 of [A-Za-z0-9_-]")
-    created = []
+    created: list[str] = []
+    drifted: list[str] = []
     for d in durables:
         name, filt = str(d.get("durable", "")), str(d.get("filter", ""))
         if not _NAME_RE.match(name):
@@ -530,9 +648,6 @@ def provision_consumers(
         info = _api(
             wire, f"CONSUMER.INFO.{stream}.{name}", None, timeout=timeout, missing="consumer"
         )
-        if info is not None:
-            _bindable(info, stream, name, filt)
-            continue
         replay = d.get("replay_s")
         config = _consumer_config(
             name,
@@ -543,6 +658,12 @@ def provision_consumers(
             start=None if replay is None else wall() - float(replay),
             start_seq=None if d.get("start_seq") is None else int(d["start_seq"]),
         )
+        if info is not None:
+            try:
+                _bindable(info, stream, name, filt, want=config)
+            except NotProvisioned as exc:
+                drifted.append(str(exc))
+            continue
         _api(
             wire,
             _create_subject(stream, name, filt),
@@ -550,6 +671,9 @@ def provision_consumers(
             timeout=timeout,
         )
         created.append(name)
+    if drifted:  # the missing ones are created first: one drifted durable blocks no other
+        made = f" (created first: {', '.join(created)})" if created else ""
+        raise NotProvisioned(" | ".join(drifted) + made)
     return created
 
 
