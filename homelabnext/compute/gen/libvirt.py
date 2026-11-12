@@ -26,6 +26,9 @@ from homelabnext.generators.safe import checked
 
 from ._text import HEADER
 
+#: one hypervisor node applies this output: ``hnx guests render --node`` may narrow it to one
+PER_NODE = True
+
 OS_VARIANTS = {"linux-6": "linux2022", "debian-12": "debian12", "ubuntu-24.04": "ubuntu24.04"}
 
 

@@ -176,6 +176,35 @@ def test_the_documented_memory_total_is_the_real_one(compose):
     assert mem_total(broken) != int(stated[1])
 
 
+def swap_problems(compose) -> list[str]:
+    """Services whose ``memswap_limit`` is not their ``mem_limit``: profiled ones included."""
+    out = []
+    for name, svc in compose["services"].items():
+        swap = svc.get("memswap_limit")
+        if swap is None or mem_mb(swap) != mem_mb(svc["mem_limit"]):
+            out.append(f"{name}: memswap_limit {swap!r}, mem_limit {svc['mem_limit']!r}")
+    return out
+
+
+def test_every_service_has_no_swap_headroom(compose):
+    """memswap_limit == mem_limit on every service, the gateway profile's too: a limit then holds
+    the same with or without host swap, so a CI runner with swap catches an undersized limit that
+    would OOM-kill on a swapless host (broker-edge at 144m did, on the first real hardware)."""
+    assert not swap_problems(compose)
+    assert any(s.get("profiles") for s in compose["services"].values())
+
+
+@pytest.mark.parametrize("service", ["broker-edge", "llm-gateway"])
+@pytest.mark.parametrize("swap", [None, "2g", "897m"])
+def test_negative_swap_headroom_is_caught(compose, service, swap):
+    broken = json.loads(json.dumps(compose))
+    if swap is None:
+        del broken["services"][service]["memswap_limit"]
+    else:
+        broken["services"][service]["memswap_limit"] = swap
+    assert [p.split(":")[0] for p in swap_problems(broken)] == [service]
+
+
 GATEWAY_PROFILES = {"gateway"}
 
 

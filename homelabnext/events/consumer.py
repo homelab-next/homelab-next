@@ -36,62 +36,83 @@ def _finite(text: str) -> float:
     return value
 
 
+#: Largest body a consumer parses: 1 MiB, the NATS default ``max_payload`` (the lab's
+#: ``compose/lab-in-a-box/config/nats/nats.conf`` keeps the default), so no body the bus delivers is
+#: refused for its size and a body nothing could have published is refused before it is parsed.
+MAX_EVENT_BYTES = 1 << 20
+
+#: Deepest nesting a consumer accepts, on every Python.  The parser's own stack is not a portable
+#: limit: 3.11's C scanner gives up near 1,000 levels (the recursion limit less the caller's
+#: depth), 3.12 and 3.13 parse 5,000 and refuse 20,000, and 3.14 parses 20,000, so the same body
+#: was "not JSON" on one version and a schema failure on another.  256 sits far below where 3.11 gives up
+#: whatever the caller's depth, and far above any event this platform defines.
+MAX_JSON_DEPTH = 256
+
+
 def parse_json(body: bytes | str) -> Any:
     """``body`` parsed as a consumer parses it: :class:`ValueError` (its message says why) for
     text that is not JSON, ``NaN``/``Infinity``, a number no float holds (``1e999``), an integer
-    past Python's digit limit, or nesting deeper than the parser's stack (never a
-    :class:`RecursionError`)."""
-    try:
-        value = json.loads(body, parse_constant=_no_constant, parse_float=_finite)
-    except RecursionError:  # nested deeper than the parser's stack: never a valid document
-        raise ValueError("nested too deeply") from None
-    # The parser's stack is not a portable limit: Python 3.14's scanner parses a 20,000-deep
-    # object that 3.11-3.13 refuse, so the same body was "not JSON" on one version and a schema
-    # failure on another. Refuse past a fixed depth on every version (no event nests near it).
-    if _depth_exceeds(value, MAX_JSON_DEPTH):
-        raise ValueError("nested too deeply")
+    past Python's digit limit, or containers nested deeper than :data:`MAX_JSON_DEPTH` (never a
+    :class:`RecursionError`).  It does not limit the size: :func:`decode_event` refuses a body
+    over :data:`MAX_EVENT_BYTES` before it gets here."""
+    value, _ = _parse(body)
     return value
 
 
-#: Deepest nesting a consumer accepts. Below the ~1000 frames at which 3.11's parser gives up,
-#: far above any event this platform defines.
-MAX_JSON_DEPTH = 512
-
-
-def _depth_exceeds(value: Any, limit: int) -> bool:
-    """True when ``value`` nests containers deeper than ``limit``. Walked without recursion."""
-    stack = [(value, 1)]
-    while stack:
-        v, depth = stack.pop()
-        if isinstance(v, dict | list):
-            if depth > limit:
-                return True
-            children = v.values() if isinstance(v, dict) else v
-            stack.extend((c, depth + 1) for c in children if isinstance(c, dict | list))
-    return False
+def _parse(body: bytes | str) -> tuple[Any, bool]:
+    """:func:`parse_json`, plus whether a string in the value holds a lone surrogate (one walk)."""
+    try:
+        value = json.loads(body, parse_constant=_no_constant, parse_float=_finite)
+    except RecursionError:  # nested past 3.11's parser stack: past MAX_JSON_DEPTH too
+        raise ValueError("nested too deeply") from None
+    too_deep, surrogate = _scan(value, MAX_JSON_DEPTH)
+    if too_deep:
+        raise ValueError("nested too deeply")
+    return value, surrogate
 
 
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
 
 
-def _has_lone_surrogate(value: Any) -> bool:
-    """True when a key or string anywhere in ``value`` holds a surrogate code point.  The parser
-    joins an escaped pair (``\\ud83d\\ude00``) into one character, so what is left is a lone
-    half (``\\ud800``): a ``str`` that no UTF-8 encoder accepts, so a consumer that stored it
-    fails later, wherever it writes it out (a page, a log).  Walked without recursion: the body
-    parsed, so it may be nested as deep as the parser's own stack."""
-    stack = [value]
+def _scan(value: Any, limit: int | None) -> tuple[bool, bool]:
+    """``(too_deep, lone_surrogate)`` for ``value`` in one walk, without recursion: whether it
+    nests containers deeper than ``limit`` (``None``: no limit), and whether a key or string
+    anywhere holds a surrogate code point.  The parser joins an escaped pair (``\\ud83d\\ude00``)
+    into one character, so what is left is a lone half (``\\ud800``): a ``str`` that no UTF-8
+    encoder accepts, so a consumer that stored it fails later, wherever it writes it out (a
+    page, a log).  The walk stops at the first container past the limit, so a deep body costs no
+    more than ``limit`` levels of it."""
+    surrogate = False
+    search = _SURROGATE.search
+    if isinstance(value, str):
+        return False, search(value) is not None
+    if not isinstance(value, dict | list):
+        return False, False
+    # one stack of containers and one of their depths: no per-child tuple or generator
+    stack: list[Any] = [value]
+    depths: list[int] = [1]
     while stack:
         v = stack.pop()
-        if isinstance(v, str):
-            if _SURROGATE.search(v):
-                return True
-        elif isinstance(v, dict):
-            stack.extend(v.keys())
-            stack.extend(v.values())
-        elif isinstance(v, list):
-            stack.extend(v)
-    return False
+        depth = depths.pop()
+        if limit is not None and depth > limit:
+            return True, surrogate
+        if isinstance(v, dict):
+            if not surrogate:
+                for k in v:
+                    if search(k):
+                        surrogate = True
+                        break
+            children = v.values()
+        else:
+            children = v
+        for c in children:
+            if isinstance(c, str):
+                if not surrogate and search(c):
+                    surrogate = True
+            elif isinstance(c, dict | list):
+                stack.append(c)
+                depths.append(depth + 1)
+    return False, surrogate
 
 
 def decode_event(
@@ -105,15 +126,21 @@ def decode_event(
     given as a mapping gets the same refusals: the surrogate walk here, and a number that is not
     finite in :func:`~homelabnext.events.envelope.validate_event` (which a producer runs too)."""
     if isinstance(body, bytes | str):
+        size = len(body)
+        if size > MAX_EVENT_BYTES or (isinstance(body, str) and _utf8_len(body) > MAX_EVENT_BYTES):
+            raise EventError(
+                "event body is not JSON", [f"larger than MAX_EVENT_BYTES ({MAX_EVENT_BYTES} bytes)"]
+            )
         try:
-            event = parse_json(body)
+            event, surrogate = _parse(body)
         except ValueError as exc:
             raise EventError("event body is not JSON", [str(exc)]) from None
     else:
         event = dict(body)
+        surrogate = _scan(event, None)[1]
     if not isinstance(event, dict):
         raise EventError("invalid event", ["event must be a JSON object"])
-    if _has_lone_surrogate(event):
+    if surrogate:
         raise EventError("invalid event", ["a string holds a lone surrogate (not Unicode text)"])
     validate_event(event)
     if types is not None:
@@ -123,6 +150,11 @@ def decode_event(
                 "unexpected event type", [f"{event['type']!r} not in {sorted(allowed)}"]
             )
     return event
+
+
+def _utf8_len(text: str) -> int:
+    """``text``'s length in UTF-8, a lone surrogate counted as the 3 bytes its escape decodes to."""
+    return len(text.encode("utf-8", "surrogatepass"))
 
 
 @dataclass(frozen=True)

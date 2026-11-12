@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
 
 
-def _invocation(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False):
+def _invocation(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False, check=False):
     """The ``ansible-playbook`` command (and its environment) that runs one hook of a role."""
     play = [
         {
@@ -52,11 +52,14 @@ def _invocation(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False)
     cmd = ["ansible-playbook", "-i", "localhost,", "-e", f"@{ev}", str(pb)]
     if verbose:
         cmd.append("-v")
+    if check:
+        cmd.append("--check")
     return cmd, run_env
 
 
-def run_role(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False):
-    cmd, run_env = _invocation(tmp_path, role, tasks_from, extra_vars, env, verbose)
+def run_role(tmp_path, role, tasks_from, extra_vars, env=None, verbose=False, check=False):
+    """One hook of ``role`` on localhost (``check``: in ``--check`` mode)."""
+    cmd, run_env = _invocation(tmp_path, role, tasks_from, extra_vars, env, verbose, check)
     return subprocess.run(cmd, capture_output=True, text=True, env=run_env, cwd=tmp_path)
 
 
