@@ -76,6 +76,12 @@
       - events_bus_streams | length == 0 or events_bus_admin_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
       - events_bus_streams | selectattr('name', 'match', '^[A-Z][A-Z0-9_]{0,31}\Z') | selectattr('subject_prefix', 'match', '^[a-z][a-z0-9_-]{0,31}\Z') | list | length == events_bus_streams | length
       - events_bus_streams | map(attribute='max_bytes') | map('int') | select('gt', 0) | list | length == events_bus_streams | length
+      # distinct names, and none another declared stream's dead-letter stream (<name>_DLQ):
+      # provisioning LAB creates LAB_DLQ as LAB's DLQ, then skips a declared LAB_DLQ as existing
+      - events_bus_streams | map(attribute='name') | unique | length == events_bus_streams | length
+      - >-
+        events_bus_streams | map(attribute='name') | map('regex_replace', '\Z', '_DLQ')
+        | intersect(events_bus_streams | map(attribute='name')) | length == 0
       # discard new (refuse when full, never evict) and a per-subject cap, for a stream created
       # from now on; an existing stream is never changed
       - events_bus_streams | rejectattr('discard', 'undefined') | rejectattr('discard', 'in', ['old', 'new']) | list | length == 0
@@ -85,7 +91,8 @@
         | selectattr('discard', 'eq', 'new') | map(attribute='max_msgs_per_subject') | select('integer') | select('gt', 0) | list | length
       - events_bus_streams | map('list') | flatten | difference(['name', 'subject_prefix', 'max_bytes', 'discard', 'max_msgs_per_subject']) | length == 0
     fail_msg: >-
-      events_bus: distinct user names; streams named [A-Z0-9_] with a lower-case subject prefix
+      events_bus: distinct user names; streams with distinct names [A-Z0-9_] (none named
+      <another declared stream>_DLQ: that is the other's dead-letter stream), a lower-case subject prefix
       and a positive max_bytes (optional: discard old|new, and max_msgs_per_subject, a positive
       integer, with discard new only; no other keys), provisioned by one of the users
       (events_bus_admin_user) whose password is a secret: reference

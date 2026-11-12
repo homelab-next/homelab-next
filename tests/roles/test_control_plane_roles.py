@@ -184,6 +184,12 @@ def test_events_bus_refuses_bad_inputs(tmp_path):
         {"events_bus_users": broker_grant(publish=[], subscribe_only="yes")},
         {"events_bus_admin_user": "nobody"},
         {"events_bus_streams": [{"name": "lab", "subject_prefix": "lab", "max_bytes": 1}]},
+        # round 7 follow-up (N6): a declared stream named as another's dead-letter stream (the
+        # provisioner would create LAB_DLQ as LAB's DLQ and then skip the declared one), or twice
+        {"events_bus_streams": [{"name": "LAB", "subject_prefix": "lab", "max_bytes": 1},
+                                {"name": "LAB_DLQ", "subject_prefix": "dlq", "max_bytes": 1}]},
+        {"events_bus_streams": [{"name": "LAB", "subject_prefix": "lab", "max_bytes": 1},
+                                {"name": "LAB", "subject_prefix": "lab2", "max_bytes": 1}]},
         # round 4: a consumer create is the provisioner's alone (it can push the stream to any
         # subject), no one holds STREAM.UPDATE (it deletes by shrinking), acks are exact
         {"events_bus_users": broker_grant(publish=["$JS.API.CONSUMER.CREATE.LAB.bridge-x.lab.x"])},
@@ -945,6 +951,15 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
     tampered["accounts"]["HNX"]["exports"].append(
         {"service": "$JS.API.STREAM.DELETE.LAB", "accounts": ["HNX-hnx-broker"]}
     )
+    # round 7 follow-up (security N1): a STREAM import that mimics the emitter's rendered service
+    # import (same account, subject and local subject) would hand it every event the others
+    # publish under lab.homelabnext.>; only the import's type tells them apart
+    tampered["accounts"]["HNX-hnx-emitter"]["imports"].append(
+        {"stream": {"account": "HNX", "subject": "lab.homelabnext.>"}}
+    )
+    tampered["accounts"]["HNX"]["exports"].append(
+        {"stream": "lab.homelabnext.>", "accounts": ["HNX-hnx-emitter"]}
+    )
     bad_conf = tmp_path / "tampered.conf"
     bad_conf.write_text(json.dumps(tampered))
     proc = _start(server, bad_conf, port)
@@ -962,7 +977,13 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
             "account HNX-hnx-broker: JetStream on; it is on in HNX alone",
             "account HNX-hnx-broker: imports $JS.API.STREAM.DELETE.LAB from HNX as "
             f"{API}.STREAM.DELETE.LAB, which the role does not render",
+            "account HNX-hnx-emitter: imports lab.homelabnext.> from HNX (a stream import), "
+            "which the role does not render",
         ], got
+        emitter_imports = [i for d in details if d["account_detail"]["account_name"] ==
+                           "HNX-hnx-emitter" for i in d["account_detail"]["imports"]
+                           if i["account"] == "HNX"]  # fmt: skip
+        assert sorted(i["type"] for i in emitter_imports) == ["service", "stream"], emitter_imports
     finally:
         proc.terminate()
         proc.wait(timeout=10)
