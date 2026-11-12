@@ -250,12 +250,11 @@ because the backend and its credentials belong to the environment, not to the gu
 
 `proxmox_api_token` is an **ephemeral** variable (`ephemeral = true`, so `providers.tf` asks for
 Terraform 1.10 or later in 1.x, `~> 1.10`): Terraform keeps it out of a saved plan file and out
-of state, and asks for it again at `apply` (pass it as `TF_VAR_proxmox_api_token` both times). On
-a Terraform or OpenTofu that cannot read `ephemeral` (Terraform before 1.10, OpenTofu before
-1.11), do not keep a saved plan file at all: `terraform plan -out` writes the token into it in
-plain text, so plan and apply
-in one step (`terraform apply`, read the plan it shows, answer `yes`), or delete the file the
-moment the apply is done.
+of state, and asks for it again at `apply` (pass it as `TF_VAR_proxmox_api_token` both times).
+The rendered files need Terraform 1.10 or later: an older Terraform refuses them on
+`required_version`, and OpenTofu before 1.11 cannot parse `ephemeral`. Never work around that by
+editing the rendered files; a non-ephemeral token variable is written in plain text into any saved
+plan (`terraform plan -out`) and into state.
 
 A VM whose `cloudinit` sets a sudo rule or packages takes its user-data as a snippet
 (`user_data_file_id = var.cloudinit_user_data["<name>"]`), because the provider's `user_account`
