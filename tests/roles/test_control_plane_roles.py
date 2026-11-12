@@ -9,6 +9,7 @@ templates rendered with the role's own defaults; the install path is proven by
 compose/lab-in-a-box/broker_e2e.py, against the deployed units)."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -158,8 +159,8 @@ def _render(tmp_path, role, extra):
     r = subprocess.run(
         ["ansible-playbook", "-i", "localhost,", "-e", f"@{tmp_path / 'vars.json'}", str(tmp_path / "play.yml")],
         capture_output=True, text=True, cwd=tmp_path,
-        env={"PATH": "/usr/bin:/bin:" + str(Path(sys.executable).parent), "ANSIBLE_CONFIG": str(ANSIBLE / "ansible.cfg"),
-             "ANSIBLE_HOME": str(tmp_path / ".ansible"), "ANSIBLE_NOCOLOR": "1"},
+        env=dict(os.environ, ANSIBLE_CONFIG=str(ANSIBLE / "ansible.cfg"),
+                 ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1"),
     )  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
     return {p.name: p.read_text() for p in out.iterdir()}
@@ -257,7 +258,6 @@ def test_the_playbook_parses_and_targets_capability_groups():
     r = subprocess.run(
         ["ansible-playbook", "--syntax-check", "-i", str(ANSIBLE / "inventory/example/hosts.yml"),
          str(ANSIBLE / "playbooks/control_plane.yml")],
-        capture_output=True, text=True, env={"PATH": "/usr/bin:/bin:" + str(Path(sys.executable).parent),
-                                             "ANSIBLE_CONFIG": str(ANSIBLE / "ansible.cfg")},
+        capture_output=True, text=True, env=dict(os.environ, ANSIBLE_CONFIG=str(ANSIBLE / "ansible.cfg")),
     )  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
