@@ -140,7 +140,8 @@ def install_pair():
     """Replace the key and the certificate as a pair: both are staged and synced first, renamed
     back to back, and checked; a pair that does not check out is put back as it was, and on a
     first install (no earlier pair) removed, so no half-installed pair is ever left behind. No
-    staged temporary file outlives the call."""
+    staged temporary file outlives the call, and no OSError escapes it. Returns (why the new pair
+    was refused, with what was done about it, or None; whether the files are as they were)."""
     old = {CONF["key"]: read(CONF["key"]), CONF["cert"]: read(CONF["cert"])}
     staged, replaced = {}, []
     try:
@@ -154,13 +155,28 @@ def install_pair():
         why = f"install failed: {e.strerror}"
     for tmp in staged.values():
         discard(tmp)
-    if why:
+    if not why:
+        return None, True
+    try:
         for dest in replaced:
-            if old[dest] is not None:
-                os.replace(stage(old[dest], dest, 0o640 if dest == CONF["key"] else 0o644), dest)
-            else:
+            if old[dest] is None:
                 discard(dest)
-    return why
+                continue
+            tmp = stage(old[dest], dest, 0o640 if dest == CONF["key"] else 0o644)
+            try:
+                os.replace(tmp, dest)
+            except OSError:
+                discard(tmp)
+                raise
+    except OSError as e:
+        why += (f"; putting the old pair back failed too ({e.strerror}): {CONF['cert']} and"
+                f" {CONF['key']} may not match, the next run installs the stored pair again")  # fmt: skip
+        return why, False
+    if not replaced:
+        return f"{why}; the installed pair is unchanged", True
+    if all(old[dest] is None for dest in replaced):
+        return f"{why}; nothing is installed", True
+    return f"{why}; the old pair is back", True
 
 
 def load_token():
@@ -222,12 +238,11 @@ def renew():
         owed_before = os.path.exists(RELOAD_OWED)
         with open(RELOAD_OWED, "w"):
             pass
-        why = install_pair()
+        why, intact = install_pair()
         if why:
-            if not owed_before:
+            if intact and not owed_before:  # a pair half put back keeps the reload owed
                 os.unlink(RELOAD_OWED)
-            back = "the old pair is back" if os.path.exists(CONF["cert"]) else "nothing is installed"
-            print(f"openbao-acme: the new pair did not check out ({why}); {back}")
+            print(f"openbao-acme: the new pair did not check out: {why}")
             return 2
         print(f"openbao-acme: installed a new certificate for {', '.join(CONF['domains'])}")
     clean = dict(os.environ)

@@ -1872,7 +1872,7 @@ def test_a_rolled_back_pair_keeps_a_reload_an_earlier_run_owed(tmp_path, pki, ow
     if owed_before:
         owed.write_text("")
     (tmp_path / "lego.force").write_text("")  # lego stores a new pair: the script installs it
-    mod.install_pair = lambda: "the installed pair did not verify"
+    mod.install_pair = lambda: ("the installed pair did not verify; the old pair is back", True)
     assert mod.renew() == 2
     assert owed.exists() is owed_before
     check = subprocess.run(
@@ -1906,7 +1906,10 @@ def test_a_failed_cert_staging_leaves_no_temporary_key_and_no_half_pair(tmp_path
         for p in old:
             (tls / p).unlink()
     mod.stage = failing(mod.stage, lambda a: a[1] == mod.CONF["cert"])
-    assert mod.install_pair() == "install failed: No space left on device"
+    assert mod.install_pair() == (
+        "install failed: No space left on device; the installed pair is unchanged",
+        True,
+    )
     assert staged_leftovers(tmp_path) == []
     for p, data in old.items():
         assert (not (tls / p).exists()) if first else (tls / p).read_bytes() == data, p
@@ -1926,9 +1929,28 @@ def test_a_first_install_that_fails_its_check_is_removed_and_the_run_fails(tmp_p
     )
     assert mod.renew() == 2
     out = capsys.readouterr().out
-    assert "did not check out (the installed pair did not verify); nothing is installed" in out, out
+    assert "did not check out: the installed pair did not verify; nothing is installed" in out, out
     assert sorted(p.name for p in tls.iterdir()) == []
     assert not Path(mod.RELOAD_OWED).exists()
+
+
+def test_a_rollback_that_cannot_put_the_old_pair_back_fails_cleanly(tmp_path, pki, capsys):
+    """N3: the new pair fails its check and putting the old one back fails too (a full disk).
+    That is a clean failure (exit 2 and a message naming both), not a traceback; no staged file
+    is left, and the reload stays owed, since the files may differ from what the server loaded."""
+    mod = acme_installed(tmp_path, pki)
+    (tmp_path / "lego.force").write_text("")  # lego stores a new pair: the script installs it
+    real = mod.problem
+    mod.problem = lambda c, *a: "it did not verify" if c == mod.CONF["cert"] else real(c, *a)
+    stored = tmp_path / "acme" / "certificates"
+    new = lambda: {(stored / f"openbao.{x}").read_bytes() for x in ("crt", "key")}  # noqa: E731
+    mod.stage = failing(mod.stage, lambda a: a[0] not in new())  # only the old pair's fails
+    assert mod.renew() == 2
+    out = capsys.readouterr().out
+    assert "did not check out: it did not verify; putting the old pair back failed too" in out, out
+    assert "No space left on device" in out and "Traceback" not in out
+    assert staged_leftovers(tmp_path) == []
+    assert Path(mod.RELOAD_OWED).exists()
 
 
 def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
