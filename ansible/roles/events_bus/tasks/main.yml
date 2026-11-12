@@ -87,6 +87,16 @@
     label: "{{ item.user }}"
   no_log: true
 
+- name: Hash the monitor user's password
+  ansible.builtin.set_fact:
+    events_bus_rendered_monitor: >-
+      {{ {} if events_bus_monitor_user == '' else {
+           'user': events_bus_monitor_user,
+           'password_hash': lookup('hnx_secret', events_bus_monitor_password_ref)
+              | password_hash('bcrypt', rounds=11, ident='2a',
+                  salt=((events_bus_monitor_password_ref ~ '|' ~ inventory_hostname ~ '|' ~ events_bus_account) | hash('sha256') | truncate(21, true, '')) ~ 'e')} }}
+  no_log: true
+
 - name: Write the server configuration
   ansible.builtin.template:
     src: nats.conf.j2

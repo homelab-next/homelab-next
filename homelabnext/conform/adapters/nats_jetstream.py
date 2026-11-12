@@ -123,6 +123,22 @@ _NS = 1_000_000_000
 _DEFAULT_DUPLICATE_WINDOW_NS = 120 * _NS
 _NOT_FOUND = {"stream": 10059, "consumer": 10014, "message": 10037}
 _PERMISSION_DENIED = re.compile(r'Permissions Violation for Publish to "([^"]+)"', re.I)
+#: what a refused ``$JS.API.*`` call most often means: a client of the events bus role (which lives
+#: in an account of its own and reaches JetStream under ``JS.<account>.API``) left at the default
+API_PREFIX_HINT = (
+    "on an events_bus-managed bus pass api_prefix JS.<account>.API "
+    "(--events-api-prefix; the relay's broker_relay_api_prefix): a client account reaches "
+    "JetStream under that prefix, never $JS.API (docs/broker.md, 'The bus ACL')"
+)
+
+
+def permission_denied(subject: str) -> str:
+    """The message of a publish the server refused this user: ``subject`` named, and for a
+    ``$JS.API.*`` call (a client at the default ``api_prefix``) :data:`API_PREFIX_HINT`."""
+    msg = f"permission denied: publish {subject}"
+    if subject.startswith(API_PREFIX + "."):
+        msg += f"; {API_PREFIX_HINT}"
+    return msg
 
 
 class WireError(EventsError):
@@ -948,7 +964,7 @@ class NatsPyWire:
             # the server drops a publish this user may not make and says so out of band (nats-py
             # hands the text over lowercased, so $JS.API... subjects compare in lower case)
             if subject.lower() in self._denied:
-                raise WireError("permission denied: publish", permanent=True) from None
+                raise WireError(permission_denied(subject), permanent=True) from None
             raise
 
     def publish(self, subject: str, payload: bytes = b"", *, reply: str = "") -> bool:

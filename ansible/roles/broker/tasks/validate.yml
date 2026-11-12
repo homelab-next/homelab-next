@@ -71,12 +71,19 @@
     that:
       - (lookup('hnx_registry', broker_relay_events_id, field='host') | split('.') | first) == (inventory_hostname | split('.') | first)
       - (broker_relay_events_endpoint | regex_replace('^.*:([0-9]+)$', '\\1') | int) == (lookup('hnx_registry', broker_relay_events_id, field='port') | int)
+      # the bus on this host is the events bus role's when its account is set here: the relay's
+      # user then lives in an account of its own and reaches JetStream under JS.<account>.API
+      # only ($JS.API is refused, and the relay would fail closed on every publish)
+      - events_bus_account is not defined or broker_relay_api_prefix == 'JS.' ~ events_bus_account ~ '.API'
     fail_msg: >-
       broker: the relay's endpoint {{ broker_relay_events_endpoint }} is loopback, but the registry
       puts {{ broker_relay_events_id }} on {{ lookup('hnx_registry', broker_relay_events_id, field='host') }}
       port {{ lookup('hnx_registry', broker_relay_events_id, field='port') }}: it must be this host
       ({{ inventory_hostname }}) and the endpoint's explicit port (required: never a default);
-      run the relay beside the bus, or give the bus a TLS listener and the relay a tls:// endpoint
+      run the relay beside the bus, or give the bus a TLS listener and the relay a tls:// endpoint;
+      and with the events bus role's account here ({{ events_bus_account | default('not set') }}),
+      broker_relay_api_prefix is JS.{{ events_bus_account | default('<account>') }}.API (it is
+      {{ broker_relay_api_prefix }})
   when: broker_relay | bool and broker_relay_events_endpoint is match('^nats://')
 
 # Handlers run as the broker's own uid today (docs/broker.md "Handlers and the broker's uid"): a

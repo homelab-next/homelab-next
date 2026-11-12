@@ -1840,7 +1840,7 @@
    "trino": 1
   },
   "tests/workflows/test_st2_bridge.py": {
-   "stackstorm": 28
+   "stackstorm": 27
   },
   "tests/workflows/test_workflows_st2.py": {
    "stackstorm": 222

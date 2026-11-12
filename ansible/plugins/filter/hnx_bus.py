@@ -2,8 +2,9 @@
 """Checks for the events bus role (``events_bus``): its users' allow-lists, its durables and its
 listen address.
 
-    {{ subjects | hnx_bus_subject_problems(user) }}              {# [] or one message per refused subject #}
-    {{ subjects | hnx_bus_subject_problems(user, admin=true) }}  {# the provisioner's: a few more calls #}
+    {{ subjects | hnx_bus_subject_problems(user, account=account, streams=streams) }}  {# [] or one message per refused subject #}
+    {{ subjects | hnx_bus_subject_problems(user, admin=true, account=account) }}  {# the provisioner's #}
+    {{ account | hnx_bus_account_hash }}                         {# nats-server's getHash: HNX -> hKkTAyOX #}
     {{ durables | hnx_bus_durable_problems(users, admin_user, streams, provision) }}
     {{ jsz | hnx_bus_push_consumers }}                           {# /jsz?consumers=true: [] or one per push consumer #}
     {{ address | hnx_is_loopback }}                              {# true for the 127/8 block and ::1 only #}
@@ -23,10 +24,14 @@ bound to a **named** stream and consumer (a literal token of ``[A-Za-z0-9_-]``, 
 ``$JS.API.CONSUMER.MSG.NEXT.<stream>.<durable>``                 pull from that durable
 ``$JS.ACK.<stream>.<durable>.*.*.*.*.*``                         settle its deliveries, ack form v1:
                                                                  exactly 9 tokens
-``$JS.ACK.<domain>.<account hash>.<stream>.<durable>.*.*.*.*.>``  ack form v2: 11 tokens or more
+``$JS.ACK._.<account hash>.<stream>.<durable>.*.*.*.*.>``        ack form v2: 11 tokens or more; the
+                                                                 hash is the bus account's, exactly
 ==============================================================  =======================================
 
-and, for the provisioner (``admin=true``, role ``events_bus_admin_user``) only,
+(the provisioner holds neither ``CONSUMER.MSG.NEXT`` nor an ack: it lives in the account
+JetStream runs in, where a delivery or an ack's answer sent to a reply of its choosing is taken as
+a JetStream request -- the confused deputy the account split closes for every other user) and,
+for the provisioner (``admin=true``, role ``events_bus_admin_user``) only,
 ``$JS.API.STREAM.CREATE.<stream>``, ``$JS.API.CONSUMER.CREATE.<stream>.<durable>[.<filter>]``,
 ``$JS.API.CONSUMER.DURABLE.CREATE.<stream>.<durable>`` and
 ``$JS.API.CONSUMER.DELETE.<stream>.<durable>``.  Nothing else under ``$JS`` is reachable: no
@@ -51,7 +56,11 @@ would read as the v2 domain and hash ``<a>.<b>`` and reach the acks of EVERY str
 
 Any other subject must start with a literal token (a leading ``*`` or ``>`` reaches every
 subject of the account, the server's own included).  ``_INBOX`` subjects are the user's own only,
-``_INBOX.<user>.<...>``: no other client may SUBSCRIBE to a user's replies.  (Subject permissions
+``_INBOX.<user>.<...>``: no other client may SUBSCRIBE to a user's replies.  For a client (any
+user but the provisioner) no other first token may start with ``_`` (the server's ``_R_``,
+``_GR_``, ``_SYS_`` reply and routing subjects), and every other grant sits under a declared
+stream's subject prefix (``<prefix>.<...>``, ``streams``): a client publishes events and nothing
+else.  (Subject permissions
 do not stop another client from publishing a forged reply to them: a request's reply subject is
 not checked against anyone's allow-list, so a client matches each reply by its own unguessable
 inbox token, as nats-py's ``new_inbox()`` does.)
@@ -71,25 +80,40 @@ import ipaddress
 import re
 
 _NAME = re.compile(r"[A-Za-z0-9_-]+\Z")
-_HASH = re.compile(r"[A-Za-z0-9]{8}\Z")
 #: one literal stream or consumer name
 NAME = "<name>"
 #: one or more further tokens, wildcards allowed
 REST = "<rest>"
 #: a v2 ack subject's domain token: "_", the server's when no JetStream domain is configured
 DOMAIN = "_"
-#: a v2 ack subject's account hash: 8 characters of [A-Za-z0-9] (server/events.go getHash)
+#: a v2 ack subject's account hash: the bus account's (:func:`hnx_bus_account_hash`)
 HASH = "<hash>"
+#: nats-server's getHash alphabet (server/accounts.go ``digits``, ``base`` 62)
+_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def hnx_bus_account_hash(account) -> str:
+    """The account hash nats-server puts in a v2 ack subject (``$JS.ACK.<domain>.<hash>...``):
+    ``getHash(accName)`` of server/events.go (2.15.1), the sha256 of the account name whose first
+    8 bytes are each taken mod 62 into ``0-9A-Za-z``.  ``HNX`` -> ``hKkTAyOX``."""
+    import hashlib
+
+    digest = hashlib.sha256(str(account).encode("utf-8")).digest()
+    return "".join(_DIGITS[b % 62] for b in digest[:8])
+
 
 #: the JetStream calls any user may hold (token by token; NAME and REST as above)
 _JS_FORMS: tuple[tuple[str, ...], ...] = (
     ("$JS", "API", "INFO"),
     ("$JS", "API", "STREAM", "INFO", NAME),
     ("$JS", "API", "CONSUMER", "INFO", NAME, NAME),
+)
+#: a client's reads of its own durable (never the provisioner's: see the module docstring)
+_JS_READ_FORMS: tuple[tuple[str, ...], ...] = (
     ("$JS", "API", "CONSUMER", "MSG", "NEXT", NAME, NAME),
     # the ack reply subjects, exactly: v1 (9 tokens) and v2 (11 or more)
     ("$JS", "ACK", NAME, NAME, "*", "*", "*", "*", "*"),
-    # v2 pins the domain to "_" and the account hash to its 8-character shape: a v2-shaped grant
+    # v2 pins the domain to "_" and the account hash to the bus account's own: a v2-shaped grant
     # whose tokens 2-3 were a stream and durable could never be told apart from one durable's
     ("$JS", "ACK", DOMAIN, HASH, NAME, NAME, "*", "*", "*", "*", ">"),
 )
@@ -125,7 +149,7 @@ def _tokens(subject: str) -> list[str] | None:
     return toks
 
 
-def _is_form(toks: list[str], form: tuple[str, ...]) -> bool:
+def _is_form(toks: list[str], form: tuple[str, ...], account_hash: str = "") -> bool:
     if form and form[-1] == REST:
         head = form[:-1]
         if len(toks) <= len(head):
@@ -134,27 +158,46 @@ def _is_form(toks: list[str], form: tuple[str, ...]) -> bool:
         form = head
     if len(toks) != len(form):
         return False
-    return all(_token_is(t, f) for t, f in zip(toks, form, strict=True))
+    return all(_token_is(t, f, account_hash) for t, f in zip(toks, form, strict=True))
 
 
-def _token_is(tok: str, form: str) -> bool:
+def _token_is(tok: str, form: str, account_hash: str = "") -> bool:
     if form == NAME:
         return bool(_NAME.match(tok))
     if form == HASH:
-        return bool(_HASH.match(tok))
+        return bool(account_hash) and tok == account_hash
     return tok == form
 
 
 def _form_text(form: tuple[str, ...]) -> str:
-    return ".".join({NAME: "<name>", REST: ">", HASH: "<account hash>"}.get(f, f) for f in form)
+    return ".".join(
+        {NAME: "<name>", REST: ">", HASH: "<the account's hash>"}.get(f, f) for f in form
+    )
 
 
-def hnx_bus_subject_problems(subjects, user, admin=False) -> list[str]:
+def _stream_prefixes(streams) -> set[str]:
+    out = set()
+    for st in streams or []:
+        prefix = st.get("subject_prefix") if isinstance(st, dict) else st
+        if prefix:
+            out.add(str(prefix))
+    return out
+
+
+def hnx_bus_subject_problems(subjects, user, admin=False, account=None, streams=None) -> list[str]:
     """One message per subject in ``subjects`` (one user's publish and subscribe allow-lists)
     that reaches beyond what that user may hold (``admin``: the provisioner, who may also create a
-    named stream and create or delete a named durable); an empty list when all are within it."""
+    named stream and create or delete a named durable, and may not pull or ack); an empty list
+    when all are within it.
+
+    ``account``: the bus account (``events_bus_account``), whose hash a v2 ack grant must carry
+    (:func:`hnx_bus_account_hash`; without it no v2 ack grant passes).  ``streams``: the declared
+    streams (``events_bus_streams``, or their subject prefixes): a client's grant that is neither
+    a JetStream call nor its own ``_INBOX`` must sit under one of them."""
     out: list[str] = []
-    forms = _JS_FORMS + (_JS_ADMIN_FORMS if admin else ())
+    account_hash = hnx_bus_account_hash(account) if account else ""
+    prefixes = _stream_prefixes(streams)
+    forms = _JS_FORMS + _JS_ADMIN_FORMS if admin else _JS_FORMS + _JS_READ_FORMS
     for subject in subjects or []:
         s = str(subject)
         toks = _tokens(s)
@@ -165,28 +208,62 @@ def hnx_bus_subject_problems(subjects, user, admin=False) -> list[str]:
             out.append(f"{s}: starts with a wildcard (every subject of the account)")
             continue
         if toks[0].startswith("$"):
-            if not any(_is_form(toks, f) for f in forms):
-                if not admin and _is_form(toks, _JS_ADMIN_FORMS[0]):
-                    out.append(
-                        f"{s}: the provisioner's call alone (it reads any stored message of the "
-                        "stream, every subject and every durable's)"
-                    )
-                    continue
-                if not admin and any(_is_form(toks, f) for f in _JS_ADMIN_FORMS):
-                    out.append(
-                        f"{s}: the provisioner's call alone (a consumer create can push the "
-                        "stream to any subject): declare the durable in events_bus_durables, "
-                        "the provisioner creates it"
-                    )
-                    continue
+            if any(_is_form(toks, f, account_hash) for f in forms):
+                continue
+            if admin and any(_is_form(toks, f, account_hash) for f in _JS_READ_FORMS):
                 out.append(
-                    f"{s}: a server subject outside the JetStream calls a "
-                    f"{'provisioner' if admin else 'user'} may hold, each on a named stream and "
-                    f"consumer ({', '.join(_form_text(f) for f in forms)})"
+                    f"{s}: not the provisioner's: it lives in the account JetStream runs in, where "
+                    "a pull's delivery or an ack's answer sent to a reply subject of its choosing "
+                    "($JS.API.STREAM.DELETE.<stream>) is taken as that request; a reader is a "
+                    "client user with a durable of its own (events_bus_durables)"
+                )
+                continue
+            if not admin and _is_form(toks, _JS_ADMIN_FORMS[0]):
+                out.append(
+                    f"{s}: the provisioner's call alone (it reads any stored message of the "
+                    "stream, every subject and every durable's)"
+                )
+                continue
+            if not admin and any(_is_form(toks, f) for f in _JS_ADMIN_FORMS):
+                out.append(
+                    f"{s}: the provisioner's call alone (a consumer create can push the "
+                    "stream to any subject): declare the durable in events_bus_durables, "
+                    "the provisioner creates it"
+                )
+                continue
+            if toks[:2] == ["$JS", "ACK"] and len(toks) >= 11 and toks[2] == DOMAIN:
+                want = account_hash or "(no events_bus_account given)"
+                out.append(
+                    f"{s}: a v2 ack names the bus account's hash, {want} "
+                    f"(nats-server's getHash of {account or '?'}), and nothing else"
+                )
+                continue
+            out.append(
+                f"{s}: a server subject outside the JetStream calls a "
+                f"{'provisioner' if admin else 'user'} may hold, each on a named stream and "
+                f"consumer ({', '.join(_form_text(f) for f in forms)})"
+            )
+            continue
+        if toks[0] == "_INBOX":
+            if not (len(toks) >= 3 and toks[1] == str(user)):
+                out.append(
+                    f"{s}: reaches another client's _INBOX (only _INBOX.{user}.> is its own)"
                 )
             continue
-        if toks[0] == "_INBOX" and not (len(toks) >= 3 and toks[1] == str(user)):
-            out.append(f"{s}: reaches another client's _INBOX (only _INBOX.{user}.> is its own)")
+        if admin:
+            continue
+        if toks[0].startswith("_"):
+            out.append(
+                f"{s}: a server subject (_R_, _GR_, _SYS_ ...: replies and routing); a client's "
+                f"only _ subject is its own _INBOX.{user}.>"
+            )
+            continue
+        if len(toks) < 2 or toks[0] not in prefixes:
+            out.append(
+                f"{s}: not under a declared stream's subjects "
+                f"({', '.join(sorted(p + '.>' for p in prefixes)) or 'no events_bus_streams'}): "
+                "a client publishes events and nothing else"
+            )
     return out
 
 
@@ -381,7 +458,16 @@ def _permissions(u) -> dict:
     }
 
 
-def hnx_bus_accounts(users, admin_user, account, api_prefix) -> dict:
+#: what the optional monitor user (events_bus_monitor_user) sees: the advisories a deletion or a
+#: stream change leaves, imported as STREAMS from the bus account into an account of its own
+MONITOR_SUBJECTS = (
+    "$JS.EVENT.ADVISORY.STREAM.DELETED.>",
+    "$JS.EVENT.ADVISORY.CONSUMER.DELETED.>",
+    "$JS.EVENT.ADVISORY.STREAM.UPDATED.>",
+)
+
+
+def hnx_bus_accounts(users, admin_user, account, api_prefix, monitor=None) -> dict:
     """The ``accounts`` block of the server's configuration (role ``events_bus``): the bus
     account ``account`` holds the streams (JetStream on) and the provisioner alone; every other
     user lives in an account of its own (:func:`hnx_bus_client_account`, JetStream off) that
@@ -409,7 +495,10 @@ def hnx_bus_accounts(users, admin_user, account, api_prefix) -> dict:
     * ``_INBOX.<user>`` subjects stay in the client's own account.
 
     ``users``: the rendered users (``user``, ``password_hash``, ``publish``, ``subscribe``,
-    ``subscribe_only``)."""
+    ``subscribe_only``).  ``monitor`` (optional, ``{user, password_hash}``): a user in an account
+    of its own that imports exactly :data:`MONITOR_SUBJECTS` from the bus account as STREAMS and
+    may subscribe to those alone, publish nothing: it watches for a stream or durable deleted
+    or a stream changed (what an ACL bypass would leave) without holding any call."""
     prefix = str(api_prefix).rstrip(".")
     exports: dict[str, dict] = {}
     bus_users, clients = [], {}
@@ -438,11 +527,22 @@ def hnx_bus_accounts(users, admin_user, account, api_prefix) -> dict:
                 ex["response_type"] = "stream"
         perms = _permissions({**u, "publish": allow})
         clients[acc] = {"users": [{**entry, "permissions": perms}], "imports": imports}
+    streams_out = []
+    if monitor:
+        name = str(monitor["user"])
+        acc = hnx_bus_client_account(account, name)
+        clients[acc] = {
+            "users": [{"user": name, "password": monitor["password_hash"], "permissions": {
+                "publish": {"deny": [">"]}, "subscribe": {"allow": list(MONITOR_SUBJECTS)}}}],
+            "imports": [{"stream": {"account": str(account), "subject": s}}
+                        for s in MONITOR_SUBJECTS],
+        }  # fmt: skip
+        streams_out = [{"stream": s, "accounts": [acc]} for s in MONITOR_SUBJECTS]
     out = {
         str(account): {
             "jetstream": "enabled",
             "users": bus_users,
-            "exports": [exports[k] for k in sorted(exports)],
+            "exports": [exports[k] for k in sorted(exports)] + streams_out,
         }
     }
     out.update(clients)
@@ -496,6 +596,80 @@ def hnx_bus_missing(jsz, account, streams=(), durables=()) -> dict:
     }
 
 
+def hnx_bus_expected_accounts(users, admin_user, account, monitor_user="") -> dict:
+    """``{account name: [its users]}`` the role's configuration gives the server: the bus account
+    with ``admin_user`` alone, one ``<account>-<user>`` per other user (and the monitor's)."""
+    names = [str(u.get("user") if isinstance(u, dict) else u) for u in users or []]
+    out = {str(account): [n for n in names if n == str(admin_user)]}
+    for n in names + ([str(monitor_user)] if monitor_user else []):
+        if n != str(admin_user):
+            out[hnx_bus_client_account(account, n)] = [n]
+    return out
+
+
+def hnx_bus_account_problems(accountz, details, users, admin_user, account, monitor_user="",
+                             connz=None) -> list[str]:  # fmt: skip
+    """What the running server says about its accounts that is not the role's account split
+    (read-only, from the loopback monitor): ``accountz`` is ``/accountz``, ``details`` each
+    ``/accountz?acc=<name>`` of the expected accounts, ``connz`` ``/connz?auth=true``.
+
+    * the server's accounts are exactly the expected ones (:func:`hnx_bus_expected_accounts`)
+      besides its own ``$G`` and ``$SYS``;
+    * JetStream is on in the bus account alone; the bus account imports nothing, and every
+      other account imports from the bus account only (the server's own ``$SYS`` imports aside);
+    * every connected user is in its own account: ``admin_user`` in the bus account, any other in
+      ``<account>-<user>`` (``/accountz`` does not list an account's users; ``/connz`` shows
+      the account each connection authenticated into)."""
+    out: list[str] = []
+    want = hnx_bus_expected_accounts(users, admin_user, account, monitor_user)
+    have = set((accountz or {}).get("accounts") or [])
+    for name in sorted(set(want) - have):
+        out.append(f"account {name}: expected, not on the server")
+    for name in sorted(have - set(want) - {"$G", "$SYS"}):
+        out.append(f"account {name}: on the server, not in the role's configuration")
+    for doc in details or []:
+        d = (doc or {}).get("account_detail") or {}
+        name = str(d.get("account_name", "?"))
+        js = bool(d.get("jetstream_enabled"))
+        if js != (name == str(account)):
+            out.append(
+                f"account {name}: JetStream {'on' if js else 'off'}; it is on in {account} alone"
+            )
+        froms = sorted({str(i.get("account")) for i in d.get("imports") or []} - {"$SYS"})
+        allowed = [] if name == str(account) else [str(account)]
+        if [f for f in froms if f not in allowed]:
+            out.append(f"account {name}: imports from {froms}; allowed {allowed or 'none'}")
+    expected_of = {u: acc for acc, us in want.items() for u in us}
+    for c in (connz or {}).get("connections") or []:
+        user = c.get("authorized_user")
+        if not user:
+            out.append(f"connection {c.get('cid')}: no authenticated user")
+            continue
+        got = c.get("account") or "$G"
+        if expected_of.get(user) != got:
+            out.append(
+                f"user {user}: connected in account {got}, expected "
+                f"{expected_of.get(user, '(not a user of the role)')}"
+            )
+    return out
+
+
+def hnx_bus_unprotected_streams(jsz, account) -> list[str]:
+    """The streams of ``account`` (``/jsz?accounts=true&streams=true&config=true``) without
+    ``deny_delete`` or ``deny_purge``: a stream created before the adapter set them.  Reported,
+    never changed (a flag can only be set by a STREAM.UPDATE, which no user holds)."""
+    out: list[str] = []
+    for acc in (jsz if isinstance(jsz, dict) else {}).get("account_details") or []:
+        if (acc or {}).get("name") != str(account):
+            continue
+        for st in acc.get("stream_detail") or []:
+            cfg = (st or {}).get("config") or {}
+            lacking = [f for f in ("deny_delete", "deny_purge") if not cfg.get(f)]
+            if lacking:
+                out.append(f"{st.get('name')} (no {' or '.join(lacking)})")
+    return out
+
+
 def hnx_is_loopback(address) -> bool:
     """True for a loopback address (the 127/8 block, ::1) written as an address, else False."""
     try:
@@ -520,6 +694,10 @@ class FilterModule:
             "hnx_bus_subscribe_problems": hnx_bus_subscribe_problems,
             "hnx_bus_client_account": hnx_bus_client_account,
             "hnx_bus_accounts": hnx_bus_accounts,
+            "hnx_bus_account_hash": hnx_bus_account_hash,
+            "hnx_bus_expected_accounts": hnx_bus_expected_accounts,
+            "hnx_bus_account_problems": hnx_bus_account_problems,
+            "hnx_bus_unprotected_streams": hnx_bus_unprotected_streams,
             "hnx_bus_missing": hnx_bus_missing,
             "hnx_is_loopback": hnx_is_loopback,
             "hnx_nats_hostport": hnx_nats_hostport,

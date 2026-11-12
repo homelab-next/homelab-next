@@ -391,6 +391,21 @@ def test_a_client_account_names_its_calls_under_the_import_prefix():
                     subject_prefix=PREFIX, api_prefix=bad)  # fmt: skip
 
 
+def test_a_refused_default_api_call_names_the_prefix_to_pass():
+    """Round 6: a client of the events bus role left at the default ``$JS.API`` is refused its
+    first call (its account reaches JetStream under ``JS.<account>.API`` only); the error says
+    so.  NatsPyWire raises it (the pinned-server test in tests/roles drives the real path)."""
+    msg = nj.permission_denied("$JS.API.STREAM.INFO.HNX_BROKER")
+    assert msg.startswith("permission denied: publish $JS.API.STREAM.INFO.HNX_BROKER; ")
+    assert "on an events_bus-managed bus pass api_prefix JS.<account>.API" in msg
+    for other in (
+        "lab.homelabnext.decision.x",
+        "JS.HNX.API.STREAM.INFO.S",
+        "$JS.ACK.S.d.1.1.1.1.0",
+    ):
+        assert "api_prefix" not in nj.permission_denied(other), other
+
+
 def test_relay_cli_once(tmp_path, monkeypatch, capsys):
     shared = FakeJetStreamWire()
     mod = tmp_path / "mods" / "relay_fake_bus.py"

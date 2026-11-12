@@ -40,6 +40,13 @@ events_bus_durables: []
 # only what is published after it exists), so the first creation on a stream that already holds
 # events is the operator's decision. Turn it on once that is decided (docs/broker.md).
 events_bus_provision_durables: false
+# Optional: a user that only watches for what an ACL bypass would leave -- a stream or durable
+# deleted, a stream changed ($JS.EVENT.ADVISORY.STREAM.DELETED.>, .CONSUMER.DELETED.>,
+# .STREAM.UPDATED.>). It lives in an account of its own (<events_bus_account>-<user>) that imports
+# exactly those advisories from the bus account as streams; it publishes nothing and holds no
+# JetStream call. "" (the default): none; the health hook's missing-stream check is the backstop.
+events_bus_monitor_user: ""
+events_bus_monitor_password_ref: ""
 # The interpreter of a homelab-next release with the nats extra (role hnx_runtime): provisioning
 # uses the project's own adapter.
 events_bus_hnx_python: /opt/hnx/current/bin/python

@@ -297,6 +297,39 @@ def test_cli_consume_maps_a_bus_failure_mid_pass_to_exit_1(tmp_path, monkeypatch
     assert "the bus failed: fetch timed out" in capsys.readouterr().err and DeadBus.closed
 
 
+def test_cli_consume_at_the_default_prefix_on_a_client_account_names_the_flag(
+    tmp_path, monkeypatch, capsys
+):
+    """Round 6: on the events bus role's bus a consumer left at --events-api-prefix's default is
+    refused its first $JS.API call (its account reaches JetStream under JS.<account>.API): exit 2
+    and the message names the prefix to pass."""
+    from homelabnext.conform.adapters import nats_jetstream as nj
+
+    class ClientAccount:  # what the server does: $JS.API.* is not in this user's allow-list
+        def request(self, subject, *a, **kw):
+            raise nj.WireError(nj.permission_denied(subject), permanent=True)
+
+        def pull(self, *a, **kw):
+            raise AssertionError("never reached")
+
+        def close(self):
+            pass
+
+    class Adapter:
+        @staticmethod
+        def make(**kw):
+            return nj.make(wire=ClientAccount(), **{k: v for k, v in kw.items()
+                                                   if k not in ("user", "password_secret")})  # fmt: skip
+
+    real = cli._connect
+    monkeypatch.setattr(cli, "_connect", lambda _mod, a: real(Adapter, a))
+    argv = ["consume", "--db", str(tmp_path / "t.db"), "--stream", "S", "--subject-prefix", "p"]
+    assert cli.main(argv, clock=lambda: T0) == 2
+    err = capsys.readouterr().err
+    assert "permission denied: publish $JS.API.STREAM.INFO.S" in err, err
+    assert "pass api_prefix JS.<account>.API (--events-api-prefix" in err, err
+
+
 def test_cli_consume_with_no_provisioned_durable_is_exit_2(tmp_path, monkeypatch, capsys):
     """The stream is there but the provisioner has not created the durable (it is declared in
     events_bus_durables, or it is not): a configuration error, exit 2, not a bus fault (1).  The

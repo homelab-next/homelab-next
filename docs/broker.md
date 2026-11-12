@@ -1015,7 +1015,11 @@ and routes the answer back into the client's own account, where no JetStream API
 nothing but that client's own imports can be reached. A client names its JetStream calls under
 `JS.HNX.API` (the import's `to`: an account without JetStream answers `$JS.API.*` itself, "JetStream
 not enabled for account"), so the adapter takes `api_prefix: JS.HNX.API` (the relay's events
-target, the bridge's and `hnx orchestration consume`'s `--events-api-prefix`); acks
+target, the bridge's and `hnx orchestration consume`'s `--events-api-prefix`; a client left at
+the default `$JS.API` is refused its first call, and the adapter's error says "on an
+events_bus-managed bus pass api_prefix JS.<account>.API"; the broker role refuses a loopback relay
+whose `broker_relay_api_prefix` is not `JS.<events_bus_account>.API` when the bus role's account
+is set on the host); acks
 (`$JS.ACK.<...>`, a delivery's reply subject) and stream subjects keep their names. `MSG.NEXT` is
 exported with `response_type: stream` (a batch answers one request with several messages). The
 events bus role renders this from the same `events_bus_users` lists (`hnx_bus_accounts` in
@@ -1096,17 +1100,27 @@ The server's own subjects are an allow-list, not a deny-list: anything under `$J
 `CONSUMER.INFO|MSG.NEXT.<stream>.<durable>`, or an ack grant in exactly one of the two reply-subject
 forms, `$JS.ACK.<stream>.<durable>.*.*.*.*.*` (v1, exactly nine tokens) or
 `$JS.ACK._.<account hash>.<stream>.<durable>.*.*.*.*.>` (v2, eleven or more: the domain token is
-`_`, the server's when no JetStream domain is set, and the hash 8 of `[A-Za-z0-9]`, so tokens 2-3
-can never be a stream and a durable), each on a named stream and durable. (A looser `$JS.ACK.<stream>.<durable>.>` reads as the v2 domain and
+`_`, the server's when no JetStream domain is set, and the hash is exactly the bus account's,
+nats-server's `getHash` of `events_bus_account` -- the sha256 of the name, its first eight bytes
+each mod 62 into `0-9A-Za-z`, so `HNX` is `hKkTAyOX` -- so tokens 2-3 can never be a stream and a
+durable, nor another account's acks), each on a named stream and durable. (A looser `$JS.ACK.<stream>.<durable>.>` reads as the v2 domain and
 hash `<stream>.<durable>` and reaches the acks, and with them `+NXT` pulls, of every stream and
 durable.) The provisioner (`events_bus_admin_user`) alone may also hold `STREAM.MSG.GET.<stream>`
 (it reads any stored message, every subject's and every durable's), `STREAM.CREATE.<stream>`,
 `CONSUMER.CREATE.<stream>.<durable>[.<filter>]`, `CONSUMER.DURABLE.CREATE.<stream>.<durable>` and
-`CONSUMER.DELETE.<stream>.<durable>`. **No user may hold `STREAM.UPDATE`, the provisioner
-included**, nor a stream delete, purge, message delete, snapshot or restore, a consumer listing,
-or anything of the key-value or object stores. A user's publish list may be empty only when it
+`CONSUMER.DELETE.<stream>.<durable>`, and it alone may NOT hold `CONSUMER.MSG.NEXT` or an ack:
+it lives in the account JetStream runs in, where a delivery or an ack's answer sent to a reply
+subject of its choosing is taken as that request (the deputy the account split closes for every
+other user; a reader is a client user with a durable of its own). **No user may hold
+`STREAM.UPDATE`, the provisioner included**, nor a stream delete, purge, message delete, snapshot
+or restore, a consumer listing, or anything of the key-value or object stores. A client's other
+grants sit under a declared stream's subject prefix (`<subject_prefix>.<...>`: it publishes events
+and nothing else), and none but its own `_INBOX.<user>` may start with `_` (`_R_`, `_GR_`, `_SYS_`
+are the server's reply and routing subjects). A user's publish list may be empty only when it
 says `subscribe_only: true`, and is then rendered deny-all (`"deny": [">"]`): NATS reads an empty
-`allow` list as no restriction at all.
+`allow` list as no restriction at all. Only the provisioner may say it: a client in an account of
+its own subscribes to its own `_INBOX` alone, so a client that publishes nothing could receive
+nothing either.
 
 The streams the role provisions are created with `deny_delete` and `deny_purge`, so the server
 refuses a message delete or a purge to every user whatever its grants; nats-server refuses to
@@ -1133,10 +1147,21 @@ recommendation. The DLQ always discards old (a refused advisory would be lost si
 **Detection backstop.** The `health` hook compares `/jsz` with the declaration: a declared stream
 or DLQ that is not on the bus fails it (a deleted stream is what a successful `STREAM.DELETE`
 leaves), a declared durable that is missing fails it once `events_bus_provision_durables` is on
-and is reported until then ("declared, not provisioned"). For alerting between health runs,
-subscribe the monitoring side (in the bus account) to the server's own advisories,
-`$JS.EVENT.ADVISORY.STREAM.DELETED.>` and `$JS.EVENT.ADVISORY.CONSUMER.DELETED.>` (and
-`...STREAM.UPDATED.>`): none should ever fire outside a break-glass step.
+and is reported until then ("declared, not provisioned"). It also reads the account split back
+from the running server (`/accountz`: the accounts, JetStream on in the bus account alone, every
+other account importing from the bus account only; `/connz?auth=true`, since `/accountz` lists no
+users: every connected user in its own account, the provisioner in the bus account) and fails on
+any departure, and it warns, without changing anything, about a stream in the bus account that
+lacks `deny_delete` or `deny_purge` (a stream created before the adapter set them, such as
+`HNX_BROKER`; the break-glass step below adds them). For alerting between health runs, the role
+can add a monitor user (`events_bus_monitor_user`, its password `events_bus_monitor_password_ref`):
+an account of its own (`<account>-<user>`) that imports exactly
+`$JS.EVENT.ADVISORY.STREAM.DELETED.>`, `$JS.EVENT.ADVISORY.CONSUMER.DELETED.>` and
+`$JS.EVENT.ADVISORY.STREAM.UPDATED.>` from the bus account as STREAM imports, may subscribe to
+those three alone and publish nothing (tested against the pinned server: a durable the
+provisioner deletes reaches it as `CONSUMER.DELETED`). None should ever fire outside a
+break-glass step. What subscribes as that user and pages is the site's (the role ships no
+watcher); without one, the health hook is the backstop.
 
 A stream created before the flags keeps its own settings (the role never changes an existing
 stream). Adding them in place is a **break-glass step**, done by hand and undone in the same

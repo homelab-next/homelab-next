@@ -35,4 +35,61 @@
           events_bus: provisioned durables missing: {{ events_bus_missing.durables | join(', ') }}
           (deleted? $JS.EVENT.ADVISORY.CONSUMER.DELETED; main re-creates them)
       when: events_bus_provision_durables | bool
+    # the account split as the server runs it (read-only): /accountz names the accounts and,
+    # per account, JetStream and imports; it does not list an account's users, so /connz?auth=true
+    # gives the account every connected user authenticated into
+    - name: Ask the bus for its accounts
+      ansible.builtin.uri:
+        url: "{{ events_bus_monitor_url }}/accountz"
+        return_content: true
+        status_code: 200
+        timeout: 5
+      register: events_bus_accountz
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    - name: And for each expected account's detail
+      ansible.builtin.uri:
+        url: "{{ events_bus_monitor_url }}/accountz?acc={{ item | urlencode }}"
+        return_content: true
+        status_code: 200
+        timeout: 5
+      loop: "{{ (events_bus_users | hnx_bus_expected_accounts(events_bus_admin_user, events_bus_account, events_bus_monitor_user)).keys() | list }}"
+      register: events_bus_account_detail
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    - name: And for the account of every connected user
+      ansible.builtin.uri:
+        url: "{{ events_bus_monitor_url }}/connz?auth=true&limit=1024"
+        return_content: true
+        status_code: 200
+        timeout: 5
+      register: events_bus_connz
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    - name: Fail unless the server runs the account split
+      ansible.builtin.assert:
+        that: events_bus_account_problems | length == 0
+        fail_msg: >-
+          events_bus: the server's accounts are not the role's account split (every user but
+          {{ events_bus_admin_user }} in an account of its own): {{ events_bus_account_problems | join('; ') }}
+        success_msg: >-
+          events_bus: account split OK ({{ events_bus_account }}: {{ events_bus_admin_user }}
+          alone with JetStream; {{ events_bus_account_detail.results | length - 1 }} client
+          account(s) importing from it only; every connected user in its own account)
+      vars:
+        events_bus_account_problems: >-
+          {{ events_bus_accountz.json | hnx_bus_account_problems(
+               events_bus_account_detail.results | map(attribute='json') | list,
+               events_bus_users, events_bus_admin_user, events_bus_account,
+               events_bus_monitor_user, events_bus_connz.json) }}
+    # reported, never changed: a flag can only be set by a STREAM.UPDATE, which no user holds
+    # (an existing stream is left as it is; docs/broker.md "The bus ACL")
+    - name: Warn about a stream without deny_delete or deny_purge
+      ansible.builtin.debug:
+        msg: >-
+          events_bus: WARNING streams without deny flags in {{ events_bus_account }}:
+          {{ events_bus_jsz.json | hnx_bus_unprotected_streams(events_bus_account) | join(', ') }}
+          (created before the adapter set them: a purge or message delete that got through would
+          be refused only with them; left unchanged, docs/broker.md has the break-glass step)
+      when: events_bus_jsz.json | hnx_bus_unprotected_streams(events_bus_account) | length > 0
   tags: [health]

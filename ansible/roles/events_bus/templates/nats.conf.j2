@@ -17,5 +17,5 @@
   "max_payload": 1048576,
   # JetStream keeps its data under <store_dir>/jetstream
   "jetstream": {"store_dir": {{ events_bus_store_dir | to_json }}, "max_memory_store": {{ events_bus_max_memory_store | int }}, "max_file_store": {{ events_bus_max_file_store | int }}},
-  "accounts": {{ events_bus_rendered_users | hnx_bus_accounts(events_bus_admin_user, events_bus_account, events_bus_api_prefix) | to_nice_json(indent=2, sort_keys=false) | indent(2) }}
+  "accounts": {{ events_bus_rendered_users | hnx_bus_accounts(events_bus_admin_user, events_bus_account, events_bus_api_prefix, events_bus_rendered_monitor | default({})) | to_nice_json(indent=2, sort_keys=false) | indent(2) }}
 }

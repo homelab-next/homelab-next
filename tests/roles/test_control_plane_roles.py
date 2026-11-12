@@ -208,6 +208,22 @@ def test_events_bus_refuses_bad_inputs(tmp_path):
             *BRIDGE_USER["publish"], "$JS.API.STREAM.MSG.GET.LAB"])]},
         {**BRIDGE_CASE, "events_bus_users": [BUS_USERS[0], PROVISIONER, dict(BRIDGE_USER, publish=[
             *BRIDGE_USER["publish"][:-1], "$JS.ACK.dom.hKkTAyOX.LAB.bridge-x.*.*.*.*.>"])]},
+        # round 6: the v2 ack hash is the bus account's own (another account's, any other)
+        {**BRIDGE_CASE, "events_bus_users": [BUS_USERS[0], PROVISIONER, dict(BRIDGE_USER, publish=[
+            *BRIDGE_USER["publish"][:-1], "$JS.ACK._.ABCDEFGH.LAB.bridge-x.*.*.*.*.>"])]},
+        {**BRIDGE_CASE, "events_bus_account": "OTHER"},  # hKkTAyOX is HNX's, not OTHER's
+        # a client that publishes nothing receives nothing (it subscribes to its own _INBOX)
+        {"events_bus_users": [*BUS_USERS, READER]},
+        # a client's grants: under a declared stream's prefix, no server _ subject
+        {"events_bus_users": broker_grant(publish=["other.homelabnext.decision.>"])},
+        {"events_bus_users": broker_grant(publish=["lab.homelabnext.decision.>", "_R_.x.>"])},
+        # the provisioner neither pulls nor acks (it lives in the JetStream account)
+        {**BRIDGE_CASE, "events_bus_users": [BUS_USERS[0], dict(PROVISIONER, publish=[
+            *PROVISIONER["publish"], "$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x"]), BRIDGE_USER]},
+        # the monitor: a name of its own (not one of the users) and a secret: reference
+        {"events_bus_monitor_user": "hnx-broker", "events_bus_monitor_password_ref": "secret:events/w"},
+        {"events_bus_monitor_user": "hnx-watch"},
+        {"events_bus_monitor_user": "Bad Name", "events_bus_monitor_password_ref": "secret:events/w"},
     ])  # fmt: skip
 
 
@@ -215,13 +231,14 @@ def test_events_bus_accepts_the_narrow_grants_a_bridge_needs(tmp_path):
     """Single JetStream calls inside the refused sets stay allowed: the ceiling refuses reach, not
     the API's prefix (the StackStorm bridge's grants in docs/broker.md), with its durable declared
     for it; the provisioner may create and delete a named durable."""
-    reader = READER  # subscribe-only: its own replies, nothing to publish
     admin = dict(PROVISIONER, publish=[*PROVISIONER["publish"],
                                        "$JS.API.CONSUMER.DELETE.LAB.e2e-scratch"])  # fmt: skip
     results = run_cases(tmp_path, "events_bus", "validate", EVENTS, [
         BRIDGE_CASE,
         {**BRIDGE_CASE, "events_bus_provision_durables": True},
-        {**BRIDGE_CASE, "events_bus_users": [BUS_USERS[0], admin, BRIDGE_USER, reader]},
+        {**BRIDGE_CASE, "events_bus_users": [BUS_USERS[0], admin, BRIDGE_USER],
+         "events_bus_monitor_user": "hnx-watch",
+         "events_bus_monitor_password_ref": "secret:events/watch"},
     ])  # fmt: skip
     assert results == [(False, "")] * 3, results
 
@@ -261,6 +278,9 @@ def test_broker_refuses_bad_inputs(tmp_path):
         {"broker_handlers": ["/x/a.sh", "/y/a.sh"]},
         # an exec handler outside a proof manifest, while handlers run as the broker's uid
         {"broker_manifest": str(PRODUCTION_MANIFEST)},
+        # the events bus role's account on this host: the relay's prefix must be its import's
+        {"events_bus_account": "HNX", "broker_relay_api_prefix": "$JS.API"},
+        {"events_bus_account": "LAB", "broker_relay_api_prefix": "JS.HNX.API"},
     ])  # fmt: skip
 
 
@@ -277,7 +297,8 @@ def test_broker_deploys_builtin_only_manifests_under_any_id(tmp_path):
         {"broker_manifest": _manifest(tmp_path, "lab-broker", builtin_only=True)},
         {"broker_manifest": proof, "broker_relay_events_endpoint": V6_LOOP_BUS},
         {"broker_manifest": proof, "broker_relay_events_endpoint": TLS_BUS},
-        {"broker_manifest": proof, "hnx_registry_file": str(tmp_path / "registry-fqdn.yml")},
+        {"broker_manifest": proof, "hnx_registry_file": str(tmp_path / "registry-fqdn.yml"),
+         "events_bus_account": "HNX"},  # JS.HNX.API, the default prefix
     ])  # fmt: skip
     assert results == [(False, "")] * 4, results
 
@@ -414,9 +435,13 @@ def test_status_hub_on_loopback_needs_no_remote_flag(tmp_path):
     assert "approvals" not in yaml.safe_load(files["agents.yml"])
 
 
-#: a user that only reads (no publish subjects at all): rendered deny-all, never {"allow": []}
+#: a client that publishes nothing (subscribe_only): refused (round 6) -- in an account of its
+#: own it may subscribe to its own _INBOX alone, so it could receive nothing at all; a reader is a
+#: client with a durable and that durable's MSG.NEXT (BRIDGE_USER)
 READER = {"user": "hnx-reader", "password_ref": "secret:events/reader", "subscribe_only": True,
           "subscribe": ["_INBOX.hnx-reader.>"]}  # fmt: skip
+#: the optional monitor user (events_bus_monitor_user), as main renders it
+MONITOR = {"user": "hnx-watch", "password_hash": "$2a$11$" + "m" * 53}
 
 
 def _rendered_users(users, password=None):
@@ -432,14 +457,16 @@ def _nats_conf(files) -> dict:
 
 
 def test_events_bus_config_grants_each_user_its_allow_lists_only(tmp_path):
-    users = _rendered_users([*BUS_USERS, READER])
+    users = _rendered_users(BUS_USERS)
     files = _render(tmp_path, "events_bus", {**EVENTS, "events_bus_rendered_users": users,
+                                             "events_bus_monitor_user": MONITOR["user"],
+                                             "events_bus_rendered_monitor": MONITOR,
                                              "inventory_hostname": "bus-01.example.internal"})  # fmt: skip
     conf = _nats_conf(files)
     assert conf["listen"].startswith(LOOP + ":") and conf["http"].startswith(LOOP + ":")
     accounts = conf["accounts"]
     # the account split: the provisioner alone with the streams, each client in its own account
-    assert list(accounts) == ["HNX", "HNX-hnx-broker", "HNX-hnx-reader"]
+    assert list(accounts) == ["HNX", "HNX-hnx-broker", "HNX-hnx-watch"]
     assert accounts["HNX"]["jetstream"] == "enabled"
     assert [u["user"] for u in accounts["HNX"]["users"]] == ["hnx-events-admin"]
     got = [a["users"][0] for a in accounts.values()]
@@ -455,14 +482,18 @@ def test_events_bus_config_grants_each_user_its_allow_lists_only(tmp_path):
         {"service": {"account": "HNX", "subject": "lab.homelabnext.decision.>"}},
         {"service": {"account": "HNX", "subject": "$JS.API.STREAM.INFO.LAB"},
          "to": "JS.HNX.API.STREAM.INFO.LAB"}]  # fmt: skip
+    advisories = ["$JS.EVENT.ADVISORY.STREAM.DELETED.>", "$JS.EVENT.ADVISORY.CONSUMER.DELETED.>",
+                  "$JS.EVENT.ADVISORY.STREAM.UPDATED.>"]  # fmt: skip
     assert accounts["HNX"]["exports"] == [
         {"service": "$JS.API.STREAM.INFO.LAB", "accounts": ["HNX-hnx-broker"]},
-        {"service": "lab.homelabnext.decision.>", "accounts": ["HNX-hnx-broker"]}]  # fmt: skip
-    # the subscribe-only user: deny-all, since NATS reads an empty allow-list as no restriction,
-    # and it imports nothing
+        {"service": "lab.homelabnext.decision.>", "accounts": ["HNX-hnx-broker"]},
+        *({"stream": a, "accounts": ["HNX-hnx-watch"]} for a in advisories)]  # fmt: skip
+    # the monitor: deny-all publish (never {"allow": []}, which NATS reads as no restriction),
+    # the three advisories imported as streams, nothing else
     assert got[2]["permissions"] == {"publish": {"deny": [">"]},
-                                     "subscribe": {"allow": READER["subscribe"]}}  # fmt: skip
-    assert accounts["HNX-hnx-reader"]["imports"] == []
+                                     "subscribe": {"allow": advisories}}  # fmt: skip
+    assert accounts["HNX-hnx-watch"]["imports"] == [
+        {"stream": {"account": "HNX", "subject": a}} for a in advisories]  # fmt: skip
     assert '"allow": []' not in files["nats.conf"]
     assert all(u["password"].startswith("$2a$") for u in got)
     unit = _directives(files["hnx-events.service"])
@@ -566,6 +597,46 @@ class _Nats:
                     return None
                 return parts[3], raw[int(parts[-2]) :]
 
+    def pull_many(self, subject: str, body: dict) -> list[str]:
+        """One ``CONSUMER.MSG.NEXT`` for a batch: the ack reply subject of every delivery, up to
+        the first status message (the batch is over) or ``batch`` deliveries."""
+        data = json.dumps(body).encode()
+        self.sock.sendall(f"PUB {subject} {self._inbox} {len(data)}\r\n".encode() + data + b"\r\n")
+        out: list[str] = []
+        while len(out) < body["batch"]:
+            line = self._line()
+            if line.startswith("-ERR"):
+                raise AssertionError(line)
+            if line == "PING":
+                self.sock.sendall(b"PONG\r\n")
+                continue
+            parts = line.split()
+            self._payload(int(parts[-1]))
+            if parts[0] == "HMSG" and len(parts) == 5:  # a status: nothing more to deliver
+                break
+            out.append(parts[3])
+        return out
+
+    def subscribe(self, subject: str, sid: int) -> list[str]:
+        """SUB ``subject``: the -ERR lines the server answers it with (none: allowed)."""
+        self.sock.sendall(f"SUB {subject} {sid}\r\nPING\r\n".encode())
+        errs = []
+        while (line := self._line()) != "PONG":
+            if line.startswith("-ERR"):
+                errs.append(line)
+        return errs
+
+    def next_subject(self) -> str:
+        """The subject of the next message delivered to any of this client's subscriptions."""
+        while True:
+            line = self._line()
+            if line == "PING":
+                self.sock.sendall(b"PONG\r\n")
+                continue
+            if line.startswith(("MSG", "HMSG")):
+                self._payload(int(line.split()[-1]))
+                return line.split()[1]
+
     def close(self):
         self.sock.close()
 
@@ -597,10 +668,13 @@ def _hnx_bus():
     return mod
 
 
-def _rendered_split_bus(tmp_path, server, users, port, monitor):
-    """The role's configuration for ``users`` (the account split), checked by the server."""
+def _rendered_split_bus(tmp_path, server, users, port, monitor, watch=""):
+    """The role's configuration for ``users`` (the account split; ``watch``: the monitor user),
+    checked by the server."""
     files = _render(tmp_path, "events_bus", {
         **EVENTS, "events_bus_rendered_users": _rendered_users(users, password="pw"),
+        "events_bus_monitor_user": watch,
+        "events_bus_rendered_monitor": {"user": watch, "password_hash": "pw"} if watch else {},
         "events_bus_users": users, "events_bus_port": port, "events_bus_monitor_port": monitor,
         "events_bus_store_dir": str(tmp_path / "store"), "inventory_hostname": "bus-01.example.internal",
     })  # fmt: skip
@@ -633,30 +707,43 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
     port, monitor = _free_port(), _free_port()
     provisioner = dict(BUS_USERS[1], publish=[
         *(f"$JS.API.STREAM.{v}.{s}" for v in ("INFO", "CREATE") for s in ("LAB", "LAB_DLQ")),
-        *PROVISIONER["publish"][1:]])  # fmt: skip
-    users = [BUS_USERS[0], provisioner, READER, BRIDGE_USER]
+        *PROVISIONER["publish"][1:], "$JS.API.CONSUMER.CREATE.LAB.e2e-scratch",
+        "$JS.API.CONSUMER.DELETE.LAB.e2e-scratch"])  # fmt: skip
+    # a second publisher whose stream subjects overlap the relay's (lab.homelabnext.> holds the
+    # relay's lab.homelabnext.decision.>): each account imports its own grant, the bus account
+    # exports both, and neither reaches further than its own list
+    emitter = {"user": "hnx-emitter", "password_ref": "secret:events/emitter",
+               "publish": ["lab.homelabnext.>"], "subscribe": ["_INBOX.hnx-emitter.>"]}  # fmt: skip
+    users = [BUS_USERS[0], provisioner, emitter, BRIDGE_USER]
     # what the role validates: the ceiling, and the durable declared for the bridge alone
     hnx_bus = _hnx_bus()
     for u in users:
         subjects = u.get("publish", []) + u["subscribe"]
-        assert hnx_bus.hnx_bus_subject_problems(subjects, u["user"],
-                                                admin=u is provisioner) == [], u  # fmt: skip
+        assert hnx_bus.hnx_bus_subject_problems(
+            subjects, u["user"], admin=u is provisioner, account="HNX",
+            streams=EVENTS["events_bus_streams"]) == [], u  # fmt: skip
     assert hnx_bus.hnx_bus_durable_problems([DURABLE], users, provisioner["user"],
                                             EVENTS["events_bus_streams"], True) == []  # fmt: skip
-    conf = _rendered_split_bus(tmp_path, server, users, port, monitor)
+    conf = _rendered_split_bus(tmp_path, server, users, port, monitor, watch="hnx-watch")
     accounts = _nats_conf({"nats.conf": conf.read_text()})["accounts"]
-    assert sorted(accounts) == ["HNX", "HNX-hnx-broker", "HNX-hnx-bus-bridge", "HNX-hnx-reader"]
+    assert sorted(accounts) == ["HNX", "HNX-hnx-broker", "HNX-hnx-bus-bridge", "HNX-hnx-emitter",
+                                "HNX-hnx-watch"]  # fmt: skip
     assert [u["user"] for u in accounts["HNX"]["users"]] == ["hnx-events-admin"]
     assert all("jetstream" not in a for n, a in accounts.items() if n != "HNX")
     proc = _start(server, conf, port)
     clients = []
     try:
-        reader = _Nats(port, "hnx-reader", "pw")
+        watch = _Nats(port, "hnx-watch", "pw")
         relay = _Nats(port, "hnx-broker", "pw")
         admin = _Nats(port, "hnx-events-admin", "pw")
-        clients += [reader, relay, admin]
+        emit = _Nats(port, "hnx-emitter", "pw")
+        clients += [watch, relay, admin, emit]
+        # the monitor publishes nothing and subscribes to the three advisories alone
         for subject in ("anything", "$JS.API.STREAM.DELETE.LAB", "lab.homelabnext.decision.x"):
-            assert _denied(reader.publish(subject)), subject
+            assert _denied(watch.publish(subject)), subject
+        assert _denied(watch.subscribe("$JS.EVENT.ADVISORY.>", 7))
+        for i, adv in enumerate(("STREAM.DELETED", "CONSUMER.DELETED", "STREAM.UPDATED")):
+            assert watch.subscribe(f"$JS.EVENT.ADVISORY.{adv}.>", 10 + i) == [], adv
         assert relay.publish("lab.homelabnext.decision.returned") == []
         for subject in ("$JS.API.STREAM.DELETE.LAB", f"{API}.STREAM.DELETE.LAB",
                         "lab.homelabnext.agent.x"):  # fmt: skip
@@ -709,6 +796,26 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
         assert info["num_ack_pending"] == 0 and info["ack_floor"]["stream_seq"] >= 1, info
         assert bridge.pull(nxt, {"batch": 1, "no_wait": True}) is None
         assert bridge.request(f"{API}.STREAM.INFO.LAB", None)["config"]["name"] == "LAB"
+        # round 6: overlapping stream grants in two accounts: the emitter stores under its wider
+        # prefix (the relay's subject included), the relay still under its own alone
+        for subject in ("lab.homelabnext.decision.returned", "lab.homelabnext.agent.job.failed"):
+            assert emit.request(subject, {"e": subject}).get("stream") == "LAB", subject
+        assert _denied(relay.publish("lab.homelabnext.agent.job.failed"))
+        assert _denied(emit.publish("lab.other.x"))
+        # a batch of 2 across the import (response_type stream: several answers to one
+        # request), both settled with the v2 ack form and the computed account hash
+        relay.request("lab.homelabnext.decision.returned", {"b": 2})
+        batch = bridge.pull_many(nxt, {"batch": 2, "no_wait": True})
+        assert len(batch) == 2 and all(len(r.split(".")) == 9 for r in batch), batch
+        account_hash = hnx_bus.hnx_bus_account_hash("HNX")
+        assert account_hash == "hKkTAyOX"
+        for reply in batch:  # $JS.ACK.<s>.<d>.<dc>.<sseq>.<dseq>.<ts>.<pending> -> v2 + a token
+            v2 = ".".join(["$JS", "ACK", "_", account_hash, *reply.split(".")[2:], "r6"])
+            assert bridge.publish(v2, b"+ACK") == [], v2
+        info = bridge.request(f"{API}.CONSUMER.INFO.LAB.bridge-x", None)
+        assert info["num_ack_pending"] == 0 and info["num_pending"] == 0, info
+        # a v2 ack under another hash is not the bridge's grant
+        assert _denied(bridge.publish(v2.replace(account_hash, "ABCDEFGH"), b"+ACK"))
         # its grants reach its own durable alone
         for other in (f"{API}.CONSUMER.MSG.NEXT.LAB.other", "$JS.ACK.LAB.other.1.1.1.1.0",
                       f"{API}.CONSUMER.DELETE.LAB.bridge-x", "$JS.API.CONSUMER.INFO.LAB.bridge-x",
@@ -757,6 +864,29 @@ def test_events_bus_config_is_enforced_by_the_pinned_server(tmp_path):
         names = [c["name"] for a in jsz["account_details"] for st in a.get("stream_detail", [])
                  for c in st.get("consumer_detail", [])]  # fmt: skip
         assert names == ["bridge-x"] and hnx_bus.hnx_bus_push_consumers(jsz) == []
+
+        # the health hook's backstops, read the way it reads them: the account split as the
+        # server runs it, and both streams with their deny flags
+        def mon(path):
+            with urllib.request.urlopen(f"http://{LOOP}:{monitor}{path}", timeout=5) as r:
+                return json.load(r)
+
+        want = hnx_bus.hnx_bus_expected_accounts(users, "hnx-events-admin", "HNX", "hnx-watch")
+        details = [mon(f"/accountz?acc={name}") for name in want]
+        assert hnx_bus.hnx_bus_account_problems(
+            mon("/accountz"), details, users, "hnx-events-admin", "HNX", "hnx-watch",
+            mon("/connz?auth=true")) == []  # fmt: skip
+        # (and it is no rubber stamp: had the relay's user been the provisioner, it would be in HNX)
+        assert hnx_bus.hnx_bus_account_problems(
+            mon("/accountz"), details, users, "hnx-broker", "HNX", "hnx-watch",
+            mon("/connz?auth=true"))  # fmt: skip
+        assert hnx_bus.hnx_bus_unprotected_streams(jsz, "HNX") == []
+        # and the monitor saw what a deletion leaves: the provisioner deletes a scratch durable
+        made = admin.request("$JS.API.CONSUMER.CREATE.LAB.e2e-scratch", {"stream_name": "LAB",
+            "config": {"durable_name": "e2e-scratch", "ack_policy": "explicit"}})  # fmt: skip
+        assert "error" not in made, made
+        assert admin.request("$JS.API.CONSUMER.DELETE.LAB.e2e-scratch", None)["success"] is True
+        assert watch.next_subject() == "$JS.EVENT.ADVISORY.CONSUMER.DELETED.LAB.e2e-scratch"
     finally:
         for c in clients:
             c.close()
@@ -866,6 +996,15 @@ def test_broker_e2e_reply_attacks_change_nothing_on_the_pinned_server(tmp_path, 
         got = e2e.check_bridge_acks(relay)
         assert "acked 1 delivery(ies)" in got and "changed nothing" in got, got
         assert "reply attacks not sent" not in got
+        # round 6: a client left at the default $JS.API is refused (its account has no
+        # JetStream of its own), and the adapter's error names the prefix to pass
+        from homelabnext.conform.adapters import nats_jetstream as nj
+
+        with pytest.raises(nj.WireError) as refused:
+            nj.make(scratch=False, provision=False, stream="LAB", subject_prefix="lab",
+                    user="hnx-broker", password_secret="secret:t/broker")  # fmt: skip
+        assert refused.value.permanent and "$JS.API.STREAM.INFO.LAB" in str(refused.value)
+        assert "pass api_prefix JS.<account>.API" in str(refused.value), refused.value
     finally:
         sys.modules.pop("broker_e2e_r", None)
         proc.terminate()
