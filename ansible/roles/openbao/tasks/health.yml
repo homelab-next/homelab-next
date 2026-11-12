@@ -3,7 +3,8 @@
 # running the pinned release. Sealed or uninitialised fails, by name. A restart owed (a change the
 # running server has not loaded: <openbao_state_dir>/restart-owed) does not fail it, since the
 # server is serving, but is reported as a WARN line naming the reasons: role interface v1 has
-# pass and fail only, so the warning is the message.
+# pass and fail only, so the warning is the message. It changes nothing (role interface v1): the
+# release record downgrade.yml reads is main's to write (release_seen.yml).
 - block:
     - name: Ask the server for its health (verified against the internal CA)
       ansible.builtin.uri:
@@ -16,13 +17,6 @@
         timeout: "{{ openbao_health_timeout | int }}"
       register: openbao_health
       changed_when: false
-    - name: Record the highest release that answered (downgrade.yml compares a pin with it)
-      ansible.builtin.include_tasks:
-        file: release_seen.yml
-        apply:
-          tags: [health]
-      vars:
-        openbao_release_answered: "{{ openbao_health.json.version | default('') | regex_search('^[0-9]+\\.[0-9]+\\.[0-9]+') or '' }}"
     - name: Fail unless it is initialised, unsealed and running the pinned release
       ansible.builtin.assert:
         that:

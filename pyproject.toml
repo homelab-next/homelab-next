@@ -139,7 +139,9 @@ suite_budgets = [
   # before them and 942s/1169s with them as first written; the cases then moved into run_cases
   # (one ansible-playbook for many) and the service tests stopped resolving a name, 176s -> 150s
   # for the module locally against 116s before the change (3.12's runners already sat at 884s of
-  # 900 before it)
+  # 900 before it). After that batching the pull request's CI measured 937.2s (3.11) and 844.1s
+  # (3.12) summed over the six shards (2026-11-12, head 6d70f118): both under 1000, so 1100 stays,
+  # 15% headroom over the slower one
   "tests/roles = 1100",
   # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
   # builds the controller and runs the whole suite against it: main measured 180-186 s summed

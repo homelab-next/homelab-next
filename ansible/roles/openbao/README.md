@@ -78,10 +78,10 @@ restart: the server reloads them on `SIGHUP` (`systemctl reload`) and stays unse
 |---|---|---|
 | `main` | `openbao_logical_id`, `openbao_api_addr`, `openbao_listen_address`, TLS | converge; start a stopped server; reload it for new TLS; never restart a running one unless allowed; refuse a pin older than a release this host has run (below) unless `openbao_allow_downgrade` |
 | `readiness` | | fails only when the API does not answer; reports `uninitialised`, `sealed`, `unsealed-active` or `unsealed-standby`, and an owed restart |
-| `health` | | fails unless initialised, unsealed and running the pinned release, and says which; a `WARN` line for an owed restart |
+| `health` | | fails unless initialised, unsealed and running the pinned release, and says which; a `WARN` line for an owed restart; changes nothing |
 | `backup` | the snapshot principal | raft snapshot to `<openbao_backup_dir>/raft.snap` (0600) plus `raft.snap.json` (sha256, the release that wrote it) |
 | `export` | the snapshot principal | the same, to `<openbao_export_dir>/<logical_id>.snap`: **not an open format** (below) |
-| `restore` | the snapshot principal, `openbao_restore_token`, `openbao_restore_source` | refuse a token whose policies are not exactly `hnx-restore`; refuse a source or manifest that is not a regular file owned by `openbao_owner` and writable by nobody else, or that is outside the backup and export directories (`openbao_restore_source_unrestricted`); stage a root-only copy and check THAT (manifest present, sha256, not written by a newer release); take `pre-restore-<UTC time>.snap`; restore the staged copy (`openbao_restore_force`: `snapshot-force`, for another cluster's snapshot) |
+| `restore` | the snapshot principal, `openbao_restore_token`, `openbao_restore_source` | sweep staging directories a killed run left; refuse a source or manifest that is not a regular file with one name, owned by `openbao_owner` and writable by nobody else, on a path whose every directory is too, or that is outside the backup and export directories (`openbao_restore_source_unrestricted`); stage a root-only copy, refuse it if the source changed during the copy, and check THAT (manifest present, sha256, not written by a newer release); then refuse a token whose policies are not exactly `hnx-restore` or that is not minted for this one restore (identity policies, use limit, TTL); take `pre-restore-<UTC time>.snap`; restore the staged copy (`openbao_restore_force`: `snapshot-force`, for another cluster's snapshot) |
 | `upgrade` | the snapshot principal, `openbao_target_version`, `openbao_target_checksums` | stage only: refuse a downgrade (against the pin and every release this host has run); pre-upgrade snapshot; fetch and verify the target release; record it as pending |
 
 The playbook accepts these seven hook names and nothing else (`openbao_hook`).
@@ -100,9 +100,11 @@ that takes the secret_id's value. The hook logs in, uses the token for this run 
 so no token is ever stored. A caller that minted a token itself may pass `openbao_snapshot_token`
 instead. Its policy is read-only: it can save a snapshot and cannot restore one. **The restore
 principal** is separate: the operator mints its token for one restore, while present, and hands it
-in as `openbao_restore_token`; the hook asks the server whose it is (`auth/token/lookup-self`) and
-refuses it unless its policies are exactly `hnx-restore` (and `default`), and refuses it equal to
-the snapshot token. A snapshot is only as readable as the unseal keys of the cluster that wrote
+in as `openbao_restore_token`; once every local check has passed, the hook asks the server whose
+it is (`auth/token/lookup-self`) and refuses it unless its policies are exactly `hnx-restore` (and
+`default`), it carries no identity policies, its use limit is 1 or 2 and its TTL at most 900
+seconds; it refuses it equal to the snapshot token. A refusal message names only plain policy
+names (`[a-z0-9_-]`, at most 64 characters) and counts the rest. A snapshot is only as readable as the unseal keys of the cluster that wrote
 it.
 
 **Handing in a token** (`openbao_restore_token`, `openbao_snapshot_token`): never as
@@ -121,14 +123,25 @@ shred -u /dev/shm/hnx-restore.yml
 (or `vars_prompt`, or `"{{ lookup('env', 'HNX_RESTORE_TOKEN') }}"` from a variable set by
 `read -rs`; never typed onto a command line). `-use-limit=2` is what a restore spends: the
 `lookup-self` check and the restore itself; the token is useless afterwards even within its TTL.
+Both uses come after every local check, and a run the lookup confirmed that then does not reach
+the restore (the pre-restore snapshot failed) revokes the token itself (`auth/token/revoke-self`).
+**A refused restore needs a freshly minted token**: a run refused before the lookup leaves the
+token unused but live until its TTL (the role does not revoke a token it has not confirmed is the
+restore principal's: it could be anyone's), so destroy it and mint another.
 
 **What the restore checks, and what it does not.** The source and its manifest must each be a
-regular file (a symbolic link is refused, and so is a path through one), owned by `openbao_owner`
-(root), writable by nobody else, and under `openbao_backup_dir` or `openbao_export_dir` unless
-`openbao_restore_source_unrestricted: true`. They are then copied into a fresh root-only (0700)
-staging directory under `openbao_backup_dir`; the sha256, the manifest checks and the restore all
-read that copy, which is removed afterwards, so the bytes restored are the bytes checked even if
-the source changes meanwhile. The manifest's sha256 protects against **corruption, not
+regular file with one name (a symbolic link is refused, so is a path through one, and so is a hard
+link: another name is another way to rewrite it), owned by `openbao_owner` (root), and under
+`openbao_backup_dir` or `openbao_export_dir` unless `openbao_restore_source_unrestricted: true`.
+"Writable by nobody else" holds for the whole path: every directory from `/` down to the source
+must be owned by `openbao_owner` or root and writable by neither its group nor others (or be
+root's with the sticky bit, as `/tmp`), so nobody else can swap a name on the way either; this
+matters most with `openbao_restore_source_unrestricted`. They are then copied into a fresh
+root-only (0700) staging directory under `openbao_backup_dir`, and stat'ed again: a source or
+manifest that is no longer the same file (device, inode, size, mtime, ctime) was changed during
+the copy and is refused. The sha256, the manifest checks and the restore all read that copy, which
+is removed afterwards (and a staging directory a killed run left is swept at the start of the
+next restore), so the bytes restored are the bytes checked even if the source changes meanwhile. The manifest's sha256 protects against **corruption, not
 tampering**: the manifest is unauthenticated, and whoever can rewrite a snapshot can rewrite its
 manifest too. What protects a snapshot from tampering is where it lives (root's alone) and the
 barrier: a snapshot is encrypted with this cluster's keys, and a forged one does not restore
@@ -138,8 +151,15 @@ without `openbao_restore_force`.
 `openbao_allow_downgrade: true`, and they do not trust `sys/health` alone, which says nothing
 while the server is stopped. Three witnesses: the release the server runs (`sys/health`), the
 release `openbao_bin` points at (`<openbao_install_dir>/<version>/bao`: what a stopped server, a
-crash restart or a reboot would start), and the highest release that ever answered here, which
-main and the health hook record in `<openbao_state_dir>/highest-release` (only ever raised).
+crash restart or a reboot would start), and the release recorded in
+`<openbao_state_dir>/highest-release`. main alone writes the record, with what answers after its
+start or restart: it is raised when a newer release answers, and lowered only by an explicit
+rollback (main with `openbao_allow_downgrade: true`, when the release that answers is the pin), so
+the switch is needed for that one run and the next routine main passes without it. The health hook
+writes nothing (role interface v1: health changes no state); a release started outside main is
+still witnessed by the link. A record that is not one (not `{"version": "<x.y.z>"}`) fails main
+and upgrade by name ("... is not a release record; remove or fix it") rather than being read as
+"nothing recorded".
 
 **Upgrading.** The `upgrade` hook stages the target release (fetched and verified beside the
 running one) and takes `pre-upgrade-<running version>.snap`; it switches nothing. Take the
@@ -153,7 +173,9 @@ main refuses a pin older than a release this host has run unless `openbao_allow_
 A rollback needs **both**: point the pin back with `openbao_allow_downgrade: true` (and
 `openbao_allow_restart: true`), unseal, and then restore `pre-upgrade-<old version>.snap` with the
 old release (the `restore` hook); the old release's directory stays for that. The switch alone,
-without the restore, leaves the old release on storage the new one may have rewritten.
+without the restore, leaves the old release on storage the new one may have rewritten. That run
+lowers the release record to the old pin once the old release answers, so leave
+`openbao_allow_downgrade` off again afterwards: later runs need it no more.
 
 If the old release cannot start or unseal on the newer storage, start it on empty storage instead
 and restore into that:

@@ -487,14 +487,26 @@ def closed_port() -> int:
         return sock.getsockname()[1]
 
 
+OLDER = "the pin is 2.7.1, older than what this host has run ("
+NOT_A_RECORD = "highest-release is not a release record; remove or fix it"
 STOPPED = [
-    # (the release the command points at, the recorded highest, allow, refused: by which witness)
-    ("2.8.0", None, False, "linked 2.8.0"),  # the command points at a newer release
-    (None, "2.8.0", False, "recorded 2.8.0"),  # a newer release answered here once
+    # (the release the command points at, the record's content, allow, refused with)
+    ("2.8.0", None, False, OLDER + "linked 2.8.0"),  # the command points at a newer release
+    (None, "2.8.0", False, OLDER + "recorded 2.8.0"),  # a newer release answered here once
     ("2.8.0", "2.9.0", True, None),  # the operator's explicit downgrade
     ("2.7.1", "2.7.1", False, None),  # the pin itself
     ("2.7.0", "2.7.0", False, None),  # an upgrade
     (None, None, False, None),  # a fresh host
+    # a record that is not one fails by name, never read as "nothing recorded"
+    (None, "not json at all", False, NOT_A_RECORD),
+    (None, '{"version": "2.8"}', False, NOT_A_RECORD),
+    (
+        None,
+        '{"version": "2.8.0", "by": "someone"}',
+        True,
+        NOT_A_RECORD,
+    ),  # the switch waives no check
+    (None, "", False, NOT_A_RECORD),
 ]
 
 
@@ -511,8 +523,11 @@ def test_a_stopped_server_does_not_let_a_lower_pin_through(tmp_path, pki):
             target.parent.mkdir(parents=True)
             target.write_text("")
             (d / "bao").symlink_to(target)
-        if recorded:
-            (d / "state" / "highest-release").write_text(json.dumps({"version": recorded}))
+        if recorded is not None:
+            plain = re.fullmatch(r"\d+\.\d+\.\d+", recorded)
+            (d / "state" / "highest-release").write_text(
+                json.dumps({"version": recorded}) if plain else recorded
+            )
         cases.append(
             {"openbao_bin": str(d / "bao"), "openbao_state_dir": str(d / "state"),
              "openbao_allow_downgrade": allow}
@@ -520,27 +535,54 @@ def test_a_stopped_server_does_not_let_a_lower_pin_through(tmp_path, pki):
     got = run_cases(tmp_path, ROLE, "downgrade", v, cases)
     for (failed, message), (*_, refused) in zip(got, STOPPED, strict=True):
         if refused:
-            assert (
-                failed
-                and f"the pin is 2.7.1, older than what this host has run ({refused}" in message
-            )
+            assert failed and refused in message, (refused, message)
         else:
             assert not failed, message
 
 
-def test_main_and_health_record_the_highest_release_that_answered(tmp_path, pki):
-    for answered, kept in (("2.8.0", "2.8.0"), ("2.7.1", "2.8.0")):  # raised, never lowered
-        with fake_openbao(pki, 200, dict(ACTIVE, version=answered)) as url:
-            r = run_role(tmp_path, ROLE, "health", hook_vars(tmp_path, pki, url))
-        record = json.loads((tmp_path / "state" / "highest-release").read_text())
-        assert record == {"version": kept}, (answered, record)
-    # the service step records what answered after the start, too
-    with fake_openbao(pki, 200, dict(ACTIVE, version="3.0.0")) as url:
-        port = int(url.rsplit(":", 1)[1])
-        v = service_vars(tmp_path, port, active=False, openbao_api_addr=url)
-        r = run_service(tmp_path, v, changed=False)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert json.loads((tmp_path / "state" / "highest-release").read_text()) == {"version": "3.0.0"}
+def record(tmp_path):
+    f = tmp_path / "state" / "highest-release"
+    return json.loads(f.read_text())["version"] if f.exists() else None
+
+
+def test_main_records_the_release_that_answered_and_an_explicit_rollback_lowers_it(tmp_path, pki):
+    """main (service.yml, after the start) raises the record; health writes nothing (role
+    interface v1: health changes no state). A rollback run (the pin answering, with
+    openbao_allow_downgrade) lowers the record to the pin, so the next routine main passes without
+    the switch; without the switch, an older release answering never lowers it."""
+    with (
+        fake_openbao(pki, 200, dict(ACTIVE, version="2.8.0")) as newer,
+        fake_openbao(pki, 200, ACTIVE) as pinned,  # 2.7.1, the pin
+    ):
+        port = int(newer.rsplit(":", 1)[1])  # something listening for the service step's wait
+
+        def service(url, **kw):
+            v = service_vars(tmp_path, port, active=False, openbao_api_addr=url, **kw)
+            return run_service(tmp_path, v, changed=False)
+
+        def downgrade(url):
+            return run_role(tmp_path, ROLE, "downgrade", hook_vars(tmp_path, pki, url))
+
+        health = run_role(tmp_path, ROLE, "health", hook_vars(tmp_path, pki, newer))
+        assert record(tmp_path) is None, health.stdout  # health recorded nothing
+        steps = [
+            (newer, {}, "2.8.0"),  # raised
+            (pinned, {}, "2.8.0"),  # an older release answering, no switch: kept
+            (pinned, {"openbao_allow_downgrade": True}, "2.7.1"),  # the explicit rollback
+        ]
+        for url, kw, want in steps:
+            r = service(url, **kw)
+            assert r.returncode == 0, (want, r.stdout + r.stderr)
+            assert record(tmp_path) == want, (want, record(tmp_path))
+        after = downgrade(pinned)  # the next routine main, without the switch
+        assert after.returncode == 0, after.stdout + after.stderr
+        # the switch with a newer release still answering (no restart made): the record stays
+        r = service(newer, openbao_allow_downgrade=True)
+        assert r.returncode == 0 and record(tmp_path) == "2.8.0", r.stdout
+        (tmp_path / "state" / "highest-release").write_text("{oops")
+        corrupt = service(pinned)
+    assert corrupt.returncode != 0 and NOT_A_RECORD in corrupt.stdout, corrupt.stdout
+    assert (tmp_path / "state" / "highest-release").read_text() == "{oops"  # never written over
 
 
 def test_upgrade_refuses_a_target_older_than_the_running_release(tmp_path, pki):
@@ -706,6 +748,7 @@ def test_health_passes_but_warns_while_a_restart_is_owed(tmp_path, pki):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "WARN openbao secrets: a restart is owed (release, unit)" in r.stdout
     assert quiet.returncode == 0 and "WARN" not in quiet.stdout
+    assert list((tmp_path / "state").iterdir()) == []  # health changes nothing (role interface v1)
 
 
 def test_readiness_reports_an_owed_restart(tmp_path, pki):
@@ -749,6 +792,14 @@ ROLE_ID = "fake-role-id-1111"
 SECRET_ID = "fake-secret-id-2222-never-shown"
 MINTED = "s.fake-minted-by-approle-login-3333"
 UNKNOWN = "s.fake-revoked-or-expired-4444"  # a token the server does not know
+# restore-principal tokens minted wrongly (what lookup-self answers for each: Api.LOOKUP)
+ODD_TOKENS = {
+    "s.fake-restore-identity-5555": "identity",  # carries identity policies
+    "s.fake-restore-unlimited-6666": "unlimited",  # no use limit
+    "s.fake-restore-long-ttl-7777": "long",  # a TTL over 15 minutes
+    "s.fake-restore-odd-policy-8888": "odd",  # a policy name a message must not print
+}
+ODD_POLICY = "evil\n{{ name }} <x>"
 SNAP = b"raft-snapshot-bytes"
 SECRETS = (TOKEN, RESTORE_TOKEN, SECRET_ID, MINTED)
 # openbao_snapshot_approle_secret_id_ref (the overlay's secret:openbao/snapshot-secret-id) resolves
@@ -758,6 +809,19 @@ APPROLE = {
     "openbao_snapshot_approle_role_id": ROLE_ID,
     "openbao_snapshot_approle_secret_id_ref": "secret:openbao/snapshot-secret-id",
 }
+
+
+# what lookup-self answers, per principal (a restore token as README.md mints it, after a use)
+LOOKUP = {
+    "restore": {"policies": ["default", "hnx-restore"], "num_uses": 1, "ttl": 899},
+    "minted": {"policies": ["default", "hnx-snapshot"], "num_uses": 1, "ttl": 299},
+    "snapshot": {"policies": ["hnx-snapshot"], "num_uses": 0, "ttl": 600},
+    "identity": {"policies": ["default", "hnx-restore"], "identity_policies": ["admin"],
+                 "num_uses": 1, "ttl": 899},
+    "unlimited": {"policies": ["default", "hnx-restore"], "num_uses": 0, "ttl": 899},
+    "long": {"policies": ["default", "hnx-restore"], "num_uses": 1, "ttl": 86400},
+    "odd": {"policies": ["default", "hnx-restore", ODD_POLICY], "num_uses": 1, "ttl": 899},
+}  # fmt: skip
 
 
 class Api:
@@ -772,9 +836,8 @@ class Api:
         self.on_save = None  # called before a snapshot is served (the swap test mutates a file)
 
     def who(self, h) -> str:
-        return {TOKEN: "snapshot", MINTED: "minted", RESTORE_TOKEN: "restore"}.get(
-            h.headers.get("X-Vault-Token", ""), "nobody"
-        )
+        tokens = {TOKEN: "snapshot", MINTED: "minted", RESTORE_TOKEN: "restore", **ODD_TOKENS}
+        return tokens.get(h.headers.get("X-Vault-Token", ""), "nobody")
 
     def handle(self, h, method):
         path = h.path.split("?")[0]
@@ -792,16 +855,19 @@ class Api:
                 self.on_save()
             return (200, SNAP) if who in ("snapshot", "minted") else (403, {"errors": ["denied"]})
         if method == "GET" and path == "/v1/auth/token/lookup-self":
-            policies = {"restore": ["default", "hnx-restore"], "minted": ["default", "hnx-snapshot"],
-                        "snapshot": ["hnx-snapshot"]}.get(who)  # fmt: skip
-            return (200, {"data": {"policies": policies}}) if policies else (403, {"errors": ["x"]})
+            data = LOOKUP.get(who)
+            return (
+                (200, {"data": {"identity_policies": None, **data}})
+                if data
+                else (403, {"errors": ["x"]})
+            )
         if method == "POST" and path.startswith("/v1/sys/storage/raft/snapshot"):
             if who != "restore":
                 return 403, {"errors": ["permission denied"]}
             self.restored.append((path.rsplit("/", 1)[1], data))
             return 204, None
         if method == "POST" and path == "/v1/auth/token/revoke-self":
-            return (204, None) if who == "minted" else (403, {"errors": ["x"]})
+            return (204, None) if who in ("minted", "restore") else (403, {"errors": ["x"]})
         return 404, {"errors": []}
 
 
@@ -947,6 +1013,10 @@ def test_restore_checks_the_manifest_takes_a_pre_restore_snapshot_then_restores(
     tmp_path, pki, force
 ):
     src = restore_case(tmp_path)
+    stale = tmp_path / "backup" / ".restore-staging-killed"  # what a killed run left
+    stale.mkdir(parents=True)
+    (stale / "raft.snap").write_bytes(SNAP)
+    stale.chmod(0o700)
     with fake_api(pki) as (url, api):
         v = snap_vars(
             tmp_path, pki, url, openbao_snapshot_token=TOKEN, openbao_restore_token=RESTORE_TOKEN,
@@ -968,7 +1038,9 @@ def test_restore_checks_the_manifest_takes_a_pre_restore_snapshot_then_restores(
     assert re.fullmatch(r"pre-restore-\d{8}T\d{6}Z\.snap", pre.name)
     assert pre.read_bytes() == SNAP and json.loads(pre.with_name(pre.name + ".json").read_text())
     assert f"the state before it is in {tmp_path}/backup/{pre.name}" in r.stdout
-    assert not list((tmp_path / "backup").glob(".restore-staging-*"))  # the staged copy is gone
+    assert not list(
+        (tmp_path / "backup").glob(".restore-staging-*")
+    )  # staged and stale copies gone
 
 
 @pytest.mark.parametrize(
@@ -990,10 +1062,9 @@ def test_restore_refuses_a_snapshot_without_a_matching_manifest_or_from_a_newer_
         )  # fmt: skip
         r = run_role(tmp_path, ROLE, "restore", v)
     assert r.returncode != 0 and says in r.stdout, r.stdout
-    asked = [
-        q for q in api.requests if q[1] not in ("/v1/sys/health", "/v1/auth/token/lookup-self")
-    ]
-    assert asked == []  # no snapshot, no restore
+    # no lookup-self (the token is not spent on a restore a local check refuses), no snapshot,
+    # no restore
+    assert [q for q in api.requests if q[1] != "/v1/sys/health"] == []
     backup = tmp_path / "backup"
     assert not backup.exists() or list(backup.iterdir()) == []  # the staged copy is gone too
 
@@ -1052,13 +1123,62 @@ def test_the_bytes_restored_are_the_bytes_checked_even_if_the_source_is_swapped(
     assert not list((tmp_path / "backup").glob(".restore-staging-*"))
 
 
+CP_THEN_TOUCH = r"""
+import os, subprocess, sys
+p = subprocess.run(["/bin/cp", *sys.argv[1:]])
+src = sys.argv[-2]
+if src.endswith(".snap"):  # the source is rewritten while it is copied: same bytes, a new mtime
+    os.utime(src, (1, 1))
+sys.exit(p.returncode)
+"""
+
+
+def test_a_source_changed_while_it_is_copied_is_refused(tmp_path, pki):
+    """The source is stat'ed again after the copy: a change between the checks and the copy (here:
+    a cp that touches it once it has copied) is refused before the token is spent."""
+    src = restore_case(tmp_path)
+    (tmp_path / "bin").mkdir()
+    fake(tmp_path / "bin" / "cp", CP_THEN_TOUCH)
+    env = {"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    with fake_api(pki) as (url, api):
+        r = run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, pki, url, src), env=env)
+    assert r.returncode != 0 and "or its manifest changed while it was copied" in r.stdout, r.stdout
+    assert [q for q in api.requests if q[1] != "/v1/sys/health"] == []
+    assert not list((tmp_path / "backup").glob(".restore-staging-*"))
+
+
+def test_a_confirmed_restore_token_is_revoked_when_the_restore_is_not_reached(tmp_path, pki):
+    """lookup-self said it is the restore principal's, then the pre-restore snapshot failed: the
+    token is revoked (its second use), never left live."""
+    src = restore_case(tmp_path)
+    with fake_api(pki) as (url, api):
+        api.save_fails = True
+        r = run_role(tmp_path, ROLE, "restore", restore_vars(tmp_path, pki, url, src))
+    assert r.returncode != 0
+    assert [q for q in api.requests if q[1] != "/v1/sys/health"] == [
+        ("GET", "/v1/auth/token/lookup-self", "restore"),
+        ("GET", "/v1/sys/storage/raft/snapshot", "snapshot"),
+        ("POST", "/v1/auth/token/revoke-self", "restore"),
+    ]
+    assert api.restored == [] and not any(x in r.stdout + r.stderr for x in SECRETS)
+
+
+UNSAFE_DIR = "lies under a directory that is not owned by"
 REFUSED_SOURCES = {
     "world-writable": "writable by its group or by others (mode 0666)",
     "group-writable manifest": "writable by its group or by others (mode 0664)",
     "symlink": "is not a non-empty snapshot file on the host (a symbolic link is refused)",
     "through a linked directory": "is reached through a symbolic link",
     "outside": "is not under",
+    "hard link": "or its manifest has more than one name (links: 2, 1)",
+    "hard-linked manifest": "or its manifest has more than one name (links: 1, 2)",
+    "group-writable directory": UNSAFE_DIR,
+    "sticky directory not root's": UNSAFE_DIR,
     "unknown token": "the server does not know it",
+    "identity": "it carries 1 identity policies",
+    "unlimited": "its use limit is none (mint it with -use-limit=2)",
+    "long": "its TTL is 86400 s, over 900",
+    "odd": "its policies are default, hnx-restore and 1 not shown",
 }
 
 
@@ -1095,8 +1215,18 @@ def test_restore_refuses_a_source_someone_else_could_have_written(tmp_path, pki)
             for f in (src, src.with_name("raft.snap.json")):
                 f.rename(out / f.name)
             src = out / "raft.snap"
+        elif case == "hard link":
+            os.link(src, d / "another-name.snap")
+        elif case == "hard-linked manifest":
+            os.link(src.with_name("raft.snap.json"), d / "another-name.json")
+        elif case == "group-writable directory":
+            d.chmod(0o775)
+        elif case == "sticky directory not root's":
+            d.chmod(0o1777)  # sticky protects names only in a directory root owns
         elif case == "unknown token":
             over["openbao_restore_token"] = UNKNOWN
+        elif case in ODD_TOKENS.values():
+            over["openbao_restore_token"] = next(t for t, w in ODD_TOKENS.items() if w == case)
         # vars/main.yml's openbao_owner outranks run_cases' play variables: set it per case
         owner = {"openbao_owner": USER, "openbao_owner_group": GROUP}
         cases.append({"openbao_restore_source": str(src), **owner, **over})
@@ -1113,7 +1243,10 @@ def test_restore_refuses_a_source_someone_else_could_have_written(tmp_path, pki)
         )  # fmt: skip
     for (failed, message), (case, says) in zip(got, REFUSED_SOURCES.items(), strict=True):
         assert failed and says in message, (case, message)
-    assert UNKNOWN not in "".join(m for _, m in got)
+    said = "".join(m for _, m in got)
+    assert UNKNOWN not in said and "evil" not in said and not [t for t in ODD_TOKENS if t in said]
+    # a token the lookup did not confirm as the restore principal's is never revoked by the role
+    assert not [q for q in api.requests if q[1] == "/v1/auth/token/revoke-self"]
     assert ok.returncode == 0, ok.stdout + ok.stderr
     assert api.restored == [("snapshot", SNAP)]
 
@@ -1158,7 +1291,9 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
     as README.md creates it (token_num_uses=2) logs in, saves and revokes its token, a two-use
     hnx-restore token passes lookup-self and restores the staged copy (an hnx-snapshot token is
     refused), and a stopped server with a lower pin is refused. A throwaway cluster: its share
-    and root token live only in this process's memory. CI has no `bao`, so this skips there."""
+    and root token live only in this process's memory (the share goes to `bao` on stdin, never
+    argv; HOME and BAO_TOKEN are throwaway, so no ~/.vault-token is read or sent). CI has no
+    `bao`, so this skips there."""
     bao = subprocess.run(["bao", "version"], capture_output=True, text=True, check=True).stdout
     assert bao.startswith("OpenBao v2.7.1 "), bao  # the pin, nothing else
     port, cport = free_port(), free_port()
@@ -1170,8 +1305,11 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
     tls = tmp_path / "etc" / "tls"
     (tls / "server.pem").write_bytes((pki / "cert.pem").read_bytes())
     (tls / "server-key.pem").write_bytes((pki / "key.pem").read_bytes())
-    env = dict(os.environ, BAO_ADDR=url, BAO_CACERT=str(tls / "ca.pem"))
-    env.pop("BAO_TOKEN", None)
+    # a throwaway HOME and token: the CLI never reads (or sends) the user's ~/.vault-token
+    (tmp_path / "home").mkdir()
+    env = dict(os.environ, BAO_ADDR=url, BAO_CACERT=str(tls / "ca.pem"), HOME=str(tmp_path / "home"),
+               BAO_TOKEN="s.throwaway-not-a-token")  # fmt: skip
+    env.pop("VAULT_TOKEN", None)
 
     def cli(*args, token=None, data=None):
         e = dict(env, BAO_TOKEN=token) if token else env
@@ -1212,7 +1350,9 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
         init = json.loads(
             cli("operator", "init", "-key-shares=1", "-key-threshold=1", "-format=json")
         )
-        cli("operator", "unseal", init["unseal_keys_b64"][0])
+        # the share on stdin (key=-), never argv: `operator unseal` takes it only as an argument
+        # or from a terminal
+        cli("write", "sys/unseal", "key=-", data=init["unseal_keys_b64"][0])
         root = init["root_token"]
         threading.Event().wait(2)  # the node becomes active
         audit = json.loads(cli("audit", "list", "-format=json", token=root))
@@ -1266,17 +1406,20 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
 
         r = run_role(tmp_path, ROLE, "health", v)
         assert r.returncode == 0, r.stdout + r.stderr
-        assert json.loads((tmp_path / "state" / "highest-release").read_text()) == {
-            "version": "2.7.1"
-        }
+        assert not (tmp_path / "state" / "highest-release").exists()  # health writes nothing
     finally:
         server.terminate()
         server.wait(timeout=30)
-    # the server is stopped: sys/health says nothing, the record still refuses a lower pin
+    # the server is stopped: sys/health says nothing; the command still points at 2.7.1 (as main
+    # links it: <install_dir>/<version>/bao), which refuses a lower pin
+    (tmp_path / "opt" / "2.7.1").mkdir(parents=True)
+    (tmp_path / "opt" / "2.7.1" / "bao").write_text("")
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    (tmp_path / "bin" / "bao").symlink_to(tmp_path / "opt" / "2.7.1" / "bao")
     r = run_role(
         tmp_path, ROLE, "downgrade", dict(v, openbao_version="2.7.0", openbao_health_timeout=2)
     )
-    assert r.returncode != 0 and "older than what this host has run (recorded 2.7.1" in r.stdout, (
+    assert r.returncode != 0 and "older than what this host has run (linked 2.7.1" in r.stdout, (
         r.stdout
     )
 

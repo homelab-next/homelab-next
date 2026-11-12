@@ -80,6 +80,8 @@
       when: openbao_snapshot_login_needed | bool
       no_log: true
 
+    # no retries: the AppRole's token has 2 uses (this save and the revoke below), so a retried
+    # save would spend the revoke's use and leave the token to its TTL
     - name: Save the raft snapshot (to a partial file first, owner-only)
       ansible.builtin.uri:
         url: "{{ openbao_api_addr }}/v1/sys/storage/raft/snapshot"
@@ -141,6 +143,8 @@
         path: "{{ openbao_snapshot_dir }}/{{ openbao_snapshot_name }}.partial"
         state: absent
 
+    # 403: the token is already dead (its two uses spent, e.g. by a save that failed after the
+    # server counted it, or its TTL passed), which is the state the revoke is for
     - name: Revoke the token this run minted
       ansible.builtin.uri:
         url: "{{ openbao_api_addr }}/v1/auth/token/revoke-self"
@@ -148,7 +152,7 @@
         headers:
           X-Vault-Token: "{{ openbao_snapshot_login.json.auth.client_token }}"
         ca_path: "{{ openbao_tls_ca_file }}"
-        status_code: [200, 204]
+        status_code: [200, 204, 403]
         follow_redirects: none
         use_proxy: false
         timeout: "{{ openbao_health_timeout | int }}"

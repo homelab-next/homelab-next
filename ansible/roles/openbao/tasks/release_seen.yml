@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-# Record the highest release that ever answered on this host (<state_dir>/highest-release), one of
-# the witnesses downgrade.yml compares a pin with: it outlives a stopped server and a moved link.
-# Takes openbao_release_answered (what sys/health said; empty when nothing answered). Only ever
-# raised, never lowered: a deliberate rollback (openbao_allow_downgrade) leaves it at the newer
-# release, so the next run refuses the older pin again until the operator decides otherwise.
-- name: Read the highest release recorded so far
-  ansible.builtin.slurp:
-    src: "{{ openbao_state_dir }}/highest-release"
-  register: openbao_highest_record
-  failed_when: false
+# Record the highest release that answered on this host (<state_dir>/highest-release), one of the
+# witnesses downgrade.yml compares a pin with: it outlives a stopped server and a moved link. main
+# alone writes it (service.yml, after the start or restart): health never changes state (role
+# interface v1), and a release started outside main is still witnessed by the link.
+# Takes openbao_release_answered (what sys/health said; empty when nothing answered). Raised when a
+# newer release answers. Lowered only by the operator's explicit rollback: with
+# openbao_allow_downgrade, when the release that answers is the pin, the record becomes the pin,
+# so the switch is needed for that one run and the next routine main passes without it.
+- name: Read the release recorded so far
+  ansible.builtin.include_tasks: release_record.yml
   when: openbao_release_answered is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
 
 - name: Create the state directory
@@ -20,7 +20,7 @@
     mode: "0750"
   when: openbao_release_answered is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
 
-- name: Raise the record when a newer release answered
+- name: Record the release that answered (raised; lowered only by an explicit rollback)
   ansible.builtin.copy:
     dest: "{{ openbao_state_dir }}/highest-release"
     content: "{{ {'version': openbao_release_answered} | to_nice_json }}\n"
@@ -28,9 +28,10 @@
     group: "{{ openbao_owner_group }}"
     mode: "0640"
   vars:
-    openbao_highest_before: >-
-      {{ ((openbao_highest_record.content | b64decode | from_json).version | default('0.0.0'))
-         if openbao_highest_record.content is defined else '0.0.0' }}
+    openbao_release_before: "{{ openbao_release_recorded | default('') }}"
   when:
     - openbao_release_answered is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
-    - openbao_highest_before is not match('^[0-9]+\.[0-9]+\.[0-9]+\Z') or openbao_release_answered is version(openbao_highest_before, '>')
+    - >-
+      openbao_release_before == '' or openbao_release_answered is version(openbao_release_before, '>')
+      or (openbao_allow_downgrade | bool and openbao_release_answered == openbao_version
+          and openbao_release_answered != openbao_release_before)

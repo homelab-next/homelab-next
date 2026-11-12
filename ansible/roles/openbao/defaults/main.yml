@@ -44,9 +44,10 @@ openbao_cluster_addr: ""
 openbao_allow_swap: false
 # main (and upgrade) refuse a pin older than a release this host has run unless this is true: the
 # one the server RUNS (sys/health), the one openbao_bin points at (what a stopped server would
-# start), and the highest one that ever answered (<openbao_state_dir>/highest-release). A downgrade
-# may meet raft storage a newer release has already rewritten: a rollback needs this AND the
-# restore of the pre-upgrade snapshot with the old release (README.md, "Upgrading").
+# start), and the one recorded in <openbao_state_dir>/highest-release (main raises it; a main run
+# with this switch lowers it to the pin once the pin answers, so the switch is needed for that one
+# run). A downgrade may meet raft storage a newer release has already rewritten: a rollback needs
+# this AND the restore of the pre-upgrade snapshot with the old release (README.md, "Upgrading").
 openbao_allow_downgrade: false
 openbao_ui: false
 openbao_log_level: info
@@ -88,6 +89,8 @@ openbao_snapshot_timeout: 300
 # cluster's unseal keys, and hnx-restore must also allow snapshot-force).
 openbao_restore_force: false
 # The restore hook restores only a file under openbao_backup_dir or openbao_export_dir unless this
-# is true; either way the source must be a regular file owned by openbao_owner and writable by
-# nobody else, and what is checked and restored is a root-only staged copy of it.
+# is true; either way the source must be a regular file with one name, owned by openbao_owner and
+# writable by nobody else, on a path whose every directory is openbao_owner's or root's and
+# writable by nobody else (or root's with the sticky bit), and what is checked and restored is a
+# root-only staged copy of it.
 openbao_restore_source_unrestricted: false
