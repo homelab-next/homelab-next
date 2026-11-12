@@ -144,8 +144,10 @@ suite_budgets = [
   # the round-4 restore and record cases (head 95a9e1cc; one 3.12 shard alone took 569s): 1320
   # since, about 1.25x the slower figure; 1680 since the control-plane roles (#360) landed beside
   # them: main measured 1116.7s (3.11) and 1205.2s (3.12) at 64fb744e, and the round-6 follow-ups
-  # (#361: the bus ACL's validation cases, the pinned-server cases) 1227.2s and 1383.5s
-  # (2026-11-12); #360's own pull request measured 991s once and about 770s typically before the
+  # (#361: the bus ACL's validation cases; its pinned-server cases skip in these shards, without
+  # nats-server or nats-py, and run in the external-tools job) 1227.2s and 1383.5s on a first run,
+  # 1106.5s and 1411.2s on the green run of head 1210441b (2026-11-12): the spread is run-to-run
+  # noise; #360's own pull request measured 991s once and about 770s typically before the
   # openbao suites joined it. 1680 is about 1.2x the slower figure
   "tests/roles = 1680",
   # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
