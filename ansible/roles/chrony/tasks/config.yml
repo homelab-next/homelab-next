@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# A changed configuration is parsed by chronyd -p (print the configuration and exit) on a staged
-# copy beside the live file before it replaces the live one, so a bad value never reaches the
-# daemon. Replacing the live file leaves a restart-pending marker that only a successful restart
-# removes, so a failed (or disabled) restart is retried on the next run even though the file no
-# longer changes.
+# A changed configuration is parsed by chronyd -p (print the configuration and exit) before it
+# replaces the live one, so a bad value never reaches the daemon. Replacing the live file leaves a
+# restart-pending marker that only a successful restart removes, so a failed (or disabled) restart
+# is retried on the next run even though the file no longer changes.
 - name: Resolve and validate the time sources
   ansible.builtin.include_tasks: validate.yml
 
@@ -13,34 +12,29 @@
     state: directory
     mode: "0750"
 
-# Staged beside the live file, not in Ansible's temporary directory: Debian's AppArmor profile for
-# chronyd lets it read /etc/chrony but not the connecting user's home (where a `validate:` copy
-# sits), so a check there fails on every real Debian 13 guest whatever the configuration says.
-- name: Stage the configuration beside the live file
+# Written by one template task, checked by `chronyd -p` (print the configuration and exit) before
+# it replaces the live file.  Not on Ansible's own temporary copy: Debian's AppArmor profile for
+# chronyd lets it read /etc/chrony but not the connecting user's home where that copy sits, so the
+# check failed on every real Debian 13 guest whatever the configuration said.  The validate
+# command copies the candidate beside the live file (a mktemp name, so nothing else is touched),
+# runs chronyd on that copy, removes it and returns chronyd's exit code.  One task, so --check
+# reports the change without needing a staged file, and nothing is left behind.
+- name: Write the configuration, checked by chronyd beside the live file before it goes live
   ansible.builtin.template:
     src: chrony.conf.j2
-    dest: "{{ chrony_staged_file }}"
-    mode: "0644"
-  register: chrony_staged
-
-- name: Read the live configuration's checksum
-  ansible.builtin.stat:
-    path: "{{ chrony_config_file }}"
-  register: chrony_live
-
-- name: Check the staged configuration with chronyd before it can go live
-  ansible.builtin.command:
-    argv: ["{{ chrony_daemon_cli }}", "-p", "-f", "{{ chrony_staged_file }}"]
-  changed_when: false
-  when: not chrony_live.stat.exists or chrony_live.stat.checksum != chrony_staged.checksum
-
-- name: Install the checked configuration
-  ansible.builtin.copy:
-    src: "{{ chrony_staged_file }}"
     dest: "{{ chrony_config_file }}"
-    remote_src: true
     mode: "0644"
+    validate: >-
+      /bin/sh -c 'c=$(mktemp "$2/.homelabnext-check.XXXXXX.conf") || exit 1;
+      cat "$3" > "$c" && "$1" -p -f "$c"; rc=$?; rm -f "$c"; exit $rc'
+      chrony-check {{ chrony_daemon_cli | quote }} {{ chrony_config_file | dirname | quote }} %s
   register: chrony_written
+
+# 82341a4e staged the candidate at this path and left it there
+- name: Remove the staged copy an earlier version of this role left beside the live file
+  ansible.builtin.file:
+    path: "{{ chrony_config_file | dirname }}/.homelabnext-staged.conf"
+    state: absent
 
 - name: Mark a restart as owed
   ansible.builtin.copy:

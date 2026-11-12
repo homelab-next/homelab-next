@@ -17,8 +17,24 @@ from homelabnext.compute.model import Fleet, Guest
 
 from ._text import HEADER, q
 
+#: one hypervisor node applies this output: ``hnx guests render --node`` may narrow it to one
+PER_NODE = True
+
 #: ``cloudinit.sudo`` -> sudoers rule (``None`` = no rule)
 SUDO_RULES = {"none": None, "password": "ALL=(ALL) ALL", "nopasswd": "ALL=(ALL) NOPASSWD:ALL"}
+
+
+def _runcmd(ci: dict) -> list[str]:
+    """Every ``runcmd`` entry of a VM's user-data (``ci``: its ``cloudinit``), in order, as
+    flow-style YAML lists.  The one place that adds one: :func:`user_data` writes them under a
+    single ``runcmd:`` key, since a second key would silently replace the first."""
+    cmds: list[str] = []
+    if "qemu-guest-agent" in ci.get("packages", []):
+        # Debian's unit is static and bound to the virtio port's device, which appeared at boot,
+        # before cloud-init installed the package: nothing starts it until the next boot, and a
+        # hypervisor that waits for the agent (the terraform-proxmox target's agent block) stalls.
+        cmds.append("[systemctl, start, qemu-guest-agent]")
+    return cmds
 
 
 def user_data(fleet: Fleet, g: Guest) -> str:
@@ -39,11 +55,9 @@ def user_data(fleet: Fleet, g: Guest) -> str:
     pk = ci.get("packages", [])
     if pk:
         L += ["package_update: true", "packages:"] + [f"  - {q(p)}" for p in sorted(pk)]
-    if "qemu-guest-agent" in pk:
-        # Debian's unit is static and bound to the virtio port's device, which appeared at boot,
-        # before cloud-init installed the package: nothing starts it until the next boot, and a
-        # hypervisor that waits for the agent (the terraform-proxmox target's agent block) stalls.
-        L += ["runcmd:", "  - [systemctl, start, qemu-guest-agent]"]
+    runcmd = _runcmd(ci)
+    if runcmd:
+        L += ["runcmd:"] + [f"  - {c}" for c in runcmd]
     L += ["ssh_pwauth: false"]
     return "\n".join(L) + "\n"
 

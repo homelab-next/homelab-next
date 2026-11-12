@@ -1,6 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, generators for IaC, cloud-init, inventory, firewall and baselines, and applying them.'
-summary_of: outline:sha256:1169a5e22376a9d7
+summary_of: outline:sha256:3beba5117c11a6cc
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -199,13 +199,21 @@ validation uses the network validator's IPv6 prefix rules. It does not validate 
 
 ## Rendering
 
-`hnx guests render DIR --site SITE --target T [--node NODE] [--out OUT [--prune]] [--keys KEYS] [--policies FILE] [--baselines FILE]`
+`hnx guests render DIR --site SITE --target T [--node NODE [--allow-empty]] [--out OUT [--prune]] [--keys KEYS] [--policies FILE] [--baselines FILE]`
 
-`--node NODE` (also on `plan`) renders only the guests placed on `NODE`, after the whole set has
+`--node NODE` (also on `plan`) renders only what belongs to `NODE`, after the whole set has
 validated: a standalone hypervisor's Terraform (one provider endpoint) must not carry another
 node's guests, and one directory of state per node keeps a plan from proposing to destroy them.
-A node that no guest and no `_nodes.yml` entry names is refused, so a typo never renders an empty
-plan (which Terraform would read as "destroy everything in state").
+It is taken only by the **per-node** targets, whose output one node applies: `terraform-proxmox`,
+`libvirt`, `cloudinit`, `firewall-rules` (the node's `/etc/pve/firewall`) and `node-mirror` (that
+node's `mirror/<node>/`). The **fleet-wide** targets (`inventory`, `registry-hosts`,
+`tailscale-acl`, `backup-jobs`, `baseline-playbook`, `runtime-labels`) are one document for every
+node, so narrowed to one they would silently drop the others' guests: `--node` with one of them is
+a usage error (exit 2); render them without it. A node that no guest and no `_nodes.yml` entry
+names is refused, so a typo never renders an empty plan, and so is a known node that holds none
+of the guests the target renders (exit 1): applied to that node's state, an empty Terraform render
+reads as "destroy everything in it". `--allow-empty` renders it anyway, for the day that is
+meant.
 
 `--out` writes only the files that differ, with the same writer as `hnx site render`. A file in
 `--out` that carries the generated-file header but is no longer rendered (a removed guest's
@@ -215,7 +223,7 @@ another target's files as stale.
 
 | Target | Output |
 |---|---|
-| `terraform-proxmox` | `vm-*.tf`, `ct-*.tf`, `providers.tf`, `variables.tf`, `MANUAL.md` (bpg/proxmox resource shapes; text only) |
+| `terraform-proxmox` | `vm-*.tf`, `ct-*.tf`, `providers.tf`, `variables.tf`, `MANUAL.md`, `USER_DATA.md` (bpg/proxmox resource shapes; text only) |
 | `libvirt` | one `virt-install` script per VM plus `SKIPPED.txt`; refuses guests it cannot isolate (below) |
 | `cloudinit` | `<name>/user-data`, `meta-data`, `network-config` per VM |
 | `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`), `host_vars/<fqdn>.yml` (with `hnx_firewall`, the guest's firewall rules with zones resolved; with a set, `hnx_baselines`, `hnx_controls` and the baseline settings of its per-guest controls) |
@@ -239,6 +247,27 @@ remote backend with locking (for example an S3-compatible bucket with server-sid
 OpenTofu's client-side state encryption): state holds the API token's effects, guest addresses and
 anything a provider marks sensitive, in plain JSON. The renderer does not emit a backend block,
 because the backend and its credentials belong to the environment, not to the guest files.
+
+`proxmox_api_token` is an **ephemeral** variable (`ephemeral = true`, so `providers.tf` asks for
+Terraform 1.10 or later in 1.x, `~> 1.10`): Terraform keeps it out of a saved plan file and out
+of state, and asks for it again at `apply` (pass it as `TF_VAR_proxmox_api_token` both times).
+The rendered files need Terraform 1.10 or later: an older Terraform refuses them on
+`required_version`, and OpenTofu before 1.11 cannot parse `ephemeral`. Never work around that by
+editing the rendered files; a non-ephemeral token variable is written in plain text into any saved
+plan (`terraform plan -out`) and into state.
+
+A VM whose `cloudinit` sets a sudo rule or packages takes its user-data as a snippet
+(`user_data_file_id = var.cloudinit_user_data["<name>"]`), because the provider's `user_account`
+block can express neither. The render says which VMs those are, three ways: the
+`cloudinit_user_data` variable's `validation` block names every one (a missing entry fails before
+the plan, by name), `USER_DATA.md` lists them with their node, vmid and the sha256 of the
+`cloudinit` target's `<name>/user-data` rendered with the same `--keys` (compare it with
+`sha256sum` of the uploaded snippet; the row says "unresolved" when a key name is), and
+`render --out` prints them. **On the snippet path the SSH keys come from the `cloudinit` render's
+`--keys`, not from `var.ssh_keys`**: the snippet creates the user, keys included, and replaces
+the `user_account` block, so a key rotated only in `terraform.tfvars` does not reach those VMs;
+re-render the cloudinit target and re-upload the snippet. A changed snippet does not replace a
+running VM by itself.
 
 ### cloud-init and sudo
 
@@ -869,14 +898,21 @@ its own runbook with its addresses.
    guest-disk storage, a cloud-init drive, `agent: enabled=1`, a serial console, `qm template`;
    never booted, so every clone generates its own SSH host keys. Its vmid is the
    `vm_templates` entry for the image's `logical` name.
-3. **Render** each target into its own directory with `--node`; keep the hand-written
+3. **Render** the per-node targets (`terraform-proxmox`, `cloudinit`, `firewall-rules`) with
+   `--node <node>`, each into its own directory, **one directory per node** (`tf/<node>/`,
+   `cloudinit/<node>/`, ...): each `tf/<node>/` is that node's own Terraform root and state, so a
+   plan in it never proposes to destroy another node's guests. Render the fleet-wide targets
+   (`inventory`, `baseline-playbook`, ...) once, without `--node`. Keep the hand-written
    `terraform.tfvars` (endpoint, `default_bridge`, `pools`, `vm_templates`, `ssh_keys`,
-   `cloudinit_user_data`) and a `*_override.tf` pinning the provider build beside the render (a
-   module has one `required_providers` block; an override file narrows the rendered constraint
-   without editing a generated file). The token reaches Terraform as `TF_VAR_proxmox_api_token`,
-   never a file in the directory.
-4. **Upload** the snippets the plan's `cloudinit_user_data` names, then `terraform init`, `plan`
-   (read it), `apply`, and `plan` again (no changes).
+   `cloudinit_user_data`) and a `*_override.tf` pinning the provider build beside each node's
+   render (a module has one `required_providers` block; an override file narrows the rendered
+   constraint without editing a generated file). The token reaches Terraform as
+   `TF_VAR_proxmox_api_token`, never a file in the directory (it is ephemeral: see the provider
+   section above on saved plans).
+4. **Upload** the snippets `USER_DATA.md` lists (the `cloudinit` render's `<name>/user-data`,
+   with the same `--keys`) to a snippets datastore on that node, check each one's `sha256sum`
+   against the table, then `terraform init`, `plan` (read it), `apply`, and `plan` again (no
+   changes).
 5. **Install** the `firewall-rules` output into `/etc/pve/firewall/` (after the apply, see
    [Firewall on by default](#firewall-on-by-default)) and run `verify-datacenter.sh`.
 6. **Trust the host key out of band**: read its fingerprint through the guest agent
@@ -884,6 +920,28 @@ its own runbook with its addresses.
    `ssh-keyscan`, then record it in the `known_hosts` the inventory uses.
 7. **Baselines**: `ansible-playbook` the `baseline-playbook` render against the `inventory` render;
    a second run must report `changed=0`.
+
+### Upgrading past 82341a4e (user-data snippets) and its follow-up (ephemeral token)
+
+An overlay whose guests were rendered before 82341a4e ("Guests: fix what the first real apply to
+a Proxmox VE 9 node found", #357) has VMs with a `user_account` block. After it, every VM whose
+`cloudinit` sets `sudo` (other than `none`) or `packages` renders `user_data_file_id` instead, and
+its plan fails until `cloudinit_user_data` names a snippet for it. To upgrade:
+
+1. Render `terraform-proxmox` per node (above) and read `USER_DATA.md`: it lists exactly the VMs
+   that need a snippet on that node, with the digest each must have.
+2. Render `cloudinit` with the same `--node` and `--keys`, and upload each listed VM's
+   `<name>/user-data` to a datastore with the `snippets` content type on its node (for example
+   `/var/lib/vz/snippets/<name>-user-data.yaml` on `local`); `sha256sum` it against the table.
+3. Add one line per VM to that node's `terraform.tfvars`:
+   `cloudinit_user_data = { "<name>" = "local:snippets/<name>-user-data.yaml" }`.
+4. `terraform plan`: an existing VM shows its initialization changing (the snippet replaces the
+   `user_account` block); read whether the provider replaces or updates it before you apply.
+
+The follow-up makes `proxmox_api_token` ephemeral and asks for Terraform `~> 1.10`: upgrade the
+binary (or, on an older one, stop saving plan files, above) and keep passing the token as
+`TF_VAR_proxmox_api_token`, at `plan` and again at `apply`. `--node` is now refused with a
+fleet-wide target: drop it from those renders.
 
 What this does not give yet: the remote, encrypted, locked state backend the provider section
 above asks for (state stays local to the render directory), credentials from the secrets store

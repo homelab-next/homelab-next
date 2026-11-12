@@ -32,6 +32,12 @@ from homelabnext.generators.safe import checked
 
 from ._text import HEADER
 
+#: one hypervisor node applies this output: ``hnx guests render --node`` may narrow it to one
+PER_NODE = True
+
+#: made of the node's ``_nodes.yml`` entry, not its guests (an empty node is no hazard)
+RENDERS_GUESTS = False
+
 #: the filter's priority: fixed, so a re-run replaces it and ``--remove`` finds it
 PREF = 49152
 SCRIPT_PATH = "/usr/local/sbin/hnx-mirror.sh"

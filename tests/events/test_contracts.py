@@ -171,3 +171,74 @@ def test_the_depth_limit_is_the_same_on_every_python():
     parse_json(nested(MAX_JSON_DEPTH))
     with pytest.raises(ValueError, match="nested too deeply"):
         parse_json(nested(MAX_JSON_DEPTH + 1))
+
+
+def _event_body(pad: int) -> bytes:
+    """A valid event's canonical body grown to ``len + pad`` bytes by an unknown extension."""
+    (sample,) = copy.deepcopy(samples("task.queued"))
+    sample["xpad"] = "a" * pad
+    return canonical_body(sample)
+
+
+def test_a_body_over_max_event_bytes_is_refused_before_it_is_parsed(monkeypatch):
+    """A body over MAX_EVENT_BYTES (1 MiB, NATS's default max_payload) is refused unparsed, as
+    bytes and as text (counted in UTF-8); one at the limit decodes."""
+    from homelabnext.events import consumer
+
+    base = len(_event_body(0))
+    at_limit = _event_body(consumer.MAX_EVENT_BYTES - base)
+    assert len(at_limit) == consumer.MAX_EVENT_BYTES
+    assert decode_event(at_limit)["xpad"]
+    assert decode_event(at_limit.decode())["xpad"]
+
+    def no_parse(*_a, **_k):
+        raise AssertionError("an oversized body reached the parser")
+
+    over = _event_body(consumer.MAX_EVENT_BYTES - base + 1)
+    monkeypatch.setattr(consumer.json, "loads", no_parse)
+    for body in (over, over.decode()):
+        with pytest.raises(EventError, match="not JSON") as exc:
+            decode_event(body)
+        assert "MAX_EVENT_BYTES" in exc.value.problems[0]
+    # 2-byte characters: under the limit in characters, over it in UTF-8
+    wide = '{"x":"' + "\u00e9" * (consumer.MAX_EVENT_BYTES // 2) + '"}'
+    assert len(wide) < consumer.MAX_EVENT_BYTES
+    with pytest.raises(EventError, match="not JSON") as exc:
+        decode_event(wide)
+    assert "MAX_EVENT_BYTES" in exc.value.problems[0]
+
+
+def test_a_wide_body_at_the_size_limit_is_checked_in_bounded_time():
+    """The worst shape for the one-pass depth/surrogate walk: ~1 MiB of tiny containers and
+    strings, flat and at the depth limit.  Each is decoded (and refused, it is no event) quickly."""
+    import time
+
+    from homelabnext.events import consumer
+
+    n = consumer.MAX_EVENT_BYTES // 6
+    flat = b'{"a":[' + b",".join([b'[""]'] * (n - 2)) + b"]}"
+    deep = (
+        b'{"a":' * (consumer.MAX_JSON_DEPTH - 1) + b'["x"]' + b"}" * (consumer.MAX_JSON_DEPTH - 1)
+    )
+    for body in (flat, deep):
+        assert len(body) <= consumer.MAX_EVENT_BYTES
+        start = time.perf_counter()
+        with pytest.raises(EventError, match="invalid event"):
+            decode_event(body)
+        assert time.perf_counter() - start < 5.0
+    assert consumer.parse_json(deep)
+
+
+@pytest.mark.parametrize(
+    ("body", "problem"),
+    [
+        (b'{"a":"\\ud800"}', "lone surrogate"),
+        (b'{"\\udfff":1}', "lone surrogate"),
+        (b'{"a":[{"b":["ok","\\ud800"]}]}', "lone surrogate"),
+        (b'{"a":"\\ud83d\\ude00"}', "required"),  # a joined pair is text: on to the schema
+    ],
+)
+def test_the_one_pass_walk_finds_a_surrogate_anywhere(body, problem):
+    with pytest.raises(EventError) as exc:
+        decode_event(body)
+    assert problem in " ".join(exc.value.problems)
