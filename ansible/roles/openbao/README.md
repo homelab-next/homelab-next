@@ -279,7 +279,9 @@ the challenge's TXT record is published). What `main` does:
 * **Idempotent.** `main` runs the script's `--check` first and starts the unit only when the
   installed certificate is missing, names other domains, does not verify, does not match its key
   or is due; a converged host with a valid certificate reports `changed=0`, and nothing is
-  reissued. A run that started the unit fails unless the certificate is valid afterwards.
+  reissued. A run that started the unit fails unless the certificate is valid afterwards. The
+  checks run `openssl`, which the host must have: without it `--check` exits 100 (could not
+  measure, never "invalid") and `main` fails saying so instead of starting the unit.
 * **A failed renewal is visible**: the unit is left failed (`systemctl --failed`), its last-run
   record says so (the status hub's Schedule page), `openbao_acme_on_failure` (empty by default)
   names a unit to start on failure (`OnFailure=`, e.g. a paging template unit where the host has

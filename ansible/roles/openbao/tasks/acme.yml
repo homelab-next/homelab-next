@@ -150,8 +150,18 @@
     argv: ["{{ openbao_acme_script }}", --check]
   register: openbao_acme_check
   changed_when: false
-  failed_when: openbao_acme_check.rc not in [0, 1]
+  failed_when: false
   check_mode: false  # read-only
+  when: openbao_acme_script_stat.stat.exists
+
+# 0 valid, 1 missing, invalid or due (start the unit). Anything else, 100 above all (openssl cannot
+# be run), means the certificate could not be checked: starting the unit would not help.
+- name: Fail when the installed certificate could not be checked at all (not the same as invalid)
+  ansible.builtin.assert:
+    that: openbao_acme_check.rc in [0, 1]
+    fail_msg: >-
+      openbao: cannot check the installed certificate, so nothing was started
+      (exit {{ openbao_acme_check.rc }}: {{ (openbao_acme_check.stdout | default('') + ' ' + openbao_acme_check.stderr | default('')) | trim }})
   when: openbao_acme_script_stat.stat.exists
 
 - name: "--check: say a certificate would be obtained (no renewal script yet, or the installed one is not valid)"

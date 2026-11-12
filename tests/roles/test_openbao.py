@@ -1847,14 +1847,15 @@ def acme_installed(tmp_path, pki, **kw):
     from importlib.util import module_from_spec, spec_from_loader
 
     with lego_mirror(pki, tmp_path) as (mirror, sha):
-        r = run_role(tmp_path, ROLE, "tls", acme_vars(tmp_path, pki, mirror, sha, **kw),
-                     env=acme_env(pki))  # fmt: skip
+        v = acme_vars(tmp_path, pki, mirror, sha, **kw)
+        r = run_role(tmp_path, ROLE, "tls", v, env=acme_env(pki))
     assert r.returncode == 0, r.stdout[-4000:] + r.stderr
     loader = SourceFileLoader(
         f"acme_renew_{id(tmp_path)}", str(tmp_path / "bin" / "openbao-acme-renew")
     )
     mod = module_from_spec(spec_from_loader(loader.name, loader))
     loader.exec_module(mod)
+    mod.role_vars = v  # a rerun finds the pinned lego in place: the mirror is not asked again
     return mod
 
 
@@ -1951,6 +1952,37 @@ def test_a_rollback_that_cannot_put_the_old_pair_back_fails_cleanly(tmp_path, pk
     assert "No space left on device" in out and "Traceback" not in out
     assert staged_leftovers(tmp_path) == []
     assert Path(mod.RELOAD_OWED).exists()
+
+
+def path_without(tmp_path, name: str) -> str:
+    """A PATH holding every command of this one but ``name``."""
+    farm = tmp_path / f"path-without-{name}"
+    farm.mkdir()
+    for d in os.environ["PATH"].split(os.pathsep):
+        if os.path.isdir(d):
+            for e in os.scandir(d):
+                if e.name != name and not (farm / e.name).exists():
+                    (farm / e.name).symlink_to(e.path)
+    return str(farm)
+
+
+def test_a_missing_openssl_is_its_own_error_and_starts_nothing(tmp_path, pki):
+    """N4: without openssl the certificate cannot be checked at all. --check says so and exits
+    100 (could not measure), not 1 (invalid), and main fails on it by name instead of starting the
+    renewal unit as if the certificate were invalid; the renewal itself refuses the same way."""
+    mod = acme_installed(tmp_path, pki)
+    script = str(tmp_path / "bin" / "openbao-acme-renew")
+    env = {"PATH": path_without(tmp_path, "openssl")}
+    for argv in ([script, "--check"], [script]):
+        r = subprocess.run([sys.executable, *argv], env=env, capture_output=True, text=True)
+        assert r.returncode == 100, (argv, r.stdout, r.stderr)
+        assert "cannot run openssl" in r.stdout and "Traceback" not in r.stderr, r.stdout
+    (tmp_path / "calls.log").unlink(missing_ok=True)
+    r = run_role(tmp_path, ROLE, "tls", mod.role_vars, env=dict(acme_env(pki), **env))
+    assert r.returncode != 0
+    assert "cannot check the installed certificate, so nothing was started" in r.stdout, r.stdout
+    assert "exit 100: openbao-acme: cannot run openssl" in r.stdout, r.stdout
+    assert not [c for c in calls(tmp_path) if c.startswith(("systemctl start", "lego "))]
 
 
 def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(

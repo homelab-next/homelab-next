@@ -1001,6 +1001,7 @@
       "exit": {
         "0": "the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid",
         "1": "with --check, the installed certificate is missing, invalid or due",
+        "100": "could not measure (openssl cannot be run); nothing was checked or installed",
         "2": "lego failed, or what it stored is not a valid certificate for the names; nothing was installed",
         "3": "the certificate was installed but the running server could not be reloaded (retried next run)"
       },

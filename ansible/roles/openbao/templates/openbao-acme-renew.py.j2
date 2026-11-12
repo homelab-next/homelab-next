@@ -14,6 +14,7 @@
 #     "1": with --check, the installed certificate is missing, invalid or due
 #     "2": lego failed, or what it stored is not a valid certificate for the names; nothing was installed
 #     "3": the certificate was installed but the running server could not be reloaded (retried next run)
+#     "100": could not measure (openssl cannot be run); nothing was checked or installed
 """Managed by Ansible (role openbao); local changes are overwritten.
 
 Without arguments (the renewal unit): run lego, which renews only when fewer than the configured
@@ -62,8 +63,15 @@ RELOAD_OWED = os.path.join(CONF["path"], "reload-owed")
 PASS_ENV = ("PATH", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE")
 
 
+class CannotMeasure(Exception):
+    """The certificate cannot be checked at all (no openssl): not the same as an invalid one."""
+
+
 def openssl(*args, data=None):
-    return subprocess.run(["openssl", *args], input=data, capture_output=True, check=False)
+    try:
+        return subprocess.run(["openssl", *args], input=data, capture_output=True, check=False)
+    except OSError as e:
+        raise CannotMeasure(f"cannot run openssl ({e.strerror}); the host needs it") from None
 
 
 def problem(cert_path, key_path, due_days):
@@ -153,6 +161,8 @@ def install_pair():
         why = problem(CONF["cert"], CONF["key"], 0)
     except OSError as e:
         why = f"install failed: {e.strerror}"
+    except CannotMeasure as e:  # installed but not checkable: never left in place unchecked
+        why = str(e)
     for tmp in staged.values():
         discard(tmp)
     if not why:
@@ -261,17 +271,23 @@ def renew():
     return 0
 
 
+def check():
+    why = problem(CONF["cert"], CONF["key"], CONF["renew_days"])
+    if not why and os.path.exists(RELOAD_OWED):
+        why = "the server has not reloaded the installed certificate (a reload failed)"
+    print(f"openbao-acme: {why}" if why else "openbao-acme: the installed certificate is valid")
+    return 1 if why else 0
+
+
 def main(argv):
-    if argv == ["--check"]:
-        why = problem(CONF["cert"], CONF["key"], CONF["renew_days"])
-        if not why and os.path.exists(RELOAD_OWED):
-            why = "the server has not reloaded the installed certificate (a reload failed)"
-        print(f"openbao-acme: {why}" if why else "openbao-acme: the installed certificate is valid")
-        return 1 if why else 0
-    if argv:
+    if argv not in ([], ["--check"]):
         print("usage: openbao-acme-renew [--check]")
         return 2
-    return renew()
+    try:
+        return check() if argv else renew()
+    except CannotMeasure as e:  # exit 1 would read as "invalid": the role would start the unit
+        print(f"openbao-acme: {e}; nothing was checked or installed")
+        return 100
 
 
 if __name__ == "__main__":
