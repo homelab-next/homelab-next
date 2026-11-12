@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Container engine (no control binds it: a guest that runs compose_app applications, or the
+# lab-in-a-box, applies it first): Docker Engine from the vendor's signed apt repository, every
+# package pinned to an upstream version and held, and a daemon.json that bounds container logs.
+# The packaging revision is the newest the repository serves for the pinned upstream version.
+docker_engine_version: "29.9.2"
+docker_engine_containerd_version: "2.4.2"
+docker_engine_buildx_version: "0.38.1"
+docker_engine_compose_version: "5.6.1"
+# The vendor repository root; the role appends /debian or /ubuntu for the guest. Point it at a
+# lab mirror (same layout) to control what is served.
+docker_engine_repository: "https://download.docker.com/linux"
+# The primary-key fingerprints the repository's signing key (<repository>/<debian|ubuntu>/gpg)
+# must carry: the vendor's "Docker Release (CE deb)". A key rotation adds the new fingerprint here.
+docker_engine_key_fingerprints:
+  - "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+# How many rotated log files of max-size each container keeps (json-file driver).
+docker_engine_log_max_file: 3
+docker_engine_config_file: /etc/docker/daemon.json
+docker_engine_cli: docker
+docker_engine_daemon_cli: dockerd
+docker_engine_systemctl_cli: systemctl
+docker_engine_service: docker
+docker_engine_restart: true
+docker_engine_state_dir: /var/lib/homelabnext/docker_engine

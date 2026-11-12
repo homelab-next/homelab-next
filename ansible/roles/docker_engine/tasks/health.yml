@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Read the engine's state
+      ansible.builtin.command:
+        argv: ["{{ docker_engine_cli }}", info, --format, json]
+      register: docker_engine_health
+      changed_when: false
+    - name: Read the compose plugin's version
+      ansible.builtin.command:
+        argv: ["{{ docker_engine_cli }}", compose, version, --short]
+      register: docker_engine_compose_health
+      changed_when: false
+    - name: Fail unless the engine answers at its pinned version with bounded json-file logs
+      vars:
+        docker_engine_info: "{{ docker_engine_health.stdout | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - docker_engine_info.ServerVersion == docker_engine_version
+          - docker_engine_info.LoggingDriver == 'json-file'
+          - docker_engine_compose_health.stdout | trim | regex_replace('^v', '') == docker_engine_compose_version
+        fail_msg: >-
+          docker_engine: engine {{ docker_engine_info.ServerVersion | default('?') }} (pinned
+          {{ docker_engine_version }}), logging driver {{ docker_engine_info.LoggingDriver | default('?') }},
+          compose {{ docker_engine_compose_health.stdout | trim }} (pinned {{ docker_engine_compose_version }})
+  tags: [health]

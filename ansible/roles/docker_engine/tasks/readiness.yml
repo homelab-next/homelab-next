@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Fail unless the engine answers on its socket
+  ansible.builtin.command:
+    argv: ["{{ docker_engine_cli }}", version]
+  changed_when: false
+  tags: [readiness]

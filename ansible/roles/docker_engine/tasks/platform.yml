@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The vendor publishes one apt repository per distribution (<root>/debian, <root>/ubuntu) with a
+# suite per release codename: refuse anything else before using either.
+- name: Refuse a host that is neither Debian nor Ubuntu (the vendor repository has one per distribution)
+  ansible.builtin.assert:
+    that: docker_engine_distribution in ['Debian', 'Ubuntu']
+    fail_msg: >-
+      docker_engine supports Debian and Ubuntu guests only (got
+      {{ docker_engine_distribution | to_json }}): the vendor apt repository is
+      <root>/debian or <root>/ubuntu
+
+- name: Refuse a release codename that is not a plain name (it names an apt suite)
+  ansible.builtin.assert:
+    that: docker_engine_release is match('^[a-z][a-z0-9-]{0,30}\Z')
+    fail_msg: "docker_engine: unexpected release codename {{ docker_engine_release | to_json }}"
