@@ -1175,6 +1175,7 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
                 threading.Event().wait(0.1)
         # TLS 1.2: only the configured forward-secret AEAD suites
         ctx12 = ssl.create_default_context(cafile=str(tls / "ca.pem"))
+        ctx12.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx12.maximum_version = ssl.TLSVersion.TLSv1_2
         with (
             socket.create_connection((LOOPBACK, port)) as raw,
