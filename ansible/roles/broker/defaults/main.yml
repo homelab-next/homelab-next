@@ -33,7 +33,12 @@ broker_relay_user: hnx-broker-relay
 broker_relay_group: hnx-broker-relay
 broker_relay_config_dir: /etc/hnx-broker-relay
 broker_relay_state_dir: /var/lib/hnx-broker-relay
-broker_relay_events_endpoint: ""
+# The bus by its registry id (role-interface section 4: a role names other services by logical
+# id); its capability must be events. The endpoint defaults to that row's port on loopback: the
+# events bus listens on loopback only until it has a TLS listener (role events_bus), so the relay
+# runs beside it. A remote bus is tls://<host>:<port>, set here once that listener exists.
+broker_relay_events_id: events
+broker_relay_events_endpoint: "nats://127.0.0.1:{{ lookup('hnx_registry', broker_relay_events_id, field='port') | int }}"  # no-raw-endpoint: allow loopback, the bus has no TLS listener yet
 broker_relay_events_user: hnx-broker
 broker_relay_password_ref: ""
 broker_relay_ca_file: ""

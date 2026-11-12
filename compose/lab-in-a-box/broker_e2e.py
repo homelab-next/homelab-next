@@ -132,6 +132,9 @@ class Relay:
     #: deployment names its own users: ``run --bus-admin``, ``--bus-not-broker``)
     admin: str = LAB_ADMIN
     not_broker: str = LAB_NOT_BROKER
+    #: the durable the step creates and acks on as ``not_broker``: a scratch name on a real bus,
+    #: never one a real consumer uses (it would inherit this step's ack floor)
+    not_broker_durable: str = LAB_NOT_BROKER_DURABLE
     bus_users: Mapping[str, str] = field(default_factory=lambda: dict(LAB_BUS_USERS))
 
     def wire(self, user: str | None) -> Any:
@@ -639,7 +642,8 @@ def check_bridge_acks(relay: Relay) -> str:
     the ACL grants both).  A refused ack is a publish violation the client never hears about, so
     the step reads the consumer back: nothing it was handed may still be pending.  The step owns
     the durable and settles real deliveries on it, which is safe only because the lab runs no bridge;
-    never point it at a bus where a real bridge uses that durable."""
+    on a real bus name a scratch durable (and stream, ``run --bus-not-broker-durable``,
+    ``--stream``), never one a real bridge uses."""
     from homelabnext.conform.adapters import nats_jetstream as nj
 
     wire = relay.wire(relay.not_broker)
@@ -647,7 +651,7 @@ def check_bridge_acks(relay: Relay) -> str:
         # replay: the lab runs no bridge, so a durable created now still sees the relay's events
         bus = nj.JetStreamBus(wire, stream=relay.stream, subject_prefix=relay.prefix,
                               provision=False, replay_s=86400.0)  # fmt: skip
-        consumer = bus.consumer(LAB_NOT_BROKER_DURABLE, "homelabnext.decision.returned")
+        consumer = bus.consumer(relay.not_broker_durable, "homelabnext.decision.returned")
         got = consumer.fetch(16)
         if not got:
             raise StepFailed(f"{relay.not_broker}'s durable was handed no decision.returned")
@@ -878,6 +882,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     r.add_argument("--bus-not-broker", default=LAB_NOT_BROKER,
                    help="a bus user that reads decisions and must not forge one")  # fmt: skip
+    r.add_argument("--bus-not-broker-durable", default=LAB_NOT_BROKER_DURABLE,
+                   help="the durable that user acks on in the bus-acl step: on a real bus a "
+                        "scratch name, never one a real consumer uses")  # fmt: skip
     h = sub.add_parser("serve-hub", help="write the hub's configuration and run the hub")
     h.add_argument("--dir", required=True)
     h.add_argument("--edge-address", default=os.environ.get("LAB_BROKER_EDGE_ADDRESS"))
@@ -938,6 +945,7 @@ def main(argv: list[str] | None = None) -> int:
             launch=relay_launch(_ids(args.relay_user) if args.relay_user else None),
             admin=args.bus_admin,
             not_broker=args.bus_not_broker,
+            not_broker_durable=args.bus_not_broker_durable,
             bus_users=users,
         )
     rows = run_scenario(setup)

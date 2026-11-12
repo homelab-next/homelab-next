@@ -12,8 +12,9 @@ status_hub_config_dir: /etc/hnx-hub
 status_hub_state_dir: /var/lib/hnx-hub
 status_hub_bind_address: 127.0.0.1  # no-raw-endpoint: allow loopback default, the edge address comes from the host
 status_hub_port: 8099
-# The hostnames clients (the edge) send besides loopback: the hub row's public_hostname.
-status_hub_allowed_hosts: []
+# The hostnames clients (the edge) send besides loopback: the hub row's public_hostname, read from
+# the registry by the hub's logical id (none on a loopback bind).
+status_hub_allowed_hosts: "{{ [] if status_hub_bind_address in status_hub_loopback else [lookup('hnx_registry', status_hub_logical_id, field='public_hostname')] }}"
 # Secrets the hub reads at run time ([secret:<name>]), delivered as HNX_SECRET_<NAME> through a
 # 0640 environment file: the front door's (the registry row's front_door.secret) and the
 # Approvals page's form-token key.

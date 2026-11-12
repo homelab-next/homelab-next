@@ -46,8 +46,8 @@ argument_specs:
       status_hub_allowed_hosts: &hosts
         type: list
         elements: str
-        description: "Host names clients send besides loopback (the row's public_hostname); required for a non-loopback bind."
-        default: []
+        description: "Host names clients send besides loopback: by default the hub row's public_hostname from the registry (status_hub_logical_id), none on a loopback bind; required for a non-loopback bind."
+        default: "{{ [] if status_hub_bind_address in status_hub_loopback else [lookup('hnx_registry', status_hub_logical_id, field='public_hostname')] }}"
       status_hub_secret_refs: &secrets
         type: list
         elements: str
@@ -121,10 +121,11 @@ argument_specs:
       status_hub_config_dir: *confdir
       status_hub_backup_dir: *backupdir
   restore:
-    short_description: Restore the hub's state directory from status_hub_restore_source with the unit stopped.
+    short_description: Restore the hub's state directory from status_hub_restore_source with the unit stopped, then start it again (data only; configuration and unit untouched).
     options:
       status_hub_state_dir: *state
       status_hub_user: *user
+      status_hub_group: *group
       status_hub_restore_source:
         type: path
         description: A directory holding a copy of the state directory.

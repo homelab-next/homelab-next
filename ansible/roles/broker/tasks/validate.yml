@@ -42,6 +42,8 @@
       - >-
         broker_relay_events_endpoint is match('^tls://[A-Za-z0-9.-]+:[0-9]{1,5}\Z')
         or broker_relay_events_endpoint is match('^nats://(127\.[0-9.]+|\[::1\]|localhost):[0-9]{1,5}\Z')
+      - broker_relay_events_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - lookup('hnx_registry', broker_relay_events_id, field='capability') == 'events'
       - broker_relay_events_user is match('^[a-z][a-z0-9-]{0,31}\Z')
       - broker_relay_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
       - broker_relay_ca_file == '' or broker_relay_ca_file is match('^/[A-Za-z0-9._/-]+\Z')
@@ -50,6 +52,29 @@
       - broker_relay_duplicate_window | int > 0
     fail_msg: >-
       broker: the relay needs its own non-root user and group, absolute paths, a bus endpoint that
-      is tls://host:port or nats:// to loopback, a bus user, its password as a secret: reference,
+      is tls://host:port or nats:// to loopback, the bus's registry id (capability events), a bus user, its password as a secret: reference,
       the standing stream (upper-case) and its subject prefix, and a positive duplicate window
   when: broker_relay | bool
+
+# Handlers run as the broker's own uid today (docs/broker.md "Handlers and the broker's uid"): a
+# handler can read and write the broker's state and audit trail. Until each handler runs under a
+# uid of its own, the role deploys an exec handler only in a proof manifest (manifest_id ending
+# -proof: the stand-ins that report what they would do); any other manifest that declares one is
+# refused here, before anything on the host changes. Built-in handlers (builtin/...) run in the
+# broker itself and are not affected.
+- name: Read the manifest's id and actions (on the controller)
+  ansible.builtin.set_fact:
+    broker_manifest_doc: "{{ lookup('ansible.builtin.file', broker_manifest) | from_yaml }}"
+
+- name: Refuse an exec handler outside a proof manifest while handlers share the broker's uid
+  ansible.builtin.assert:
+    that: >-
+      (broker_manifest_doc.manifest_id | default('') | string) is match('.*-proof\Z')
+      or (broker_manifest_doc.actions | default([]) | map(attribute='handler', default='')
+          | reject('match', '^builtin/') | list | length == 0)
+    fail_msg: >-
+      broker: manifest {{ broker_manifest_doc.manifest_id | default('?') }} declares exec handlers
+      ({{ broker_manifest_doc.actions | default([]) | map(attribute='handler', default='') | reject('match', '^builtin/') | join(', ') }}),
+      which would run as {{ broker_user }} with the broker's state and audit trail. Handlers must
+      run under a uid of their own first (docs/broker.md "Handlers and the broker's uid"); only a
+      proof manifest (manifest_id ending -proof) may declare one until then.

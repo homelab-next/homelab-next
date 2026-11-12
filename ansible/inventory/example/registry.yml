@@ -39,3 +39,16 @@ services:
     port: 4000
     scheme: https
     capability: llm-gateway
+  # the control plane's events bus (role events_bus; the broker's relay names it by this id)
+  events:
+    host: events-01.example.internal
+    port: 4222
+    scheme: nats
+    capability: events
+  # the status hub (role status_hub): the edge sends its public name
+  status-hub:
+    host: hub-01.example.internal
+    port: 8099
+    scheme: http
+    capability: status-hub
+    public_hostname: status.lab.example

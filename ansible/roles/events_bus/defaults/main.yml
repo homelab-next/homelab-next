@@ -4,8 +4,9 @@
 # each get an allow-list and nothing else, JetStream on disk, the standing streams provisioned
 # with limits by the operator's user (never by a client). Passwords are stored as bcrypt hashes.
 #
-# It listens on loopback by default: a client on another host needs TLS (the adapter refuses a
-# password over plaintext nats:// to anything but loopback), which this role does not set up yet.
+# It listens on loopback only, and validation refuses any other address: a client on another host
+# needs TLS (the adapter refuses a password over plaintext nats:// to anything but loopback), which
+# this role does not set up yet.
 # events_bus_archive_url and _sha256 pin the server (no default: the playbook pins the release).
 events_bus_version: "2.15.1"
 events_bus_user: hnx-events

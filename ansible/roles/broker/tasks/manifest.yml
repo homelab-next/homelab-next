@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# The manifest is checked BEFORE it replaces the live one: staged as manifest.yml.new in the same
+# directory (so its handlers/ paths resolve against the installed handlers), validated by
+# `hnx broker validate` with the release the broker runs, and only then copied over manifest.yml.
+# A manifest that fails validation stops the play and leaves the running broker's manifest (and
+# the broker) untouched. The staged copy stays, so a re-run with nothing changed is changed=0.
+- name: Stage the manifest beside the live one
+  ansible.builtin.copy:
+    src: "{{ broker_manifest }}"
+    dest: "{{ broker_config_dir }}/manifest.yml.new"
+    owner: "{{ broker_config_owner }}"
+    group: "{{ broker_group }}"
+    mode: "0640"
+  register: broker_manifest_staged
+
+# in --check a changed manifest is not staged (nothing is written), so there is nothing new to
+# validate; an unchanged one is validated as it stands
+- name: Validate the staged manifest and its handlers with the running release
+  ansible.builtin.command:
+    argv: ["{{ broker_hnx_bin }}", broker, validate, "{{ broker_config_dir }}/manifest.yml.new"]
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+  when: not ansible_check_mode or broker_manifest_staged is not changed
+
+- name: Install the validated manifest
+  ansible.builtin.copy:
+    src: "{{ broker_config_dir }}/manifest.yml.new"
+    dest: "{{ broker_config_dir }}/manifest.yml"
+    remote_src: true
+    owner: "{{ broker_config_owner }}"
+    group: "{{ broker_group }}"
+    mode: "0640"
+  register: broker_manifest_file
+  when: not ansible_check_mode or broker_manifest_staged is not changed
+
+- name: Report the manifest as changing (--check, a new manifest is not staged)
+  ansible.builtin.set_fact:
+    broker_manifest_file: {changed: true}
+  changed_when: true
+  when: ansible_check_mode and broker_manifest_staged is changed

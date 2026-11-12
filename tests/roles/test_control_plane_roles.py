@@ -8,15 +8,18 @@ templates rendered with the role's own defaults; the install path is proven by
 ``--syntax-check`` of the playbook and on a real host (the broker scenario,
 compose/lab-in-a-box/broker_e2e.py, against the deployed units)."""
 
+import grp
+import hashlib
 import json
 import os
+import pwd
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import run_cases
+from rolerun import fake, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
@@ -26,6 +29,7 @@ SHA = "a" * 64
 HUB_ADDR = "198.51.100.7"  # no-raw-endpoint: allow a documentation address the hub binds under test
 LOOP = "127.0.0.1"  # no-raw-endpoint: allow loopback, what the bus and the hub may bind
 PLAIN_REMOTE_BUS = "nats://events.lab.example:4222"  # no-raw-endpoint: allow the refused endpoint
+REGISTRY = ANSIBLE / "inventory/example/registry.yml"
 
 RUNTIME = {
     "hnx_runtime_wheel": "/srv/dist/homelabnext-0.1.0-py3-none-any.whl",
@@ -49,9 +53,25 @@ EVENTS = {
     "events_bus_admin_user": "hnx-events-admin",
     "events_bus_admin_password_ref": "secret:events/admin",
 }
+PRODUCTION_MANIFEST = ROOT / "examples/broker/manifest.production.yml"
+
+
+def _manifest(tmp_path, manifest_id, builtin_only=False):
+    """The example production manifest under another id (``-proof``: the stand-in handlers may be
+    deployed while handlers share the broker's uid), optionally with its exec actions removed."""
+    doc = yaml.safe_load(PRODUCTION_MANIFEST.read_text())
+    doc["manifest_id"] = manifest_id
+    if builtin_only:
+        doc["actions"] = [a for a in doc["actions"] if a["handler"].startswith("builtin/")]
+        doc.pop("handler_docs", None)
+    path = tmp_path / f"{manifest_id}.yml"
+    path.write_text(yaml.safe_dump(doc))
+    return str(path)
+
+
 BROKER = {
     "broker_logical_id": "broker",
-    "broker_manifest": str(ROOT / "examples/broker/manifest.production.yml"),
+    "broker_manifest": str(PRODUCTION_MANIFEST),
     "broker_handlers": [
         str(p) for p in sorted((ROOT / "examples/broker/handlers").glob("service-*"))
     ],
@@ -95,25 +115,66 @@ def test_hnx_runtime_refuses_bad_inputs(tmp_path):
 
 
 def test_events_bus_refuses_bad_inputs(tmp_path):
-    wide = [dict(BUS_USERS[0], publish=["$JS.API.>"]), BUS_USERS[1]]
-    inbox = [dict(BUS_USERS[0], subscribe=["_INBOX.>"]), BUS_USERS[1]]
+    def broker_grant(**kw):
+        return [dict(BUS_USERS[0], **kw), BUS_USERS[1]]
+
     _refusals(tmp_path, "events_bus", EVENTS, [
         {"events_bus_listen_address": "0.0.0.0"},  # no-raw-endpoint: allow the refused wildcard
+        # loopback only until the role has a TLS listener (a password would cross the wire)
+        {"events_bus_listen_address": HUB_ADDR},
         {"events_bus_archive_url": "http://releases.example.internal/nats-server-v2.15.1-linux-amd64.tar.gz"},
         {"events_bus_archive_url": "https://releases.example.internal/nats-server-v2.14.0-linux-amd64.tar.gz"},
         {"events_bus_archive_sha256": "0"},
-        {"events_bus_users": wide},
-        {"events_bus_users": inbox},
+        # the subject ceiling, token by token (not only the literal spellings)
+        {"events_bus_users": broker_grant(publish=["$JS.API.>"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.*.>"])},
+        {"events_bus_users": broker_grant(publish=["$JS.>"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.>"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.PURGE.LAB"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.DELETE.*"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.UPDATE.LAB"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.MSG.DELETE.LAB"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.*.LAB"])},
+        {"events_bus_users": broker_grant(publish=["$JS.API.STREAM.MSG.*.LAB"])},
+        {"events_bus_users": broker_grant(publish=[">"])},
+        {"events_bus_users": broker_grant(publish=["*.homelabnext.decision.>"])},
+        {"events_bus_users": broker_grant(subscribe=["$SYS.>"])},
+        {"events_bus_users": broker_grant(subscribe=["$SYS.ACCOUNT.*.CONNECT"])},
+        {"events_bus_users": broker_grant(subscribe=["_INBOX.>"])},
+        {"events_bus_users": broker_grant(subscribe=["_INBOX.*"])},
+        {"events_bus_users": broker_grant(subscribe=["_INBOX.*.>"])},
+        {"events_bus_users": broker_grant(subscribe=["_INBOX.hnx-events-admin.>"])},
+        {"events_bus_users": broker_grant(subscribe=["_INBOX.hnx-broker"])},
+        {"events_bus_users": broker_grant(publish=["lab..decision"])},
+        {"events_bus_users": broker_grant(publish=["lab.>.decision"])},
         {"events_bus_users": [dict(BUS_USERS[0], password_ref="hunter2")]},
         {"events_bus_admin_user": "nobody"},
         {"events_bus_streams": [{"name": "lab", "subject_prefix": "lab", "max_bytes": 1}]},
     ])  # fmt: skip
 
 
+def test_events_bus_accepts_the_narrow_grants_a_bridge_needs(tmp_path):
+    """Single JetStream calls inside the refused sets stay allowed: the ceiling refuses reach, not
+    the API's prefix (the StackStorm bridge's grants in docs/broker.md)."""
+    bridge = {"user": "hnx-bus-bridge", "password_ref": "secret:events/bus-bridge",
+              "publish": ["$JS.API.STREAM.INFO.LAB", "$JS.API.STREAM.MSG.GET.LAB",
+                          "$JS.API.CONSUMER.CREATE.LAB.bridge-x.lab.homelabnext.decision.returned",
+                          "$JS.API.CONSUMER.MSG.NEXT.LAB.bridge-x", "$JS.ACK.LAB.bridge-x.*.*.*.*.*",
+                          "$JS.ACK._.ACCOUNTHASH.LAB.bridge-x.*.*.*.*.>"],
+              "subscribe": ["_INBOX.hnx-bus-bridge.>"]}  # fmt: skip
+    results = run_cases(tmp_path, "events_bus", "validate", EVENTS, [
+        {"events_bus_users": [*BUS_USERS, bridge]},
+    ])  # fmt: skip
+    assert results == [(False, "")], results
+
+
 def test_broker_refuses_bad_inputs(tmp_path):
-    _refusals(tmp_path, "broker", BROKER, [
+    proof = {**BROKER, "broker_manifest": _manifest(tmp_path, "lab-broker-proof")}
+    _refusals(tmp_path, "broker", proof, [
         # a password over plaintext to another host
         {"broker_relay_events_endpoint": PLAIN_REMOTE_BUS},
+        # the bus by its registry id: a row that is not the events capability
+        {"broker_relay_events_id": "query-core"},
         {"broker_socket_mode": "666"},
         {"broker_socket_dir": "/tmp/hnx-broker"},
         {"broker_clients_group": "hnx-broker"},
@@ -122,7 +183,17 @@ def test_broker_refuses_bad_inputs(tmp_path):
         {"broker_approvals_url": "http://status.lab.example/approvals"},
         {"broker_relay_stream": "lab"},
         {"broker_handlers": ["/x/a.sh", "/y/a.sh"]},
+        # an exec handler outside a proof manifest, while handlers run as the broker's uid
+        {"broker_manifest": str(PRODUCTION_MANIFEST)},
     ])  # fmt: skip
+
+
+def test_broker_deploys_builtin_only_manifests_under_any_id(tmp_path):
+    """The handler-uid gate refuses exec handlers only: lanes (builtin/) run in the broker."""
+    results = run_cases(tmp_path, "broker", "validate", BROKER, [
+        {"broker_manifest": _manifest(tmp_path, "lab-broker", builtin_only=True)},
+    ])  # fmt: skip
+    assert results == [(False, "")], results
 
 
 def test_status_hub_refuses_bad_inputs(tmp_path):
@@ -154,8 +225,9 @@ def _render(tmp_path, role, extra):
     }]  # fmt: skip
     (tmp_path / "play.yml").write_text(yaml.safe_dump(play))
     (tmp_path / "vars.json").write_text(
-        json.dumps({"ansible_python_interpreter": sys.executable, **vars_})
-    )
+        json.dumps({"ansible_python_interpreter": sys.executable,
+                    "hnx_registry_file": str(REGISTRY), **vars_})
+    )  # fmt: skip
     r = subprocess.run(
         ["ansible-playbook", "-i", "localhost,", "-e", f"@{tmp_path / 'vars.json'}", str(tmp_path / "play.yml")],
         capture_output=True, text=True, cwd=tmp_path,
@@ -183,8 +255,11 @@ def test_broker_units_keep_the_socket_and_the_outbox_reachable(tmp_path):
     assert not {"RuntimeDirectory", "StateDirectory", "ExecStartPre"} & set(unit)
     # outbox files are opened 0640 for the relay's group: a stricter umask makes them unreadable
     assert unit["UMask"] == ["0027"]
-    # --socket-group chowns the socket: @chown must stay allowed
-    assert "~@privileged" not in " ".join(unit["SystemCallFilter"])
+    # the socket takes the clients' group from its setgid directory: serve chowns nothing, so the
+    # whole of @privileged (@chown included) stays denied and the unit needs no extra group
+    assert unit["SystemCallFilter"] == ["@system-service", "~@privileged @resources"]
+    assert "--socket-group" not in unit["ExecStart"][0] and "SupplementaryGroups" not in unit
+    assert unit["ProtectProc"] == ["invisible"] and unit["ProcSubset"] == ["pid"]
     assert unit["PrivateNetwork"] == ["yes"] and unit["RestrictAddressFamilies"] == ["AF_UNIX"]
     assert "/run/hnx-broker" in unit["ReadWritePaths"][0]
     assert "HNX_RUNTIME_RELEASE=1234123412341234" in unit["Environment"]
@@ -195,6 +270,16 @@ def test_broker_units_keep_the_socket_and_the_outbox_reachable(tmp_path):
     target = yaml.safe_load(files["events-target.yml"])
     config = target["capabilities"]["events"]["config"]
     assert config["password_secret"] == "secret:events/broker" and "password" not in config
+
+
+def test_broker_relay_names_the_bus_by_its_registry_id(tmp_path):
+    """Role interface section 4: the relay's endpoint comes from the events row's port (on
+    loopback, the bus having no TLS listener), not from a literal in the inventory."""
+    extra = {k: v for k, v in BROKER.items() if k != "broker_relay_events_endpoint"}
+    files = _render(tmp_path, "broker", extra)
+    relay = _directives(files["hnx-broker-relay.service"])
+    port = yaml.safe_load(REGISTRY.read_text())["services"]["events"]["port"]
+    assert f"HNX_ENDPOINT_EVENTS=nats://{LOOP}:{port}" in relay["Environment"]
 
 
 def test_broker_unit_gets_a_network_only_when_asked(tmp_path):
@@ -225,6 +310,14 @@ def test_status_hub_renders_agents_and_views_its_schemas_accept(tmp_path):
         jsonschema.validate(
             doc, json.loads((ROOT / f"schemas/status/{schema}.schema.json").read_text())
         )
+
+
+def test_status_hub_allowed_host_is_the_rows_public_hostname(tmp_path):
+    extra = {k: v for k, v in HUB.items() if k != "status_hub_allowed_hosts"}
+    files = _render(tmp_path, "status_hub", extra)
+    argv = _directives(files["hnx-hub.service"])["ExecStart"][0].split()
+    public = yaml.safe_load(REGISTRY.read_text())["services"]["status-hub"]["public_hostname"]
+    assert argv[argv.index("--allowed-host") + 1] == public
 
 
 def test_status_hub_on_loopback_needs_no_remote_flag(tmp_path):
@@ -261,3 +354,72 @@ def test_the_playbook_parses_and_targets_capability_groups():
         capture_output=True, text=True, env=dict(os.environ, ANSIBLE_CONFIG=str(ANSIBLE / "ansible.cfg")),
     )  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ---------------------------------------------------------------- install paths run on localhost
+def _me():
+    return pwd.getpwuid(os.getuid()).pw_name, grp.getgrgid(os.getgid()).gr_name
+
+
+def test_broker_bad_manifest_never_replaces_the_live_one(tmp_path):
+    """The manifest is staged beside the live one and validated by the release's own
+    ``hnx broker validate`` before it is copied over it: a manifest that fails validation stops
+    the play and the running broker's manifest is untouched."""
+    user, group = _me()
+    conf = tmp_path / "etc"
+    conf.mkdir()
+    (conf / "manifest.yml").write_text("manifest_id: live\n")
+    # the release's hnx: `broker validate PATH` refuses a manifest that says bad
+    hnx = fake(tmp_path / "hnx", "import sys\n"
+               "assert sys.argv[1:3] == ['broker', 'validate'], sys.argv\n"
+               "sys.exit(1 if 'bad' in open(sys.argv[3]).read() else 0)\n")  # fmt: skip
+    base = {"broker_config_dir": str(conf), "broker_hnx_bin": hnx, "broker_group": group,
+            "broker_config_owner": user}  # fmt: skip
+    good, bad = tmp_path / "good.yml", tmp_path / "bad.yml"
+    good.write_text("manifest_id: next\n")
+    bad.write_text("manifest_id: bad\n")
+
+    r = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(good)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (conf / "manifest.yml").read_text() == "manifest_id: next\n"
+    again = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(good)})
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+    r = run_role(tmp_path, "broker", "manifest", {**base, "broker_manifest": str(bad)})
+    assert r.returncode != 0, r.stdout
+    assert (conf / "manifest.yml").read_text() == "manifest_id: next\n"
+
+
+def _runtime_vars(tmp_path, python):
+    wheel = tmp_path / "homelabnext-0.1.0-py3-none-any.whl"
+    wheel.write_bytes(b"not really a wheel")
+    return {**RUNTIME, "hnx_runtime_wheel": str(wheel),
+            "hnx_runtime_wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+            "hnx_runtime_prefix": str(tmp_path / "opt"), "hnx_runtime_python": python,
+            "hnx_runtime_os_packages": []}  # fmt: skip
+
+
+def _release(stdout: str) -> str:
+    """The release name the role chose, from ``-v`` output of its set_fact."""
+    for line in stdout.splitlines():
+        if '"hnx_runtime_release"' in line:
+            return line.split('"hnx_runtime_release":')[1].split('"')[1]
+    raise AssertionError(stdout)
+
+
+def test_hnx_runtime_check_mode_on_a_fresh_host_and_the_interpreter_version(tmp_path):
+    """``--check`` on a host without the release passes (no wheel there to hash yet), and the
+    release is named by the interpreter's full version as well as its path: the same
+    /usr/bin/python3 after a distribution upgrade is a new release, built again."""
+    python = tmp_path / "python3"
+    version = tmp_path / "version"
+    fake(python, f"import sys\nprint(open({str(version)!r}).read())\n")
+    names = []
+    for v in ("3.13.5 (main) [GCC 14]", "3.13.7 (main) [GCC 14]"):
+        version.write_text(v)
+        r = run_role(tmp_path, "hnx_runtime", "main", _runtime_vars(tmp_path, str(python)),
+                     verbose=True, check=True)  # fmt: skip
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert not (tmp_path / "opt").exists()  # --check wrote nothing
+        names.append(_release(r.stdout))
+    assert names[0] != names[1]

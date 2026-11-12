@@ -75,14 +75,17 @@
   loop_control:
     label: "{{ item.path }}"
 
-# the socket's directory: the broker's, in the clients' group, 0750 (the server refuses anything
-# group-writable or open to others); tmpfiles.d recreates it at boot, /run being a tmpfs
+# the socket's directory: the broker's, in the clients' group, 2750: setgid, so the socket the
+# broker binds in it is born in that group and serve needs no chown (no --socket-group; the unit
+# keeps ~@privileged). The server refuses anything group-writable or open to others. tmpfiles.d
+# recreates it at boot, /run being a tmpfs.
 - name: Declare the socket's directory to systemd-tmpfiles
   ansible.builtin.copy:
     dest: /etc/tmpfiles.d/hnx-broker.conf
     content: |
-      # Managed by homelabnext (role broker): the broker socket's directory.
-      d {{ broker_socket_dir }} 0750 {{ broker_user }} {{ broker_clients_group }} -
+      # Managed by homelabnext (role broker): the broker socket's directory (setgid: the socket
+      # inherits the clients' group).
+      d {{ broker_socket_dir }} 2750 {{ broker_user }} {{ broker_clients_group }} -
     owner: root
     group: root
     mode: "0644"
@@ -93,7 +96,7 @@
     state: directory
     owner: "{{ broker_user }}"
     group: "{{ broker_clients_group }}"
-    mode: "0750"
+    mode: "2750"
 
 # ---- the operator's manifest and handlers
 - name: Install the handlers (scripts executable, documents read-only; root-owned, the broker reads them)
@@ -106,20 +109,8 @@
   loop: "{{ broker_handlers }}"
   register: broker_handler_files
 
-- name: Install the manifest
-  ansible.builtin.copy:
-    src: "{{ broker_manifest }}"
-    dest: "{{ broker_config_dir }}/manifest.yml"
-    owner: root
-    group: "{{ broker_group }}"
-    mode: "0640"
-  register: broker_manifest_file
-
-- name: Validate the installed manifest and its handlers with the running release
-  ansible.builtin.command:
-    argv: ["{{ broker_hnx_bin }}", broker, validate, "{{ broker_config_dir }}/manifest.yml"]
-  changed_when: false
-  check_mode: false  # read-only: it runs in --check too
+- name: Install the manifest, validated before it replaces the live one
+  ansible.builtin.include_tasks: manifest.yml
 
 - name: Write the handlers' secrets (HNX_BROKER_SECRET_<NAME>, readable by root and the broker)
   ansible.builtin.copy:

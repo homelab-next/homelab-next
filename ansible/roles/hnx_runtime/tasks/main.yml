@@ -2,15 +2,26 @@
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
-# One release per (wheel, lock, extras, interpreter): a changed input is a new virtualenv beside
-# the running one, switched to only once it installed and passed pip check, so a failed install
-# never leaves the services on a half-built environment.
+# The interpreter's full version, not only its path: a distribution upgrade (3.13.5 -> 3.13.7,
+# or a new minor behind the same /usr/bin/python3) leaves a virtualenv built for the old one, so
+# it names a new release and the venv is built again.
+- name: Ask the interpreter for its version
+  ansible.builtin.command:
+    argv: ["{{ hnx_runtime_python }}", -c, "import sys; print(sys.version)"]
+  register: hnx_runtime_python_version
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+
+# One release per (wheel, lock, extras, interpreter and its version): a changed input is a new
+# virtualenv beside the running one, switched to only once it installed and passed pip check, so a
+# failed install never leaves the services on a half-built environment.
 - name: Name this release
   ansible.builtin.set_fact:
     hnx_runtime_release: >-
       {{ (hnx_runtime_wheel_sha256 ~ '|' ~ (lookup('file', hnx_runtime_constraints) | hash('sha256'))
           ~ '|' ~ (lookup('file', hnx_runtime_bootstrap) | hash('sha256'))
-          ~ '|' ~ (hnx_runtime_extras | join(',')) ~ '|' ~ hnx_runtime_python) | hash('sha256') | truncate(16, true, '') }}
+          ~ '|' ~ (hnx_runtime_extras | join(',')) ~ '|' ~ hnx_runtime_python
+          ~ '|' ~ (hnx_runtime_python_version.stdout | trim)) | hash('sha256') | truncate(16, true, '') }}
 
 - name: Install what a virtualenv needs
   ansible.builtin.apt:
@@ -47,12 +58,15 @@
     get_checksum: true
   register: hnx_runtime_wheel_stat
 
+# in --check on a host without this release the copy above wrote nothing, so there is no wheel on
+# the host to hash yet: the pin is checked on the run that copies it
 - name: Refuse a wheel that is not the pinned one
   ansible.builtin.assert:
     that: hnx_runtime_wheel_stat.stat.checksum == hnx_runtime_wheel_sha256
     fail_msg: >-
       hnx_runtime: {{ hnx_runtime_wheel | basename }} hashes to {{ hnx_runtime_wheel_stat.stat.checksum }},
       the pin is {{ hnx_runtime_wheel_sha256 }}
+  when: hnx_runtime_wheel_stat.stat.exists or not ansible_check_mode
 
 - name: Copy the dependency lock and pip's own pin
   ansible.builtin.copy:
@@ -110,6 +124,7 @@
         dest: "{{ hnx_runtime_dir }}/installed"
         content: "{{ {'release': hnx_runtime_release, 'wheel': hnx_runtime_wheel | basename,
                       'wheel_sha256': hnx_runtime_wheel_sha256, 'extras': hnx_runtime_extras,
+                      'python': hnx_runtime_python, 'python_version': hnx_runtime_python_version.stdout | trim,
                       'source_commit': hnx_runtime_source_commit or none} | to_nice_json }}\n"
         owner: root
         group: root

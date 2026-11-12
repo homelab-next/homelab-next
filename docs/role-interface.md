@@ -67,7 +67,7 @@ A role refers to other services by **logical id** and resolves them at run time:
 
 ```jinja
 {{ lookup('hnx_registry', 'query-core', field='url') }}   {# scheme://host:port #}
-{{ lookup('hnx_registry', dep, field='host') }}           {# host / port / url #}
+{{ lookup('hnx_registry', dep, field='host') }}           {# host / port / url / capability / public_hostname #}
 ```
 
 `ansible/plugins/lookup/hnx_registry.py` is a deliberately small stand-in that

@@ -363,3 +363,28 @@ def test_the_acl_check_reads_and_acks_as_the_bridge(e2e, tmp_path, ack_format):
     setup.relay.wire_as = wire_as
     with pytest.raises(e2e.StepFailed, match=r"ack of seq \d+ failed"):
         e2e.check_bus_acl(setup, "req-1")
+
+
+def test_the_ack_check_uses_the_durable_it_is_given(e2e, tmp_path):
+    """On a real bus the scenario acks on a scratch durable (``run --bus-not-broker-durable``):
+    the bridge's real durable is never created, so a real bridge never inherits the run's ack
+    floor."""
+    from homelabnext.broker.relay import BROKER_SOURCE
+    from homelabnext.broker.state import StateDir
+    from homelabnext.events.envelope import build_event
+
+    state = StateDir(tmp_path / "state")
+    data = {"decision_id": "req-1", "verdict": "accept", "confidence": 1.0, "tier_used": "human"}
+    state.put_outbox(build_event("homelabnext.decision.returned", BROKER_SOURCE, data,
+                                 dedupe_key="r", subject="req-1"))  # fmt: skip
+    shared = _SharedWire()
+    relay = _relay(e2e, state.root, shared, acl=False)  # the lab's ACL names the real durable
+    relay.not_broker_durable = "e2e-scratch-decision-returned"
+    relay.provision()
+    relay.run_once()
+    assert "acked 1 delivery(ies)" in e2e.check_bridge_acks(relay)
+    consumers = shared.server.streams[e2e.LAB_EVENTS_STREAM].consumers
+    assert set(consumers) == {"e2e-scratch-decision-returned"}
+    with pytest.raises(SystemExit) as done:
+        e2e.main(["run", "--bus-not-broker-durable", "x", "--help"])
+    assert done.value.code == 0

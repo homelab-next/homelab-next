@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# Data only: the configuration comes from main. Ownership is the broker's, as main sets it; run
-# main again afterwards so outbox/ and relay/ get the relay's group back.
+# Data only (role interface section 2): the configuration and the units are main's and are left as
+# they are. The units are stopped for the copy (a live broker would write beside it) and started
+# again after, and the ownership main gives outbox/ (the relay's group) and relay/ (the relay's
+# own) is put back, so the relay reads the outbox and writes its markers as before.
 - block:
     - name: Stop the relay and the broker
       ansible.builtin.systemd_service:
@@ -13,8 +15,26 @@
         dest: "{{ item.dest }}/"
         remote_src: true
         owner: "{{ broker_user }}"
+        group: "{{ broker_group }}"
         mode: preserve
       loop:
-        - {src: state, dest: "{{ broker_state_root }}/state"}
+        - {src: state, dest: "{{ broker_state_dir }}"}
         - {src: agents, dest: "{{ broker_data_root }}"}
+    - name: Give outbox/ back to the relay's group and relay/ to the relay
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        recurse: true
+      loop:
+        - {path: "{{ broker_state_dir }}/outbox", owner: "{{ broker_user }}", group: "{{ broker_relay_group }}"}
+        - {path: "{{ broker_state_dir }}/relay", owner: "{{ broker_relay_user }}", group: "{{ broker_group }}"}
+      loop_control:
+        label: "{{ item.path }}"
+      when: broker_relay | bool
+    - name: Start the broker and the relay again
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+      loop: "{{ ['hnx-broker.service'] + (['hnx-broker-relay.service'] if broker_relay | bool else []) }}"
   tags: [restore]

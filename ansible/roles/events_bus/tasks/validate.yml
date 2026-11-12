@@ -14,8 +14,10 @@
       - events_bus_bin is match('^/[A-Za-z0-9._/-]+\Z')
       - events_bus_config_dir is match('^/[A-Za-z0-9._/-]+\Z')
       - events_bus_store_dir is match('^/[A-Za-z0-9._/-]+\Z')
+      # loopback only (the 127/8 block, ::1) until the role sets up a TLS listener: the adapter
+      # refuses a password over plaintext nats:// to anything else, and the bus has no TLS yet
       - events_bus_listen_address is match('^[0-9a-f.:]+\Z')
-      - events_bus_listen_address not in ['0.0.0.0', '::']  # no-raw-endpoint: allow refused wildcards
+      - events_bus_listen_address | hnx_is_loopback
       - events_bus_port | int > 1023 and events_bus_port | int < 65536
       - events_bus_monitor_port | int > 1023 and events_bus_monitor_port | int < 65536
       - events_bus_port | int != events_bus_monitor_port | int
@@ -23,7 +25,7 @@
       - events_bus_max_memory_store | int > 0 and events_bus_max_file_store | int > 0
     fail_msg: >-
       events_bus: a logical id, an https .tar.gz archive of the pinned version and its 64-hex
-      sha256, a non-root user and group, absolute paths, an address that is not a wildcard,
+      sha256, a non-root user and group, absolute paths, a loopback listen address (no TLS listener yet),
       unprivileged distinct ports, an upper-case account name and positive store caps
 
 - name: Validate the users and their allow-lists
@@ -34,11 +36,12 @@
       - (item.publish | default([])) is sequence and (item.subscribe | default([])) is sequence
       - (item.publish | default([]) + item.subscribe | default([])) | select('match', '^[A-Za-z0-9_.*>$-]+\Z') | list | length
         == (item.publish | default([]) + item.subscribe | default([])) | length
-      - (item.publish | default([]) + item.subscribe | default([])) | intersect(events_bus_refused_subjects) | length == 0
+      - (item.publish | default([]) + item.subscribe | default([])) | hnx_bus_subject_problems(item.user) | length == 0
       - item.keys() | difference(['user', 'password_ref', 'publish', 'subscribe']) | length == 0
     fail_msg: >-
       events_bus: user {{ item.user | default('?') }}: a name, a secret: reference for its
-      password, and allow-lists of plain subjects, none of them {{ events_bus_refused_subjects | join(' ') }}
+      password, and allow-lists of plain subjects within one user's reach:
+      {{ (item.publish | default([]) + item.subscribe | default([])) | hnx_bus_subject_problems(item.user | default('?')) | join('; ') }}
   loop: "{{ events_bus_users }}"
   loop_control:
     label: "{{ item.user | default('?') }}"

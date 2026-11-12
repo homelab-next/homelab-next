@@ -46,7 +46,7 @@ argument_specs:
         default: /var/lib/hnx-events
       events_bus_listen_address: &listen
         type: str
-        description: "Address the client port binds: loopback unless TLS is configured (not yet in this role); never a wildcard."
+        description: "Address the client port binds: loopback only (the 127/8 block or ::1); the role refuses any other until it sets up a TLS listener (a client password would cross the network in clear)."
         default: 127.0.0.1  # no-raw-endpoint: allow loopback default
       events_bus_port: &port
         type: int
@@ -109,7 +109,7 @@ argument_specs:
       events_bus_store_dir: *store
       events_bus_config_dir: *confdir
   restore:
-    short_description: Restore JetStream's store from events_bus_restore_source with the server stopped.
+    short_description: Restore JetStream's store from events_bus_restore_source with the server stopped, then start it again (data only; configuration and unit untouched).
     options:
       events_bus_store_dir: *store
       events_bus_user: *user

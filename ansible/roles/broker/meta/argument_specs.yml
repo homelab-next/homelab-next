@@ -55,7 +55,7 @@ argument_specs:
         default: /srv/agents
       broker_socket_dir: &sockdir
         type: path
-        description: "The socket's directory (a systemd RuntimeDirectory under /run); the socket is broker.sock in it."
+        description: "The socket's directory under /run, made by the role and kept across reboots by tmpfiles.d (2750, the broker's, in the clients' group: setgid, so the socket is born in that group); the socket is broker.sock in it."
         default: /run/hnx-broker
       broker_socket_mode: &sockmode
         type: str
@@ -93,10 +93,14 @@ argument_specs:
         type: path
         description: "The relay's own state (its stats file)."
         default: /var/lib/hnx-broker-relay
+      broker_relay_events_id: &eventsid
+        type: str
+        description: "The bus's logical id in the registry (capability events); its port names the default endpoint."
+        default: events
       broker_relay_events_endpoint: &endpoint
         type: str
-        description: "The bus endpoint, nats://<loopback>:<port> or tls://<host>:<port> (HNX_ENDPOINT_EVENTS); required with broker_relay."
-        default: ""
+        description: "The bus endpoint (HNX_ENDPOINT_EVENTS): nats:// to loopback on the registry row's port by default (the bus listens on loopback only until it has a TLS listener), or tls://<host>:<port>."
+        default: "nats://127.0.0.1:{{ lookup('hnx_registry', broker_relay_events_id, field='port') | int }}"  # no-raw-endpoint: allow loopback, the bus has no TLS listener yet
       broker_relay_events_user: &euser
         type: str
         description: "The broker's user on the bus."
@@ -153,6 +157,7 @@ argument_specs:
     options:
       broker_client_users: *peers
       broker_relay: *relay
+      broker_relay_events_id: *eventsid
       broker_relay_events_endpoint: *endpoint
   backup:
     short_description: Write the backup manifest (the state directory, the data root, the configuration).
@@ -163,12 +168,15 @@ argument_specs:
       broker_config_dir: *confdir
       broker_backup_dir: *backupdir
   restore:
-    short_description: Restore the state and the data root from broker_restore_source (state/ and agents/) with the units stopped.
+    short_description: Restore the state and the data root from broker_restore_source (state/ and agents/) with the units stopped, then start them again (data only; configuration and units untouched).
     options:
       broker_state_root: *stateroot
       broker_data_root: *data
       broker_user: *user
+      broker_group: *group
       broker_relay: *relay
+      broker_relay_user: *ruser
+      broker_relay_group: *rgroup
       broker_restore_source:
         type: path
         description: A directory holding state/ (a copy of <state_root>/state) and agents/ (a copy of the data root).

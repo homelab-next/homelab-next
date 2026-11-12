@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+# Data only (role interface section 2): the configuration and the unit are main's and are left as
+# they are. The hub is stopped for the copy (it writes its state while it runs) and started again
+# after; the state is the hub user's, as main makes it.
 - block:
     - name: Stop the hub
       ansible.builtin.systemd_service:
@@ -10,8 +13,9 @@
         dest: "{{ status_hub_state_dir }}/"
         remote_src: true
         owner: "{{ status_hub_user }}"
+        group: "{{ status_hub_group }}"
         mode: preserve
-    - name: Start the hub
+    - name: Start the hub again
       ansible.builtin.systemd_service:
         name: hnx-hub.service
         state: started

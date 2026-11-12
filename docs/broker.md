@@ -1,6 +1,6 @@
 ---
 summary: 'The broker service: named actions decided allow, deny or needs-approval, lanes, exec handlers, approvals, state, Code Mode tokens, running it and its MCP tools.'
-summary_of: outline:sha256:f26c5779087d854d
+summary_of: outline:sha256:71e701a0a3652dd3
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Broker service
@@ -603,7 +603,10 @@ hnx broker serve --manifest /etc/hnx-broker/manifest.yml --state /var/lib/hnx-br
 The socket is created `0600` (or `--socket-mode`, which may grant nothing to others) and owned by
 the service user, `--socket-group` its group; its directory is created `0750` (`0700` without a
 group) and the server refuses a directory owned by another user (other than root), one that is
-group-writable or open to others, and a file at the socket path that is not a stale socket.
+group-writable or open to others, and a file at the socket path that is not a stale socket. A
+directory that already exists may be setgid (`2750`, in the clients' group): the socket is then
+born in that group and `--socket-group` is not needed, so the server never calls `chown` (the
+[systemd unit](#a-systemd-unit) relies on this to deny all of `@privileged`).
 Bounds: one request per connection, at most 1 MiB (`--max-request-bytes`) read within 10 s
 (`--timeout`, for the whole request, not each read); 32 connections at once for callers, plus 4
 kept for approval relays so agents cannot crowd out the hub; more get `busy`.
@@ -648,11 +651,12 @@ runs as `hnx-hub`, also in that group. The socket's directory and the state root
 as root, not by systemd: `RuntimeDirectory=` and `StateDirectory=` are reset to `User:Group` for
 every command the unit starts, so an `ExecStartPre=+/bin/chgrp` to the clients' (or the relay's)
 group is undone before `ExecStart` runs, and the peers then cannot reach the socket (the relay
-its `outbox/`). A `tmpfiles.d` line keeps the socket's directory across reboots:
+its `outbox/`). A `tmpfiles.d` line keeps the socket's directory across reboots, **setgid** so
+the socket is born in the clients' group and the broker never chowns it:
 
 ```text
 # /etc/tmpfiles.d/hnx-broker.conf
-d /run/hnx-broker 0750 hnx-broker hnx-broker-clients -
+d /run/hnx-broker 2750 hnx-broker hnx-broker-clients -
 ```
 
 ```ini
@@ -664,23 +668,28 @@ After=network.target
 [Service]
 User=hnx-broker
 Group=hnx-broker
-SupplementaryGroups=hnx-broker-clients
 ExecStart=/opt/hnx/bin/hnx broker serve --manifest /etc/hnx-broker/manifest.yml \
   --state /var/lib/hnx-broker/state --data-root /srv/agents \
-  --socket /run/hnx-broker/broker.sock --socket-mode 660 --socket-group hnx-broker-clients
+  --socket /run/hnx-broker/broker.sock --socket-mode 660
 EnvironmentFile=-/etc/hnx-broker/secrets.env
+# 0027, not 0077: the broker creates outbox files 0640 for the relay's group (open's mode is
+# masked by the umask), and 0600 ones are quarantined by the relay as unreadable; everything else
+# it creates 0600/0700 itself
+UMask=0027
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/hnx-broker /srv/agents /run/hnx-broker
 ProtectHome=yes
 PrivateTmp=yes
+# other users' processes are invisible, and /proc holds processes only
+ProtectProc=invisible
+ProcSubset=pid
 # serve needs no network: the socket is its only door (its handlers then get none either)
 PrivateNetwork=yes
 RestrictAddressFamilies=AF_UNIX
 SystemCallFilter=@system-service
-# not ~@privileged: it holds @chown, and --socket-group chowns the socket (the process is killed
-# with SIGSYS at start)
-SystemCallFilter=~@resources
+# all of @privileged (it holds @chown): the socket takes its group from the setgid directory
+SystemCallFilter=~@privileged @resources
 
 [Install]
 WantedBy=multi-user.target
@@ -689,7 +698,27 @@ WantedBy=multi-user.target
 `/srv/agents` (the lanes' data root) is writable by `hnx-broker` only; agents read their own
 memory there if the operator grants it, never write. Handler secrets come from
 `HNX_BROKER_SECRET_<NAME>` in the service's environment (here an environment file readable by
-root and the service user only).
+root and the service user only). `ProcSubset=pid` hides `/proc/sys`, so a run claim records no
+boot id and a claimant is told live or gone by its pid's start time alone (`homelabnext.broker.state`).
+
+### Handlers and the broker's uid
+
+**An exec handler runs as the broker's own user**, inside the broker's unit: it can read and write
+everything the broker can, the state directory and the audit trail included. The digest pin and
+the sandboxing of the unit bound *which* bytes run and what the host lets them touch, not what
+they may do to the broker's own evidence. So **before the first real handler** (one that acts,
+rather than a stand-in that reports what it would do), handlers MUST run under a uid of their own:
+a transient unit per run (`systemd-run --uid=` / `DynamicUser=yes`, with the run directory handed
+over) or a small setuid-free helper (`setpriv --reuid --regid --clear-groups`) started with that
+one capability. That change is to execution itself and is not made yet.
+
+Until it is, the `broker` role ([Deploying with Ansible](#deploying-with-ansible)) **refuses** a
+manifest that declares an exec handler (an action whose `handler` is not `builtin/...`) unless
+its `manifest_id` ends in `-proof`: the marker of proof content whose handlers are stand-ins. The
+refusal is at validate time, on the controller, before anything on the host changes; built-in
+handlers (the lanes) run in the broker itself and are not affected. A deployment that uses the
+`-proof` marker must not carry it past its proof (the private overlay's own checks refuse a
+deploy-relevant run while its manifest still has it).
 
 ### Deploying with Ansible
 
@@ -706,12 +735,38 @@ root and the service user only).
 Every secret is a `secret:<name>` reference resolved on the controller by the `hnx_secret` lookup
 (OpenBao in a private overlay's deploy). A changed release, manifest, handler, secret or unit
 restarts the service it belongs to; a re-run with nothing changed reports `changed=0`, and so does
-`--check --diff`. Build the wheel from the commit you deploy, with the commit's time as
-`SOURCE_DATE_EPOCH` so the bytes (and the pinned sha256) are reproducible:
+`--check --diff`. Other services are named by registry id (role interface section 4): the relay's
+bus by `broker_relay_events_id` (capability `events`; the endpoint defaults to that row's port on
+loopback, the bus having no TLS listener yet), the hub's allowed host by its own row's
+`public_hostname`.
+
+* **The manifest is validated before it is installed.** It is staged as `manifest.yml.new` beside
+  the live one (so its `handlers/` resolve against the installed handlers), checked by the
+  release's own `hnx broker validate`, and only then copied over `manifest.yml`; one that fails
+  stops the play with the running broker's manifest untouched. (The handlers are installed first:
+  a new handler with a refused manifest leaves the old manifest refusing it by digest.)
+* **Handlers share the broker's uid**, so the role refuses a non-proof manifest with an exec
+  handler ([Handlers and the broker's uid](#handlers-and-the-brokers-uid)).
+* **The release names the interpreter's full version** (`sys.version`) besides its path, so a
+  distribution's Python upgrade builds a new virtualenv instead of running the old one on it.
+* **`restore` is data only** in all four roles' sense of it: the units are stopped for the copy and
+  started again after, ownership is put back as `main` makes it, and configuration and unit files
+  are left alone.
+
+**The wheel**, from the commit you deploy and nothing else: a fresh clone (or `git clean -xdf`),
+the build backend pinned by hash (`constraints/build.txt`, setuptools from the same lock as
+`constraints/ci.txt`) in a throwaway virtualenv, and the commit's time as `SOURCE_DATE_EPOCH`, so
+the bytes, and the pinned sha256, are reproducible. Record the backend's version next to the sha:
 
 ```sh
-SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) python -m pip wheel --no-deps --no-build-isolation -w dist .
-sha256sum dist/homelabnext-*.whl   # -> hnx_runtime_wheel_sha256
+git clone --quiet --no-checkout https://github.com/homelab-next/homelab-next.git hnx-build
+git -C hnx-build checkout --quiet <commit>          # a fresh tree: nothing untracked is packaged
+python3 -m venv /tmp/hnx-build-venv
+/tmp/hnx-build-venv/bin/pip install --require-hashes --no-deps -r hnx-build/constraints/bootstrap.txt
+/tmp/hnx-build-venv/bin/pip install --require-hashes --no-deps -r hnx-build/constraints/build.txt
+cd hnx-build && SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) \
+  /tmp/hnx-build-venv/bin/python -m pip wheel --no-deps --no-build-isolation -w dist .
+sha256sum dist/homelabnext-*.whl   # -> hnx_runtime_wheel_sha256 (built with setuptools 84.2.1)
 ```
 
 To run [the scenario](#testing) against the deployed units, run `broker_e2e.py run` as root on
@@ -721,6 +776,9 @@ hnx-broker-relay`), the hub's public name, approver and groups (`--hub-host`, `-
 `--approver-group`, `--viewer-group`), the bus users (`--bus-admin`, `--bus-not-broker`) and the
 relay's `--events-target`, `--stream` and `--subject-prefix`; stop `hnx-broker-relay.service`
 for the run (one relay per state directory; the scenario's own `--once` passes take its place).
+**Use scratch names on a real bus**: a stream and prefix of the run's own (granted to the bus users
+for the run only) and `--bus-not-broker-durable` a durable no real consumer uses, so the real
+bridge never inherits the run's ack floor and the standing stream holds none of its events.
 The hub's steps must reach it from a trusted proxy's address (the registry's edge-proxy host), as
 the edge would.
 
