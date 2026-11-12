@@ -184,6 +184,12 @@ def test_events_bus_refuses_bad_inputs(tmp_path):
         {"events_bus_users": broker_grant(publish=[], subscribe_only="yes")},
         {"events_bus_admin_user": "nobody"},
         {"events_bus_streams": [{"name": "lab", "subject_prefix": "lab", "max_bytes": 1}]},
+        # round 7 follow-up (N6): a declared stream named as another's dead-letter stream (the
+        # provisioner would create LAB_DLQ as LAB's DLQ and then skip the declared one), or twice
+        {"events_bus_streams": [{"name": "LAB", "subject_prefix": "lab", "max_bytes": 1},
+                                {"name": "LAB_DLQ", "subject_prefix": "dlq", "max_bytes": 1}]},
+        {"events_bus_streams": [{"name": "LAB", "subject_prefix": "lab", "max_bytes": 1},
+                                {"name": "LAB", "subject_prefix": "lab2", "max_bytes": 1}]},
         # round 4: a consumer create is the provisioner's alone (it can push the stream to any
         # subject), no one holds STREAM.UPDATE (it deletes by shrinking), acks are exact
         {"events_bus_users": broker_grant(publish=["$JS.API.CONSUMER.CREATE.LAB.bridge-x.lab.x"])},
