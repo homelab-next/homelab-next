@@ -264,18 +264,25 @@ the challenge's TXT record is published). What `main` does:
   `/usr/local/libexec/homelabnext/openbao-acme-renew`: lego renews when fewer than
   `openbao_acme_renew_days` (30, at most 45: a margin at or past the certificate's lifetime would
   reissue on every run, into the CA's rate limits) remain or the names changed (and when the CA's renewal-info
-  endpoint asks for it); the script then checks what lego stored (every name verified against
-  `openbao_acme_trust_bundle`, the key matching the certificate, not expired) and, when it differs
-  from what the listener reads, installs the key (0640, group `openbao_group`) and the
+  endpoint asks for it); the script then checks what lego stored (exactly the configured names,
+  each verified against `openbao_acme_trust_bundle`, the key matching the certificate, not
+  expired) and, when it differs from what the listener reads, installs the key (0640, group `openbao_group`) and the
   certificate (0644) atomically, checks the installed pair again, and reloads a running server
   with `systemctl reload` (SIGHUP: it stays unsealed). A reload that fails is recorded
   (`<openbao_acme_dir>/reload-owed`) and retried by every later run, and `--check` reports it, so
   a server still serving the old certificate is never taken for a current one. **It never restarts the server**, which would seal it. The unit runs as root,
   sandboxed (`ProtectSystem=strict` with only the ACME directory, the TLS directory and its
   last-run record writable, no capability but `CAP_CHOWN`).
+* **Changing the names.** Adding a name to `openbao_acme_domains` or removing one both take
+  effect on the next `main`: lego runs with `--force-cert-domains` (without it lego v5 merges the
+  stored certificate's names into the request, so a removed name would stay on the certificate
+  indefinitely), and `--check` wants exactly the configured names, so a certificate naming more
+  or fewer is not current and a new one is ordered.
 * **Taking it back.** Setting `openbao_tls_source: provided` again stops and removes the renewal
   timer, its unit, the script and the token file (left in place, the timer would overwrite the
-  supplied PEMs); the ACME account directory stays.
+  supplied PEMs). `openbao_acme_dir` stays: lego's ACME account key and its copy of the last
+  certificate **and its private key** (root, 0700). Switching back to ACME reuses the account;
+  when you will not, remove the directory by hand (that key was served, so treat it as such).
 * **Idempotent.** `main` runs the script's `--check` first and starts the unit only when the
   installed certificate is missing, names other domains, does not verify, does not match its key
   or is due; a converged host with a valid certificate reports `changed=0`, and nothing is

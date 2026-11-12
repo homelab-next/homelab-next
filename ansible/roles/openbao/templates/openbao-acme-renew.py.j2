@@ -18,8 +18,9 @@
 """Managed by Ansible (role openbao); local changes are overwritten.
 
 Without arguments (the renewal unit): run lego, which renews only when fewer than the configured
-days remain (or the names changed); check what it stored (every name verified against the trust
-bundle, the key matching the certificate, not expired); when that differs from what the listener
+days remain (or the names changed: ``--force-cert-domains``, so a removed name is dropped rather
+than kept from the stored certificate); check what it stored (exactly the configured names, each
+verified against the trust bundle, the key matching the certificate, not expired); when that differs from what the listener
 reads, install the key and the certificate (atomically, the key readable by the service account's
 group only) and reload a running server with ``systemctl reload`` (SIGHUP: it stays unsealed; a
 restart would seal it). ``--check``: is the INSTALLED certificate valid and not yet due? The role
@@ -30,6 +31,7 @@ environment only (never an argument, never the unit's environment); nothing here
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -85,6 +87,12 @@ def problem(cert_path, key_path, due_days):
     if end not in pem:
         return f"{cert_path} holds no certificate"
     leaf = pem[: pem.index(end) + len(end)] + b"\n"
+    # exactly the configured names: lego runs with --force-cert-domains, so a name removed from
+    # the configuration leaves the certificate, and one still on it is not current
+    san = openssl("x509", "-noout", "-ext", "subjectAltName", data=leaf).stdout.decode()
+    names = {n.lower() for n in re.findall(r"DNS:([^,\s]+)", san)}
+    if names != {n.lower() for n in CONF["domains"]}:
+        return f"{cert_path} names {', '.join(sorted(names)) or 'nothing'}, not exactly {', '.join(CONF['domains'])}"
     with tempfile.NamedTemporaryFile(prefix="leaf-", suffix=".pem") as t:
         t.write(leaf)
         t.flush()
@@ -222,7 +230,7 @@ def renew():
             "--server", CONF["server"], "--path", CONF["path"], "--cert.name", NAME,
             "--key-type", CONF["key_type"], "--dns", CONF["provider"],
             "--dns.propagation.wait", CONF["wait"], "--renew-days", str(CONF["renew_days"]),
-            "--no-random-sleep"]  # fmt: skip
+            "--no-random-sleep", "--force-cert-domains"]  # fmt: skip
     if CONF["email"]:
         argv += ["--email", CONF["email"]]
     for name in CONF["domains"]:

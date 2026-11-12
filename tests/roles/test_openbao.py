@@ -1595,7 +1595,7 @@ a = sys.argv[1:]
 # any other spelling is refused, as the real binary refuses it
 KNOWN = {"--log.format", "run", "--accept-tos", "--server", "--path", "--cert.name", "--key-type",
          "--dns", "--dns.propagation.wait", "--renew-days", "--no-random-sleep", "--email",
-         "--domains"}
+         "--domains", "--force-cert-domains"}
 unknown = [x for x in a if x.startswith("-") and x not in KNOWN]
 if unknown or a[2:3] != ["run"]:
     sys.exit("lego: flag provided but not defined: " + " ".join(unknown or a[:3]))
@@ -1609,8 +1609,16 @@ if os.path.exists(MARK + ".wrong"):
     names = ["wrong.example.internal"]
 d = os.path.join(path, "certificates")
 crt = os.path.join(d, a[a.index("--cert.name") + 1] + ".crt")
-if os.path.exists(crt) and not os.path.exists(MARK + ".force"):
-    sys.exit(0)  # not due
+if os.path.exists(crt):
+    # v5.6.0 renewForDomains: the stored certificate's names merged with --domains, unless
+    # --force-cert-domains; a set that differs from the stored one orders a new certificate
+    ext = subprocess.run(["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", crt],
+                         capture_output=True, text=True).stdout
+    had = [x.strip()[4:] for x in ext.splitlines()[-1].split(",")]
+    if "--force-cert-domains" not in a:
+        names = had + [n for n in names if n not in had]
+    if sorted(names) == sorted(had) and not os.path.exists(MARK + ".force"):
+        sys.exit(0)  # not due
 os.makedirs(d, mode=0o700, exist_ok=True)
 san = ",".join("DNS:" + n for n in names)
 subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
@@ -2006,6 +2014,34 @@ def test_a_server_still_starting_keeps_the_reload_owed(tmp_path, pki, state, cap
     assert not [c for c in calls(tmp_path) if c.startswith("systemctl reload")]
     (tmp_path / "openbao.state").write_text("failed")  # stopped: it reads the pair when it starts
     assert mod.renew() == 0 and not Path(mod.RELOAD_OWED).exists()
+
+
+def sans(cert: Path) -> list[str]:
+    ext = subprocess.run(["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", cert],
+                         capture_output=True, text=True, check=True).stdout  # fmt: skip
+    return sorted(x.strip().removeprefix("DNS:") for x in ext.splitlines()[-1].split(","))
+
+
+def test_a_name_removed_from_the_domains_leaves_the_certificate(tmp_path, pki):
+    """N5: lego v5 keeps every name of its stored certificate unless --force-cert-domains, so a
+    name dropped from openbao_acme_domains used to stay on the certificate indefinitely (and
+    --check, which checked only the configured names, called it current). lego now runs with
+    --force-cert-domains and --check wants exactly the configured names: the next main orders a
+    certificate without the removed name."""
+    alt = "alt.example.internal"
+    mod = acme_installed(tmp_path, pki, openbao_acme_domains=[HOST, alt])
+    cert = tmp_path / "etc" / "tls" / "server.pem"
+    assert sans(cert) == sorted([HOST, alt])
+    (tmp_path / "calls.log").unlink()
+    r = run_role(tmp_path, ROLE, "tls", dict(mod.role_vars, openbao_acme_domains=[HOST]),
+                 env=acme_env(pki))  # fmt: skip
+    assert r.returncode == 0, r.stdout[-4000:] + r.stderr
+    assert sans(cert) == [HOST]
+    (lego,) = [c for c in calls(tmp_path) if c.startswith("lego ")]
+    assert " --force-cert-domains " in lego and f"--domains {alt}" not in lego, lego
+    # the script as first rendered (both names configured) refuses the one-name certificate
+    key = str(tmp_path / "etc" / "tls" / "server-key.pem")
+    assert f"names {HOST}, not exactly {HOST}, {alt}" in mod.problem(str(cert), key, 0)
 
 
 def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
