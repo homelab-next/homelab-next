@@ -1,14 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-# The exit copy is a raft snapshot as well: the format every release of this product (and the
-# product it forked from) restores. A plaintext dump of every secret is deliberately not offered;
-# moving the secrets to another store reads them by name through the secrets contract instead
-# (hnx secrets plan lists every name the lab uses).
-- name: Take a raft snapshot into the export directory
-  ansible.builtin.include_tasks:
-    file: snapshot.yml
-    apply:
-      tags: [export]
-  vars:
-    openbao_snapshot_dir: "{{ openbao_export_dir }}"
-    openbao_snapshot_name: "{{ openbao_logical_id }}.snap"
+# NOT an open-format exit copy (role interface v1 section 2 asks for one; ADR-0008 decisions 1 and
+# 4). What this writes is a raft snapshot: encrypted by the barrier, readable only by this product
+# (or the one it forked from) holding the unseal keys of the cluster that wrote it. A plaintext
+# dump of every secret is deliberately not offered here. The exit path out of this product is the
+# secrets contract: `hnx secrets plan` lists every name the lab uses, and each is read by name
+# through the contract and written into the next store (README.md, "Leaving this product").
+# Whether to add an open-format dump is an operator decision, recorded as open.
+- block:
+    - name: Say what this copy is (and is not)
+      ansible.builtin.debug:
+        msg: >-
+          openbao {{ openbao_logical_id }}: the export is a raft snapshot, not an open format; the
+          exit path is reading every name through the secrets contract (hnx secrets plan)
+    - name: Take a raft snapshot into the export directory
+      ansible.builtin.include_tasks:
+        file: snapshot.yml
+        apply:
+          tags: [export]
+      vars:
+        openbao_snapshot_dir: "{{ openbao_export_dir }}"
+        openbao_snapshot_name: "{{ openbao_logical_id }}.snap"
   tags: [export]

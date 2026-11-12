@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-# A release bump: refuse a downgrade or a no-op, take a pre-upgrade raft snapshot, fetch and verify
-# the target release beside the running one, and record it as pending. The switch itself is main
-# with the moved pin (openbao_version and openbao_checksums), which needs a restart: run it with
-# openbao_allow_restart: true while the operator is there to unseal, then the health hook. The old
-# release's directory stays for a rollback (point the pin back, restart, unseal).
+# A release bump, staged, not switched: refuse a downgrade or a no-op (against the pin and against
+# the RUNNING release), take a pre-upgrade raft snapshot, fetch and verify the target release
+# beside the running one, and record it as pending. The switch itself is main with the moved pin
+# (openbao_version, openbao_checksums and openbao_checksums_version), which needs a restart: run
+# it with openbao_allow_restart: true while the operator is there to unseal, then the health hook.
+# Rollback is NOT pointing the pin back: the new release may already have rewritten the raft
+# storage. Restore pre-upgrade-<old version>.snap with the old release (README.md, "Upgrading").
 - block:
     - name: Refuse a downgrade, a no-op or a target without a checksum
       ansible.builtin.assert:
@@ -16,6 +18,13 @@
         fail_msg: >-
           openbao: target {{ openbao_target_version }} is not a release newer than
           {{ openbao_version }} with a sha256 per architecture (openbao_target_checksums)
+    - name: Refuse a target older than the running release
+      ansible.builtin.include_tasks:
+        file: downgrade.yml
+        apply:
+          tags: [upgrade]
+      vars:
+        openbao_version: "{{ openbao_target_version }}"
     - name: Check the platform (architecture, swap)
       ansible.builtin.include_tasks:
         file: platform.yml

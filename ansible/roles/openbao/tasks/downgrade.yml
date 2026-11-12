@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# Refuse a pin older than the release the server is RUNNING. The pin and openbao_target_version
+# are only what was asked for; sys/health says what runs, and a release may rewrite raft storage
+# in a format an older one cannot read. Nothing answers on a fresh host (or a stopped server):
+# there is nothing to downgrade then.
+- name: Ask the running server for its release
+  ansible.builtin.uri:
+    url: "{{ openbao_api_addr }}/v1/sys/health?{{ openbao_health_query }}"
+    ca_path: "{{ openbao_tls_ca_file }}"
+    status_code: 200
+    return_content: true
+    follow_redirects: none
+    use_proxy: false
+    timeout: "{{ openbao_health_timeout | int }}"
+  register: openbao_running_release
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only
+
+- name: Refuse a pin older than the running release unless openbao_allow_downgrade
+  ansible.builtin.assert:
+    that: >-
+      openbao_allow_downgrade | bool
+      or openbao_running_release.json.version | default('') is not match('^[0-9]+\.[0-9]+\.[0-9]+')
+      or openbao_version is version(openbao_running_release.json.version | regex_search('^[0-9]+\.[0-9]+\.[0-9]+'), '>=')
+    fail_msg: >-
+      openbao: the server runs {{ openbao_running_release.json.version | default('?') }} and the pin
+      is {{ openbao_version }}, older. A downgrade can meet storage the newer release already
+      rewrote: restore its pre-upgrade snapshot with the old release instead (README.md,
+      "Upgrading"), or set openbao_allow_downgrade: true if you know the formats match.

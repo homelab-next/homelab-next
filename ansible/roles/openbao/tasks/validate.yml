@@ -9,6 +9,7 @@
       - openbao_checksums is mapping and openbao_checksums | length > 0
       - openbao_checksums.values() | reject('match', '^[0-9a-f]{64}\Z') | list | length == 0
       - openbao_checksums.keys() | difference(['amd64', 'arm64']) | length == 0
+      - openbao_checksums_version == openbao_version
       - openbao_release_repository is match('^https://[^\s?#]+[^/\s?#]\Z')
       - openbao_api_addr is match('^https://[^/\s?#@]+\Z')
       - openbao_cluster_url is match('^https://[^/\s?#@]+\Z')
@@ -27,7 +28,8 @@
       - openbao_config_dir is match('^/[^\s"]+\Z') and openbao_config_dir != '/etc'
     fail_msg: >-
       openbao: refused input. Needs an https api_addr and cluster_addr (no path), a concrete listen
-      address (never a wildcard), a pinned x.y.z version with a sha256 per architecture, a
+      address (never a wildcard), a pinned x.y.z version with a sha256 per architecture taken for
+      that version (openbao_checksums_version equal to openbao_version), a
       non-root user and group, and dedicated data, audit and configuration directories.
 
 - name: Refuse a TLS input that is neither supplied nor the test-only self-signed option
@@ -45,9 +47,22 @@
 
 - name: Refuse supplied PEMs together with the self-signed test option
   ansible.builtin.assert:
-    that: not (openbao_tls_selfsigned_for_tests | bool and (openbao_tls_cert_pem | length > 0 or openbao_tls_private_key_pem | length > 0))
-    fail_msg: "openbao: openbao_tls_selfsigned_for_tests generates its own certificate; drop the supplied PEMs or the option"
+    that: >-
+      not (openbao_tls_selfsigned_for_tests | bool and
+           (openbao_tls_cert_pem | length > 0 or openbao_tls_private_key_pem | length > 0
+            or openbao_tls_ca_pem | length > 0))
+    fail_msg: >-
+      openbao: openbao_tls_selfsigned_for_tests generates its own CA and certificate; drop the
+      supplied PEMs (the CA's too: clients would trust a CA the server does not chain to) or the option
   no_log: true
+
+- name: Refuse the self-signed test option without its second, explicit confirmation
+  ansible.builtin.assert:
+    that: openbao_tls_selfsigned_for_tests | bool == openbao_tls_selfsigned_confirm_throwaway | bool
+    fail_msg: >-
+      openbao: openbao_tls_selfsigned_for_tests and openbao_tls_selfsigned_confirm_throwaway go
+      together: both true only for a throwaway test server (its CA key sits on the same disk), both
+      false otherwise
 
 - name: Refuse a self-signed SAN that is not a plain host name or address
   ansible.builtin.assert:

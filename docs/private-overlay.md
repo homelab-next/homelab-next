@@ -167,7 +167,10 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    split as you decided, never into a repository, a chat or an Actions secret. Unseal, create the
    KV v2 mount (`secret/`), write the lab's credentials under the names the registry and roles use
    (`secret:<name>` maps to `secret/data/<name>`) with `hnx secrets seed`
-   ([Seeding the credentials](#seeding-the-credentials)), then revoke the root token.
+   ([Seeding the credentials](#seeding-the-credentials)). Keep the root token until the deploy's
+   AppRole (step 4) and the role's snapshot principal and restore policy exist; revoke it then, in
+   the order the [role's README](../ansible/roles/openbao/README.md#the-operators-procedure-first-start)
+   gives (seed, AppRole, snapshot principal, revoke).
 4. **An identity for the deploy.** Create an AppRole for the deploy with a policy that can read
    only the paths the deploy needs (and the vault password at `secret/data/ansible/vault-password`
    if you keep it there), for example:

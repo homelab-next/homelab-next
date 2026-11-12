@@ -24,6 +24,9 @@ TimeoutStopSec=30
 LimitNOFILE=65536
 LimitCORE=0
 UMask=0077
+# The release never locks its memory: keep this service's memory out of swap whatever the host
+# does (cgroup v2). main also refuses a host with active swap (defence in depth).
+MemorySwapMax=0
 
 # The release never locks memory and needs no capability: port {{ openbao_port | int }} is unprivileged.
 NoNewPrivileges=yes
@@ -46,6 +49,10 @@ RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# It binds its API and cluster ports and nothing else.
+SocketBindAllow=tcp:{{ openbao_port | int }}
+SocketBindAllow=tcp:{{ openbao_cluster_port | int }}
+SocketBindDeny=any
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 RemoveIPC=yes

@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # Start a stopped server; never restart a running one unless openbao_allow_restart, because a
-# restart seals it and only the operator can unseal. A change that needs a restart is recorded in
-# <state_dir>/restart-owed, which readiness reports, until a restart clears it.
+# restart seals it and only the operator can unseal. A change that needs a restart (the release,
+# the configuration, the unit) is recorded in <state_dir>/restart-owed, merged with what an earlier
+# run recorded, which readiness and health report, until a restart clears it. A new TLS
+# certificate or key needs no restart: the server reloads them on SIGHUP (the unit's ExecReload),
+# staying unsealed.
 - name: Reload systemd when the unit changed
   ansible.builtin.command:
     argv: ["{{ openbao_systemctl_cli }}", daemon-reload]
@@ -14,6 +17,7 @@
   register: openbao_enabled
   changed_when: false
   failed_when: false
+  check_mode: false  # read-only: a --check run needs the answer too
 
 - name: Enable the unit
   ansible.builtin.command:
@@ -27,6 +31,7 @@
   register: openbao_active
   changed_when: false
   failed_when: false
+  check_mode: false  # read-only
 
 - name: Note what changed under a running server
   ansible.builtin.set_fact:
@@ -34,8 +39,11 @@
     openbao_restart_reasons: >-
       {{ (['release'] if (openbao_link | default({})) is changed else [])
          + (['configuration'] if (openbao_config | default({})) is changed else [])
-         + (['unit'] if (openbao_unit | default({})) is changed else [])
-         + (['TLS certificate or key'] if ([openbao_tls_cert_copy | default({}), openbao_tls_key_copy | default({}), openbao_tls_test_cert | default({}), openbao_tls_test_key | default({})] | select('changed') | list | length > 0) else []) }}
+         + (['unit'] if (openbao_unit | default({})) is changed else []) }}
+    openbao_tls_changed: >-
+      {{ [openbao_tls_cert_copy | default({}), openbao_tls_key_copy | default({}),
+          openbao_tls_test_cert | default({}), openbao_tls_test_key | default({})]
+         | select('changed') | list | length > 0 }}
 
 - name: Create the state directory
   ansible.builtin.file:
@@ -50,9 +58,19 @@
     path: "{{ openbao_state_dir }}/restart-owed"
   register: openbao_owed_before
 
-- name: Decide whether a running server needs a restart
+- name: Read the reasons it recorded
+  ansible.builtin.slurp:
+    src: "{{ openbao_state_dir }}/restart-owed"
+  register: openbao_owed_record
+  when: openbao_owed_before.stat.exists
+
+- name: Decide whether a running server needs a restart (merging the reasons already recorded)
   ansible.builtin.set_fact:
     openbao_needs_restart: "{{ openbao_running | bool and (openbao_restart_reasons | length > 0 or openbao_owed_before.stat.exists) }}"
+    openbao_owed_reasons: >-
+      {{ ((((openbao_owed_record.content | b64decode | from_json).reasons | default([]))
+            if openbao_owed_record.content is defined else [])
+          + openbao_restart_reasons) | unique }}
 
 - name: Start the server (it starts sealed, or uninitialised on first install)
   ansible.builtin.command:
@@ -66,10 +84,18 @@
   when: openbao_needs_restart | bool and openbao_allow_restart | bool
   changed_when: true
 
+- name: Reload the server for a new TLS certificate or key (SIGHUP; it stays unsealed)
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", reload, "{{ openbao_service }}.service"]
+  when: >-
+    openbao_tls_changed | bool and openbao_running | bool
+    and not (openbao_needs_restart | bool and openbao_allow_restart | bool)
+  changed_when: true
+
 - name: Record the restart a running server owes
   ansible.builtin.copy:
     dest: "{{ openbao_state_dir }}/restart-owed"
-    content: "{{ {'reasons': openbao_restart_reasons} | to_nice_json }}\n"
+    content: "{{ {'reasons': openbao_owed_reasons} | to_nice_json }}\n"
     mode: "0640"
   when: openbao_restart_reasons | length > 0 and openbao_running | bool and not openbao_allow_restart | bool
 
@@ -77,7 +103,7 @@
   ansible.builtin.debug:
     msg: >-
       openbao: the running server has not loaded a change
-      ({{ openbao_restart_reasons | join(', ') if openbao_restart_reasons else 'recorded by an earlier run' }}).
+      ({{ openbao_owed_reasons | join(', ') if openbao_owed_reasons else 'recorded by an earlier run' }}).
       A restart SEALS it: restart when the operator can unseal (re-run with
       openbao_allow_restart: true while they are there).
   when: openbao_needs_restart | bool and not openbao_allow_restart | bool

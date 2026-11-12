@@ -1,9 +1,12 @@
 {# SPDX-License-Identifier: Apache-2.0 -#}
 # Managed by Ansible (role openbao). Do not edit.
 # SIGHUP makes the server reopen its audit file; the rotated files stay mode 0600, owned by the
-# service account.
+# service account (logrotate works in its directory as that account: su). A failed SIGHUP to a
+# running server fails the rotation (logrotate.service shows failed) rather than going unnoticed.
 {{ openbao_audit_file }} {
+    su {{ openbao_user }} {{ openbao_group }}
     daily
+    maxsize 256M
     rotate 30
     compress
     delaycompress
@@ -11,6 +14,6 @@
     notifempty
     create 0600 {{ openbao_user }} {{ openbao_group }}
     postrotate
-        {{ openbao_systemctl_cli }} kill --signal=HUP --kill-whom=main {{ openbao_service }}.service >/dev/null 2>&1 || true
+        if {{ openbao_systemctl_cli }} is-active --quiet {{ openbao_service }}.service; then {{ openbao_systemctl_cli }} kill --signal=HUP --kill-whom=main {{ openbao_service }}.service; fi
     endscript
 }

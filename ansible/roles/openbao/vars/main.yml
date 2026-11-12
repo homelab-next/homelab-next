@@ -26,3 +26,13 @@ openbao_owner: root
 openbao_owner_group: root
 # The cluster URL the configuration carries: openbao_cluster_addr, else the listen address.
 openbao_cluster_url: "{{ openbao_cluster_addr or ('https://' ~ openbao_listen_address_hostport ~ ':' ~ (openbao_cluster_port | int)) }}"
+# The active swap areas (tests point it at a file of their own).
+openbao_proc_swaps: /proc/swaps
+# TLS 1.2 suites the listener accepts: forward-secret AEAD only (TLS 1.3 has only AEAD suites).
+openbao_tls_cipher_suites:
+  - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+  - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+  - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+  - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+  - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+  - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305

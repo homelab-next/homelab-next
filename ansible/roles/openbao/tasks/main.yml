@@ -11,6 +11,9 @@
 - name: Create the service account
   ansible.builtin.include_tasks: account.yml
 
+- name: Refuse a pin older than the running release
+  ansible.builtin.include_tasks: downgrade.yml
+
 - name: Install the pinned release
   ansible.builtin.include_tasks: release.yml
   vars:

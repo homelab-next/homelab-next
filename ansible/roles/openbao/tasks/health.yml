@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Healthy means initialised, unsealed and serving (active, or an unsealed standby of a cluster),
-# running the pinned release. Sealed or uninitialised fails, by name.
+# running the pinned release. Sealed or uninitialised fails, by name. A restart owed (a change the
+# running server has not loaded: <openbao_state_dir>/restart-owed) does not fail it, since the
+# server is serving, but is reported as a WARN line naming the reasons: role interface v1 has
+# pass and fail only, so the warning is the message.
 - block:
     - name: Ask the server for its health (verified against the internal CA)
       ansible.builtin.uri:
@@ -28,4 +31,22 @@
              if openbao_health.json.version | default('') != openbao_version
              else 'HTTP ' ~ openbao_health.status }}
         success_msg: "openbao {{ openbao_logical_id }}: unsealed, {{ 'standby' if openbao_health.json.standby | default(false) else 'active' }}, {{ openbao_health.json.version }}"
+    - name: Read whether a restart is owed
+      ansible.builtin.stat:
+        path: "{{ openbao_state_dir }}/restart-owed"
+      register: openbao_health_owed
+    - name: Read the reasons
+      ansible.builtin.slurp:
+        src: "{{ openbao_state_dir }}/restart-owed"
+      register: openbao_health_owed_record
+      when: openbao_health_owed.stat.exists
+    - name: Warn that a restart is owed
+      ansible.builtin.debug:
+        msg: >-
+          WARN openbao {{ openbao_logical_id }}: a restart is owed
+          ({{ ((openbao_health_owed_record.content | b64decode | from_json).reasons | default([])) | join(', ') or 'reasons not recorded' }}):
+          the running server has not loaded them. A restart SEALS it; restart while the operator can
+          unseal (main with openbao_allow_restart: true). A crash restart (Restart=on-failure) or a
+          reboot would load them too, sealed.
+      when: openbao_health_owed.stat.exists
   tags: [health]
