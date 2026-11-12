@@ -2013,7 +2013,8 @@ def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
 ):
     """With ACME the hooks verify the server against the trust bundle (no CA file of the role's)
     and by the name in openbao_api_addr; health fails when the installed certificate is inside
-    openbao_acme_health_min_days (renewal has been failing)."""
+    openbao_acme_health_min_days (renewal has been failing), and while a reload is owed (N6: the
+    server may still serve the certificate the renewal replaced)."""
     other = tmp_path_factory.mktemp("other-ca")
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
@@ -2021,6 +2022,9 @@ def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
          "-out", other / "ca.pem"],
         check=True, capture_output=True,
     )  # fmt: skip
+    owed = tmp_path / "acme-owed"  # a renewal whose reload failed: the server may serve the old one
+    owed.mkdir()
+    (owed / "reload-owed").write_text("")
     with fake_openbao(pki, 200, ACTIVE) as url:
         v = base(tmp_path, **dict(ACME, openbao_api_addr=url, openbao_acme_domains=[LOOPBACK],
                                   openbao_acme_trust_bundle=str(pki / "ca.pem")))  # fmt: skip
@@ -2032,11 +2036,13 @@ def test_acme_hooks_verify_the_public_chain_by_name_and_health_watches_expiry(
             {"openbao_acme_health_min_days": 1},
             {},  # 14 days: inside the margin
             {"openbao_acme_health_min_days": 1, "openbao_acme_trust_bundle": str(other / "ca.pem")},
+            {"openbao_acme_health_min_days": 1, "openbao_acme_dir": str(owed)},
         ])  # fmt: skip
         ready = run_role(tmp_path, ROLE, "readiness", v)
     assert got[0][0] is False, got[0]
     assert got[1][0] and "expires within 14 days" in got[1][1], got[1]
     assert got[2][0] and "CERTIFICATE_VERIFY_FAILED" in got[2][1], got[2]
+    assert got[3][0] and "a certificate reload is owed" in got[3][1], got[3]  # N6
     assert ready.returncode == 0 and "unsealed-active" in ready.stdout, ready.stdout
 
 

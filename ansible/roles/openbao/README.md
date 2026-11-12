@@ -286,7 +286,9 @@ the challenge's TXT record is published). What `main` does:
   record says so (the status hub's Schedule page), `openbao_acme_on_failure` (empty by default)
   names a unit to start on failure (`OnFailure=`, e.g. a paging template unit where the host has
   one; this repository ships none, so that is the gap), and the `health` hook fails once fewer
-  than `openbao_acme_health_min_days` (14) remain, which is renewal having failed for 16 days.
+  than `openbao_acme_health_min_days` (14) remain, which is renewal having failed for 16 days,
+  and while a reload is owed (`<openbao_acme_dir>/reload-owed`: the server may still serve the
+  certificate the renewal replaced).
 * **Clients** verify against the public chain: no CA file is written (`<openbao_config_dir>/tls/ca.pem`
   from an earlier supplied-PEM run is removed), the hooks verify against
   `openbao_acme_trust_bundle` by the name in `openbao_api_addr`, and `BAO_CACERT` stays unset on
