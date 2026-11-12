@@ -29,7 +29,9 @@ def test_repo_python_files_all_have_header():
     # quick start creates inside the checkout, failing with ~2000 third-party files.
     listed = subprocess.run(
         ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "*.py"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if listed.returncode == 0:
         files = [root / line for line in listed.stdout.splitlines() if line]
