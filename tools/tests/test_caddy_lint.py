@@ -776,7 +776,10 @@ def test_the_generated_sites_need_their_site_level_strip(platform_identity):
     golden = (REPO / "tests/generators/golden/caddy/sites.caddy").read_text(encoding="utf-8")
     assert lint.lint_caddy(golden) == []
     strip = platform_identity.strip_lines("\t")
-    without = golden.replace(f"{strip}\timport", "\timport")
+    # the strip taken out of every forward-auth site (each imports the generated snippet of other
+    # proxies' identity headers first, which deletes none of the platform's)
+    foreign = "\timport hnx_strip_foreign_identity\n\timport hnx_forward_auth"
+    without = golden.replace(f"{strip}{foreign}", foreign)
     gated = [
         i + 1 for i, ln in enumerate(without.splitlines()) if ln.endswith(" {") and not
         ln.startswith(("\t", "(")) and "\timport hnx_forward_auth" in without[

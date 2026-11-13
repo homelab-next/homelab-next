@@ -23,10 +23,38 @@
 	}
 }
 
+(hnx_strip_foreign_identity) {
+	request_header -*forwarded-user*
+	request_header -*forwarded_user*
+	request_header -*forwarded-groups*
+	request_header -*forwarded_groups*
+	request_header -*forwarded-email*
+	request_header -*forwarded_email*
+	request_header -*forwarded-preferred-username*
+	request_header -*forwarded-preferred_username*
+	request_header -*forwarded_preferred-username*
+	request_header -*forwarded_preferred_username*
+	request_header -*forwarded-access-token*
+	request_header -*forwarded-access_token*
+	request_header -*forwarded_access-token*
+	request_header -*forwarded_access_token*
+	request_header -*remote-user*
+	request_header -*remote_user*
+	request_header -*remote-groups*
+	request_header -*remote_groups*
+	request_header -*remote-email*
+	request_header -*remote_email*
+	request_header -*remote-name*
+	request_header -*remote_name*
+	request_header -*webauth-user*
+	request_header -*webauth_user*
+}
+
 dashboards.lab.example {
 	# service dashboards (dashboards) owner=platform-team
 	request_header -*auth-request*
 	request_header -*auth_request*
+	import hnx_strip_foreign_identity
 	import hnx_forward_auth lab-admins,lab-viewers,platform-team
 	reverse_proxy http://dashboards.svc.example.internal:3000
 }
@@ -35,6 +63,7 @@ login.lab.example {
 	# service idp (idp) owner=identity-team
 	request_header -*auth-request*
 	request_header -*auth_request*
+	import hnx_strip_foreign_identity
 	reverse_proxy https://idp.svc.example.internal:8443
 }
 
@@ -42,6 +71,7 @@ metrics.lab.example {
 	# service metrics (metrics) owner=platform-team
 	request_header -*auth-request*
 	request_header -*auth_request*
+	import hnx_strip_foreign_identity
 	import hnx_forward_auth lab-viewers,platform-team
 	reverse_proxy http://metrics.svc.example.internal:9090
 }
@@ -50,6 +80,7 @@ status.lab.example {
 	# service status-hub (status-hub) owner=platform-team
 	request_header -*auth-request*
 	request_header -*auth_request*
+	import hnx_strip_foreign_identity
 	import hnx_forward_auth hub-approvers,hub-private-viewers
 	reverse_proxy http://status-hub.svc.example.internal:8099 {
 		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
@@ -60,6 +91,7 @@ uptime.lab.example {
 	# service uptime (uptime) owner=platform-team
 	request_header -*auth-request*
 	request_header -*auth_request*
+	import hnx_strip_foreign_identity
 	import hnx_forward_auth lab-viewers,platform-team
 	reverse_proxy http://uptime.svc.example.internal:3001
 }

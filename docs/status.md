@@ -729,6 +729,7 @@ The private pages and the `private` menu group exist only for a request that pas
    status.lab.example {
    	request_header -*auth-request*
    	request_header -*auth_request*
+   	# and import hnx_strip_foreign_identity: other proxies' identity headers (below)
    	import hnx_forward_auth hub-approvers,hub-private-viewers
    	reverse_proxy <the hub's capability alias and port> {
    		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
@@ -783,6 +784,88 @@ Every private view is appended to the access log (`private.access_log`, JSONL, m
 `user`, `view`, `session`, `event`), which is itself a private page. Detail content is rendered as
 escaped text only (never HTML or markdown) and nothing in this code feeds it back into an agent's
 context.
+
+### The edge-to-hub hop over mTLS (`edge_tls`, registry 2.10)
+
+The front-door secret proves only that a request carries a value the edge knows. With mTLS the
+hub also requires the **edge's client certificate**, so "came from the edge" is a property of
+the TLS session, not of a source address. The registry declares both sides on the hub's row:
+
+```yaml
+status-hub:
+  protocol: http
+  port: 8099
+  tls: mtls                       # the hub serves TLS and requires a client certificate
+  public_hostname: hub.example.internal
+  front_door: {header: X-Hnx-Front-Door, secret: "secret:status/front-door-secret"}
+  edge_tls:
+    client_cert: "secret:edge/hub-client-cert"   # the edge's client certificate (PEM)
+    client_key: "secret:edge/hub-client-key"     # its key (PEM)
+    ca: "secret:pki/internal-ca"                 # the CA the hub's server certificate chains to
+    server_name: status-hub.svc.example.internal # optional: default, the alias the edge dials
+```
+
+and the generated site reaches the hub with:
+
+```caddyfile
+reverse_proxy https://<the hub's capability alias and port> {
+	header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
+	transport http {
+		tls
+		tls_client_auth /etc/hnx/edge-tls/edge/hub-client-cert.pem /etc/hnx/edge-tls/edge/hub-client-key.pem
+		tls_trust_pool file /etc/hnx/edge-tls/pki/internal-ca.pem
+		tls_server_name status-hub.svc.example.internal
+	}
+}
+```
+
+- **The material is never in a generated file.** Each `edge_tls` entry names a secret; the
+  Caddyfile names the file `/etc/hnx/edge-tls/<secret path>.pem`, and the generator writes
+  `caddy/edge_tls.json` listing every file (path, secret, mode `0600` for a key and `0644` for a
+  certificate, the sites that read it) for the edge's role to write from the secret store.
+- **Verification is never off.** The upstream's certificate is checked against `ca` (not the
+  system roots) for `server_name`. The generator refuses to render `tls_insecure_skip_verify`,
+  a test fails if any registry in the tree renders it, and `tools/tls_verify_lint.py` fails any
+  Caddyfile in the tree that holds it.
+- **The rules** (the registry refuses each, the generator again for a hand-built model): a
+  public `tls: mtls` row needs `edge_tls`; `edge_tls` needs a `public_hostname` and `tls:
+  internal` or `mtls`; `client_cert` and `client_key` go together, are required for `mtls` and
+  refused otherwise; the key is never the certificate or the CA. `tls: internal` with only `ca`
+  is the IdP's case: TLS verified against the lab CA, no client certificate.
+
+### One deployment's edge (`--edge-host`)
+
+A registry can hold two deployments, as an overlay does while a new lab is built beside an old
+one. By default the `caddy` generator publishes every public primary, which is right for a
+registry that is one deployment and is what it always did. **An edge that serves one deployment
+of a shared registry renders with its hosts:**
+
+```sh
+hnx registry generate services.yml out/ --only caddy \
+  --edge-host edge-01 --edge-host core-01 --edge-host idp-01
+```
+
+- Only the public rows on those hosts become sites; every other row (the old lab's) is left out.
+- **A dial outside the hosts is refused**, not skipped: the forward-auth proxy when an in-scope
+  site needs it, and a site whose capability alias names a row elsewhere. So the new edge can
+  never proxy to, or ask for sign-in at, the old lab. When no in-scope site needs forward auth,
+  the `hnx_forward_auth` snippet is not rendered at all.
+- An unknown host name, a set with no public row, and `--edge-host` with no generator that takes
+  it (`--only dns_zone`) are refused, so a typo cannot render a harmless-looking empty edge.
+
+The default stays "every public primary" because every existing registry is one deployment and
+the lint (`tools/caddy_lint.py`) renders each one whole. An edge module for a shared registry
+must always pass `--edge-host`.
+
+### Other proxies' identity headers
+
+The hub reads only the platform's identity headers (`X-Auth-Request-*`), which the edge deletes
+from the client and the auth proxy alone sets. An app behind the edge may instead read
+`X-Forwarded-User`, `X-Forwarded-Groups`, `X-Forwarded-Email`, `X-Forwarded-Preferred-Username`,
+`X-Forwarded-Access-Token`, the `Remote-User` family or `X-WEBAUTH-USER`; the edge never sets
+those, so every client-sent copy is deleted too, in every `-`/`_` spelling, at site level before
+forward auth runs (the generated `hnx_strip_foreign_identity` snippet, which every site imports;
+`homelabnext.edge_identity.FOREIGN_IDENTITY`).
 
 ### The Approvals page (broker stage 2b)
 

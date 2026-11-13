@@ -101,6 +101,9 @@ class Service:
     why: str = ""
     #: 2.9: the capability whose data this row serves from a second place, or None
     replica_of: str | None = None
+    #: 2.10: how the edge reaches this public row over TLS: ``ca``, optional ``server_name``, and
+    #: with ``tls: mtls`` the ``client_cert`` and ``client_key`` it presents (secret references)
+    edge_tls: dict | None = None
 
     @property
     def is_primary(self) -> bool:
@@ -378,6 +381,7 @@ def semantic_problems(doc: dict) -> list[str]:
             problems.append(
                 f"service {sname}: front_door needs auth: idp and a public_hostname (the edge adds it)"
             )
+        problems += edge_tls_problems(sname, s)
     problems += upstream_problems(services)
     # a primary answers by its capability, an eval or retiring row by its row name (ADR-0039
     # decision 2): both the endpoint variables and the alias-zone names must stay unique, so a
@@ -410,6 +414,39 @@ def semantic_problems(doc: dict) -> list[str]:
     problems += status_source_problems(services)
     problems += secret_ref_problems(service_secret_refs(services))
     return problems
+
+
+def edge_tls_problems(sname: str, s: Mapping[str, Any]) -> list[str]:
+    """A row's ``edge_tls`` (2.10) against its ``tls`` and ``public_hostname``: the edge reaches
+    a public ``tls: mtls`` row only with a client certificate, so that row needs one; ``edge_tls``
+    is for a public row that serves TLS from the lab's CA (``internal`` or ``mtls``), and its
+    client certificate only for ``mtls`` (a row that checks none would be handed one for nothing);
+    the key is never the certificate or the CA."""
+    et = s.get("edge_tls")
+    tls = s.get("tls")
+    if not et:
+        if tls == "mtls" and s.get("public_hostname"):
+            return [
+                f"service {sname}: a public tls: mtls route needs edge_tls (the edge's client "
+                "certificate, key and the CA it verifies the service with)"
+            ]
+        return []
+    out = []
+    if not s.get("public_hostname"):
+        out.append(f"service {sname}: edge_tls needs a public_hostname (only the edge reads it)")
+    if tls not in ("internal", "mtls"):
+        out.append(
+            f"service {sname}: edge_tls needs tls: internal or mtls (the edge verifies the "
+            f"service with the lab's CA), not {tls}"
+        )
+    if tls == "mtls" and not et.get("client_cert"):
+        out.append(f"service {sname}: tls: mtls needs edge_tls.client_cert and client_key")
+    if tls != "mtls" and et.get("client_cert"):
+        out.append(f"service {sname}: edge_tls.client_cert needs tls: mtls")
+    key = et.get("client_key")
+    if key and key in (et.get("client_cert"), et.get("ca")):
+        out.append(f"service {sname}: edge_tls.client_key is also its certificate or CA")
+    return out
 
 
 def upstream_problems(services: Mapping[str, Mapping[str, Any]]) -> list[str]:
@@ -570,7 +607,7 @@ def _standing_problems(services: Mapping[str, Any], primary: Mapping[str, Any]) 
 
 def service_secret_refs(services: Mapping[str, Any]) -> list[tuple[str, str]]:
     """``(where, reference)`` of every secret reference of the registry's services (a front
-    door's ``secret``, a status source's ``auth.secret``); ``services`` maps name to a service
+    door's ``secret``, an ``edge_tls`` file, a status source's ``auth.secret``); ``services`` maps name to a service
     document or a :class:`Service`."""
     out = []
     for sname, s in services.items():
@@ -578,6 +615,10 @@ def service_secret_refs(services: Mapping[str, Any]) -> list[tuple[str, str]]:
         fd = get("front_door") or {}
         if isinstance(fd, Mapping) and isinstance(fd.get("secret"), str):
             out.append((f"service {sname}: front_door.secret", fd["secret"]))
+        et = get("edge_tls") or {}
+        for key in ("ca", "client_cert", "client_key"):
+            if isinstance(et, Mapping) and isinstance(et.get(key), str):
+                out.append((f"service {sname}: edge_tls.{key}", et[key]))
         for src in get("status_sources") or ():
             auth = src.get("auth") if isinstance(src, Mapping) else None
             if isinstance(auth, Mapping) and isinstance(auth.get("secret"), str):
@@ -821,6 +862,7 @@ def build_registry(doc: dict) -> Registry:
             until=(s.get("standing") or {}).get("until"),
             why=(s.get("standing") or {}).get("why", ""),
             replica_of=s.get("replica_of"),
+            edge_tls=s.get("edge_tls"),
         )
     return Registry(
         lab_name=lab["name"],

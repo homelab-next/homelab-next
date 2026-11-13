@@ -41,6 +41,15 @@ ones never copied included.
 
 A lab with another auth proxy changes this one declaration (and so every consumer at once); a
 set is validated when it is built, so a header that does not carry its mark cannot be declared.
+
+**Other proxies' identity headers.**  An app behind the edge may read an identity header the
+platform never sets: oauth2-proxy's upstream headers (``X-Forwarded-User``, ``-Groups``,
+``-Email``, ``-Preferred-Username``, ``-Access-Token``), the ``Remote-User`` family of Authelia
+and Caddy examples, Grafana's ``X-WEBAUTH-USER``.  Nothing at the edge sets one, so a copy that
+reaches the app was written by the client.  The edge deletes every client-sent copy too, in every
+``-``/``_`` spelling (:data:`FOREIGN_IDENTITY`, :func:`foreign_strip_lines`), at site level and
+again before ``forward_auth``, so an app that falls back to one of them cannot be told a name by
+the client.  They are not the platform's identity: no consumer reads them.
 """
 
 from __future__ import annotations
@@ -68,6 +77,15 @@ _MARK = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 def fold(name: str) -> str:
     """A header name as a CGI-style upstream compares it: lower case, ``_`` read as ``-``."""
     return name.lower().replace("_", "-")
+
+
+def _spellings(name: str) -> tuple[str, ...]:
+    """Every spelling of a lower-case ``-``-joined name with ``-`` or ``_`` at each separator."""
+    parts = name.split("-")
+    out = [parts[0]]
+    for part in parts[1:]:
+        out = [f"{o}{sep}{part}" for o in out for sep in "-_"]
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -108,11 +126,7 @@ class IdentityHeaders:
 
     def mark_spellings(self) -> tuple[str, ...]:
         """Every spelling of the mark with ``-`` or ``_`` at each separator, lower case."""
-        parts = self.mark.split("-")
-        out = [parts[0]]
-        for part in parts[1:]:
-            out = [f"{o}{sep}{part}" for o in out for sep in "-_"]
-        return tuple(out)
+        return _spellings(self.mark)
 
     def strip_patterns(self) -> tuple[str, ...]:
         """The ``request_header -<pattern>`` deletes that remove every client-sent identity
@@ -132,3 +146,31 @@ IDENTITY_HEADERS = IdentityHeaders(
     username="X-Auth-Request-Preferred-Username",
     mark="auth-request",
 )
+
+
+#: identity headers other auth proxies and apps read, which the edge never sets: every client-sent
+#: copy is deleted, in every spelling (see the module docstring), each name without its ``X-``
+FOREIGN_IDENTITY = (
+    "forwarded-user",
+    "forwarded-groups",
+    "forwarded-email",
+    "forwarded-preferred-username",
+    "forwarded-access-token",
+    "remote-user",
+    "remote-groups",
+    "remote-email",
+    "remote-name",
+    "webauth-user",
+)
+
+
+def foreign_strip_patterns() -> tuple[str, ...]:
+    """The ``request_header -<pattern>`` deletes of :data:`FOREIGN_IDENTITY`: one
+    contains-wildcard per spelling of each name (Caddy matches it in any case, anywhere in the
+    header name, so ``X-Forwarded-User`` and ``Forwarded_User`` both go)."""
+    return tuple(f"*{s}*" for name in FOREIGN_IDENTITY for s in _spellings(name))
+
+
+def foreign_strip_lines(indent: str = "") -> str:
+    """The deletes of :func:`foreign_strip_patterns` as Caddyfile lines, each ending in a newline."""
+    return "".join(f"{indent}request_header -{p}\n" for p in foreign_strip_patterns())
