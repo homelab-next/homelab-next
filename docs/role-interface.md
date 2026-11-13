@@ -51,6 +51,13 @@ A hook that cannot be implemented yet still exists and says so explicitly
   from loopback and the unspecified address (RL004), and no hostname literal in
   `defaults/`, `vars/` or `tasks/` (RL005). Variables whose name ends in
   `_image`/`_repository` are exempt from RL005 because they are covered by RL009.
+  A distribution package name can read like a hostname (`containerd.io`), so RL005 skips a
+  name on its reviewed list (`PACKAGE_NAMES` in `tools/role_lint.py`; adding one is a reviewed
+  change) when it is the name of a whole package spec (`name` or `name=version`) where it can
+  only be a package: the `name`/`pkg`/`package` argument of a task's own `apt`, `package` or
+  `dpkg_selections` module, and a role variable named `*_package`/`*_packages` (a list of specs,
+  or of mappings whose `name` is one). Any other value there (`nas.example.internal`), and a spec's
+  version, is still scanned.
 * Container images are pinned by tag and `sha256` digest, never `:latest` (RL009).
   `compose_app` goes further: see section 6.
 * A task that uses a secret-looking variable carries `no_log: true` (RL011). No
@@ -156,6 +163,12 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 `hosts:` names an inventory host or a literal address (PB001).
 
 ## 6. `compose_app` spec rules
+
+`compose_app` needs a container engine on its host. The core role
+[`docker_engine`](../ansible/roles/docker_engine/README.md) installs one: Docker Engine from the
+vendor's signed repository (its key is accepted only by a pinned fingerprint), every package pinned
+and held, and a `daemon.json` checked by `dockerd --validate` that bounds container logs. Apply it
+first on a `compose_app` module's host.
 
 `compose_app_spec.services.<name>` is validated before anything is rendered:
 

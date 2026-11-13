@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# The container engine a compose_app guest (or the lab-in-a-box) needs: Docker Engine from the
+# vendor's signed apt repository, the engine, CLI, containerd, buildx and compose packages pinned
+# and held, and a daemon.json, checked by dockerd before it goes live, that bounds container logs.
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Check the host has a vendor apt repository (Debian or Ubuntu)
+  ansible.builtin.include_tasks: platform.yml
+
+- name: Install gpg (it checks the vendor key's fingerprint)
+  ansible.builtin.apt:
+    name: gpg
+    state: present
+
+- name: Fetch the vendor signing key and check it against the pinned fingerprints
+  ansible.builtin.include_tasks: signing_key.yml
+
+- name: Add the vendor apt repository, signed by the checked vendor key
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: deb
+    uris: "{{ docker_engine_apt_uri }}"
+    suites: "{{ docker_engine_release }}"
+    components: stable
+    signed_by: "{{ docker_engine_keyring }}"
+
+# The packages are held (below), so moving one to a new pin (the upgrade hook's bump path) must be
+# allowed to change those held packages; the holds are set again right after. They install in one
+# transaction because the engine depends on the matching CLI and containerd.
+- name: Install the pinned engine, CLI, containerd and plugins
+  ansible.builtin.apt:
+    name: "{{ docker_engine_packages | map(attribute='name') | zip(docker_engine_packages | map(attribute='version')) | map('join', '=') | list }}"
+    allow_change_held_packages: true
+    update_cache: true
+
+- name: Hold the packages at their pins again
+  ansible.builtin.dpkg_selections:
+    name: "{{ item.name }}"
+    selection: hold
+  loop: "{{ docker_engine_packages }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Write the daemon configuration and restart while a restart is owed
+  ansible.builtin.include_tasks: config.yml
+
+- name: Enable and start the engine
+  ansible.builtin.systemd_service:
+    name: "{{ docker_engine_service }}"
+    enabled: true
+    state: started
