@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install Docker Engine from the vendor's signed repository, pinned and held, with bounded container logs.
+    options:
+      docker_engine_log_max_size:
+        type: str
+        description: "The json-file log driver's max-size per container log file (a number and k, m or g, e.g. 10m): every container's logs are bounded to max-size x max-file."
+        required: true
+      docker_engine_version: &version
+        type: str
+        description: Pinned engine and CLI upstream version (x.y.z), installed and held; the packaging revision is the newest served for it.
+        default: 29.9.2
+      docker_engine_containerd_version: &containerd
+        type: str
+        description: Pinned containerd.io upstream version (x.y.z), installed and held.
+        default: 2.4.2
+      docker_engine_buildx_version: &buildx
+        type: str
+        description: Pinned buildx plugin upstream version (x.y.z), installed and held (compose builds images through it).
+        default: 0.38.1
+      docker_engine_compose_version: &compose
+        type: str
+        description: Pinned compose plugin upstream version (x.y.z), installed and held.
+        default: 5.6.1
+      docker_engine_repository:
+        type: str
+        description: Vendor package repository root (https); the role appends /debian or /ubuntu for the guest. A lab mirror with the same layout may stand in for it.
+        default: https://download.docker.com/linux
+      docker_engine_key_fingerprints:
+        type: list
+        elements: str
+        description: Primary-key fingerprints (40 upper-case hex digits) the repository's signing key must carry; the key is refused otherwise.
+        default: ["9DC858229FC7DD38854AE2D88D81803C0EBFCD88"]
+      docker_engine_log_max_file:
+        type: int
+        description: How many log files of max-size each container keeps (1 to 100).
+        default: 3
+      docker_engine_config_file:
+        type: path
+        description: The daemon configuration file.
+        default: /etc/docker/daemon.json
+      docker_engine_cli: &cli
+        type: str
+        description: The docker command.
+        default: docker
+      docker_engine_daemon_cli:
+        type: str
+        description: The dockerd command (checks a staged daemon.json with --validate).
+        default: dockerd
+      docker_engine_systemctl_cli: &systemctl
+        type: str
+        description: The systemctl command (restarts the engine while a restart is owed; readiness asks it whether the unit is active).
+        default: systemctl
+      docker_engine_dpkg_query_cli: &dpkg_query
+        type: str
+        description: The dpkg-query command (health reads each package's installed version and hold from it).
+        default: dpkg-query
+      docker_engine_service: &service
+        type: str
+        description: The engine's systemd unit.
+        default: docker
+      docker_engine_restart:
+        type: bool
+        description: Restart the engine while a restart is owed (false leaves it owed, retried on the next run).
+        default: true
+      docker_engine_state_dir:
+        type: path
+        description: Where the role keeps its restart-pending marker.
+        default: /var/lib/homelabnext/docker_engine
+  health:
+    short_description: Fail unless the engine is ready, answers at its pinned version with json-file logs, compose is at its pin, and every package is installed at its pin and held.
+    options:
+      docker_engine_cli: *cli
+      docker_engine_systemctl_cli: *systemctl
+      docker_engine_dpkg_query_cli: *dpkg_query
+      docker_engine_service: *service
+      docker_engine_version: *version
+      docker_engine_containerd_version: *containerd
+      docker_engine_buildx_version: *buildx
+      docker_engine_compose_version: *compose
+  readiness:
+    short_description: Fail unless the engine's unit is active and the daemon answers docker info.
+    options:
+      docker_engine_cli: *cli
+      docker_engine_systemctl_cli: *systemctl
+      docker_engine_service: *service
+  backup:
+    short_description: Nothing to back up; each compose_app application backs up its own data.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main installs the engine again.
+    options: {}
+  upgrade:
+    short_description: Validate a newer pinned engine version; then set the version and re-run main.
+    options:
+      docker_engine_version: *version
+      docker_engine_target_version:
+        type: str
+        description: Engine version to upgrade to (must be newer).
+        required: true
+  export:
+    short_description: Nothing to export; the engine holds no data of its own.
+    options: {}

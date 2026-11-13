@@ -75,6 +75,14 @@ SOURCES: dict[str, tuple[str, str]] = {
     "ci:ZIZMOR_VERSION": ("pypi", "zizmor"),
     "ci:CADDY_VERSION": ("github", "caddyserver/caddy"),
     "ci:GITLEAKS_VERSION": ("github", "gitleaks/gitleaks"),
+    "role:docker_engine/docker_engine_version": (
+        "none",
+        "moby/moby tags engine releases docker-vX.Y.Z, which the github source does not parse: "
+        "compare with its releases page by hand",
+    ),
+    "role:docker_engine/docker_engine_containerd_version": ("github", "containerd/containerd"),
+    "role:docker_engine/docker_engine_buildx_version": ("github", "docker/buildx"),
+    "role:docker_engine/docker_engine_compose_version": ("github", "docker/compose"),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
@@ -94,6 +102,7 @@ NOTES: dict[str, str] = {
     "ci:CADDY_VERSION": "the example registries' `impl: caddy` version moves with it",
     "ci:ZIZMOR_VERSION": "docs/private-overlay.md names it",
     "role:wazuh_agent/wazuh_agent_version": "never newer than the manager it reports to",
+    "role:docker_engine/docker_engine_version": "docker-ce and docker-ce-cli move with it",
     "role:open_webui/open_webui_image": "an image: bump the tag and its digest together",
     "role:openbao/openbao_lego_version": (
         "moves with openbao_lego_checksums and openbao_lego_checksums_release, taken from the "

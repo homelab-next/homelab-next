@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Ready: the engine's unit is active and the daemon answers on its socket (docker info reaches
+# the server; a client alone answers docker version even with the daemon down).
+- block:
+    - name: Read the engine unit's state
+      ansible.builtin.command:
+        argv: ["{{ docker_engine_systemctl_cli }}", is-active, "{{ docker_engine_service }}"]
+      register: docker_engine_ready_unit
+      changed_when: false
+      failed_when: false
+    - name: Ask the daemon for its state
+      ansible.builtin.command:
+        argv: ["{{ docker_engine_cli }}", info, --format, json]
+      register: docker_engine_ready_info
+      changed_when: false
+      failed_when: false
+    - name: Fail unless the unit is active and the daemon answers
+      ansible.builtin.assert:
+        that:
+          - docker_engine_ready_unit.rc == 0
+          - docker_engine_ready_unit.stdout | trim == 'active'
+          - docker_engine_ready_info.rc == 0
+          - (docker_engine_ready_info.stdout | from_json).ServerVersion | default('', true) | length > 0
+          - (docker_engine_ready_info.stdout | from_json).ServerErrors | default([], true) | length == 0
+        fail_msg: >-
+          docker_engine: unit {{ docker_engine_service }} is
+          {{ docker_engine_ready_unit.stdout | trim or 'unknown' }}, docker info exited
+          {{ docker_engine_ready_info.rc }}: {{ docker_engine_ready_info.stderr | default('') | trim | truncate(200) }}
+  tags: [readiness]

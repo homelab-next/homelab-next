@@ -64,6 +64,7 @@ SHIPPED = [
     "compose_app",
     "config_leak_scan",
     "disk_encryption_check",
+    "docker_engine",
     "etckeeper",
     "events_bus",
     "example_service",

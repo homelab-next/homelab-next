@@ -163,6 +163,12 @@ membership change. `role_lint.py --playbook X --inventory Y` fails a playbook wh
 
 ## 6. `compose_app` spec rules
 
+`compose_app` needs a container engine on its host. The core role
+[`docker_engine`](../ansible/roles/docker_engine/README.md) installs one: Docker Engine from the
+vendor's signed repository (its key is accepted only by a pinned fingerprint), every package pinned
+and held, and a `daemon.json` checked by `dockerd --validate` that bounds container logs. Apply it
+first on a `compose_app` module's host.
+
 `compose_app_spec.services.<name>` is validated before anything is rendered:
 
 * `image` is the repository only (no tag, no digest); `tag` is mandatory and not
