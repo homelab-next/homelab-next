@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); db/ (the container's database directory) and export/ belong to the
+# container's user, so the server and the export (run as that user) create files it can open.
+- name: Create the data root, the database directory and the export directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ ntfy_data_root }}", owner: "{{ ntfy_owner }}", group: "{{ ntfy_group }}", mode: "0750"}
+    - {path: "{{ ntfy_data_root }}/db", owner: "{{ ntfy_uid | int }}", group: "{{ ntfy_gid | int }}", mode: "0700"}
+    - {path: "{{ ntfy_data_root }}/export", owner: "{{ ntfy_uid | int }}", group: "{{ ntfy_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

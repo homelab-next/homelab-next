@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (ntfy_target_image, tag and digest), export both
+# databases first, then converge with the new pin (set ntfy_image to the target in the overlay).
+#   ansible-playbook -i <inventory> modules/ntfy/playbooks/upgrade.yml -e ntfy_target_image=<ref>
+- name: Upgrade ntfy
+  hosts: mod_ntfy_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: ntfy
+        tasks_from: upgrade
+    - name: Export both databases before the new image opens them
+      ansible.builtin.include_role:
+        name: ntfy
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: ntfy
+      vars:
+        ntfy_image: "{{ ntfy_target_image }}"

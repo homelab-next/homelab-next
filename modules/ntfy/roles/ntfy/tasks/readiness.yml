@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# ntfy's dependencies are the container engine (docker_engine, applied to the guest before this
+# module) and its credentials in the secret store; it calls no other service.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+  tags: [readiness]

@@ -80,8 +80,8 @@ names module ids, versions and the overlay's module paths: treat it as private.
 
 **What it does not do yet.** A digest binding the inventory, the playbooks and the checked
 selection and module trees together (the guard play catches only a missing group, not a stale
-one); a walk of each role directory refusing links before it runs as root (no non-fixture module
-ships roles yet, and the loader refuses a role directory today). The selection's `config` values and the module's secrets reach the
+one); a walk of each role directory refusing links before it runs as root (the loader's
+`roles/` walk is a point-in-time check of the checkout, so run from a staging copy). The selection's `config` values and the module's secrets reach the
 roles only through the overlay's group and host variables (no generated variable file); firewall
 edges and backup membership stay in the guest file; `lifecycle.upgrade` and `lifecycle.remove`
 are not rendered; a host role's `count` copies are not spread over several guests.

@@ -51,7 +51,7 @@ from typing import Any
 from homelabnext._http import DEFAULT_MAX_BYTES, check_plaintext, read_bounded, safe_urlopen
 from homelabnext.notify import LEVELS, Message, NtfySender, SendError
 
-from ._env import resolve
+from ._env import env_secret, resolve
 
 __all__ = ["NtfyTarget", "make"]
 
@@ -201,14 +201,27 @@ class NtfyTarget:
 def make(
     *,
     topic: str | None = None,
+    token_env: str | None = None,
     timeout: float = 10.0,
     allow_plaintext: bool = False,
     capability: str = "notify",
 ) -> NtfyTarget:
-    """A target on the ``notify`` endpoint (unauthenticated, as the lab's ntfy is)."""
+    """A target on the ``notify`` endpoint: unauthenticated by default (the lab-in-a-box ntfy), or,
+    with ``token_env``, sending that variable's value as a bearer token on every publish and poll
+    (a deny-all server such as the ``ntfy`` module's: its publisher token).  The variable is read
+    when the target is built (a missing one fails at once, naming it) and again at each request,
+    so the target never holds the token."""
+    auth = None
+    if token_env is not None:
+        token = env_secret(token_env)
+
+        def auth() -> str:
+            return "Bearer " + token()
+
     return NtfyTarget(
         resolve(capability, env_only=True, schemes=("http", "https")).url,
         topic=topic,
+        auth=auth,
         timeout=timeout,
         allow_plaintext=allow_plaintext,
     )

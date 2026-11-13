@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the notify suite through
+# the shared ntfy adapter, which resolves the endpoint from HNX_ENDPOINT_NOTIFY (never a URL here)
+# and sends the token named by token_env as a bearer token, read at every request. The server is
+# deny-all, so the token is the publisher's (secret:ntfy/publisher-token), which may read back
+# only the hnxconf-* scratch topics the adapter publishes to.
+#   HNX_ENDPOINT_NOTIFY=http://<host>:80 HNX_NOTIFY_TOKEN=<token> \
+#     hnx conform run notify --target modules/ntfy/conformance/target.yml
+# The lab reaches ntfy over plain http inside its own network: the adapter refuses to send a token
+# over http to a host that is not loopback, so a run against the lab's instance sets
+# allow_plaintext: true in a copy of this file (a decision for that run, not a default here).
+name: ntfy
+capabilities:
+  notify:
+    adapter: homelabnext.conform.adapters.ntfy:make
+    config: {token_env: HNX_NOTIFY_TOKEN}
+    features: [fault-injection]

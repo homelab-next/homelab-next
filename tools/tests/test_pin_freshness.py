@@ -157,6 +157,25 @@ def test_inventory_finds_every_kind_of_pin_with_its_place(tmp_path):
     assert pins["tool:uv"] == pf.Pin("tool:uv", "Makefile", 2, "", kind="unpinned")
 
 
+def test_a_public_module_s_role_pins_are_read_like_a_core_role_s(tmp_path):
+    """modules/<id>/roles/<role>/defaults/main.yml: one role namespace with ansible/roles."""
+    root = make_tree(tmp_path)
+    d = root / "modules" / "chat" / "roles" / "chat" / "defaults"
+    d.mkdir(parents=True)
+    (d / "main.yml").write_text(
+        "chat_image: example.internal/chat:v1.0.0@sha256:" + "a" * 64 + "\nchat_port: 80\n"
+    )
+    (root / "modules" / "chat" / "module.yml").write_text("id: chat\n")
+    pins = {p.id: p for p in pf.inventory(root)}
+    pin = pins["role:chat/chat_image"]
+    assert (pin.path, pin.line, pin.kind) == (
+        "modules/chat/roles/chat/defaults/main.yml",
+        1,
+        "image",
+    )
+    assert set(pins) == set(SOURCES) | {"role:chat/chat_image"}  # nothing else in the module
+
+
 def test_every_pin_in_this_tree_has_an_upstream():
     """A new pin dependabot cannot see must name where its releases are, or nothing watches it."""
     assert pf.check_inventory(pf.inventory(ROOT)) == []
