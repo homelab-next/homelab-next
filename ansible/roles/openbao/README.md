@@ -75,7 +75,10 @@ restart: the server reloads them on `SIGHUP` (`systemctl reload`) and stays unse
 * **Restarts and patching.** A crash restart (`Restart=on-failure`) or a reboot starts whatever
   `openbao_bin` points at, sealed: after the pin moved, that is the new release. Hosts in
   `cap_secrets` should set `unattended_upgrades_reboot_time: never` (role `unattended_upgrades`),
-  so a patch run never reboots the secret store while nobody is there to unseal it.
+  so a patch run never reboots the secret store while nobody is there to unseal it. Moving a
+  host to `never` also cancels a reboot that unattended-upgrades had already scheduled through
+  logind under the earlier window (the role's `config` runs `shutdown -c`), and the role's
+  `health` fails while one is pending on a `never` host.
 
 ## Hooks
 

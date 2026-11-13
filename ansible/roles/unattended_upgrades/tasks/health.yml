@@ -1,5 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 - block:
+    # A secret store reboots sealed: with reboot_time "never" a pending shutdown is a failure,
+    # whatever scheduled it (config cancels one; this catches one scheduled later).
+    - when: unattended_upgrades_reboot_time == 'never'
+      block:
+        - name: Read the scheduled shutdown (reboot_time never)
+          ansible.builtin.include_tasks:
+            file: scheduled_shutdown.yml
+            apply:
+              tags: [health]
+        - name: Fail while a reboot is scheduled on a reboot-never host
+          ansible.builtin.assert:
+            that: not unattended_upgrades_shutdown_pending | bool
+            fail_msg: >-
+              unattended_upgrades: reboot_time is never but logind holds a pending
+              {{ unattended_upgrades_shutdown_desc }}; cancel it (`shutdown -c`, or run the role's
+              config hook)
     - name: Read the stamp of the last unattended run
       ansible.builtin.stat:
         path: "{{ unattended_upgrades_stamp_file }}"
