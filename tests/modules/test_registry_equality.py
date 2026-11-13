@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Registry equality (H4; docs/modules/selection.md, "Registry rows: checked, not generated"):
+"""Registry equality (H4; docs/modules/registry-rows.md, "Registry rows: checked, not generated"):
 every service row a selected module contributes appears in the lab registry identically, as the
 site binds it (a provider's row renamed to the instance with its product's version, ``host``
 the placed guest), and every difference is named, field by field."""

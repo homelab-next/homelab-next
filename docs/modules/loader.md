@@ -113,7 +113,7 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    every service row a selected module contributes appears in it identically as the site binds it
    (renamed to the instance, `version` from the product, `host` the placed guest), each difference
    named field by field
-   ([registry rows](selection.md#registry-rows-checked-not-generated)).
+   ([registry rows](registry-rows.md)).
 4. **Two-way, against what runs**: every contributed file, and every lifecycle playbook
    (`lifecycle.install|upgrade|remove.playbook`, what the apply path runs as root), exists, is a
    regular file inside the

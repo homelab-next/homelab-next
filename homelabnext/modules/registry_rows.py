@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Registry equality: each selected module's contributed service rows appear, identically, in the
-lab's registry (``lab/services.yml``; docs/modules/selection.md, "Registry rows: checked, not
+lab's registry (``lab/services.yml``; docs/modules/registry-rows.md, "Registry rows: checked, not
 generated").
 
 The operator chose to keep the lab registry hand-written and to *check* it against the modules
