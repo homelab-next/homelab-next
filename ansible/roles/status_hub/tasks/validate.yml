@@ -38,3 +38,57 @@
       lists the hub under, the page's https origin, the socket's group, and its form-token key
       (when set) among status_hub_secret_refs so it is delivered
   when: status_hub_approvals_socket | length > 0
+
+# The identity headers are trusted only from these hosts: never empty, never a wildcard or a range,
+# and every entry a registry host (by name, or by the address the registry gives it).
+- name: Validate the trusted proxies
+  ansible.builtin.assert:
+    that:
+      - status_hub_trusted_proxies is sequence and status_hub_trusted_proxies is not string
+      - status_hub_trusted_proxies | length > 0
+      - status_hub_trusted_proxies | map('string') | select('search', '[*/?\[\]]') | list | length == 0
+      - status_hub_trusted_proxies | map('string') | select('match', '^([a-z][a-z0-9-]{0,62}|[0-9a-f.:]{2,45})\Z') | list | length == status_hub_trusted_proxies | length
+      - status_hub_trusted_proxies | map('string') | reject('in', status_hub_host_names) | list | length == 0
+      # an address names a host only when the registry gives it to that host alone
+      - >-
+        status_hub_trusted_proxies | map('string') | reject('in', status_hub_registry_hosts) | list | length == 0
+        or (status_hub_registry_hosts.values() | map(attribute='address') | map('string') | list | length
+            == status_hub_registry_hosts.values() | map(attribute='address') | map('string') | unique | list | length)
+    fail_msg: >-
+      status_hub: status_hub_trusted_proxies names the registry hosts (or their registry addresses)
+      the hub trusts for identity headers: at least one, no wildcard or range, an address only when
+      the registry gives it to one host alone, each a host of
+      {{ status_hub_registry }} (unknown:
+      {{ status_hub_trusted_proxies | map('string') | reject('in', status_hub_host_names) | list }})
+
+# mTLS (docs/status.md "The edge-to-hub hop"): the three references together, as secret: refs
+# never inline PEM; plain HTTP off loopback only by the explicit opt-in.
+- name: Validate the TLS listener's settings
+  ansible.builtin.assert:
+    that:
+      - (status_hub_tls_cert_ref | length > 0) == (status_hub_tls_key_ref | length > 0)
+      - (status_hub_tls_cert_ref | length > 0) == (status_hub_client_ca_ref | length > 0)
+      - >-
+        [status_hub_tls_cert_ref, status_hub_tls_key_ref, status_hub_client_ca_ref,
+         status_hub_health_client_cert_ref, status_hub_health_client_key_ref]
+        | reject('equalto', '') | reject('match', '^secret:[a-z0-9][a-z0-9/_.-]*\Z') | list | length == 0
+      - >-
+        [status_hub_tls_cert_ref, status_hub_tls_key_ref, status_hub_client_ca_ref,
+         status_hub_health_client_cert_ref, status_hub_health_client_key_ref]
+        | reject('equalto', '') | select('in', status_hub_secret_refs) | list | length == 0
+      - not (status_hub_tls | bool and status_hub_plain_http | bool)
+      - status_hub_tls | bool or status_hub_plain_http | bool or status_hub_bind_address in status_hub_loopback
+      - status_hub_client_names | select('match', '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z') | list | length == status_hub_client_names | length
+      - status_hub_client_names | length == 0 or status_hub_tls | bool
+      - not status_hub_tls | bool or status_hub_tls_server_name is match('^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z')
+      - (status_hub_health_client_cert_ref | length > 0) == (status_hub_health_client_key_ref | length > 0)
+      - not status_hub_health_cert | bool or status_hub_tls | bool
+      - status_hub_health_client_name == '' or status_hub_health_client_name is match('^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z')
+      - not (status_hub_health_cert | bool and status_hub_client_names | length > 0) or status_hub_health_client_name | length > 0
+    fail_msg: >-
+      status_hub: TLS needs all three of status_hub_tls_cert_ref, status_hub_tls_key_ref and
+      status_hub_client_ca_ref as secret: references (not also in status_hub_secret_refs: they are
+      files, not environment); off loopback the hub needs them or status_hub_plain_http (the
+      explicit opt-in), never both; TLS needs status_hub_tls_server_name (a name in the server
+      certificate); status_hub_client_names (DNS names, no wildcard) and the hooks'
+      client certificate (both references, and its name when the pin is set) need TLS

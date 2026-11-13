@@ -231,7 +231,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.events.cli").main(a),
     ),
     "status": (
-        "the read-only status hub: sources (the menu)|catalog|views|collect|render|serve|ingest",
+        "the read-only status hub: sources (the menu)|catalog|views|collect|render|serve|ingest|probe-tls",
         lambda a: importlib.import_module("homelabnext.status.cli").main(a),
     ),
     "graph": (
