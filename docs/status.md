@@ -1,6 +1,6 @@
 ---
-summary: 'The read-only status hub: sources, collecting, views, the status.json contract, events, agent activity, its edge (mTLS, scope) and the Approvals page.'
-summary_of: outline:sha256:0d8885ee2bc353d1
+summary: 'The read-only status hub: sources, views, the status.json contract, events, agent activity, the mTLS edge hop from both sides and the Approvals page.'
+summary_of: outline:sha256:dd4201ec73c6b397
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -719,9 +719,14 @@ the stream refreshes with a meta refresh, the inspector is a second pane chosen 
 
 The private pages and the `private` menu group exist only for a request that passes **all** of:
 
-1. it comes **from a trusted proxy address**: the hosts of the registry's `edge-proxy`
-   services (or `private.trusted_proxies`, registry host names); a local process on the hub's
-   host is not one, so the loopback listener alone never serves the private tier;
+1. it comes **from a trusted proxy address**: `private.trusted_proxies` (registry host names;
+   without the key, the hosts of the registry's `edge-proxy` services; the `status_hub` role
+   always writes it, from `status_hub_trusted_proxies`), and, when the hub serves TLS, **over a
+   verified client certificate** that passes the pin (below, "The edge-to-hub hop"); a local
+   process on the hub's host is not one, so the loopback listener alone never serves the private
+   tier. A request that is not from a trusted proxy has every identity header removed before any
+   page sees it (any header carrying `auth-request`, and `X-Forwarded-User`, `-Preferred-Username`,
+   `-Email`, `-Groups`, `X-Remote-User`, `Remote-User`), so it names nobody;
 2. it carries the **front-door header** with the shared secret. The registry declares it on the
    hub's service (`front_door: {header: X-Hnx-Front-Door, secret: "secret:status/front-door-secret"}`,
    needs `auth: idp` and a `public_hostname`), and the generated Caddy site adds it:
@@ -773,7 +778,8 @@ person, at a session you watch, or pre-enrol their OTP credential when you creat
 do not leave an account with a password and no enrolled factor (ADR-0034 decision 2).
 
 Anything missing, repeated or malformed is `403`. Run the hub with `hnx status serve --agents
-examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example`.
+examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example` and
+its TLS options (the next section).
 **Check your edge** once: a request to the site with a forged `X-Auth-Request-Preferred-Username`
 and no login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1
 keep a client-sent header the auth proxy omits) with the generated snippet, which deletes every
@@ -785,7 +791,60 @@ Every private view is appended to the access log (`private.access_log`, JSONL, m
 escaped text only (never HTML or markdown) and nothing in this code feeds it back into an agent's
 context.
 
-### The edge-to-hub hop over mTLS (`edge_tls`, registry 2.10)
+### The edge-to-hub hop: mTLS (Stage 5)
+
+Off loopback the hop from the edge to the hub is TLS with **client-certificate authentication**,
+so "came from the edge" is a cryptographic fact rather than a source address (an address can be
+shared: a subnet router that SNATs its clients, containers NATed out of the edge's host):
+
+```
+hnx status serve --agents agents.yml --bind <address> --allow-remote --allowed-host status.lab.example \
+  --tls-cert server.crt --tls-key server.key --client-ca edge-ca.crt --client-name edge.example.internal
+```
+
+- **The handshake refuses** a peer with no client certificate, with one from another CA, or with
+  one whose extended key usage excludes client authentication; plain HTTP to the TLS port gets no
+  HTTP answer. The handshake runs on the connection's own thread with a 5 s deadline (and a whole
+  TLS connection has 60 s), so a peer that connects and stalls cannot stop the hub accepting
+  others. Refused connections are counted, with one line on stderr at most once a minute.
+- **`--client-name` pins the edge** (repeatable): a certificate the CA signed that names none of
+  them (its DNS subjectAltNames, or its CN only when it has no subjectAltName extension at all;
+  exact, no wildcard) is closed
+  right after the handshake. Without it, any certificate the CA signed is admitted.
+- **Trust needs both**: a request's identity headers count only when it comes from a trusted
+  proxy's address *and* over a verified, pinned certificate. The front-door secret header stays
+  the second check, and the group checks are unchanged.
+- **Plain HTTP** stays on loopback, and off loopback only with `--plain-http`, the explicit
+  opt-in for tests and lab-in-a-box; trust is then the source address alone, as before.
+- The edge needs a client certificate from an internal CA (a public CA does not issue client
+  authentication), and its `reverse_proxy` must present it to the hub. The `caddy` generator's
+  upstream mTLS transport (a `tls: mtls` row's `edge_tls`) is a separate change (Stage 5, H2):
+  until the edge you run presents a client certificate, an off-loopback hub behind it keeps
+  `--plain-http` (`status_hub_plain_http: true`).
+- **Pin the edge whenever the client CA signs anything else.** Without `--client-name` any
+  certificate the CA signed is admitted, and from a trusted proxy's address it is as good as the
+  edge's. The hooks' own certificate (below) joins the same pin, so give it a name only the hub's
+  hooks hold and keep its key off the edge's host.
+- **No revocation check**: client certificates are not checked against a CRL or OCSP. Keep them
+  short-lived and rotate the CA (or drop the name from the pin) to withdraw one.
+
+The `status_hub` role turns this on when `status_hub_tls_cert_ref`, `status_hub_tls_key_ref` and
+`status_hub_client_ca_ref` are set (secret references, written 0640 to `/etc/hnx-hub/tls`, never
+inline), with `status_hub_client_names` as the pin; off loopback without them it needs
+`status_hub_plain_http: true`. `status_hub_trusted_proxies` names the proxies the hub trusts:
+registry host names, or the exact address the registry gives a host (it must give no other host
+the same address), at least one, never a wildcard or a range; the role writes them to
+`agents.yml` as host names (default: the hosts of the registry's `edge-proxy` rows), for example
+`status_hub_trusted_proxies: [edge-core]`. **Health and readiness** run `hnx status probe-tls` on the bind
+address, trusting exactly the installed server certificate's leaf by `status_hub_tls_server_name`:
+a peer without a client certificate must be refused with a TLS alert (an HTTP answer, a bare close,
+a plain listener or no listener fails). The hooks never hold the edge's certificate; give them their
+own (`status_hub_health_client_cert_ref`/`_key_ref`, signed by the client CA, its name
+`status_hub_health_client_name`, which joins the pin) and they also fetch `/status.json` over mTLS
+and check it is the status document. Without one, the end-to-end check is the edge's own health of
+the hub's route.
+
+### The edge side of the hop (`edge_tls`, registry 2.10)
 
 The front-door secret proves only that a request carries a value the edge knows. With mTLS the
 hub also requires the **edge's client certificate**, so "came from the edge" is a property of

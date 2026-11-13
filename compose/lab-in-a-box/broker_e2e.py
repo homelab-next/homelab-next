@@ -982,7 +982,9 @@ def hub_argv(hnx: Sequence[str], files: Mapping[str, Path], *, bind: str, port: 
             str(files["services"].parent / "state.json"), "--bind", bind, "--port", str(port),
             "--allowed-host", HUB_HOST]  # fmt: skip
     if bind not in (LOOPBACK, "localhost", "::1"):
-        argv.append("--allow-remote")
+        # the lab's hub is plain HTTP on the compose network (no internal CA here): the explicit
+        # opt-in a non-loopback bind needs since the hub serves mTLS by default (Stage 5, H1)
+        argv += ["--allow-remote", "--plain-http"]
     return argv
 
 

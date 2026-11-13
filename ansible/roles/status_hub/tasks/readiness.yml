@@ -16,3 +16,13 @@
         fail_msg: "status_hub: no broker socket at {{ status_hub_approvals_socket }}"
       when: status_hub_approvals_socket | length > 0
   tags: [readiness]
+
+# The TLS listener (readiness: the edge can reach the hub only through it): refused without a
+# client certificate, and the status document with the hooks' own when the role gives them one.
+- name: Check the hub's TLS listener
+  ansible.builtin.include_tasks:
+    file: tls_probe.yml
+    apply:
+      tags: [readiness]
+  when: status_hub_tls | bool
+  tags: [readiness]

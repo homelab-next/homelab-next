@@ -1,3 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # Fixed, not settings: the loopback names (a non-loopback bind needs --allow-remote).
 status_hub_loopback: [127.0.0.1, "::1", localhost]  # no-raw-endpoint: allow the loopback names themselves
+# TLS is on when the three certificate references are set (validate.yml refuses a partial set).
+status_hub_tls: "{{ (status_hub_tls_cert_ref | length > 0) and (status_hub_tls_key_ref | length > 0) and (status_hub_client_ca_ref | length > 0) }}"
+status_hub_tls_dir: "{{ status_hub_config_dir }}/tls"
+# The hooks' own client certificate is configured (both references).
+status_hub_health_cert: "{{ (status_hub_health_client_cert_ref | length > 0) and (status_hub_health_client_key_ref | length > 0) }}"
+# The names the hub admits (empty: any certificate the CA signed): the pin plus the hooks' own name.
+status_hub_pinned_names: >-
+  {{ (status_hub_client_names + ([status_hub_health_client_name] if (status_hub_client_names | length > 0
+      and status_hub_health_client_name | length > 0) else [])) | unique }}
+# The registry's hosts (on the controller) and each trusted proxy resolved to its host name: an
+# entry is a host name, or the address of exactly the host the registry gives it.
+status_hub_registry_hosts: "{{ (lookup('ansible.builtin.file', status_hub_registry) | from_yaml).hosts | default({}, true) }}"
+status_hub_host_by_address: >-
+  {{ dict(status_hub_registry_hosts.values() | map(attribute='address') | map('string')
+     | zip(status_hub_registry_hosts.keys())) }}
+status_hub_host_names: >-
+  {{ dict(status_hub_registry_hosts.keys() | zip(status_hub_registry_hosts.keys()))
+     | combine(status_hub_host_by_address) }}
+status_hub_trusted_proxy_hosts: >-
+  {{ status_hub_trusted_proxies | map('string') | select('in', status_hub_host_names)
+     | map('extract', status_hub_host_names) | unique | sort }}

@@ -53,7 +53,11 @@ generated and checked the same way.
 
 ## Decisions, status and scripts
 
-- [Status hub](status.md) ([[status]]): <!-- hnx:gen:summary:status.md -->The read-only status hub: sources, collecting, views, the status.json contract, events, agent activity, its edge (mTLS, scope) and the Approvals page.<!-- /hnx:gen -->
+<<<<<<< HEAD
+- [Status hub](status.md) ([[status]]): <!-- hnx:gen:summary:status.md -->The read-only status hub: sources, views, the status.json contract, events, agent activity, the mTLS edge hop from both sides and the Approvals page.<!-- /hnx:gen -->
+=======
+- [Status hub](status.md) ([[status]]): <!-- hnx:gen:summary:status.md -->The read-only status hub: sources, views, the status.json contract, events, agent activity, the mTLS edge hop from both sides and the Approvals page.<!-- /hnx:gen -->
+>>>>>>> origin/main
 - [Status source catalog](status/sources.md) ([[status/sources|status sources]]): <!-- hnx:gen:summary:status/sources.md -->The status hub menu: every status source a service offers, with its module, kind, interval, stale-after window and what it reports.<!-- /hnx:gen -->
 - [Architecture decision log](adr/README.md) ([[adr/README|ADRs]]): <!-- hnx:gen:summary:adr/README.md -->Index of the architecture decision log: how ADRs are numbered and checked, with a one-line entry per decision.<!-- /hnx:gen -->
 - [A four-box lab, end to end](four-box-lab.md) ([[four-box-lab]]): <!-- hnx:gen:summary:four-box-lab.md -->A worked four-machine lab (hypervisor, physical sensor, detonation box, secondary DNS) that validates and renders end to end, and how to make it yours.<!-- /hnx:gen -->
