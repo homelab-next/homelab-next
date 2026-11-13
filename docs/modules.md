@@ -207,6 +207,7 @@ on one of these pages.
 | [the network scope](modules/network-scope.md) | The network scope |
 | [what the loader checks](modules/loader.md) | What the loader checks |
 | [the loader at deploy time](modules/loader-deploy.md) | The loader at deploy time |
+| [the apply path](modules/apply.md) | From a selection to Ansible; Running it in an overlay |
 | [what the census gathers](modules/census.md) | What the census gathers |
 | [how a swap works](modules/swap-flow.md) | How a swap works, end to end; Swap record 1.2 (draft: `platform/module_swap` 1.0) |
 | [the product-name lint](modules/name-lint.md) | The product-name lint (rule 1) |
