@@ -9,7 +9,8 @@ certificate, or one from another CA, is refused in the handshake, before any HTT
 names none of them (its DNS subjectAltNames or, only when it has none, its common name; exact,
 case-insensitive, never a wildcard) is closed right after the handshake, before any HTTP is read.
 
-The handshake runs on the connection's own thread with a deadline (:data:`HANDSHAKE_TIMEOUT_S`),
+The handshake runs on the connection's own thread with a deadline (:data:`HANDSHAKE_TIMEOUT_S`;
+the whole connection has :data:`CONNECTION_DEADLINE_S`),
 never on the accepting thread, so a peer that connects and stalls holds one bounded slot and
 cannot stop the server from accepting others (``serve.BoundedHTTPServer``).
 
@@ -32,7 +33,9 @@ from pathlib import Path
 from typing import Any
 
 #: how long a peer has to finish the TLS handshake (s)
-HANDSHAKE_TIMEOUT_S = 10.0
+HANDSHAKE_TIMEOUT_S = 5.0
+#: how long one TLS connection may last in all (s): a peer that handshakes and then trickles
+CONNECTION_DEADLINE_S = 60.0
 #: the most of an answer the hooks' probe reads (the status document)
 MAX_PROBE_BYTES = 16 << 20
 #: a pinned client name: a DNS name or a bare host name, never a wildcard or an address range
@@ -52,14 +55,16 @@ def client_name_ok(name: str) -> bool:
 
 def peer_names(cert: Mapping[str, Any] | None) -> frozenset[str]:
     """The names a verified peer certificate (``SSLSocket.getpeercert()``) is for: its DNS
-    subjectAltNames, or, only when it has none, its subject's common names; lower-cased, a
-    trailing dot dropped.  Empty for no certificate."""
+    subjectAltNames; its subject's common names only when it has no subjectAltName extension at
+    all (a certificate with only IP or other SANs names no DNS name, and its CN is not read);
+    lower-cased, a trailing dot dropped.  Empty for no certificate."""
     if not cert:
         return frozenset()
-    sans = {v for k, v in cert.get("subjectAltName", ()) if k == "DNS"}
-    if not sans:
-        sans = {v for rdn in cert.get("subject", ()) for k, v in rdn if k == "commonName"}
-    return frozenset(n.strip().lower().rstrip(".") for n in sans if n.strip())
+    if "subjectAltName" in cert:
+        names = {v for k, v in cert["subjectAltName"] if k == "DNS"}
+    else:
+        names = {v for rdn in cert.get("subject", ()) for k, v in rdn if k == "commonName"}
+    return frozenset(n.strip().lower().rstrip(".") for n in names if n.strip())
 
 
 @dataclass(frozen=True)
@@ -134,16 +139,32 @@ class TLSSettings:
 @dataclass(frozen=True)
 class ProbeResult:
     ok: bool
-    outcome: str  # refused | answered | not-tls | server-cert | unreachable
+    outcome: str  # refused | answered | closed | not-tls | server-cert | unreachable
     detail: str
 
 
 def _alerted(exc: BaseException) -> bool:
     """A TLS alert from the server (certificate required, bad or unknown certificate, handshake
-    failure), or the connection cut right after the handshake: a refusal, never an answer."""
-    if isinstance(exc, ssl.SSLError):
-        return "ALERT" in (exc.reason or "").upper() or isinstance(exc, ssl.SSLEOFError)
-    return isinstance(exc, (ConnectionResetError, BrokenPipeError, ssl.SSLZeroReturnError))
+    failure): the hub's refusal.  A reset or a bare close is not one (a crashing hub does that
+    too), so it never passes as a refusal."""
+    return isinstance(exc, ssl.SSLError) and "ALERT" in (exc.reason or "").upper()
+
+
+def _leaf_sha256(path: str) -> str | None:
+    """The SHA-256 of the first certificate in a PEM file (the hub's leaf), or None."""
+    import hashlib
+
+    text = Path(path).read_text(encoding="ascii", errors="replace")
+    end = "-----END CERTIFICATE-----"
+    if end not in text:
+        return None
+    first = text[: text.index(end) + len(end)] + "\n"
+    try:
+        return hashlib.sha256(
+            ssl.PEM_cert_to_DER_cert(first[first.index("-----BEGIN") :])
+        ).hexdigest()
+    except ValueError:
+        return None
 
 
 def probe(
@@ -175,6 +196,9 @@ def probe(
     # the leaf itself is the trust anchor (no CA needed to pin exactly the hub's certificate)
     ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
     ctx.load_verify_locations(cafile=server_cert)
+    leaf = _leaf_sha256(server_cert)
+    if leaf is None:
+        return ProbeResult(False, "server-cert", f"{server_cert} holds no certificate")
     with_cert = bool(client_cert)
     if with_cert:
         ctx.load_cert_chain(client_cert, client_key)  # type: ignore[arg-type]
@@ -199,6 +223,15 @@ def probe(
                 return _refused(with_cert, exc)
             return ProbeResult(False, "not-tls", f"no TLS handshake: {_why(exc)}")
         with tls:
+            import hashlib
+
+            # the leaf itself, not only a chain to anything server_cert holds (an intermediate
+            # appended to it is a trust anchor too under the partial-chain flag)
+            peer = tls.getpeercert(binary_form=True) or b""
+            if hashlib.sha256(peer).hexdigest() != leaf:
+                return ProbeResult(
+                    False, "server-cert", f"not the hub's own certificate ({server_cert})"
+                )
             try:
                 tls.sendall(request)
                 data = b""
@@ -210,11 +243,11 @@ def probe(
             except (ssl.SSLError, OSError) as exc:
                 if _alerted(exc) and not data:
                     return _refused(with_cert, exc)
-                return ProbeResult(False, "unreachable", f"read failed: {_why(exc)}")
+                return ProbeResult(False, "closed", f"closed without an alert: {_why(exc)}")
     finally:
         raw.close()
     if not data:
-        return _refused(with_cert, None)
+        return ProbeResult(False, "closed", "closed before any HTTP, without a TLS alert")
     status = data.split(b"\r\n", 1)[0].decode("latin-1")
     if not with_cert:
         return ProbeResult(False, "answered", f"answered without a client certificate: {status}")
@@ -233,8 +266,8 @@ def _why(exc: BaseException) -> str:
     return getattr(exc, "reason", None) or type(exc).__name__
 
 
-def _refused(with_cert: bool, exc: BaseException | None) -> ProbeResult:
-    why = _why(exc) if exc is not None else "closed before any HTTP"
+def _refused(with_cert: bool, exc: BaseException) -> ProbeResult:
+    why = _why(exc)
     if with_cert:
         return ProbeResult(False, "refused", f"refused the hooks' client certificate: {why}")
     return ProbeResult(True, "refused", f"refused without a client certificate: {why}")

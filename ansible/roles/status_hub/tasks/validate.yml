@@ -49,9 +49,15 @@
       - status_hub_trusted_proxies | map('string') | select('search', '[*/?\[\]]') | list | length == 0
       - status_hub_trusted_proxies | map('string') | select('match', '^([a-z][a-z0-9-]{0,62}|[0-9a-f.:]{2,45})\Z') | list | length == status_hub_trusted_proxies | length
       - status_hub_trusted_proxies | map('string') | reject('in', status_hub_host_names) | list | length == 0
+      # an address names a host only when the registry gives it to that host alone
+      - >-
+        status_hub_trusted_proxies | map('string') | reject('in', status_hub_registry_hosts) | list | length == 0
+        or (status_hub_registry_hosts.values() | map(attribute='address') | map('string') | list | length
+            == status_hub_registry_hosts.values() | map(attribute='address') | map('string') | unique | list | length)
     fail_msg: >-
       status_hub: status_hub_trusted_proxies names the registry hosts (or their registry addresses)
-      the hub trusts for identity headers: at least one, no wildcard or range, each a host of
+      the hub trusts for identity headers: at least one, no wildcard or range, an address only when
+      the registry gives it to one host alone, each a host of
       {{ status_hub_registry }} (unknown:
       {{ status_hub_trusted_proxies | map('string') | reject('in', status_hub_host_names) | list }})
 

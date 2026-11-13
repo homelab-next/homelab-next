@@ -478,6 +478,12 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     except TLSConfigError as exc:
         print(f"hnx status serve: {exc}", file=sys.stderr)
         return 2
+    if tls is not None and not tls.client_names:
+        print(
+            "hnx status serve: no --client-name: any certificate the client CA signed is "
+            "admitted (pin the edge's name unless the CA signs nothing else)",
+            file=sys.stderr,
+        )
     approvals = _approvals_site(agents_cfg, clock)
     served = approvals is not None
     document = DocumentMemo(

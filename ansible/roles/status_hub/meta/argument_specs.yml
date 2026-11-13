@@ -52,6 +52,7 @@ argument_specs:
         type: list
         elements: str
         description: "The registry hosts (names, or the addresses the registry gives them) the hub trusts for the identity headers (agents.yml private.trusted_proxies): replaces the hard-coded edge-proxy capability. At least one, no wildcard or range, each a host of status_hub_registry. Default: the hosts of the registry's edge-proxy rows."
+        default: "{{ ((lookup('ansible.builtin.file', status_hub_registry) | from_yaml).services | default({}, true)).values() | selectattr('capability', 'defined') | selectattr('capability', 'equalto', 'edge-proxy') | map(attribute='host') | unique | sort }}"
       status_hub_tls_cert_ref: &tlscert
         type: str
         description: "secret:<name> of the hub's server certificate (PEM, the chain after the leaf). With status_hub_tls_key_ref and status_hub_client_ca_ref: serve TLS and require a client certificate."

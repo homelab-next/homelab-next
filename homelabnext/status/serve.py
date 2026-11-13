@@ -57,7 +57,9 @@ import ipaddress
 import os
 import socket
 import ssl
+import sys
 import threading
+import time
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -68,13 +70,15 @@ from homelabnext.edge_identity import IDENTITY_HEADERS
 
 from .release import ReleaseError
 from .render import render_html, style_hash
-from .tls import HANDSHAKE_TIMEOUT_S, TLSSettings
+from .tls import CONNECTION_DEADLINE_S, HANDSHAKE_TIMEOUT_S, TLSSettings
 from .views import dumps, public_status, route_ceiling, withheld_route
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the read-only console binds loopback by default
 LOOPBACK_NAMES = frozenset({LOOPBACK, "localhost", "::1"})
 #: connections the console serves at once; more are answered 503 at once (BoundedHTTPServer)
 DEFAULT_MAX_CONNECTIONS = 64
+#: at most one refused-TLS-connection line on stderr per this many seconds
+REFUSAL_LOG_EVERY_S = 60.0
 #: the listen backlog of the hub's listeners
 LISTEN_BACKLOG = 128
 _BUSY = (
@@ -184,6 +188,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         max_per_client: int | None = None,
         deadline_s: float | None = None,
         tls: TLSSettings | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ):
         if max_connections < 1:
             raise ValueError("max_connections is at least 1")
@@ -199,6 +204,9 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         #: the TLS listener's settings and context (None: plain HTTP); loaded before binding, so
         #: a bad certificate fails the start, never the first connection
         self.tls = tls
+        self.clock = clock  # the refusal log's rate limit
+        self.tls_refused = 0
+        self._refusal_said: float | None = None
         self.tls_context = tls.context() if tls is not None else None
         super().__init__(address, handler)
 
@@ -224,9 +232,29 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         try:
             request.settimeout(HANDSHAKE_TIMEOUT_S)
             request.do_handshake()
-            return self.tls.name_allowed(request.getpeercert())
-        except (OSError, ValueError):
-            return False
+            if self.tls.name_allowed(request.getpeercert()):
+                return True
+            why = "client certificate outside the pin"
+        except (OSError, ValueError) as exc:
+            why = getattr(exc, "reason", None) or type(exc).__name__
+        self._refusal(why)
+        return False
+
+    def _refusal(self, why: str) -> None:
+        """Count a refused TLS connection; say so on stderr at most once a minute (the count
+        since, and the last reason), so a probe or a misconfigured edge is visible."""
+        with self._clients:
+            self.tls_refused += 1
+            now = self.clock()
+            said = self._refusal_said
+            if said is not None and now - said < REFUSAL_LOG_EVERY_S:
+                return
+            self._refusal_said, count = now, self.tls_refused
+        print(
+            f"hnx status serve: {count} TLS connection(s) refused so far (last: {why})",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def _client(self, client_address) -> str:
         return str(client_address[0]) if client_address else ""
@@ -561,4 +589,12 @@ def make_server(
         def log_message(self, *a: Any) -> None:  # quiet; the CLI prints the URL once
             pass
 
-    return BoundedHTTPServer((host, port), Handler, max_connections=max_connections, tls=tls)
+    return BoundedHTTPServer(
+        (host, port),
+        Handler,
+        max_connections=max_connections,
+        tls=tls,
+        # over TLS a whole connection is bounded too: a peer that handshakes and then trickles
+        # cannot hold a slot past the deadline (plain HTTP keeps its per-read timeout only)
+        deadline_s=CONNECTION_DEADLINE_S if tls is not None else None,
+    )

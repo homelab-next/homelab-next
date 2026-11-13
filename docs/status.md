@@ -803,10 +803,12 @@ hnx status serve --agents agents.yml --bind <address> --allow-remote --allowed-h
 
 - **The handshake refuses** a peer with no client certificate, with one from another CA, or with
   one whose extended key usage excludes client authentication; plain HTTP to the TLS port gets no
-  HTTP answer. The handshake runs on the connection's own thread with a 10 s deadline, so a peer
-  that connects and stalls cannot stop the hub accepting others.
+  HTTP answer. The handshake runs on the connection's own thread with a 5 s deadline (and a whole
+  TLS connection has 60 s), so a peer that connects and stalls cannot stop the hub accepting
+  others. Refused connections are counted, with one line on stderr at most once a minute.
 - **`--client-name` pins the edge** (repeatable): a certificate the CA signed that names none of
-  them (its DNS subjectAltNames, or its CN only when it has none; exact, no wildcard) is closed
+  them (its DNS subjectAltNames, or its CN only when it has no subjectAltName extension at all;
+  exact, no wildcard) is closed
   right after the handshake. Without it, any certificate the CA signed is admitted.
 - **Trust needs both**: a request's identity headers count only when it comes from a trusted
   proxy's address *and* over a verified, pinned certificate. The front-door secret header stays
@@ -814,15 +816,28 @@ hnx status serve --agents agents.yml --bind <address> --allow-remote --allowed-h
 - **Plain HTTP** stays on loopback, and off loopback only with `--plain-http`, the explicit
   opt-in for tests and lab-in-a-box; trust is then the source address alone, as before.
 - The edge needs a client certificate from an internal CA (a public CA does not issue client
-  authentication), and its `reverse_proxy` presents it to the hub (the `caddy` generator's
-  upstream transport for a `tls: mtls` row).
+  authentication), and its `reverse_proxy` must present it to the hub. The `caddy` generator's
+  upstream mTLS transport (a `tls: mtls` row's `edge_tls`) is a separate change (Stage 5, H2):
+  until the edge you run presents a client certificate, an off-loopback hub behind it keeps
+  `--plain-http` (`status_hub_plain_http: true`).
+- **Pin the edge whenever the client CA signs anything else.** Without `--client-name` any
+  certificate the CA signed is admitted, and from a trusted proxy's address it is as good as the
+  edge's. The hooks' own certificate (below) joins the same pin, so give it a name only the hub's
+  hooks hold and keep its key off the edge's host.
+- **No revocation check**: client certificates are not checked against a CRL or OCSP. Keep them
+  short-lived and rotate the CA (or drop the name from the pin) to withdraw one.
 
 The `status_hub` role turns this on when `status_hub_tls_cert_ref`, `status_hub_tls_key_ref` and
 `status_hub_client_ca_ref` are set (secret references, written 0640 to `/etc/hnx-hub/tls`, never
 inline), with `status_hub_client_names` as the pin; off loopback without them it needs
-`status_hub_plain_http: true`. **Health and readiness** run `hnx status probe-tls` on the bind
-address: a peer without a client certificate must be refused in the handshake (an HTTP answer, a
-plain listener or no listener fails). The hooks never hold the edge's certificate; give them their
+`status_hub_plain_http: true`. `status_hub_trusted_proxies` names the proxies the hub trusts:
+registry host names, or the exact address the registry gives a host (it must give no other host
+the same address), at least one, never a wildcard or a range; the role writes them to
+`agents.yml` as host names (default: the hosts of the registry's `edge-proxy` rows), for example
+`status_hub_trusted_proxies: [edge-core]`. **Health and readiness** run `hnx status probe-tls` on the bind
+address, trusting exactly the installed server certificate's leaf by `status_hub_tls_server_name`:
+a peer without a client certificate must be refused with a TLS alert (an HTTP answer, a bare close,
+a plain listener or no listener fails). The hooks never hold the edge's certificate; give them their
 own (`status_hub_health_client_cert_ref`/`_key_ref`, signed by the client CA, its name
 `status_hub_health_client_name`, which joins the pin) and they also fetch `/status.json` over mTLS
 and check it is the status document. Without one, the end-to-end check is the edge's own health of

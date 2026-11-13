@@ -211,9 +211,11 @@ def test_a_bad_certificate_fails_the_start_not_the_first_connection(tmp_path, pk
 
 
 def test_peer_names_prefer_the_sans_over_the_cn():
-    cert = {"subject": ((("commonName", "cn.example"),),), "subjectAltName": (("DNS", "A.x."),)}
-    assert peer_names(cert) == {"a.x"}
-    assert peer_names({"subject": ((("commonName", "cn.example"),),)}) == {"cn.example"}
+    cn = ((("commonName", "cn.example"),),)
+    assert peer_names({"subject": cn, "subjectAltName": (("DNS", "A.x."),)}) == {"a.x"}
+    assert peer_names({"subject": cn}) == {"cn.example"}
+    # IP SANs only: the CN is not read (it names nothing the pin can trust)
+    assert peer_names({"subject": cn, "subjectAltName": (("IP Address", ELSEWHERE),)}) == set()
     assert peer_names(None) == frozenset()
 
 
@@ -356,7 +358,7 @@ def test_probe_trusts_exactly_the_hubs_certificate_by_its_name(serve, pki):
 def test_probe_fails_a_hooks_certificate_outside_the_pin(serve, pki):
     port = serve(tls=_settings(pki, [EDGE]))
     r = _probe(pki, port, "other")
-    assert not r.ok and r.outcome == "refused", r
+    assert not r.ok and r.outcome == "closed", r
 
 
 def test_probe_tls_command_exit_codes(serve, pki, capsys):
@@ -371,3 +373,48 @@ def test_probe_tls_command_exit_codes(serve, pki, capsys):
     assert main([*base, "--client-cert", edge[0], "--client-key", edge[1]]) == 0
     assert main([*base[:-1], "status-hub.svc.example.internal"]) == 1
     assert main([*base, "--client-cert", edge[0]]) == 2
+
+
+def test_a_cn_with_only_ip_sans_does_not_pass_the_pin(serve, pki, tmp_path):
+    """The audit's case: a CA-signed certificate whose CN is the pinned name and whose only SAN
+    is an address is closed by the pin."""
+    ca = (pki["ca"], pki["ca"].with_suffix(".key"))
+    crt, key = _leaf(tmp_path, EDGE, ca, san=f"IP:{LOOPBACK}", eku="clientAuth")
+    port = serve(tls=_settings(pki, [EDGE]))
+    pki = {**pki, "cn_only": (crt, key)}
+    with pytest.raises(REFUSED):
+        _get(port, pki, "cn_only")
+
+
+def test_the_probe_pins_the_leaf_not_anything_in_the_file(serve, pki, tmp_path):
+    """An extra certificate appended to the server certificate file (a CA, under the partial-chain
+    flag a trust anchor too) does not let another server pass: the leaf's digest is compared."""
+    port = serve(tls=_settings(pki))
+    bundle = tmp_path / "edge-then-ca.pem"
+    bundle.write_text(pki["edge"][0].read_text() + pki["ca"].read_text())
+    r = probe(
+        LOOPBACK, port, host_header=HUB_HOST, server_cert=str(bundle), server_name="localhost"
+    )
+    assert not r.ok and r.outcome == "server-cert", r
+
+
+def test_refused_handshakes_are_counted_and_said(pki, capsys):
+    srv = make_server(lambda: DOC, tls=_settings(pki), allowed_hosts=[HUB_HOST])
+    done = threading.Event()
+    real = srv._refusal
+
+    def refusal(why):
+        real(why)
+        done.set()
+
+    srv._refusal = refusal
+    threading.Thread(target=srv.serve_forever, args=(0.05,), daemon=True).start()
+    try:
+        with pytest.raises(REFUSED):
+            _get(srv.server_address[1], pki, None)
+        assert done.wait(10)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert srv.tls_refused == 1
+    assert "1 TLS connection(s) refused so far" in capsys.readouterr().err

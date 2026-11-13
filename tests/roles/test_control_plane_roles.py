@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_cases, run_role
+from rolerun import calls, fake, logging_fake, run_cases, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "ansible"
@@ -1531,3 +1531,61 @@ def test_hnx_runtime_check_mode_on_a_fresh_host_and_the_interpreter_version(tmp_
         assert not (tmp_path / "opt").exists()  # --check wrote nothing
         names.append(_release(r.stdout))
     assert names[0] != names[1]
+
+
+def _hub_hooks(tmp_path, hook, *, probe_cert, fails=False):
+    """The ``hook`` (health or readiness) of the TLS hub, run against a fake ``hnx`` that logs its
+    argv; ``probe_cert``: give the hooks their own client certificate."""
+    hnx = logging_fake(tmp_path, "hnx")
+    if fails:
+        (tmp_path / "hnx.fails").write_text("")
+    extra = {
+        **{k: v for k, v in HUB_TLS.items() if k.startswith("status_hub_") and k in {
+            "status_hub_logical_id", "status_hub_bind_address", "status_hub_allowed_hosts",
+            "status_hub_tls_cert_ref", "status_hub_tls_key_ref", "status_hub_client_ca_ref",
+            "status_hub_tls_server_name"}},
+        "status_hub_hnx_bin": hnx, "status_hub_config_dir": str(tmp_path / "etc"),
+        "status_hub_approvals_socket": "",
+    }  # fmt: skip
+    env = {}
+    if probe_cert:
+        extra |= {"status_hub_health_client_cert_ref": "secret:status/hub-probe-cert",
+                  "status_hub_health_client_key_ref": "secret:status/hub-probe-key"}  # fmt: skip
+        env = {"HNX_SECRET_STATUS_HUB_PROBE_CERT": "fake-probe-cert",
+               "HNX_SECRET_STATUS_HUB_PROBE_KEY": "fake-probe-key"}  # fmt: skip
+    if hook == "readiness":  # its views check runs the fake too; the socket is off
+        (tmp_path / "etc").mkdir()
+    return run_role(tmp_path, "status_hub", hook, extra, env=env), calls(tmp_path)
+
+
+@pytest.mark.parametrize("hook", ["health", "readiness"])
+def test_status_hub_hooks_probe_the_tls_listener(tmp_path, hook):
+    """Over TLS the hooks run ``hnx status probe-tls``: once without a client certificate (it
+    must be refused) and, with the hooks' own certificate, once with it, from a private temporary
+    directory that is gone afterwards; a probe that fails fails the hook."""
+    r, log = _hub_hooks(tmp_path, hook, probe_cert=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    probes = [line.split() for line in log if " probe-tls " in line]
+    assert len(probes) == 2, log
+    bare, mtls = probes
+    for argv in probes:
+        assert argv[argv.index("--address") + 1] == HUB_ADDR
+        assert argv[argv.index("--server-cert") + 1] == str(tmp_path / "etc/tls/server.crt")
+        assert argv[argv.index("--server-name") + 1] == "status-hub.svc.example.internal"
+        assert argv[argv.index("--host-header") + 1] == "status.lab.example"
+    assert "--client-cert" not in bare
+    probe_dir = Path(mtls[mtls.index("--client-cert") + 1]).parent
+    assert mtls[mtls.index("--client-key") + 1] == str(probe_dir / "probe.key")
+    assert not probe_dir.exists()  # the hooks' key is removed after the probe
+    assert "fake-probe" not in r.stdout  # no_log: the key never reaches the output
+
+    tmp = tmp_path / "bare"
+    tmp.mkdir()
+    r, log = _hub_hooks(tmp, hook, probe_cert=False)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert len([line for line in log if " probe-tls " in line]) == 1
+
+    tmp = tmp_path / "fails"
+    tmp.mkdir()
+    r, _ = _hub_hooks(tmp, hook, probe_cert=False, fails=True)
+    assert r.returncode != 0
