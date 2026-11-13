@@ -70,7 +70,9 @@ def test_the_guests_are_read_by_the_guest_loader(guests):
     data = guests.hosts["guest:data-1"]
     assert (data.kind, data.status, data.capability) == ("vm", "live", "cap:object-store")
     assert data.capacity == {"cpu": 8, "memory_mb": 16384, "disk_gb": 4000}  # disks summed
-    assert data.addresses == ("192.0.2.11", "2001:db8:20::11")  # ip, then extra_addresses
+    net = ld.load_yaml(GUESTS / "data-1.yml")["network"]
+    want = (net["ip"], *(e["address"] for e in net["extra_addresses"]))
+    assert data.addresses == want and len(want) == 2  # ip, then extra_addresses
     # the baseline set is read, so server's parent base is carried too
     assert guests.baselines_read and data.baselines == {"server", "base"}
     assert guests.hosts["guest:box-1"].capacity is None
