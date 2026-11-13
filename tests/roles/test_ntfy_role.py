@@ -90,6 +90,16 @@ def test_main_renders_deny_all_with_the_credentials_only_in_the_env_file(tmp_pat
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
+def test_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
+    """The module apply path sets hnx_module_slice on ntfy's play (its role slice, installed by
+    the limits play); compose_app makes it the container's cgroup parent without ntfy passing it."""
+    v = ntfy_vars(tmp_path, hnx_module_slice="hnx-ntfy-server.slice")
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    assert doc["services"]["ntfy"]["cgroup_parent"] == "hnx-ntfy-server.slice"
+
+
 @pytest.mark.parametrize(
     "over, env",
     [

@@ -56,6 +56,11 @@
       changed_when: ansible_check_mode and hnx_quota_check.rc == 3
       failed_when: hnx_quota_check.rc not in [0, 3]
       tags: [hnx_quota]
+    - name: "what caps each data root (a vm or lxc: its own disk)"
+      ansible.builtin.debug:
+        msg: "{{ hnx_quota_check.stdout_lines + hnx_quota_check.stderr_lines }}"
+      when: hnx_quota_check.stdout_lines is defined
+      tags: [hnx_quota]
     - name: "cap and reserve every owed data root (fails if one cannot be)"
       ansible.builtin.command:
         argv: ["{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"]
@@ -103,6 +108,11 @@
       changed_when: ansible_check_mode and hnx_quota_check.rc == 3
       failed_when: hnx_quota_check.rc not in [0, 3]
       tags: [hnx_quota]
+    - name: "what caps each data root (a vm or lxc: its own disk)"
+      ansible.builtin.debug:
+        msg: "{{ hnx_quota_check.stdout_lines + hnx_quota_check.stderr_lines }}"
+      when: hnx_quota_check.stdout_lines is defined
+      tags: [hnx_quota]
     - name: "cap and reserve every owed data root (fails if one cannot be)"
       ansible.builtin.command:
         argv: ["{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"]
@@ -117,6 +127,8 @@
   hosts: mod_example_agent_runtime_runtime
   become: true
   tags: [mod_example_agent_runtime]
+  vars:
+    hnx_module_slice: "hnx-example_agent_runtime-runtime.slice"
   pre_tasks:
     - name: "preflight readiness: example_agent_runtime"
       ansible.builtin.include_role:
@@ -132,6 +144,8 @@
   hosts: mod_example_inference_server
   become: true
   tags: [mod_example_inference]
+  vars:
+    hnx_module_slice: "hnx-example_inference-server.slice"
   pre_tasks:
     - name: "preflight readiness: example_inference"
       ansible.builtin.include_role:
@@ -147,6 +161,8 @@
   hosts: mod_example_platform_platform
   become: true
   tags: [mod_example_platform]
+  vars:
+    hnx_module_slice: "hnx-example_platform-platform.slice"
   pre_tasks:
     - name: "preflight readiness: example_platform"
       ansible.builtin.include_role:
@@ -164,6 +180,8 @@
   hosts: mod_example_object_store_store
   become: true
   tags: [mod_example_object_store]
+  vars:
+    hnx_module_slice: "hnx-example_object_store-store.slice"
   pre_tasks:
     - name: "preflight readiness: example_object_store"
       ansible.builtin.include_role:
@@ -179,6 +197,8 @@
   hosts: mod_example_lake_lake
   become: true
   tags: [mod_example_lake]
+  vars:
+    hnx_module_slice: "hnx-example_lake-lake.slice"
   pre_tasks:
     - name: "preflight readiness: example_lake"
       ansible.builtin.include_role:
@@ -194,6 +214,8 @@
   hosts: mod_example_siem_suite_suite
   become: true
   tags: [mod_example_siem_suite]
+  vars:
+    hnx_module_slice: "hnx-example_siem_suite-suite.slice"
   pre_tasks:
     - name: "preflight readiness: example_siem_suite"
       ansible.builtin.include_role:
@@ -210,6 +232,8 @@
   hosts: mod_external_collector_receiver
   become: true
   tags: [mod_external_collector]
+  vars:
+    hnx_module_slice: "hnx-external_collector-receiver.slice"
   pre_tasks:
     - name: "preflight readiness: external_collector_receiver"
       ansible.builtin.include_role:

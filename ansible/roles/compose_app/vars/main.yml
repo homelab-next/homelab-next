@@ -28,3 +28,7 @@ compose_app_sensitive_name_pattern: '(?i)(password|passwd|secret|token|api_?key|
 compose_app_dangerous_caps:
   [ALL, SYS_ADMIN, SYS_MODULE, SYS_RAWIO, SYS_PTRACE, SYS_BOOT, DAC_READ_SEARCH, BPF, PERFMON,
    NET_ADMIN, MAC_ADMIN, MAC_OVERRIDE]
+# the only cgroup parent a container may be given: a module role slice (homelabnext.modules.limits
+# names them hnx-<module id>-<host role>.slice, `-` in either written `_`), never system.slice,
+# -.slice or a cgroupfs path that would leave the slice's limits
+compose_app_cgroup_parent_pattern: '^hnx-[a-z0-9_]+-[a-z0-9_]+\.slice\Z'

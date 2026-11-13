@@ -20,6 +20,9 @@ services:
 {% if svc.user is defined %}
     user: {{ q(svc.user) }}
 {% endif %}
+{% if compose_app_cgroup_parent | length > 0 %}
+    cgroup_parent: {{ q(compose_app_cgroup_parent) }}
+{% endif %}
     security_opt: {{ ql(compose_app_security_opt) }}
     cap_drop: {{ ql(compose_app_cap_drop) }}
 {% if svc.cap_add | default([]) | length > 0 %}

@@ -15,6 +15,17 @@
       {{ compose_app_restart_policies }}, and no-new-privileges may only be dropped together
       with compose_app_allow_privileged
 
+- name: Validate the cgroup parent (a module role slice, or none)
+  ansible.builtin.assert:
+    that:
+      - compose_app_cgroup_parent is string
+      - compose_app_cgroup_parent == '' or compose_app_cgroup_parent is match(compose_app_cgroup_parent_pattern)
+      - hnx_module_slice is not defined or compose_app_cgroup_parent in ['', hnx_module_slice]
+    fail_msg: >-
+      compose_app_cgroup_parent must be empty or a module role slice (hnx-<module>-<host role>.slice,
+      the name homelabnext.modules.limits gives it), and in a module play its own role's slice
+      (hnx_module_slice), never another module's; not {{ compose_app_cgroup_parent | string | truncate(80) | to_json }}
+
 - name: Validate services exist
   ansible.builtin.assert:
     that:
