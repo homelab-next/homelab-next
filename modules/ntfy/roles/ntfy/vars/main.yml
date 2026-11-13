@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# Deny-all for anyone not named in the access list; no sign-up, no web login, no reservations,
+# no web app, no metrics endpoint. Nothing here names an upstream, a push service, SMTP, a phone
+# provider or an attachment store, so the server opens no connection out of the guest.
+ntfy_fixed_env:
+  NTFY_LISTEN_HTTP: ":8080"
+  NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+  NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
+  NTFY_AUTH_DEFAULT_ACCESS: deny-all
+  NTFY_BEHIND_PROXY: "false"
+  NTFY_ENABLE_SIGNUP: "false"
+  NTFY_ENABLE_LOGIN: "false"
+  NTFY_ENABLE_RESERVATIONS: "false"
+  NTFY_ENABLE_METRICS: "false"
+  NTFY_WEB_ROOT: disable
+# where the database directory is mounted in the container (NTFY_CACHE_FILE, NTFY_AUTH_FILE)
+ntfy_container_db_dir: /var/lib/ntfy
+ntfy_databases: [auth.db, cache.db]
+# The publisher signs in by token only: ntfy wants a bcrypt hash for every provisioned account, so
+# it gets one that is well-formed (cost 10) but was not made from any password, and no password is
+# known to match it. It is not a credential and grants nothing.
+ntfy_publisher_unusable_hash: "$2b$10$NoPasswordMatchesThisHashNoPasswordMatchesThisHashNoP"
+# ntfy's own rules: an account name, a topic pattern, a token (tk_ and 29 more), a bcrypt hash
+ntfy_username_pattern: '^[-_.+@a-zA-Z0-9]{1,64}\Z'
+ntfy_topic_pattern_pattern: '^[-_*A-Za-z0-9]{1,64}\Z'
+ntfy_key_pattern: '^tk_[-_A-Za-z0-9]{29}\Z'
+ntfy_bcrypt_pattern: '^\$2[aby]\$(1[0-9]|2[0-9]|3[01])\$[./A-Za-z0-9]{53}\Z'
+ntfy_repository: "{{ ntfy_image.split('@')[0].rsplit(':', 1)[0] }}"
+ntfy_tag: "{{ ntfy_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+ntfy_digest: "{{ ntfy_image.split('@')[1] | default('') }}"
+# The export (docs/modules/data.md, object-tree): each database copied with SQLite's online backup
+# (consistent while the server writes), then listing.jsonl (key, size, sha256). Run as the
+# container's user (setpriv), so it never creates a file the server cannot open.
+ntfy_export_script: |
+  import hashlib, json, os, sqlite3, sys
+  src, dst, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+  rows = []
+  for name in names:
+      path = os.path.join(src, name)
+      if not os.path.isfile(path) or os.path.islink(path):
+          continue
+      tmp = os.path.join(dst, "." + name + ".tmp")
+      if os.path.lexists(tmp):
+          os.unlink(tmp)
+      with sqlite3.connect("file:" + path + "?mode=ro", uri=True) as a, sqlite3.connect(tmp) as b:
+          a.backup(b)
+      a.close(); b.close()
+      os.chmod(tmp, 0o600)
+      os.replace(tmp, os.path.join(dst, name))
+  for name in names:
+      out = os.path.join(dst, name)
+      if os.path.isfile(out) and not os.path.islink(out):
+          h = hashlib.sha256()
+          with open(out, "rb") as f:
+              for chunk in iter(lambda: f.read(1 << 20), b""):
+                  h.update(chunk)
+          rows.append({"key": name, "size": os.path.getsize(out), "sha256": h.hexdigest()})
+  tmp = os.path.join(dst, ".listing.jsonl.tmp")
+  with open(tmp, "w", encoding="utf-8") as f:
+      for r in rows:
+          f.write(json.dumps(r, sort_keys=True) + "\n")
+  os.chmod(tmp, 0o600)
+  os.replace(tmp, os.path.join(dst, "listing.jsonl"))
+  print(json.dumps(rows))
+# The import check: the source is a directory holding listing.jsonl and only the files it lists
+# (each a database name above), every one a regular file with one link, its size and sha256 as
+# listed, and an SQLite database that passes integrity_check. It reads, never writes.
+ntfy_import_check_script: |
+  import hashlib, json, os, sqlite3, stat, sys
+  src, names = sys.argv[1], set(sys.argv[2:])
+  st = os.lstat(src)
+  if not stat.S_ISDIR(st.st_mode):
+      sys.exit("restore source is not a directory (or is a link)")
+  listed = {}
+  with open(os.path.join(src, "listing.jsonl"), encoding="utf-8") as f:
+      for line in f:
+          if line.strip():
+              r = json.loads(line)
+              if r.get("key") not in names or r["key"] in listed:
+                  sys.exit("listing names an unknown or repeated file")
+              listed[r["key"]] = r
+  present = set(os.listdir(src)) - {"listing.jsonl"}
+  if present != set(listed):
+      sys.exit("the source holds files the listing does not name, or misses one it does")
+  for name, r in listed.items():
+      p = os.path.join(src, name)
+      s = os.lstat(p)
+      if not stat.S_ISREG(s.st_mode) or s.st_nlink != 1 or s.st_size != r.get("size"):
+          sys.exit(name + ": not a single-link regular file of the listed size")
+      h = hashlib.sha256()
+      with open(p, "rb") as f:
+          for chunk in iter(lambda: f.read(1 << 20), b""):
+              h.update(chunk)
+      if h.hexdigest() != r.get("sha256"):
+          sys.exit(name + ": sha256 differs from the listing")
+      with sqlite3.connect("file:" + p + "?mode=ro&immutable=1", uri=True) as c:
+          if c.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+              sys.exit(name + ": SQLite integrity_check failed")
+      c.close()
+  print(json.dumps(sorted(listed)))

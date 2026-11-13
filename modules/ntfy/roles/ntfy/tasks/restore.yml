@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore both databases from an export: the source is checked first (a directory, listing.jsonl
+# naming only auth.db and cache.db, each a single-link regular file of the listed size and sha256
+# that passes SQLite's integrity_check), then the server is stopped, the files copied in as the
+# container's user (the stale -wal and -shm files removed), and the server started again.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: "{{ ['python3', '-I', '-c', ntfy_import_check_script, ntfy_restore_source] + ntfy_databases }}"
+      register: ntfy_restore_check
+      changed_when: false
+    - name: Stop the server
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ ntfy_dir }}/docker-compose.yml", stop]
+      changed_when: true
+    - name: Remove the live write-ahead files (they belong to the databases being replaced)
+      ansible.builtin.file:
+        path: "{{ ntfy_data_root }}/db/{{ item }}"
+        state: absent
+      loop: "{{ ntfy_databases | product(['-wal', '-shm']) | map('join') | list }}"
+    - name: Copy each listed database in, owned by the container's user
+      ansible.builtin.copy:
+        src: "{{ ntfy_restore_source }}/{{ item }}"
+        dest: "{{ ntfy_data_root }}/db/{{ item }}"
+        remote_src: true
+        owner: "{{ ntfy_uid | int }}"
+        group: "{{ ntfy_gid | int }}"
+        mode: "0600"
+      loop: "{{ ntfy_restore_check.stdout | from_json }}"
+    - name: Start the server again
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ ntfy_dir }}/docker-compose.yml", up, -d]
+      changed_when: true
+  tags: [restore]

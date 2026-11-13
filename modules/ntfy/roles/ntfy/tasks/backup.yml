@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths); the export first writes consistent copies of both databases into it (export/), so a
+# restore never depends on the live files being caught between two writes.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy both databases consistently (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: ntfy
+        compose_app_dir: "{{ ntfy_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ ntfy_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ ntfy_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ ntfy_app.compose_app_owner }}"
+        compose_app_group: "{{ ntfy_app.compose_app_group }}"
+        compose_app_spec: "{{ ntfy_app.compose_app_spec }}"
+  tags: [backup]

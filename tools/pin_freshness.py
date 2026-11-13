@@ -6,7 +6,7 @@
 #   purpose: Report the version pins dependabot cannot parse against their upstream's newest release past the 14-day cooldown.
 #   owner: maintainers
 #   trigger: [ci:pin-freshness/report, manual]
-#   inputs: the tree (role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)
+#   inputs: the tree (role defaults, the public modules' role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)
 #   outputs: inventory - the pins found, as JSON; report - a Markdown report for the tracking issue
 #   exit:
 #     "0": inventory listed, or report written (pins that are behind are reported, never a failure)
@@ -20,8 +20,9 @@
 Dependabot updates actions, the hashed constraints, compose images, Dockerfiles and pre-commit
 hooks.  It cannot parse these, so they drift unseen:
 
-* an Ansible role's ``*_version`` and ``*_image`` defaults (``ansible/roles/*/defaults/main.yml``),
-  including an empty version that installs whatever the vendor repository serves;
+* an Ansible role's ``*_version`` and ``*_image`` defaults (``ansible/roles/*/defaults/main.yml``
+  and a public module's ``modules/*/roles/*/defaults/main.yml``), including an empty version that
+  installs whatever the vendor repository serves;
 * a workflow's ``*_VERSION`` env (``.github/workflows/*.yml``), usually beside the checksum that
   must move with it (``*_SHA256``, ``*_SHA512``, ``*_SUM_SHA256``), and ``GO_VERSION``;
 * the Terraform provider constraint the compute generator writes;
@@ -85,6 +86,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:docker_engine/docker_engine_compose_version": ("github", "docker/compose"),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
+    "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
     "role:openbao/openbao_lego_version": ("github", "go-acme/lego"),
@@ -104,6 +106,10 @@ NOTES: dict[str, str] = {
     "role:wazuh_agent/wazuh_agent_version": "never newer than the manager it reports to",
     "role:docker_engine/docker_engine_version": "docker-ce and docker-ce-cli move with it",
     "role:open_webui/open_webui_image": "an image: bump the tag and its digest together",
+    "role:ntfy/ntfy_image": (
+        "an image (modules/ntfy): bump the tag and its digest together, with product.version in "
+        "modules/ntfy/module.yml and the lab registry's version"
+    ),
     "role:openbao/openbao_lego_version": (
         "moves with openbao_lego_checksums and openbao_lego_checksums_release, taken from the "
         "release's lego_<version>_checksums.txt"
@@ -176,7 +182,12 @@ def _lineno(text: str, offset: int) -> int:
 
 def inventory(root: Path = ROOT) -> list[Pin]:
     pins: list[Pin] = []
-    for f in sorted((root / "ansible" / "roles").glob("*/defaults/main.yml")):
+    # the core's roles, then the public modules' roles (modules/<id>/roles/<role>/): one role
+    # namespace, so a module role is watched under its own name like a core one
+    role_defaults = sorted((root / "ansible" / "roles").glob("*/defaults/main.yml")) + sorted(
+        (root / "modules").glob("*/roles/*/defaults/main.yml")
+    )
+    for f in role_defaults:
         role = f.parent.parent.name
         for n, line in enumerate(f.read_text().splitlines(), 1):
             m = _ROLE_KEY.match(line)

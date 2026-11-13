@@ -148,7 +148,7 @@ Each is a deliberately broken fake (`hnx conform run notify --target broken:<mut
 The `notify` contract on ntfy (pinned: ntfy 2.33), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/notify.yml`](../../compose/lab-in-a-box/targets/notify.yml) (target `lab-notify`)
-- Factory: `make(*, topic: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`
+- Factory: `make(*, topic: str | None=None, token_env: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`
 
 **Product limits recorded by the adapter:**
 
@@ -236,7 +236,7 @@ Depended on by: [metrics](../systems/metrics.md) ([[systems/metrics|metrics]]), 
    def make(**config) -> NotifyTarget: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.ntfy:make` is `make(*, topic: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`.
+   The factory this repository ships: `homelabnext.conform.adapters.ntfy:make` is `make(*, topic: str | None=None, token_env: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; the test hooks `fault-injection` are for fakes; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

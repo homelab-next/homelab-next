@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export both databases (export_first), then stop and remove the container. The data root
+# (with the export in it) and the compose project are kept for the operator to archive or delete;
+# the decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove ntfy
+  hosts: mod_ntfy_server
+  become: true
+  tasks:
+    - name: Export both databases first
+      ansible.builtin.include_role:
+        name: ntfy
+        tasks_from: export
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ ntfy_dir | default('/opt/compose/ntfy') }}/docker-compose.yml", down]
+      changed_when: true

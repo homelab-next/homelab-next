@@ -1,0 +1,150 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run ntfy as a compose_app with deny-all auth, an admin account and a token-only publisher.
+    options:
+      ntfy_logical_id: &logical
+        type: str
+        description: "The instance's registry id (the service row the site binds, e.g. notify)."
+        required: true
+      ntfy_image: &image
+        type: str
+        description: "repository:tag@sha256:<digest> of the ntfy image."
+        default: "docker.io/binwiederhier/ntfy:v2.35.0@sha256:6f0c9abab7b99a978d816611cc90dabb4849b81f60c53114e91cd07931085dc0"
+      ntfy_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address the port is published on (never all interfaces)."
+        default: "{{ ansible_host }}"
+      ntfy_port: &port
+        type: int
+        description: "Host port (the registry row's port)."
+        default: 80
+      ntfy_dir: &dir
+        type: path
+        description: "The compose project directory."
+        default: /opt/compose/ntfy
+      ntfy_owner: &owner
+        type: str
+        description: "Owner of the compose project and the data root (db/ and export/ belong to ntfy_uid)."
+        default: root
+      ntfy_group: &group
+        type: str
+        description: "Group of the compose project and the data root."
+        default: root
+      ntfy_data_root: &root
+        type: path
+        description: "The module's data root on the host: db/ (mounted in the container) and export/."
+        default: /var/lib/hnx-modules/ntfy
+      ntfy_uid: &uid
+        type: int
+        description: "The container's user id (no account on the host has it); owns db/ and export/."
+        default: 61000
+      ntfy_gid: &gid
+        type: int
+        description: "The container's group id."
+        default: 61000
+      ntfy_admin_user: &admin
+        type: str
+        description: "The admin account's name."
+        default: admin
+      ntfy_admin_login_ref: &adminpw
+        type: str
+        description: "secret:<name> of the admin password (the health hook signs in with it)."
+        default: secret:ntfy/admin-password
+      ntfy_admin_hash_ref: &adminhash
+        type: str
+        description: "secret:<name> of the admin password's bcrypt hash (ntfy user hash), cost 10 or more."
+        default: secret:ntfy/admin-password-hash
+      ntfy_publisher_user: &pub
+        type: str
+        description: "The publisher account's name (a regular account; it has a token and no password)."
+        default: publisher
+      ntfy_publisher_key_ref: &pubtoken
+        type: str
+        description: "secret:<name> of the publisher's access token (tk_ and 29 more, ntfy token generate)."
+        default: secret:ntfy/publisher-token
+      ntfy_publisher_topics: &topics
+        type: list
+        elements: str
+        description: "Topic patterns (ntfy's, * a wildcard) the publisher may publish to, write-only."
+        default: ["*"]
+      ntfy_scratch_prefix: &scratch
+        type: str
+        description: "The scratch topics' prefix: the publisher may also read back <prefix>* (health hook, conformance)."
+        default: hnxconf-
+      ntfy_cache_duration:
+        type: str
+        description: "How long messages stay in the cache for a poll (a number and s, m, h or d)."
+        default: 12h
+      ntfy_mem_limit:
+        type: str
+        description: "Container memory limit."
+        default: 256m
+      ntfy_start:
+        type: bool
+        description: "Run docker compose up after rendering."
+        default: true
+      ntfy_validate_with_docker:
+        type: bool
+        description: "Run docker compose config on the rendered file."
+        default: true
+      ntfy_health_timeout: &htimeout
+        type: int
+        description: "Seconds for each health request."
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy, /v1/health answers, anonymous publish is refused, the admin signs in and the publisher's round trip works.
+    options:
+      ntfy_logical_id: *logical
+      ntfy_image: *image
+      ntfy_bind: *bind
+      ntfy_port: *port
+      ntfy_dir: *dir
+      ntfy_owner: *owner
+      ntfy_group: *group
+      ntfy_data_root: *root
+      ntfy_uid: *uid
+      ntfy_gid: *gid
+      ntfy_admin_user: *admin
+      ntfy_admin_login_ref: *adminpw
+      ntfy_publisher_key_ref: *pubtoken
+      ntfy_scratch_prefix: *scratch
+      ntfy_health_timeout: *htimeout
+  readiness:
+    short_description: Fail unless the container engine is ready and every credential resolves in its expected form.
+    options:
+      ntfy_admin_login_ref: *adminpw
+      ntfy_admin_hash_ref: *adminhash
+      ntfy_publisher_key_ref: *pubtoken
+  backup:
+    short_description: Export both databases consistently, then name the data root for the backup.
+    options: &appopts
+      ntfy_logical_id: *logical
+      ntfy_image: *image
+      ntfy_bind: *bind
+      ntfy_port: *port
+      ntfy_dir: *dir
+      ntfy_owner: *owner
+      ntfy_group: *group
+      ntfy_data_root: *root
+      ntfy_uid: *uid
+      ntfy_gid: *gid
+  restore:
+    short_description: Check an export (listing, sizes, sha256, integrity) and restore both databases from it, the server stopped meanwhile.
+    options:
+      <<: *appopts
+      ntfy_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl and the databases it lists).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      <<: *appopts
+      ntfy_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to."
+        required: true
+  export:
+    short_description: Write the open-format exit copy (object-tree) of both databases to <data root>/export.
+    options: *appopts
