@@ -136,7 +136,16 @@ render` opens no path to it (DNS included, when `dns` is an incumbent), so a pla
 reaches an incumbent only once the egress generator learns the registry's addresses, which is a
 later change. Moving a slot from its incumbent to a module is a cutover-ledger step (ADR-0043) and
 one selection edit that removes the incumbent and adds the provider, not a module swap (`hnx
-modules swap-*` moves a slot between two modules).
+modules swap-*` moves a slot between two modules; its check counts an incumbent as selected for
+the incoming module's requirements, but a swap record cannot name an incumbent as its outgoing
+side). A registry promotion that demotes an incumbent's row (ADR-0039) is caught by the next
+check ("not its capability's primary"), so the `incumbents` edit goes in the same change.
+
+Two limits to know: `hnx modules check` notes each selected module whose requirements reach an
+incumbent (the egress render opens no path to it), and an agent lane binds only to a module
+`orchestration` instance, so with `orchestration` an incumbent a module that contributes agents
+cannot be bound yet ("lane ... bound to unselected instance"). `hnx modules providers` lists the
+incumbents as declared; only `hnx modules check` judges them.
 
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
 instance the site selects of that provider (per-instance agent bindings would be a later, additive

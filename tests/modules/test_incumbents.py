@@ -254,7 +254,10 @@ def test_hnx_modules_providers_lists_the_incumbents(capsys):
     doc = json.loads(capsys.readouterr().out)
     assert doc["incumbents"] == {s: s for s in ("dns", "events", "idp", "inference", "secrets")}
     assert mcli.main(argv) == 0
-    assert "secrets: incumbent (registry row secrets, outside modules)" in capsys.readouterr().out
+    assert (
+        "secrets: incumbent (registry row secrets, outside modules; not checked here)"
+        in capsys.readouterr().out
+    )
 
 
 # ----------------------------------------------------------------------------- at deploy time
@@ -424,3 +427,37 @@ def test_a_pass_through_next_to_an_incumbent_says_its_formats_are_undeclared(tre
         "whose formats the selection does not declare"
     ) in got
     assert "cap:log-pipeline: pass-through with no upstream stage selected" not in got
+
+
+# ----------------------------------------------------------------------------- swaps and notes
+
+
+def test_a_swap_s_incoming_module_may_require_an_incumbent_slot():
+    """other-object-store requires cap:secrets; on a site where secrets is an incumbent the swap
+    check counts it as selected, as the site rules do."""
+    from homelabnext.modules import swap as msw
+
+    root = EXAMPLES
+    mods = {p.parent.name: ld.load_yaml(p) for p in sorted(root.glob("*/module.yml"))}
+    swap = json.loads(
+        (ROOT / "schemas/platform/examples/module_swap.object-store-samples.json").read_text()
+    )
+    site = ld.load_yaml(root / "sites" / "full.yml")
+    for line in site["slots"]["object-store"]:
+        if line["instance"] == "samples":
+            line["provider"] = "example-object-store"
+    want = "other-object-store requires cap:secrets, which the site does not select"
+    assert want not in msw.module_swap_problems(swap, mods, site)
+    del site["slots"]["secrets"]
+    assert want in msw.module_swap_problems(swap, mods, site)
+    site["incumbents"] = {"secrets": {"service": "secrets", "why": "the core's secret store"}}
+    assert want not in msw.module_swap_problems(swap, mods, site)
+
+
+def test_the_check_notes_each_module_whose_requirements_reach_an_incumbent(tree):
+    report = ld.check(
+        tree, slots=SLOTS, roles=ROLES, in_tree_roots=(EXAMPLES,), core=CORE, site=fixture()
+    )
+    [note] = [n for n in report.notes if n.startswith("the egress policy opens no path")]
+    assert "example-object-store reaches dns, secrets" in note
+    assert "external-collector reaches dns" in note

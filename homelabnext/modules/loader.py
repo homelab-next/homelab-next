@@ -1054,6 +1054,22 @@ def _core_problems(tree: Tree, ins: Inputs, core: CoreNames, load=None) -> list[
     return out
 
 
+def incumbent_reach(site: Doc, sel: Mapping[str, Doc]) -> dict[str, list[str]]:
+    """Per selected module with a host role, the incumbent slots it requires or prefers (``dns``
+    for every one when ``dns`` is an incumbent): the egress render opens no path to them."""
+    inc = set(mr.incumbents(site)) - set(site.get("slots", {}))
+    out: dict[str, list[str]] = {}
+    for n, m in sel.items():
+        if not mr._hosts(m):
+            continue
+        caps = {r["cap"][4:] for r in m["requires"].get("capabilities", [])}
+        caps |= {p["cap"][4:] for p in m.get("prefers", {}).get("capabilities", [])}
+        got = sorted((caps | {"dns"}) & inc)
+        if got:
+            out[n] = got
+    return out
+
+
 def _instance_problems(site: Doc, core: CoreNames) -> list[Problem]:
     """A provider instance named like a core service row is that row, so the row's capability
     must be one of the slots the instance fills (``inference`` filling ``cap:inference``)."""
@@ -1603,6 +1619,13 @@ def check(
         sel = mr.selected(site, valid)
     except KeyError:
         return Report(sorted(set(problems)), notes)  # site_problems reported it
+    reached = incumbent_reach(site, sel)
+    if reached:
+        notes.append(
+            "the egress policy opens no path to an incumbent (hnx modules render cannot place "
+            "one): "
+            + "; ".join(f"{m} reaches {', '.join(caps)}" for m, caps in sorted(reached.items()))
+        )
     problems += pair_problems(sel)
     if "tlp_readers" not in site and mr.lake_readers(sel):
         notes.append(

@@ -509,7 +509,7 @@ def _providers(args: argparse.Namespace) -> int:
     for slot, v in unserved.items():
         print(f"{slot}: {v}")
     for slot, svc in incumbents.items():
-        print(f"{slot}: incumbent (registry row {svc}, outside modules)")
+        print(f"{slot}: incumbent (registry row {svc}, outside modules; not checked here)")
     return 0
 
 
