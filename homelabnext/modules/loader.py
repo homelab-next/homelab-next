@@ -42,6 +42,7 @@ error.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -57,6 +58,7 @@ from homelabnext import paths
 from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyLoader
 from homelabnext.modules import guest_hosts as gh
+from homelabnext.modules import registry_rows as rr
 from homelabnext.modules import rules as mr
 from homelabnext.modules import supply
 from homelabnext.schemas.module_manifest import RESERVED_IDS
@@ -108,6 +110,14 @@ MAX_CATALOG_FILES = 1_000
 #: files a fixture root's modules may name without shipping (the fictional examples carry no
 #: Ansible): never exempt for the public tree or an overlay
 FIXTURE_UNSHIPPED = ("roles/", "playbooks/")
+#: where a module's Ansible roles live: ``roles/<name>``, a directory (the apply path runs the
+#: module's roles from its ``roles/``, by path or by name, so every entry there is held to the
+#: same rules whether or not a playbook names it today)
+ROLES_DIR = "roles"
+#: the most entries one module's ``roles/`` tree may hold, and how deep it may nest: a walk past
+#: either is refused, never cut short (a role has tens of files, a few levels deep)
+MAX_ROLE_ENTRIES = 5_000
+MAX_ROLE_DEPTH = 12
 #: the kinds of what runs that the two-way check compares, as the inventory names them
 INVENTORY_KINDS = ("units", "rows", "mcp_servers", "agents", "tables")
 #: contributed kinds validated against a record type (the rest are checked for containment only)
@@ -598,16 +608,135 @@ def _contained(mod_dir: Path, rel: str) -> str | None:
     return None
 
 
+def lifecycle_playbooks(doc: Doc) -> Iterator[str]:
+    """The module-relative path of every lifecycle playbook a manifest names (what the apply
+    path runs on a host, as root)."""
+    for step in ("install", "upgrade", "remove"):
+        e = doc.get("lifecycle", {}).get(step)
+        if isinstance(e, dict) and isinstance(e.get("playbook"), str):
+            yield e["playbook"]
+
+
+def _walk_problem(top: Path, shown: str) -> str | None:
+    """Why the tree under directory ``top`` is not plain (``shown`` names ``top`` in the
+    message), or None: every entry a directory or a single-link regular file, no symbolic link
+    anywhere (a role or playbook runs as root, and a link inside it can point at any file on the
+    controller), at most :data:`MAX_ROLE_ENTRIES` entries and :data:`MAX_ROLE_DEPTH` levels.
+    Nothing is followed and nothing is read; entries are visited in name order, so the first
+    problem named is the same on every run."""
+    seen = 0
+    stack: list[tuple[Path, str, int]] = [(top, shown, 0)]
+    while stack:
+        d, label, depth = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                # never hold more than the cap: one entry past what is left is enough to refuse
+                entries = list(itertools.islice(it, MAX_ROLE_ENTRIES - seen + 1))
+        except OSError as exc:
+            return f"{label}: cannot be listed ({exc.strerror})"
+        if seen + len(entries) > MAX_ROLE_ENTRIES:
+            return f"{shown}: more than {MAX_ROLE_ENTRIES} entries"
+        entries.sort(key=lambda e: e.name)
+        subdirs = []
+        for e in entries:
+            seen += 1
+            here = f"{label}/{_shown(e.name)}"
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                return f"{here}: cannot be read"
+            if stat.S_ISLNK(st.st_mode):
+                return f"{here}: a symbolic link (a role runs as root; ship the file itself)"
+            if stat.S_ISDIR(st.st_mode):
+                if depth + 1 >= MAX_ROLE_DEPTH:
+                    return f"{here}: nested more than {MAX_ROLE_DEPTH} levels"
+                subdirs.append((Path(e.path), here, depth + 1))
+            elif not stat.S_ISREG(st.st_mode):
+                return f"{here}: not a regular file or a directory"
+            elif st.st_nlink > 1:
+                return f"{here}: a hard link (it may alias a file outside the module)"
+        stack.extend(reversed(subdirs))
+    return None
+
+
+def _role_problems(doc: Doc, mod_dir: Path) -> list[str]:
+    """Each contributed role is a directory ``roles/<name>`` of the module, reached through no
+    symbolic link and inside it; and the module's ``roles/`` tree (what the apply path runs
+    roles from) holds only the contributed roles, with no symbolic link, special
+    file or hard link anywhere under it (:func:`_walk_problem`)."""
+    out: list[str] = []
+    listed: set[str] = set()
+    for e in doc.get("contributes", {}).get("roles", []):
+        rel = e["file"]
+        parts = rel.removesuffix("/").split("/")  # the schema allows a directory's slash
+        if len(parts) != 2 or parts[0] != ROLES_DIR or parts[1] in ("", ".", ".."):
+            out.append(
+                f"{rel}: a role is the directory {ROLES_DIR}/<name> of the module (the apply "
+                f"path runs roles from {ROLES_DIR}/)"
+            )
+            continue
+        listed.add(parts[1])
+    top = mod_dir / ROLES_DIR
+    if not os.path.lexists(top):
+        out += [f"{ROLES_DIR}/{r}: not a role directory in the module" for r in sorted(listed)]
+        return out
+    if top.is_symlink():
+        return [*out, f"{ROLES_DIR}: reached through a symbolic link"]
+    if not stat.S_ISDIR(top.lstat().st_mode):
+        return [*out, f"{ROLES_DIR}: not a directory"]
+    if not top.resolve().is_relative_to(mod_dir.resolve()):
+        return [*out, f"{ROLES_DIR}: outside the module"]
+    try:
+        with os.scandir(top) as it:
+            present = {
+                e.name: e.stat(follow_symlinks=False).st_mode
+                for e in itertools.islice(it, MAX_ROLE_ENTRIES + 1)
+            }
+    except OSError as exc:
+        return [*out, f"{ROLES_DIR}: cannot be listed ({exc.strerror})"]
+    if len(present) > MAX_ROLE_ENTRIES:
+        return [*out, f"{ROLES_DIR}: more than {MAX_ROLE_ENTRIES} entries"]
+    for name in sorted(listed):
+        mode = present.get(name)
+        if mode is not None and stat.S_ISLNK(mode):
+            out.append(f"{ROLES_DIR}/{name}: reached through a symbolic link")
+        elif mode is None or not stat.S_ISDIR(mode):
+            out.append(f"{ROLES_DIR}/{name}: not a role directory in the module")
+    for name in sorted(set(present) - listed):
+        out.append(
+            f"{ROLES_DIR}/{_shown(name)}: not a contributed role (everything under {ROLES_DIR}/ "
+            "is where the apply path runs roles from; list it under contributes.roles or "
+            "remove it)"
+        )
+    if out:
+        return out
+    why = _walk_problem(top, ROLES_DIR)
+    return [why] if why else []
+
+
 def _file_problems(doc: Doc, mod_dir: Path, fixture: bool) -> tuple[list[str], bool]:
-    """(problems, whether the fixture exemption applied) for every contributed file."""
+    """(problems, whether the fixture exemption applied) for every contributed file, every
+    lifecycle playbook and the module's roles (:func:`_role_problems`)."""
     out, exempt = [], False
-    for _, rel in contributed_files(doc):
+    files = [(k, rel) for k, rel in contributed_files(doc) if k != "roles"]
+    files += [("lifecycle", rel) for rel in lifecycle_playbooks(doc)]
+    for _, rel in files:
         if fixture and rel.startswith(FIXTURE_UNSHIPPED):
             exempt = True
             continue
         why = _contained(mod_dir, rel)
         if why:
             out.append(f"{rel}: {why}")
+    roles = [e["file"] for e in doc.get("contributes", {}).get("roles", [])]
+    if (
+        fixture
+        and roles
+        and all(r.startswith(FIXTURE_UNSHIPPED) for r in roles)
+        and not (os.path.lexists(mod_dir / ROLES_DIR))
+    ):
+        exempt = True
+    else:
+        out += _role_problems(doc, mod_dir)
     return out, exempt
 
 
@@ -1527,6 +1656,7 @@ def check(
     budget: Budget | None = None,
     empty_selection: bool = False,
     guests: gh.Guests | None = None,
+    lab_registry: Any = None,
 ) -> Report:
     """Every rule of "What the loader checks" over ``tree``; with ``site`` the site rules and
     the supply chain, with ``inventory`` the runtime half of the two-way check.
@@ -1539,7 +1669,12 @@ def check(
     ``guests`` (:func:`homelabnext.modules.guest_hosts.read`): the guest records a site host may
     reference (``hosts.<name>.guest``).  Each reference is resolved to the guest's kind, capacity
     and addresses before any site rule reads it, and every placed role is judged against its
-    guest; a reference with no guests read is a problem."""
+    guest; a reference with no guests read is a problem.
+
+    ``lab_registry`` (the lab's own registry document, ``lab/services.yml``): every service row
+    a selected module contributes, as the site binds it (renamed to the instance, placed on the
+    guest), appears in it identically (:func:`homelabnext.modules.registry_rows.row_problems`);
+    without it the rows are not compared, and the report says so."""
     problems: list[Problem] = []
     notes: list[str] = []
     core = core or CoreNames()
@@ -1647,6 +1782,18 @@ def check(
             + "; ".join(f"{m} reaches {', '.join(caps)}" for m, caps in sorted(reached.items()))
         )
     problems += pair_problems(sel)
+    if lab_registry is not None:
+        try:
+            found = rr.row_problems(site, sel, ins.rows, lab_registry)
+        except (KeyError, TypeError, AttributeError, ValueError, RecursionError) as exc:
+            found = [f"the lab registry's rows could not be compared ({exc.__class__.__name__})"]
+        problems += [Problem("registry", p) for p in found]
+    elif any(True for _ in rr.expected_rows(site, sel, ins.rows)):
+        notes.append(
+            "the selected modules' service rows were not compared with the lab registry (none "
+            "was read: give the overlay's lab/services.yml or --services; the repository's "
+            "example registry describes another lab)"
+        )
     if "tlp_readers" not in site and mr.lake_readers(sel):
         notes.append(
             "the lake's readers have no TLP ceilings (tlp_readers): render writes no "

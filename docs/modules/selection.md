@@ -226,6 +226,7 @@ selected instance that way. `hnx modules check` compares the core registry's `im
 whose capability is a selected slot names the product (or an alias) of a provider selected for that
 slot, and a row for a slot the site selects `none` or `pass-through` for is a problem; with the
 repository's example registry (another lab) the comparison is a note. Nothing consumes it at run
-time yet (`homelabnext/broker/cli.py` still reads a conformance target file), the baselines'
-`role` bindings are not compared, and the registry is not generated from the selection (an
-operator decision). Model choice stays one line in the role table.
+time yet (`homelabnext/broker/cli.py` still reads a conformance target file), and the baselines'
+`role` bindings are not compared. The registry is not generated from the selection (an operator
+decision); its rows are checked against the modules instead
+([registry rows](registry-rows.md)). Model choice stays one line in the role table.

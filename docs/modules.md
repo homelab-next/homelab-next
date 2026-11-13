@@ -203,6 +203,7 @@ on one of these pages.
 | [TLP labels](modules/tlp.md) | TLP labels (ADR-0033) |
 | [placement, isolation and the supply chain](modules/supply-chain.md) | Placement and isolation; Supply chain |
 | [site selection](modules/selection.md) | Site selection (`platform/module_selection` 1.0, a draft schema) |
+| [registry rows](modules/registry-rows.md) | Registry rows: checked, not generated |
 | [the network scope](modules/network-scope.md) | The network scope |
 | [what the loader checks](modules/loader.md) | What the loader checks |
 | [the loader at deploy time](modules/loader-deploy.md) | The loader at deploy time |
