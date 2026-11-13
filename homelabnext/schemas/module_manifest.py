@@ -417,11 +417,31 @@ def _defs() -> dict[str, Any]:
                     "description": "Default internal. internet-facing: only on a kind external role, or with the overlay's grants.internet_facing. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated.",
                 },
                 "footprint": ref("footprint"),
+                "guest": obj(
+                    {
+                        "capability": arr(
+                            ref("cap_ref"),
+                            "The guest's own capability (platform/guest capability) is one of these.",
+                            1,
+                        ),
+                        "baselines": arr(
+                            pat(SLUG, None, 40),
+                            "Every one of these is among the guest's baselines (platform/guest baseline.names, with what they extend when the guests' baseline set is read).",
+                            1,
+                        ),
+                    },
+                    desc="What the guest under this role must provide, judged when the site's host references a guest (hosts.<name>.guest, loader); on a stand-in host it is noted as not checked. Not on a kind external role (loader).",
+                    minProperties=1,
+                ),
                 "roles": arr(ref("role_ref"), "The module's own Ansible roles on this host."),
                 "purpose": text(200),
             },
             ["role", "kind", "footprint"],
             "A host or guest the module needs, by role, never by name.",
+            **{
+                "if": {"required": ["kind"], "properties": {"kind": {"const": "external"}}},
+                "then": {"not": {"required": ["guest"]}},
+            },
         ),
         "requires": obj(
             {
@@ -1431,6 +1451,11 @@ def module_selection_schema() -> dict[str, Any]:
     )
     host = obj(
         {
+            "guest": pat(
+                "guest:" + SLUG,
+                "The platform/guest record this host is (its id, guest:<name>). The loader reads the guest file (hnx modules check --guests DIR, or the overlay's lab/guests/) and derives kind, capacity and addresses from it, so they are not written here; it refuses an unknown or retired guest, a guest two hosts name, and a placed host role whose kind, footprint or guest requirements the guest does not meet.",
+                70,
+            ),
             "kind": {"enum": ["vm", "lxc", "host", "external"]},
             "isolated": {"type": "boolean"},
             "capacity": capacity,
@@ -1443,12 +1468,16 @@ def module_selection_schema() -> dict[str, Any]:
                     "allOf": [ref("scope_entry"), {"not": {"pattern": "/(?!(?:32|128)$)"}}],
                     "description": "One address: no prefix, or a full-length one (/32, /128).",
                 },
-                "The host's own addresses, what the egress generator (homelabnext.modules.egress) lets a module role reach on it and never counts as the internet. A stand-in, like capacity, until the loader reads them from the guest records and the network model (and refuses a mismatch). Private: documentation ranges in a public example.",
+                "The host's own addresses, what the egress generator (homelabnext.modules.egress) lets a module role reach on it and never counts as the internet. A stand-in, like capacity: a host that references a guest takes them from the guest record (network.ip and extra_addresses) instead. Private: documentation ranges in a public example.",
                 1,
             ),
         },
-        ["kind", "capacity"],
-        "A site host; capacity stands in for its platform/guest resources.",
+        desc="A site host: a reference to its platform/guest record (guest), or a stand-in that declares kind and capacity itself (an external host, or a host with no guest file). isolated, resources and headroom go with either form.",
+        **{
+            "if": {"required": ["guest"]},
+            "then": {"allOf": _not_kind("kind", "capacity", "addresses")},
+            "else": {"required": ["kind", "capacity"]},
+        },
     )
     choice = obj(
         {

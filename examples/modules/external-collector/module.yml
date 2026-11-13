@@ -50,6 +50,7 @@ requires:
     - role: receiver
       kind: vm
       footprint: {cpu: 1, memory_mb: 384, disk_gb: 10}
+      guest: {baselines: [server]}   # judged when the site's host references a guest record
       roles: [role:external_collector_receiver]
       purpose: receives batches, writes the lake and the object store
   scope:

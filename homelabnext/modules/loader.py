@@ -56,6 +56,7 @@ import yaml
 from homelabnext import paths
 from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.modules import guest_hosts as gh
 from homelabnext.modules import rules as mr
 from homelabnext.modules import supply
 from homelabnext.schemas.module_manifest import RESERVED_IDS
@@ -230,6 +231,9 @@ class CoreNames:
 class Report:
     problems: list[Problem]
     notes: list[str]  # what was not checked, and why
+    #: the selection as the rules judged it: hosts that reference a guest carry the kind,
+    #: capacity and addresses resolved from their guest records (None without a valid site)
+    site: Doc | None = None
 
     @property
     def ok(self) -> bool:
@@ -1522,6 +1526,7 @@ def check(
     inventory: Doc | None = None,
     budget: Budget | None = None,
     empty_selection: bool = False,
+    guests: gh.Guests | None = None,
 ) -> Report:
     """Every rule of "What the loader checks" over ``tree``; with ``site`` the site rules and
     the supply chain, with ``inventory`` the runtime half of the two-way check.
@@ -1529,7 +1534,12 @@ def check(
     ``empty_selection`` (no ``site``): the site selects no module at all (a lab that has taken
     up none, ``hnx modules check --deploy``).  The site rules and the supply chain have nothing
     to judge, but the runtime check still runs: every running name bound to a module is one the
-    site does not select."""
+    site does not select.
+
+    ``guests`` (:func:`homelabnext.modules.guest_hosts.read`): the guest records a site host may
+    reference (``hosts.<name>.guest``).  Each reference is resolved to the guest's kind, capacity
+    and addresses before any site rule reads it, and every placed role is judged against its
+    guest; a reference with no guests read is a problem."""
     problems: list[Problem] = []
     notes: list[str] = []
     core = core or CoreNames()
@@ -1606,6 +1616,8 @@ def check(
     if errs:
         problems += [Problem("site", f"schema: {e}") for e in errs]
         return Report(sorted(set(problems)), notes)
+    site, unresolved = gh.resolve(site, guests)
+    problems += [Problem("site", p) for p in unresolved]
     problems += [
         Problem("site", p)
         for p in mr.site_problems(
@@ -1619,6 +1631,13 @@ def check(
         sel = mr.selected(site, valid)
     except KeyError:
         return Report(sorted(set(problems)), notes)  # site_problems reported it
+    problems += [Problem("site", p) for p in gh.placement_problems(site, sel, guests)]
+    unchecked = gh.unchecked(site, sel)
+    if unchecked:
+        notes.append(
+            "guest requirements not checked (the host is a stand-in, not a guest reference): "
+            + "; ".join(unchecked)
+        )
     reached = incumbent_reach(site, sel)
     if reached:
         notes.append(
@@ -1646,7 +1665,7 @@ def check(
         notes.append("no inventory of what runs: the runtime half of the two-way check did not run")
     else:
         _runtime(vtree, ins, site, sel, inventory, load, problems, notes, core)
-    return Report(sorted(set(problems)), notes)
+    return Report(sorted(set(problems)), notes, site)
 
 
 def _runtime(

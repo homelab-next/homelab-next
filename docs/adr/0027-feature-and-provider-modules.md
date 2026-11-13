@@ -81,7 +81,10 @@ says what selecting someone else's module grants it.
 9. **Selection is site configuration in the private overlay** (`platform/module_selection` 1.0):
    providers per slot as instances, `none` or `pass-through` where the registry allows, an
    **incumbent** for a slot served outside modules
-   ([selection](../modules/selection.md#incumbents-slots-served-outside-modules)), placement,
+   ([selection](../modules/selection.md#incumbents-slots-served-outside-modules)), placement
+   on hosts that reference their guest records, whose kind, capacity and addresses the loader
+   reads and judges each placed role against
+   ([selection](../modules/selection.md#hosts-that-are-guests)),
    lane-to-orchestration-instance bindings, real configuration values, the grants, and the
    site's **network scope** (trusted, target and excluded addresses: the one place a selection
    holds addresses; a module declares the parts it reads and its reader fails closed). Consumers
