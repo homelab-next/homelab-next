@@ -148,8 +148,12 @@ suite_budgets = [
   # nats-server or nats-py, and run in the external-tools job) 1227.2s and 1383.5s on a first run,
   # 1106.5s and 1411.2s on the green run of head 1210441b (2026-11-12): the spread is run-to-run
   # noise; #360's own pull request measured 991s once and about 770s typically before the
-  # openbao suites joined it. 1680 is about 1.2x the slower figure
-  "tests/roles = 1680",
+  # openbao suites joined it. 1680 is about 1.2x the slower figure. 2150 since the openbao ACME,
+  # node-notify, ssh_hardening check-mode and docker_engine role suites joined (#367, #366, #368,
+  # #372): on 2026-11-12 3.12 measured 1791.1s (#372, a red run over 1680), 1670.2s and 1460.0s
+  # (its green rerun), and 1686.5s (#373, red); 3.11 1166.2s-1344.8s. 2150 is about 1.2x the
+  # slowest figure
+  "tests/roles = 2150",
   # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
   # builds the controller and runs the whole suite against it: main measured 180-186 s summed
   # over the shards (2026-11-09), and the pull request that added it 245.8 s, over 240
