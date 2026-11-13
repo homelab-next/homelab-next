@@ -261,8 +261,13 @@ bao kv get -field=value secret/ntfy/publisher-token | ssh root@hv-1 sh /root/hnx
 ```
 
 `pvesh` takes parameters only as arguments, so while the target is written the value (base64) is
-in that `pvesh` command line on the node, where every local account is an administrator; mount
-`/proc` with `hidepid=2` if the node has any other. A target configured by hand in this shape
+in that `pvesh` command line on the node. A stock Proxmox VE node mounts `/proc` without
+`hidepid`, so every local account can read it: mount `/proc` with `hidepid=2` if the node has
+accounts other than administrators, and never run the script under `sh -x` (it prints the
+command lines). For an unattended run give the value in `HNX_NOTIFY_SECRET`: the stdin read waits
+for a line or the end of input. Rotating the token under the same name is a re-run with the new
+value; renaming the credential (`secret:token` to another name) leaves the old secret on the
+target, so run the old script's `--remove` first, then apply the new one. A target configured by hand in this shape
 (target `hnx-notify-<node>`, header `Authorization: Bearer {{ secrets.token }}`, secret `token`) is
 adopted by declaring the same `url`, `topic` and `credential: secret:token`: the first apply
 rewrites it in place.

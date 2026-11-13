@@ -20,6 +20,7 @@
   hosts: modhost_core
   become: true
   gather_facts: false
+  any_errors_fatal: true
   tags: [hnx_limits, mod_example_agent_runtime, mod_example_inference, mod_example_platform, mod_example_siem_suite]
   vars:
     hnx_limits_unit_dir: "/etc/systemd/system"
@@ -41,11 +42,18 @@
         src: "{{ playbook_dir }}/limits/core/hnx-module-quota.sh"
         dest: "{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"
         mode: "0755"
+    - name: "is hnx-module-quota.sh installed? (a dry run copies nothing)"
+      ansible.builtin.stat:
+        path: "{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"
+      register: hnx_quota_script
+      tags: [hnx_quota]
     - name: "every data-root cap in place? (exit 3: one is owed)"
       ansible.builtin.command:
         argv: ["{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh", "--check"]
       register: hnx_quota_check
-      changed_when: false
+      check_mode: false
+      when: hnx_quota_script.stat.exists
+      changed_when: ansible_check_mode and hnx_quota_check.rc == 3
       failed_when: hnx_quota_check.rc not in [0, 3]
       tags: [hnx_quota]
     - name: "cap and reserve every owed data root (fails if one cannot be)"
@@ -59,6 +67,7 @@
   hosts: modhost_data
   become: true
   gather_facts: false
+  any_errors_fatal: true
   tags: [hnx_limits, mod_example_lake, mod_example_object_store, mod_external_collector]
   vars:
     hnx_limits_unit_dir: "/etc/systemd/system"
@@ -80,11 +89,18 @@
         src: "{{ playbook_dir }}/limits/data/hnx-module-quota.sh"
         dest: "{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"
         mode: "0755"
+    - name: "is hnx-module-quota.sh installed? (a dry run copies nothing)"
+      ansible.builtin.stat:
+        path: "{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"
+      register: hnx_quota_script
+      tags: [hnx_quota]
     - name: "every data-root cap in place? (exit 3: one is owed)"
       ansible.builtin.command:
         argv: ["{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh", "--check"]
       register: hnx_quota_check
-      changed_when: false
+      check_mode: false
+      when: hnx_quota_script.stat.exists
+      changed_when: ansible_check_mode and hnx_quota_check.rc == 3
       failed_when: hnx_quota_check.rc not in [0, 3]
       tags: [hnx_quota]
     - name: "cap and reserve every owed data root (fails if one cannot be)"

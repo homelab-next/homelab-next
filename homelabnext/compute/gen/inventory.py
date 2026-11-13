@@ -164,9 +164,13 @@ GROUP_VARS_MAX = 1 << 20
 
 
 def _read_regular(path: Path) -> str:
-    """A regular file's text, opened without following a link (refused, not followed)."""
+    """A regular file's text, opened without following a link (refused, not followed) and
+    without blocking (a FIFO is refused, never waited on)."""
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise ComputeUnreadable(f"--group-vars {path}: not a regular file")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path, flags)
     except OSError as exc:
         raise ComputeUnreadable(f"--group-vars {path}: {exc.strerror}") from None
     with os.fdopen(fd, "rb") as fh:
@@ -201,7 +205,8 @@ def group_vars(directory: str | Path, hosts_yml_text: str) -> dict[str, str]:
         m = _GROUP_VARS_FILE.match(entry.name)
         if m is None:
             problems.append(
-                f"{entry.name}: not <group>.yml (a group_vars/<group>/ directory is not carried)"
+                f"{entry.name}: not <group>.yml or <group>.yaml (only those are carried, and a "
+                "dotfile is skipped; a group_vars/<group>/ directory is not carried)"
             )
             continue
         group = m["group"]
@@ -222,7 +227,10 @@ def group_vars(directory: str | Path, hosts_yml_text: str) -> dict[str, str]:
             problems.append(f"{entry.name}: not a mapping of variables")
             continue
         if group not in groups:
-            problems.append(f"{entry.name}: {group} is no group of this inventory")
+            problems.append(
+                f"{entry.name}: {group} is no group of this inventory (a mod_* or modhost_* "
+                "group needs --selection)"
+            )
             continue
         rel = f"group_vars/{group}.yml"
         if rel in out:

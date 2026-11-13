@@ -44,8 +44,12 @@ apply reads it from ``HNX_NOTIFY_SECRET`` or, when that is unset and stdin is no
 first line of stdin, and refuses to change anything without it (``--test`` and ``--remove`` do not
 need it).  Every apply stores it again with the headers, so a re-run converges both and rotates
 the token.  ``pvesh`` takes parameters only as arguments, so the value (base64-encoded) is in the
-``pvesh`` command line while that call runs: on a hypervisor every local account is an
-administrator, and ``hidepid`` hides it from the rest.
+``pvesh`` command line while that call runs, readable by every local account of a stock node
+(``/proc`` is mounted without ``hidepid``; mount it with ``hidepid=2`` if the node has accounts
+other than administrators), and never run the script under ``sh -x``, which prints it.  Use the
+environment variable for an unattended run: the stdin read waits for a line or end of file.
+Renaming the credential leaves the old secret on the target: run the old script's ``--remove``,
+then apply.
 
 This is deliberately not a client of the ``notify`` capability: a hypervisor must be able to
 alert when no guest (the notify service included) is up, so the node talks to the server named in
@@ -204,22 +208,29 @@ def script(node: str, spec: dict) -> str:
         L += [
             "# the credential's value, before anything changes: the environment, else the first",
             "# line of stdin (never an argument, never this file); none, and nothing is touched",
-            f'SECRET="${{{SECRET_ENV}:-}}"',
+            "# (a private name, unset first: an inherited, exported one would reach every child)",
+            "unset hnx_value",
+            f'hnx_value="${{{SECRET_ENV}:-}}"',
             f"unset {SECRET_ENV}",
-            'if [ -z "$SECRET" ] && [ ! -t 0 ]; then',
-            "  IFS= read -r SECRET || true",
+            'if [ -z "$hnx_value" ] && [ ! -t 0 ]; then',
+            "  IFS= read -r hnx_value || true",
             "fi",
-            'if [ -z "$SECRET" ]; then',
+            'if [ -z "$hnx_value" ]; then',
             f'  echo "$0: the publish credential (secret $SECRET_NAME): set {SECRET_ENV} or give it '
             'on stdin" >&2',
             "  exit 2",
             "fi",
-            'case "$SECRET" in',
+            'case "$hnx_value" in',
             "  *[![:graph:]]*)",
             '    echo "$0: the publish credential holds a space or a control character" >&2',
             "    exit 2 ;;",
             "esac",
-            "SECRET=$(printf '%s' \"$SECRET\" | base64 | tr -d '\\n')",
+            "hnx_value=$(printf '%s' \"$hnx_value\" | base64 | tr -d '\\n')",
+            "# no pipefail in sh: a base64 that failed leaves nothing, never an empty secret",
+            'if [ -z "$hnx_value" ]; then',
+            '  echo "$0: could not encode the publish credential (base64)" >&2',
+            "  exit 2",
+            "fi",
             "# the target first: the matcher must name a target that exists.  The headers and the",
             "# secret are given in full on every apply: a re-run converges them (and rotates the",
             "# token); disable is the one key to drop",
@@ -227,15 +238,15 @@ def script(node: str, spec: dict) -> str:
             '  pvesh set "$WEBHOOKS/$NAME" --method post --url "$URL" --body "$BODY" \\',
             '    --header "name=Content-Type,value=$CTYPE" \\',
             '    --header "name=Authorization,value=$AUTH" \\',
-            '    --secret "name=$SECRET_NAME,value=$SECRET" --comment "$COMMENT" \\',
+            '    --secret "name=$SECRET_NAME,value=$hnx_value" --comment "$COMMENT" \\',
             "    --delete disable",
             "else",
             '  pvesh create "$WEBHOOKS" --name "$NAME" --method post --url "$URL" --body "$BODY" \\',
             '    --header "name=Content-Type,value=$CTYPE" \\',
             '    --header "name=Authorization,value=$AUTH" \\',
-            '    --secret "name=$SECRET_NAME,value=$SECRET" --comment "$COMMENT"',
+            '    --secret "name=$SECRET_NAME,value=$hnx_value" --comment "$COMMENT"',
             "fi",
-            "SECRET=",
+            "hnx_value=",
         ]
     L += [
         "# only what this node raises: notifications.cfg is one file for the whole cluster.",

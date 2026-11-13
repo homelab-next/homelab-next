@@ -190,6 +190,7 @@ def test_the_script_passes_shellcheck(tmp_path):
 # ``$STATE.testfail`` fails the test, ``$STATE.deletefail`` every delete.
 PVESH_STUB = r"""#!/bin/sh
 echo "pvesh $*" >> "$LOG"
+if [ -n "${hnx_value:-}${HNX_NOTIFY_SECRET:-}" ]; then echo "ENV-LEAK" >> "$LOG"; fi
 verb="$1" path="$2"; shift 2
 f="$STATE$(printf '%s' "$path" | tr / _)"
 check_args() {
@@ -562,3 +563,25 @@ def test_the_credential_script_passes_shellcheck(tmp_path):
     script = tmp_path / "hnx-notify.sh"
     script.write_text(out["notify/hv-a/hnx-notify.sh"], encoding="utf-8")
     subprocess.run(["shellcheck", "-s", "sh", str(script)], check=True)
+
+
+def test_the_value_never_reaches_a_child_through_the_environment(node):
+    # an exported variable of the script's private name, inherited from the caller, is unset
+    # before the value is put in it, and HNX_NOTIFY_SECRET is unset once read
+    run = node(CRED)
+    r, calls = run(extra_env={node_notify.SECRET_ENV: VALUE, "hnx_value": "inherited"})
+    assert r.returncode == 0, r.stderr
+    assert "ENV-LEAK" not in calls
+
+
+def test_a_failed_encoding_changes_nothing(node, tmp_path):
+    run = node(CRED)
+    fake = tmp_path / "nobase64"
+    fake.mkdir()
+    (fake / "base64").write_text("#!/bin/sh\nexit 1\n")
+    (fake / "base64").chmod(0o755)
+    r, calls = run(
+        extra_env={node_notify.SECRET_ENV: VALUE, "PATH": f"{fake}:{node.bin}:/usr/bin:/bin"}
+    )
+    assert r.returncode == 2 and calls == []
+    assert "could not encode" in r.stderr

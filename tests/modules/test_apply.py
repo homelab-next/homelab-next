@@ -688,6 +688,15 @@ def test_the_limits_are_installed_before_the_modules_and_a_rerun_changes_nothing
     assert not any(c.endswith(" apply") for c in calls)
     quota = sorted(c for c in calls if c.startswith("quota "))
     assert quota == sorted(f"quota {h} --check" for h in quota_hosts)
+    # a dry run reports an owed cap (the --check is read-only) and applies nothing
+    (qdir / f"{quota_hosts[0]}.capped").unlink()
+    r = run("--check")
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = [c for c in log.read_text().splitlines() if c.startswith("quota ")]
+    assert sorted(calls) == sorted(f"quota {h} --check" for h in quota_hosts)
+    owed = next(iter(inv["all"]["children"][apply.host_group(quota_hosts[0])]["hosts"]))
+    recap = next(ln for ln in r.stdout.splitlines() if ln.startswith(owed) and "changed=" in ln)
+    assert "changed=1" in recap, r.stdout
 
 
 @pytest.mark.requires_tool("ansible-playbook")
@@ -821,6 +830,9 @@ def test_a_linked_or_unreadable_group_vars_file_is_2(tmp_path, capsys):
     (gv / "all.yml").write_text("a: 1\na: 2\n")  # one of the two would be set silently
     assert _guests_render("--group-vars", str(gv)) == 2
     assert _guests_render("--group-vars", str(tmp_path / "missing")) == 2
+    (gv / "all.yml").unlink()
+    os.mkfifo(gv / "all.yml")  # refused, never waited on
+    assert _guests_render("--group-vars", str(gv)) == 2
 
 
 def test_group_vars_is_for_the_inventory_target_only(tmp_path, capsys):

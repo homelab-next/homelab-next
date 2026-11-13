@@ -518,6 +518,9 @@ def _limits_plays(
             f"  hosts: {host_group(host)}",
             "  become: true",
             "  gather_facts: false",
+            # a host whose limits failed stops the run: no module installs anywhere against a
+            # provider whose host is not capped
+            "  any_errors_fatal: true",
             f"  tags: [{', '.join(tags)}]",
             "  vars:",
             f"    hnx_limits_unit_dir: {_q(UNIT_DIR)}",
@@ -553,11 +556,20 @@ def _limits_plays(
                 f'        src: "{src}/{QUOTA_SCRIPT}"',
                 f'        dest: "{{{{ hnx_limits_sbin_dir }}}}/{QUOTA_SCRIPT}"',
                 '        mode: "0755"',
+                f"    - name: {_q(f'is {QUOTA_SCRIPT} installed? (a dry run copies nothing)')}",
+                "      ansible.builtin.stat:",
+                f'        path: "{{{{ hnx_limits_sbin_dir }}}}/{QUOTA_SCRIPT}"',
+                "      register: hnx_quota_script",
+                f"      tags: [{QUOTA_TAG}]",
                 f"    - name: {_q('every data-root cap in place? (exit 3: one is owed)')}",
                 "      ansible.builtin.command:",
                 f'        argv: ["{{{{ hnx_limits_sbin_dir }}}}/{QUOTA_SCRIPT}", "--check"]',
                 "      register: hnx_quota_check",
-                "      changed_when: false",
+                # read-only by the script's contract: a dry run (--check) reports an owed cap too
+                "      check_mode: false",
+                "      when: hnx_quota_script.stat.exists",
+                # an owed cap is a change a dry run reports; a real run's change is the apply
+                "      changed_when: ansible_check_mode and hnx_quota_check.rc == 3",
                 "      failed_when: hnx_quota_check.rc not in [0, 3]",
                 f"      tags: [{QUOTA_TAG}]",
                 f"    - name: {_q('cap and reserve every owed data root (fails if one cannot be)')}",

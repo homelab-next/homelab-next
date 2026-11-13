@@ -60,8 +60,20 @@ when one changed, then installs `hnx-module-quota.sh` into `/usr/local/sbin/` (0
 `--check`: exit 0 changes nothing, exit 3 (a cap is owed) runs the script once to cap and reserve
 the owed data roots, and that run failing (exit 3 again: data in the way, a different size, a
 symbolic link) fails the play, so no module role runs on a host whose caps could not be put in
-place. Any other exit of `--check` fails too. A second run copies nothing, reloads nothing and
-only runs `--check` (`changed=0`). The quota tasks are tagged `hnx_quota` as well. The two
+place. Any other exit of `--check` fails too, and the limits plays are `any_errors_fatal`: a
+host whose limits fail stops the whole run, so no module installs anywhere against a provider
+whose host is not capped. A stuck cap (an image cap whose `disk_gb` changed, which is never
+resized in place) therefore blocks every module on its host; `--skip-tags hnx_quota` (the two
+quota tasks' own tag) is the explicit way past it while the data is moved. A module's data root
+that already holds files on a guest without ZFS (a module deployed before its limits were
+installed) is refused the same way: move the data out, or make the root its own ZFS dataset,
+then rerun. A second run copies nothing, reloads nothing and only runs `--check` (`changed=0`);
+under `ansible-playbook --check` the `--check` still runs (it is read-only) and an owed cap shows
+as a change, while the apply is skipped. `--tags mod_<module>` installs that module's whole host's
+limits and runs the quota script for every module's data root there, and `--skip-tags
+mod_<module>` skips the limits play of each host it is on, other modules there included.
+`daemon-reload` runs only when a unit changed: a run killed between the copy and the reload
+leaves it owed (`systemctl daemon-reload` by hand), a cost accepted for an exact `changed=0`. The two
 directories are play variables (`hnx_limits_unit_dir`, `hnx_limits_sbin_dir`), so a test can
 point them elsewhere with `-e`. A slice limits only the services that join it (`Slice=`, or a
 container's cgroup parent): a role that does not is not confined by it. A file of the limits
@@ -124,7 +136,14 @@ its slice gets a chain that allows only DNS and its required slots and drops the
 which requires only `secrets`, read at deploy time by the controller, not by the guest: in effect
 drop all). Its
 unit starts before `network-pre.target` and requires every role slice, so a wrong policy can cut a
-host off at boot. A digest binding the inventory, the playbooks and the checked
+host off at boot. The options: install it as rendered (containers stay unfiltered, so a declared
+`egress: none` would read as enforced when it is not); filter containers first, with `compose_app`
+putting the container under its role slice and either `network_mode: host` or a stable bridge
+name matched by `iifname` in a `forward` chain; give an `egress: none` container an
+`internal: true` Docker network, which is not open to a module that publishes a port (ntfy does:
+an internal network carries no published port, so it would need a second network, and egress
+again); or install nothing for container roles and make the gap visible where the posture is
+read (a `hnx modules check` warning, not only this page). A digest binding the inventory, the playbooks and the checked
 selection and module trees together (the guard play catches only a missing group, not a stale
 one); a walk of each role directory refusing links before it runs as root (the loader's
 `roles/` walk is a point-in-time check of the checkout, so run from a staging copy). The selection's `config` values and the module's secrets reach the
