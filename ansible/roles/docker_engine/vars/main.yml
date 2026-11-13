@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Where the checked vendor signing key is installed for apt (the repository's Signed-By); the
+# vendor serves it ASCII-armoured.
+docker_engine_keyring: /etc/apt/keyrings/hnx-docker.asc
+# The guest's distribution and release codename: the vendor publishes one repository per
+# distribution (<root>/debian, <root>/ubuntu) with a suite per codename.
+docker_engine_distribution: "{{ ansible_facts['distribution'] }}"
+docker_engine_release: "{{ ansible_facts['distribution_release'] }}"
+docker_engine_apt_uri: "{{ docker_engine_repository }}/{{ 'ubuntu' if docker_engine_distribution == 'Ubuntu' else 'debian' }}"
+# The packages and the pin each one follows (the engine and its CLI move together).
+docker_engine_packages:
+  - {name: docker-ce, version: "5:{{ docker_engine_version }}-*"}
+  - {name: docker-ce-cli, version: "5:{{ docker_engine_version }}-*"}
+  - {name: containerd.io, version: "{{ docker_engine_containerd_version }}-*"}
+  - {name: docker-buildx-plugin, version: "{{ docker_engine_buildx_version }}-*"}
+  - {name: docker-compose-plugin, version: "{{ docker_engine_compose_version }}-*"}
+# Where a new daemon.json waits for dockerd --validate: beside the live file (tasks/config.yml).
+docker_engine_staged_file: "{{ docker_engine_config_file | dirname }}/.homelabnext-staged.json"

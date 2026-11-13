@@ -64,6 +64,7 @@ SHIPPED = [
     "compose_app",
     "config_leak_scan",
     "disk_encryption_check",
+    "docker_engine",
     "etckeeper",
     "events_bus",
     "example_service",
@@ -351,3 +352,48 @@ def test_ansible_cfg_never_disables_host_key_checking():
                 assert value.strip().lower() not in ("false", "no", "0", "off"), (section, key)
             if key.endswith("ssh_args") or key.endswith("ssh_common_args"):
                 assert "StrictHostKeyChecking=no" not in value, (section, key)
+
+
+# ------------------------------------------------- RL005 and package names (containerd.io)
+def _task(module, args):
+    return yaml.safe_dump([{"name": "t", module: args}], sort_keys=False)
+
+
+@pytest.mark.parametrize(
+    "tasks, defaults, bad",
+    [
+        # a package-name argument of a package module names a package, never a host
+        (_task("ansible.builtin.apt", {"name": "containerd.io"}), "", False),
+        (_task("ansible.builtin.apt", {"name": ["gpg", "containerd.io=2.4.2-*"]}), "", False),
+        (_task("apt", {"pkg": "containerd.io={{ demo_role_version }}-*"}), "", False),
+        (_task("ansible.builtin.package", {"name": "containerd.io"}), "", False),
+        (_task("ansible.builtin.dpkg_selections", {"name": "containerd.io", "selection": "hold"}), "", False),
+        # a role variable named *_packages / *_package lists package names
+        ("", "demo_role_packages: [containerd.io, docker-ce]\n", False),
+        ("", "demo_role_packages:\n  - {name: containerd.io, version: 2.4.2-*}\n", False),
+        ("", "demo_role_package: containerd.io\n", False),
+        # a real hostname is still caught, inside and outside those contexts
+        # only a value that is a package spec as a whole is skipped, and only its name
+        (_task("ansible.builtin.apt", {"name": "gpg mirror.example.internal"}), "", True),
+        (_task("ansible.builtin.apt", {"name": "x=1 mirror.example.internal"}), "", True),
+        (_task("ansible.builtin.apt_repository", {"repo": "deb mirror.example.internal main"}), "", True),
+        (_task("ansible.builtin.apt", {"name": "x", "default_release": "mirror.example.internal"}), "", True),
+        (_task("ansible.builtin.systemd_service", {"name": "db.example.internal"}), "", True),
+        (_task("ansible.builtin.debug", {"msg": "containerd.io"}), "", True),
+        ("", "demo_role_packages:\n  - {name: x, mirror: mirror.example.internal}\n", True),
+        ("", "demo_role_peers:\n  - {name: db.example.internal}\n", True),
+        ("", "demo_role_settings: {apt: {name: db.example.internal}}\n", True),
+        ("", "demo_role_mirror: mirror.example.internal\n", True),
+        # a hostname-shaped value in a package-name context is not a reviewed package name
+        ("", "demo_role_package: vault.example.internal\n", True),
+        ("", "demo_role_packages: [db2.example.internal]\n", True),
+        (_task("ansible.builtin.apt", {"name": "nas.example.internal"}), "", True),
+        # the module key must be a task's own: not a mapping inside vars:/args:/module_defaults:
+        ("- name: t\n  vars: {apt: {name: containerd.io}}\n  ansible.builtin.debug: {msg: x}\n", "", True),
+        ("- name: t\n  module_defaults: {apt: {name: containerd.io}}\n  ansible.builtin.debug: {msg: x}\n", "", True),
+        ("- block:\n    - name: t\n      ansible.builtin.apt: {name: containerd.io}\n  tags: [x]\n", "", False),
+    ],
+)  # fmt: skip
+def test_rl005_skips_a_package_name_and_still_catches_a_hostname(tmp_path, tasks, defaults, bad):
+    found = mutate(tmp_path, main_tasks=tasks, defaults=defaults)
+    assert ("RL005" in rules(found)) is bad, found
