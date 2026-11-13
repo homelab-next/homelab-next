@@ -119,14 +119,21 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    regular file inside the
    module (no symbolic link on the way, realpath containment) with a single link (a hard link
    could alias a file outside it), and is read only then. A contributed role is a **directory**,
-   `roles/<name>` exactly (the apply path puts the module's `roles/` on `roles_path`), reached
+   `roles/<name>` exactly (the apply path runs the module's roles from its `roles/`), reached
    through no symbolic link; the module's whole `roles/` tree holds only the contributed roles
-   (any other entry is refused: Ansible could find it by name) and, walked without following
+   (any other entry is refused, a `README` or `.gitkeep` beside the roles included: a module
+   ships only `roles/<name>/` directories there) and, walked without following
    anything, no symbolic link at any depth (a role runs as root, and a link can point at any file
    on the controller), no FIFO, socket or device, and no hard-linked file; a tree of more than
    5,000 entries or 12 levels is refused rather than cut short. Nothing under `roles/` is read.
    A fixture module (`--examples`) that ships no `roles/` keeps its exemption; one that ships it
-   is walked the same way. The kinds with a record type are
+   is walked the same way. What the check does **not** cover, and the apply path must: the
+   check is a point-in-time walk of the checkout (run what was checked, from a staging copy, not
+   the live tree), and Ansible also loads `library/`, `*_plugins/`, `collections/`,
+   `group_vars/`, `host_vars/`, `ansible.cfg` and a `roles/` beside a playbook, none of which a
+   module contributes, so the apply path must not run a playbook from a directory holding them;
+   role content that reaches outside the module (a `meta` dependency by path, an
+   `include_tasks: ../..`, an absolute `src`) is the review's and the tree digest's. The kinds with a record type are
    validated against it: MCP records (`platform/mcp_server`), service rows (`platform/service`),
    prompt templates (`agent/prompt_template`), lake tables (`platform/lake_table`), interface
    schemas (a JSON Schema in the owner's `$id` namespace), unit specs (the fleet_units rules) and

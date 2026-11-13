@@ -39,9 +39,11 @@ __all__ = ["SITE_FIELDS", "Expected", "expected_rows", "row_problems"]
 #: the fields of a registry row that are the lab's, not the module's: compared only when the
 #: module's row sets them.  ``standing`` (ADR-0039: whether this row is the capability's primary,
 #: an eval, retiring or legacy, with its ``until`` and ``why``), ``backup_job`` (the lab's backup
-#: schedule), ``scope`` (the writer-tool scope, inherited from the host guest when absent) and
-#: ``clients`` (extra zones that may reach the service: zones are the lab's names)
-SITE_FIELDS = frozenset({"standing", "backup_job", "scope", "clients"})
+#: schedule) and ``scope`` (the writer-tool scope, which only narrows what agents file about the
+#: service).  Never ``clients``: extra zones widen who may reach the service (firewall edges, the
+#: agent access map), so a registry that adds them differs from the module, and the module must
+#: say so too
+SITE_FIELDS = frozenset({"standing", "backup_job", "scope"})
 
 #: the longest value a problem prints before it is cut (a row's field can be a large mapping)
 SHOWN = 120
@@ -70,7 +72,8 @@ class Expected:
 
 def _registry_host(site: Doc, host: str) -> str:
     """The registry's name for site host ``host``: its guest's name, or the site host's own."""
-    h = (site.get("hosts") or {}).get(host)
+    hosts = site.get("hosts")
+    h = hosts.get(host) if isinstance(hosts, Mapping) else None
     ref = h.get("guest") if isinstance(h, Mapping) else None
     if isinstance(ref, str) and ref.startswith("guest:"):
         return ref.removeprefix("guest:")
@@ -84,7 +87,9 @@ def _bind(
     if version is not None:
         out["version"] = version
     role = row.get("host")
-    target = placement.get(role) if isinstance(placement, Mapping) else None
+    target = (
+        placement.get(role) if isinstance(placement, Mapping) and isinstance(role, str) else None
+    )
     if isinstance(target, str):
         out["host"] = _registry_host(site, target)
         return out, None
@@ -101,14 +106,17 @@ def expected_rows(
         if not isinstance(lines, list):
             continue  # none or pass-through: nothing is contributed
         for line in lines:
+            if not isinstance(line, Mapping):
+                continue  # the selection schema refuses it
             mid, inst = line.get("provider"), line.get("instance")
-            m = sel.get(mid)
-            if m is None or not isinstance(inst, str):
+            m = sel.get(mid) if isinstance(mid, str) else None
+            if not isinstance(m, Mapping) or not isinstance(inst, str):
                 continue  # the site rules report it
             row = rows.get(mid, {}).get(slot)
             if not isinstance(row, Mapping):
                 continue  # this provider contributes no row for the slot
-            version = str(m.get("product", {}).get("version"))
+            product = m.get("product")
+            version = str(product.get("version")) if isinstance(product, Mapping) else None
             bound, unplaced = _bind(site, dict(row), line.get("placement") or {}, version)
             yield Expected(inst, mid, inst, slot, bound, unplaced)
     for section in ("features", "core"):
@@ -122,7 +130,11 @@ def expected_rows(
                     yield Expected(name, mid, None, name, bound, unplaced)
     # a core module is selected on every site, placed or not
     for mid in sorted(sel):
-        if sel[mid].get("kind") == "core" and mid not in (site.get("core") or {}):
+        if (
+            isinstance(sel[mid], Mapping)
+            and sel[mid].get("kind") == "core"
+            and mid not in (site.get("core") or {})
+        ):
             for name, row in sorted(rows.get(mid, {}).items()):
                 if isinstance(row, Mapping):
                     bound, unplaced = _bind(site, dict(row), {}, None)
@@ -180,7 +192,7 @@ def row_problems(
                 "row (copy it as the site binds it)"
             )
             continue
-        for field in sorted(set(e.row) | set(have), key=str):
+        for field in sorted({*e.row, *have}, key=str):
             if field == "host" and e.unplaced is not None:
                 continue
             if field in SITE_FIELDS and field not in e.row:

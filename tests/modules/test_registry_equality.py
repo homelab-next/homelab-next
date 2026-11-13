@@ -143,17 +143,26 @@ def test_the_lab_s_own_fields_are_not_the_module_s():
     row["standing"] = {"tier": "eval", "until": "2027-01-31", "why": "a candidate under test"}
     row["backup_job"] = "nightly"
     row["scope"] = "out"
-    row["clients"] = ["mgmt"]
     assert problems(registry=reg) == []
+
+
+def test_clients_the_registry_adds_is_a_difference():
+    """Extra zones widen who may reach the service: never the lab's alone to add."""
+    reg = lab_registry()
+    reg["services"]["samples"]["clients"] = ["mgmt"]
+    assert problems(registry=reg) == [
+        f"services.samples.clients: {STORE} (instance samples) contributes (absent) (its row "
+        'object-store), the lab registry has ["mgmt"]'
+    ]
 
 
 def test_a_lab_field_the_module_sets_is_compared():
     rows = copy.deepcopy(ROWS)
-    rows[COLLECTOR]["external-collector-receiver"]["clients"] = ["edge"]
+    rows[COLLECTOR]["external-collector-receiver"]["scope"] = "out"
     sel = mr.selected(SITE, TREE.mods)
     got = rr.row_problems(SITE, sel, rows, lab_registry())
     assert got == [
-        'services.external-collector-receiver.clients: external-collector contributes ["edge"], '
+        'services.external-collector-receiver.scope: external-collector contributes "out", '
         "the lab registry has (absent)"
     ]
 
@@ -200,6 +209,50 @@ def test_a_planted_value_is_printed_escaped_and_cut():
     assert "\n" not in got and "\\n::error::" in got
     assert got.endswith('..."') or got.endswith("...")
     assert len(got) < 400
+
+
+def test_an_unplaced_role_never_reads_as_a_host_mismatch():
+    site = copy.deepcopy(SITE)
+    del site["slots"]["object-store"][0]["placement"]
+    got = problems(site)
+    assert not [p for p in got if ".host:" in p], got
+    assert got == [
+        f"services.samples: {STORE} (instance samples)'s host role store is placed on no site "
+        "host, so the registry row's host cannot be compared"
+    ]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "not-a-line",
+        {"provider": ["x"], "instance": "samples"},
+        {"provider": STORE, "instance": "samples", "placement": ["store"]},
+        {"provider": STORE, "instance": "samples", "placement": {"store": ["data"]}},
+    ],
+)
+def test_a_malformed_selection_line_is_never_a_crash(line):
+    site = copy.deepcopy(SITE)
+    site["slots"]["object-store"] = [line]
+    sel = {**mr.selected(SITE, TREE.mods)}
+    assert isinstance(rr.row_problems(site, sel, ROWS, lab_registry()), list)
+
+
+def test_a_provider_row_that_repeats_its_version_is_refused(tmp_path):
+    import shutil
+
+    root = tmp_path / "fixtures"
+    shutil.copytree(EXAMPLES, root)
+    f = root / STORE / "registry" / "services.yml"
+    doc = yaml.safe_load(f.read_text())
+    doc["services"]["object-store"]["version"] = "9.9.9"
+    f.write_text(yaml.safe_dump(doc))
+    tree, _ = ld.discover(fixtures=root)
+    report = ld.check(tree, slots=SLOTS, roles={}, in_tree_roots=(root,), core=CORE)
+    assert (
+        f"{STORE}: registry/services.yml: object-store: a provider's row takes its version from "
+        "product.version" in [str(p) for p in report.problems]
+    )
 
 
 def test_a_registry_without_services_is_one_problem():

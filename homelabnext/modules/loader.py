@@ -42,6 +42,7 @@ error.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -109,8 +110,9 @@ MAX_CATALOG_FILES = 1_000
 #: files a fixture root's modules may name without shipping (the fictional examples carry no
 #: Ansible): never exempt for the public tree or an overlay
 FIXTURE_UNSHIPPED = ("roles/", "playbooks/")
-#: where a module's Ansible roles live: ``roles/<name>``, a directory (the apply path puts the
-#: module's ``roles/`` on ``roles_path``, so every entry there is a role Ansible can find)
+#: where a module's Ansible roles live: ``roles/<name>``, a directory (the apply path runs the
+#: module's roles from its ``roles/``, by path or by name, so every entry there is held to the
+#: same rules whether or not a playbook names it today)
 ROLES_DIR = "roles"
 #: the most entries one module's ``roles/`` tree may hold, and how deep it may nest: a walk past
 #: either is refused, never cut short (a role has tens of files, a few levels deep)
@@ -628,14 +630,16 @@ def _walk_problem(top: Path, shown: str) -> str | None:
         d, label, depth = stack.pop()
         try:
             with os.scandir(d) as it:
-                entries = sorted(it, key=lambda e: e.name)
+                # never hold more than the cap: one entry past what is left is enough to refuse
+                entries = list(itertools.islice(it, MAX_ROLE_ENTRIES - seen + 1))
         except OSError as exc:
             return f"{label}: cannot be listed ({exc.strerror})"
+        if seen + len(entries) > MAX_ROLE_ENTRIES:
+            return f"{shown}: more than {MAX_ROLE_ENTRIES} entries"
+        entries.sort(key=lambda e: e.name)
         subdirs = []
         for e in entries:
             seen += 1
-            if seen > MAX_ROLE_ENTRIES:
-                return f"{shown}: more than {MAX_ROLE_ENTRIES} entries"
             here = f"{label}/{_shown(e.name)}"
             try:
                 st = e.stat(follow_symlinks=False)
@@ -657,8 +661,8 @@ def _walk_problem(top: Path, shown: str) -> str | None:
 
 def _role_problems(doc: Doc, mod_dir: Path) -> list[str]:
     """Each contributed role is a directory ``roles/<name>`` of the module, reached through no
-    symbolic link and inside it; and the module's ``roles/`` tree (all of it is on the apply
-    path's ``roles_path``) holds only the contributed roles, with no symbolic link, special
+    symbolic link and inside it; and the module's ``roles/`` tree (what the apply path runs
+    roles from) holds only the contributed roles, with no symbolic link, special
     file or hard link anywhere under it (:func:`_walk_problem`)."""
     out: list[str] = []
     listed: set[str] = set()
@@ -668,7 +672,7 @@ def _role_problems(doc: Doc, mod_dir: Path) -> list[str]:
         if len(parts) != 2 or parts[0] != ROLES_DIR or parts[1] in ("", ".", ".."):
             out.append(
                 f"{rel}: a role is the directory {ROLES_DIR}/<name> of the module (the apply "
-                f"path puts {ROLES_DIR}/ on roles_path)"
+                f"path runs roles from {ROLES_DIR}/)"
             )
             continue
         listed.add(parts[1])
@@ -684,7 +688,10 @@ def _role_problems(doc: Doc, mod_dir: Path) -> list[str]:
         return [*out, f"{ROLES_DIR}: outside the module"]
     try:
         with os.scandir(top) as it:
-            present = {e.name: e.stat(follow_symlinks=False).st_mode for e in it}
+            present = {
+                e.name: e.stat(follow_symlinks=False).st_mode
+                for e in itertools.islice(it, MAX_ROLE_ENTRIES + 1)
+            }
     except OSError as exc:
         return [*out, f"{ROLES_DIR}: cannot be listed ({exc.strerror})"]
     if len(present) > MAX_ROLE_ENTRIES:
@@ -698,7 +705,8 @@ def _role_problems(doc: Doc, mod_dir: Path) -> list[str]:
     for name in sorted(set(present) - listed):
         out.append(
             f"{ROLES_DIR}/{_shown(name)}: not a contributed role (everything under {ROLES_DIR}/ "
-            "is on the apply path's roles_path; list it under contributes.roles or remove it)"
+            "is where the apply path runs roles from; list it under contributes.roles or "
+            "remove it)"
         )
     if out:
         return out
@@ -1775,7 +1783,10 @@ def check(
         )
     problems += pair_problems(sel)
     if lab_registry is not None:
-        found = rr.row_problems(site, sel, ins.rows, lab_registry)
+        try:
+            found = rr.row_problems(site, sel, ins.rows, lab_registry)
+        except (KeyError, TypeError, AttributeError, ValueError, RecursionError) as exc:
+            found = [f"the lab registry's rows could not be compared ({exc.__class__.__name__})"]
         problems += [Problem("registry", p) for p in found]
     elif any(True for _ in rr.expected_rows(site, sel, ins.rows)):
         notes.append(

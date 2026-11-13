@@ -236,6 +236,23 @@ def test_a_roles_tree_too_large_or_too_deep_is_refused_not_cut_short(tmp_path, m
     assert f"{MID}: roles/demo_relay/files/a: nested more than 3 levels" in got, got
 
 
+def test_a_loose_file_beside_the_roles_is_refused(tmp_path):
+    d = module(tmp_path)
+    (d / "roles" / "README.md").write_text("roles\n")
+    got = problems(tmp_path)
+    assert any(p.startswith(f"{MID}: roles/README.md: not a contributed role") for p in got), got
+
+
+def test_a_huge_directory_is_refused_without_listing_all_of_it(tmp_path, monkeypatch):
+    d = module(tmp_path)
+    many = d / "roles" / "demo_relay" / "files"
+    many.mkdir()
+    for i in range(50):
+        (many / f"f{i}").write_text("")
+    monkeypatch.setattr(ld, "MAX_ROLE_ENTRIES", 10)
+    assert f"{MID}: roles: more than 10 entries" in problems(tmp_path)
+
+
 def test_a_role_file_is_never_read_or_followed(tmp_path, monkeypatch):
     d = module(tmp_path)
     (d / "roles" / "demo_relay" / "tasks" / "pw.yml").symlink_to("/etc/passwd")

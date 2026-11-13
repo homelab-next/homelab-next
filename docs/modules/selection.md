@@ -256,16 +256,22 @@ appear in the lab registry **identically, as the site binds it**
   registry: services.notify-eval: example-notify (instance notify-eval) contributes this row (its row notify), but the lab registry has no such row (copy it as the site binds it)
   ```
 
-- four fields are the lab's own facts about a row, which a generic module cannot know:
-  `standing` (ADR-0039: eval, retiring or legacy, with `until` and `why`), `backup_job`, `scope`
-  and `clients` (zones are the lab's names). The registry may add them; they are compared only
-  when the module's row sets them;
+- three fields are the lab's own facts about a row, which a generic module cannot know:
+  `standing` (ADR-0039: eval, retiring or legacy, with `until` and `why`), `backup_job` and
+  `scope` (which only narrows what agents file about the service). The registry may add them;
+  they are compared only when the module's row sets them. `clients` is **not** one of them: extra
+  zones widen who may reach the service, so a registry that adds them differs from the module.
+  So the overlay's copy of a module's row is the bound row plus, at most, these three (an eval
+  instance beside the primary: the module's fields exactly, and `standing`);
+- a provider's row never sets `version` (the loader refuses one that does), so the product's
+  version is the only one there is;
 - a host role the site places on no host is a problem of its own (the registry's `host` cannot be
   judged); the row's other fields are still compared. A `version` is compared as text, so an
   unquoted YAML version equals its quoted form.
 
 The comparison runs only against the lab's own registry (the overlay's `lab/services.yml`, or
 `--services`); with the repository's example registry, which describes another lab, the report
-notes that the rows were not compared. Only the selected modules' rows are judged: a registry row
-that no selected module contributes is the lab's own and is not compared. Values in a problem are
+notes that the rows were not compared. The comparison is one-directional: only the selected
+modules' rows are judged, and a registry row that no selected module contributes is the lab's own
+and is not compared. Values in a problem are
 printed as JSON (control characters escaped) and cut at 120 characters.
