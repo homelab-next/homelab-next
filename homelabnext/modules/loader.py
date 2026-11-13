@@ -1618,6 +1618,7 @@ def check(
         return Report(sorted(set(problems)), notes)
     site, unresolved = gh.resolve(site, guests)
     problems += [Problem("site", p) for p in unresolved]
+    problems += [Problem("site", p) for p in gh.address_problems(site)]
     problems += [
         Problem("site", p)
         for p in mr.site_problems(

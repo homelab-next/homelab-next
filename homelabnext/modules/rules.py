@@ -1747,6 +1747,8 @@ def footprint_problems(site: Doc, placed) -> list[str]:
         # a host that references a guest: name the guest whose capacity it is
         at = f"{host} ({sh['guest']})" if "guest" in sh else host
         for dim, v in u.items():
+            if dim == "gpu_memory_mb" and "guest" in sh:
+                continue  # a guest record has no GPU memory yet (guest_hosts.placement_problems)
             if v > cap.get(dim, 0):
                 out.append(f"{at}: {dim} {v} exceeds {cap.get(dim, 0)}")
         have = [r["kind"] for r in sh.get("resources", [])]

@@ -17,6 +17,8 @@ summary_of: outline:sha256:e2334f5f35796d84
   (decision 2); what a module creates elsewhere is generated from its manifest, labelled with its
   id and garbage-collected (decision 3); and replacing a module is the one protocol `hnx modules
   replace` (decision 5)
+- **Amended:** 2026-11-12, in place while proposed: decision 9's placement is on hosts that
+  reference their guest records (modules plan H2)
 - **Amended-by:** ADR-0040
 
 ## Context

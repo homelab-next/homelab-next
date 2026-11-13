@@ -105,7 +105,11 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    cross-module secrets; every agent lane bound to exactly one selected orchestration instance;
    placements complete for features and core modules alike, external and isolated roles on matching
    hosts; footprints times `count` over four dimensions, and every resource claim against the
-   host's named resources with exclusivity.
+   host's named resources with exclusivity; a host that references a guest record resolved
+   (known, schema-valid, live or planned, with resources, named by one host) and each role placed
+   on it against the guest's kind, size, capability and baselines; every lab host's own address
+   private or in `scope.trusted.nets`
+   ([hosts that are guests](selection.md#hosts-that-are-guests)).
 4. **Two-way, against what runs**: every contributed file exists, is a regular file inside the
    module (no symbolic link on the way, realpath containment) with a single link (a hard link
    could alias a file outside it), and is read only then. The kinds with a record type are

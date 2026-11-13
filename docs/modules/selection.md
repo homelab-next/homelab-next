@@ -199,6 +199,13 @@ guest:
   role on a stand-in host has no guest to judge, so `hnx modules check` notes its requirements as
   not checked.
 
+A role too big for its guest is named twice when it is the host's only occupant: once by the role
+and once by the host's sum. A role with a GPU footprint on a guest host is refused with one line
+saying so (a guest record holds no GPU memory yet). Every lab host's own address, a guest's or a
+stand-in's (an `external` host aside), must be private or in `scope.trusted.nets`, since the egress
+policy lets a role reach it and counts it as never the internet. The guest directory's files must
+be its own regular files (a symbolic link is refused), and two files with one id refuse that id.
+
 The selection names no hypervisor node, so a guest's `placement.node` is not judged; nor is a
 guest's own validity beyond its schema (zones, firewall rules, backup), which is
 `hnx guests validate`'s. The stand-in form stays for an external host and for a host with no guest

@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -292,3 +293,67 @@ def test_a_guests_path_that_does_not_exist_is_a_usage_error(capsys, tmp_path):
     code = mcli.main(["check", "--root", str(ROOT), *args])
     capsys.readouterr()
     assert code == 2
+
+
+# ----------------------------------------------------------------------------- review findings
+
+
+def _guest_dir(tmp_path: Path) -> Path:
+    d = tmp_path / "guests"
+    shutil.copytree(GUESTS, d)
+    return d
+
+
+def test_a_guest_address_that_is_public_is_refused(tree, tmp_path):
+    """The egress policy lets a role reach a host's own addresses: a guest's public one would
+    open a path out (a public address, built from an integer so no literal is in the test)."""
+    import ipaddress
+
+    public = str(ipaddress.ip_address(0x0808_0808))
+    d = _guest_dir(tmp_path)
+    doc = yaml.safe_load((d / "data-1.yml").read_text())
+    doc["network"]["ip"] = public
+    (d / "data-1.yml").write_text(yaml.safe_dump(doc))
+    got = site_problems(tree, site(), gh.read(d))
+    assert (
+        f"hosts.data: address {public} (from guest:data-1) is neither private nor in "
+        "scope.trusted.nets; a lab host's own address is never the internet"
+    ) in got
+
+
+def test_two_files_with_one_guest_id_are_refused(tree, tmp_path):
+    d = _guest_dir(tmp_path)
+    shutil.copy(d / "data-1.yml", d / "data-1.yaml")
+    got = site_problems(tree, site(), gh.read(d))
+    assert got == [
+        "hosts.data: guest:data-1's guest file has problems (hnx guests validate): "
+        "two guest files carry this id"
+    ]
+
+
+def test_a_symlinked_guest_file_is_unreadable(tmp_path):
+    d = _guest_dir(tmp_path)
+    (tmp_path / "outside.yml").write_text("secret: value\n")
+    (d / "evil-1.yml").symlink_to(tmp_path / "outside.yml")
+    with pytest.raises(gh.GuestsUnreadable, match=re.escape("symbolic links: evil-1.yml")):
+        gh.read(d)
+
+
+def test_a_guest_file_that_is_not_utf8_is_a_problem_not_a_crash(tree, tmp_path):
+    d = _guest_dir(tmp_path)
+    (d / "junk-1.yml").write_bytes(b"\xff\xfe\x00junk")
+    g = gh.read(d)
+    assert "guest:junk-1" in g.invalid
+    assert site_problems(tree, site(), g) == []  # the selection does not reference it
+
+
+def test_a_gpu_footprint_on_a_guest_host_is_named_once(tree, guests):
+    mods = copy.deepcopy(tree.mods)
+    role = mods["external-collector"]["requires"]["hosts"][1]
+    role["footprint"] = {**role["footprint"], "gpu_memory_mb": 1024}
+    t = ld.Tree(mods, tree.dirs, tree.origin)
+    got = site_problems(t, site(), guests)
+    assert got == [
+        "external-collector/receiver: a GPU footprint cannot be judged against a guest record "
+        "yet (host data (guest:data-1) declares no GPU memory); place it on a stand-in host"
+    ]
