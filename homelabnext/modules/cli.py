@@ -996,7 +996,7 @@ def _write_new(out: Path, files: dict[str, str]) -> None:
                 break
             d = d.parent
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags, 0o644)
+        fd = os.open(path, flags, 0o600)  # private: it names the overlay's modules
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
 

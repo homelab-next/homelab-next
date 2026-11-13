@@ -70,7 +70,7 @@ render is not relocatable, so render into the directory the playbooks run from, 
 straight after the check, from the same unchanged checkouts (no digest yet ties what was checked
 to the role files Ansible reads). Every value written outside a quoted string (module ids, host
 roles, groups, hooks, kind, version, role path segments) is held to its schema shape by the
-render itself, and files are written as new files, never through a symbolic link. The render
+render itself, and files are written as new files (mode 0600), never through a symbolic link. The render
 names module ids, versions and the overlay's module paths: treat it as private.
 
 **The check playbooks (`checks/<module>.yml`).** For one placed module, on each of its groups, the
