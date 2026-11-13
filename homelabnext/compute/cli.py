@@ -17,7 +17,7 @@ from .loader import load_fleet, load_registry_for, registry_placement
 from .model import ComputeError, ComputeUnreadable
 from .plan import plan as make_plan
 from .plan import read_tree
-from .render import TARGETS, render
+from .render import SELECTION_TARGETS, TARGETS, render
 from .zones import site_facts
 
 
@@ -105,8 +105,37 @@ def _node_arg(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _selection_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--selection",
+        help="a module selection (lab/modules.yml, checked by hnx modules check): the inventory "
+        "target adds a mod_<module>_<host role> group per placed host role, holding the guest "
+        "its selection host references (docs/modules/apply.md).  Inventory only",
+    )
+
+
+def _selection(path: str | None) -> dict | None:
+    """The module selection named by ``--selection``, schema-valid, or None.  Unreadable is
+    :class:`ComputeUnreadable` (exit 2), schema-invalid a :class:`ComputeError` (exit 1)."""
+    if path is None:
+        return None
+    from homelabnext.modules import loader as ld
+
+    try:
+        doc = ld.load_input(path, ld.Budget())
+    except ld.Unreadable as exc:
+        raise ComputeUnreadable(f"--selection {path}: {exc}") from None
+    errs = ld._errors(ld._schema("platform", "module_selection.schema.json"), doc)
+    if errs:
+        raise ComputeError(f"--selection {path}: schema: {errs[0]}")
+    return doc
+
+
 def _node_usage(args: argparse.Namespace) -> str | None:
-    """Why ``--node``/``--allow-empty`` cannot be used as given (a usage error), or None."""
+    """Why ``--node``/``--allow-empty``/``--selection`` cannot be used as given (a usage error),
+    or None."""
+    if getattr(args, "selection", None) is not None and args.target not in SELECTION_TARGETS:
+        return f"--selection is for the inventory target; {args.target} does not take it"
     if args.node is None:
         return "--allow-empty needs --node" if args.allow_empty else None
     if args.target not in PER_NODE_TARGETS:
@@ -164,6 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     _common(r)
     r.add_argument("--target", required=True, choices=sorted(TARGETS))
     _node_arg(r)
+    _selection_arg(r)
     r.add_argument("--out", help="write files here (default: print a file list)")
     r.add_argument(
         "--prune",
@@ -175,6 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     _common(pl)
     pl.add_argument("--target", required=True, choices=sorted(TARGETS))
     _node_arg(pl)
+    _selection_arg(pl)
     pl.add_argument("--against", required=True, help="directory holding the previous render")
     pl.add_argument("--exit-code", action="store_true", help="exit 3 when there are changes")
     b = sub.add_parser("baselines", help="guest x defense-layer baseline coverage")
@@ -269,6 +300,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             problems += _key_problems(fleet)
         if args.cmd in ("render", "plan"):
             fleet = _on_node(fleet, args.node, args.target, args.allow_empty)
+            selection = _selection(args.selection)
+            if selection is not None:
+                # a placement the inventory cannot hold is a failed check (1), never a traceback
+                files = render(fleet, args.target, selection)
     except ComputeUnreadable as exc:  # docs/interfaces.md: bad input is 2, a failed check 1
         print(f"hnx guests: {exc}", file=sys.stderr)
         return 2
@@ -289,7 +324,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         for line in usage_lines(fleet):
             print(f"  {line}")
         return 0
-    files = render(fleet, args.target)
+    if getattr(args, "selection", None) is None:
+        files = render(fleet, args.target)
     if args.cmd == "render":
         if args.out:
             from pathlib import Path

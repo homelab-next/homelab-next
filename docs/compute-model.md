@@ -292,7 +292,7 @@ another target's files as stale.
 | `terraform-proxmox` | `vm-*.tf`, `ct-*.tf`, `providers.tf`, `variables.tf`, `MANUAL.md`, `USER_DATA.md` (bpg/proxmox resource shapes; text only) |
 | `libvirt` | one `virt-install` script per VM plus `SKIPPED.txt`; refuses guests it cannot isolate (below) |
 | `cloudinit` | `<name>/user-data`, `meta-data`, `network-config` per VM |
-| `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`), `host_vars/<fqdn>.yml` (with `hnx_firewall`, the guest's firewall rules with zones resolved; with a set, `hnx_baselines`, `hnx_controls` and the baseline settings of its per-guest controls) |
+| `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`; with `--selection lab/modules.yml`, a `mod_<module>_<host role>` group per placed module host role, [the module apply path](modules/apply.md)), `host_vars/<fqdn>.yml` (with `hnx_firewall`, the guest's firewall rules with zones resolved; with a set, `hnx_baselines`, `hnx_controls` and the baseline settings of its per-guest controls) |
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
 | `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`, or, for an `apply: central` control, once to its product host's `group` with `<role>_guests`; unbound controls as commented blocks |
@@ -988,6 +988,9 @@ its own runbook with its addresses.
    `ssh-keyscan`, then record it in the `known_hosts` the inventory uses.
 7. **Baselines**: `ansible-playbook` the `baseline-playbook` render against the `inventory` render;
    a second run must report `changed=0`.
+8. **Modules**: render the inventory with `--selection lab/modules.yml` and `hnx modules render`,
+   then `ansible-playbook` its `modules.yml` and each module's `checks/<module>.yml`
+   ([the module apply path](modules/apply.md#running-it-in-an-overlay)).
 
 ### Upgrading past 82341a4e (user-data snippets) and its follow-up (ephemeral token)
 

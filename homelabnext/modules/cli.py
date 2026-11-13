@@ -40,7 +40,11 @@ checks").
     the request and its HTTP status, never what the catalog answered.
 ``hnx modules render --site FILE [--network FILE] --out DIR [...]``
     the same check, then (only when it is clean) the footprint limits and the egress policy for
-    the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``.  ``DIR`` must not exist or be
+    the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``, and the apply path
+    (:mod:`homelabnext.modules.apply`, docs/modules/apply.md): ``DIR/modules.yml``, which installs
+    each placed module's host roles on its ``mod_<module>_<host role>`` inventory group in the
+    order of the modules' hard requirements, and ``DIR/checks/<module>.yml``, its roles'
+    readiness and health hooks; the role paths are relative to ``DIR``.  ``DIR`` must not exist or be
     empty: a render never mixes with stale files from an earlier one.  ``--network`` is the
     network model (``site.yml``; with ``--overlay``, ``DIR/lab/site.yml`` by default): its zone
     ``subnet6`` and ``delegated_prefixes6`` prefixes are
@@ -908,12 +912,15 @@ def _run(args: argparse.Namespace) -> int:
         for n in notes:
             print(f"note: {n}")
         if written:
+            from homelabnext.modules.apply import CHECKS_DIR as apply_checks
+            from homelabnext.modules.apply import PLAYBOOK as apply_book
             from homelabnext.modules.tlp_sources import FILE as tlp_sources_file
 
             print(
                 f"hnx modules render: wrote {written['limits']} limits and {written['egress']} "
                 f"egress file(s), {written['tlp_sources']} TLP source(s) in "
-                f"{tlp_sources_file}"
+                f"{tlp_sources_file}, {apply_book} with {written['checks']} module check "
+                f"playbook(s) in {apply_checks}/"
                 + (
                     f", {written['lake_readers']} lake reader rule(s) in lake-access.json"
                     if "lake_readers" in written
@@ -974,30 +981,64 @@ def _tlp_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _write_new(out: Path, files: dict[str, str]) -> None:
+    """Write each file under ``out`` as a new file: never through a symbolic link (a directory
+    or the file itself) and never over a file already there, so a link planted after the
+    ``--out`` check cannot redirect a playbook outside the render."""
+    for rel, text in sorted(files.items()):
+        path = out / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        d = path.parent
+        while True:  # every directory from the file's up to --out itself
+            if d.is_symlink():
+                raise ld.LoaderError(f"--out {out}: {d} is a symbolic link")
+            if d == out or d == d.parent:
+                break
+            d = d.parent
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags, 0o600)  # private: it names the overlay's modules
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+
+
 def _render(
     args: argparse.Namespace, tree: ld.Tree, site: dict, network: dict | None = None
 ) -> tuple[dict[str, int], str | None]:
     """(files written per output, or the generator's refusal)."""
     from homelabnext.logpipeline.tlp_labels import SourceTableError
-    from homelabnext.modules import egress, lake_access, limits, tlp_sources
+    from homelabnext.modules import apply, egress, lake_access, limits, tlp_sources
+    from homelabnext.modules.rules import selected
 
     ins = ld.inputs(tree)
+    out = args.out.resolve()
     try:
         lim = limits.render(site, tree.mods, ld.units_fn(ins))
         egr = egress.render(site, tree.mods, ld.rows_fn(ins), ld.units_fn(ins), network)
         src = tlp_sources.render(site, tree.mods)
         access = lake_access.render(site)
+        sel = selected(site, tree.mods)
+        # each module's directory as the playbooks reach it: relative to where they are
+        # written, so the render and the checkouts move together
+        dirs = {m: os.path.relpath(tree.dirs[m].resolve(), out) for m in sel}
+        books = apply.render(site, sel, dirs)
     except (
         limits.LimitsError,
         egress.EgressError,
         SourceTableError,
         lake_access.LakeAccessError,
+        apply.ApplyError,
     ) as exc:
         return {}, str(exc)
     limits.write(lim, args.out / "limits")
     egress.write(egr, args.out / "egress")
     tlp_sources.write(src, args.out)
-    written = {"limits": len(lim), "egress": len(egr), "tlp_sources": len(src["sources"])}
+    _write_new(args.out, books)
+    written = {
+        "limits": len(lim),
+        "egress": len(egr),
+        "tlp_sources": len(src["sources"]),
+        "checks": sum(1 for rel in books if rel.startswith(apply.CHECKS_DIR + "/")),
+    }
     if access is not None:
         lake_access.write(access, args.out)
         written["lake_readers"] = len(access["tables"])
