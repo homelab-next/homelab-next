@@ -619,6 +619,27 @@ def test_a_task_file_reached_through_a_link_counts_as_a_container_role(tmp_path)
     assert eg.runs_containers(role, load)
 
 
+def test_a_symlinked_directory_under_tasks_counts_as_a_container_role(tmp_path):
+    role = _role(tmp_path / "r", {"tasks/main.yml": "- include_tasks: sub/app.yml\n"})
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "app.yml").write_text("- debug: {msg: y}\n")
+    (role / "tasks" / "sub").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    assert eg.runs_containers(role, load)
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"tasks/main.yml": "- debug: {msg: x}\n",
+         "handlers/main.yml": "- name: restart\n  ansible.builtin.command: {argv: [docker, restart, x]}\n"},
+        {"tasks/main.yml": "- include_tasks: app.j2\n",
+         "tasks/app.j2": "- include_role: {name: compose_app}\n"},  # any file name
+    ],
+)  # fmt: skip
+def test_handlers_and_any_task_file_name_are_read(tmp_path, files):
+    assert eg.runs_containers(_role(tmp_path / "r", files), load)
+
+
 @pytest.mark.parametrize(
     "files",
     [

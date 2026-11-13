@@ -67,6 +67,7 @@ ports are integers, protocols are the registry's, and every name matches the slu
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -733,19 +734,28 @@ def _is_role(ref: Any, role: str) -> bool:
 
 
 def runs_containers(role_dir: Path, load: Callable[[Path], Any]) -> bool:
-    """A role runs its service as containers when any of its task files (``tasks/``, at any
-    depth) or its ``meta/main.yml`` includes, imports or depends on :data:`CONTAINER_ROLE` (or a
+    """A role runs its service as containers when any of its task or handler files (``tasks/``,
+    ``handlers/``, at any depth, any name) or its ``meta/main.yml`` includes, imports or depends on :data:`CONTAINER_ROLE` (or a
     role named by a template), uses a docker module, or runs ``docker`` as a command.  This is a
     heuristic over what the role says, so it errs towards a container: a file that cannot be
-    read, or a task file reached through a symbolic link, counts as one (the caller warns, and a
+    read, or any symbolic link under ``tasks/`` or ``handlers/`` (file or directory), counts as one (the caller warns, and a
     warning too many is better than none)."""
     files = [role_dir / "meta" / "main.yml", role_dir / "meta" / "main.yaml"]
-    tasks = role_dir / "tasks"
     try:
-        if tasks.is_symlink():
-            return True
-        if tasks.is_dir():
-            files += sorted(p for p in tasks.rglob("*") if p.suffix in (".yml", ".yaml"))
+        for sub in ("tasks", "handlers"):
+            top = role_dir / sub
+            if top.is_symlink():
+                return True
+            if not top.is_dir():
+                continue
+            # every entry, at any depth, with no suffix filter (include_tasks may name any file):
+            # a symbolic link anywhere, a directory included, counts as a container role, since
+            # os.walk does not follow it and its contents would go unread
+            for root, dirnames, filenames in os.walk(top, followlinks=False):
+                for name in dirnames + filenames:
+                    if (Path(root) / name).is_symlink():
+                        return True
+                files += sorted(Path(root) / f for f in filenames)
         for f in files:
             if f.is_symlink():
                 return True
