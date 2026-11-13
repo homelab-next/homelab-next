@@ -1,1 +1,2 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
 {{ {"log-driver": "json-file", "log-opts": {"max-size": docker_engine_log_max_size, "max-file": docker_engine_log_max_file | string}} | to_nice_json(indent=2) }}
