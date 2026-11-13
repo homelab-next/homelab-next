@@ -1084,7 +1084,7 @@
         "2": "usage error, an unreadable tree or an unwritable --out file"
       },
       "id": "pin-freshness",
-      "inputs": "the tree (role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)",
+      "inputs": "the tree (role defaults, the public modules' role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)",
       "kind": "tool",
       "language": "python",
       "outputs": "inventory - the pins found, as JSON; report - a Markdown report for the tracking issue",
