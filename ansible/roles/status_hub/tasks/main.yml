@@ -80,6 +80,35 @@
   no_log: true
   diff: false
 
+- name: Create the TLS directory (root, readable by the hub's group)
+  ansible.builtin.file:
+    path: "{{ status_hub_tls_dir }}"
+    state: directory
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0750"
+  when: status_hub_tls | bool
+
+# The certificate, its key and the client CA come from the secret store by reference (never a
+# literal in the inventory), like every other secret the roles deliver.
+- name: Write the server certificate, its key and the client CA bundle
+  ansible.builtin.copy:
+    dest: "{{ status_hub_tls_dir }}/{{ item.file }}"
+    content: "{{ lookup('hnx_secret', item.ref) | trim }}\n"
+    owner: root
+    group: "{{ status_hub_group }}"
+    mode: "0640"
+  loop:
+    - {file: server.crt, ref: "{{ status_hub_tls_cert_ref }}"}
+    - {file: server.key, ref: "{{ status_hub_tls_key_ref }}"}
+    - {file: client-ca.crt, ref: "{{ status_hub_client_ca_ref }}"}
+  loop_control:
+    label: "{{ item.file }}"
+  register: status_hub_tls_files
+  no_log: true
+  diff: false
+  when: status_hub_tls | bool
+
 - name: Write the unit
   ansible.builtin.template:
     src: hnx-hub.service.j2
@@ -96,10 +125,11 @@
     daemon_reload: "{{ status_hub_unit is changed }}"
     state: >-
       {{ 'restarted' if (status_hub_unit is changed or status_hub_registry_file is changed
-         or status_hub_config is changed or status_hub_env is changed) else 'started' }}
+         or status_hub_config is changed or status_hub_env is changed
+         or status_hub_tls_files is changed) else 'started' }}
   when: status_hub_start | bool
 
-- name: Wait for the hub to answer
+- name: Wait for the hub to answer (plain HTTP)
   ansible.builtin.uri:
     url: "http://{{ ('[' ~ status_hub_bind_address ~ ']') if ':' in status_hub_bind_address else status_hub_bind_address }}:{{ status_hub_port | int }}/status.json"
     headers:
@@ -110,4 +140,15 @@
   retries: 30
   delay: 1
   changed_when: false
-  when: status_hub_start | bool
+  when: status_hub_start | bool and not status_hub_tls | bool
+
+- name: Wait for the hub's TLS listener
+  ansible.builtin.wait_for:
+    host: "{{ status_hub_bind_address }}"
+    port: "{{ status_hub_port | int }}"
+    timeout: 30
+  when: status_hub_start | bool and status_hub_tls | bool
+
+- name: Check the TLS listener (refused without a client certificate)
+  ansible.builtin.include_tasks: tls_probe.yml
+  when: status_hub_start | bool and status_hub_tls | bool

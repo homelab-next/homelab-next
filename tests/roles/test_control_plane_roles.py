@@ -10,6 +10,7 @@ compose/lab-in-a-box/broker_e2e.py, against the deployed units)."""
 
 import grp
 import hashlib
+import ipaddress
 import json
 import os
 import pwd
@@ -115,7 +116,24 @@ HUB = {
     "status_hub_approvals_socket": "/run/hnx-broker/broker.sock",
     "status_hub_approvals_csrf_key_ref": "secret:status/approvals-csrf-secret",
     "status_hub_public_origin": "https://status.lab.example",
+    # plain HTTP off loopback: the explicit opt-in (Stage 5's mTLS listener is HUB_TLS)
+    "status_hub_plain_http": True,
 }
+#: the hub with its mTLS listener (Stage 5, H1): certificates by secret: reference, the edge pinned
+HUB_TLS = {
+    **{k: v for k, v in HUB.items() if k != "status_hub_plain_http"},
+    "status_hub_tls_cert_ref": "secret:status/hub-tls-cert",
+    "status_hub_tls_key_ref": "secret:status/hub-tls-key",
+    "status_hub_client_ca_ref": "secret:status/hub-client-ca",
+    "status_hub_client_names": ["edge.example.internal"],
+    "status_hub_tls_server_name": "status-hub.svc.example.internal",
+}
+
+
+#: the example edge's address widened to its /24: a range, never a host
+_EDGE_RANGE = str(ipaddress.ip_network(
+    yaml.safe_load((ROOT / "examples/services.yml").read_text())["hosts"]["edge-core"]["address"]
+    + "/24", strict=False))  # fmt: skip
 
 
 def _refusals(tmp_path, role, good, bad):
@@ -332,7 +350,56 @@ def test_status_hub_refuses_bad_inputs(tmp_path):
         {"status_hub_approvals_csrf_key_ref": "secret:status/not-delivered"},
         {"status_hub_secret_refs": ["plain"]},
         {"status_hub_title": "a\nExecStart=/bin/sh"},
+        # Stage 5 (H1): off loopback, plain HTTP only by the explicit opt-in
+        {"status_hub_plain_http": False},
+        # the trusted proxies: never empty, no wildcard or range, each a registry host
+        {"status_hub_trusted_proxies": []},
+        {"status_hub_trusted_proxies": ["*"]},
+        {"status_hub_trusted_proxies": ["edge-core", "nowhere"]},
+        {"status_hub_trusted_proxies": [str(ipaddress.IPv4Address(0))]},  # the wildcard address
+        {"status_hub_trusted_proxies": [_EDGE_RANGE]},  # a range around the edge's address
+        {"status_hub_trusted_proxies": "edge-core"},  # a string, not a list
     ])  # fmt: skip
+
+
+def test_status_hub_refuses_bad_tls_inputs(tmp_path):
+    def without(*keys):
+        return {k: (False if k == "status_hub_plain_http" else "") for k in keys}
+
+    _refusals(tmp_path, "status_hub", HUB_TLS, [
+        without("status_hub_tls_key_ref"),  # a partial set
+        without("status_hub_client_ca_ref"),
+        {"status_hub_plain_http": True},  # exclusive with TLS
+        {"status_hub_tls_cert_ref": "-----BEGIN CERTIFICATE-----"},  # never inline
+        {"status_hub_tls_key_ref": "/etc/ssl/private/hub.key"},
+        # a certificate is a file, not an environment variable
+        {"status_hub_secret_refs": [*HUB["status_hub_secret_refs"], "secret:status/hub-tls-key"]},
+        {"status_hub_client_names": ["*.example.internal"]},
+        {"status_hub_client_names": ["Edge Proxy"]},
+        {"status_hub_tls_server_name": ""},  # TLS needs the name the probe verifies
+        # the pin needs TLS
+        {**without("status_hub_tls_cert_ref", "status_hub_tls_key_ref", "status_hub_client_ca_ref"),
+         "status_hub_plain_http": True},
+        # the hooks' certificate: both references, and its name when the pin is set
+        {"status_hub_health_client_cert_ref": "secret:status/hub-probe-cert"},
+        {"status_hub_health_client_cert_ref": "secret:status/hub-probe-cert",
+         "status_hub_health_client_key_ref": "secret:status/hub-probe-key"},
+    ])  # fmt: skip
+
+
+def test_status_hub_accepts_a_trusted_proxy_by_its_registry_address(tmp_path):
+    edge = yaml.safe_load((ROOT / "examples/services.yml").read_text())["hosts"]["edge-core"]
+    results = run_cases(tmp_path, "status_hub", "validate", HUB_TLS, [
+        {"status_hub_trusted_proxies": [edge["address"]]},
+        {"status_hub_trusted_proxies": ["edge-core", edge["address"]]},
+        {"status_hub_bind_address": LOOP, "status_hub_plain_http": False,
+         "status_hub_tls_cert_ref": "", "status_hub_tls_key_ref": "",
+         "status_hub_client_ca_ref": "", "status_hub_client_names": []},  # loopback: no opt-in
+        {"status_hub_health_client_cert_ref": "secret:status/hub-probe-cert",
+         "status_hub_health_client_key_ref": "secret:status/hub-probe-key",
+         "status_hub_health_client_name": "hub-probe.example.internal"},
+    ], parallel=True)  # fmt: skip
+    assert results == [(False, "")] * 4, results
 
 
 # ---------------------------------------------------------------- the rendered files
@@ -341,6 +408,7 @@ def _render(tmp_path, role, extra):
     defaults = yaml.safe_load((ROLES / role / "defaults/main.yml").read_text())
     fixed = ROLES / role / "vars/main.yml"
     vars_ = {**defaults, **(yaml.safe_load(fixed.read_text()) if fixed.is_file() else {}), **extra}
+    tmp_path.mkdir(parents=True, exist_ok=True)
     out = tmp_path / role
     out.mkdir()
     play = [{
@@ -427,7 +495,8 @@ def test_status_hub_renders_agents_and_views_its_schemas_accept(tmp_path):
     assert unit["SupplementaryGroups"] == ["hnx-broker-clients"]
     agents = yaml.safe_load(files["agents.yml"])
     assert agents["approvals"]["csrf_key"] == "secret:status/approvals-csrf-secret"
-    assert agents["private"] == {"service": "status-hub", "access_log": "access.jsonl"}
+    assert agents["private"] == {"service": "status-hub", "access_log": "access.jsonl",
+                                 "trusted_proxies": ["edge-core"]}  # fmt: skip
     views = yaml.safe_load(files["views.yml"])
     assert {"id": "approvals", "title": "Approvals", "panel": "approvals", "group": "private",
             "tlp": "red"} in views["menu"]  # fmt: skip
@@ -438,6 +507,41 @@ def test_status_hub_renders_agents_and_views_its_schemas_accept(tmp_path):
         jsonschema.validate(
             doc, json.loads((ROOT / f"schemas/status/{schema}.schema.json").read_text())
         )
+
+
+def test_status_hub_trusts_the_edge_proxy_hosts_by_default_and_the_set_hosts_otherwise(tmp_path):
+    """The role writes private.trusted_proxies explicitly: by default the registry's edge-proxy
+    hosts (the hub's own default before Stage 5), else status_hub_trusted_proxies resolved to
+    host names (an address becomes its registry host)."""
+    reg = yaml.safe_load((ROOT / "examples/services.yml").read_text())
+    edges = sorted(
+        {s["host"] for s in reg["services"].values() if s.get("capability") == "edge-proxy"}
+    )
+    files = _render(tmp_path / "default", "status_hub", HUB)
+    assert yaml.safe_load(files["agents.yml"])["private"]["trusted_proxies"] == edges
+    address = reg["hosts"]["mon-core"]["address"]
+    files = _render(
+        tmp_path / "set", "status_hub", {**HUB, "status_hub_trusted_proxies": [address]}
+    )
+    assert yaml.safe_load(files["agents.yml"])["private"]["trusted_proxies"] == ["mon-core"]
+
+
+def test_status_hub_unit_serves_mtls_with_the_pin_or_plain_http_by_opt_in(tmp_path):
+    files = _render(tmp_path / "tls", "status_hub", {
+        **HUB_TLS, "status_hub_health_client_cert_ref": "secret:status/hub-probe-cert",
+        "status_hub_health_client_key_ref": "secret:status/hub-probe-key",
+        "status_hub_health_client_name": "hub-probe.example.internal"})  # fmt: skip
+    argv = _directives(files["hnx-hub.service"])["ExecStart"][0].split()
+    tls = "/etc/hnx-hub/tls"
+    assert argv[argv.index("--tls-cert") + 1] == f"{tls}/server.crt"
+    assert argv[argv.index("--tls-key") + 1] == f"{tls}/server.key"
+    assert argv[argv.index("--client-ca") + 1] == f"{tls}/client-ca.crt"
+    names = [argv[i + 1] for i, a in enumerate(argv) if a == "--client-name"]
+    assert names == ["edge.example.internal", "hub-probe.example.internal"]
+    assert "--plain-http" not in argv
+    plain = _directives(_render(tmp_path / "plain", "status_hub", HUB)["hnx-hub.service"])
+    argv = plain["ExecStart"][0].split()
+    assert "--plain-http" in argv and "--tls-cert" not in argv and "--client-name" not in argv
 
 
 def test_status_hub_allowed_host_is_the_rows_public_hostname(tmp_path):

@@ -9,7 +9,7 @@ argument_specs:
         required: true
       status_hub_registry: &registry
         type: path
-        description: "The lab's registry (services.yml) on the controller; the hub reads its own row and the edge-proxy hosts (its trusted proxies) from it."
+        description: "The lab's registry (services.yml) on the controller; the hub reads its own row from it, and the role resolves status_hub_trusted_proxies against its hosts."
         required: true
       status_hub_hnx_bin: &bin
         type: path
@@ -48,6 +48,47 @@ argument_specs:
         elements: str
         description: "Host names clients send besides loopback: by default the hub row's public_hostname from the registry (status_hub_logical_id), none on a loopback bind; required for a non-loopback bind."
         default: "{{ [] if status_hub_bind_address in status_hub_loopback else [lookup('hnx_registry', status_hub_logical_id, field='public_hostname')] }}"
+      status_hub_trusted_proxies:
+        type: list
+        elements: str
+        description: "The registry hosts (names, or the addresses the registry gives them) the hub trusts for the identity headers (agents.yml private.trusted_proxies): replaces the hard-coded edge-proxy capability. At least one, no wildcard or range, each a host of status_hub_registry. Default: the hosts of the registry's edge-proxy rows."
+      status_hub_tls_cert_ref: &tlscert
+        type: str
+        description: "secret:<name> of the hub's server certificate (PEM, the chain after the leaf). With status_hub_tls_key_ref and status_hub_client_ca_ref: serve TLS and require a client certificate."
+        default: ""
+      status_hub_tls_key_ref: &tlskey
+        type: str
+        description: "secret:<name> of the server certificate's private key (PEM), written 0640 root:<status_hub_group>."
+        default: ""
+      status_hub_client_ca_ref: &clientca
+        type: str
+        description: "secret:<name> of the CA bundle a client certificate must chain to (the edge's issuing CA): a peer without one, or with one from another CA, is refused in the handshake."
+        default: ""
+      status_hub_tls_server_name: &servername
+        type: str
+        description: "A DNS name the server certificate holds (the one the edge dials and verifies, such as the hub's svc alias): required with TLS. The hooks' probe trusts exactly the installed certificate and checks this name in it."
+        default: ""
+      status_hub_client_names: &clientnames
+        type: list
+        elements: str
+        description: "Pin the client certificate's name (its DNS subjectAltNames, else its CN; exact, no wildcard): the edge's. Empty: any certificate the client CA signed. Needs TLS."
+        default: []
+      status_hub_plain_http: &plain
+        type: bool
+        description: "Serve plain HTTP off loopback (the explicit opt-in: tests, lab-in-a-box, or until the certificates exist); trust is then the source address alone. Exclusive with TLS."
+        default: false
+      status_hub_health_client_cert_ref: &hcert
+        type: str
+        description: "secret:<name> of the health and readiness hooks' own client certificate (signed by the client CA; optional). With it the hooks also GET /status.json over mTLS."
+        default: ""
+      status_hub_health_client_key_ref: &hkey
+        type: str
+        description: "secret:<name> of its key."
+        default: ""
+      status_hub_health_client_name: &hname
+        type: str
+        description: "The hooks' certificate's name, added to the pin when status_hub_client_names is set (required then)."
+        default: ""
       status_hub_secret_refs: &secrets
         type: list
         elements: str
@@ -102,18 +143,36 @@ argument_specs:
         description: "Where the export hook writes the agent-activity export."
         default: /var/backups/hnx-hub/export
   health:
-    short_description: Fail unless the hub answers /status.json with its contract on its bind address.
+    short_description: "Fail unless the hub answers /status.json with its contract on its bind address; over TLS, unless a peer without a client certificate is refused in the handshake (and, with the hooks' own certificate, the status document is served)."
     options:
       status_hub_logical_id: *id
+      status_hub_hnx_bin: *bin
+      status_hub_config_dir: *confdir
       status_hub_bind_address: *bind
       status_hub_port: *port
       status_hub_allowed_hosts: *hosts
+      status_hub_tls_cert_ref: *tlscert
+      status_hub_tls_key_ref: *tlskey
+      status_hub_client_ca_ref: *clientca
+      status_hub_tls_server_name: *servername
+      status_hub_health_client_cert_ref: *hcert
+      status_hub_health_client_key_ref: *hkey
   readiness:
-    short_description: Fail unless the broker's socket (with the Approvals page) is there and the registry copy validates.
+    short_description: "Fail unless the broker's socket (with the Approvals page) is there, the registry copy validates and, over TLS, a peer without a client certificate is refused in the handshake."
     options:
       status_hub_hnx_bin: *bin
       status_hub_config_dir: *confdir
       status_hub_approvals_socket: *sock
+      status_hub_logical_id: *id
+      status_hub_bind_address: *bind
+      status_hub_port: *port
+      status_hub_allowed_hosts: *hosts
+      status_hub_tls_cert_ref: *tlscert
+      status_hub_tls_key_ref: *tlskey
+      status_hub_client_ca_ref: *clientca
+      status_hub_tls_server_name: *servername
+      status_hub_health_client_cert_ref: *hcert
+      status_hub_health_client_key_ref: *hkey
   backup:
     short_description: Write the backup manifest (the activity store, the access log, the configuration).
     options:

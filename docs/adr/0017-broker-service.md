@@ -155,7 +155,10 @@ each remote agent logs in as its own system user.
 14. **Same front door, separate grant.** The page reuses the private tier's door
    (`homelabnext/status/agents/auth.py`: trusted proxy address, shared front-door secret header,
    forward-auth identity header) and adds an **approver group** that must differ from the viewer
-   group. Viewers may read the queue (its params are as sensitive as the private tier they already
+   group. Since Stage 5 the trusted proxy is also a cryptographic identity: off loopback the hub
+   serves TLS and requires the edge's client certificate (`homelabnext/status/tls.py`), the
+   address counts only over that verified, pinned certificate, and a request that is not from a
+   trusted proxy has its identity headers removed ([status](../status.md#the-edge-to-hub-hop-mtls-stage-5)). Viewers may read the queue (its params are as sensitive as the private tier they already
    read); only the approver group may decide.
 15. **The hub's one write is guarded as one.** `POST /approvals/decide` only (every other `POST`
    stays `405`); the console's Host/Origin guard, then a same-origin `Origin` (or `Referer`) and no

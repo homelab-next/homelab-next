@@ -13,10 +13,14 @@
                       [--maps ROOT] [--invariants-results FILE] [--roster FILE] [--mcp-catalog DIR]]
     hnx status serve [--state FILE] [--views FILE] [--registry FILE] [--bind HOST] [--port N]
                      [--allow-remote --allowed-host NAME ...] [--agents FILE] [--secrets-dir DIR]
+                     [--tls-cert FILE --tls-key FILE --client-ca FILE [--client-name NAME ...]
+                      | --plain-http]
                      [--strategy DIR] [--projects DIR] [--orchestration DB]
                      [--guests DIR --guests-site SITE [--guests-registry FILE]]
                      [--maps ROOT] [--invariants-results FILE] [--roster FILE]
                      [--mcp-catalog DIR]
+    hnx status probe-tls --address ADDR [--port N] --host-header NAME --server-cert FILE
+                         --server-name NAME [--client-cert FILE --client-key FILE]
     hnx status ingest --agents FILE [--registry FILE] [--bind HOST] [--port N] [--publish-to URL]
                       [--allow-remote --allowed-host NAME ...] [--secrets-dir DIR]
 
@@ -26,6 +30,9 @@ sessions to ``status.json`` and ``serve`` the agent pages (the private tier only
 trusted front door); ``ingest`` is the separate push listener (``POST /ingest/agent-activity``).
 An ``approvals:`` block there has ``serve`` add the broker Approvals page (``/approvals``, behind
 the same front door; the hub's one ``POST``: ``homelabnext.status.approvals``).
+``serve --tls-cert/--tls-key/--client-ca`` listens over TLS and requires a client certificate
+signed by that CA (``--client-name`` pins the edge's name; ``homelabnext.status.tls``); off
+loopback, plain HTTP needs ``--plain-http`` (tests, lab-in-a-box).
 ``--strategy`` (``examples/strategy``) has ``serve`` add the strategy pages (Strategy,
 Requirements, Objectives, RFIs; ``docs/strategy.md``); ``--projects`` (``examples/projects``)
 adds the Projects page (open projects and their steps, blocked work, work by strategy record;
@@ -129,7 +136,9 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     """Entry point; ``clock`` is the process edge's real clock (injectable for tests)."""
     ap = argparse.ArgumentParser(prog="hnx status", description="the read-only status hub")
     sub = ap.add_subparsers(
-        dest="cmd", required=True, metavar="{sources,catalog,views,collect,render,serve,ingest}"
+        dest="cmd",
+        required=True,
+        metavar="{sources,catalog,views,collect,render,serve,ingest,probe-tls}",
     )
 
     def agents_opt(p, *, required=False):
@@ -263,6 +272,27 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     p = sub.add_parser("serve", help="serve the page and status.json live (GET only)")
     common(p, views=True, state=True)
     remote_opts(p, 8099)
+    p.add_argument("--tls-cert", metavar="FILE", help="serve TLS: the server certificate (PEM)")
+    p.add_argument("--tls-key", metavar="FILE", help="the server certificate's key (PEM)")
+    p.add_argument(
+        "--client-ca",
+        metavar="FILE",
+        help="the CA bundle a client certificate must chain to (required with TLS: a peer "
+        "without one is refused in the handshake)",
+    )
+    p.add_argument(
+        "--client-name",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="pin the client certificate's name (DNS subjectAltName, else CN; repeatable): the "
+        "edge's; default: any certificate the CA signed",
+    )
+    p.add_argument(
+        "--plain-http",
+        action="store_true",
+        help="serve plain HTTP off loopback (tests, lab-in-a-box): trust is the source address alone",
+    )
     p.add_argument("--docs-base", default="docs")
     p.add_argument("--strategy", help="a strategy directory: serve its pages (docs/strategy.md)")
     p.add_argument(
@@ -275,6 +305,25 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
     )
     map_opts(p)
     agents_opt(p)
+    p = sub.add_parser(
+        "probe-tls",
+        help="check the hub's TLS listener: refused without a client certificate (the role's "
+        "health and readiness hooks), 200 with one",
+    )
+    p.add_argument("--address", required=True, help="the hub's bind address")
+    p.add_argument("--port", type=int, default=8099)
+    p.add_argument("--host-header", required=True, help="the Host the hub allows")
+    p.add_argument(
+        "--server-cert",
+        required=True,
+        metavar="FILE",
+        help="the hub's own certificate: the probe's one trust anchor (it reaches that hub only)",
+    )
+    p.add_argument(
+        "--server-name", required=True, help="a name the hub's certificate must hold (the edge's)"
+    )
+    p.add_argument("--client-cert", metavar="FILE", help="the probe's own client certificate")
+    p.add_argument("--client-key", metavar="FILE", help="its key")
     p = sub.add_parser("ingest", help="the agent-activity push listener (POST only)")
     common(p)
     remote_opts(p, 8098)
@@ -307,6 +356,8 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         args = ap.parse_args(argv)
     except SystemExit as exc:
         return 2 if exc.code else 0
+    if args.cmd == "probe-tls":
+        return _probe_tls(args)
     try:
         reg = load(args.registry)
     except RegistryError as exc:
@@ -420,7 +471,13 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         print("wrote " + ", ".join(str(p) for p in paths))
         return 0
     from .serve import LOOPBACK, DocumentMemo, make_server
+    from .tls import TLSConfigError, TLSSettings
 
+    try:
+        tls = TLSSettings.from_args(args.tls_cert, args.tls_key, args.client_ca, args.client_name)
+    except TLSConfigError as exc:
+        print(f"hnx status serve: {exc}", file=sys.stderr)
+        return 2
     approvals = _approvals_site(agents_cfg, clock)
     served = approvals is not None
     document = DocumentMemo(
@@ -443,14 +500,43 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
             baselines=_baseline_site(args),
             approvals=approvals,
             maps=maps,
+            tls=tls,
+            plain_http=args.plain_http,
         )
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError) as exc:  # TLSConfigError is a ValueError
         print(f"hnx status serve: {exc}", file=sys.stderr)
         return 2
     host, port = srv.server_address[:2]
-    print(f"status hub (read-only) on http://{host}:{port}/  (Ctrl-C stops)")
+    scheme = "https" if tls is not None else "http"
+    mtls = " (client certificate required)" if tls is not None else ""
+    print(f"status hub (read-only) on {scheme}://{host}:{port}/{mtls}  (Ctrl-C stops)")
     _serve(srv, store)
     return 0
+
+
+def _probe_tls(args) -> int:
+    """``probe-tls``: 0 when the listener behaves (see :func:`homelabnext.status.tls.probe`), 1
+    when it does not, 2 for a usage error."""
+    from .tls import probe
+
+    if bool(args.client_cert) != bool(args.client_key):
+        print("hnx status probe-tls: --client-cert and --client-key go together", file=sys.stderr)
+        return 2
+    try:
+        result = probe(
+            args.address,
+            args.port,
+            host_header=args.host_header,
+            server_cert=args.server_cert,
+            server_name=args.server_name,
+            client_cert=args.client_cert,
+            client_key=args.client_key,
+        )
+    except (OSError, ValueError) as exc:  # an unreadable client certificate or key
+        print(f"hnx status probe-tls: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+    print(f"hnx status probe-tls: {result.outcome}: {result.detail}")
+    return 0 if result.ok else 1
 
 
 def _preview(args, reg, specs, views, clock) -> int:

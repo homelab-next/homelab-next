@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# The hub's TLS listener, checked by `hnx status probe-tls` on its bind address (trusting exactly
+# the installed server certificate, by status_hub_tls_server_name): a peer with no
+# client certificate must be refused in the handshake (any HTTP answer, a plain listener or none
+# fails); with the hooks' own client certificate (status_hub_health_client_cert_ref/_key_ref,
+# optional) GET /status.json must answer 200. The probe's key is written for the probe alone and
+# removed after it.
+- name: Expect a peer without a client certificate to be refused
+  ansible.builtin.command:
+    argv: ["{{ status_hub_hnx_bin }}", status, probe-tls, --address, "{{ status_hub_bind_address }}",
+           --port, "{{ status_hub_port | int }}", --host-header, "{{ status_hub_probe_host }}",
+           --server-cert, "{{ status_hub_tls_dir }}/server.crt", --server-name, "{{ status_hub_tls_server_name }}"]
+  vars:
+    status_hub_probe_host: "{{ status_hub_allowed_hosts | first if status_hub_bind_address not in status_hub_loopback else 'localhost' }}"
+  register: status_hub_tls_refusal
+  changed_when: false
+  failed_when: status_hub_tls_refusal.rc != 0
+  check_mode: false  # read-only: it runs in --check too
+
+- name: GET /status.json with the hooks' own client certificate
+  when: status_hub_health_cert | bool
+  block:
+    - name: Create a private directory for the hooks' client certificate
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .hnx-hub-probe
+      register: status_hub_probe_dir
+      check_mode: false
+    - name: Write the hooks' client certificate and key (root only)
+      ansible.builtin.copy:
+        dest: "{{ status_hub_probe_dir.path }}/{{ item.file }}"
+        content: "{{ lookup('hnx_secret', item.ref) | trim }}\n"
+        mode: "0600"
+      loop:
+        - {file: probe.crt, ref: "{{ status_hub_health_client_cert_ref }}"}
+        - {file: probe.key, ref: "{{ status_hub_health_client_key_ref }}"}
+      loop_control:
+        label: "{{ item.file }}"
+      no_log: true
+      diff: false
+      changed_when: false
+      check_mode: false
+    - name: Expect 200 with the hooks' client certificate
+      ansible.builtin.command:
+        argv: ["{{ status_hub_hnx_bin }}", status, probe-tls, --address, "{{ status_hub_bind_address }}",
+               --port, "{{ status_hub_port | int }}", --host-header, "{{ status_hub_probe_host }}",
+               --server-cert, "{{ status_hub_tls_dir }}/server.crt", --server-name, "{{ status_hub_tls_server_name }}",
+               --client-cert, "{{ status_hub_probe_dir.path }}/probe.crt",
+               --client-key, "{{ status_hub_probe_dir.path }}/probe.key"]
+      vars:
+        status_hub_probe_host: "{{ status_hub_allowed_hosts | first if status_hub_bind_address not in status_hub_loopback else 'localhost' }}"
+      register: status_hub_tls_mtls
+      changed_when: false
+      failed_when: status_hub_tls_mtls.rc != 0
+      check_mode: false
+  always:
+    - name: Remove the hooks' client certificate and key
+      ansible.builtin.file:
+        path: "{{ status_hub_probe_dir.path }}"
+        state: absent
+      when: status_hub_probe_dir.path is defined
+      changed_when: false
+      check_mode: false

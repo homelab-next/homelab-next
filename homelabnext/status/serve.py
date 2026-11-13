@@ -28,7 +28,17 @@ files and so drops the reused build.
 
 It binds loopback by default.  Another address is refused unless ``allow_remote=True``, which
 also requires ``allowed_hosts``: the server has no authentication of its own, so exposing it is a
-decision for the proxy in front (the forward-auth edge), not a default.
+decision for the proxy in front (the forward-auth edge), not a default.  Off loopback it also needs
+either ``tls`` (:class:`homelabnext.status.tls.TLSSettings`: a TLS listener that requires a client
+certificate from the edge's CA, optionally pinned to the edge's name) or the explicit
+``plain_http=True`` opt-in (tests, lab-in-a-box).
+
+**Who is the edge.**  Over TLS, a request's source address reaches the front door
+(:mod:`homelabnext.status.agents.auth`) only when its connection presented a verified client
+certificate that passes the pin; and a request that is not from a trusted proxy (by that rule) has
+every identity header (:data:`IDENTITY_STRIP`) removed before any route sees it, so a client-sent
+``X-Auth-Request-Preferred-Username`` or ``X-Forwarded-User`` never names anybody.  Over plain
+HTTP the source address alone decides, as before Stage 5.
 
 **DNS rebinding.**  Binding loopback is not enough: a web page the operator visits can point a
 hostname of its own at the loopback address and read ``status.json`` same-origin.  So every request whose
@@ -43,8 +53,10 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import ipaddress
 import os
 import socket
+import ssl
 import threading
 import urllib.parse
 from collections.abc import Callable, Iterable, Mapping
@@ -52,9 +64,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from homelabnext._http import is_loopback
+from homelabnext.edge_identity import IDENTITY_HEADERS
 
 from .release import ReleaseError
 from .render import render_html, style_hash
+from .tls import HANDSHAKE_TIMEOUT_S, TLSSettings
 from .views import dumps, public_status, route_ceiling, withheld_route
 
 LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the read-only console binds loopback by default
@@ -77,6 +91,44 @@ _HEADERS = {
     "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY",
 }
+
+
+#: identity headers some proxy or framework reads that the platform's set does not name: dropped,
+#: with every header carrying the identity mark (``auth-request``, any spelling), from a request
+#: that is not from a trusted proxy (an untrusted request names nobody, whatever it sends)
+IDENTITY_STRIP = (
+    "X-Forwarded-User",
+    "X-Forwarded-Preferred-Username",
+    "X-Forwarded-Email",
+    "X-Forwarded-Groups",
+    "X-Remote-User",
+    "Remote-User",
+)
+_STRIP_FOLDED = frozenset(h.lower().replace("_", "-") for h in IDENTITY_STRIP)
+
+
+def is_identity_header(name: str) -> bool:
+    """Whether a request header names a person or their groups (see :data:`IDENTITY_STRIP`)."""
+    return (
+        IDENTITY_HEADERS.carries_mark(name)
+        or name.strip().lower().replace("_", "-") in _STRIP_FOLDED
+    )
+
+
+def strip_identity(headers: Any) -> list[str]:
+    """Remove every identity header from ``headers`` (an ``email.message.Message``), every
+    occurrence; the names removed (for tests)."""
+    names = sorted({k for k in headers if is_identity_header(k)})
+    for name in names:
+        del headers[name]
+    return names
+
+
+def _canonical(addr: str | None) -> str | None:
+    try:
+        return str(ipaddress.ip_address((addr or "").strip("[]")))
+    except ValueError:
+        return None
 
 
 def host_header_name(value: str | None) -> str | None:
@@ -131,6 +183,7 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         max_connections: int = DEFAULT_MAX_CONNECTIONS,
         max_per_client: int | None = None,
         deadline_s: float | None = None,
+        tls: TLSSettings | None = None,
     ):
         if max_connections < 1:
             raise ValueError("max_connections is at least 1")
@@ -143,7 +196,37 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         self.deadline_s = deadline_s
         self.per_client: dict[str, int] = {}
         self._clients = threading.Lock()
+        #: the TLS listener's settings and context (None: plain HTTP); loaded before binding, so
+        #: a bad certificate fails the start, never the first connection
+        self.tls = tls
+        self.tls_context = tls.context() if tls is not None else None
         super().__init__(address, handler)
+
+    def get_request(self):
+        """Accept, and over TLS wrap the socket without handshaking: the handshake runs on the
+        connection's own thread (:meth:`_handshake`), never on this accepting one."""
+        sock, addr = super().get_request()
+        if self.tls_context is None:
+            return sock, addr
+        try:
+            return (
+                self.tls_context.wrap_socket(sock, server_side=True, do_handshake_on_connect=False),
+                addr,
+            )
+        except (OSError, ValueError):
+            sock.close()
+            raise OSError("TLS wrap failed") from None
+
+    def _handshake(self, request) -> bool:
+        """The TLS handshake within :data:`HANDSHAKE_TIMEOUT_S`, then the client-name pin.  False
+        (the connection is closed without a byte of HTTP) on any failure: no certificate, one
+        from another CA, plain HTTP on the TLS port, a stalled peer, or a name not pinned."""
+        try:
+            request.settimeout(HANDSHAKE_TIMEOUT_S)
+            request.do_handshake()
+            return self.tls.name_allowed(request.getpeercert())
+        except (OSError, ValueError):
+            return False
 
     def _client(self, client_address) -> str:
         return str(client_address[0]) if client_address else ""
@@ -202,6 +285,8 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             timer.daemon = True
             timer.start()
         try:
+            if self.tls_context is not None and not self._handshake(request):
+                return  # refused in the handshake (the finally below closes it)
             self.finish_request(request, client_address)
         except Exception:
             if (
@@ -285,6 +370,8 @@ def make_server(
     maps: Any = None,
     releases: Any = None,
     max_connections: int = DEFAULT_MAX_CONNECTIONS,
+    tls: TLSSettings | None = None,
+    plain_http: bool = False,
 ) -> ThreadingHTTPServer:
     """A server for ``document()`` (called once per request).  ``port=0`` picks a free port;
     at most ``max_connections`` are served at once (:class:`BoundedHTTPServer`).
@@ -306,7 +393,12 @@ def make_server(
     ceiling is ``clear``, so a request through the trusted front door gets the same fields (the
     private tier's grant shows only in the private menu group), and neither the bind address nor
     ``allowed_hosts`` changes what they hold.  A release that fails is a ``500`` with no body
-    from the document."""
+    from the document.
+
+    ``tls``: serve over TLS and require a client certificate (:mod:`homelabnext.status.tls`);
+    ``plain_http``: the explicit opt-in to plain HTTP off loopback (refused together with
+    ``tls``).  Over TLS a request is from a trusted proxy only with a verified, pinned certificate
+    *and* a trusted source address; a request that is not has its identity headers removed."""
     extra = frozenset(h.strip().lower().rstrip(".") for h in allowed_hosts if h.strip())
     if allow_remote and not extra:
         raise ValueError("allow_remote needs allowed_hosts: the hostnames clients will use")
@@ -315,7 +407,18 @@ def make_server(
             f"refusing to bind {host}: the status console is loopback-only unless allow_remote "
             "is set (put the forward-auth proxy in front of it)"
         )
+    if tls is not None and plain_http:
+        raise ValueError("plain_http and tls are exclusive: choose one listener")
+    if tls is None and not is_loopback(host) and not plain_http:
+        raise ValueError(
+            f"refusing plain HTTP on {host}: off loopback the hub serves TLS with client "
+            "certificates (tls) unless plain_http is set explicitly (tests, lab-in-a-box)"
+        )
     allowed = LOOPBACK_NAMES | extra
+    front = next(
+        (fd for fd in (getattr(s, "front_door", None) for s in (agents, approvals)) if fd), None
+    )
+    trusted_proxies: frozenset[str] = front.trusted if front is not None else frozenset()
 
     def _public(doc: Mapping[str, Any], *, contract: bool = False) -> dict[str, Any] | None:
         """The one producer of the public document here: ``doc`` through its release transform,
@@ -340,6 +443,23 @@ def make_server(
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def _client(self) -> str | None:
+            """The source address the front door judges, after dropping every identity header
+            from a request that is not from a trusted proxy.  Over TLS the address counts only
+            when the connection's verified certificate passes the pin (the handshake already
+            refused a missing or foreign one); an address that is not a trusted proxy's, or no
+            address, leaves a request that names nobody."""
+            addr = self.client_address[0] if self.client_address else None
+            if tls is not None:
+                cert = (
+                    self.request.getpeercert() if isinstance(self.request, ssl.SSLSocket) else None
+                )
+                if not tls.name_allowed(cert):
+                    addr = None
+            if addr is None or _canonical(addr) not in trusted_proxies:
+                strip_identity(self.headers)
+            return addr
+
         def _guard(self) -> bool:
             """403 unless Host (and Origin, if sent) name an allowed host (DNS rebinding)."""
             if host_allowed(self.headers.get("Host"), self.headers.get("Origin"), allowed):
@@ -351,7 +471,7 @@ def make_server(
             if not self._guard():
                 return
             route, _, query = self.path.partition("?")
-            client = self.client_address[0] if self.client_address else None
+            client = self._client()
             if route in ("/", "/index.html", "/status.json"):
                 doc = _public(document(), contract=route == "/status.json")
                 if doc is None:
@@ -429,7 +549,7 @@ def make_server(
             if approvals is None or route != "/approvals/decide":
                 self._refuse()
                 return
-            client = self.client_address[0] if self.client_address else None
+            client = self._client()
             if not host_allowed(self.headers.get("Host"), self.headers.get("Origin"), allowed):
                 # the same DNS-rebinding refusal as every route, and logged like every attempt
                 self._reply(*approvals.refuse(client, self.headers, 403, "host not allowed"))
@@ -441,4 +561,4 @@ def make_server(
         def log_message(self, *a: Any) -> None:  # quiet; the CLI prints the URL once
             pass
 
-    return BoundedHTTPServer((host, port), Handler, max_connections=max_connections)
+    return BoundedHTTPServer((host, port), Handler, max_connections=max_connections, tls=tls)
