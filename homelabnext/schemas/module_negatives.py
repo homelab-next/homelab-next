@@ -715,6 +715,35 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         ),
         "An incumbent is a registry row and a reason, never a provider.",
     ),
+    "planned-without-review-by": (
+        "small-lab",
+        lambda d: (
+            d["slots"].pop("idp"),
+            d.__setitem__("planned", {"idp": {"why": "an identity module, next stage"}}),
+        ),
+        "A planned slot carries the date its plan is next reviewed.",
+    ),
+    "planned-review-by-not-a-date": (
+        "small-lab",
+        lambda d: (
+            d["slots"].pop("idp"),
+            d.__setitem__(
+                "planned", {"idp": {"why": "an identity module", "review_by": "next quarter"}}
+            ),
+        ),
+        "A planned slot's review_by is a YYYY-MM-DD date.",
+    ),
+    "planned-unknown-field": (
+        "small-lab",
+        lambda d: (
+            d["slots"].pop("idp"),
+            d.__setitem__(
+                "planned",
+                {"idp": {"why": "x", "review_by": "2027-01-15", "provider": "example-platform"}},
+            ),
+        ),
+        "A planned slot is a reason and a review date, never a provider.",
+    ),
     "cloud-model-not-a-role": (
         "full",
         lambda d: d["grants"].__setitem__("cloud_models", {"publishing": ["main-reasoner"]}),

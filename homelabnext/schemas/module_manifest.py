@@ -1607,7 +1607,7 @@ def module_selection_schema() -> dict[str, Any]:
         "$id": BASE + "platform/module_selection/1.0",
         "x-draft": "ADR-0027 (proposed): read by the module loader (homelabnext.modules.loader) and at deploy time; not frozen until ADR-0027 is accepted after the pilot, so an overlay pins the core commit it is validated against",
         "title": "Module selection",
-        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, the slots served outside modules (incumbents), feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
+        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, the slots served outside modules (incumbents), the required core slots not served yet (planned), feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
         "type": "object",
         "additionalProperties": False,
         "required": ["profile", "hosts", "slots"],
@@ -1644,6 +1644,23 @@ def module_selection_schema() -> dict[str, Any]:
                     ["service", "why"],
                 ),
                 "description": "Slots served outside modules, by a core role or a lab's existing service (ADR-0027 decision 9): each names the registry row that serves it. An incumbent counts as selected for a required core slot and for a module that requires or prefers the slot; it is never a provider, an instance or an egress target. The slot must be in the slot registry and not also under slots; the row must exist, be the primary of the slot's capability (loader).",
+            },
+            "planned": {
+                "type": "object",
+                "propertyNames": pat(SLUG, None, 64),
+                "additionalProperties": obj(
+                    {
+                        "why": text(
+                            200, "What will serve the slot (a module, a cutover) and when."
+                        ),
+                        "review_by": {
+                            "$ref": COMMON + "date",
+                            "description": "When the plan is next reviewed (YYYY-MM-DD, quoted in YAML so it stays a string). hnx modules check --deploy refuses the selection once it has passed (HNX_TODAY, else the local date).",
+                        },
+                    },
+                    ["why", "review_by"],
+                ),
+                "description": "Required core slots the site does not serve yet (ADR-0027 decision 9): a staged lab's honest 'not built'. A planned slot turns 'a required core slot has no provider' into a warning naming its why and review_by; it is not served, so it satisfies no requirement and is never a provider, an instance, an egress target or an upstream. The slot must be a required core slot of the slot registry, not also under slots or incumbents, with a real review_by date that a deploy's check refuses once passed (loader).",
             },
             "features": {"type": "object", "propertyNames": mid, "additionalProperties": binding},
             "core": {"type": "object", "propertyNames": mid, "additionalProperties": binding},

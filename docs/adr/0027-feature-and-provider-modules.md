@@ -19,6 +19,8 @@ summary_of: outline:sha256:e2334f5f35796d84
   replace` (decision 5)
 - **Amended:** 2026-11-12, in place while proposed: decision 9's placement is on hosts that
   reference their guest records (modules plan H2)
+- **Amended:** 2026-11-13, in place while proposed (operator-approved): decision 9's selection
+  may plan a required core slot it does not serve yet, with a `review_by` a deploy enforces
 - **Amended-by:** ADR-0040
 
 ## Context
@@ -83,7 +85,9 @@ says what selecting someone else's module grants it.
 9. **Selection is site configuration in the private overlay** (`platform/module_selection` 1.0):
    providers per slot as instances, `none` or `pass-through` where the registry allows, an
    **incumbent** for a slot served outside modules
-   ([selection](../modules/selection.md#incumbents-slots-served-outside-modules)), placement
+   ([selection](../modules/selection.md#incumbents-slots-served-outside-modules)), a **planned**
+   required core slot not served yet, a warning until its dated review, which a deploy enforces
+   ([planned](../modules/planned.md)), placement
    on hosts that reference their guest records, whose kind, capacity and addresses the loader
    reads and judges each placed role against
    ([selection](../modules/selection.md#hosts-that-are-guests)),

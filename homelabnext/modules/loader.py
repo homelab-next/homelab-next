@@ -42,6 +42,7 @@ error.
 
 from __future__ import annotations
 
+import datetime as dt
 import itertools
 import json
 import os
@@ -244,6 +245,8 @@ class Report:
     #: the selection as the rules judged it: hosts that reference a guest carry the kind,
     #: capacity and addresses resolved from their guest records (None without a valid site)
     site: Doc | None = None
+    #: what is owed but not refused: each planned core slot (``planned``), its why and review
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -1657,6 +1660,7 @@ def check(
     empty_selection: bool = False,
     guests: gh.Guests | None = None,
     lab_registry: Any = None,
+    today: dt.date | None = None,
 ) -> Report:
     """Every rule of "What the loader checks" over ``tree``; with ``site`` the site rules and
     the supply chain, with ``inventory`` the runtime half of the two-way check.
@@ -1674,7 +1678,11 @@ def check(
     ``lab_registry`` (the lab's own registry document, ``lab/services.yml``): every service row
     a selected module contributes, as the site binds it (renamed to the instance, placed on the
     guest), appears in it identically (:func:`homelabnext.modules.registry_rows.row_problems`);
-    without it the rows are not compared, and the report says so."""
+    without it the rows are not compared, and the report says so.
+
+    ``today`` (a ``datetime.date``: the date ``hnx modules check --deploy`` is judged on): a
+    planned slot whose ``review_by`` is before it is a problem.  Without it no date is read; each
+    planned slot is a warning either way (:func:`~homelabnext.modules.rules.planned_warnings`)."""
     problems: list[Problem] = []
     notes: list[str] = []
     core = core or CoreNames()
@@ -1760,13 +1768,15 @@ def check(
             site, valid, dict(slots), rows=ins.rows, units=ins.units,
             privileged_units=ins.privileged_units, roles=dict(roles), known=dict(tree.mods),
             registry=dict(core.rows) if core.rows_known else None, non_primary=core.non_primary,
+            today=today,
         )
     ]  # fmt: skip
+    warnings = mr.planned_warnings(site)
     problems += _instance_problems(site, core)
     try:
         sel = mr.selected(site, valid)
     except KeyError:
-        return Report(sorted(set(problems)), notes)  # site_problems reported it
+        return Report(sorted(set(problems)), notes, warnings=warnings)  # site_problems said
     problems += [Problem("site", p) for p in gh.placement_problems(site, sel, guests)]
     unchecked = gh.unchecked(site, sel)
     if unchecked:
@@ -1813,7 +1823,7 @@ def check(
         notes.append("no inventory of what runs: the runtime half of the two-way check did not run")
     else:
         _runtime(vtree, ins, site, sel, inventory, load, problems, notes, core)
-    return Report(sorted(set(problems)), notes, site)
+    return Report(sorted(set(problems)), notes, site, warnings)
 
 
 def _runtime(

@@ -29,7 +29,7 @@ something (non-empty `in` and `out`). The fields:
 | `stage` | SOC pipeline stage 1-10, or null (replaces nothing: `layer` stays) | pass-through neighbours |
 | `formats: {in, out}` | boundary formats | pass-through is legal only when the selected upstream's out meets the downstream's in |
 | `stateful`, `export_formats` | whether providers carry a migration, and in which neutral formats | no fictional migrations for stateless slots (notify, static hosting, edge, inference) |
-| `required_in_core` | a site must select a provider, or declare the slot an incumbent ([selection](selection.md#incumbents-slots-served-outside-modules)) | a selection cannot silently omit dns or backup |
+| `required_in_core` | a site must select a provider, or declare the slot an incumbent ([selection](selection.md#incumbents-slots-served-outside-modules)), or plan it, a warning until its review date ([planned](planned.md)) | a selection cannot silently omit dns or backup |
 | `privileged` | secrets, idp, edge (the front door), broker, orchestration, records | never provisional; always a conformance run and the human review tier |
 | `pass_through` | the stage may be skipped | |
 | `authority` | broker, secrets, idp, edge, remote-admin, mcp-catalog (each that the registry holds) | never in an agent's `needs`; an authority for the site rules; must agree with `homelabnext.modules.authority`, the one list the schema generator and the rules read (the loader refuses a registry that disagrees, either way) |
