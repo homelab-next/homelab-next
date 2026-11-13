@@ -20,14 +20,15 @@ REG = sc.build_registry(ROOT)
 CURRENT = json.loads((ROOT / "schemas/platform/service.json").read_text())
 FROZEN_28 = json.loads((ROOT / "schemas/_frozen/2.8/platform/service.json").read_text())
 FROZEN_29 = json.loads((ROOT / "schemas/_frozen/2.9/platform/service.json").read_text())
+FROZEN_210 = json.loads((ROOT / "schemas/_frozen/2.10/platform/service.json").read_text())
 DOC = yaml.safe_load((ROOT / "examples/services.yml").read_text())
 FOUR_BOX = yaml.safe_load((ROOT / "examples/four-box-lab/services.yml").read_text())
 
 
 def test_version_is_2_9_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.9")
-    assert CURRENT == FROZEN_29
-    assert sc.is_additive(FROZEN_28, CURRENT) == []
+    assert FROZEN_29["$id"].endswith("/platform/service/2.9")
+    assert sc.is_additive(FROZEN_28, FROZEN_29) == []
+    assert sc.is_additive(FROZEN_29, FROZEN_210) == []
 
 
 def test_standing_validates_in_2_9_only_and_reaches_the_model():

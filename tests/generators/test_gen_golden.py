@@ -507,7 +507,10 @@ def test_every_public_site_strips_identity_headers_at_site_level_first():
     for site in sites:
         lines = [ln.strip() for ln in site.splitlines()[1:] if not ln.strip().startswith("#")]
         assert lines[: len(want)] == want, site
-        imports = lines[len(want)].startswith("import hnx_forward_auth ")
+        # then other proxies' identity headers (X-Forwarded-User, Remote-User, ...), still at
+        # site level and before the forward auth
+        assert lines[len(want)] == "import hnx_strip_foreign_identity", site
+        imports = lines[len(want) + 1].startswith("import hnx_forward_auth ")
         assert imports == (site.split()[0] in gated), site
 
 
@@ -524,7 +527,9 @@ def test_each_public_idp_site_lets_in_exactly_its_role_groups():
     gated = [s for s in REG.sorted_services() if s.auth == "idp" and s.public_hostname]
     assert gated
     for s in gated:
-        [imp] = [ln for ln in _site(text, s.public_hostname) if ln.startswith("import ")]
+        [imp] = [
+            ln for ln in _site(text, s.public_hostname) if ln.startswith("import hnx_forward_auth")
+        ]
         want = ",".join(sorted({g for gs in s.roles.values() for g in gs}))
         assert imp == f"import hnx_forward_auth {want}", s.name
     status = _site(text, "status.lab.example")

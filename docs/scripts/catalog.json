@@ -1319,7 +1319,7 @@
       "outputs": "one line per disabled verification",
       "owner": "maintainers",
       "path": "tools/tls_verify_lint.py",
-      "purpose": "Fail when Python code or a YAML/JSON config turns TLS certificate verification off.",
+      "purpose": "Fail when Python code, a YAML/JSON config or a Caddyfile turns TLS certificate verification off.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",

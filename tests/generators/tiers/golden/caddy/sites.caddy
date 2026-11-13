@@ -23,10 +23,37 @@
 	}
 }
 
+(hnx_strip_foreign_identity) {
+	request_header -*forwarded-user*
+	request_header -*forwarded_user*
+	request_header -*forwarded-group*
+	request_header -*forwarded_group*
+	request_header -*forwarded-email*
+	request_header -*forwarded_email*
+	request_header -*forwarded-preferred-username*
+	request_header -*forwarded-preferred_username*
+	request_header -*forwarded_preferred-username*
+	request_header -*forwarded_preferred_username*
+	request_header -*forwarded-access-token*
+	request_header -*forwarded-access_token*
+	request_header -*forwarded_access-token*
+	request_header -*forwarded_access_token*
+	request_header -*remote-user*
+	request_header -*remote_user*
+	request_header -*remote-group*
+	request_header -*remote_group*
+	request_header -*remote-email*
+	request_header -*remote_email*
+	request_header -*remote-name*
+	request_header -*remote_name*
+	request_header -*webauth*
+}
+
 login.lab.example {
 	# service idp (idp) owner=identity-team
 	request_header -*auth-request*
 	request_header -*auth_request*
+	import hnx_strip_foreign_identity
 	reverse_proxy https://idp.svc.example.internal:9443
 }
 
@@ -34,6 +61,7 @@ status.lab.example {
 	# service status-hub (status-hub) owner=platform-team
 	request_header -*auth-request*
 	request_header -*auth_request*
+	import hnx_strip_foreign_identity
 	import hnx_forward_auth hub-viewers
 	reverse_proxy https://status-hub.svc.example.internal:8443
 }

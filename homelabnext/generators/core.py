@@ -2,7 +2,10 @@
 """Generator framework: registration, generation, idempotent writing, drift check.
 
 A generator is a pure function ``(Registry) -> {relative_path: text}``. No
-clock, no randomness, no environment: identical registry in, identical bytes out.
+clock, no randomness, no environment: identical registry in, identical bytes out.  A generator
+may declare named **options** (``register(..., options=("edge_hosts",))``): the caller's
+deployment choices, passed as keyword arguments, never read from the environment, so the output
+is still a pure function of the registry and the options given.
 """
 
 from __future__ import annotations
@@ -31,22 +34,31 @@ class Generator:
     #: the top-level output directories it owns even when it renders nothing, so a stale file
     #: there is pruned and reported (its output for one registry may be no file at all)
     dirs: tuple[str, ...] = ()
+    #: the keyword options it takes (``generate(..., options={name: value})``)
+    options: tuple[str, ...] = ()
 
 
 GENERATORS: dict[str, Generator] = {}
 
 
-def register(name: str, description: str, target: str, *, when_named=None, dirs=()):
+def register(name: str, description: str, target: str, *, when_named=None, dirs=(), options=()):
     def deco(fn):
         if name in GENERATORS:
             raise RuntimeError(f"duplicate generator {name}")
-        GENERATORS[name] = Generator(name, description, target, fn, when_named, tuple(dirs))
+        GENERATORS[name] = Generator(
+            name, description, target, fn, when_named, tuple(dirs), tuple(options)
+        )
         return fn
 
     return deco
 
 
-def generate(reg: Registry, names: list[str] | None = None) -> dict[str, dict[str, str]]:
+def generate(
+    reg: Registry, names: list[str] | None = None, options: dict[str, object] | None = None
+) -> dict[str, dict[str, str]]:
+    """Render the ``names`` generators (all when None).  ``options`` (None values ignored) go to
+    the generators that declare them; an option no selected generator takes is a ``KeyError``, so
+    a deployment choice is never silently dropped."""
     from . import builtin  # noqa: F401  (registers the generators)
 
     selected = names or sorted(GENERATORS)
@@ -54,6 +66,13 @@ def generate(reg: Registry, names: list[str] | None = None) -> dict[str, dict[st
     if unknown:
         raise KeyError(
             f"unknown generator(s): {', '.join(unknown)}; known: {', '.join(sorted(GENERATORS))}"
+        )
+    given = {k: v for k, v in (options or {}).items() if v is not None}
+    unused = sorted(k for k in given if not any(k in GENERATORS[n].options for n in selected))
+    if unused:
+        raise KeyError(
+            f"option(s) {', '.join(unused)} taken by none of the selected generators "
+            f"({', '.join(sorted(selected))})"
         )
     bad = list(control_char_paths(dataclasses.asdict(reg)))
     if bad:
@@ -63,7 +82,10 @@ def generate(reg: Registry, names: list[str] | None = None) -> dict[str, dict[st
         check = GENERATORS[n].when_named
         if check is not None:
             check(reg)
-    return {n: GENERATORS[n].func(reg) for n in sorted(selected)}
+    return {
+        n: GENERATORS[n].func(reg, **{k: v for k, v in given.items() if k in GENERATORS[n].options})
+        for n in sorted(selected)
+    }
 
 
 def flatten(outputs: dict[str, dict[str, str]]) -> dict[str, str]:

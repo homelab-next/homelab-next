@@ -12,7 +12,9 @@ does not name never reaches its output:
 * metrics and uptime targets: primary and ``eval`` rows, by the name each answers by;
 * the IdP realm: rendered only for an ``idp`` row whose ``impl`` is the realm format's product,
   primary or ``eval``; clients for ``auth: idp`` rows that are primary or ``eval``;
-* the edge: primaries only, and the forward-auth check needs a primary ``auth-proxy``.
+* the edge: primaries only, and the forward-auth check needs a primary ``auth-proxy``; with the
+  ``edge_hosts`` option, only the sites of rows on those hosts (one deployment's edge), and a dial
+  outside them is refused.
 
 A ``legacy`` row reaches no output.
 """
@@ -23,6 +25,7 @@ import ipaddress
 import json
 import re
 from collections import defaultdict
+from pathlib import PurePosixPath
 from urllib.parse import quote
 
 import yaml
@@ -36,12 +39,14 @@ from homelabnext.edge_identity import (
     IDENTITY_HEADERS,
     USERNAME_CLAIM,
     IdentityHeaders,
+    foreign_strip_lines,
 )
 from homelabnext.registry.model import (
     ANSWERING_TIERS,
     STANDINGS,
     Registry,
     Service,
+    edge_tls_problems,
     secret_env_name,
 )
 
@@ -248,12 +253,12 @@ def allowed_groups_arg(s: Service) -> str:
     return ",".join(quote(g, safe="") for g in groups)
 
 
-def _auth_proxy(reg: Registry) -> Service | None:
-    """The forward-auth proxy, required as soon as one public service has ``auth: idp``: without
+def _auth_proxy(reg: Registry, sites: list[Service]) -> Service | None:
+    """The forward-auth proxy, required as soon as one of ``sites`` has ``auth: idp``: without
     it such a site would be published with no login at all, so generation fails instead."""
     proxy = reg.by_capability(AUTH_PROXY_CAPABILITY)
     if proxy is None:
-        gated = [s.name for s in reg.sorted_services() if s.auth == "idp" and s.public_hostname]
+        gated = [s.name for s in sites if s.auth == "idp"]
         if gated:
             raise GeneratorRefusal(
                 f"caddy: {', '.join(gated)} need(s) auth: idp at the edge but no primary provides "
@@ -263,39 +268,186 @@ def _auth_proxy(reg: Registry) -> Service | None:
     return proxy
 
 
-@register(
-    "caddy", "Caddyfile site snippets for services with a public hostname", "reverse proxy (edge)"
+#: the snippet every site imports at site level: the deletes of every client-sent copy of another
+#: proxy's identity headers (:data:`homelabnext.edge_identity.FOREIGN_IDENTITY`)
+FOREIGN_STRIP_SNIPPET = "hnx_strip_foreign_identity"
+
+#: where the edge reads the TLS files of an ``edge_tls`` row: the edge's role writes each secret
+#: named there from the secret store to :func:`edge_tls_path` (the generated ``caddy/edge_tls.json``
+#: lists them); the Caddyfile names the path, never the material
+EDGE_TLS_DIR = "/etc/hnx/edge-tls"
+#: the edge's site file, and beside it the list of TLS files its role writes
+SITES_FILE = "caddy/sites.caddy"
+EDGE_TLS_FILE = str(PurePosixPath(SITES_FILE).with_name("edge_tls.json"))
+#: the ``edge_tls`` keys naming a secret, the file each is written as, and its mode
+EDGE_TLS_FILES = {"client_cert": "0644", "client_key": "0600", "ca": "0644"}
+#: the one spelling a secret reference may take (the registry schema's, held again here for a
+#: hand-built model): its path is a file path under :data:`EDGE_TLS_DIR` with no ``..`` or ``/``
+#: at either end
+_SECRET_REF = re.compile(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*")
+_SERVER_NAME = re.compile(
+    r"(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*"
 )
-def caddy(reg: Registry) -> dict[str, str]:
-    proxy = _auth_proxy(reg)
+#: what the edge never renders: certificate verification switched off on an upstream
+INSECURE = "insecure_skip_verify"
+
+
+def edge_tls_path(ref: str) -> str:
+    """The file the edge reads secret ``ref`` from: the reference's path under
+    :data:`EDGE_TLS_DIR` with ``.pem`` appended (``edge/hub-client-cert`` is
+    ``/etc/hnx/edge-tls/edge/hub-client-cert.pem``).  Two references are two paths."""
+    if not _SECRET_REF.fullmatch(ref):
+        raise GeneratorRefusal(f"edge_tls: {ref!r} is not a secret: reference")
+    return f"{EDGE_TLS_DIR}/{ref.removeprefix('secret:')}.pem"
+
+
+def _edge_tls_problem(s: Service) -> str | None:
+    """Why the edge cannot reach public row ``s`` over TLS as its row declares, or None: the
+    registry's own rules (:func:`~homelabnext.registry.model.edge_tls_problems`, one copy), held
+    to a hand-built model here too, plus what only the rendering needs (https, a CA, a host
+    name the Caddyfile can carry)."""
+    rules = edge_tls_problems(
+        s.name, {"edge_tls": s.edge_tls, "tls": s.tls, "public_hostname": s.public_hostname}
+    )
+    if rules:
+        return rules[0]
+    et = s.edge_tls
+    if not et:
+        return None
+    if s.scheme != "https":
+        return f"service {s.name}: edge_tls needs a service that answers https"
+    if not et.get("ca"):
+        return f"service {s.name}: edge_tls without ca: the edge verifies it with the lab's CA"
+    name = et.get("server_name")
+    if name is not None and not _SERVER_NAME.fullmatch(str(name)):
+        return f"service {s.name}: edge_tls.server_name {name!r} is not a host name"
+    return None
+
+
+def _edge_transport(reg: Registry, s: Service) -> list[str]:
+    """The ``transport http`` lines of a row with ``edge_tls``: TLS to the upstream verified
+    against the lab's CA (``tls_trust_pool file``, never the system roots, never skipped), the
+    server name checked, and with ``tls: mtls`` the edge's client certificate presented."""
+    et = s.edge_tls or {}
+    lines = ["\t\ttransport http {\n", "\t\t\ttls\n"]
+    if s.tls == "mtls":
+        cert = edge_tls_path(et["client_cert"])
+        key = edge_tls_path(et["client_key"])
+        lines.append(f"\t\t\ttls_client_auth {cert} {key}\n")
+    lines.append(f"\t\t\ttls_trust_pool file {edge_tls_path(et['ca'])}\n")
+    name = et.get("server_name") or reg.alias(s.capability)
+    if not _SERVER_NAME.fullmatch(name):  # a host name holds no Caddyfile metacharacter
+        raise GeneratorRefusal(f"edge: {s.name}: tls server name {name!r} is not a host name")
+    lines.append(f"\t\t\ttls_server_name {name}\n")
+    lines.append("\t\t}\n")
+    return lines
+
+
+def _edge_tls_manifest(reg: Registry, sites: list[Service]) -> dict[str, str]:
+    """:data:`EDGE_TLS_FILE`: every TLS file the sites name, for the edge's role to write from
+    the secret store (path, secret, mode, and the sites that read it); nothing when none does."""
+    files: dict[str, dict] = {}
+    for s in sites:
+        for key, mode in EDGE_TLS_FILES.items():
+            ref = (s.edge_tls or {}).get(key)
+            if not ref or (key != "ca" and s.tls != "mtls"):
+                continue
+            path = edge_tls_path(ref)
+            entry = files.setdefault(path, {"path": path, "secret": ref, "mode": mode, "sites": []})
+            if entry["mode"] != mode:
+                raise GeneratorRefusal(
+                    f"edge: secret {ref} is both a private key and a certificate (edge_tls)"
+                )
+            entry["sites"].append(s.public_hostname)
+    if not files:
+        return {}
+    listed = [{**files[k], "sites": sorted(files[k]["sites"])} for k in sorted(files)]
+    return {EDGE_TLS_FILE: _json_doc(reg, {"files": listed})}
+
+
+def _edge_sites(reg: Registry, edge_hosts) -> list[Service]:
+    """The public primaries this edge publishes: every one, or with ``edge_hosts`` (one
+    deployment's hosts) those whose row is on one of them.  An unknown host name is refused (a
+    typo must not render a harmless-looking empty edge), and so is a set that publishes nothing."""
+    every = [s for s in reg.sorted_services() if s.public_hostname and s.is_primary]
+    if edge_hosts is None:
+        return every
+    if isinstance(edge_hosts, str):
+        raise GeneratorRefusal("edge: edge_hosts is a collection of host names, not one string")
+    scope = set(edge_hosts)
+    unknown = sorted(scope - set(reg.hosts))
+    if unknown:
+        raise GeneratorRefusal(f"edge: host(s) {', '.join(unknown)} not in the registry")
+    sites = [s for s in every if s.host in scope]
+    if not sites:
+        raise GeneratorRefusal(
+            f"edge: no public row is on the edge hosts ({', '.join(sorted(scope))}): the edge "
+            "would publish nothing"
+        )
+    return sites
+
+
+def _in_scope(reg: Registry, edge_hosts, dial: Service, what: str) -> None:
+    """Refuse a dial to a row outside ``edge_hosts``: one deployment's edge never proxies to
+    another's hosts (the old lab, ADR-0039 ``legacy``)."""
+    if edge_hosts is not None and dial.host not in set(edge_hosts):
+        raise GeneratorRefusal(
+            f"edge: {what} dials {dial.name} on host {dial.host}, outside the edge hosts "
+            f"({', '.join(sorted(set(edge_hosts)))}): this edge never proxies to another "
+            "deployment"
+        )
+
+
+@register(
+    "caddy",
+    "Caddyfile site snippets for services with a public hostname",
+    "reverse proxy (edge)",
+    options=("edge_hosts",),
+)
+def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
+    """The edge's sites.  ``edge_hosts`` (a collection of registry host names, the hosts of one
+    deployment: ``hnx registry generate --edge-host``) narrows them to the public rows on those
+    hosts, and refuses any dial (a site's upstream, the forward-auth proxy) outside them; without
+    it every public primary is a site, as for a registry that is one deployment."""
+    sites = _edge_sites(reg, edge_hosts)
+    proxy = _auth_proxy(reg, sites)
+    gated = any(s.auth == "idp" for s in sites)
     parts = [_hdr(reg)]
-    if proxy:
+    if proxy and (edge_hosts is None or gated):
+        if gated:
+            _in_scope(reg, edge_hosts, proxy, "the forward auth")
         parts.append(
             _forward_auth_snippet(
                 checked(_endpoint_url(reg, proxy), "auth-proxy endpoint", "caddy")
             )
         )
-    strip = IDENTITY_HEADERS.strip_lines("\t")
-    for s in reg.sorted_services():
-        # a public route is a primary's alone (ADR-0039 decision 2; the registry refuses one
-        # elsewhere, and a hand-built model is held to it here too)
-        if not s.public_hostname or not s.is_primary:
-            continue
+    parts.append(f"({FOREIGN_STRIP_SNIPPET}) {{\n{foreign_strip_lines(chr(9))}}}\n")
+    strip = IDENTITY_HEADERS.strip_lines("\t") + f"\timport {FOREIGN_STRIP_SNIPPET}\n"
+    for s in sites:
+        # the site dials its capability's alias, which names the capability's primary: this row
+        _in_scope(reg, edge_hosts, reg.by_capability(s.capability) or s, s.public_hostname)
+        problem = _edge_tls_problem(s)
+        if problem:
+            raise GeneratorRefusal(f"edge: {problem}")
         # every site strips the client's identity headers at site level, before every handle
         # and route of the site (Caddy sorts request_header first): a path that never reaches
         # the snippet's route (a handle added beside it, a matcher on a route) and a site with
         # no forward auth that reaches the same service under another name still reach it
-        # without them; the route-level strip in the snippet stays as well
+        # without them; the route-level strip in the snippet stays as well.  Other proxies'
+        # identity headers (X-Forwarded-User, Remote-User, ...) go too, before forward auth runs
         auth_block = strip
         if s.auth == "idp":
             auth_block += f"\timport hnx_forward_auth {allowed_groups_arg(s)}\n"
-        proxy_block = ""
+        inner: list[str] = []
         if s.front_door and s.auth == "idp":
             # the shared secret that tells the service this request came through the edge (and
             # so its identity headers are the auth proxy's): from the environment, never in the file
             header = checked(s.front_door["header"], "front_door.header", "caddy")
             env = checked(secret_env_name(s.front_door["secret"]), "front_door.secret", "caddy")
-            proxy_block = f" {{\n\t\theader_up {header} {{env.{env}}}\n\t}}"
+            inner.append(f"\t\theader_up {header} {{env.{env}}}\n")
+        if s.edge_tls:
+            inner += _edge_transport(reg, s)
+        proxy_block = " {\n" + "".join(inner) + "\t}" if inner else ""
         parts.append(
             render(
                 "caddy_site",
@@ -309,7 +461,10 @@ def caddy(reg: Registry) -> dict[str, str]:
                 port=str(s.port),
             )
         )
-    return {"caddy/sites.caddy": "\n".join(parts)}
+    text = "\n".join(parts)
+    if INSECURE in text:
+        raise GeneratorRefusal(f"edge: never renders {INSECURE} (trust the lab's CA)")
+    return {SITES_FILE: text, **_edge_tls_manifest(reg, sites)}
 
 
 # 4 ---------------------------------------------------------------- Prometheus

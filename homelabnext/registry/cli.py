@@ -131,6 +131,15 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         p.add_argument("registry")
         p.add_argument("out_dir")
         p.add_argument("--only", action="append", default=None, help="generator name (repeatable)")
+        p.add_argument(
+            "--edge-host",
+            action="append",
+            default=None,
+            metavar="HOST",
+            help="a registry host of this deployment (repeatable): the edge generator renders "
+            "only the public rows on these hosts and refuses any dial outside them, so one lab's "
+            "edge never proxies to another's (default: every public primary)",
+        )
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -177,7 +186,7 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             print(f"hnx: {exc}", file=err)
             return 1
     try:
-        files = flatten(generate(reg, args.only))
+        files = flatten(generate(reg, args.only, {"edge_hosts": args.edge_host}))
     except KeyError as exc:
         print(f"hnx: {exc.args[0]}", file=err)
         return 2

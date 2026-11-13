@@ -3,7 +3,7 @@
 # hnx-script:
 #   id: tls-verify-lint
 #   kind: check
-#   purpose: Fail when Python code or a YAML/JSON config turns TLS certificate verification off.
+#   purpose: Fail when Python code, a YAML/JSON config or a Caddyfile turns TLS certificate verification off.
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:tls-lint]
 #   invariant: [F-07]
@@ -31,6 +31,10 @@ Config (YAML and JSON, every document, every nesting level)
                       ``insecure``/``skip_tls_verify``/``tls_skip_verify``/
                       ``insecure_skip_tls_verify`` set to true (booleans and their string forms;
                       a templated value such as ``"{{ x }}"`` is not judged here)
+Caddyfile (every ``Caddyfile*``, ``*.caddyfile*``, ``*.caddy`` and their templates)
+  caddy-skip-verify   a ``tls_insecure_skip_verify`` directive (a ``reverse_proxy`` transport
+                      that accepts any upstream certificate: trust the lab's CA with
+                      ``tls_trust_pool file`` instead)
 
 Out of scope: test code and fixtures (``tests/``, ``*/tests/``, ``test_*.py``, ``conftest.py``),
 which plant these on purpose. A reviewed exception is either a path glob in
@@ -91,6 +95,15 @@ OFF_WHEN_TRUE = {
     "tls_skip_verify",
     "insecure_skip_tls_verify",
 }
+#: a Caddyfile by name: ``tools/caddy_lint.py``'s rule (Caddyfile*, *.caddyfile*, *.caddy and its
+#: templates) and a ``caddy*.conf``/``.cfg``/template; a file only an ``import`` names under
+#: another name is caddy_lint's to read, not this lint's
+CADDY_NAME = re.compile(
+    r"(?i)((^|\.)caddyfile([.-]|$))|(\.caddy(\.(j2|jinja2?|tmpl|tpl))?$)"
+    r"|(^caddy[\w.-]*\.(conf|cfg|j2|jinja2?|tmpl|tpl)$)"
+)
+#: the directive that turns an upstream's certificate verification off, first on its line
+CADDY_SKIP_VERIFY = re.compile(r"""^\s*(["`]?)tls_insecure_skip_verify\1(?![\w-])""")
 FALSE = {"false", "no", "off", "0"}
 TRUE = {"true", "yes", "on", "1"}
 
@@ -236,6 +249,16 @@ def lint_config(text: str, rel: str = "<string>") -> list[Finding]:
     return found
 
 
+def lint_caddyfile(text: str, rel: str = "<string>") -> list[Finding]:
+    """``tls_insecure_skip_verify`` in directive position, bare or quoted (Caddy reads a quoted
+    token the same); a comment line is not one."""
+    return [
+        Finding(rel, n, "caddy-skip-verify", "tls_insecure_skip_verify")
+        for n, line in enumerate(text.splitlines(), 1)
+        if CADDY_SKIP_VERIFY.match(line) and not INLINE_ALLOW.search(line)
+    ]
+
+
 def load_allowlist(path: Path | None) -> list[tuple[str, str]]:
     return [(str(e["path"]), str(e["reason"]).strip()) for e in entries(path, AllowlistError)]
 
@@ -256,18 +279,21 @@ def scan(root: Path, allow: list[tuple[str, str]]) -> tuple[list[Finding], int]:
         rel = p.relative_to(root).as_posix()
         if not p.is_file() or p.is_symlink() or not _in_scope(rel):
             continue
-        if p.suffix not in (".py", ".yml", ".yaml", ".json"):
+        caddyfile = bool(CADDY_NAME.search(p.name))
+        if p.suffix not in (".py", ".yml", ".yaml", ".json") and not caddyfile:
             continue
         if any(fnmatch.fnmatchcase(rel, g) for g, _ in allow):
             continue
         n += 1
         try:
             text = p.read_text(encoding="utf-8")
+            if caddyfile:
+                findings += lint_caddyfile(text, rel)
             if p.suffix == ".py":
                 findings += lint_python(text, rel)
             elif p.suffix == ".json":
                 findings += lint_json(text, rel)
-            else:
+            elif p.suffix in (".yml", ".yaml"):
                 findings += lint_config(text, rel)
         except (SyntaxError, UnicodeDecodeError, yaml.YAMLError) as exc:
             findings.append(Finding(rel, 0, "parse", f"cannot parse: {exc.__class__.__name__}"))
