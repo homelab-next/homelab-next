@@ -132,7 +132,9 @@
 
 # Under --check nothing is staged, so there is no file for sshd to judge or to install: the dry
 # run reports the drop-in it would write (the comparison above, with --diff), and the real run
-# tests it before it goes live.
+# tests it before it goes live. So a green --check proves the lockout guard and the diff only: the
+# sshd -t / sshd -T checks and ssh-keygen's validate: of the CA and revoked files run for real only
+# (a real run that fails one stops before anything goes live).
 - name: Test the new drop-in, then install it
   when: ssh_hardening_written is changed and not ansible_check_mode
   vars:
