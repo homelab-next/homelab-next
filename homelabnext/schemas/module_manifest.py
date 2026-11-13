@@ -1636,10 +1636,14 @@ def module_selection_schema() -> dict[str, Any]:
                             "its primary for the slot's capability (loader).",
                             63,
                         ),
-                        "why": text(
-                            200,
-                            "What serves it outside modules (a core role, the old lab) and why.",
-                        ),
+                        "why": {
+                            **text(
+                                200,
+                                "What serves it outside modules (a core role, the old lab) and "
+                                "why: one line of printable text.",
+                            ),
+                            "pattern": TITLE_PATTERN,
+                        },
                     },
                     ["service", "why"],
                 ),
@@ -1650,11 +1654,17 @@ def module_selection_schema() -> dict[str, Any]:
                 "propertyNames": pat(SLUG, None, 64),
                 "additionalProperties": obj(
                     {
-                        "why": text(
-                            200, "What will serve the slot (a module, a cutover) and when."
-                        ),
+                        "why": {
+                            **text(
+                                200,
+                                "What will serve the slot (a module, a cutover) and when: one "
+                                "line of printable text (check prints it).",
+                            ),
+                            "pattern": TITLE_PATTERN,
+                        },
                         "review_by": {
-                            "$ref": COMMON + "date",
+                            "type": "string",
+                            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$(?!\\n)",
                             "description": "When the plan is next reviewed (YYYY-MM-DD, quoted in YAML so it stays a string). hnx modules check --deploy refuses the selection once it has passed (HNX_TODAY, else the local date).",
                         },
                     },

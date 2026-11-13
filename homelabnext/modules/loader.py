@@ -1190,6 +1190,20 @@ def _core_problems(tree: Tree, ins: Inputs, core: CoreNames, load=None) -> list[
     return out
 
 
+def planned_reach(site: Doc, sel: Mapping[str, Doc]) -> dict[str, list[str]]:
+    """Per selected module, the planned slots it requires or prefers (a hard requirement is also
+    a problem; a preference falls back while the slot is planned)."""
+    plans = set(mr.planned(site))
+    out: dict[str, list[str]] = {}
+    for n, m in sel.items():
+        caps = {r["cap"][4:] for r in m["requires"].get("capabilities", [])}
+        caps |= {p["cap"][4:] for p in m.get("prefers", {}).get("capabilities", [])}
+        got = sorted(caps & plans)
+        if got:
+            out[n] = got
+    return out
+
+
 def incumbent_reach(site: Doc, sel: Mapping[str, Doc]) -> dict[str, list[str]]:
     """Per selected module with a host role, the incumbent slots it requires or prefers (``dns``
     for every one when ``dns`` is an incumbent): the egress render opens no path to them."""
@@ -1771,7 +1785,7 @@ def check(
             today=today,
         )
     ]  # fmt: skip
-    warnings = mr.planned_warnings(site)
+    warnings = mr.planned_warnings(site, slots)
     problems += _instance_problems(site, core)
     try:
         sel = mr.selected(site, valid)
@@ -1783,6 +1797,12 @@ def check(
         notes.append(
             "guest requirements not checked (the host is a stand-in, not a guest reference): "
             + "; ".join(unchecked)
+        )
+    waiting = planned_reach(site, sel)
+    if waiting:
+        notes.append(
+            "modules that require or prefer a planned slot (not served yet): "
+            + "; ".join(f"{m} needs {', '.join(caps)}" for m, caps in sorted(waiting.items()))
         )
     reached = incumbent_reach(site, sel)
     if reached:

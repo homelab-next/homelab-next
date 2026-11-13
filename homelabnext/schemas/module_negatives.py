@@ -733,6 +733,28 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         ),
         "A planned slot's review_by is a YYYY-MM-DD date.",
     ),
+    "planned-why-control-character": (
+        "small-lab",
+        lambda d: (
+            d["slots"].pop("idp"),
+            d.__setitem__(
+                "planned",
+                {"idp": {"why": "x\nhnx modules: 0 problem(s)", "review_by": "2027-01-15"}},
+            ),
+        ),
+        "A planned slot's why is one line of printable text: check prints it.",
+    ),
+    "planned-review-by-other-digits": (
+        "small-lab",
+        lambda d: (
+            d["slots"].pop("idp"),
+            d.__setitem__(
+                "planned",
+                {"idp": {"why": "x", "review_by": "\u0662\u0660\u0662\u0667-01-15"}},
+            ),
+        ),
+        "A planned slot's review_by is written in ASCII digits.",
+    ),
     "planned-unknown-field": (
         "small-lab",
         lambda d: (

@@ -1089,8 +1089,8 @@ def planned_problems(site: Doc, slots: Mapping[str, Doc], on: dt.date | None = N
             out.append(f"{where}: no such slot in the slot registry")
         elif not slots[slot].get("required_in_core"):
             out.append(
-                f"{where}: not a required core slot (only one may be planned; an optional slot "
-                "the site does not select is left out)"
+                f"{where}: not a required core slot (only a required core slot may be planned; "
+                "an optional slot the site does not select is left out)"
             )
         how = site.get("slots", {}).get(slot)
         if how is not None:
@@ -1114,12 +1114,17 @@ def planned_problems(site: Doc, slots: Mapping[str, Doc], on: dt.date | None = N
     return out
 
 
-def planned_warnings(site: Doc) -> list[str]:
-    """One warning per planned slot, with what will serve it and when the plan is next reviewed:
-    the "a required core slot has no provider" a staged lab owes, said rather than refused."""
+def planned_warnings(site: Doc, slots: Mapping[str, Doc]) -> list[str]:
+    """One warning per planned slot that is a required core slot of ``slots`` (any other is a
+    problem, :func:`planned_problems`, and so is one also answered under ``slots`` or
+    ``incumbents``), with what will serve it and when the plan is next
+    reviewed: the "a required core slot has no provider" a staged lab owes, said, not refused."""
     out = []
+    elsewhere = set(site.get("slots", {})) | set(incumbents(site))
     for slot, plan in sorted(planned(site).items()):
-        if isinstance(plan, dict):
+        if slot in elsewhere:
+            continue  # answered twice: a problem, never also a warning
+        if isinstance(plan, dict) and slots.get(slot, {}).get("required_in_core"):
             out.append(
                 f"{slot}: a required core slot has no provider yet (planned: {plan.get('why')}; "
                 f"review by {plan.get('review_by')})"
@@ -1236,7 +1241,7 @@ def site_problems(
     empty = {"cap:" + s: v for s, v in site["slots"].items() if not isinstance(v, list)}
     for cap, how in empty.items():
         if how == "pass-through":
-            out += _pass_through_problems(cap, ch, sel, slots, set(inc))
+            out += _pass_through_problems(cap, ch, sel, slots, set(inc), set(plans))
     for m in sel.values():
         for r in m["requires"].get("capabilities", []):
             if r["cap"] not in served and r["cap"][4:] in plans:
@@ -1676,9 +1681,12 @@ def _upstream_problems(
     return out
 
 
-def _pass_through_problems(cap, ch, sel, slots, incumbent=frozenset()) -> list[str]:
+def _pass_through_problems(
+    cap, ch, sel, slots, incumbent=frozenset(), planned_=frozenset()
+) -> list[str]:
     """``incumbent``: the slots served outside modules, whose formats the selection does not
-    declare, so a pass-through next to one is refused with that reason."""
+    declare, so a pass-through next to one is refused with that reason; ``planned_``: the slots
+    not served yet, refused with theirs."""
     d = slots.get(cap.removeprefix("cap:"), {})
     if not d.get("pass_through"):
         return [f"{cap}: the slot may not be pass-through"]
@@ -1711,10 +1719,18 @@ def _pass_through_problems(cap, ch, sel, slots, incumbent=frozenset()) -> list[s
         inc_up = sorted(
             s for s, desc in slots.items() if desc.get("stage") == d["stage"] - 1 and s in incumbent
         )
+        plan_up = sorted(
+            s for s, desc in slots.items() if desc.get("stage") == d["stage"] - 1 and s in planned_
+        )
         if inc_up:
             probs.append(
                 f"{cap}: pass-through, but its upstream stage {', '.join(inc_up)} is an "
                 "incumbent, whose formats the selection does not declare"
+            )
+        elif plan_up:
+            probs.append(
+                f"{cap}: pass-through, but its upstream stage {', '.join(plan_up)} is planned, "
+                "not served yet"
             )
         else:
             probs.append(f"{cap}: pass-through with no upstream stage selected")

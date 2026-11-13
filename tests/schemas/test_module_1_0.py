@@ -1148,6 +1148,8 @@ SELECTION_NEGATIVES = {
     "planned-without-review-by": "planned/idp",
     "planned-review-by-not-a-date": "planned/idp/review_by",
     "planned-unknown-field": "planned/idp",
+    "planned-why-control-character": "planned/idp/why",
+    "planned-review-by-other-digits": "planned/idp/review_by",
     "lab-namespace-without-why": "lab_table_namespaces/0",
     "lab-namespace-not-a-name": "lab_table_namespaces/0/namespace",
     "tlp-reader-unknown-ceiling": "tlp_readers/0/ceiling",

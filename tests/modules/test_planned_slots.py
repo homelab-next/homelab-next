@@ -92,13 +92,13 @@ def test_the_cli_prints_the_warnings_and_exits_zero(capsys):
     assert mcli.main(argv) == 0
     out = capsys.readouterr().out
     assert [ln for ln in out.splitlines() if ln.startswith("warning: ")] == [
-        f"warning: {w}" for w in mr.planned_warnings(fixture())
+        f"warning: {w}" for w in mr.planned_warnings(fixture(), SLOTS)
     ]
     assert out.rstrip().endswith("0 problem(s), 3 warning(s)")
     assert mcli.main([*argv, "--json"]) == 0
     got = capsys.readouterr()
     doc = json.loads(got.out)
-    assert (doc["problems"], doc["warnings"]) == ([], mr.planned_warnings(fixture()))
+    assert (doc["problems"], doc["warnings"]) == ([], mr.planned_warnings(fixture(), SLOTS))
     assert "warning: idp: a required core slot has no provider yet" in got.err
 
 
@@ -132,8 +132,8 @@ DEFECTS = {
             s["slots"].pop("hot-index"),
             s["planned"].__setitem__("hot-index", {"why": "x", "review_by": "2027-01-15"}),
         ),
-        "planned.hot-index: not a required core slot (only one may be planned; an optional slot "
-        "the site does not select is left out)",
+        "planned.hot-index: not a required core slot (only a required core slot may be planned; "
+        "an optional slot the site does not select is left out)",
     ),
     "a module provider and a plan": (
         lambda s: s["slots"].__setitem__(
@@ -399,3 +399,83 @@ def test_a_staged_lab_whose_provider_requires_a_planned_slot_is_refused(checkout
             "yet (a planned slot satisfies no requirement)"
         ],
     )
+
+
+# ----------------------------------------------------------------------------- review fixes
+
+
+def test_only_a_required_core_slot_answered_nowhere_else_is_warned_about(tree):
+    """A planned slot the loader refuses (unknown, optional, answered twice) is a problem and
+    never also the "required core slot" warning."""
+    site = fixture()
+    site["planned"]["no-such-slot"] = {"why": "x", "review_by": "2027-01-15"}
+    site["slots"].pop("hot-index")
+    site["planned"]["hot-index"] = {"why": "x", "review_by": "2027-01-15"}
+    site["incumbents"]["idp"] = {"service": "idp", "why": "x"}
+    report = check(tree, site)
+    assert [w.split(":")[0] for w in report.warnings] == ["edge", "inference"]
+    assert "site: planned.idp: the slot is also an incumbent: one answer per slot" in [
+        str(p) for p in report.problems
+    ]
+
+
+@pytest.mark.parametrize("how", ["none", "pass-through"])
+def test_none_and_pass_through_stay_refused_for_a_required_core_slot(tree, ins, how):
+    """A plan relaxes nothing else: none or pass-through for a required core slot is refused as
+    before, planned slots beside it or not."""
+    site = fixture()
+    site["slots"]["records"] = how
+    got = problems(site, tree, ins)
+    want = (
+        "cap:records: the slot may not be pass-through"
+        if how == "pass-through"
+        else "records: a required core slot has no provider"
+    )
+    assert want in got
+
+
+def test_a_pass_through_next_to_a_planned_slot_says_it_is_not_served(tree, ins):
+    slots = copy.deepcopy(SLOTS)
+    slots["siem-source"]["required_in_core"] = True  # a registry where the stage is core
+    site = fixture()
+    assert site["slots"]["log-pipeline"] == "pass-through"
+    del site["slots"]["siem-source"]
+    site["slots"]["detections"] = "none"
+    site["slots"]["notify"] = [{"provider": "example-platform", "instance": "platform"}]
+    site["planned"]["siem-source"] = {"why": "a SIEM module", "review_by": "2027-01-15"}
+    got = mr.site_problems(
+        site, tree.mods, slots, rows=ins.rows, units=ins.units,
+        privileged_units=ins.privileged_units, roles=ROLES, registry=CORE.rows,
+    )  # fmt: skip
+    assert (
+        "cap:log-pipeline: pass-through, but its upstream stage siem-source is planned, not "
+        "served yet"
+    ) in got
+    assert "cap:log-pipeline: pass-through with no upstream stage selected" not in got
+
+
+def test_a_swap_s_incoming_module_may_not_require_a_planned_slot():
+    from homelabnext.modules import swap as msw
+
+    mods = {p.parent.name: ld.load_yaml(p) for p in sorted(EXAMPLES.glob("*/module.yml"))}
+    swap = json.loads(
+        (ROOT / "schemas/platform/examples/module_swap.object-store-samples.json").read_text()
+    )
+    site = ld.load_yaml(EXAMPLES / "sites" / "full.yml")
+    for line in site["slots"]["object-store"]:
+        if line["instance"] == "samples":
+            line["provider"] = "example-object-store"
+    del site["slots"]["secrets"]
+    site["planned"] = {"secrets": {"why": "a secret store module", "review_by": "2027-01-15"}}
+    assert (
+        "other-object-store requires cap:secrets, which the site plans but does not serve yet"
+        in msw.module_swap_problems(swap, mods, site)
+    )
+
+
+def test_the_check_notes_each_module_that_needs_a_planned_slot(tree):
+    site = fixture()
+    site["planned"]["records"] = {"why": "a records module", "review_by": "2027-01-15"}
+    del site["slots"]["records"]
+    [note] = [n for n in check(tree, site).notes if n.startswith("modules that require")]
+    assert "core-staff needs records" in note and "external-collector needs records" in note

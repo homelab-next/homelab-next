@@ -271,7 +271,8 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "What serves it outside modules (a core role, the old lab) and why."
+            "description": "What serves it outside modules (a core role, the old lab) and why: one line of printable text.",
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u00a0\\u1680\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u206f\\u3000\\ufeff]+$(?!\\n)"
           }
         }
       },
@@ -296,10 +297,12 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "What will serve the slot (a module, a cutover) and when."
+            "description": "What will serve the slot (a module, a cutover) and when: one line of printable text (check prints it).",
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u00a0\\u1680\\u2000-\\u200f\\u2028-\\u202f\\u205f-\\u206f\\u3000\\ufeff]+$(?!\\n)"
           },
           "review_by": {
-            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/date",
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$(?!\\n)",
             "description": "When the plan is next reviewed (YYYY-MM-DD, quoted in YAML so it stays a string). hnx modules check --deploy refuses the selection once it has passed (HNX_TODAY, else the local date)."
           }
         }
