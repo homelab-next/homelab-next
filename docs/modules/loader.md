@@ -97,7 +97,8 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    values are declared keys, carry no site address, and a secret value is the module's own or
    granted; the scope block parses strictly, and every part a selected module requires is present
    and non-empty (an exclusion may be `[]`); required core slots
-   selected; instances unique; every hard requirement and instance satisfied; fallbacks selected
+   selected (a provider, or an incumbent: a real slot, not also under `slots`, naming the core
+   registry's primary row of that capability); instances unique; every hard requirement and instance satisfied; fallbacks selected
    and datasets moved with their data override; service upstreams follow the fallback; pass-through
    only where allowed and formats meet; interfaces provided, on instances their providers require;
    grants for publish, egress (internet, authority services, external hosts), public routes and

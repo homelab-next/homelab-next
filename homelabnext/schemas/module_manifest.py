@@ -1578,7 +1578,7 @@ def module_selection_schema() -> dict[str, Any]:
         "$id": BASE + "platform/module_selection/1.0",
         "x-draft": "ADR-0027 (proposed): read by the module loader (homelabnext.modules.loader) and at deploy time; not frozen until ADR-0027 is accepted after the pilot, so an overlay pins the core commit it is validated against",
         "title": "Module selection",
-        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
+        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, the slots served outside modules (incumbents), feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
         "type": "object",
         "additionalProperties": False,
         "required": ["profile", "hosts", "slots"],
@@ -1595,6 +1595,26 @@ def module_selection_schema() -> dict[str, Any]:
                 "additionalProperties": {
                     "oneOf": [{"enum": ["none", "pass-through"]}, arr(choice, None, 1)]
                 },
+            },
+            "incumbents": {
+                "type": "object",
+                "propertyNames": pat(SLUG, None, 64),
+                "additionalProperties": obj(
+                    {
+                        "service": pat(
+                            "[a-z][a-z0-9-]{1,62}",
+                            "The core registry's row (lab/services.yml) that serves the slot: "
+                            "its primary for the slot's capability (loader).",
+                            63,
+                        ),
+                        "why": text(
+                            200,
+                            "What serves it outside modules (a core role, the old lab) and why.",
+                        ),
+                    },
+                    ["service", "why"],
+                ),
+                "description": "Slots served outside modules, by a core role or a lab's existing service (ADR-0027 decision 9): each names the registry row that serves it. An incumbent counts as selected for a required core slot and for a module that requires or prefers the slot; it is never a provider, an instance or an egress target. The slot must be in the slot registry and not also under slots; the row must exist, be the primary of the slot's capability (loader).",
             },
             "features": {"type": "object", "propertyNames": mid, "additionalProperties": binding},
             "core": {"type": "object", "propertyNames": mid, "additionalProperties": binding},

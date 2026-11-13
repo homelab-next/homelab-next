@@ -658,6 +658,25 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["tlp_readers"][0].__setitem__("reader", "everyone"),
         "A reader is a profile, module, analyzer, user or group id.",
     ),
+    "incumbent-without-why": (
+        "small-lab",
+        lambda d: (
+            d["slots"].pop("secrets"),
+            d.__setitem__("incumbents", {"secrets": {"service": "secrets"}}),
+        ),
+        "An incumbent says what serves the slot outside modules and why.",
+    ),
+    "incumbent-unknown-field": (
+        "small-lab",
+        lambda d: (
+            d["slots"].pop("secrets"),
+            d.__setitem__(
+                "incumbents",
+                {"secrets": {"service": "secrets", "why": "the core's role", "provider": "x"}},
+            ),
+        ),
+        "An incumbent is a registry row and a reason, never a provider.",
+    ),
     "cloud-model-not-a-role": (
         "full",
         lambda d: d["grants"].__setitem__("cloud_models", {"publishing": ["main-reasoner"]}),
