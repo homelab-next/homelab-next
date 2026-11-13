@@ -632,6 +632,8 @@ def test_the_limits_are_installed_before_the_modules_and_a_rerun_changes_nothing
     log = tmp_path / "calls.log"
     env = dict(
         os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1",
+        # no fact gathering: the stub roles need none, and it is most of the run time
+        ANSIBLE_GATHERING="explicit",
         PATH=f"{bin_}:{os.environ['PATH']}", QLOG=str(log), QDIR=str(qdir),
     )  # fmt: skip
     pb = str(tmp_path / "out" / apply.PLAYBOOK)
