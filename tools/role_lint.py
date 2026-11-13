@@ -75,7 +75,7 @@ IMAGE_KEY = re.compile(r"(_image|_images|_repository|_repo)$")
 # the name of a whole package spec (``name`` or ``name=version``) where it can only be a package:
 # the name argument of a package module in a task, or a role variable named *_package/*_packages
 # (a list of names, or of mappings whose ``name`` is one). Any other text there is still scanned,
-# and so is a spec's version: ``foo.home.lan`` in the same place is still a hostname literal.
+# and so is a spec's version: ``db.example.internal`` in the same place is still a hostname literal.
 PACKAGE_NAMES = {"containerd.io"}
 PACKAGE_MODULES = {"apt", "package", "dpkg_selections"}
 PACKAGE_ARGS = {"name", "pkg", "package"}
