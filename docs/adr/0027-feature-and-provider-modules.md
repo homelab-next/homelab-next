@@ -79,7 +79,10 @@ says what selecting someone else's module grants it.
 8. **Every owned dataset has a neutral export and import**; every stateful slot's contract gains a
    round-trip check, and X-07 becomes slot-keyed. A removal never touches another module's data.
 9. **Selection is site configuration in the private overlay** (`platform/module_selection` 1.0):
-   providers per slot as instances, `none` or `pass-through` where the registry allows, placement,
+   providers per slot as instances, `none` or `pass-through` where the registry allows, or an
+   **incumbent** (a slot served outside modules, by a core role or the lab's existing service,
+   named by its primary core registry row and refused alongside a provider for the same slot, so
+   a lab can take up modules one at a time; [selection](../modules/selection.md#incumbents-slots-served-outside-modules)), placement,
    lane-to-orchestration-instance bindings, real configuration values, the grants, and the
    site's **network scope** (trusted, target and excluded addresses: the one place a selection
    holds addresses; a module declares the parts it reads and its reader fails closed). Consumers

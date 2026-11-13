@@ -1,6 +1,6 @@
 ---
-summary: 'Module manifest reference: a site''s module selection (draft platform/module_selection 1.0): hosts, slot choices, bindings and grants.'
-summary_of: outline:sha256:14c502670559e594
+summary: 'Module manifest reference: a site''s module selection (draft platform/module_selection 1.0): hosts, slot choices, incumbents, bindings and grants.'
+summary_of: outline:sha256:bfb5f043f788d174
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Modules: site selection
@@ -21,6 +21,7 @@ changes far more often than the site). Shape, as in the three profiles:
 profile: full
 hosts:      {<name>: {kind, isolated, capacity: {cpu, memory_mb, disk_gb, gpu_memory_mb}, resources: [{name: gpu0, kind: gpu}], headroom: {memory_mb}}}
 slots:      {<slot>: [{provider, instance, placement: {<host role>: <host>}}] | none | pass-through}
+incumbents: {<slot>: {service: <core registry row>, why}}   # served outside modules (below)
 features:   {<module>: {placement, config, agents: {<key>: {lanes: {real: <orchestration instance>, shadow: ...}}}}}
 core:       {<module>: {placement, config, agents: {...}}}   # core modules are always selected
 providers:  {<module>: {agents: {...}}}             # a provider's agents (placement and config are per instance)
@@ -98,6 +99,39 @@ is not in the tree). In the private overlay, adding a namespace or dropping the 
 human-approve (`hnx site review-tier`); removing a namespace, changing a `why` or declaring the list
 where it was absent (every other namespace is then judged) is owner, and a list that is not a list
 of distinct `{namespace, why}` at either end (a `null` included) fails the gate.
+
+### Incumbents: slots served outside modules
+
+A lab takes up modules one at a time, and until a module provides a slot something else already
+serves it: a core role (the secret store, the broker, the events bus, the status hub) or a service
+of the lab that predates modules. `incumbents` (optional) says so, per slot, by the core registry
+row (`lab/services.yml`) that serves it:
+
+```yaml
+incumbents:
+  secrets: {service: secrets, why: "the core's secret store role on the control-plane host"}
+  orchestration: {service: orchestrator, why: "the lab's existing orchestrator, not yet a module"}
+```
+
+The loader judges each one against the registry it reads (`--services`, or the overlay's
+`lab/services.yml`): the slot must be in the slot registry; it must not also be under `slots` (a
+provider, `none` or `pass-through`: one answer per slot); the row must exist, its `capability` must
+be the slot's name (a row of `edge-proxy` does not serve `edge`), and it must be its capability's
+primary (an `eval`, `retiring` or `legacy` row serves no consumer, ADR-0039). Without a registry
+every incumbent is a problem, never taken on trust. A selection that names a required core slot in
+neither `slots` nor `incumbents` is the same error as before ("a required core slot has no
+provider").
+
+An incumbent counts as selected for a required core slot, for a module that requires or prefers the
+slot (a required `instance` must then be the incumbent's row), for a dataset's slot and for a
+service row's upstream (an authority upstream still needs `grants.upstreams`). It is never a
+provider or an instance: `provider_for` refuses the slot with "served outside modules", `hnx
+modules providers` lists it as an incumbent, and the registry's `impl:` for it is not compared.
+Nor is it an egress target: `svc:<slot>` or `svc:<row>` is refused as no service, and `hnx modules
+render` opens no path to it (DNS included, when `dns` is an incumbent), so a placed module role
+reaches an incumbent only once the egress generator learns the registry's addresses, which is a
+later change. Moving a slot from its incumbent to a module is a swap through the cutover ledger
+(ADR-0043), one selection edit that removes the incumbent and adds the provider.
 
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
 instance the site selects of that provider (per-instance agent bindings would be a later, additive

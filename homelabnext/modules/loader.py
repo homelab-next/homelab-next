@@ -21,7 +21,7 @@ rules need, so no rule is skipped because a caller forgot an argument:
    title that is one of the core's own names (:class:`CoreNames`).
 4. **Per site** (with a selection): the selection validates against ``platform/module_selection``,
    then :func:`~homelabnext.modules.rules.site_problems` with the rows, units, privileged units and
-   model roles built here, no provider instance that takes a core service name for another
+   model roles built here and the core registry's rows (each incumbent names one), no provider instance that takes a core service name for another
    capability, one declaration per notify pair problem title and a recovery that names no other
    title (:func:`pair_problems`), and
    :func:`homelabnext.modules.supply.lock_problems` for the selected modules (a
@@ -179,7 +179,9 @@ class CoreNames:
     already has (:func:`core_names`), never from a list kept for this check:
 
     * ``ids``: the reserved ids (:data:`homelabnext.schemas.module_manifest.RESERVED_IDS`);
-    * ``rows``: the service rows of the core registry (``services.yml``), each with its capability;
+    * ``rows``: the service rows of the core registry (``services.yml``), each with its capability,
+      ``non_primary`` those whose standing is eval, retiring or legacy (ADR-0039), and
+      ``rows_known`` says the registry was read (a site's incumbents are judged against it);
     * ``mcp_servers``: the ids of the core's MCP catalog (``mcp/`` beside the registry), and
       ``mcp_instances`` each one's instance template (a running name bound to no module must be
       one of these, when ``mcp_known``);
@@ -197,6 +199,8 @@ class CoreNames:
 
     ids: frozenset[str] = frozenset(RESERVED_IDS)
     rows: Mapping[str, str] = field(default_factory=dict)  # row name -> capability
+    non_primary: frozenset[str] = frozenset()  # rows whose standing is not primary
+    rows_known: bool = False
     mcp_servers: frozenset[str] = frozenset()
     agents: frozenset[str] = frozenset()
     tables: frozenset[str] = frozenset()  # table:<namespace>.<name>
@@ -796,6 +800,7 @@ def core_names(
     set."""
     out: list[Problem] = []
     names: dict[str, str] = {}
+    non_primary: set[str] = set()
     if services is not None:
         rows = services.get("services") if isinstance(services, dict) else None
         if not isinstance(rows, dict):
@@ -808,6 +813,11 @@ def core_names(
                     )
                     continue
                 names[k] = str(v.get("capability", ""))
+                standing = v.get("standing")
+                if standing is not None and (
+                    not isinstance(standing, dict) or standing.get("tier", "primary") != "primary"
+                ):
+                    non_primary.add(k)  # a malformed standing is never read as primary
     mcp_ids: set[str] = set()
     mcp_instances: dict[str, str] = {}
     for fname, rec in mcp or ():
@@ -848,6 +858,8 @@ def core_names(
     return (
         CoreNames(
             rows=names,
+            non_primary=frozenset(non_primary),
+            rows_known=services is not None,
             mcp_servers=frozenset(mcp_ids),
             agents=frozenset(agents),
             tables=core_tables if table_namespace else frozenset(),
@@ -1583,6 +1595,7 @@ def check(
         for p in mr.site_problems(
             site, valid, dict(slots), rows=ins.rows, units=ins.units,
             privileged_units=ins.privileged_units, roles=dict(roles), known=dict(tree.mods),
+            registry=dict(core.rows) if core.rows_known else None, non_primary=core.non_primary,
         )
     ]  # fmt: skip
     problems += _instance_problems(site, core)

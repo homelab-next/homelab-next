@@ -483,6 +483,9 @@ def _providers(args: argparse.Namespace) -> int:
         bad = [str(p) for p in found]
         raise ld.LoaderError(f"{exc}" + (f" ({'; '.join(bad)})" if bad else "")) from None
     unserved = {s: v for s, v in sorted(site["slots"].items()) if not isinstance(v, list)}
+    incumbents = {
+        s: v["service"] for s, v in sorted((site.get("incumbents") or {}).items())
+    }  # the schema holds each to {service, why}
     if args.json:
         doc = {
             "providers": [
@@ -497,6 +500,7 @@ def _providers(args: argparse.Namespace) -> int:
                 for p in rows
             ],
             "unserved": unserved,
+            "incumbents": incumbents,
         }
         print(json.dumps(doc, indent=2))
         return 0
@@ -504,6 +508,8 @@ def _providers(args: argparse.Namespace) -> int:
         print(f"{p.slot}/{p.instance}: {p.module} ({p.product} {p.version}; licence {p.licence})")
     for slot, v in unserved.items():
         print(f"{slot}: {v}")
+    for slot, svc in incumbents.items():
+        print(f"{slot}: incumbent (registry row {svc}, outside modules)")
     return 0
 
 

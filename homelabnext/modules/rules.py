@@ -11,6 +11,7 @@ documents (the loader validates every manifest and selection first).
 from __future__ import annotations
 
 import re
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -1002,6 +1003,57 @@ def chosen(site: Doc) -> dict[str, list[Doc]]:
     return {"cap:" + s: c for s, c in site["slots"].items() if isinstance(c, list)}
 
 
+def incumbents(site: Doc) -> dict[str, Doc]:
+    """The slots the site serves outside modules (``incumbents``), slot -> ``{service, why}``: a
+    core role or a lab's existing service, named by its registry row.  Never a provider, an
+    instance or an egress target; :func:`incumbent_problems` checks each one."""
+    got = site.get("incumbents")
+    return dict(got) if isinstance(got, dict) else {}
+
+
+def incumbent_problems(
+    site: Doc,
+    slots: Mapping[str, Doc],
+    registry: Mapping[str, str] | None,
+    non_primary: Collection[str] = frozenset(),
+) -> list[str]:
+    """Each incumbent names a slot of the slot registry that ``slots`` does not also answer (a
+    provider, ``none`` or ``pass-through``: one answer per slot), and a row of the core registry
+    (``registry``: row name -> capability, ``cap:`` optional) whose capability is that slot and
+    which is its capability's primary (``non_primary``: the eval, retiring and legacy rows, which
+    serve no consumer, ADR-0039).  Without a registry (``None``) every incumbent is a problem: it
+    is never taken on trust."""
+    out: list[str] = []
+    for slot, inc in sorted(incumbents(site).items()):
+        where = f"incumbents.{slot}"
+        svc = inc.get("service") if isinstance(inc, dict) else None
+        if slot not in slots:
+            out.append(f"{where}: no such slot in the slot registry")
+        how = site.get("slots", {}).get(slot)
+        if how is not None:
+            what = "a module provider" if isinstance(how, list) else f"{how}"
+            out.append(
+                f"{where}: the slot is also selected under slots ({what}): one answer per slot"
+            )
+        if not isinstance(svc, str):
+            continue  # the schema reports it
+        if registry is None:
+            out.append(f"{where}: service {svc} cannot be checked: no core registry was read")
+        elif svc not in registry:
+            out.append(f"{where}: service {svc} is not a row of the core registry")
+        elif str(registry[svc]).removeprefix("cap:") != slot:
+            out.append(
+                f"{where}: service {svc} provides {str(registry[svc]).removeprefix('cap:')}, "
+                f"not {slot}"
+            )
+        elif svc in non_primary:
+            out.append(
+                f"{where}: service {svc} is not its capability's primary (an eval, retiring or "
+                "legacy row serves no consumer)"
+            )
+    return out
+
+
 def lab_namespace_problems(site: Doc, mods: dict[str, Doc]) -> list[str]:
     """The selection's ``lab_table_namespaces`` (the lake namespaces that are the lab's own): a
     namespace listed twice, the core's (:data:`homelabnext.lake.tables.CORE_NAMESPACE`) or a
@@ -1037,6 +1089,8 @@ def site_problems(
     privileged_units: dict[str, set[str]],
     roles: dict[str, Doc],
     known: dict[str, Doc] | None = None,
+    registry: Mapping[str, str] | None = None,
+    non_primary: Collection[str] = frozenset(),
 ) -> list[str]:
     """Rules a site's selection must meet.  ``rows`` (module id -> its contributed service rows):
     public routes need grants.public_routes, upstreams follow the fallback, and an upstream that
@@ -1047,7 +1101,12 @@ def site_problems(
     whose prompts can leave the lab needs grants.cloud_models.  All four are required, so no rule
     is skipped for want of an input (a module with none passes an empty mapping); the loader will
     pass them.  ``known`` is every module the tree holds, those that failed validation included
-    (default ``mods``): a lab namespace may name none of them."""
+    (default ``mods``): a lab namespace may name none of them.  ``registry`` (the core registry's
+    row name -> capability) and ``non_primary`` (its eval, retiring and legacy rows) judge the
+    incumbents (:func:`incumbent_problems`); without a registry every incumbent is a problem.  An
+    incumbent counts as selected for a required core slot, a requirement (an ``instance`` is then
+    the incumbent's row), a preference's fallback, a dataset's slot and a row's upstream; it is
+    never an instance, a provider or an egress target."""
     # first: a selected module that failed validation stops the rest, not this
     out = lab_namespace_problems(site, mods if known is None else known)
     try:
@@ -1055,9 +1114,13 @@ def site_problems(
     except KeyError as exc:
         return [*out, str(exc)]
     ch = chosen(site)
+    inc = incumbents(site)
+    #: every slot the site serves, by a module provider or an incumbent
+    served = set(ch) | {"cap:" + s for s in inc}
     grants = site.get("grants", {})
+    out += incumbent_problems(site, slots, registry, non_primary)
     out += _binding_problems(site, mods, sel)
-    out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots)
+    out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots, served)
     out += role_ceiling_problems(roles)
     out += _config_problems(site, sel, grants)
     out += scope_problems(site)
@@ -1080,7 +1143,7 @@ def site_problems(
         n for mid, rs in rows.items() if mid in sel and sel[mid]["kind"] != "provider" for n in rs
     }  # a provider's rows are reached by their slot or instance (the egress generator's rule)
     for slot, d in slots.items():
-        if d.get("required_in_core") and "cap:" + slot not in ch:
+        if d.get("required_in_core") and "cap:" + slot not in served:
             out.append(f"{slot}: a required core slot has no provider")
     for cap, cs in ch.items():
         insts = [c["instance"] for c in cs]
@@ -1097,24 +1160,31 @@ def site_problems(
             out += _pass_through_problems(cap, ch, sel, slots)
     for m in sel.values():
         for r in m["requires"].get("capabilities", []):
-            if r["cap"] not in ch:
+            if r["cap"] not in served:
                 out.append(f"{m['id']}: requires {r['cap']}, which the site does not select")
+            elif r["cap"] not in ch:  # an incumbent: an instance is its registry row
+                svc = inc[r["cap"][4:]].get("service")
+                if r.get("instance") and r["instance"] != svc:
+                    out.append(
+                        f"{m['id']}: requires instance {r['instance']} of {r['cap']}, which is "
+                        f"served outside modules by {svc}"
+                    )
             elif r.get("instance") and r["instance"] not in {c["instance"] for c in ch[r["cap"]]}:
                 out.append(f"{m['id']}: requires instance {r['instance']} of {r['cap']}")
         for p in m.get("prefers", {}).get("capabilities", []):
             to = p["fallback"].get("to")
-            if p["cap"] not in ch and to and to not in ch:
+            if p["cap"] not in served and to and to not in served:
                 out.append(
                     f"{m['id']}: falls back from {p['cap']} to {to}, which is not selected either"
                 )
         for ds in m.get("data", []):
             via = ds.get("via", {}).get("cap")
-            if via and via not in ch:
+            if via and via not in served:
                 pref = next(
                     (p for p in m.get("prefers", {}).get("capabilities", []) if p["cap"] == via),
                     None,
                 )
-                moved = pref and pref["fallback"].get("to") in ch
+                moved = pref and pref["fallback"].get("to") in served
                 over = pref and any(
                     x["dataset"] == ds["id"] for x in pref["fallback"].get("data", [])
                 )
@@ -1155,7 +1225,7 @@ def site_problems(
                 m["id"], []
             ):
                 out.append(f"{m['id']}: service {name} is public without grants.public_routes")
-            out += _upstream_problems(m, name, row, ch, slots, grants)
+            out += _upstream_problems(m, name, row, ch, slots, grants, served)
         for u in sorted(privileged_units.get(m["id"], set())):
             if u not in grants.get("units", {}).get(m["id"], []):
                 out.append(
@@ -1219,6 +1289,7 @@ def _grant_problems(
     model_roles: dict[str, Doc],
     ch: dict[str, list[Doc]],
     slots: dict[str, Doc],
+    served: set[str] | None = None,
 ) -> list[str]:
     """Every grant names a selected module and only what that module uses: an egress target its
     entry lists (or external for an external role), an internet-facing role inside the lab, a
@@ -1316,7 +1387,7 @@ def _grant_problems(
             "cap:" + a
             for row in rows.get(mid, {}).values()
             for u in row.get("upstreams", [])
-            for a in _resolved_upstream(sel[mid], u, ch, slots) & set(GRANTED_UPSTREAMS)
+            for a in _resolved_upstream(sel[mid], u, ch, slots, served) & set(GRANTED_UPSTREAMS)
         }
         for c in caps:
             if c not in used:
@@ -1476,38 +1547,43 @@ def _fallback_to(m: Doc, slot: str) -> str | None:
     return pref["fallback"].get("to") if pref else None
 
 
-def _resolved_upstream(m: Doc, u: str, ch, slots) -> set[str]:
+def _resolved_upstream(m: Doc, u: str, ch, slots, served=None) -> set[str]:
     """The slots a row's upstream ``u`` reaches on this site, as traffic goes: a selected slot
-    itself; an unselected preferred slot, its fallback slot when that is selected; an instance,
-    every slot it fills."""
+    itself (``served``, default the slots of ``ch``: an incumbent's slot too); an unselected
+    preferred slot, its fallback slot when that is selected; an instance, every slot it fills."""
+    served = set(ch) if served is None else served
     if u in slots:
-        if "cap:" + u in ch:
+        if "cap:" + u in served:
             return {u}
         to = _fallback_to(m, u)
-        return {to[4:]} if to and to in ch else set()
+        return {to[4:]} if to and to in served else set()
     return {cap[4:] for cap, cs in ch.items() for c in cs if c["instance"] == u}
 
 
-def _upstream_problems(m: Doc, name: str, row: Doc, ch, slots, grants: Doc) -> list[str]:
+def _upstream_problems(
+    m: Doc, name: str, row: Doc, ch, slots, grants: Doc, served=None
+) -> list[str]:
     """A row's upstream follows the module's fallback: a preferred slot the site does not select
     resolves to its fallback slot, which must be selected; an instance must be selected.  A
     broker, idp or remote-admin upstream needs grants.upstreams, judged by what the upstream
     reaches as traffic goes (:func:`_resolved_upstream`: the slot, its fallback, an instance)."""
     out = []
+    served = set(ch) if served is None else served
     selected_instances = {c["instance"] for cs in ch.values() for c in cs}
     granted = grants.get("upstreams", {}).get(m["id"], [])
     for u in row.get("upstreams", []):
-        for authority in sorted(_resolved_upstream(m, u, ch, slots) & set(GRANTED_UPSTREAMS)):
+        resolved = _resolved_upstream(m, u, ch, slots, served)
+        for authority in sorted(resolved & set(GRANTED_UPSTREAMS)):
             if "cap:" + authority not in granted:
                 out.append(
                     f"{m['id']}: service {name} upstream {u} reaches {authority} without "
                     "grants.upstreams"
                 )
         if u in slots:
-            if "cap:" + u in ch:
+            if "cap:" + u in served:
                 continue
             to = _fallback_to(m, u)
-            if not (to and to in ch):
+            if not (to and to in served):
                 out.append(
                     f"{m['id']}: service {name} upstream {u} is not selected, nor a fallback for it"
                 )
