@@ -1138,6 +1138,8 @@ SELECTION_NEGATIVES = {
     "addresses-network": "hosts/data/addresses/0",
     "upstream-grant-not-authority": "grants/upstreams/publishing/0",
     "cloud-model-not-a-role": "grants/cloud_models/publishing/0",
+    "incumbent-without-why": "incumbents/secrets",
+    "incumbent-unknown-field": "incumbents/secrets",
     "lab-namespace-without-why": "lab_table_namespaces/0",
     "lab-namespace-not-a-name": "lab_table_namespaces/0/namespace",
     "tlp-reader-unknown-ceiling": "tlp_readers/0/ceiling",

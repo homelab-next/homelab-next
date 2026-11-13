@@ -80,11 +80,18 @@ def provider_for(
 
     ``None`` when the site selects ``none`` or ``pass-through`` for the slot (nothing serves it,
     by decision).  Without ``instance`` the slot must have exactly one selected instance.  A slot
-    the selection does not name, an instance it does not select, and an ambiguous lookup raise
+    the selection does not name, a slot served outside modules (an incumbent: the registry row
+    answers, not a module), an instance it does not select, and an ambiguous lookup raise
     :class:`ProviderLookupError`: a consumer never guesses."""
     slot = slot.removeprefix("cap:")
     lines = site.get("slots", {}).get(slot)
     if lines is None:
+        inc = (site.get("incumbents") or {}).get(slot)
+        if isinstance(inc, dict):
+            raise ProviderLookupError(
+                f"{slot}: served outside modules by registry row {inc.get('service')} (an "
+                "incumbent): no module provides it"
+            )
         raise ProviderLookupError(f"{slot}: the site selection does not name this slot")
     if not isinstance(lines, list):
         return None
