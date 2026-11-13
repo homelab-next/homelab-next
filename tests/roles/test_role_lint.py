@@ -385,9 +385,9 @@ def _task(module, args):
         ("", "demo_role_settings: {apt: {name: db.example.internal}}\n", True),
         ("", "demo_role_mirror: mirror.example.internal\n", True),
         # a hostname-shaped value in a package-name context is not a reviewed package name
-        ("", "demo_role_package: vault.homelab.lan\n", True),
-        ("", "demo_role_packages: [db.prod.corp]\n", True),
-        (_task("ansible.builtin.apt", {"name": "nas.home.lan"}), "", True),
+        ("", "demo_role_package: vault.example.internal\n", True),
+        ("", "demo_role_packages: [db2.example.internal]\n", True),
+        (_task("ansible.builtin.apt", {"name": "nas.example.internal"}), "", True),
         # the module key must be a task's own: not a mapping inside vars:/args:/module_defaults:
         ("- name: t\n  vars: {apt: {name: containerd.io}}\n  ansible.builtin.debug: {msg: x}\n", "", True),
         ("- name: t\n  module_defaults: {apt: {name: containerd.io}}\n  ansible.builtin.debug: {msg: x}\n", "", True),

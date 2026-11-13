@@ -56,7 +56,7 @@ A hook that cannot be implemented yet still exists and says so explicitly
   change) when it is the name of a whole package spec (`name` or `name=version`) where it can
   only be a package: the `name`/`pkg`/`package` argument of a task's own `apt`, `package` or
   `dpkg_selections` module, and a role variable named `*_package`/`*_packages` (a list of specs,
-  or of mappings whose `name` is one). Any other value there (`nas.home.lan`), and a spec's
+  or of mappings whose `name` is one). Any other value there (`nas.example.internal`), and a spec's
   version, is still scanned.
 * Container images are pinned by tag and `sha256` digest, never `:latest` (RL009).
   `compose_app` goes further: see section 6.
