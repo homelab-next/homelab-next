@@ -200,6 +200,7 @@ nodes:
       severities: [warning, error, unknown]  # the default; unknown is forwarded system mail
       priority: 4                            # ntfy priority 1-5, default 4
       default_mail: false                    # the default: turn off the built-in mail matcher
+      credential: secret:token               # optional: publish with a bearer token (below)
 ```
 
 `hnx guests render --target node-notify` writes `notify/<node>/hnx-notify.sh`. Run on the node as
@@ -239,8 +240,32 @@ node entry reaches the shell outside double quotes; Proxmox fills its `{{ escape
 be long: the server's message size limit must allow it (ntfy's default is 4 KB). The URL is plain
 `http` or `https` with a host name or IPv4 address, an optional port and base path, and no user,
 query or fragment; with `http` the notification (backup logs, host names) crosses the network in
-clear. Publishing needs no credential: a server that requires a token to publish is not supported
-yet. Targets and matchers share one namespace in `notifications.cfg`, so the two names differ.
+clear. Targets and matchers share one namespace in `notifications.cfg`, so the two names differ.
+
+**A publish credential.** Without `credential` the server must accept publishing with none, and
+every apply removes any header or secret added to the target by hand. A deny-all server (the ntfy
+module's) needs a bearer token, named by `credential: secret:<name>` (lower case, digits and `_`,
+at most 32), and the target then sends `Authorization: Bearer {{ secrets.<name> }}` and holds the token as
+its Proxmox notification secret `<name>` (in `/etc/pve/priv/`; `pvesh get` never shows it). The
+value is never in `_nodes.yml`, never in the rendered script and never one of the script's
+arguments: an apply reads it from the `HNX_NOTIFY_SECRET` environment variable or, when that is
+unset and stdin is not a terminal, from the first line of stdin, and exits 2 before changing
+anything when there is none (or it holds a space or a control character). `--test` and `--remove`
+need no value. Every apply gives both headers and the secret in full, so a re-run converges them,
+and rotating the token is a re-run with the new value; removing `credential` drops the header and
+the secret on the next apply. Pipe the value from the secret store straight into the script (the
+KV v2 mount and field `hnx secrets seed` writes, `secret` and `value`, by default):
+
+```sh
+bao kv get -field=value secret/ntfy/publisher-token | ssh root@hv-1 sh /root/hnx-notify.sh
+```
+
+`pvesh` takes parameters only as arguments, so while the target is written the value (base64) is
+in that `pvesh` command line on the node, where every local account is an administrator; mount
+`/proc` with `hidepid=2` if the node has any other. A target configured by hand in this shape
+(target `hnx-notify-<node>`, header `Authorization: Bearer {{ secrets.token }}`, secret `token`) is
+adopted by declaring the same `url`, `topic` and `credential: secret:token`: the first apply
+rewrites it in place.
 
 This target is deliberately not a client of the [notify capability](capabilities/notify.md): a
 hypervisor must be able to alert when no guest, the notify service included, is up. The node

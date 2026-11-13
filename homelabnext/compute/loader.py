@@ -234,18 +234,25 @@ _NOTIFY_URL_RE = re.compile(
 _NOTIFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 #: the severities a Proxmox notification matcher can match
 PVE_SEVERITIES = ("info", "notice", "warning", "error", "unknown")
+#: a publish credential: a reference to a secret by name, never its value.  The name becomes the
+#: webhook target's secret name, read back by Proxmox as ``{{ secrets.<name> }}`` (a template
+#: path, so no ``-`` or ``.``)
+_NOTIFY_CREDENTIAL_RE = re.compile(r"^secret:(?P<name>[a-z][a-z0-9_]{0,31})\Z")
 
 
 def _notify(p: Path, name: Any, raw: Any) -> dict[str, Any]:
-    """``{url, topic, severities, priority, default_mail}``: send the node's own Proxmox
-    notifications of these severities (default warning, error and unknown, which is the mail the
-    node forwards to root) to an ntfy topic at priority 1 to 5 (default 4).  ``default_mail``
-    (default false) keeps Proxmox's built-in matcher that mails everything to root@pam."""
+    """``{url, topic, severities, priority, default_mail, credential}``: send the node's own
+    Proxmox notifications of these severities (default warning, error and unknown, which is the
+    mail the node forwards to root) to an ntfy topic at priority 1 to 5 (default 4).
+    ``default_mail`` (default false) keeps Proxmox's built-in matcher that mails everything to
+    root@pam.  ``credential`` (optional, ``secret:<name>``) names the publish token: its value is
+    given to the generated script when it runs, never written here."""
     where = f"{p}: node {name!r}: notify"
-    keys = {"url", "topic", "severities", "priority", "default_mail"}
+    keys = {"url", "topic", "severities", "priority", "default_mail", "credential"}
     if not isinstance(raw, dict) or set(raw) - keys or not {"url", "topic"} <= set(raw):
         raise ComputeError(
-            f"{where}: takes url and topic (required), severities, priority and default_mail"
+            f"{where}: takes url and topic (required), severities, priority, default_mail and "
+            "credential"
         )
     url, topic = raw["url"], raw["topic"]
     m = _NOTIFY_URL_RE.match(url) if isinstance(url, str) else None
@@ -272,13 +279,24 @@ def _notify(p: Path, name: Any, raw: Any) -> dict[str, Any]:
     mail = raw.get("default_mail", False)
     if not isinstance(mail, bool):
         raise ComputeError(f"{where}.default_mail: true or false")
-    return {
+    out = {
         "url": url if url.endswith("/") else url + "/",
         "topic": topic,
         "severities": list(sev),
         "priority": prio,
         "default_mail": mail,
     }
+    if "credential" in raw:
+        cred = raw["credential"]
+        m = _NOTIFY_CREDENTIAL_RE.match(cred) if isinstance(cred, str) else None
+        if m is None:
+            # never echo the value: a token pasted here by mistake must not reach a log
+            raise ComputeError(
+                f"{where}.credential: a secret reference, secret:<name> ([a-z][a-z0-9_], up to "
+                "32), never a value"
+            )
+        out["credential"] = m["name"]
+    return out
 
 
 #: one OpenSSH public key line: a known key type, base64 material, an optional comment

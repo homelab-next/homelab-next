@@ -33,9 +33,19 @@ one entry for the whole cluster, so in a cluster give every node a ``notify`` be
 off.  The body is a fixed template rendered here and carried base64-encoded, the form ``pvesh``
 takes, so no value of the node's entry reaches the shell outside double quotes.  Proxmox fills
 ``{{ title }}``, ``{{ message }}`` and ``{{ severity }}`` when it sends (its ``escape`` helper
-makes the first two JSON string content; the severity is a fixed word).  ntfy publishing with no
-credential is assumed: a re-run removes any header or secret added by hand, and a server that
-needs a token for publishing is not supported yet.
+makes the first two JSON string content; the severity is a fixed word).
+
+With no ``credential`` the server must accept publishing with none: a re-run removes any header or
+secret added by hand.  With ``credential: secret:<name>`` (a deny-all server), the target also
+sends ``Authorization: Bearer {{ secrets.<name> }}`` and holds the token as its Proxmox
+notification secret ``<name>`` (kept in ``/etc/pve/priv/``, never shown by ``pvesh get``).  The
+value is never in ``_nodes.yml`` or the rendered script, nor in the script's own arguments: an
+apply reads it from ``HNX_NOTIFY_SECRET`` or, when that is unset and stdin is not a terminal, the
+first line of stdin, and refuses to change anything without it (``--test`` and ``--remove`` do not
+need it).  Every apply stores it again with the headers, so a re-run converges both and rotates
+the token.  ``pvesh`` takes parameters only as arguments, so the value (base64-encoded) is in the
+``pvesh`` command line while that call runs: on a hypervisor every local account is an
+administrator, and ``hidepid`` hides it from the rest.
 
 This is deliberately not a client of the ``notify`` capability: a hypervisor must be able to
 alert when no guest (the notify service included) is up, so the node talks to the server named in
@@ -73,6 +83,15 @@ def names(node: str) -> tuple[str, str]:
 
 #: the Proxmox built-in matcher that sends everything to ``mail-to-root``
 DEFAULT_MATCHER = "default-matcher"
+#: where an apply reads the publish credential's value (else the first line of stdin)
+SECRET_ENV = "HNX_NOTIFY_SECRET"
+
+
+def auth_header(secret: str) -> str:
+    """The ``Authorization`` header value, a Proxmox template naming the target's secret."""
+    return f"Bearer {{{{ secrets.{secret} }}}}"
+
+
 #: the guest schema's placement.node pattern: the node name becomes a directory of the render
 NODE_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 
@@ -103,6 +122,9 @@ def script(node: str, spec: dict) -> str:
     payload = _b64(body(node, topic, spec["priority"]))
     ctype = _b64("application/json")
     keep_mail = spec["default_mail"]
+    cred = spec.get("credential")
+    if cred is not None:
+        cred = checked(cred, f"node {node}: notify.credential", "shell")
     name, matcher = names(node)
     L = [
         "#!/bin/sh",
@@ -125,6 +147,14 @@ def script(node: str, spec: dict) -> str:
         f'COMMENT="hnx: {sev} to notify topic {topic}"',
         "WEBHOOKS=/cluster/notifications/endpoints/webhook",
         "MATCHERS=/cluster/notifications/matchers",
+    ]
+    if cred is not None:
+        L += [
+            f"# the publish credential: secret {cred} of the target, sent as " + auth_header(cred),
+            f'SECRET_NAME="{cred}"',
+            f'AUTH="{_b64(auth_header(cred))}"',
+        ]
+    L += [
         "",
         "exists() {",
         '  pvesh get "$1" >/dev/null 2>&1',
@@ -157,15 +187,57 @@ def script(node: str, spec: dict) -> str:
         "  exit 0",
         "fi",
         "",
-        "# the target first: the matcher must name a target that exists",
-        'if exists "$WEBHOOKS/$NAME"; then',
-        '  pvesh set "$WEBHOOKS/$NAME" --method post --url "$URL" --body "$BODY" \\',
-        '    --header "name=Content-Type,value=$CTYPE" --comment "$COMMENT" \\',
-        "    --delete disable --delete secret",
-        "else",
-        '  pvesh create "$WEBHOOKS" --name "$NAME" --method post --url "$URL" --body "$BODY" \\',
-        '    --header "name=Content-Type,value=$CTYPE" --comment "$COMMENT"',
-        "fi",
+    ]
+    if cred is None:
+        L += [
+            "# the target first: the matcher must name a target that exists",
+            'if exists "$WEBHOOKS/$NAME"; then',
+            '  pvesh set "$WEBHOOKS/$NAME" --method post --url "$URL" --body "$BODY" \\',
+            '    --header "name=Content-Type,value=$CTYPE" --comment "$COMMENT" \\',
+            "    --delete disable --delete secret",
+            "else",
+            '  pvesh create "$WEBHOOKS" --name "$NAME" --method post --url "$URL" --body "$BODY" \\',
+            '    --header "name=Content-Type,value=$CTYPE" --comment "$COMMENT"',
+            "fi",
+        ]
+    else:
+        L += [
+            "# the credential's value, before anything changes: the environment, else the first",
+            "# line of stdin (never an argument, never this file); none, and nothing is touched",
+            f'SECRET="${{{SECRET_ENV}:-}}"',
+            f"unset {SECRET_ENV}",
+            'if [ -z "$SECRET" ] && [ ! -t 0 ]; then',
+            "  IFS= read -r SECRET || true",
+            "fi",
+            'if [ -z "$SECRET" ]; then',
+            f'  echo "$0: the publish credential (secret $SECRET_NAME): set {SECRET_ENV} or give it '
+            'on stdin" >&2',
+            "  exit 2",
+            "fi",
+            'case "$SECRET" in',
+            "  *[![:graph:]]*)",
+            '    echo "$0: the publish credential holds a space or a control character" >&2',
+            "    exit 2 ;;",
+            "esac",
+            "SECRET=$(printf '%s' \"$SECRET\" | base64 | tr -d '\\n')",
+            "# the target first: the matcher must name a target that exists.  The headers and the",
+            "# secret are given in full on every apply: a re-run converges them (and rotates the",
+            "# token); disable is the one key to drop",
+            'if exists "$WEBHOOKS/$NAME"; then',
+            '  pvesh set "$WEBHOOKS/$NAME" --method post --url "$URL" --body "$BODY" \\',
+            '    --header "name=Content-Type,value=$CTYPE" \\',
+            '    --header "name=Authorization,value=$AUTH" \\',
+            '    --secret "name=$SECRET_NAME,value=$SECRET" --comment "$COMMENT" \\',
+            "    --delete disable",
+            "else",
+            '  pvesh create "$WEBHOOKS" --name "$NAME" --method post --url "$URL" --body "$BODY" \\',
+            '    --header "name=Content-Type,value=$CTYPE" \\',
+            '    --header "name=Authorization,value=$AUTH" \\',
+            '    --secret "name=$SECRET_NAME,value=$SECRET" --comment "$COMMENT"',
+            "fi",
+            "SECRET=",
+        ]
+    L += [
         "# only what this node raises: notifications.cfg is one file for the whole cluster.",
         "# A re-run also drops what a hand edit added: a disable, an inversion, a calendar rule.",
         'if exists "$MATCHERS/$MATCHER"; then',
@@ -196,24 +268,30 @@ def readme(notifies: dict[str, dict]) -> str:
             "Each node below sends its hypervisor notifications of the listed severities to the",
             "server's topic. Copy `<node>/hnx-notify.sh` to the node and run it as root; each run",
             "ends with a test notification (so run it by hand or from a deploy, not from cron),",
-            "and the built-in mail matcher is turned off only after it was delivered. The server",
-            "must accept publishing with no credential. A backup job sends through this only with",
-            "`notification-mode notification-system` (or `auto` with no `mailto`). The node keeps",
+            "and the built-in mail matcher is turned off only after it was delivered. With no",
+            "credential the server must accept publishing with none; with one (a deny-all server)",
+            f"give its value as `{SECRET_ENV}` or on stdin, never as an argument: the target sends",
+            "it as a bearer token held in the node's notification secrets. A backup job sends",
+            "through this only with `notification-mode notification-system` (or `auto` with no",
+            "`mailto`). The node keeps",
             "no other route: watch the topic for the test. `hnx-notify.sh --remove` turns the",
             "built-in mail matcher back on and deletes the node's target and matcher. Deleting a",
             "node's `notify` renders no script for it, so run the old script's `--remove` on the",
             "node before deleting the key.",
             "",
-            "| Node | Notify server | Topic | Severities | Built-in mail matcher |",
-            "|---|---|---|---|---|",
+            "| Node | Notify server | Topic | Severities | Built-in mail matcher | Credential |",
+            "|---|---|---|---|---|---|",
         ]
         for node, n in notifies.items():
             sev = ", ".join(f"`{checked(s, 'severity', 'markdown')}`" for s in n["severities"])
             mail = "kept" if n["default_mail"] else "turned off"
+            cred = n.get("credential")
+            cred = f"`secret:{checked(cred, 'notify.credential', 'markdown')}`" if cred else "none"
             L.append(
                 f"| `{checked(node, 'node', 'markdown')}` "
                 f"| `{checked(n['url'], 'notify.url', 'markdown')}` "
-                f"| `{checked(n['topic'], 'notify.topic', 'markdown')}` | {sev} | {mail} |"
+                f"| `{checked(n['topic'], 'notify.topic', 'markdown')}` | {sev} | {mail} "
+                f"| {cred} |"
             )
     return "\n".join(L) + "\n"
 
