@@ -1693,6 +1693,8 @@ def placement_problems(site: Doc, sel: dict[str, Doc]) -> list[str]:
         if sh is None:
             out.append(f"{mod}: placed on unknown host {host}")
             continue
+        if "capacity" not in sh:
+            continue  # a guest reference that did not resolve (guest_hosts.resolve reports it)
         if (h["kind"] == "external") != (sh["kind"] == "external"):
             out.append(
                 f"{mod}/{role}: an external role lands only on an external host, and only it does"
@@ -1730,8 +1732,8 @@ def footprint_problems(site: Doc, placed) -> list[str]:
     use: dict[str, dict[str, float]] = {}
     claims: dict[str, dict[str, list[bool]]] = {}
     for _, _, _, h, host in placed:
-        if h is None or host not in site["hosts"]:
-            continue
+        if h is None or "capacity" not in site["hosts"].get(host, {}):
+            continue  # an unknown host, or a guest reference that did not resolve
         fp, n = h["footprint"], h.get("count", 1)
         u = use.setdefault(host, {})
         for dim in ("cpu", "memory_mb", "disk_gb", "gpu_memory_mb"):
@@ -1742,19 +1744,23 @@ def footprint_problems(site: Doc, placed) -> list[str]:
         sh = site["hosts"][host]
         cap = dict(sh["capacity"])
         cap["memory_mb"] -= sh.get("headroom", {}).get("memory_mb", 0)
+        # a host that references a guest: name the guest whose capacity it is
+        at = f"{host} ({sh['guest']})" if "guest" in sh else host
         for dim, v in u.items():
+            if dim == "gpu_memory_mb" and "guest" in sh:
+                continue  # a guest record has no GPU memory yet (guest_hosts.placement_problems)
             if v > cap.get(dim, 0):
-                out.append(f"{host}: {dim} {v} exceeds {cap.get(dim, 0)}")
+                out.append(f"{at}: {dim} {v} exceeds {cap.get(dim, 0)}")
         have = [r["kind"] for r in sh.get("resources", [])]
         for kind, cl in claims.get(host, {}).items():
             n, shared, named = cl.count(True), cl.count(False), have.count(kind)
             if not named:
-                out.append(f"{host}: no {kind} named, {len(cl)} claim(s) on one")
+                out.append(f"{at}: no {kind} named, {len(cl)} claim(s) on one")
             elif n > named:
-                out.append(f"{host}: {n} exclusive {kind} wanted, {named} named")
+                out.append(f"{at}: {n} exclusive {kind} wanted, {named} named")
             elif shared and n >= named:
                 out.append(
-                    f"{host}: {shared} shared {kind} claim(s), but every {kind} is held exclusively"
+                    f"{at}: {shared} shared {kind} claim(s), but every {kind} is held exclusively"
                 )
     return out
 

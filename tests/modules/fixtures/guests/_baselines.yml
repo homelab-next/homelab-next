@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The guests' baseline set for tests/modules/test_guest_hosts.py (fictional, trimmed from
+# examples/minimal/guests/_baselines.yml): `server` extends `base`, so a guest naming server
+# carries base too.
+controls:
+  time-sync:
+    layer: host
+    description: The clock follows the lab's time sources, so logs and tokens line up.
+    role: null
+    verify: the time daemon reports synchronised with an offset under one second
+  ssh-hardening:
+    layer: identity
+    description: Key-only SSH, no direct root login, a short list of permitted users.
+    role: null
+    verify: sshd -T shows passwordauthentication no and permitrootlogin no
+baselines:
+  base:
+    description: What every in-scope guest gets, whatever it runs.
+    controls: [time-sync]
+  server:
+    description: A long-running service guest.
+    extends: [base]
+    controls: [ssh-hardening]

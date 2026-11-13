@@ -27,11 +27,13 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "kind",
-          "capacity"
-        ],
         "properties": {
+          "guest": {
+            "type": "string",
+            "maxLength": 70,
+            "pattern": "^guest:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)",
+            "description": "The platform/guest record this host is (its id, guest:<name>). The loader reads the guest file (hnx modules check --guests DIR, or the overlay's lab/guests/) and derives kind, capacity and addresses from it, so they are not written here; it refuses an unknown or retired guest, a guest two hosts name, and a placed host role whose kind, footprint or guest requirements the guest does not meet."
+          },
           "kind": {
             "enum": [
               "vm",
@@ -121,10 +123,46 @@
               "description": "One address: no prefix, or a full-length one (/32, /128)."
             },
             "minItems": 1,
-            "description": "The host's own addresses, what the egress generator (homelabnext.modules.egress) lets a module role reach on it and never counts as the internet. A stand-in, like capacity, until the loader reads them from the guest records and the network model (and refuses a mismatch). Private: documentation ranges in a public example."
+            "description": "The host's own addresses, what the egress generator (homelabnext.modules.egress) lets a module role reach on it and never counts as the internet. A stand-in, like capacity: a host that references a guest takes them from the guest record (network.ip and extra_addresses) instead. Private: documentation ranges in a public example."
           }
         },
-        "description": "A site host; capacity stands in for its platform/guest resources."
+        "description": "A site host: a reference to its platform/guest record (guest), or a stand-in that declares kind and capacity itself (an external host, or a host with no guest file). isolated, resources and headroom go with either form.",
+        "if": {
+          "required": [
+            "guest"
+          ]
+        },
+        "then": {
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "capacity"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "addresses"
+                ]
+              }
+            }
+          ]
+        },
+        "else": {
+          "required": [
+            "kind",
+            "capacity"
+          ]
+        }
       }
     },
     "slots": {
