@@ -1,6 +1,6 @@
 ---
-summary: 'Module manifest reference: a site''s module selection (draft platform/module_selection 1.0): hosts (guest records), slots, incumbents, bindings and grants.'
-summary_of: outline:sha256:ff40bb097e250b11
+summary: 'Module manifest reference: a site''s module selection (draft platform/module_selection 1.0): hosts, slots, incumbents, bindings, grants and registry rows.'
+summary_of: outline:sha256:8104a981a869101a
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Modules: site selection
@@ -226,6 +226,46 @@ selected instance that way. `hnx modules check` compares the core registry's `im
 whose capability is a selected slot names the product (or an alias) of a provider selected for that
 slot, and a row for a slot the site selects `none` or `pass-through` for is a problem; with the
 repository's example registry (another lab) the comparison is a note. Nothing consumes it at run
-time yet (`homelabnext/broker/cli.py` still reads a conformance target file), the baselines'
-`role` bindings are not compared, and the registry is not generated from the selection (an
-operator decision). Model choice stays one line in the role table.
+time yet (`homelabnext/broker/cli.py` still reads a conformance target file), and the baselines'
+`role` bindings are not compared. The registry is not generated from the selection (an operator
+decision); its rows are checked against the modules instead
+([below](#registry-rows-checked-not-generated)). Model choice stays one line in the role table.
+
+### Registry rows: checked, not generated
+
+The lab's registry (`lab/services.yml`) stays hand-written: it is the one file every generator
+(DNS, proxy, monitoring, firewall) reads, and the operator chose to **check it for equality**
+rather than generate it from the selection. So `hnx modules check` (and `render`, which runs the
+same check) requires every service row a selected module contributes (`contributes.services`) to
+appear in the lab registry **identically, as the site binds it**
+(`homelabnext.modules.registry_rows`):
+
+- a provider's row is keyed by its slot and becomes one row per instance the site selects of that
+  provider for that slot, named by the instance, with `version` the provider's `product.version`
+  (a provider's row never repeats it); a feature's or core module's row keeps its name;
+- `host` is the module's host role in the contributed row; in the registry it is where the site
+  places that role: the guest's name for a host that references a guest
+  (`hosts.<name>.guest: guest:<id>` gives `<id>`, the key the guest registry fragment uses), else
+  the site host's own name;
+- every other field must be equal, whole values compared (a mapping or list is one value). Each
+  difference is its own problem under `registry`, naming the row, the field, the module (and
+  instance) and both values, with `(absent)` for a field one side lacks:
+
+  ```text
+  registry: services.notify-eval.port: example-notify (instance notify-eval) contributes 80 (its row notify), the lab registry has 8080
+  registry: services.notify-eval: example-notify (instance notify-eval) contributes this row (its row notify), but the lab registry has no such row (copy it as the site binds it)
+  ```
+
+- four fields are the lab's own facts about a row, which a generic module cannot know:
+  `standing` (ADR-0039: eval, retiring or legacy, with `until` and `why`), `backup_job`, `scope`
+  and `clients` (zones are the lab's names). The registry may add them; they are compared only
+  when the module's row sets them;
+- a host role the site places on no host is a problem of its own (the registry's `host` cannot be
+  judged); the row's other fields are still compared. A `version` is compared as text, so an
+  unquoted YAML version equals its quoted form.
+
+The comparison runs only against the lab's own registry (the overlay's `lab/services.yml`, or
+`--services`); with the repository's example registry, which describes another lab, the report
+notes that the rows were not compared. Only the selected modules' rows are judged: a registry row
+that no selected module contributes is the lab's own and is not compared. Values in a problem are
+printed as JSON (control characters escaped) and cut at 120 characters.

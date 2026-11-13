@@ -109,10 +109,24 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    (known, schema-valid, live or planned, with resources, named by one host) and each role placed
    on it against the guest's kind, size, capability and baselines; every lab host's own address
    private or in `scope.trusted.nets`
-   ([hosts that are guests](selection.md#hosts-that-are-guests)).
-4. **Two-way, against what runs**: every contributed file exists, is a regular file inside the
+   ([hosts that are guests](selection.md#hosts-that-are-guests)); with the lab's own registry,
+   every service row a selected module contributes appears in it identically as the site binds it
+   (renamed to the instance, `version` from the product, `host` the placed guest), each difference
+   named field by field
+   ([registry rows](selection.md#registry-rows-checked-not-generated)).
+4. **Two-way, against what runs**: every contributed file, and every lifecycle playbook
+   (`lifecycle.install|upgrade|remove.playbook`, what the apply path runs as root), exists, is a
+   regular file inside the
    module (no symbolic link on the way, realpath containment) with a single link (a hard link
-   could alias a file outside it), and is read only then. The kinds with a record type are
+   could alias a file outside it), and is read only then. A contributed role is a **directory**,
+   `roles/<name>` exactly (the apply path puts the module's `roles/` on `roles_path`), reached
+   through no symbolic link; the module's whole `roles/` tree holds only the contributed roles
+   (any other entry is refused: Ansible could find it by name) and, walked without following
+   anything, no symbolic link at any depth (a role runs as root, and a link can point at any file
+   on the controller), no FIFO, socket or device, and no hard-linked file; a tree of more than
+   5,000 entries or 12 levels is refused rather than cut short. Nothing under `roles/` is read.
+   A fixture module (`--examples`) that ships no `roles/` keeps its exemption; one that ships it
+   is walked the same way. The kinds with a record type are
    validated against it: MCP records (`platform/mcp_server`), service rows (`platform/service`),
    prompt templates (`agent/prompt_template`), lake tables (`platform/lake_table`), interface
    schemas (a JSON Schema in the owner's `$id` namespace), unit specs (the fleet_units rules) and

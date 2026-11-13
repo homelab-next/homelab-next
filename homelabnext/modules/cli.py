@@ -851,6 +851,9 @@ def _run(args: argparse.Namespace) -> int:
         if not isinstance(doc, dict):
             raise ld.LoaderError(f"the {what} is not a mapping")
     slot_entries, slot_problems = _slot_entries(slots)
+    # the lab's own registry, read once: the impl: comparison and registry equality both judge
+    # it; the repository's example registry describes another lab, so neither judges that
+    lab_registry = None if example_registry or site is None else _read(services, "registry", budget)
     report = ld.check(
         tree,
         slots=slot_entries,
@@ -864,6 +867,7 @@ def _run(args: argparse.Namespace) -> int:
         budget=budget,
         empty_selection=empty,
         guests=guests,
+        lab_registry=lab_registry,
     )
     impl_problems: list[ld.Problem] = []
     if site is not None and not any(
@@ -875,7 +879,7 @@ def _run(args: argparse.Namespace) -> int:
                 "registry is the repository's example, which describes another lab)"
             )
         else:
-            impl_problems = _impl_problems(site, tree.mods, _read(services, "registry", budget))
+            impl_problems = _impl_problems(site, tree.mods, lab_registry)
     found = sorted(
         {
             *problems,
