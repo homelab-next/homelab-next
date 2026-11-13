@@ -10,6 +10,7 @@ refusal is shown failing on a bad input and passing on a good one."""
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -555,6 +556,48 @@ def test_ssh_hardening_tests_the_drop_in_then_installs_and_reloads(first):
     assert len(calls(tmp_path)) == 3  # unchanged: not tested or reloaded again
     health = run_role(tmp_path, "ssh_hardening", "health", v)
     assert health.returncode == 0, health.stdout
+
+
+def _first(tmp_path):
+    v = ssh_setup(tmp_path)
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v, "check": True}
+
+
+@first_run(_first)
+def test_ssh_hardening_check_mode_reads_the_account_and_writes_nothing(first):
+    """--check (the overlay's "--check --diff first") runs the lockout guard against the real
+    account, not a skipped getent and /nonexistent (LL-563), and changes nothing: the drop-in it
+    would write is reported, not installed, and sshd is neither tested on it nor reloaded."""
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "would lock it out" not in r.stdout
+    assert not (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").exists()
+    assert not (tmp_path / "state").exists()
+    assert calls(tmp_path) == []
+
+
+def test_ssh_hardening_check_mode_on_a_converged_host_is_clean(tmp_path):
+    v = ssh_setup(tmp_path)
+    assert run_role(tmp_path, "ssh_hardening", "config", v).returncode == 0
+    before = calls(tmp_path)
+    r = run_role(tmp_path, "ssh_hardening", "config", v, check=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert re.search(r"localhost\s*:\s*ok=\d+\s+changed=0\s", r.stdout), r.stdout
+    assert calls(tmp_path) == before
+
+
+def _first(tmp_path):
+    v = ssh_setup(tmp_path)
+    (tmp_path / "home" / ".ssh" / "authorized_keys").write_text("")
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v, "check": True}
+
+
+@first_run(_first)
+def test_ssh_hardening_check_mode_still_refuses_an_account_without_a_key(first):
+    """The guard reads the account under --check too, so a real lockout still fails the dry run."""
+    r, tmp_path = first
+    assert r.returncode != 0 and "key-only SSH would lock it out" in r.stdout
+    assert calls(tmp_path) == []
 
 
 def _first(tmp_path):
