@@ -2132,9 +2132,9 @@ sqlalchemy==2.1.6 \
     --hash=sha256:f1e78019147ff7e08afaffb88fc3a0aa795171b147eacfc7ff873ce7a0d37dff \
     --hash=sha256:fd1154c6394892e727ff234273f5eb2b4319e5714917b016602435d77add8dcb
     # via pyiceberg
-sse-starlette==3.5.0 \
-    --hash=sha256:3e6e1070df3f0f5d9cea81496de92dbb72f6721871d99748ece67441dd8b7997 \
-    --hash=sha256:75de713aa8a9441513cc283220826da079d982770965b951e9437720e8bafdb2
+sse-starlette==3.6.0 \
+    --hash=sha256:623151d6c20dc0eebf1b3379c27faae91fff883bac7ab6665f16f46440a88b3a \
+    --hash=sha256:e4dfa4d237d2712cb2b4d4918eda9b457cd6b44bbecdc838af75de836565bafd
     # via mcp
 starlette==1.10.0 \
     --hash=sha256:478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4 \
