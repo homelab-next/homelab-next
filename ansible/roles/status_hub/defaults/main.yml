@@ -3,7 +3,8 @@
 # over the lab's registry, with the private tier and the broker's Approvals page behind the front
 # door (docs/status.md "The private tier", "The Approvals page"). It binds one address: loopback,
 # or the host's own address when the edge (another host) fronts it, which the host firewall then
-# opens to the edge alone. The hub trusts only the registry's edge-proxy hosts as proxies.
+# opens to the edge alone. The hub trusts as proxies only status_hub_trusted_proxies (by default
+# the registry's edge-proxy hosts), and off loopback it serves TLS with client certificates.
 status_hub_hnx_bin: /opt/hnx/bin/hnx
 status_hub_runtime_release: ""
 status_hub_user: hnx-hub
@@ -15,6 +16,34 @@ status_hub_port: 8099
 # The hostnames clients (the edge) send besides loopback: the hub row's public_hostname, read from
 # the registry by the hub's logical id (none on a loopback bind).
 status_hub_allowed_hosts: "{{ [] if status_hub_bind_address in status_hub_loopback else [lookup('hnx_registry', status_hub_logical_id, field='public_hostname')] }}"
+# The registry hosts (names, or their addresses) the hub trusts for the identity headers: replaces
+# the hard-coded edge-proxy capability. Default: the hosts of the registry's edge-proxy rows (the
+# behaviour before Stage 5). Never empty, never a wildcard; each entry must be a registry host.
+status_hub_trusted_proxies: >-
+  {{ ((lookup('ansible.builtin.file', status_hub_registry) | from_yaml).services | default({}, true)).values()
+     | selectattr('capability', 'defined') | selectattr('capability', 'equalto', 'edge-proxy')
+     | map(attribute='host') | unique | sort }}
+# mTLS on the hub's listener (docs/status.md "The edge-to-hub hop"): secret: references to the
+# server certificate, its key and the CA bundle client certificates must chain to (PEM; the role
+# writes them under status_hub_config_dir/tls). All three set: TLS with a client certificate
+# required. None set: plain HTTP, which off loopback needs status_hub_plain_http (the opt-in).
+status_hub_tls_cert_ref: ""
+status_hub_tls_key_ref: ""
+status_hub_client_ca_ref: ""
+# A name the server certificate holds (the one the edge dials, e.g. the hub's svc alias): required
+# with TLS; the hooks' probe verifies the hub's own certificate by it.
+status_hub_tls_server_name: ""
+# Pin the client certificate's name (its DNS SANs, else CN): the edge's. Empty: any certificate the
+# CA signed.
+status_hub_client_names: []
+# Plain HTTP off loopback: the explicit opt-in (tests, lab-in-a-box, or until the certificates exist).
+status_hub_plain_http: false
+# The health and readiness hooks' own client certificate (secret: references; optional). With it
+# they also GET /status.json over mTLS; without it they check only that a peer with no client
+# certificate is refused in the handshake. Its name joins the pin (status_hub_health_client_name).
+status_hub_health_client_cert_ref: ""
+status_hub_health_client_key_ref: ""
+status_hub_health_client_name: ""
 # Secrets the hub reads at run time ([secret:<name>]), delivered as HNX_SECRET_<NAME> through a
 # 0640 environment file: the front door's (the registry row's front_door.secret) and the
 # Approvals page's form-token key.

@@ -1,5 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
-- block:
+# Over TLS the hooks cannot use the edge's certificate (it never leaves the edge): they check the
+# listener with `hnx status probe-tls` (tls_probe.yml), refused without a client certificate and,
+# when the role gives the hooks their own (status_hub_health_client_cert_ref/_key_ref, signed by
+# the client CA, its name in the pin), the status document with it. Without that certificate the
+# end-to-end check is the edge's own health of the hub's route.
+- name: Check the hub's TLS listener
+  ansible.builtin.include_tasks:
+    file: tls_probe.yml
+    apply:
+      tags: [health]
+  when: status_hub_tls | bool
+  tags: [health]
+
+- when: not status_hub_tls | bool
+  block:
     - name: Ask the hub for status.json on its bind address
       ansible.builtin.uri:
         url: "http://{{ ('[' ~ status_hub_bind_address ~ ']') if ':' in status_hub_bind_address else status_hub_bind_address }}:{{ status_hub_port | int }}/status.json"

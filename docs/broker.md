@@ -812,7 +812,9 @@ the provisioner lives in an account of its own and names its JetStream calls und
 `JS.<account>.API` (`--bus-api-prefix`, default `JS.HNX.API`): grant the run's scratch calls in
 `events_bus_users` like any other, and the role renders the imports.
 The hub's steps must reach it from a trusted proxy's address (the registry's edge-proxy host), as
-the edge would.
+the edge would; the lab-in-a-box hub serves plain HTTP (`--plain-http`), while a hub with its mTLS
+listener ([status](status.md#the-edge-to-hub-hop-mtls-stage-5)) also needs the edge's client
+certificate.
 
 ### Publishing events: the outbox relay
 
