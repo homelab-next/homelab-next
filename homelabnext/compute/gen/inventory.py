@@ -13,14 +13,27 @@ With a module selection (``--selection``, docs/modules/apply.md), each placed mo
 also a group, ``mod_<module>_<host role>``, holding the guest its selection host references
 (:func:`homelabnext.modules.apply.inventory_groups`); the ``hnx modules render`` playbooks target
 those groups.  Without one the render is unchanged.
+
+With ``--group-vars DIR`` (:func:`group_vars`), the overlay's group variable files (one
+``<group>.yml`` per group, plain YAML) are carried into the render as ``group_vars/<group>.yml``,
+next to ``hosts.yml``, where Ansible reads them; a file for a group the inventory does not hold is
+refused, so a typo or a module no longer selected cannot set nothing silently.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
+import stat
+from pathlib import Path
 
+import yaml
+
+from homelabnext import _yaml
 from homelabnext.compute.baselines import resolve, role_vars
-from homelabnext.compute.model import ComputeError, Fleet, Guest
+from homelabnext.compute.model import ComputeError, ComputeUnreadable, Fleet, Guest
+from homelabnext.shapes import VAULT_BLOB
 
 from ._text import HEADER, q, qlist
 from .firewall_rules import resolve_addresses
@@ -141,4 +154,83 @@ def render(fleet: Fleet, selection: dict | None = None) -> dict[str, str]:
     out = {"hosts.yml": hosts_yml(fleet, selection)}
     for g in fleet.sorted():
         out[f"host_vars/{fleet.fqdn(g)}.yml"] = host_vars(fleet, g)
+    return out
+
+
+#: a group variable file the render carries: an Ansible group name, ``.yml`` or ``.yaml``
+_GROUP_VARS_FILE = re.compile(r"(?P<group>[A-Za-z_][A-Za-z0-9_]*)\.ya?ml\Z")
+#: the largest group variable file carried (a typo'd path must not pull in a disk image)
+GROUP_VARS_MAX = 1 << 20
+
+
+def _read_regular(path: Path) -> str:
+    """A regular file's text, opened without following a link (refused, not followed)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise ComputeUnreadable(f"--group-vars {path}: {exc.strerror}") from None
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise ComputeUnreadable(f"--group-vars {path}: not a regular file")
+        data = fh.read(GROUP_VARS_MAX + 1)
+    if len(data) > GROUP_VARS_MAX:
+        raise ComputeUnreadable(f"--group-vars {path}: larger than {GROUP_VARS_MAX} bytes")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ComputeUnreadable(f"--group-vars {path}: not UTF-8 text") from None
+
+
+def group_vars(directory: str | Path, hosts_yml_text: str) -> dict[str, str]:
+    """``group_vars/<group>.yml`` for every ``<group>.yml`` (or ``.yaml``) in ``directory``, each
+    a group of the rendered inventory (``hosts_yml_text``) or ``all``.  The content is carried as
+    written, after a header naming it generated (so ``--prune`` knows it); it must be plain YAML
+    holding a mapping (an ``ansible-vault`` file is refused: secrets reach roles by reference).
+    Unreadable input is :class:`ComputeUnreadable` (exit 2); a file for a group the inventory
+    does not hold, two files for one group or a non-mapping is :class:`ComputeError` (exit 1)."""
+    d = Path(directory)
+    if d.is_symlink() or not d.is_dir():
+        raise ComputeUnreadable(f"--group-vars {d}: not a directory")
+    inv = _yaml.safe_load(hosts_yml_text)
+    groups = {"all", *inv["all"]["children"]}
+    out: dict[str, str] = {}
+    problems: list[str] = []
+    for entry in sorted(d.iterdir()):
+        if entry.name.startswith("."):
+            continue
+        m = _GROUP_VARS_FILE.match(entry.name)
+        if m is None:
+            problems.append(
+                f"{entry.name}: not <group>.yml (a group_vars/<group>/ directory is not carried)"
+            )
+            continue
+        group = m["group"]
+        text = _read_regular(entry)
+        if re.match(VAULT_BLOB, text.lstrip()):
+            problems.append(
+                f"{entry.name}: an ansible-vault file (give secrets by reference, secret:<name>)"
+            )
+            continue
+        try:
+            # a key given twice is refused: one of the two would be set silently
+            doc = yaml.load(text, Loader=_yaml.UniqueKeyLoader)
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            where = f" at line {mark.line + 1}" if mark else ""
+            raise ComputeUnreadable(f"--group-vars {entry}: not valid YAML{where}") from None
+        if doc is not None and not isinstance(doc, dict):
+            problems.append(f"{entry.name}: not a mapping of variables")
+            continue
+        if group not in groups:
+            problems.append(f"{entry.name}: {group} is no group of this inventory")
+            continue
+        rel = f"group_vars/{group}.yml"
+        if rel in out:
+            problems.append(f"{entry.name}: a second file for group {group}")
+            continue
+        out[rel] = f"# {HEADER}\n# carried from --group-vars: {entry.name}\n{text}"
+        if not text.endswith("\n"):
+            out[rel] += "\n"
+    if problems:
+        raise ComputeError("--group-vars: " + "; ".join(problems))
     return out

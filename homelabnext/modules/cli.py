@@ -1054,7 +1054,7 @@ def _render(
         # each module's directory as the playbooks reach it: relative to where they are
         # written, so the render and the checkouts move together
         dirs = {m: os.path.relpath(tree.dirs[m].resolve(), out) for m in sel}
-        books = apply.render(site, sel, dirs)
+        books = apply.render(site, sel, dirs, lim)
     except (
         limits.LimitsError,
         egress.EgressError,

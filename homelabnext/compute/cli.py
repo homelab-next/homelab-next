@@ -114,6 +114,17 @@ def _selection_arg(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _group_vars_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--group-vars",
+        metavar="DIR",
+        help="the overlay's group variables (one <group>.yml per group, e.g. "
+        "mod_<module>_<host role>.yml): carried into the render as group_vars/, beside "
+        "hosts.yml, where Ansible reads them; a file for a group the inventory does not hold is "
+        "refused.  Inventory only",
+    )
+
+
 def _selection(path: str | None) -> dict | None:
     """The module selection named by ``--selection``, schema-valid, or None.  Unreadable is
     :class:`ComputeUnreadable` (exit 2), schema-invalid a :class:`ComputeError` (exit 1)."""
@@ -136,6 +147,8 @@ def _node_usage(args: argparse.Namespace) -> str | None:
     or None."""
     if getattr(args, "selection", None) is not None and args.target not in SELECTION_TARGETS:
         return f"--selection is for the inventory target; {args.target} does not take it"
+    if getattr(args, "group_vars", None) is not None and args.target != "inventory":
+        return f"--group-vars is for the inventory target; {args.target} does not take it"
     if args.node is None:
         return "--allow-empty needs --node" if args.allow_empty else None
     if args.target not in PER_NODE_TARGETS:
@@ -194,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--target", required=True, choices=sorted(TARGETS))
     _node_arg(r)
     _selection_arg(r)
+    _group_vars_arg(r)
     r.add_argument("--out", help="write files here (default: print a file list)")
     r.add_argument(
         "--prune",
@@ -206,6 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--target", required=True, choices=sorted(TARGETS))
     _node_arg(pl)
     _selection_arg(pl)
+    _group_vars_arg(pl)
     pl.add_argument("--against", required=True, help="directory holding the previous render")
     pl.add_argument("--exit-code", action="store_true", help="exit 3 when there are changes")
     b = sub.add_parser("baselines", help="guest x defense-layer baseline coverage")
@@ -326,6 +341,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if getattr(args, "selection", None) is None:
         files = render(fleet, args.target)
+    if getattr(args, "group_vars", None) is not None:
+        from .gen.inventory import group_vars
+
+        try:
+            files.update(group_vars(args.group_vars, files["hosts.yml"]))
+        except ComputeUnreadable as exc:
+            print(f"hnx guests: {exc}", file=sys.stderr)
+            return 2
+        except ComputeError as exc:
+            print(f"hnx guests: {exc}", file=sys.stderr)
+            return 1
     if args.cmd == "render":
         if args.out:
             from pathlib import Path

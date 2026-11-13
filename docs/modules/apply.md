@@ -19,7 +19,7 @@ rule (`homelabnext/modules/apply.py`), so they agree by construction:
 
 | Render | Writes | Holds |
 |---|---|---|
-| `hnx guests render --target inventory --selection lab/modules.yml` | `hosts.yml` (and `host_vars/`, unchanged) | one group `mod_<module>_<host role>` per placed host role, `-` written `_` (module `web-app`, host role `server`: `mod_web_app_server`), holding the guest every placement of that role lands on |
+| `hnx guests render --target inventory --selection lab/modules.yml` | `hosts.yml` (and `host_vars/`, unchanged; `group_vars/` with `--group-vars`) | one group `mod_<module>_<host role>` per placed host role, `-` written `_` (module `web-app`, host role `server`: `mod_web_app_server`), holding the guest every placement of that role lands on; and one group `modhost_<site host>` per lab site host a module is placed on, holding the guest that site host references |
 | `hnx modules render ... --out DIR` | `DIR/modules.yml`, `DIR/checks/<module>.yml` (beside `limits/`, `egress/`, `tlp-sources.json`) | the install playbook and one check playbook per placed module |
 
 Both are pure functions of the files they read (ADR-0028): the same selection, manifests and
@@ -33,7 +33,10 @@ the fleet does not hold. A placement on an `external` stand-in host runs outside
 no group. Two instances of one provider placed on two guests share their group (the roles are the
 same; instance values come from the guests' variables). The render refuses a group name two
 placements would share (`a-b`/`c` and `a`/`b-c` are both `mod_a_b_c`) and one equal to a group the
-guest model already writes. The inventory path checks the selection's schema only, not the module rules: run `hnx modules
+guest model already writes. Each lab site host with a placement is also a group,
+`modhost_<site host>` (`-` written `_`; a site host name has no `_`, and `modhost_` never equals
+a `mod_` group), the target of that host's limits play below; one guest referenced by two site
+hosts is refused (one guest is one host). The inventory path checks the selection's schema only, not the module rules: run `hnx modules
 check` first. `--selection` is for the `inventory` target only (`render` and
 `plan`); a selection the schema refuses is exit 1, one that cannot be read exit 2. The inventory is
 fleet-wide, so `--node` does not narrow it: render it once.
@@ -46,7 +49,29 @@ incumbent order nothing, and a requirement cycle is refused, naming the modules 
 those that only wait on it). The first play, on `localhost` and tagged `always`, fails unless
 every module group the playbook targets holds a host: a play on a group the inventory lacks
 (rendered without `--selection`, or from another selection) would otherwise be "no hosts
-matched", and `ansible-playbook` would exit 0 having installed nothing. Then, per host role, a play:
+matched", and `ansible-playbook` would exit 0 having installed nothing.
+
+Then, before any module, one **limits play** per site host that `limits/` renders (the
+[footprint limits](../modules.md)), on `modhost_<site host>`, escalated, tagged `hnx_limits` and
+the tag of every module placed on that host (so `--tags mod_<module>` installs its host's limits
+first). It copies the host's role slices and its fleet units' `Slice=` drop-ins into
+`/etc/systemd/system/` (0644; drop-in directories 0755) and runs `systemctl daemon-reload` only
+when one changed, then installs `hnx-module-quota.sh` into `/usr/local/sbin/` (0755) and runs its
+`--check`: exit 0 changes nothing, exit 3 (a cap is owed) runs the script once to cap and reserve
+the owed data roots, and that run failing (exit 3 again: data in the way, a different size, a
+symbolic link) fails the play, so no module role runs on a host whose caps could not be put in
+place. Any other exit of `--check` fails too. A second run copies nothing, reloads nothing and
+only runs `--check` (`changed=0`). The quota tasks are tagged `hnx_quota` as well. The two
+directories are play variables (`hnx_limits_unit_dir`, `hnx_limits_sbin_dir`), so a test can
+point them elsewhere with `-e`. A slice limits only the services that join it (`Slice=`, or a
+container's cgroup parent): a role that does not is not confined by it. A file of the limits
+render that is not one of those three shapes is refused by the render. A module removed from a
+host leaves its slice behind (`lifecycle.remove` is not rendered yet).
+
+The egress policy (`egress/`) is rendered but **not installed** by `modules.yml`: see "What it
+does not do yet" below.
+
+Then, per host role, a play:
 
 - targets exactly `mod_<module>_<host role>`, never a group a module names, so a module's roles
   reach only the guests the site placed it on (`role_lint` PB001 holds by construction; a play on
@@ -78,11 +103,33 @@ names module ids, versions and the overlay's module paths: treat it as private.
 `tasks_from`); both are read-only by the role interface contract. `--tags health` (or
 `readiness`) runs one hook.
 
-**What it does not do yet.** A digest binding the inventory, the playbooks and the checked
+**Group variables.** The selection's `config` values and a module role's own variables (the ntfy
+role's `ntfy_logical_id`, say) reach the roles through the overlay's group variables, one file
+per module group (`mod_<module>_<host role>.yml`). `hnx guests render --target inventory
+--group-vars DIR` carries every `<group>.yml` (or `.yaml`) of `DIR` into the render as
+`group_vars/<group>.yml`, beside `hosts.yml`, where Ansible reads it for that inventory: nothing
+to link by hand. Each must be a group the rendered inventory holds (or `all`), plain YAML holding
+a mapping: a file for any other group (a typo, or a module no longer selected), a second file for
+one group, an `ansible-vault` file (give secrets by reference, `secret:<name>`), a directory
+(`group_vars/<group>/`) or a symbolic link is refused, so no variable is set on nothing silently.
+The carried file starts with the render's header, so `--prune` removes it once its source is
+gone; `plan` takes `--group-vars` too.
+
+**What it does not do yet.** Install the egress policy (`egress/`: `hnx-egress.nft`, its service
+and timer, the fleet units' drop-ins); it is rendered, and its README says how to install it by
+hand. Installing it from `modules.yml` waits on a decision: it filters only sockets of processes
+in a role slice and in the host's own network namespace, so a module that runs as a container on
+a bridge network (ntfy) is not filtered at all, and a module with `egress: none` that does run in
+its slice gets a chain that allows only DNS and its required slots and drops the rest (for ntfy,
+which requires only `secrets`, read at deploy time by the controller, not by the guest: in effect
+drop all). Its
+unit starts before `network-pre.target` and requires every role slice, so a wrong policy can cut a
+host off at boot. A digest binding the inventory, the playbooks and the checked
 selection and module trees together (the guard play catches only a missing group, not a stale
 one); a walk of each role directory refusing links before it runs as root (the loader's
 `roles/` walk is a point-in-time check of the checkout, so run from a staging copy). The selection's `config` values and the module's secrets reach the
-roles only through the overlay's group and host variables (no generated variable file); firewall
+roles only through the overlay's group and host variables (carried by `--group-vars`, never
+generated); firewall
 edges and backup membership stay in the guest file; `lifecycle.upgrade` and `lifecycle.remove`
 are not rendered; a host role's `count` copies are not spread over several guests.
 
@@ -94,7 +141,7 @@ From the overlay root, with the pinned checkout at `hnx/` (the layout `hnx modul
 ```sh
 hnx modules check --root hnx --overlay . --deploy
 hnx guests render lab/guests --site lab/site.yml --target inventory \
-    --selection lab/modules.yml --out build/inventory
+    --selection lab/modules.yml --group-vars group_vars --out build/inventory
 hnx modules render --root hnx --overlay . --out build/modules
 ansible-playbook -i build/inventory/hosts.yml build/modules/modules.yml
 ansible-playbook -i build/inventory/hosts.yml build/modules/modules.yml   # changed=0

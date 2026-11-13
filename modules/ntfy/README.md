@@ -126,8 +126,14 @@ Against the lab's instance:
 
 ```sh
 HNX_ENDPOINT_NOTIFY=http://<guest>:80 HNX_NOTIFY_TOKEN=<publisher token> \
-  hnx conform run notify --target <copy of conformance/target.yml with allow_plaintext: true>
+  hnx conform --root <homelab-next checkout> run notify \
+    --target <copy of conformance/target.yml with allow_plaintext: true>
 ```
+
+`--root` (before `run`) names a source checkout of homelab-next, such as the overlay's pinned
+`hnx/`: the conformance suites are executed code and are not in the wheel, so an installed `hnx`
+runs a suite only from a checkout it is pointed at (without `--root` it reports "hnx conform needs
+a source checkout").
 
 ## Known limits
 

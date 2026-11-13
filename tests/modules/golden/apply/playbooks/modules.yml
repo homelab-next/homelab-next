@@ -14,7 +14,85 @@
         that: "(groups[item] | default([])) | length > 0"
         fail_msg: "{{ item }} holds no host: render the inventory with hnx guests render --target inventory --selection (the selection this playbook was rendered from)"
         quiet: true
-      loop: [mod_example_agent_runtime_runtime, mod_example_inference_server, mod_example_platform_platform, mod_example_object_store_store, mod_example_lake_lake, mod_example_siem_suite_suite, mod_external_collector_receiver]
+      loop: [modhost_core, modhost_data, mod_example_agent_runtime_runtime, mod_example_inference_server, mod_example_platform_platform, mod_example_object_store_store, mod_example_lake_lake, mod_example_siem_suite_suite, mod_external_collector_receiver]
+
+- name: "module limits on site host core"
+  hosts: modhost_core
+  become: true
+  gather_facts: false
+  tags: [hnx_limits, mod_example_agent_runtime, mod_example_inference, mod_example_platform, mod_example_siem_suite]
+  vars:
+    hnx_limits_unit_dir: "/etc/systemd/system"
+    hnx_limits_sbin_dir: "/usr/local/sbin"
+  tasks:
+    - name: "the role slices and the fleet units' slice drop-ins"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/limits/core/{{ item }}"
+        dest: "{{ hnx_limits_unit_dir }}/{{ item }}"
+        mode: "0644"
+      loop: ["hnx-example_agent_runtime-runtime.slice", "hnx-example_inference-server.slice", "hnx-example_platform-platform.slice", "hnx-example_siem_suite-suite.slice"]
+      register: hnx_limits_units
+    - name: "systemd reads the changed units"
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: hnx_limits_units is changed
+    - name: "the data-root quota script (hnx-module-quota.sh)"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/limits/core/hnx-module-quota.sh"
+        dest: "{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"
+        mode: "0755"
+    - name: "every data-root cap in place? (exit 3: one is owed)"
+      ansible.builtin.command:
+        argv: ["{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh", "--check"]
+      register: hnx_quota_check
+      changed_when: false
+      failed_when: hnx_quota_check.rc not in [0, 3]
+      tags: [hnx_quota]
+    - name: "cap and reserve every owed data root (fails if one cannot be)"
+      ansible.builtin.command:
+        argv: ["{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"]
+      when: (hnx_quota_check.rc | default(0)) == 3
+      changed_when: true
+      tags: [hnx_quota]
+
+- name: "module limits on site host data"
+  hosts: modhost_data
+  become: true
+  gather_facts: false
+  tags: [hnx_limits, mod_example_lake, mod_example_object_store, mod_external_collector]
+  vars:
+    hnx_limits_unit_dir: "/etc/systemd/system"
+    hnx_limits_sbin_dir: "/usr/local/sbin"
+  tasks:
+    - name: "the role slices and the fleet units' slice drop-ins"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/limits/data/{{ item }}"
+        dest: "{{ hnx_limits_unit_dir }}/{{ item }}"
+        mode: "0644"
+      loop: ["hnx-example_lake-lake.slice", "hnx-example_object_store-store.slice", "hnx-external_collector-receiver.slice"]
+      register: hnx_limits_units
+    - name: "systemd reads the changed units"
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: hnx_limits_units is changed
+    - name: "the data-root quota script (hnx-module-quota.sh)"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/limits/data/hnx-module-quota.sh"
+        dest: "{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"
+        mode: "0755"
+    - name: "every data-root cap in place? (exit 3: one is owed)"
+      ansible.builtin.command:
+        argv: ["{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh", "--check"]
+      register: hnx_quota_check
+      changed_when: false
+      failed_when: hnx_quota_check.rc not in [0, 3]
+      tags: [hnx_quota]
+    - name: "cap and reserve every owed data root (fails if one cannot be)"
+      ansible.builtin.command:
+        argv: ["{{ hnx_limits_sbin_dir }}/hnx-module-quota.sh"]
+      when: (hnx_quota_check.rc | default(0)) == 3
+      changed_when: true
+      tags: [hnx_quota]
 
 # module core-modules: placed on no host (hosted, config-only or unplaced)
 
