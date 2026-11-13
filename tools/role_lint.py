@@ -70,6 +70,15 @@ HOSTNAME = re.compile(
 )
 IMAGE_KEY = re.compile(r"(_image|_images|_repository|_repo)$")
 # Variables whose value is an image reference are checked by RL009, not RL005.
+# A distribution package name may read like a hostname (containerd.io), so RL005 skips the name of a
+# package spec (``name`` or ``name=version``, the whole value) where it can only be a package: the
+# name argument of a package module in a task, or a role variable named *_package/*_packages (a
+# list of names, or of mappings whose ``name`` is one). Any other text there is still scanned,
+# and so is a spec's version.
+PACKAGE_MODULES = {"apt", "package", "dpkg_selections"}
+PACKAGE_ARGS = {"name", "pkg", "package"}
+PACKAGE_KEY = re.compile(r"_packages?$")
+PACKAGE_SPEC = re.compile(r"[a-z0-9][a-z0-9+.-]+(?=(=.*)?\Z)", re.S)
 
 
 @dataclass(frozen=True)
@@ -118,6 +127,29 @@ def _walk_scalars(node: Any, key: str = "") -> Iterable[tuple[str, str]]:
         yield key, node
 
 
+def _walk_paths(node: Any, path: tuple[str, ...] = ()) -> Iterable[tuple[tuple[str, ...], str]]:
+    """Yield (mapping keys from the document root, string value) for every string scalar."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from _walk_paths(v, (*path, str(k)))
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk_paths(v, path)
+    elif isinstance(node, str):
+        yield path, node
+
+
+def _package_context(sub: str, path: tuple[str, ...]) -> bool:
+    """True when a scalar at ``path`` of a ``sub`` (tasks/defaults/vars) file names a package."""
+    if sub == "tasks":
+        return (
+            len(path) >= 2
+            and path[-1] in PACKAGE_ARGS
+            and path[-2].rsplit(".", 1)[-1] in PACKAGE_MODULES
+        )
+    return bool(path) and bool(PACKAGE_KEY.search(path[0])) and path[1:] in ((), ("name",))
+
+
 def _check_literals(role: Path, findings: list[Finding]) -> None:
     for sub, scan_hosts in (
         ("defaults", True),
@@ -147,9 +179,12 @@ def _check_literals(role: Path, findings: list[Finding]) -> None:
                     doc = yaml.safe_load(text)
                 except yaml.YAMLError:
                     continue  # reported elsewhere
-                for key, val in _walk_scalars(doc):
+                for path, val in _walk_paths(doc):
+                    key = path[-1] if path else ""
                     if IMAGE_KEY.search(key) or ("{{" in val and "lookup(" in val):
                         continue
+                    if _package_context(sub, path) and (spec := PACKAGE_SPEC.match(val)):
+                        val = val[spec.end() :]  # the version (if any) is still scanned
                     for m in HOSTNAME.finditer(val):
                         findings.append(
                             Finding("RL005", rel, f"hostname literal {m.group(0)} in '{key}'")

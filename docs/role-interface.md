@@ -51,6 +51,12 @@ A hook that cannot be implemented yet still exists and says so explicitly
   from loopback and the unspecified address (RL004), and no hostname literal in
   `defaults/`, `vars/` or `tasks/` (RL005). Variables whose name ends in
   `_image`/`_repository` are exempt from RL005 because they are covered by RL009.
+  A distribution package name can read like a hostname (`containerd.io`), so RL005 skips the
+  name of a package spec (`name` or `name=version`, the whole value) where it can only be a
+  package: the `name`/`pkg`/`package` argument of `apt`, `package` or `dpkg_selections` in a
+  task, and a role variable named `*_package`/`*_packages` (a list of specs, or of mappings
+  whose `name` is one). Anything else in those places, a spec's version included, is still
+  scanned.
 * Container images are pinned by tag and `sha256` digest, never `:latest` (RL009).
   `compose_app` goes further: see section 6.
 * A task that uses a secret-looking variable carries `no_log: true` (RL011). No
