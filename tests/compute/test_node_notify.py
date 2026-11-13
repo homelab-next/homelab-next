@@ -80,6 +80,15 @@ def test_defaults_fill_in(tmp_path):
         ({**NOTIFY, "priority": 6}, "1 to 5"),
         ({**NOTIFY, "priority": True}, "1 to 5"),
         ({**NOTIFY, "default_mail": "no"}, "true or false"),
+        ({**NOTIFY, "credential": "token"}, "secret reference"),
+        ({**NOTIFY, "credential": "secret:"}, "secret reference"),
+        ({**NOTIFY, "credential": "secret:Token"}, "secret reference"),
+        ({**NOTIFY, "credential": "secret:a-b"}, "secret reference"),
+        ({**NOTIFY, "credential": "secret:a.b"}, "secret reference"),
+        ({**NOTIFY, "credential": "secret:a b"}, "secret reference"),
+        ({**NOTIFY, "credential": "secret:a\n"}, "secret reference"),
+        ({**NOTIFY, "credential": "secret:" + "a" * 33}, "secret reference"),
+        ({**NOTIFY, "credential": 7}, "secret reference"),
     ],
 )
 def test_a_bad_notify_is_refused(tmp_path, notify, needle):
@@ -101,7 +110,7 @@ def test_a_notifying_node_gets_a_script(tmp_path):
     assert 'SEVERITIES="warning,error,unknown"' in sh
     assert (
         "| `hv-a` | `https://notify.example.org/` | `node-alerts` "
-        "| `warning`, `error`, `unknown` | turned off |" in out["notify/README.md"]
+        "| `warning`, `error`, `unknown` | turned off | none |" in out["notify/README.md"]
     )
 
 
@@ -176,10 +185,12 @@ def test_the_script_passes_shellcheck(tmp_path):
 # the entry to exist (the built-in default-matcher is seeded), ``--delete`` takes one key per
 # flag and may repeat (pvesh 9 refuses ``--delete a,b``: "invalid configuration ID 'a,b'"), each
 # key one the entry has, and ``--match-severity`` is one comma-joined list of Proxmox severities
-# (the form the live node took).  ``$STATE.testfail`` fails the test, ``$STATE.deletefail`` every
-# delete.
+# (the form the live node took).  ``--header`` and ``--secret`` are ``name=...,value=...`` property
+# strings, a secret's value base64.  Each entry keeps the arguments of its last create or set.
+# ``$STATE.testfail`` fails the test, ``$STATE.deletefail`` every delete.
 PVESH_STUB = r"""#!/bin/sh
 echo "pvesh $*" >> "$LOG"
+if [ -n "${hnx_value:-}${HNX_NOTIFY_SECRET:-}" ]; then echo "ENV-LEAK" >> "$LOG"; fi
 verb="$1" path="$2"; shift 2
 f="$STATE$(printf '%s' "$path" | tr / _)"
 check_args() {
@@ -189,6 +200,14 @@ check_args() {
         case "$2" in
           disable|secret|header|comment|invert-match|match-calendar|match-field|match-severity) ;;
           *) echo "invalid configuration ID '$2'" >&2; exit 255 ;;
+        esac ;;
+      --header)
+        case "$2" in name=?*,value=?*) ;; *) echo "header: bad property string" >&2; exit 255 ;; esac ;;
+      --secret)
+        case "$2" in
+          name=?*,value=?*) v="${2#*,value=}"
+            printf '%s' "$v" | base64 -d >/dev/null 2>&1 || { echo "secret: not base64" >&2; exit 255; } ;;
+          *) echo "secret: bad property string" >&2; exit 255 ;;
         esac ;;
       --match-severity)
         [ -n "$2" ] || { echo "match-severity: empty" >&2; exit 255; }
@@ -212,10 +231,11 @@ case "$verb" in
     for e in "$STATE"*_"$name"; do
       [ -e "$e" ] && { echo "an entity with the same name already exists" >&2; exit 255; }
     done
-    touch "$f"_"$name" ;;
+    printf '%s\n' "$*" > "$f"_"$name" ;;
   set)
     [ -e "$f" ] || { echo "not found" >&2; exit 255; }
-    check_args "$@" ;;
+    check_args "$@"
+    printf '%s\n' "$*" > "$f" ;;
   delete)
     [ -e "$STATE.deletefail" ] && { echo "500 could not delete" >&2; exit 255; }
     rm "$f" ;;
@@ -246,11 +266,19 @@ def node(tmp_path):
             "STATE": str(state),
         }
 
-        def run(*args: str):
+        def run(*args: str, extra_env: dict | None = None, stdin: str | None = None):
             log.write_text("")
-            r = subprocess.run(["sh", str(script), *args], env=env, capture_output=True, text=True)
+            r = subprocess.run(
+                ["sh", str(script), *args],
+                env={**env, **(extra_env or {})},
+                capture_output=True,
+                text=True,
+                # never the test runner's own stdin: the script reads a credential from a pipe
+                **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}),
+            )
             return r, log.read_text().splitlines()
 
+        run.script = script
         return run
 
     setup.bin = str(bin_)
@@ -399,3 +427,161 @@ def test_a_rerun_sends_a_comma_joined_severity_list_and_one_key_per_delete(node)
     assert matcher.count("--delete ") == 3
     target = next(c for c in calls if c.startswith("pvesh set /cluster/notifications/endpoints"))
     assert target.count("--delete ") == 2
+
+
+# ------------------------------------------------------------------ the publish credential
+
+CRED = {**NOTIFY, "credential": "secret:token"}
+#: a stand-in token value (not a real one): the tests prove where it goes and where it never is
+VALUE = "tk_standin0123456789abcdef"
+
+
+def _b64s(text: str) -> str:
+    return base64.b64encode(text.encode()).decode()
+
+
+def _prop(call: str, flag: str) -> list[str]:
+    parts = call.split()
+    return [parts[i + 1] for i, p in enumerate(parts[:-1]) if p == flag]
+
+
+def test_a_credential_loads_as_its_name(tmp_path):
+    got = load_nodes(nodes_file(tmp_path, {"hv-a": {"notify": CRED}}))["hv-a"]["notify"]
+    assert got["credential"] == "token"
+
+
+def test_a_bad_credential_is_refused_without_echoing_it(tmp_path):
+    with pytest.raises(ComputeError) as ei:
+        load_nodes(nodes_file(tmp_path, {"hv-a": {"notify": {**NOTIFY, "credential": VALUE}}}))
+    assert VALUE not in str(ei.value)
+
+
+def test_no_credential_renders_no_auth(tmp_path):
+    sh = render(fleet_with(tmp_path, {"hv-a": {"notify": NOTIFY}}), "node-notify")[
+        "notify/hv-a/hnx-notify.sh"
+    ]
+    assert "Authorization" not in sh and "--secret" not in sh and node_notify.SECRET_ENV not in sh
+
+
+def test_the_rendered_credential_is_a_name_and_a_template_never_a_value(tmp_path):
+    out = render(fleet_with(tmp_path, {"hv-a": {"notify": CRED}}), "node-notify")
+    sh = out["notify/hv-a/hnx-notify.sh"]
+    assert 'SECRET_NAME="token"' in sh
+    assert f'AUTH="{_b64s("Bearer {{ secrets.token }}")}"' in sh
+    assert "| `secret:token` |" in out["notify/README.md"]
+
+
+@pytest.mark.parametrize("how", ["env", "stdin"])
+def test_the_first_run_stores_the_secret_and_sends_the_bearer_header(node, how):
+    run = node(CRED)
+    given = {"extra_env": {node_notify.SECRET_ENV: VALUE}} if how == "env" else {"stdin": VALUE}
+    r, calls = run(**given)
+    assert r.returncode == 0, r.stderr
+    create = next(c for c in calls if c.startswith("pvesh create /cluster/notifications/endpoints"))
+    assert _prop(create, "--header") == [
+        f"name=Content-Type,value={_b64s('application/json')}",
+        f"name=Authorization,value={_b64s('Bearer {{ secrets.token }}')}",
+    ]
+    assert _prop(create, "--secret") == [f"name=token,value={_b64s(VALUE)}"]
+    # the value is never in the rendered script, and pvesh gets it only base64-encoded
+    assert VALUE not in run.script.read_text() and _b64s(VALUE) not in run.script.read_text()
+    assert not any(VALUE in c for c in calls)
+    assert _verbs(calls)[-1] == "pvesh set /cluster/notifications/matchers/default-matcher"
+
+
+def test_a_rerun_converges_headers_and_secret_and_never_deletes_the_secret(node):
+    run = node(CRED)
+    run(extra_env={node_notify.SECRET_ENV: VALUE})
+    r, calls = run(extra_env={node_notify.SECRET_ENV: VALUE + "x"})
+    assert r.returncode == 0, r.stderr
+    assert _verbs(calls) == [
+        "pvesh set /cluster/notifications/endpoints/webhook/hnx-notify-hv-a",
+        "pvesh set /cluster/notifications/matchers/hnx-notify-hv-a-route",
+        "pvesh create /cluster/notifications/targets/hnx-notify-hv-a/test",
+        "pvesh set /cluster/notifications/matchers/default-matcher",
+    ]
+    target = next(c for c in calls if c.startswith("pvesh set /cluster/notifications/endpoints"))
+    assert _prop(target, "--delete") == ["disable"]  # never --delete secret
+    assert _prop(target, "--secret") == [f"name=token,value={_b64s(VALUE + 'x')}"]  # rotated
+    assert len(_prop(target, "--header")) == 2
+    state = Path(f"{node.state}_cluster_notifications_endpoints_webhook_hnx-notify-hv-a")
+    assert "name=Authorization" in state.read_text()
+
+
+@pytest.mark.parametrize("value", [None, "", "two words", "tab\there"])
+def test_no_usable_credential_changes_nothing(node, value):
+    run = node(CRED)
+    extra = {} if value is None else {node_notify.SECRET_ENV: value}
+    r, calls = run(extra_env=extra)
+    assert r.returncode == 2 and calls == []
+    assert "publish credential" in r.stderr
+    if value:
+        assert value not in r.stderr
+
+
+def test_test_and_remove_need_no_credential(node):
+    run = node(CRED)
+    run(extra_env={node_notify.SECRET_ENV: VALUE})
+    r, calls = run("--test")
+    assert r.returncode == 0 and len(calls) == 1
+    r, calls = run("--remove")
+    assert r.returncode == 0, r.stderr
+    assert _verbs(calls) == [
+        "pvesh set /cluster/notifications/matchers/default-matcher",
+        "pvesh delete /cluster/notifications/matchers/hnx-notify-hv-a-route",
+        "pvesh delete /cluster/notifications/endpoints/webhook/hnx-notify-hv-a",
+    ]
+
+
+def test_dropping_the_credential_removes_the_secret_on_the_next_apply(node):
+    node(CRED)(extra_env={node_notify.SECRET_ENV: VALUE})
+    r, calls = node(NOTIFY)()
+    assert r.returncode == 0, r.stderr
+    target = next(c for c in calls if c.startswith("pvesh set /cluster/notifications/endpoints"))
+    assert _prop(target, "--delete") == ["disable", "secret"]
+    assert "Authorization" not in target
+
+
+def test_a_hand_applied_target_is_adopted_unchanged(tmp_path):
+    """The shape a node configured by hand already has: target hnx-notify-<node>, the server's
+    root URL, its topic, Authorization: Bearer {{ secrets.token }}, secret token."""
+    spec = {"url": "http://192.0.2.10", "topic": "hv-alerts", "credential": "secret:token"}
+    sh = render(fleet_with(tmp_path, {"hv-a": {"notify": spec}}), "node-notify")[
+        "notify/hv-a/hnx-notify.sh"
+    ]
+    assert 'NAME="hnx-notify-hv-a"' in sh and 'URL="http://192.0.2.10/"' in sh
+    line = next(x for x in sh.splitlines() if x.startswith('AUTH="'))
+    assert base64.b64decode(line[len('AUTH="') : -1]).decode() == "Bearer {{ secrets.token }}"
+    assert 'SECRET_NAME="token"' in sh
+    body_line = next(x for x in sh.splitlines() if x.startswith('BODY="'))
+    assert '"topic":"hv-alerts"' in base64.b64decode(body_line[len('BODY="') : -1]).decode()
+
+
+@pytest.mark.requires_tool("shellcheck")
+def test_the_credential_script_passes_shellcheck(tmp_path):
+    out = render(fleet_with(tmp_path, {"hv-a": {"notify": CRED}}), "node-notify")
+    script = tmp_path / "hnx-notify.sh"
+    script.write_text(out["notify/hv-a/hnx-notify.sh"], encoding="utf-8")
+    subprocess.run(["shellcheck", "-s", "sh", str(script)], check=True)
+
+
+def test_the_value_never_reaches_a_child_through_the_environment(node):
+    # an exported variable of the script's private name, inherited from the caller, is unset
+    # before the value is put in it, and HNX_NOTIFY_SECRET is unset once read
+    run = node(CRED)
+    r, calls = run(extra_env={node_notify.SECRET_ENV: VALUE, "hnx_value": "inherited"})
+    assert r.returncode == 0, r.stderr
+    assert "ENV-LEAK" not in calls
+
+
+def test_a_failed_encoding_changes_nothing(node, tmp_path):
+    run = node(CRED)
+    fake = tmp_path / "nobase64"
+    fake.mkdir()
+    (fake / "base64").write_text("#!/bin/sh\nexit 1\n")
+    (fake / "base64").chmod(0o755)
+    r, calls = run(
+        extra_env={node_notify.SECRET_ENV: VALUE, "PATH": f"{fake}:{node.bin}:/usr/bin:/bin"}
+    )
+    assert r.returncode == 2 and calls == []
+    assert "could not encode" in r.stderr

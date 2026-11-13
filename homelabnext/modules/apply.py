@@ -8,15 +8,20 @@ Two renders share one naming rule, :func:`module_group`, so they agree by constr
   role, each listing the guest every placement of that role lands on
   (:func:`inventory_groups`; ``hnx guests render --target inventory --selection FILE`` adds them
   to the guest inventory);
-* the **playbooks** (:func:`render`; ``hnx modules render`` writes them): ``modules.yml``, one
+* the **site host groups** ``modhost_<site host>`` (``-`` as ``_``), one per lab site host a
+  module is placed on, holding the guest that site host references: the per-host renders
+  (``limits/<site host>/``) are installed on it (:func:`host_group`);
+* the **playbooks** (:func:`render`; ``hnx modules render`` writes them): ``modules.yml``, first
+  one play per site host group installing that host's module limits (the slices, the fleet units'
+  slice drop-ins and the data-root quota script, which it runs), then one
   play per placed host role of each selected module, in the order of the modules' hard
   requirements, each play on that role's group alone and running the roles the module lists for
   the host role (``requires.hosts[].roles``; role interface v1 ``main``), after the role's own
   preflight hooks (``contributes.preflight``); and ``checks/<module>.yml`` per placed module,
   which runs every one of its roles' ``readiness`` and then ``health`` hook on each of its groups.
 
-A play's ``hosts`` is always one ``mod_*`` group the site's placement fills, never a group a
-module names: a module cannot reach a host the site did not place it on (``role_lint`` PB001
+A play's ``hosts`` is always one ``mod_*`` or ``modhost_*`` group the site's placement fills,
+never a group a module names: a module cannot reach a host the site did not place it on (``role_lint`` PB001
 holds by construction).  The module's own ``lifecycle.install`` playbook is not imported here:
 its plays name their own hosts, which is the site's to decide.
 
@@ -39,6 +44,18 @@ Doc = dict[str, Any]
 
 #: the group prefix every module group carries (no guest-model group starts with it)
 GROUP_PREFIX = "mod_"
+#: the group prefix of a site host a module is placed on (``modhost_`` never equals a ``mod_``
+#: group: the fourth character differs)
+HOST_GROUP_PREFIX = "modhost_"
+#: where the limits play installs a site host's units and its quota script (play variables, so a
+#: test can point them elsewhere; the render's README names the same paths)
+UNIT_DIR = "/etc/systemd/system"
+SBIN_DIR = "/usr/local/sbin"
+QUOTA_SCRIPT = "hnx-module-quota.sh"
+#: the tag of the tasks that run the quota script (``--skip-tags`` leaves the caps alone)
+QUOTA_TAG = "hnx_quota"
+#: the tag every limits play carries (not ``mod_``: a module named ``limits`` would share it)
+LIMITS_TAG = "hnx_limits"
 #: the install playbook ``hnx modules render`` writes, and the directory of the check playbooks
 PLAYBOOK = "modules.yml"
 CHECKS_DIR = "checks"
@@ -66,6 +83,13 @@ def module_group(module: str, role: str) -> str:
     """The inventory group of a module's host role: ``mod_<module id>_<host role>``, ``-`` as
     ``_`` (``web-app`` / ``server`` -> ``mod_web_app_server``)."""
     return f"{GROUP_PREFIX}{us(module)}_{us(role)}"
+
+
+def host_group(host: str) -> str:
+    """The inventory group of a site host a module is placed on: ``modhost_<site host>``, ``-``
+    as ``_`` (``app-host`` -> ``modhost_app_host``).  Site host names have no ``_`` (the
+    selection schema), so two site hosts never share a group."""
+    return f"{HOST_GROUP_PREFIX}{us(host)}"
 
 
 def placements(site: Mapping[str, Any]) -> list[Placement]:
@@ -102,7 +126,8 @@ def inventory_groups(
     host_of: Callable[[str], str | None],
     taken: frozenset[str] = frozenset(),
 ) -> dict[str, list[str]]:
-    """``mod_*`` group -> the sorted inventory hosts it holds.  Each placement's site host must
+    """``mod_*`` and ``modhost_*`` group -> the sorted inventory hosts it holds.  Each
+    placement's site host must
     reference a guest (``hosts.<name>.guest``) that ``host_of`` (guest id -> inventory host name,
     None for no such guest) knows: a stand-in host is no machine Ansible can reach.  A placement
     on an ``external`` stand-in host runs outside the lab and gets no group.  ``taken`` are the
@@ -111,6 +136,7 @@ def inventory_groups(
     hosts = site.get("hosts") or {}
     groups: dict[str, set[str]] = {}
     problems: list[str] = []
+    site_host_of: dict[str, set[str]] = {}
     rows = placements(site)
     for p in rows:
         who = f"{p.module}/{p.role}" + (f" ({p.instance})" if p.instance else "")
@@ -132,6 +158,13 @@ def inventory_groups(
             problems.append(f"{who}: hosts.{p.host} references {gid}, which is no guest here")
             continue
         groups.setdefault(module_group(p.module, p.role), set()).add(name)
+        groups.setdefault(host_group(p.host), set()).add(name)
+        site_host_of.setdefault(name, set()).add(p.host)
+    problems += [
+        f"{name}: referenced by the site hosts {', '.join(sorted(sh))} (one guest is one host)"
+        for name, sh in sorted(site_host_of.items())
+        if len(sh) > 1
+    ]
     problems += _group_clashes({(p.module, p.role) for p in rows})
     problems += [
         f"{g}: a module group with the name of a guest-model group"
@@ -320,12 +353,17 @@ def _plays(site: Mapping[str, Any], sel: Mapping[str, Doc]) -> dict[str, list[tu
 
 
 def render(
-    site: Mapping[str, Any], sel: Mapping[str, Doc], module_dirs: Mapping[str, str]
+    site: Mapping[str, Any],
+    sel: Mapping[str, Doc],
+    module_dirs: Mapping[str, str],
+    limits_files: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """``modules.yml`` and ``checks/<module>.yml`` for every placed module.  ``site`` is the
     checked selection, ``sel`` the selected manifests (:func:`homelabnext.modules.rules.selected`)
     and ``module_dirs`` each module's directory as the playbooks will reach it (relative to the
-    directory they are written to).  Raises :class:`ApplyError`."""
+    directory they are written to).  ``limits_files`` is the :func:`homelabnext.modules.limits.render`
+    output written beside the playbooks under ``limits/``: each of its site hosts gets a limits
+    play before every module play.  Raises :class:`ApplyError`."""
     placed = _plays(site, sel)
     bad = _names_problems(placed, sel)
     if bad:
@@ -334,13 +372,14 @@ def render(
     if clashes:
         raise ApplyError("; ".join(clashes))
     order = install_order(site, sel)
-    L = [
+    head = [
         f"# {HEADER}",
         "# Installs each placed module on the inventory group of each of its host roles",
         "# (mod_<module>_<host role>, hnx guests render --target inventory --selection), in the",
         "# order of the modules' hard requirements. One module: --tags mod_<module>.",
         f"# install order: {', '.join(order) if order else '(no module selected)'}",
     ]
+    L: list[str] = []
     files: dict[str, str] = {}
     targets: list[str] = []
     plays = 0
@@ -403,15 +442,16 @@ def render(
                     there = p if p.startswith("/") else f"../{p}"
                     check += _include(there, hook, f"{hook}: {p.rsplit('/', 1)[-1]}")
         if mine:
-            head = [
+            chead = [
                 f"# {HEADER}",
                 f"# The readiness and then the health hook of every role of module {mod}, on each",
                 "# group it is placed on. Read-only by the role interface v1 contract.",
                 "",
                 *_guard(mine),
             ]
-            files[f"{CHECKS_DIR}/{mod}.yml"] = "\n".join(head + check) + "\n"
-    if not plays:
+            files[f"{CHECKS_DIR}/{mod}.yml"] = "\n".join(chead + check) + "\n"
+    lim = _limits_plays(site, placed, limits_files or {})
+    if not plays and not lim:
         L += [
             "",
             "# no placed module has a role to apply",
@@ -419,7 +459,125 @@ def render(
             "  hosts: localhost",
             "  gather_facts: false",
         ]
+        body = head + L
     else:
-        L[5:5] = ["", *_guard(targets)]
-    files[PLAYBOOK] = "\n".join(L) + "\n"
+        groups = [*(host_group(h) for h in lim), *targets]
+        body = [*head, "", *_guard(groups)]
+        for lines in lim.values():
+            body += ["", *lines]
+        body += L
+    files[PLAYBOOK] = "\n".join(body) + "\n"
     return files
+
+
+# ----------------------------------------------------------------------------- limits
+
+
+#: one file of a site host's limits render, by what it is
+_SLICE = re.compile(r"hnx-[a-z0-9_]+(?:-[a-z0-9_]+)?\.slice\Z")
+_DROPIN = re.compile(r"(hnx-[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.service\.d)/50-hnx-slice\.conf\Z")
+
+
+def _limits_plays(
+    site: Mapping[str, Any],
+    placed: Mapping[str, list[tuple[str, Doc]]],
+    limits_files: Mapping[str, str],
+) -> dict[str, list[str]]:
+    """Site host -> its limits play: the limits render's files for that host installed under
+    ``UNIT_DIR`` (slices, and the fleet units' ``Slice=`` drop-ins) and ``SBIN_DIR`` (the quota
+    script), ``daemon-reload`` when one changed, then the quota script run when ``--check`` says
+    a cap is owed (exit 3), failing the play when the run cannot apply it.  Idempotent: a second
+    run copies nothing and runs only the ``--check``.  Tagged with the tag of every module placed
+    on the host, so ``--tags mod_<module>`` installs the host's limits before the module.  Every
+    file name is held to the shape the limits render writes; any other is refused."""
+    by_host: dict[str, list[str]] = {}
+    for rel in sorted(limits_files):
+        if "/" not in rel:
+            continue  # README.md
+        host, name = rel.split("/", 1)
+        by_host.setdefault(host, []).append(name)
+    mods_on: dict[str, set[str]] = {}
+    for p in placements(site):
+        if p.module in placed and any(r == p.role for r, _h in placed[p.module]):
+            mods_on.setdefault(p.host, set()).add(p.module)
+    out: dict[str, list[str]] = {}
+    for host, names in sorted(by_host.items()):
+        if not _NAME.match(host):
+            raise ApplyError(f"limits: host {host!r:.80} is not a site host name")
+        slices = [n for n in names if _SLICE.match(n)]
+        dropins = [(m[1], n) for n in names if (m := _DROPIN.match(n))]
+        quota = QUOTA_SCRIPT in names
+        bad = sorted(set(names) - set(slices) - {n for _d, n in dropins} - {QUOTA_SCRIPT})
+        if bad:
+            raise ApplyError(f"limits/{host}: {', '.join(bad)} is no file the limits render writes")
+        tags = sorted({f"{GROUP_PREFIX}{us(m)}" for m in mods_on.get(host, ())} | {LIMITS_TAG})
+        src = f"{{{{ playbook_dir }}}}/limits/{host}"
+        units = [*slices, *(n for _d, n in dropins)]
+        P = [
+            f"- name: {_q(f'module limits on site host {host}')}",
+            f"  hosts: {host_group(host)}",
+            "  become: true",
+            "  gather_facts: false",
+            # a host whose limits failed stops the run: no module installs anywhere against a
+            # provider whose host is not capped
+            "  any_errors_fatal: true",
+            f"  tags: [{', '.join(tags)}]",
+            "  vars:",
+            f"    hnx_limits_unit_dir: {_q(UNIT_DIR)}",
+            f"    hnx_limits_sbin_dir: {_q(SBIN_DIR)}",
+            "  tasks:",
+        ]
+        if dropins:
+            P += [
+                '    - name: "the fleet units\' drop-in directories"',
+                "      ansible.builtin.file:",
+                '        path: "{{ hnx_limits_unit_dir }}/{{ item }}"',
+                "        state: directory",
+                '        mode: "0755"',
+                f"      loop: [{', '.join(_q(d) for d in sorted({d for d, _n in dropins}))}]",
+            ]
+        P += [
+            '    - name: "the role slices and the fleet units\' slice drop-ins"',
+            "      ansible.builtin.copy:",
+            f'        src: "{src}/{{{{ item }}}}"',
+            '        dest: "{{ hnx_limits_unit_dir }}/{{ item }}"',
+            '        mode: "0644"',
+            f"      loop: [{', '.join(_q(u) for u in units)}]",
+            "      register: hnx_limits_units",
+            '    - name: "systemd reads the changed units"',
+            "      ansible.builtin.systemd_service:",
+            "        daemon_reload: true",
+            "      when: hnx_limits_units is changed",
+        ]
+        if quota:
+            P += [
+                f"    - name: {_q(f'the data-root quota script ({QUOTA_SCRIPT})')}",
+                "      ansible.builtin.copy:",
+                f'        src: "{src}/{QUOTA_SCRIPT}"',
+                f'        dest: "{{{{ hnx_limits_sbin_dir }}}}/{QUOTA_SCRIPT}"',
+                '        mode: "0755"',
+                f"    - name: {_q(f'is {QUOTA_SCRIPT} installed? (a dry run copies nothing)')}",
+                "      ansible.builtin.stat:",
+                f'        path: "{{{{ hnx_limits_sbin_dir }}}}/{QUOTA_SCRIPT}"',
+                "      register: hnx_quota_script",
+                f"      tags: [{QUOTA_TAG}]",
+                f"    - name: {_q('every data-root cap in place? (exit 3: one is owed)')}",
+                "      ansible.builtin.command:",
+                f'        argv: ["{{{{ hnx_limits_sbin_dir }}}}/{QUOTA_SCRIPT}", "--check"]',
+                "      register: hnx_quota_check",
+                # read-only by the script's contract: a dry run (--check) reports an owed cap too
+                "      check_mode: false",
+                "      when: hnx_quota_script.stat.exists",
+                # an owed cap is a change a dry run reports; a real run's change is the apply
+                "      changed_when: ansible_check_mode and hnx_quota_check.rc == 3",
+                "      failed_when: hnx_quota_check.rc not in [0, 3]",
+                f"      tags: [{QUOTA_TAG}]",
+                f"    - name: {_q('cap and reserve every owed data root (fails if one cannot be)')}",
+                "      ansible.builtin.command:",
+                f'        argv: ["{{{{ hnx_limits_sbin_dir }}}}/{QUOTA_SCRIPT}"]',
+                "      when: (hnx_quota_check.rc | default(0)) == 3",
+                "      changed_when: true",
+                f"      tags: [{QUOTA_TAG}]",
+            ]
+        out[host] = P
+    return out

@@ -55,9 +55,15 @@ def _dirs(sel) -> dict[str, str]:
     return {m: f"{DIRS_PREFIX}/{m}" for m in sel}
 
 
-def _books(site, tree) -> dict[str, str]:
+def _limits(site, tree) -> dict[str, str]:
+    from homelabnext.modules import limits
+
+    return limits.render(site, tree.mods, ld.units_fn(ld.inputs(tree)))
+
+
+def _books(site, tree, with_limits: bool = True) -> dict[str, str]:
     sel = selected(site, tree.mods)
-    return apply.render(site, sel, _dirs(sel))
+    return apply.render(site, sel, _dirs(sel), _limits(site, tree) if with_limits else None)
 
 
 @pytest.fixture(scope="module")
@@ -106,6 +112,10 @@ def test_inventory_with_a_selection_matches_golden(fleet):
         "mod_example_object_store_store",
         "mod_example_siem_suite_suite",
         "mod_external_collector_receiver",
+        # one per lab site host a module is placed on: its limits play's target
+        "modhost_bus",
+        "modhost_infer",
+        "modhost_lake",
     }
 
 
@@ -294,10 +304,15 @@ def test_every_play_targets_its_module_group_in_install_order(tree):
     guard, *plays = yaml.safe_load(out[apply.PLAYBOOK])
     sel = selected(site, tree.mods)
     order = apply.install_order(site, sel)
-    seen = [p["hosts"] for p in plays]
-    # the first play refuses an inventory that lacks any of them
+    # the first play refuses an inventory that lacks any group a later play targets
     assert guard["hosts"] == "localhost" and guard["tags"] == ["always"]
-    assert guard["tasks"][0]["loop"] == seen
+    assert guard["tasks"][0]["loop"] == [p["hosts"] for p in plays]
+    # every site host's limits play comes before every module play
+    lim = [p for p in plays if p["hosts"].startswith(apply.HOST_GROUP_PREFIX)]
+    assert lim and plays[: len(lim)] == lim
+    assert [p["hosts"] for p in lim] == ["modhost_core", "modhost_data"]
+    plays = plays[len(lim) :]
+    seen = [p["hosts"] for p in plays]
     assert all(h.startswith("mod_") for h in seen)
     mods = [next(m for m in order if p["tags"][0] == "mod_" + m.replace("-", "_")) for p in plays]
     assert mods == sorted(mods, key=order.index)
@@ -569,3 +584,276 @@ def test_the_writer_never_follows_a_link_planted_in_the_render(tmp_path):
     (out / "modules.yml").write_text("planted\n")
     with pytest.raises(FileExistsError):
         mcli._write_new(out, {"modules.yml": "x\n"})
+
+
+# ----------------------------------------------------------------------------- module limits
+
+
+def _write_books(base: Path, books: dict[str, str], lim: dict[str, str]) -> None:
+    for rel, text in [*books.items(), *((f"limits/{r}", t) for r, t in lim.items())]:
+        (base / rel).parent.mkdir(parents=True, exist_ok=True)
+        (base / rel).write_text(text)
+
+
+#: a quota script stand-in: --check exits 3 until the apply ran once on this host, then 0; every
+#: call is logged, so a run shows what ran in what order
+QUOTA_STUB = """#!/bin/sh
+echo "quota $HOST ${1:-apply}" >> "$QLOG"
+if [ "${1:-}" = --check ]; then [ -e "$QDIR/$HOST.capped" ] && exit 0; exit 3; fi
+: > "$QDIR/$HOST.capped"
+"""
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_the_limits_are_installed_before_the_modules_and_a_rerun_changes_nothing(
+    tmp_path, tree, fleet
+):
+    site = ld.load_yaml(FLEET_SELECTION)
+    sel = selected(site, tree.mods)
+    lim = _limits(site, tree)
+    books = apply.render(site, sel, _stub_roles(tmp_path / "modules", sel), lim)
+    hosts = sorted({rel.split("/")[0] for rel in lim if "/" in rel})
+    assert hosts == ["bus", "infer", "lake"]
+    for h in hosts:  # the stand-in runs instead of the real script (which needs root)
+        if f"{h}/{apply.QUOTA_SCRIPT}" in lim:
+            lim[f"{h}/{apply.QUOTA_SCRIPT}"] = QUOTA_STUB.replace("$HOST", h)
+    _write_books(tmp_path / "out", books, lim)
+    inv = yaml.safe_load(render(fleet, "inventory", site)["hosts.yml"])
+    for name in inv["all"]["children"]["guests"]["hosts"]:
+        inv["all"]["children"]["guests"]["hosts"][name] = {
+            "ansible_connection": "local", "ansible_python_interpreter": sys.executable,
+        }  # fmt: skip
+    (tmp_path / "hosts.yml").write_text(yaml.safe_dump(inv))
+    bin_, units, sbin, qdir = (tmp_path / d for d in ("bin", "units", "sbin", "q"))
+    for d in (bin_, units, sbin, qdir):
+        d.mkdir()
+    (bin_ / "systemctl").write_text('#!/bin/sh\necho "systemctl $*" >> "$QLOG"\n')
+    (bin_ / "systemctl").chmod(0o755)
+    log = tmp_path / "calls.log"
+    env = dict(
+        os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1",
+        # no fact gathering: the stub roles need none, and it is most of the run time
+        ANSIBLE_GATHERING="explicit",
+        PATH=f"{bin_}:{os.environ['PATH']}", QLOG=str(log), QDIR=str(qdir),
+    )  # fmt: skip
+    pb = str(tmp_path / "out" / apply.PLAYBOOK)
+    for name in inv["all"]["children"]["guests"]["hosts"]:  # every guest is local: one each
+        (sbin / name).mkdir()
+        (units / name).mkdir()
+    args = ["ansible-playbook", "-i", "hosts.yml", pb, "-e", "ansible_become=false",
+            "-e", f"hnx_limits_unit_dir={units}/{{{{ inventory_hostname }}}}",
+            "-e", f"hnx_limits_sbin_dir={sbin}/{{{{ inventory_hostname }}}}"]  # fmt: skip
+
+    def run(*extra: str) -> subprocess.CompletedProcess:
+        log.write_text("")
+        return subprocess.run(
+            [*args, *extra], capture_output=True, text=True, env=env, cwd=tmp_path, timeout=300
+        )
+
+    # one module: its host's limits play runs first, then the module's hooks
+    r = run("--tags", "mod_example_inference")
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = r.stdout
+    assert out.index("module limits on site host infer") < out.index("module example-inference")
+    # only its own host's units: the other hosts' limits plays match no task under the tag
+    infer = next(iter(inv["all"]["children"][apply.host_group("infer")]["hosts"]))
+    assert [p.name for p in units.iterdir() if any(p.iterdir())] == [infer]
+    assert sorted(p.name for p in (units / infer).iterdir()) == sorted(
+        rel.split("/", 1)[1] for rel in lim if rel.startswith("infer/") and ".slice" in rel
+    )
+    first = log.read_text().splitlines()
+    assert "quota infer --check" in first and "quota infer apply" in first
+    # the whole playbook: every host's units, its quota script, a daemon-reload, a cap
+    r = run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    for rel, text in lim.items():
+        if "/" not in rel:
+            continue
+        host, name = rel.split("/", 1)
+        guest = next(iter(inv["all"]["children"][apply.host_group(host)]["hosts"]))
+        dest = (sbin if name.endswith(".sh") else units) / guest / name
+        assert dest.read_text() == text, rel
+        assert oct(dest.stat().st_mode & 0o777) == ("0o755" if rel.endswith(".sh") else "0o644")
+    calls = first + log.read_text().splitlines()
+    assert "systemctl daemon-reload" in calls
+    quota_hosts = [h for h in hosts if f"{h}/{apply.QUOTA_SCRIPT}" in lim]
+    assert quota_hosts
+    for h in quota_hosts:
+        assert calls.index(f"quota {h} --check") < calls.index(f"quota {h} apply")
+    # idempotent: nothing to copy, no reload, the caps already in place
+    r = run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    recap = [ln for ln in r.stdout.splitlines() if "changed=" in ln]
+    assert recap and all("changed=0" in ln for ln in recap), r.stdout
+    calls = log.read_text().splitlines()
+    assert "systemctl daemon-reload" not in calls
+    assert not any(c.endswith(" apply") for c in calls)
+    quota = sorted(c for c in calls if c.startswith("quota "))
+    assert quota == sorted(f"quota {h} --check" for h in quota_hosts)
+    # a dry run reports an owed cap (the --check is read-only) and applies nothing
+    (qdir / f"{quota_hosts[0]}.capped").unlink()
+    r = run("--check")
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = [c for c in log.read_text().splitlines() if c.startswith("quota ")]
+    assert sorted(calls) == sorted(f"quota {h} --check" for h in quota_hosts)
+    owed = next(iter(inv["all"]["children"][apply.host_group(quota_hosts[0])]["hosts"]))
+    recap = next(ln for ln in r.stdout.splitlines() if ln.startswith(owed) and "changed=" in ln)
+    assert "changed=1" in recap, r.stdout
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_an_owed_cap_that_cannot_be_applied_fails_the_play(tmp_path, tree, fleet):
+    site = ld.load_yaml(FLEET_SELECTION)
+    sel = selected(site, tree.mods)
+    lim = _limits(site, tree)
+    books = apply.render(site, sel, _stub_roles(tmp_path / "modules", sel), lim)
+    for rel in lim:
+        if rel.endswith(apply.QUOTA_SCRIPT):
+            lim[rel] = '#!/bin/sh\necho "owed: cannot cap" >&2\nexit 3\n'
+    _write_books(tmp_path / "out", books, lim)
+    inv = yaml.safe_load(render(fleet, "inventory", site)["hosts.yml"])
+    for name in inv["all"]["children"]["guests"]["hosts"]:
+        inv["all"]["children"]["guests"]["hosts"][name] = {
+            "ansible_connection": "local", "ansible_python_interpreter": sys.executable,
+        }  # fmt: skip
+    (tmp_path / "hosts.yml").write_text(yaml.safe_dump(inv))
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "systemctl").write_text("#!/bin/sh\n")
+    (bin_ / "systemctl").chmod(0o755)
+    env = dict(os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1",
+               PATH=f"{bin_}:{os.environ['PATH']}")  # fmt: skip
+    r = subprocess.run(
+        ["ansible-playbook", "-i", "hosts.yml", str(tmp_path / "out" / apply.PLAYBOOK),
+         "-e", "ansible_become=false", "-e", f"hnx_limits_unit_dir={tmp_path}",
+         "-e", f"hnx_limits_sbin_dir={tmp_path}"],
+        capture_output=True, text=True, env=env, cwd=tmp_path, timeout=300,
+    )  # fmt: skip
+    assert r.returncode != 0
+    assert "cap and reserve every owed data root" in r.stdout
+    # the module plays never ran on a host whose cap is owed
+    assert "hook " not in r.stdout
+
+
+def test_a_file_the_limits_render_does_not_write_is_refused(tree):
+    site = ld.load_yaml(SITE)
+    sel = selected(site, tree.mods)
+    lim = {**_limits(site, tree), "core/evil.service": "[Service]\n"}
+    with pytest.raises(apply.ApplyError, match="no file the limits render writes"):
+        apply.render(site, sel, _dirs(sel), lim)
+    lim = {**_limits(site, tree), "../x/hnx-a-b.slice": "x"}
+    with pytest.raises(apply.ApplyError, match="not a site host name"):
+        apply.render(site, sel, _dirs(sel), lim)
+
+
+def test_without_limits_the_playbook_has_no_limits_play(tree):
+    site = ld.load_yaml(SITE)
+    plays = yaml.safe_load(_books(site, tree, with_limits=False)[apply.PLAYBOOK])
+    assert not any(p["hosts"].startswith(apply.HOST_GROUP_PREFIX) for p in plays)
+
+
+def test_the_limits_play_tag_is_never_a_module_tag():
+    # a module named "limits" is tagged mod_limits; the limits plays are tagged hnx_limits
+    assert not apply.LIMITS_TAG.startswith(apply.GROUP_PREFIX)
+    assert apply.host_group("app-host") == "modhost_app_host"
+    assert not apply.host_group("x").startswith(apply.GROUP_PREFIX)
+
+
+def test_one_guest_behind_two_site_hosts_is_refused():
+    site = {
+        "hosts": {"h1": {"guest": "g"}, "h2": {"guest": "g"}},
+        "slots": {},
+        "features": {"a": {"placement": {"server": "h1"}}, "b": {"placement": {"server": "h2"}}},
+    }
+    with pytest.raises(apply.ApplyError, match="one guest is one host"):
+        apply.inventory_groups(site, lambda g: "g.example.internal")
+
+
+# ----------------------------------------------------------------------------- --group-vars
+
+
+def _gv(tmp_path: Path, files: dict[str, str]) -> Path:
+    d = tmp_path / "group_vars"
+    d.mkdir()
+    for name, text in files.items():
+        (d / name).write_text(text)
+    return d
+
+
+def test_group_vars_are_carried_beside_the_inventory_and_plan_agrees(tmp_path, capsys):
+    gv = _gv(tmp_path, {"mod_example_siem_suite_suite.yml": "suite_logical_id: siem-a\n",
+                        "all.yaml": "x: 1"})  # fmt: skip
+    out = tmp_path / "inv"
+    args = ("--selection", str(FLEET_SELECTION), "--group-vars", str(gv))
+    assert _guests_render(*args, "--out", str(out)) == 0
+    text = (out / "group_vars" / "mod_example_siem_suite_suite.yml").read_text()
+    assert yaml.safe_load(text) == {"suite_logical_id": "siem-a"}
+    assert yaml.safe_load((out / "group_vars" / "all.yml").read_text()) == {"x": 1}
+    capsys.readouterr()
+    code = hnx.main(
+        ["guests", "plan", str(FLEET), "--site", str(COMPUTE / "site.yml"), "--target",
+         "inventory", *args, "--against", str(out), "--exit-code"]
+    )  # fmt: skip
+    assert code == 0, capsys.readouterr().out
+    # a file dropped from the overlay is pruned like any other generated file
+    (gv / "all.yaml").unlink()
+    assert _guests_render(*args, "--out", str(out), "--prune") == 0
+    assert not (out / "group_vars" / "all.yml").exists()
+
+
+@pytest.mark.parametrize(
+    "files, needle",
+    [
+        ({"mod_example_siem_suite_sutie.yml": "a: 1\n"}, "no group of this inventory"),
+        ({"mod_x.yml": "$" + "ANSIBLE_VAULT;1.1;AES256\n6162\n"}, "ansible-vault"),
+        ({"mod_example_siem_suite_suite.yml": "- a\n"}, "not a mapping"),
+        ({"notes.txt": "x"}, "not <group>.yml"),
+        ({"all.yml": "a: 1\n", "all.yaml": "a: 2\n"}, "a second file for group all"),
+    ],
+)
+def test_a_group_vars_file_the_inventory_cannot_use_is_refused(tmp_path, capsys, files, needle):
+    gv = _gv(tmp_path, files)
+    out = tmp_path / "inv"
+    code = _guests_render("--selection", str(FLEET_SELECTION), "--group-vars", str(gv),
+                          "--out", str(out))  # fmt: skip
+    assert code == 1
+    assert needle in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_a_linked_or_unreadable_group_vars_file_is_2(tmp_path, capsys):
+    gv = _gv(tmp_path, {})
+    (tmp_path / "elsewhere.yml").write_text("a: 1\n")
+    (gv / "all.yml").symlink_to(tmp_path / "elsewhere.yml")
+    assert _guests_render("--group-vars", str(gv)) == 2
+    (gv / "all.yml").unlink()
+    (gv / "all.yml").write_text("a: [\n")
+    assert _guests_render("--group-vars", str(gv)) == 2
+    (gv / "all.yml").write_text("a: 1\na: 2\n")  # one of the two would be set silently
+    assert _guests_render("--group-vars", str(gv)) == 2
+    assert _guests_render("--group-vars", str(tmp_path / "missing")) == 2
+    (gv / "all.yml").unlink()
+    os.mkfifo(gv / "all.yml")  # refused, never waited on
+    assert _guests_render("--group-vars", str(gv)) == 2
+
+
+def test_group_vars_is_for_the_inventory_target_only(tmp_path, capsys):
+    assert _guests_render("--group-vars", str(tmp_path), target="cloudinit") == 2
+    assert "--group-vars is for the inventory target" in capsys.readouterr().err
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_ansible_reads_the_carried_group_vars(tmp_path, capsys):
+    gv = _gv(tmp_path, {"mod_example_siem_suite_suite.yml": "probe_value: carried\n"})
+    out = tmp_path / "inv"
+    assert _guests_render("--selection", str(FLEET_SELECTION), "--group-vars", str(gv),
+                          "--out", str(out)) == 0  # fmt: skip
+    host = next(iter(yaml.safe_load((out / "hosts.yml").read_text())["all"]["children"][
+        "mod_example_siem_suite_suite"]["hosts"]))  # fmt: skip
+    env = dict(os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1")
+    r = subprocess.run(
+        ["ansible-inventory", "-i", str(out / "hosts.yml"), "--host", host],
+        capture_output=True, text=True, env=env, timeout=120,
+    )  # fmt: skip
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["probe_value"] == "carried"
