@@ -318,14 +318,16 @@ def _staged_overlay(tmp_path: Path, review_by: str = "2027-01-15") -> Path:
             "health": {"kind": "tcp"},
             "tags": ["core"],
         }
-    reg["services"]["notify"]["impl"] = "litware-siem"  # the provider's product: provider_for
+    # the provider's product, as provider_for answers it
+    reg["services"]["notify"]["impl"] = ld.load_yaml(EXAMPLES / PROVIDER / "module.yml")["product"][
+        "name"
+    ]
     (lab / "services.yml").write_text(yaml.safe_dump(reg, sort_keys=False))
     site = {
         "profile": "staged",
         "hosts": {
             "core": {
                 "kind": "host",
-                "addresses": ["192.0.2.10"],
                 "capacity": {"cpu": 16, "memory_mb": 32768, "disk_gb": 2000},
             }
         },
