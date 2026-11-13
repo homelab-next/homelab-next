@@ -8,6 +8,11 @@ With a baseline set, each guest is also in ``baseline_<name>`` for every baselin
 ``hnx_baselines`` / ``hnx_controls`` (the baseline-playbook target plays to those groups), and
 the baseline settings (``with:``, baseline set 1.2) of its per-guest controls as the bound roles'
 prefixed variables (``trivy_severity: "HIGH"``).
+
+With a module selection (``--selection``, docs/modules/apply.md), each placed module host role is
+also a group, ``mod_<module>_<host role>``, holding the guest its selection host references
+(:func:`homelabnext.modules.apply.inventory_groups`); the ``hnx modules render`` playbooks target
+those groups.  Without one the render is unchanged.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ from __future__ import annotations
 import json
 
 from homelabnext.compute.baselines import resolve, role_vars
-from homelabnext.compute.model import Fleet, Guest
+from homelabnext.compute.model import ComputeError, Fleet, Guest
 
 from ._text import HEADER, q, qlist
 from .firewall_rules import resolve_addresses
@@ -96,7 +101,19 @@ def host_vars(fleet: Fleet, g: Guest) -> str:
     return "\n".join(L) + "\n"
 
 
-def hosts_yml(fleet: Fleet) -> str:
+def module_groups(fleet: Fleet, selection: dict, taken: frozenset[str]) -> dict[str, list[str]]:
+    """The selection's ``mod_*`` groups over this fleet's guests (a guest id -> its fqdn); a
+    placement the inventory cannot hold is a :class:`ComputeError` naming it."""
+    from homelabnext.modules.apply import ApplyError, inventory_groups
+
+    by_id = {g.id: fleet.fqdn(g) for g in fleet.guests}
+    try:
+        return inventory_groups(selection, by_id.get, taken)
+    except ApplyError as exc:
+        raise ComputeError(f"--selection: {exc}") from None
+
+
+def hosts_yml(fleet: Fleet, selection: dict | None = None) -> str:
     guests = fleet.sorted()
     groups: dict[str, list[str]] = {}
     for g in guests:
@@ -110,6 +127,8 @@ def hosts_yml(fleet: Fleet) -> str:
                 groups.setdefault(baseline_group(b), []).append(fleet.fqdn(g))
             for c in r.controls:
                 groups.setdefault(control_group(c), []).append(fleet.fqdn(g))
+    if selection is not None:
+        groups.update(module_groups(fleet, selection, frozenset(groups)))
     L = [f"# {HEADER}", "all:", "  children:", "    guests:", "      hosts:"]
     L += [f"        {fleet.fqdn(g)}:" for g in guests]
     for grp in sorted(groups):
@@ -118,8 +137,8 @@ def hosts_yml(fleet: Fleet) -> str:
     return "\n".join(L) + "\n"
 
 
-def render(fleet: Fleet) -> dict[str, str]:
-    out = {"hosts.yml": hosts_yml(fleet)}
+def render(fleet: Fleet, selection: dict | None = None) -> dict[str, str]:
+    out = {"hosts.yml": hosts_yml(fleet, selection)}
     for g in fleet.sorted():
         out[f"host_vars/{fleet.fqdn(g)}.yml"] = host_vars(fleet, g)
     return out
