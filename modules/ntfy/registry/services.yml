@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes. It is keyed by the slot and
+# renamed to the instance the site selects; version is product.version (never repeated here), and
+# host is the module's host role, which the site places on a guest. The lab registry
+# (lab/services.yml) must carry it exactly as bound (hnx modules check, docs/modules/registry-rows.md):
+# the instance's name, the placed guest's name as host, the product's version, and at most the
+# lab's own standing, backup_job and scope beside it. Internal only: no public_hostname and no
+# public route; the clients authenticate with their own token (auth: own).
+services:
+  notify:
+    capability: notify
+    impl: ntfy
+    host: server
+    protocol: http
+    port: 80
+    health: {kind: http, path: /v1/health, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [notify]
+    description: ntfy, deny-all; clients publish with the publisher token. No public route, no web app, no egress.

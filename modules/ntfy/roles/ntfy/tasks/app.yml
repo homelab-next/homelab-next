@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The access
+# list is not a secret: the publisher writes to its topics, and reads and writes the scratch
+# topics (the longer pattern wins in ntfy, so a scratch topic is read-write even under "*").
+- name: Build the access list
+  ansible.builtin.set_fact:
+    ntfy_access_list: >-
+      {{ (ntfy_publisher_topics | map('regex_replace', '^(.*)$', ntfy_publisher_user ~ ':\1:wo') | list)
+         + [ntfy_publisher_user ~ ':' ~ ntfy_scratch_prefix ~ '*:rw'] }}
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    ntfy_app:
+      compose_app_name: ntfy
+      compose_app_dir: "{{ ntfy_dir }}"
+      compose_app_data_dir: "{{ ntfy_data_root }}"
+      compose_app_export_dir: "{{ ntfy_data_root }}/export"
+      compose_app_owner: "{{ ntfy_owner }}"
+      compose_app_group: "{{ ntfy_group }}"
+      compose_app_start: "{{ ntfy_start }}"
+      compose_app_validate_with_docker: "{{ ntfy_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          ntfy:
+            image: "{{ ntfy_repository }}"
+            tag: "{{ ntfy_tag }}"
+            digest: "{{ ntfy_digest }}"
+            command: [serve]
+            user: "{{ ntfy_uid | int }}:{{ ntfy_gid | int }}"
+            environment: >-
+              {{ ntfy_fixed_env | combine({'NTFY_CACHE_DURATION': ntfy_cache_duration,
+                                           'NTFY_AUTH_ACCESS': ntfy_access_list | join(',')}) }}
+            ports: ["{{ ntfy_bind }}:{{ ntfy_port | int }}:8080"]
+            volumes: ["{{ ntfy_data_root }}/db:{{ ntfy_container_db_dir }}"]
+            mem_limit: "{{ ntfy_mem_limit }}"
+            healthcheck:
+              test: [CMD, wget, -q, -T, "5", -O, /dev/null, "http://127.0.0.1:8080/v1/health"]  # no-raw-endpoint: allow the container probes itself
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 20s
+  tags: [health, backup, restore, export, upgrade]

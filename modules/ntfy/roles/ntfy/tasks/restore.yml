@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore both databases from an export (vars/main.yml ntfy_restore_script): the source is checked
+# first, without writing (owner, modes, the listing, single-link regular files, sizes, sha256);
+# then the server is stopped, each file copied through the descriptor that was opened, hashed and
+# integrity-checked as staged, the stale -wal and -shm removed and the copy renamed into place as
+# the container's user; the server is started again whatever happened. A restored account or token
+# that the environment does not provision fails the next health run (the drift check).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', '-c', ntfy_restore_script, 'check', ntfy_restore_source,
+              (ntfy_uid | int | string)] + ntfy_databases }}
+      changed_when: false
+    - name: Replace the databases with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ ntfy_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Copy, verify and install each listed database
+          ansible.builtin.command:
+            argv: >-
+              {{ ['python3', '-I', '-c', ntfy_restore_script, 'apply', ntfy_restore_source,
+                  ntfy_data_root ~ '/db', (ntfy_uid | int | string), (ntfy_gid | int | string)]
+                 + ntfy_databases }}
+          changed_when: true
+      always:
+        - name: Start the server again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ ntfy_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+  tags: [restore]

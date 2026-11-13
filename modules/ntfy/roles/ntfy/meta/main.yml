@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "ntfy, the notify provider: one compose_app container, deny-all auth (an admin account and a token-only publisher), no egress."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

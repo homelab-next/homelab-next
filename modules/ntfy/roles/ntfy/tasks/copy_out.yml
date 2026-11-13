@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copy both databases into export/ with SQLite's online backup, as the container's user: through
+# setpriv when the play runs as anyone else (root, on a real host), directly when it already runs
+# as that user. Never as root, so no file appears that the server cannot open.
+- name: Read the user the play runs as on the host
+  ansible.builtin.command:
+    argv: [id, -u]
+  register: ntfy_run_uid
+  changed_when: false
+  tags: [backup, export]
+
+- name: Copy both databases and list them
+  ansible.builtin.command:
+    argv: >-
+      {{ ([] if (ntfy_run_uid.stdout | trim | int) == (ntfy_uid | int) else
+          ['setpriv', '--reuid=' ~ (ntfy_uid | int), '--regid=' ~ (ntfy_gid | int),
+           '--clear-groups', '--no-new-privs'])
+         + ['python3', '-I', '-c', ntfy_export_script,
+            ntfy_data_root ~ '/db', ntfy_data_root ~ '/export'] + ntfy_databases }}
+  register: ntfy_export
+  changed_when: true
+  tags: [backup, export]

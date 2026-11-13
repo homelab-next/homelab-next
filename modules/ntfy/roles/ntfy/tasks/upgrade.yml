@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - ntfy_target_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+          - ntfy_target_image.split('@')[0].rsplit(':', 1)[0] == ntfy_repository
+        fail_msg: "ntfy: the target must be {{ ntfy_repository }}:<tag>@sha256:<64 hex>"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: ntfy
+        compose_app_dir: "{{ ntfy_app.compose_app_dir }}"
+        compose_app_owner: "{{ ntfy_app.compose_app_owner }}"
+        compose_app_group: "{{ ntfy_app.compose_app_group }}"
+        compose_app_spec: "{{ ntfy_app.compose_app_spec }}"
+        compose_app_upgrade_service: ntfy
+        compose_app_upgrade_tag: "{{ ntfy_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ ntfy_target_image.split('@')[1] }}"
+  tags: [upgrade]
