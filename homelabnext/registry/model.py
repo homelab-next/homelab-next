@@ -383,6 +383,7 @@ def semantic_problems(doc: dict) -> list[str]:
             )
         problems += edge_tls_problems(sname, s)
     problems += upstream_problems(services)
+    problems += edge_tls_key_reuse(services)
     # a primary answers by its capability, an eval or retiring row by its row name (ADR-0039
     # decision 2): both the endpoint variables and the alias-zone names must stay unique, so a
     # row named like another capability is refused
@@ -446,7 +447,28 @@ def edge_tls_problems(sname: str, s: Mapping[str, Any]) -> list[str]:
     key = et.get("client_key")
     if key and key in (et.get("client_cert"), et.get("ca")):
         out.append(f"service {sname}: edge_tls.client_key is also its certificate or CA")
+    if et.get("client_cert") and et.get("client_cert") == et.get("ca"):
+        out.append(f"service {sname}: edge_tls.client_cert is also its CA")
     return out
+
+
+def edge_tls_key_reuse(services: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """A secret that one row's ``edge_tls`` names as a private key and another as a certificate
+    or CA: the edge's role would write it world-readable, or the CA as a key (2.10)."""
+    keys: dict[str, str] = {}
+    certs: dict[str, str] = {}
+    for sname, s in services.items():
+        et = s.get("edge_tls") or {}
+        if et.get("client_key"):
+            keys.setdefault(et["client_key"], sname)
+        for k in ("client_cert", "ca"):
+            if et.get(k):
+                certs.setdefault(et[k], sname)
+    return [
+        f"service {certs[ref]}: edge_tls names {ref} as a certificate, which service "
+        f"{keys[ref]} names as its client_key"
+        for ref in sorted(set(keys) & set(certs))
+    ]
 
 
 def upstream_problems(services: Mapping[str, Mapping[str, Any]]) -> list[str]:

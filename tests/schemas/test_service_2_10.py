@@ -2,7 +2,7 @@
 """platform/service 2.10 (additive): a public row's ``edge_tls``, how the edge reaches it over
 TLS (the lab CA, and for ``tls: mtls`` the edge's client certificate).  Absent ``edge_tls`` is
 what every 2.9 registry has, so each still validates; the cross-field rules (``tls``,
-``public_hostname``) are in ``tests/generators/test_edge_tls.py``."""
+``public_hostname``) are in ``tests/generators/edge/test_edge_tls.py``."""
 
 from __future__ import annotations
 

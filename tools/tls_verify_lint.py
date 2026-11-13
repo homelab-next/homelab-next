@@ -95,11 +95,15 @@ OFF_WHEN_TRUE = {
     "tls_skip_verify",
     "insecure_skip_tls_verify",
 }
-#: a Caddyfile by name (``tools/caddy_lint.py``'s rule): Caddyfile*, *.caddyfile*, *.caddy and its
-#: templates
-CADDY_NAME = re.compile(r"(?i)((^|\.)caddyfile([.-]|$))|(\.caddy(\.(j2|jinja2?|tmpl|tpl))?$)")
+#: a Caddyfile by name: ``tools/caddy_lint.py``'s rule (Caddyfile*, *.caddyfile*, *.caddy and its
+#: templates) and a ``caddy*.conf``/``.cfg``/template; a file only an ``import`` names under
+#: another name is caddy_lint's to read, not this lint's
+CADDY_NAME = re.compile(
+    r"(?i)((^|\.)caddyfile([.-]|$))|(\.caddy(\.(j2|jinja2?|tmpl|tpl))?$)"
+    r"|(^caddy[\w.-]*\.(conf|cfg|j2|jinja2?|tmpl|tpl)$)"
+)
 #: the directive that turns an upstream's certificate verification off, first on its line
-CADDY_SKIP_VERIFY = re.compile(r"^\s*tls_insecure_skip_verify(?![\w-])")
+CADDY_SKIP_VERIFY = re.compile(r"""^\s*(["`]?)tls_insecure_skip_verify\1(?![\w-])""")
 FALSE = {"false", "no", "off", "0"}
 TRUE = {"true", "yes", "on", "1"}
 
@@ -246,7 +250,8 @@ def lint_config(text: str, rel: str = "<string>") -> list[Finding]:
 
 
 def lint_caddyfile(text: str, rel: str = "<string>") -> list[Finding]:
-    """``tls_insecure_skip_verify`` in directive position (a comment line is not one)."""
+    """``tls_insecure_skip_verify`` in directive position, bare or quoted (Caddy reads a quoted
+    token the same); a comment line is not one."""
     return [
         Finding(rel, n, "caddy-skip-verify", "tls_insecure_skip_verify")
         for n, line in enumerate(text.splitlines(), 1)

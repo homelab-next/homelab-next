@@ -130,6 +130,8 @@ def test_json_with_a_lone_surrogate_escape_is_read_not_a_parse_failure(tmp_path)
         "x {\n\treverse_proxy https://a {\n\t\ttransport http {\n\t\t\ttls_insecure_skip_verify\n"
         "\t\t}\n\t}\n}\n",
         "  tls_insecure_skip_verify\n",
+        '\t\t\t"tls_insecure_skip_verify"\n',
+        "\t\t\t`tls_insecure_skip_verify`\n",
     ],
 )
 def test_caddyfile_skipping_upstream_verification_is_flagged(src):
@@ -149,7 +151,17 @@ def test_caddyfile_verified_commented_or_waived_is_clean(src):
     assert lint.lint_caddyfile(src) == []
 
 
-@pytest.mark.parametrize("name", ["Caddyfile", "edge.caddy", "sites.Caddyfile.j2", "caddyfile.yml"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Caddyfile",
+        "edge.caddy",
+        "sites.Caddyfile.j2",
+        "caddyfile.yml",
+        "caddy.conf",
+        "caddy-edge.j2",
+    ],
+)
 def test_a_caddyfile_in_the_tree_is_scanned(tmp_path, name):
     (tmp_path / name).write_text("a {\n\ttls_insecure_skip_verify\n}\n", encoding="utf-8")
     findings, n = lint.scan(tmp_path, [])

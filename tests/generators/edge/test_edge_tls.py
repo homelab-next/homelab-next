@@ -154,13 +154,14 @@ def _model(row: str, **changes):
 @pytest.mark.parametrize(
     ("row", "changes", "match"),
     [
-        ("status-hub", {"edge_tls": None}, "tls: mtls and a public hostname but no edge_tls"),
+        ("status-hub", {"edge_tls": None}, "a public tls: mtls route needs edge_tls"),
         (
             "status-hub",
             {"edge_tls": {"ca": "secret:pki/internal-ca"}},
-            "needs client_cert and client_key",
+            "tls: mtls needs edge_tls.client_cert and client_key",
         ),
-        ("idp", {"tls": "public"}, "does not serve https"),
+        ("idp", {"tls": "public"}, "edge_tls needs tls: internal or mtls"),
+        ("idp", {"protocol": "tcp"}, "answers https"),
         (
             "idp",
             {
@@ -170,7 +171,7 @@ def _model(row: str, **changes):
                     "client_key": "secret:b",
                 }
             },
-            "tls is not mtls",
+            "edge_tls.client_cert needs tls: mtls",
         ),
         ("idp", {"edge_tls": {"server_name": "idp.example.internal"}}, "without ca"),
         ("idp", {"edge_tls": {"ca": "secret:pki/ca", "server_name": "a b"}}, "not a host name"),
@@ -181,10 +182,11 @@ def test_a_hand_built_model_is_held_to_the_registry_rules(row, changes, match):
         _edge(_model(row, **changes))
 
 
-def test_one_secret_as_both_key_and_certificate_is_refused():
-    et = {**REG.services["status-hub"].edge_tls, "client_key": "secret:pki/internal-ca"}
+def test_one_secret_as_a_key_on_one_row_and_a_certificate_on_another_is_refused():
+    """Within one row the registry refuses it; across rows the manifest does (the key would be
+    written world-readable, or the CA mode 0600)."""
     with pytest.raises(GeneratorRefusal, match="both a private key and a certificate"):
-        _edge(_model("status-hub", edge_tls=et))
+        _edge(_model("idp", edge_tls={"ca": "secret:edge/hub-client-key"}))
 
 
 # ------------------------------------------------------------------------- deployment scope
@@ -238,6 +240,11 @@ def test_an_unknown_or_empty_scope_is_refused(hosts, match):
         _edge(hosts=hosts)
 
 
+def test_a_bare_string_scope_is_refused_not_read_by_character():
+    with pytest.raises(GeneratorRefusal, match="not one string"):
+        _edge(hosts="core-01")
+
+
 def test_the_cli_scopes_the_edge_and_refuses_an_option_no_generator_takes(tmp_path, capsys):
     hosts = [a for h in NEW_LAB for a in ("--edge-host", h)]
     args = ["generate", str(FIXTURE), str(tmp_path), "--only", "caddy", *hosts]
@@ -272,6 +279,7 @@ def _problems(doc) -> list[str]:
         (lambda s: s.update(tls="none"), "edge_tls needs tls: internal or mtls"),
         (lambda s: s.pop("public_hostname"), "edge_tls needs a public_hostname"),
         (lambda s: s["edge_tls"].update(client_key="secret:pki/internal-ca"), "certificate or CA"),
+        (lambda s: s["edge_tls"].update(client_cert="secret:pki/internal-ca"), "also its CA"),
         (lambda s: s["edge_tls"].update(extra="x"), "Additional properties"),
         (lambda s: s["edge_tls"].pop("ca"), "'ca' is a required property"),
         (lambda s: s["edge_tls"].update(ca="/etc/ca.pem"), "does not match"),
@@ -282,6 +290,12 @@ def test_the_registry_holds_edge_tls_to_the_rows_tls(mutate, match):
     doc = _doc()
     mutate(doc["services"]["status-hub"])
     assert any(match in p for p in _problems(doc)), _problems(doc)
+
+
+def test_a_key_on_one_row_used_as_a_certificate_on_another_is_refused_by_the_registry():
+    doc = _doc()
+    doc["services"]["idp"]["edge_tls"]["ca"] = "secret:edge/hub-client-key"
+    assert any("names as its client_key" in p for p in _problems(doc)), _problems(doc)
 
 
 def test_the_fixture_is_valid_and_edge_tls_reaches_the_model():
@@ -307,7 +321,7 @@ def _example_sites() -> str:
     "header",
     ["X-Forwarded-User", "X-Forwarded-Groups", "X-Forwarded-Email",
      "X-Forwarded-Preferred-Username", "X-Forwarded-Access-Token", "x_forwarded_user",
-     "X-Forwarded_Groups", "Remote-User", "X-Remote-User", "Remote_Groups", "X-WEBAUTH-USER"],
+     "X-Forwarded_Groups", "X-Forwarded-Username", "Remote-User", "Remote-Group", "X-Remote-User", "Remote_Groups", "X-WEBAUTH-USER"],
 )  # fmt: skip
 def test_every_spelling_of_another_proxys_identity_header_is_deleted(header):
     """Caddy's ``-*x*`` delete matches case-insensitively anywhere in the name."""

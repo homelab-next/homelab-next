@@ -47,9 +47,11 @@ platform never sets: oauth2-proxy's upstream headers (``X-Forwarded-User``, ``-G
 ``-Email``, ``-Preferred-Username``, ``-Access-Token``), the ``Remote-User`` family of Authelia
 and Caddy examples, Grafana's ``X-WEBAUTH-USER``.  Nothing at the edge sets one, so a copy that
 reaches the app was written by the client.  The edge deletes every client-sent copy too, in every
-``-``/``_`` spelling (:data:`FOREIGN_IDENTITY`, :func:`foreign_strip_lines`), at site level and
-again before ``forward_auth``, so an app that falls back to one of them cannot be told a name by
-the client.  They are not the platform's identity: no consumer reads them.
+``-``/``_`` spelling (:data:`FOREIGN_IDENTITY`, :func:`foreign_strip_lines`), at site level,
+which Caddy runs before every ``route`` and so before ``forward_auth``; an app that falls back to
+one of them cannot be told a name by the client.  The list is a deny-list of stems and cannot be
+complete: an app that trusts some other header must be fronted by its own strip.  They are not
+the platform's identity: no consumer reads them.
 """
 
 from __future__ import annotations
@@ -148,19 +150,19 @@ IDENTITY_HEADERS = IdentityHeaders(
 )
 
 
-#: identity headers other auth proxies and apps read, which the edge never sets: every client-sent
-#: copy is deleted, in every spelling (see the module docstring), each name without its ``X-``
+#: stems of identity headers other auth proxies and apps read, which the edge never sets: every
+#: client-sent header containing one is deleted, in every spelling (see the module docstring)
 FOREIGN_IDENTITY = (
-    "forwarded-user",
-    "forwarded-groups",
+    "forwarded-user",  # and -username
+    "forwarded-group",  # and -groups
     "forwarded-email",
     "forwarded-preferred-username",
     "forwarded-access-token",
     "remote-user",
-    "remote-groups",
+    "remote-group",
     "remote-email",
     "remote-name",
-    "webauth-user",
+    "webauth",  # X-WEBAUTH-USER and its kin
 )
 
 

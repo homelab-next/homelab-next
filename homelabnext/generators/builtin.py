@@ -46,6 +46,7 @@ from homelabnext.registry.model import (
     STANDINGS,
     Registry,
     Service,
+    edge_tls_problems,
     secret_env_name,
 )
 
@@ -301,28 +302,25 @@ def edge_tls_path(ref: str) -> str:
 
 
 def _edge_tls_problem(s: Service) -> str | None:
-    """Why the edge cannot reach public row ``s`` over TLS as its row declares, or None.  The
-    registry refuses each of these; a hand-built model is held to them here too."""
+    """Why the edge cannot reach public row ``s`` over TLS as its row declares, or None: the
+    registry's own rules (:func:`~homelabnext.registry.model.edge_tls_problems`, one copy), held
+    to a hand-built model here too, plus what only the rendering needs (https, a CA, a host
+    name the Caddyfile can carry)."""
+    rules = edge_tls_problems(
+        s.name, {"edge_tls": s.edge_tls, "tls": s.tls, "public_hostname": s.public_hostname}
+    )
+    if rules:
+        return rules[0]
     et = s.edge_tls
-    if s.tls == "mtls" and not et:
-        return (
-            "has tls: mtls and a public hostname but no edge_tls: the edge would offer no client "
-            "certificate and the upstream would refuse it"
-        )
     if not et:
         return None
-    if s.tls not in ("internal", "mtls") or s.scheme != "https":
-        return "has edge_tls but does not serve https with tls: internal or mtls"
-    pair = [k for k in ("client_cert", "client_key") if et.get(k)]
-    if s.tls == "mtls" and len(pair) != 2:
-        return "has tls: mtls: its edge_tls needs client_cert and client_key"
-    if s.tls != "mtls" and pair:
-        return "has a client certificate in edge_tls but tls is not mtls"
+    if s.scheme != "https":
+        return f"service {s.name}: edge_tls needs a service that answers https"
     if not et.get("ca"):
-        return "has edge_tls without ca: the edge verifies the upstream against the lab's CA"
+        return f"service {s.name}: edge_tls without ca: the edge verifies it with the lab's CA"
     name = et.get("server_name")
     if name is not None and not _SERVER_NAME.fullmatch(str(name)):
-        return f"edge_tls.server_name {name!r} is not a host name"
+        return f"service {s.name}: edge_tls.server_name {name!r} is not a host name"
     return None
 
 
@@ -374,6 +372,8 @@ def _edge_sites(reg: Registry, edge_hosts) -> list[Service]:
     every = [s for s in reg.sorted_services() if s.public_hostname and s.is_primary]
     if edge_hosts is None:
         return every
+    if isinstance(edge_hosts, str):
+        raise GeneratorRefusal("edge: edge_hosts is a collection of host names, not one string")
     scope = set(edge_hosts)
     unknown = sorted(scope - set(reg.hosts))
     if unknown:
@@ -428,7 +428,7 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
         _in_scope(reg, edge_hosts, reg.by_capability(s.capability) or s, s.public_hostname)
         problem = _edge_tls_problem(s)
         if problem:
-            raise GeneratorRefusal(f"edge: {s.name} {problem}")
+            raise GeneratorRefusal(f"edge: {problem}")
         # every site strips the client's identity headers at site level, before every handle
         # and route of the site (Caddy sorts request_header first): a path that never reaches
         # the snippet's route (a handle added beside it, a matcher on a route) and a site with

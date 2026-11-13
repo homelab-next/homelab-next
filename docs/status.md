@@ -1,6 +1,6 @@
 ---
-summary: 'The read-only status hub: registering sources, collecting, views, the page and status.json contract, events, agent activity and the broker Approvals page.'
-summary_of: outline:sha256:d1f8f8e52b102f21
+summary: 'The read-only status hub: sources, collecting, views, the status.json contract, events, agent activity, its edge (mTLS, scope) and the Approvals page.'
+summary_of: outline:sha256:0d8885ee2bc353d1
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -846,16 +846,21 @@ hnx registry generate services.yml out/ --only caddy \
 ```
 
 - Only the public rows on those hosts become sites; every other row (the old lab's) is left out.
-- **A dial outside the hosts is refused**, not skipped: the forward-auth proxy when an in-scope
-  site needs it, and a site whose capability alias names a row elsewhere. So the new edge can
-  never proxy to, or ask for sign-in at, the old lab. When no in-scope site needs forward auth,
-  the `hnx_forward_auth` snippet is not rendered at all.
+- **A dial outside the hosts is refused**, not skipped. For a valid registry the case that
+  matters is the forward-auth proxy: an in-scope `auth: idp` site whose `auth-proxy` primary is on
+  another deployment's host is refused, so the new edge can never ask the old lab to sign anyone
+  in. (A site dials its own row's capability alias, which is that row, so its own dial is in scope
+  by construction; the generator checks it again for a hand-built model.) When no in-scope site
+  needs forward auth, the `hnx_forward_auth` snippet is not rendered at all.
 - An unknown host name, a set with no public row, and `--edge-host` with no generator that takes
   it (`--only dns_zone`) are refused, so a typo cannot render a harmless-looking empty edge.
 
 The default stays "every public primary" because every existing registry is one deployment and
-the lint (`tools/caddy_lint.py`) renders each one whole. An edge module for a shared registry
-must always pass `--edge-host`.
+the lint (`tools/caddy_lint.py`) renders each one whole. That leaves the shared-registry case to
+the caller: **an edge module for a shared registry must always pass `--edge-host`** (an acceptance
+check of the edge module, H3: its role refuses to render without it). Only the edge is scoped:
+the other generators (the DNS zone, the IdP realm's clients, the hosts block) still render every
+row of a shared registry.
 
 ### Other proxies' identity headers
 
@@ -865,7 +870,10 @@ from the client and the auth proxy alone sets. An app behind the edge may instea
 `X-Forwarded-Access-Token`, the `Remote-User` family or `X-WEBAUTH-USER`; the edge never sets
 those, so every client-sent copy is deleted too, in every `-`/`_` spelling, at site level before
 forward auth runs (the generated `hnx_strip_foreign_identity` snippet, which every site imports;
-`homelabnext.edge_identity.FOREIGN_IDENTITY`).
+`homelabnext.edge_identity.FOREIGN_IDENTITY`). It deletes every header containing one of the
+stems (`forwarded-user`, `forwarded-group`, `remote-user`, `webauth`, ...), so `-Username` and
+`-Groups` variants go too; it is a deny-list and cannot be complete, so an app that trusts some
+other header needs its own strip.
 
 ### The Approvals page (broker stage 2b)
 
