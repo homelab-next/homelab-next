@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-__all__ = ["EXAMPLES", "NEGATIVES", "SELECTION_NEGATIVES", "render"]
+__all__ = ["EXAMPLES", "NEGATIVES", "SELECTION_EXAMPLES", "SELECTION_NEGATIVES", "render"]
 
 HDR = "# SPDX-License-Identifier: Apache-2.0\n"
 
@@ -96,6 +96,19 @@ P, F, V, S, C = (
     "example-siem-suite",
     "core-staff",
 )
+
+#: selection example label -> (base site profile, change, comment): a valid selection that is not
+#: one of the three profiles (the profiles' hosts are stand-ins, since the examples ship no guests)
+SELECTION_EXAMPLES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
+    "guest-hosts": (
+        "small-lab",
+        lambda d: d["hosts"].__setitem__(
+            "data", {"guest": "guest:data-1", "headroom": {"memory_mb": 2048}}
+        ),
+        "Site profile small-lab with its data host referencing a guest record (guest:data-1): "
+        "kind, capacity and addresses come from the guest file, never from the selection.",
+    ),
+}
 
 #: negative name -> (base example module, mutation, comment)
 NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
@@ -313,6 +326,16 @@ NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
             ],
         ),
         "An interface's item schema is a JSON Schema file, never a Markdown page.",
+    ),
+    "host-guest-requirement-empty": (
+        F,
+        lambda d: d["requires"]["hosts"][1].__setitem__("guest", {}),
+        "A role's guest requirements name a capability or a baseline, or are left out.",
+    ),
+    "host-guest-requirement-on-external": (
+        F,
+        lambda d: d["requires"]["hosts"][0].__setitem__("guest", {"baselines": ["server"]}),
+        "An external host role is no guest, so it states no guest requirements.",
     ),
     "host-without-footprint": (
         F,
@@ -587,6 +610,21 @@ SELECTION_NEGATIVES: dict[str, tuple[str, Callable[[Doc], None], str]] = {
         lambda d: d["hosts"]["data"].__setitem__("addresses", [DOC_NET]),
         "A host address is one address, never a network.",
     ),
+    "guest-host-with-kind": (
+        "small-lab",
+        lambda d: d["hosts"].__setitem__("data", {"guest": "guest:data-1", "kind": "vm"}),
+        "A host that references a guest takes its kind from the guest record, never as well.",
+    ),
+    "guest-host-not-a-guest-id": (
+        "small-lab",
+        lambda d: d["hosts"].__setitem__("data", {"guest": "data-1"}),
+        "A guest reference is a guest id, guest:<name>.",
+    ),
+    "stand-in-host-without-capacity": (
+        "small-lab",
+        lambda d: d["hosts"]["data"].pop("capacity"),
+        "A host that references no guest declares its capacity.",
+    ),
     "scope-unknown-part": (
         "full",
         lambda d: d["scope"]["trusted"].__setitem__("lan", [DOC_NET]),
@@ -715,6 +753,10 @@ def render(root: Path) -> dict[str, str]:
         out[f"schemas/platform/examples/module_selection.{name}.yml"] = _dump(
             site, f"Site profile {name}, as examples/modules/sites/{name}.yml."
         )
+    for name, (profile, change, comment) in SELECTION_EXAMPLES.items():
+        d = copy.deepcopy(sites[profile])
+        change(d)
+        out[f"schemas/platform/examples/module_selection.{name}.yml"] = _dump(d, comment)
     for name, (profile, mutate, comment) in SELECTION_NEGATIVES.items():
         d = copy.deepcopy(sites[profile])
         mutate(d)

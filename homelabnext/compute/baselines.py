@@ -252,7 +252,7 @@ def load_baselines(
     p = Path(path)
     try:
         doc = yaml.load(p.read_text(encoding="utf-8"), Loader=UniqueKeyStrDateLoader)
-    except (OSError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         raise ComputeUnreadable(f"cannot read baseline set {p}: {exc}") from exc
     where = p.name
     out = [Problem(where, f"unsafe: {m}") for m in control_char_paths(doc)]

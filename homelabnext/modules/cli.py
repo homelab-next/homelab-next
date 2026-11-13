@@ -85,6 +85,9 @@ is ``DIR/lab/modules.yml``, the lock ``DIR/lab/modules.lock``, the review policy
 ``DIR/lab/services.yml`` and, for ``render``, the network model ``DIR/lab/site.yml`` when they
 exist, otherwise the repository's examples
 (``examples/model_roles.json``, ``examples/services.yml``), each such fallback printed as a note.
+When the selection's hosts reference guest records (``hosts.<name>.guest``), they are read from
+``--guests DIR`` or the overlay's ``DIR/lab/guests/`` (:mod:`homelabnext.modules.guest_hosts`);
+with neither, each reference is a problem.
 The core's own names (:class:`homelabnext.modules.loader.CoreNames`) are read from the registry,
 the MCP catalog, the keyring's agent principals, the OCSF tables and the core's notify pairs.
 With ``--overlay`` the catalog is ``DIR/lab/mcp/`` and the keyring ``DIR/lab/keyring/keyring.json``,
@@ -107,6 +110,7 @@ from typing import Any
 
 from homelabnext import paths
 from homelabnext.gitbase import add_base_arguments
+from homelabnext.modules import guest_hosts as gh
 from homelabnext.modules import loader as ld
 from homelabnext.modules.authority import slot_flag_problems
 
@@ -243,6 +247,27 @@ def _core(
     return core, [*problems, *found]
 
 
+def _guests(
+    args: argparse.Namespace, lab: Path | None, site: Any, notes: list[str]
+) -> gh.Guests | None:
+    """The guest records, read only when the selection references one (``hosts.<name>.guest``):
+    ``--guests DIR``, else the overlay's ``lab/guests/``.  None when nothing is read, which makes
+    every reference a problem (:func:`homelabnext.modules.guest_hosts.resolve`)."""
+    if not isinstance(site, dict) or not gh.references(site):
+        return None
+    where = args.guests
+    if where is None and lab is not None and (lab / gh.GUESTS_DIR).is_dir():
+        where = lab / gh.GUESTS_DIR
+    if where is None:
+        return None
+    try:
+        guests = gh.read(where)
+    except gh.GuestsUnreadable as exc:
+        raise ld.LoaderError(f"guest records {where}: {exc}") from None
+    notes.append(f"{len(guests.hosts)} guest record(s) read from {where}")
+    return guests
+
+
 def _impl_problems(site: Any, mods: dict[str, Any], registry: Any) -> list[ld.Problem]:
     """The core registry's ``impl:`` against the selection (:mod:`homelabnext.modules.providers`):
     the selection is the one answer to which product serves a slot."""
@@ -297,6 +322,12 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--mcp-catalog", type=Path, help="the core MCP catalog directory")
         p.add_argument("--lock", type=Path, help="lab/modules.lock")
         p.add_argument("--review-policy", type=Path, help="the review policy")
+        p.add_argument(
+            "--guests",
+            type=Path,
+            help="the guest records a site host may reference (hosts.<name>.guest; "
+            "default with --overlay: lab/guests/)",
+        )
         p.add_argument("--json", action="store_true")
         if name == "check":
             p.add_argument("--running", type=Path, help="what runs (platform/module_inventory)")
@@ -710,6 +741,7 @@ def _run(args: argparse.Namespace) -> int:
         "mcp_catalog",
         "lock",
         "review_policy",
+        "guests",
     ):
         _given(getattr(args, flag), "--" + flag.replace("_", "-"))
     _given(getattr(args, "running", None), "--running")
@@ -794,6 +826,7 @@ def _run(args: argparse.Namespace) -> int:
             "in-tree modules load"
         )
     site = _read(site_path, "site selection", budget) if site_path else None
+    guests = _guests(args, lab, site, notes)
     network = None
     if args.cmd == "render":
         # the overlay's own network model by default, as the role table and registry are
@@ -830,6 +863,7 @@ def _run(args: argparse.Namespace) -> int:
         inventory=_read(running, "inventory", budget) if running else None,
         budget=budget,
         empty_selection=empty,
+        guests=guests,
     )
     impl_problems: list[ld.Problem] = []
     if site is not None and not any(
@@ -856,7 +890,9 @@ def _run(args: argparse.Namespace) -> int:
     written: dict[str, int] = {}
     error = None
     if not found and args.cmd == "render":
-        written, error = _render(args, tree, site, network)
+        # the selection as checked: guest references resolved to the guests' kind, capacity and
+        # addresses, which the slices and the egress policy take
+        written, error = _render(args, tree, report.site or site, network)
     if args.json:
         doc = {"problems": [str(p) for p in found], "notes": notes, "modules": len(tree.mods)}
         if args.cmd == "render":

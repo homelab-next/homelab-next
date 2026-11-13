@@ -67,7 +67,7 @@ def load_guests(directory: str | Path) -> tuple[list[Guest], list[Problem]]:
         where = path.name
         try:
             doc = yaml.load(sops.read_text(path), Loader=_UniqueKeyLoader)
-        except (OSError, yaml.YAMLError, sops.SopsError) as exc:
+        except (OSError, UnicodeDecodeError, yaml.YAMLError, sops.SopsError) as exc:
             problems.append(Problem(where, f"{UNREADABLE}: {exc}"))
             continue
         # Python's re lets a schema pattern's "$" match before a trailing newline, and every

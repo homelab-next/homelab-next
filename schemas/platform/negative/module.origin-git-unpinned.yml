@@ -59,6 +59,9 @@ requires:
       cpu: 1
       memory_mb: 384
       disk_gb: 10
+    guest:
+      baselines:
+      - server
     roles:
     - role:external_collector_receiver
     purpose: receives batches, writes the lake and the object store
