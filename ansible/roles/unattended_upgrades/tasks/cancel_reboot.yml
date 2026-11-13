@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# reboot_time "never": cancel a shutdown logind still holds. unattended-upgrades schedules
+# `shutdown -r <window>` after an update that needs a reboot; writing Automatic-Reboot "false"
+# later does not cancel it, so a guest moved to "never" (the secret store) would still reboot in
+# the old window and come back sealed. A change only when one was pending; a would-change in
+# check mode; anything else (another reboot policy) is never touched (config includes this only
+# for "never").
+- name: Read the scheduled shutdown
+  ansible.builtin.include_tasks: scheduled_shutdown.yml
+
+- name: Cancel the pending {{ unattended_upgrades_shutdown_desc }} (reboot_time is never)
+  ansible.builtin.command:
+    argv: ["{{ unattended_upgrades_shutdown_cli }}", -c]
+  changed_when: true
+  when: unattended_upgrades_shutdown_pending | bool and not ansible_check_mode
+
+- name: Report what was cancelled
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'would cancel' if ansible_check_mode else 'cancelled' }} the {{ unattended_upgrades_shutdown_desc }}
+      logind held (unattended_upgrades_reboot_time is never)
+  changed_when: ansible_check_mode
+  when: unattended_upgrades_shutdown_pending | bool
+
+- name: Read it again after the cancel
+  ansible.builtin.include_tasks: scheduled_shutdown.yml
+  when: unattended_upgrades_shutdown_pending | bool and not ansible_check_mode
+
+- name: Fail when the shutdown is still pending after the cancel
+  ansible.builtin.assert:
+    that: not unattended_upgrades_shutdown_pending | bool
+    fail_msg: >-
+      unattended_upgrades: a {{ unattended_upgrades_shutdown_desc }} is still scheduled after
+      `{{ unattended_upgrades_shutdown_cli }} -c` (reboot_time is never)
+    quiet: true
+  when: not ansible_check_mode

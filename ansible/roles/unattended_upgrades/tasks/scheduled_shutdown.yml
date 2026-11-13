@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read the shutdown logind holds (`shutdown -r HH:MM`, which unattended-upgrades schedules after an
+# update that needs a reboot). It is runtime state: Automatic-Reboot "false" shapes the next run
+# only, so a reboot scheduled under an earlier window stays pending after the switch to "never".
+# Sets unattended_upgrades_shutdown_pending (bool) and unattended_upgrades_shutdown_desc ("<type>
+# at <time>"); fails, naming both readers' answers, when neither busctl nor `shutdown --show` can
+# be read (an unread state is not "nothing pending"). Read-only, so it runs in check mode too.
+- name: Read logind's ScheduledShutdown
+  ansible.builtin.command:
+    argv:
+      - "{{ unattended_upgrades_busctl_cli }}"
+      - get-property
+      - org.freedesktop.login1  # workstation-ref: allow the D-Bus name of systemd-logind, not a host
+      - /org/freedesktop/login1  # workstation-ref: allow the logind D-Bus object path, not a host
+      - org.freedesktop.login1.Manager  # workstation-ref: allow the logind D-Bus interface, not a host
+      - ScheduledShutdown
+  register: unattended_upgrades_busctl
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Parse busctl's answer
+  ansible.builtin.set_fact:
+    unattended_upgrades_shutdown_bus: >-
+      {{ (unattended_upgrades_busctl.stdout | default('') | trim
+          | regex_findall(unattended_upgrades_busctl_pattern))
+         if (unattended_upgrades_busctl.rc | default(1)) == 0 else [] }}
+
+- name: Ask shutdown --show where busctl gave no answer
+  ansible.builtin.command:
+    argv: ["{{ unattended_upgrades_shutdown_cli }}", --show]
+  register: unattended_upgrades_show
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: unattended_upgrades_shutdown_bus | length == 0
+
+- name: Parse shutdown --show's answer
+  ansible.builtin.set_fact:
+    unattended_upgrades_shutdown_show_text: >-
+      {{ (unattended_upgrades_show.stdout | default('')) ~ ' ' ~ (unattended_upgrades_show.stderr | default(''))
+         if unattended_upgrades_shutdown_bus | length == 0 else '' }}
+
+- name: Fail when neither busctl nor shutdown --show could be read
+  ansible.builtin.assert:
+    that: >-
+      unattended_upgrades_shutdown_bus | length > 0
+      or unattended_upgrades_shutdown_show_text | regex_findall(unattended_upgrades_show_pattern) | length > 0
+      or unattended_upgrades_show_none in unattended_upgrades_shutdown_show_text
+    fail_msg: >-
+      unattended_upgrades: cannot read the scheduled shutdown: busctl exited
+      {{ unattended_upgrades_busctl.rc | default('?') }} with
+      {{ (unattended_upgrades_busctl.stdout | default('') ~ ' ' ~ unattended_upgrades_busctl.stderr | default('') ~ ' ' ~ unattended_upgrades_busctl.msg | default('')) | trim | truncate(200) | to_json }},
+      shutdown --show exited {{ unattended_upgrades_show.rc | default('?') }} with
+      {{ unattended_upgrades_shutdown_show_text | trim | truncate(200) | to_json }}
+    quiet: true
+
+- name: Record whether a shutdown is pending, and which
+  vars:
+    _bus: "{{ unattended_upgrades_shutdown_bus | first | default(['', '0']) }}"
+    _usec: "{{ _bus[1] | int }}"
+    _show: "{{ unattended_upgrades_shutdown_show_text | regex_findall(unattended_upgrades_show_pattern) | first | default([]) }}"
+  ansible.builtin.set_fact:
+    # busctl: pending when either field says so (a type, or a time that is not "none")
+    unattended_upgrades_shutdown_pending: >-
+      {{ (_bus[0] != '' or (_usec | int) not in unattended_upgrades_no_shutdown_usec)
+         if unattended_upgrades_shutdown_bus | length > 0 else _show | length > 0 }}
+    unattended_upgrades_shutdown_desc: >-
+      {%- if unattended_upgrades_shutdown_bus | length > 0 -%}
+      {{ _bus[0] or 'shutdown of unknown type' }} at {{ ('%Y-%m-%d %H:%M:%S UTC' | strftime((_usec | int) // 1000000, utc=true)) if (_usec | int) not in unattended_upgrades_no_shutdown_usec else 'an unknown time' }}
+      {%- elif _show | length > 0 -%}
+      {{ _show[0] | lower }} at {{ _show[1] }}
+      {%- else -%}
+      nothing
+      {%- endif -%}
