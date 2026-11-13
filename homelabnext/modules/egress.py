@@ -668,3 +668,101 @@ def _lab_note(with_network: bool) -> list[str]:
 
 def write(files: dict[str, str], out: Path) -> None:
     limits.write(files, out)
+
+
+# ----------------------------------------------------------------------------- what is not enforced
+
+#: the platform role whose containers have their own network namespace (a bridge network)
+CONTAINER_ROLE = "compose_app"
+_INCLUDES = frozenset(
+    f"{ns}{verb}"
+    for ns in ("", "ansible.builtin.", "ansible.legacy.")
+    for verb in ("include_role", "import_role")
+)
+
+
+def _names_role(node: Any, role: str, depth: int = 0) -> bool:
+    """``node`` (a parsed task file, or ``meta/main.yml``) includes, imports or depends on
+    ``role`` anywhere (blocks, rescue and always included)."""
+    if depth > 64:
+        return True  # deeper than any real task file: say container, never stay silent
+    if isinstance(node, list):
+        return any(_names_role(x, role, depth + 1) for x in node)
+    if not isinstance(node, dict):
+        return False
+    for k, v in node.items():
+        if k in _INCLUDES and isinstance(v, dict) and _is_role(v.get("name"), role):
+            return True
+        if k == "dependencies" and isinstance(v, list):
+            for d in v:
+                ref = d.get("role", d.get("name")) if isinstance(d, dict) else d
+                if _is_role(ref, role):
+                    return True
+        if isinstance(v, (list, dict)) and _names_role(v, role, depth + 1):
+            return True
+    return False
+
+
+def _is_role(ref: Any, role: str) -> bool:
+    return isinstance(ref, str) and (ref == role or ref.rsplit("/", 1)[-1] == role)
+
+
+def runs_containers(role_dir: Path, load: Callable[[Path], Any]) -> bool:
+    """A role runs its service as containers when any of its task files or its ``meta/main.yml``
+    includes, imports or depends on :data:`CONTAINER_ROLE`.  A file that cannot be read counts
+    as a container role: the caller warns, and a warning too many is better than none."""
+    files = [role_dir / "meta" / "main.yml", role_dir / "meta" / "main.yaml"]
+    tasks = role_dir / "tasks"
+    try:
+        if tasks.is_dir() and not tasks.is_symlink():
+            files += sorted(p for p in tasks.iterdir() if p.suffix in (".yml", ".yaml"))
+        for f in files:
+            if not f.is_file() or f.is_symlink():
+                continue
+            if _names_role(load(f), CONTAINER_ROLE):
+                return True
+    except Exception:  # unreadable: report it as a container role (see above)
+        return True
+    return False
+
+
+def unenforced(
+    site: Doc, sel: dict[str, Doc], dirs: dict[str, Path], load: Callable[[Path], Any]
+) -> list[str]:
+    """One warning per placed lab container host role (:func:`runs_containers`): its egress
+    (``egress:``, ``none`` when absent, so every module declares one) is not enforced.  The
+    rendered policy cannot filter it at all: its containers are on a bridge network, their
+    traffic is forwarded, and the policy matches sockets of the role's slice in the host's own
+    ``output`` hook, so ``modules.yml`` installs no policy for it (``docs/modules/apply.md``,
+    "What it does not do yet": filtering the containers in a forward chain or on the host
+    network is the follow-up).  A role that is not a container role is not warned about: its
+    policy is rendered and, as for every role, installed by hand (``egress/README.md``)."""
+    hosts = site.get("hosts") or {}
+    out: set[str] = set()
+    for mod, _inst, role, h, host in _placed(site, sel):
+        if not isinstance(h, dict) or h.get("kind") == "external":
+            continue
+        if (hosts.get(host) or {}).get("kind") == "external":
+            continue
+        decl = sel[mod].get("egress", "none")
+        if decl == "none":
+            said = "egress: none" + ("" if "egress" in sel[mod] else " (the default)")
+        else:
+            to = sorted({t for e in decl if e.get("host") == role for t in e.get("to", [])})
+            said = f"egress to {', '.join(to)}" if to else "egress: none (none listed for it)"
+        files = {
+            "role:" + e["file"].rstrip("/").rsplit("/", 1)[-1]: e["file"].rstrip("/")
+            for e in sel[mod].get("contributes", {}).get("roles", [])
+        }
+        refs = [files[r] for r in h.get("roles", []) if r in files]
+        container = any(runs_containers(Path(dirs[mod]) / f, load) for f in refs)
+        where = f"{mod}/{role} on {host}"
+        if container:
+            out.add(
+                f"{where}: {said} is NOT enforced: the role runs containers (compose_app) on a "
+                "bridge network, whose traffic is forwarded and never matched by the egress "
+                "policy (sockets of the role's slice in the host's output hook), so modules.yml "
+                "installs no policy for it; the follow-up is to filter the containers in a "
+                "forward chain or run them on the host network (docs/modules/apply.md)"
+            )
+    return sorted(out)

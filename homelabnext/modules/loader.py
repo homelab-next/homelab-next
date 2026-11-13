@@ -1792,6 +1792,9 @@ def check(
     except KeyError:
         return Report(sorted(set(problems)), notes, warnings=warnings)  # site_problems said
     problems += [Problem("site", p) for p in gh.placement_problems(site, sel, guests)]
+    from homelabnext.modules.egress import unenforced
+
+    warnings += unenforced(site, sel, vtree.dirs, load)
     unchecked = gh.unchecked(site, sel)
     if unchecked:
         notes.append(

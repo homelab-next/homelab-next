@@ -163,7 +163,12 @@ def test_an_overlay_placing_ntfy_on_a_guest_checks_clean_and_renders(tmp_path, c
     ov = overlay(tmp_path / "ov")
     code, out = _check(ov, capsys)
     assert code == 0, out
-    assert out.rstrip().endswith("0 problem(s)")
+    assert out.rstrip().endswith("0 problem(s), 1 warning(s)")
+    # its container is on a bridge network: egress: none cannot be enforced, and check says so
+    assert (
+        "warning: ntfy/server on apps: egress: none is NOT enforced: the role runs containers"
+        in out
+    )
     dest = tmp_path / "out"
     code = mcli.main(["render", *_args(ov), "--out", str(dest)])
     out = capsys.readouterr().out
@@ -174,6 +179,12 @@ def test_an_overlay_placing_ntfy_on_a_guest_checks_clean_and_renders(tmp_path, c
     assert plays[0]["roles"][0]["role"].endswith("modules/ntfy/roles/ntfy")
     assert plays[0]["pre_tasks"][0]["ansible.builtin.include_role"]["tasks_from"] == "readiness"
     assert (dest / "checks" / "ntfy.yml").is_file()
+    # its container joins the role's slice (compose_app reads the play variable) ...
+    assert plays[0]["vars"] == {"hnx_module_slice": "hnx-ntfy-server.slice"}
+    assert (dest / "limits" / "apps" / "hnx-ntfy-server.slice").is_file()
+    # ... and on a vm its data root is capped by the guest's disk, never by an image over its data
+    quota = (dest / "limits" / "apps" / "hnx-module-quota.sh").read_text()
+    assert "\nrun guest_disk ntfy 4 vm\n" in quota and "\nrun cap " not in quota
 
 
 def test_a_registry_row_that_differs_is_named(tmp_path, capsys):

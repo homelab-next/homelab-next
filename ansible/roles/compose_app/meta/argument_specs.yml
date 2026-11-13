@@ -126,6 +126,14 @@ argument_specs:
         type: bool
         description: Run docker compose up -d after rendering.
         default: true
+      compose_app_cgroup_parent:
+        type: str
+        description: >-
+          The systemd slice every container runs in (compose cgroup_parent), a module role slice
+          hnx-<module>-<host role>.slice or empty for docker's default. Defaults to
+          hnx_module_slice, which the module apply path sets on each module play. Starting needs
+          docker's systemd cgroup driver.
+        default: "{{ hnx_module_slice | default('') }}"
   health:
     short_description: Assert every service of the spec has a container and every container is running and healthy.
     options:

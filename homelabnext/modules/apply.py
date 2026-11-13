@@ -15,7 +15,8 @@ Two renders share one naming rule, :func:`module_group`, so they agree by constr
   one play per site host group installing that host's module limits (the slices, the fleet units'
   slice drop-ins and the data-root quota script, which it runs), then one
   play per placed host role of each selected module, in the order of the modules' hard
-  requirements, each play on that role's group alone and running the roles the module lists for
+  requirements, each play on that role's group alone, setting ``hnx_module_slice`` to the role's
+  slice (``compose_app`` makes it its containers' cgroup parent), and running the roles the module lists for
   the host role (``requires.hosts[].roles``; role interface v1 ``main``), after the role's own
   preflight hooks (``contributes.preflight``); and ``checks/<module>.yml`` per placed module,
   which runs every one of its roles' ``readiness`` and then ``health`` hook on each of its groups.
@@ -38,6 +39,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from homelabnext.modules.limits import slice_name
 from homelabnext.modules.rules import us
 
 Doc = dict[str, Any]
@@ -54,6 +56,9 @@ SBIN_DIR = "/usr/local/sbin"
 QUOTA_SCRIPT = "hnx-module-quota.sh"
 #: the tag of the tasks that run the quota script (``--skip-tags`` leaves the caps alone)
 QUOTA_TAG = "hnx_quota"
+#: the play variable naming a module play's role slice (compose_app reads it as the containers'
+#: cgroup parent, ``compose_app_cgroup_parent``)
+SLICE_VAR = "hnx_module_slice"
 #: the tag every limits play carries (not ``mod_``: a module named ``limits`` would share it)
 LIMITS_TAG = "hnx_limits"
 #: the install playbook ``hnx modules render`` writes, and the directory of the check playbooks
@@ -420,6 +425,10 @@ def render(
                 # the module's tag only: a group tag could equal another module's tag
                 # (module a-b is mod_a_b; module a's host role b is mod_a_b too)
                 f"  tags: [{GROUP_PREFIX}{us(mod)}]",
+                # the role's slice (the limits play installs it): compose_app makes it each
+                # container's cgroup parent, so the slice's limits confine the containers too
+                "  vars:",
+                f"    {SLICE_VAR}: {_q(slice_name(mod, role))}",
             ]
             if pre:
                 L.append("  pre_tasks:")
@@ -571,6 +580,12 @@ def _limits_plays(
                 # an owed cap is a change a dry run reports; a real run's change is the apply
                 "      changed_when: ansible_check_mode and hnx_quota_check.rc == 3",
                 "      failed_when: hnx_quota_check.rc not in [0, 3]",
+                f"      tags: [{QUOTA_TAG}]",
+                # every data root's line, so a cap left to a guest's own disk is said, not silent
+                f"    - name: {_q('what caps each data root (a vm or lxc: its own disk)')}",
+                "      ansible.builtin.debug:",
+                '        msg: "{{ hnx_quota_check.stdout_lines + hnx_quota_check.stderr_lines }}"',
+                "      when: hnx_quota_check.stdout_lines is defined",
                 f"      tags: [{QUOTA_TAG}]",
                 f"    - name: {_q('cap and reserve every owed data root (fails if one cannot be)')}",
                 "      ansible.builtin.command:",

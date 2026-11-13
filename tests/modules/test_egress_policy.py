@@ -577,3 +577,66 @@ def test_a_svc_target_naming_a_provider_row_is_refused_by_check_as_by_render():
     assert any("svc:example-object-store-console, which is no service" in p for p in probs)
     with pytest.raises(eg.EgressError, match="svc:example-object-store-console is no selected"):
         eg.render(SITES["full"], mods, lambda m: all_rows.get(m, {}))
+
+
+# ------------------------------------------------- what the policy does not enforce: containers
+
+
+def _role(base: Path, files: dict[str, str]) -> Path:
+    for rel, text in files.items():
+        (base / rel).parent.mkdir(parents=True, exist_ok=True)
+        (base / rel).write_text(text)
+    return base
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"tasks/main.yml": "- ansible.builtin.include_role: {name: compose_app}\n"},
+        {"tasks/main.yml": "- import_role: {name: ../../ansible/roles/compose_app}\n"},
+        {"tasks/app.yml": "- block:\n  - ansible.legacy.include_role: {name: compose_app}\n"},
+        {"tasks/main.yml": "- debug: {msg: x}\n", "meta/main.yml": "dependencies: [compose_app]\n"},
+        {"meta/main.yml": "dependencies:\n- {role: compose_app}\n"},
+        {"tasks/main.yml": "- [unclosed\n"},  # unreadable: warned about, never silent
+    ],
+)
+def test_a_role_that_runs_compose_app_is_a_container_role(tmp_path, files):
+    assert eg.runs_containers(_role(tmp_path / "r", files), load)
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"tasks/main.yml": "- ansible.builtin.include_role: {name: docker_engine}\n"},
+        {"tasks/main.yml": "- debug: {msg: compose_app}\n"},  # a word, not a role use
+        {"meta/main.yml": "dependencies: []\n"},
+        {},
+    ],
+)
+def test_any_other_role_is_not(tmp_path, files):
+    assert not eg.runs_containers(_role(tmp_path / "r", files), load)
+
+
+def test_each_placed_container_role_is_warned_about_and_no_other(tmp_path):
+    site = copy.deepcopy(SITES["small-lab"])
+    mods = copy.deepcopy(MODULES)
+    sel = mr.selected(site, mods)
+    dirs = {m: tmp_path / m for m in sel}
+    lake = sel["example-lake"]
+    lake["contributes"] = {"roles": [{"file": "roles/lake"}]}
+    next(h for h in lake["requires"]["hosts"] if h["role"] == "lake")["roles"] = ["role:lake"]
+    _role(
+        dirs["example-lake"] / "roles/lake",
+        {"tasks/main.yml": "- include_role: {name: compose_app}\n"},
+    )
+    got = eg.unenforced(site, sel, dirs, load)
+    assert len(got) == 1, got
+    assert got[0].startswith("example-lake/lake on data: egress")
+    assert "is NOT enforced: the role runs containers (compose_app) on a bridge network" in got[0]
+    assert "forward chain or run them on the host network" in got[0]
+    lake.pop("egress", None)
+    assert "egress: none (the default) is NOT enforced" in eg.unenforced(site, sel, dirs, load)[0]
+    lake["egress"] = [{"host": "lake", "to": ["internet"]}]
+    assert "egress to internet is NOT enforced" in eg.unenforced(site, sel, dirs, load)[0]
+    (dirs["example-lake"] / "roles/lake/tasks/main.yml").write_text("- debug: {msg: x}\n")
+    assert eg.unenforced(site, sel, dirs, load) == []

@@ -63,11 +63,25 @@ symbolic link) fails the play, so no module role runs on a host whose caps could
 place. Any other exit of `--check` fails too, and the limits plays are `any_errors_fatal`: a
 host whose limits fail stops the whole run, so no module installs anywhere against a provider
 whose host is not capped. A stuck cap (an image cap whose `disk_gb` changed, which is never
-resized in place) therefore blocks every module on its host; `--skip-tags hnx_quota` (the two
-quota tasks' own tag) is the explicit way past it while the data is moved. A module's data root
-that already holds files on a guest without ZFS (a module deployed before its limits were
-installed) is refused the same way: move the data out, or make the root its own ZFS dataset,
-then rerun. A second run copies nothing, reloads nothing and only runs `--check` (`changed=0`);
+resized in place) therefore blocks every module on its host; `--skip-tags hnx_quota` (the
+quota tasks' own tag) is the explicit way past it while the data is moved.
+
+**Disk caps by host kind.** On a host of kind `vm` or `lxc` (the kind the selection, or the
+guest record a site host references, gives) nothing is capped per module: the guest's own disk,
+sized by the hypervisor, is the cap. The quota script reports each module there (the size of the
+filesystem holding its data root, and a warning when that is smaller than the footprint's
+`disk_gb`), changes nothing, and its `--check` passes, so a module whose data root already holds
+data (deployed before its limits) is not stuck. A guest's root is ext4 on a virtual disk (the
+Debian cloud image) or a hypervisor-capped rootfs: an image cannot be mounted over a data root
+that holds data, and ext4 project quotas need the `quota` feature and a `prjquota` mount of the
+root, a `tune2fs` and a remount of a live root filesystem that this never does. The cost:
+modules placed on one guest share its disk, so one can fill it under the others (the limits
+README lists them); give a module that must not, its own guest. The quota play prints every
+line of the `--check` (a cap left to the guest's disk is said in the run, never skipped
+silently). On any other host (kind `host`, the hypervisor or a bare machine) a data root is
+capped as above, and one that already holds files on a filesystem without ZFS (a module
+deployed before its limits) is refused: move the data out, or make the root its own ZFS
+dataset, then rerun. A second run copies nothing, reloads nothing and only runs `--check` (`changed=0`);
 under `ansible-playbook --check` the `--check` still runs (it is read-only) and an owed cap shows
 as a change, while the apply is skipped. `--tags mod_<module>` installs that module's whole host's
 limits and runs the quota script for every module's data root there, and `--skip-tags
@@ -76,12 +90,27 @@ mod_<module>` skips the limits play of each host it is on, other modules there i
 leaves it owed (`systemctl daemon-reload` by hand), a cost accepted for an exact `changed=0`. The two
 directories are play variables (`hnx_limits_unit_dir`, `hnx_limits_sbin_dir`), so a test can
 point them elsewhere with `-e`. A slice limits only the services that join it (`Slice=`, or a
-container's cgroup parent): a role that does not is not confined by it. A file of the limits
+container's cgroup parent): a role that does not is not confined by it. Each module play sets
+`hnx_module_slice` to its role's slice (`hnx-<module>-<host role>.slice`, `-` written `_` in
+either), and `compose_app` makes that every container's `cgroup_parent`
+(`compose_app_cgroup_parent`, which defaults to it; only a module role slice is accepted), so a
+`compose_app` module's containers run inside the slice and its CPU and memory limits confine them.
+That needs docker's systemd cgroup driver, the default of Debian's docker on cgroup v2
+(`docker_engine` does not set it): with cgroupfs docker would read the slice name as a cgroup
+directory of its own, outside the slice, so `compose_app` reads `docker info` and refuses to
+start rather than run unconfined while the slice looks installed. A container already running
+is recreated by its first apply with the parent (`docker compose up -d` sees the changed
+service), once. To see it on a guest: `systemctl status hnx-<module>-<role>.slice` lists the
+container's `docker-<id>.scope`, and `docker inspect -f '{{.HostConfig.CgroupParent}}' <container>`
+names the slice. A file of the limits
 render that is not one of those three shapes is refused by the render. A module removed from a
 host leaves its slice behind (`lifecycle.remove` is not rendered yet).
 
-The egress policy (`egress/`) is rendered but **not installed** by `modules.yml`: see "What it
-does not do yet" below.
+The egress policy (`egress/`) is rendered but **not installed** by `modules.yml`, for any role:
+see "What it does not do yet" below. `hnx modules check` warns, per placed host role that runs
+containers through `compose_app` (its task files or `meta/main.yml` include, import or depend on
+it), that its declared egress (`egress: none` when the manifest says nothing) is **not
+enforced**, and why.
 
 Then, per host role, a play:
 
@@ -129,21 +158,23 @@ gone; `plan` takes `--group-vars` too.
 
 **What it does not do yet.** Install the egress policy (`egress/`: `hnx-egress.nft`, its service
 and timer, the fleet units' drop-ins); it is rendered, and its README says how to install it by
-hand. Installing it from `modules.yml` waits on a decision: it filters only sockets of processes
-in a role slice and in the host's own network namespace, so a module that runs as a container on
-a bridge network (ntfy) is not filtered at all, and a module with `egress: none` that does run in
-its slice gets a chain that allows only DNS and its required slots and drops the rest (for ntfy,
-which requires only `secrets`, read at deploy time by the controller, not by the guest: in effect
-drop all). Its
-unit starts before `network-pre.target` and requires every role slice, so a wrong policy can cut a
-host off at boot. The options: install it as rendered (containers stay unfiltered, so a declared
-`egress: none` would read as enforced when it is not); filter containers first, with `compose_app`
-putting the container under its role slice and either `network_mode: host` or a stable bridge
-name matched by `iifname` in a `forward` chain; give an `egress: none` container an
-`internal: true` Docker network, which is not open to a module that publishes a port (ntfy does:
-an internal network carries no published port, so it would need a second network, and egress
-again); or install nothing for container roles and make the gap visible where the posture is
-read (a `hnx modules check` warning, not only this page). A digest binding the inventory, the playbooks and the checked
+hand. It filters only sockets of processes in a role slice and in the host's own network
+namespace. A container on a bridge network (every `compose_app` module, ntfy included) has its
+own namespace: its traffic is forwarded, never output from a socket the policy sees, so even in
+its slice it is not filtered at all. The decision taken (option D): **install nothing for
+container roles, and say so where the posture is read**: `hnx modules check` warns for each
+placed container role that its egress is not enforced. Roles that are not container roles keep
+the policy rendered only: no module of that kind is deployed yet to prove it on, and its unit
+starts before `network-pre.target` and requires every role slice, so a wrong policy can cut a
+host off at boot; it is installed by hand until a module needs it. The follow-up (option B):
+filter containers, now that `compose_app` puts them in their role slice, either on the host
+network (`network_mode: host`, so the output hook sees their sockets) or by giving each
+application's bridge a stable name matched by `iifname` in a `forward` chain built from the same
+allows (no per-container address churn); then install the policy from `modules.yml`. Not
+chosen: installing it as rendered (a declared `egress: none` would read as enforced when it is
+not), and an `internal: true` Docker network for an `egress: none` container, which is not open
+to a module that publishes a port (ntfy does: an internal network carries no published port, so
+it would need a second network, and egress again). A digest binding the inventory, the playbooks and the checked
 selection and module trees together (the guard play catches only a missing group, not a stale
 one); a walk of each role directory refusing links before it runs as root (the loader's
 `roles/` walk is a point-in-time check of the checkout, so run from a staging copy). The selection's `config` values and the module's secrets reach the

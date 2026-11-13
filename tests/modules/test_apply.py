@@ -735,6 +735,64 @@ def test_an_owed_cap_that_cannot_be_applied_fails_the_play(tmp_path, tree, fleet
     assert "hook " not in r.stdout
 
 
+@pytest.mark.requires_tool("ansible-playbook")
+def test_on_vm_guests_the_real_quota_script_passes_over_existing_data_and_says_so(
+    tmp_path, tree, fleet
+):
+    """The first live module's case, through the real playbook and the real quota script: its
+    data root already held data on an ext4 VM, so an image cap could never be mounted and every
+    run failed at the limits play.  On a vm the guest's disk is the cap: the play passes, prints
+    what caps each data root, touches no data and changes nothing on a rerun."""
+    site = copy.deepcopy(ld.load_yaml(FLEET_SELECTION))
+    for h in site["hosts"].values():
+        if h.get("kind") != "external":
+            h["kind"] = "vm"  # what the guest records resolve to on the live lab
+    sel = selected(site, tree.mods)
+    lim = _limits(site, tree)
+    books = apply.render(site, sel, _stub_roles(tmp_path / "modules", sel), lim)
+    data = tmp_path / "hnx-modules"
+    scripts = [rel for rel in lim if rel.endswith(apply.QUOTA_SCRIPT)]
+    assert scripts
+    for rel in scripts:  # the real script, its data root moved under tmp_path
+        assert "\nrun guest_disk " in lim[rel] and "\nrun cap " not in lim[rel]
+        lim[rel] = lim[rel].replace("ROOT=/var/lib/hnx-modules\n", f"ROOT={data}\n")
+    held = next(ln.split()[2] for ln in lim[scripts[0]].splitlines() if ln.startswith("run "))
+    (data / held).mkdir(parents=True)
+    (data / held / "auth.db").write_text("kept")
+    _write_books(tmp_path / "out", books, lim)
+    inv = yaml.safe_load(render(fleet, "inventory", site)["hosts.yml"])
+    for name in inv["all"]["children"]["guests"]["hosts"]:
+        inv["all"]["children"]["guests"]["hosts"][name] = {
+            "ansible_connection": "local", "ansible_python_interpreter": sys.executable,
+        }  # fmt: skip
+    (tmp_path / "hosts.yml").write_text(yaml.safe_dump(inv))
+    bin_, units, sbin = (tmp_path / d for d in ("bin", "units", "sbin"))
+    for d in (bin_, units, sbin):
+        d.mkdir()
+    for name in inv["all"]["children"]["guests"]["hosts"]:
+        (sbin / name).mkdir()
+        (units / name).mkdir()
+    for tool in ("systemctl", "mkfs.ext4", "fallocate", "zfs", "losetup"):  # none may run
+        (bin_ / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "{tmp_path}/calls.log"\n')
+        (bin_ / tool).chmod(0o755)
+    env = dict(os.environ, ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1",
+               ANSIBLE_GATHERING="explicit", PATH=f"{bin_}:{os.environ['PATH']}")  # fmt: skip
+    args = ["ansible-playbook", "-i", "hosts.yml", str(tmp_path / "out" / apply.PLAYBOOK),
+            "-e", "ansible_become=false",
+            "-e", f"hnx_limits_unit_dir={units}/{{{{ inventory_hostname }}}}",
+            "-e", f"hnx_limits_sbin_dir={sbin}/{{{{ inventory_hostname }}}}"]  # fmt: skip
+    for _run in (1, 2):
+        r = subprocess.run(args, capture_output=True, text=True, env=env, cwd=tmp_path, timeout=300)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert f"{held}: no per-module cap on a vm: the guest's own disk is the cap" in r.stdout
+    recap = [ln for ln in r.stdout.splitlines() if "changed=" in ln]
+    assert recap and all("changed=0" in ln for ln in recap), r.stdout
+    assert (data / held / "auth.db").read_text() == "kept"
+    assert not (data / ".images").exists()
+    calls = (tmp_path / "calls.log").read_text() if (tmp_path / "calls.log").exists() else ""
+    assert all(c.startswith("systemctl daemon-reload") for c in calls.splitlines()), calls
+
+
 def test_a_file_the_limits_render_does_not_write_is_refused(tree):
     site = ld.load_yaml(SITE)
     sel = selected(site, tree.mods)

@@ -52,6 +52,27 @@
   changed_when: false
   when: compose_app_validate_with_docker | bool
 
+# With the cgroupfs driver docker would read the slice name as a cgroup directory of its own,
+# outside the slice systemd limits: the containers would run unconfined while the slice looked
+# installed. Debian's docker on cgroup v2 uses systemd; docker_engine leaves the default.
+- name: Read docker's cgroup driver (a cgroup parent needs systemd)
+  ansible.builtin.command:
+    argv: [docker, info, --format, "{{ '{{' }}.CgroupDriver{{ '}}' }}"]
+  register: compose_app_cgroup_driver
+  changed_when: false
+  check_mode: false
+  when: compose_app_start | bool and compose_app_cgroup_parent | length > 0
+
+- name: Refuse a cgroup parent docker would not put under its systemd slice
+  ansible.builtin.assert:
+    that:
+      - compose_app_cgroup_driver.stdout | trim == 'systemd'
+    fail_msg: >-
+      docker's cgroup driver is {{ compose_app_cgroup_driver.stdout | trim | to_json }}, not systemd:
+      with it the containers would not run in {{ compose_app_cgroup_parent }} (set "exec-opts":
+      ["native.cgroupdriver=systemd"] in /etc/docker/daemon.json, or leave hnx_module_slice unset)
+  when: compose_app_start | bool and compose_app_cgroup_parent | length > 0
+
 - name: Start the application
   ansible.builtin.command:
     argv: [docker, compose, -f, "{{ compose_app_dir }}/docker-compose.yml", up, -d, --remove-orphans]
