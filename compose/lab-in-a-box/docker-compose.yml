@@ -124,7 +124,7 @@ services:
   # --- lake-catalog: Iceberg REST catalog -------------------------------------------------
   catalog-migrate:
     <<: [*restart, *hardened]
-    image: quay.io/lakekeeper/catalog:v0.14.1@sha256:7c5d6b178a1b5ae230bd7d3e7a09da4704ce58fafc66a8b90c3b6edb69ba9817
+    image: quay.io/lakekeeper/catalog:v0.15.0@sha256:b02a882df48042020c473a79b980a643fcc883a6f9c21b74c5b7cc8eabeec9fe
     command: ["migrate"]
     environment: &catalog-env
       LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://lab:${LAB_POSTGRES_PASSWORD}@postgres:5432/catalog
@@ -140,7 +140,7 @@ services:
 
   lake-catalog:
     <<: [*restart, *hardened]
-    image: quay.io/lakekeeper/catalog:v0.14.1@sha256:7c5d6b178a1b5ae230bd7d3e7a09da4704ce58fafc66a8b90c3b6edb69ba9817
+    image: quay.io/lakekeeper/catalog:v0.15.0@sha256:b02a882df48042020c473a79b980a643fcc883a6f9c21b74c5b7cc8eabeec9fe
     command: ["serve"]
     environment: *catalog-env
     depends_on:
