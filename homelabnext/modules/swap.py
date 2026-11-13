@@ -411,7 +411,9 @@ def module_swap_problems(
             out.append("legs' orders must be 1..n, each once")
     for ask in mods[to].get("requires", {}).get("capabilities", []):
         need = ask["cap"].removeprefix("cap:")
-        if not _lines(site, need) and need not in (site.get("incumbents") or {}):
+        if need in (site.get("planned") or {}) and not _lines(site, need):
+            out.append(f"{to} requires {ask['cap']}, which the site plans but does not serve yet")
+        elif not _lines(site, need) and need not in (site.get("incumbents") or {}):
             out.append(f"{to} requires {ask['cap']}, which the site does not select")
     try:
         want_report = dependants_report(swap, mods, site)

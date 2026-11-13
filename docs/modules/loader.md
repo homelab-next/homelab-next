@@ -98,7 +98,8 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    granted; the scope block parses strictly, and every part a selected module requires is present
    and non-empty (an exclusion may be `[]`); required core slots
    selected (a provider, or an incumbent: a real slot, not also under `slots`, naming the core
-   registry's primary row of that capability); instances unique; every hard requirement and instance satisfied; fallbacks selected
+   registry's primary row of that capability), or planned (a warning: a required core slot, in no
+   other answer, with a real `review_by` that `--deploy` refuses once passed; never served); instances unique; every hard requirement and instance satisfied; fallbacks selected
    and datasets moved with their data override; service upstreams follow the fallback; pass-through
    only where allowed and formats meet; interfaces provided, on instances their providers require;
    grants for publish, egress (internet, authority services, external hosts), public routes and

@@ -10,6 +10,7 @@ documents (the loader validates every manifest and selection first).
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from collections.abc import Collection, Mapping
 from pathlib import Path
@@ -1054,6 +1055,83 @@ def incumbent_problems(
     return out
 
 
+def planned(site: Doc) -> dict[str, Doc]:
+    """The required core slots the site does not serve yet (``planned``), slot -> ``{why,
+    review_by}``: a staged lab's honest "not built".  A planned slot is **not served**: it
+    satisfies no requirement and is never a provider, an instance, an egress target or an
+    upstream; :func:`planned_problems` checks each one and :func:`planned_warnings` says what
+    each stands for."""
+    got = site.get("planned")
+    return dict(got) if isinstance(got, dict) else {}
+
+
+def _plan_date(raw: Any) -> dt.date | None:
+    """A ``review_by`` as a calendar date, or None (the schema holds it to YYYY-MM-DD; a date
+    that does not exist, 2027-02-30, passes the pattern and is refused here)."""
+    try:
+        return dt.date.fromisoformat(raw) if isinstance(raw, str) else None
+    except ValueError:
+        return None
+
+
+def planned_problems(site: Doc, slots: Mapping[str, Doc], on: dt.date | None = None) -> list[str]:
+    """Each planned slot is a required core slot of the slot registry (an optional slot is simply
+    left out), answered nowhere else (not under ``slots``, not an incumbent: one answer per
+    slot), with a ``review_by`` that is a real date.  With ``on`` (the date a deploy is judged
+    on, :func:`homelabnext.registry.standing.today`), a ``review_by`` before it is a problem: an
+    expired plan never rots silently.  Without ``on`` no date is read, so the check stays a pure
+    function of its files."""
+    out: list[str] = []
+    inc = incumbents(site)
+    for slot, plan in sorted(planned(site).items()):
+        where = f"planned.{slot}"
+        if slot not in slots:
+            out.append(f"{where}: no such slot in the slot registry")
+        elif not slots[slot].get("required_in_core"):
+            out.append(
+                f"{where}: not a required core slot (only a required core slot may be planned; "
+                "an optional slot the site does not select is left out)"
+            )
+        how = site.get("slots", {}).get(slot)
+        if how is not None:
+            what = "a module provider" if isinstance(how, list) else f"{how}"
+            out.append(
+                f"{where}: the slot is also selected under slots ({what}): one answer per slot"
+            )
+        if slot in inc:
+            out.append(f"{where}: the slot is also an incumbent: one answer per slot")
+        raw = plan.get("review_by") if isinstance(plan, dict) else None
+        if raw is None:
+            continue  # the schema reports it
+        review = _plan_date(raw)
+        if review is None:
+            out.append(f"{where}: review_by {raw!r} is not a date")
+        elif on is not None and review < on:
+            out.append(
+                f"{where}: review_by {review} has passed ({on}): serve the slot (a provider or "
+                "an incumbent) or review the plan and set a new date"
+            )
+    return out
+
+
+def planned_warnings(site: Doc, slots: Mapping[str, Doc]) -> list[str]:
+    """One warning per planned slot that is a required core slot of ``slots`` (any other is a
+    problem, :func:`planned_problems`, and so is one also answered under ``slots`` or
+    ``incumbents``), with what will serve it and when the plan is next
+    reviewed: the "a required core slot has no provider" a staged lab owes, said, not refused."""
+    out = []
+    elsewhere = set(site.get("slots", {})) | set(incumbents(site))
+    for slot, plan in sorted(planned(site).items()):
+        if slot in elsewhere:
+            continue  # answered twice: a problem, never also a warning
+        if isinstance(plan, dict) and slots.get(slot, {}).get("required_in_core"):
+            out.append(
+                f"{slot}: a required core slot has no provider yet (planned: {plan.get('why')}; "
+                f"review by {plan.get('review_by')})"
+            )
+    return out
+
+
 def lab_namespace_problems(site: Doc, mods: dict[str, Doc]) -> list[str]:
     """The selection's ``lab_table_namespaces`` (the lake namespaces that are the lab's own): a
     namespace listed twice, the core's (:data:`homelabnext.lake.tables.CORE_NAMESPACE`) or a
@@ -1091,6 +1169,7 @@ def site_problems(
     known: dict[str, Doc] | None = None,
     registry: Mapping[str, str] | None = None,
     non_primary: Collection[str] = frozenset(),
+    today: dt.date | None = None,
 ) -> list[str]:
     """Rules a site's selection must meet.  ``rows`` (module id -> its contributed service rows):
     public routes need grants.public_routes, upstreams follow the fallback, and an upstream that
@@ -1106,7 +1185,10 @@ def site_problems(
     incumbents (:func:`incumbent_problems`); without a registry every incumbent is a problem.  An
     incumbent counts as selected for a required core slot, a requirement (an ``instance`` is then
     the incumbent's row), a preference's fallback, a dataset's slot and a row's upstream; it is
-    never an instance, a provider or an egress target."""
+    never an instance, a provider or an egress target.  A **planned** slot (:func:`planned`) is
+    not served: a required core slot it names owes no provider (:func:`planned_warnings` says
+    so), but it satisfies nothing; ``today`` (a deploy's date) refuses one whose review has
+    passed (:func:`planned_problems`)."""
     # first: a selected module that failed validation stops the rest, not this
     out = lab_namespace_problems(site, mods if known is None else known)
     try:
@@ -1115,10 +1197,12 @@ def site_problems(
         return [*out, str(exc)]
     ch = chosen(site)
     inc = incumbents(site)
-    #: every slot the site serves, by a module provider or an incumbent
+    plans = planned(site)
+    #: every slot the site serves, by a module provider or an incumbent (never a planned one)
     served = set(ch) | {"cap:" + s for s in inc}
     grants = site.get("grants", {})
     out += incumbent_problems(site, slots, registry, non_primary)
+    out += planned_problems(site, slots, today)
     out += _binding_problems(site, mods, sel)
     out += _grant_problems(grants, sel, rows, units, privileged_units, roles, ch, slots, served)
     out += role_ceiling_problems(roles)
@@ -1143,7 +1227,7 @@ def site_problems(
         n for mid, rs in rows.items() if mid in sel and sel[mid]["kind"] != "provider" for n in rs
     }  # a provider's rows are reached by their slot or instance (the egress generator's rule)
     for slot, d in slots.items():
-        if d.get("required_in_core") and "cap:" + slot not in served:
+        if d.get("required_in_core") and "cap:" + slot not in served and slot not in plans:
             out.append(f"{slot}: a required core slot has no provider")
     for cap, cs in ch.items():
         insts = [c["instance"] for c in cs]
@@ -1157,10 +1241,15 @@ def site_problems(
     empty = {"cap:" + s: v for s, v in site["slots"].items() if not isinstance(v, list)}
     for cap, how in empty.items():
         if how == "pass-through":
-            out += _pass_through_problems(cap, ch, sel, slots, set(inc))
+            out += _pass_through_problems(cap, ch, sel, slots, set(inc), set(plans))
     for m in sel.values():
         for r in m["requires"].get("capabilities", []):
-            if r["cap"] not in served:
+            if r["cap"] not in served and r["cap"][4:] in plans:
+                out.append(
+                    f"{m['id']}: requires {r['cap']}, which the site plans but does not serve "
+                    "yet (a planned slot satisfies no requirement)"
+                )
+            elif r["cap"] not in served:
                 out.append(f"{m['id']}: requires {r['cap']}, which the site does not select")
             elif r["cap"] not in ch:  # an incumbent: an instance is its registry row
                 svc = inc[r["cap"][4:]].get("service")
@@ -1592,9 +1681,12 @@ def _upstream_problems(
     return out
 
 
-def _pass_through_problems(cap, ch, sel, slots, incumbent=frozenset()) -> list[str]:
+def _pass_through_problems(
+    cap, ch, sel, slots, incumbent=frozenset(), planned_=frozenset()
+) -> list[str]:
     """``incumbent``: the slots served outside modules, whose formats the selection does not
-    declare, so a pass-through next to one is refused with that reason."""
+    declare, so a pass-through next to one is refused with that reason; ``planned_``: the slots
+    not served yet, refused with theirs."""
     d = slots.get(cap.removeprefix("cap:"), {})
     if not d.get("pass_through"):
         return [f"{cap}: the slot may not be pass-through"]
@@ -1627,10 +1719,18 @@ def _pass_through_problems(cap, ch, sel, slots, incumbent=frozenset()) -> list[s
         inc_up = sorted(
             s for s, desc in slots.items() if desc.get("stage") == d["stage"] - 1 and s in incumbent
         )
+        plan_up = sorted(
+            s for s, desc in slots.items() if desc.get("stage") == d["stage"] - 1 and s in planned_
+        )
         if inc_up:
             probs.append(
                 f"{cap}: pass-through, but its upstream stage {', '.join(inc_up)} is an "
                 "incumbent, whose formats the selection does not declare"
+            )
+        elif plan_up:
+            probs.append(
+                f"{cap}: pass-through, but its upstream stage {', '.join(plan_up)} is planned, "
+                "not served yet"
             )
         else:
             probs.append(f"{cap}: pass-through with no upstream stage selected")

@@ -106,6 +106,7 @@ Exit: 0 clean, 1 problems, 2 usage or an input that cannot be read, 100 an inter
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import sys
@@ -270,6 +271,17 @@ def _guests(
         raise ld.LoaderError(f"guest records {where}: {exc}") from None
     notes.append(f"{len(guests.hosts)} guest record(s) read from {where}")
     return guests
+
+
+def _judged_on() -> dt.date:
+    """The date a deploy's check is judged on: ``HNX_TODAY`` when set, else the local date
+    (:func:`homelabnext.registry.standing.today`, the one reader of ``HNX_TODAY``)."""
+    from homelabnext.registry.standing import today
+
+    try:
+        return today()
+    except ValueError as exc:
+        raise ld.LoaderError(str(exc)) from None
 
 
 def _impl_problems(site: Any, mods: dict[str, Any], registry: Any) -> list[ld.Problem]:
@@ -521,6 +533,10 @@ def _providers(args: argparse.Namespace) -> int:
     incumbents = {
         s: v["service"] for s, v in sorted((site.get("incumbents") or {}).items())
     }  # the schema holds each to {service, why}
+    planned = {
+        s: {"why": v["why"], "review_by": v["review_by"]}
+        for s, v in sorted((site.get("planned") or {}).items())
+    }  # the schema holds each to {why, review_by}
     if args.json:
         doc = {
             "providers": [
@@ -536,6 +552,7 @@ def _providers(args: argparse.Namespace) -> int:
             ],
             "unserved": unserved,
             "incumbents": incumbents,
+            "planned": planned,
         }
         print(json.dumps(doc, indent=2))
         return 0
@@ -545,6 +562,8 @@ def _providers(args: argparse.Namespace) -> int:
         print(f"{slot}: {v}")
     for slot, svc in incumbents.items():
         print(f"{slot}: incumbent (registry row {svc}, outside modules; not checked here)")
+    for slot, plan in planned.items():
+        print(f"{slot}: planned, not served yet ({plan['why']}; review by {plan['review_by']})")
     return 0
 
 
@@ -872,6 +891,7 @@ def _run(args: argparse.Namespace) -> int:
         empty_selection=empty,
         guests=guests,
         lab_registry=lab_registry,
+        today=_judged_on() if deploy else None,
     )
     impl_problems: list[ld.Problem] = []
     if site is not None and not any(
@@ -902,17 +922,26 @@ def _run(args: argparse.Namespace) -> int:
         # addresses, which the slices and the egress policy take
         written, error = _render(args, tree, report.site or site, network)
     if args.json:
-        doc = {"problems": [str(p) for p in found], "notes": notes, "modules": len(tree.mods)}
+        doc = {
+            "problems": [str(p) for p in found],
+            "warnings": report.warnings,
+            "notes": notes,
+            "modules": len(tree.mods),
+        }
         if args.cmd == "render":
             doc["written"] = written
         if error:
             doc["error"] = error
         print(json.dumps(doc, indent=2))
-        for n in notes:  # the report is JSON on stdout; what was not checked also on stderr
+        for w in report.warnings:  # the report is JSON on stdout; warnings and notes on stderr
+            print(f"warning: {w}", file=sys.stderr)
+        for n in notes:  # what was not checked also on stderr
             print(f"note: {n}", file=sys.stderr)
     else:
         for p in found:
             print(p)
+        for w in report.warnings:
+            print(f"warning: {w}")
         for n in notes:
             print(f"note: {n}")
         if written:
@@ -932,7 +961,8 @@ def _run(args: argparse.Namespace) -> int:
                 )
                 + f", under {args.out}"
             )
-        print(f"hnx modules: {len(tree.mods)} module(s), {len(found)} problem(s)")
+        warned = f", {len(report.warnings)} warning(s)" if report.warnings else ""
+        print(f"hnx modules: {len(tree.mods)} module(s), {len(found)} problem(s){warned}")
     if error:
         print(f"hnx modules render: {error}", file=sys.stderr)
     return 1 if found or error else 0

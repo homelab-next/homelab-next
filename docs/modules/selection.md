@@ -1,5 +1,5 @@
 ---
-summary: 'Module manifest reference: a site''s module selection (draft platform/module_selection 1.0): hosts (guest records), slots, incumbents, bindings and grants.'
+summary: 'Module manifest reference: a site''s module selection (draft platform/module_selection 1.0): hosts, slots, incumbents, planned slots, bindings and grants.'
 summary_of: outline:sha256:ff40bb097e250b11
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -23,6 +23,7 @@ hosts:      {<name>: {guest: guest:<id>, isolated, resources: [{name: gpu0, kind
             # or a stand-in: {<name>: {kind, isolated, capacity: {cpu, memory_mb, disk_gb, gpu_memory_mb}, addresses, resources, headroom}}
 slots:      {<slot>: [{provider, instance, placement: {<host role>: <host>}}] | none | pass-through}
 incumbents: {<slot>: {service: <core registry row>, why}}   # served outside modules (below)
+planned:    {<slot>: {why, review_by: "YYYY-MM-DD"}}       # a required core slot not served yet
 features:   {<module>: {placement, config, agents: {<key>: {lanes: {real: <orchestration instance>, shadow: ...}}}}}
 core:       {<module>: {placement, config, agents: {...}}}   # core modules are always selected
 providers:  {<module>: {agents: {...}}}             # a provider's agents (placement and config are per instance)
@@ -120,8 +121,10 @@ provider, `none` or `pass-through`: one answer per slot); the row must exist, it
 be the slot's name (a row of `edge-proxy` does not serve `edge`), and it must be its capability's
 primary (an `eval`, `retiring` or `legacy` row serves no consumer, ADR-0039). Without a registry
 every incumbent is a problem, never taken on trust. A selection that names a required core slot in
-neither `slots` nor `incumbents` is the same error as before ("a required core slot has no
-provider").
+neither `slots`, `incumbents` nor `planned` is the same error as before ("a required core slot
+has no provider"); a staged lab names the core slots it has not built yet under `planned`, each a
+warning with a review date that `--deploy` enforces, never served
+([planned core slots](planned.md)).
 
 An incumbent counts as selected for a required core slot, for a module that requires or prefers the
 slot, for a dataset's slot and for a service row's upstream (an authority upstream still needs
