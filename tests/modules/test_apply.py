@@ -291,10 +291,13 @@ def test_a_requirement_cycle_is_refused_naming_its_modules():
 def test_every_play_targets_its_module_group_in_install_order(tree):
     site = ld.load_yaml(SITE)
     out = _books(site, tree)
-    plays = yaml.safe_load(out[apply.PLAYBOOK])
+    guard, *plays = yaml.safe_load(out[apply.PLAYBOOK])
     sel = selected(site, tree.mods)
     order = apply.install_order(site, sel)
     seen = [p["hosts"] for p in plays]
+    # the first play refuses an inventory that lacks any of them
+    assert guard["hosts"] == "localhost" and guard["tags"] == ["always"]
+    assert guard["tasks"][0]["loop"] == seen
     assert all(h.startswith("mod_") for h in seen)
     mods = [next(m for m in order if p["tags"][0] == "mod_" + m.replace("-", "_")) for p in plays]
     assert mods == sorted(mods, key=order.index)
@@ -306,7 +309,7 @@ def test_every_play_targets_its_module_group_in_install_order(tree):
     for rel, text in out.items():
         if rel == apply.PLAYBOOK:
             continue
-        for play in yaml.safe_load(text):
+        for play in yaml.safe_load(text)[1:]:
             hooks = [t["ansible.builtin.include_role"]["tasks_from"] for t in play["tasks"]]
             assert hooks == sorted(hooks, key=lambda h: h != "readiness")
             assert play["hosts"].startswith("mod_")
@@ -464,3 +467,105 @@ def test_a_cycle_in_the_selection_fails_the_render_cleanly(tree):
     )
     with pytest.raises(apply.ApplyError, match="example-object-store, example-platform"):
         apply.render(site, sel, _dirs(sel))
+
+
+# ----------------------------------------------------------------------------- review fixes
+
+
+@pytest.mark.requires_tool("ansible-playbook")
+def test_a_missing_module_group_fails_the_run_instead_of_matching_nothing(tmp_path, tree, fleet):
+    """Without the guard, a play on a group the inventory lacks is "no hosts matched", exit 0."""
+    site = ld.load_yaml(FLEET_SELECTION)
+    sel = selected(site, tree.mods)
+    books = apply.render(site, sel, _stub_roles(tmp_path / "modules", sel))
+    for rel, text in books.items():
+        (tmp_path / "out" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "out" / rel).write_text(text)
+    # the inventory rendered WITHOUT --selection: no mod_* group
+    (tmp_path / "hosts.yml").write_text(render(fleet, "inventory")["hosts.yml"])
+    for pb, tags in (
+        (apply.PLAYBOOK, ()),
+        (apply.PLAYBOOK, ("--tags", "mod_example_inference")),
+        (f"{apply.CHECKS_DIR}/example-object-store.yml", ("--tags", "health")),
+    ):
+        r = _ansible(tmp_path, "-i", "hosts.yml", str(tmp_path / "out" / pb), *tags)
+        assert r.returncode != 0, pb
+        assert "holds no host" in r.stdout, r.stdout
+
+
+def test_plays_carry_only_the_module_tag():
+    """Module a-b's tag is mod_a_b, and so would be module a's host role b's group tag."""
+    sel = {"a-b": _mod("a-b"), "a": _mod("a")}
+    sel["a"]["requires"]["hosts"][0]["role"] = "b"
+    site = _sel_site(x=[("a-b", "x")])
+    site["slots"]["y"] = [{"provider": "a", "instance": "y", "placement": {"b": "h"}}]
+    plays = yaml.safe_load(
+        apply.render(site, sel, {"a": "../m/a", "a-b": "../m/a-b"})["modules.yml"]
+    )
+    by_hosts = {p["hosts"]: p["tags"] for p in plays}
+    assert by_hosts["mod_a_b"] == ["mod_a"]
+    assert by_hosts["mod_a_b_server"] == ["mod_a_b"]
+    assert by_hosts["localhost"] == ["always"]
+
+
+def test_a_cycle_error_names_the_cycle_not_what_waits_on_it():
+    sel = {"a": _mod("a", "y"), "b": _mod("b", "x"), "d": _mod("d", "x")}
+    site = _sel_site(x=[("a", "a")], y=[("b", "b")], z=[("d", "d")])
+    with pytest.raises(apply.ApplyError) as ei:
+        apply.install_order(site, sel)
+    assert str(ei.value).endswith(": a, b")  # d only waits for a
+
+
+@pytest.mark.parametrize(
+    "edit, why",
+    [
+        (lambda s: s["a"].update(kind="feature\n- hosts: all"), "kind"),
+        (lambda s: s["a"].update(version="1.0 {{ lookup('pipe', 'id') }}"), "version"),
+        (lambda s: s["a"]["contributes"]["roles"][0].update(file="roles/{{x}}"), "role path"),
+        (lambda s: s["a"]["contributes"].update(preflight=[{"role": "role:a", "hook": "main"}]),
+         "preflight hook"),
+    ],
+)  # fmt: skip
+def test_render_refuses_a_value_that_would_add_yaml_or_jinja(edit, why):
+    """The schema blocks these; render() holds them to their shape even without it."""
+    sel = {"a": _mod("a")}
+    sel["a"]["requires"]["hosts"][0]["roles"] = ["role:a"]
+    sel["a"]["contributes"]["roles"] = [{"file": "roles/a"}]
+    edit(sel)
+    if why == "role path":
+        sel["a"]["requires"]["hosts"][0]["roles"] = ["role:{{x}}"]
+    with pytest.raises(apply.ApplyError, match=why):
+        apply.render(_sel_site(x=[("a", "a")]), sel, {"a": "../m/a"})
+    bad = _sel_site(x=[("a", "a")])
+    bad["slots"]["x"][0]["placement"] = {"s\n- hosts: all": "h"}
+    with pytest.raises(apply.ApplyError, match="host role"):
+        apply.render(bad, {"a": _mod("a")}, {"a": "../m/a"})
+
+
+def test_a_refused_render_writes_no_playbook(tmp_path, capsys, monkeypatch):
+    def boom(*_a, **_k):
+        raise apply.ApplyError("planted: no install order exists")
+
+    monkeypatch.setattr(apply, "render", boom)
+    out = tmp_path / "render"
+    code = mcli.main(
+        ["render", "--root", str(ROOT), "--examples", "--site", str(SITE), "--guests",
+         str(GUESTS), "--out", str(out)]
+    )  # fmt: skip
+    assert code == 1
+    assert "planted: no install order exists" in capsys.readouterr().err
+    assert not (out / apply.PLAYBOOK).exists()
+
+
+def test_the_writer_never_follows_a_link_planted_in_the_render(tmp_path):
+    out = tmp_path / "render"
+    out.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (out / apply.CHECKS_DIR).symlink_to(elsewhere)
+    with pytest.raises(ld.LoaderError, match="symbolic link"):
+        mcli._write_new(out, {f"{apply.CHECKS_DIR}/a.yml": "x\n"})
+    assert list(elsewhere.iterdir()) == []
+    (out / "modules.yml").write_text("planted\n")
+    with pytest.raises(FileExistsError):
+        mcli._write_new(out, {"modules.yml": "x\n"})

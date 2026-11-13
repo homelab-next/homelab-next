@@ -981,6 +981,26 @@ def _tlp_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _write_new(out: Path, files: dict[str, str]) -> None:
+    """Write each file under ``out`` as a new file: never through a symbolic link (a directory
+    or the file itself) and never over a file already there, so a link planted after the
+    ``--out`` check cannot redirect a playbook outside the render."""
+    for rel, text in sorted(files.items()):
+        path = out / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        d = path.parent
+        while True:  # every directory from the file's up to --out itself
+            if d.is_symlink():
+                raise ld.LoaderError(f"--out {out}: {d} is a symbolic link")
+            if d == out or d == d.parent:
+                break
+            d = d.parent
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+
+
 def _render(
     args: argparse.Namespace, tree: ld.Tree, site: dict, network: dict | None = None
 ) -> tuple[dict[str, int], str | None]:
@@ -1012,9 +1032,7 @@ def _render(
     limits.write(lim, args.out / "limits")
     egress.write(egr, args.out / "egress")
     tlp_sources.write(src, args.out)
-    for rel, text in sorted(books.items()):
-        (args.out / rel).parent.mkdir(parents=True, exist_ok=True)
-        (args.out / rel).write_text(text, encoding="utf-8")
+    _write_new(args.out, books)
     written = {
         "limits": len(lim),
         "egress": len(egr),

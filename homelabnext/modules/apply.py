@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -181,7 +182,15 @@ def install_order(site: Mapping[str, Any], sel: Mapping[str, Doc]) -> list[str]:
             if waiting[n] == 0:
                 heapq.heappush(ready, n)
     if len(order) != len(sel):
-        cycle = sorted(m for m, n in waiting.items() if n > 0)
+        # what is left is the cycles and what waits on them: peel off every module nothing
+        # left waits for (downstream of a cycle, not in one), so the error names the cycle
+        left = {m for m, n in waiting.items() if n > 0}
+        while True:
+            tail = {m for m in left if not any(m in after[o] for o in left)}
+            if not tail:
+                break
+            left -= tail
+        cycle = sorted(left)
         raise ApplyError(
             "the modules' hard requirements form a cycle, so no install order exists: "
             + ", ".join(cycle)
@@ -190,6 +199,73 @@ def install_order(site: Mapping[str, Any], sel: Mapping[str, Doc]) -> list[str]:
 
 
 # ----------------------------------------------------------------------------- playbooks
+
+
+#: what a name written into a playbook unquoted may be (a group, a tag, a comment): the schema's
+#: id and host-role shape; render() refuses anything else even when called without the schema
+_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
+#: a version or kind shown in a comment
+_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}\Z")
+#: one segment of a role path (``..`` for the way up from the render directory); never ``{``,
+#: ``%`` or ``#``, which Ansible templates in a role name
+_SEGMENT = re.compile(r"(?:\.\.|[A-Za-z0-9_][A-Za-z0-9._-]*)\Z")
+#: what an inventory group of a module looks like
+_GROUP = re.compile(r"mod_[a-z0-9_]+\Z")
+
+
+def _safe_path(path: str) -> str:
+    segs = path.split("/")
+    if path.startswith("/"):
+        segs = segs[1:]
+    if not segs or not all(_SEGMENT.match(x) for x in segs):
+        raise ApplyError(f"role path {path!r}: not a plain relative or absolute path")
+    return path
+
+
+def _names_problems(
+    placed: Mapping[str, list[tuple[str, Doc]]], sel: Mapping[str, Doc]
+) -> list[str]:
+    """Every value written into a playbook outside a JSON-quoted string, held to its shape."""
+    out = []
+    for mod in sel:
+        doc = sel[mod]
+        if not _NAME.match(str(mod)):
+            out.append(f"module id {mod!r}: not a module id")
+        for key in ("kind", "version"):
+            if key in doc and not _WORD.match(str(doc[key])):
+                out.append(f"{mod}: {key} {doc[key]!r} is not a plain word")
+    for mod, rows in placed.items():
+        for role, _h in rows:
+            if not _NAME.match(str(role)):
+                out.append(f"{mod}: host role {role!r} is not a host role name")
+            if not _GROUP.match(module_group(str(mod), str(role))):
+                out.append(f"{mod}/{role}: no module group can be named from it")
+        for e in sel[mod].get("contributes", {}).get("preflight", []):
+            if e.get("hook") not in CHECK_HOOKS:
+                out.append(f"{mod}: preflight hook {e.get('hook')!r} is not readiness or health")
+    return out
+
+
+def _guard(groups: list[str]) -> list[str]:
+    """The first play: every module group the playbook targets holds a host.  Without it a play
+    on a group the inventory lacks (rendered without ``--selection``, or from another selection)
+    is "skipping: no hosts matched", and ``ansible-playbook`` exits 0: a silent install or a
+    green check that ran nothing.  Tagged ``always``, so ``--tags`` keeps it."""
+    return [
+        '- name: "every module group is in the inventory"',
+        "  hosts: localhost",
+        "  gather_facts: false",
+        "  tags: [always]",
+        "  tasks:",
+        '    - name: "refuse an inventory without the module groups"',
+        "      ansible.builtin.assert:",
+        '        that: "(groups[item] | default([])) | length > 0"',
+        '        fail_msg: "{{ item }} holds no host: render the inventory with '
+        "hnx guests render --target inventory --selection (the selection this playbook was "
+        'rendered from)"',
+        "        quiet: true",
+        f"      loop: [{', '.join(groups)}]",
+    ]
 
 
 def _q(value: Any) -> str:
@@ -213,7 +289,7 @@ def _role_path(module_dirs: Mapping[str, str], mod: str, doc: Doc, ref: str) -> 
     files = _role_files(doc)
     if ref not in files:
         raise ApplyError(f"{mod}: {ref} is not a role the module contributes")
-    return f"{module_dirs[mod].rstrip('/')}/{files[ref]}"
+    return _safe_path(f"{module_dirs[mod].rstrip('/')}/{files[ref]}")
 
 
 def _include(path: str, hook: str, name: str) -> list[str]:
@@ -251,6 +327,9 @@ def render(
     and ``module_dirs`` each module's directory as the playbooks will reach it (relative to the
     directory they are written to).  Raises :class:`ApplyError`."""
     placed = _plays(site, sel)
+    bad = _names_problems(placed, sel)
+    if bad:
+        raise ApplyError("; ".join(bad))
     clashes = _group_clashes({(m, r) for m, rows in placed.items() for r, _h in rows})
     if clashes:
         raise ApplyError("; ".join(clashes))
@@ -263,6 +342,7 @@ def render(
         f"# install order: {', '.join(order) if order else '(no module selected)'}",
     ]
     files: dict[str, str] = {}
+    targets: list[str] = []
     plays = 0
     for mod in order:
         rows = placed.get(mod)
@@ -271,11 +351,8 @@ def render(
             continue
         doc = sel[mod]
         L += ["", f"# ---- module {mod} ({doc['kind']}, {doc.get('version', '?')})"]
-        check: list[str] = [
-            f"# {HEADER}",
-            f"# The readiness and then the health hook of every role of module {mod}, on each",
-            "# group it is placed on. Read-only by the role interface v1 contract.",
-        ]
+        check: list[str] = []
+        mine: list[str] = []
         for role, h in rows:
             group = module_group(mod, role)
             name = f"module {mod}: host role {role}"
@@ -294,12 +371,16 @@ def render(
                 if e["role"] == r
             ]
             plays += 1
+            targets.append(group)
+            mine.append(group)
             L += [
                 f"- name: {_q(name)}",
                 f"  hosts: {group}",
                 # a module's roles install packages, units and files: the play escalates
                 "  become: true",
-                f"  tags: [{GROUP_PREFIX}{us(mod)}, {group}]",
+                # the module's tag only: a group tag could equal another module's tag
+                # (module a-b is mod_a_b; module a's host role b is mod_a_b too)
+                f"  tags: [{GROUP_PREFIX}{us(mod)}]",
             ]
             if pre:
                 L.append("  pre_tasks:")
@@ -321,8 +402,15 @@ def render(
                     # to the render directory is one more level up from it
                     there = p if p.startswith("/") else f"../{p}"
                     check += _include(there, hook, f"{hook}: {p.rsplit('/', 1)[-1]}")
-        if len(check) > 3:
-            files[f"{CHECKS_DIR}/{mod}.yml"] = "\n".join(check) + "\n"
+        if mine:
+            head = [
+                f"# {HEADER}",
+                f"# The readiness and then the health hook of every role of module {mod}, on each",
+                "# group it is placed on. Read-only by the role interface v1 contract.",
+                "",
+                *_guard(mine),
+            ]
+            files[f"{CHECKS_DIR}/{mod}.yml"] = "\n".join(head + check) + "\n"
     if not plays:
         L += [
             "",
@@ -331,5 +419,7 @@ def render(
             "  hosts: localhost",
             "  gather_facts: false",
         ]
+    else:
+        L[5:5] = ["", *_guard(targets)]
     files[PLAYBOOK] = "\n".join(L) + "\n"
     return files

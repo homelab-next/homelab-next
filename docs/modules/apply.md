@@ -33,7 +33,8 @@ the fleet does not hold. A placement on an `external` stand-in host runs outside
 no group. Two instances of one provider placed on two guests share their group (the roles are the
 same; instance values come from the guests' variables). The render refuses a group name two
 placements would share (`a-b`/`c` and `a`/`b-c` are both `mod_a_b_c`) and one equal to a group the
-guest model already writes. `--selection` is for the `inventory` target only (`render` and
+guest model already writes. The inventory path checks the selection's schema only, not the module rules: run `hnx modules
+check` first. `--selection` is for the `inventory` target only (`render` and
 `plan`); a selection the schema refuses is exit 1, one that cannot be read exit 2. The inventory is
 fleet-wide, so `--node` does not narrow it: render it once.
 
@@ -41,7 +42,11 @@ fleet-wide, so `--node` does not narrow it: render it once.
 the modules in **install order**: each after every module that serves a slot it hard-requires
 (`requires.capabilities`: the provider of the named instance, or of every instance of the slot
 when the requirement names none), ties broken by id. A soft requirement (`prefers`) and an
-incumbent order nothing, and a requirement cycle is refused, naming the modules in it. A play:
+incumbent order nothing, and a requirement cycle is refused, naming the modules in the cycle (not
+those that only wait on it). The first play, on `localhost` and tagged `always`, fails unless
+every module group the playbook targets holds a host: a play on a group the inventory lacks
+(rendered without `--selection`, or from another selection) would otherwise be "no hosts
+matched", and `ansible-playbook` would exit 0 having installed nothing. Then, per host role, a play:
 
 - targets exactly `mod_<module>_<host role>`, never a group a module names, so a module's roles
   reach only the guests the site placed it on (`role_lint` PB001 holds by construction; a play on
@@ -50,22 +55,33 @@ incumbent order nothing, and a requirement cycle is refused, naming the modules 
 - runs the module's own preflight hooks for its roles first (`contributes.preflight`, as
   `pre_tasks`), then the roles the module lists for the host role (`requires.hosts[].roles`), each
   the role interface v1 `main` entry point ([role interface](../role-interface.md));
-- is tagged `mod_<module>` and `mod_<module>_<host role>`, so `--tags mod_web_app` installs one
-  module.
+- is tagged `mod_<module>` only, so `--tags mod_web_app` installs one module (a group tag could
+  equal another module's tag: module `a-b`'s is `mod_a_b`, and so is module `a`'s host role `b`).
 
-A host role of kind `external` and one that lists no roles are written as comments, and a module
+A host role of kind `external` and one that lists no roles are written as comments (the loader
+lands an external role only on an external host and only it there, so the inventory's skipped
+external hosts and these comments agree), and a module
 placed nowhere (a hosted or config-only provider) as `placed on no host`. A selection with no role
 to apply is one play on `localhost` that does nothing (`ansible-playbook` refuses an empty
 playbook). The module's own `lifecycle.install` playbook is not imported: its plays name their own
-hosts, which is the site's placement to decide. Role paths are written relative to `DIR`, so the
-render and the checkouts move together: render into the directory the playbooks run from.
+hosts, which is the site's placement to decide; so an install step a module expresses outside
+the roles its host roles list is not applied. Role paths are written relative to `DIR`: the
+render is not relocatable, so render into the directory the playbooks run from, and apply
+straight after the check, from the same unchanged checkouts (no digest yet ties what was checked
+to the role files Ansible reads). Every value written outside a quoted string (module ids, host
+roles, groups, hooks, kind, version, role path segments) is held to its schema shape by the
+render itself, and files are written as new files, never through a symbolic link. The render
+names module ids, versions and the overlay's module paths: treat it as private.
 
 **The check playbooks (`checks/<module>.yml`).** For one placed module, on each of its groups, the
 `readiness` hook and then the `health` hook of every one of its roles (`include_role` with
 `tasks_from`); both are read-only by the role interface contract. `--tags health` (or
 `readiness`) runs one hook.
 
-**What it does not do yet.** The selection's `config` values and the module's secrets reach the
+**What it does not do yet.** A digest binding the inventory, the playbooks and the checked
+selection and module trees together (the guard play catches only a missing group, not a stale
+one); a walk of each role directory refusing links before it runs as root (no non-fixture module
+ships roles yet, and the loader refuses a role directory today). The selection's `config` values and the module's secrets reach the
 roles only through the overlay's group and host variables (no generated variable file); firewall
 edges and backup membership stay in the guest file; `lifecycle.upgrade` and `lifecycle.remove`
 are not rendered; a host role's `count` copies are not spread over several guests.
