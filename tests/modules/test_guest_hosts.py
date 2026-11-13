@@ -333,7 +333,7 @@ def test_two_files_with_one_guest_id_are_refused(tree, tmp_path):
 
 def test_a_symlinked_guest_file_is_unreadable(tmp_path):
     d = _guest_dir(tmp_path)
-    (tmp_path / "outside.yml").write_text("secret: value\n")
+    (tmp_path / "outside.yml").write_text("outside: true\n")
     (d / "evil-1.yml").symlink_to(tmp_path / "outside.yml")
     with pytest.raises(gh.GuestsUnreadable, match=re.escape("symbolic links: evil-1.yml")):
         gh.read(d)
