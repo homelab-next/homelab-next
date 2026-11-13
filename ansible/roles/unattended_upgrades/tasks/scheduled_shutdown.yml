@@ -2,9 +2,12 @@
 # Read the shutdown logind holds (`shutdown -r HH:MM`, which unattended-upgrades schedules after an
 # update that needs a reboot). It is runtime state: Automatic-Reboot "false" shapes the next run
 # only, so a reboot scheduled under an earlier window stays pending after the switch to "never".
-# Sets unattended_upgrades_shutdown_pending (bool) and unattended_upgrades_shutdown_desc ("<type>
-# at <time>"); fails, naming both readers' answers, when neither busctl nor `shutdown --show` can
-# be read (an unread state is not "nothing pending"). Read-only, so it runs in check mode too.
+# Sets unattended_upgrades_shutdown_pending (bool: a reboot is scheduled; a poweroff or halt is
+# not one), unattended_upgrades_shutdown_scheduled (bool: anything is) and
+# unattended_upgrades_shutdown_desc ("<type> at <time>"); fails, naming both readers' answers, when neither busctl nor `shutdown --show` can
+# be read (an unread state is not "nothing pending"; a guest with no logind at all, such as a
+# minimal container, therefore fails here and must not use reboot_time never). Read-only, so it
+# runs in check mode too.
 - name: Read logind's ScheduledShutdown
   ansible.builtin.command:
     argv:
@@ -62,12 +65,17 @@
     _show: "{{ unattended_upgrades_shutdown_show_text | regex_findall(unattended_upgrades_show_pattern) | first | default([]) }}"
   ansible.builtin.set_fact:
     # busctl: pending when either field says so (a type, or a time that is not "none")
-    unattended_upgrades_shutdown_pending: >-
+    unattended_upgrades_shutdown_scheduled: >-
       {{ (_bus[0] != '' or (_usec | int) not in unattended_upgrades_no_shutdown_usec)
          if unattended_upgrades_shutdown_bus | length > 0 else _show | length > 0 }}
+    unattended_upgrades_shutdown_pending: >-
+      {{ ((_bus[0] != '' or (_usec | int) not in unattended_upgrades_no_shutdown_usec)
+          and _bus[0] in unattended_upgrades_reboot_types)
+         if unattended_upgrades_shutdown_bus | length > 0
+         else (_show | length > 0 and _show[0] in unattended_upgrades_reboot_types) }}
     unattended_upgrades_shutdown_desc: >-
       {%- if unattended_upgrades_shutdown_bus | length > 0 -%}
-      {{ _bus[0] or 'shutdown of unknown type' }} at {{ ('%Y-%m-%d %H:%M:%S UTC' | strftime((_usec | int) // 1000000, utc=true)) if (_usec | int) not in unattended_upgrades_no_shutdown_usec else 'an unknown time' }}
+      {{ _bus[0] or 'shutdown of unknown type (read as a reboot)' }} at {{ ('%Y-%m-%d %H:%M:%S UTC' | strftime((_usec | int) // 1000000, utc=true)) if (_usec | int) not in unattended_upgrades_no_shutdown_usec else 'an unknown time' }}
       {%- elif _show | length > 0 -%}
       {{ _show[0] | lower }} at {{ _show[1] }}
       {%- else -%}

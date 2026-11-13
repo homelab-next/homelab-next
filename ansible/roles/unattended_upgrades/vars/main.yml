@@ -10,5 +10,9 @@ unattended_upgrades_busctl_pattern: '^\(st\) "([^"]*)" ([0-9]+)$'
 unattended_upgrades_no_shutdown_usec: [0, 18446744073709551615]
 # `shutdown --show` (systemd): "<Reboot|Shutdown|...> scheduled for <time>, use 'shutdown -c' to
 # cancel." on a pending one, "No scheduled shutdown." otherwise (either on stdout or stderr).
-unattended_upgrades_show_pattern: "(\\S+) scheduled for (.+?), use "
+unattended_upgrades_show_pattern: "([A-Z][\\w-]*(?: [a-z][\\w-]*)?) scheduled for (.+?), use "
 unattended_upgrades_show_none: No scheduled shutdown
+# The logind types that restart the guest (busctl's raw type, or --show's word for it); a
+# poweroff or halt someone scheduled on purpose is left alone. An empty type with a time is
+# treated as a reboot (unknown, so the safe reading for a host that must not reboot).
+unattended_upgrades_reboot_types: [reboot, kexec, soft-reboot, "", Reboot, Soft-reboot]

@@ -229,18 +229,21 @@ def test_chrony_health_reads_the_tracking_line(first):
 
 
 # ---------------------------------------------------------------- unattended_upgrades
-# Fake logind: the file ``logind`` holds "<type> <usec>" while a shutdown is scheduled.  busctl
-# prints the ScheduledShutdown property (and fails while ``busctl.fails`` exists); shutdown -c
-# removes the file (unless ``cancel.sticky`` exists) and --show answers as systemd's does, on
-# stderr (garbled while ``show.garbled`` exists).  Both log their calls.
+# Fake logind: the file ``logind`` holds "<type> <usec>" ("-" for an empty type) while a shutdown
+# is scheduled.  busctl prints the ScheduledShutdown property (fails while ``busctl.fails``
+# exists, prints something else while ``busctl.garbled`` does); shutdown -c removes the file
+# (unless ``cancel.sticky`` exists, and exits 1 while ``cancel.fails`` does) and --show answers
+# as systemd's does, on stderr (garbled while ``show.garbled`` exists).  Both log their calls.
 FAKE_BUSCTL = r"""
 import os, sys
 open(LOG, "a").write("busctl " + " ".join(sys.argv[1:]) + "\n")
 if os.path.exists(os.path.join(BASE, "busctl.fails")):
     sys.exit("Failed to connect to bus: No such file or directory")
+if os.path.exists(os.path.join(BASE, "busctl.garbled")):
+    sys.exit(print("Unknown property or interface."))
 state = os.path.join(BASE, "logind")
 kind, usec = open(state).read().split() if os.path.exists(state) else ("", "18446744073709551615")
-print('(st) "%s" %s' % (kind, usec))
+print('(st) "%s" %s' % ("" if kind == "-" else kind, usec))
 """
 FAKE_SHUTDOWN = r"""
 import os, sys
@@ -249,6 +252,7 @@ state = os.path.join(BASE, "logind")
 if sys.argv[1:] == ["-c"]:
     if os.path.exists(state) and not os.path.exists(os.path.join(BASE, "cancel.sticky")):
         os.remove(state)
+    sys.exit(1 if os.path.exists(os.path.join(BASE, "cancel.fails")) else 0)
 elif sys.argv[1:] == ["--show"]:
     if os.path.exists(os.path.join(BASE, "show.garbled")):
         sys.exit("shutdown: unrecognized option '--show'")
@@ -300,8 +304,9 @@ def _first(tmp_path):
 
 @first_run(_first)
 def test_unattended_upgrades_never_cancels_a_reboot_logind_still_holds(first):
-    """LL-564: a reboot unattended-upgrades scheduled under an earlier window survives the switch
-    to "never"; config cancels it, names it, and a second run is changed=0."""
+    """A reboot unattended-upgrades scheduled under an earlier window survives the switch to
+    "never" (Automatic-Reboot "false" governs only the next run; a secret store then reboots
+    sealed): config cancels it, names it, and a second run is changed=0."""
     r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (tmp_path / "logind").exists()
@@ -377,6 +382,81 @@ def test_unattended_upgrades_fails_when_the_schedule_cannot_be_read_or_cancelled
     (tmp_path / "cancel.sticky").touch()
     r = run_role(tmp_path, "unattended_upgrades", "config", first.setup["v"])
     assert r.returncode != 0 and "is still scheduled after" in r.stdout, r.stdout
+
+
+def _first(tmp_path):
+    (tmp_path / "logind").write_text(f"poweroff {USEC_0430}\n")
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_never_leaves_a_scheduled_poweroff_alone(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "left the poweroff at 2026-11-13 04:30:00 UTC alone" in r.stdout, r.stdout
+    assert (tmp_path / "logind").exists() and "shutdown -c" not in calls(tmp_path)
+    (tmp_path / "stamp").touch()
+    health = run_role(tmp_path, "unattended_upgrades", "health", first.setup["v"])
+    assert health.returncode == 0, health.stdout
+
+
+def _first(tmp_path):
+    (tmp_path / "logind").write_text(f"- {USEC_0430}\n")
+    (tmp_path / "cancel.fails").touch()  # exits 1, yet the shutdown is gone: the re-read decides
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_unattended_upgrades_never_reads_an_untyped_shutdown_as_a_reboot(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "cancelled the shutdown of unknown type (read as a reboot) at 2026-11-13" in r.stdout
+    assert not (tmp_path / "logind").exists()
+
+
+def _first(tmp_path):
+    (tmp_path / "busctl.garbled").touch()  # exits 0 with an answer that is not the property
+    (tmp_path / "logind").write_text(f"reboot {USEC_0430}\n")
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_unattended_upgrades_reads_shutdown_show_when_busctl_answers_something_else(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "shutdown --show" in calls(tmp_path) and "shutdown -c" in calls(tmp_path)
+    assert not (tmp_path / "logind").exists()
+
+
+def _first(tmp_path):
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    run_role(tmp_path, "unattended_upgrades", "config", v)  # converged: the file is written
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v,
+            "check": True}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_check_mode_with_nothing_scheduled_is_clean(first):
+    r, _ = first
+    assert r.returncode == 0 and changed(r) == 0, r.stdout + r.stderr
+
+
+def _first(tmp_path):
+    (tmp_path / "busctl.fails").touch()
+    (tmp_path / "show.garbled").touch()
+    (tmp_path / "stamp").touch()
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "health", "extra_vars": v}
+
+
+@first_run(_first)
+def test_unattended_upgrades_health_fails_when_the_schedule_cannot_be_read(first):
+    r, _ = first
+    assert r.returncode != 0 and "cannot read the scheduled shutdown" in r.stdout, r.stdout
 
 
 def _first(tmp_path):
