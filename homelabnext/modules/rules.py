@@ -1157,7 +1157,7 @@ def site_problems(
     empty = {"cap:" + s: v for s, v in site["slots"].items() if not isinstance(v, list)}
     for cap, how in empty.items():
         if how == "pass-through":
-            out += _pass_through_problems(cap, ch, sel, slots)
+            out += _pass_through_problems(cap, ch, sel, slots, set(inc))
     for m in sel.values():
         for r in m["requires"].get("capabilities", []):
             if r["cap"] not in served:
@@ -1592,7 +1592,9 @@ def _upstream_problems(
     return out
 
 
-def _pass_through_problems(cap, ch, sel, slots) -> list[str]:
+def _pass_through_problems(cap, ch, sel, slots, incumbent=frozenset()) -> list[str]:
+    """``incumbent``: the slots served outside modules, whose formats the selection does not
+    declare, so a pass-through next to one is refused with that reason."""
     d = slots.get(cap.removeprefix("cap:"), {})
     if not d.get("pass_through"):
         return [f"{cap}: the slot may not be pass-through"]
@@ -1622,7 +1624,16 @@ def _pass_through_problems(cap, ch, sel, slots) -> list[str]:
                     f"{cap}: pass-through, but {su} out {sorted(fu)} meets nothing {sd} reads"
                 )
     if not up:
-        probs.append(f"{cap}: pass-through with no upstream stage selected")
+        inc_up = sorted(
+            s for s, desc in slots.items() if desc.get("stage") == d["stage"] - 1 and s in incumbent
+        )
+        if inc_up:
+            probs.append(
+                f"{cap}: pass-through, but its upstream stage {', '.join(inc_up)} is an "
+                "incumbent, whose formats the selection does not declare"
+            )
+        else:
+            probs.append(f"{cap}: pass-through with no upstream stage selected")
     return probs
 
 

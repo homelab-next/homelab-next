@@ -813,11 +813,11 @@ def core_names(
                     )
                     continue
                 names[k] = str(v.get("capability", ""))
-                standing = v.get("standing")
-                if standing is not None and (
-                    not isinstance(standing, dict) or standing.get("tier", "primary") != "primary"
-                ):
-                    non_primary.add(k)  # a malformed standing is never read as primary
+                # the registry's own reading (registry.model.standing_of): a missing or empty
+                # standing is primary; a standing that is no mapping is never read as primary
+                standing = v.get("standing") or {}
+                if not isinstance(standing, dict) or standing.get("tier", "primary") != "primary":
+                    non_primary.add(k)
     mcp_ids: set[str] = set()
     mcp_instances: dict[str, str] = {}
     for fname, rec in mcp or ():

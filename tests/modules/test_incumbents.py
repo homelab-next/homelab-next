@@ -186,6 +186,7 @@ def test_the_core_registry_names_its_non_primary_rows():
     }
     reg["services"]["idp"]["standing"] = {"tier": "primary"}
     reg["services"]["dns"]["standing"] = "eval"  # malformed: never read as primary
+    reg["services"]["notify"]["standing"] = ""  # empty: primary, as the registry reads it
     core, _ = ld.core_names(reg)
     assert core.rows_known and core.non_primary == {"secrets-next", "dns"}
     assert not ld.core_names(None)[0].rows_known
@@ -325,3 +326,101 @@ def test_the_deploy_check_judges_incumbents_against_the_lab_s_registry(tmp_path,
         1,
         ["site: incumbents.broker: service broker is not a row of the core registry"],
     )
+
+
+# ----------------------------------------------------------------------------- served, every path
+
+
+def _lake_off(site):
+    """The lake unselected: the collector's preferred lake slots fall back to the hot index,
+    which the fixture selects none for, and its sessions dataset lives in the lake."""
+    site["slots"]["lake-catalog"] = site["slots"]["lake-query"] = "none"
+
+
+def test_a_preferred_slot_and_a_dataset_s_slot_are_served_by_an_incumbent(tree, ins):
+    site = fixture()
+    _lake_off(site)
+    got = problems(site, tree, ins)
+    fallback = (
+        "external-collector: falls back from cap:lake-catalog to cap:hot-index, which is not "
+        "selected either"
+    )
+    dataset = (
+        "external-collector: dataset sessions lives in cap:lake-catalog, unselected, with no "
+        "fallback data"
+    )
+    assert fallback in got
+    # the dataset's slot falls back with its data, so only its fallback slot is missing here;
+    # hot-index as an incumbent serves the fallback, the dataset moving with it
+    for slot in ("lake-catalog", "lake-query"):
+        del site["slots"][slot]
+        site["incumbents"][slot] = {"service": slot, "why": "the lab's existing lake"}
+    got = problems(site, tree, ins)
+    assert fallback not in got and dataset not in got
+    assert not [p for p in got if "external-collector" in p and "lake" in p]
+
+
+def test_a_dataset_whose_slot_is_neither_selected_nor_an_incumbent_is_refused(tree, ins):
+    mods = copy.deepcopy(tree.mods)
+    ec = mods["external-collector"]
+    ec["prefers"]["capabilities"] = [
+        p for p in ec["prefers"]["capabilities"] if p["cap"] != "cap:lake-catalog"
+    ]
+    site = fixture()
+    _lake_off(site)
+    want = (
+        "external-collector: dataset sessions lives in cap:lake-catalog, unselected, with no "
+        "fallback data"
+    )
+    assert want in problems(site, tree, ins, mods=mods)
+    del site["slots"]["lake-catalog"]
+    site["incumbents"]["lake-catalog"] = {"service": "lake-catalog", "why": "the existing lake"}
+    assert want not in problems(site, tree, ins, mods=mods)
+
+
+def test_an_upstream_falling_back_to_an_incumbent_authority_slot_needs_its_grant(tree, ins):
+    """A row's upstream on an unselected preferred slot resolves to its fallback, here an
+    incumbent idp: the authority grant is still required."""
+    mods = copy.deepcopy(tree.mods)
+    mods["external-collector"]["prefers"]["capabilities"].append(
+        {
+            "cap": "cap:lake-query",
+            "version": "1.0",
+            "purpose": "x",
+            "fallback": {"to": "cap:idp", "behaviour": "x"},
+        }
+    )
+    mods["external-collector"]["prefers"]["capabilities"] = [
+        p
+        for p in mods["external-collector"]["prefers"]["capabilities"]
+        if not (p["cap"] == "cap:lake-query" and p["fallback"].get("to") == "cap:hot-index")
+    ]
+    rows = copy.deepcopy(ins.rows)
+    rows["external-collector"] = {
+        **rows.get("external-collector", {}),
+        "collector-console": {"capability": "collector-console", "upstreams": ["lake-query"]},
+    }
+    site = fixture()
+    site["slots"]["lake-query"] = "none"
+    got = problems(site, tree, ins, mods=mods, rows=rows)
+    assert (
+        "external-collector: service collector-console upstream lake-query reaches idp without "
+        "grants.upstreams"
+    ) in got
+    assert not [p for p in got if "nor a fallback for it" in p]
+    site["grants"]["upstreams"] = {"external-collector": ["cap:idp"]}
+    got = problems(site, tree, ins, mods=mods, rows=rows)
+    assert not [p for p in got if "collector-console" in p]
+
+
+def test_a_pass_through_next_to_an_incumbent_says_its_formats_are_undeclared(tree, ins):
+    site = fixture()
+    assert site["slots"]["log-pipeline"] == "pass-through"
+    del site["slots"]["siem-source"]
+    site["incumbents"]["siem-source"] = {"service": "siem", "why": "the lab's existing SIEM"}
+    got = problems(site, tree, ins, registry={**CORE.rows, "siem": "siem-source"})
+    assert (
+        "cap:log-pipeline: pass-through, but its upstream stage siem-source is an incumbent, "
+        "whose formats the selection does not declare"
+    ) in got
+    assert "cap:log-pipeline: pass-through with no upstream stage selected" not in got

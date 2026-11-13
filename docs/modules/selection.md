@@ -123,15 +123,20 @@ neither `slots` nor `incumbents` is the same error as before ("a required core s
 provider").
 
 An incumbent counts as selected for a required core slot, for a module that requires or prefers the
-slot (a required `instance` must then be the incumbent's row), for a dataset's slot and for a
-service row's upstream (an authority upstream still needs `grants.upstreams`). It is never a
+slot, for a dataset's slot and for a service row's upstream (an authority upstream still needs
+`grants.upstreams`). A required `instance` of an incumbent slot is, deliberately, the incumbent's
+registry row name (for a provider it is the instance the site names; the two cannot collide, since
+an instance may not take a core row's name). A `pass-through` stage next to an incumbent is
+refused: the selection declares no formats for an incumbent, so the formats cannot be shown to
+meet. It is never a
 provider or an instance: `provider_for` refuses the slot with "served outside modules", `hnx
 modules providers` lists it as an incumbent, and the registry's `impl:` for it is not compared.
 Nor is it an egress target: `svc:<slot>` or `svc:<row>` is refused as no service, and `hnx modules
 render` opens no path to it (DNS included, when `dns` is an incumbent), so a placed module role
 reaches an incumbent only once the egress generator learns the registry's addresses, which is a
-later change. Moving a slot from its incumbent to a module is a swap through the cutover ledger
-(ADR-0043), one selection edit that removes the incumbent and adds the provider.
+later change. Moving a slot from its incumbent to a module is a cutover-ledger step (ADR-0043) and
+one selection edit that removes the incumbent and adds the provider, not a module swap (`hnx
+modules swap-*` moves a slot between two modules).
 
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
 instance the site selects of that provider (per-instance agent bindings would be a later, additive
