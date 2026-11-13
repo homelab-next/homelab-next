@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# Remove: export both databases (export_first), then stop and remove the container. The data root
-# (with the export in it) and the compose project are kept for the operator to archive or delete;
+# Remove: export both databases (export_first), stop and remove the container, and delete the
+# env_file that holds the admin's hash and the publisher's token. The data root (with the export
+# in it) and the rest of the compose project are kept for the operator to archive or delete;
 # the decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
 - name: Remove ntfy
   hosts: mod_ntfy_server
@@ -14,3 +15,7 @@
       ansible.builtin.command:
         argv: [docker, compose, -f, "{{ ntfy_dir | default('/opt/compose/ntfy') }}/docker-compose.yml", down]
       changed_when: true
+    - name: Delete the credentials the container was given (the admin's hash, the publisher's token)
+      ansible.builtin.file:
+        path: "{{ ntfy_dir | default('/opt/compose/ntfy') }}/secrets/ntfy.env"
+        state: absent

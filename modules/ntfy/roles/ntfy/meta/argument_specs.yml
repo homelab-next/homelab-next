@@ -29,8 +29,8 @@ argument_specs:
         default: root
       ntfy_group: &group
         type: str
-        description: "Group of the compose project and the data root."
-        default: root
+        description: "Group of the compose project and the data root: the container's gid, so its user passes through the data root to db/ and export/."
+        default: "{{ ntfy_gid }}"
       ntfy_data_root: &root
         type: path
         description: "The module's data root on the host: db/ (mounted in the container) and export/."

@@ -7,7 +7,6 @@ export writes an object-tree with a sha256 listing and restore refuses a tampere
 
 from __future__ import annotations
 
-import grp
 import json
 import os
 import pwd
@@ -23,9 +22,7 @@ from tests.modules.ntfy_front import DenyAllNtfy
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = str(ROOT / "modules" / "ntfy" / "roles" / "ntfy")
-_ME = pwd.getpwuid(os.getuid())
-USER = _ME.pw_name
-GROUP = grp.getgrgid(_ME.pw_gid).gr_name
+USER = pwd.getpwuid(os.getuid()).pw_name
 GUEST = "192.0.2.40"  # no-raw-endpoint: allow a documentation-range guest address
 TOKEN = "tk_fakefakefakefakefakefakefake0"
 PASSWORD = "admin-password-fake"
@@ -36,7 +33,8 @@ SECRETS = {
     "HNX_SECRET_NTFY_PUBLISHER_TOKEN": TOKEN,
 }
 
-pytestmark = pytest.mark.skipif(os.getuid() < 1000, reason="the role holds the uid to >= 1000")
+# The container's uid and gid are the test's own (CI runs unprivileged, as a uid of 1000 or more,
+# which the role requires), so the role's ownership changes need no privilege.
 
 
 def ntfy_vars(tmp_path: Path, **kw) -> dict:
@@ -46,7 +44,6 @@ def ntfy_vars(tmp_path: Path, **kw) -> dict:
         "ntfy_dir": str(tmp_path / "app"),
         "ntfy_data_root": str(tmp_path / "data"),
         "ntfy_owner": USER,
-        "ntfy_group": GROUP,
         "ntfy_uid": os.getuid(),
         "ntfy_gid": os.getgid(),
         "ntfy_start": False,
@@ -84,6 +81,10 @@ def test_main_renders_deny_all_with_the_credentials_only_in_the_env_file(tmp_pat
     assert PASSWORD not in secrets  # the server is given the hash only
     assert oct((tmp_path / "app" / "secrets" / "ntfy.env").stat().st_mode & 0o777) == "0o600"
     assert oct((tmp_path / "data" / "db").stat().st_mode & 0o777) == "0o700"
+    # the data root's group is the container's gid by default, so the container's user (which
+    # runs the export) passes through it to db/ and export/
+    root = (tmp_path / "data").stat()
+    assert root.st_gid == os.getgid() and oct(root.st_mode & 0o777) == "0o750"
     assert TOKEN not in r.stdout and HASH not in r.stdout
     again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
@@ -99,6 +100,9 @@ def test_main_renders_deny_all_with_the_credentials_only_in_the_env_file(tmp_pat
         ({"ntfy_publisher_key_ref": "secret:ntfy/admin-password"}, {}),
         ({"ntfy_publisher_topics": ["alerts/x"]}, {}),
         ({"ntfy_scratch_prefix": "hnx*"}, {}),
+        ({"ntfy_publisher_topics": ["hnxconf-x*"]}, {}),  # inside the scratch prefix
+        ({"ntfy_data_root": "/var/lib/../etc"}, {}),
+        ({"ntfy_dir": "relative/dir"}, {}),
         ({"ntfy_uid": 0}, {}),
         ({}, {"HNX_SECRET_NTFY_PUBLISHER_TOKEN": "tk_short"}),
         ({}, {"HNX_SECRET_NTFY_ADMIN_PASSWORD_HASH": "plain-password"}),
@@ -120,7 +124,26 @@ def _docker(tmp_path: Path, health: str = "healthy") -> dict:
     return {"PATH": f"{bindir}:{os.environ['PATH']}"}
 
 
+def _auth_db(root: Path, minted: int = 0, unprovisioned: tuple[str, ...] = ()) -> None:
+    """A user database shaped like ntfy's (the columns the drift check reads): the provisioned
+    admin and publisher with the publisher's token, ``minted`` tokens nobody provisioned and
+    ``unprovisioned`` accounts."""
+    (root / "db").mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(root / "db" / "auth.db")
+    c.execute("CREATE TABLE user (id TEXT, user TEXT, provisioned INT)")
+    c.execute("CREATE TABLE user_token (user_id TEXT, token TEXT, provisioned INT)")
+    users = [("u_e", "*", 0), ("u_a", "admin", 1), ("u_p", "publisher", 1)]
+    users += [(f"u_{n}", n, 0) for n in unprovisioned]
+    c.executemany("INSERT INTO user VALUES (?, ?, ?)", users)
+    tokens = [("u_p", TOKEN, 1)] + [("u_p", f"tk_minted{i}", 0) for i in range(minted)]
+    c.executemany("INSERT INTO user_token VALUES (?, ?, ?)", tokens)
+    c.commit()
+    c.close()
+
+
 def _health(tmp_path, srv, **env):
+    if not (tmp_path / "data" / "db" / "auth.db").exists():
+        _auth_db(tmp_path / "data")
     host, port = srv._httpd.server_address[:2]
     v = ntfy_vars(tmp_path, ntfy_bind=host, ntfy_port=port)
     return run_role(tmp_path, ROLE, "health", v, env={**SECRETS, **_docker(tmp_path), **env})
@@ -141,6 +164,23 @@ def test_health_fails_when_anonymous_publishing_is_open(tmp_path):
         r = _health(tmp_path, srv)
     assert r.returncode != 0
     assert "An anonymous publish is refused" in r.stdout
+
+
+def test_health_fails_when_the_publisher_can_read_any_topic(tmp_path):
+    with DenyAllNtfy(token=TOKEN, admin=("admin", PASSWORD)) as srv:
+        srv.scratch = ""  # an access list that lets the token read everything
+        r = _health(tmp_path, srv)
+    assert r.returncode != 0 and "may not read a topic outside the scratch prefix" in r.stdout
+
+
+@pytest.mark.parametrize("drift", [{"minted": 1}, {"unprovisioned": ("intruder",)}])
+def test_health_fails_on_a_token_or_account_the_environment_does_not_provision(tmp_path, drift):
+    _auth_db(tmp_path / "data", **drift)
+    with DenyAllNtfy(token=TOKEN, admin=("admin", PASSWORD)) as srv:
+        r = _health(tmp_path, srv)
+    assert r.returncode != 0
+    assert "holds only what the environment provisions" in r.stdout
+    assert TOKEN not in r.stdout
 
 
 def test_health_fails_when_the_admin_cannot_sign_in(tmp_path):
@@ -183,14 +223,29 @@ def test_export_writes_an_object_tree_and_restore_checks_it(tmp_path):
     assert ok.returncode == 0, ok.stdout + ok.stderr
     calls = log.read_text().splitlines()
     assert calls[0].endswith(" stop") and calls[-1].endswith(" up -d")
+    restored = (tmp_path / "data" / "db" / "cache.db").stat()
+    assert restored.st_uid == os.getuid() and oct(restored.st_mode & 0o777) == "0o600"
+    assert not list((tmp_path / "data" / "db").glob(".*.restore"))
     # a tampered file, or one the listing does not name, is refused before anything changes
     log.unlink()
     with open(src / "cache.db", "ab") as f:
         f.write(b"x")
     bad = run_role(tmp_path, ROLE, "restore", {**v, "ntfy_restore_source": str(src)}, env=env)
-    assert bad.returncode != 0 and "not a single-link regular file" in bad.stdout
+    assert bad.returncode != 0 and "cache.db: not the listed size" in bad.stdout
     assert not log.exists()
     (src / "cache.db").write_bytes((export / "cache.db").read_bytes())
+    # a file another user could have written, or a link in place of one, is refused too
+    (src / "cache.db").chmod(0o664)
+    bad = run_role(tmp_path, ROLE, "restore", {**v, "ntfy_restore_source": str(src)}, env=env)
+    assert bad.returncode != 0 and "writable by no one else" in bad.stdout
+    (src / "cache.db").chmod(0o600)
+    (src / "cache.db").rename(tmp_path / "cache.db.real")
+    (src / "cache.db").symlink_to(tmp_path / "cache.db.real")
+    bad = run_role(tmp_path, ROLE, "restore", {**v, "ntfy_restore_source": str(src)}, env=env)
+    assert bad.returncode != 0 and "cache.db: cannot be opened (missing, or a link)" in bad.stdout
+    assert not log.exists()
+    (src / "cache.db").unlink()
+    (tmp_path / "cache.db.real").rename(src / "cache.db")
     (src / "extra.db").write_bytes(b"")
     bad = run_role(tmp_path, ROLE, "restore", {**v, "ntfy_restore_source": str(src)}, env=env)
     assert bad.returncode != 0 and "the listing does not name" in bad.stdout
@@ -203,6 +258,8 @@ def test_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(tmp_path):
         tmp_path, ROLE, "upgrade", {**v, "ntfy_target_image": "docker.io/binwiederhier/ntfy:v9"}
     )
     assert bad.returncode != 0
+    other = "docker.io/someone/ntfy:v9.9.9@sha256:" + "a" * 64  # another repository
+    assert run_role(tmp_path, ROLE, "upgrade", {**v, "ntfy_target_image": other}).returncode != 0
     target = "docker.io/binwiederhier/ntfy:v9.9.9@sha256:" + "a" * 64
     ok = run_role(tmp_path, ROLE, "upgrade", {**v, "ntfy_target_image": target})
     assert ok.returncode == 0, ok.stdout + ok.stderr

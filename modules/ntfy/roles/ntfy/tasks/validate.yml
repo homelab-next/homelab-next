@@ -24,12 +24,19 @@
       - ntfy_publisher_topics | reject('match', ntfy_topic_pattern_pattern) | list | length == 0
       # the scratch prefix is a plain prefix (no wildcard of its own) that leaves room for a topic
       - ntfy_scratch_prefix is match('^[-_A-Za-z0-9]{3,40}\Z')
+      # a publisher pattern inside the scratch prefix would shadow or narrow its read-write grant
+      - ntfy_publisher_topics | select('match', ntfy_scratch_prefix) | list | length == 0
+      # absolute, canonical paths (no //, no . or .. component, no trailing /, nothing a SQLite
+      # URI or a shell would read differently)
+      - >-
+        [ntfy_dir, ntfy_data_root] | reject('match', ntfy_path_pattern) | list | length == 0
       - ntfy_cache_duration is match('^[1-9][0-9]{0,4}[smhd]\Z')
       - ntfy_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
     fail_msg: >-
       ntfy: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish
       on (not all interfaces), a port, a container uid and gid of 1000 or more, two
       distinct account names ntfy accepts, three distinct secret: references, one or more topic
-      patterns ([-_*A-Za-z0-9], at most 64), a scratch prefix without a wildcard, a cache duration
+      patterns ([-_*A-Za-z0-9], at most 64) none inside the scratch prefix, a scratch prefix
+      without a wildcard, absolute canonical directories, a cache duration
       like 12h and a memory limit like 256m
   tags: [health, backup, restore, export, upgrade]

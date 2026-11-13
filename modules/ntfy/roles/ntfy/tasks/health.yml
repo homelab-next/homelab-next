@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Healthy means: the container runs and is healthy, the server answers /v1/health, deny-all is in
-# force (an anonymous publish is refused), the admin signs in with the stored password, and the
-# publisher's token publishes to a scratch topic and reads the message back. The round trip leaves
-# one message in a scratch topic's cache (expired after the cache duration); nothing else changes.
+# force (an anonymous publish and an anonymous read are refused, and the publisher may not read a
+# topic outside the scratch prefix), the admin signs in with the stored password, the publisher's
+# token publishes to a scratch topic and reads the message back, and the user database holds no
+# account or token the environment does not provision (the drift check).
+# One deviation from role interface v1's "health does not mutate the service": the round trip
+# leaves one message in a scratch topic's cache, expired after the cache duration. Nothing else
+# changes.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
@@ -37,6 +41,21 @@
         status_code: [401, 403]
         timeout: "{{ ntfy_health_timeout | int }}"
       changed_when: false
+    - name: An anonymous read is refused (deny-all)
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/{{ ntfy_health_topic }}/json?poll=1&since=all"
+        status_code: [401, 403]
+        timeout: "{{ ntfy_health_timeout | int }}"
+      changed_when: false
+    - name: The publisher may not read a topic outside the scratch prefix (write-only)
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/hnx-health-{{ ntfy_health_marker[-16:] }}/json?poll=1&since=all"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', ntfy_publisher_key_ref) }}"
+        status_code: [403]
+        timeout: "{{ ntfy_health_timeout | int }}"
+      changed_when: false
+      no_log: true
     - name: The admin signs in with the stored password
       ansible.builtin.uri:
         url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/v1/account"
@@ -82,4 +101,28 @@
       ansible.builtin.assert:
         that: ntfy_health_marker in ntfy_poll.content | default('')
         fail_msg: "ntfy: the publisher's message to {{ ntfy_health_topic }} was not read back"
+    - name: Read the user the play runs as on the host
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: ntfy_health_uid
+      changed_when: false
+    - name: List the accounts and tokens the environment does not provision (read-only)
+      ansible.builtin.command:
+        argv: >-
+          {{ ([] if (ntfy_health_uid.stdout | trim | int) == (ntfy_uid | int) else
+              ['setpriv', '--reuid=' ~ (ntfy_uid | int), '--regid=' ~ (ntfy_gid | int),
+               '--clear-groups', '--no-new-privs'])
+             + ['python3', '-I', '-c', ntfy_drift_script, ntfy_data_root ~ '/db/auth.db'] }}
+      register: ntfy_drift
+      changed_when: false
+    - name: The user database holds only what the environment provisions
+      ansible.builtin.assert:
+        that:
+          - (ntfy_drift.stdout | from_json).minted == 0
+          - (ntfy_drift.stdout | from_json).users | length == 0
+        fail_msg: >-
+          ntfy: the user database holds {{ (ntfy_drift.stdout | from_json).minted }} token(s) and
+          the account(s) {{ (ntfy_drift.stdout | from_json).users }} that the environment does not
+          provision (a token minted through the API, or an account a restore brought in): they
+          survive a rotation of the secrets. Remove them (README, "Known limits").
   tags: [health]

@@ -3,7 +3,9 @@
 way the ``ntfy`` module configures the server: a request without the publisher's bearer token is
 refused (403 on a topic, as ntfy answers an anonymous publish under deny-all; 401 for a bad
 token), ``/v1/health`` is open, and ``GET /v1/account`` answers the admin's basic-auth sign-in.
-The publish and poll themselves are the stand-in's, unchanged, so the notify suite runs exactly
+The token may read back only the scratch topics (``hnxconf-``, as the module's access list
+``publisher:*:wo,publisher:hnxconf-*:rw`` does); it publishes anywhere.  The publish and poll
+themselves are the stand-in's, unchanged, so the notify suite runs exactly
 as it does against the open stand-in.  Shared by tests/modules/test_ntfy_module.py and
 tests/roles/test_ntfy_role.py."""
 
@@ -24,6 +26,7 @@ class DenyAllNtfy(FakeNtfy):
         self.token = token
         self.admin = admin
         self.refused = 0
+        self.scratch = "hnxconf-"
         super().__init__(**kw)
 
     def _handler(self):
@@ -70,6 +73,10 @@ class DenyAllNtfy(FakeNtfy):
                 ok = self._bearer_ok()
                 if not ok:
                     self._refuse(ok)
+                    return
+                if not path.lstrip("/").startswith(front.scratch):
+                    front.refused += 1  # write-only outside the scratch topics
+                    self._send(403, b'{"code":40301,"error":"forbidden"}')
                     return
                 super().do_GET()
 

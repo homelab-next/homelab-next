@@ -9,9 +9,11 @@ ntfy_image: "docker.io/binwiederhier/ntfy:v2.35.0@sha256:6f0c9abab7b99a978d81661
 ntfy_bind: "{{ ansible_host }}"
 ntfy_port: 80
 ntfy_dir: /opt/compose/ntfy
-# owner and group of the compose project and the data root (db/ and export/ are the container's)
+# owner and group of the compose project and the data root (db/ and export/ are the container's).
+# The group is the container's gid, so the container's user can pass through the data root (0750)
+# to db/ and export/ (the export runs as that user); no account on the host has that gid.
 ntfy_owner: root
-ntfy_group: root
+ntfy_group: "{{ ntfy_gid }}"
 # the module's data root on its host (docs/modules/data.md): db/ (the container's) and export/
 ntfy_data_root: /var/lib/hnx-modules/ntfy
 # the container's user and group: an id no account on the host has
