@@ -70,11 +70,13 @@ HOSTNAME = re.compile(
 )
 IMAGE_KEY = re.compile(r"(_image|_images|_repository|_repo)$")
 # Variables whose value is an image reference are checked by RL009, not RL005.
-# A distribution package name may read like a hostname (containerd.io), so RL005 skips the name of a
-# package spec (``name`` or ``name=version``, the whole value) where it can only be a package: the
-# name argument of a package module in a task, or a role variable named *_package/*_packages (a
-# list of names, or of mappings whose ``name`` is one). Any other text there is still scanned,
-# and so is a spec's version.
+# A distribution package name may read like a hostname (containerd.io). RL005 skips such a name only
+# when it is one of PACKAGE_NAMES (a reviewed list: a name added here is a reviewed change) and it is
+# the name of a whole package spec (``name`` or ``name=version``) where it can only be a package:
+# the name argument of a package module in a task, or a role variable named *_package/*_packages
+# (a list of names, or of mappings whose ``name`` is one). Any other text there is still scanned,
+# and so is a spec's version: ``foo.home.lan`` in the same place is still a hostname literal.
+PACKAGE_NAMES = {"containerd.io"}
 PACKAGE_MODULES = {"apt", "package", "dpkg_selections"}
 PACKAGE_ARGS = {"name", "pkg", "package"}
 PACKAGE_KEY = re.compile(r"_packages?$")
@@ -142,10 +144,13 @@ def _walk_paths(node: Any, path: tuple[str, ...] = ()) -> Iterable[tuple[tuple[s
 def _package_context(sub: str, path: tuple[str, ...]) -> bool:
     """True when a scalar at ``path`` of a ``sub`` (tasks/defaults/vars) file names a package."""
     if sub == "tasks":
+        # the module key of a task: at the top of the file or directly in a block/rescue/always
+        # (never inside vars:, args:, module_defaults: or any other mapping)
         return (
             len(path) >= 2
             and path[-1] in PACKAGE_ARGS
             and path[-2].rsplit(".", 1)[-1] in PACKAGE_MODULES
+            and (len(path) == 2 or path[-3] in ("block", "rescue", "always"))
         )
     return bool(path) and bool(PACKAGE_KEY.search(path[0])) and path[1:] in ((), ("name",))
 
@@ -183,7 +188,8 @@ def _check_literals(role: Path, findings: list[Finding]) -> None:
                     key = path[-1] if path else ""
                     if IMAGE_KEY.search(key) or ("{{" in val and "lookup(" in val):
                         continue
-                    if _package_context(sub, path) and (spec := PACKAGE_SPEC.match(val)):
+                    spec = PACKAGE_SPEC.match(val)
+                    if spec and spec.group(0) in PACKAGE_NAMES and _package_context(sub, path):
                         val = val[spec.end() :]  # the version (if any) is still scanned
                     for m in HOSTNAME.finditer(val):
                         findings.append(

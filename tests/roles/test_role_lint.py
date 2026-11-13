@@ -384,6 +384,14 @@ def _task(module, args):
         ("", "demo_role_peers:\n  - {name: db.example.internal}\n", True),
         ("", "demo_role_settings: {apt: {name: db.example.internal}}\n", True),
         ("", "demo_role_mirror: mirror.example.internal\n", True),
+        # a hostname-shaped value in a package-name context is not a reviewed package name
+        ("", "demo_role_package: vault.homelab.lan\n", True),
+        ("", "demo_role_packages: [db.prod.corp]\n", True),
+        (_task("ansible.builtin.apt", {"name": "nas.home.lan"}), "", True),
+        # the module key must be a task's own: not a mapping inside vars:/args:/module_defaults:
+        ("- name: t\n  vars: {apt: {name: containerd.io}}\n  ansible.builtin.debug: {msg: x}\n", "", True),
+        ("- name: t\n  module_defaults: {apt: {name: containerd.io}}\n  ansible.builtin.debug: {msg: x}\n", "", True),
+        ("- block:\n    - name: t\n      ansible.builtin.apt: {name: containerd.io}\n  tags: [x]\n", "", False),
     ],
 )  # fmt: skip
 def test_rl005_skips_a_package_name_and_still_catches_a_hostname(tmp_path, tasks, defaults, bad):
