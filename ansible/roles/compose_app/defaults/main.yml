@@ -32,6 +32,8 @@ compose_app_validate_with_docker: true
 # module apply path sets hnx_module_slice on each module play to the role's slice
 # (hnx-<module>-<host role>.slice, installed by the play's limits play), so the slice's CPU and
 # memory limits confine the containers. Empty: docker's default (system.slice). Only a module role
-# slice is accepted, and docker must use the systemd cgroup driver (checked before the start).
+# slice is accepted (in a module play, its own), and before a start docker must use the systemd
+# cgroup driver and the slice must have its unit file (with compose_app_start false neither is
+# checked: nothing starts).
 compose_app_cgroup_parent: "{{ hnx_module_slice | default('') }}"
 compose_app_start: true

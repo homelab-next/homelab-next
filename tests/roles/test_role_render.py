@@ -777,6 +777,24 @@ def _bad_parent(tmp, parent):
     return {"runner": run_role, "role": "compose_app", "tasks_from": "main", "extra_vars": v}
 
 
+def _other_slice(tmp):
+    v = app_vars(
+        tmp,
+        compose_app_validate_with_docker=False,
+        hnx_module_slice="hnx-web_app-server.slice",
+        compose_app_cgroup_parent="hnx-other-server.slice",
+    )
+    return {"runner": run_role, "role": "compose_app", "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_other_slice)
+def test_compose_app_in_a_module_play_takes_only_its_own_role_slice(first):
+    r, tmp_path = first
+    assert r.returncode != 0
+    assert "never another module's" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
 @pytest.mark.parametrize("parent", BAD_PARENTS)
 @first_run(_bad_parent)
 def test_compose_app_refuses_a_cgroup_parent_that_is_no_module_role_slice(first, parent):

@@ -681,45 +681,77 @@ _INCLUDES = frozenset(
 )
 
 
-def _names_role(node: Any, role: str, depth: int = 0) -> bool:
-    """``node`` (a parsed task file, or ``meta/main.yml``) includes, imports or depends on
-    ``role`` anywhere (blocks, rescue and always included)."""
+#: modules that run containers without compose_app (any of them makes a container role)
+_CONTAINER_MODULES = ("community.docker.", "docker_container", "docker_compose", "docker_image")
+
+
+def _runs(node: Any, role: str, depth: int = 0) -> bool:
+    """``node`` (a parsed task file, or ``meta/main.yml``) may run containers: it includes,
+    imports or depends on ``role``, names a role by a template (which may be it), uses a docker
+    module, or runs ``docker`` or ``podman`` as a command (blocks, rescue and always included)."""
     if depth > 64:
         return True  # deeper than any real task file: say container, never stay silent
     if isinstance(node, list):
-        return any(_names_role(x, role, depth + 1) for x in node)
+        return any(_runs(x, role, depth + 1) for x in node)
     if not isinstance(node, dict):
         return False
     for k, v in node.items():
-        if k in _INCLUDES and isinstance(v, dict) and _is_role(v.get("name"), role):
+        key = str(k)
+        if key in _INCLUDES and isinstance(v, dict) and _is_role(v.get("name"), role):
             return True
-        if k == "dependencies" and isinstance(v, list):
+        if key.startswith(_CONTAINER_MODULES) or key.removeprefix("community.general.") in (
+            "docker_container",
+            "docker_compose",
+        ):
+            return True
+        if key.rsplit(".", 1)[-1] in ("command", "shell", "raw") and _docker_command(v):
+            return True
+        if key == "dependencies" and isinstance(v, list):
             for d in v:
                 ref = d.get("role", d.get("name")) if isinstance(d, dict) else d
                 if _is_role(ref, role):
                     return True
-        if isinstance(v, (list, dict)) and _names_role(v, role, depth + 1):
+        if isinstance(v, (list, dict)) and _runs(v, role, depth + 1):
             return True
     return False
 
 
+def _docker_command(v: Any) -> bool:
+    if isinstance(v, dict):
+        v = v.get("argv") or v.get("cmd") or v.get("_raw_params") or ""
+    words = " ".join(map(str, v)) if isinstance(v, list) else str(v)
+    return bool(re.search(r"(?:^|[\s/;&|])(?:docker|podman|nerdctl)(?:\s|$)", words))
+
+
 def _is_role(ref: Any, role: str) -> bool:
-    return isinstance(ref, str) and (ref == role or ref.rsplit("/", 1)[-1] == role)
+    if not isinstance(ref, str):
+        return False
+    if "{{" in ref or "{%" in ref:
+        return True  # a templated role name may be it: warn rather than stay silent
+    last = ref.rsplit("/", 1)[-1]
+    return last == role or last.rsplit(".", 1)[-1] == role  # bare, a path, or a collection FQCN
 
 
 def runs_containers(role_dir: Path, load: Callable[[Path], Any]) -> bool:
-    """A role runs its service as containers when any of its task files or its ``meta/main.yml``
-    includes, imports or depends on :data:`CONTAINER_ROLE`.  A file that cannot be read counts
-    as a container role: the caller warns, and a warning too many is better than none."""
+    """A role runs its service as containers when any of its task files (``tasks/``, at any
+    depth) or its ``meta/main.yml`` includes, imports or depends on :data:`CONTAINER_ROLE` (or a
+    role named by a template), uses a docker module, or runs ``docker`` as a command.  This is a
+    heuristic over what the role says, so it errs towards a container: a file that cannot be
+    read, or a task file reached through a symbolic link, counts as one (the caller warns, and a
+    warning too many is better than none)."""
     files = [role_dir / "meta" / "main.yml", role_dir / "meta" / "main.yaml"]
     tasks = role_dir / "tasks"
     try:
-        if tasks.is_dir() and not tasks.is_symlink():
-            files += sorted(p for p in tasks.iterdir() if p.suffix in (".yml", ".yaml"))
+        if tasks.is_symlink():
+            return True
+        if tasks.is_dir():
+            files += sorted(p for p in tasks.rglob("*") if p.suffix in (".yml", ".yaml"))
         for f in files:
-            if not f.is_file() or f.is_symlink():
+            if f.is_symlink():
+                return True
+            if not f.is_file():
                 continue
-            if _names_role(load(f), CONTAINER_ROLE):
+            if _runs(load(f), CONTAINER_ROLE):
                 return True
     except Exception:  # unreadable: report it as a container role (see above)
         return True

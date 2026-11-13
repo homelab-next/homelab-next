@@ -184,7 +184,7 @@ def test_an_overlay_placing_ntfy_on_a_guest_checks_clean_and_renders(tmp_path, c
     assert (dest / "limits" / "apps" / "hnx-ntfy-server.slice").is_file()
     # ... and on a vm its data root is capped by the guest's disk, never by an image over its data
     quota = (dest / "limits" / "apps" / "hnx-module-quota.sh").read_text()
-    assert "\nrun guest_disk ntfy 4 vm\n" in quota and "\nrun cap " not in quota
+    assert "\nrun guest_disk ntfy 4 vm 4\n" in quota and "\nrun cap " not in quota
 
 
 def test_a_registry_row_that_differs_is_named(tmp_path, capsys):

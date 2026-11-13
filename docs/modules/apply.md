@@ -68,15 +68,22 @@ quota tasks' own tag) is the explicit way past it while the data is moved.
 
 **Disk caps by host kind.** On a host of kind `vm` or `lxc` (the kind the selection, or the
 guest record a site host references, gives) nothing is capped per module: the guest's own disk,
-sized by the hypervisor, is the cap. The quota script reports each module there (the size of the
-filesystem holding its data root, and a warning when that is smaller than the footprint's
-`disk_gb`), changes nothing, and its `--check` passes, so a module whose data root already holds
+sized by the hypervisor, is the cap, and `disk_gb` is **not enforced per module** there (a
+placement sum only, as the capacity check reads it), for a new module as for an old one. The
+quota script reports each module there (the size of the filesystem holding its data root, and a
+warning when that is smaller than the footprints on the host add up to), changes nothing, and its
+`--check` passes, so a module whose data root already holds
 data (deployed before its limits) is not stuck. A guest's root is ext4 on a virtual disk (the
 Debian cloud image) or a hypervisor-capped rootfs: an image cannot be mounted over a data root
 that holds data, and ext4 project quotas need the `quota` feature and a `prjquota` mount of the
 root, a `tune2fs` and a remount of a live root filesystem that this never does. The cost:
 modules placed on one guest share its disk, so one can fill it under the others (the limits
-README lists them); give a module that must not, its own guest. The quota play prints every
+README lists them); give a module that must not, its own guest. The rule is only as true as the
+host's kind: a site that declares a bare host `vm` loses its caps, so the kind should come from
+the guest record (`hosts.<name>.guest`), not a stand-in. Not chosen: an image cap on a guest
+whose data root is still empty, falling back to the guest's disk only when it holds data, which
+would make the cap depend on deploy order (two guests of one selection capped differently, and
+a cap that disappears when a data root is restored before the first apply). The quota play prints every
 line of the `--check` (a cap left to the guest's disk is said in the run, never skipped
 silently). On any other host (kind `host`, the hypervisor or a bare machine) a data root is
 capped as above, and one that already holds files on a filesystem without ZFS (a module
@@ -95,6 +102,11 @@ container's cgroup parent): a role that does not is not confined by it. Each mod
 either), and `compose_app` makes that every container's `cgroup_parent`
 (`compose_app_cgroup_parent`, which defaults to it; only a module role slice is accepted), so a
 `compose_app` module's containers run inside the slice and its CPU and memory limits confine them.
+In a module play `compose_app` accepts only that role's own slice. A role that runs its service
+some other way joins the slice itself (`Slice=` on its units); the variable alone confines
+nothing. Before starting, `compose_app` also refuses a slice with no unit file (the limits play
+skipped): systemd would create it on docker's request, empty, with no limits. With
+`compose_app_start: false` neither is checked, because nothing starts.
 That needs docker's systemd cgroup driver, the default of Debian's docker on cgroup v2
 (`docker_engine` does not set it): with cgroupfs docker would read the slice name as a cgroup
 directory of its own, outside the slice, so `compose_app` reads `docker info` and refuses to
@@ -108,8 +120,10 @@ host leaves its slice behind (`lifecycle.remove` is not rendered yet).
 
 The egress policy (`egress/`) is rendered but **not installed** by `modules.yml`, for any role:
 see "What it does not do yet" below. `hnx modules check` warns, per placed host role that runs
-containers through `compose_app` (its task files or `meta/main.yml` include, import or depend on
-it), that its declared egress (`egress: none` when the manifest says nothing) is **not
+containers (its task files, at any depth, or `meta/main.yml` include, import or depend on
+`compose_app` or a role named by a template, use a docker module, or run `docker` as a command;
+a heuristic that errs towards a container, and an unreadable or linked file counts as one), that
+its declared egress (`egress: none` when the manifest says nothing) is **not
 enforced**, and why.
 
 Then, per host role, a play:

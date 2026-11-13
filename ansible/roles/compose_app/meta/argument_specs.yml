@@ -131,8 +131,9 @@ argument_specs:
         description: >-
           The systemd slice every container runs in (compose cgroup_parent), a module role slice
           hnx-<module>-<host role>.slice or empty for docker's default. Defaults to
-          hnx_module_slice, which the module apply path sets on each module play. Starting needs
-          docker's systemd cgroup driver.
+          hnx_module_slice, which the module apply path sets on each module play (in a module
+          play only that slice is accepted). Starting needs docker's systemd cgroup driver and
+          the slice's unit file; with compose_app_start false neither is checked.
         default: "{{ hnx_module_slice | default('') }}"
   health:
     short_description: Assert every service of the spec has a container and every container is running and healthy.

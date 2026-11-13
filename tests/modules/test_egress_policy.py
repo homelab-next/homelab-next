@@ -598,10 +598,25 @@ def _role(base: Path, files: dict[str, str]) -> Path:
         {"tasks/main.yml": "- debug: {msg: x}\n", "meta/main.yml": "dependencies: [compose_app]\n"},
         {"meta/main.yml": "dependencies:\n- {role: compose_app}\n"},
         {"tasks/main.yml": "- [unclosed\n"},  # unreadable: warned about, never silent
+        # reached through include_tasks, at any depth under tasks/
+        {"tasks/main.yml": "- include_tasks: sub/app.yml\n",
+         "tasks/sub/app.yml": "- include_role: {name: compose_app}\n"},
+        {"tasks/main.yml": "- include_role: {name: homelab.core.compose_app}\n"},  # an FQCN
+        {"tasks/main.yml": "- include_role: {name: '{{ runner_role }}'}\n"},  # may be it
+        {"tasks/main.yml": "- community.docker.docker_container: {name: x, image: y}\n"},
+        {"tasks/main.yml": "- ansible.builtin.command: {argv: [docker, run, -d, x]}\n"},
+        {"tasks/main.yml": "- shell: /usr/bin/docker compose up -d\n"},
     ],
-)
-def test_a_role_that_runs_compose_app_is_a_container_role(tmp_path, files):
+)  # fmt: skip
+def test_a_role_that_runs_containers_is_a_container_role(tmp_path, files):
     assert eg.runs_containers(_role(tmp_path / "r", files), load)
+
+
+def test_a_task_file_reached_through_a_link_counts_as_a_container_role(tmp_path):
+    role = _role(tmp_path / "r", {"tasks/main.yml": "- debug: {msg: x}\n"})
+    (tmp_path / "elsewhere.yml").write_text("- debug: {msg: y}\n")
+    (role / "tasks" / "linked.yml").symlink_to(tmp_path / "elsewhere.yml")
+    assert eg.runs_containers(role, load)
 
 
 @pytest.mark.parametrize(
@@ -609,6 +624,7 @@ def test_a_role_that_runs_compose_app_is_a_container_role(tmp_path, files):
     [
         {"tasks/main.yml": "- ansible.builtin.include_role: {name: docker_engine}\n"},
         {"tasks/main.yml": "- debug: {msg: compose_app}\n"},  # a word, not a role use
+        {"tasks/main.yml": "- command: {argv: [dockerd, --validate]}\n"},  # not the client
         {"meta/main.yml": "dependencies: []\n"},
         {},
     ],
@@ -638,5 +654,7 @@ def test_each_placed_container_role_is_warned_about_and_no_other(tmp_path):
     assert "egress: none (the default) is NOT enforced" in eg.unenforced(site, sel, dirs, load)[0]
     lake["egress"] = [{"host": "lake", "to": ["internet"]}]
     assert "egress to internet is NOT enforced" in eg.unenforced(site, sel, dirs, load)[0]
+    # deliberate: a role that is not a container role is not warned about (its policy is
+    # rendered and installed by hand, like every role's; docs/modules/apply.md)
     (dirs["example-lake"] / "roles/lake/tasks/main.yml").write_text("- debug: {msg: x}\n")
     assert eg.unenforced(site, sel, dirs, load) == []

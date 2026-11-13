@@ -73,6 +73,26 @@
       ["native.cgroupdriver=systemd"] in /etc/docker/daemon.json, or leave hnx_module_slice unset)
   when: compose_app_start | bool and compose_app_cgroup_parent | length > 0
 
+# A slice with no unit file is still created by systemd when docker asks for it, with no limits:
+# the containers would look confined and be unlimited. The limits play installs the unit first.
+- name: Read the slice's unit (installed by the module's limits play)
+  ansible.builtin.command:
+    argv: [systemctl, show, --property=LoadState, --property=FragmentPath, "{{ compose_app_cgroup_parent }}"]
+  register: compose_app_slice_unit
+  changed_when: false
+  check_mode: false
+  when: compose_app_start | bool and compose_app_cgroup_parent | length > 0
+
+- name: Refuse a slice that has no unit file (it would carry no limits)
+  ansible.builtin.assert:
+    that:
+      - "'LoadState=loaded' in compose_app_slice_unit.stdout_lines"
+      - compose_app_slice_unit.stdout_lines | select('match', '^FragmentPath=/.+') | list | length == 1
+    fail_msg: >-
+      {{ compose_app_cgroup_parent }} has no unit file: install the module limits first (modules.yml,
+      tag hnx_limits) or the containers would run in an empty slice with no limits
+  when: compose_app_start | bool and compose_app_cgroup_parent | length > 0
+
 - name: Start the application
   ansible.builtin.command:
     argv: [docker, compose, -f, "{{ compose_app_dir }}/docker-compose.yml", up, -d, --remove-orphans]

@@ -84,13 +84,20 @@ open(os.environ["DOCKER_LOG"], "a").write(" ".join(sys.argv[1:]) + "\\n")
 if sys.argv[1:2] == ["info"]:
     print(os.environ["DOCKER_DRIVER"])
 """
+SYSTEMCTL = """import os
+if os.environ["SLICE_UNIT"] == "installed":
+    print("LoadState=loaded\\nFragmentPath=/etc/systemd/system/hnx-web_app-server.slice")
+else:  # what systemd says of a slice with no unit file
+    print("LoadState=not-found\\nFragmentPath=")
+"""
 DIGEST = "sha256:" + "ab" * 32
 
 
-def _driver(tmp, driver):
+def _driver(tmp, driver, unit):
     bindir = tmp / "bin"
     bindir.mkdir()
     fake(bindir / "docker", DOCKER)
+    fake(bindir / "systemctl", SYSTEMCTL)
     spec = {"services": {"web": {
         "image": "registry.example.internal/demo/web", "tag": "1.2.3", "digest": DIGEST,
         "healthcheck": {"test": ["CMD", "true"]},
@@ -113,23 +120,30 @@ def _driver(tmp, driver):
             "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
             "DOCKER_LOG": str(tmp / "docker.log"),
             "DOCKER_DRIVER": driver,
+            "SLICE_UNIT": unit,
         },
     }
 
 
-@pytest.mark.parametrize("driver", ["systemd", "cgroupfs"])
+@pytest.mark.parametrize(
+    "driver, unit", [("systemd", "installed"), ("cgroupfs", "installed"), ("systemd", "missing")]
+)
 @first_run(_driver)
-def test_a_slice_starts_only_under_docker_s_systemd_cgroup_driver(first, driver):
+def test_a_slice_starts_only_under_systemd_and_with_its_unit_installed(first, driver, unit):
     """With cgroupfs docker would read the slice name as a cgroup directory of its own, outside
-    the slice systemd limits: the container would run unconfined while the slice looked
-    installed.  So the start is refused, naming the fix."""
+    the slice systemd limits; and a slice with no unit file is created empty by systemd.  Either
+    way the container would run unconfined while it looked confined, so the start is refused,
+    naming the fix."""
     r, tmp = first
     calls = (tmp / "docker.log").read_text().splitlines()
     assert calls[0] == "info --format {{.CgroupDriver}}"
-    if driver == "systemd":
+    if (driver, unit) == ("systemd", "installed"):
         assert r.returncode == 0, r.stdout + r.stderr
         assert calls[1].startswith("compose -f ") and calls[1].endswith(" up -d --remove-orphans")
-    else:
-        assert r.returncode != 0
+        return
+    assert r.returncode != 0
+    assert len(calls) == 1  # never started
+    if driver == "cgroupfs":
         assert "native.cgroupdriver=systemd" in r.stdout
-        assert len(calls) == 1  # never started
+    else:
+        assert "has no unit file: install the module limits first" in r.stdout

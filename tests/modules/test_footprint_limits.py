@@ -95,7 +95,7 @@ def test_count_multiplies_and_cpu_is_a_percentage_of_one_core():
     assert "CPUQuota=50%\n" in body
     assert f"MemoryMax={host['footprint']['memory_mb'] * 2}M\n" in body
     assert (
-        f"run guest_disk example-lake {host['footprint']['disk_gb'] * 2} vm\n"
+        f"run guest_disk example-lake {host['footprint']['disk_gb'] * 2} vm "
         in files["data/hnx-module-quota.sh"]
     )
 
@@ -141,7 +141,7 @@ def test_two_instances_of_one_provider_on_one_host_share_the_slice_summed():
     body = files["data/hnx-example_object_store-store.slice"]
     assert f"MemoryMax={fp['memory_mb'] * 2}M\n" in body
     assert (
-        f"run guest_disk example-object-store {fp['disk_gb'] * 2} vm\n"
+        f"run guest_disk example-object-store {fp['disk_gb'] * 2} vm "
         in files["data/hnx-module-quota.sh"]
     )
 
@@ -215,7 +215,7 @@ def test_disk_zero_is_no_cap_and_gpu_memory_is_reported_unenforced():
     assert "example-lake" not in files["data/hnx-module-quota.sh"]
     assert "| core | example-inference | server |" in files["README.md"]
     assert "(not enforced)" in files["README.md"]
-    assert "run guest_disk external-collector 10 vm\n" in files["data/hnx-module-quota.sh"]
+    assert "run guest_disk external-collector 10 vm " in files["data/hnx-module-quota.sh"]
 
 
 def test_render_is_deterministic():
@@ -490,7 +490,7 @@ def test_on_a_vm_or_lxc_host_the_guest_s_disk_is_the_cap_and_nothing_is_mounted(
     files = render(site)
     data, core = files["data/hnx-module-quota.sh"], files["core/hnx-module-quota.sh"]
     assert SITES["small-lab"]["hosts"]["data"]["kind"] == "vm"
-    assert "\nrun guest_disk external-collector 10 vm\n" in data
+    assert "\nrun guest_disk external-collector 10 vm " in data
     assert "\nrun cap " not in data
     assert "\nrun cap " in core and "guest_disk example" not in core  # kind: host is capped
     readme = files["README.md"]
@@ -500,9 +500,7 @@ def test_on_a_vm_or_lxc_host_the_guest_s_disk_is_the_cap_and_nothing_is_mounted(
     )
     assert "share the vm's disk: one can fill it under the others" in readme
     site["hosts"]["data"]["kind"] = "lxc"
-    assert (
-        "\nrun guest_disk external-collector 10 lxc\n" in render(site)["data/hnx-module-quota.sh"]
-    )
+    assert "\nrun guest_disk external-collector 10 lxc " in render(site)["data/hnx-module-quota.sh"]
 
 
 def test_only_a_guest_kind_s_disk_stands_in_for_a_cap():
@@ -535,6 +533,16 @@ def test_a_guest_filesystem_smaller_than_the_footprint_is_a_warning_not_a_failur
     r, _ = run("--check", guest_kind="vm")
     assert r.returncode == 0
     assert "WARNING: the filesystem holding" in r.stderr and "smaller than the 2G" in r.stderr
+
+
+def test_the_guest_filesystem_is_compared_with_every_footprint_that_shares_it(host):
+    root, mnt, _u, _mount, run = host
+    for m in ("m", "n"):
+        (root / m).mkdir(parents=True)
+    (mnt / "df").write_text(str(4 * 1048576))  # 4 GiB: each footprint fits, the two (5) do not
+    r, _ = run("--check", caps={"m": 2, "n": 3}, guest_kind="vm")
+    assert r.returncode == 0
+    assert r.stderr.count("smaller than the 5G the footprints on this host add up to") == 2
 
 
 def test_a_missing_data_root_on_a_guest_is_reported_not_created(host):

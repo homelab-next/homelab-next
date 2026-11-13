@@ -28,7 +28,9 @@ placed host (``<host>/``):
   host (:data:`GUEST_DISK_KINDS`, the host's kind as the selection or its guest record gives it)
   there is no per-module cap: the guest's own disk, sized by the hypervisor, is the cap, and the
   script says so for each module there (with the size of the filesystem holding its data root,
-  and a warning when that is smaller than the footprint) and changes nothing.  A guest's root is
+  and a warning when that is smaller than the footprints on the host add up to) and changes
+  nothing: ``disk_gb`` is then a placement sum only, not enforced per module, and the cap is only
+  as true as the host's declared kind.  A guest's root is
   ext4 on a virtual disk (the cloud image) or a hypervisor-capped rootfs: a loop image cannot be
   mounted over a data root that already holds data, and project quotas would need a ``prjquota``
   remount or a ``tune2fs`` of the live root, which this never does.  Modules that share one guest
@@ -253,10 +255,10 @@ cap() {
   say "$id: $dir mounted from a ${gb}G image"
 }
 
-guest_disk() {  # $1 id, $2 gb, $3 the host's kind: its own disk is the cap; nothing changes
-  id=$1 gb=$2 kind=$3
+guest_disk() {  # $1 id, $2 gb, $3 the host's kind, $4 GiB of every module's footprint here
+  id=$1 gb=$2 kind=$3 all=$4
   dir="$ROOT/$id"
-  want=$((gb * 1048576))   # KiB, as df -k counts
+  want=$((all * 1048576))   # KiB, as df -k counts: the footprints that share this disk
   if [ -L "$ROOT" ] || [ -L "$dir" ]; then owe "$id: $dir or $ROOT is a symbolic link; refusing"; fi
   if [ ! -d "$dir" ]; then
     say "$id: no per-module cap on a $kind: the guest's own disk is the cap (${gb}G footprint; $dir not created yet)"
@@ -270,7 +272,7 @@ guest_disk() {  # $1 id, $2 gb, $3 the host's kind: its own disk is the cap; not
   esac
   say "$id: no per-module cap on a $kind: the guest's own disk is the cap (the filesystem holding $dir is ${size}K; ${gb}G footprint)"
   if [ "$size" -lt "$want" ]; then
-    say "$id: WARNING: the filesystem holding $dir (${size}K) is smaller than the ${gb}G footprint: grow the guest's disk or correct its record" >&2
+    say "$id: WARNING: the filesystem holding $dir (${size}K) is smaller than the ${all}G the footprints on this host add up to: grow the guest's disk or correct its record" >&2
   fi
 }
 
@@ -305,7 +307,8 @@ def _quota_script(
             raise LimitsError(f"{p!r:.80} is not a plain absolute path")
     if guest_kind is not None and guest_kind not in GUEST_DISK_KINDS:
         raise LimitsError(f"{guest_kind!r:.40} is not a kind whose own disk is the cap")
-    how = f"guest_disk {{}} {{}} {guest_kind}" if guest_kind else "cap {} {}"
+    total = sum(int(gb) for gb in caps.values())
+    how = f"guest_disk {{}} {{}} {guest_kind} {total}" if guest_kind else "cap {} {}"
     lines = "\n".join(
         "run " + how.format(_checked("module id", mid), int(gb)) for mid, gb in sorted(caps.items())
     )
