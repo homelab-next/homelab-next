@@ -15,6 +15,7 @@
         dest: "{{ docker_engine_keyring }}.download"
         mode: "0644"
         force: true
+        timeout: 30
       changed_when: false
     - name: Make a scratch GnuPG home (reading the key must not touch a real keyring)
       ansible.builtin.tempfile:

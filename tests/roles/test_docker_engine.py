@@ -222,11 +222,11 @@ def test_an_owed_restart_survives_until_one_succeeds(first):
 # ---------------------------------------------------------------- health and readiness
 GOOD_INFO = {"ServerVersion": "29.9.2", "LoggingDriver": "json-file"}
 GOOD_DPKG = [
-    "docker-ce 5:29.9.2-1~debian.13~trixie hold",
-    "docker-ce-cli 5:29.9.2-1~debian.13~trixie hold",
-    "containerd.io 2.4.2-1~debian.13~trixie hold",
-    "docker-buildx-plugin 0.38.1-1~debian.13~trixie hold",
-    "docker-compose-plugin 5.6.1-1~debian.13~trixie hold",
+    "docker-ce 5:29.9.2-1~debian.13~trixie hi ",
+    "docker-ce-cli 5:29.9.2-1~debian.13~trixie hi ",
+    "containerd.io 2.4.2-1~debian.13~trixie hi ",
+    "docker-buildx-plugin 0.38.1-1~debian.13~trixie hi ",
+    "docker-compose-plugin 5.6.1-1~debian.13~trixie hi ",
 ]
 
 
@@ -243,15 +243,19 @@ HEALTH_CASES = {
     "logs not bounded by json-file": ("active", {**GOOD_INFO, "LoggingDriver": "journald"}, "5.6.1", GOOD_DPKG, "logging driver journald"),
     "compose off its pin": ("active", GOOD_INFO, "5.7.1", GOOD_DPKG, "compose 5.7.1"),
     "containerd off its pin": ("active", GOOD_INFO, "5.6.1", _swap(GOOD_DPKG, "containerd.io 2.4.2", "containerd.io 2.4.20"), "containerd.io"),
-    "a package not held": ("active", GOOD_INFO, "5.6.1", _swap(GOOD_DPKG, "0.38.1-1~debian.13~trixie hold", "0.38.1-1~debian.13~trixie install"), "docker-buildx-plugin"),
+    "a package not held": ("active", GOOD_INFO, "5.6.1", _swap(GOOD_DPKG, "0.38.1-1~debian.13~trixie hi ", "0.38.1-1~debian.13~trixie ii "), "docker-buildx-plugin"),
     "a package missing": ("active", GOOD_INFO, "5.6.1", GOOD_DPKG[:-1], "docker-compose-plugin"),
     "the CLI off the engine's pin": ("active", GOOD_INFO, "5.6.1", _swap(GOOD_DPKG, "docker-ce-cli 5:29.9.2", "docker-ce-cli 5:29.9.1"), "docker-ce-cli"),
+    "held but only unpacked": ("active", GOOD_INFO, "5.6.1", _swap(GOOD_DPKG, "2.4.2-1~debian.13~trixie hi ", "2.4.2-1~debian.13~trixie hU "), "containerd.io"),
+    "a restart still owed": ("active", GOOD_INFO, "5.6.1", GOOD_DPKG, "a restart is owed", True),
 }  # fmt: skip
 
 
-def health_fakes(tmp, i, unit, info, compose, dpkg):
+def health_fakes(tmp, i, unit, info, compose, dpkg, pending=False):
     d = tmp / f"case{i}"
-    d.mkdir()
+    (d / "state").mkdir(parents=True)
+    if pending:
+        (d / "state" / "restart-pending").write_text("owed\n")
     out = json.dumps(info) if info is not None else json.dumps({"ServerErrors": ["Cannot connect"]})
     docker = fake(d / "docker", (
         "import sys\na = sys.argv[1:]\n"
@@ -263,11 +267,13 @@ def health_fakes(tmp, i, unit, info, compose, dpkg):
     )
     dpkg_query = fake(d / "dpkg-query", f"print({chr(10).join(dpkg)!r})\n")
     return {"docker_engine_cli": docker, "docker_engine_systemctl_cli": systemctl,
-            "docker_engine_dpkg_query_cli": dpkg_query}  # fmt: skip
+            "docker_engine_dpkg_query_cli": dpkg_query, "docker_engine_state_dir": str(d / "state")}  # fmt: skip
 
 
 def _first(tmp):
-    overrides = [health_fakes(tmp, i, *case[:4]) for i, case in enumerate(HEALTH_CASES.values())]
+    overrides = [
+        health_fakes(tmp, i, *case[:4], *case[5:]) for i, case in enumerate(HEALTH_CASES.values())
+    ]
     return {"runner": run_cases, "role": ROLE, "tasks_from": "health", "base_vars": {},
             "overrides": overrides}  # fmt: skip
 
@@ -276,7 +282,7 @@ def _first(tmp):
 def test_health_needs_the_engine_ready_at_its_pins_with_bounded_logs_and_held_packages(first):
     results, _ = first
     for (name, case), (failed, got) in zip(HEALTH_CASES.items(), results, strict=True):
-        msg = case[4]
+        msg = case[4]  # (a sixth item: a restart is owed)
         assert failed is (msg is not None), (name, got)
         assert msg is None or msg in got, (name, got)
 
@@ -364,3 +370,14 @@ def test_a_primary_key_whose_fingerprint_is_not_read_is_refused(first):
     r, _ = first
     assert r.returncode != 0 and "not the pinned" in r.stdout, r.stdout
     assert not first.setup["ring"].exists()
+
+
+def test_the_docker_commands_reach_this_hosts_daemon_whatever_the_environment_says():
+    """health and readiness pin DOCKER_HOST and DOCKER_CONFIG, so a DOCKER_HOST, a context or a
+    CLI plugin from the account's environment cannot answer for another engine."""
+    for hook in ("health", "readiness"):
+        (block,) = yaml.safe_load((ANSIBLE / "roles" / ROLE / "tasks" / f"{hook}.yml").read_text())
+        assert block["environment"] == {
+            "DOCKER_HOST": "unix:///run/docker.sock",
+            "DOCKER_CONFIG": "{{ docker_engine_state_dir }}/cli-config",
+        }, hook

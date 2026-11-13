@@ -64,12 +64,12 @@ argument_specs:
         type: bool
         description: Restart the engine while a restart is owed (false leaves it owed, retried on the next run).
         default: true
-      docker_engine_state_dir:
+      docker_engine_state_dir: &state_dir
         type: path
         description: Where the role keeps its restart-pending marker.
         default: /var/lib/homelabnext/docker_engine
   health:
-    short_description: Fail unless the engine is ready, answers at its pinned version with json-file logs, compose is at its pin, and every package is installed at its pin and held.
+    short_description: Fail unless the engine is ready, owes no restart, answers at its pinned version with the json-file log driver, compose is at its pin, and every package is installed at its pin and held.
     options:
       docker_engine_cli: *cli
       docker_engine_systemctl_cli: *systemctl
@@ -79,12 +79,14 @@ argument_specs:
       docker_engine_containerd_version: *containerd
       docker_engine_buildx_version: *buildx
       docker_engine_compose_version: *compose
+      docker_engine_state_dir: *state_dir
   readiness:
     short_description: Fail unless the engine's unit is active and the daemon answers docker info.
     options:
       docker_engine_cli: *cli
       docker_engine_systemctl_cli: *systemctl
       docker_engine_service: *service
+      docker_engine_state_dir: *state_dir
   backup:
     short_description: Nothing to back up; each compose_app application backs up its own data.
     options: {}

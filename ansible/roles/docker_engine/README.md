@@ -63,11 +63,29 @@ repository: the first run made 10 changes, the second made 0, and readiness and 
 | Hook | What it checks or does |
 |---|---|
 | `readiness` | The unit is `active`, and `docker info` reaches the daemon (a server version, no server errors). |
-| `health` | Readiness passes; the engine's `ServerVersion` equals the pin; the logging driver is `json-file`; `docker compose version` equals its pin; and `dpkg-query` shows every package at its pin and `hold`. |
+| `health` | Readiness passes; no restart is owed (so the daemon runs the `daemon.json` on disk); the engine's `ServerVersion` equals the pin; the logging driver is `json-file`; `docker compose version` equals its pin; and `dpkg-query` shows every package at its pin in state `hi` (held and installed, not merely unpacked). |
 | `upgrade` | Refuses a target that is not a newer `x.y.z` than `docker_engine_version`. Then set the pin and re-run `main`. |
 | `backup`, `restore`, `export` | Nothing to do. The engine holds no data of its own, and each `compose_app` application backs up its own. |
 
+Both hooks run their `docker` commands with `DOCKER_HOST=unix:///run/docker.sock` and a
+`DOCKER_CONFIG` under the state directory, so a `DOCKER_HOST`, a context or a CLI plugin from the
+account's environment cannot answer for another engine.
+
 ## Notes
+
+* **The log bound is required.** `docker_engine_log_max_size` has no default on purpose. Role
+  interface v1 asks `main` for at least one required input, and the per-container log budget
+  (max-size x max-file, times the number of containers) is a disk decision for each host. The
+  lab's value is `10m`, the same default `compose_app_log_max_size` uses. The daemon's log options
+  apply to containers created after the restart. A running container keeps the options it was
+  created with until it is recreated.
+* **The role owns `daemon.json`.** The file holds exactly the log settings above, and a key added
+  by hand is replaced on the next run. There is deliberately no pass-through for other daemon
+  options: settings such as `hosts`, `data-root` or registry mirrors change the engine's attack
+  surface or state, and each one should be a reviewed, validated input of its own.
+* **The staged copy stays.** `/etc/docker/.homelabnext-staged.json` (mode 0644, the same content
+  as the live file) is what the next run compares against. Removing it would make every run
+  re-stage and re-validate, which would cost idempotence.
 
 * **Pin freshness for the engine.** The vendor tags engine releases `docker-vX.Y.Z` on
   moby/moby, which `tools/pin_freshness.py`'s GitHub source does not parse. So the engine pin is

@@ -26,4 +26,9 @@
           docker_engine: unit {{ docker_engine_service }} is
           {{ docker_engine_ready_unit.stdout | trim or 'unknown' }}, docker info exited
           {{ docker_engine_ready_info.rc }}: {{ docker_engine_ready_info.stderr | default('') | trim | truncate(200) }}
+  # the daemon on this host, whatever the account's environment says: no DOCKER_HOST or context
+  # elsewhere, no client config or CLI plugins from a home directory
+  environment:
+    DOCKER_HOST: "unix:///run/docker.sock"
+    DOCKER_CONFIG: "{{ docker_engine_state_dir }}/cli-config"
   tags: [readiness]

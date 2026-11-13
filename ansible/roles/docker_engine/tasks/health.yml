@@ -1,12 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-# Healthy: ready (unit active, the daemon answers), the engine at its pin with bounded json-file
-# logs, the compose plugin at its pin, and every package installed at its pin and still held.
+# Healthy: ready (unit active, the daemon answers), no restart owed (the daemon runs the daemon.json
+# on disk), the engine at its pin with the json-file log driver, the compose plugin at its pin, and
+# every package installed at its pin and held (dpkg state "hi": hold, installed).
 - block:
     - name: Check the engine is ready
       ansible.builtin.include_tasks:
         file: readiness.yml
         apply:
           tags: [health]
+    - name: Look for a restart still owed (a daemon.json the daemon has not read)
+      ansible.builtin.stat:
+        path: "{{ docker_engine_state_dir }}/restart-pending"
+      register: docker_engine_health_pending
+    - name: Fail while a restart is owed
+      ansible.builtin.assert:
+        that: not docker_engine_health_pending.stat.exists
+        fail_msg: >-
+          docker_engine: a restart is owed ({{ docker_engine_state_dir }}/restart-pending): the
+          running daemon has not read the daemon.json on disk; re-run main with docker_engine_restart true
     - name: Read the engine's state
       ansible.builtin.command:
         argv: ["{{ docker_engine_cli }}", info, --format, json]
@@ -20,7 +31,7 @@
     - name: Read the installed packages' versions and selections
       ansible.builtin.command:
         argv: >-
-          {{ [docker_engine_dpkg_query_cli, '-W', '-f', '${Package} ${Version} ${db:Status-Want}\n']
+          {{ [docker_engine_dpkg_query_cli, '-W', '-f', '${Package} ${Version} ${db:Status-Abbrev}\n']
              + (docker_engine_packages | map(attribute='name') | list) }}
       register: docker_engine_dpkg_health
       changed_when: false
@@ -39,17 +50,22 @@
           compose {{ docker_engine_compose_health.stdout | trim }} (pinned {{ docker_engine_compose_version }})
     - name: Fail unless every package is installed at its pin and held
       vars:
-        # the names whose dpkg-query line is not "<name> <pin without its trailing *>... hold"
+        # the names whose dpkg-query line is not "<name> <pin without its trailing *>... hi"
         docker_engine_unpinned: >-
           {%- set out = [] -%}
           {%- for p in docker_engine_packages -%}
-          {%- set want = '(?m)^' ~ (p.name | regex_escape) ~ ' ' ~ (p.version | regex_replace('[*]$', '') | regex_escape) ~ '\\S* hold$' -%}
+          {%- set want = '(?m)^' ~ (p.name | regex_escape) ~ ' ' ~ (p.version | regex_replace('[*]$', '') | regex_escape) ~ '\\S* hi\\s*$' -%}
           {%- if not (docker_engine_dpkg_health.stdout is search(want)) -%}{%- set _ = out.append(p.name) -%}{%- endif -%}
           {%- endfor -%}
           {{ out | join(', ') }}
       ansible.builtin.assert:
         that: docker_engine_unpinned | length == 0
         fail_msg: >-
-          docker_engine: not installed at the pin and held: {{ docker_engine_unpinned }}
+          docker_engine: not installed at the pin and held (dpkg state hi): {{ docker_engine_unpinned }}
           (dpkg-query: {{ docker_engine_dpkg_health.stdout_lines | join('; ') or docker_engine_dpkg_health.stderr | default('') | trim }})
+  # the daemon on this host, whatever the account's environment says: no DOCKER_HOST or context
+  # elsewhere, no client config or CLI plugins from a home directory
+  environment:
+    DOCKER_HOST: "unix:///run/docker.sock"
+    DOCKER_CONFIG: "{{ docker_engine_state_dir }}/cli-config"
   tags: [health]
