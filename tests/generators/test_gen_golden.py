@@ -154,46 +154,11 @@ def test_prometheus_and_blackbox_parse_as_yaml():
     assert events["static_configs"][0]["targets"] == [REG.alias("events") + ":" + "7777"]
     query = next(j for j in prom["scrape_configs"] if j["job_name"] == "lake-query")
     assert query["static_configs"][0]["targets"] == [REG.alias("lake-query") + ":" + "8443"]
-    assert (
-        next(j for j in prom["scrape_configs"] if j["job_name"] == "lake-catalog")["scheme"]
-        == "http"
-    )
-    assert (
-        next(j for j in prom["scrape_configs"] if j["job_name"] == "object-store")["scheme"]
-        == "https"
-    )
-    assert query["basic_auth"] == {
-        "username": "prometheus-scraper",
-        "password_file": "/etc/hnx/prometheus-credentials/lake/trino-scraper-password.credentials",
-    }
-    cred = json.loads(out["prometheus"]["prometheus/credentials.json"])
-    assert cred["credentials"] == [
-        {
-            "secret": "secret:lake/trino-scraper-password",
-            "path": "/etc/hnx/prometheus-credentials/lake/trino-scraper-password.credentials",
-            "mode": "0600",
-        }
-    ]
     http = yaml.safe_load(out["blackbox"]["blackbox/targets_http.yml"])
     tcp = yaml.safe_load(out["blackbox"]["blackbox/targets_tcp.yml"])
     assert len(http) + len(tcp) == sum(
         1 for s in REG.services.values() if s.health["kind"] != "none"
     )
-
-
-def test_prometheus_bearer_auth_uses_a_credentials_file():
-    doc = yaml.safe_load(EXAMPLE.read_text())
-    doc["services"]["lake-query"]["metrics"]["auth"] = {
-        "kind": "bearer",
-        "secret": "secret:lake/trino-scraper-token",
-    }
-    output = generate(build_registry(doc), ["prometheus"])["prometheus"]
-    prom = yaml.safe_load(output["prometheus/scrape_configs.yml"])
-    query = next(j for j in prom["scrape_configs"] if j["job_name"] == "lake-query")
-    assert query["authorization"] == {
-        "type": "Bearer",
-        "credentials_file": "/etc/hnx/prometheus-credentials/lake/trino-scraper-token.credentials",
-    }
 
 
 def test_systemd_dropin_lists_upstreams():

@@ -41,7 +41,7 @@ scrape_configs:
     targets:
     - lake-catalog.svc.example.internal:9100
 - basic_auth:
-    password_file: /etc/hnx/prometheus-credentials/lake/trino-scraper-password.credentials
+    password_file: /etc/hnx/scrape-credentials/lake/trino-scraper-password.credentials
     username: prometheus-scraper
   job_name: lake-query
   metrics_path: /metrics

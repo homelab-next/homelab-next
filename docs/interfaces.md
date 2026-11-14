@@ -434,7 +434,7 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
   Authenticated scrape targets use `metrics.auth: {kind: basic, username: ..., secret: secret:<name>}`
   or `{kind: bearer, secret: secret:<name>}`. Values never belong in the registry or generated
   Prometheus config: `prometheus/credentials.json` maps each secret reference to its fixed
-  `/etc/hnx/prometheus-credentials/` file and mode `0600`, which the monitoring role writes.
+  `/etc/hnx/scrape-credentials/` file and mode `0600`, which the monitoring role writes.
   Product documentation must identify the scrape principal's required permissions (for example,
   Trino's metrics principal needs system-information read permission).
 - Bindings reach a primary only (ADR-0039 decision 3). A binding is a row's `upstreams`, a role
