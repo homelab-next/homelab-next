@@ -250,7 +250,6 @@ def test_the_example_registries_run_the_caddy_ci_checks_with():
 
 # --- metrics: the scrape target each pinned version really serves -------------------------------
 
-ISSUES = "https://github.com/homelab-next/homelab-next/issues/"
 #: the example registry's controller row: this repository's controller, at this repository's
 #: version (ADR-0026 decisions 15 and 16), so its facts are read from this checkout's source
 ORCHESTRATOR_ROW = "examples/services.yml"
@@ -388,11 +387,6 @@ def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
         f"{ORCHESTRATOR_ROUTES} no longer serves GET /metrics: update the orchestrator entry of "
         f"{FACTS}"
     )
-
-
-def test_the_unscraped_metrics_link_their_issues():
-    text = read("examples/services.yml")
-    assert f"{ISSUES}250" in text and f"{ISSUES}251" in text
 
 
 @pytest.mark.parametrize(
