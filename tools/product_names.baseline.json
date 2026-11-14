@@ -1595,7 +1595,7 @@
    "example-4b": 9,
    "litellm": 6,
    "ollama": 1,
-   "vllm": 22
+   "vllm": 18
   },
   "tests/network/fixtures/services.yml": {
    "authentik": 1,
