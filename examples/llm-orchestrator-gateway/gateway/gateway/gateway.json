@@ -1,0 +1,74 @@
+{
+  "admin_key_env": "HNX_SECRET_LLM_GATEWAY_MASTER_KEY",
+  "keys": [
+    {
+      "alias": "home-vllm-a",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_HOME_VLLM_A",
+      "limits": null,
+      "owner": "home-vllm-a",
+      "roles": [
+        "main-reasoner-a"
+      ],
+      "tlp_ceiling": "red"
+    },
+    {
+      "alias": "home-vllm-b",
+      "data_tier": "local-only",
+      "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_HOME_VLLM_B",
+      "limits": null,
+      "owner": "home-vllm-b",
+      "roles": [
+        "main-reasoner-b"
+      ],
+      "tlp_ceiling": "red"
+    }
+  ],
+  "name": "llm-orchestrator-example",
+  "roles": {
+    "main-reasoner-a": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "vllm-a",
+          "base_url": "http://vllm-a.svc.example.internal:8000",
+          "id": "main-reasoner-a-1",
+          "locality": "local",
+          "model": "example-27b",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": 131072,
+      "tlp_ceiling": "red"
+    },
+    "main-reasoner-b": {
+      "cost_per_1k_tokens": null,
+      "deployments": [
+        {
+          "api_key_env": null,
+          "backend": "vllm-b",
+          "base_url": "http://vllm-b.svc.example.internal:8000",
+          "id": "main-reasoner-b-1",
+          "locality": "local",
+          "model": "example-27b",
+          "protocol": "openai"
+        }
+      ],
+      "fallbacks": [],
+      "kind": "chat",
+      "leaves_lab": false,
+      "limits": null,
+      "max_context_tokens": 65536,
+      "tlp_ceiling": "red"
+    }
+  },
+  "telemetry_reader": {
+    "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER"
+  },
+  "version": "1.0"
+}

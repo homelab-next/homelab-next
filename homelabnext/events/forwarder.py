@@ -25,7 +25,12 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
-from homelabnext._http import ResponseTooLarge, check_plaintext, read_bounded, safe_urlopen
+from homelabnext._http import (
+    ResponseTooLarge,
+    check_plaintext,
+    no_redirect_urlopen,
+    read_bounded,
+)
 
 from .envelope import body_digest, canonical_body
 
@@ -175,14 +180,16 @@ class HttpForwarder:
 
     Status mapping: 200/201/202/204 accepted (a body of ``{"duplicate": true}`` is reported as
     duplicate), 409 -> :class:`PermanentError` (id collision),
-    408/425/429 and 5xx -> :class:`TransientError`, 401/403/404/421 -> :class:`MisconfiguredError`
-    (retryable after the URL or credential is fixed), any other 4xx -> :class:`PermanentError`.
+    408/425/429 and 5xx -> :class:`TransientError`, 401/403/404/421 and any 3xx (none is followed)
+    -> :class:`MisconfiguredError` (retryable after the URL or credential is fixed), any other 4xx
+    -> :class:`PermanentError`.
     Connection errors and timeouts are transient.  The id travels in ``Idempotency-Key`` too.
 
-    Redirects are followed only within the same origin, and a reply body over ``max_reply_bytes``
-    is refused (the ack is tiny).  ``auth`` (a callable returning an ``Authorization`` value,
-    read per request) is refused over plain http to a non-loopback host unless
-    ``allow_plaintext=True``.
+    No redirect is followed (urllib would resend the POST as a GET with no body, and a 2xx to it
+    would mark an event sent that never arrived): a 3xx is :class:`MisconfiguredError`, the event
+    stays pending.  A reply body over ``max_reply_bytes`` is refused (the ack is tiny).  ``auth``
+    (a callable returning an ``Authorization`` value, read per request) is refused over plain
+    http to a non-loopback host unless ``allow_plaintext=True``.
     """
 
     def __init__(
@@ -202,7 +209,7 @@ class HttpForwarder:
         self.timeout = timeout
         self._auth = auth
         self.max_reply_bytes = max_reply_bytes
-        self._opener = opener or safe_urlopen
+        self._opener = opener or no_redirect_urlopen
 
     def build_request(self, event: dict[str, Any]) -> urllib.request.Request:
         headers = {"Content-Type": CONTENT_TYPE, IDEMPOTENCY_HEADER: event["id"]}
@@ -245,7 +252,8 @@ class HttpForwarder:
     def _raise_for(code: int) -> None:
         if code in (408, 425, 429) or code >= 500:
             raise TransientError(f"forwarder answered HTTP {code}")
-        if code in (401, 403, 404, 421):
+        if code in (401, 403, 404, 421) or 300 <= code < 400:
+            # no redirect is followed: a 3xx means the URL is wrong, so the event stays pending
             raise MisconfiguredError(
                 f"forwarder answered HTTP {code} (check the URL and credential)"
             )

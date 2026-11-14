@@ -71,16 +71,33 @@ def _cap_service(registry: Any, cap_id: str):
     return registry.by_capability(cap_id.split(":", 1)[1]) if ":" in cap_id else None
 
 
-def reachable_services(registry: Any, zone: str) -> list[Any]:
+def reachable_services(registry: Any, zone: str, *, with_eval: bool = False) -> list[Any]:
     """Services a host in ``zone`` may connect to: same zone, a listed client zone, or a
-    dependency of a service in the zone (``upstreams``)."""
+    dependency of a service in the zone (``upstreams``).
+
+    ``with_eval`` adds the ``eval`` rows (the keyring's rows, ADR-0039 decision 2), each reached
+    by its own zone and client zones only: an upstream binds to its capability's primary, never to
+    a candidate, and an eval row's own upstreams make nothing reachable.
+
+    The keyring states what the registry declares: an eval row's grant to a client zone is not
+    a firewall rule.  The generated zone matrix (``firewall_matrix``) stays primary-only, so a
+    client zone in another zone than the eval row is still denied at the firewall (fail-closed)
+    until a site's service exception lets it through."""
     in_zone = [s for s in registry.sorted_services() if registry.host_of(s).zone == zone]
     called = {u for s in in_zone for u in s.upstreams}
-    return [
+    out = [
         s
         for s in registry.sorted_services()
         if registry.host_of(s).zone == zone or zone in s.clients or s.capability in called
     ]
+    if with_eval:
+        out += [
+            s
+            for s in registry.rows("eval")
+            if registry.host_of(s).zone == zone or zone in s.clients
+        ]
+        out.sort(key=lambda s: s.name)
+    return out
 
 
 def _broker_grants(broker: Mapping[str, Any] | None, principal: str) -> dict[str, dict]:
@@ -166,12 +183,28 @@ def principal_access(
     return {"principal": principal, "kind": "agent", "grants": grants, "denials": denials}
 
 
+#: The host role that marks the agent runner's host (ADR-0039 decision 7: ``agent-runtime`` is
+#: the runner slot, and no service row carries it).
+RUNNER_ROLE = "agent-runtime"
+
+
 def _runs_on(registry: Any, runs_on: str | None) -> Any:
+    """The registry host an agent runs on: ``runs_on`` when given, else the one host whose
+    ``role`` is :data:`RUNNER_ROLE`.  None or several such hosts is refused, as
+    ``provider_for`` refuses an ambiguous slot: the caller names the host instead of a guess."""
     if runs_on is None:
-        svc = registry.by_capability("agent-runtime")
-        if svc is None:
-            raise SpecError("no runs_on host given and the registry has no agent-runtime service")
-        runs_on = svc.host
+        found = sorted(h.name for h in registry.hosts.values() if h.role == RUNNER_ROLE)
+        if not found:
+            raise SpecError(
+                f"no runs_on host given and no registry host has role {RUNNER_ROLE}; "
+                "name one with --runs-on"
+            )
+        if len(found) > 1:
+            raise SpecError(
+                f"no runs_on host given and several registry hosts have role {RUNNER_ROLE} "
+                f"({', '.join(found)}); name one with --runs-on"
+            )
+        runs_on = found[0]
     host = registry.hosts.get(runs_on)
     if host is None:
         raise SpecError(f"runs_on host {runs_on!r} is not in the registry")
@@ -188,7 +221,7 @@ def access_block(
 ) -> dict:
     """The structured access block for ``profile`` (a
     :class:`~homelabnext.agent.compiler.VerifiedProfile`) running on registry host ``runs_on``
-    (default: the host of the registry's ``agent-runtime`` service)."""
+    (default: the one registry host whose role is ``agent-runtime``)."""
     require_verified(profile, "access_block")
     host = _runs_on(registry, runs_on)
     access = principal_access(

@@ -120,7 +120,7 @@ def _gen(argv: list[str]) -> int:
 # name -> (one-line help, handler).  Order is the order shown in --help.
 COMMANDS: dict[str, tuple[str, Main]] = {
     "registry": (
-        "the service registry: validate|resolve|generate|check|list-generators",
+        "the service registry: validate|resolve|bindings|consumers|standing|generate|check|list-generators",
         _registry,
     ),
     "new": ("scaffold a component: hnx new role|capability|detection|schema NAME", _new),
@@ -231,7 +231,7 @@ COMMANDS: dict[str, tuple[str, Main]] = {
         lambda a: importlib.import_module("homelabnext.events.cli").main(a),
     ),
     "status": (
-        "the read-only status hub: sources (the menu)|catalog|views|collect|render|serve|ingest",
+        "the read-only status hub: sources (the menu)|catalog|views|collect|render|serve|ingest|probe-tls",
         lambda a: importlib.import_module("homelabnext.status.cli").main(a),
     ),
     "graph": (

@@ -82,7 +82,7 @@ author: unknown
 
 <!-- hnx:gen:deps -->
 - Depends on: [lake-catalog](lake-catalog.md) ([[systems/lake-catalog|lake-catalog]]), [object-store](object-store.md) ([[systems/object-store|object-store]]), [idp](idp.md) ([[systems/idp|idp]])
-- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
+- Depended on by: [orchestrator](orchestrator.md) ([[systems/orchestrator|orchestrator]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

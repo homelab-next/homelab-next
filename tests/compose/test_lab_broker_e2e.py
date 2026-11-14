@@ -143,7 +143,9 @@ class _SharedWire:
 class _AclWire:
     """The fake behind the lab's own NATS permissions (config/nats/nats.conf, parsed): a
     connection as ``user`` may publish (and pull) what that user may on the lab's server, and a
-    connection without a known user is refused, as nats-server refuses it."""
+    connection without a known user is refused, as nats-server refuses it.  A client account
+    names its JetStream calls under the import prefix (``JS.HNX.API``): the fake, which models
+    one account, gets them as the bus account's ``$JS.API`` calls they import."""
 
     def __init__(self, shared: _SharedWire, user: str | None, *, permissive: bool = False):
         from test_lab_in_a_box import nats_users
@@ -163,12 +165,16 @@ class _AclWire:
             raise self._nj.WireError("permission denied: publish", permanent=True)
 
     def request(self, subject, *a, **kw):
+        from test_lab_in_a_box import bus_subject
+
         self._check(subject)
-        return self.shared.request(subject, *a, **kw)
+        return self.shared.request(bus_subject(subject), *a, **kw)
 
     def pull(self, subject, *a, **kw):
+        from test_lab_in_a_box import bus_subject
+
         self._check(subject)
-        return self.shared.pull(subject, *a, **kw)
+        return self.shared.pull(bus_subject(subject), *a, **kw)
 
     def close(self):
         pass
@@ -190,7 +196,7 @@ def _relay(e2e, state_root: Path, wire: _SharedWire, *, drop_marks: bool = False
 
     def relay_bus():  # the relay's: provisions nothing
         return nj.make(wire=wire_as("hnx-broker"), scratch=False, provision=False, stream=stream,
-                       subject_prefix=prefix)  # fmt: skip
+                       subject_prefix=prefix, api_prefix=e2e.LAB_API_PREFIX)  # fmt: skip
 
     def once():
         r = OutboxRelay(state_root, relay_bus)
@@ -214,7 +220,10 @@ def test_the_scenario_passes_every_step(lab, e2e):
     assert [r["step"] for r in rows] == list(e2e.steps(s)), rows
     assert {"bus-relay", "bus-acl"} <= set(e2e.steps(s)) and "bus-relay" not in e2e.STEPS
     acl = next(r for r in rows if r["step"] == "bus-acl")["detail"]
-    assert "hnx-st2-bridge: forged decision.returned and purge refused" in acl
+    assert (
+        "hnx-st2-bridge: forged decision.returned, purge, push consumer to another inbox and stream update refused"
+        in acl
+    )
     assert all(r["ok"] for r in rows), [r for r in rows if not r["ok"]]
     # what the steps claim, checked here against the broker's own state
     vias = {r["via"] for r in svc.audit_documents()}
@@ -308,7 +317,25 @@ def test_the_acl_check_fails_on_a_bus_anyone_may_publish_to(e2e, tmp_path):
     setup.relay = _relay(e2e, state.root, shared)
     setup.relay.provision()
     setup.relay.run_once()
-    assert "forged decision.returned and purge refused" in e2e.check_bus_acl(setup, "req-1")
+    got = e2e.check_bus_acl(setup, "req-1")
+    assert (
+        "forged decision.returned, purge, push consumer to another inbox and stream update refused"
+        in got
+    )
+    # round 4: a bridge that may create a consumer could push the stream to another's inbox
+    lab_wire = setup.relay.wire_as
+
+    class CreateAllowed(_AclWire):
+        def _check(self, subject):
+            from test_lab_in_a_box import bus_subject
+
+            if not bus_subject(subject).startswith("$JS.API.CONSUMER.CREATE."):
+                super()._check(subject)
+
+    setup.relay.wire_as = lambda user: CreateAllowed(shared, user)
+    with pytest.raises(e2e.StepFailed, match=r"CONSUMER\.CREATE\."):
+        e2e.check_bus_acl(setup, "req-1")
+    setup.relay.wire_as = lab_wire
     setup.relay = _relay(e2e, state.root, shared, acl=False)
     with pytest.raises(e2e.StepFailed, match="a client without a user connected"):
         e2e.check_bus_acl(setup, "req-1")
@@ -363,3 +390,34 @@ def test_the_acl_check_reads_and_acks_as_the_bridge(e2e, tmp_path, ack_format):
     setup.relay.wire_as = wire_as
     with pytest.raises(e2e.StepFailed, match=r"ack of seq \d+ failed"):
         e2e.check_bus_acl(setup, "req-1")
+
+
+def test_the_ack_check_uses_the_durable_it_is_given(e2e, tmp_path):
+    """On a real bus the scenario acks on a scratch durable (``run --bus-not-broker-durable``):
+    the bridge's real durable is never created, so a real bridge never inherits the run's ack
+    floor, and the scratch one is deleted again at the end (as the bus admin)."""
+    from homelabnext.broker.relay import BROKER_SOURCE
+    from homelabnext.broker.state import StateDir
+    from homelabnext.events.envelope import build_event
+
+    state = StateDir(tmp_path / "state")
+    data = {"decision_id": "req-1", "verdict": "accept", "confidence": 1.0, "tier_used": "human"}
+    state.put_outbox(build_event("homelabnext.decision.returned", BROKER_SOURCE, data,
+                                 dedupe_key="r", subject="req-1"))  # fmt: skip
+    shared = _SharedWire()
+    relay = _relay(e2e, state.root, shared, acl=False)  # the lab's ACL names the real durable
+    relay.not_broker_durable = "e2e-scratch-decision-returned"
+    relay.provision()
+    relay.run_once()
+    asked = []
+    real = shared.request
+    shared.request = lambda subject, *a, **kw: asked.append(subject) or real(subject, *a, **kw)
+    relay.delete_durable = True
+    got = e2e.check_bridge_acks(relay)
+    assert "acked 1 delivery(ies)" in got and "scratch durable deleted" in got
+    made = [s for s in asked if s.startswith("$JS.API.CONSUMER.CREATE.")]
+    assert made and all(".e2e-scratch-decision-returned." in s for s in made)
+    assert shared.server.streams[e2e.LAB_EVENTS_STREAM].consumers == {}  # gone again
+    with pytest.raises(SystemExit) as done:
+        e2e.main(["run", "--bus-not-broker-durable", "x", "--help"])
+    assert done.value.code == 0

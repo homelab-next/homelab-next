@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: Apache-2.0
+# Data only (role interface section 2): the configuration and the units are main's and are left as
+# they are. Every unit of the two that exists is stopped for the copy, whatever broker_start says
+# (a live broker would write beside it; broker_start: false means main never started them, not
+# that nothing else did), and started again after only when broker_start is true, as main
+# does; every ownership and mode
+# main sets on the state is put back: the copy gives what it writes the broker's user and group
+# and the backup's modes, the state directory included, and the relay can only reach outbox/
+# through that directory while it is the relay's group, 0710.
+#
+# The copy merges the backup into the state directory, it deletes nothing: the run claims and
+# consumed approvals written after the backup survive a restore over a surviving state directory.
+# Restored onto an EMPTY one (the original lost), every approval consumed after the backup is
+# unconsumed again and a run-once action can run a second time (docs/broker.md "Backup and
+# restore").
+- block:
+    - name: Look for the relay's and the broker's units
+      ansible.builtin.stat:
+        path: "{{ broker_systemd_dir }}/{{ item }}"
+      loop: [hnx-broker-relay.service, hnx-broker.service]
+      register: broker_restore_units
+    - name: Stop the relay and the broker, each whose unit exists
+      ansible.builtin.systemd_service:
+        name: "{{ item.item }}"
+        state: stopped
+      loop: "{{ broker_restore_units.results | selectattr('stat.exists') | list }}"
+      loop_control:
+        label: "{{ item.item }}"
+    - name: Restore the state directory and the data root
+      ansible.builtin.copy:
+        src: "{{ broker_restore_source }}/{{ item.src }}/"
+        dest: "{{ item.dest }}/"
+        remote_src: true
+        owner: "{{ broker_user }}"
+        group: "{{ broker_group }}"
+        mode: preserve
+      loop:
+        - {src: state, dest: "{{ broker_state_dir }}"}
+        - {src: agents, dest: "{{ broker_data_root }}"}
+    - name: Put back the state directory's and the data root's own group and mode (main's)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ broker_user }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ broker_state_dir }}"
+          group: "{{ broker_relay_group if broker_relay | bool else broker_group }}"
+          mode: "{{ '0710' if broker_relay | bool else '0700' }}"
+        - {path: "{{ broker_data_root }}", group: "{{ broker_group }}", mode: "0750"}
+      loop_control:
+        label: "{{ item.path }}"
+    - name: Give outbox/ back to the relay's group and relay/ to the relay
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        recurse: true
+      loop:
+        - {path: "{{ broker_state_dir }}/outbox", owner: "{{ broker_user }}", group: "{{ broker_relay_group }}"}
+        - {path: "{{ broker_state_dir }}/relay", owner: "{{ broker_relay_user }}", group: "{{ broker_group }}"}
+      loop_control:
+        label: "{{ item.path }}"
+      when: broker_relay | bool
+    - name: Put back outbox/'s and relay/'s own modes (main's, setgid)
+      ansible.builtin.file:
+        path: "{{ broker_state_dir }}/{{ item }}"
+        state: directory
+        mode: "2750"
+      loop: [outbox, relay]
+      when: broker_relay | bool
+    - name: Start the broker and the relay again
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: started
+      loop: "{{ ['hnx-broker.service'] + (['hnx-broker-relay.service'] if broker_relay | bool else []) }}"
+      when: broker_start | bool
+  tags: [restore]

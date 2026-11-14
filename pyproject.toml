@@ -134,9 +134,30 @@ suite_budgets = [
   # (2026-10-24/25), over 1080 with no test changed; 900 since a test's first run starts beside
   # the others of its module (rolerun.first_run, one ansible-playbook per CPU): 1194s -> 700s
   # summed over the six shards on a 4-CPU box (2026-10-27) against CI's 1143.6s before, so about
-  # 670s on CI, and 900 is about 1.3x that
-  "tests/roles = 900",
-  "tools/tests = 240",
+  # 670s on CI, and 900 is about 1.3x that; 1100 since the openbao role's restore staging,
+  # downgrade witnesses and their refusal cases (pull request #358): CI measured 761s/884s (3.11/3.12)
+  # before them and 942s/1169s with them as first written; the cases then moved into run_cases
+  # (one ansible-playbook for many) and the service tests stopped resolving a name, 176s -> 150s
+  # for the module locally against 116s before the change (3.12's runners already sat at 884s of
+  # 900 before it). After that batching the pull request's CI measured 937.2s (3.11) and 844.1s
+  # (3.12) summed over the six shards (2026-11-12, head 6d70f118), then 986.5s and 1055.2s with
+  # the round-4 restore and record cases (head 95a9e1cc; one 3.12 shard alone took 569s): 1320
+  # since, about 1.25x the slower figure; 1680 since the control-plane roles (#360) landed beside
+  # them: main measured 1116.7s (3.11) and 1205.2s (3.12) at 64fb744e, and the round-6 follow-ups
+  # (#361: the bus ACL's validation cases; its pinned-server cases skip in these shards, without
+  # nats-server or nats-py, and run in the external-tools job) 1227.2s and 1383.5s on a first run,
+  # 1106.5s and 1411.2s on the green run of head 1210441b (2026-11-12): the spread is run-to-run
+  # noise; #360's own pull request measured 991s once and about 770s typically before the
+  # openbao suites joined it. 1680 is about 1.2x the slower figure. 2150 since the openbao ACME,
+  # node-notify, ssh_hardening check-mode and docker_engine role suites joined (#367, #366, #368,
+  # #372): on 2026-11-12 3.12 measured 1791.1s (#372, a red run over 1680), 1670.2s and 1460.0s
+  # (its green rerun), and 1686.5s (#373, red); 3.11 1166.2s-1344.8s. 2150 is about 1.2x the
+  # slowest figure
+  "tests/roles = 2150",
+  # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
+  # builds the controller and runs the whole suite against it: main measured 180-186 s summed
+  # over the shards (2026-11-09), and the pull request that added it 245.8 s, over 240
+  "tools/tests = 300",
   # the golden suites: run whole they take about 20 s (2026-10-26, a local 4-core box), but the
   # code-mode report fixture (module scope, about 13 s) runs once in every CI shard that draws a
   # test of its module, and the merge sums every shard's time: 34.2 s in four shards (2026-10-25),
@@ -153,8 +174,10 @@ suite_budgets = [
   "tests/agent = 90",
   # the module loader, review tier, swap gate and egress suites: about 1,000 tests, measured 60.7 s
   # on a local 4-core box (2026-10-28, over the 60 s default) after the swap gate's role-trust
-  # cases, each of which builds two git commits; 90 is about 1.5x that
-  "tests/modules = 90",
+  # cases, each of which builds two git commits; 90 is about 1.5x that; 150 since the apply path
+  # runs its limits plays with ansible-playbook (#378): 58.8 s locally (2026-11-13), CI measured
+  # 109.9 s on 3.11 and 104.7 s on 3.12 (ansible-playbook starts are slower there)
+  "tests/modules = 150",
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
   # 100 since CI measured 91s with 30 ADRs; 130 since CI measured 100.8s with 32 ADRs and the
@@ -171,14 +194,20 @@ suite_budgets = [
   # without them it measured 84.1s on a local 4-core box (2026-10-26), where it took 136s with
   # them, so 110 leaves it the headroom it had and the sweeps no longer push it; 140 since CI
   # measured 111.2s on 3.12 (2026-11-05) after the lake-query count_by/cardinality and lake-catalog
-  # batch-source checks (ADR-0036), about 1.25x that
-  "tests/conform = 140",
+  # batch-source checks (ADR-0036), about 1.25x that; 180 since the agent-runner suite (ADR-0051
+  # step 2), whose every check starts real processes under the development launcher (about 8s a
+  # run): 147.5s and then, after its gateway wait came down to 0.1s and its enough-checks test
+  # stopped rerunning it, 137.4s on a shared local 4-core box (2026-11-09); 180 is about 1.3x
+  "tests/conform = 180",
   # the sweeps: each registered mutant through its whole suite (test_conform_mutants.py, the
   # protocol mutants) and X-10 end to end over every suite (the CLI report tests, one of which
   # also runs every suite and mutant once, stay in tests/conform). They grow with
   # every check and mutant, so this budget is the one to raise as they do: 50.0s on the same box
-  # (2026-10-26), 75 is 1.5x that
-  "tests/conform_sweeps = 75",
+  # (2026-10-26), 75 is 1.5x that; 210 since the agent-runner suite's mutants, each a whole
+  # run of real processes (about 8s): 143.7s, then 159.1s with its tenth mutant and three more
+  # checks, then 185.6s with the two stale-record checks, on a shared local 4-core box
+  # (2026-11-09); 240 is about 1.3x
+  "tests/conform_sweeps = 240",
 ]
 skip_reasons = [
   "^could not import '[A-Za-z0-9_.]+'",  # pytest.importorskip: an optional extra is not installed

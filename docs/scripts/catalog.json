@@ -22,6 +22,28 @@
     },
     {
       "exit": {
+        "0": "every list is at its count (and no count rose against the base without a human-tier code owner)",
+        "1": "a list above or below its count, a counts file outside CODEOWNERS' human tier, or a count raised against the base with none",
+        "100": "the check itself failed (could not measure)",
+        "2": "usage error, a malformed counts file or allowlist, an unusable base, or an update that would raise a count without --grow"
+      },
+      "id": "allowlist-ratchet",
+      "inputs": "the tracked tree; tools/allowlist_counts.yml; CODEOWNERS; the base commit's counts and CODEOWNERS (--base, --ci-base)",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per list that grew, shrank or had an entry edited against the counts file (or against the base); --update rewrites the counts and digests",
+      "owner": "maintainers",
+      "path": "tools/allowlist_ratchet.py",
+      "purpose": "Fail when a gate's allowlist or inline suppression markers outgrow the reviewed counts in tools/allowlist_counts.yml.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:gates",
+        "make:allowlist-counts"
+      ]
+    },
+    {
+      "exit": {
         "0": "reported"
       },
       "id": "broker-example-dhcp-leases",
@@ -103,6 +125,29 @@
       "status": "active",
       "trigger": [
         "manual"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid",
+        "1": "with --check, the installed certificate is missing, invalid or due",
+        "100": "could not measure (openssl cannot be run); nothing was checked or installed",
+        "2": "lego failed, or what it stored is not a valid certificate for the names; nothing was installed",
+        "3": "the certificate was installed but Caddy could not be reloaded (retried next run)"
+      },
+      "id": "caddy-acme-renew",
+      "inputs": "the DNS provider's token (the root-only environment file, read by the script itself); lego's stored certificate",
+      "installs_to": "/usr/local/libexec/homelabnext/caddy-acme-renew",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the edge certificate and key in the module's certs directory; a reload (caddy reload --force) of a running Caddy",
+      "owner": "platform",
+      "path": "modules/caddy/roles/caddy/templates/caddy-acme-renew.py.j2",
+      "purpose": "Renew the edge's public certificate over ACME (DNS-01) when due, install it where Caddy reads it and reload a running Caddy.",
+      "status": "active",
+      "trigger": [
+        "timer:caddy/acme-renew",
+        "role:caddy"
       ]
     },
     {
@@ -348,6 +393,26 @@
     },
     {
       "exit": {
+        "0": "every stream, its DLQ and every durable exist (each durable a pull durable on its filter)",
+        "1": "the bus refused or could not be reached, or an existing durable is not one a client may bind to or differs from its declaration (each field named)",
+        "2": "usage error"
+      },
+      "id": "events-provision",
+      "inputs": "the bus URL and the admin user as arguments, its password in HNX_EVENTS_ADMIN_PASSWORD, the streams and durables as JSON on stdin",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-events-provision",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON line: the streams and durables (stream/durable) it created, under the key created",
+      "owner": "platform",
+      "path": "ansible/roles/events_bus/files/hnx-events-provision.py",
+      "purpose": "Create the standing events streams (each with its DLQ, bounded) and the pull durables clients bind to, when missing.",
+      "status": "active",
+      "trigger": [
+        "role:events_bus"
+      ]
+    },
+    {
+      "exit": {
         "0": "every gate and test of every listed component passed (list and validate, the file is valid; ratchet, the list did not grow or the operator allowed it)",
         "1": "a gate or a test failed (ratchet, the list grew against the base)",
         "2": "the list is invalid or unreadable (ratchet, or the base is not a commit)"
@@ -382,7 +447,8 @@
       "purpose": "Serve the deterministic fake OpenAI-compatible inference API.",
       "status": "active",
       "trigger": [
-        "compose:lab-in-a-box/inference"
+        "compose:lab-in-a-box/inference",
+        "script:gateway-conformance"
       ]
     },
     {
@@ -406,6 +472,25 @@
       "trigger": [
         "ci:ci/regression-tests",
         "make:fix-check"
+      ]
+    },
+    {
+      "exit": {
+        "0": "deps installed, or every check of the suite passed",
+        "1": "a setting is missing or wrong, a process did not come up, or a check did not pass"
+      },
+      "id": "gateway-conformance",
+      "inputs": "HNX_VENV, HNX_PYTHON, GATEWAY_BIN, WORK_DIR; the conformance gateway spec and the own-gateway target under compose/lab-in-a-box/",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "WORK_DIR (render, usage.jsonl, fake.log, gateway.log, conform-inference.json); a verdict line, also to $GITHUB_STEP_SUMMARY when set",
+      "owner": "maintainers",
+      "path": "tools/gateway_conformance.sh",
+      "purpose": "Run the inference conformance suite against the repository's own gateway binary and the fake inference server on loopback, holding every check to a pass.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/gateway-conformance",
+        "ci:ci/orchestration-conformance"
       ]
     },
     {
@@ -467,6 +552,44 @@
       "trigger": [
         "ci:ci/lint",
         "make:hermetic-lint"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the mode did its work (health reports its findings in problems)",
+        "1": "refused input, an error from the IdP, or flow drift sync will not touch (the reason on stderr)",
+        "2": "usage error"
+      },
+      "id": "keycloak-api",
+      "inputs": "the mode as the one argument (wait, sync, health, export); every setting, the admin's password and the client secrets as one JSON document on stdin",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON document on stdout (sync - created and changed; health - problems; export - the realm's partial export)",
+      "owner": "platform",
+      "path": "modules/keycloak/roles/keycloak/files/keycloak_api.py",
+      "purpose": "Import or converge the generated realm through the IdP's admin API, and check it (the keycloak role's sync, health and export).",
+      "status": "active",
+      "trigger": [
+        "role:keycloak"
+      ]
+    },
+    {
+      "exit": {
+        "0": "listed, checked or staged",
+        "1": "the export or the source is refused (the reason on stderr)",
+        "2": "usage error"
+      },
+      "id": "keycloak-backup",
+      "inputs": "listing EXPORT_DIR | check SOURCE DB_UID | stage SOURCE DEST DB_UID DB_GID",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the listing's rows, or the checked files' size and sha256, as JSON on stdout; stage also writes DEST (0600, the database's user)",
+      "owner": "platform",
+      "path": "modules/keycloak/roles/keycloak/files/keycloak_backup.py",
+      "purpose": "List the keycloak role's export, and check an export (and stage its dump through the checked descriptor) before a restore.",
+      "status": "active",
+      "trigger": [
+        "role:keycloak"
       ]
     },
     {
@@ -543,6 +666,24 @@
       "status": "active",
       "trigger": [
         "compose:lab-in-a-box/lab-init"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the controller stopped cleanly",
+        "1": "no token, or the configuration's check failed"
+      },
+      "id": "lab-orchestrator-entrypoint",
+      "inputs": "/run/secrets/orchestrator-token; /etc/orchestrator/controller.yaml",
+      "kind": "tool",
+      "language": "shell",
+      "outputs": "/var/lib/orchestrator/api-tokens.yaml (owner-only); the controller's log",
+      "owner": "lab-in-a-box",
+      "path": "compose/lab-in-a-box/orchestrator/entrypoint.sh",
+      "purpose": "Start the lab controller with a tokens file written from the throwaway token's digest.",
+      "status": "active",
+      "trigger": [
+        "compose:lab-in-a-box/orchestrator"
       ]
     },
     {
@@ -661,9 +802,11 @@
       "trigger": [
         "role:last_run",
         "timer:aide/scan",
+        "timer:caddy/acme-renew",
         "timer:clamav/scan",
         "timer:lynis/scan",
         "timer:needrestart/check",
+        "timer:openbao/acme-renew",
         "timer:rkhunter/scan",
         "timer:trivy/scan"
       ]
@@ -697,6 +840,7 @@
         "make:secret-scan",
         "pre-commit:leak-scan",
         "pre-commit:secret-scan",
+        "script:allowlist-ratchet",
         "script:coverage-floor",
         "script:private-leak-check"
       ]
@@ -708,13 +852,13 @@
         "2": "the register cannot be read"
       },
       "id": "licence-check",
-      "inputs": "constraints/*.txt, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml",
+      "inputs": "constraints/*.txt, every go.mod's require lines, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml",
       "kind": "check",
       "language": "python",
       "outputs": "one line per problem; a summary line",
       "owner": "maintainers",
       "path": "tools/licence_check.py",
-      "purpose": "Fail when a pinned Python package or a compose image has no reviewed licence entry, or a linked one is copyleft.",
+      "purpose": "Fail when a pinned Python package, a Go module a go.mod requires or a compose image has no reviewed licence entry, or a linked one is copyleft.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
@@ -917,6 +1061,49 @@
     },
     {
       "exit": {
+        "0": "the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid",
+        "1": "with --check, the installed certificate is missing, invalid or due",
+        "100": "could not measure (openssl cannot be run); nothing was checked or installed",
+        "2": "lego failed, or what it stored is not a valid certificate for the names; nothing was installed",
+        "3": "the certificate was installed but the server could not be reloaded, or is starting or stopping (retried next run)"
+      },
+      "id": "openbao-acme-renew",
+      "inputs": "the DNS provider's token (the root-only environment file, read by the script itself); lego's stored certificate",
+      "installs_to": "/usr/local/libexec/homelabnext/openbao-acme-renew",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the server certificate and key in the TLS directory; a reload (SIGHUP) of a running server",
+      "owner": "platform",
+      "path": "ansible/roles/openbao/templates/openbao-acme-renew.py.j2",
+      "purpose": "Renew OpenBao's public server certificate over ACME (DNS-01) when due, install it and reload the server with SIGHUP.",
+      "status": "active",
+      "trigger": [
+        "timer:openbao/acme-renew",
+        "role:openbao"
+      ]
+    },
+    {
+      "exit": {
+        "0": "the suite passed",
+        "1": "a check did not pass (for verdict, a fault check did not), or the controller did not come up",
+        "2": "usage error"
+      },
+      "id": "orchestration-conformance",
+      "inputs": "a built orchestrator/cmd/controller; an absolute, empty or missing work directory",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the work directory (controller.yaml, controller.log, the state, the session pids); the suite's verdict",
+      "owner": "maintainers",
+      "path": "tools/orchestration_conformance.py",
+      "purpose": "Run the orchestration conformance suite against the repository's own controller binary on loopback, with process-level fault injection.",
+      "status": "active",
+      "trigger": [
+        "make:orchestration-conformance",
+        "ci:ci/orchestration-conformance"
+      ]
+    },
+    {
+      "exit": {
         "0": "the job is the manual deploy from main; it may run",
         "1": "any other job; the runner fails it before its first step"
       },
@@ -959,7 +1146,7 @@
         "2": "usage error, an unreadable tree or an unwritable --out file"
       },
       "id": "pin-freshness",
-      "inputs": "the tree (role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)",
+      "inputs": "the tree (role defaults, the public modules' role defaults, workflow env, the Terraform provider block, the Makefile); upstream release lists over HTTPS (report only)",
       "kind": "tool",
       "language": "python",
       "outputs": "inventory - the pins found, as JSON; report - a Markdown report for the tracking issue",
@@ -1194,7 +1381,7 @@
       "outputs": "one line per disabled verification",
       "owner": "maintainers",
       "path": "tools/tls_verify_lint.py",
-      "purpose": "Fail when Python code or a YAML/JSON config turns TLS certificate verification off.",
+      "purpose": "Fail when Python code, a YAML/JSON config or a Caddyfile turns TLS certificate verification off.",
       "status": "active",
       "trigger": [
         "ci:ci/schemas",
@@ -1259,6 +1446,26 @@
       "trigger": [
         "ci:ci/schemas",
         "make:workstation-lint"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every file at its count",
+        "1": "a file with more unbudgeted uses than its count (or one not listed), or fewer (lower the count)",
+        "2": "usage error or a malformed allowlist"
+      },
+      "id": "yaml-loader-lint",
+      "inputs": "homelabnext/**/*.py; tools/yaml_loader.allow.yml",
+      "kind": "check",
+      "language": "python",
+      "outputs": "one line per file above or below its reviewed count",
+      "owner": "maintainers",
+      "path": "tools/yaml_loader_lint.py",
+      "purpose": "Fail when package code parses YAML with yaml.safe_load or SafeLoader instead of the budgeted loaders of homelabnext/_yaml.py, beyond the counts in tools/yaml_loader.allow.yml.",
+      "status": "active",
+      "trigger": [
+        "ci:ci/schemas",
+        "make:gates"
       ]
     }
   ]

@@ -7,6 +7,7 @@ now packages only git-tracked files (or, from an sdist, its manifest) and refuse
 Every artefact is checked against an allowlist of paths and leak-scanned after unpacking.
 """
 
+import hashlib
 import re
 import sys
 import tarfile
@@ -19,7 +20,8 @@ from pkgbuild import ROOT, BuildFailed, build, export_tree, git
 sys.path.insert(0, str(ROOT / "tools"))
 import leak_scan
 
-pytestmark = pytest.mark.slow
+# one shard builds this module's artefacts once (tests/suite_policy.py, shard_by_module)
+pytestmark = [pytest.mark.slow, pytest.mark.shard_by_module]
 
 WHEEL_ALLOW = re.compile(
     r"^(?:homelabnext/(?!.*/\.)[\w/.-]+\.(?:py|tmpl|yml)"
@@ -107,6 +109,20 @@ def test_sdist_contents_match_the_allowlist(artefacts):
     assert not any(r.endswith("scratch_notes.py") for r in rel)
 
 
+def _go_module_names(names):
+    """The names under the top-level Go module ``orchestrator/``: a path whose FIRST component is
+    ``orchestrator`` (``examples/mcp/clients/orchestrator/...``, an example of the orchestrator's
+    files, is not the module)."""
+    return [n for n in names if Path(n).parts[:1] == ("orchestrator",)]
+
+
+def test_only_the_top_level_go_module_counts():
+    names = ["orchestrator/go.mod", "orchestrator/internal/x.go",
+             "examples/mcp/clients/orchestrator/mcp_catalog.yaml",
+             "examples/mcp/clients/orchestrator.yml", "homelabnext/orchestration/model.py"]  # fmt: skip
+    assert _go_module_names(names) == ["orchestrator/go.mod", "orchestrator/internal/x.go"]
+
+
 def test_the_go_module_is_in_neither_artefact(artefacts):
     """orchestrator/ is a Go module with its own CI job; MANIFEST.in prunes it from the sdist and
     the wheel's package list never reaches it (docs: the migration plan, section 3.3)."""
@@ -116,8 +132,14 @@ def test_the_go_module_is_in_neither_artefact(artefacts):
         sdist_names = [m.name.split("/", 1)[1] for m in t.getmembers() if "/" in m.name]
     wheel_names = zipfile.ZipFile(wheel).namelist()
     for names in (sdist_names, wheel_names):
-        assert [n for n in names if "orchestrator" in Path(n).parts] == []
+        assert _go_module_names(names) == []
         assert not any(n.endswith((".go", "go.mod", "hnx_adapter/adapter.py")) for n in names)
+
+
+def _same_file_key(path: Path) -> tuple[str, str]:
+    """What the scan of a file depends on besides its label: its bytes and its name (the scanner
+    reads only the name of the path, for ``.go`` and ``go.sum``)."""
+    return hashlib.sha256(path.read_bytes()).hexdigest(), path.name
 
 
 def test_unpacked_artefacts_are_leak_clean(artefacts, tmp_path):
@@ -128,7 +150,22 @@ def test_unpacked_artefacts_are_leak_clean(artefacts, tmp_path):
     for record in (tmp_path / "wheel").glob("*.dist-info/RECORD"):
         record.unlink()  # file hashes by construction (high entropy, nothing to leak)
     skipped: list = []
-    hits = leak_scan.scan_paths([str(tmp_path)], skipped=skipped)
+    hits = leak_scan.scan_paths([str(tmp_path / "sdist")], skipped=skipped)
+    # the wheel's files, less those the sdist scan already read byte for byte under the same file
+    # name (most of the package): the scan of each would be the same, and it took half the time
+    seen = {
+        _same_file_key(f)
+        for f in leak_scan.iter_files([str(tmp_path / "sdist")])
+        if isinstance(f, Path) and f.is_file() and not f.is_symlink()
+    }
+    rest = []
+    for f in leak_scan.iter_files([str(tmp_path / "wheel")]):
+        if not isinstance(f, Path):
+            skipped.append(f)  # a directory that could not be listed
+        elif not f.is_file() or f.is_symlink() or _same_file_key(f) not in seen:
+            rest.append(str(f))
+    assert len(rest) < sum(1 for _ in (tmp_path / "wheel").rglob("*"))  # some were the sdist's
+    hits += leak_scan.scan_paths(rest, skipped=skipped)
     assert hits == [] and skipped == []
 
 

@@ -13,3 +13,6 @@ allow:
   - path: homelabnext/generators/builtin.py
     rules: [coverage]
     reason: the caddy generator builds the hnx_forward_auth snippet from string pieces; its output for every registry in the tree is linted as a Caddy config
+  - path: modules/caddy/roles/caddy/templates/Caddyfile.j2
+    rules: [parse, semantic]
+    reason: the edge module's Caddyfile imports sites.caddy, which the role renders at deploy time with the caddy generator for one deployment's hosts (--edge-host); the generator's output for every registry in the tree is linted, and the module's tests render this template and adapt it with the generated sites through the pinned Caddy (tests/modules/test_edge_module.py, run in this job)

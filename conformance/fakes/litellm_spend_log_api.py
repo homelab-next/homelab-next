@@ -11,18 +11,15 @@ can see the window and paging asked for.
 
 from __future__ import annotations
 
-import http.server
 import json
-import threading
-import urllib.parse
 from pathlib import Path
 
+from conformance.fakes._loopback import LoopbackAPI
 from homelabnext.status.model import parse_iso
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "litellm_spend_logs_v2.json"
 VIEWER_KEY = "fake-viewer-key-0001"
 KEY_ENV = {"HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER": VIEWER_KEY}
-LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow the fake gateway binds loopback only
 #: the tags the fixture's rows carry for the four example jobs, and the window that holds them
 TAGS = ("run-0001", "hnx-run-0002", "run-0003", "run-0004")
 WINDOW = ("2026-01-01T00:00:00Z", "2026-01-01T03:00:00Z")
@@ -65,7 +62,7 @@ def _within(rows: list, q: dict[str, str]) -> list:
     return out
 
 
-class FakeSpendLogs:
+class FakeSpendLogs(LoopbackAPI):
     """``GET /spend/logs/v2`` on loopback: the fixture's rows started in the window, by ``page``
     and ``page_size``, or ``pages_`` verbatim by ``page``; 401 for any other key,
     ``status`` for every request when it is not 200.  A context manager (serves while inside)."""
@@ -76,55 +73,18 @@ class FakeSpendLogs:
         self.recorded = pages_ is None
         self.pages = pages() if pages_ is None else pages_
         self.status = status
-        self.requests: list[dict[str, str]] = []
-        fake = self
+        super().__init__()
 
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                path, _, query = self.path.partition("?")
-                q = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
-                fake.requests.append({"path": path, **q})
-                if self.headers.get("Authorization") != f"Bearer {VIEWER_KEY}":
-                    return self._reply(401, {"error": "invalid key"})
-                if fake.status != 200:
-                    return self._reply(fake.status, {"error": "fake failure"})
-                n = int(q.get("page", "1"))
-                if fake.recorded:  # as the API: the rows of the window, paged by page_size
-                    rows = _within([r for p in fake.pages for r in p["data"]], q)
-                    size = int(q.get("page_size", "50"))
-                    total = -(-len(rows) // size)
-                    return self._reply(
-                        200, {"data": rows[(n - 1) * size : n * size], "total_pages": total}
-                    )
-                doc = fake.pages[n - 1] if n <= len(fake.pages) else {"data": [], "total_pages": 0}
-                return self._reply(200, doc)
-
-            def _reply(self, code, doc):
-                raw = json.dumps(doc).encode()
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-
-            def log_message(self, *a):
-                pass
-
-        self.server = http.server.ThreadingHTTPServer((LOOPBACK, 0), Handler)
-        self.url = f"http://{LOOPBACK}:{self.server.server_address[1]}"
-
-    def start(self) -> FakeSpendLogs:
-        threading.Thread(
-            target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
-        ).start()
-        return self
-
-    def stop(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-
-    def __enter__(self):
-        return self.start()
-
-    def __exit__(self, *a):
-        self.stop()
+    def answer(self, path, q, headers):
+        if headers.get("Authorization") != f"Bearer {VIEWER_KEY}":
+            return 401, {"error": "invalid key"}
+        if self.status != 200:
+            return self.status, {"error": "fake failure"}
+        n = int(q.get("page", "1"))
+        if self.recorded:  # as the API: the rows of the window, paged by page_size
+            rows = _within([r for p in self.pages for r in p["data"]], q)
+            size = int(q.get("page_size", "50"))
+            total = -(-len(rows) // size)
+            return 200, {"data": rows[(n - 1) * size : n * size], "total_pages": total}
+        doc = self.pages[n - 1] if n <= len(self.pages) else {"data": [], "total_pages": 0}
+        return 200, doc

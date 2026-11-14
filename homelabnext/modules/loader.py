@@ -21,7 +21,7 @@ rules need, so no rule is skipped because a caller forgot an argument:
    title that is one of the core's own names (:class:`CoreNames`).
 4. **Per site** (with a selection): the selection validates against ``platform/module_selection``,
    then :func:`~homelabnext.modules.rules.site_problems` with the rows, units, privileged units and
-   model roles built here, no provider instance that takes a core service name for another
+   model roles built here and the core registry's rows (each incumbent names one), no provider instance that takes a core service name for another
    capability, one declaration per notify pair problem title and a recovery that names no other
    title (:func:`pair_problems`), and
    :func:`homelabnext.modules.supply.lock_problems` for the selected modules (a
@@ -42,6 +42,8 @@ error.
 
 from __future__ import annotations
 
+import datetime as dt
+import itertools
 import json
 import os
 import re
@@ -56,6 +58,8 @@ import yaml
 from homelabnext import paths
 from homelabnext._schema_text import safe_message
 from homelabnext._yaml import UniqueKeyLoader
+from homelabnext.modules import guest_hosts as gh
+from homelabnext.modules import registry_rows as rr
 from homelabnext.modules import rules as mr
 from homelabnext.modules import supply
 from homelabnext.schemas.module_manifest import RESERVED_IDS
@@ -107,6 +111,14 @@ MAX_CATALOG_FILES = 1_000
 #: files a fixture root's modules may name without shipping (the fictional examples carry no
 #: Ansible): never exempt for the public tree or an overlay
 FIXTURE_UNSHIPPED = ("roles/", "playbooks/")
+#: where a module's Ansible roles live: ``roles/<name>``, a directory (the apply path runs the
+#: module's roles from its ``roles/``, by path or by name, so every entry there is held to the
+#: same rules whether or not a playbook names it today)
+ROLES_DIR = "roles"
+#: the most entries one module's ``roles/`` tree may hold, and how deep it may nest: a walk past
+#: either is refused, never cut short (a role has tens of files, a few levels deep)
+MAX_ROLE_ENTRIES = 5_000
+MAX_ROLE_DEPTH = 12
 #: the kinds of what runs that the two-way check compares, as the inventory names them
 INVENTORY_KINDS = ("units", "rows", "mcp_servers", "agents", "tables")
 #: contributed kinds validated against a record type (the rest are checked for containment only)
@@ -179,7 +191,9 @@ class CoreNames:
     already has (:func:`core_names`), never from a list kept for this check:
 
     * ``ids``: the reserved ids (:data:`homelabnext.schemas.module_manifest.RESERVED_IDS`);
-    * ``rows``: the service rows of the core registry (``services.yml``), each with its capability;
+    * ``rows``: the service rows of the core registry (``services.yml``), each with its capability,
+      ``non_primary`` those whose standing is eval, retiring or legacy (ADR-0039), and
+      ``rows_known`` says the registry was read (a site's incumbents are judged against it);
     * ``mcp_servers``: the ids of the core's MCP catalog (``mcp/`` beside the registry), and
       ``mcp_instances`` each one's instance template (a running name bound to no module must be
       one of these, when ``mcp_known``);
@@ -197,6 +211,8 @@ class CoreNames:
 
     ids: frozenset[str] = frozenset(RESERVED_IDS)
     rows: Mapping[str, str] = field(default_factory=dict)  # row name -> capability
+    non_primary: frozenset[str] = frozenset()  # rows whose standing is not primary
+    rows_known: bool = False
     mcp_servers: frozenset[str] = frozenset()
     agents: frozenset[str] = frozenset()
     tables: frozenset[str] = frozenset()  # table:<namespace>.<name>
@@ -226,6 +242,11 @@ class CoreNames:
 class Report:
     problems: list[Problem]
     notes: list[str]  # what was not checked, and why
+    #: the selection as the rules judged it: hosts that reference a guest carry the kind,
+    #: capacity and addresses resolved from their guest records (None without a valid site)
+    site: Doc | None = None
+    #: what is owed but not refused: each planned core slot (``planned``), its why and review
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -246,6 +267,12 @@ def read_bytes(path: str | Path, *, follow: bool = True) -> bytes:
         fd = os.open(path, flags)
     except OSError as exc:
         raise Unreadable(f"cannot be opened ({exc.strerror})") from None
+    return _read_fd(fd)
+
+
+def _read_fd(fd: int) -> bytes:
+    """A regular file's bytes from an open descriptor (closed here), at most
+    :data:`MAX_BYTES`."""
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
@@ -273,6 +300,88 @@ def path_has_symlink(root: str | Path, rel: str) -> bool:
         if cur.is_symlink():
             return True
     return False
+
+
+def containment_root(base: str | Path) -> Path:
+    """The default root :func:`read_contained` keeps a path inside: the nearest directory, from
+    ``base`` up to (and no higher than) the caller's working directory, that holds a ``.git``
+    entry (a checkout; a change cannot commit a ``.git``, and a dotfiles checkout in a home
+    directory above the working directory is never reached); else this package's own verified
+    source checkout (:func:`homelabnext.paths.checkout_root`, which a ``git archive`` export
+    also is) when it holds ``base``; else ``base`` itself.  Nothing is asked of git: a directory a
+    change controls could otherwise name a root of its choosing (a planted bare-repository layout
+    makes ``git rev-parse --show-toplevel`` answer ``/``).  A root of ``/`` is refused by
+    :func:`read_contained` whichever way it was chosen."""
+    target = Path(os.path.abspath(base))
+    here = Path(os.path.abspath(os.getcwd()))
+    if target == here or here in target.parents:
+        for d in (target, *target.parents):
+            if os.path.lexists(d / ".git"):
+                return d
+            if d == here:
+                break
+    own = paths.checkout_root()
+    if own is not None:
+        own = Path(os.path.abspath(own))
+        if target == own or own in target.parents:
+            return own
+    return target
+
+
+def read_contained(base: str | Path, rel: str, root: str | Path | None = None) -> bytes:
+    """The bytes of ``rel``, a path relative to directory ``base``, that must stay inside
+    ``root`` (default :func:`containment_root`).  ``..`` is allowed while the normalised path
+    stays inside the root; an absolute ``rel``, a path that leaves the root, and a symbolic link
+    on any component between the root and the file (the file included) are refused with
+    :class:`Unreadable`, as is anything :func:`read_bytes` refuses.  The walk opens each
+    component relative to the one before with ``O_NOFOLLOW``, so a link swapped in after a check
+    is refused too."""
+    if Path(rel).is_absolute():
+        raise Unreadable("an absolute path (give one relative to the file that names it)")
+    root = Path(os.path.abspath(root)) if root is not None else containment_root(base)
+    if root == Path(root.anchor):
+        raise Unreadable(f"the root {root} is a filesystem root: give the checkout instead")
+    target = Path(os.path.normpath(os.path.join(os.path.abspath(base), rel)))
+    try:
+        parts = target.relative_to(root).parts
+    except ValueError:
+        raise Unreadable(
+            f"outside the root {root}: pass --root <checkout> or run from the checkout"
+        ) from None
+    if not parts:
+        raise Unreadable("not a regular file")
+
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    dirflags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow | cloexec
+    try:
+        fd = os.open(root, dirflags)  # O_NOFOLLOW: the root itself is no link either
+    except OSError as exc:
+        if os.path.islink(root):
+            raise Unreadable("a symbolic link on its path") from None
+        raise Unreadable(f"cannot be opened ({exc.strerror})") from None
+    try:
+        for n, part in enumerate(parts[:-1], start=1):
+            try:
+                nxt = os.open(part, dirflags, dir_fd=fd)
+            except OSError as exc:
+                raise Unreadable(_open_failure(root, parts[:n], exc)) from None
+            os.close(fd)
+            fd = nxt
+        try:
+            ffd = os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | nofollow | cloexec, dir_fd=fd)
+        except OSError as exc:
+            raise Unreadable(_open_failure(root, parts, exc)) from None
+    finally:
+        os.close(fd)
+    return _read_fd(ffd)
+
+
+def _open_failure(root: Path, parts: tuple[str, ...], exc: OSError) -> str:
+    """Why an ``O_NOFOLLOW`` open of ``root/parts`` failed: a link there, or the OS error."""
+    if os.path.islink(os.path.join(root, *parts)):
+        return "a symbolic link on its path"
+    return f"cannot be opened ({exc.strerror})"
 
 
 def read_tree_file(root: str | Path, rel: str) -> bytes | str | None:
@@ -339,8 +448,14 @@ def load_yaml(path: str | Path, *, follow: bool = True) -> Any:
 
 def parse_yaml(text: str) -> Any:
     """YAML text with duplicate keys and aliases refused and deep nesting refused."""
+    from homelabnext._yaml import ExpansionRefused, NestedTooDeeply
+
     try:
         return yaml.load(text, Loader=_Loader)
+    except NestedTooDeeply:
+        raise Unreadable("nested too deeply") from None
+    except ExpansionRefused as exc:
+        raise Unreadable(str(getattr(exc, "problem", "") or exc)) from None
     except yaml.YAMLError as exc:
         raise Unreadable(
             f"not valid YAML ({exc.__class__.__name__}: {getattr(exc, 'problem', '') or exc})"
@@ -496,16 +611,135 @@ def _contained(mod_dir: Path, rel: str) -> str | None:
     return None
 
 
+def lifecycle_playbooks(doc: Doc) -> Iterator[str]:
+    """The module-relative path of every lifecycle playbook a manifest names (what the apply
+    path runs on a host, as root)."""
+    for step in ("install", "upgrade", "remove"):
+        e = doc.get("lifecycle", {}).get(step)
+        if isinstance(e, dict) and isinstance(e.get("playbook"), str):
+            yield e["playbook"]
+
+
+def _walk_problem(top: Path, shown: str) -> str | None:
+    """Why the tree under directory ``top`` is not plain (``shown`` names ``top`` in the
+    message), or None: every entry a directory or a single-link regular file, no symbolic link
+    anywhere (a role or playbook runs as root, and a link inside it can point at any file on the
+    controller), at most :data:`MAX_ROLE_ENTRIES` entries and :data:`MAX_ROLE_DEPTH` levels.
+    Nothing is followed and nothing is read; entries are visited in name order, so the first
+    problem named is the same on every run."""
+    seen = 0
+    stack: list[tuple[Path, str, int]] = [(top, shown, 0)]
+    while stack:
+        d, label, depth = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                # never hold more than the cap: one entry past what is left is enough to refuse
+                entries = list(itertools.islice(it, MAX_ROLE_ENTRIES - seen + 1))
+        except OSError as exc:
+            return f"{label}: cannot be listed ({exc.strerror})"
+        if seen + len(entries) > MAX_ROLE_ENTRIES:
+            return f"{shown}: more than {MAX_ROLE_ENTRIES} entries"
+        entries.sort(key=lambda e: e.name)
+        subdirs = []
+        for e in entries:
+            seen += 1
+            here = f"{label}/{_shown(e.name)}"
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                return f"{here}: cannot be read"
+            if stat.S_ISLNK(st.st_mode):
+                return f"{here}: a symbolic link (a role runs as root; ship the file itself)"
+            if stat.S_ISDIR(st.st_mode):
+                if depth + 1 >= MAX_ROLE_DEPTH:
+                    return f"{here}: nested more than {MAX_ROLE_DEPTH} levels"
+                subdirs.append((Path(e.path), here, depth + 1))
+            elif not stat.S_ISREG(st.st_mode):
+                return f"{here}: not a regular file or a directory"
+            elif st.st_nlink > 1:
+                return f"{here}: a hard link (it may alias a file outside the module)"
+        stack.extend(reversed(subdirs))
+    return None
+
+
+def _role_problems(doc: Doc, mod_dir: Path) -> list[str]:
+    """Each contributed role is a directory ``roles/<name>`` of the module, reached through no
+    symbolic link and inside it; and the module's ``roles/`` tree (what the apply path runs
+    roles from) holds only the contributed roles, with no symbolic link, special
+    file or hard link anywhere under it (:func:`_walk_problem`)."""
+    out: list[str] = []
+    listed: set[str] = set()
+    for e in doc.get("contributes", {}).get("roles", []):
+        rel = e["file"]
+        parts = rel.removesuffix("/").split("/")  # the schema allows a directory's slash
+        if len(parts) != 2 or parts[0] != ROLES_DIR or parts[1] in ("", ".", ".."):
+            out.append(
+                f"{rel}: a role is the directory {ROLES_DIR}/<name> of the module (the apply "
+                f"path runs roles from {ROLES_DIR}/)"
+            )
+            continue
+        listed.add(parts[1])
+    top = mod_dir / ROLES_DIR
+    if not os.path.lexists(top):
+        out += [f"{ROLES_DIR}/{r}: not a role directory in the module" for r in sorted(listed)]
+        return out
+    if top.is_symlink():
+        return [*out, f"{ROLES_DIR}: reached through a symbolic link"]
+    if not stat.S_ISDIR(top.lstat().st_mode):
+        return [*out, f"{ROLES_DIR}: not a directory"]
+    if not top.resolve().is_relative_to(mod_dir.resolve()):
+        return [*out, f"{ROLES_DIR}: outside the module"]
+    try:
+        with os.scandir(top) as it:
+            present = {
+                e.name: e.stat(follow_symlinks=False).st_mode
+                for e in itertools.islice(it, MAX_ROLE_ENTRIES + 1)
+            }
+    except OSError as exc:
+        return [*out, f"{ROLES_DIR}: cannot be listed ({exc.strerror})"]
+    if len(present) > MAX_ROLE_ENTRIES:
+        return [*out, f"{ROLES_DIR}: more than {MAX_ROLE_ENTRIES} entries"]
+    for name in sorted(listed):
+        mode = present.get(name)
+        if mode is not None and stat.S_ISLNK(mode):
+            out.append(f"{ROLES_DIR}/{name}: reached through a symbolic link")
+        elif mode is None or not stat.S_ISDIR(mode):
+            out.append(f"{ROLES_DIR}/{name}: not a role directory in the module")
+    for name in sorted(set(present) - listed):
+        out.append(
+            f"{ROLES_DIR}/{_shown(name)}: not a contributed role (everything under {ROLES_DIR}/ "
+            "is where the apply path runs roles from; list it under contributes.roles or "
+            "remove it)"
+        )
+    if out:
+        return out
+    why = _walk_problem(top, ROLES_DIR)
+    return [why] if why else []
+
+
 def _file_problems(doc: Doc, mod_dir: Path, fixture: bool) -> tuple[list[str], bool]:
-    """(problems, whether the fixture exemption applied) for every contributed file."""
+    """(problems, whether the fixture exemption applied) for every contributed file, every
+    lifecycle playbook and the module's roles (:func:`_role_problems`)."""
     out, exempt = [], False
-    for _, rel in contributed_files(doc):
+    files = [(k, rel) for k, rel in contributed_files(doc) if k != "roles"]
+    files += [("lifecycle", rel) for rel in lifecycle_playbooks(doc)]
+    for _, rel in files:
         if fixture and rel.startswith(FIXTURE_UNSHIPPED):
             exempt = True
             continue
         why = _contained(mod_dir, rel)
         if why:
             out.append(f"{rel}: {why}")
+    roles = [e["file"] for e in doc.get("contributes", {}).get("roles", [])]
+    if (
+        fixture
+        and roles
+        and all(r.startswith(FIXTURE_UNSHIPPED) for r in roles)
+        and not (os.path.lexists(mod_dir / ROLES_DIR))
+    ):
+        exempt = True
+    else:
+        out += _role_problems(doc, mod_dir)
     return out, exempt
 
 
@@ -702,6 +936,7 @@ def core_names(
     set."""
     out: list[Problem] = []
     names: dict[str, str] = {}
+    non_primary: set[str] = set()
     if services is not None:
         rows = services.get("services") if isinstance(services, dict) else None
         if not isinstance(rows, dict):
@@ -714,6 +949,11 @@ def core_names(
                     )
                     continue
                 names[k] = str(v.get("capability", ""))
+                # the registry's own reading (registry.model.standing_of): a missing or empty
+                # standing is primary; a standing that is no mapping is never read as primary
+                standing = v.get("standing") or {}
+                if not isinstance(standing, dict) or standing.get("tier", "primary") != "primary":
+                    non_primary.add(k)
     mcp_ids: set[str] = set()
     mcp_instances: dict[str, str] = {}
     for fname, rec in mcp or ():
@@ -754,6 +994,8 @@ def core_names(
     return (
         CoreNames(
             rows=names,
+            non_primary=frozenset(non_primary),
+            rows_known=services is not None,
             mcp_servers=frozenset(mcp_ids),
             agents=frozenset(agents),
             tables=core_tables if table_namespace else frozenset(),
@@ -945,6 +1187,36 @@ def _core_problems(tree: Tree, ins: Inputs, core: CoreNames, load=None) -> list[
             Problem(n, f"service row {r} is a core service name")
             for r in sorted(set(ins.rows.get(n, {})) & set(core.rows))
         ]
+    return out
+
+
+def planned_reach(site: Doc, sel: Mapping[str, Doc]) -> dict[str, list[str]]:
+    """Per selected module, the planned slots it requires or prefers (a hard requirement is also
+    a problem; a preference falls back while the slot is planned)."""
+    plans = set(mr.planned(site))
+    out: dict[str, list[str]] = {}
+    for n, m in sel.items():
+        caps = {r["cap"][4:] for r in m["requires"].get("capabilities", [])}
+        caps |= {p["cap"][4:] for p in m.get("prefers", {}).get("capabilities", [])}
+        got = sorted(caps & plans)
+        if got:
+            out[n] = got
+    return out
+
+
+def incumbent_reach(site: Doc, sel: Mapping[str, Doc]) -> dict[str, list[str]]:
+    """Per selected module with a host role, the incumbent slots it requires or prefers (``dns``
+    for every one when ``dns`` is an incumbent): the egress render opens no path to them."""
+    inc = set(mr.incumbents(site)) - set(site.get("slots", {}))
+    out: dict[str, list[str]] = {}
+    for n, m in sel.items():
+        if not mr._hosts(m):
+            continue
+        caps = {r["cap"][4:] for r in m["requires"].get("capabilities", [])}
+        caps |= {p["cap"][4:] for p in m.get("prefers", {}).get("capabilities", [])}
+        got = sorted((caps | {"dns"}) & inc)
+        if got:
+            out[n] = got
     return out
 
 
@@ -1400,6 +1672,9 @@ def check(
     inventory: Doc | None = None,
     budget: Budget | None = None,
     empty_selection: bool = False,
+    guests: gh.Guests | None = None,
+    lab_registry: Any = None,
+    today: dt.date | None = None,
 ) -> Report:
     """Every rule of "What the loader checks" over ``tree``; with ``site`` the site rules and
     the supply chain, with ``inventory`` the runtime half of the two-way check.
@@ -1407,7 +1682,21 @@ def check(
     ``empty_selection`` (no ``site``): the site selects no module at all (a lab that has taken
     up none, ``hnx modules check --deploy``).  The site rules and the supply chain have nothing
     to judge, but the runtime check still runs: every running name bound to a module is one the
-    site does not select."""
+    site does not select.
+
+    ``guests`` (:func:`homelabnext.modules.guest_hosts.read`): the guest records a site host may
+    reference (``hosts.<name>.guest``).  Each reference is resolved to the guest's kind, capacity
+    and addresses before any site rule reads it, and every placed role is judged against its
+    guest; a reference with no guests read is a problem.
+
+    ``lab_registry`` (the lab's own registry document, ``lab/services.yml``): every service row
+    a selected module contributes, as the site binds it (renamed to the instance, placed on the
+    guest), appears in it identically (:func:`homelabnext.modules.registry_rows.row_problems`);
+    without it the rows are not compared, and the report says so.
+
+    ``today`` (a ``datetime.date``: the date ``hnx modules check --deploy`` is judged on): a
+    planned slot whose ``review_by`` is before it is a problem.  Without it no date is read; each
+    planned slot is a warning either way (:func:`~homelabnext.modules.rules.planned_warnings`)."""
     problems: list[Problem] = []
     notes: list[str] = []
     core = core or CoreNames()
@@ -1484,19 +1773,60 @@ def check(
     if errs:
         problems += [Problem("site", f"schema: {e}") for e in errs]
         return Report(sorted(set(problems)), notes)
+    site, unresolved = gh.resolve(site, guests)
+    problems += [Problem("site", p) for p in unresolved]
+    problems += [Problem("site", p) for p in gh.address_problems(site)]
     problems += [
         Problem("site", p)
         for p in mr.site_problems(
             site, valid, dict(slots), rows=ins.rows, units=ins.units,
             privileged_units=ins.privileged_units, roles=dict(roles), known=dict(tree.mods),
+            registry=dict(core.rows) if core.rows_known else None, non_primary=core.non_primary,
+            today=today,
         )
     ]  # fmt: skip
+    warnings = mr.planned_warnings(site, slots)
     problems += _instance_problems(site, core)
     try:
         sel = mr.selected(site, valid)
     except KeyError:
-        return Report(sorted(set(problems)), notes)  # site_problems reported it
+        return Report(sorted(set(problems)), notes, warnings=warnings)  # site_problems said
+    problems += [Problem("site", p) for p in gh.placement_problems(site, sel, guests)]
+    from homelabnext.modules.egress import unenforced
+
+    warnings += unenforced(site, sel, vtree.dirs, load)
+    unchecked = gh.unchecked(site, sel)
+    if unchecked:
+        notes.append(
+            "guest requirements not checked (the host is a stand-in, not a guest reference): "
+            + "; ".join(unchecked)
+        )
+    waiting = planned_reach(site, sel)
+    if waiting:
+        notes.append(
+            "modules that require or prefer a planned slot (not served yet): "
+            + "; ".join(f"{m} needs {', '.join(caps)}" for m, caps in sorted(waiting.items()))
+        )
+    reached = incumbent_reach(site, sel)
+    if reached:
+        notes.append(
+            "the egress policy opens no path to an incumbent (hnx modules render cannot place "
+            "one): "
+            + "; ".join(f"{m} reaches {', '.join(caps)}" for m, caps in sorted(reached.items()))
+        )
     problems += pair_problems(sel)
+    if lab_registry is not None:
+        try:
+            found = rr.row_problems(site, sel, ins.rows, lab_registry)
+        except (KeyError, TypeError, AttributeError, ValueError, RecursionError) as exc:
+            found = [f"the lab registry's rows could not be compared ({exc.__class__.__name__})"]
+        problems += [Problem("registry", p) for p in found]
+    elif any(True for _ in rr.expected_rows(site, sel, ins.rows)):
+        notes.append(
+            "the selected modules' service rows were not compared with the lab registry (none "
+            "was read: give the overlay's lab/services.yml or --services; the repository's "
+            "example registry describes another lab)"
+        )
     if "tlp_readers" not in site and mr.lake_readers(sel):
         notes.append(
             "the lake's readers have no TLP ceilings (tlp_readers): render writes no "
@@ -1516,7 +1846,7 @@ def check(
         notes.append("no inventory of what runs: the runtime half of the two-way check did not run")
     else:
         _runtime(vtree, ins, site, sel, inventory, load, problems, notes, core)
-    return Report(sorted(set(problems)), notes)
+    return Report(sorted(set(problems)), notes, site, warnings)
 
 
 def _runtime(

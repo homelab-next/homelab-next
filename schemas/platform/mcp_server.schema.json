@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.3",
+  "$id": "https://schemas.example.internal/homelabnext/platform/mcp_server/1.4",
   "title": "MCP catalog record",
-  "description": "One MCP server of the lab's MCP catalog (ADR-0024, docs/mcp-catalog.md): one YAML file per server, <catalog>/<id>.yml, the single source of truth for what the server is, where its code comes from (the launch a client starts it with is generated from that origin, never written in the record), how a client reaches it, what it may see and reach, the tools it exposes with their capability classes, its review and its lifecycle. Agent profiles grant servers by id; the capability-class table, the knowledge graph, the system pages, the status hub and every client configuration are derived from these records. Endpoints are registry names (svc:<service>), never URLs; credentials are secret-store names (secret:<name>), never values. Semantic rules JSON Schema cannot express (the id is the file name, a third-party origin carries a hash, endpoints and hosts resolve in the registry, egress agrees with the tools' classes, the review policy, how acting tools reach the world (acts_via), grants) are checked by homelabnext.mcp.servers (`hnx mcp catalog check`). 1.3 adds, additively, tlp (ADR-0033 decisions 11 and 12): the TLP label of what the server returns, which agrees with data_tier (local-only is above clear, cloud-allowed is clear); a profile is granted the server only when tlp is at or below its tlp_ceiling. Absent, it is read from data_tier: clear for cloud-allowed, red for local-only.",
+  "description": "One MCP server of the lab's MCP catalog (ADR-0024, docs/mcp-catalog.md): one YAML file per server, <catalog>/<id>.yml, the single source of truth for what the server is, where its code comes from (the launch a client starts it with is generated from that origin, never written in the record), how a client reaches it, what it may see and reach, the tools it exposes with their capability classes, its review and its lifecycle. Agent profiles grant servers by id; the capability-class table, the knowledge graph, the system pages, the status hub and every client configuration are derived from these records. Endpoints are registry names (svc:<service>), never URLs; credentials are secret-store names (secret:<name>), never values. Semantic rules JSON Schema cannot express (the id is the file name, a third-party origin carries a hash, endpoints and hosts resolve in the registry, egress agrees with the tools' classes, the review policy, how acting tools reach the world (acts_via), grants) are checked by homelabnext.mcp.servers (`hnx mcp catalog check`). 1.3 adds, additively, tlp (ADR-0033 decisions 11 and 12): the TLP label of what the server returns, which agrees with data_tier (local-only is above clear, cloud-allowed is clear); a profile is granted the server only when tlp is at or below its tlp_ceiling. Absent, it is read from data_tier: clear for cloud-allowed, red for local-only. 1.4 (additive): a parameter's `binds` and `root` say how a per-instance value binds to the granting profile (its agent key, its lane, or a prefix of its path scope under the tree a setting names); the orchestrator's catalog binds such a key in profile_scope instead of pinning it.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -740,6 +740,22 @@
         "required": {
           "type": "boolean",
           "description": "No default: every grant must give a value."
+        },
+        "binds": {
+          "enum": [
+            "agent_key",
+            "agent_key_lane",
+            "lane",
+            "writable",
+            "readable",
+            "prefix"
+          ],
+          "description": "1.4: the parameter's value is the granting profile's own: its agent key (agent_key; agent_key_lane adds -shadow on the shadow lane), its lane name (lane: enum [real, shadow]), or a comma-separated list of prefixes within its path scope under the tree the `root` setting names (writable, readable; prefix: one directory). Required for an env key that picks an identity or a scope (_PREFIX*, _SCOPE, _LIST, _AGENT_KEY, _BY): such a value is never pinned across profiles (homelabnext.mcp.servers)."
+        },
+        "root": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$(?!\\n)",
+          "description": "1.4: with binds writable, readable or prefix, the setting whose value is the tree the prefixes lie under."
         }
       }
     }

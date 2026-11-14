@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the idp suite through the
+# Keycloak adapter, which resolves the endpoint from HNX_ENDPOINT_IDP (never a URL here), verifies
+# the server against the CA file the operator names in ca_file_env, and signs in as the
+# break-glass admin named by admin_user_env and admin_password_env, read at every request.
+# The adapter works in a scratch realm of its own (hnxconf-<hex>, created per target, deleted
+# when the target is closed): it never touches the lab's realm, its users or its flows.
+#   HNX_ENDPOINT_IDP=https://<internal name>:8443 HNX_IDP_CA_FILE=<lab CA PEM> \
+#   HNX_IDP_ADMIN_USER=<admin> HNX_IDP_ADMIN_PASSWORD=<password> \
+#     hnx conform --root <checkout> run idp --target modules/keycloak/conformance/target.yml
+name: keycloak
+capabilities:
+  idp:
+    adapter: homelabnext.conform.adapters.keycloak:make
+    config:
+      admin_user_env: HNX_IDP_ADMIN_USER
+      admin_password_env: HNX_IDP_ADMIN_PASSWORD
+      ca_file_env: HNX_IDP_CA_FILE

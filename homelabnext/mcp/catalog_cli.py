@@ -174,7 +174,7 @@ def _render(args) -> int:
                 print(f"note: {n}", file=sys.stderr)
             return 0
         out = Path(args.out)
-        splice = args.client == "llm-orchestrator"
+        splice = clients.client_name(args.client) == clients.ORCHESTRATOR
         rendered = clients.Rendered([clients.Output(out, text, splice=splice)], notes)
     for n in rendered.notes:
         print(f"note: {n}", file=sys.stderr)
@@ -233,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.choices["render"]
     r.add_argument("--spec", help="a render spec: every output it names")
     r.add_argument("--profile", help="one compiled or lean agent profile")
-    r.add_argument("--client", choices=clients.CLIENTS)
+    r.add_argument("--client", choices=[*clients.CLIENTS, *clients.CLIENT_ALIASES])
     r.add_argument(
         "--param",
         action="append",

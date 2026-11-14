@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# edge_tls names secret-store entries, never the material itself
+registry_version: 1
+lab: {name: northwind, domain: example.internal}
+zones:
+  mgmt: {cidr: 192.0.2.0/24}
+hosts:
+  core-01: {address: 192.0.2.7, zone: mgmt}
+services:
+  status-hub:
+    capability: status-hub
+    host: core-01
+    protocol: http
+    port: 8099
+    owner: platform-team
+    version: "0.1.0"
+    tls: mtls
+    auth: own
+    public_hostname: hub.example.internal
+    edge_tls: {ca: "-----BEGIN CERTIFICATE-----", client_cert: "secret:edge/c", client_key: "secret:edge/k"}

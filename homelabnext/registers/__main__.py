@@ -38,6 +38,8 @@ import json
 import sys
 from pathlib import Path
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
+
 from . import RegisterError, build_all, join_register, split_register, stale_links
 
 
@@ -224,12 +226,11 @@ def _events(ns) -> int:
             written = migrate(p)
             print(f"[registers] {p}: {len(written)} file(s) written")
         return 0
-    import yaml
 
     from .write import write_event
 
     with open(ns.event, encoding="utf-8") as fh:
-        event = yaml.safe_load(fh)
+        event = _yaml_safe_load(fh)
     if not isinstance(event, dict):
         raise RegisterError("events", [f"{ns.event}: not a YAML mapping"])
     print(write_event(ns.record, event, require_reviews=ns.require_reviews))

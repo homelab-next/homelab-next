@@ -17,12 +17,12 @@ Each capability is a seam: a small contract (`conformance/protocols/`), a confor
 | [lake-query](lake-query.md) ([[capabilities/lake-query\|lake-query]]) | SQL (portable subset) over the OCSF tables with bound named parameters | 6 | 14 | 0 | `lake` | [lake-query](../systems/lake-query.md) ([[systems/lake-query\|lake-query]]) |
 | [lake-catalog](lake-catalog.md) ([[capabilities/lake-catalog\|lake-catalog]]) | tables, schemas and commit-then-checkpoint idempotent writes | 6 | 13 | 0 | `lake` | [lake-catalog](../systems/lake-catalog.md) ([[systems/lake-catalog\|lake-catalog]]) |
 | [object-store](object-store.md) ([[capabilities/object-store\|object-store]]) | buckets of byte objects: put/get/head/delete and ordered, paginated listing | 6 | 14 | 1 | `s3` | [object-store](../systems/object-store.md) ([[systems/object-store\|object-store]]) |
-| [inference](inference.md) ([[capabilities/inference\|inference]]) | OpenAI-compatible /v1 chat, streaming and embeddings behind a role alias | 21 | 15 | 2 | `llm_gateway`, `openai_compat` (client) | [inference](../systems/inference.md) ([[systems/inference\|inference]]) |
+| [inference](inference.md) ([[capabilities/inference\|inference]]) | OpenAI-compatible /v1 chat, streaming and embeddings behind a role alias | 35 | 22 | 2 | `llm_gateway`, `openai_compat` (client) | [inference](../systems/inference.md) ([[systems/inference\|inference]]) |
 | [fast-classifier](fast-classifier.md) ([[capabilities/fast-classifier\|fast-classifier]]) | small text classifier: label from the offered set, confidence in [0, 1], deterministic | 1 | 7 | 4 | `openai_classifier` (client) | none |
 | [notify](notify.md) ([[capabilities/notify\|notify]]) | exactly-once delivery of faithful messages; one page per state change, one recovery | 2 | 9 | 0 | `ntfy` | [notify](../systems/notify.md) ([[systems/notify\|notify]]) |
 | [cases](cases.md) ([[capabilities/cases\|cases]]) | alerts, dismissal with a reason, promotion to cases, notes and the status machine | 8 | 12 | 0 | none yet | none |
 | [events](events.md) ([[capabilities/events\|events]]) | publish/consume with acknowledgement, bounded redelivery and dead letters | 4 | 16 | 1 | `nats_jetstream` | [events](../systems/events.md) ([[systems/events\|events]]) |
-| [orchestration](orchestration.md) ([[capabilities/orchestration\|orchestration]]) | named jobs: run once per idempotency key, retry a bounded number of times, cancel, isolate, and hold capacity only for live work | 13 | 17 | 0 | `llm_orchestrator` | none |
+| [orchestration](orchestration.md) ([[capabilities/orchestration\|orchestration]]) | named jobs: run once per idempotency key, retry a bounded number of times, cancel, isolate, and hold capacity only for live work | 13 | 17 | 0 | `orchestrator` | [orchestrator](../systems/orchestrator.md) ([[systems/orchestrator\|orchestrator]]) |
 | [broker](broker.md) ([[capabilities/broker\|broker]]) | allowlisted command execution with argument validation, a redacted audit trail and caller-bound requests | 15 | 16 | 3 | none yet | none |
 | [secrets](secrets.md) ([[capabilities/secrets\|secrets]]) | versioned key-value secrets with leases and redacted errors | 7 | 15 | 0 | `openbao` | [secrets](../systems/secrets.md) ([[systems/secrets\|secrets]]) |
 | [idp](idp.md) ([[capabilities/idp\|idp]]) | issue/verify short-lived bearer tokens; forged, expired, revoked and garbage tokens fail | 3 | 15 | 0 | none yet | [idp](../systems/idp.md) ([[systems/idp\|idp]]) |
@@ -39,7 +39,6 @@ Every service in `examples/services.yml`, and the capability page that holds its
 
 | Service | Capability | Implementation | Contract |
 |---|---|---|---|
-| [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-runtime\|agent-runtime]]) | `agent-runtime` | `orchestrator` | no conformance suite |
 | [agentmetry](../systems/agentmetry.md) ([[systems/agentmetry\|agentmetry]]) | `agent-audit` | `agentmetry` | no conformance suite |
 | [auth-proxy](../systems/auth-proxy.md) ([[systems/auth-proxy\|auth-proxy]]) | `auth-proxy` | `oauth2-proxy` | no conformance suite |
 | [automation](../systems/automation.md) ([[systems/automation\|automation]]) | `automation` | `stackstorm` | no conformance suite |
@@ -56,6 +55,7 @@ Every service in `examples/services.yml`, and the capability page that holds its
 | [metrics](../systems/metrics.md) ([[systems/metrics\|metrics]]) | `metrics` | `prometheus` | no conformance suite |
 | [notify](../systems/notify.md) ([[systems/notify\|notify]]) | `notify` | `ntfy` | [notify](notify.md) ([[capabilities/notify\|notify]]) |
 | [object-store](../systems/object-store.md) ([[systems/object-store\|object-store]]) | `object-store` | `minio` | [object-store](object-store.md) ([[capabilities/object-store\|object-store]]) |
+| [orchestrator](../systems/orchestrator.md) ([[systems/orchestrator\|orchestrator]]) | `orchestration` | `orchestrator` | [orchestration](orchestration.md) ([[capabilities/orchestration\|orchestration]]) |
 | [records-db](../systems/records-db.md) ([[systems/records-db\|records-db]]) | `records-db` | `postgresql` | no conformance suite |
 | [secrets](../systems/secrets.md) ([[systems/secrets\|secrets]]) | `secrets` | `openbao` | [secrets](secrets.md) ([[capabilities/secrets\|secrets]]) |
 | [status-hub](../systems/status-hub.md) ([[systems/status-hub\|status-hub]]) | `status-hub` | `homelabnext` | no conformance suite |

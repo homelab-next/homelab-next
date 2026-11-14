@@ -97,17 +97,44 @@ there is a usage error); with `--json`, a generator's refusal is the output's `e
    values are declared keys, carry no site address, and a secret value is the module's own or
    granted; the scope block parses strictly, and every part a selected module requires is present
    and non-empty (an exclusion may be `[]`); required core slots
-   selected; instances unique; every hard requirement and instance satisfied; fallbacks selected
+   selected (a provider, or an incumbent: a real slot, not also under `slots`, naming the core
+   registry's primary row of that capability), or planned (a warning: a required core slot, in no
+   other answer, with a real `review_by` that `--deploy` refuses once passed; never served); instances unique; every hard requirement and instance satisfied; fallbacks selected
    and datasets moved with their data override; service upstreams follow the fallback; pass-through
    only where allowed and formats meet; interfaces provided, on instances their providers require;
    grants for publish, egress (internet, authority services, external hosts), public routes and
    cross-module secrets; every agent lane bound to exactly one selected orchestration instance;
    placements complete for features and core modules alike, external and isolated roles on matching
    hosts; footprints times `count` over four dimensions, and every resource claim against the
-   host's named resources with exclusivity.
-4. **Two-way, against what runs**: every contributed file exists, is a regular file inside the
+   host's named resources with exclusivity; a host that references a guest record resolved
+   (known, schema-valid, live or planned, with resources, named by one host) and each role placed
+   on it against the guest's kind, size, capability and baselines; every lab host's own address
+   private or in `scope.trusted.nets`
+   ([hosts that are guests](selection.md#hosts-that-are-guests)); with the lab's own registry,
+   every service row a selected module contributes appears in it identically as the site binds it
+   (renamed to the instance, `version` from the product, `host` the placed guest), each difference
+   named field by field
+   ([registry rows](registry-rows.md)).
+4. **Two-way, against what runs**: every contributed file, and every lifecycle playbook
+   (`lifecycle.install|upgrade|remove.playbook`, what the apply path runs as root), exists, is a
+   regular file inside the
    module (no symbolic link on the way, realpath containment) with a single link (a hard link
-   could alias a file outside it), and is read only then. The kinds with a record type are
+   could alias a file outside it), and is read only then. A contributed role is a **directory**,
+   `roles/<name>` exactly (the apply path runs the module's roles from its `roles/`), reached
+   through no symbolic link; the module's whole `roles/` tree holds only the contributed roles
+   (any other entry is refused, a `README` or `.gitkeep` beside the roles included: a module
+   ships only `roles/<name>/` directories there) and, walked without following
+   anything, no symbolic link at any depth (a role runs as root, and a link can point at any file
+   on the controller), no FIFO, socket or device, and no hard-linked file; a tree of more than
+   5,000 entries or 12 levels is refused rather than cut short. Nothing under `roles/` is read.
+   A fixture module (`--examples`) that ships no `roles/` keeps its exemption; one that ships it
+   is walked the same way. What the check does **not** cover, and the apply path must: the
+   check is a point-in-time walk of the checkout (run what was checked, from a staging copy, not
+   the live tree), and Ansible also loads `library/`, `*_plugins/`, `collections/`,
+   `group_vars/`, `host_vars/`, `ansible.cfg` and a `roles/` beside a playbook, none of which a
+   module contributes, so the apply path must not run a playbook from a directory holding them;
+   role content that reaches outside the module (a `meta` dependency by path, an
+   `include_tasks: ../..`, an absolute `src`) is the review's and the tree digest's. The kinds with a record type are
    validated against it: MCP records (`platform/mcp_server`), service rows (`platform/service`),
    prompt templates (`agent/prompt_template`), lake tables (`platform/lake_table`), interface
    schemas (a JSON Schema in the owner's `$id` namespace), unit specs (the fleet_units rules) and

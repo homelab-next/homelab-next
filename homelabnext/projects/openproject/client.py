@@ -7,7 +7,8 @@
   every request, so no object holds the value and no message ever contains it.
 * **TLS on:** https with the default verifying context; plain http only to loopback (the
   recorded fake in tests) or with ``allow_plaintext=True`` (:func:`homelabnext._http.check_plaintext`).
-  Redirects stay on the same origin (:func:`homelabnext._http.safe_opener`).
+  Redirects stay on the same origin, and only for GET/HEAD; writes follow none
+  (:func:`homelabnext._http.safe_opener`).
 * **Pagination:** :meth:`OpenProjectClient.collect` follows ``offset``/``pageSize`` until
   ``total`` items are read (``pageSize`` 1000, OpenProject's default maximum).
 * **Concurrency:** a ``PATCH`` carries the ``lockVersion`` it read; a stale one is HTTP 409,

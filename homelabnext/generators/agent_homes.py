@@ -441,8 +441,9 @@ def _names_id(value: str, ids: Iterable[str]) -> str | None:
 
 def home_findings(home: Path, ids: set[str]) -> list[str]:
     """What ``<home>/config.yaml`` names that it must not (empty = clean).  A missing file is a
-    finding (nothing to check never reads as checked); a file that is not UTF-8 or not YAML raises
-    :class:`CouldNotMeasure`."""
+    finding (nothing to check never reads as checked); a file that is not UTF-8 raises
+    :class:`CouldNotMeasure`, and so does one that is no YAML a reader takes unless the word scan
+    of its raw text finds something (then that is the finding)."""
     path = home / HOME_FILE
     try:
         doc = _load(path)
@@ -453,6 +454,11 @@ def home_findings(home: Path, ids: set[str]) -> list[str]:
     except OSError as exc:
         return [f"{path}: cannot read: {exc.strerror or exc}"]
     except (yaml.YAMLError, RecursionError) as exc:
+        # UTF-8 but no YAML a reader takes (a recursive alias, a bomb, a syntax error): the words
+        # of the raw text are still scanned, so a home cannot hide an address behind a parse error
+        raw = _raw_findings(path, ids)
+        if raw:
+            return raw
         raise CouldNotMeasure(f"{path}: not readable as YAML: {exc}") from None
     out: list[str] = []
     for where, value, is_key in _strings(doc):
@@ -464,6 +470,31 @@ def home_findings(home: Path, ids: set[str]) -> list[str]:
                 f"{path}: {where} names the engine model id {mid!r} (name its role alias; the "
                 "role table maps it to the model)"
             )
+    return out
+
+
+def _raw_findings(path: Path, ids: set[str]) -> list[str]:
+    """The word scan over the raw text of a home's file that does not parse: every IP address
+    and engine model id its words name."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    out = [
+        f"{path}: (not readable as YAML; its raw text) names the IP address {addr} (name the "
+        "gateway instead)"
+        for addr in ip_literals(text)
+    ]
+    named: list[str] = []
+    for word in _words(text):
+        mid = _names_id(word, ids)
+        if mid and mid not in named:
+            named.append(mid)
+    out += [
+        f"{path}: (not readable as YAML; its raw text) names the engine model id {mid!r} (name "
+        "its role alias)"
+        for mid in named
+    ]
     return out
 
 

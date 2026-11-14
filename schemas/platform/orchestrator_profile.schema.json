@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/orchestrator_profile/1.0",
+  "x-draft": "ADR-0026 (proposed): the controller's dispatch profile as orchestrator/internal/profile reads it; not frozen, may change until ADR-0026 is accepted and the profile is rendered from the agent profile",
+  "title": "Orchestrator dispatch profile",
+  "description": "One agent's dispatch profile, a YAML file in the controller's profiles_dir: what the agent may use (tools, a path scope, MCP grants per lane), how its prompt is built and where it may run. It is a derived artifact of the compiled agent profile (platform/agent_profile): path_scope is that profile's memory scopes in the shared tree, grants its MCP grants as the MCP catalog render writes them; rendering the rest from it is a follow-up. The Go loader (orchestrator/internal/profile) is the authority and is stricter: it decodes unknown keys at every level as errors except the top-level extension keys its config lists in profile_extensions (which this schema therefore allows), checks every path_scope entry against the configured scope zones, resolves prompt_context against the config's prompt_dir, prompt_state_files and facts_commands, and renders grants against the catalog. Its tests hold this schema's keys to the Go types and its examples and negatives to the loader's verdicts.",
+  "type": "object",
+  "required": [
+    "agent_key"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The profile's own identifier (with its version), recorded per job."
+    },
+    "agent_key": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?!\\n)",
+      "description": "The key jobs are submitted under; never one the scope zones reserve."
+    },
+    "allowed_tools": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "path_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The prefixes the agent may write and read in the shared tree (relative, clean, no `..`, no hidden segment; no writable prefix in a denied root of the zones).",
+      "properties": {
+        "writable_prefixes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "readable_prefixes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "toolsets": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per lane, the toolsets a runner enables when the profile has no grants (opaque to the controller).",
+      "properties": {
+        "real": {
+          "type": "string"
+        },
+        "shadow": {
+          "type": "string"
+        }
+      }
+    },
+    "default_task_description": {
+      "type": "string",
+      "description": "The task when a job is submitted without one."
+    },
+    "prompt_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Prompt blocks beyond the task text, each off unless turned on, each naming only what the controller's config lists.",
+      "properties": {
+        "state_file": {
+          "type": "string",
+          "description": "An absolute path listed in prompt_state_files."
+        },
+        "state_label": {
+          "type": "string"
+        },
+        "known_incidents_key": {
+          "type": "string"
+        },
+        "own_state": {
+          "type": "boolean"
+        },
+        "cursor": {
+          "type": "boolean"
+        },
+        "cursor_file": {
+          "type": "string",
+          "description": "The agent's own cursor store, exactly the cursor_file_template for its agent_key."
+        },
+        "cursor_label": {
+          "type": "string"
+        },
+        "facts": {
+          "type": "string",
+          "description": "A name in the config's facts_commands."
+        },
+        "facts_timeout_s": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600
+        },
+        "facts_preamble_file": {
+          "type": "string",
+          "description": "Relative to the config's prompt_dir."
+        },
+        "appendix_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "real_appendix_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "shadow_appendix_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "inject_own_state": {
+      "type": "boolean",
+      "description": "The older spelling of prompt_context.own_state."
+    },
+    "local_only": {
+      "type": "boolean",
+      "description": "Never fall back to a cloud backend."
+    },
+    "backend_affinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "require_tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "exclude_backends": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "min_context": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exclusive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "max_attempts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "grants": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The MCP server instances the agent may use, per lane: both lanes or neither.",
+      "properties": {
+        "real": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/grant"
+          }
+        },
+        "shadow": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/grant"
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "real": {
+              "maxItems": 0
+            },
+            "shadow": {
+              "maxItems": 0
+            }
+          }
+        },
+        {
+          "required": [
+            "real",
+            "shadow"
+          ],
+          "properties": {
+            "real": {
+              "minItems": 1
+            },
+            "shadow": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?!\\n)",
+          "description": "The server name the runner, and so the model, sees; unique in its lane."
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$(?!\\n)",
+          "description": "A kind of the controller's catalog (`hnx mcp catalog render --client orchestrator`)."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "not": {
+              "pattern": "\\$\\{"
+            }
+          },
+          "description": "Values of the kind's allowed_env keys only, each as the catalog classifies it (pinned, profile-bound or free in a shape: orchestrator/internal/grants). No `${...}` reference."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Seconds; 0 or absent: the kind's timeout."
+        }
+      }
+    }
+  }
+}

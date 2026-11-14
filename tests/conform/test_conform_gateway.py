@@ -10,23 +10,30 @@ Postgres: ``400 No connected db.``; Bifrost: provider-prefixed ``/v1/models`` id
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
 import pytest
 
+from conformance.fakes.inference_target import TlpGatewayServer
 from conformance.fakes.openai_server import FakeOpenAIServer
-from conformance.protocols.inference import GatewayClient
+from conformance.protocols.inference import GatewayClient, TlpAdmitGateway
 from conformance.suites.inference import SUITE
+from homelabnext import tlp
 from homelabnext.conform import run_capability
 from homelabnext.conform.adapters import llm_gateway
 from homelabnext.conform.adapters._env import AdapterConfigError
+from homelabnext.conform.adapters.openai_compat import InferenceError, OpenAICompat
 from homelabnext.conform.target import load_target
+from homelabnext.registry.model import secret_env_name
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = ROOT / "compose" / "lab-in-a-box" / "targets"
 ADMIN = "sk-fake-master-key-0000"
 THROTTLE = "sk-fake-throttle-0000"
-ROLES = ["fast-classifier", "main-reasoner"]  # schemas/platform/examples/model_roles.valid.json
+#: the aliases of schemas/platform/examples/model_roles.valid.json
+ROLES = ["embedder", "fast-classifier", "main-reasoner"]
 GATEWAY_CHECKS = [
     "gateway-rejects-bad-key",
     "gateway-limit-throttles",
@@ -106,12 +113,15 @@ def test_the_lab_targets_pass_every_check_against_a_conforming_gateway(monkeypat
         assert sorted(r.check for r in run.results if not r.ok) == []
         assert {r.check for r in run.results} >= set(GATEWAY_CHECKS)
         # nothing skipped but the turn-records checks (the lab targets name no window known to
-        # hold turns yet; follow-up: a recorded call per lab run, docs/orchestration-telemetry.md)
-        # and the tlp-ceiling check (the lab's gateway has no role that leaves the lab)
+        # hold turns yet; follow-up: a recorded call per lab run, docs/orchestration-telemetry.md),
+        # the tlp-ceiling check (the lab's gateway has no role that leaves the lab) and the
+        # tlp-admit checks (LiteLLM cannot read a request's X-HNX-TLP label)
         skipped = {r.check for r in run.results if r.status != "pass"}
         assert {r.status for r in run.results if r.check in skipped} <= {"skip"}
         assert skipped == {
-            s.id for s in SUITE.specs if {"turn-records", "tlp-ceiling"} & set(s.requires)
+            s.id
+            for s in SUITE.specs
+            if {"turn-records", "tlp-ceiling", "tlp-admit"} & set(s.requires)
         }
     finally:
         srv.stop()
@@ -307,3 +317,295 @@ def test_the_ceiling_check_needs_its_configuration(monkeypatch):
             t.over_ceiling()
     finally:
         srv.stop()
+
+
+# --- the lab's own gateway: feature tlp-admit, and its target on the conformance spec -----------
+CONFORMANCE = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway-conformance"
+OWN_TARGET = TARGETS / "inference-own-gateway.yml"
+CLEAR_KEY = "sk-fake-clear-sender-0000"
+TLP_CHECKS = [s.id for s in SUITE.specs if "tlp-admit" in s.requires]
+
+
+class HeaderRecorder(FakeOpenAIServer):
+    """Records every POST's X-HNX-TLP and X-HNX-Tag fields, as the server received them."""
+
+    def gate(self, headers, path, model):
+        self.seen = [(n, v) for n, v in headers.items() if n.lower().startswith("x-hnx-")]
+        return None
+
+
+def test_chat_fields_sends_each_field_on_its_own_and_refuses_a_line_break():
+    with HeaderRecorder(models=["m"]) as srv:
+        c = OpenAICompat(srv.url)
+        tlp = [("X-HNX-TLP", ""), ("X-HNX-TLP", "clear"), ("X-HNX-Tag", "run-1")]
+        assert c.chat_fields("m", PROMPT_MSG, tlp).model == "m"
+        assert srv.seen == [("X-HNX-TLP", ""), ("X-HNX-TLP", "clear"), ("X-HNX-Tag", "run-1")]
+        c.chat_fields("m", PROMPT_MSG, [])
+        assert srv.seen == []
+        for bad in ([("X-HNX-TLP", "clear\r\nX-Evil: 1")], [("X HNX", "clear")]):
+            with pytest.raises(ValueError):
+                c.chat_fields("m", PROMPT_MSG, bad)
+
+
+def test_chat_fields_reads_the_error_envelopes_code():
+    class Refuser(FakeOpenAIServer):
+        def gate(self, headers, path, model):
+            return 403, "tlp refused (unlabelled): no label"
+
+    with Refuser(models=["m"]) as srv, pytest.raises(InferenceError) as exc:
+        OpenAICompat(srv.url).chat_fields("m", PROMPT_MSG, [])
+    assert (exc.value.status, exc.value.path) == (403, "/v1/chat/completions")
+    assert exc.value.detail.startswith("tlp refused (unlabelled)")
+
+
+PROMPT_MSG = [{"role": "user", "content": "hello"}]
+
+
+def _own_config():
+    return load_target(str(OWN_TARGET)).binding("inference").config
+
+
+def _tlp_target(monkeypatch, cls=None, **server):
+    cfg = _own_config()
+    roles = json.loads((ROOT / cfg["roles"]).read_text())["roles"]
+    kw = {
+        "models": sorted(roles),
+        "api_keys": [ADMIN, CLEAR_KEY],
+        "key_models": {CLEAR_KEY: [cfg["tlp_model"], cfg["tlp_local_model"]]},
+        "leaving": {cfg["tlp_model"]: tlp.Label.CLEAR},
+        "key_ceilings": {ADMIN: tlp.Label.RED, CLEAR_KEY: tlp.Label.CLEAR},
+    }
+    srv = (cls or TlpGatewayServer)(**(kw | server)).start()
+    monkeypatch.setenv("HNX_ENDPOINT_LLM_GATEWAY", srv.url)
+    monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_MASTER_KEY", ADMIN)
+    monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_CLEAR", CLEAR_KEY)
+    keep = ("roles", "model", "tlp_sender_key", "tlp_model", "tlp_local_model", "failover_model")
+    return srv, llm_gateway.make(**{k: cfg[k] for k in keep})
+
+
+def test_the_adapter_runs_the_tlp_admit_checks_through_the_target_config(monkeypatch):
+    srv, t = _tlp_target(monkeypatch)
+    try:
+        assert isinstance(t, TlpAdmitGateway)
+        results = [SUITE.bind(c, features=["gateway", "tlp-admit"])(t) for c in TLP_CHECKS]
+        assert [(r.check, r.status) for r in results if r.status != "pass"] == []
+        sent = [r for r in srv.requests if r["path"] == "/v1/chat/completions"]
+        assert {r["body"]["model"] for r in sent} >= {"cloud-reasoner", "failover"}
+    finally:
+        srv.stop()
+
+
+def test_a_gateway_that_reads_the_admin_ceiling_as_clear_fails_through_the_adapter(monkeypatch):
+    srv, t = _tlp_target(monkeypatch, key_ceilings={ADMIN: tlp.Label.CLEAR})
+    try:
+        r = SUITE.bind("tlp-admit-judged-at-key-ceiling", features=["gateway", "tlp-admit"])(t)
+        assert r.status == "fail" and "expected an error" in r.evidence, r
+    finally:
+        srv.stop()
+
+
+def test_the_tlp_admit_and_turn_records_features_need_their_configuration(monkeypatch):
+    srv = gateway(monkeypatch)
+    try:
+        t = llm_gateway.make(roles="schemas/platform/examples/model_roles.valid.json")
+        with pytest.raises(AdapterConfigError, match="tlp-admit needs"):
+            t.tlp_admit()
+        assert t.refused_fallback() is None
+        with pytest.raises(AdapterConfigError, match="turn-records needs"):
+            t.turn_records()
+        with pytest.raises(AdapterConfigError, match="go together"):
+            llm_gateway.make(
+                roles="schemas/platform/examples/model_roles.valid.json",
+                tlp_sender_key="secret:llm-gateway/key-x",
+            )
+        with pytest.raises(AdapterConfigError, match="embed_model: 'nope' is not a role"):
+            llm_gateway.make(
+                roles="schemas/platform/examples/model_roles.valid.json", embed_model="nope"
+            )
+    finally:
+        srv.stop()
+
+
+def test_the_own_gateway_target_agrees_with_the_conformance_gateway_config():
+    """The own gateway's target names keys and roles of the rendered conformance config, each of
+    the kind its check needs: the plain client's roles stay in the lab (it sends no X-HNX-TLP)."""
+    t = load_target(str(OWN_TARGET)).binding("inference")
+    assert set(t.features) == {
+        "streaming",
+        "embeddings",
+        "gateway",
+        "tlp-ceiling",
+        "tlp-admit",
+        "turn-records",
+    }  # fmt: skip  (ADR-0038 decision 7's acceptance run)
+    cfg = t.config
+    doc = json.loads((CONFORMANCE / "gateway" / "gateway.json").read_text())
+    table = json.loads((ROOT / cfg["roles"]).read_text())["roles"]
+    roles, keys = doc["roles"], {k["key_env"]: k for k in doc["keys"]}
+    assert doc["conformance_only"] is True and sorted(roles) == sorted(table)
+
+    def key(ref):
+        return keys[secret_env_name(ref)]
+
+    for opt in ("model", "embed_model", "throttle_model", "tlp_local_model", "over_ceiling_served"):
+        assert roles[cfg[opt]]["leaves_lab"] is False, opt
+    assert (
+        roles[cfg["model"]]["kind"] == "chat" and roles[cfg["embed_model"]]["kind"] == "embedding"
+    )
+    throttle = key(cfg["throttle_key"])
+    assert throttle["limits"]["max_requests"] == cfg["throttle_requests"]
+    assert cfg["throttle_model"] in throttle["roles"]
+    over = key(cfg["over_ceiling_key"])
+    assert tlp.read(over["tlp_ceiling"]) > tlp.read(roles[cfg["over_ceiling_model"]]["tlp_ceiling"])
+    assert cfg["over_ceiling_model"] not in over["roles"]
+    assert cfg["over_ceiling_served"] in over["roles"]
+    leaving = roles[cfg["tlp_model"]]
+    assert leaving["leaves_lab"] is True and leaving["tlp_ceiling"] in ("clear", "green")
+    sender = key(cfg["tlp_sender_key"])
+    assert sender["tlp_ceiling"] == "clear"
+    assert {cfg["tlp_model"], cfg["tlp_local_model"]} <= set(sender["roles"])
+    # the failover role: its deployment fails, its first fallback is refused by its own token
+    # limit (below any reservation) and is never a model the fake serves, a later one serves
+    failover = roles[cfg["failover_model"]]
+    first, *later = failover["fallbacks"]
+    assert later and roles[first]["limits"]["max_tokens"] == 1
+    # what must have served it, read back from the turn record: the later fallback's deployment
+    assert cfg["failover_served"] == roles[later[-1]]["deployments"][0]["id"]
+    # the refused fallback is on a model the fake serves: a gateway that called it would be
+    # served by it, so the read-back (which names the deployment) is what tells the two apart
+    spare = roles[first]["deployments"][0]
+    assert spare["id"] != cfg["failover_served"]
+    assert spare["model"] in DOCUMENTED_FAKE_MODELS
+    assert doc["telemetry_reader"]["key_env"] == secret_env_name(cfg["telemetry_key"])
+    assert all(not str(v).startswith(("http://", "https://")) for v in cfg.values())
+    assert "sk-" not in OWN_TARGET.read_text()
+
+
+class TagRecorder(TlpGatewayServer):
+    """The TLP fake that also records each chat's X-HNX-Tag and whether it was refused."""
+
+    def gate(self, headers, path, model):
+        verdict = super().gate(headers, path, model)
+        self.tagged = getattr(self, "tagged", [])
+        self.tagged.append((model, headers.get_all("X-HNX-Tag"), verdict is None))
+        return verdict
+
+
+def test_turn_records_sends_tagged_calls_once_a_run_and_names_their_window(monkeypatch):
+    from homelabnext.conform.adapters.gateway_usage import UsageTurnSource
+
+    cfg = _own_config()
+    roles = json.loads((ROOT / cfg["roles"]).read_text())["roles"]
+    srv = TagRecorder(
+        models=sorted(roles),
+        api_keys=[ADMIN, CLEAR_KEY],
+        key_models={CLEAR_KEY: [cfg["tlp_model"], cfg["tlp_local_model"]]},
+        leaving={cfg["tlp_model"]: tlp.Label.CLEAR},
+        key_ceilings={ADMIN: tlp.Label.RED, CLEAR_KEY: tlp.Label.CLEAR},
+    ).start()
+    monkeypatch.setenv("HNX_ENDPOINT_LLM_GATEWAY", srv.url)
+    monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_MASTER_KEY", ADMIN)
+    monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_KEY_CONFORMANCE_CLEAR", CLEAR_KEY)
+    monkeypatch.setenv("HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER", "sk-fake-reader-0000")
+    keep = ("roles", "model", "tlp_sender_key", "tlp_model", "tlp_local_model", "telemetry_key")
+    try:
+        source, start, end, tags = llm_gateway.make(**{k: cfg[k] for k in keep}).turn_records()
+        again = llm_gateway.make(**{k: cfg[k] for k in keep}).turn_records()
+        assert isinstance(source, UsageTurnSource) and again[0] is source  # sent once a run
+        assert start < end and len(set(tags)) == 2
+        assert srv.tagged == [
+            (cfg["model"], [tags[0]], True),
+            (cfg["model"], [tags[0]], True),
+            (cfg["model"], [tags[1]], True),
+            (cfg["tlp_model"], [tags[1]], False),  # refused: unlabelled to a role that leaves
+            (cfg["tlp_model"], [tags[1]], False),
+        ]
+    finally:
+        srv.stop()
+
+
+class LenientLabels(TlpGatewayServer):
+    """Reads an X-HNX-TLP value that is no label as clear (the defect the unknown labels catch)."""
+
+    def judge(self, fields, leaves, sender):
+        known = len(fields) != 1 or tlp.read(fields[0]) is not tlp.Label.RED
+        if not known and fields[0].strip().lower().removeprefix("tlp:") != "red":
+            fields = ["clear"]
+        return super().judge(fields, leaves, sender)
+
+
+def test_a_gateway_that_reads_an_unknown_label_as_clear_fails_the_above_ceiling_check(monkeypatch):
+    srv, t = _tlp_target(monkeypatch, cls=LenientLabels)
+    try:
+        r = SUITE.bind("tlp-admit-above-ceiling-refused", features=["gateway", "tlp-admit"])(t)
+        assert r.status == "fail" and "bogus" in r.evidence, r
+    finally:
+        srv.stop()
+
+
+def test_a_non_ascii_look_alike_label_reaches_the_gateway_as_utf8():
+    with HeaderRecorder(models=["m"]) as srv:
+        OpenAICompat(srv.url).chat_fields("m", PROMPT_MSG, [("X-HNX-TLP", "\uff43lear")])
+    # http.server decodes header bytes as latin-1: the UTF-8 bytes arrive unchanged
+    assert srv.seen == [("X-HNX-TLP", "\uff43lear".encode().decode("latin-1"))]
+
+
+class FallbackSubject:
+    """A subject whose failover call is answered under the alias and whose turn record for
+    that call names ``served`` as what served it."""
+
+    features = ("gateway", "tlp-admit")
+
+    def __init__(self, served):
+        self.served, self.tags = served, []
+
+    def refused_fallback(self):
+        return self, "failover", "fast-classifier-1"
+
+    def chat_fields(self, model, messages, fields, **kw):
+        from conformance.protocols.inference import ChatResult
+
+        self.tags.append(dict(fields)["X-HNX-Tag"])
+        return ChatResult("hello", "stop", model)
+
+    def turn_records(self):
+        subject = self
+
+        class Source:
+            def turns(self, start, end, tags):
+                return [{"model": subject.served} for t in subject.tags if t in tags]
+
+        return Source(), 0.0, 1.0, ["unused"]
+
+
+@pytest.mark.parametrize(
+    ("served", "status"), [("fast-classifier-1", "pass"), ("spare-1", "fail"), (None, "fail")]
+)
+def test_the_skipped_fallback_is_proved_by_what_served_the_call(served, status):
+    r = SUITE.bind("fallback-refused-at-admission-skipped")(FallbackSubject(served))
+    assert r.status == status, r
+    if status == "fail":
+        assert "the refused fallback was called" in r.evidence
+
+
+def _documented_fake_models() -> list[str]:
+    """The fake's ``--model`` list in docs/llm-gateway.md's own-gateway recipe."""
+    text = (ROOT / "docs" / "llm-gateway.md").read_text()
+    recipe = text.split("## Running the suite against the lab's own gateway", 1)[1]
+    block = recipe.split("```bash", 1)[1].split("```", 1)[0]
+    line = block[block.index("openai_server.py") :].split("&", 1)[0]
+    return re.findall(r"--model\s+(\S+)", line)
+
+
+DOCUMENTED_FAKE_MODELS = _documented_fake_models()
+
+
+def test_the_documented_fake_serves_every_conformance_deployment_but_the_dead_one():
+    doc = json.loads((CONFORMANCE / "gateway" / "gateway.json").read_text())
+    want = {
+        d["model"]
+        for r in doc["roles"].values()
+        for d in r["deployments"]
+        if d["backend"] != "inference-down"  # nothing listens there, on purpose
+    }
+    assert want == set(DOCUMENTED_FAKE_MODELS), (sorted(want), DOCUMENTED_FAKE_MODELS)

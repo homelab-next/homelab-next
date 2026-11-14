@@ -11,7 +11,7 @@
     "192.0.2.20": {
       "value": "none",
       "guest": "guest:ops-core",
-      "capability": "cap:orchestration"
+      "capability": "cap:exposure-management"
     },
     "192.0.2.80": {
       "value": "none",

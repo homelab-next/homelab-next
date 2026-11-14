@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+# Every account, its access entries and the token come from the environment at each start: ntfy
+# deletes a provisioned account, entry or token the environment no longer names. Only the env_file
+# (0600) holds the hash and the token.
+- name: Read the admin password hash and the publisher token
+  ansible.builtin.set_fact:
+    ntfy_secret_env:
+      ntfy:
+        NTFY_AUTH_USERS: >-
+          {{ ntfy_admin_user }}:{{ lookup('hnx_secret', ntfy_admin_hash_ref) }}:admin,{{
+          ntfy_publisher_user }}:{{ ntfy_publisher_unusable_hash }}:user
+        NTFY_AUTH_TOKENS: >-
+          {{ ntfy_publisher_user }}:{{ lookup('hnx_secret', ntfy_publisher_key_ref) }}:{{
+          ntfy_logical_id }}-publisher
+  no_log: true
+
+- name: Refuse a malformed hash or token before the server sees it (it would not start)
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Render and start ntfy
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ ntfy_app.compose_app_name }}"
+    compose_app_dir: "{{ ntfy_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ ntfy_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ ntfy_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ ntfy_app.compose_app_owner }}"
+    compose_app_group: "{{ ntfy_app.compose_app_group }}"
+    compose_app_start: "{{ ntfy_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ ntfy_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ ntfy_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ ntfy_secret_env }}"
+  no_log: true

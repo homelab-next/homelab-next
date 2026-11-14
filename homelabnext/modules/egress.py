@@ -67,6 +67,7 @@ ports are integers, protocols are the registry's, and every name matches the slu
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -668,3 +669,142 @@ def _lab_note(with_network: bool) -> list[str]:
 
 def write(files: dict[str, str], out: Path) -> None:
     limits.write(files, out)
+
+
+# ----------------------------------------------------------------------------- what is not enforced
+
+#: the platform role whose containers have their own network namespace (a bridge network)
+CONTAINER_ROLE = "compose_app"
+_INCLUDES = frozenset(
+    f"{ns}{verb}"
+    for ns in ("", "ansible.builtin.", "ansible.legacy.")
+    for verb in ("include_role", "import_role")
+)
+
+
+#: modules that run containers without compose_app (any of them makes a container role)
+_CONTAINER_MODULES = ("community.docker.", "docker_container", "docker_compose", "docker_image")
+
+
+def _runs(node: Any, role: str, depth: int = 0) -> bool:
+    """``node`` (a parsed task file, or ``meta/main.yml``) may run containers: it includes,
+    imports or depends on ``role``, names a role by a template (which may be it), uses a docker
+    module, or runs ``docker`` or ``podman`` as a command (blocks, rescue and always included)."""
+    if depth > 64:
+        return True  # deeper than any real task file: say container, never stay silent
+    if isinstance(node, list):
+        return any(_runs(x, role, depth + 1) for x in node)
+    if not isinstance(node, dict):
+        return False
+    for k, v in node.items():
+        key = str(k)
+        if key in _INCLUDES and isinstance(v, dict) and _is_role(v.get("name"), role):
+            return True
+        if key.startswith(_CONTAINER_MODULES) or key.removeprefix("community.general.") in (
+            "docker_container",
+            "docker_compose",
+        ):
+            return True
+        if key.rsplit(".", 1)[-1] in ("command", "shell", "raw") and _docker_command(v):
+            return True
+        if key == "dependencies" and isinstance(v, list):
+            for d in v:
+                ref = d.get("role", d.get("name")) if isinstance(d, dict) else d
+                if _is_role(ref, role):
+                    return True
+        if isinstance(v, (list, dict)) and _runs(v, role, depth + 1):
+            return True
+    return False
+
+
+def _docker_command(v: Any) -> bool:
+    if isinstance(v, dict):
+        v = v.get("argv") or v.get("cmd") or v.get("_raw_params") or ""
+    words = " ".join(map(str, v)) if isinstance(v, list) else str(v)
+    return bool(re.search(r"(?:^|[\s/;&|])(?:docker|podman|nerdctl)(?:\s|$)", words))
+
+
+def _is_role(ref: Any, role: str) -> bool:
+    if not isinstance(ref, str):
+        return False
+    if "{{" in ref or "{%" in ref:
+        return True  # a templated role name may be it: warn rather than stay silent
+    last = ref.rsplit("/", 1)[-1]
+    return last == role or last.rsplit(".", 1)[-1] == role  # bare, a path, or a collection FQCN
+
+
+def runs_containers(role_dir: Path, load: Callable[[Path], Any]) -> bool:
+    """A role runs its service as containers when any of its task or handler files (``tasks/``,
+    ``handlers/``, at any depth, any name) or its ``meta/main.yml`` includes, imports or depends on :data:`CONTAINER_ROLE` (or a
+    role named by a template), uses a docker module, or runs ``docker`` as a command.  This is a
+    heuristic over what the role says, so it errs towards a container: a file that cannot be
+    read, or any symbolic link under ``tasks/`` or ``handlers/`` (file or directory), counts as one (the caller warns, and a
+    warning too many is better than none)."""
+    files = [role_dir / "meta" / "main.yml", role_dir / "meta" / "main.yaml"]
+    try:
+        for sub in ("tasks", "handlers"):
+            top = role_dir / sub
+            if top.is_symlink():
+                return True
+            if not top.is_dir():
+                continue
+            # every entry, at any depth, with no suffix filter (include_tasks may name any file):
+            # a symbolic link anywhere, a directory included, counts as a container role, since
+            # os.walk does not follow it and its contents would go unread
+            for root, dirnames, filenames in os.walk(top, followlinks=False):
+                for name in dirnames + filenames:
+                    if (Path(root) / name).is_symlink():
+                        return True
+                files += sorted(Path(root) / f for f in filenames)
+        for f in files:
+            if f.is_symlink():
+                return True
+            if not f.is_file():
+                continue
+            if _runs(load(f), CONTAINER_ROLE):
+                return True
+    except Exception:  # unreadable: report it as a container role (see above)
+        return True
+    return False
+
+
+def unenforced(
+    site: Doc, sel: dict[str, Doc], dirs: dict[str, Path], load: Callable[[Path], Any]
+) -> list[str]:
+    """One warning per placed lab container host role (:func:`runs_containers`): its egress
+    (``egress:``, ``none`` when absent, so every module declares one) is not enforced.  The
+    rendered policy cannot filter it at all: its containers are on a bridge network, their
+    traffic is forwarded, and the policy matches sockets of the role's slice in the host's own
+    ``output`` hook, so ``modules.yml`` installs no policy for it (``docs/modules/apply.md``,
+    "What it does not do yet": filtering the containers in a forward chain or on the host
+    network is the follow-up).  A role that is not a container role is not warned about: its
+    policy is rendered and, as for every role, installed by hand (``egress/README.md``)."""
+    hosts = site.get("hosts") or {}
+    out: set[str] = set()
+    for mod, _inst, role, h, host in _placed(site, sel):
+        if not isinstance(h, dict) or h.get("kind") == "external":
+            continue
+        if (hosts.get(host) or {}).get("kind") == "external":
+            continue
+        decl = sel[mod].get("egress", "none")
+        if decl == "none":
+            said = "egress: none" + ("" if "egress" in sel[mod] else " (the default)")
+        else:
+            to = sorted({t for e in decl if e.get("host") == role for t in e.get("to", [])})
+            said = f"egress to {', '.join(to)}" if to else "egress: none (none listed for it)"
+        files = {
+            "role:" + e["file"].rstrip("/").rsplit("/", 1)[-1]: e["file"].rstrip("/")
+            for e in sel[mod].get("contributes", {}).get("roles", [])
+        }
+        refs = [files[r] for r in h.get("roles", []) if r in files]
+        container = any(runs_containers(Path(dirs[mod]) / f, load) for f in refs)
+        where = f"{mod}/{role} on {host}"
+        if container:
+            out.add(
+                f"{where}: {said} is NOT enforced: the role runs containers (compose_app) on a "
+                "bridge network, whose traffic is forwarded and never matched by the egress "
+                "policy (sockets of the role's slice in the host's output hook), so modules.yml "
+                "installs no policy for it; the follow-up is to filter the containers in a "
+                "forward chain or run them on the host network (docs/modules/apply.md)"
+            )
+    return sorted(out)

@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+from ..capability_names import CAPABILITIES, EXTENDED
 from ..paths import checkout_root
 from .core import Suite
 
@@ -31,26 +32,6 @@ __all__ = [
     "schema_problems",
 ]
 
-CAPABILITIES: tuple[str, ...] = (
-    "lake-query",
-    "lake-catalog",
-    "object-store",
-    "inference",
-    "fast-classifier",
-    "notify",
-    "cases",
-    "events",
-    "orchestration",
-    "broker",
-    "secrets",
-    "idp",
-    "records",
-    "detections",
-    "context",
-    "projects",
-    "codemode-executor",
-    "codemode-runner",
-)
 #: the capabilities among the eighteen whose components are frozen or experimental (the `conform`
 #: lists of tools/experimental.yml, held equal by tools/tests/test_experimental.py): still listed
 #: and still run, but out of the blocking set, so ``hnx conform report`` leaves them out unless
@@ -58,16 +39,6 @@ CAPABILITIES: tuple[str, ...] = (
 #: (``projects`` stays blocking although the home-built store is frozen: the same suite holds the
 #: OpenProject adapter, the lab's one projects backend, to the contract)
 EXPERIMENTAL: tuple[str, ...] = ("codemode-executor", "codemode-runner")
-#: additional suites that ship with the harness but are not among the eighteen
-EXTENDED: tuple[str, ...] = (
-    "backup",
-    "dns",
-    "edge",
-    "broker-tokens",
-    "orchestration-features",
-    "migration",
-    "log-pipeline",
-)
 
 
 class ConformError(Exception):

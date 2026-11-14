@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+# 2.9 (ADR-0039): one primary per capability; a candidate (eval), a former primary in its rollback
+# window (retiring) and an old-lab product kept only for the ledger (legacy) share its capability;
+# a resolver secondary is a replica, not a tier
+registry_version: 1
+lab: {name: northwind, domain: example.internal}
+zones:
+  mgmt: {cidr: 192.0.2.0/24}
+hosts:
+  mon-core: {address: 192.0.2.20, zone: mgmt}
+  dns-1: {address: 192.0.2.5, zone: mgmt}
+  dns-2: {address: 192.0.2.6, zone: mgmt}
+services:
+  notify:
+    capability: notify
+    impl: notifier-a
+    host: mon-core
+    protocol: http
+    port: 8080
+    owner: platform-team
+    version: "2.11"
+    tls: none
+    tlp_ceiling: amber
+  notify-candidate:
+    capability: notify
+    impl: notifier-b
+    host: mon-core
+    protocol: http
+    port: 8081
+    owner: platform-team
+    version: "2.6"
+    tls: none
+    tlp_ceiling: green
+    standing: {tier: eval, until: "2026-12-31", why: a candidate notifier under shadow traffic}
+  notify-previous:
+    capability: notify
+    impl: notifier-c
+    host: mon-core
+    protocol: http
+    port: 8082
+    owner: platform-team
+    version: "1.9"
+    tls: none
+    tlp_ceiling: amber
+    standing: {tier: retiring, until: "2026-12-15", why: "the former primary, stopped and restorable"}
+  notify-oldlab:
+    capability: notify
+    impl: notifier-b
+    host: mon-core
+    protocol: http
+    port: 8083
+    owner: platform-team
+    version: "2.4"
+    tls: none
+    standing: {tier: legacy, until: "2027-01-31", why: "the old lab's notifier until its ledger row closes"}
+  dns:
+    capability: dns
+    impl: resolver-a
+    host: dns-1
+    protocol: dns
+    port: 53
+    owner: platform-team
+    version: "13.0"
+    tls: none
+  dns-secondary:
+    capability: dns-secondary
+    replica_of: dns
+    impl: resolver-a
+    host: dns-2
+    protocol: dns
+    port: 53
+    owner: platform-team
+    version: "13.0"
+    tls: none

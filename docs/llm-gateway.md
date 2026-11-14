@@ -1,6 +1,6 @@
 ---
 summary: 'The LLM gateway, where a role becomes a backend and model id: generated config, the locality rule, TLP labels on requests, lab-in-a-box, conformance, LiteLLM.'
-summary_of: outline:sha256:5a47e561dbb9bf66
+summary_of: outline:sha256:af5a6e7fc45054ef
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # LLM gateway
@@ -34,7 +34,7 @@ inputs:
 | optionally, a serving spec (`serving:`, [model-serving.md](model-serving.md)) | the store-served backends: each becomes `{locality: local, port}` from the serving plan, and every binding on it must resolve to a store entry its engine may serve; the plan's `exposure` must be `zone`, and a registry service for a backend must have the plan's port |
 
 ```bash
-hnx gen gateway render SPEC OUT_DIR            # writes litellm/ under OUT_DIR
+hnx gen gateway render SPEC OUT_DIR            # writes litellm/ and gateway/ under OUT_DIR
 hnx gen gateway render SPEC OUT_DIR --check    # drift check and locality audit (make gateway-check)
 hnx gen gateway provision OUT_DIR/litellm/keys.json   # create LiteLLM keys on a running proxy
 hnx gen gateway homes --roles ROLES HOME...    # no HERMES_HOME names an IP or an engine model id (A-14)
@@ -60,7 +60,10 @@ It writes:
   per-minute share, rounded down) and `max_budget`. LiteLLM limits each deployment and its
   pre-call checks move an over-limit request onto the next one, so a role with `n` bindings gives
   each deployment `1/n` of the share and of the budget (rounded down): the sum is never above the
-  declared figure, and a share that rounds to nothing is refused. LiteLLM counts only per minute, so a limit
+  declared figure, and a share that rounds to nothing is refused. An exhausted per-deployment budget only takes that
+  deployment out of the routing (LiteLLM's "No deployments available - crossed budget"), which
+  the proxy answers with 429; since LiteLLM 1.106.2, an exhausted key, user or team budget
+  answers 422 instead, and the lab sets none of those. LiteLLM counts only per minute, so a limit
   must have a window of whole minutes and at least one call a minute: `1` per `3600` s or `5` per
   `10` s is refused rather than rendered looser (`1` rpm, `30` rpm). Counts are whole numbers of
   at least 1; `max_requests: 0` is refused, never rendered as unlimited. Role fallbacks go in `router_settings`, with
@@ -88,6 +91,76 @@ It writes:
 Secrets are always `secret:<name>` and are delivered in `HNX_SECRET_<NAME>` (the registry's
 mapping). The renderer refuses a literal value.
 
+## The neutral gateway config, `gateway/gateway.json`
+
+Beside `litellm/`, `render` also writes `gateway/gateway.json`: the product-neutral config of
+[ADR-0038](adr/0038-the-llm-gateway-is-our-own-behind-the-same-contract.md) that the lab's own
+gateway reads (schema `schemas/platform/gateway_config.schema.json`, a draft until ADR-0038 is
+accepted). It comes from the same spec as the LiteLLM files and says the same things in one file:
+
+- each role's kind, context limit, TLP ceiling and `leaves_lab` (both chain-inclusive: the role
+  table's `role_ceiling` and `cloud_roles` over the role and its whole fallback chain, exactly what
+  `model_tlp.admit` reads), its deployments in binding order (`openai` protocol for a local
+  backend, its base URL without `/v1`; a cloud one on `https://api.openai.com` or
+  `https://api.anthropic.com`), its fallbacks (what LiteLLM's `fallbacks` gets) and its limits as
+  declared, one budget per role in its own window (not LiteLLM's per-minute, per-deployment
+  share);
+- each key's alias, environment name, owner, data tier, sending ceiling, the roles it may call
+  (its own and their fallback chains, what LiteLLM's `models` gets) and its limits;
+- the admin key's environment name (the master key; its ceiling is always `red`) and the
+  telemetry reader's (it may call `GET /v1/usage` only).
+
+Only environment names appear, never a value. JSON carries no comment, and the contract allows no
+extra key, so the generated-by line and the digest are in the sibling `gateway/.hnx-generated`,
+which also records `gateway.json`'s sha256.
+
+**Refusals.** The contract cannot express a cloud provider other than `openai` or `anthropic`, an
+embedding role on an `anthropic` deployment, or a role `max_cost` without `cost_per_1k_tokens`. For
+such a spec `render` still writes `litellm/` (LiteLLM stays the deployed gateway until the cutover,
+ADR-0038 decision 7), writes no `gateway/`, and says why in a `# note:` line of
+`litellm/config.yaml` and on stderr; a `gateway/gateway.json` left from an earlier render is
+removed (`--check` reports it stale), with or without its marker, so the lab's gateway never
+reads a config the spec no longer produces.
+
+**The audit** (`--check`, and every render) reads `gateway.json` itself: it must be schema-valid;
+no local-only or agent role may have a cloud deployment or fall back to a role with one (a
+deployment is local only when it says `local`, speaks `openai` and is on a declared local host); a
+cloud deployment's base URL is its provider's API; each role's `tlp_ceiling` and `leaves_lab` are
+the spec's; every key is the spec's, with its data tier and ceiling (a missing or unknown label
+reads as `red`) and no role beyond what the spec grants; no key reaches a role whose ceiling is
+below its own, and no `local-only` key reaches a role with a cloud deployment or `leaves_lab`; every
+key role is a role of the file, and a key that lists a role also lists that role's fallbacks (the
+contract's own invariant); and no environment name serves two credentials (admin, reader, keys,
+upstream keys). It also holds the file to the spec, field by field: the same roles (none added or
+missing); each role's kind, context limit, fallbacks, limits and cost, and each deployment's id,
+backend, locality, protocol, base URL, model and API key environment as its binding renders; each
+key's environment name, owner, roles and limits; the admin and telemetry-reader environment names.
+Counts are compared as JSON (`60.0` is not `60`: the gateway decodes them as integers). A file that
+is consistent on its own but is not the spec's (a fallback added, two key environments swapped, a
+local deployment moved to another declared host) is refused, even when its marker's sha256 was
+rewritten to match. The marker only says the file is generated; the comparison is what proves it.
+
+**The test-only render** (`render --conformance`, ADR-0038 decision 7) is for a conformance run
+against the fake inference server, never for a lab. A spec's `conformance:` block, which a render
+without the flag refuses, points every cloud deployment at the fake (`cloud_base_url`, an origin
+under the lab's service domain) instead of its provider's API; `--conformance-host HOST`
+(a loopback name only) then moves every deployment's host to the machine the suite runs
+on, keeping its port. A spec with a cloud backend and no `conformance:` block is refused by the
+test-only render: its suite would otherwise send test prompts, with a real provider key, out of
+the lab. Such a render writes `gateway/` alone (LiteLLM has no conformance mode), and
+its `gateway.json` carries `"conformance_only": true`: the gateway refuses to start on it unless
+started with `-conformance`, which serves loopback only. Its audit requires the flag, the fake's
+URL on every cloud deployment and the moved hosts; a lab render's audit refuses
+`conformance_only`, and so does `--check` without the flag.
+
+```bash
+hnx gen gateway render SPEC OUT_DIR --conformance [--conformance-host HOST]
+```
+
+Packaged examples carry `gateway.json` but not its `.hnx-generated` marker: no dotfile goes into a
+wheel (the sdist drops them, and the two wheels must be identical); `hnx` never reads the marker
+from the package.
+
 ## The locality rule
 
 A per-request fallback from a local model to a cloud one has two effects. It bypasses `local_only`
@@ -110,6 +183,12 @@ not a publicly routable network), or when its host is under the lab's internal s
 (`<svc_label>.<domain>`, `svc.example.internal` in the lab). `{locality: local, host:
 api.example.com}` is refused, and the `--check` audit counts such a host as cloud even if the spec
 was edited to let it through.
+
+With a registry loaded, a self-declared host in the service domain is held to the registry
+(ADR-0039 decision 3): a host that is a capability's primary alias is that registry service, with
+its zone, port and scheme; a host that names any other registry row or capability, or a name under
+one, is refused. So a primary that serves a second API port is not a backend through its alias on
+that port: register the second port as a row of its own.
 
 `--check` then audits the rendered files themselves. It decides locality from each file, not from
 the spec:
@@ -180,7 +259,8 @@ egress content checks of decision 13 on gateway requests are a later step.
 The lab's spec is `compose/lab-in-a-box/config/llm-gateway/gateway.yml`. It uses
 `schemas/platform/examples/model_roles.valid.json`, the two example profiles, and one extra key,
 `conformance-throttle`, limited to 3 requests a minute so the limit check has something to hit.
-Both backends point at the fake inference server, which serves `example-4b` and `example-27b`
+Both backends point at the fake inference server, which serves `example-4b`, `example-27b` and
+`example-embed-8d` (the `embedder` role's, which the embeddings checks call as `embed_model`)
 under the aliases `inference-small` and `inference-large`.
 
 The gateway services are an optional compose profile. They are not part of `make lab-up` or the
@@ -208,7 +288,7 @@ hnx conform run inference --target compose/lab-in-a-box/targets/inference-gatewa
 
 | Profile | Services | mem_limit |
 |---|---|---|
-| `gateway` | `llm-gateway` (LiteLLM 1.106.2, `litellm-database` image, digest-pinned), on the lab's postgres as role `litellm`, which owns only schema `litellm` (created by `config/postgres/init/10-litellm.sh` when the volume is first initialised; password `LAB_GATEWAY_DB_PASSWORD`); `llm-gateway-keys` (one-shot `provision`) | 896 + 64 MB |
+| `gateway` | `llm-gateway` (LiteLLM 1.106.3, `litellm-database` image, digest-pinned), on the lab's postgres as role `litellm`, which owns only schema `litellm` (created by `config/postgres/init/10-litellm.sh` when the volume is first initialised; password `LAB_GATEWAY_DB_PASSWORD`); `llm-gateway-keys` (one-shot `provision`) | 896 + 64 MB |
 
 The default stack's 3584 MB budget does not include profile services, because `docker compose up`
 does not start them. `tests/compose` counts the profile's 960 MB separately and checks it against
@@ -238,16 +318,92 @@ again against the same gateway.
 The product adapter is `homelabnext.conform.adapters.llm_gateway:make`. It is stdlib-only, keeps
 no state between calls, and is not tied to any product. It reads the endpoint from
 `HNX_ENDPOINT_<CAPABILITY>` and the keys from `HNX_SECRET_*` on every call. The declared models
-come from the role table, not from the gateway itself. The lab ships one target file,
-`targets/inference-gateway.yml` (LiteLLM). Switching gateways means a renderer for the new
+come from the role table, not from the gateway itself. The lab ships two target files,
+`targets/inference-gateway.yml` (LiteLLM) and `targets/inference-own-gateway.yml` (the lab's own
+gateway on the conformance spec, below). Switching gateways means a renderer for the new
 product, a target file, and passing this suite.
+[ADR-0038](adr/0038-the-llm-gateway-is-our-own-behind-the-same-contract.md) (proposed) takes that
+exit with the lab's own gateway, which reads a product-neutral `gateway/gateway.json`; LiteLLM
+stays deployed until that gateway passes this suite.
 
 A target that also declares `tlp-ceiling` (`TlpCeilingGateway`) adds
 `gateway-refuses-role-above-key-ceiling`: on a key whose sending TLP ceiling is above a cloud
 role's (`over_ceiling_key`, `over_ceiling_model`; and `over_ceiling_served`, a role it may call),
 the call to the cloud role is a 401 or 403 from the chat itself and the call to the other role is
-served. The lab's targets do not declare it: the lab-in-a-box gateway has no role that leaves the
-lab.
+served. The LiteLLM target does not declare it: the lab-in-a-box gateway has no role that leaves
+the lab. The own gateway's target does (below).
+
+A target that also declares `tlp-admit` (`TlpAdmitGateway`, a gateway that reads a request's
+`X-HNX-TLP` header, ADR-0038 decision 5) adds seven checks. They send the header themselves, on a
+clear-ceiling key (`tlp_sender_key`), on the admin key (whose ceiling is always `red`), to a role
+that leaves the lab (`tlp_model`) and one that stays in it (`tlp_local_model`). A refusal must be
+a 403 from the chat whose error is a TLP refusal (`code: tlp_refused`, or a message naming TLP)
+and names its reason, `unlabelled` or `above-ceiling` (the one in parentheses first, as the
+gateway words it: `tlp refused (unlabelled): ...`).
+
+| Check | Fails when |
+|---|---|
+| `tlp-admit-unlabelled-refused` | no header to the leaving role is not a 403 `unlabelled` (a reply means the gateway served it or fell back to another role), or no header to the staying role is not served |
+| `tlp-admit-within-ceiling-served` | `clear`, ` TLP:CLEAR ` or `white` from the clear-ceiling key is not served by the leaving role under its alias (HTTP strips the spaces, so ` TLP:CLEAR ` tests case and prefix only) |
+| `tlp-admit-above-ceiling-refused` | `amber`, `red`, or a value that is no label (`bogus`, `tlp:clearx`, a non-ASCII look-alike of `clear`, `tlp:tlp:clear`) to the leaving role is not a 403 `above-ceiling` |
+| `tlp-admit-judged-at-key-ceiling` | the admin key's `clear` to the leaving role is served (it must be judged at the key's `red`), or its call to the staying role is not |
+| `tlp-admit-empty-field-is-red` | one empty field is not refused as `above-ceiling` (it is a label that reads `red`, not "no label") |
+| `tlp-admit-two-fields-are-red` | two `clear` fields are not refused as `above-ceiling` |
+| `fallback-refused-at-admission-skipped` | on `failover_model`, whose deployments fail and whose first fallback is refused at admission (by its own limit), the call is not served under its alias, or (with `failover_served` and the target's turn records) the call's turn, read back by its own `X-HNX-Tag`, names another deployment than `failover_served` (skipped when the target names no such role) |
+
+A TLP-refused fallback cannot be built from a rendered config (a role's ceiling and `leaves_lab`
+include its whole chain, so a fallback is never judged stricter than the role admitted), so the
+skip check uses a fallback refused by its own token limit, and the gateway's unit tests cover the
+TLP case (ADR-0038, amendment).
+
+## Running the suite against the lab's own gateway
+
+The lab's own gateway (ADR-0038) is `orchestrator/cmd/gateway`, built in this repository's Go
+module (ADR-0026; [the lab's own gateway](gateway.md)). CI's `gateway-conformance` job builds it
+and runs this suite against it on every change, through `tools/gateway_conformance.sh`, which a
+workstation runs the same way ([the lab's own gateway](gateway.md#conformance-in-ci)). The run uses
+the conformance gateway spec, the test-only render and a target:
+
+- `compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml`, with its own test-only role
+  table (`model_roles.json` beside it): `fast-classifier` and `embedder` on the fake,
+  `cloud-reasoner` (a cloud `openai` deployment pointed at the fake by `cloud_base_url`, so it
+  leaves the lab at ceiling `clear`, falling back to `fast-classifier`), and `failover` (its one
+  deployment on a port nothing listens on, then `spare`, refused by a token limit of 1 although
+  the fake serves its model, then `fast-classifier`). A gateway that called `spare` anyway would be
+  served by `spare-1`, and the skip check's read-back of the call's turn record catches it. Its keys are `conformance-throttle` (3 a
+  minute), `conformance-clear` (cloud-allowed, ceiling `clear`), `conformance-red` (local-only,
+  ceiling `red`, scoped away from `cloud-reasoner`) and the telemetry reader. Its test-only render
+  is committed beside it (`gateway/`), held by `make gateway-check`.
+- `compose/lab-in-a-box/targets/inference-own-gateway.yml`, the target with every feature of the
+  acceptance run: `streaming`, `embeddings`, `gateway`, `tlp-ceiling`, `tlp-admit` and
+  `turn-records`. The plain client sends no `X-HNX-TLP`, so `model`, `embed_model` and
+  `throttle_model` are roles that stay in the lab.
+
+By hand, on one machine (the fake, the gateway and the suite on loopback; the script does the
+same, generates the keys and holds every check to a pass):
+
+```bash
+(cd orchestrator && go build -o ../build/bin/llm-gateway ./cmd/gateway)
+spec=compose/lab-in-a-box/config/llm-gateway-conformance/gateway.yml
+lo=127.0.0.1  # no-raw-endpoint: allow the conformance mode serves loopback only
+hnx gen gateway render $spec "$scratch" --conformance --conformance-host $lo
+python3 conformance/fakes/openai_server.py --port 8000 \
+  --model conformance-chat --model conformance-spare --model example-embed-8d \
+  --model example-cloud-chat &
+# every *_env the rendered gateway.json names, each client key at least 32 bytes and distinct:
+# HNX_SECRET_LLM_GATEWAY_MASTER_KEY, ..._KEY_CONFORMANCE_THROTTLE, ..._KEY_CONFORMANCE_CLEAR,
+# ..._KEY_CONFORMANCE_RED, ..._KEY_TELEMETRY_READER, ..._CONFORMANCE_CLOUD_KEY (sent to the fake)
+build/bin/llm-gateway -config "$scratch/gateway/gateway.json" -conformance -listen $lo:4100 \
+  -usage "$scratch/usage.jsonl" &
+export HNX_ENDPOINT_LLM_GATEWAY=http://$lo:4100
+hnx conform run inference --target compose/lab-in-a-box/targets/inference-own-gateway.yml
+```
+
+The `turn-records` checks send a few calls tagged `X-HNX-Tag` (two tags of the run, two of them
+refused by TLP) and read them back over `GET /v1/usage` with the telemetry reader's key, through
+the turn source `homelabnext.conform.adapters.gateway_usage:make` ([orchestration
+telemetry](orchestration-telemetry.md)). As with LiteLLM, `gateway-limit-throttles` uses up the
+throttle key's minute: restart the gateway (limits are in memory) or wait before a rerun.
 
 ## Running LiteLLM: the supported shape
 

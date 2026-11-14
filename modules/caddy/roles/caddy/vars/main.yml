@@ -1,0 +1,284 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# Inside the container: Caddy listens on unprivileged ports (the host publishes caddy_port on the
+# guest's address to the HTTPS one), reads its configuration, the certificate and the upstream TLS
+# files read-only, and keeps its own state in /data and /config. Its admin API is on the
+# container's own loopback (caddy reload uses it); the health site answers only there too.
+caddy_container_https_port: 8443
+caddy_container_http_port: 8080
+caddy_container_health_port: 8081
+caddy_container_config_dir: /etc/caddy
+caddy_container_certs_dir: /etc/hnx-edge/certs
+caddy_container_env:
+  HOME: /data
+  XDG_DATA_HOME: /data
+  XDG_CONFIG_HOME: /config
+# the generator's fixed paths (homelabnext.generators.builtin: SITES_FILE, EDGE_TLS_FILE,
+# EDGE_TLS_DIR): the sites name the upstream TLS files under this directory, which the role
+# fills from the secret store and mounts read-only at the same path
+caddy_sites_file: caddy/sites.caddy
+caddy_edge_tls_file: caddy/edge_tls.json
+caddy_edge_tls_dir: /etc/hnx/edge-tls
+# the installed certificate (the renewal script's install target) and its name in lego's store
+caddy_cert_file: "{{ caddy_data_root }}/certs/edge.crt"
+caddy_key_file: "{{ caddy_data_root }}/certs/edge.key"
+caddy_acme_dir: "{{ caddy_data_root }}/acme"
+caddy_acme_cert_name: edge
+caddy_acme_env_file: "{{ caddy_data_root }}/acme-env/dns.env"
+caddy_acme_script: /usr/local/libexec/homelabnext/caddy-acme-renew
+caddy_acme_unit: hnx-caddy-acme
+caddy_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+# the DNS provider's environment variable for its token (lego's provider documentation)
+caddy_acme_token_env:
+  cloudflare: CF_DNS_API_TOKEN
+caddy_arch_names:
+  x86_64: amd64
+  amd64: amd64
+  aarch64: arm64
+  arm64: arm64
+# the image reference's parts (compose_app takes them apart)
+caddy_image_parts:
+  repository: "{{ caddy_image.split('@')[0].rsplit(':', 1)[0] }}"
+  tag: "{{ caddy_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+  digest: "{{ caddy_image.split('@')[1] | default('') }}"
+caddy_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+caddy_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+caddy_name_pattern: '^(?=.{1,253}\Z)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?\Z'
+caddy_ref_pattern: '^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*\Z'
+caddy_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+# a generated site's address line (column 0, a host name, then the block) and a front door's
+# environment placeholder, as the edge generator writes them
+caddy_site_pattern: '(?m)^([a-z0-9][a-z0-9.-]*) \{$'
+caddy_env_pattern: '\{env\.(HNX_SECRET_[A-Z0-9_]+)\}'
+# the forward-auth proxy the generated sites dial (hnx_forward_auth's forward_auth line)
+caddy_forward_auth_pattern: '(?m)^\t\tforward_auth http://([a-z0-9.-]+):([0-9]+) \{$'
+# The export (data acme, object-tree): the ACME client's account and certificates and the
+# rendered configuration, copied into export/ (acme/..., config/...) with listing.jsonl (key, size,
+# sha256). Root only: the account key is the account. Every run writes a new snapshot.
+caddy_export_script: |
+  import hashlib, json, os, shutil, stat, sys
+  root, dst = sys.argv[1], sys.argv[2]
+  rows = []
+  stage = dst + ".new"
+  if os.path.lexists(stage):
+      shutil.rmtree(stage)
+  os.mkdir(stage, 0o700)
+  for top in ("acme", "config"):
+      base = os.path.join(root, top)
+      if not os.path.isdir(base) or os.path.islink(base):
+          continue
+      for d, dirs, files in os.walk(base):
+          dirs[:] = sorted(x for x in dirs if not os.path.islink(os.path.join(d, x)))
+          for f in sorted(files):
+              src = os.path.join(d, f)
+              st = os.lstat(src)
+              if not stat.S_ISREG(st.st_mode):
+                  continue
+              key = os.path.relpath(src, root)
+              out = os.path.join(stage, key)
+              os.makedirs(os.path.dirname(out), mode=0o700, exist_ok=True)
+              h = hashlib.sha256()
+              fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+              with os.fdopen(fd, "rb") as a, open(out, "wb") as b:
+                  for chunk in iter(lambda: a.read(1 << 20), b""):
+                      h.update(chunk)
+                      b.write(chunk)
+              os.chmod(out, 0o600)
+              rows.append({"key": key, "size": os.path.getsize(out), "sha256": h.hexdigest()})
+  with open(os.path.join(stage, "listing.jsonl"), "w") as f:
+      for r in rows:
+          f.write(json.dumps(r, sort_keys=True) + "\n")
+  os.chmod(os.path.join(stage, "listing.jsonl"), 0o600)
+  # the old snapshot stays whole until the new one is in place
+  old = dst + ".old"
+  if os.path.lexists(old):
+      shutil.rmtree(old)
+  if os.path.lexists(dst):
+      os.rename(dst, old)
+  os.rename(stage, dst)
+  if os.path.lexists(old):
+      shutil.rmtree(old)
+  print(json.dumps({"files": len(rows)}))
+# The restore (check, then apply): the source directory and every file opened without following a
+# link, owned by root and writable by no one else; listing.jsonl naming only acme/ and config/
+# files, each a single-link regular file of the listed size and sha256. Apply copies each one
+# through the descriptor that was checked into a staging file beside its target and renames it in
+# (root only, 0600). Main then converges (it renders the configuration again and reinstalls the
+# certificate from lego's store).
+caddy_restore_script: |
+  import hashlib, json, os, stat, sys
+  mode, src, root = sys.argv[1], sys.argv[2], sys.argv[3]
+  def fail(msg):
+      print("caddy restore: " + msg)
+      sys.exit(1)
+  def safe(st, what):
+      if st.st_uid != 0 or st.st_mode & 0o022:
+          fail(what + " must be root's and writable by no one else")
+  dfd = os.open(src, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+  safe(os.fstat(dfd), src)
+  with os.fdopen(os.open("listing.jsonl", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)) as f:
+      rows = [json.loads(line) for line in f if line.strip()]
+  def opened(key):
+      parts = key.split("/")
+      if parts[0] not in ("acme", "config") or any(p in ("", ".", "..") for p in parts):
+          fail("listing names " + json.dumps(key) + ", outside acme/ and config/")
+      fd = dfd
+      for p in parts[:-1]:
+          nfd = os.open(p, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+          safe(os.fstat(nfd), key)
+          if fd != dfd:
+              os.close(fd)
+          fd = nfd
+      ffd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+      if fd != dfd:
+          os.close(fd)
+      st = os.fstat(ffd)
+      safe(st, key)
+      if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+          fail(key + " is not a single-link regular file")
+      return ffd, st
+  checked = []
+  for r in rows:
+      ffd, st = opened(r["key"])
+      h = hashlib.sha256()
+      with os.fdopen(os.dup(ffd), "rb") as f:
+          data = f.read()
+      h.update(data)
+      if st.st_size != r["size"] or h.hexdigest() != r["sha256"]:
+          fail(r["key"] + " differs from the listing (size or sha256)")
+      checked.append((r["key"], data))
+      os.close(ffd)
+  if mode == "check":
+      print(json.dumps({"files": len(checked)}))
+      sys.exit(0)
+  for key, data in checked:
+      dest = os.path.join(root, key)
+      os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+      tmp = os.path.join(os.path.dirname(dest), ".restore-" + os.path.basename(dest))
+      fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+      with os.fdopen(fd, "wb") as f:
+          f.write(data)
+          f.flush()
+          os.fsync(f.fileno())
+      os.replace(tmp, dest)
+  print(json.dumps({"files": len(checked), "restored": True}))
+# The health probe, run on the guest (argv[1] a JSON document of what to check; stdin the running
+# configuration, read from Caddy's admin API in the container). It parses the deployed sites file
+# as the edge generator writes it (a site is a column-0 "<name> {" line to the next "}" line) and
+# checks: TLS on the edge's address for every name, verified against the public trust bundle by
+# name; the forward-auth redirect to the sign-in page for an unauthenticated request to a gated
+# site; the catch-all 404 for a name no site has; the running configuration's identity strip (every
+# site deletes every spelling of the identity headers first, before anything it proxies); each
+# mTLS upstream refused without the edge's client certificate and answering with it; each other
+# TLS upstream's certificate verified against the lab's CA by name.
+caddy_probe_script: |
+  import json, re, socket, ssl, sys
+  spec = json.loads(sys.argv[1])
+  live = json.loads(sys.stdin.read() or "null")
+  out = {"tls": {}, "redirect": {}, "catch_all": None, "strip": {}, "mtls": {}, "upstream_tls": {}}
+  timeout = spec["timeout"]
+  sites, cur = {}, None
+  for line in spec["sites"].splitlines():
+      m = re.match(r"^([a-z0-9][a-z0-9.-]*) \{$", line)
+      if m:
+          cur = m.group(1)
+          sites[cur] = []
+      elif line == "}":
+          cur = None
+      elif cur:
+          sites[cur].append(line.strip())
+  def host_path(p):
+      return spec["tls_root"] + p[len(spec["tls_dir"]):] if p.startswith(spec["tls_dir"] + "/") else p
+  def get(name, host_header):
+      ctx = ssl.create_default_context(cafile=spec["bundle"])
+      with socket.create_connection((spec["bind"], spec["port"]), timeout=timeout) as raw:
+          with ctx.wrap_socket(raw, server_hostname=name) as s:
+              s.sendall(("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" % host_header).encode())
+              data = b""
+              while len(data) < 65536:
+                  chunk = s.recv(4096)
+                  if not chunk:
+                      break
+                  data += chunk
+      head = data.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
+      hdrs = {k.strip().lower(): v.strip() for k, _, v in (h.partition(":") for h in head[1:])}
+      return int(head[0].split()[1]), hdrs
+  def err(e):
+      return "%s: %s" % (type(e).__name__, e)
+  for name in spec["names"]:
+      try:
+          status, hdrs = get(name, name)
+          out["tls"][name] = "ok"
+          if any(x.startswith("import hnx_forward_auth ") for x in sites.get(name, [])):
+              out["redirect"][name] = [status, hdrs.get("location", "")]
+      except (OSError, ssl.SSLError, ValueError, IndexError) as e:
+          out["tls"][name] = err(e)
+  if spec["names"]:
+      try:
+          out["catch_all"] = get(spec["names"][0], "hnx-health-no-such-site.invalid")[0]
+      except (OSError, ssl.SSLError, ValueError, IndexError) as e:
+          out["catch_all"] = err(e)
+  marks = set(spec["marks"])
+  servers = (((live or {}).get("apps") or {}).get("http") or {}).get("servers") or {}
+  for srv in servers.values():
+      for route in srv.get("routes", []):
+          for host in [h for m in route.get("match", []) for h in m.get("host", [])]:
+              if host not in sites:
+                  continue
+              first = next((h["routes"][0] for h in route.get("handle", [])
+                            if h.get("handler") == "subroute" and h.get("routes")), None)
+              deleted = set()
+              if first and not first.get("match"):
+                  for h in first.get("handle", []):
+                      if h.get("handler") != "headers":
+                          break
+                      deleted |= set((h.get("request") or {}).get("delete", []))
+              out["strip"][host] = sorted(marks - deleted)
+  for site, lines in sorted(sites.items()):
+      opts = {}
+      for x in lines:
+          words = x.split()
+          if words[:1] == ["reverse_proxy"] and len(words) > 1:
+              m = re.match(r"^https://([a-z0-9.-]+):([0-9]+)$", words[1])
+              if m:
+                  opts["host"], opts["port"] = m.group(1), int(m.group(2))
+          elif words[:1] == ["tls_client_auth"] and len(words) == 3:
+              opts["chain"] = (host_path(words[1]), host_path(words[2]))
+          elif words[:2] == ["tls_trust_pool", "file"] and len(words) == 3:
+              opts["ca"] = host_path(words[2])
+          elif words[:1] == ["tls_server_name"] and len(words) == 2:
+              opts["name"] = words[1]
+      if not {"host", "ca", "name"} <= set(opts):
+          continue
+      def attempt(chain):
+          # a failure to reach the upstream at all is an error; a TLS peer that ends the
+          # handshake or the connection (no client certificate) is "refused"
+          c = ssl.create_default_context(cafile=opts["ca"])
+          if chain:
+              c.load_cert_chain(*chain)
+          try:
+              raw = socket.create_connection((opts["host"], opts["port"]), timeout=timeout)
+          except OSError as e:
+              return err(e)
+          with raw:
+              try:
+                  with c.wrap_socket(raw, server_hostname=opts["name"]) as s:
+                      s.sendall(b"GET / HTTP/1.1\r\nHost: " + opts["name"].encode() + b"\r\nConnection: close\r\n\r\n")
+                      return "answered" if s.recv(64).startswith(b"HTTP/") else "refused"
+              except ssl.SSLCertVerificationError as e:
+                  return err(e)
+              except (ssl.SSLError, ConnectionError) as e:
+                  return "refused" if not chain else err(e)
+      if "chain" in opts:
+          out["mtls"][site] = {"without": attempt(None), "with": attempt(opts["chain"])}
+      else:
+          got = attempt(None)
+          out["upstream_tls"][site] = "ok" if got == "answered" else got
+  print(json.dumps(out, sort_keys=True))
+# the forms a credential must have before it is written anywhere
+caddy_dns_value_pattern: '^[A-Za-z0-9._~+/=-]{1,512}\Z'
+caddy_front_door_value_pattern: '^[^''"\r\n\x00]{16,512}\Z'
+caddy_pem_cert_pattern: '-----BEGIN CERTIFICATE-----'
+caddy_pem_key_pattern: '-----BEGIN (EC |RSA )?PRIVATE KEY-----'
+# the deletes every site must run first (homelabnext.edge_identity.IDENTITY_HEADERS.strip_patterns)
+caddy_identity_marks: ["*auth-request*", "*auth_request*"]

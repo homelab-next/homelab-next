@@ -6,7 +6,6 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import ipaddress
-import os
 from typing import Any
 
 from .model import (
@@ -397,15 +396,17 @@ def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
                 "provisioning manual requires lifecycle.requires_root_steps (what to do by hand)",
             )
         )
-    if g.capability not in _known_caps():
+    placed = fleet.placement.get(g.name, frozenset())
+    if g.capability not in _known_caps() and g.capability.removeprefix("cap:") not in placed:
         out.append(
             Problem(
                 g.id,
                 f"capability {g.capability} is not a known capability (one the class table "
-                "homelabnext/agent/tool_classes.yml or the conformance harness names)",
+                "homelabnext/agent/tool_classes.yml or the conformance harness names, or, with a "
+                "registry, one a row on the guest's host serves)",
             )
         )
-    ok_groups = allowed_groups()
+    ok_groups = allowed_groups() | {group_for_capability(c) for c in placed}
     for grp in g.groups:
         if grp not in ok_groups:
             out.append(Problem(g.id, f"capability_groups: {grp} is not a known inventory group"))
@@ -428,14 +429,14 @@ def model_runtime(g: Guest) -> str | None:
 
 def today(now: dt.date | None = None) -> dt.date:
     """The date reviews are judged against: ``now`` when given, else ``HNX_TODAY`` (YYYY-MM-DD)
-    when set, so a test or a replay is deterministic, else the local date."""
-    raw = os.environ.get("HNX_TODAY")
-    if now is None and raw:
-        try:
-            now = dt.date.fromisoformat(raw)
-        except ValueError:
-            raise ComputeError(f"HNX_TODAY={raw!r} is not a YYYY-MM-DD date") from None
-    return now or dt.date.today()
+    when set, so a test or a replay is deterministic, else the local date
+    (:func:`homelabnext.registry.standing.today`, the one reader of ``HNX_TODAY``)."""
+    from homelabnext.registry.standing import today as judged_on
+
+    try:
+        return judged_on(now)
+    except ValueError as exc:
+        raise ComputeError(str(exc)) from None
 
 
 def _review_date(raw: Any) -> dt.date | None:

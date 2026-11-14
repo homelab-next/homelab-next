@@ -71,6 +71,8 @@ SELECTION = json.loads((ROOT / "schemas/platform/module_selection.schema.json").
 
 # A negative's file name says which rule it breaks; an error must be at that place.
 NEGATIVES = {
+    "host-guest-requirement-empty": "requires/hosts/1/guest",
+    "host-guest-requirement-on-external": "requires/hosts/0",
     "adapter-any-callable": "provides/slots/object-store/adapter",
     "agent-ceiling": "contributes/agents/0",
     "agent-needs-an-authority-slot": "contributes/agents/0/needs/2/cap",
@@ -1138,6 +1140,16 @@ SELECTION_NEGATIVES = {
     "addresses-network": "hosts/data/addresses/0",
     "upstream-grant-not-authority": "grants/upstreams/publishing/0",
     "cloud-model-not-a-role": "grants/cloud_models/publishing/0",
+    "incumbent-without-why": "incumbents/secrets",
+    "guest-host-with-kind": "hosts/data",
+    "guest-host-not-a-guest-id": "hosts/data/guest",
+    "stand-in-host-without-capacity": "hosts/data",
+    "incumbent-unknown-field": "incumbents/secrets",
+    "planned-without-review-by": "planned/idp",
+    "planned-review-by-not-a-date": "planned/idp/review_by",
+    "planned-unknown-field": "planned/idp",
+    "planned-why-control-character": "planned/idp/why",
+    "planned-review-by-other-digits": "planned/idp/review_by",
     "lab-namespace-without-why": "lab_table_namespaces/0",
     "lab-namespace-not-a-name": "lab_table_namespaces/0/namespace",
     "tlp-reader-unknown-ceiling": "tlp_readers/0/ceiling",

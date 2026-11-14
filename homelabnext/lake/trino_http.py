@@ -273,8 +273,9 @@ class TrinoHTTP:
         self.max_bytes = max_bytes
         self._retries = retries
         self._sleep = sleep
-        #: how requests are sent: by default same-origin redirects only; a client that signs in
-        #: passes :func:`homelabnext._http.credential_opener` (no redirect, no proxy)
+        #: how requests are sent: by default same-origin redirects only (GET/HEAD) and no proxy;
+        #: a client that signs in passes :func:`homelabnext._http.credential_opener` (no
+        #: redirect, no proxy)
         self._opener = opener
 
     def __repr__(self) -> str:

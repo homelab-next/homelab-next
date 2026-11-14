@@ -5,7 +5,25 @@
   loopback unless the caller passed ``allow_plaintext=True`` (the same rule as
   :class:`homelabnext.lake.trino.TrinoLake`).
 * :func:`safe_opener` follows a redirect only to the same scheme, host and port, so an
-  ``Authorization`` header is never replayed to another origin and https is never downgraded.
+  ``Authorization`` header is never replayed to another origin and https is never downgraded,
+  and only for a GET or HEAD: any other method's 3xx is the ``HTTPError`` (urllib would turn a
+  POST answered 301/302/303 into a GET with no body).  A ``303`` after a write the server
+  processed is therefore reported as an error; no caller retries a 3xx, so a manual re-run of
+  a create that is not idempotent may duplicate it.
+* No opener here uses a proxy from the environment: ``HTTP(S)_PROXY``
+  would receive each request's ``Authorization`` (or ``X-Vault-Token``) header, in clear
+  for http.  Lab endpoints are reached directly.  A deployment that needs an egress proxy says
+  so explicitly: it passes the client an ``opener=`` built with its own
+  ``urllib.request.ProxyHandler`` (the events forwarder, the notify sender, the lake clients),
+  or a ``transport=`` for the model client; a model call to a cloud provider goes through the
+  LLM gateway, whose ``-upstream-proxy`` is that path's proxy.  The events forwarder, the
+  notify sender or a direct-mode model client pointed at a public host behind an egress proxy
+  need that.
+* :func:`no_redirect_urlopen` follows no redirect (a 3xx surfaces as an ``HTTPError``) and uses
+  no proxy, for a POST whose 2xx answer is read as an acknowledgement and which may carry a
+  credential (the events forwarder, notify).  A ``303`` after a write the server processed is
+  reported as an error here too; the events forwarder's retry of it is safe because every
+  send carries an idempotency key.
 * :func:`credential_opener` follows no redirect and uses no proxy, for a request carrying a key
   (the st2 bridge's webhook, the gateway's spend-log reader).
 * :func:`read_bounded` reads at most ``limit`` bytes and refuses a longer reply instead of
@@ -80,14 +98,34 @@ def _origin(url: str) -> tuple[str, str, int | None]:
 
 
 class SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Follow a redirect only within the same scheme, host and port; refuse anything else."""
+    """Follow a redirect only for a GET or HEAD, and only within the same scheme, host and port;
+    refuse anything else.  urllib resends a POST answered 301/302/303 as a GET with no body, and
+    a 2xx to that GET would read as the write's result, so any other method's 3xx surfaces as
+    the ``HTTPError`` instead."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        target = urllib.parse.urljoin(req.full_url, newurl)
-        if _origin(target) != _origin(req.full_url):
+        if req.get_method() not in ("GET", "HEAD"):
             raise urllib.error.HTTPError(
-                req.full_url, code, f"refusing cross-origin redirect ({msg})", headers, fp
+                req.full_url,
+                code,
+                f"refusing to follow a redirect of a {req.get_method()} ({msg})",
+                headers,
+                fp,
             )
+        # userinfo, a backslash or a percent-escape in the authority is read differently by
+        # urlsplit and by http.client (which host is the origin?), and a bad port or bracket
+        # makes urlsplit raise: neither is followed, both are the HTTPError
+        why = None
+        try:
+            target = urllib.parse.urljoin(req.full_url, newurl)
+            if any(c in urllib.parse.urlsplit(target).netloc for c in "@\\%"):
+                why = "refusing redirect to an ambiguous authority"
+            elif _origin(target) != _origin(req.full_url):
+                why = "refusing cross-origin redirect"
+        except ValueError:
+            why = "refusing redirect to an invalid URL"
+        if why:
+            raise urllib.error.HTTPError(req.full_url, code, f"{why} ({msg})", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -109,12 +147,25 @@ def credential_opener(ca_file: str | None = None) -> urllib.request.OpenerDirect
 
 
 def safe_opener() -> urllib.request.OpenerDirector:
-    return urllib.request.build_opener(SameOriginRedirectHandler)
+    """An opener with :class:`SameOriginRedirectHandler` and no proxy (see the module
+    docstring: every caller reaches a lab endpoint, most with a credential)."""
+    return urllib.request.build_opener(SameOriginRedirectHandler, urllib.request.ProxyHandler({}))
 
 
 def safe_urlopen(req: Any, timeout: float | None = None) -> Any:
-    """Drop-in for ``urllib.request.urlopen`` with :class:`SameOriginRedirectHandler`."""
+    """Drop-in for ``urllib.request.urlopen`` with :class:`SameOriginRedirectHandler` and no
+    proxy."""
     return safe_opener().open(req, timeout=timeout)
+
+
+def no_redirect_urlopen(req: Any, timeout: float | None = None) -> Any:
+    """Drop-in for ``urllib.request.urlopen`` that follows no redirect (a POST redirected by
+    urllib arrives as a GET with no body, and a 2xx to that GET would read as delivered) and
+    uses no proxy (the environment's ``HTTP(S)_PROXY`` would get the request's
+    ``Authorization`` header, in clear for http)."""
+    return urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({})).open(
+        req, timeout=timeout
+    )
 
 
 def read_bounded(resp: Any, limit: int = DEFAULT_MAX_BYTES) -> bytes:

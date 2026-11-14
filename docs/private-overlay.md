@@ -160,17 +160,30 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
 2. **Keys offline first.** Generate the operator's age identity on the workstation
    (`age-keygen`); store it in the password manager and print a paper copy. Put its public
    recipient in `.sops.yaml`. Choose the ansible-vault password the same way.
-3. **OpenBao.** Install it in server mode (raft storage, TLS from the internal CA). Initialise it:
+3. **OpenBao.** Install it in server mode (raft storage, TLS from the internal CA): the
+   [`openbao` role](../ansible/roles/openbao/README.md) and `ansible/playbooks/openbao.yml` on the
+   `cap_secrets` host, whose README has the commands for this step. Initialise it:
    the unseal key shares and the initial root token go to the password manager and to paper,
    split as you decided, never into a repository, a chat or an Actions secret. Unseal, create the
    KV v2 mount (`secret/`), write the lab's credentials under the names the registry and roles use
    (`secret:<name>` maps to `secret/data/<name>`) with `hnx secrets seed`
-   ([Seeding the credentials](#seeding-the-credentials)), then revoke the root token.
+   ([Seeding the credentials](#seeding-the-credentials)). Keep the root token until the deploy's
+   AppRole (step 4) and the role's snapshot principal and restore policy exist; revoke it then, in
+   the order the [role's README](../ansible/roles/openbao/README.md#the-operators-procedure-first-start)
+   gives (seed, AppRole, snapshot principal, restore policy, revoke). The snapshot principal's
+   `secret_id` is issued by OpenBao itself, so `seed` lists `openbao/snapshot-secret-id` as an
+   external value still missing until that step stores it.
 4. **An identity for the deploy.** Create an AppRole for the deploy with a policy that can read
    only the paths the deploy needs (and the vault password at `secret/data/ansible/vault-password`
-   if you keep it there), for example:
+   if you keep it there; and the snapshot principal's `secret_id`, which the `openbao` role reads
+   by name on the deploy's behalf), for example:
 
    ```sh
+   bao policy write hnx-deploy - <<'EOF'
+   path "secret/data/ansible/vault-password"     { capabilities = ["read"] }
+   path "secret/data/openbao/snapshot-secret-id" { capabilities = ["read"] }
+   # ...one line per name the deploy reads (hnx secrets plan lists them)
+   EOF
    bao write auth/approle/role/hnx-deploy token_policies=hnx-deploy \
      token_ttl=5m token_max_ttl=15m token_type=service \
      secret_id_ttl=720h secret_id_num_uses=0 \
@@ -185,6 +198,24 @@ Order matters: each step needs the one before it, and nothing secret is ever wri
    mid-deploy), so keep that TTL short and rotate it (below). Bound the CIDRs to the tailnet range
    the deploy node gets, or the runner VM's subnet. Generate a second age identity for the deploy
    and add its recipient to `.sops.yaml` (`sops updatekeys` on existing files).
+
+   The snapshot principal's `secret_id` (the role's README, step 3) also expires after 30 days, and
+   backups fail the day it does. Declare it in `lab/secrets.yml`, so that `hnx secrets plan` knows
+   how it is made and ADR-0045's rotate-by audit sees it, and put it in the deploy's owner map (the
+   spec's `also:`, the deploy's own names: the deploy reads it):
+
+   ```yaml
+   also: [ansible/vault-password, openbao/snapshot-secret-id]
+   rules:
+     - match: "openbao/snapshot-secret-id"
+       kind: external
+       how: >-
+         bao write -f -field=secret_id auth/approle/role/hnx-snapshot/secret-id
+         | bao kv put -mount=secret openbao/snapshot-secret-id value=-
+         (then destroy the old secret_id's accessor)
+       # max_age: 21d   ADR-0045 decision 10's key (at most 30 days: the secret_id_ttl), once hnx
+       #                reads it; today's loader refuses unknown keys, so it stays a comment until then
+   ```
 5. **A path into the lab.** Either
    * **Tailscale** (no inbound exposure): declare the deploy's access in `lab/site.yml`
      (`tailnet.deploy`, [below](#tailscale-the-deploy-tag-least-access)), including an exception
@@ -473,7 +504,13 @@ role's `fallback` decide which modules need `grants.cloud_models`, and no pin sh
 overlay's swap gate is `hnx modules swap-gate --overlay .`, which `checks.yml`'s `swap-gate` job runs on every pull request; see [modules.md](modules.md)), and what
 vouches for a model a swap rebinds to (`lab/model-serving/model_store.json`,
 `lab/model_roles.eval.json` and `lab/model-evals/`, as the module tier rates the repository's).
-The `CODEOWNERS` template names all of them.
+The `CODEOWNERS` template names all of them. In the registry the review also names, field by
+field, the changes that move which row every consumer of a capability reaches
+([ADR-0039](adr/0039-one-primary-per-capability.md) decision 8): a row added or removed (a new row
+is a primary unless it says otherwise), and a row's `standing`, `capability` or `replica_of`
+added, removed or changed (deleting `standing` promotes the row). The date a non-primary row's
+standing runs to is checked by `hnx registry standing lab/services.yml --overdue` (checklist
+X-12), which fails once a row is past its `until`.
 
 A file new at the head or removed from it, one that does not read at either end (not YAML, an
 alias or a duplicate key, a symbolic link, not a regular file, over the size cap), a sealed one (a
@@ -606,7 +643,10 @@ job needs it and checks out only the commit it hands on), the private leak check
 --overlay . --deploy`, with the pinned `hnx`, the overlay read as data), the specs the operator
 applies by hand (`lab-specs`: `hnx ssh-ca check lab/ssh-ca.yml` and `hnx secrets plan lab --spec
 lab/secrets.yml`, each when the file exists; the plan reads names only and reaches no store), the
-site review tier (`site-review-tier`) and the swap gate (`swap-gate`), and a last job, `checks`,
+site review tier (`site-review-tier`), the swap gate (`swap-gate`), the binding check
+(`registry-bindings`: `hnx registry bindings lab/services.yml`, with `lab/model_roles.json` and
+the selection's `requires` when present and the evaluation report's canary bindings as the base
+has them; ADR-0039 decision 3), and a last job, `checks`,
 that needs all of them and fails unless each succeeded: it is the one check branch protection
 requires, so no job can be left out of it. A pull request's code never sees a credential, and a
 module or spec problem shows on the pull request, not only at the deploy or when it is applied.

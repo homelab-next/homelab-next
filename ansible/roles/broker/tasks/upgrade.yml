@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The broker's code is homelab-next's (role hnx_runtime's upgrade hook); what changes here is the
+# operator's manifest: validate the new one with the running release and record it as pending,
+# then move broker_manifest and re-run main.
+- block:
+    - name: Validate the target manifest
+      ansible.builtin.command:
+        argv: ["{{ broker_hnx_bin }}", broker, validate, "{{ broker_target_manifest }}"]
+      changed_when: false
+    - name: Hash it
+      ansible.builtin.stat:
+        path: "{{ broker_target_manifest }}"
+        checksum_algorithm: sha256
+      register: broker_upgrade_target
+    - name: Record the pending manifest
+      ansible.builtin.copy:
+        dest: "{{ broker_config_dir }}/pending-manifest-sha256"
+        content: "{{ broker_upgrade_target.stat.checksum }}\n"
+        mode: "0640"
+  tags: [upgrade]

@@ -214,7 +214,7 @@ def test_an_export_starts_with_a_header_naming_its_store(synced):
     assert header == {
         "schema": EXPORT_SCHEMA,
         "kind": "header",
-        "sources": ["svc:llm-orchestrator"],
+        "sources": ["svc:orchestrator", "svc:llm-orchestrator"],  # both, for the overlap
         "retention_days": 90,
         "exported_at": "2026-01-01T06:00:00Z",
     }
@@ -228,7 +228,8 @@ def test_an_import_into_a_store_of_other_sources_says_why_every_job_is_refused(s
     assert all("no job holds gateway tag" in why for _, why in refused[4:])
     for _, why in refused[:4]:
         assert "not the controller's job record" in why
-        assert "the export's store took svc:llm-orchestrator; this store takes svc:other-ctl" in why
+        took = "the export's store took svc:orchestrator, svc:llm-orchestrator"
+        assert f"{took}; this store takes svc:other-ctl" in why
     misplaced = [lines[1], lines[0]]  # a header is the first line or nothing
     counts, refused = import_lines(TelemetryStore(tmp_path / "p.db", clock=lambda: T0), misplaced)
     assert refused == [(2, "a header is the first line of an export")]

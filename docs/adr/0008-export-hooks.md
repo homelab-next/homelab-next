@@ -8,6 +8,11 @@ summary_of: outline:sha256:2fdd5ae7b30885dd
 - **Date:** 2026-10-15
 - **Related:** ADR-0004, ADR-0005
 - **Status note (2026-10-28):** decisions 1 and 2 are not yet met as written; the decision is unchanged. Today `ansible/roles/compose_app/tasks/export.yml` exports a tar.gz of the live data directory, not an open-format dump (JSON, STIX, SQL), and the `restore_drill` role runs the backup product's image-level drill (`restore_drill_cli`), not a restore from an export.
+- **Amended:** 2026-11-07 by ADR-0040 (decision 6): export and import become methods of each
+  stateful slot's protocol, with a round-trip requirement; and by ADR-0042 (decision 2): a dump
+  restores the same product, while the export of decision 1 is for leaving it and stays a separate,
+  open-format hook
+- **Amended-by:** ADR-0040, ADR-0042
 
 ## Context
 

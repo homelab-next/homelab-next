@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data auth and cache, object-tree): <data root>/export/{auth.db,cache.db,
+# listing.jsonl}, each database copied with SQLite's online backup while the server runs, as the
+# container's user (setpriv), never as root, so no file appears that the server cannot open.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy both databases consistently (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+  tags: [export]

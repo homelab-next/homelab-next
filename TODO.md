@@ -40,6 +40,20 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
   In the same pull request, change the overlay's own `CLAUDE.md` ("Validate lab data") to read
   the pin from `locks/hnx-ref` instead of `gh variable get HNX_REF`, so agents stop reading the
   variable you delete.
+- [ ] **Give agents their own GitHub identity, if you accept ADR-0046** (decisions 1, 2 and 8;
+  [ADR-0046](docs/adr/0046-repository-governance-agents-are-not-the-operator.md)). Until then
+  agents act with your token, so GitHub cannot tell them from you:
+  - create the GitHub App with decision 1's permissions and install it on homelab-next and the
+    overlay only;
+  - put the App's private key with the token mint;
+  - remove every route that acts as your account from agent environments: tokens, `gh` logins,
+    SSH and deploy keys, and hosted-session GitHub connectors and MCP servers authorised as you;
+  - check whether your plan offers organisation required-workflow rules (decision 2), and record
+    the answer on the ADR;
+  - once the leak-watch template has merged (implementation step 8), create the overlay's
+    `leak-watch` Environment and age identity and seal the deny-list to it.
+  Do not apply the rulesets yet: that is a later item (implementation step 7), because applied
+  early the required checks never report.
 
 ## 2. Secrets and the deploy path (before the first deploy)
 
@@ -148,6 +162,8 @@ procedure is [docs/private-overlay.md](docs/private-overlay.md), "Bootstrapping 
 - [ ] **Accept ADR-0036 (novelty baselines).** That ends the draft status of its novelty spec
   schema and of its amendment to ADR-0033 decision 6. Accept, too, the other ADRs whose code has
   shipped but whose **Status** line still reads `proposed`.
+- [ ] **Decide the proposed ADRs listed in ADR-0046 decision 10**: accept, reject or leave each,
+  the batch 0039 to 0049 as the last group. Accepting one decides it; its implementation follows.
 - [ ] **Confirm or overturn the defaults in pull request #59 (broker-only actors).** The first is
   ADR-0030 decision 1: a site's `--classes` table may not class a packaged capability or tier
   down. The second, that there is no per-record waiver for the tool-class floors, is in #59's

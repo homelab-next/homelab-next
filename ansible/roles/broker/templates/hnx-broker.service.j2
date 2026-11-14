@@ -1,0 +1,76 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role broker, service {{ broker_logical_id }}); local changes are overwritten.
+# docs/broker.md "A systemd unit": a dedicated user owns the state; each agent and the status hub
+# are peers of the socket through {{ broker_clients_group }}. Neither RuntimeDirectory= nor
+# StateDirectory=: systemd sets an exec directory to User:Group again for every command it starts,
+# so an ExecStartPre=+chgrp to the clients' (or the relay's) group is undone before ExecStart runs
+# and the peers cannot reach the socket. The role makes the directories (tmpfiles.d for the
+# socket's, so it is back after a reboot) with the groups docs/broker.md names; the socket's is
+# setgid (2750), so the socket is born in {{ broker_clients_group }} and serve chowns nothing.
+#
+# HANDLERS RUN AS THIS UNIT'S USER ({{ broker_user }}), with its access to the state and the audit
+# trail: acceptable for the role's proof manifests only (manifest_id ending -proof; the role
+# refuses any other manifest that declares an exec handler). A real handler needs its own uid
+# first (docs/broker.md "Handlers and the broker's uid").
+[Unit]
+Description=homelab-next broker ({{ broker_logical_id }}: named actions for agents)
+After=network.target
+
+[Service]
+Type=simple
+User={{ broker_user }}
+Group={{ broker_group }}
+ExecStart={{ broker_hnx_bin }} broker serve --manifest {{ broker_config_dir }}/manifest.yml --state {{ broker_state_dir }} --data-root {{ broker_data_root }} --socket {{ broker_socket }} --socket-mode {{ broker_socket_mode }}
+{% if broker_runtime_release %}
+Environment=HNX_RUNTIME_RELEASE={{ broker_runtime_release }}
+{% endif %}
+{% if broker_approvals_url %}
+Environment=HNX_BROKER_APPROVALS_URL={{ broker_approvals_url }}
+{% endif %}
+EnvironmentFile=-{{ broker_config_dir }}/secrets.env
+Restart=on-failure
+RestartSec=5
+# 0027, not 0077: the broker creates outbox files 0640 for the relay's group (open's mode is
+# masked by the umask), and 0600 ones are quarantined by the relay as unreadable; everything else
+# it creates 0600/0700 itself
+UMask=0027
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths={{ broker_state_root }} {{ broker_data_root }} {{ broker_socket_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+{% if not broker_network %}
+# serve needs no network at all: the socket is its only door, and its handlers get none either
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+{% else %}
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+{% endif %}
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# other users' processes are invisible, and /proc holds processes only (a run claim then records no
+# boot id; homelabnext.broker.state tells a live claimant by its pid's start time alone)
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# ~@privileged too (it holds @chown): the socket takes its group from the setgid directory, so
+# serve never chowns
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

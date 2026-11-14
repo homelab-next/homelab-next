@@ -197,3 +197,28 @@ def test_a_requirement_names_only_the_module_s_own_host_roles(tmp_path):
     probs = mr.module_problems(doc, mod, {}, _load, (tmp_path,))
     assert any("hosts: no-such-role is not one of the module's host roles" in p for p in probs)
     assert not any("hosts: receiver" in p for p in probs)
+
+
+@pytest.mark.parametrize(
+    ("adapter", "refused"),
+    [
+        ("conformance.fakes.agent_runner_launcher:make", False),
+        ("vendor.launcher:make", True),  # a provider certifying its own launcher
+    ],
+)
+def test_an_agent_runtime_providers_target_runs_under_the_reference_launcher(adapter, refused):
+    """ADR-0051 decision 13: a runtime provider supplies its body and exit_classes; its target
+    always runs them under the reference launcher (later the controller's runner/agent)."""
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    mod = root / "examples" / "modules" / "example-agent-runtime"
+    doc = yaml.safe_load((mod / "module.yml").read_text())
+    target = {"name": "t", "capabilities": {"agent-runner": {"adapter": adapter}}}
+    slots = yaml.safe_load((root / "examples" / "modules" / "slots.yml").read_text())["slots"]
+    probs = [
+        p
+        for p in mr.module_problems(doc, mod, slots, lambda p: target, (mod.parent,))
+        if "reference launcher" in p
+    ]
+    assert bool(probs) is refused, probs

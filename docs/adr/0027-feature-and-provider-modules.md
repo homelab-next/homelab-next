@@ -8,10 +8,20 @@ summary_of: outline:sha256:e2334f5f35796d84
 - **Date:** 2026-10-23
 - **Related:** ADR-0002, ADR-0004, ADR-0005, ADR-0007, ADR-0008, ADR-0017, ADR-0018, ADR-0021,
   ADR-0024, ADR-0025 (orchestration telemetry, merged) and ADR-0026 (the orchestrator as a component,
-  planned): the manifest relies on the former's job record for the orchestration export and on the
-  latter for the `agent-runtime` slot. `schemas/platform/module.schema.json` (draft),
+  proposed): the manifest relies on the former's job record for the orchestration export and on the
+  agent-runner contract the latter names for the `agent-runtime` slot. `schemas/platform/module.schema.json` (draft),
   [modules](../modules.md), [swap kit](../swap.md), [conformance](../conformance.md),
   [decommission audit](../decommission.md), [private overlay](../private-overlay.md)
+- **Amended:** 2026-11-07 by ADR-0040: a module declares its state class and the loader refuses
+  state nobody declared (decision 1); no module reads or writes another module's storage
+  (decision 2); what a module creates elsewhere is generated from its manifest, labelled with its
+  id and garbage-collected (decision 3); and replacing a module is the one protocol `hnx modules
+  replace` (decision 5)
+- **Amended:** 2026-11-12, in place while proposed: decision 9's placement is on hosts that
+  reference their guest records (modules plan H2)
+- **Amended:** 2026-11-13, in place while proposed (operator-approved): decision 9's selection
+  may plan a required core slot it does not serve yet, with a `review_by` a deploy enforces
+- **Amended-by:** ADR-0040
 
 ## Context
 
@@ -73,7 +83,14 @@ says what selecting someone else's module grants it.
 8. **Every owned dataset has a neutral export and import**; every stateful slot's contract gains a
    round-trip check, and X-07 becomes slot-keyed. A removal never touches another module's data.
 9. **Selection is site configuration in the private overlay** (`platform/module_selection` 1.0):
-   providers per slot as instances, `none` or `pass-through` where the registry allows, placement,
+   providers per slot as instances, `none` or `pass-through` where the registry allows, an
+   **incumbent** for a slot served outside modules
+   ([selection](../modules/selection.md#incumbents-slots-served-outside-modules)), a **planned**
+   required core slot not served yet, a warning until its dated review, which a deploy enforces
+   ([planned](../modules/planned.md)), placement
+   on hosts that reference their guest records, whose kind, capacity and addresses the loader
+   reads and judges each placed role against
+   ([selection](../modules/selection.md#hosts-that-are-guests)),
    lane-to-orchestration-instance bindings, real configuration values, the grants, and the
    site's **network scope** (trusted, target and excluded addresses: the one place a selection
    holds addresses; a module declares the parts it reads and its reader fails closed). Consumers

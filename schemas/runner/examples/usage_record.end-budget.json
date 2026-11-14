@@ -1,0 +1,5 @@
+{
+  "type": "end",
+  "turns": 7,
+  "budget_exhausted": "tool_calls"
+}

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Create the export directory
+      ansible.builtin.file:
+        path: "{{ status_hub_export_dir }}"
+        state: directory
+        mode: "0700"
+    - name: Export the state directory (JSON state, SQLite store, JSONL access log) as tar.gz
+      ansible.builtin.command:
+        argv: [tar, -czf, "{{ status_hub_export_dir }}/{{ status_hub_logical_id }}-state.tar.gz", -C, "{{ status_hub_state_dir }}", .]
+      changed_when: true
+  tags: [export]

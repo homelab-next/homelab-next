@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the database from an export's dump (README, "Restore drill"): the source is checked
+# first and nothing is written until it passes (keycloak_backup.py check: no links, trusted
+# owners, the listing's two files with their sizes and sha256). Then, with the IdP stopped, the
+# dump is staged in export/db/ as the database's user, hashed again (what is restored is what was
+# checked), and restored with pg_restore --clean --if-exists in one transaction; the staged copy
+# is removed and the IdP started again whatever happened. realm.json is not used here: the dump
+# holds the realm, its users and their keys. Run health afterwards.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read and check the rendered realm
+      ansible.builtin.include_tasks: realm.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the source (nothing is written)
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', keycloak_scripts ~ '/keycloak_backup.py') }}",
+               check, "{{ keycloak_restore_source }}", "{{ keycloak_db_uid | int }}"]
+      register: keycloak_restore_check
+      changed_when: false
+    - name: Restore with the IdP stopped
+      block:
+        - name: Stop the IdP
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", stop, keycloak]
+          changed_when: true
+        - name: Stage the dump as the database's user (through the checked descriptor)
+          ansible.builtin.command:
+            argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', keycloak_scripts ~ '/keycloak_backup.py') }}",
+                   stage, "{{ keycloak_restore_source }}", "{{ keycloak_data_root }}/export/db/.restore.dump",
+                   "{{ keycloak_db_uid | int }}", "{{ keycloak_db_gid | int }}"]
+          changed_when: true
+        - name: Restore the database (one transaction)
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", exec, -T, postgres,
+                   pg_restore, -U, "{{ keycloak_db_user }}", -d, "{{ keycloak_db_name }}",
+                   --clean, --if-exists, --no-owner, --single-transaction, --exit-on-error,
+                   "{{ keycloak_container_export }}/.restore.dump"]
+          changed_when: true
+      always:
+        - name: Remove the staged copy
+          ansible.builtin.file:
+            path: "{{ keycloak_data_root }}/export/db/.restore.dump"
+            state: absent
+        - name: Start the IdP again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", up, -d, keycloak]
+          changed_when: true
+    # an older dump may hold an older realm (a flow, a reserved user): converge it onto the
+    # rendered document and prove it before the restore is reported done
+    - name: Converge the restored realm
+      ansible.builtin.include_tasks: converge.yml
+    - name: Prove the restored realm (health)
+      ansible.builtin.include_tasks: health.yml
+  tags: [restore]

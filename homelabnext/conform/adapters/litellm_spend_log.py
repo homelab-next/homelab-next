@@ -40,8 +40,6 @@ is used, so the key never reaches another origin; the reply is read bounded.
 from __future__ import annotations
 
 import json
-import math
-import numbers
 import os
 import re
 import urllib.error
@@ -51,11 +49,14 @@ from collections.abc import Collection, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from conformance.protocols.inference import ERROR_CODE, TURN_ID, TurnSourceError, is_name
-from homelabnext._http import ResponseTooLarge, check_plaintext, credential_opener, read_bounded
+from conformance.protocols.inference import ERROR_CODE, TURN_ID, TurnSourceError
+from homelabnext._http import check_plaintext, credential_opener
 from homelabnext.registry import env_var_name
 from homelabnext.registry.model import secret_env_name
 from homelabnext.status.model import iso, parse_iso
+
+from ._turn_source import cost as cost_or_none
+from ._turn_source import count, fetch_json, name, plain_float, plain_int
 
 __all__ = [
     "DEFAULT_KEY",
@@ -85,30 +86,6 @@ MAX_PAGES = 200
 #: the longest a single page request may wait, in seconds (``timeout`` is 0 < t <= this)
 MAX_TIMEOUT = 600
 _SECRET_REF = re.compile(r"secret:[a-z0-9][a-z0-9/_.-]{0,127}")
-
-
-def _plain_float(value: object) -> float | None:
-    """``value`` as a plain ``float``, or None for a bool or a non-real.  The range is checked on
-    the converted value, so a subclass that overrides its comparisons cannot pass a check and
-    reach the socket as something else."""
-    if isinstance(value, bool) or not isinstance(value, numbers.Real):
-        return None
-    try:
-        out = float(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return out if type(out) is float else None
-
-
-def _plain_int(value: object) -> int | None:
-    """``value`` as a plain ``int``, or None for a bool or a non-integral (see :func:`_plain_float`)."""
-    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
-        return None
-    try:
-        out = int(value)
-    except (TypeError, ValueError):
-        return None
-    return out if type(out) is int else None
 
 
 class SpendLogError(TurnSourceError):
@@ -148,12 +125,12 @@ class SpendLogReader:
             check_plaintext(base_url, credentials=True, allow_plaintext=allow_plaintext)
         except ValueError as exc:
             raise SpendLogError(str(exc)) from None
-        page_size, max_pages = _plain_int(page_size), _plain_int(max_pages)
+        page_size, max_pages = plain_int(page_size), plain_int(max_pages)
         if page_size is None or max_pages is None or not 1 <= page_size <= 1000 or max_pages < 1:
             raise SpendLogError("page_size is 1..1000 and max_pages positive")
         # a socket refuses a negative timeout and overflows on a huge one at read time, which
         # failed every pass with a traceback instead of a configuration error at startup
-        timeout = _plain_float(timeout)
+        timeout = plain_float(timeout)
         if timeout is None or not 0 < timeout <= MAX_TIMEOUT:
             raise SpendLogError(f"timeout is seconds, 0 < timeout <= {MAX_TIMEOUT}")
         self.url = f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}{SPEND_LOGS_PATH}"
@@ -187,28 +164,16 @@ class SpendLogReader:
         req = urllib.request.Request(f"{self.url}?{q}", method="GET")
         req.add_header("Accept", "application/json")
         req.add_header("Authorization", f"Bearer {self._key()}")
-        try:
-            with self._opener.open(req, timeout=self.timeout) as resp:
-                status, body = int(resp.status), read_bounded(resp, MAX_PAGE_BYTES)
-        except urllib.error.HTTPError as exc:
-            exc.close()
-            if exc.code in (401, 403):
-                raise SpendLogError(
-                    f"the gateway refused the key ({exc.code}): it needs the proxy_admin_viewer "
-                    f"role and the route {SPEND_LOGS_PATH}"
-                ) from None
-            raise SpendLogError(f"the spend log answered HTTP {exc.code}") from None
-        except ResponseTooLarge:
-            raise SpendLogError(f"a spend-log page is over {MAX_PAGE_BYTES} bytes") from None
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            reason = getattr(exc, "reason", exc)
-            raise SpendLogError(f"the gateway is unreachable ({type(reason).__name__})") from None
-        if not 200 <= status < 300:
-            raise SpendLogError(f"the spend log answered HTTP {status}")
-        try:
-            doc = json.loads(body)
-        except ValueError:
-            raise SpendLogError("the spend log did not answer JSON") from None
+        doc = fetch_json(
+            self._opener,
+            req,
+            timeout=self.timeout,
+            max_bytes=MAX_PAGE_BYTES,
+            error=SpendLogError,
+            log="the spend log",
+            page="a spend-log page",
+            refused=f"it needs the proxy_admin_viewer role and the route {SPEND_LOGS_PATH}",
+        )
         if not isinstance(doc, dict) or not isinstance(doc.get("data"), list):
             raise SpendLogError("the spend log's answer has no data list")
         return doc
@@ -297,24 +262,13 @@ def _time(v: Any) -> float | None:
         return None
 
 
-def _count(v: Any) -> int | None:
-    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
-
-
-def _name(key: str, v: Any) -> str | None:
-    """``v`` when the turn record's ``key`` takes it (the one rule,
-    :func:`~conformance.protocols.inference.is_name`), else null: a gateway's odd name costs
-    that one field, never the turn."""
-    return v if is_name(key, v) else None
-
-
 def _cache_read(meta: Mapping[str, Any]) -> int | None:
     usage = meta.get("usage_object")
     if not isinstance(usage, Mapping):
         return None
-    got = _count(usage.get("cache_read_input_tokens"))
+    got = count(usage.get("cache_read_input_tokens"))
     if got is None and isinstance(usage.get("prompt_tokens_details"), Mapping):
-        got = _count(usage["prompt_tokens_details"].get("cached_tokens"))
+        got = count(usage["prompt_tokens_details"].get("cached_tokens"))
     return got
 
 
@@ -344,21 +298,16 @@ def turn_from_row(row: Mapping[str, Any], tags: Iterable[str]) -> dict[str, Any]
         "turn_id": rid,
         "gateway_tag": hit[0],
         "started_at": iso(start),
-        "duration_ms": _count(row.get("request_duration_ms")),
+        "duration_ms": count(row.get("request_duration_ms")),
         "ttft_ms": round((first - start) * 1000) if first is not None and first >= start else None,
-        "model_role": _name("model_role", row.get("model_group")),  # LiteLLM's word for it
-        "model": _name("model", row.get("model")),
-        "call_type": _name("call_type", row.get("call_type")),
+        "model_role": name("model_role", row.get("model_group")),  # LiteLLM's word for it
+        "model": name("model", row.get("model")),
+        "call_type": name("call_type", row.get("call_type")),
         "status": row.get("status") if row.get("status") in ("success", "failure") else None,
         "error_code": code if ERROR_CODE.fullmatch(code) else None,
-        "input_tokens": _count(row.get("prompt_tokens")),
-        "output_tokens": _count(row.get("completion_tokens")),
+        "input_tokens": count(row.get("prompt_tokens")),
+        "output_tokens": count(row.get("completion_tokens")),
         "cache_read_tokens": _cache_read(meta),
         "cache_hit": {"true": True, "false": False}.get(hit_cache),
-        "cost_usd": float(cost)
-        if isinstance(cost, int | float)
-        and not isinstance(cost, bool)
-        and math.isfinite(cost)
-        and cost >= 0
-        else None,
+        "cost_usd": cost_or_none(cost),
     }

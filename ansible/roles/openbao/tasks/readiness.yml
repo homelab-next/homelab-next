@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# The secret store depends on nothing (it is the first thing a cold start needs: ADR-0042
+# decision 7), so readiness asks whether its API answers and says, honestly, what state it is in:
+# uninitialised, sealed, or unsealed (active or standby), and whether a restart is owed. It fails
+# only when the API does not answer; health is what fails on sealed.
+- block:
+    - name: Ask the server for its state (every state answers 200 with these codes)
+      ansible.builtin.uri:
+        url: "{{ openbao_api_addr }}/v1/sys/health?{{ openbao_health_query }}"
+        ca_path: "{{ openbao_tls_ca_file }}"
+        status_code: 200
+        return_content: true
+        follow_redirects: none
+        use_proxy: false
+        timeout: "{{ openbao_health_timeout | int }}"
+      register: openbao_ready
+      changed_when: false
+      failed_when: false
+    - name: Read whether a restart is owed
+      ansible.builtin.stat:
+        path: "{{ openbao_state_dir }}/restart-owed"
+      register: openbao_owed
+    - name: Name the state
+      ansible.builtin.set_fact:
+        openbao_state: >-
+          {{ 'unreachable' if openbao_ready.status | default(-1) != 200 or openbao_ready.json is not defined
+             else 'uninitialised' if not openbao_ready.json.initialized | default(false)
+             else 'sealed' if openbao_ready.json.sealed | default(true)
+             else 'unsealed-standby' if openbao_ready.json.standby | default(false)
+             else 'unsealed-active' }}
+    - name: Report it
+      ansible.builtin.debug:
+        msg: >-
+          openbao {{ openbao_logical_id }}: {{ openbao_state }}{{
+          (', version ' ~ openbao_ready.json.version) if openbao_ready.json.version is defined else '' }}{{
+          ', a restart is owed (' ~ openbao_owed.stat.path ~ ')' if openbao_owed.stat.exists else '' }}
+    - name: Fail when the API does not answer
+      ansible.builtin.assert:
+        that: openbao_state != 'unreachable'
+        fail_msg: >-
+          openbao {{ openbao_logical_id }}: the API at {{ openbao_api_addr }} does not answer
+          ({{ openbao_ready.msg | default('no response') }})
+  tags: [readiness]

@@ -3,10 +3,10 @@
 # hnx-script:
 #   id: licence-check
 #   kind: check
-#   purpose: Fail when a pinned Python package or a compose image has no reviewed licence entry, or a linked one is copyleft.
+#   purpose: Fail when a pinned Python package, a Go module a go.mod requires or a compose image has no reviewed licence entry, or a linked one is copyleft.
 #   owner: maintainers
 #   trigger: [ci:ci/schemas, make:licence-check]
-#   inputs: constraints/*.txt, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml
+#   inputs: constraints/*.txt, every go.mod's require lines, compose/**/docker-compose*.yml, compose/**/Dockerfile and tools/licences.yml
 #   outputs: one line per problem; a summary line
 #   exit:
 #     "0": every pin and image listed, none refused
@@ -14,7 +14,8 @@
 #     "2": the register cannot be read
 """Gate: ADR-0011's licence rule, checked against what is pinned and deployed.
 
-Every package ``constraints/*.txt`` pins (``name==version``) and every image a compose stack
+Every package ``constraints/*.txt`` pins (``name==version``), every Go module a ``go.mod`` of the
+tree requires (its module path; a linters' module's tools included) and every image a compose stack
 under ``compose/`` runs or builds on (``image:``, and a Dockerfile's ``FROM`` other than an
 earlier stage or ``scratch``; its repository, less tag and digest) must have an entry in
 ``tools/licences.yml``: its licence as an SPDX expression and its ``kind``.  A ``linked``
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,7 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTER = "tools/licences.yml"
 #: the copyleft families ADR-0011 decision 4 refuses for linked code (LGPL is not one of them)
 REFUSED = ("GPL", "AGPL", "SSPL")
-KINDS = {"python": ("linked", "tool"), "images": ("service",)}
+KINDS = {"python": ("linked", "tool"), "go": ("linked", "tool"), "images": ("service",)}
 _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==", re.M)
 _IMAGE = re.compile(r"^\s*image:\s*['\"]?([^'\"\s#]+)", re.M)
 _FROM = re.compile(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?", re.M | re.I)
@@ -59,6 +61,53 @@ def pins(root: Path) -> set[str]:
         for f in sorted((root / "constraints").glob("*.txt"))
         for m in _PIN.finditer(f.read_text(encoding="utf-8"))
     }
+
+
+#: the directories never searched for a go.mod: version control, build output, caches, test data
+_GO_SKIP = {".git", "build", "dist", "node_modules", ".venv", "venv", "__pycache__", "testdata"}
+#: this repository's own modules: a requirement on one is first-party, never a licence entry
+_OWN_MODULE = "github.com/homelab-next/homelab-next/"
+
+
+def _go_mods(root: Path) -> list[Path]:
+    """The tree's go.mod files: in a git checkout only the tracked ones (an agent worktree or a
+    scratch module under the checkout is not part of the tree), else every one on disk."""
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", "go.mod", "**/go.mod"],
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout  # fmt: skip
+    except (OSError, subprocess.CalledProcessError):
+        return sorted(root.glob("**/go.mod"))
+    if not (root / ".git").exists():
+        return sorted(root.glob("**/go.mod"))
+    return sorted(root / p for p in out.split("\0") if p)
+
+
+_GO_REQUIRE = re.compile(r"^\s*(?:require\s+)?([A-Za-z0-9][\w.~/-]*\.[\w.~/-]+)\s+v\S+")
+
+
+def go_requires(root: Path) -> dict[str, str]:
+    """Each module path a ``go.mod`` of the tree requires -> the first go.mod that names it."""
+    out: dict[str, str] = {}
+    for f in _go_mods(root):
+        rel = f.relative_to(root)
+        if any(part in _GO_SKIP for part in rel.parts[:-1]) or not f.is_file():
+            continue
+        block = False
+        for line in f.read_text(encoding="utf-8").splitlines():
+            line = line.split("//", 1)[0].rstrip()
+            if line.startswith("require ("):
+                block = True
+            elif block and line.strip() == ")":
+                block = False
+            elif (
+                (block or line.startswith("require "))
+                and (m := _GO_REQUIRE.match(line))
+                and not m[1].startswith(_OWN_MODULE)
+            ):
+                out.setdefault(m[1], rel.as_posix())
+    return out
 
 
 def repository(ref: str) -> str:
@@ -107,7 +156,11 @@ def check(root: Path) -> list[str]:
     reg = yaml.safe_load((root / REGISTER).read_text(encoding="utf-8")) or {}
     if not isinstance(reg, dict) or set(reg) - set(KINDS):
         raise ValueError(f"{REGISTER}: the top level holds only {', '.join(KINDS)}")
-    used = {"python": dict.fromkeys(pins(root), "constraints/"), "images": {}}
+    used = {
+        "python": dict.fromkeys(pins(root), "constraints/"),
+        "go": go_requires(root),
+        "images": {},
+    }
     for ref, where in images(root).items():
         if "$" in ref:
             used["images"][ref] = where  # reported below: an interpolated image cannot be listed
@@ -159,8 +212,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"licence_check: {p}", file=sys.stderr)
     if problems:
         return 1
-    n = len(pins(args.root)), len({repository(r) for r in images(args.root)})
-    print(f"licence_check: {n[0]} pinned packages and {n[1]} images, each with a reviewed licence")
+    n = (
+        len(pins(args.root)),
+        len(go_requires(args.root)),
+        len({repository(r) for r in images(args.root)}),
+    )
+    print(
+        f"licence_check: {n[0]} pinned packages, {n[1]} Go modules and {n[2]} images, "
+        "each with a reviewed licence"
+    )
     return 0
 
 

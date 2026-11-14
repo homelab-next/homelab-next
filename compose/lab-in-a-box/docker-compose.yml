@@ -49,6 +49,17 @@ volumes:
   broker-state:
   broker-outbox:   # <state>/outbox: the broker writes it, the relay only reads it
   broker-relay:    # <state>/relay: the relay's markers; the broker only reads them
+  orchestrator-state:
+
+# The controller's job API token, given to its container as a file (/run/secrets/...), never in an
+# environment: the container's init (PID 1) would hold it there, readable through /proc by a
+# session of the same uid, and docker inspect would show it. The file is no barrier to that same
+# uid, though: a session running as the controller's user can still read
+# /run/secrets/orchestrator-token. Starting as root to hash it and dropping to the controller's
+# user would need SETUID and SETGID back past cap_drop: [ALL], so the lab does not.
+secrets:
+  orchestrator-token:
+    environment: LAB_ORCHESTRATOR_TOKEN
 
 services:
   # --- object-store: S3 API ---------------------------------------------------------------
@@ -73,6 +84,7 @@ services:
       retries: 20
       start_period: 5s
     mem_limit: 192m
+    memswap_limit: 192m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [garage, object-store.svc.example.internal]
@@ -104,6 +116,7 @@ services:
       timeout: 5s
       retries: 20
     mem_limit: 256m
+    memswap_limit: 256m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [postgres.svc.example.internal]
@@ -122,6 +135,7 @@ services:
       postgres:
         condition: service_healthy
     mem_limit: 128m
+    memswap_limit: 128m  # = mem_limit: no swap headroom, same result with or without host swap
     networks: [lab]
 
   lake-catalog:
@@ -141,6 +155,7 @@ services:
       retries: 20
       start_period: 5s
     mem_limit: 256m
+    memswap_limit: 256m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [lake-catalog.svc.example.internal]
@@ -169,6 +184,7 @@ services:
       lake-catalog:
         condition: service_healthy
     mem_limit: 64m
+    memswap_limit: 64m  # = mem_limit: no swap headroom, same result with or without host swap
     networks: [lab]
 
   # --- lake-query: Trino, single node, tiny heap ------------------------------------------
@@ -199,7 +215,8 @@ services:
       timeout: 5s
       retries: 30
       start_period: 40s
-    mem_limit: 1280m
+    mem_limit: 1232m  # heap -Xmx848M (config/trino/jvm.config) + code cache 128M + metaspace 192M leaves 64M for threads, GC and direct buffers
+    memswap_limit: 1232m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [lake-query.svc.example.internal]
@@ -231,6 +248,7 @@ services:
       timeout: 5s
       retries: 20
     mem_limit: 128m
+    memswap_limit: 128m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [events.svc.example.internal]
@@ -266,7 +284,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-    mem_limit: 256m
+    mem_limit: 208m  # measured peak 36 MB (cgroup memory.peak, swapless, over a full lab-smoke, 2026-11-11)
+    memswap_limit: 208m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [secrets.svc.example.internal]
@@ -274,7 +293,7 @@ services:
   # --- notify: ntfy -----------------------------------------------------------------------
   notify:
     <<: [*restart, *hardened]
-    image: binwiederhier/ntfy:v2.33.1@sha256:29bc952294d58957f6ca6638eca9a653a33555989224edbdf4bb9433ee606497
+    image: binwiederhier/ntfy:v2.35.0@sha256:6f0c9abab7b99a978d816611cc90dabb4849b81f60c53114e91cd07931085dc0
     command: ["serve"]
     environment:
       NTFY_BASE_URL: http://notify.svc.example.internal
@@ -288,6 +307,7 @@ services:
       timeout: 5s
       retries: 20
     mem_limit: 96m
+    memswap_limit: 96m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [notify.svc.example.internal]
@@ -299,9 +319,11 @@ services:
     build:
       context: ../..
       dockerfile: compose/lab-in-a-box/fakes/Dockerfile
-    # example-4b and example-27b: the two bindings of model_roles.valid.json (the gateway profile)
+    # example-4b, example-27b and example-embed-8d: the bindings of model_roles.valid.json (the
+    # gateway profile; the last is the embedding role's)
     command: ["python", "/app/openai_server.py", "--host", "0.0.0.0", "--allow-any-host",
-              "--port", "8000", "--model", "example-4b", "--model", "example-27b"]
+              "--port", "8000", "--model", "example-4b", "--model", "example-27b",
+              "--model", "example-embed-8d"]
     ports:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_INFERENCE:-8001}:8000"
     healthcheck: &fake-health
@@ -310,6 +332,7 @@ services:
       timeout: 5s
       retries: 20
     mem_limit: 64m
+    memswap_limit: 64m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         # inference-large/-small: the svc: backends the role table binds (config/llm-gateway)
@@ -328,6 +351,7 @@ services:
       - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_CASES:-8002}:8000"
     healthcheck: *fake-health
     mem_limit: 64m
+    memswap_limit: 64m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [cases.svc.example.internal]
@@ -354,6 +378,7 @@ services:
       timeout: 5s
       retries: 20
     mem_limit: 192m
+    memswap_limit: 192m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [metrics.svc.example.internal]
@@ -367,7 +392,7 @@ services:
   # Kuma tries `sudo service nscd start` and logs that it failed: no-new-privileges, by design.
   uptime:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:2.5.6-slim-rootless@sha256:6eb4e96a7cbdb8a5d6779aa26dce2cb97dcea65b486856b9b2280f73a1d0adf4
+    image: louislam/uptime-kuma:2.5.7-slim-rootless@sha256:a2b9fc59ac8f43daf5c728d233dd7bf23fae25c819b20067ee2b5143606bc061
     environment:
       UPTIME_KUMA_DB_TYPE: sqlite
     volumes:
@@ -381,6 +406,7 @@ services:
       retries: 30
       start_period: 20s
     mem_limit: 256m
+    memswap_limit: 256m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [uptime.svc.example.internal]
@@ -392,7 +418,7 @@ services:
   # healthy only then, so `up --wait` returns with the page in place.
   uptime-init:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:2.5.6-slim-rootless@sha256:6eb4e96a7cbdb8a5d6779aa26dce2cb97dcea65b486856b9b2280f73a1d0adf4
+    image: louislam/uptime-kuma:2.5.7-slim-rootless@sha256:a2b9fc59ac8f43daf5c728d233dd7bf23fae25c819b20067ee2b5143606bc061
     entrypoint: ["node", "/provision/provision.js"]
     working_dir: /app
     environment:
@@ -417,6 +443,7 @@ services:
       timeout: 5s
       retries: 60
     mem_limit: 96m
+    memswap_limit: 96m  # = mem_limit: no swap headroom, same result with or without host swap
     networks: [lab]
 
   # --- broker end to end (ADR-0017; docs/broker.md, "Testing") ----------------------------
@@ -457,6 +484,7 @@ services:
       timeout: 5s
       retries: 30
     mem_limit: 48m  # measured peak 35 MB
+    memswap_limit: 48m  # = mem_limit: no swap headroom, same result with or without host swap
 
   status-hub:
     <<: [*restart, *hardened]
@@ -480,6 +508,7 @@ services:
       timeout: 5s
       retries: 30
     mem_limit: 64m  # measured peak 42 MB
+    memswap_limit: 64m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [status-hub.svc.example.internal]
@@ -525,7 +554,10 @@ services:
       interval: 2s
       timeout: 5s
       retries: 30
-    mem_limit: 144m  # measured peak 120 MB: the MCP client and server, one CLI at a time
+    # the scenario holds the MCP client and server (~65 MB each) plus one CLI: ~150-156 MB,
+    # measured on a swapless host (2026-11-11), where 144m OOM-killed the server
+    mem_limit: 192m
+    memswap_limit: 192m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         ipv4_address: ${LAB_BROKER_EDGE_ADDRESS:?see .env.example}
@@ -535,10 +567,39 @@ services:
   # gateway) on the lab's own postgres, in its own schema and role.  It serves the role aliases of schemas/platform/examples/model_roles.valid.json in
   # front of the fake inference server, from config generated by `hnx gen gateway render`
   # (config/llm-gateway, never edited by hand).  Conformance: targets/inference-gateway.yml.
+  # --- orchestration: the controller (orchestrator/cmd/controller) -------------------------
+  # Built from this checkout, with the exec runner running /bin/sh sessions (no model): the smoke
+  # submits a job through the job API and waits for it to finish (smoke_checks.py: orchestration).
+  # The entrypoint writes the tokens file from the token secret's digest.
+  orchestrator:
+    <<: [*restart, *hardened]
+    image: hnx-lab-orchestrator:local
+    build:
+      context: ../..
+      dockerfile: compose/lab-in-a-box/orchestrator/Dockerfile
+    command: ["/bin/sh", "/app/entrypoint.sh"]
+    secrets: [orchestrator-token]
+    environment:
+      GOMEMLIMIT: 32MiB  # below mem_limit, so the collector works before the kernel kills it
+    volumes:
+      - orchestrator-state:/var/lib/orchestrator
+    ports:
+      - "${LAB_BIND:-127.0.0.1}:${LAB_PORT_ORCHESTRATOR:-8088}:8088"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8088/healthz"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    mem_limit: 48m
+    memswap_limit: 48m  # = mem_limit: no swap headroom, same result with or without host swap
+    networks:
+      lab:
+        aliases: [orchestration.svc.example.internal]
+
   llm-gateway:
     <<: [*restart, *hardened]
     profiles: [gateway]
-    image: litellm/litellm-database:v1.106.2@sha256:35f2cec3a14bb297e08bfab56c1fc377432bc4071aaf71978fdff043a5d91e79
+    image: litellm/litellm-database:v1.106.4@sha256:db36453d25e76c9eb689d7d51b8e5fa48843243d7a86ed1284cf574ce0107b3f
     command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
     environment:
       HNX_SECRET_LLM_GATEWAY_MASTER_KEY: ${LAB_GATEWAY_MASTER_KEY:?see .env.example}
@@ -563,7 +624,8 @@ services:
       timeout: 5s
       retries: 30
       start_period: 30s
-    mem_limit: 896m  # measured 1.106.2: 604 MB RSS, 692 MB cgroup peak (1.103.7: 528 and 621)
+    mem_limit: 896m  # measured on 1.106.2: 604 MB RSS, 692 MB cgroup peak (1.103.7: 528 and 621)
+    memswap_limit: 896m  # = mem_limit: no swap headroom, same result with or without host swap
     networks:
       lab:
         aliases: [llm-gateway.svc.example.internal]
@@ -589,4 +651,5 @@ services:
       llm-gateway:
         condition: service_healthy
     mem_limit: 64m
+    memswap_limit: 64m  # = mem_limit: no swap headroom, same result with or without host swap
     networks: [lab]

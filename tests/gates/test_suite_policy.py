@@ -707,6 +707,25 @@ def test_shards_run_every_test_once_end_to_end(tmp_path):
     assert rc == 1 and "expected" in out
 
 
+WHOLE = "import pytest\n\npytestmark = pytest.mark.shard_by_module\n\n" + "".join(
+    f"def test_{k}():\n    pass\n\n" for k in range(12)
+)
+SPREAD = "".join(f"def test_{k}():\n    pass\n\n" for k in range(12))
+
+
+def test_a_module_marked_shard_by_module_runs_whole_in_one_shard(tmp_path):
+    """Its module-scoped fixtures are then built once over the shards, not once per shard."""
+    procs, reports = _shards(tmp_path, 3, a__test_whole=WHOLE, a__test_spread=SPREAD)
+    assert all(p.returncode == 0 for p in procs), [p.stdout for p in procs]
+    ran = [re.findall(r"^PASSED (\S+)", p.stdout, re.M) for p in procs]
+    whole = [sum(n.startswith("a/test_whole.py::") for n in r) for r in ran]
+    spread = [sum(n.startswith("a/test_spread.py::") for n in r) for r in ran]
+    assert sorted(whole) == [0, 0, 12], whole
+    assert sum(spread) == 12 and max(spread) < 12, spread  # unmarked: still split by node id
+    rc, out = _merge(reports, "--groups", "{}.{}".format(*sys.version_info[:2]))
+    assert rc == 0, out  # every test ran exactly once
+
+
 def test_the_merge_refuses_shards_that_do_not_add_up(tmp_path):
     _, reports = _shards(tmp_path, 3, **SHARDED)
     data = {i: json.loads((reports / f"{i}.json").read_text()) for i in (1, 2, 3)}

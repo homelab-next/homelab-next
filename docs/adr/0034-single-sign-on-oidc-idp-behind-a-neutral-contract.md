@@ -6,6 +6,9 @@ summary_of: outline:sha256:881053abbe9b00d9
 
 - **Status:** accepted (2026-10-31, by the operator)
 - **Date:** 2026-10-31
+- **Amended:** 2026-11-06 (decision 4, the username claim; decision 3, the note on public
+  routes); 2026-11-13 (decision 2, the second factor: a passkey or a client certificate, never a
+  one-time code, by the operator; reserved usernames)
 - **Related:** ADR-0017 (the broker's approval gate, approvers by SSO issuer and subject);
   ADR-0027 (modules, the product-name lint); ADR-0030 (agents act only through the broker);
   [architecture](../architecture.md) (layer 4); [idp](../systems/idp.md);
@@ -38,35 +41,54 @@ one IdP product.
    group-to-role table, a groups claim and a roles claim, and a browser flow that requires a
    second factor. The realm never holds a secret: each client secret is a secret-store
    reference, one per service (for example `secret:idp/clients/metrics`), substituted at import.
-   **The second factor is OTP, required, with nothing beside it, in every flow that signs a
-   user in.** The realm binds two user sign-in flows and covers both:
+   **The second factor is a passkey (WebAuthn) or a browser client certificate, required, with
+   nothing beside it, in every flow that signs a user in; no one-time code (TOTP or HOTP) is
+   offered** (amended 2026-11-13: the operator declined code-based MFA fleet-wide, and recorded
+   on that date that approvers authenticate with a password plus a passkey or a client
+   certificate; the earlier text required OTP). The realm binds two user sign-in flows and
+   covers both:
    - **browser** (`browserFlow`): the session cookie, or the username/password form and then
-     the OTP form (`auth-otp-form`), both `REQUIRED` in one subflow. A `REQUIRED` authenticator
-     a user has not configured adds its setup action, so a user with no OTP yet goes through
-     `CONFIGURE_TOTP` (enabled in the realm's `requiredActions` as a default action, so every
-     new user has it) before the sign-in completes; with the action disabled the sign-in
-     fails, never passes on the password alone;
+     the WebAuthn form (`webauthn-authenticator`), both `REQUIRED` in one subflow. A `REQUIRED`
+     authenticator a user has not configured adds its setup action, so a user with no key yet
+     goes through `webauthn-register` (enabled in the realm's `requiredActions` as a default
+     action, so every new user has it) before the sign-in completes; with the action disabled
+     the sign-in fails, never passes on the password alone. The realm's WebAuthn policy requires
+     user verification on the key (a PIN or biometric: a passkey, not bare possession);
    - **direct grant** (`directGrantFlow`, `grant_type=password`, which the IdP's own built-in
-     `admin-cli` client allows): `direct-grant-validate-username`, `-password` and `-otp`, all
-     `REQUIRED`. A direct grant cannot run a required action, so a user with no OTP gets no
-     token at all. Without this binding the IdP's built-in direct grant flow would run, whose
-     OTP step is conditional on the user having one: password alone for an un-enrolled user.
+     `admin-cli` client allows): **refused for every user** (`deny-access-authenticator`,
+     `REQUIRED`, alone). A passkey cannot be presented on a direct grant and a direct grant
+     cannot run a required action, so no direct grant can carry the second factor. Without this
+     binding the IdP's built-in direct grant flow would run, whose OTP step is conditional on
+     the user having one: password alone.
+   `CONFIGURE_TOTP` and the passwordless key's `webauthn-register-passwordless` are rendered
+   **disabled** (so the account console offers neither), and no OTP step is in any flow.
    Every client the realm renders has `directAccessGrantsEnabled: false` and no flow-binding
    override. The other user-facing flows are unreachable: `registrationAllowed` and
    `resetPasswordAllowed` are false, and no identity provider is rendered, so no broker login
    flow runs (the client-authentication flow authenticates clients, not people). Adding any of
    these, or a new binding, is a change to this rule.
-   WebAuthn is **not** in the flows: as an `ALTERNATIVE` beside OTP it is skipped for a user
-   with no key, and a subflow of alternatives none of which the user has configured is the
-   ambiguous case this rule closes. Adding a key later is a change to this rule (for example a
-   conditional subflow on the user's configured credentials). A test reads every path through
-   each bound flow and fails on one without a password and an OTP step, and on any of the
-   conditions above (`tests/generators/test_gen_golden.py`).
+   **A client certificate** is a permitted second factor under this rule but is not rendered
+   yet: it takes the IdP's X.509 authenticator and the edge forwarding the browser's verified
+   certificate (the edge terminates TLS), a change of its own. It must keep the property this
+   rule states: a password and a possession factor on every path, never an `ALTERNATIVE` an
+   un-enrolled user can skip. A subflow of alternatives none of which the user has configured
+   is the ambiguous case this rule closes; offering both factors needs, for example, a
+   conditional subflow on the user's configured credentials. A test reads every path through
+   each bound flow and fails on one without a password and a passkey step, on any OTP step, on
+   an enabled `CONFIGURE_TOTP`, and on any of the conditions above
+   (`tests/generators/test_gen_golden.py`).
    **First-sign-in enrolment is trust on first use**: whoever first signs in with an
-   un-enrolled user's password enrols the authenticator, so an attacker holding that password
-   before the user signs in enrols their own. Create users with a temporary password
-   (`UPDATE_PASSWORD`) and enrol them in person, at a session the operator watches, or
-   pre-enrol their OTP credential at creation, and do not leave an account un-enrolled.
+   un-enrolled user's password registers the key, so an attacker holding that password before
+   the user signs in registers their own. Create users with a temporary password
+   (`UPDATE_PASSWORD`) and have them register their key in person, at a session the operator
+   watches, and do not leave an account un-enrolled.
+   **Reserved usernames** (amended 2026-11-13): the realm refuses, as a username, every name on
+   the generator's built-in list (the Stage 4 proof manifest's approver, `operator-one`) and
+   every name the site adds (`hnx registry generate --reserved-username`), through a `pattern`
+   validator on the username in the realm's user profile, so no admin, console or form can
+   create or rename a user into one. A realm import of users bypasses validators, so the IdP
+   module's health hook also fails while a user with a reserved name exists. A name an
+   approver allowlist or a proof scenario has used is never handed to a person.
 3. **Forward auth goes through an auth proxy** (registry capability `auth-proxy`; the default is
    oauth2-proxy) next to the edge, for every app with no OIDC login of its own. The generated
    `hnx_forward_auth` Caddy snippet proxies the auth proxy's `/oauth2/*` paths under each site,

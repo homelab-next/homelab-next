@@ -27,7 +27,7 @@ env:
   # the version its go.mod names): the Python tools' Go tests and fix_has_test's Go proofs.  There
   # may be no go.mod at all yet, so it is pinned here, exactly; Dependabot does not raise it: bump
   # it by hand to a supported release (https://go.dev/doc/devel/release).
-  GO_VERSION: "1.27.3"
+  GO_VERSION: "1.27.4"
 
 jobs:
   lint:
@@ -95,6 +95,18 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false  # the tests build throwaway modules: nothing worth caching
+      # The orchestrator module's dependencies, fetched (by go.sum) while the job still has a
+      # network, and the controller built from them once: the tests that run it
+      # (tests/conform/controller_rig.py, tools/tests/test_orchestration_conformance.py) take it
+      # from HNX_CONTROLLER_BIN instead of each shard cold-building it (modernc's sqlite is a big
+      # compile, with no Go cache here) inside its suite's time budget
+      - name: fetch the orchestrator module's dependencies and build the controller
+        if: matrix.python.go
+        working-directory: orchestrator
+        env:
+          GOFLAGS: -mod=readonly
+          GOWORK: "off"
+        run: go mod download && go build -o "$RUNNER_TEMP/controller" ./cmd/controller
       # test_this_repo_meets_the_floor runs tools/coverage_floor.py, which the coverage job below
       # already runs on every push; here it only repeated the whole suite under coverage (~220s a job)
       # No network: the suite runs as the runner user in a network namespace with only loopback,
@@ -103,6 +115,7 @@ jobs:
       # sudo -E keeps the job's environment (sudo's secure_path would drop the setup-python PATH)
       - env:
           HNX_REQUIRE_GO: ${{ matrix.python.go && '1' || '' }}
+          HNX_CONTROLLER_BIN: ${{ matrix.python.go && format('{0}/controller', runner.temp) || '' }}
           HNX_REQUIRE_MODULES: ${{ matrix.python.require-modules }}
           HNX_REQUIRE_TOOLS: ${{ matrix.python.require-tools }}
           SHARD: ${{ matrix.shard }}
@@ -178,7 +191,7 @@ jobs:
       - uses: ./.github/actions/python-deps
         with:
           python-version: "3.12"
-          extras: test
+          extras: test,ansible,nats  # the events bus role's configuration, rendered for the real server; nats-py for the broker scenario's bus checks against it
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -225,10 +238,12 @@ jobs:
           zizmor --offline --no-progress --min-severity medium .github/
       - name: the tests that call these tools; a missing one fails them here
         env:
-          HNX_REQUIRE_TOOLS: actionlint,zizmor,nats-server,docker
+          HNX_REQUIRE_TOOLS: actionlint,zizmor,nats-server,docker,ansible-playbook
         run: >-
           python -m pytest -q -m "not live" -rs
           tests/overlay/test_private_overlay_example.py tests/compose/test_lab_in_a_box.py
+          tests/roles/test_control_plane_roles.py::test_events_bus_config_is_enforced_by_the_pinned_server
+          tests/roles/test_control_plane_roles.py::test_broker_e2e_reply_attacks_change_nothing_on_the_pinned_server
 
   # The tests that call the real nft (`nft -c` on the rendered firewall, the nftables_host role's
   # refusal of a ruleset nft rejects) and dnsmasq (`dnsmasq --test`), and the one that needs root
@@ -329,6 +344,15 @@ jobs:
           HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
           HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: python tools/product_name_lint.py --ci-base .
+      - name: package code parses YAML through the budgeted loaders only (alias and merge bombs)
+        run: python tools/yaml_loader_lint.py .
+      # the change's own copy; its trusted-gates copy (the base's) follows once the tool is on main,
+      # since a base without it has none to run: CONTRIBUTING.md, "Hygiene lints", tracks it
+      - name: the gates' allowlists and suppression markers at their reviewed counts and digests (tools/allowlist_counts.yml), no raise against the base without its code owner
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: python tools/allowlist_ratchet.py --ci-base .
       - name: helpers are shared, not copied (M-03)
         run: python tools/shared_helpers_lint.py .
       - name: no copy-paste beyond the shrinking baseline (M-03); the baseline never loosens against the base
@@ -358,6 +382,10 @@ jobs:
         env:
           HNX_CADDY_REQUIRED: "1"  # the semantic check must run here; a local run may skip it
         run: python tools/caddy_lint.py .
+      - name: "the edge provider module against the pinned release above: the edge suite through its target, and its configuration with the generated sites as the server adapts it"
+        env:
+          HNX_EDGE_SERVER_REQUIRED: "1"  # installed above: a skip here would hide the edge's conformance run
+        run: python -m pytest -q -rs -p no:cacheprovider tests/modules/test_edge_module.py
       - name: nothing at runtime points at the workstation (F-17)
         run: python tools/workstation_refs.py .
       - name: every pinned package and compose image has a reviewed licence, no linked one copyleft (ADR-0011)
@@ -378,6 +406,8 @@ jobs:
         run: make models-check PY=python
       - name: the LLM gateway configs have no drift and no local-only or agent role reaches a cloud model
         run: make gateway-check PY=python
+      - name: consumers bind only to a primary registry row (ADR-0039 decision 3)
+        run: make bindings-check PY=python
       - name: readers cannot act (agent profile and context manifest lint)
         run: python -m homelabnext.cli agent lint
       - name: prompt template lint (G-01, untrusted slots only inside fences)
@@ -743,7 +773,9 @@ jobs:
             # which test2json does not see (a TestMain panic after PASS still reads as a pass)
             # only root writes the results (sudo tee); --no-new-privs, though root holds every
             # privilege already, keeps both runs from gaining any through an exec
-            (cd "$pkg" && status=0 && { /usr/bin/sudo unshare --net -- \
+            # --mount: a test's mounts (the bind-mount tests) live in a private mount namespace
+            # and vanish with it, never touching the runner's
+            (cd "$pkg" && status=0 && { /usr/bin/sudo unshare --net --mount -- \
               sh -c 'ip link set lo up && exec setpriv --no-new-privs -- "$@"' \
               sh "$bin" -test.run "$rx" -test.count=1 -test.v=test2json 2>&1 || status=$?; } \
               && echo "$imp $status" | /usr/bin/sudo tee -a "$exits" > /dev/null) \
@@ -808,21 +840,132 @@ jobs:
         run: |
           setpriv --no-new-privs -- go tool -modfile=tools/go.mod staticcheck ./...
           setpriv --no-new-privs -- go tool -modfile=tools/go.mod govulncheck ./...
+  # The gateway against its contract (ADR-0038 decision 7, as ADR-0026 amends it): build
+  # orchestrator/cmd/gateway, render the conformance gateway spec with --conformance, start the
+  # fake inference server and the gateway (-conformance) on loopback with generated keys, and run
+  # the inference suite on compose/lab-in-a-box/targets/inference-own-gateway.yml with every
+  # check held to a pass (none skipped or untested).  The steps are tools/gateway_conformance.sh,
+  # which runs the same way on a workstation; its venv is pip-by-hash plus the core extra under
+  # constraints/ci.txt, and refuses any installed distribution the constraints do not pin.  It
+  # runs on every change, unconditionally: the contract, the renderer, the spec and the binary all
+  # live here, so any of them can break it, and it costs a few minutes.  go-ok requires it, so a
+  # Python-side break (the suite, the renderer, the spec or the fake) also shows as a red go-ok.
+  # The run step needs only loopback: it runs in a network namespace with only loopback, as the
+  # runner user under no_new_privs (sudo opens the namespace, setpriv drops back), as the go job's
+  # tests do; deps, which downloads, runs before it with the network.
+  gateway-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOFLAGS: -mod=readonly  # go.mod is an input: a build never rewrites it
+      GOTOOLCHAIN: local  # the go setup-go installed from go.mod, never a download
+      GOWORK: "off"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: orchestrator/go.mod
+          cache: false  # the gateway's packages are standard library only: nothing of the module's deps is built here (the go job caches them)
+      - id: python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: build orchestrator/cmd/gateway
+        working-directory: orchestrator
+        run: go build -o "$RUNNER_TEMP/llm-gateway" ./cmd/gateway
+      - name: the suite's Python deps (venv, hash-pinned constraints, nothing unpinned)
+        env:
+          HNX_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: HNX_VENV="$RUNNER_TEMP/hnx-venv" tools/gateway_conformance.sh deps
+      - name: inference conformance against the gateway (fake upstream, loopback only, every check a pass)
+        run: |
+          /usr/bin/sudo env "PATH=$PATH" "HOME=$HOME" "GITHUB_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" \
+            "HNX_VENV=$RUNNER_TEMP/hnx-venv" "GATEWAY_BIN=$RUNNER_TEMP/llm-gateway" \
+            "WORK_DIR=$RUNNER_TEMP/gateway-conformance" \
+            unshare --net -- sh -c 'ip link set lo up && exec setpriv --no-new-privs --reuid="$1" \
+              --regid="$2" --clear-groups -- tools/gateway_conformance.sh run' \
+            sh "$(id -u)" "$(id -g)"
+
+  # The controller against its contract (ADR-0026 decision 14, PR 2.7c): build
+  # orchestrator/cmd/controller, check the fictional example configuration with it (decision 17),
+  # and run the orchestration suite strict against the binary on loopback, with process-level
+  # fault injection (tools/orchestration_conformance.py), in a network namespace with only
+  # loopback, as an unprivileged user under no_new_privs. Every executed check must pass.
+  orchestration-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GOFLAGS: -mod=readonly  # go.mod is an input: a build never rewrites it
+      GOTOOLCHAIN: local  # the go setup-go installed from go.mod, never a download
+      GOWORK: "off"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version-file: orchestrator/go.mod
+          cache-dependency-path: orchestrator/go.sum
+      - id: python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: build orchestrator/cmd/controller
+        working-directory: orchestrator
+        run: go build -o "$RUNNER_TEMP/controller" ./cmd/controller
+      - name: the controller's check on the example configuration (make controller-check)
+        run: make controller-check
+      - name: the suite's Python deps (venv, hash-pinned constraints, nothing unpinned)
+        env:
+          HNX_PYTHON: ${{ steps.python.outputs.python-path }}
+        # the same venv the gateway's job makes: the core extra and this checkout, by hash
+        run: HNX_VENV="$RUNNER_TEMP/hnx-venv" tools/gateway_conformance.sh deps
+      # The network namespace is for the suite's hermeticity (it reaches nothing but loopback), not
+      # a sandbox for this pull request's code: the build and deps steps above run it with the
+      # network, as every other job here does.
+      - name: orchestration conformance against the controller (strict, fault injection, loopback only)
+        run: |
+          /usr/bin/sudo env "PATH=$PATH" "HOME=$HOME" \
+            "PY=$RUNNER_TEMP/hnx-venv/bin/python" "BIN=$RUNNER_TEMP/controller" \
+            "WORK=$RUNNER_TEMP/orchestration-conformance" "OUT=$RUNNER_TEMP/orchestration.json" \
+            unshare --net -- sh -c 'ip link set lo up && exec setpriv --no-new-privs --reuid="$1" \
+              --regid="$2" --clear-groups -- "$PY" -I tools/orchestration_conformance.py run \
+              --controller "$BIN" --work "$WORK" --strict --out "$OUT"' \
+            sh "$(id -u)" "$(id -g)"
+      # a target that lost fault_injection: true would leave the two fault checks out of a
+      # passing run (untested fails --strict, but a skip would not): they must have passed
+      - name: the two fault-injection checks ran and passed
+        run: >-
+          "$RUNNER_TEMP/hnx-venv/bin/python" -I tools/orchestration_conformance.py verdict
+          "$RUNNER_TEMP/orchestration.json"
+
   # One stable check name for branch protection, whatever the modules are called: the discovery
-  # passed, and every module's go job passed (or there was none to run).
+  # passed, every module's go job passed (or there was none to run), and the gateway and the
+  # controller passed their conformance suites (always run: both are modules here, ADR-0026).
   go-ok:
-    needs: [go-modules, go]
+    needs: [go-modules, go, gateway-conformance, orchestration-conformance]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: the Go modules were discovered and every one passed
+      - name: the Go modules were discovered and every one passed, and so did the gateway's and the controller's conformance runs
         env:
           MODULES: ${{ needs.go-modules.result }}
           GO: ${{ needs.go.result }}
+          GATEWAY: ${{ needs.gateway-conformance.result }}
+          ORCHESTRATION: ${{ needs.orchestration-conformance.result }}
         run: |
-          echo "go-modules: $MODULES, go: $GO"
-          [ "$MODULES" = success ] && { [ "$GO" = success ] || [ "$GO" = skipped ]; }
+          echo "go-modules: $MODULES, go: $GO, gateway-conformance: $GATEWAY, orchestration-conformance: $ORCHESTRATION"
+          [ "$MODULES" = success ] && { [ "$GO" = success ] || [ "$GO" = skipped ]; } \
+            && [ "$GATEWAY" = success ] && [ "$ORCHESTRATION" = success ]
 
   # The lab-in-a-box: the real stack, brought up by the nightly's smoke, on every change that can
   # affect it.  lab-paths decides (tools/lab_paths.py: the stack's compose file, config, images and

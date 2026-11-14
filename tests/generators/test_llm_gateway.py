@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """LLM gateway config generator: render, the locality rule, the audit of rendered files, the CLI
-drift check and LiteLLM key provisioning (against a stdlib fake; no network)."""
+drift check, LiteLLM key provisioning (against a stdlib fake; no network) and the
+product-neutral config of ADR-0038 (``gateway/gateway.json``: shape, refusals, audit)."""
 
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import yaml
 
 from homelabnext.cli import main as hnx
 from homelabnext.generators import llm_gateway as gw
+from homelabnext.schema_registry import validator
 
 ROOT = Path(__file__).resolve().parents[2]
 LAB = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway"
@@ -99,7 +101,9 @@ def make_spec(tmp_path, roles=None, **over):
 
 def test_render_the_gateway_from_one_spec(tmp_path):
     files = gw.render_file(make_spec(tmp_path))
-    assert sorted(files) == [  # LiteLLM only: the second gateway was removed (ADR-0022, amended)
+    assert sorted(files) == [  # LiteLLM, and the neutral config of ADR-0038 beside it
+        "gateway/.hnx-generated",
+        "gateway/gateway.json",
         "litellm/config.yaml",
         "litellm/keys.json",
     ]
@@ -262,6 +266,47 @@ def test_a_registry_service_in_a_cloud_zone_is_not_local(tmp_path):
     assert "inference.svc.example.internal" in files["litellm/config.yaml"]
 
 
+def test_a_primary_alias_host_meets_the_registry_s_locality_check(tmp_path):
+    # the alias names the registry service: a self-declared host may not skip its zone check
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    port = doc["services"]["inference"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-alias": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": port,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-alias"
+    reg = registry_with(tmp_path, "cloud")
+    with pytest.raises(
+        gw.GatewaySpecError, match=r"registry service inference .*is not in a lab zone"
+    ):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    reg = registry_with(tmp_path, "compute")
+    gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_primary_alias_host_with_another_scheme_is_refused(tmp_path):
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    svc = doc["services"]["inference"]
+    other = "http" if svc.get("tls", "none") != "none" or svc["protocol"] == "https" else "https"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-alias": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": svc["port"],
+            "scheme": other,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-alias"
+    reg = registry_with(tmp_path, "compute")
+    with pytest.raises(gw.GatewaySpecError, match=f"scheme {other} is not registry service"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
 def test_a_cloud_api_domain_named_as_the_lab_domain_is_refused(tmp_path):
     # the spec's own domain cannot make a provider's API internal (review of #32)
     host = {"locality": "local", "host": "x.api.anthropic.com", "port": 443, "scheme": "https"}
@@ -277,6 +322,133 @@ def test_audit_counts_a_host_under_a_cloud_api_domain_as_cloud(tmp_path):
         gw.load_spec(make_spec(tmp_path)), service_domain="api.anthropic.com"
     )
     assert not gw.internal_host(spec, "x.api.anthropic.com")
+
+
+def registry_with_candidate(tmp_path, tier):
+    """The example registry plus an inference row of standing ``tier`` named
+    ``inference-candidate`` (ADR-0039)."""
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    row = copy.deepcopy(doc["services"]["inference"])
+    row.pop("env_var", None)
+    row.pop("mcp", None)
+    row.pop("status_sources", None)
+    row.pop("public_hostname", None)
+    row["port"] = row["port"] + 1
+    row["standing"] = {"tier": tier, "until": "2027-01-31", "why": "a candidate engine"}
+    doc["services"]["inference-candidate"] = row
+    (tmp_path / "registry.yml").write_text(yaml.safe_dump(doc))
+    return "registry.yml"
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring", "legacy"])
+def test_a_gateway_backend_naming_a_non_primary_row_is_refused(tmp_path, tier):
+    backends = spec_doc()["backends"] | {"svc:inference-candidate": {"locality": "local"}}
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:inference-candidate"
+    reg = registry_with_candidate(tmp_path, tier)
+    with pytest.raises(gw.GatewaySpecError, match=f"inference-candidate is an? {tier} row"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring"])
+def test_a_backend_of_another_name_may_not_reach_a_non_primary_row_by_its_host(tmp_path, tier):
+    reg = registry_with_candidate(tmp_path, tier)
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    row = doc["services"]["inference-candidate"]
+    host = f"inference-candidate.{doc['lab']['svc_label']}.{doc['lab']['domain']}"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": row["port"]}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match=f"host {host} is an? {tier} row's record"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+@pytest.mark.parametrize("kind", ["capability", "row"])
+def test_a_self_declared_host_naming_a_registry_row_or_capability_is_refused(tmp_path, kind):
+    reg = registry_with_candidate(tmp_path, "eval")
+    services = yaml.safe_load((tmp_path / reg).read_text())["services"]
+    caps = {v["capability"] for v in services.values()}
+    # a primary row named apart from its capability: its name and its capability are both
+    # registry names that no record of this form answers by
+    row, svc = next((k, v) for k, v in services.items() if k not in caps and "standing" not in v)
+    label = svc["capability"] if kind == "capability" else row
+    host = f"{label}.extra.svc.example.internal"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": 9}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    words = f"names registry {kind} {label} but is not a capability's primary alias"
+    with pytest.raises(gw.GatewaySpecError, match=re.escape(words)):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_the_primary_alias_with_a_candidate_s_port_is_refused(tmp_path):
+    # a candidate engine shares the primary's host; the alias with its port reaches it
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    port = doc["services"]["inference-candidate"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": port,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match=r"is not registry service inference's port"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_made_up_name_under_a_non_primary_row_s_record_is_refused(tmp_path):
+    reg = registry_with_candidate(tmp_path, "eval")
+    host = "x.inference-candidate.svc.example.internal"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": 9}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match=f"host {re.escape(host)} is under an eval row"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_backend_with_no_host_is_held_to_its_default_alias(tmp_path):
+    # a backend named after a capability (not a row) defaults to that capability's alias: the
+    # primary's port only
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    caps = {v["capability"] for v in doc["services"].values()}
+    _row, svc = next(
+        (k, v) for k, v in doc["services"].items() if k not in caps and "standing" not in v
+    )
+    cap = svc["capability"]
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = f"svc:{cap}"
+    for port, ok in ((svc["port"] + 1, False), (svc["port"], True)):
+        backends = spec_doc()["backends"] | {f"svc:{cap}": {"locality": "local", "port": port}}
+        spec = make_spec(tmp_path, roles, registry=reg, backends=backends)
+        if ok:
+            gw.render_file(spec)
+        else:
+            with pytest.raises(gw.GatewaySpecError, match=r"is not registry service \S+'s port"):
+                gw.render_file(spec)
+
+
+def test_a_self_declared_host_at_a_capability_s_primary_alias_is_accepted(tmp_path):
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    host = f"inference.{doc['lab']['svc_label']}.{doc['lab']['domain']}"
+    port = doc["services"]["inference"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-main": {"locality": "local", "host": host, "port": port}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-main"
+    files = gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    assert host in files[PROXY_CONFIG]
 
 
 def test_a_spec_domain_that_differs_from_the_registry_is_refused(tmp_path):
@@ -517,10 +689,11 @@ def test_audit_catches_a_hand_added_cloud_fallback_in_litellm():
 
 def test_audit_catches_a_cloud_deployment_and_a_default_fallback_in_litellm():
     spec, files = lab_files()
-    doc = yaml.safe_load(files["litellm/config.yaml"])
-    doc["model_list"][0]["litellm_params"]["api_base"] = "https://api.example.com/v1"
+    doc = yaml.safe_load(files[PROXY_CONFIG])
+    fast = next(m for m in doc["model_list"] if m["model_name"] == "fast-classifier")
+    fast[DEPLOY_PARAMS]["api_base"] = "https://api.example.com/v1"
     doc["router_settings"]["default_fallbacks"] = ["elsewhere"]
-    files["litellm/config.yaml"] = yaml.safe_dump(doc)
+    files[PROXY_CONFIG] = yaml.safe_dump(doc)
     problems = "\n".join(gw.audit(files, spec))
     assert (
         "fast-classifier (profile:reader is data_tier local-only) has a cloud deployment"
@@ -548,7 +721,7 @@ def test_render_writes_and_is_idempotent(tmp_path, capsys):
     out = tmp_path / "out"
     assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 0
     assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 0
-    assert "wrote 0, unchanged 2" in capsys.readouterr().out
+    assert "wrote 0, unchanged 4" in capsys.readouterr().out
 
 
 def test_bad_spec_exits_1(tmp_path, capsys):
@@ -999,7 +1172,7 @@ def test_a_role_table_ceiling_the_rules_refuse_is_refused(tmp_path):
     roles = _roles_with(tlp_ceiling="amber")
     roles["roles"]["cloud-reasoner"]["bindings"][0]["leaves_lab"] = True
     # the role table's schema refuses it before the rules see it (RoleTable.load)
-    with pytest.raises(gw.GatewaySpecError, match="tlp_ceiling: 'amber' is not one of"):
+    with pytest.raises(gw.GatewaySpecError, match="tlp_ceiling: is not one of"):
         gw.load_spec(make_spec(tmp_path, roles))
 
 
@@ -1164,3 +1337,710 @@ def test_audit_follows_fallbacks_and_aliases_to_a_cloud_model(tmp_path, route):
         f"{KEYS}: key local-agent (metadata.tlp_ceiling read as red) reaches "
         "cloud-reasoner, which has a cloud deployment at TLP ceiling clear"
     ]
+
+
+# --- the product-neutral gateway config (ADR-0038 decision 1) -----------------------------------
+NEUTRAL = gw.NEUTRAL
+MARKER = gw.NEUTRAL_MARKER
+SCHEMA = validator("platform", "gateway_config.schema.json")
+
+#: local and cloud roles, a fallback, role and key limits, keys of both tiers and the reader
+RICH_ROLES = copy.deepcopy(ROLES)
+RICH_ROLES["roles"]["cloud-reasoner"]["max_context_tokens"] = 200000
+RICH_ROLES["roles"]["cloud-reasoner"]["limits"] = {
+    "window_s": 60,
+    "max_requests": 30,
+    "max_cost": 2.5,
+    "cost_per_1k_tokens": 0.01,
+}
+RICH_ROLES["roles"]["embedder"] = {
+    "tier": "fast",
+    "kind": "embedding",
+    "bindings": [{"backend": "svc:infer-b", "model_id": "example-embed"}],
+}
+
+
+def rich(tmp_path, roles=None, **over):
+    over.setdefault("telemetry_reader", {"key": "secret:llm-gateway/key-telemetry-reader"})
+    return gw.load_spec(make_spec(tmp_path, roles=roles or RICH_ROLES, **over))
+
+
+def neutral(spec) -> dict:
+    return json.loads(gw.render(spec)[NEUTRAL])
+
+
+def test_the_rendered_config_has_the_contracts_shape(tmp_path):
+    doc = neutral(rich(tmp_path))
+    assert list(SCHEMA.iter_errors(doc)) == []
+    assert set(doc) == {"version", "name", "admin_key_env", "roles", "keys", "telemetry_reader"}
+    assert doc["version"] == "1.0" and doc["name"] == ""
+    assert doc["admin_key_env"] == "HNX_SECRET_LLM_GATEWAY_MASTER_KEY"
+    assert doc["telemetry_reader"] == {"key_env": "HNX_SECRET_LLM_GATEWAY_KEY_TELEMETRY_READER"}
+    roles = doc["roles"]
+    assert (
+        roles["agent-local"]
+        == {
+            "kind": "chat",
+            "max_context_tokens": None,
+            "tlp_ceiling": "red",
+            "leaves_lab": False,
+            "deployments": [
+                {
+                    "id": "agent-local-1",
+                    "backend": "infer-a",
+                    "locality": "local",
+                    "protocol": "openai",
+                    "base_url": "http://infer-a.svc.example.internal:8000",  # no-raw-endpoint: allow rendered alias
+                    "model": ROLES["roles"]["agent-local"]["bindings"][0]["model_id"],
+                    "api_key_env": None,
+                }
+            ],
+            "fallbacks": ["small-local"],
+            "limits": None,
+            "cost_per_1k_tokens": None,
+        }
+    )
+    # a role's limit is whole (one budget, its own window), not LiteLLM's per-minute share
+    assert roles["small-local"]["limits"] == {
+        "window_s": 3600,
+        "max_requests": 120,
+        "max_tokens": None,
+        "max_cost": None,
+    }
+    cloud = roles["cloud-reasoner"]
+    assert (cloud["tlp_ceiling"], cloud["leaves_lab"], cloud["max_context_tokens"]) == (
+        "clear",
+        True,
+        200000,
+    )
+    assert cloud["deployments"][0] | {"model": "-"} == {
+        "id": "cloud-reasoner-1",
+        "backend": "cloud",
+        "locality": "cloud",
+        "protocol": "anthropic",
+        "base_url": "https://api.anthropic.com",
+        "model": "-",
+        "api_key_env": gw.secret_env_name("secret:llm-gateway/anthropic-api-key"),
+    }
+    assert cloud["limits"]["max_cost"] == 2.5 and cloud["cost_per_1k_tokens"] == 0.01
+    assert roles["embedder"]["kind"] == "embedding"
+    keys = {k["alias"]: k for k in doc["keys"]}
+    assert [k["alias"] for k in doc["keys"]] == sorted(keys)
+    assert keys["local-agent"] == {
+        "alias": "local-agent",
+        "key_env": "HNX_SECRET_LLM_GATEWAY_KEY_LOCAL_AGENT",
+        "owner": "local-agent",
+        "data_tier": "local-only",
+        "tlp_ceiling": "red",
+        "roles": ["agent-local", "small-local"],  # its role and the fallback chain
+        "limits": None,
+    }
+    assert keys["cloud-tool"]["tlp_ceiling"] == "clear"
+    assert keys["cloud-tool"]["limits"] == {"window_s": 60, "max_requests": 10, "max_tokens": None}
+
+
+def test_the_neutral_config_agrees_with_the_proxy_files(tmp_path):
+    """Fallbacks are LiteLLM's ``router_settings.fallbacks`` and key roles its ``models``."""
+    files = gw.render(rich(tmp_path))
+    doc = json.loads(files[NEUTRAL])
+    lt = yaml.safe_load(files[PROXY_CONFIG])
+    falls = {k: v for e in lt["router_settings"]["fallbacks"] for k, v in e.items()}
+    assert {r: v["fallbacks"] for r, v in doc["roles"].items() if v["fallbacks"]} == falls
+    models = {k["key_alias"]: k["models"] for k in json.loads(files[KEYS])["keys"]}
+    models.pop(gw.READER_ALIAS)
+    assert {k["alias"]: k["roles"] for k in doc["keys"]} == models
+
+
+def test_an_openai_cloud_backend_uses_the_openai_api(tmp_path):
+    backends = {
+        "svc:infer-a": {"locality": "local", "port": 8000},
+        "svc:infer-b": {"locality": "local", "port": 8000},
+        "svc:cloud": {"locality": "cloud", "provider": "openai", "api_key": "secret:x/openai"},
+    }
+    dep = neutral(rich(tmp_path, backends=backends))["roles"]["cloud-reasoner"]["deployments"][0]
+    assert (dep["protocol"], dep["base_url"]) == ("openai", "https://api.openai.com")
+
+
+def test_every_committed_rendered_config_is_schema_valid_and_marked():
+    examples = LAB.parents[3] / "examples"
+    for out in (
+        LAB,
+        examples / "model-serving" / "gateway",
+        examples / "llm-orchestrator-gateway" / "gateway",
+    ):
+        doc = json.loads((out / NEUTRAL).read_text())
+        assert list(SCHEMA.iter_errors(doc)) == [], out
+        assert (out / MARKER).read_text().startswith("# generated by hnx llm_gateway from")
+
+
+# --- refusals ------------------------------------------------------------------------------------
+def _refused(tmp_path, roles=None, **over):
+    spec = rich(tmp_path, roles=roles, **over)
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.render_neutral(spec)
+    files = gw.render(spec)  # LiteLLM is still rendered, and says why the neutral file is not
+    assert sorted(files) == sorted([PROXY_CONFIG, KEYS])
+    notes = [ln for ln in files[PROXY_CONFIG].splitlines() if NEUTRAL in ln]
+    assert notes and all(ln.startswith(f"# note: {NEUTRAL} is not rendered: ") for ln in notes)
+    return exc.value.problems
+
+
+def test_a_cloud_provider_without_a_protocol_is_refused(tmp_path):
+    backends = {
+        "svc:infer-a": {"locality": "local", "port": 8000},
+        "svc:infer-b": {"locality": "local", "port": 8000},
+        "svc:cloud": {"locality": "cloud", "provider": "gemini", "api_key": "secret:x/gemini"},
+    }
+    (p,) = _refused(tmp_path, backends=backends)
+    assert "cloud provider gemini has no protocol" in p
+
+
+def test_an_embedding_role_on_anthropic_is_refused(tmp_path):
+    roles = copy.deepcopy(RICH_ROLES)
+    roles["roles"]["cloud-reasoner"]["kind"] = "embedding"
+    (p,) = _refused(tmp_path, roles=roles)
+    assert "embedding role on an anthropic deployment" in p
+
+
+def test_max_cost_without_a_token_price_is_refused(tmp_path):
+    roles = copy.deepcopy(RICH_ROLES)
+    del roles["roles"]["cloud-reasoner"]["limits"]["cost_per_1k_tokens"]
+    (p,) = _refused(tmp_path, roles=roles)
+    assert p.startswith("mdl:cloud-reasoner: limits.max_cost without limits.cost_per_1k_tokens")
+
+
+def test_a_config_the_spec_stops_expressing_is_pruned_and_reported_stale(tmp_path, capsys):
+    path = make_spec(tmp_path, roles=RICH_ROLES)
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", str(path), str(out)]) == 0
+    assert (out / NEUTRAL).is_file()
+    roles = copy.deepcopy(RICH_ROLES)
+    del roles["roles"]["cloud-reasoner"]["limits"]["cost_per_1k_tokens"]
+    (tmp_path / "roles.json").write_text(json.dumps(roles))
+    assert hnx(["gen", "gateway", "render", str(path), str(out), "--check"]) == 1
+    assert f"stale: {NEUTRAL} (no longer rendered)" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(path), str(out)]) == 0
+    assert not (out / NEUTRAL).exists() and not (out / MARKER).exists()
+    assert f"{NEUTRAL} not rendered: mdl:cloud-reasoner" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(path), str(out), "--check"]) == 0
+
+
+# --- the audit of a hand-edited file -------------------------------------------------------------
+def _audit_edit(spec, edit):
+    files = dict(gw.render(spec))
+    doc = json.loads(files[NEUTRAL])
+    edit(doc)
+    files[NEUTRAL] = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+    return [p for p in gw.audit(files, spec) if p.startswith(f"{NEUTRAL}:")]
+
+
+def test_the_audit_passes_what_the_renderer_writes(tmp_path):
+    spec = rich(tmp_path)
+    assert gw.audit(gw.render(spec), spec) == []
+
+
+def test_the_audit_refuses_a_cloud_deployment_on_a_local_only_role(tmp_path):
+    def edit(doc):
+        cloud = doc["roles"]["cloud-reasoner"]["deployments"][0]
+        doc["roles"]["small-local"]["deployments"].append(cloud | {"id": "small-local-2"})
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    # the local-only role whose chain reaches it, and the local-only key that may call it (R13)
+    assert (
+        f"{NEUTRAL}: local-only/agent role agent-local (key local-agent is data_tier local-only) "
+        "falls back to non-local small-local" in problems
+    )
+    assert (
+        f"{NEUTRAL}: key local-agent is local-only but may call small-local, which has a cloud "
+        "deployment or leaves the lab" in problems
+    )
+
+
+def test_the_audit_refuses_a_deployment_that_only_calls_itself_local(tmp_path):
+    def edit(doc):
+        dep = doc["roles"]["small-local"]["deployments"][0]
+        dep["base_url"] = "https://api.anthropic.com"
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert any("small-local" in p and "has a cloud deployment" in p for p in problems)
+
+
+def test_the_audit_refuses_a_widened_key(tmp_path):
+    def edit(doc):
+        (k,) = [k for k in doc["keys"] if k["alias"] == "local-agent"]
+        k["roles"] = sorted(k["roles"] + ["cloud-reasoner"])
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert (
+        f"{NEUTRAL}: key local-agent: may call cloud-reasoner, which the spec does not "
+        "grant" in problems
+    )
+    assert (
+        f"{NEUTRAL}: key local-agent (tlp_ceiling red) may call cloud-reasoner, whose TLP "
+        "ceiling is clear (ADR-0033 decision 11)" in problems
+    )
+
+
+def test_the_audit_refuses_a_lowered_role_ceiling(tmp_path):
+    def edit(doc):
+        doc["roles"]["small-local"]["tlp_ceiling"] = "clear"
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert (
+        f"{NEUTRAL}: role small-local: tlp_ceiling read as clear, but the role's ceiling is "
+        "red" in problems
+    )
+    assert (
+        f"{NEUTRAL}: key local-agent (tlp_ceiling red) may call small-local, whose TLP "
+        "ceiling is clear (ADR-0033 decision 11)" in problems
+    )
+
+
+@pytest.mark.parametrize(
+    ("edit", "words"),
+    [
+        (lambda d: d["roles"]["cloud-reasoner"].update(tlp_ceiling="red"), "but the role's ceil"),
+        (lambda d: d["roles"]["cloud-reasoner"].update(leaves_lab=False), "leaves_lab must be"),
+        (lambda d: d["keys"][0].update(tlp_ceiling="red"), "the spec's is clear"),
+        (lambda d: d["keys"][0].pop("tlp_ceiling"), "read as red, the spec's is clear"),
+        (
+            lambda d: d["roles"]["small-local"].update(leaves_lab=True),
+            "key local-agent is local-only but may call small-local",
+        ),
+        (lambda d: d["keys"][1].update(tlp_ceiling="clear"), "the spec's is red"),
+        (lambda d: d["keys"][1].update(tlp_ceiling="white"), "tlp_ceiling read as clear"),
+        (lambda d: d["keys"][1].update(roles=["nope"]), "role nope is not a role here"),
+        (lambda d: d["keys"].reverse(), "keys are not sorted by alias"),
+        (lambda d: d["keys"].append(dict(d["keys"][1], alias="zz")), "not a key of the spec"),
+        (lambda d: d["keys"][0].update(key_env=d["admin_key_env"]), "share HNX_SECRET_LLM_"),
+        (
+            lambda d: d["telemetry_reader"].update(key_env=d["keys"][1]["key_env"]),
+            "and telemetry_reader share",
+        ),
+        (
+            lambda d: d["keys"][0].update(
+                key_env=d["roles"]["cloud-reasoner"]["deployments"][0]["api_key_env"]
+            ),
+            "is the upstream key of cloud-reasoner",
+        ),
+        (lambda d: d["roles"]["small-local"].update(fallbacks=["small-local"]), "itself"),
+        (lambda d: d.update(extra=1), "schema: (top): Additional properties"),
+        (lambda d: d.update(conformance_only=True), "conformance_only is set"),
+        (
+            lambda d: d["roles"]["agent-local"]["deployments"][0].update(
+                base_url="http://infer-a.svc.example.internal:8000/v1"  # no-raw-endpoint: allow rendered alias
+            ),
+            "schema: roles/agent-local/deployments/0/base_url",
+        ),
+    ],
+)
+def test_the_audit_refuses_other_hand_edits(tmp_path, edit, words):
+    # keys sorted: cloud-tool (clear), local-agent (red)
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert any(words in p for p in problems), problems
+
+
+#: RICH_ROLES and a local chat role no key calls (not held local-only by any key): the audit's
+#: locality rules leave it free, so only the comparison with the spec can catch an edit to it
+FREE_ROLES = copy.deepcopy(RICH_ROLES)
+FREE_ROLES["roles"]["free-local"] = {
+    "tier": "fast",
+    "bindings": [{"backend": "svc:infer-a", "model_id": "example-free"}],
+}
+
+
+def _swap_key_envs(d):
+    a, b = d["keys"]
+    a["key_env"], b["key_env"] = b["key_env"], a["key_env"]
+
+
+def _cloud_fallback(d):  # the role's TLP fields made to agree, so only the spec can refuse it
+    d["roles"]["free-local"].update(fallbacks=["cloud-reasoner"], leaves_lab=True)
+    d["roles"]["free-local"]["tlp_ceiling"] = "clear"
+
+
+def _extra_role(d):
+    d["roles"]["zz-extra"] = copy.deepcopy(d["roles"]["free-local"]) | {"tlp_ceiling": "clear"}
+    d["roles"]["zz-extra"]["deployments"][0]["id"] = "zz-extra-1"
+
+
+@pytest.mark.parametrize(
+    ("edit", "words"),
+    [
+        (_cloud_fallback, "role free-local: fallbacks must be [], the spec's"),
+        (_swap_key_envs, 'key cloud-tool: key_env must be "HNX_SECRET_LLM_GATEWAY_KEY_CLOUD_TOOL"'),
+        (
+            lambda d: d.update(admin_key_env="HNX_SECRET_OTHER_MASTER"),
+            'admin_key_env must be "HNX_SECRET_LLM_GATEWAY_MASTER_KEY", the spec\'s',
+        ),
+        (
+            lambda d: d.update(telemetry_reader={"key_env": "HNX_SECRET_OTHER_READER"}),
+            "telemetry_reader must be",
+        ),
+        (lambda d: d.update(telemetry_reader=None), "telemetry_reader must be"),
+        (lambda d: d["roles"]["small-local"].update(limits=None), "role small-local: limits must"),
+        (lambda d: d["keys"][0].update(limits=None), "key cloud-tool: limits must be"),
+        (
+            lambda d: d["roles"]["cloud-reasoner"].update(cost_per_1k_tokens=0.0),
+            "role cloud-reasoner: cost_per_1k_tokens must be 0.01",
+        ),
+        (
+            lambda d: d["roles"]["small-local"]["limits"].update(window_s=3600.0),
+            "role small-local: limits must be",
+        ),
+        (
+            lambda d: d["roles"]["cloud-reasoner"]["deployments"][0].update(model="other-model"),
+            'role cloud-reasoner deployments[0]: model must be "example-cloud-1"',
+        ),
+        (
+            lambda d: d["roles"]["cloud-reasoner"]["deployments"][0].update(
+                api_key_env="HNX_SECRET_SOMEONE_ELSES_KEY"
+            ),
+            "role cloud-reasoner deployments[0]: api_key_env must be",
+        ),
+        (
+            lambda d: d["roles"]["free-local"]["deployments"][0].update(
+                base_url=d["roles"]["small-local"]["deployments"][0]["base_url"]
+            ),
+            "role free-local deployments[0]: base_url must be",
+        ),
+        (
+            lambda d: d["roles"]["free-local"]["deployments"].append(
+                d["roles"]["free-local"]["deployments"][0] | {"id": "free-local-2"}
+            ),
+            "role free-local: 2 deployment(s), but the spec binds 1",
+        ),
+        (_extra_role, "role zz-extra is not a role of the spec"),
+        (lambda d: d["roles"].pop("embedder"), "role embedder of the spec is missing"),
+        (lambda d: d["keys"].pop(0), "key cloud-tool of the spec is missing"),
+        (lambda d: d["keys"][1].update(owner="someone-else"), "key local-agent: owner must be"),
+        (lambda d: d.update(name="other-lab"), 'name must be "", the spec\'s'),
+    ],
+)
+def test_the_audit_holds_the_file_to_the_spec(tmp_path, edit, words):
+    """A file that is internally consistent but says something the spec does not is refused."""
+    problems = _audit_edit(rich(tmp_path, roles=FREE_ROLES), edit)
+    assert any(words in p for p in problems), problems
+
+
+def test_a_keys_roles_hold_the_fallbacks_of_its_roles(tmp_path):
+    """The contract's own invariant (the Go loader refuses a key that breaks it)."""
+
+    def edit(doc):
+        (k,) = [k for k in doc["keys"] if k["alias"] == "local-agent"]
+        k["roles"] = ["agent-local"]
+
+    problems = _audit_edit(rich(tmp_path), edit)
+    assert (
+        f"{NEUTRAL}: key local-agent may call agent-local but not its fallback small-local: a "
+        "key's roles hold the fallbacks of every role it lists" in problems
+    )
+
+
+def test_a_hand_edit_that_rewrites_the_marker_still_fails_the_audit(tmp_path):
+    spec = rich(tmp_path)
+    files = dict(gw.render(spec))
+    doc = json.loads(files[NEUTRAL])
+    _swap_key_envs(doc)
+    files[NEUTRAL] = json.dumps(doc, indent=2, sort_keys=True) + "\n"
+    digest = hashlib.sha256(files[NEUTRAL].encode()).hexdigest()
+    files[MARKER] = re.sub(
+        r"gateway\.json sha256:[0-9a-f]+", f"gateway.json sha256:{digest}", files[MARKER]
+    )
+    problems = gw.audit(files, spec)
+    assert not [p for p in problems if p.startswith(MARKER)], problems
+    assert (
+        f'{NEUTRAL}: key cloud-tool: key_env must be "HNX_SECRET_LLM_GATEWAY_KEY_CLOUD_TOOL", '
+        "the spec's" in problems
+    )
+
+
+def test_counts_are_json_integers(tmp_path):
+    """The role table holds limits as floats and a spec may write ``60.0``; the Go loader decodes
+    ``window_s``, ``max_requests`` and ``max_tokens`` strictly, so they are written as integers."""
+    keys = spec_doc()["keys"]
+    keys[1]["limits"] = {"window_s": 60.0, "max_requests": 10.0, "max_tokens": 6000.0}
+    doc = neutral(rich(tmp_path, keys=keys))
+    limits = [r["limits"] for r in doc["roles"].values() if r["limits"]]
+    limits += [k["limits"] for k in doc["keys"] if k["limits"]]
+    assert len(limits) == 3
+    for lim in limits:
+        for name in ("window_s", "max_requests", "max_tokens"):
+            assert lim[name] is None or type(lim[name]) is int, (name, lim)
+    assert doc["keys"][0]["limits"] == {"window_s": 60, "max_requests": 10, "max_tokens": 6000}
+
+
+def test_a_gateway_json_without_its_marker_is_still_pruned(tmp_path, capsys):
+    """The reviewer's reproduction: render, lose the marker, make the spec non-expressible."""
+    path = make_spec(tmp_path, roles=RICH_ROLES)
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", str(path), str(out)]) == 0
+    (out / MARKER).unlink()
+    roles = copy.deepcopy(RICH_ROLES)
+    del roles["roles"]["cloud-reasoner"]["limits"]["cost_per_1k_tokens"]
+    (tmp_path / "roles.json").write_text(json.dumps(roles))
+    capsys.readouterr()
+    assert hnx(["gen", "gateway", "render", str(path), str(out), "--check"]) == 1
+    assert f"stale: {NEUTRAL} (no longer rendered)" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(path), str(out)]) == 0
+    assert not (out / NEUTRAL).exists()
+    assert hnx(["gen", "gateway", "render", str(path), str(out), "--check"]) == 0
+
+
+def test_the_audit_refuses_a_marker_whose_digest_no_longer_matches(tmp_path):
+    spec = rich(tmp_path)
+    files = dict(gw.render(spec))
+    files[NEUTRAL] = files[NEUTRAL].replace('"red"', '"red" ', 1)
+    assert gw.audit(files, spec) == [
+        f"{MARKER}: gateway.json does not have the sha256 this marker records (edited by hand?)"
+    ]
+
+
+def test_check_reads_the_neutral_config_on_disk(tmp_path, capsys):
+    out = tmp_path / "lab"
+    out.mkdir()
+    for rel in (*gw.render(gw.load_spec(LAB_SPEC)),):
+        (out / rel).parent.mkdir(parents=True, exist_ok=True)
+        (out / rel).write_text((LAB / rel).read_text())
+    doc = json.loads((out / NEUTRAL).read_text())
+    doc["keys"][0]["roles"].append("main-reasoner")
+    (out / NEUTRAL).write_text(json.dumps(doc))
+    assert hnx(["gen", "gateway", "render", str(LAB_SPEC), str(out), "--check"]) == 1
+    err = capsys.readouterr().err
+    assert f"differs: {NEUTRAL}" in err
+    assert "key agent-reader: may call main-reasoner, which the spec does not grant" in err
+
+
+def test_a_fallback_of_another_kind_is_refused_before_render(tmp_path):
+    """The gateway refuses at load a fallback whose kind differs from its role's, so the role
+    table refuses it first and the renderer can never emit one."""
+    roles = copy.deepcopy(RICH_ROLES)
+    roles["roles"]["embedder"]["fallback"] = "mdl:small-local"
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        rich(tmp_path, roles=roles)
+    assert (
+        "role embedder: fallback mdl:small-local is a chat role, but embedder is embedding: a "
+        "fallback must be of its role's kind" in exc.value.problems
+    )
+
+
+# --- the test-only render (render --conformance, ADR-0038 decision 7) ---------------------------
+CONFORMANCE = ROOT / "compose" / "lab-in-a-box" / "config" / "llm-gateway-conformance"
+FAKE_URL = "http://fake.svc.example.internal:8000"  # no-raw-endpoint: allow rendered alias
+OUTSIDE_URL = "http://fake.example.com:8000"  # no-raw-endpoint: allow a URL the render refuses
+
+
+def test_the_conformance_spec_and_its_committed_output_pass_only_with_the_flag(capsys):
+    spec = str(CONFORMANCE / "gateway.yml")
+    assert (
+        hnx(["gen", "gateway", "render", spec, str(CONFORMANCE), "--conformance", "--check"]) == 0
+    )
+    capsys.readouterr()
+    assert hnx(["gen", "gateway", "render", spec, str(CONFORMANCE), "--check"]) == 1
+    assert "honoured only by the test-only render" in capsys.readouterr().err
+    doc = json.loads((CONFORMANCE / NEUTRAL).read_text())
+    assert doc["conformance_only"] is True and list(SCHEMA.iter_errors(doc)) == []
+    assert sorted(p.name for p in (CONFORMANCE / "gateway").iterdir()) == [
+        ".hnx-generated",
+        "gateway.json",
+    ]  # gateway/ alone: the other gateway product has no conformance mode
+    assert sorted(p.name for p in CONFORMANCE.iterdir()) == [
+        "gateway",
+        "gateway.yml",
+        "model_roles.json",
+    ]
+
+
+def test_the_conformance_block_is_refused_without_the_flag(tmp_path):
+    with pytest.raises(gw.GatewaySpecError, match="honoured only by the test-only render"):
+        gw.load_spec(
+            make_spec(tmp_path, roles=RICH_ROLES, conformance={"cloud_base_url": FAKE_URL})
+        )
+
+
+def _conformance_spec(tmp_path, host=None, **conf):
+    path = make_spec(
+        tmp_path,
+        roles=RICH_ROLES,
+        telemetry_reader={"key": "secret:llm-gateway/key-telemetry-reader"},
+        conformance=conf or {"cloud_base_url": FAKE_URL},
+    )
+    return gw.load_spec(path, conformance=True, conformance_host=host)
+
+
+def test_the_test_only_render_writes_gateway_alone_marked_conformance_only(tmp_path):
+    spec = _conformance_spec(tmp_path)
+    files = gw.render(spec)
+    assert sorted(files) == [gw.NEUTRAL_MARKER, NEUTRAL]
+    doc = json.loads(files[NEUTRAL])
+    assert doc["conformance_only"] is True and list(SCHEMA.iter_errors(doc)) == []
+    cloud = doc["roles"]["cloud-reasoner"]["deployments"][0]
+    assert (cloud["locality"], cloud["protocol"], cloud["base_url"]) == (
+        "cloud",
+        "anthropic",
+        FAKE_URL,
+    )
+    local = doc["roles"]["agent-local"]["deployments"][0]["base_url"]
+    assert local == "http://infer-a.svc.example.internal:8000"  # no-raw-endpoint: allow alias
+    assert "conformance_only" in files[gw.NEUTRAL_MARKER]
+    assert gw.audit(files, spec) == []
+
+
+def test_conformance_host_moves_every_deployment_to_loopback(tmp_path):
+    spec = _conformance_spec(tmp_path, host=LOOPBACK)
+    doc = json.loads(gw.render(spec)[NEUTRAL])
+    urls = {d["base_url"] for r in doc["roles"].values() for d in r["deployments"]}
+    assert urls == {f"http://{LOOPBACK}:8000"}  # no-raw-endpoint: allow loopback test URL
+
+
+def test_without_a_conformance_block_a_cloud_backend_is_refused(tmp_path):
+    path = make_spec(tmp_path, roles=RICH_ROLES)
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        gw.load_spec(path, conformance=True)
+    assert any("svc:cloud would call their provider" in p for p in exc.value.problems)
+
+
+def _local_spec(tmp_path):
+    """A spec with no cloud backend: the test-only render needs no conformance block for it."""
+    roles = copy.deepcopy(ROLES)
+    del roles["roles"]["cloud-reasoner"]
+    doc = spec_doc()
+    del doc["backends"]["svc:cloud"]
+    doc["keys"] = [k for k in doc["keys"] if k["name"] == "local-agent"]
+    (tmp_path / "roles.json").write_text(json.dumps(roles))
+    path = tmp_path / "gateway.yml"
+    path.write_text(yaml.safe_dump(doc))
+    return path
+
+
+def test_without_a_cloud_backend_no_conformance_block_is_needed(tmp_path):
+    doc = json.loads(gw.render(gw.load_spec(_local_spec(tmp_path), conformance=True))[NEUTRAL])
+    assert doc["conformance_only"] is True
+
+
+@pytest.mark.parametrize(
+    ("conf", "host", "words"),
+    [
+        ({"cloud_base_url": "https://api.openai.com"}, None, "under the lab's service domain"),
+        ({"cloud_base_url": OUTSIDE_URL}, None, "under the lab's service domain"),
+        ({"cloud_base_url": FAKE_URL + "/v1"}, None, "no path"),
+        ({"cloud_base_url": FAKE_URL + "/"}, None, "no path"),
+        ({"cloud_base_url": "ftp://fake.svc.example.internal"}, None, "http(s) origin"),
+        ({"cloud_base_url": "http://u:p@fake.svc.example.internal"}, None, "http(s) origin"),
+        ({"cloud_base_url": 8000}, None, "http(s) origin"),
+        ({"cloud_base_url": FAKE_URL, "extra": 1}, None, "takes cloud_base_url"),
+        ({"cloud_base_url": FAKE_URL}, "0.0.0.0", "loopback only"),
+        ({"cloud_base_url": FAKE_URL}, "fake.svc.example.internal", "loopback only"),
+    ],
+)
+def test_the_test_only_render_refuses_a_fake_that_is_not_the_labs(tmp_path, conf, host, words):
+    with pytest.raises(gw.GatewaySpecError) as exc:
+        _conformance_spec(tmp_path, host=host, **conf)
+    assert any(words in p for p in exc.value.problems), exc.value.problems
+
+
+def test_conformance_host_needs_the_flag(tmp_path, capsys):
+    out = tmp_path / "out"
+    spec = str(make_spec(tmp_path, roles=RICH_ROLES))
+    assert hnx(["gen", "gateway", "render", spec, str(out), "--conformance-host", LOOPBACK]) == 1
+    assert "--conformance-host needs --conformance" in capsys.readouterr().err
+
+
+def test_a_lab_check_refuses_a_test_only_render_and_the_reverse(tmp_path, capsys):
+    spec = str(_local_spec(tmp_path))
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", spec, str(out), "--conformance"]) == 0
+    capsys.readouterr()
+    assert hnx(["gen", "gateway", "render", spec, str(out), "--check"]) == 1
+    assert "conformance_only is set" in capsys.readouterr().err
+    lab = tmp_path / "lab"
+    assert hnx(["gen", "gateway", "render", spec, str(lab)]) == 0
+    capsys.readouterr()
+    assert hnx(["gen", "gateway", "render", spec, str(lab), "--conformance", "--check"]) == 1
+    assert "conformance_only must be true" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("edit", "words"),
+    [
+        (lambda d: d.pop("conformance_only"), "conformance_only must be true"),
+        (lambda d: d.update(conformance_only=False), "conformance_only must be true"),
+        (
+            lambda d: d["roles"]["cloud-reasoner"]["deployments"][0].update(
+                base_url="http://other.svc.example.internal:8000"  # no-raw-endpoint: allow alias
+            ),
+            "deployment's base_url must be " + FAKE_URL,
+        ),
+    ],
+)
+def test_the_test_only_audit_refuses_hand_edits(tmp_path, edit, words):
+    problems = _audit_edit(_conformance_spec(tmp_path), edit)
+    assert any(words in p for p in problems), problems
+
+
+def test_the_spec_s_role_table_is_not_read_through_a_symbolic_link(tmp_path):
+    spec = make_spec(tmp_path)
+    outside = tmp_path / "outside.json"
+    (tmp_path / "roles.json").rename(outside)
+    (tmp_path / "roles.json").symlink_to(outside)
+    with pytest.raises(gw.GatewaySpecError, match="a symbolic link on its path"):
+        gw.render_file(spec)
+    # a linked directory on the path is refused too
+    (tmp_path / "roles.json").unlink()
+    real = tmp_path / "real"
+    real.mkdir()
+    outside.rename(real / "roles.json")
+    (tmp_path / "linked").symlink_to(real, target_is_directory=True)
+    doc = yaml.safe_load(spec.read_text())
+    doc["roles"] = "linked/roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(gw.GatewaySpecError, match="a symbolic link on its path"):
+        gw.render_file(spec)
+    doc["roles"] = "real/roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    gw.render_file(spec)
+
+
+def test_the_spec_s_role_table_stays_inside_the_checkout(tmp_path):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    spec = make_spec(spec_dir)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (spec_dir / "roles.json").rename(outside / "roles.json")
+    # tmp_path is in no git checkout, so the spec's own directory is the root
+    for roles, words in (
+        (str(outside / "roles.json"), "an absolute path"),
+        ("../outside/roles.json", "outside the root"),
+    ):
+        doc = yaml.safe_load(spec.read_text())
+        doc["roles"] = roles
+        spec.write_text(yaml.safe_dump(doc))
+        with pytest.raises(gw.GatewaySpecError, match=words):
+            gw.render_file(spec)
+    # an absolute path through a linked directory is refused before any link is followed
+    (tmp_path / "linkdir").symlink_to(outside, target_is_directory=True)
+    doc["roles"] = str(tmp_path / "linkdir" / "roles.json")
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(gw.GatewaySpecError, match="an absolute path"):
+        gw.render_file(spec)
+
+
+def test_a_role_table_path_with_dotdot_inside_the_checkout_is_read():
+    # the lab-in-a-box spec names ../../../../schemas/...: inside the repository, so allowed
+    assert ".." in yaml.safe_load(LAB_SPEC.read_text())["roles"]
+    assert gw.render_file(LAB_SPEC)
+
+
+def test_render_takes_the_root_its_role_table_stays_in(tmp_path, capsys):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    spec = make_spec(spec_dir)
+    (spec_dir / "roles.json").rename(tmp_path / "roles.json")
+    doc = yaml.safe_load(spec.read_text())
+    doc["roles"] = "../roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 1
+    assert "outside the root" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(spec), str(out), "--root", str(tmp_path)]) == 0

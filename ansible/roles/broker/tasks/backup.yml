@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Create the backup directory
+      ansible.builtin.file:
+        path: "{{ broker_backup_dir }}"
+        state: directory
+        mode: "0700"
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ broker_backup_dir }}/backup-manifest.json"
+        content: "{{ {'service': broker_logical_id,
+                      'paths': [broker_state_root ~ '/state', broker_data_root, broker_config_dir],
+                      'note': 'the state is one file per fact, created exclusively (ADR-0014): a copy taken live is consistent per file; keep ownership and modes'} | to_nice_json }}\n"
+        mode: "0600"
+  tags: [backup]

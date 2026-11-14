@@ -48,9 +48,6 @@ resource "proxmox_virtual_environment_vm" "edge_core" {
         gateway = "203.0.113.1"
       }
     }
-    user_account {
-      username = "ansible"
-      keys     = [var.ssh_keys["operator"]]
-    }
+    user_data_file_id = var.cloudinit_user_data["edge-core"]
   }
 }

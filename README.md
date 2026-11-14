@@ -98,9 +98,13 @@ seams (object store, Iceberg REST catalog with Postgres, a single-node query eng
 secrets in dev mode, notifications) plus the project's own fakes (an
 OpenAI-compatible inference server and a case system). It needs Docker with the compose plugin and
 about 2 GB of free RAM (the stack is capped well inside 4 GB); every credential in it is a
-throwaway placeholder from `compose/lab-in-a-box/.env.example`.
+throwaway placeholder from `compose/lab-in-a-box/.env.example`. `make lab-smoke` also runs the
+conformance suites, and the `events` suite needs the NATS client, so install the `core` and
+`nats` extras first (the nightly workflow installs the same two); without them that one suite
+fails as could-not-measure.
 
 ```bash
+pip install -e ".[dev,core,nats]"
 make lab-up       # build the fakes, start everything, wait until every healthcheck passes
 make lab-smoke    # up, check each service end to end, run `hnx conform` if present, tear down
 make lab-broker   # only the broker end to end: broker, hub and edge containers, the scenario, down
@@ -134,6 +138,7 @@ memory budget) and skips the parts that need a daemon. The architecture behind i
 | [docs/agent.md](docs/agent.md) | agent profile compiler, context packs and the broker contracts (`hnx agent`, `schemas/agent/`, `schemas/broker/`) |
 | [docs/swap.md](docs/swap.md) | the swap kit: record, gates, parity, flip, decommission |
 | [docs/projects.md](docs/projects.md) | project management: projects, steps and tasks under board rules (`hnx projects`), the Projects hub page, OpenProject setup, strategy sync and change feed |
+| `orchestrator/` | the Go module of the orchestrator (ADR-0026): today the lab's own LLM gateway, `cmd/gateway` ([docs/gateway.md](docs/gateway.md)); not shipped in the wheel |
 | `homelabnext/` | the Python package: registry, generators, ids, paths, lake, notify, state, records, decide, golden, network, compute, customization, conform, swap, parity, agent, broker, detections, registers, invariants, scaffolds, `cli.py` |
 | `profiles/` | shipped optional customization profiles (inert until enabled; see [docs/customization.md](docs/customization.md)) |
 | [docs/network-model.md](docs/network-model.md), [docs/compute-model.md](docs/compute-model.md) | the site/network and guest models |
@@ -160,7 +165,7 @@ fixed in [ADR-0005](docs/adr/0005-swap-procedure-and-conformance.md).
 
 ## Decisions
 
-36 architecture decision records live in [docs/adr/](docs/adr/README.md), whose index gives one
+51 architecture decision records live in [docs/adr/](docs/adr/README.md), whose index gives one
 line for each. The first twelve cover schemas in git, registry and DNS aliases, shared libraries,
 role interface, swap procedure, detections as code, model roles, export hooks, bus placement,
 records lifecycle, the public/private split, and the deliberately non-modular substrate. Where a real lab lives (a private overlay repository read by

@@ -35,7 +35,7 @@ requires:
       version: "1.0"
       purpose: runs the analyst when a sample arrives
     - cap: cap:agent-runtime
-      provisional: true
+      version: "1.0"
       purpose: the runtime the analyst's job is dispatched to
     - cap: cap:records
       version: "1.0"

@@ -36,6 +36,19 @@
         "max_cost": 1.5,
         "cost_per_1k_tokens": 0.002
       }
+    },
+    "embedder": {
+      "kind": "embedding",
+      "tier": "fast",
+      "dimensions": 8,
+      "bindings": [
+        {
+          "backend": "svc:inference-small",
+          "model_id": "example-embed-8d",
+          "version": "2026.08.1",
+          "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      ]
     }
   }
 }

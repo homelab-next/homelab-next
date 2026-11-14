@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# A changed daemon.json is checked by dockerd --validate on a staged copy beside the live file
+# before it replaces the live one, so a bad value never reaches the daemon (a daemon.json dockerd
+# cannot read stops it from starting). Replacing the live file leaves a restart-pending marker that
+# only a successful restart removes, so a failed (or disabled) restart is retried on the next run.
+- name: Ensure the state and configuration directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ docker_engine_state_dir }}", mode: "0750"}
+    - {path: "{{ docker_engine_config_file | dirname }}", mode: "0755"}
+
+- name: Stage the daemon configuration beside the live file
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: "{{ docker_engine_staged_file }}"
+    mode: "0644"
+  register: docker_engine_staged
+
+- name: Read the live configuration's checksum
+  ansible.builtin.stat:
+    path: "{{ docker_engine_config_file }}"
+  register: docker_engine_live
+
+- name: Check the staged configuration with dockerd before it can go live
+  ansible.builtin.command:
+    argv: ["{{ docker_engine_daemon_cli }}", --validate, --config-file, "{{ docker_engine_staged_file }}"]
+  changed_when: false
+  when: not docker_engine_live.stat.exists or docker_engine_live.stat.checksum != docker_engine_staged.checksum
+
+- name: Install the checked configuration
+  ansible.builtin.copy:
+    src: "{{ docker_engine_staged_file }}"
+    dest: "{{ docker_engine_config_file }}"
+    remote_src: true
+    mode: "0644"
+  register: docker_engine_written
+
+- name: Mark a restart as owed
+  ansible.builtin.copy:
+    dest: "{{ docker_engine_state_dir }}/restart-pending"
+    content: "daemon.json changed; the engine has not been restarted since\n"
+    mode: "0640"
+  when: docker_engine_written is changed
+
+- name: Look for a restart still owed
+  ansible.builtin.stat:
+    path: "{{ docker_engine_state_dir }}/restart-pending"
+  register: docker_engine_pending
+
+- name: Restart the engine while a restart is owed
+  when: docker_engine_pending.stat.exists and docker_engine_restart | bool
+  block:
+    - name: Restart the engine (it reads daemon.json only at start)
+      ansible.builtin.command:
+        argv: ["{{ docker_engine_systemctl_cli }}", restart, "{{ docker_engine_service }}"]
+      changed_when: true
+    - name: Clear the owed restart
+      ansible.builtin.file:
+        path: "{{ docker_engine_state_dir }}/restart-pending"
+        state: absent

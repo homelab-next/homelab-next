@@ -55,8 +55,9 @@ class RestCatalog:
         self._timeout = timeout
         self.max_bytes = max_bytes
         self._prefix: str | None = None
-        #: how requests are sent: by default same-origin redirects only; a caller that sends a
-        #: credential passes :func:`homelabnext._http.credential_opener` (no redirect, no proxy)
+        #: how requests are sent: by default same-origin redirects only, and only for GET/HEAD
+        #: (writes follow none); a caller that sends a credential passes
+        #: :func:`homelabnext._http.credential_opener` (no redirect, no proxy)
         self._opener = opener
 
     def __repr__(self) -> str:

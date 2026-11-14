@@ -57,6 +57,9 @@ def _validate(lab: Path) -> int:
 
 def test_an_edge_guest_validates_and_an_unknown_capability_is_still_refused(tmp_path, capsys):
     lab = _lab(tmp_path)
+    # the vocabulary alone: with its registry the lab also holds the guest to the rows on its
+    # host (tests/compute/test_guest_capability_placement.py)
+    (lab / "services.yml").unlink()
     _set_capability(lab, "proxy-1", "cap:edge")
     assert _validate(lab) == 0
     _set_capability(lab, "proxy-1", "cap:teleporter")
@@ -79,10 +82,14 @@ def test_example_hypervisors_declare_the_hypervisor_capability(lab):
     assert {g["id"]: g["capability"] for g in hosts} == {g["id"]: "cap:hypervisor" for g in hosts}
 
 
-def test_the_example_proxy_is_registered_as_the_edge_not_the_identity_provider():
+def test_the_example_proxy_is_registered_as_the_edge_proxy_not_the_identity_provider():
     lab = ROOT / "examples" / "four-box-lab"
     zones, domain = open_site(lab / "site.yml")
     fleet = load_fleet(lab / "guests", zones, domain=domain or "example.internal")
-    flat = registry_hosts.fragment(fleet)["hosts"]
-    assert flat["proxy-1"]["role"] == "edge"
-    assert {flat[h]["role"] for h in ("dns-1", "dns-2")} == {"dns"}
+    caps = {g.name: g.capability for g in fleet.sorted()}
+    # each guest declares the capability of a row on its own host (ADR-0039 decision 7): the
+    # secondary resolver its replica row's, not the primary's
+    assert caps["proxy-1"] == "cap:edge-proxy"
+    assert (caps["dns-1"], caps["dns-2"]) == ("cap:dns", "cap:dns-secondary")
+    # the registry fragment derives no host role from a guest's capability
+    assert all("role" not in h for h in registry_hosts.fragment(fleet)["hosts"].values())

@@ -29,7 +29,8 @@ fake, the target-file adapters with their product limits, and the integration st
 ```bash
 hnx conform list                      # the eighteen capabilities (also: hnx conform --list)
 hnx conform list --all                # plus the extended suites (backup, dns, edge, broker-tokens,
-                                      # orchestration-features, migration, log-pipeline)
+                                      # orchestration-features, migration, log-pipeline,
+                                      # agent-runner)
 hnx conform run object-store          # against the in-memory fake
 hnx conform run all --out build/conform.json
 hnx conform run secrets --target broken            # a defective fake: must FAIL, naming the check
@@ -187,7 +188,15 @@ verified restores, retention), `dns` (zone semantics the registry's aliases rely
 follow-up 7, see [modules](modules/data.md#data-and-lifecycle-safety)), `log-pipeline` (the runtime
 label the model-runtime detections match, from the guest model's table and the observed address,
 and the TLP label the lake stores, from the route's declaration, never the event's own; see
-[log pipeline](log-pipeline.md)) and
+[log pipeline](log-pipeline.md)), `agent-runner` (the `agent-runtime` slot's contract, ADR-0051:
+a session spec in, a usage stream and an answer out, classes from typed signals with the gateway
+corroborating what it records, the run's key and trace on every call, servers only from the
+grants file, the gateway pinned outside the spec, a bounded stream; its fake is the reference
+runtime under the development launcher, `conformance/fakes/agent_runner_launcher.py`. A
+provider's target supplies only its runner body's argv and `exit_classes`
+(`adapter: conformance.fakes.agent_runner_launcher:make`) and so runs under the reference
+launcher, which a launcher's own target certifies: no target can skip the checks of the
+launcher's rules) and
 `orchestration-features`. The last one holds the optional features of the `orchestration`
 contract (clauses f-j): priority ordering (a SHOULD, needing a reported limit), shadow runs on the
 shadow lane only with one unfinished per job, placement constraints (tags, minimum context,
@@ -218,7 +227,7 @@ MUTANTS = {
 `hnx conform mutants` (the core suites; name an extended one to run its own, or pass `--all`
 for every suite) and
 `tests/conform_sweeps/test_conform_mutants.py` (every suite, extended ones included) assert each mutant is
-caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there: `broker-tokens`, `codemode-executor`,
+caught **by that check**, and for the newer suites (`ONLY_ITS_OWN` there: `agent-runner`, `broker-tokens`, `codemode-executor`,
 `codemode-runner`, `log-pipeline`, `migration`, `orchestration-features`) by that check alone, so a regression in a suite shows up as a named check, not as silence.  The named check
 must be a `must` that always executes against the mutant (not `skippable`, and every feature it
 `requires` declared by the mutant: `Mutant(..., features=frozenset({"admission"}))` says what the
@@ -354,8 +363,9 @@ Set `HNX_CONFORM_TARGET` to run the invariant against a real target.
    summary and a precise assertion message.  Test errors and negative cases, not only the happy
    path.
 4. **Wire it.** Add the name to `CAPABILITIES` (core, only by changing `docs/interfaces.md`) or to
-   `EXTENDED` in `homelabnext/conform/registry.py`; add `conformance/<name>/test_conformance_<name>.py`
-   (copy any sibling); for a core capability add it to `capabilities.yml`.
+   `EXTENDED` in `homelabnext/capability_names.py`; add
+   `conformance/<name>/test_conformance_<name>.py` (copy any sibling); for a core capability add it
+   to `capabilities.yml`.
 5. **Prove it.** `python -m pytest -q tests/conform conformance` must pass: the fake passes with
    no skips, each mutant is caught by its named check.  A new check ships with a fake update in
    the same change (`docs/interfaces.md` section 6): checks are never removed, only added.

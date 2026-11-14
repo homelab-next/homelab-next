@@ -5,7 +5,7 @@
 ``homelabnext.agent.job.finished``: the body is decoded and validated against the envelope and
 the type's schema (:func:`homelabnext.events.consumer.decode_event`), its ``source`` must be one
 of the controller's service ids the store is configured with (``sources``, default
-:data:`.model.CONTROLLER_SOURCE`), and it is idempotent the way
+:data:`.model.CONTROLLER_SOURCES`, both of the controller's for the overlap release), and it is idempotent the way
 :class:`homelabnext.events.consumer.Consumer` is, but durably (the seen ids are the table):
 
 * the same event id with the same body is a ``duplicate`` (acknowledged, nothing written);
@@ -80,7 +80,7 @@ from homelabnext.events.consumer import Delivery, decode_event
 from homelabnext.events.envelope import EventError, body_digest
 from homelabnext.status.model import iso, parse_iso
 
-from .model import CONTROLLER_SOURCE, FINISHED_EVENT, rollup
+from .model import CONTROLLER_SOURCES, FINISHED_EVENT, rollup
 
 _TABLES = """
 CREATE TABLE IF NOT EXISTS jobs(
@@ -151,7 +151,7 @@ class TelemetryStore:
         clock: Callable[[], float] = time.time,
         retention_days: float = DEFAULT_RETENTION_DAYS,
         read_only: bool = False,
-        sources: Iterable[str] = (CONTROLLER_SOURCE,),
+        sources: Iterable[str] = CONTROLLER_SOURCES,
     ):
         self.path, self.clock = Path(path), clock
         self.sources = tuple(sources)

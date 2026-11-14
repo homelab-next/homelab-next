@@ -76,13 +76,22 @@ author: unknown
 
 <!-- hnx:todo:failure -->
 > TODO(human): symptom, likely cause, first check, fix: one row each.
+
+- **The server refuses its configuration after an upgrade from 2.10.** Likely cause: since 2.11,
+  a server, cluster or gateway name that contains a space is refused. Fix: rename it.
+- **A stream refuses new consumers.** Likely cause: since 2.15 a stream allows 1,000 consumers by
+  default. First check: the stream's consumer count. Fix: delete stale durables, or raise the
+  limit on the stream.
+- **A supervisor reads a clean stop as a failure, or the reverse.** Since 2.15 a graceful stop
+  exits 0 (2.10 exited 1). Fix: update any unit or script that treated exit 1 as a normal stop.
+
 <!-- /hnx:todo -->
 
 ## Depends on / depended on by
 
 <!-- hnx:gen:deps -->
 - Depends on: none declared
-- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
+- Depended on by: [orchestrator](orchestrator.md) ([[systems/orchestrator|orchestrator]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

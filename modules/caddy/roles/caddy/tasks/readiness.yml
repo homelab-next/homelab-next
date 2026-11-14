@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Caddy's dependencies: the container engine (docker_engine, applied to the guest before this
+# module), the edge generator on the controller (it must render this deployment's sites, and only
+# the declared names) and every credential the sites and the certificate need, in its form.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: The sites render for this deployment's hosts only, exactly the declared names
+      ansible.builtin.include_tasks: generate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+  tags: [readiness]

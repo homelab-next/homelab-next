@@ -7,7 +7,7 @@ summary_of: outline:sha256:d1336261c3f7712e
 - **Status:** proposed
 - **Date:** 2026-11-04
 - **Related:** ADR-0009 (bus), ADR-0013 (status hub), ADR-0014 (conflict-free writes),
-  ADR-0020 (projects), ADR-0025 (orchestration telemetry), ADR-0026 (reserved: the orchestrator
+  ADR-0020 (projects), ADR-0025 (orchestration telemetry), ADR-0026 (the orchestrator
   as a component), [Agent profiles](../agent.md) ("Agent memory (M-09)", the reader -> actor
   handoff, G-04), [Broker](../broker.md), [Orchestration controller](../orchestration-controller.md)
 - **Depends-on:** ADR-0030, ADR-0032, ADR-0033
@@ -67,7 +67,7 @@ The same objection applies here, more strongly.
 
 1. **The coordinator is a profile like any other.** It is compiled under the policy ceiling, verified
    against the lock, and acts only through the broker (ADR-0030). It is not the orchestration
-   controller, which admits sessions, and not the component reserved as ADR-0026.
+   controller, which admits sessions, and not the component of ADR-0026.
 
    *Amendment (2026-11-06, review 2):* the coordinator is **two profiles joined by a G-04
    handoff** ([Agent profiles](../agent.md), G-03 and G-04), not one. Opening another profile's

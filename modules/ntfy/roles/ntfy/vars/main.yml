@@ -1,0 +1,185 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# Deny-all for anyone not named in the access list; no sign-up, no web login, no reservations,
+# no web app, no metrics endpoint. Nothing here names an upstream, a push service, SMTP, a phone
+# provider or an attachment store, so the server opens no connection out of the guest.
+ntfy_fixed_env:
+  NTFY_LISTEN_HTTP: ":8080"
+  NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+  NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
+  NTFY_AUTH_DEFAULT_ACCESS: deny-all
+  NTFY_BEHIND_PROXY: "false"
+  NTFY_ENABLE_SIGNUP: "false"
+  NTFY_ENABLE_LOGIN: "false"
+  NTFY_ENABLE_RESERVATIONS: "false"
+  NTFY_ENABLE_METRICS: "false"
+  NTFY_WEB_ROOT: disable
+# where the database directory is mounted in the container (NTFY_CACHE_FILE, NTFY_AUTH_FILE)
+ntfy_container_db_dir: /var/lib/ntfy
+ntfy_databases: [auth.db, cache.db]
+# The publisher signs in by token only: ntfy wants a bcrypt hash for every provisioned account, so
+# it gets one that is well-formed (cost 10) but was not made from any password, and no password is
+# known to match it. It is not a credential and grants nothing.
+ntfy_publisher_unusable_hash: "$2b$10$NoPasswordMatchesThisHashNoPasswordMatchesThisHashNoP"
+# ntfy's own rules: an account name, a topic pattern, a token (tk_ and 29 more), a bcrypt hash
+ntfy_username_pattern: '^[-_.+@a-zA-Z0-9]{1,64}\Z'
+ntfy_topic_pattern_pattern: '^[-_*A-Za-z0-9]{1,64}\Z'
+ntfy_key_pattern: '^tk_[-_A-Za-z0-9]{29}\Z'
+ntfy_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+ntfy_bcrypt_pattern: '^\$2[aby]\$(1[0-9]|2[0-9]|3[01])\$[./A-Za-z0-9]{53}\Z'
+ntfy_repository: "{{ ntfy_image.split('@')[0].rsplit(':', 1)[0] }}"
+ntfy_tag: "{{ ntfy_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+ntfy_digest: "{{ ntfy_image.split('@')[1] | default('') }}"
+# The export (docs/modules/data.md, object-tree): each database copied with SQLite's online backup
+# (consistent while the server writes), then listing.jsonl (key, size, sha256). Run as the
+# container's user (setpriv), so it never creates a file the server cannot open. It is a snapshot:
+# every run writes a new one (the hook reports changed).
+ntfy_export_script: |
+  import hashlib, json, os, pathlib, sqlite3, sys
+  src, dst, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+  rows = []
+  for name in names:
+      path = os.path.join(src, name)
+      if not os.path.isfile(path) or os.path.islink(path):
+          continue
+      tmp = os.path.join(dst, "." + name + ".tmp")
+      if os.path.lexists(tmp):
+          os.unlink(tmp)
+      a = sqlite3.connect(pathlib.Path(path).as_uri() + "?mode=ro", uri=True)
+      b = sqlite3.connect(tmp)
+      a.backup(b)
+      a.close(); b.close()
+      os.chmod(tmp, 0o600)
+      os.replace(tmp, os.path.join(dst, name))
+  for name in names:
+      out = os.path.join(dst, name)
+      if os.path.isfile(out) and not os.path.islink(out):
+          h = hashlib.sha256()
+          with open(out, "rb") as f:
+              for chunk in iter(lambda: f.read(1 << 20), b""):
+                  h.update(chunk)
+          rows.append({"key": name, "size": os.path.getsize(out), "sha256": h.hexdigest()})
+  tmp = os.path.join(dst, ".listing.jsonl.tmp")
+  with open(tmp, "w", encoding="utf-8") as f:
+      for r in rows:
+          f.write(json.dumps(r, sort_keys=True) + "\n")
+  os.chmod(tmp, 0o600)
+  os.replace(tmp, os.path.join(dst, "listing.jsonl"))
+  print(json.dumps(rows))
+# The restore (docs/modules/data.md, import): one script, run as root, in two passes.
+#   check SRC UID NAMES...        reads, never writes
+#   apply SRC DB UID GID NAMES... the server stopped: copies, re-verifies, replaces
+# Both open the source directory once (O_NOFOLLOW) and every file from that descriptor
+# (O_NOFOLLOW), so a link or a swap after the check is never followed. The source and each file
+# must belong to root or the container's user and be writable by no one else; listing.jsonl names
+# only the databases, each a single-link regular file of its listed size and sha256. apply copies
+# each file through its descriptor into a staging file beside the live one, hashes the staged
+# copy (what is installed is what was hashed), runs integrity_check on it, then removes the stale
+# -wal and -shm files and renames it into place, owned by the container's user, 0600.
+ntfy_restore_script: |
+  import hashlib, json, os, pathlib, sqlite3, stat, sys
+  mode, src = sys.argv[1], sys.argv[2]
+  if mode == "check":
+      uid, names, db, gid = int(sys.argv[3]), set(sys.argv[4:]), None, None
+  else:
+      db, uid, gid, names = sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), set(sys.argv[6:])
+  def fail(why):
+      sys.exit("restore refused: " + why)
+  def trusted(st, what):
+      if st.st_uid not in (0, uid) or st.st_mode & 0o022:
+          fail(what + " must belong to root or the container's user and be writable by no one else")
+  nf = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+  try:
+      dfd = os.open(src, os.O_RDONLY | os.O_DIRECTORY | nf)
+  except OSError:
+      fail("the source is not a directory (or is a link)")
+  trusted(os.fstat(dfd), "the source directory")
+  def opened(name):
+      try:
+          fd = os.open(name, os.O_RDONLY | nf, dir_fd=dfd)
+      except OSError:
+          fail(name + ": cannot be opened (missing, or a link)")
+      st = os.fstat(fd)
+      if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+          fail(name + ": not a single-link regular file")
+      trusted(st, name)
+      return fd, st
+  fd, _ = opened("listing.jsonl")
+  with os.fdopen(fd, encoding="utf-8") as f:
+      text = f.read(1 << 16)
+  listed = {}
+  for line in text.splitlines():
+      if line.strip():
+          r = json.loads(line)
+          if r.get("key") not in names or r["key"] in listed:
+              fail("the listing names an unknown or repeated file")
+          listed[r["key"]] = r
+  if set(os.listdir(dfd)) - {"listing.jsonl"} != set(listed):
+      fail("the source holds files the listing does not name, or misses one it does")
+  def digest(fd, out=None):
+      h, n = hashlib.sha256(), 0
+      while True:
+          chunk = os.read(fd, 1 << 20)
+          if not chunk:
+              return h.hexdigest(), n
+          h.update(chunk); n += len(chunk)
+          if out is not None:
+              out.write(chunk)
+  def sound(path):
+      c = sqlite3.connect(pathlib.Path(path).as_uri() + "?mode=ro&immutable=1", uri=True)
+      try:
+          return c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+      finally:
+          c.close()
+  for name, r in sorted(listed.items()):
+      fd, st = opened(name)
+      if st.st_size != r.get("size"):
+          fail(name + ": not the listed size")
+      if mode == "check":
+          got, _ = digest(fd)
+          os.close(fd)
+          if got != r.get("sha256"):
+              fail(name + ": sha256 differs from the listing")
+          continue
+      staged = os.path.join(db, "." + name + ".restore")
+      if os.path.lexists(staged):
+          os.unlink(staged)
+      ofd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nf, 0o600)
+      with os.fdopen(ofd, "wb") as out:
+          digest(fd, out)
+          out.flush(); os.fsync(out.fileno())
+      os.close(fd)
+      sfd = os.open(staged, os.O_RDONLY | nf)
+      got, n = digest(sfd)
+      os.close(sfd)
+      if got != r.get("sha256") or n != r.get("size"):
+          os.unlink(staged)
+          fail(name + ": the staged copy differs from the listing")
+      if not sound(staged):
+          os.unlink(staged)
+          fail(name + ": SQLite integrity_check failed")
+      os.chown(staged, uid, gid)
+  if mode == "apply":
+      for name in sorted(listed):
+          for suffix in ("-wal", "-shm"):
+              if os.path.lexists(os.path.join(db, name + suffix)):
+                  os.unlink(os.path.join(db, name + suffix))
+          os.replace(os.path.join(db, "." + name + ".restore"), os.path.join(db, name))
+  print(json.dumps(sorted(listed)))
+# The drift check (health): every account and token in the user database is one the environment
+# provisions. ntfy deletes only provisioned entries it no longer names, so a token an account
+# minted for itself (POST /v1/account/token: a token can manage its own account) or an account a
+# restore brought in would outlive a rotation of the secrets; health fails on either. Read-only.
+ntfy_drift_script: |
+  import json, os, pathlib, sqlite3, sys
+  path = sys.argv[1]
+  if not os.path.isfile(path) or os.path.islink(path):
+      sys.exit("drift check: " + path + " is missing (or a link)")
+  c = sqlite3.connect(pathlib.Path(path).as_uri() + "?mode=ro", uri=True)
+  try:
+      minted = c.execute("SELECT COUNT(*) FROM user_token WHERE provisioned = 0").fetchone()[0]
+      users = c.execute(
+          "SELECT user FROM user WHERE provisioned = 0 AND user != '*' ORDER BY user").fetchall()
+  finally:
+      c.close()
+  print(json.dumps({"minted": minted, "users": [u[0] for u in users]}))

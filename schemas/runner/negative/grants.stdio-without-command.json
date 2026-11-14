@@ -1,0 +1,12 @@
+{
+  "grants_version": "1.0",
+  "profile": "triage",
+  "profile_digest": "sha256:abababababababababababababababababababababababababababababababab",
+  "servers": {
+    "notes": {
+      "kind": "notes",
+      "transport": "stdio",
+      "locality": "local"
+    }
+  }
+}

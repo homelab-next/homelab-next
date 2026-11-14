@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Ask the bus for its health, JetStream included
+      ansible.builtin.uri:
+        url: "{{ events_bus_monitor_url }}/healthz?js-enabled-only=true"
+        status_code: 200
+        timeout: 5
+      changed_when: false
+    - name: And for its consumers, none of them a push consumer
+      ansible.builtin.include_tasks: push_consumers.yml
+    # read-only, from the same /jsz: a standing stream that is gone is what a STREAM.DELETE
+    # leaves (no user holds one; the detection backstop if one ever got through), so it fails;
+    # a declared durable the provisioner has not created yet is events_bus_provision_durables
+    # still off, so it is reported, and fails only once provisioning is on
+    - name: Compare the bus with what is declared (streams, their DLQs, the durables)
+      ansible.builtin.set_fact:
+        events_bus_missing: "{{ events_bus_jsz.json | hnx_bus_missing(events_bus_account, events_bus_streams, events_bus_durables) }}"
+    - name: Fail on a declared stream that is not on the bus
+      ansible.builtin.assert:
+        that: events_bus_missing.streams | length == 0
+        fail_msg: >-
+          events_bus: declared streams missing from account {{ events_bus_account }}:
+          {{ events_bus_missing.streams | join(', ') }} (deleted? check the server log and the
+          $JS.EVENT.ADVISORY.STREAM.DELETED advisory; main re-creates a missing one, empty)
+    - name: Report the declared durables not provisioned
+      ansible.builtin.debug:
+        msg: >-
+          events_bus: declared, not provisioned: {{ events_bus_missing.durables | join(', ') }}
+          (events_bus_provision_durables is {{ events_bus_provision_durables }})
+      when: events_bus_missing.durables | length > 0
+    - name: Fail on a declared durable missing while provisioning is on
+      ansible.builtin.assert:
+        that: events_bus_missing.durables | length == 0
+        fail_msg: >-
+          events_bus: provisioned durables missing: {{ events_bus_missing.durables | join(', ') }}
+          (deleted? $JS.EVENT.ADVISORY.CONSUMER.DELETED; main re-creates them)
+      when: events_bus_provision_durables | bool
+    # read-only, from the same /jsz (config=true): the provisioner creates a durable once and
+    # never changes it (it refuses one that drifted, naming the fields), so a durable created with
+    # another lease, max_deliver or start than its declaration says would keep it silently; it
+    # fails here whatever events_bus_provision_durables says (one that exists was provisioned)
+    - name: Fail on a declared durable whose configuration on the bus is not its declaration
+      ansible.builtin.assert:
+        that: events_bus_jsz.json | hnx_bus_durable_drift(events_bus_account, events_bus_durables) | length == 0
+        fail_msg: >-
+          events_bus: durables differ from events_bus_durables:
+          {{ events_bus_jsz.json | hnx_bus_durable_drift(events_bus_account, events_bus_durables) | join(' | ') }}.
+          Nothing is changed or recreated. deliver_policy, opt_start_seq, ack_policy,
+          replay_policy, deliver_subject, flow_control, idle_heartbeat, mem_storage, direct and
+          sourcing cannot be changed on an existing durable: delete it as the provisioner (its
+          ack floor and pending deliveries go with it; deliver_policy new skips what is published
+          until it exists again) and run main with events_bus_provision_durables on to recreate
+          it. Every other field can be changed in place (nats consumer edit, keeping what is
+          pending). Or correct the declaration (docs/broker.md, "A durable keeps the
+          configuration it was created with")
+    # the account split as the server runs it (read-only): /accountz names the accounts and,
+    # per account, JetStream and imports; it does not list an account's users, so /connz?auth=true
+    # gives the account every connected user authenticated into
+    - name: Ask the bus for its accounts
+      ansible.builtin.uri:
+        url: "{{ events_bus_monitor_url }}/accountz"
+        return_content: true
+        status_code: 200
+        timeout: 5
+      register: events_bus_accountz
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    - name: And for each expected account's detail
+      ansible.builtin.uri:
+        url: "{{ events_bus_monitor_url }}/accountz?acc={{ item | urlencode }}"
+        return_content: true
+        status_code: 200
+        timeout: 5
+      loop: "{{ (events_bus_users | hnx_bus_expected_accounts(events_bus_admin_user, events_bus_account, events_bus_monitor_user)).keys() | list }}"
+      register: events_bus_account_detail
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    # at most limit connections come back: the check fails when /connz's total is more than it
+    # returned (it could not see them all), and skips one whose CONNECT is not processed yet
+    - name: And for the account of every connected user
+      ansible.builtin.uri:
+        url: "{{ events_bus_monitor_url }}/connz?auth=true&limit=1024"
+        return_content: true
+        status_code: 200
+        timeout: 5
+      register: events_bus_connz
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    - name: Fail unless the server runs the account split
+      ansible.builtin.assert:
+        that: events_bus_account_problems | length == 0
+        fail_msg: >-
+          events_bus: the server's accounts are not the role's account split (every user but
+          {{ events_bus_admin_user }} in an account of its own): {{ events_bus_account_problems | join('; ') }}
+        success_msg: >-
+          events_bus: account split OK ({{ events_bus_account }}: {{ events_bus_admin_user }}
+          alone with JetStream; {{ events_bus_client_accounts }} client account(s) importing from
+          it exactly their own subjects{{ ' and the monitor account its advisories'
+          if events_bus_monitor_user != '' else '' }}; every connected user in its own account)
+      vars:
+        events_bus_account_problems: >-
+          {{ events_bus_accountz.json | hnx_bus_account_problems(
+               events_bus_account_detail.results | map(attribute='json') | list,
+               events_bus_users, events_bus_admin_user, events_bus_account,
+               events_bus_monitor_user, events_bus_connz.json, events_bus_api_prefix) }}
+        # every expected account but the bus account and the monitor's
+        events_bus_client_accounts: >-
+          {{ events_bus_account_detail.results | length - 1
+             - (1 if events_bus_monitor_user != '' else 0) }}
+    # a republish, mirror, sources or subject transform can aim a stream's messages at
+    # $JS.API.*, where the server takes them as requests (STREAM.DELETE of another stream): the
+    # provisioner's STREAM.CREATE body is not limited by its grant, and the role's streams never
+    # carry one, so any is a stream created some other way (docs/broker.md "The bus ACL")
+    - name: Fail on a stream that sends its messages elsewhere
+      ansible.builtin.assert:
+        that: events_bus_jsz.json | hnx_bus_stream_redirects(events_bus_account) | length == 0
+        fail_msg: >-
+          events_bus: streams in {{ events_bus_account }} with a republish, mirror, sources or
+          subject transform (none is declared; one can send messages to $JS.API, which the
+          server takes as requests):
+          {{ events_bus_jsz.json | hnx_bus_stream_redirects(events_bus_account) | join('; ') }};
+          check the provisioner credential, then delete the stream as an operator (main
+          re-creates a declared one, empty)
+    # reported, never changed: a flag can only be set by a STREAM.UPDATE, which no user holds
+    # (an existing stream is left as it is; docs/broker.md "The bus ACL")
+    - name: Warn about a stream without deny_delete or deny_purge
+      ansible.builtin.debug:
+        msg: >-
+          events_bus: WARNING streams without deny flags in {{ events_bus_account }}:
+          {{ events_bus_jsz.json | hnx_bus_unprotected_streams(events_bus_account) | join(', ') }}
+          (created before the adapter set them: a purge or message delete that got through would
+          be refused only with them; left unchanged, docs/broker.md has the break-glass step)
+      when: events_bus_jsz.json | hnx_bus_unprotected_streams(events_bus_account) | length > 0
+  tags: [health]

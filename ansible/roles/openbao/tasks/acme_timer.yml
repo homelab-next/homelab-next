@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# The renewal timer is enabled and started on EVERY run, not only when its unit files changed: a
+# timer disabled or stopped by hand (or never started because the first run failed after the units
+# were written) would otherwise stay off, the certificate would stop renewing, and nothing would
+# say so until it expired.  Idempotent: `systemctl is-enabled`/`is-active` are read first, and
+# `enable --now` runs only when the units changed or the timer is not both (a converged host runs
+# nothing and reports changed=0).  The reads run in --check mode too (they change nothing).
+- name: Ask whether the renewal timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", is-enabled, "{{ openbao_acme_unit }}.timer"]
+  register: openbao_acme_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the renewal timer is started
+  ansible.builtin.command:
+    argv: ["{{ openbao_systemctl_cli }}", is-active, "{{ openbao_acme_unit }}.timer"]
+  register: openbao_acme_timer_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
+  ansible.builtin.command:
+    argv: "{{ [openbao_systemctl_cli] + item }}"
+  vars:
+    openbao_acme_timer_owed: >-
+      {{ openbao_acme_units is changed
+         or openbao_acme_timer_enabled.stdout | default('') | trim != 'enabled'
+         or openbao_acme_timer_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if openbao_acme_units is changed else [])
+       + ([['enable', '--now', openbao_acme_unit ~ '.timer']] if openbao_acme_timer_owed | bool else []) }}
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

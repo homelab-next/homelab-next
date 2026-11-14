@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (keycloak_target_image, or
+# keycloak_target_postgres_image within its major version), export first, then converge with the
+# new pin (set keycloak_image or keycloak_postgres_image to the target in the overlay).
+#   ansible-playbook -i <inventory> modules/keycloak/playbooks/upgrade.yml -e keycloak_target_image=<ref>
+- name: Upgrade Keycloak
+  hosts: mod_keycloak_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: keycloak
+        tasks_from: upgrade
+    - name: Export the database and the realm before the new image opens them
+      ansible.builtin.include_role:
+        name: keycloak
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: keycloak
+      vars:
+        keycloak_image: "{{ keycloak_target_image | default(keycloak_image, true) }}"
+        keycloak_postgres_image: "{{ keycloak_target_postgres_image | default(keycloak_postgres_image, true) }}"

@@ -63,8 +63,8 @@ role's chain, which accepts:
 It logs and drops the rest; an `isolated` role reaches nothing, and any other socket in
 `hnx.slice` is dropped. Hosts carry their own `addresses` in the selection
 (`hosts.<name>.addresses`: one address each, private, documentation ranges in a public example; a
-stand-in, like `capacity`, until the loader reads them from the guest records and the network
-model). Every address, port, protocol and name is checked before it reaches the ruleset.
+stand-in, like `capacity`; a host that references a guest takes its guest record's `network.ip` and
+`extra_addresses` instead, see [selection](selection.md#hosts-that-are-guests)). Every address, port, protocol and name is checked before it reaches the ruleset.
 `hnx-egress.service` loads it only on the unified cgroup v2 hierarchy with every role slice's
 cgroup present, before `network-pre.target`; the module's fleet units start only after it, and
 `hnx-egress.timer` reloads it every 30 seconds, because nftables resolves a cgroup once (a

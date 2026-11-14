@@ -88,6 +88,13 @@ def test_main_1_mirrors_its_guests_to_its_spare_nic(fleet):
     assert 'TO="enp65s0f1"' in script and 'BRIDGES="vmbr0"' in script
 
 
+def test_main_1_sends_its_notifications_to_the_topic(fleet):
+    out = render(fleet, "node-notify")
+    script = out["notify/main-1/hnx-notify.sh"]
+    assert 'URL="https://notify.example.org/"' in script and 'NAME="hnx-notify-main-1"' in script
+    assert script.index("/test") < script.index("--disable 1")
+
+
 def test_every_rendered_guest_lets_ssh_in_from_mgmt_only(fleet):
     files = render(fleet, "firewall-rules")
     rules = {k: v for k, v in files.items() if k.endswith(".fw")}

@@ -56,10 +56,16 @@ from .readers import ToolClasses, default_classes
 KEYRING_VERSION = 1
 
 
+#: the tiers whose rows are in the keyring (ADR-0039 decision 2): a retiring or legacy row is
+#: in no principal's grants or denials
+KEYRING_TIERS = ("primary", "eval")
+
+
 def _zones(registry: Any) -> list[dict]:
     rows = []
+    listed = registry.rows(*KEYRING_TIERS)
     for zone in sorted(registry.zones):
-        reach = {s.name for s in reachable_services(registry, zone)}
+        reach = {s.name for s in reachable_services(registry, zone, with_eval=True)}
         rows.append(
             {
                 "principal": f"zone:{zone}",
@@ -69,14 +75,15 @@ def _zones(registry: Any) -> list[dict]:
                         "resource": f"svc:{s.name}",
                         "kind": "service",
                         "level": "connect",
-                        "endpoint": registry.alias(s.capability),
+                        # a primary by its capability alias, an eval row by its row name
+                        "endpoint": registry.address_of(s),
                     }
-                    for s in registry.sorted_services()
+                    for s in listed
                     if s.name in reach
                 ],
                 "denials": [
                     {"resource": f"svc:{s.name}", "reason": "zone not a client (default deny)"}
-                    for s in registry.sorted_services()
+                    for s in listed
                     if s.name not in reach
                 ],
             }

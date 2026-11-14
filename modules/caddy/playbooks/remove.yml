@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the ACME account and the configuration (export_first), stop and remove both
+# containers, stop and disable the renewal timer, and delete the credentials the secret store
+# holds the source of: the auth proxy's env_file (the IdP client's secret, the cookie key),
+# Caddy's env_file (a front door's secret), the upstream TLS files (the client key) and the DNS
+# token. What only this host holds stays unless -e caddy_remove_purge=true: the certificate and
+# its key (certs/), the ACME account key and lego's copies (acme/) and the export (export/, which
+# holds them too); archive them first if the account is to be kept. The compose projects stay;
+# the decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove the edge
+  hosts: mod_caddy_edge
+  become: true
+  tasks:
+    - name: Export the account and the configuration first
+      ansible.builtin.include_role:
+        name: caddy
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ item }}/docker-compose.yml", down]
+      loop:
+        - "{{ caddy_auth_proxy_dir | default('/opt/compose/caddy-auth-proxy') }}"
+        - "{{ caddy_dir | default('/opt/compose/caddy') }}"
+      changed_when: true
+    - name: Stop and disable the renewal timer
+      ansible.builtin.command:
+        argv: [systemctl, disable, --now, hnx-caddy-acme.timer]
+      changed_when: true
+      failed_when: false
+    - name: Delete the credentials the secret store holds the source of
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ caddy_auth_proxy_dir | default('/opt/compose/caddy-auth-proxy') }}/secrets"
+        - "{{ caddy_dir | default('/opt/compose/caddy') }}/secrets"
+        - "{{ caddy_data_root | default('/var/lib/hnx-modules/caddy') }}/edge-tls"
+        - "{{ caddy_data_root | default('/var/lib/hnx-modules/caddy') }}/acme-env"
+    - name: Purge the certificate, the ACME account and the export (opt-in)
+      ansible.builtin.file:
+        path: "{{ caddy_data_root | default('/var/lib/hnx-modules/caddy') }}/{{ item }}"
+        state: absent
+      loop: [certs, acme, export]
+      when: caddy_remove_purge | default(false) | bool

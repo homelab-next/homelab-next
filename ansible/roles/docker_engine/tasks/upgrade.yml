@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# The bump path: validate the new pin, then set docker_engine_version and re-run main.
+- name: Refuse a downgrade, a no-op or a malformed version
+  ansible.builtin.assert:
+    that:
+      - docker_engine_target_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - docker_engine_target_version is version(docker_engine_version, '>')
+    fail_msg: "target {{ docker_engine_target_version }} is not a newer x.y.z than {{ docker_engine_version }}"
+  tags: [upgrade]

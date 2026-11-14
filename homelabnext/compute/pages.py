@@ -17,7 +17,7 @@ from homelabnext.status.agents.pages import _table
 from homelabnext.status.render import _e, nav_html, shell_html
 
 from .baselines import coverage
-from .loader import load_fleet
+from .loader import load_fleet, load_registry_for, registry_placement
 from .model import ComputeError
 from .zones import open_site
 
@@ -74,6 +74,7 @@ class BaselineSite:
                 domain=domain or "example.internal",
                 baselines_path=self.baselines_path,
                 require_baselines=False,
+                placement=registry_placement(load_registry_for(self.site)),
             )
         except (ComputeError, OSError, ValueError) as exc:
             return f'<h2>Baselines</h2><p class="s fail">cannot load the guests</p><pre>{_e(exc)}</pre>'

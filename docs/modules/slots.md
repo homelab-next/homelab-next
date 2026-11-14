@@ -29,7 +29,7 @@ something (non-empty `in` and `out`). The fields:
 | `stage` | SOC pipeline stage 1-10, or null (replaces nothing: `layer` stays) | pass-through neighbours |
 | `formats: {in, out}` | boundary formats | pass-through is legal only when the selected upstream's out meets the downstream's in |
 | `stateful`, `export_formats` | whether providers carry a migration, and in which neutral formats | no fictional migrations for stateless slots (notify, static hosting, edge, inference) |
-| `required_in_core` | a site must select a provider | a selection cannot silently omit dns or backup |
+| `required_in_core` | a site must select a provider, or declare the slot an incumbent ([selection](selection.md#incumbents-slots-served-outside-modules)), or plan it, a warning until its review date ([planned](planned.md)) | a selection cannot silently omit dns or backup |
 | `privileged` | secrets, idp, edge (the front door), broker, orchestration, records | never provisional; always a conformance run and the human review tier |
 | `pass_through` | the stage may be skipped | |
 | `authority` | broker, secrets, idp, edge, remote-admin, mcp-catalog (each that the registry holds) | never in an agent's `needs`; an authority for the site rules; must agree with `homelabnext.modules.authority`, the one list the schema generator and the rules read (the loader refuses a registry that disagrees, either way) |
@@ -45,7 +45,7 @@ is subsumed by the providers' and core modules' `requires`.
 | `capabilities` | `{cap, version, features, formats, instance, provisional, hosts, purpose}` | `version` is required unless `provisional` (then forbidden); provisional is refused where the slot has a contract; `hosts` (optional, the module's own host roles) scopes which roles the [egress policy](egress.md#egress-and-publishing) lets reach the slot, every role when absent |
 | `model_roles` | `{role: mdl:<role>, purpose}` | a role alias; the model is bound once, in the site's role table |
 | `interfaces` | `{interface, version, cardinality: one\|all, purpose}` | never names the offering module |
-| `hosts` | `{role, kind, count, exposure, footprint, roles, purpose}` | by role; `exposure: internal \| internet-facing \| isolated`; `internet-facing` only on a `kind: external` role or with `grants.internet_facing` |
+| `hosts` | `{role, kind, count, exposure, footprint, guest, roles, purpose}` | by role; `guest: {capability, baselines}` is what the guest under the role must provide, judged when the site's host references a guest record ([selection](selection.md#hosts-that-are-guests)), never on a `kind: external` role; `exposure: internal \| internet-facing \| isolated`; `internet-facing` only on a `kind: external` role or with `grants.internet_facing` |
 | `scope` | `{part, purpose}` | a part of the selection's [network scope](network-scope.md#the-network-scope) (`trusted.wan`, `trusted.nets`, `trusted.tooling`, `target`, `exclude.unattended_mutation`, `exclude.offensive`); the module reads those addresses from the selection, never from its own config. `requires` only: a module that reads scope has no fallback for it |
 
 A `prefers` entry names a `fallback`: `behaviour`, optionally a lighter slot `to`, and optionally

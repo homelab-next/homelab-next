@@ -39,7 +39,11 @@ def guest_capabilities() -> frozenset[str]:
     return frozenset(known_capabilities())
 
 
-#: The capability inventory groups named in docs/role-interface.md section 5.
+#: The capability inventory groups named in docs/role-interface.md section 5.  One that is a
+#: capability's derived group (cap_secrets, cap_idp, ...) is bound to that capability's registry
+#: row when the registry places one, and free to join when it places none; the others name no
+#: registry capability and are always free to join (docs/role-interface.md, "Who may join a
+#: group"): the guest file's review, not the registry check, gates joining them.
 ROLE_GROUPS: tuple[str, ...] = (
     "cap_siem",
     "cap_lake",
@@ -324,6 +328,11 @@ class Fleet:
     #: site declares its own; None = it declares none.  Validation judges it (the site file is
     #: read without ``hnx site validate``), and anything it cannot read holds nothing as the lab's
     delegated6: Any = None
+    #: with a service registry: registry host name -> the capabilities its rows serve, of every
+    #: standing (ADR-0039 decision 7).  A guest on such a host may declare one of them, or its
+    #: ``cap_<capability>`` group, even outside the platform vocabulary (a site's own capability
+    #: names never enter the public class table); every other guest keeps the vocabulary check
+    placement: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
     def node_firewall(self, node: str) -> bool:
         """Whether the node (hypervisor) itself enforces a firewall.  Unlisted = yes (safe default)."""

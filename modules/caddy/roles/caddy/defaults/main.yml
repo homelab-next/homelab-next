@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+# Caddy, the edge provider (modules/caddy): the front door of ONE deployment. The sites are the
+# edge generator's, rendered by this role on the controller for the deployment's own hosts only
+# (caddy_edge_hosts, required); the certificate is a public-trust one obtained and renewed on the
+# host by the pinned ACME client (lego, DNS-01); the upstream client certificate and CA come from
+# the generated caddy/edge_tls.json, each by secret reference.
+# caddy_logical_id (required): the instance's registry id, e.g. edge
+caddy_image: "docker.io/library/caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits the operator's sources on this port
+caddy_bind: "{{ ansible_host }}"
+caddy_port: 443
+caddy_dir: /opt/compose/caddy
+# the module's data root on its host (docs/modules/data.md): config/ (the Caddyfile and the
+# generated sites), certs/ (the installed certificate), edge-tls/ (the upstream TLS files), acme/
+# (the ACME client's account, root only), data/ and state/ (Caddy's own), export/
+caddy_data_root: /var/lib/hnx-modules/caddy
+# owner of the compose project and of the data root's root-only parts (acme/, acme-env/, export/);
+# the data root's group is the container's gid, so its user passes through to what it reads
+caddy_owner: root
+caddy_owner_group: root
+# the container's user and group: an id no account on the host has
+caddy_uid: 61010
+caddy_gid: 61010
+# --- the sites (the edge generator, run on the controller) -------------------------------------
+# the lab registry on the controller (the overlay's lab/services.yml)
+caddy_registry: ""
+# the registry hosts of THIS deployment (hnx registry generate --edge-host): only their public rows
+# become sites, and a dial outside them is refused. Never empty: without it the generator renders
+# every public row of the registry, the old lab's included.
+caddy_edge_hosts: []
+# the controller's hnx command (argv), the overlay's pinned one
+caddy_hnx_cli: [hnx]
+# the public names this edge serves: exactly the generated sites' names, and the names on the
+# certificate (the overlay declares them; nothing else gets a route)
+caddy_acme_domains: []
+# secret: references the generated sites read from the environment ({env.HNX_SECRET_...}: a
+# front door's shared secret); exactly the ones the sites name
+caddy_front_door_refs: []
+# the secret area every upstream client KEY the sites name must come from (a certificate or the CA
+# may come from anywhere): the module's own namespace, so a registry row cannot make the edge read
+# and serve another holder's private key
+caddy_edge_tls_key_area: caddy
+# --- the certificate (ACME, DNS-01, on the host) ---------------------------------------------------
+caddy_acme_server: "https://acme-v02.api.letsencrypt.org/directory"
+caddy_acme_email: ""
+caddy_acme_dns_provider: cloudflare
+# the DNS provider's API token (Zone DNS edit), by reference
+caddy_acme_dns_ref: secret:caddy/acme-dns-token
+# a fixed wait after the challenge record is written instead of lego's propagation check (split
+# horizon: the host's resolvers answer for the zone themselves; outbound DNS is blocked)
+caddy_acme_propagation_wait: "30s"
+caddy_acme_renew_days: 30
+caddy_acme_key_type: EC256
+caddy_acme_schedule: "*-*-* 03:41:00 UTC"
+caddy_acme_health_min_days: 14
+caddy_acme_trust_bundle: /etc/ssl/certs/ca-certificates.crt
+caddy_acme_on_failure: ""
+# the ACME client, lego, pinned by the sha256 of its release archive per architecture (from the
+# release's lego_<version>_checksums.txt; 5.6.0 was published 2026-10-28), moved together with
+# caddy_lego_checksums_release; the same pin as role openbao's
+caddy_lego_version: "5.6.0"
+caddy_lego_checksums:
+  amd64: "f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a"
+  arm64: "34d87a6552d69390c4a4560237045c47713a8e148d899e16db0e97040894ed1f"
+caddy_lego_checksums_release: "5.6.0"
+caddy_lego_release_repository: "https://github.com/go-acme/lego/releases/download"
+caddy_install_dir: /opt/hnx-caddy
+caddy_unit_dir: /etc/systemd/system
+caddy_systemctl_cli: systemctl
+caddy_last_run_dir: /var/lib/homelabnext/last-run
+caddy_last_run_group: root
+# --- the container ----------------------------------------------------------------------------------
+caddy_mem_limit: 256m
+caddy_start: true
+caddy_validate_with_docker: true
+caddy_health_timeout: 10

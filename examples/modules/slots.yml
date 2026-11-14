@@ -37,5 +37,5 @@ slots:
   broker:              {stage: 6, contract: broker.py, stateful: true, export_formats: [jsonl], required_in_core: true, privileged: true, authority: true, granted_upstream: true}
   orchestration:       {stage: 6, contract: orchestration.py, stateful: true, export_formats: [jsonl], required_in_core: true, privileged: true}
   records:             {stage: 9, contract: records.py, stateful: true, export_formats: [markdown-tree], required_in_core: true, privileged: true, egress: true}
-  agent-runtime:       {stage: null, contract: null, stateful: false, required_in_core: true}
+  agent-runtime:       {stage: null, contract: agent_runner.py, stateful: false, required_in_core: true}  # 1.0 tracks the x-draft schemas/runner until ADR-0051 is accepted
   inference:           {stage: null, contract: inference.py, stateful: false, required_in_core: true}

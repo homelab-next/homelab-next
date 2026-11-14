@@ -8,7 +8,8 @@
         "homelabnext.on_agent_job_retry"
       ],
       "sources": [
-        "svc:llm-orchestrator"
+        "svc:llm-orchestrator",
+        "svc:orchestrator"
       ],
       "subject": "homelabnext.agent.job.failed"
     },

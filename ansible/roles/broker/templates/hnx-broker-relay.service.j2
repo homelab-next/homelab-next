@@ -1,0 +1,54 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role broker, service {{ broker_logical_id }}); local changes are overwritten.
+# docs/broker.md "Publishing events": the relay is its own user; it reads the outbox through its
+# group and writes only relay/ and its own state; the agents' data and the socket are hidden.
+[Unit]
+Description=homelab-next broker outbox relay ({{ broker_logical_id }}: outbox -> event bus)
+After=network-online.target hnx-broker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ broker_relay_user }}
+Group={{ broker_relay_group }}
+Environment=HNX_ENDPOINT_EVENTS={{ broker_relay_events_endpoint }}
+{% if broker_runtime_release %}
+Environment=HNX_RUNTIME_RELEASE={{ broker_runtime_release }}
+{% endif %}
+EnvironmentFile={{ broker_relay_config_dir }}/relay.env
+ExecStart={{ broker_hnx_bin }} broker relay --state {{ broker_state_dir }} --events-target {{ broker_relay_config_dir }}/events-target.yml --stream {{ broker_relay_stream }} --subject-prefix {{ broker_relay_subject_prefix }} --stats-file {{ broker_relay_state_dir }}/stats.json
+Restart=on-failure
+RestartSec=5
+UMask=0027
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadOnlyPaths={{ broker_state_dir }}/outbox
+ReadWritePaths={{ broker_state_dir }}/relay {{ broker_relay_state_dir }}
+InaccessiblePaths=-{{ broker_data_root }} -{{ broker_socket_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

@@ -3,7 +3,7 @@
     "key": "$event.data.agent_key",
     "window_s": 600
   },
-  "digest": "sha256:1e096a19756e73ec1fdf28401641fe5a6d3d26acdbc1d5222b52509820eb229d",
+  "digest": "sha256:6477bc202afe4d08d749ad8964b1cc2afda2c3abbc5957d40646d5ccbe647699",
   "mode": "shadow",
   "pack": {
     "actor": "profile:workflow-agents",
@@ -22,7 +22,7 @@
             "state": "failed"
           },
           "id": "evt-job-0001",
-          "source": "svc:llm-orchestrator",
+          "source": "svc:orchestrator",
           "specversion": "1.0",
           "subject": "run-0001",
           "time": "2026-01-01T00:00:00Z",
@@ -40,7 +40,7 @@
                 "retry_of_run_id": "run-0001"
               },
               "result": "executed",
-              "target": "svc:orchestration"
+              "target": "svc:orchestrator"
             }
           ]
         },
@@ -59,7 +59,7 @@
             "state": "failed"
           },
           "id": "evt-job-0002",
-          "source": "svc:llm-orchestrator",
+          "source": "svc:orchestrator",
           "specversion": "1.0",
           "subject": "run-0002",
           "time": "2026-01-01T00:20:00Z",
@@ -83,7 +83,7 @@
             "state": "failed"
           },
           "id": "evt-job-0003",
-          "source": "svc:llm-orchestrator",
+          "source": "svc:orchestrator",
           "specversion": "1.0",
           "subject": "run-0003",
           "time": "2026-01-01T00:30:00Z",
@@ -108,7 +108,7 @@
             "state": "failed"
           },
           "id": "evt-job-0004",
-          "source": "svc:llm-orchestrator",
+          "source": "svc:orchestrator",
           "specversion": "1.0",
           "subject": "run-0004",
           "time": "2026-01-01T00:40:00Z",
@@ -133,7 +133,7 @@
             "state": "failed"
           },
           "id": "evt-job-0006",
-          "source": "svc:llm-orchestrator",
+          "source": "svc:orchestrator",
           "specversion": "1.0",
           "subject": "run-0006",
           "time": "2026-01-01T00:50:00Z",
@@ -144,6 +144,66 @@
           "triggered": false
         },
         "name": "auto-retried-by-the-scheduler-not-resubmitted"
+      },
+      {
+        "event": {
+          "data": {
+            "agent_key": "triage",
+            "attempts": 2,
+            "failure_class": "capacity",
+            "reason": "capacity",
+            "resubmits": 0,
+            "run_id": "run-0007",
+            "state": "failed"
+          },
+          "id": "evt-job-0007",
+          "source": "svc:llm-orchestrator",
+          "specversion": "1.0",
+          "subject": "run-0007",
+          "time": "2026-01-01T00:10:00Z",
+          "type": "homelabnext.agent.job.failed"
+        },
+        "expect": {
+          "calls": [
+            {
+              "action": "agent.job.submit",
+              "params": {
+                "agent_key": "triage",
+                "idempotency_key": "run-0007",
+                "priority": 90,
+                "reason": "capacity",
+                "retry_of_run_id": "run-0007"
+              },
+              "result": "executed",
+              "target": "svc:orchestrator"
+            }
+          ]
+        },
+        "name": "capacity-failure-under-the-old-source-resubmitted"
+      },
+      {
+        "event": {
+          "data": {
+            "agent_key": "triage",
+            "attempts": 2,
+            "failure_class": "capacity",
+            "reason": "capacity",
+            "resubmits": 0,
+            "run_id": "run-0008",
+            "state": "failed"
+          },
+          "id": "evt-job-0008",
+          "source": "svc:status-hub",
+          "specversion": "1.0",
+          "subject": "run-0008",
+          "time": "2026-01-01T00:15:00Z",
+          "type": "homelabnext.agent.job.failed"
+        },
+        "expect": {
+          "calls": [],
+          "triggered": false
+        },
+        "name": "another-producer-not-retried"
       }
     ],
     "pack": "agent-job-retry",
@@ -159,14 +219,17 @@
           "reason": "$event.data.reason",
           "retry_of_run_id": "$event.data.run_id"
         },
-        "target": "svc:orchestration"
+        "target": "svc:orchestrator"
       }
     ],
     "trigger": {
       "event": "homelabnext.agent.job.failed",
       "where": [
         {
-          "equals": "svc:llm-orchestrator",
+          "in": [
+            "svc:orchestrator",
+            "svc:llm-orchestrator"
+          ],
           "ref": "$event.source"
         },
         {

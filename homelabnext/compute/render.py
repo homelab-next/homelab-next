@@ -13,6 +13,7 @@ from .gen import (
     inventory,
     libvirt,
     node_mirror,
+    node_notify,
     registry_hosts,
     runtime_labels,
     tailscale_acl,
@@ -31,15 +32,26 @@ TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
     "baseline-playbook": baseline_playbook.render,
     "tailscale-acl": tailscale_acl.render,
     "node-mirror": node_mirror.render,
+    "node-notify": node_notify.render,
     "runtime-labels": runtime_labels.render,
 }
 
 
-def render(fleet: Fleet, target: str) -> dict[str, str]:
+#: the targets that take a module selection (``--selection``): the inventory's ``mod_*`` groups
+SELECTION_TARGETS = frozenset({"inventory"})
+
+
+def render(fleet: Fleet, target: str, selection: dict | None = None) -> dict[str, str]:
+    """``target``'s files for ``fleet``; ``selection`` (a schema-valid module selection) only for
+    a target in :data:`SELECTION_TARGETS`."""
     try:
         fn = TARGETS[target]
     except KeyError:
         raise ComputeError(
             f"unknown target {target!r}; known: {', '.join(sorted(TARGETS))}"
         ) from None
-    return fn(fleet)
+    if selection is None:
+        return fn(fleet)
+    if target not in SELECTION_TARGETS:
+        raise ComputeError(f"--selection is for the inventory target, not {target}")
+    return inventory.render(fleet, selection)

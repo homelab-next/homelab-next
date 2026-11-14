@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The product roles bound to the baseline controls (ADR-0016 decision 7): wazuh_agent,
-tailscale_node, suricata_enroll and greenbone_target.
+tailscale_node, suricata_enroll and greenbone_target (and, for the vendor signing keys, trivy and
+docker_engine, whose other hooks tests/roles/test_docker_engine.py runs).
 
 The central roles run end to end on localhost against fake ``suricata``/``suricatasc``/``gvm-cli``
 commands; the per-guest roles install vendor packages, so their input validation and health hooks
@@ -93,10 +94,15 @@ def test_wazuh_agent_refuses_bad_inputs(first, over):
     assert "wazuh_agent: manager id" in r.stdout
 
 
-def test_wazuh_agent_needs_a_manager(tmp_path):
+def _first(tmp_path):
     v = wazuh_vars(tmp_path)
     del v["wazuh_agent_manager_id"]
-    r = run_role(tmp_path, SIEM_ROLE, "main", v)
+    return {"role": SIEM_ROLE, "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first)
+def test_wazuh_agent_needs_a_manager(first):
+    r, _ = first
     assert r.returncode != 0 and "wazuh_agent_manager_id" in r.stdout + r.stderr
 
 
@@ -211,6 +217,8 @@ KEY_CASES = {
     "trivy": ("public.key", True, "hnx-trivy.asc", {"trivy_severity": "HIGH"}),
     "tailscale_node": ("debian/bookworm.noarmor.gpg", False, "hnx-tailscale.gpg",
                        {"tailscale_node_distribution": "Debian", "tailscale_node_release": "bookworm"}),
+    "docker_engine": ("debian/gpg", True, "hnx-docker.asc",
+                      {"docker_engine_distribution": "Debian", "docker_engine_release": "trixie"}),
 }  # fmt: skip
 
 
@@ -276,6 +284,7 @@ def test_the_pinned_fingerprints_are_the_vendor_keys():
         "wazuh_agent": ["0DCFCA5547B19D2A6099506096B3EE5F29111145"],  # Wazuh.com (Wazuh Signing Key)
         "tailscale_node": ["2596A99EAAB33821893C0A79458CA832957F5868"],  # Tailscale Inc. (Package repository signing key)
         "trivy": ["825AD9036F7C850E6A6FED4935B8ACA44FD9CA9F"],  # trivy-repo (Aqua Security) (aquasecurity/trivy-repo deb/public.key)
+        "docker_engine": ["9DC858229FC7DD38854AE2D88D81803C0EBFCD88"],  # Docker Release (CE deb) (download.docker.com/linux/debian/gpg)
     }  # fmt: skip
     for role, want in pins.items():
         d = yaml.safe_load((ANSIBLE / "roles" / role / "defaults" / "main.yml").read_text())

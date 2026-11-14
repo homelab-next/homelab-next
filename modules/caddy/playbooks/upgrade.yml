@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump of Caddy (caddy_target_image) or of the auth
+# proxy (caddy_auth_proxy_target_image), each tag and digest, export the ACME account and the
+# configuration first, then converge with the new pins (set caddy_image / caddy_auth_proxy_image to
+# the targets in the overlay).
+#   ansible-playbook -i <inventory> modules/caddy/playbooks/upgrade.yml -e caddy_target_image=<ref>
+- name: Upgrade the edge
+  hosts: mod_caddy_edge
+  become: true
+  tasks:
+    - name: Validate and record Caddy's bump
+      ansible.builtin.include_role:
+        name: caddy
+        tasks_from: upgrade
+      when: caddy_target_image is defined
+    - name: Validate and record the auth proxy's bump
+      ansible.builtin.include_role:
+        name: caddy_auth_proxy
+        tasks_from: upgrade
+      when: caddy_auth_proxy_target_image is defined
+    - name: Export the account and the configuration before the new image reads them
+      ansible.builtin.include_role:
+        name: caddy
+        tasks_from: export
+    - name: Converge Caddy on the new pin
+      ansible.builtin.include_role:
+        name: caddy
+      vars:
+        caddy_image: "{{ caddy_target_image | default(caddy_image) }}"  # caddy-lint: allow the role refuses a target that is not its repository pinned by tag and digest (upgrade hook)
+    - name: Converge the auth proxy on the new pin
+      ansible.builtin.include_role:
+        name: caddy_auth_proxy
+      vars:
+        caddy_auth_proxy_image: "{{ caddy_auth_proxy_target_image | default(caddy_auth_proxy_image) }}"  # caddy-lint: allow the auth proxy (oauth2-proxy), not Caddy; its role refuses an unpinned target

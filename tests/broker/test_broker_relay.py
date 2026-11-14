@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from conformance.fakes.jetstream_wire import FakeJetStreamWire
+from conformance.protocols.events import EventsError
 from homelabnext.broker import cli as broker_cli
 from homelabnext.broker.relay import (
     BROKER_SOURCE,
@@ -337,8 +338,214 @@ def provision(server: FakeJetStreamWire, *, max_bytes: int = 1 << 30) -> None:
         )
         assert made == [STREAM, f"{STREAM}_DLQ"]
         assert server.streams[f"{STREAM}_DLQ"].config["max_bytes"] == max_bytes // 4
+        # the evidence leaves only by the limits: no user may purge or delete a message
+        for name in made:
+            config = server.streams[name].config
+            assert config["deny_delete"] is True and config["deny_purge"] is True, name
     else:
         nj.make(wire=Wire(server), scratch=False, stream=STREAM, subject_prefix=PREFIX).close()
+
+
+def test_a_new_stream_can_refuse_rather_than_evict():
+    """Round 5: ``discard: new`` (and with it a per-subject cap) on a stream the provisioner
+    creates, so a full stream refuses a publish instead of evicting the evidence; the DLQ keeps
+    discarding old; a cap without ``discard: new`` is refused."""
+    server = FakeJetStreamWire()
+    made = nj.provision_streams(Wire(server), stream=STREAM, subject_prefix=PREFIX,
+                                max_bytes=1 << 20, discard="new", max_msgs_per_subject=1000)  # fmt: skip
+    assert made == [STREAM, f"{STREAM}_DLQ"]
+    cfg = server.streams[STREAM].config
+    assert cfg["discard"] == "new" and cfg["max_msgs_per_subject"] == 1000
+    assert cfg["discard_new_per_subject"] is True and cfg["deny_delete"] is True
+    assert server.streams[f"{STREAM}_DLQ"].config["discard"] == "old"
+    for bad in ({"discard": "oldest"}, {"max_msgs_per_subject": 10},
+                {"discard": "new", "max_msgs_per_subject": 0},
+                {"discard": "new", "max_msgs_per_subject": True}):  # fmt: skip
+        with pytest.raises(EventsError):
+            nj.provision_streams(Wire(FakeJetStreamWire()), stream=STREAM, subject_prefix=PREFIX,
+                                 max_bytes=1 << 20, **bad)  # fmt: skip
+
+
+def test_the_provisioner_checks_its_own_stream_bodies_before_sending():
+    """Round 7 (security F1): the server does not check a STREAM.CREATE body against any grant,
+    and a republish, mirror, sources or subject transform aimed at ``$JS.API.*`` turns the
+    stream into a JetStream client.  ``provision_streams`` checks every configuration it renders
+    before it sends one; a body carrying any of them (or lacking a deny flag) is refused."""
+    sent: list[tuple[str, dict]] = []
+
+    class Spy(Wire):
+        def request(self, subject, payload=b"", *, headers=None, timeout):
+            if ".STREAM.CREATE." in subject:
+                sent.append((subject, json.loads(payload)))
+            return super().request(subject, payload, headers=headers, timeout=timeout)
+
+    nj.provision_streams(Spy(FakeJetStreamWire()), stream=STREAM, subject_prefix=PREFIX,
+                         max_bytes=1 << 20, discard="new", max_msgs_per_subject=10)  # fmt: skip
+    assert [s for s, _ in sent] == [f"$JS.API.STREAM.CREATE.{STREAM}",
+                                    f"$JS.API.STREAM.CREATE.{STREAM}_DLQ"]  # fmt: skip
+    for _, body in sent:
+        nj.check_stream_config(body)  # what it rendered passes its own check
+    good = sent[0][1]
+    for bad in (
+        {**good, "republish": {"src": f"{PREFIX}.a", "dest": "$JS.API.STREAM.DELETE.X"}},
+        {**good, "mirror": {"name": "OTHER"}},
+        {**good, "sources": [{"name": "OTHER"}]},
+        {**good, "subject_transform": {"src": f"{PREFIX}.>", "dest": "$JS.API.>"}},
+        {**good, "subjects": ["$JS.API.STREAM.DELETE.X"]},
+        {**good, "subjects": ["_R_.>"]},
+        {**good, "deny_delete": False},
+        {k: v for k, v in good.items() if k != "deny_purge"},
+        # round 7 follow-up (N3): a literal prefix's ">" or a named stream's dead-letter
+        # advisory, nothing else (the docstring's promise, now the code's)
+        {**good, "subjects": [">"]},
+        {**good, "subjects": ["*.>"]},
+        {**good, "subjects": [f"{PREFIX}.*.>"]},
+        {**good, "subjects": [f"{PREFIX}.a"]},
+        {**good, "subjects": [f"{PREFIX}..>"]},
+        {**good, "subjects": []},
+        {k: v for k, v in good.items() if k != "subjects"},
+        {**good, "subjects": "hnx.>"},
+        {**good, "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.>"]},
+        {**good, "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.*.*"]},
+        {**good, "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.HNX.x"]},
+        {**good, "subjects": ["$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.HNX.*.>"]},
+    ):
+        with pytest.raises(EventsError):
+            nj.check_stream_config(bad)
+    nj.check_stream_config({**good, "subjects": [f"{PREFIX}.a.b.>"]})
+
+
+def test_the_provisioner_checks_every_body_before_creating_any(monkeypatch):
+    """Round 7 follow-up (N3): a refused dead-letter configuration is refused before the main
+    stream is created, not after it: no request at all is sent."""
+    sent: list[str] = []
+
+    class Spy(Wire):
+        def request(self, subject, payload=b"", *, headers=None, timeout):
+            sent.append(subject)
+            return super().request(subject, payload, headers=headers, timeout=timeout)
+
+    real = nj.check_stream_config
+
+    def refuse_the_dlq(config):
+        if config["name"].endswith("_DLQ"):
+            raise EventsError("refused")
+        real(config)
+
+    monkeypatch.setattr(nj, "check_stream_config", refuse_the_dlq)
+    with pytest.raises(EventsError):
+        nj.provision_streams(Spy(FakeJetStreamWire()), stream=STREAM, subject_prefix=PREFIX,
+                             max_bytes=1 << 20)  # fmt: skip
+    assert sent == []
+
+
+def test_a_client_account_names_its_calls_under_the_import_prefix():
+    """Round 5: a client of the events bus role lives in an account of its own that imports the
+    bus account's JetStream calls under ``JS.<account>.API``: with ``api_prefix`` every API call
+    the bus makes is named there (none under ``$JS.API``), its publishes and acks are not."""
+    server = FakeJetStreamWire()
+    provision(server)
+    seen = []
+
+    class Imported(Wire):
+        def request(self, subject, *a, **kw):
+            seen.append(subject)
+            return super().request(subject.replace("JS.HNX.API.", "$JS.API.", 1), *a, **kw)
+
+    bus = nj.make(wire=Imported(server), scratch=False, provision=False, stream=STREAM,
+                  subject_prefix=PREFIX, api_prefix="JS.HNX.API")  # fmt: skip
+    assert bus.publish("homelabnext.decision.returned", b"{}", msg_id="m-1") == 1
+    assert bus.api(f"STREAM.INFO.{STREAM}")["config"]["name"] == STREAM
+    assert [s.split(".")[:3] for s in seen if "API" in s] == [["JS", "HNX", "API"]] * 3
+    assert not [s for s in seen if s.startswith("$JS.API.")]
+    for bad in ("", "JS.*.API", "JS..API", "$JS.HNX.API", "JS.H NX"):
+        with pytest.raises(EventsError):
+            nj.make(wire=Imported(server), scratch=False, provision=False, stream=STREAM,
+                    subject_prefix=PREFIX, api_prefix=bad)  # fmt: skip
+
+
+def test_a_refused_default_api_call_names_the_prefix_to_pass():
+    """Round 6: a client of the events bus role left at the default ``$JS.API`` is refused its
+    first call (its account reaches JetStream under ``JS.<account>.API`` only); the error says
+    so.  NatsPyWire raises it (the pinned-server test in tests/roles drives the real path)."""
+    msg = nj.permission_denied("$JS.API.STREAM.INFO.HNX_BROKER")
+    assert msg.startswith("permission denied: publish $JS.API.STREAM.INFO.HNX_BROKER; ")
+    assert "on an events_bus-managed bus pass api_prefix JS.<account>.API" in msg
+    for other in (
+        "lab.homelabnext.decision.x",
+        "JS.HNX.API.STREAM.INFO.S",
+        "$JS.ACK.S.d.1.1.1.1.0",
+    ):
+        assert "api_prefix" not in nj.permission_denied(other), other
+
+
+def test_a_relay_at_the_default_api_prefix_logs_the_hint_and_holds_the_outbox(
+    tmp_path, caplog, monkeypatch
+):
+    """Round 7 (design B1): the refused ``$JS.API`` call is the connect's first stream lookup
+    (``make()``), so it reaches the relay as a CONNECT failure.  The relay logs the subject and
+    the prefix to pass (rebuilt from the subject: nothing else the error carries), keeps every
+    event in the outbox with backoff, and marks none undeliverable however long it lasts."""
+    monkeypatch.setenv("HNX_SECRET_EVENTS_BROKER", SECRET)
+    state, bus, clock = StateDir(tmp_path / "state"), Bus(), Clock()
+    ids = emit(state, 3)
+    real = bus.wire.request
+
+    def refusing(subject, payload=b"", *, headers=None, timeout):
+        if subject.startswith("$JS.API."):  # NatsPyWire's refusal, plus a tail that must not leak
+            raise nj.WireError(f"{nj.permission_denied(subject)} [{SECRET}@bus.invalid]",
+                               permanent=True)  # fmt: skip
+        return real(subject, payload, headers=headers, timeout=timeout)
+
+    bus.wire.request = refusing
+    stats = tmp_path / "relay-stats.json"
+    r = relay(state, bus, clock, max_attempts=1, max_undeliverable_run=1, stats_file=stats)
+    caplog.set_level(logging.DEBUG, logger="homelabnext.broker.relay")
+    run_until_idle(r, clock, 10)
+    assert bus.connects == 10 and r.failures == 10  # every pass retried the connect
+    hint = (
+        "connect failed (WireError): permission denied: publish $JS.API.STREAM.INFO.HNX; "
+        "on an events_bus-managed bus pass api_prefix JS.<account>.API"
+    )
+    assert hint in caplog.text and "events stay in the outbox" in caplog.text
+    assert SECRET not in caplog.text and "bus.invalid" not in caplog.text
+    # held, not drained: nothing undeliverable, every event still pending, in order
+    assert [e["id"] for e in pending(state)] == ids
+    assert RelayStore(state.root).count("undeliverable") == 0 and not r.holding
+    doc = json.loads(stats.read_text())
+    assert doc["state"] == "warn" and doc["pending"] == 3 and doc["undeliverable"] == 0
+    assert doc["last_error"].endswith("connect: WireError") and SECRET not in stats.read_text()
+    # any other permanent refusal is logged by its class alone, as before
+    caplog.clear()
+    bus.wire.request = real
+    bus.wire.down = True
+    clock.t = r.pause_until
+    r.pass_once()
+    assert "connect failed (WireError); retrying" in caplog.text and "api_prefix" not in caplog.text
+    # once the target names the prefix (here: the refusal gone), the outbox drains in order
+    bus.wire.down = False
+    clock.t = r.pause_until
+    assert r.pass_once() == 3 and [ev["id"] for _, ev, _ in bus.stored()] == ids
+
+
+def test_only_a_refused_api_call_is_logged_with_its_subject():
+    from homelabnext.broker.relay import _refused_api_call
+
+    def err(msg, permanent=True):
+        return nj.WireError(msg, permanent=permanent)
+
+    assert _refused_api_call(err(nj.permission_denied("$JS.API.STREAM.INFO.S"))) == (
+        nj.permission_denied("$JS.API.STREAM.INFO.S")
+    )
+    for other in (
+        err(nj.permission_denied("$JS.API.STREAM.INFO.S"), permanent=False),  # an outage
+        err(nj.permission_denied("lab.homelabnext.decision.x")),  # not an API call
+        err("permission denied: publish $JS.API.STREAM.INFO.S nats://u:p@h:4222"),  # not literal
+        err("permission denied: publish $JS.API.*"),
+        err("cannot connect: permission denied: publish $JS.API.STREAM.INFO.S"),  # not the start
+        ValueError("permission denied: publish $JS.API.STREAM.INFO.S"),  # no permanent flag
+    ):
+        assert _refused_api_call(other) is None, other
 
 
 def test_relay_cli_once(tmp_path, monkeypatch, capsys):
@@ -756,6 +963,32 @@ def test_the_adapter_marks_a_permission_violation_permanent():
     assert not err.value.permanent
     m = nj._PERMISSION_DENIED.search('nats: Permissions Violation for Publish to "a.b.c"')
     assert m and m.group(1) == "a.b.c"
+
+
+def test_a_denied_jetstream_api_call_is_permanent_though_nats_py_lowercases_it():
+    """Found live (round 4): nats-py hands the server's -ERR over lowercased
+    (``permissions violation for publish to "$js.api.consumer.create..."``), so a denied
+    ``$JS.API`` request timed out as an outage instead of a permanent refusal.  (The error
+    callback lives inside the connection; its lowering is checked in the source.)"""
+    w = object.__new__(nj.NatsPyWire)
+    w._denied = set()
+    subject = "$JS.API.CONSUMER.CREATE.HNXE2E.evil"
+    seen = []
+
+    def run(coro, timeout):
+        coro.close()
+        # what nats-py's error_cb receives: the -ERR text, lowercased
+        seen.append(f'nats: permissions violation for publish to "{subject.lower()}"')
+        m = nj._PERMISSION_DENIED.search(seen[-1])
+        w._denied.add(m.group(1).lower())
+        raise nj.WireError("no reply within 6.0s")
+
+    w._run = run
+    with pytest.raises(nj.WireError) as err:
+        w.request(subject, b"{}", timeout=5.0)
+    assert err.value.permanent
+    src = Path(nj.__file__).read_text()
+    assert "self._denied.add(m.group(1).lower())" in src
 
 
 def _nats_py_raises(error_name: str) -> nj.WireError:

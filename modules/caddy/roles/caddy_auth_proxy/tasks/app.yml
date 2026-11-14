@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app): one
+# container as its own user, every capability dropped, a read-only root filesystem, published on
+# the guest's address only.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    caddy_auth_proxy_app:
+      compose_app_name: caddy-auth-proxy
+      compose_app_dir: "{{ caddy_auth_proxy_dir }}"
+      compose_app_data_dir: "{{ caddy_auth_proxy_dir }}/data"
+      compose_app_export_dir: "{{ caddy_auth_proxy_dir }}/export"
+      compose_app_owner: "{{ caddy_auth_proxy_owner }}"
+      compose_app_group: "{{ caddy_auth_proxy_owner }}"
+      compose_app_start: "{{ caddy_auth_proxy_start }}"
+      compose_app_validate_with_docker: "{{ caddy_auth_proxy_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          auth-proxy:
+            image: "{{ caddy_auth_proxy_image_parts.repository }}"  # caddy-lint: allow the auth proxy (oauth2-proxy), not Caddy
+            tag: "{{ caddy_auth_proxy_image_parts.tag }}"
+            digest: "{{ caddy_auth_proxy_image_parts.digest }}"
+            user: "{{ caddy_auth_proxy_uid | int }}:{{ caddy_auth_proxy_gid | int }}"
+            read_only: true
+            environment: >-
+              {{ caddy_auth_proxy_fixed_env | combine({
+                   'OAUTH2_PROXY_OIDC_ISSUER_URL': caddy_auth_proxy_issuer_url,
+                   'OAUTH2_PROXY_CLIENT_ID': caddy_auth_proxy_client_id,
+                   'OAUTH2_PROXY_WHITELIST_DOMAINS': caddy_auth_proxy_sites | join(','),
+                   'OAUTH2_PROXY_COOKIE_EXPIRE': caddy_auth_proxy_cookie_expire}) }}
+            ports: ["{{ caddy_auth_proxy_bind }}:{{ caddy_auth_proxy_port | int }}:{{ caddy_auth_proxy_container_port }}"]
+            mem_limit: "{{ caddy_auth_proxy_mem_limit }}"
+            healthcheck:
+              test: [CMD, wget, -q, -T, "5", -O, /dev/null, "http://127.0.0.1:{{ caddy_auth_proxy_container_port }}/ping"]  # no-raw-endpoint: allow the container probes itself
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 20s
+  tags: [health, backup, restore, export, upgrade]

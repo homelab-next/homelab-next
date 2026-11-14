@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create the data and audit directories (the service account's alone)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ openbao_user }}"
+    group: "{{ openbao_group }}"
+    mode: "0700"
+  loop: ["{{ openbao_data_dir }}", "{{ openbao_audit_dir }}"]
+
+- name: Create the configuration directory (the files in it keep their own modes)
+  ansible.builtin.file:
+    path: "{{ openbao_config_dir }}"
+    state: directory
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_group }}"
+    mode: "0755"
+
+- name: Write the server configuration
+  ansible.builtin.template:
+    src: openbao.hcl.j2
+    dest: "{{ openbao_config_file }}"
+    owner: "{{ openbao_owner }}"
+    group: "{{ openbao_group }}"
+    mode: "0640"
+  register: openbao_config
+
+- name: Write the unit
+  ansible.builtin.template:
+    src: openbao.service.j2
+    dest: "{{ openbao_unit_dir }}/{{ openbao_service }}.service"
+    mode: "0644"
+  register: openbao_unit
+
+- name: Rotate the audit log (the server reopens it on SIGHUP)
+  ansible.builtin.template:
+    src: logrotate.j2
+    dest: "{{ openbao_logrotate_dir }}/{{ openbao_service }}"
+    mode: "0644"

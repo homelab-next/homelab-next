@@ -23,6 +23,7 @@ REG = sc.build_registry(ROOT)
 CURRENT = json.loads((ROOT / "schemas/platform/service.json").read_text())
 FROZEN_27 = json.loads((ROOT / "schemas/_frozen/2.7/platform/service.json").read_text())
 FROZEN_28 = json.loads((ROOT / "schemas/_frozen/2.8/platform/service.json").read_text())
+FROZEN_29 = json.loads((ROOT / "schemas/_frozen/2.9/platform/service.json").read_text())
 DOC = yaml.safe_load((ROOT / "examples/services.yml").read_text())
 
 
@@ -37,14 +38,15 @@ def _problems(doc):
 
 
 def test_version_is_2_8_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.8")
-    assert CURRENT == FROZEN_28
-    assert sc.is_additive(FROZEN_27, CURRENT) == []
+    assert FROZEN_28["$id"].endswith("/platform/service/2.8")
+    assert sc.is_additive(FROZEN_27, FROZEN_28) == []
+    assert sc.is_additive(FROZEN_28, FROZEN_29) == []
 
 
 def test_tlp_ceiling_validates_in_2_8_only_and_reaches_the_model():
     doc = _with_ceiling("green")
     assert sc.errors_for(CURRENT, doc, REG) == [] and _problems(doc) == []
+    assert sc.errors_for(FROZEN_28, doc, REG) == []
     assert sc.errors_for(FROZEN_27, doc, REG) != []
     assert build_registry(doc).by_capability("notify").tlp_ceiling == "green"
     assert build_registry(DOC).by_capability("notify").tlp_ceiling is None

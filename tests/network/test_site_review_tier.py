@@ -739,3 +739,85 @@ def test_every_change_to_a_lake_reader_ceiling_is_human():
         got = rt.scope_changes(base, {**base, **change})
         assert got and {c.tier for c in got} == {rt.HUMAN}, change
         assert all("TLP ceiling" in c.why or "catalog" in c.why for c in got), got
+
+
+# ---- the registry's standing, named field by field (ADR-0039 decision 8) --------------------
+
+REGISTRY = yaml.safe_load(paths.example_file("minimal", "services.yml").read_text())
+EVAL = {"tier": "eval", "until": "2026-12-31", "why": "the candidate under test"}
+
+
+def _registry(**rows) -> dict:
+    doc = copy.deepcopy(REGISTRY)
+    for name, row in rows.items():
+        if row is None:
+            del doc["services"][name]
+        else:
+            doc["services"][name] = row
+    return doc
+
+
+def _row(name: str, **edits) -> dict:
+    row = copy.deepcopy(REGISTRY["services"][name])
+    for k, v in edits.items():
+        if v is None:
+            row.pop(k, None)
+        else:
+            row[k] = v
+    return row
+
+
+def test_an_unchanged_registry_or_another_field_names_no_registry_field():
+    assert rt.registry_changes(REGISTRY, copy.deepcopy(REGISTRY)) == []
+    # a port change is human-approve through the file (TRUST_PATHS), not named here
+    assert rt.registry_changes(REGISTRY, _registry(events=_row("events", port=4223))) == []
+
+
+def test_a_standing_change_is_human():
+    before = _registry(events=_row("events", standing=EVAL))
+    after = _registry(events=_row("events", standing={**EVAL, "tier": "retiring"}))
+    assert tiers(rt.registry_changes(before, after)) == {"services.events.standing.tier": rt.HUMAN}
+    # adding a standing (demoting a primary) names the whole field
+    added = rt.registry_changes(REGISTRY, before)
+    assert tiers(added) == {"services.events.standing": rt.HUMAN}
+    assert added[0].why.startswith("added: the row's standing")
+
+
+def test_deleting_standing_is_human_it_promotes_the_row():
+    before = _registry(events=_row("events", standing=EVAL))
+    (c,) = rt.registry_changes(before, REGISTRY)
+    assert (c.field, c.tier) == ("services.events.standing", rt.HUMAN)
+    assert c.why.startswith("removed: ") and "deleting it promotes the row" in c.why
+
+
+def test_adding_or_removing_a_row_is_human():
+    row = _row("events", port=4223, standing=EVAL)
+    (c,) = rt.registry_changes(REGISTRY, _registry(**{"events-next": row}))
+    assert (c.field, c.tier) == ("services.events-next", rt.HUMAN)
+    assert c.why.startswith("added: a row added or removed: a new row is a primary by default")
+    (c,) = rt.registry_changes(REGISTRY, _registry(events=None))
+    assert (c.field, c.tier) == ("services.events", rt.HUMAN) and c.why.startswith("removed: ")
+
+
+def test_a_capability_or_replica_change_is_human():
+    after = _registry(dns=_row("dns", capability="dns-2", replica_of="dns"))
+    assert tiers(rt.registry_changes(REGISTRY, after)) == {
+        "services.dns.capability": rt.HUMAN,
+        "services.dns.replica_of": rt.HUMAN,
+    }
+
+
+def test_review_names_the_registry_fields_beside_the_file(lab):
+    root, _ = lab
+    _write(root, rt.REGISTRY, REGISTRY)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "the registry")
+    base = _git(root, "rev-parse", "HEAD")
+    _write(root, rt.REGISTRY, _registry(events=_row("events", standing=EVAL)))
+    (r,), _ = rt.review(root, base)
+    assert r.path == rt.REGISTRY and r.tier == rt.HUMAN
+    assert [c.field for c in r.changes] == [rt.REGISTRY, "services.events.standing"]
+    # a sealed or unreadable registry names no field: the file-level change stands alone
+    _write(root, rt.REGISTRY, "services: [unclosed\n")
+    (r,), _ = rt.review(root, base)
+    assert [c.field for c in r.changes] == [rt.REGISTRY]

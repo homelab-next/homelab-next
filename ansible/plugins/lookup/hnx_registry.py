@@ -17,7 +17,9 @@ registry) and defaults to ``https`` in a url; ``host`` and ``port`` are required
 for the field asked, and a row without one is refused by name.
 
 ``field='capability'`` is what the service provides (empty when the row does not say), so a role
-can refuse an id that resolves to the wrong kind of service.
+can refuse an id that resolves to the wrong kind of service.  ``field='public_hostname'`` is the
+name clients use for the service through the edge (the platform registry's ``public_hostname``),
+refused by name when the row has none.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ options:
     description: Logical service ids.
     required: true
   field:
-    description: One of host, port, url, capability.
+    description: One of host, port, url, capability, public_hostname.
     default: url
 """
 
@@ -43,9 +45,13 @@ options:
 class LookupModule(LookupBase):
     def run(self, terms, variables=None, **kwargs):
         field = kwargs.get("field", "url")
-        if field not in ("host", "port", "url", "capability"):
+        if field not in ("host", "port", "url", "capability", "public_hostname"):
             raise AnsibleLookupError(f"hnx_registry: unknown field '{field}'")
         path = (variables or {}).get("hnx_registry_file")
+        if isinstance(path, str) and "{{" in path and self._templar is not None:
+            # an inventory sets it relative to itself ("{{ inventory_dir }}/..."); a lookup is
+            # handed the variable as written, so it is templated here
+            path = self._templar.template(path)
         if not path:
             raise AnsibleLookupError(
                 "hnx_registry: inventory variable hnx_registry_file is not set"

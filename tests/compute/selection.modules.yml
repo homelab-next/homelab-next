@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# A module selection over this directory's guest fleet (fictional; tests/modules/test_apply.py): the
+# inventory target with --selection adds one mod_<module>_<host role> group per placed host role,
+# holding the guest its selection host references. Two instances of one provider on two guests
+# share their group; a feature on an external stand-in host gets none.
+profile: compute-apply
+hosts:
+  bus:
+    guest: guest:bus-core
+  lake:
+    guest: guest:lake-core
+  infer:
+    guest: guest:infer-core
+  collector-edge:
+    kind: external
+    capacity: {cpu: 1, memory_mb: 1024, disk_gb: 25}
+slots:
+  notify:
+    - {provider: example-siem-suite, instance: siem, placement: {suite: bus}}
+  object-store:
+    - {provider: example-object-store, instance: samples, placement: {store: lake}}
+    - {provider: example-object-store, instance: archive, placement: {store: infer}}
+  inference: [{provider: example-inference, instance: inference, placement: {server: infer}}]
+  log-pipeline: pass-through
+features:
+  external-collector:
+    placement: {edge: collector-edge, receiver: lake}

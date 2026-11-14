@@ -77,8 +77,10 @@ Not every layer is built at once. The first lab runs a small slice (operator dec
 2026-10-31; [build order](build-order.md), "The v0 slice"): the **registry and aliases**,
 **OpenBao** (secrets), the **lake** (Garage, Lakekeeper, Trino), **Sigma detections**, the
 **broker**, **notify**, the **status hub**, and **SSO** through Keycloak (ADR-0034, in flight).
-The LLM gateway is LiteLLM alone (ADR-0022, amended). Projects and tasks live in OpenProject
-only; the lessons, runbooks and invariants registers stay.
+The deployed LLM gateway is LiteLLM (ADR-0022, amended); the own gateway in `orchestrator/`
+(`orchestrator/cmd/gateway`, ADR-0038 and ADR-0026) replaces it at the gateway cutover.
+Projects and tasks live in OpenProject only; the lessons, runbooks and invariants registers
+stay.
 
 The rest keeps its contracts and code but not all of it blocks a merge: StackStorm is
 *experimental*, and Code Mode (layer 11), the strategy stack and the home-built projects store
@@ -153,6 +155,7 @@ every service is single node. See the README "Try it" section.
 | `metrics` | Prometheus, scraping itself, two always-firing rules | (status hub source) |
 | `uptime` | Uptime Kuma, provisioned headlessly with a public status page | (status hub source) |
 | `broker`, `status-hub`, `broker-edge` | `hnx broker serve` on a Unix socket, `hnx status serve` with the Approvals page, and the edge that drives them, each as its own uid (no alias for `broker`: it has no network) | `broker` (the end-to-end check below) |
+| `orchestration` | the controller built from `orchestrator/` with the exec runner running `/bin/sh` sessions (no model), job API authenticated | `orchestration` (the smoke submits a job and waits for it to finish) |
 
 The object store is Garage v2 (`dxflrs/garage:v2.5.0`). `lab_init.py` speaks Garage's admin API
 v2 (`/v2/<Operation>`: `GetNodeInfo`, `UpdateClusterLayout`, `ApplyClusterLayout`, `ImportKey`,
@@ -291,7 +294,7 @@ service as follows:
 
 | Lab service | Lab shortcut | Production replacement |
 |---|---|---|
-| `secrets` (OpenBao) | dev mode: in memory, no TLS, a known root token, starts unsealed | server mode with integrated (raft) storage, TLS, real unseal keys or auto-unseal, root token revoked after initialisation, short-lived per-client tokens |
+| `secrets` (OpenBao) | dev mode: in memory, no TLS, a known root token, starts unsealed | server mode with integrated (raft) storage, TLS, Shamir unseal shares held offline (ADR-0042 decision 6; no auto-unseal), root token revoked after initialisation, short-lived per-client tokens: the [`openbao` role](../ansible/roles/openbao/README.md) |
 | `object-store` (Garage) | known RPC secret and admin token, single node, plain HTTP | generated secrets from the secrets capability, replicated layout, TLS at the edge, admin API on the management zone only |
 | `postgres` | known password, `fsync=off` | generated password, `fsync` on, TLS, backups in the restore drill |
 | `lake-catalog` (Lakekeeper) | no authentication, known encryption key | OIDC through the IdP, encryption key from the secrets capability |
@@ -301,7 +304,8 @@ service as follows:
 | `inference`, `cases` | the project's fakes | the real inference server and case system behind the same aliases |
 | `metrics` (Prometheus) | no authentication, 2-hour retention, rules that always fire | the real metrics service with its own rules, behind the forward-auth proxy |
 | `uptime` (Uptime Kuma) | a known admin password, a public status page | a generated admin password, 2FA, behind the forward-auth proxy; only the monitors the hub should see on the public page |
-| `broker`, `status-hub`, `broker-edge` | a known front-door secret, an edge that asserts the approver's identity without a login, the example handlers | the systemd unit in [broker](broker.md#a-systemd-unit) with the operator's manifest and handlers, the hub behind Caddy, the auth proxy and the IdP (ADR-0034) with the front-door secret from the secrets capability |
+| `broker`, `status-hub`, `broker-edge` | a known front-door secret, an edge that asserts the approver's identity without a login, the example handlers | the systemd unit in [broker](broker.md#a-systemd-unit) with the operator's manifest and handlers (`ansible/playbooks/control_plane.yml`: [deploying with Ansible](broker.md#deploying-with-ansible)), the hub behind Caddy, the auth proxy and the IdP (ADR-0034) with the front-door secret from the secrets capability |
+| `orchestration` (the controller) | a known job API token, `/bin/sh` sessions, one backend name and no model | the example unit (`orchestrator/deploy/systemd/orchestrator.service`) with the site's runner, backends and tokens file, behind the gateway (docs/orchestration-controller.md) |
 
 ## Ansible host trust
 

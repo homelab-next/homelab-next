@@ -83,7 +83,7 @@ author: unknown
 
 <!-- hnx:gen:deps -->
 - Depends on: [inference](inference.md) ([[systems/inference|inference]])
-- Depended on by: [agent-runtime](agent-runtime.md) ([[systems/agent-runtime|agent-runtime]])
+- Depended on by: [orchestrator](orchestrator.md) ([[systems/orchestrator|orchestrator]])
 <!-- /hnx:gen -->
 
 <!-- hnx:todo:deps -->

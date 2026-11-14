@@ -7,6 +7,10 @@ summary_of: outline:sha256:0b473ec2dc9e7a63
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0001, ADR-0005, `detections/`
+- **Amended:** 2026-11-07 by ADR-0049 (decision 2): decision 4's native rule is allowed only when
+  Sigma cannot carry it, and a module's native detection names its engine and a `native_reason`
+  from a closed list (`engine-correlation`, `decoder`, `list-lookup`, `stock-override`)
+- **Amended-by:** ADR-0049
 
 ## Context
 

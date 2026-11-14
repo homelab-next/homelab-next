@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The secret store's data is its raft storage, encrypted by the barrier: a raft snapshot is the
+# application-consistent dump (ADR-0042 decision 2). It goes to openbao_backup_dir/raft.snap with a
+# manifest beside it, for the backup job to pick up. The snapshot is only as readable as the unseal
+# keys of the cluster that wrote it: losing the shares loses every snapshot too. It needs the
+# snapshot principal (snapshot.yml): read-only, it can save a snapshot and cannot restore one.
+- name: Take a raft snapshot into the backup directory
+  ansible.builtin.include_tasks:
+    file: snapshot.yml
+    apply:
+      tags: [backup]
+  vars:
+    openbao_snapshot_dir: "{{ openbao_backup_dir }}"
+    openbao_snapshot_name: raft.snap
+  tags: [backup]

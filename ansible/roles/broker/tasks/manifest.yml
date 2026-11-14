@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: Apache-2.0
+# The manifest and its handlers are checked together BEFORE either replaces the live ones: both
+# are staged under <config>/staged/ (manifest.yml and handlers/, so the staged manifest's
+# handlers/ paths resolve against the staged handlers, digests included), validated by
+# `hnx broker validate` with the release the broker runs, and only then copied over the live
+# handlers/ and manifest.yml. A manifest or handler that fails validation stops the play and
+# leaves the running broker's manifest, its handlers (and the broker) untouched. The staged
+# copies stay, so a re-run with nothing changed is changed=0. A handler no longer in
+# broker_handlers is removed from staged/handlers/ before the validation, and from handlers/ only
+# after the broker has restarted onto the new manifest (tasks/main.yml): until then the running
+# broker serves the previous manifest, which may still name it.
+- name: Create the staging directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ broker_config_owner }}"
+    group: "{{ broker_group }}"
+    mode: "0750"
+  loop:
+    - "{{ broker_config_dir }}/staged"
+    - "{{ broker_config_dir }}/staged/handlers"
+
+- name: Stage the handlers (scripts executable, documents read-only)
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ broker_config_dir }}/staged/handlers/{{ item | basename }}"
+    owner: "{{ broker_config_owner }}"
+    group: "{{ broker_group }}"
+    mode: "{{ '0640' if item is match('.*\\.(json|ya?ml)$') else '0750' }}"
+  loop: "{{ broker_handlers }}"
+  register: broker_handlers_staged
+
+# a handler dropped from broker_handlers must not stay beside the manifest that is validated, nor
+# among the live ones the broker can run
+- name: Find the staged handlers
+  ansible.builtin.find:
+    paths: "{{ broker_config_dir }}/staged/handlers"
+    file_type: any
+    hidden: true
+  register: broker_staged_found
+  check_mode: false  # read-only: it runs in --check too
+
+- name: Remove the staged handlers no longer listed
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ broker_staged_found.files | rejectattr('path', 'in', broker_handlers | map('basename') | map('regex_replace', '^', broker_config_dir ~ '/staged/handlers/') | list) | list }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: broker_staged_pruned
+
+- name: Stage the manifest beside them
+  ansible.builtin.copy:
+    src: "{{ broker_manifest }}"
+    dest: "{{ broker_config_dir }}/staged/manifest.yml"
+    owner: "{{ broker_config_owner }}"
+    group: "{{ broker_group }}"
+    mode: "0640"
+  register: broker_manifest_staged
+
+# in --check a changed manifest or handler is not staged (nothing is written), so there is
+# nothing new to validate; an unchanged set is validated as it stands
+- name: Note whether --check left anything unstaged
+  ansible.builtin.set_fact:
+    broker_staging_pending: "{{ ansible_check_mode and (broker_manifest_staged is changed or broker_handlers_staged is changed or broker_staged_pruned is changed) }}"
+
+- name: Validate the staged manifest and its handlers with the running release
+  ansible.builtin.command:
+    argv: ["{{ broker_hnx_bin }}", broker, validate, "{{ broker_config_dir }}/staged/manifest.yml"]
+  changed_when: false
+  check_mode: false  # read-only: it runs in --check too
+  when: not broker_staging_pending | bool
+
+- name: Install the validated handlers
+  ansible.builtin.copy:
+    src: "{{ broker_config_dir }}/staged/handlers/{{ item | basename }}"
+    dest: "{{ broker_config_dir }}/handlers/{{ item | basename }}"
+    remote_src: true
+    owner: "{{ broker_config_owner }}"
+    group: "{{ broker_group }}"
+    mode: "{{ '0640' if item is match('.*\\.(json|ya?ml)$') else '0750' }}"
+  loop: "{{ broker_handlers }}"
+  register: broker_handler_files
+  when: not broker_staging_pending | bool
+
+- name: Install the validated manifest
+  ansible.builtin.copy:
+    src: "{{ broker_config_dir }}/staged/manifest.yml"
+    dest: "{{ broker_config_dir }}/manifest.yml"
+    remote_src: true
+    owner: "{{ broker_config_owner }}"
+    group: "{{ broker_group }}"
+    mode: "0640"
+  register: broker_manifest_file
+  when: not broker_staging_pending | bool
+
+- name: Report the manifest and handlers as changing (--check, new ones are not staged)
+  ansible.builtin.set_fact:
+    broker_manifest_file: {changed: true}
+    broker_handler_files: {changed: true}
+  changed_when: true
+  when: broker_staging_pending | bool
+
+- name: Remove the previous layout's staged manifest
+  ansible.builtin.file:
+    path: "{{ broker_config_dir }}/manifest.yml.new"
+    state: absent

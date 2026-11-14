@@ -4,6 +4,7 @@
     hnx orchestration consume --db FILE --stream S --subject-prefix P [--durable NAME]
                               [--events-user U --events-password-secret secret:NAME]
                               [--events-ca-file F] [--events-allow-plaintext]
+                              [--events-api-prefix JS.<account>.API]
     hnx orchestration ingest --db FILE EVENTS.jsonl|-
     hnx orchestration turns --db FILE --turn-source none|MODULE:FACTORY [--gateway-url URL]
                             [--key secret:NAME] [--ca-file F] [--allow-plaintext] [--settle-s N]
@@ -58,7 +59,7 @@ from conformance.protocols.events import EventsError
 from conformance.protocols.inference import TurnSource, TurnSourceError
 from homelabnext.events.envelope import EventError
 
-from .model import CONTROLLER_SOURCE
+from .model import CONTROLLER_SOURCES
 from .store import DEFAULT_RETENTION_DAYS, STORE_ERRORS, TelemetryStore
 
 TURN_SOURCE_ENV = "HNX_ORCHESTRATION_TURN_SOURCE"
@@ -103,7 +104,9 @@ _FLAG_OPTIONS = {
 }
 #: the controller's service id(s), comma-separated, when --source is not given
 SOURCE_ENV = "HNX_ORCHESTRATION_SOURCE"
-REPLAY_S = 7 * 86400  # a new durable reads the last week, not only what arrives after it
+#: where the provisioner should start this consumer's durable (events_bus_durables replay_s): the
+#: last week, not only what arrives after it exists; the consumer itself creates no durable
+REPLAY_S = 7 * 86400
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -124,7 +127,7 @@ def _parser() -> argparse.ArgumentParser:
             default=None,
             metavar="svc:NAME",
             help="the controller's service id, the only source of job records (repeatable; "
-            f"default: ${SOURCE_ENV}, else {CONTROLLER_SOURCE})",
+            f"default: ${SOURCE_ENV}, else {','.join(CONTROLLER_SOURCES)})",
         )
 
     p = sub.add_parser("consume", help="drain agent.job.finished from the bus (one pass)")
@@ -143,6 +146,12 @@ def _parser() -> argparse.ArgumentParser:
         "--events-allow-plaintext",
         action="store_true",
         help="allow the NATS password over nats:// to a host that is not loopback (the lab only)",
+    )
+    p.add_argument(
+        "--events-api-prefix",
+        default="$JS.API",
+        help="where the consumer's account reaches JetStream: JS.<account>.API for a user of the "
+        "events bus role (its own account imports its calls; docs/broker.md, 'The bus ACL')",
     )
     p = sub.add_parser("ingest", help="store agent.job.finished events from a JSON-lines file")
     store_opts(p)
@@ -282,6 +291,11 @@ def _consume(a, store: TelemetryStore) -> int:
         return 2
     try:
         counts = drain(bus, store, durable=a.durable or DURABLE)
+    except (
+        nats_jetstream.NotProvisioned
+    ) as exc:  # no durable to bind to: configuration, not a fault
+        print(f"hnx orchestration consume: {exc}", file=sys.stderr)
+        return 2
     except EventsError as exc:  # a fetch or a settle on a bus that went away mid-pass
         print(f"hnx orchestration consume: the bus failed: {exc}", file=sys.stderr)
         return 1
@@ -295,16 +309,16 @@ def _consume(a, store: TelemetryStore) -> int:
 def _connect(nats_jetstream, a):
     return nats_jetstream.make(
         scratch=False,
-        provision=False,  # read the stream, manage the durable, nothing else
+        provision=False,  # read the stream, bind to the provisioner's durable, nothing else
         stream=a.stream,
         subject_prefix=a.subject_prefix,
         ack_wait=30.0,
-        replay_s=REPLAY_S,
         user=a.events_user,
         password_secret=a.events_password_secret,
         ca_file=a.events_ca_file,
         allow_plaintext=a.events_allow_plaintext,
         client_name="hnx-orchestration-telemetry",
+        api_prefix=a.events_api_prefix,
     )
 
 
@@ -543,7 +557,9 @@ def main(argv: Sequence[str] | None = None, *, clock: Callable[[], float] = time
     a = _parser().parse_args(argv)
     try:
         sources = a.source or [
-            s.strip() for s in os.environ.get(SOURCE_ENV, CONTROLLER_SOURCE).split(",") if s.strip()
+            s.strip()
+            for s in os.environ.get(SOURCE_ENV, ",".join(CONTROLLER_SOURCES)).split(",")
+            if s.strip()
         ]
         store = TelemetryStore(
             a.db,

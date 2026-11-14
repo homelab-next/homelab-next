@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/platform/gateway_config/1.0",
+  "x-draft": "ADR-0038 (proposed): the product-neutral LLM gateway config the lab's own gateway reads; not frozen, may change until ADR-0038 is accepted",
+  "title": "LLM gateway config",
+  "description": "gateway/gateway.json, rendered by `hnx gen gateway render` beside litellm/ from the same role table, profiles and gateway spec (ADR-0038 decision 1; docs/llm-gateway.md, 'The neutral gateway config'), and read by the lab's own gateway. It names roles, their ordered deployments, fallbacks and limits, the keys and what each may call, and the telemetry reader; secrets only as the environment variable names their secret: references map to, never a value. Unknown keys are refused at every level. The rules a schema cannot state (keys sorted with unique aliases and envs, every key role and fallback a role here, locality, TLP ceilings) are in homelabnext.generators.llm_gateway (audit).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "name",
+    "admin_key_env",
+    "roles",
+    "keys",
+    "telemetry_reader"
+  ],
+  "properties": {
+    "version": {
+      "description": "the contract version; a reader refuses another major",
+      "const": "1.0"
+    },
+    "name": {
+      "description": "the gateway spec's name (a slug), empty when the spec is unnamed",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^(?:[a-z][a-z0-9]*(?:-[a-z0-9]+)*)?$(?!\\n)"
+    },
+    "admin_key_env": {
+      "description": "the environment variable holding the admin key (the spec's master_key): it may call every role and /v1/usage, and its sending TLP ceiling is always red (no field)",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^HNX_SECRET_[A-Z0-9_]+$(?!\\n)"
+    },
+    "roles": {
+      "description": "role alias -> role; a request names the alias, never a backend model id",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "maxLength": 64,
+        "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/role"
+      }
+    },
+    "keys": {
+      "description": "the client keys, sorted by alias",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/key"
+      }
+    },
+    "conformance_only": {
+      "description": "true only in a config rendered with the renderer's test-only option (a conformance run against a fake); the gateway refuses to start on it unless run in conformance mode on loopback, and a lab render never carries it (omitted when false)",
+      "type": "boolean"
+    },
+    "telemetry_reader": {
+      "description": "the key that may call only GET /v1/usage (no model), or null",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key_env"
+          ],
+          "properties": {
+            "key_env": {
+              "description": "the environment variable holding the telemetry reader's key",
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^HNX_SECRET_[A-Z0-9_]+$(?!\\n)"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "label": {
+      "description": "a canonical TLP 2.0 label",
+      "enum": [
+        "clear",
+        "green",
+        "amber",
+        "amber+strict",
+        "red"
+      ]
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "max_context_tokens",
+        "tlp_ceiling",
+        "leaves_lab",
+        "deployments",
+        "fallbacks",
+        "limits",
+        "cost_per_1k_tokens"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "chat",
+            "embedding"
+          ]
+        },
+        "max_context_tokens": {
+          "description": "the role's context limit, or null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "tlp_ceiling": {
+          "description": "the role's TLP ceiling, chain-inclusive: homelabnext.modules.rules.role_ceiling over the role and its whole fallback chain (red unless a prompt can leave the lab through it); a request judged above it is refused",
+          "$ref": "#/$defs/label"
+        },
+        "leaves_lab": {
+          "description": "chain-inclusive: true when a prompt can leave the lab through the role or anywhere down its fallback chain (homelabnext.modules.rules.cloud_roles), not only through its own deployments",
+          "type": "boolean"
+        },
+        "deployments": {
+          "description": "tried in order, first to last",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/deployment"
+          }
+        },
+        "fallbacks": {
+          "description": "role aliases tried in order once every deployment failed; one level (a fallback's own fallbacks are not followed)",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+          }
+        },
+        "limits": {
+          "description": "one budget for the whole role across its deployments, or null",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/role_limits"
+            }
+          ]
+        },
+        "cost_per_1k_tokens": {
+          "description": "what limits.max_cost counts per 1000 tokens, or null",
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "backend",
+        "locality",
+        "protocol",
+        "base_url",
+        "model",
+        "api_key_env"
+      ],
+      "properties": {
+        "id": {
+          "description": "<role alias>-<n>, n from 1 in deployment order",
+          "type": "string",
+          "maxLength": 72,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-[1-9][0-9]*$(?!\\n)"
+        },
+        "backend": {
+          "description": "the backend's svc: name, without the prefix",
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+        },
+        "locality": {
+          "enum": [
+            "local",
+            "cloud"
+          ]
+        },
+        "protocol": {
+          "description": "openai: OpenAI-compatible chat and embeddings; anthropic: the Messages API (chat only)",
+          "enum": [
+            "openai",
+            "anthropic"
+          ]
+        },
+        "base_url": {
+          "description": "scheme, host and optional port; no path and no trailing slash (the gateway appends /v1/...)",
+          "type": "string",
+          "maxLength": 256,
+          "pattern": "^https?://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?$(?!\\n)"
+        },
+        "model": {
+          "description": "the backend's model id (never shown to a caller)",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:/-]+$(?!\\n)"
+        },
+        "api_key_env": {
+          "description": "the environment variable holding the upstream key, or null (no auth header)",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "description": "the upstream key's environment variable",
+              "type": "string",
+              "maxLength": 128,
+              "pattern": "^HNX_SECRET_[A-Z0-9_]+$(?!\\n)"
+            }
+          ]
+        }
+      }
+    },
+    "role_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "window_s",
+        "max_requests",
+        "max_tokens",
+        "max_cost"
+      ],
+      "properties": {
+        "window_s": {
+          "description": "the sliding window in seconds",
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_requests": {
+          "description": "requests per window, or null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "max_tokens": {
+          "description": "tokens per window, or null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "max_cost": {
+          "description": "cost per window (in the unit of cost_per_1k_tokens), or null",
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "key_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "window_s",
+        "max_requests",
+        "max_tokens"
+      ],
+      "properties": {
+        "window_s": {
+          "description": "the sliding window in seconds",
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_requests": {
+          "description": "requests per window, or null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "max_tokens": {
+          "description": "tokens per window, or null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      }
+    },
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alias",
+        "key_env",
+        "owner",
+        "data_tier",
+        "tlp_ceiling",
+        "roles",
+        "limits"
+      ],
+      "properties": {
+        "alias": {
+          "description": "the key's alias (an agent key: agent-<profile>)",
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+        },
+        "key_env": {
+          "description": "the environment variable holding the key's value",
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^HNX_SECRET_[A-Z0-9_]+$(?!\\n)"
+        },
+        "owner": {
+          "description": "profile:<id> for an agent key, else the alias",
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^(?:profile:)?[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+        },
+        "data_tier": {
+          "enum": [
+            "local-only",
+            "cloud-allowed"
+          ]
+        },
+        "tlp_ceiling": {
+          "description": "the key's sending TLP ceiling: a request to a role that leaves the lab is judged at least at it; a reader treats a missing or unknown label as red",
+          "$ref": "#/$defs/label"
+        },
+        "roles": {
+          "description": "sorted role aliases the key may call: its own and their fallback chains",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+          }
+        },
+        "limits": {
+          "description": "the key's own budget, or null (no cost per key in 1.0)",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/key_limits"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

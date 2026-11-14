@@ -417,11 +417,31 @@ def _defs() -> dict[str, Any]:
                     "description": "Default internal. internet-facing: only on a kind external role, or with the overlay's grants.internet_facing. isolated: no route to the lab and no egress, enforced by the generated network policy; it lands only on a host the site marks isolated.",
                 },
                 "footprint": ref("footprint"),
+                "guest": obj(
+                    {
+                        "capability": arr(
+                            ref("cap_ref"),
+                            "The guest's own capability (platform/guest capability) is one of these.",
+                            1,
+                        ),
+                        "baselines": arr(
+                            pat(SLUG, None, 40),
+                            "Every one of these is among the guest's baselines (platform/guest baseline.names, with what they extend when the guests' baseline set is read).",
+                            1,
+                        ),
+                    },
+                    desc="What the guest under this role must provide, judged when the site's host references a guest (hosts.<name>.guest, loader); on a stand-in host it is noted as not checked. Not on a kind external role (loader).",
+                    minProperties=1,
+                ),
                 "roles": arr(ref("role_ref"), "The module's own Ansible roles on this host."),
                 "purpose": text(200),
             },
             ["role", "kind", "footprint"],
             "A host or guest the module needs, by role, never by name.",
+            **{
+                "if": {"required": ["kind"], "properties": {"kind": {"const": "external"}}},
+                "then": {"not": {"required": ["guest"]}},
+            },
         ),
         "requires": obj(
             {
@@ -1431,6 +1451,11 @@ def module_selection_schema() -> dict[str, Any]:
     )
     host = obj(
         {
+            "guest": pat(
+                "guest:" + SLUG,
+                "The platform/guest record this host is (its id, guest:<name>). The loader reads the guest file (hnx modules check --guests DIR, or the overlay's lab/guests/) and derives kind, capacity and addresses from it, so they are not written here; it refuses an unknown or retired guest, a guest two hosts name, and a placed host role whose kind, footprint or guest requirements the guest does not meet.",
+                70,
+            ),
             "kind": {"enum": ["vm", "lxc", "host", "external"]},
             "isolated": {"type": "boolean"},
             "capacity": capacity,
@@ -1443,12 +1468,16 @@ def module_selection_schema() -> dict[str, Any]:
                     "allOf": [ref("scope_entry"), {"not": {"pattern": "/(?!(?:32|128)$)"}}],
                     "description": "One address: no prefix, or a full-length one (/32, /128).",
                 },
-                "The host's own addresses, what the egress generator (homelabnext.modules.egress) lets a module role reach on it and never counts as the internet. A stand-in, like capacity, until the loader reads them from the guest records and the network model (and refuses a mismatch). Private: documentation ranges in a public example.",
+                "The host's own addresses, what the egress generator (homelabnext.modules.egress) lets a module role reach on it and never counts as the internet. A stand-in, like capacity: a host that references a guest takes them from the guest record (network.ip and extra_addresses) instead. Private: documentation ranges in a public example.",
                 1,
             ),
         },
-        ["kind", "capacity"],
-        "A site host; capacity stands in for its platform/guest resources.",
+        desc="A site host: a reference to its platform/guest record (guest), or a stand-in that declares kind and capacity itself (an external host, or a host with no guest file). isolated, resources and headroom go with either form.",
+        **{
+            "if": {"required": ["guest"]},
+            "then": {"allOf": _not_kind("kind", "capacity", "addresses")},
+            "else": {"required": ["kind", "capacity"]},
+        },
     )
     choice = obj(
         {
@@ -1578,7 +1607,7 @@ def module_selection_schema() -> dict[str, Any]:
         "$id": BASE + "platform/module_selection/1.0",
         "x-draft": "ADR-0027 (proposed): read by the module loader (homelabnext.modules.loader) and at deploy time; not frozen until ADR-0027 is accepted after the pilot, so an overlay pins the core commit it is validated against",
         "title": "Module selection",
-        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
+        "description": "A site's selection of modules (docs/modules.md): hosts, providers per slot with placement, the slots served outside modules (incumbents), the required core slots not served yet (planned), feature, core and provider bindings, the grants a module cannot give itself and the site's network scope. In an overlay it is lab/modules.yml; the public example profiles are examples/modules/sites/.",
         "type": "object",
         "additionalProperties": False,
         "required": ["profile", "hosts", "slots"],
@@ -1595,6 +1624,53 @@ def module_selection_schema() -> dict[str, Any]:
                 "additionalProperties": {
                     "oneOf": [{"enum": ["none", "pass-through"]}, arr(choice, None, 1)]
                 },
+            },
+            "incumbents": {
+                "type": "object",
+                "propertyNames": pat(SLUG, None, 64),
+                "additionalProperties": obj(
+                    {
+                        "service": pat(
+                            "[a-z][a-z0-9-]{1,62}",
+                            "The core registry's row (lab/services.yml) that serves the slot: "
+                            "its primary for the slot's capability (loader).",
+                            63,
+                        ),
+                        "why": {
+                            **text(
+                                200,
+                                "What serves it outside modules (a core role, the old lab) and "
+                                "why: one line of printable text.",
+                            ),
+                            "pattern": TITLE_PATTERN,
+                        },
+                    },
+                    ["service", "why"],
+                ),
+                "description": "Slots served outside modules, by a core role or a lab's existing service (ADR-0027 decision 9): each names the registry row that serves it. An incumbent counts as selected for a required core slot and for a module that requires or prefers the slot; it is never a provider, an instance or an egress target. The slot must be in the slot registry and not also under slots; the row must exist, be the primary of the slot's capability (loader).",
+            },
+            "planned": {
+                "type": "object",
+                "propertyNames": pat(SLUG, None, 64),
+                "additionalProperties": obj(
+                    {
+                        "why": {
+                            **text(
+                                200,
+                                "What will serve the slot (a module, a cutover) and when: one "
+                                "line of printable text (check prints it).",
+                            ),
+                            "pattern": TITLE_PATTERN,
+                        },
+                        "review_by": {
+                            "type": "string",
+                            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$(?!\\n)",
+                            "description": "When the plan is next reviewed (YYYY-MM-DD, quoted in YAML so it stays a string). hnx modules check --deploy refuses the selection once it has passed (HNX_TODAY, else the local date).",
+                        },
+                    },
+                    ["why", "review_by"],
+                ),
+                "description": "Required core slots the site does not serve yet (ADR-0027 decision 9): a staged lab's honest 'not built'. A planned slot turns 'a required core slot has no provider' into a warning naming its why and review_by; it is not served, so it satisfies no requirement and is never a provider, an instance, an egress target or an upstream. The slot must be a required core slot of the slot registry, not also under slots or incumbents, with a real review_by date that a deploy's check refuses once passed (loader).",
             },
             "features": {"type": "object", "propertyNames": mid, "additionalProperties": binding},
             "core": {"type": "object", "propertyNames": mid, "additionalProperties": binding},

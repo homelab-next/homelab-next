@@ -27,6 +27,9 @@ from homelabnext.generators.safe import checked
 
 from ._text import HEADER
 
+#: one hypervisor node applies this output: ``hnx guests render --node`` may narrow it to one
+PER_NODE = True
+
 
 def resolve_addresses(fleet: Fleet, ref: str) -> list[str | None]:
     """A rule's ``any`` (``[None]``: no address match, either family), CIDR (as written), or

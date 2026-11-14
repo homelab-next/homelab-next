@@ -32,11 +32,16 @@ DRAFTS = {
     "platform/export_manifest.schema.json",
     "platform/module_inventory.schema.json",
     "platform/novelty_spec.schema.json",
+    "platform/gateway_config.schema.json",
+    "platform/orchestrator_profile.schema.json",
     "ocsf/novelty_finding.v1.json",
     "codemode/execution_request.schema.json",
     "codemode/execution_result.schema.json",
     "codemode/token.schema.json",
     "codemode/journal_step.schema.json",
+    "runner/session.schema.json",
+    "runner/usage_record.schema.json",
+    "runner/grants.schema.json",
 }
 
 
@@ -75,6 +80,7 @@ NEWER_THAN_1_0 = {
     "mcp_server.direct.yml": "platform/mcp_server 1.1: acts_via, direct_reason",
     "mcp_server.codemode.yml": "platform/mcp_server 1.2: class codemode",
     "mcp_server.labelled.yml": "platform/mcp_server 1.3: tlp",
+    "mcp_server.bound.yml": "platform/mcp_server 1.4: binds, root",
     "customization.full.maintained.json": "platform/customization 1.1: maintained_upstream",
 }
 

@@ -33,6 +33,7 @@ import pathlib
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
 from homelabnext.state import atomic_write_text
 
 from . import events as ev
@@ -205,7 +206,6 @@ def check_page(
 ) -> None:
     """Validate a docs/systems page's reviews (inline plus sidecar events plus ``new_events``):
     the review identity rules, and the policy's tiers when the page claims ``reviewed``."""
-    import yaml
 
     from homelabnext.reviews import ReviewError, evaluate, missing_message, require_policy
     from homelabnext.sop.pages import FRONT_RE, page_digest
@@ -215,7 +215,7 @@ def check_page(
     p = pathlib.Path(page_path)
     text = p.read_text(encoding="utf-8") if text is None else text
     m = FRONT_RE.match(text)
-    fm = yaml.safe_load(m["fm"]) if m else None
+    fm = _yaml_safe_load(m["fm"]) if m else None
     if not isinstance(fm, dict) or fm.get("type") != "system":
         raise RegisterError("system page", [f"{p.name}: not a docs/systems page"])
     problems: list[str] = []

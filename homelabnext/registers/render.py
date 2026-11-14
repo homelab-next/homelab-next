@@ -13,8 +13,7 @@ import html
 import json
 import pathlib
 
-import yaml
-
+from homelabnext._yaml import safe_load as _yaml_safe_load
 from homelabnext.identity import node_of
 from homelabnext.identity.numbers import sibling_key
 
@@ -54,7 +53,7 @@ code,pre{font-family:ui-monospace,monospace;font-size:.85rem;white-space:pre-wra
 
 
 def load_yaml(path):
-    return yaml.safe_load(pathlib.Path(path).read_text())
+    return _yaml_safe_load(pathlib.Path(path).read_text())
 
 
 def e(x) -> str:

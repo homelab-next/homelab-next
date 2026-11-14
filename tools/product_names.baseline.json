@@ -211,11 +211,6 @@
   "compose/lab-in-a-box/config/llm-gateway/litellm/": {
    "litellm": 1
   },
-  "compose/lab-in-a-box/config/llm-gateway/litellm/config.yaml": {
-   "example-27b": 1,
-   "example-4b": 1,
-   "litellm": 3
-  },
   "compose/lab-in-a-box/config/postgres/init/10-litellm.sh": {
    "litellm": 7
   },
@@ -420,21 +415,6 @@
   },
   "examples/registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.events/20261022T120001Z-review-agent-example-auditor.yml": {
    "openbao": 1
-  },
-  "examples/services.yml": {
-   "agentmetry": 9,
-   "caddy": 1,
-   "grafana": 1,
-   "minio": 3,
-   "nifi": 4,
-   "ntfy": 1,
-   "openbao": 1,
-   "prometheus": 4,
-   "stackstorm": 4,
-   "technitium": 1,
-   "trino": 1,
-   "uptime-kuma": 2,
-   "vllm": 1
   },
   "examples/status/roster.yml": {
    "stackstorm": 2
@@ -701,21 +681,6 @@
    "prometheus": 1,
    "technitium": 1,
    "trino": 1,
-   "vllm": 1
-  },
-  "schemas/platform/examples/service.valid.yml": {
-   "agentmetry": 9,
-   "caddy": 1,
-   "grafana": 1,
-   "minio": 3,
-   "nifi": 4,
-   "ntfy": 1,
-   "openbao": 1,
-   "prometheus": 4,
-   "stackstorm": 4,
-   "technitium": 1,
-   "trino": 1,
-   "uptime-kuma": 2,
    "vllm": 1
   },
   "schemas/platform/examples/site.port-mirror.yml": {
@@ -1250,7 +1215,7 @@
    "iceberg": 1,
    "litellm": 17,
    "prometheus": 3,
-   "stackstorm": 7,
+   "stackstorm": 6,
    "trino": 3,
    "uptime-kuma": 2
   },
@@ -1447,7 +1412,7 @@
   "tests/generators/test_llm_gateway.py": {
    "example-27b": 2,
    "example-4b": 1,
-   "litellm": 49,
+   "litellm": 46,
    "vllm": 1
   },
   "tests/golden/conftest.py": {
@@ -1845,10 +1810,10 @@
    "trino": 1
   },
   "tests/workflows/test_st2_bridge.py": {
-   "stackstorm": 28
+   "stackstorm": 27
   },
   "tests/workflows/test_workflows_st2.py": {
-   "stackstorm": 223
+   "stackstorm": 222
   },
   "tools/caddy_lint.py": {
    "caddy": 165
@@ -1874,9 +1839,6 @@
   "tools/tests/test_shared_helpers_lint.py": {
    "ntfy": 2,
    "trino": 1
-  },
-  "tools/tests/test_tls_verify_lint.py": {
-   "proxmox": 1
   },
   "tools/tests/test_workstation_refs.py": {
    "caddy": 1

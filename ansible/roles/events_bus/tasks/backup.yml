@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Write the backup manifest
+  ansible.builtin.copy:
+    dest: "{{ events_bus_config_dir }}/backup-manifest.json"
+    content: "{{ {'service': events_bus_logical_id, 'paths': [events_bus_store_dir, events_bus_config_dir],
+                  'note': 'stop hnx-events.service (or snapshot the filesystem) for a consistent JetStream store'} | to_nice_json }}\n"
+    mode: "0640"
+  tags: [backup]

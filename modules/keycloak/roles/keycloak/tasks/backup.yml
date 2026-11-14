@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths); the export first writes a consistent dump and the realm's export into it (export/), so a
+# restore never depends on the live cluster being caught between two writes.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read and check the rendered realm
+      ansible.builtin.include_tasks: realm.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Dump, export and list
+      ansible.builtin.include_tasks: dump.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: keycloak
+        compose_app_dir: "{{ keycloak_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ keycloak_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ keycloak_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ keycloak_app.compose_app_owner }}"
+        compose_app_group: "{{ keycloak_app.compose_app_group }}"
+        compose_app_spec: "{{ keycloak_app.compose_app_spec }}"
+  tags: [backup]

@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - caddy_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - caddy_image is match(caddy_pinned_ref_pattern)
+      # the guest's own IPv4 address: a hostname and all interfaces are refused
+      - caddy_bind is match(caddy_ipv4_pattern)
+      - caddy_bind != '0.0.0.0'
+      - caddy_port | int >= 1 and caddy_port | int <= 65535
+      - caddy_uid | int >= 1000 and caddy_gid | int >= 1000
+      - >-
+        [caddy_dir, caddy_data_root, caddy_install_dir, caddy_unit_dir, caddy_last_run_dir]
+        | reject('match', caddy_path_pattern) | list | length == 0
+      - caddy_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      caddy: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish
+      on (not all interfaces), a port, a container uid and gid of 1000 or more, absolute canonical
+      directories and a memory limit like 256m
+  tags: [health, backup, restore, export, upgrade]
+
+# One deployment's edge: the generator runs with --edge-host for every host named here and never
+# without one (it would render every public row of the registry, another deployment's too).
+- name: Validate the sites' inputs (one deployment, its own names)
+  ansible.builtin.assert:
+    that:
+      - caddy_registry is string and caddy_registry is match('^/')
+      - caddy_edge_hosts is sequence and caddy_edge_hosts is not string
+      - caddy_edge_hosts | length > 0
+      - caddy_edge_hosts | reject('match', '^[a-z][a-z0-9-]{0,62}\Z') | list | length == 0
+      - caddy_edge_hosts | unique | length == caddy_edge_hosts | length
+      - caddy_hnx_cli is sequence and caddy_hnx_cli is not string and caddy_hnx_cli | length > 0
+      - caddy_hnx_cli | reject('string') | list | length == 0
+      # the overlay's hnx and nothing else: an absolute path to an hnx entry point, or an
+      # absolute python running the homelabnext CLI module (the tests' form)
+      - >-
+        (caddy_hnx_cli | length == 1 and caddy_hnx_cli[0] is match('^(hnx|/[A-Za-z0-9_./-]*/hnx)\Z'))
+        or (caddy_hnx_cli | length == 3 and caddy_hnx_cli[0] is match('^/[A-Za-z0-9_./-]*/python3?(\.[0-9]+)?\Z')
+            and caddy_hnx_cli[1:] == ['-m', 'homelabnext.cli'])
+      - caddy_edge_tls_key_area is match('^[a-z][a-z0-9_-]*\Z')
+      - caddy_acme_domains is sequence and caddy_acme_domains is not string
+      - caddy_acme_domains | length > 0
+      - caddy_acme_domains | reject('match', caddy_name_pattern) | list | length == 0
+      - caddy_acme_domains | unique | length == caddy_acme_domains | length
+      - caddy_front_door_refs is sequence and caddy_front_door_refs is not string
+      - caddy_front_door_refs | reject('match', caddy_ref_pattern) | list | length == 0
+    fail_msg: >-
+      caddy: caddy_registry is the lab registry's absolute path on the controller,
+      caddy_edge_hosts the registry hosts of this deployment (one or more: the edge never renders
+      without them), caddy_hnx_cli the controller's hnx command as a list (an hnx entry point, or python -m
+      homelabnext.cli), caddy_edge_tls_key_area a secret-store area like caddy, caddy_acme_domains the
+      public names it serves (one or more, lower-case DNS names) and caddy_front_door_refs a list
+      of secret: references
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Validate the certificate's settings
+  ansible.builtin.assert:
+    that:
+      - caddy_acme_server is match('^https://[^\s?#@]+\Z')
+      - caddy_acme_email == '' or caddy_acme_email is match('^[A-Za-z0-9._+][A-Za-z0-9._+-]*@[A-Za-z0-9.-]+\Z')
+      - caddy_acme_dns_provider in caddy_acme_token_env
+      - caddy_acme_dns_ref is match(caddy_ref_pattern)
+      - caddy_acme_propagation_wait is match('^[1-9][0-9]{0,3}(s|m)\Z')
+      - caddy_acme_renew_days | int > 0 and caddy_acme_renew_days | int <= 45
+      - caddy_acme_health_min_days | int >= 0 and caddy_acme_health_min_days | int < caddy_acme_renew_days | int
+      - caddy_acme_key_type in ['EC256', 'EC384', 'RSA2048', 'RSA3072', 'RSA4096']
+      - caddy_acme_schedule is match('^[0-9*][0-9*:/,. -]*[0-9*] UTC\Z')
+      - caddy_acme_trust_bundle is match('^/[A-Za-z0-9._/-]+\Z')
+      - caddy_acme_on_failure == '' or caddy_acme_on_failure is match('^[A-Za-z0-9@_.:-]+\.service\Z')
+      - caddy_lego_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - caddy_lego_checksums_release == caddy_lego_version
+      - caddy_lego_checksums is mapping and caddy_lego_checksums | length > 0
+      - caddy_lego_checksums.values() | reject('match', '^[0-9a-f]{64}\Z') | list | length == 0
+      - caddy_lego_release_repository is match('^https://[^\s?#@]+\Z')
+    fail_msg: >-
+      caddy: the ACME settings are an https directory, an optional e-mail, a known DNS provider,
+      a secret: reference for its token, a wait like 30s, renewal days 1-45 above the health
+      margin, a key type, a calendar in UTC, a trust bundle path, an optional .service on failure
+      and a pinned lego (version, a sha256 per architecture, the checksums' release equal to it)
+  tags: [health, backup, restore, export, upgrade]

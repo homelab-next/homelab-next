@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# The broker as the production unit of docs/broker.md ("A systemd unit") and its outbox relay
+# ("Publishing events"), each under its own user: the broker answers on a Unix socket only and
+# holds the state and the agents' data root; the relay may read the outbox and write its own
+# markers, nothing else. The manifest and the handlers are the operator's (broker_manifest and
+# broker_handlers, files on the controller); secrets are references resolved at deploy time.
+broker_hnx_bin: /opt/hnx/bin/hnx
+# Changes the unit when the homelab-next release changes (role hnx_runtime's
+# hnx_runtime_release), so the service restarts onto it; empty: not tracked.
+broker_runtime_release: ""
+broker_user: hnx-broker
+broker_group: hnx-broker
+broker_clients_group: hnx-broker-clients
+# System users that are peers of the socket (each agent's user, the status hub's relay user):
+# created here when missing and put in broker_clients_group. The manifest maps them.
+broker_client_users: []
+broker_config_dir: /etc/hnx-broker
+broker_handlers: []
+broker_state_root: /var/lib/hnx-broker
+broker_data_root: /srv/agents
+broker_socket_dir: /run/hnx-broker
+broker_socket_mode: "660"
+# Handler secrets: {NAME: secret:<name>}, delivered as HNX_BROKER_SECRET_<NAME>.
+broker_secret_refs: {}
+# The Approvals page's URL in requests' events and pages (https://<hub>/approvals); empty: none.
+broker_approvals_url: ""
+# false: the broker (and every handler it runs) has no network at all (PrivateNetwork), which
+# serve itself never needs; true for handlers that reach other hosts or for ntfy pages.
+broker_network: false
+# The outbox relay (hnx broker relay) and its bus.
+broker_relay: true
+broker_relay_user: hnx-broker-relay
+broker_relay_group: hnx-broker-relay
+broker_relay_config_dir: /etc/hnx-broker-relay
+broker_relay_state_dir: /var/lib/hnx-broker-relay
+# The bus by its registry id (role-interface section 4: a role names other services by logical
+# id); its capability must be events. The endpoint defaults to that row's port on loopback: the
+# events bus listens on loopback only until it has a TLS listener (role events_bus), so the relay
+# runs beside it. A remote bus is tls://<host>:<port>, set here once that listener exists.
+broker_relay_events_id: events
+broker_relay_events_endpoint: "nats://127.0.0.1:{{ lookup('hnx_registry', broker_relay_events_id, field='port') | int }}"  # no-raw-endpoint: allow loopback, the bus has no TLS listener yet
+broker_relay_events_user: hnx-broker
+broker_relay_password_ref: ""
+broker_relay_ca_file: ""
+# Where the relay's bus account reaches JetStream: the events bus role puts every client in an
+# account of its own that imports its calls under JS.<events_bus_account>.API (docs/broker.md,
+# "The bus ACL"; the adapter's api_prefix).
+broker_relay_api_prefix: JS.HNX.API
+broker_relay_stream: ""
+broker_relay_subject_prefix: ""
+broker_relay_duplicate_window: 86400
+broker_backup_dir: /var/backups/hnx-broker
+broker_export_dir: /var/backups/hnx-broker/export
+broker_systemd_dir: /etc/systemd/system
+broker_start: true

@@ -53,7 +53,14 @@ This is ADR-0009's second sanctioned publish path (the first is the forwarder,
   with a swept id written later would be published again, as a new message.
 * **Nothing secret logged.**  Logs and stats name event ids, types and exception *classes*; never
   an event body, an endpoint or a credential (the bus credential is a secret name in the target
-  file, read from the environment when connecting).
+  file, read from the environment when connecting).  One exception, a subject: when the bus
+  refuses a ``$JS.API.*`` call for good (the connect's first stream lookup, made at the default
+  API prefix against the events bus role's account split), the log names that subject and the
+  prefix to pass (``connect failed (WireError): permission denied: publish $JS.API.STREAM.INFO.
+  <stream>; on an events_bus-managed bus pass api_prefix JS.<account>.API ...``), rebuilt from the
+  subject alone.  A connect failure is never an event's fault: every event stays in the outbox
+  (``last_error`` ``connect: WireError``) and the relay retries with backoff; none is marked
+  undeliverable.
 
 Every event keeps the broker's source, :data:`BROKER_SOURCE`, which the StackStorm bridge and the
 approved-run rule (A03) pin.  That pin means something only when nobody else can publish those
@@ -67,6 +74,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -97,6 +105,25 @@ ATTEMPTS = "attempts.json"
 #: how long delivered markers are kept once the broker pruned their outbox file (30 days)
 RETAIN_S = 30 * 86400.0
 _SWEEP_INTERVAL_S = 3600.0
+#: a permanent refusal of a JetStream API call (``NatsPyWire``: the message names the subject and,
+#: for ``$JS.API.*``, the API prefix to pass): the subject alone is taken from it, a literal one
+_REFUSED_API = re.compile(r"permission denied: publish (\$JS\.API\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){0,15})(?:;|\Z)")  # fmt: skip
+
+
+def _refused_api_call(exc: BaseException) -> str | None:
+    """For a permanent refusal of a ``$JS.API.*`` call (a client of the events bus role left at
+    the default API prefix, typically), the message to log: rebuilt from the subject alone
+    (:func:`~homelabnext.conform.adapters.nats_jetstream.permission_denied`, a fixed hint), so
+    nothing else the exception carries is ever logged.  None for anything else."""
+    if not getattr(exc, "permanent", False):
+        return None
+    m = _REFUSED_API.match(str(exc))
+    if m is None:
+        return None
+    from homelabnext.conform.adapters.nats_jetstream import permission_denied
+
+    return permission_denied(m.group(1))
+
 
 log = logging.getLogger("homelabnext.broker.relay")
 
@@ -403,6 +430,13 @@ class OutboxRelay:
         self.pause_until = self.clock() + delay
         # the exception's class only: a transport message may carry an endpoint or a credential
         self.last_error = f"{self.now()} {what}: {type(exc).__name__}"
+        refused = _refused_api_call(exc)
+        if refused is not None:
+            # a refused $JS.API call: the bus will refuse every retry until the relay's target
+            # changes; the rebuilt message names a subject and a fixed hint, nothing else
+            log.error("broker relay: %s failed (%s): %s; retrying in %.1fs, events stay in the "
+                      "outbox", what, type(exc).__name__, refused, delay)  # fmt: skip
+            return
         log.warning(
             "broker relay: %s failed (%s)%s; retrying in %.1fs",
             what,

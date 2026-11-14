@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Create the service group
+  ansible.builtin.group:
+    name: "{{ openbao_group }}"
+    system: true
+
+- name: Create the service account (no shell, no home of its own)
+  ansible.builtin.user:
+    name: "{{ openbao_user }}"
+    group: "{{ openbao_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ openbao_data_dir | dirname }}"
+    create_home: false

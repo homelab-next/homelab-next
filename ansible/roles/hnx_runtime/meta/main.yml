@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "homelab-next itself in a per-release virtualenv: a sha256-pinned wheel and the hash-locked dependencies of the same commit, <prefix>/bin/hnx for the units."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

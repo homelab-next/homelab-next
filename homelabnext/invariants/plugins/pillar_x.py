@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Pillar X - modularity. Eight criteria; five are checkable on a laptop, three need a server.
+"""Pillar X - modularity. The criteria here; X-02, X-07 and X-08 need a server.
 
     X-01  no raw endpoints outside the registry          (runs tools/no_raw_endpoints.py)
     X-02  registry completeness vs live listeners        SERVER (needs the live platform)
@@ -12,6 +12,8 @@
     X-07  every stateful product's export hook exercised SERVER (needs a restore drill)
     X-08  cutover-commit audit                           SERVER (needs a real cutover)
     X-11  product names only in their provider modules   (runs tools/product_name_lint.py)
+    X-12  no non-primary registry row past its ``until``  (``hnx registry standing --overdue``
+                                                         over each registry in the tree)
 
 X-09 (customizations) and X-10 (conformance has-a-passing-test) are registered through the
 ``homelabnext.invariants.checks`` entry-point group from
@@ -41,9 +43,11 @@ import sys
 
 import yaml
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
+
 from ..api import ERROR, FAIL, PASS, SKIP, Check, CheckResult, Context, Registry
 
-__all__ = ["SERVER_ONLY", "register", "x01", "x03", "x04", "x05", "x06", "x11"]
+__all__ = ["SERVER_ONLY", "register", "x01", "x03", "x04", "x05", "x06", "x11", "x12"]
 
 SERVER_ONLY = {
     "X-02": "registry rows vs live listeners needs the running platform",
@@ -68,6 +72,141 @@ def x01(ctx: Context) -> CheckResult:
 
 def x11(ctx: Context) -> CheckResult:
     return _tool_check(ctx, "tools/product_name_lint.py", [], "product names in place")
+
+
+#: directories X-12 never looks in: test fixtures and vendored or generated trees
+_X12_SKIP_DIRS = frozenset({"tests", "node_modules", "__pycache__", "dist", "build"})
+_X12_SKIPPED = "hidden directories, " + ", ".join(sorted(_X12_SKIP_DIRS))
+
+
+def _is_registry_doc(text: str) -> bool | None:
+    """Whether a YAML (or JSON) text is a registry: its top level is a mapping with the key
+    ``registry_version``, however the key is spelled (plain, quoted, flow, ``? key``) and
+    including through a merge key (``<<: {...}``, ``<<: *anchor`` or a list of them), as the
+    registry loader reads it.  Read by composing the node graph only, so no value is constructed
+    and an alias is never expanded.  None when it is not one YAML document: the caller cannot
+    tell, and fails closed."""
+    try:
+        node = yaml.compose(text, Loader=yaml.SafeLoader)
+        return "registry_version" in _top_keys(node, set())
+    except yaml.YAMLError:
+        return None
+    except RecursionError:  # nested (or merged) too deeply to read: cannot be told either
+        return None
+
+
+def _top_keys(node: object, seen: set[int]) -> set[str]:
+    """The scalar keys of a mapping node, those a merge key brings in included (a merged mapping,
+    an alias to one, or a sequence of them); ``seen`` stops an anchor cycle."""
+    if not isinstance(node, yaml.MappingNode) or id(node) in seen:
+        return set()
+    seen.add(id(node))
+    keys: set[str] = set()
+    for k, v in node.value:
+        if not isinstance(k, yaml.ScalarNode):
+            continue
+        if k.tag == "tag:yaml.org,2002:merge":
+            for m in v.value if isinstance(v, yaml.SequenceNode) else [v]:
+                keys |= _top_keys(m, seen)
+        else:
+            keys.add(k.value)
+    return keys
+
+
+_X12_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _registries(root: pathlib.Path) -> tuple[list[pathlib.Path], list[str]]:
+    """(the registries a tree holds, the paths it refused to read).
+
+    A registry is a ``services.yml`` (at any depth) whose top level declares
+    ``registry_version`` (read from the parsed top-level keys, :func:`_is_registry_doc`); a
+    module's registry fragment, which has none, is not one, and one that does not parse is
+    refused.  The walk
+    follows no symbolic link and skips hidden directories and :data:`_X12_SKIP_DIRS`.  A
+    ``services.yml`` that is a symbolic link, resolves outside the tree, is no regular file or is
+    over the size cap is refused (named, never read), so the check cannot be pointed at a file
+    outside the repository."""
+    import os
+
+    root_real = root.resolve()
+    found: list[pathlib.Path] = []
+    refused: list[str] = []
+    for d, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = sorted(x for x in dirs if not x.startswith(".") and x not in _X12_SKIP_DIRS)
+        if "services.yml" not in files:
+            continue
+        p = pathlib.Path(d) / "services.yml"
+        rel = p.relative_to(root).as_posix()
+        if p.is_symlink() or not p.resolve().is_relative_to(root_real) or not p.is_file():
+            refused.append(f"{rel}: a symbolic link or no regular file inside the tree")
+            continue
+        if p.stat().st_size > _X12_MAX_BYTES:
+            refused.append(f"{rel}: over {_X12_MAX_BYTES} bytes")
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            refused.append(f"{rel}: {type(exc).__name__}")
+            continue
+        is_reg = _is_registry_doc(text)
+        if is_reg is None:
+            refused.append(
+                f"{rel}: cannot be read as one YAML document, so it cannot be told from a registry"
+            )
+        elif is_reg:
+            found.append(p)
+    return sorted(found), refused
+
+
+def x12(ctx: Context) -> CheckResult:
+    """ADR-0039 decision 8: an ``eval`` that never ends, or a ``retiring`` row nobody removed,
+    turns red here instead of lingering.  The date is ``HNX_TODAY``, else the local date: the
+    same rule as ``hnx registry standing --overdue``, through the same code.  Every registry is
+    judged; one that cannot be read or validated is named with its error type only (no content
+    of the file reaches the evidence)."""
+    from homelabnext.registry import model, standing
+
+    paths, errors = _registries(ctx.root)
+    if not paths and not errors:
+        return CheckResult(
+            SKIP,
+            f"no registry (services.yml with registry_version) in this tree (not searched: "
+            f"{_X12_SKIPPED})",
+        )
+    try:
+        on = standing.today()
+    except ValueError:
+        return CheckResult(ERROR, "HNX_TODAY is not a YYYY-MM-DD date")
+    when = on.isoformat() + (" (HNX_TODAY)" if standing.overridden() else "")
+    late, rows = [], 0
+    for path in paths:
+        rel = path.relative_to(ctx.root).as_posix()
+        try:
+            reg = model.load(path)
+        except model.RegistryError as exc:  # unreadable or invalid: this check cannot judge it
+            errors.append(f"{rel}: {type(exc).__name__}")
+            continue
+        found = standing.standings(reg, on)
+        rows += len(found)
+        late += [
+            f"{rel}: {r.row} ({r.tier} {r.capability}) "
+            + (f"invalid until {r.until}" if not r.valid else f"until {r.until}")
+            for r in found
+            if r.overdue
+        ]
+    unjudged = f"; could not judge: {'; '.join(errors)}" if errors else ""
+    if late:
+        return CheckResult(
+            FAIL, (f"past their until on {when}: " + "; ".join(late) + unjudged)[:600]
+        )
+    if errors:
+        return CheckResult(ERROR, f"could not judge on {when}: {'; '.join(errors)}"[:600])
+    return CheckResult(
+        PASS,
+        f"{len(paths)} registr{'y' if len(paths) == 1 else 'ies'}, {rows} non-primary row(s) in "
+        f"date on {when} (not searched: {_X12_SKIPPED})",
+    )
 
 
 def x05(ctx: Context) -> CheckResult:
@@ -103,8 +242,8 @@ def _load(path: pathlib.Path):
         m = _FRONTMATTER.match(text)
         if m is None:
             raise ValueError(f"{path}: no YAML frontmatter")
-        return yaml.safe_load(m.group(1))
-    return yaml.safe_load(text)
+        return _yaml_safe_load(m.group(1))
+    return _yaml_safe_load(text)
 
 
 def _build_registry(schemas: list[pathlib.Path]):
@@ -280,7 +419,7 @@ def _det_map(root: pathlib.Path) -> tuple[str, dict] | None:
     for cand in DET_MAPS:
         mp = root / cand
         if mp.exists():
-            return cand, yaml.safe_load(mp.read_text()) or {}
+            return cand, _yaml_safe_load(mp.read_text()) or {}
     return None
 
 
@@ -320,5 +459,6 @@ def register(reg: Registry) -> None:
     reg.register(
         Check("X-11", "product names only in their provider modules, site config and prose", x11)
     )
+    reg.register(Check("X-12", "no non-primary registry row is past its until", x12))
     for id_ in SERVER_ONLY:
         reg.register(Check(id_, SERVER_ONLY[id_], _server(id_)))
