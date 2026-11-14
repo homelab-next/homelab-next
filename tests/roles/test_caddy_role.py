@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import _invocation, run_role
+from rolerun import _invocation, calls, fake, run_role
 
 from homelabnext.edge_identity import AUTH_PROXY_COOKIE
 
@@ -93,6 +93,70 @@ def run_steps(tmp_path: Path, role: str, steps: list[str], extra: dict, env: dic
 
 
 # ----------------------------------------------------------------------------- caddy
+
+# a systemctl that keeps a timer's state in two files: `enable --now` writes both, `disable --now`
+# removes them, and the is-* queries answer from them (every call is logged)
+FAKE_SYSTEMCTL = r"""
+import os, sys
+a = sys.argv[1:]
+open(LOG, "a").write("systemctl " + " ".join(a) + "\n")
+en, act = STATE + ".enabled", STATE + ".active"
+if a[0] == "enable":
+    open(en, "w").close()
+    if "--now" in a:
+        open(act, "w").close()
+elif a[0] == "disable":
+    for f in (en, act):
+        os.path.exists(f) and os.unlink(f)
+elif a[0] == "is-enabled":
+    print("enabled" if os.path.exists(en) else "disabled")
+    sys.exit(0 if os.path.exists(en) else 1)
+elif a[0] == "is-active":
+    print("active" if os.path.exists(act) else "inactive")
+    sys.exit(0 if os.path.exists(act) else 3)
+"""
+
+
+def test_the_acme_timer_is_enabled_and_started_on_every_run_not_only_when_its_units_change(
+    tmp_path,
+):
+    """The renewal timer was enabled only when its unit files changed, so a timer disabled by hand
+    stayed off and the certificate stopped renewing unnoticed.  The role now reads the timer on
+    every run and runs `enable --now` only when it is not both enabled and active: a converged host
+    runs nothing (changed=0), a timer disabled by hand is enabled and started again, one merely
+    stopped is started, and a changed unit gets its daemon-reload first."""
+    body = FAKE_SYSTEMCTL.replace("LOG", repr(str(tmp_path / "calls.log"))).replace(
+        "STATE", repr(str(tmp_path / "timer"))
+    )
+    v = {
+        "caddy_systemctl_cli": fake(tmp_path / "systemctl", body),
+        "caddy_acme_units": {"changed": False},
+    }
+    enabled, started = tmp_path / "timer.enabled", tmp_path / "timer.active"
+
+    def run(**kw):
+        (tmp_path / "calls.log").unlink(missing_ok=True)
+        r = run_role(tmp_path, CADDY, "acme_timer", {**v, **kw})
+        assert r.returncode == 0, r.stdout + r.stderr
+        return r, [c for c in calls(tmp_path) if not c.startswith("systemctl is-")]
+
+    r, acts = run()  # never started, units unchanged (the first run failed after writing them)
+    assert acts == ["systemctl enable --now hnx-caddy-acme.timer"] and "changed=1" in r.stdout
+    assert enabled.exists() and started.exists()
+    r, acts = run()  # converged: reads only
+    assert acts == [] and "changed=0" in r.stdout, r.stdout
+    enabled.unlink()
+    started.unlink()  # disabled by hand
+    r, acts = run()
+    assert acts == ["systemctl enable --now hnx-caddy-acme.timer"] and started.exists()
+    started.unlink()  # stopped by hand, still enabled
+    r, acts = run()
+    assert acts == ["systemctl enable --now hnx-caddy-acme.timer"] and started.exists()
+    r, acts = run(caddy_acme_units={"changed": True})  # new units: reload, then enable
+    assert acts == ["systemctl daemon-reload", "systemctl enable --now hnx-caddy-acme.timer"]
+    r, acts = run()
+    assert acts == [] and "changed=0" in r.stdout
+
 
 def test_the_health_check_reads_the_sign_in_redirect_encoded_or_not_but_only_to_its_own_site(
     tmp_path,
