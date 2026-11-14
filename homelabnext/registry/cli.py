@@ -137,8 +137,8 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             default=None,
             metavar="HOST",
             help="a registry host of this deployment (repeatable): the edge generator renders "
-            "only the public rows on these hosts and refuses any dial outside them, so one lab's "
-            "edge never proxies to another's (default: every public primary)",
+            "only the public rows on these hosts and refuses any dial outside them; the IdP realm "
+            "renders only auth=idp clients on these hosts (default: each generator's usual output)",
         )
         p.add_argument(
             "--reserved-username",

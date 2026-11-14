@@ -44,10 +44,33 @@
   loop: [service, timer]
   register: clamav_units
 
-- name: Reload systemd and enable the timer when the units changed
+- name: Ask whether the clamav timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ clamav_systemctl_cli }}", is-enabled, hnx-clamav.timer]
+  register: clamav_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the clamav timer is started
+  ansible.builtin.command:
+    argv: ["{{ clamav_systemctl_cli }}", is-active, hnx-clamav.timer]
+  register: clamav_timer_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
   ansible.builtin.command:
     argv: "{{ [clamav_systemctl_cli] + item }}"
-  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-clamav.timer']] if clamav_units is changed else [] }}"
+  vars:
+    clamav_timer_owed: >-
+      {{ clamav_units is changed
+         or clamav_timer_enabled.stdout | default('') | trim != 'enabled'
+         or clamav_timer_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if clamav_units is changed else [])
+       + ([['enable', '--now', 'hnx-clamav.timer']] if clamav_timer_owed | bool else []) }}
   loop_control:
     label: "{{ item | join(' ') }}"
   changed_when: true

@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from homelabnext._version import VERSION
+from homelabnext.registry.model import listener_clashes
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
@@ -322,22 +323,6 @@ def metrics_mismatches(doc: dict, src: str = "<registry>") -> list[str]:
         if path in fact.get("not", ()) or (allowed is not None and path not in allowed):
             out.append(f"{where}: metrics path {path} is not served")
     return out
-
-
-def listener_clashes(doc: dict, src: str = "<registry>") -> list[str]:
-    """Two listeners (service ports and metrics ports) on one host, port and transport."""
-    seen: dict[tuple, list[str]] = defaultdict(list)
-    for name, s in sorted((doc.get("services") or {}).items()):
-        transport = "udp" if s.get("protocol") == "udp" else "tcp"
-        seen[(s["host"], transport, s["port"])].append(name)
-        m = s.get("metrics")
-        if m and m.get("port") not in (None, s["port"]):
-            seen[(s["host"], "tcp", m["port"])].append(f"{name} metrics")
-    return [
-        f"{src}: {host} {transport}/{port} is claimed by {', '.join(sorted(names))}"
-        for (host, transport, port), names in seen.items()
-        if len(names) > 1
-    ]
 
 
 def _registries() -> list[tuple[str, dict]]:

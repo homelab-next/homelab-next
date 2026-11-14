@@ -5,18 +5,18 @@
 # unseals, or touches an unseal share or a root token (README.md, "What the role never does").
 #
 # The release lab-in-a-box pins (compose/lab-in-a-box/docker-compose.yml, service `secrets`);
-# tools/tests/test_pin_consistency.py holds the two equal. 2.7.1 was published 2026-10-01.
-openbao_version: "2.7.1"
+# tools/tests/test_pin_consistency.py holds the two equal. 2.7.2 was published 2026-10-26.
+openbao_version: "2.7.2"
 # sha256 of the release archive per CPU architecture. Taken from the release's checksums.txt after
 # checking its detached signature (checksums.txt.gpgsig) against the project's release key,
 # primary fingerprint 66D15FDD87287219C8E15478D200CD702853E6D0 (openbao-gpg-pub-20240618.asc).
 # The upgrade entry point takes the next release's pair the same way (README.md, "Upgrading").
 openbao_checksums:
-  amd64: "0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243"
-  arm64: "2b3807d90f224df05d4fe1fdede7f052d2227596c648a56bd291381f8fd01840"
+  amd64: "582b1f3c2fdc5afd443b2d57a225ef654de75adea609fdb66731fd582a9cbc96"
+  arm64: "5b97bf816fa820e5e521abec1db19c6161fcca2f666cf4a84e335089c0e83edd"
 # The release the checksums above were taken for. validate refuses it unequal to openbao_version,
 # so moving the version without its checksums (or the reverse) fails before anything is fetched.
-openbao_checksums_release: "2.7.1"
+openbao_checksums_release: "2.7.2"
 # Where the release archives are fetched from (<repository>/v<version>/<archive>); a mirror must
 # serve byte-identical archives, since the checksum above is checked either way.
 openbao_release_repository: "https://github.com/openbao/openbao/releases/download"
