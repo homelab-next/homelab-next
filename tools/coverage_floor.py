@@ -105,11 +105,16 @@ EXPERIMENTAL_CODE: frozenset[str] = frozenset(p for c in experimental.load() for
 
 
 def _cov_target(unit: str) -> str:
-    """What ``--cov`` measures for a unit: its package or module, or (a tool, not importable as
-    a package) the directory it lives in, which ``per_unit`` then narrows to the file."""
-    if unit.startswith("homelabnext/"):
-        return unit.removesuffix(".py").replace("/", ".")
-    return Path(unit).parent.as_posix()
+    """What ``--cov`` measures for a unit: a directory, never a dotted module name: the unit's
+    own directory for a package, else the directory its file lives in, which ``per_unit`` then
+    narrows to the file.  A dotted name makes coverage import the package before the tests run
+    to find its files, then drop what that import added to ``sys.modules``: a package attribute
+    set by that import (``homelabnext.tlp`` once ``homelabnext.registry`` imports it) is left
+    naming a discarded module, and the tests see two copies of one module (two ``Label``
+    types)."""
+    if unit.endswith(".py"):
+        return Path(unit).parent.as_posix()
+    return unit.rstrip("/")
 
 
 def groups(units: dict[str, tuple[str, ...]] = UNITS) -> dict[tuple[str, ...], list[str]]:

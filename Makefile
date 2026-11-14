@@ -25,6 +25,7 @@ help:
 	@echo "invariants register, fast criteria, never pages (not in check; CI runs it): invariants"
 	@echo "lab-in-a-box (needs docker with compose): lab-up lab-down lab-smoke lab-broker"
 	@echo "live (needs a real model endpoint): injection-eval MODEL=<role> REGISTRY=<file> ROLES=<file>; models-eval REGISTRY=<file>; models-canary REGISTRY=<file> ROLE=<role>"
+	@echo "Go (needs a Go toolchain; CI's go job runs it): controller-check orchestration-conformance"
 	@echo "override RUFF=/path/to/ruff if ruff is not importable as a module"
 
 check: lint component-tests hermetic-lint test schemas gates decide-lint decide-safety models-check agent-lint prompts-lint injection-check workflows scripts-check detections registers ids-check conform-check spdx leak-scan changelog-check
@@ -81,6 +82,8 @@ CODEMODE_GOLDEN := homelabnext/golden/examples/codemode/report.json
 gates:
 	$(PY) $(ENDPOINT_GATE) .
 	$(PY) tools/product_name_lint.py .
+	$(PY) tools/yaml_loader_lint.py .
+	$(PY) tools/allowlist_ratchet.py .
 	$(PY) $(ROLE_LINT) $(ROLES)
 	$(PY) $(ROLE_LINT) --playbook $(PLAYBOOKS) --inventory ansible/inventory/example/hosts.yml
 	$(PY) -m homelabnext.cli custom check
@@ -188,6 +191,37 @@ gateway-check:
 	$(PY) -m homelabnext.cli gen gateway render $(GATEWAY_SPEC) $(dir $(GATEWAY_SPEC)) --check
 	$(PY) -m homelabnext.cli gen gateway render $(CONFORMANCE_GATEWAY)/gateway.yml $(CONFORMANCE_GATEWAY) --conformance --check
 	$(PY) -m homelabnext.cli gen gateway render $(ORCH_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway --check
+
+# consumers bind only to a primary (ADR-0039 decision 3): the example registry's upstreams, the
+# role table, the evaluation report's canary bindings, every workflow pack, the example gateway
+# specs and each reference site's requires through its selection (docs/interfaces.md, "Registry
+# and naming")
+BINDINGS_GATEWAYS := $(GATEWAY_SPEC) $(CONFORMANCE_GATEWAY)/gateway.yml $(ORCH_GATEWAY)/gateway.yml
+.PHONY: bindings-check
+check: bindings-check
+bindings-check:
+	for site in examples/modules/sites/*.yml; do \
+	  $(PY) -m homelabnext.cli registry bindings examples/services.yml --reference-examples \
+	    --roles $(MODEL_ROLES) \
+	    --eval-report $(MODEL_EVAL) --packs workflows/packs \
+	    $(foreach g,$(BINDINGS_GATEWAYS),--gateway $(g)) \
+	    --site "$$site" --modules examples/modules || exit 1; \
+	done
+
+# the Go loader's judgement of the controller's fictional example configuration (ADR-0026 decision
+# 17): its profiles, their grants against the catalog, the registers, the runner and the pool,
+# with no database, port, network or secret read. CI's go job runs it; it needs a Go toolchain.
+# the orchestration suite, strict, against the controller built from this checkout, with process
+# fault injection (tools/orchestration_conformance.py; ADR-0026 PR 2.8). Needs Go; loopback only.
+.PHONY: orchestration-conformance
+orchestration-conformance:
+	cd orchestrator && GOFLAGS=-mod=readonly GOWORK=off go build -o ../build/controller ./cmd/controller
+	rm -rf build/orchestration-conformance
+	$(PY) tools/orchestration_conformance.py run --controller build/controller --work $(CURDIR)/build/orchestration-conformance --strict
+
+.PHONY: controller-check
+controller-check:
+	cd orchestrator && GOFLAGS=-mod=readonly GOWORK=off go run ./cmd/controller check --config deploy/examples/controller.yaml
 
 # the MCP catalog (docs/mcp-catalog.md, ADR-0024): every record valid and reviewed, the registry's
 # MCP entries and every profile's grants resolve to it, and the rendered example client configs
@@ -403,7 +437,7 @@ licence-check:
 #   F-17 no runtime config points at the admin workstation (runs beside X-01's endpoint gate)
 #   M-12 the generated keyring has 0 drift from its sources
 #   scripts write scratch output under their run directory (homelabnext.runs) or build/ only
-.PHONY: helpers-lint dup-check dup-baseline product-names-baseline tls-lint caddy-lint workstation-lint keyring-check keyring run-output-lint
+.PHONY: helpers-lint dup-check dup-baseline product-names-baseline allowlist-counts tls-lint caddy-lint workstation-lint keyring-check keyring run-output-lint
 check: helpers-lint dup-check tls-lint caddy-lint workstation-lint keyring-check run-output-lint
 
 helpers-lint:
@@ -421,6 +455,11 @@ dup-baseline:
 # product's total would rise) and commit it
 product-names-baseline:
 	$(PY) tools/product_name_lint.py --update .
+
+# after removing exemptions: lower tools/allowlist_counts.yml to what is there (refused when a
+# count would rise: raise one by hand, or with --update --grow, for its code owner to review)
+allowlist-counts:
+	$(PY) tools/allowlist_ratchet.py --update .
 
 caddy-lint:
 	$(PY) tools/caddy_lint.py .
@@ -459,10 +498,10 @@ fix-check:
 # days are skipped unless a direct pin needs one.  CONSTRAINTS_FRESH lists the exemptions as
 # pkg=YYYY-MM-DD: that package may use releases up to that date, so an exemption is dated and
 # bounded and lapses on its own (tests/packaging/test_constraints_cooldown.py fails once one is
-# older than 14 days, when the plain cutoff covers it anyway).  filelock and setuptools since
-# 2026-10-24, for the pip-audit fixes CVE-2026-112907/112913/112940 and GHSA-xmj3-9gf7-h52w.
+# older than 14 days, when the plain cutoff covers it anyway).  None is open; the last two
+# (filelock and setuptools, 2026-10-24) lapsed on 2026-11-07 once the cutoff covered them.
 CONSTRAINTS_CUTOFF ?= $(shell date -u -d '14 days ago' +%Y-%m-%d 2>/dev/null)
-CONSTRAINTS_FRESH ?= filelock=2026-10-24 setuptools=2026-10-24
+CONSTRAINTS_FRESH ?=
 constraints:
 	$(if $(CONSTRAINTS_CUTOFF),,$(error CONSTRAINTS_CUTOFF is empty: GNU date -d is required (macOS: use gdate), or pass CONSTRAINTS_CUTOFF=YYYY-MM-DD))
 	uv pip compile pyproject.toml constraints/ci-tools.in --extra dev --extra test --extra lake \
@@ -471,6 +510,7 @@ constraints:
 	  $(foreach e,$(CONSTRAINTS_FRESH),--exclude-newer-package $(e)) \
 	  -o constraints/ci.txt
 	awk '/^pip==/{p=1} p{print} p&&!/\\$$/{exit}' constraints/ci.txt > constraints/bootstrap.txt
+	awk '/^setuptools==/{p=1} p{print} p&&!/\\$$/{exit}' constraints/ci.txt > constraints/build.txt
 
 clean:
 	rm -rf build dist .pytest_cache .ruff_cache *.egg-info .coverage .coverage.*

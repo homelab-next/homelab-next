@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# A retired guest: kept for the record, but gone, so nothing may be placed on it.
+id: guest:gone-1
+status: retired
+kind: vm
+provisioning: terraform
+placement: {node: hv-01, vmid: 213, vmid_scheme: freeform}
+resources:
+  cpu: {cores: 8}
+  memory: {size_mb: 16384}
+  disks: [{name: rootfs, size_gb: 4000, pool: bulk}]
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+network: {zone: data, ip: 192.0.2.13}
+capability: cap:object-store
+backup: {policy: none}
+owners: {primary: platform-team}
+baseline: {names: [server]}

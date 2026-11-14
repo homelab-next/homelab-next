@@ -67,7 +67,7 @@ def load_guests(directory: str | Path) -> tuple[list[Guest], list[Problem]]:
         where = path.name
         try:
             doc = yaml.load(sops.read_text(path), Loader=_UniqueKeyLoader)
-        except (OSError, yaml.YAMLError, sops.SopsError) as exc:
+        except (OSError, UnicodeDecodeError, yaml.YAMLError, sops.SopsError) as exc:
             problems.append(Problem(where, f"{UNREADABLE}: {exc}"))
             continue
         # Python's re lets a schema pattern's "$" match before a trailing newline, and every
@@ -100,11 +100,12 @@ def load_policies(path: str | Path) -> dict[str, Mapping[str, Any]]:
 
 def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
     """Read ``{nodes: {name: {firewall: enabled|disabled, power: {...}, capacity: {...},
-    pools: {...}, mirror: {...}}}}``: what each hypervisor enforces, what feeds it (``power``,
-    checked against the site by :func:`homelabnext.power.fleet_problems`), what it holds
-    (``capacity`` and ``pools``, checked against its guests by
-    :func:`homelabnext.compute.validate.validate`), and where it copies its guests' traffic for a
-    network sensor (``mirror``, rendered by the ``node-mirror`` target)."""
+    pools: {...}, mirror: {...}, notify: {...}}}}``: what each hypervisor enforces, what feeds it
+    (``power``, checked against the site by :func:`homelabnext.power.fleet_problems`), what it
+    holds (``capacity`` and ``pools``, checked against its guests by
+    :func:`homelabnext.compute.validate.validate`), where it copies its guests' traffic for a
+    network sensor (``mirror``, rendered by the ``node-mirror`` target), and where its own
+    notifications go (``notify``, rendered by the ``node-notify`` target)."""
     p = Path(path)
     try:
         doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
@@ -128,6 +129,8 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
             out[str(name)]["pools"] = _pools(p, name, spec["pools"])
         if isinstance(spec, dict) and "mirror" in spec:
             out[str(name)]["mirror"] = _mirror(p, name, spec["mirror"])
+        if isinstance(spec, dict) and "notify" in spec:
+            out[str(name)]["notify"] = _notify(p, name, spec["notify"])
     return out
 
 
@@ -220,6 +223,82 @@ def _mirror(p: Path, name: Any, raw: Any) -> dict[str, Any]:
     return {"to": to, "bridges": list(bridges)}
 
 
+#: a notify server: http(s), an ASCII host name (dot-separated labels) or IPv4 address, an optional
+#: port and base path; no user, query or fragment
+_NOTIFY_URL_RE = re.compile(
+    r"^https?://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)"
+    r"(?::(?P<port>[0-9]{1,5}))?(?P<path>(?:/[A-Za-z0-9._~-]+)*)/?\Z"
+)
+#: an ntfy topic name (ntfy's own rule)
+_NOTIFY_TOPIC_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
+#: the severities a Proxmox notification matcher can match
+PVE_SEVERITIES = ("info", "notice", "warning", "error", "unknown")
+#: a publish credential: a reference to a secret by name, never its value.  The name becomes the
+#: webhook target's secret name, read back by Proxmox as ``{{ secrets.<name> }}`` (a template
+#: path, so no ``-`` or ``.``)
+_NOTIFY_CREDENTIAL_RE = re.compile(r"^secret:(?P<name>[a-z][a-z0-9_]{0,31})\Z")
+
+
+def _notify(p: Path, name: Any, raw: Any) -> dict[str, Any]:
+    """``{url, topic, severities, priority, default_mail, credential}``: send the node's own
+    Proxmox notifications of these severities (default warning, error and unknown, which is the
+    mail the node forwards to root) to an ntfy topic at priority 1 to 5 (default 4).
+    ``default_mail`` (default false) keeps Proxmox's built-in matcher that mails everything to
+    root@pam.  ``credential`` (optional, ``secret:<name>``) names the publish token: its value is
+    given to the generated script when it runs, never written here."""
+    where = f"{p}: node {name!r}: notify"
+    keys = {"url", "topic", "severities", "priority", "default_mail", "credential"}
+    if not isinstance(raw, dict) or set(raw) - keys or not {"url", "topic"} <= set(raw):
+        raise ComputeError(
+            f"{where}: takes url and topic (required), severities, priority, default_mail and "
+            "credential"
+        )
+    url, topic = raw["url"], raw["topic"]
+    m = _NOTIFY_URL_RE.match(url) if isinstance(url, str) else None
+    if (
+        m is None
+        or not 1 <= int(m["port"] or 80) <= 65535
+        or any(seg in (".", "..") for seg in m["path"].split("/"))
+    ):
+        raise ComputeError(f"{where}.url: {url!r} is not an http(s) server URL (no query, no user)")
+    if not isinstance(topic, str) or not _NOTIFY_TOPIC_RE.match(topic):
+        raise ComputeError(f"{where}.topic: {topic!r} is not a topic ([A-Za-z0-9_-], 1-64)")
+    sev = raw.get("severities", ["warning", "error", "unknown"])
+    if (
+        not isinstance(sev, list)
+        or not sev
+        or not all(isinstance(s, str) and s in PVE_SEVERITIES for s in sev)
+    ):
+        raise ComputeError(f"{where}.severities: a non-empty list of {', '.join(PVE_SEVERITIES)}")
+    if len(set(sev)) != len(sev):
+        raise ComputeError(f"{where}.severities: a severity is listed twice")
+    prio = raw.get("priority", 4)
+    if isinstance(prio, bool) or not isinstance(prio, int) or not 1 <= prio <= 5:
+        raise ComputeError(f"{where}.priority: a whole number from 1 to 5")
+    mail = raw.get("default_mail", False)
+    if not isinstance(mail, bool):
+        raise ComputeError(f"{where}.default_mail: true or false")
+    out = {
+        "url": url if url.endswith("/") else url + "/",
+        "topic": topic,
+        "severities": list(sev),
+        "priority": prio,
+        "default_mail": mail,
+    }
+    if "credential" in raw:
+        cred = raw["credential"]
+        m = _NOTIFY_CREDENTIAL_RE.match(cred) if isinstance(cred, str) else None
+        if m is None:
+            # never echo the value: a token pasted here by mistake must not reach a log
+            raise ComputeError(
+                f"{where}.credential: a secret reference, secret:<name> ([a-z][a-z0-9_], up to "
+                "32), never a value"
+            )
+        out["credential"] = m["name"]
+    return out
+
+
 #: one OpenSSH public key line: a known key type, base64 material, an optional comment
 PUBLIC_KEY_LINE = re.compile(
     r"(?:ssh-(?:ed25519|rsa|dss)|ecdsa-sha2-nistp(?:256|384|521)"
@@ -284,6 +363,7 @@ def load_fleet(
     deploy: Mapping[str, Any] | None = None,
     site_addresses: Mapping[str, tuple[str, ...]] | None = None,
     delegated6: Any = None,
+    placement: Mapping[str, frozenset[str]] | None = None,
 ) -> Fleet:
     """Load, schema- and semantically validate; raise ComputeError listing every problem.
 
@@ -299,7 +379,8 @@ def load_fleet(
     (:func:`homelabnext.compute.zones.site_addresses`), which no extra address may claim.
     ``delegated6``: the site's ``delegated_prefixes6`` as read
     (:func:`homelabnext.compute.zones.site_delegated6`), the global IPv6 prefixes it declares its
-    own."""
+    own.  ``placement``: the service registry's capabilities per host
+    (:func:`registry_placement`), which widen the capabilities a guest on that host may declare."""
     from .validate import validate
 
     d = Path(directory)
@@ -329,8 +410,49 @@ def load_fleet(
         deploy=deploy,
         site_addresses=dict(site_addresses or {}),
         delegated6=delegated6,
+        placement=dict(placement or {}),
     )
     problems += validate(fleet, require_baselines=require_baselines)
     if problems:
         raise ComputeError(f"invalid guest set in {d}", problems)
     return fleet
+
+
+def registry_path(site_path: str | Path, explicit: str | Path | None = None) -> Path | None:
+    """The service registry the guests are judged against: ``explicit`` when given (it must
+    exist), else ``services.yml`` beside the site file when there is one, else None."""
+    if explicit:
+        return Path(explicit)
+    beside = Path(site_path).parent / "services.yml"
+    return beside if beside.is_file() else None
+
+
+def load_registry_for(site_path: str | Path, explicit: str | Path | None = None) -> Any:
+    """The registry of :func:`registry_path`, loaded, or None.  Unreadable is
+    :class:`ComputeUnreadable`, invalid :class:`ComputeError`."""
+    from homelabnext.network.loader import SiteError, SiteUnreadable, load_registry
+
+    path = registry_path(site_path, explicit)
+    if path is None:
+        return None
+    try:
+        return load_registry(path)
+    except SiteUnreadable as exc:
+        raise ComputeUnreadable(str(exc)) from exc
+    except SiteError as exc:
+        raise ComputeError(str(exc)) from exc
+
+
+def registry_placement(reg: Any) -> dict[str, frozenset[str]]:
+    """Registry host -> the capabilities a guest on it may declare: those its rows serve, every
+    standing (ADR-0039 decision 7), and a row-less host's own ``role`` (the runner's role on any
+    host), which ``registry_hosts.capability_problems`` accepts by name."""
+    from homelabnext.registry.model import STANDINGS
+
+    out: dict[str, set[str]] = {}
+    for r in [] if reg is None else reg.rows(*STANDINGS):
+        out.setdefault(r.host, set()).add(r.capability)
+    for name, h in ({} if reg is None else reg.hosts).items():
+        if h.role and (name not in out or h.role == "agent-runtime"):
+            out.setdefault(name, set()).add(h.role)
+    return {h: frozenset(c) for h, c in out.items()}

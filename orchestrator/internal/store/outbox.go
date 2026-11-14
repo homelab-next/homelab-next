@@ -204,7 +204,7 @@ func (s *Store) FailWithRetry(runID string, from State, class string, retry *Job
 	} else if n == 0 {
 		return false, nil, ErrStateConflict
 	}
-	if rerr := insertJobTx(tx, retry, nil); rerr != nil {
+	if rerr := insertJobTx(tx, retry, nil, nil); rerr != nil {
 		tx.Rollback()
 		return false, rerr, s.UpdateStateClass(runID, from, StateFailed, class)
 	}

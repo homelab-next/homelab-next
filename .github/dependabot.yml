@@ -121,3 +121,18 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "deps"
+
+  # The lab's orchestrator image is built FROM the Go toolchain image: patch releases only, since
+  # the module's go.mod names the toolchain (GOTOOLCHAIN=local) and a minor bump moves both.
+  - package-ecosystem: docker
+    directories:
+      - "/compose/lab-in-a-box/orchestrator"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    commit-message:
+      prefix: "deps"

@@ -3,9 +3,12 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -470,6 +473,23 @@ func TestListJobs_SubmittedBy(t *testing.T) {
 	}
 }
 
+// ListJobs filters by the runner's session id.
+func TestListJobs_SessionID(t *testing.T) {
+	s := openTest(t)
+	for _, id := range []string{"a", "b"} {
+		if err := s.CreateJob(queued(id, "x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.UpdateUsageFields("b", UsageFields{SessionID: "sess-b"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListJobs(ListFilter{SessionID: "sess-b", Limit: 10})
+	if err != nil || len(got) != 1 || got[0].RunID != "b" || got[0].SessionID != "sess-b" {
+		t.Fatalf("ListJobs(session) = %v, %v", got, err)
+	}
+}
+
 // A drain survives a restart and keeps its first since.
 func TestDrains_SaveLoadDelete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "orch.db")
@@ -496,5 +516,105 @@ func TestDrains_SaveLoadDelete(t *testing.T) {
 	}
 	if got, _ := s.LoadDrains(); len(got) != 0 {
 		t.Errorf("after delete: %v", got)
+	}
+}
+
+// The admission list leaves out the text admission never reads, the task included (it compares
+// tasks by digest), and keeps the rest.
+func TestListForAdmission_LeavesOutTheText(t *testing.T) {
+	s := openTest(t)
+	j := queued("a", "x")
+	j.TaskDescription = "the task"
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateExecutionResult("a", false, 1, "SECRET-REASON", "SECRET-ANSWER"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListForAdmission(StateQueued)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListForAdmission = %v, %v", got, err)
+	}
+	if g := got[0]; g.ResponseBody != "" || g.LocalFailedReason != "" || g.TaskDescription != "" || g.RunID != "a" || g.IdempotencyKey != "idem-a" {
+		t.Fatalf("row = %+v", g)
+	}
+	sum := sha256.Sum256([]byte("the task"))
+	if g := got[0]; g.TaskSHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("task digest = %q", g.TaskSHA256)
+	}
+	if full, err := s.GetJob("a"); err != nil || full.TaskDescription != "the task" || full.TaskSHA256 != got[0].TaskSHA256 {
+		t.Fatalf("GetJob = %+v, %v", full, err)
+	}
+	if strings.Count(admissionColumns, "NULL") != 5 {
+		t.Fatalf("columns = %s", admissionColumns)
+	}
+}
+
+// A list page carries summaries: no task, answer or failure reason, however large they are.
+func TestListJobs_IsSummariesOnly(t *testing.T) {
+	s := openTest(t)
+	j := queued("a", "x")
+	j.TaskDescription = strings.Repeat("t", 200<<10)
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateExecutionResult("a", false, 1, "a reason", strings.Repeat("r", 1<<20)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListJobs(ListFilter{Limit: 10})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListJobs = %v, %v", got, err)
+	}
+	if g := got[0]; g.TaskDescription != "" || g.ResponseBody != "" || g.LocalFailedReason != "" || g.RunID != "a" || g.AgentKey != "x" {
+		t.Fatalf("summary carries text: task %d bytes, answer %d bytes", len(g.TaskDescription), len(g.ResponseBody))
+	}
+}
+
+func BenchmarkListJobs_FullPageOfLargeJobs(b *testing.B) {
+	s, err := Open(filepath.Join(b.TempDir(), "orch.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+	big := strings.Repeat("t", 256<<10)
+	for i := 0; i < 50; i++ {
+		j := queued(fmt.Sprintf("r%03d", i), "x")
+		j.TaskDescription = big
+		if err := s.CreateJob(j); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := s.ListJobs(ListFilter{Limit: MaxListLimit}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// Requeue moves the row and sets its attempts together, and a lost compare-and-swap changes
+// neither.
+func TestRequeue_StateAndAttemptsTogether(t *testing.T) {
+	s := openTest(t)
+	mkJob(t, s, "run-1", "watcher", StateRunning)
+	if err := s.UpdateAttempts("run-1", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Requeue("run-1", StateRunning, 2); err != nil {
+		t.Fatal(err)
+	}
+	j, _ := s.GetJob("run-1")
+	if j.State != StateQueued || j.Attempts != 2 {
+		t.Fatalf("job = %s attempts=%d", j.State, j.Attempts)
+	}
+	if err := s.Requeue("run-1", StateRunning, 0); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("a lost compare-and-swap: %v", err)
+	}
+	if j, _ := s.GetJob("run-1"); j.State != StateQueued || j.Attempts != 2 {
+		t.Fatalf("a lost compare-and-swap changed the row: %s attempts=%d", j.State, j.Attempts)
+	}
+	mkJob(t, s, "run-2", "watcher", StateDone)
+	if err := s.Requeue("run-2", StateDone, 0); err == nil || errors.Is(err, ErrStateConflict) {
+		t.Fatalf("a finished job went back to the queue: %v", err)
 	}
 }

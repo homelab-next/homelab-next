@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,7 +24,21 @@ def test_header_present_and_missing(tmp_path: Path):
 
 def test_repo_python_files_all_have_header():
     root = Path(__file__).resolve().parents[2]
-    files = [p for p in root.rglob("*.py") if ".git" not in p.parts]
+    # The repository's files, not everything under the checkout: tracked plus untracked-but-not-
+    # ignored, as tools/run_output_lint.py does. A plain rglob also walked a .venv the README's own
+    # quick start creates inside the checkout, failing with ~2000 third-party files.
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "*.py"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listed.returncode == 0:
+        files = [root / line for line in listed.stdout.splitlines() if line]
+    else:  # not a git checkout (an unpacked sdist): fall back to the tree, skipping the usual venvs
+        skip = {".git", ".venv", "venv"}
+        files = [p for p in root.rglob("*.py") if not skip.intersection(p.parts)]
+    files = [p for p in files if p.is_file()]
     assert [str(p) for p in files if check_spdx.missing_header(p)] == []
 
 

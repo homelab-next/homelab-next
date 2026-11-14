@@ -13,7 +13,9 @@ that names other addresses it sends from (``network.extra_addresses``, guest 1.6
 role can hold each one to the guest's own zone as validation did; a guest whose baselines set
 inputs of that role (``with:``, baseline set 1.2) carries them as ``settings: {<role>_<input>:
 value}`` in its row.  A per-guest control's settings are host
-variables (the ``inventory`` target writes them), so its play names only the role.
+variables (the ``inventory`` target writes them), so its play names only the role.  Every play
+sets ``become: true``: the roles install packages and write system files, so the connecting
+account escalates (``cloudinit.sudo: nopasswd`` for an automation account).
 
 A control whose ``role`` is null has no product yet: it is written as a commented block that names
 the guests waiting for it, never dropped.  A control no guest needs is listed as such.  The
@@ -126,6 +128,9 @@ def render(fleet: Fleet) -> dict[str, str]:
             L += [
                 f"- name: {q(name)}",
                 f"  hosts: {hosts}",
+                # every bound role changes the system (packages, /etc, services): the play
+                # escalates, so the cloud-init user's sudo rule (cloudinit.sudo) is what it uses
+                "  become: true",
                 f"  tags: {qlist([control_group(c), f'layer_{layer}'])}",
                 f"  # verify: {info['verify']}",
             ]

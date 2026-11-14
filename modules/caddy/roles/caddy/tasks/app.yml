@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). Caddy runs as
+# the container's user with every capability dropped but NET_BIND_SERVICE, which the stock image's
+# binary carries as a file capability (setcap +ep): without it in the bounding set the kernel
+# refuses to exec the binary at all. It binds no privileged port (the host publishes caddy_port to
+# the unprivileged HTTPS port), and no-new-privileges keeps the file capability from being granted.
+# The root filesystem is read-only; the configuration, the certificate and the upstream TLS files
+# are read-only mounts; Caddy writes only its own data/ and state/.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    caddy_app:
+      compose_app_name: caddy
+      compose_app_dir: "{{ caddy_dir }}"
+      compose_app_data_dir: "{{ caddy_data_root }}"
+      compose_app_export_dir: "{{ caddy_data_root }}/export"
+      compose_app_owner: "{{ caddy_owner }}"
+      compose_app_group: "{{ caddy_gid }}"
+      compose_app_start: "{{ caddy_start }}"
+      compose_app_validate_with_docker: "{{ caddy_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          caddy:
+            image: "{{ caddy_image_parts.repository }}"  # caddy-lint: allow caddy_image split apart; the Caddy pin is defaults/main.yml caddy_image
+            tag: "{{ caddy_image_parts.tag }}"
+            digest: "{{ caddy_image_parts.digest }}"
+            command: [caddy, run, --config, "{{ caddy_container_config_dir }}/Caddyfile", --adapter, caddyfile]
+            user: "{{ caddy_uid | int }}:{{ caddy_gid | int }}"
+            cap_add: [NET_BIND_SERVICE]
+            read_only: true
+            environment: "{{ caddy_container_env }}"
+            ports: ["{{ caddy_bind }}:{{ caddy_port | int }}:{{ caddy_container_https_port }}"]
+            volumes:
+              - "{{ caddy_data_root }}/config:{{ caddy_container_config_dir }}:ro"
+              - "{{ caddy_data_root }}/certs:{{ caddy_container_certs_dir }}:ro"
+              - "{{ caddy_data_root }}/edge-tls:{{ caddy_edge_tls_dir }}:ro"
+              - "{{ caddy_data_root }}/data:/data"
+              - "{{ caddy_data_root }}/state:/config"
+            mem_limit: "{{ caddy_mem_limit }}"
+            healthcheck:
+              test: [CMD, wget, -q, -T, "5", -O, /dev/null, "http://127.0.0.1:{{ caddy_container_health_port }}/"]  # no-raw-endpoint: allow the container probes its own loopback health site
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 10s
+  tags: [health, backup, restore, export, upgrade]

@@ -16,4 +16,8 @@ unattended_upgrades_max_age_hours: 48
 unattended_upgrades_config_file: /etc/apt/apt.conf.d/52homelabnext-unattended-upgrades
 unattended_upgrades_stamp_file: /var/lib/apt/periodic/unattended-upgrades-stamp
 unattended_upgrades_apt_config_cli: apt-config
+# With reboot_time "never", config cancels a shutdown logind still holds (one unattended-upgrades
+# scheduled under an earlier reboot window) and health fails while one is pending.
+unattended_upgrades_busctl_cli: busctl
+unattended_upgrades_shutdown_cli: shutdown
 unattended_upgrades_state_dir: /var/lib/homelabnext/unattended-upgrades

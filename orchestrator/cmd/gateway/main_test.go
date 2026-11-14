@@ -16,7 +16,8 @@ import (
 
 const config = `{"version":"1.0","name":"t","admin_key_env":"HNX_SECRET_ADMIN","roles":{"r":{"kind":"chat",
 "max_context_tokens":null,"tlp_ceiling":"red","leaves_lab":false,"deployments":[{"id":"r-1","backend":"b",
-"locality":"local","protocol":"openai","base_url":"http://127.0.0.1:1","model":"m","api_key_env":null}],
+"locality":"local","protocol":"openai","base_url":"http://127.0.0.1:1","model":"m","api_key_env":null}],` + // no-raw-endpoint: allow a loopback base URL, only loaded by -check
+	`
 "fallbacks":[],"limits":null,"cost_per_1k_tokens":null}},"keys":[],"telemetry_reader":null%s}`
 
 // adminValue is a dummy admin key of the 32-byte minimum.
@@ -64,15 +65,15 @@ func TestGatewayCmdLocalhostIsResolved(t *testing.T) {
 	good := map[string]string{"HNX_SECRET_ADMIN": adminValue}
 	saved := lookupIP
 	t.Cleanup(func() { lookupIP = saved })
-	lookupIP = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}, nil }
-	if code, out := runGW(t, good, "-config", p, "-check", "-listen", "localhost:4100"); code != 0 {
+	lookupIP = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}, nil } // no-raw-endpoint: allow a stubbed resolver's loopback answer
+	if code, out := runGW(t, good, "-config", p, "-check", "-listen", "localhost:4100"); code != 0 {                 // no-raw-endpoint: allow a loopback listen address the command must accept
 		t.Fatalf("loopback localhost: %d %s", code, out)
 	}
 	// a hosts file that maps localhost to a lab address does not make that a loopback listen
 	lookupIP = func(string) ([]net.IP, error) {
-		return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("192.0.2.5")}, nil
+		return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("192.0.2.5")}, nil // no-raw-endpoint: allow a stubbed resolver mapping localhost to a documentation address (RFC 5737)
 	}
-	if code, out := runGW(t, good, "-config", p, "-check", "-listen", "localhost:4100"); code != 1 || !strings.Contains(out, "not loopback") {
+	if code, out := runGW(t, good, "-config", p, "-check", "-listen", "localhost:4100"); code != 1 || !strings.Contains(out, "not loopback") { // no-raw-endpoint: allow a listen address the command must refuse as not loopback
 		t.Fatalf("localhost to a lab address: %d %s", code, out)
 	}
 }
@@ -89,7 +90,7 @@ func TestGatewayCmdListenAndConformance(t *testing.T) {
 		{[]string{"-config", p, "-check", "-listen", "0.0.0.0:4100"}, 1, "not loopback"},
 		{[]string{"-config", p, "-check", "-listen", ":4100"}, 1, "not loopback"},
 		{[]string{"-config", p, "-check", "-listen", "0.0.0.0:4100", "-allow-plaintext"}, 0, "ok"},
-		{[]string{"-config", p, "-check", "-listen", "192.0.2.5:4100", "-tls-cert", "c.pem", "-tls-key", "k.pem"}, 0, "ok"},
+		{[]string{"-config", p, "-check", "-listen", "192.0.2.5:4100", "-tls-cert", "c.pem", "-tls-key", "k.pem"}, 0, "ok"}, // no-raw-endpoint: allow a documentation listen address (RFC 5737), checked and never bound
 		{[]string{"-config", p, "-check", "-tls-cert", "c.pem"}, 1, "go together"},
 		{[]string{"-config", p, "-check", "-listen", "[::1]:4100"}, 0, "ok"},
 		{[]string{"-config", p, "-check", "-upstream-proxy", "socks5://x"}, 1, "upstream-proxy"},
@@ -105,7 +106,7 @@ func TestGatewayCmdListenAndConformance(t *testing.T) {
 }
 
 func TestGatewayCmdServesAndShutsDownOnSIGTERM(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0") // no-raw-endpoint: allow a loopback listener the test opens itself
 	if err != nil {
 		t.Fatal(err)
 	}

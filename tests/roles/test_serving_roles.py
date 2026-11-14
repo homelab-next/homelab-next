@@ -402,28 +402,42 @@ def closed(*dirs: Path) -> bool:
     return all(d.lstat().st_mode & 0o7777 == 0o700 for d in dirs)
 
 
-def test_model_store_refuses_a_link_in_an_export_before_taking_ownership(tmp_path):
-    """exports/<run>/x -> a host file: the root-run chown/chmod would follow it and make that file
-    store-owned (/etc/passwd in the attack; a stand-in here, never a real host file).  The walk
-    refuses the link before anything is chowned."""
+def _first(tmp_path):
     v, run = trainer_export(tmp_path)
     target = tmp_path / "host-passwd"
     target.write_text("root:x:0:0::/root:/bin/sh\n")
     target.chmod(0o666)
     (run / "x").symlink_to(target)
-    r = run_role(tmp_path, "model_store", "main", v)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v,
+            "setup": {"run": run, "target": target}}  # fmt: skip
+
+
+@first_run(_first)
+def test_model_store_refuses_a_link_in_an_export_before_taking_ownership(first):
+    """exports/<run>/x -> a host file: the root-run chown/chmod would follow it and make that file
+    store-owned (/etc/passwd in the attack; a stand-in here, never a real host file).  The walk
+    refuses the link before anything is chowned."""
+    r, _ = first
+    run, target = first.setup["run"], first.setup["target"]
     assert r.returncode != 0 and "x (a link)" in r.stdout, r.stdout
     assert untouched(target, *run.iterdir()), oct(target.stat().st_mode)
     assert closed(run)
 
 
-def test_model_store_refuses_an_unlisted_file_in_an_export(tmp_path):
+def _first(tmp_path):
     v, run = trainer_export(tmp_path)
     (run / "sub").mkdir()
     (run / "sub" / "extra.bin").write_bytes(b"not in the manifest\n")
     (run / "sub").chmod(0o777)
     (run / "sub" / "extra.bin").chmod(0o666)
-    r = run_role(tmp_path, "model_store", "main", v)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v,
+            "setup": {"v": v, "run": run}}  # fmt: skip
+
+
+@first_run(_first)
+def test_model_store_refuses_an_unlisted_file_in_an_export(first):
+    r, tmp_path = first
+    v, run = first.setup["v"], first.setup["run"]
     assert r.returncode != 0 and "sub/extra.bin (not in the manifest)" in r.stdout, r.stdout
     assert untouched(*(p for p in run.rglob("*") if p.is_file())) and closed(run, run / "sub")
     (run / "sub" / "extra.bin").unlink()
@@ -433,27 +447,41 @@ def test_model_store_refuses_an_unlisted_file_in_an_export(tmp_path):
     assert not untouched(run) and run.stat().st_mode & 0o027 == 0  # now taken out of their hands
 
 
-def test_model_store_refuses_an_export_directory_that_is_a_link(tmp_path):
-    """exports/<run> itself a link (to a tree with the right bytes): a followed chown would take
-    ownership of wherever it points."""
+def _first(tmp_path):
     v, run = trainer_export(tmp_path)
     elsewhere = tmp_path / "elsewhere"
     run.rename(elsewhere)
     run.symlink_to(elsewhere)
-    r = run_role(tmp_path, "model_store", "main", v)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v,
+            "setup": {"elsewhere": elsewhere}}  # fmt: skip
+
+
+@first_run(_first)
+def test_model_store_refuses_an_export_directory_that_is_a_link(first):
+    """exports/<run> itself a link (to a tree with the right bytes): a followed chown would take
+    ownership of wherever it points."""
+    r, _ = first
+    elsewhere = first.setup["elsewhere"]
     assert r.returncode != 0 and ". (the entry directory is a link)" in r.stdout, r.stdout
     assert untouched(elsewhere, *elsewhere.iterdir())
 
 
-def test_model_store_takes_an_export_before_hashing_it(tmp_path):
-    """Hashing first left a window in which a trainer could swap the bytes after the check and
-    before the chown; the role now takes ownership first, so the bytes it hashes are the ones it
-    serves (a mismatch then stays store-owned, out of the trainers' reach, and fails)."""
+def _first(tmp_path):
     v, run = trainer_export(tmp_path)
     weights = run / "model.safetensors"
     weights.write_bytes(weights.read_bytes().upper())  # same size, other bytes
     weights.chmod(0o666)
-    r = run_role(tmp_path, "model_store", "main", v)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v,
+            "setup": {"weights": weights}}  # fmt: skip
+
+
+@first_run(_first)
+def test_model_store_takes_an_export_before_hashing_it(first):
+    """Hashing first left a window in which a trainer could swap the bytes after the check and
+    before the chown; the role now takes ownership first, so the bytes it hashes are the ones it
+    serves (a mismatch then stays store-owned, out of the trainers' reach, and fails)."""
+    r, _ = first
+    weights = first.setup["weights"]
     assert r.returncode != 0 and "model.safetensors (sha256 differs)" in r.stdout, r.stdout
     assert weights.stat().st_mode & 0o027 == 0, oct(weights.stat().st_mode)
 
@@ -489,9 +517,7 @@ def test_an_export_is_never_taken_by_path():
     assert "ansible.builtin.file" not in used and "model_store_files" in used, used
 
 
-def test_model_store_promotes_two_quants_of_one_run(tmp_path):
-    """The manifest key is (source, run, quant), so two export entries may share exports/<run>:
-    each one's walk allows the other's files (check_disk unions them by directory)."""
+def _two_quants(tmp_path):
     store = manifest()
     first = next(k for k, e in store["models"].items() if e["format"] == "export")
     e = store["models"][first]
@@ -507,14 +533,23 @@ def test_model_store_promotes_two_quants_of_one_run(tmp_path):
     remote_tree(tmp_path, store)  # health reads every entry, so fetch the hub ones too
     v = store_vars(tmp_path, store)
     write_export(tmp_path / "srv", store)
-    r = run_role(tmp_path, "model_store", "main", v)
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v,
+            "setup": {"v": v, "st": st, "eid": first}}  # fmt: skip
+
+
+@first_run(_two_quants)
+def test_model_store_promotes_two_quants_of_one_run(first):
+    """The manifest key is (source, run, quant), so two export entries may share exports/<run>:
+    each one's walk allows the other's files (check_disk unions them by directory)."""
+    r, tmp_path = first
+    v, st, eid = first.setup["v"], first.setup["st"], first.setup["eid"]
     assert r.returncode == 0, r.stdout
     h = run_role(tmp_path, "model_store", "health", v)
     assert h.returncode == 0, h.stdout
-    assert store_mod.check_disk(st, tmp_path / "srv", only=[first, first + "-q4"]) == []
+    assert store_mod.check_disk(st, tmp_path / "srv", only=[eid, eid + "-q4"]) == []
 
 
-def test_model_store_backup_and_export_hooks(tmp_path):
+def _first(tmp_path):
     store = manifest()
     # codepoint order (sha256sum's, and Entry.listing's): LICENSE, README.md, config.json; a
     # case-insensitive sort would put config.json first and the listing would not hash to the digest
@@ -523,7 +558,15 @@ def test_model_store_backup_and_export_hooks(tmp_path):
         {"path": "LICENSE", "sha256": "b" * 64, "size": 1},
     ]
     v = store_vars(tmp_path, store, model_store_fetch=False)
-    assert run_role(tmp_path, "model_store", "main", v).returncode == 0
+    return {"role": "model_store", "tasks_from": "main", "extra_vars": v,
+            "setup": {"v": v, "store": store}}  # fmt: skip
+
+
+@first_run(_first)
+def test_model_store_backup_and_export_hooks(first):
+    r, tmp_path = first
+    v, store = first.setup["v"], first.setup["store"]
+    assert r.returncode == 0, r.stdout + r.stderr
     assert run_role(tmp_path, "model_store", "backup", v).returncode == 0
     b = json.loads((tmp_path / "srv" / "manifests" / "backup-manifest.json").read_text())
     assert b["paths"] == [str(tmp_path / "srv" / "exports"), str(tmp_path / "srv" / "manifests")]

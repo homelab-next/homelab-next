@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate and record an image bump (compose_app upgrade) for the IdP (keycloak_target_image) or
+# the database (keycloak_target_postgres_image, a minor version only: a major one is a dump and a
+# restore into a new cluster, README "Upgrading"). The playbook exports first, then converges.
+- block:
+    - name: Name the target
+      ansible.builtin.set_fact:
+        keycloak_up_idp: "{{ keycloak_target_image | default('') }}"
+        keycloak_up_db: "{{ keycloak_target_postgres_image | default('') }}"
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - (keycloak_up_idp | length > 0) != (keycloak_up_db | length > 0)
+          - >-
+            keycloak_up_idp | length == 0 or (keycloak_up_idp is match(keycloak_pinned_ref_pattern)
+            and keycloak_up_idp.split('@')[0].rsplit(':', 1)[0] == keycloak_repository)
+          - >-
+            keycloak_up_db | length == 0 or
+            (keycloak_up_db is match(keycloak_pinned_ref_pattern)
+             and keycloak_up_db.split('@')[0].rsplit(':', 1)[0] == keycloak_db_repository
+             and keycloak_up_db.split('@')[0].rsplit(':', 1)[1].split('.')[0]
+                 == keycloak_db_tag.split('.')[0])
+        fail_msg: >-
+          keycloak: name one target, {{ keycloak_repository }}:<tag>@sha256:<64 hex> or
+          {{ keycloak_db_repository }}:<same major>.<minor>@sha256:<64 hex>
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        keycloak_target: "{{ keycloak_up_idp if keycloak_up_idp | length > 0 else keycloak_up_db }}"
+        compose_app_name: keycloak
+        compose_app_dir: "{{ keycloak_app.compose_app_dir }}"
+        compose_app_owner: "{{ keycloak_app.compose_app_owner }}"
+        compose_app_group: "{{ keycloak_app.compose_app_group }}"
+        compose_app_spec: "{{ keycloak_app.compose_app_spec }}"
+        compose_app_upgrade_service: "{{ 'keycloak' if keycloak_up_idp | length > 0 else 'postgres' }}"
+        compose_app_upgrade_tag: "{{ keycloak_target.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ keycloak_target.split('@')[1] }}"
+  tags: [upgrade]

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the streams are read over the bus; their events are JSON already)
+  ansible.builtin.debug:
+    msg: events_bus keeps no data beyond the streams themselves
+  tags: [export]

@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: Apache-2.0
+# The notify provider on ntfy (docs/modules.md; README.md beside this file): one container from a
+# pinned image, run by compose_app on a guest that already has docker_engine. Auth is deny-all:
+# an admin account, and a publisher account whose only credential is a token, allowed to publish
+# to any topic and to read back only the scratch topics the health hook and the conformance suite
+# use. No egress, no public route, no web app. Every real value (the guest, its address, the
+# secret values) is the site's: the overlay's lab/modules.yml, lab/services.yml and secret store.
+manifest_version: "1.0"
+id: ntfy
+kind: provider
+title: Notifications on ntfy
+description: Fills the notify slot with ntfy, a self-hosted publish and subscribe server, run as one
+  compose_app container with deny-all auth; proved by the notify conformance suite through the
+  shared ntfy adapter.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: ntfy
+  version: 2.35.0
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:ntfy/admin-password
+    identity: password
+    holder: provider
+    purpose: the admin account's password; the role's health hook signs in with it to prove the stored hash matches
+  - secret: secret:ntfy/admin-password-hash
+    identity: password-hash
+    holder: provider
+    purpose: the bcrypt hash of the admin password (ntfy user hash), the only form the server is given
+  - secret: secret:ntfy/publisher-token
+    identity: token
+    holder: granted
+    purpose: the access token the lab's services publish with (the publisher account has no password)
+identifiers:
+  - {kind: secret-name, name: ntfy, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the admin password, its hash and the publisher token are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 1, memory_mb: 512, disk_gb: 4}
+      guest:
+        baselines: [base]
+      roles: [role:ntfy]
+      purpose: runs the ntfy container (docker_engine applied first, compose_app renders it)
+provides:
+  slots:
+    notify:
+      adapter: homelabnext.conform.adapters.ntfy:make
+      features: [fault-injection]
+      conformance:
+        target: conformance/target.yml
+egress: none
+contributes:
+  roles:
+    - file: roles/ntfy
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:ntfy, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: auth
+    kind: state
+    description: The user database (auth.db) - the provisioned accounts, their access entries and tokens, all re-created from the secrets at start.
+    export: {formats: [object-tree], via: role:ntfy}
+    import: {formats: [object-tree], via: role:ntfy}
+    retention: {keep: forever}
+  - id: cache
+    kind: database
+    description: The message cache (cache.db) - the messages a subscriber can still poll, kept for the cache duration.
+    export: {formats: [object-tree], via: role:ntfy}
+    import: {formats: [object-tree], via: role:ntfy}
+    retention: {keep: transient}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest): the role's upgrade hook validates and records it, the databases are exported, then it converges"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

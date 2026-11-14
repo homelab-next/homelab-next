@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The hub's code is homelab-next's (role hnx_runtime's upgrade hook); what moves here is the
+# registry: check the views against the target and record its sha256 as pending.
+- block:
+    - name: Check the views against the target registry
+      ansible.builtin.command:
+        argv: ["{{ status_hub_hnx_bin }}", status, views, check, "{{ status_hub_config_dir }}/views.yml",
+               --registry, "{{ status_hub_target_registry }}"]
+      changed_when: false
+    - name: Hash it
+      ansible.builtin.stat:
+        path: "{{ status_hub_target_registry }}"
+        checksum_algorithm: sha256
+      register: status_hub_upgrade_target
+    - name: Record the pending registry
+      ansible.builtin.copy:
+        dest: "{{ status_hub_config_dir }}/pending-registry-sha256"
+        content: "{{ status_hub_upgrade_target.stat.checksum }}\n"
+        mode: "0640"
+  tags: [upgrade]

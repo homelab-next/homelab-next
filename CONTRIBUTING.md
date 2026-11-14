@@ -47,8 +47,11 @@ tests on a laptop with no network and no private context.
    scratch output only under `homelabnext.runs.run_dir(run_id)` or `build/`
    (`make run-output-lint`).
 7. **A contract change needs an ADR** (copy `docs/adr/_template.md`; one file, five headings).
-8. Python >= 3.11, standard library first. New dependencies go in an extra in `pyproject.toml`,
-   must be permissively licensed (LGPL only as an unmodified dependency; a separately run tool
+8. Python >= 3.11, standard library first. CI tests 3.11 and 3.12 (the pyproject classifiers);
+   3.13 and 3.14 are best-effort: nothing in CI runs them, and a defect only they show is fixed
+   when it is found (as 3.14's `fromisoformat` and JSON depth were), with a test that pins the
+   verdict on every version rather than a newer interpreter's. New dependencies go in an extra in
+   `pyproject.toml`, must be permissively licensed (LGPL only as an unmodified dependency; a separately run tool
    such as ansible-core is the ADR-0011 decision 4 exception), and are justified in the PR. Each
    package `constraints/` pins and each image a compose stack runs has a reviewed licence entry
    in `tools/licences.yml` (`make licence-check`).
@@ -178,6 +181,33 @@ and an entry that no longer excuses anything fails the lint.
   host, and no role step runs on the Ansible control node. Allowlist:
   `tools/workstation_refs.allow.yml` (`path`, optional `match`, `reason`), or
   `workstation-ref: allow <reason>` on the line.
+- `tools/allowlist_ratchet.py`: the suppression lists only grow by a reviewed change. It counts
+  the `allow:` globs of `tools/product_names.yml`, the entries of
+  `tools/no_raw_endpoints.allow.yml` and of `tools/scripts.allow.yml`, the `allow:` entries of
+  the other gates' `tools/*.allow.yml` files (an absent one counts as empty), and the lines
+  carrying a `scrub-allow` or an inline `no-raw-endpoint: allow` marker, and holds each count to
+  `tools/allowlist_counts.yml`. A list above its count fails: raise the count in the same change
+  (a code-owned file, so the raise is the code owner's to review). A list below its count fails
+  too, with the number to lower it to (`make allowlist-counts`). The list files also have a
+  digest of their sorted entries there, so an entry edited in place (a glob widened, a path
+  swapped, a reason reworded) fails until `make allowlist-counts` records it; a marker's count is
+  of marked lines only, and a marked line edited in place is reviewed in its own file's diff. The
+  counts file must sit under an explicit CODEOWNERS path rule, not the catch-all; with
+  `--base`/`--ci-base` a count raised or a digest changed since the base is printed, and fails
+  unless the base's CODEOWNERS puts the counts file there. CI's schemas job runs it with
+  `--ci-base`, the change's own copy. **Follow-up, open:** add the base's copy to CI's
+  `trusted-gates` job (`"$PY" -I "$RUNNER_TEMP/base/tools/allowlist_ratchet.py" --base "$BASE"
+  "$GITHUB_WORKSPACE"`, and `allowlist_ratchet` to `RATCHETS` in
+  `tests/gates/test_ci_trusted_gates.py`) in the first change after the tool is on `main`. Until
+  then a change can edit `tools/allowlist_ratchet.py` itself to always pass, and only the `/tools/`
+  code-owner review stands in the way; `tools/tests/test_allowlist_ratchet.py` keeps this note
+  here until the step exists. Each other gate's `tools/*.allow.yml` is a list named after the
+  file, so a new one has no count until one is reviewed in; with `--base`, a list the base has no
+  count for rises from 0. What it deliberately leaves out, with why, is its `NOT_RATCHETED`: the
+  two shrink-only baselines (their own ratchets), `.gitleaks.toml`'s `[[allowlists]]` (its own
+  CODEOWNERS rule), and, as a follow-up, the other inline markers (`run-output: allow`,
+  `# hermetic: allow`, `gitleaks:allow` and the edge-config, workstation-ref and tls-verify
+  lints' own); a `tools/*.baseline.json` in neither table fails its tests.
 - `make keyring-check` (M-12): `examples/keyring/keyring.json` is exactly what
   `hnx agent keyring build examples/keyring/sources.yml` generates (`make keyring` rebuilds it).
 
@@ -220,8 +250,9 @@ and an entry that no longer excuses anything fails the lint.
 - **Time budgets.** Each suite (a test file's first two directories, e.g. `tests/lake`) has a budget
   (`suite_budget_default`, `suite_budgets`); a suite over it fails the run. `pytest --suite-times`
   prints the table; `HNX_SUITE_BUDGET_SCALE=3` scales every budget on a slow machine.
-  `tests/roles` starts each module's independent first role runs together, one per CPU and at
-  most 8 at once; `HNX_ROLERUN_WORKERS=N` sets the number (any positive integer of up to four
+  `tests/roles` starts the session's independent first role runs (`rolerun.first_run`, every
+  module's) together, one per CPU and at most 8 at once, and `run_cases(..., parallel=True)`
+  splits a long list of stand-alone cases over as many processes; `HNX_ROLERUN_WORKERS=N` sets the number (any positive integer of up to four
   digits: an explicit value is not capped), and a bad value stops the session at start.
 - **Shards.** CI runs the suite as six jobs per Python version: `pytest --shard I/6
   --shard-report FILE` runs the tests whose node id hashes to the I-th sixth and writes what it
@@ -229,7 +260,9 @@ and an entry that no longer excuses anything fails the lint.
   (`python -m tests.shard_report --groups 3.11,3.12 DIR`) fails unless every shard passed, together
   they ran each collected test exactly once, and each suite's time summed over the shards is
   within its budget. A module- or session-scoped fixture runs, and is timed, once per shard that
-  uses it, so the summed time can exceed a whole run's. Branch protection requires `test-ok`, the
+  uses it, so the summed time can exceed a whole run's; a module marked
+  `pytestmark = pytest.mark.shard_by_module` goes to one shard whole, so its module fixtures run
+  once (the packaging builds do). Branch protection requires `test-ok`, the
   one stable check name. Locally, `make test` still runs the suite whole.
 
 ## Keeping pins current
@@ -273,6 +306,22 @@ constraints`' `--exclude-newer`), so a bad release has time to be pulled first.
   weekly `pin-freshness` workflow keeps the result in one issue ("Pin freshness"). It never fails
   a pull request. A new pin of that kind needs its upstream in `SOURCES` in that file
   (`python3 tools/pin_freshness.py inventory --check`, also a unit test).
+- **Security releases waiting out the cooldown**: a release that carries a security fix is still
+  held for 14 days, and the bump is its own pull request once the cooldown clears.  **The one
+  exception:** a toolchain or dependency release that fixes an advisory `govulncheck` or
+  `pip-audit` reports as reachable, and so fails a required check (on main or every open pull
+  request), is taken at once, past no cooldown.  Its digest or checksum is verified as for any
+  bump (below, "Bumping by hand"), and its CHANGELOG entry names the advisory id and says the
+  cooldown was waived for it.  Go 1.27.4 is the precedent: released 2026-11-10, taken 2026-11-11
+  for GO-2026-6859, which failed `go-ok`.  A fix that no required check reports waits out the
+  cooldown like any other release. Pending as of
+  2026-11-08:
+  - NATS 2.15.2 (security fixes, among them bounds on stream-state recovery) for the lab events
+    image and CI's `NATS_SERVER_VERSION`; it clears about 2026-11-09.
+  - Open WebUI 0.12.4 and 0.12.5, each opening with an upstream security advisory whose fixes are
+    not listed, for the `open_webui` role; they clear about 2026-11-08 and 2026-11-12.
+
+  Remove an item here when its bump lands.
 - **Bumping by hand**: take an action's SHA from `git ls-remote https://github.com/OWNER/REPO
   refs/tags/TAG^{} refs/tags/TAG` (the peeled `^{}` commit for an annotated tag), a binary's
   checksum from the release's own checksums file, a Go tool's from `go mod download -json`

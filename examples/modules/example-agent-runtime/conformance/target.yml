@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider's contracted slots. A runtime
+# provider supplies its runner body's argv and exit_classes; the suite runs them under the reference
+# launcher (ADR-0051 decision 13).
+name: example-agent-runtime
+capabilities:
+  agent-runner:
+    adapter: conformance.fakes.agent_runner_launcher:make
+    config:
+      body: [/usr/local/bin/adatum-runtime-body]
+      exit_classes: {69: BackendFault, 75: ConcurrencyLimited, 1: TurnFailed}

@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Two deployments in one registry, as an overlay holds them while a new lab is built beside an
+# old one (fictional: RFC 5737 addresses, example.internal names). The new lab's edge renders
+# with --edge-host edge-01 --edge-host core-01 --edge-host idp-01: only the new lab's sites, the
+# hub reached over mTLS (edge_tls, registry 2.10), the IdP over TLS verified against the lab CA.
+# The old lab's public rows (old-app, old-wiki) sit on old-apps and must never reach that edge.
+registry_version: 1
+
+lab:
+  name: twolab
+  domain: example.internal
+  svc_label: svc
+  owner: platform-team
+
+zones:
+  core:
+    cidr: 192.0.2.0/24
+    description: both labs' service guests
+
+hosts:
+  edge-01:  {address: 192.0.2.31, zone: core, role: edge}
+  core-01:  {address: 192.0.2.7,  zone: core, role: control-plane}
+  idp-01:   {address: 192.0.2.32, zone: core, role: identity}
+  old-apps: {address: 192.0.2.100, zone: core, role: apps}
+
+services:
+  idp:
+    capability: idp
+    host: idp-01
+    protocol: https
+    port: 8443
+    owner: identity-team
+    version: "26.8.1"
+    tls: internal
+    auth: own
+    public_hostname: sso.example.internal
+    # the edge verifies the IdP's server certificate against the lab CA (no client certificate:
+    # tls is internal, not mtls)
+    edge_tls: {ca: "secret:pki/internal-ca"}
+
+  auth-proxy:
+    capability: auth-proxy
+    host: edge-01
+    protocol: http
+    port: 4180
+    upstreams: [idp]
+    owner: identity-team
+    version: "7.15.5"
+    tls: none
+    auth: own
+
+  status-hub:
+    capability: status-hub
+    host: core-01
+    protocol: http
+    port: 8099
+    owner: platform-team
+    version: "0.1.0"
+    tls: mtls
+    auth: idp
+    public_hostname: hub.example.internal
+    roles: {viewer: [lab-admins], approver: [lab-approvers]}
+    front_door: {header: X-Hnx-Front-Door, secret: "secret:status/front-door-secret"}
+    # the hub requires a client certificate signed by the lab CA: the edge presents its own
+    edge_tls:
+      client_cert: "secret:edge/hub-client-cert"
+      client_key: "secret:edge/hub-client-key"
+      ca: "secret:pki/internal-ca"
+      server_name: status-hub.svc.example.internal
+
+  old-app:
+    capability: dashboards
+    host: old-apps
+    protocol: http
+    port: 3000
+    owner: platform-team
+    version: "11.0.0"
+    tls: none
+    auth: idp
+    roles: {viewer: [lab-admins]}
+    public_hostname: dashboards.example.internal
+
+  old-wiki:
+    capability: docs
+    host: old-apps
+    protocol: http
+    port: 8000
+    owner: platform-team
+    version: "1.6.0"
+    tls: none
+    auth: own
+    public_hostname: wiki.example.internal

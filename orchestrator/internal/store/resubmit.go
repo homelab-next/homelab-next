@@ -109,6 +109,8 @@ type ResubmitCheck struct {
 	// Reason, when not empty, is the failure class the caller believes the parent failed with;
 	// it must equal the recorded one.
 	Reason string
+	// Limits bound the resubmit's submitter like any submit (CreateSubmit).
+	Limits SubmitLimits
 }
 
 // checkResubmit checks j (RetryOfRunID set) against its parent inside tx and fills in j's task
@@ -203,7 +205,7 @@ func (s *Store) CreateResubmit(j *Job, check ResubmitCheck) error {
 	if j.RetryOfRunID == "" {
 		return fmt.Errorf("CreateResubmit: RetryOfRunID is empty")
 	}
-	return s.createJob(j, &check)
+	return s.createJob(j, &check, nil)
 }
 
 // RetriedBy returns the run id of runID's retry, or "".

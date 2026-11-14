@@ -10,7 +10,7 @@ resources:
   disks: [{name: rootfs, size_gb: 40, pool: fast}]
 image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
 network: {zone: services, ip: 192.0.2.73}
-capability: cap:orchestration
-capability_groups: [cap_orchestration]
+capability: cap:automation
+capability_groups: [cap_automation]
 tags: [prod]
 owners: {primary: platform-team}

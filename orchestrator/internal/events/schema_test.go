@@ -8,24 +8,26 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/homelab-next/homelab-next/orchestrator/internal/schematest"
 )
 
 // The schemas the controller's events must satisfy, read in place from schemas/events: the
 // envelope for every event, and the data contracts of the two job events that have one.
 var emittedStems = []string{"envelope", "agent.job.finished", "agent.job.failed"}
 
-func mustValidator(t *testing.T) *validator {
+func mustValidator(t *testing.T) *schematest.Validator {
 	t.Helper()
-	v, err := loadValidator()
+	v, err := schematest.Load("../../../schemas")
 	if err != nil {
 		t.Fatal(err)
 	}
 	return v
 }
 
-func mustID(t *testing.T, v *validator, stem string) string {
+func mustID(t *testing.T, v *schematest.Validator, stem string) string {
 	t.Helper()
-	id, err := v.schemaIDOf(stem)
+	id, err := v.SchemaIDOf(stem)
 	if err != nil || id == "" {
 		t.Fatalf("schema %s: %q, %v", stem, id, err)
 	}
@@ -54,18 +56,18 @@ func TestSchemaValidatorAgreesWithTheRepositoryFixtures(t *testing.T) {
 				t.Fatalf("%s: no %s to check the validator against", stem, kind)
 			}
 			for _, f := range own {
-				doc, err := readJSON(f)
+				doc, err := schematest.ReadJSON(f)
 				if err != nil {
 					t.Fatal(err)
 				}
-				r := v.validate(id, doc)
-				if len(r.unsupported) > 0 {
-					t.Errorf("%s: the validator cannot judge it: %v", f, r.unsupported)
+				r := v.Validate(id, doc)
+				if len(r.Unsupported) > 0 {
+					t.Errorf("%s: the validator cannot judge it: %v", f, r.Unsupported)
 				}
-				if kind == "examples" && len(r.errs) > 0 {
-					t.Errorf("example %s is refused: %v", f, r.errs)
+				if kind == "examples" && len(r.Errs) > 0 {
+					t.Errorf("example %s is refused: %v", f, r.Errs)
 				}
-				if kind == "negative" && len(r.errs) == 0 {
+				if kind == "negative" && len(r.Errs) == 0 {
 					t.Errorf("negative %s is accepted", f)
 				}
 			}
@@ -73,7 +75,7 @@ func TestSchemaValidatorAgreesWithTheRepositoryFixtures(t *testing.T) {
 	}
 }
 
-func assertValid(t *testing.T, v *validator, stem string, e Event) {
+func assertValid(t *testing.T, v *schematest.Validator, stem string, e Event) {
 	t.Helper()
 	body, err := json.Marshal(e)
 	if err != nil {
@@ -83,9 +85,9 @@ func assertValid(t *testing.T, v *validator, stem string, e Event) {
 	if err := json.Unmarshal(body, &doc); err != nil {
 		t.Fatal(err)
 	}
-	r := v.validate(mustID(t, v, stem), doc)
-	if len(r.unsupported) > 0 || len(r.errs) > 0 {
-		t.Fatalf("%s envelope %s\nrefused: %v\nunsupported: %v", stem, body, r.errs, r.unsupported)
+	r := v.Validate(mustID(t, v, stem), doc)
+	if len(r.Unsupported) > 0 || len(r.Errs) > 0 {
+		t.Fatalf("%s envelope %s\nrefused: %v\nunsupported: %v", stem, body, r.Errs, r.Unsupported)
 	}
 }
 
@@ -153,9 +155,9 @@ func TestSchemaValidatorRefusesABadEnvelope(t *testing.T) {
 		body, _ := json.Marshal(e)
 		var doc any
 		_ = json.Unmarshal(body, &doc)
-		r := v.validate(mustID(t, v, stem), doc)
-		if len(r.unsupported) > 0 || len(r.errs) == 0 {
-			t.Errorf("%s: accepted (unsupported %v)", name, r.unsupported)
+		r := v.Validate(mustID(t, v, stem), doc)
+		if len(r.Unsupported) > 0 || len(r.Errs) == 0 {
+			t.Errorf("%s: accepted (unsupported %v)", name, r.Unsupported)
 		}
 	}
 }
@@ -163,7 +165,7 @@ func TestSchemaValidatorRefusesABadEnvelope(t *testing.T) {
 // ValidSource is the schema's svc_id rule: the same pattern and the same length bound, read in
 // place from schemas/ids/logical-id.schema.json.
 func TestValidSourceIsTheSchemasSvcID(t *testing.T) {
-	doc, err := readJSON("../../../schemas/ids/logical-id.schema.json")
+	doc, err := schematest.ReadJSON("../../../schemas/ids/logical-id.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}

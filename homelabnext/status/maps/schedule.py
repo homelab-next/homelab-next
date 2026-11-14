@@ -4,7 +4,8 @@ where a status source says so, its last and next run.
 
 Sources of truth, all read from the checkout and never copied:
 
-* **role timers** -- each ``<U>.timer`` (or ``.timer.j2``) a role or profile ships: its
+* **role timers** -- each ``<U>.timer`` (or ``.timer.j2``) a role (a core one, or a public
+  module's ``modules/<id>/roles/<role>``) or profile ships: its
   ``OnCalendar=`` with a ``{{ var }}`` resolved from the role's ``defaults/main.yml`` (then
   ``vars/main.yml``), its ``RandomizedDelaySec=`` and ``Description=``; the scripts it runs are
   the catalogued ones whose header names the trigger ``timer:<role>/<U>``
@@ -165,6 +166,9 @@ def gather_timers(root: Path, files: Sequence[str]) -> list[dict[str, Any]]:
             continue
         if rel.startswith("ansible/roles/") and len(parts) > 3:
             owner, owner_dir = parts[2], root / "ansible" / "roles" / parts[2]
+        elif rel.startswith("modules/") and len(parts) > 5 and parts[2] == "roles":
+            # a public module's role (modules/<id>/roles/<role>/): one namespace with the core's
+            owner, owner_dir = parts[3], root / "modules" / parts[1] / "roles" / parts[3]
         elif rel.startswith("profiles/") and len(parts) > 2:
             owner, owner_dir = parts[1], root / "profiles" / parts[1]
         else:

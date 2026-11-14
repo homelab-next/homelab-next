@@ -6,7 +6,7 @@ argument_specs:
       chrony_server_ids: &servers
         type: list
         elements: str
-        description: Logical ids of the lab's time sources in the registry (their host is used; NTP is UDP 123).
+        description: Logical ids of the lab's time sources in the registry (their host is used; NTP is UDP 123). May be empty only when chrony_pools names a pool.
         required: true
       chrony_pools: &pools
         type: list

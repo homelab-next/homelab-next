@@ -1,0 +1,64 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role openbao) for {{ openbao_logical_id }}. Do not edit.
+# A restart seals the server: only the operator unseals it (ADR-0042 decision 6).
+[Unit]
+Description=OpenBao secret store, server mode ({{ openbao_logical_id }})
+Documentation=https://openbao.org/docs/
+Wants=network-online.target
+After=network-online.target
+ConditionFileNotEmpty={{ openbao_config_file }}
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=notify
+User={{ openbao_user }}
+Group={{ openbao_group }}
+ExecStart={{ openbao_bin }} server -config={{ openbao_config_file }}
+ExecReload=/bin/kill --signal HUP $MAINPID
+KillMode=process
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+LimitCORE=0
+UMask=0077
+# The release never locks its memory: keep this service's memory out of swap whatever the host
+# does (cgroup v2). main also refuses a host with active swap (defence in depth).
+MemorySwapMax=0
+
+# The release never locks memory and needs no capability: port {{ openbao_port | int }} is unprivileged.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths={{ openbao_data_dir }} {{ openbao_audit_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# It binds its API and cluster ports and nothing else.
+SocketBindAllow=tcp:{{ openbao_port | int }}
+SocketBindAllow=tcp:{{ openbao_cluster_port | int }}
+SocketBindDeny=any
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

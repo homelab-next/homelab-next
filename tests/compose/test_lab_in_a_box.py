@@ -74,10 +74,31 @@ def nats_users() -> dict[str, dict]:
     }
 
 
+#: where a client account imports the bus account's JetStream calls (role events_bus's
+#: events_bus_api_prefix for the account HNX; the adapter's api_prefix)
+LAB_API_PREFIX = "JS.HNX.API"
+
+
+def bus_subject(subject: str) -> str:
+    """A client's grant as the bus account sees it: ``JS.HNX.API.<call>`` is the import of
+    ``$JS.API.<call>``; anything else is imported as it is."""
+    head = LAB_API_PREFIX + "."
+    return "$JS.API." + subject[len(head) :] if subject.startswith(head) else subject
+
+
+def client_subject(user: dict, subject: str) -> str:
+    """``subject`` (a ``$JS.API`` call or any other) as ``user`` names it: a client account
+    names its JetStream calls under the import prefix, the bus account (HNX) as they are."""
+    if user.get("account") != "HNX" and subject.startswith("$JS.API."):
+        return f"{LAB_API_PREFIX}.{subject[len('$JS.API.') :]}"
+    return subject
+
+
 def nats_allowed(user: dict, direction: str, subject: str) -> bool:
     """Does ``user`` (a :func:`nats_users` entry) may ``direction`` (publish / subscribe) on
     ``subject``: allow-list semantics, deny wins; a user with no permissions may do anything in
-    its own account."""
+    its own account.  As nats-server reads it, a missing or EMPTY ``allow`` is no restriction
+    (only ``deny`` then limits the user): ``{"allow": []}`` grants everything."""
     from conformance.fakes.jetstream_wire import subject_matches
 
     perms = (user.get("permissions") or {}).get(direction)
@@ -85,7 +106,8 @@ def nats_allowed(user: dict, direction: str, subject: str) -> bool:
         return "permissions" not in user
     if any(subject_matches(p, subject) for p in perms.get("deny", [])):
         return False
-    return any(subject_matches(p, subject) for p in perms.get("allow", []))
+    allow = perms.get("allow") or []
+    return not allow or any(subject_matches(p, subject) for p in allow)
 
 
 @pytest.fixture(scope="module")
@@ -174,6 +196,35 @@ def test_the_documented_memory_total_is_the_real_one(compose):
     broken = json.loads(json.dumps(compose))
     broken["services"]["metrics"]["mem_limit"] = "1g"  # what a silent bump would look like
     assert mem_total(broken) != int(stated[1])
+
+
+def swap_problems(compose) -> list[str]:
+    """Services whose ``memswap_limit`` is not their ``mem_limit``: profiled ones included."""
+    out = []
+    for name, svc in compose["services"].items():
+        swap = svc.get("memswap_limit")
+        if swap is None or mem_mb(swap) != mem_mb(svc["mem_limit"]):
+            out.append(f"{name}: memswap_limit {swap!r}, mem_limit {svc['mem_limit']!r}")
+    return out
+
+
+def test_every_service_has_no_swap_headroom(compose):
+    """memswap_limit == mem_limit on every service, the gateway profile's too: a limit then holds
+    the same with or without host swap, so a CI runner with swap catches an undersized limit that
+    would OOM-kill on a swapless host (broker-edge at 144m did, on the first real hardware)."""
+    assert not swap_problems(compose)
+    assert any(s.get("profiles") for s in compose["services"].values())
+
+
+@pytest.mark.parametrize("service", ["broker-edge", "llm-gateway"])
+@pytest.mark.parametrize("swap", [None, "2g", "897m"])
+def test_negative_swap_headroom_is_caught(compose, service, swap):
+    broken = json.loads(json.dumps(compose))
+    if swap is None:
+        del broken["services"][service]["memswap_limit"]
+    else:
+        broken["services"][service]["memswap_limit"] = swap
+    assert [p.split(":")[0] for p in swap_problems(broken)] == [service]
 
 
 GATEWAY_PROFILES = {"gateway"}
@@ -1347,6 +1398,7 @@ CREDENTIALS = (
     "LAB_UPTIME_PASSWORD",
     "LAB_HUB_FRONT_DOOR_SECRET",
     "LAB_BROKER_DEMO_TOKEN",
+    "LAB_ORCHESTRATOR_TOKEN",
     "LAB_GATEWAY_MASTER_KEY",
     "LAB_GATEWAY_DB_PASSWORD",
     "LAB_GATEWAY_SALT_KEY",
@@ -1398,7 +1450,21 @@ def guard(lab, tmp_path, docker=False, **env):
 
 
 def real_credentials():
-    return {k: f"changed-{k.lower()}" for k in CREDENTIALS}
+    # long enough for the job API token's 32-character minimum
+    return {k: f"changed-{k.lower()}-0123456789abcdef" for k in CREDENTIALS}
+
+
+def test_pass1_refuses_a_short_job_api_token_off_loopback(lab_copy, tmp_path):
+    env = {
+        "LAB_BIND": "0.0.0.0",
+        "LAB_I_UNDERSTAND_UNAUTHENTICATED": "1",
+        **real_credentials(),
+    }
+    env["LAB_ORCHESTRATOR_TOKEN"] = "short-but-changed-token"
+    r = guard_pass1(lab_copy, tmp_path, **env)
+    assert r.returncode == 4 and "LAB_ORCHESTRATOR_TOKEN is 23 characters" in r.stderr, r.stderr
+    env["LAB_ORCHESTRATOR_TOKEN"] = "a-job-api-token-of-32-characters"
+    assert guard_pass1(lab_copy, tmp_path, **env).returncode == 0
 
 
 def guard_pass1(lab, tmp_path, **env):
@@ -1679,19 +1745,24 @@ def test_the_events_service_requires_a_user_and_reads_the_lab_config(compose, en
         assert events["environment"][var] == f"${{{var}:?see .env.example}}"
         assert "fake" in env_vars[var]
     users = nats_users()
+    # the account split (round 5): the provisioner alone with the streams, a client per account
+    bridge = load_module("broker_e2e", LAB / "broker_e2e.py").LAB_NOT_BROKER
     assert {u: v["account"] for u, v in users.items()} == {
-        "hnx-broker": "HNX",
-        "hnx-st2-bridge": "HNX",
+        "hnx-broker": "HNX-hnx-broker",
+        bridge: f"HNX-{bridge}",
         "hnx-lab-admin": "HNX",
         "hnx-conformance": "CONFORM",
     }
+    clients = [v["account"] for v in users.values() if v["account"].startswith("HNX-")]
+    assert conf["accounts"]["HNX"]["jetstream"] == "enabled" and len(clients) == 2
+    assert all("jetstream" not in conf["accounts"][a] for a in clients)
 
 
 @pytest.mark.parametrize("kind", ["decision.returned", "decision.requested", "proposal.created"])
 def test_only_the_broker_may_publish_the_brokers_subjects(kind):
     e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
     subject = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.{kind}"
-    hnx = {n: u for n, u in nats_users().items() if u["account"] == "HNX"}
+    hnx = {n: u for n, u in nats_users().items() if u["account"].startswith("HNX")}
     assert [n for n, u in hnx.items() if nats_allowed(u, "publish", subject)] == ["hnx-broker"]
     broker = hnx["hnx-broker"]
     other = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.agent.job.failed"
@@ -1705,7 +1776,7 @@ def test_nobody_but_the_controller_may_publish_agent_job_events():
     for kind in ("failed", "other"):
         subject = f"{e2e.LAB_EVENTS_PREFIX}.homelabnext.agent.job.{kind}"
         allowed = [n for n, u in nats_users().items()
-                   if u["account"] == "HNX" and nats_allowed(u, "publish", subject)]  # fmt: skip
+                   if u["account"].startswith("HNX") and nats_allowed(u, "publish", subject)]  # fmt: skip
         assert allowed == [], subject
 
 
@@ -1724,19 +1795,22 @@ def test_the_conformance_account_has_its_own_jetstream_limits():
 def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     e2e = load_module("broker_e2e", LAB / "broker_e2e.py")
     stream = e2e.LAB_EVENTS_STREAM
-    hnx = {n: u for n, u in nats_users().items() if u["account"] == "HNX"}
+    hnx = {n: u for n, u in nats_users().items() if u["account"].startswith("HNX")}
     for name, user in hnx.items():
         assert "permissions" in user, name  # an allow-list for everyone in HNX
         for what in ("STREAM.PURGE", "STREAM.UPDATE", "STREAM.DELETE", "STREAM.MSG.DELETE",
                      "CONSUMER.DELETE"):  # fmt: skip
-            assert not nats_allowed(user, "publish", f"$JS.API.{what}.{stream}"), (name, what)
+            for call in (f"$JS.API.{what}.{stream}", f"{LAB_API_PREFIX}.{what}.{stream}"):
+                assert not nats_allowed(user, "publish", call), (name, what)
         subs = user["permissions"]["subscribe"]["allow"]
         assert subs == [f"_INBOX.{name}.>"], name
         for other in hnx:
             if other != name:
                 assert not nats_allowed(user, "subscribe", f"_INBOX.{other}.x.y"), (name, other)
-    # the bridge reads its own durables only, and creates no stream
+    # the bridge reads its own durables only, and creates no stream and no consumer: a consumer
+    # create takes a push deliver_subject, which the server delivers to any subject
     bridge = hnx["hnx-st2-bridge"]
+    admin = hnx["hnx-lab-admin"]
     bridge_json = json.loads((ROOT / "workflows" / "stackstorm" / "bridge.json").read_text())
     prefix = e2e.LAB_EVENTS_PREFIX
     # the bus-acl step reads and acks through the bridge's own durable on decision.returned
@@ -1745,17 +1819,25 @@ def test_no_user_may_purge_rewrite_or_read_another_users_inbox():
     for sub in bridge_json["subscriptions"]:
         d = sub["durable"]
         for what in ("INFO", "MSG.NEXT"):
-            assert nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.{what}.{stream}.{d}")
-        # only the filtered create (nats 2.9+): the server holds the request to that filter
-        create = f"$JS.API.CONSUMER.CREATE.{stream}.{d}"
-        assert nats_allowed(bridge, "publish", f"{create}.{prefix}.{sub['subject']}")
-        assert not nats_allowed(bridge, "publish", create)  # any filter, any shape
-        assert not nats_allowed(bridge, "publish", f"{create}.{prefix}.homelabnext.other")
+            call = f"$JS.API.CONSUMER.{what}.{stream}.{d}"
+            assert nats_allowed(bridge, "publish", client_subject(bridge, call))
+            assert not nats_allowed(bridge, "publish", call)  # its account answers $JS.API itself
+        for user, may in ((bridge, False), (admin, True)):
+            create = client_subject(user, f"$JS.API.CONSUMER.CREATE.{stream}.{d}")
+            # the provisioner pre-creates it through the filtered create (nats 2.9+) alone
+            assert nats_allowed(user, "publish", f"{create}.{prefix}.{sub['subject']}") is may
+            assert not nats_allowed(user, "publish", create)  # any filter, any shape
+            assert not nats_allowed(user, "publish", f"{create}.{prefix}.homelabnext.other")
+            assert not nats_allowed(user, "publish", client_subject(
+                user, f"$JS.API.CONSUMER.DURABLE.CREATE.{stream}.{d}"))  # fmt: skip
         assert nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.{d}.1.2.3.4.5")
     assert not nats_allowed(bridge, "publish", f"$JS.ACK.{stream}.other.1.2.3.4.5")
-    assert not nats_allowed(bridge, "publish", f"$JS.API.CONSUMER.CREATE.{stream}.other")
-    assert not nats_allowed(bridge, "publish", f"$JS.API.STREAM.CREATE.{stream}")
-    assert not nats_allowed(hnx["hnx-broker"], "publish", f"$JS.API.STREAM.CREATE.{stream}")
+    for user in (bridge, hnx["hnx-broker"]):
+        for call in (f"$JS.API.CONSUMER.CREATE.{stream}.other", f"$JS.API.STREAM.CREATE.{stream}",
+                     f"$JS.API.STREAM.MSG.GET.{stream}"):  # fmt: skip
+            assert not nats_allowed(user, "publish", client_subject(user, call)), call
+    # reading a stored message back reads every subject's: the provisioner's alone
+    assert nats_allowed(admin, "publish", f"$JS.API.STREAM.MSG.GET.{stream}")
 
 
 def nats_account_hash(account: str) -> str:
@@ -1790,7 +1872,7 @@ def test_acks_are_granted_token_exact_in_both_reply_subject_forms():
         if not acks:
             continue
         ackers += 1  # the bridge: the one user granted acks on the standing stream
-        h = nats_account_hash(user["account"])
+        h = nats_account_hash("HNX")  # the stream's account, not the client's
         durables = {s.split(".")[3] for s in acks if s.split(".")[2] == stream}
         assert durables
         assert sorted(acks) == sorted(
@@ -1854,3 +1936,262 @@ def test_nats_server_accepts_the_lab_config(tmp_path, env_vars):
     proc = subprocess.run(["nats-server", "-c", str(conf), "-t"], env=env, capture_output=True,
                           text=True, timeout=30)  # fmt: skip
     assert proc.returncode == 0, proc.stderr
+
+
+class FakeJobAPI(BaseHTTPRequestHandler):
+    """The controller's job API as the orchestration check sees it: a submit, then the run's
+    states one read at a time, ending as ``FINAL`` says."""
+
+    BEARER = "lab-fake-bearer"
+    FINAL: ClassVar[dict] = {}
+    states: ClassVar[list[str]] = []
+
+    def _send(self, status, doc):
+        body = json.dumps(doc).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _authorized(self):
+        return self.headers.get("Authorization") == f"Bearer {self.BEARER}"
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            return self._send(200, {"ok": True})
+        if not self._authorized():
+            return self._send(401, {"error": "unauthorized"})
+        state = FakeJobAPI.states.pop(0) if len(FakeJobAPI.states) > 1 else FakeJobAPI.states[0]
+        doc = {"run_id": "r1", "state": state}
+        if state == FakeJobAPI.states[-1] and not FakeJobAPI.states[1:]:
+            doc.update(FakeJobAPI.FINAL)
+        self._send(200, doc)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        sent = json.loads(self.rfile.read(length))
+        if (
+            not self._authorized()
+            or sent.get("agent_key") != "lab-smoke"
+            or not sent.get("idempotency_key")
+        ):
+            return self._send(400, {"error": "bad submit"})
+        self._send(201, {"run_id": "r1"})
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def job_api():
+    httpd = ThreadingHTTPServer((LOOPBACK, 0), FakeJobAPI)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://{LOOPBACK}:{httpd.server_address[1]}"
+    httpd.shutdown()
+    httpd.server_close()
+
+
+@pytest.mark.parametrize(
+    ("states", "final", "status", "detail"),
+    [
+        (["queued", "running", "done"], {"response_body": "lab-smoke-ok\n", "started_at": "t", "local_backend_used": "engine-a"},
+         "pass", "claimed on engine-a and done (states seen: queued -> running -> done)"),
+        (["queued", "failed"], {"local_failed_reason": "turn-failed: exit 1"}, "fail", "ended failed: turn-failed"),
+        (["done"], {"response_body": "lab-smoke-ok\n"}, "fail", "never claimed by a backend"),
+        (["done"], {"response_body": "something else", "started_at": "t", "local_backend_used": "engine-a"}, "fail", "ended done"),
+    ],
+)  # fmt: skip
+def test_orchestration_check_passes_only_for_a_claimed_finished_job(
+    checks, job_api, monkeypatch, states, final, status, detail
+):
+    monkeypatch.setattr(FakeJobAPI, "states", list(states))
+    monkeypatch.setattr(FakeJobAPI, "FINAL", final)
+    bases = {"orchestration": job_api, "orchestration-token": FakeJobAPI.BEARER}
+    (result,) = checks.run_checks(bases, only=["orchestration"], retries=1)
+    assert result["status"] == status and detail in result["detail"], result
+    (result,) = checks.run_checks(
+        {"orchestration": job_api, "orchestration-token": "wrong"},
+        only=["orchestration"],
+        retries=1,
+    )
+    assert result["status"] == "fail" and "HTTP 400" in result["detail"]
+
+
+def test_the_lab_smoke_reads_the_orchestration_endpoint_and_token(checks):
+    env = {"LAB_BIND": LOOPBACK, "LAB_PORT_ORCHESTRATOR": "8088", "LAB_ORCHESTRATOR_TOKEN": "t"}
+    bases = checks.bases_from_env(env)
+    assert (
+        bases["orchestration"] == f"http://{LOOPBACK}:8088" and bases["orchestration-token"] == "t"
+    )
+
+
+def _resolved_judge() -> str:
+    text = GUARD.read_text()
+    return text.split("read -r -d '' _LAB_RESOLVED_JUDGE <<'PY' || true\n", 1)[1].split(
+        "\nPY\n", 1
+    )[0]
+
+
+def _stub_judge(tmp_path: Path, config: dict, resolved: str) -> subprocess.CompletedProcess:
+    """The resolved judge run against a stub docker: ``config`` is what ``compose config
+    --format json`` prints, ``resolved`` what ``--environment`` prints for the lab's .env, and
+    .env.example alone resolves the token to a placeholder."""
+    lab = tmp_path / "lab"
+    lab.mkdir(exist_ok=True)
+    (lab / ".env.example").write_text("LAB_ORCHESTRATOR_TOKEN=fake-placeholder\n")
+    (lab / ".env").write_text("LAB_ORCHESTRATOR_TOKEN=${UNSET}x\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    (tmp_path / "resolved.env").write_text(f"LAB_I_UNDERSTAND_UNAUTHENTICATED=1\n{resolved}")
+    stub = bin_dir / "docker"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        f"  *'--format json'*) cat {tmp_path / 'config.json'} ;;\n"
+        f"  *'.env -f'*) cat {tmp_path / 'resolved.env'} ;;\n"
+        "  *) echo LAB_ORCHESTRATOR_TOKEN=fake-placeholder ;;\n"
+        "esac\n"
+    )
+    stub.chmod(0o755)
+    return subprocess.run(
+        [sys.executable, "-I", "-c", _resolved_judge(), str(lab)],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+
+
+#: 32 characters, the minimum (not hex: a hex secret this long trips the leak scan)
+LONG_TOKEN = "a-job-api-token-of-32-characters"
+PORTS = [{"host_ip": "0.0.0.0", "published": "8088"}]
+MOUNT = {"source": "orchestrator-token", "target": "/run/secrets/orchestrator-token"}
+EXPOSED = {"orchestrator": {"ports": PORTS, "secrets": [MOUNT]}}
+
+
+def _config(**secret) -> dict:
+    return {"services": EXPOSED, "secrets": {"orchestrator-token": secret}}
+
+
+def test_pass2_judges_the_job_api_token_compose_resolves(tmp_path):
+    """Pass 1 reads .env as written; compose expands ${VAR} there, so
+    `LAB_ORCHESTRATOR_TOKEN=${UNSET}x` is 9 characters to pass 1 and `x` to compose. The resolved
+    judge holds the resolved value to the 32-character minimum."""
+    config = _config(environment="LAB_ORCHESTRATOR_TOKEN")
+    r = _stub_judge(tmp_path, config, "LAB_ORCHESTRATOR_TOKEN=x\n")  # what ${UNSET}x resolves to
+    assert (
+        r.returncode == 4
+        and "LAB_ORCHESTRATOR_TOKEN (the orchestrator service's orchestrator-token secret) resolves to 1 characters"
+        in r.stderr
+    ), r.stderr
+    r = _stub_judge(tmp_path, config, f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n")
+    assert r.returncode == 0, r.stderr
+
+
+def test_pass2_measures_the_variable_the_token_secret_reads(tmp_path):
+    """The token's variable is the one the resolved orchestrator-token secret names, not a name
+    the guard assumes: a compose file that points the secret at another variable is judged by
+    that one, and a secret with no environment source cannot be measured, so it is refused."""
+    long = LONG_TOKEN
+    other = _config(environment="LAB_OTHER_TOKEN")
+    r = _stub_judge(tmp_path, other, f"LAB_ORCHESTRATOR_TOKEN={long}\nLAB_OTHER_TOKEN=x\n")
+    assert (
+        r.returncode == 4
+        and "LAB_OTHER_TOKEN (the orchestrator service's orchestrator-token secret)" in r.stderr
+    ), r.stderr
+    r = _stub_judge(tmp_path, other, f"LAB_ORCHESTRATOR_TOKEN=x\nLAB_OTHER_TOKEN={long}\n")
+    assert r.returncode == 0, r.stderr
+    r = _stub_judge(tmp_path, _config(file="./token"), f"LAB_ORCHESTRATOR_TOKEN={long}\n")
+    assert r.returncode == 4 and "not one secret read from an environment variable" in r.stderr, (
+        r.stderr
+    )
+
+
+def test_pass2_judges_the_secret_the_orchestrator_mounts(tmp_path):
+    """The secret judged is the one the orchestrator service mounts at its entrypoint's path, not
+    the secret named orchestrator-token: a compose file that mounts a weak secret there, while
+    another service mounts the long orchestrator-token, is refused; and an orchestrator that
+    mounts nothing there cannot be measured, so it is refused too."""
+    weak = {"source": "weak", "target": "/run/secrets/orchestrator-token"}
+    config = {
+        "services": {
+            "orchestrator": {"ports": PORTS, "secrets": [weak]},
+            "other": {"secrets": [MOUNT]},
+        },
+        "secrets": {
+            "orchestrator-token": {"environment": "LAB_ORCHESTRATOR_TOKEN"},
+            "weak": {"environment": "LAB_WEAK"},
+        },
+    }
+    env = f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\nLAB_WEAK=x\n"
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 4 and "LAB_WEAK (the orchestrator service's weak secret)" in r.stderr, (
+        r.stderr
+    )
+    config["services"]["orchestrator"]["secrets"] = []
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 4 and "not one secret read from an environment variable" in r.stderr, (
+        r.stderr
+    )
+    # a stack without the controller has no job API token to judge
+    config["services"] = {"other": {"ports": PORTS}}
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 0, r.stderr
+
+
+def _secrets(**env) -> dict:
+    return {"orchestrator-token": {"environment": "LAB_ORCHESTRATOR_TOKEN"}, **env}
+
+
+@pytest.mark.parametrize(
+    "marks",
+    [
+        {"image": "hnx-lab-orchestrator:local"},
+        {"image": "registry.example/x/hnx-lab-orchestrator@sha256:" + "0" * 64},
+        {"command": ["/bin/sh", "/app/entrypoint.sh"]},
+        {"ports": [{"host_ip": "0.0.0.0", "published": "9999", "target": 8088}]},
+    ],
+)
+def test_pass2_finds_a_renamed_controller_by_its_image_entrypoint_or_api_port(tmp_path, marks):
+    """The controller is judged by every mark it has, not only its service name: a copy renamed
+    `jobs` that mounts no token, or a weak one, is refused."""
+    svc = {"ports": PORTS, **marks}
+    config = {"services": {"jobs": svc}, "secrets": _secrets()}
+    env = f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n"
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 4 and "the controller service jobs mounts" in r.stderr, r.stderr
+    svc["secrets"] = [MOUNT]
+    r = _stub_judge(tmp_path, config, env)
+    assert r.returncode == 0, r.stderr
+    r = _stub_judge(tmp_path, config, "LAB_ORCHESTRATOR_TOKEN=x\n")
+    assert r.returncode == 4 and "the jobs service's orchestrator-token secret" in r.stderr
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    [
+        {"tmpfs": ["/run/secrets:size=1m"]},
+        {"tmpfs": "/run/secrets"},
+        {
+            "volumes": [
+                {"type": "bind", "source": "./t", "target": "/run/secrets/orchestrator-token"}
+            ]
+        },
+        {"volumes": [{"type": "volume", "source": "v", "target": "/run/secrets"}]},
+        {"volumes": [{"type": "tmpfs", "target": "/run"}]},
+    ],
+)
+def test_pass2_refuses_a_mount_over_the_controllers_secrets(tmp_path, shadow):
+    """A volume, bind or tmpfs at /run/secrets (or above it) on the controller replaces the file
+    compose gives it, so the measured secret would not be the token it reads."""
+    config = {
+        "services": {"orchestrator": {"ports": PORTS, "secrets": [MOUNT], **shadow}},
+        "secrets": _secrets(),
+    }
+    r = _stub_judge(tmp_path, config, f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n")
+    assert r.returncode == 4 and "over /run/secrets" in r.stderr, r.stderr
+    config["services"]["orchestrator"]["volumes"] = [{"type": "volume", "target": "/var/lib/x"}]
+    config["services"]["orchestrator"].pop("tmpfs", None)
+    r = _stub_judge(tmp_path, config, f"LAB_ORCHESTRATOR_TOKEN={LONG_TOKEN}\n")
+    assert r.returncode == 0, r.stderr

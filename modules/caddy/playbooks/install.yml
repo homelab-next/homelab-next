@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the edge on the guest the site placed the module's `edge` role on. The
+# apply path (docs/modules/apply.md) renders its own modules.yml from the selection and does not
+# import this file; it is the module's own entry point, for a lab that runs one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/caddy/playbooks/install.yml
+# docker_engine is applied to the guest first (a compose_app module's host); the roles' readiness
+# hooks refuse to go on without it. Caddy first: the auth proxy reaches the IdP through it.
+- name: Install the edge (Caddy and its forward-auth proxy)
+  hosts: mod_caddy_edge
+  become: true
+  pre_tasks:
+    - name: Preflight (Caddy's readiness)
+      ansible.builtin.include_role:
+        name: caddy
+        tasks_from: readiness
+      tags: [mod_caddy]
+    - name: Preflight (the auth proxy's readiness)
+      ansible.builtin.include_role:
+        name: caddy_auth_proxy
+        tasks_from: readiness
+      tags: [mod_caddy]
+  roles:
+    - role: caddy
+      tags: [mod_caddy]
+    - role: caddy_auth_proxy
+      tags: [mod_caddy]

@@ -1,6 +1,6 @@
 ---
-summary: 'The read-only status hub: registering sources, collecting, views, the page and status.json contract, events, agent activity and the broker Approvals page.'
-summary_of: outline:sha256:d1f8f8e52b102f21
+summary: 'The read-only status hub: sources, views, the status.json contract, events, agent activity, the mTLS edge hop from both sides and the Approvals page.'
+summary_of: outline:sha256:dd4201ec73c6b397
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Status hub: one read-only place for activity and status
@@ -719,9 +719,14 @@ the stream refreshes with a meta refresh, the inspector is a second pane chosen 
 
 The private pages and the `private` menu group exist only for a request that passes **all** of:
 
-1. it comes **from a trusted proxy address**: the hosts of the registry's `edge-proxy`
-   services (or `private.trusted_proxies`, registry host names); a local process on the hub's
-   host is not one, so the loopback listener alone never serves the private tier;
+1. it comes **from a trusted proxy address**: `private.trusted_proxies` (registry host names;
+   without the key, the hosts of the registry's `edge-proxy` services; the `status_hub` role
+   always writes it, from `status_hub_trusted_proxies`), and, when the hub serves TLS, **over a
+   verified client certificate** that passes the pin (below, "The edge-to-hub hop"); a local
+   process on the hub's host is not one, so the loopback listener alone never serves the private
+   tier. A request that is not from a trusted proxy has every identity header removed before any
+   page sees it (any header carrying `auth-request`, and `X-Forwarded-User`, `-Preferred-Username`,
+   `-Email`, `-Groups`, `X-Remote-User`, `Remote-User`), so it names nobody;
 2. it carries the **front-door header** with the shared secret. The registry declares it on the
    hub's service (`front_door: {header: X-Hnx-Front-Door, secret: "secret:status/front-door-secret"}`,
    needs `auth: idp` and a `public_hostname`), and the generated Caddy site adds it:
@@ -729,6 +734,7 @@ The private pages and the `private` menu group exist only for a request that pas
    status.lab.example {
    	request_header -*auth-request*
    	request_header -*auth_request*
+   	# and import hnx_strip_foreign_identity: other proxies' identity headers (below)
    	import hnx_forward_auth hub-approvers,hub-private-viewers
    	reverse_proxy <the hub's capability alias and port> {
    		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
@@ -762,17 +768,20 @@ none of them, so only viewers and approvers reach the hub at all) and sends a si
 to `/oauth2/sign_in`. To let other signed-in people see the hub's non-private pages, give their
 group a role of its own on the hub's row (say `reader`); the hub ignores roles it does not read.
 
-**Provisioning the people.** The realm requires a one-time code on every sign-in (browser and
-direct grant) and makes a user with none enrol one at their first browser sign-in. That
-enrolment is **trust on first use**: whoever first signs in with an un-enrolled account's
-password enrols the authenticator, so someone who learns that password before its owner signs
-in enrols their own and holds the account. Create each viewer and approver with a temporary
-password (the realm's `UPDATE_PASSWORD` action makes them change it) and have them enrol in
-person, at a session you watch, or pre-enrol their OTP credential when you create the account;
-do not leave an account with a password and no enrolled factor (ADR-0034 decision 2).
+**Provisioning the people.** The realm requires a password and a passkey (WebAuthn, with user
+verification) on every browser sign-in, refuses every direct grant, offers no one-time code, and
+makes a user with no key register one at their first browser sign-in (ADR-0034 decision 2,
+amended 2026-11-13). That enrolment is **trust on first use**: whoever first signs in with an
+un-enrolled account's password registers the key, so someone who learns that password before its
+owner signs in registers their own and holds the account. Create each viewer and approver with a
+temporary password (the realm's `UPDATE_PASSWORD` action makes them change it) and have them
+register their key in person, at a session you watch; do not leave an account with a password and
+no registered key. The realm refuses the reserved usernames (the Stage 4 proof approver
+`operator-one`, and the site's own `--reserved-username` list) as a username.
 
 Anything missing, repeated or malformed is `403`. Run the hub with `hnx status serve --agents
-examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example`.
+examples/status/agents.yml --bind <address> --allow-remote --allowed-host status.lab.example` and
+its TLS options (the next section).
 **Check your edge** once: a request to the site with a forged `X-Auth-Request-Preferred-Username`
 and no login must not reach the hub with that header. Run Caddy 2.11.2 or later (2.9.0 to 2.11.1
 keep a client-sent header the auth proxy omits) with the generated snippet, which deletes every
@@ -783,6 +792,151 @@ Every private view is appended to the access log (`private.access_log`, JSONL, m
 `user`, `view`, `session`, `event`), which is itself a private page. Detail content is rendered as
 escaped text only (never HTML or markdown) and nothing in this code feeds it back into an agent's
 context.
+
+### The edge-to-hub hop: mTLS (Stage 5)
+
+Off loopback the hop from the edge to the hub is TLS with **client-certificate authentication**,
+so "came from the edge" is a cryptographic fact rather than a source address (an address can be
+shared: a subnet router that SNATs its clients, containers NATed out of the edge's host):
+
+```
+hnx status serve --agents agents.yml --bind <address> --allow-remote --allowed-host status.lab.example \
+  --tls-cert server.crt --tls-key server.key --client-ca edge-ca.crt --client-name edge.example.internal
+```
+
+- **The handshake refuses** a peer with no client certificate, with one from another CA, or with
+  one whose extended key usage excludes client authentication; plain HTTP to the TLS port gets no
+  HTTP answer. The handshake runs on the connection's own thread with a 5 s deadline (and a whole
+  TLS connection has 60 s), so a peer that connects and stalls cannot stop the hub accepting
+  others. Refused connections are counted, with one line on stderr at most once a minute.
+- **`--client-name` pins the edge** (repeatable; `NAME@ADDRESS[,ADDRESS...]` also binds the name to the source addresses it is accepted from, IPv4-mapped spellings included: the hooks' own certificate is bound to the hub's address): a certificate the CA signed that names none of
+  them (its DNS subjectAltNames, or its CN only when it has no subjectAltName extension at all;
+  exact, no wildcard) is closed
+  right after the handshake. Without it, any certificate the CA signed is admitted.
+- **Trust needs both**: a request's identity headers count only when it comes from a trusted
+  proxy's address *and* over a verified, pinned certificate. The front-door secret header stays
+  the second check, and the group checks are unchanged.
+- **Plain HTTP** stays on loopback, and off loopback only with `--plain-http`, the explicit
+  opt-in for tests and lab-in-a-box; trust is then the source address alone, as before.
+- The edge needs a client certificate from an internal CA (a public CA does not issue client
+  authentication), and its `reverse_proxy` must present it to the hub. The `caddy` generator's
+  upstream mTLS transport (a `tls: mtls` row's `edge_tls`) is a separate change (Stage 5, H2):
+  until the edge you run presents a client certificate, an off-loopback hub behind it keeps
+  `--plain-http` (`status_hub_plain_http: true`).
+- **Pin the edge whenever the client CA signs anything else.** Without `--client-name` any
+  certificate the CA signed is admitted, and from a trusted proxy's address it is as good as the
+  edge's. The hooks' own certificate (below) joins the same pin, so give it a name only the hub's
+  hooks hold and keep its key off the edge's host.
+- **No revocation check**: client certificates are not checked against a CRL or OCSP. Keep them
+  short-lived and rotate the CA (or drop the name from the pin) to withdraw one.
+
+The `status_hub` role turns this on when `status_hub_tls_cert_ref`, `status_hub_tls_key_ref` and
+`status_hub_client_ca_ref` are set (secret references, written 0640 to `/etc/hnx-hub/tls`, never
+inline), with `status_hub_client_names` as the pin; off loopback without them it needs
+`status_hub_plain_http: true`. `status_hub_trusted_proxies` names the proxies the hub trusts:
+registry host names, or the exact address the registry gives a host (it must give no other host
+the same address), at least one, never a wildcard or a range; the role writes them to
+`agents.yml` as host names (default: the hosts of the registry's `edge-proxy` rows), for example
+`status_hub_trusted_proxies: [edge-core]`. **Health and readiness** run `hnx status probe-tls` on the bind
+address, trusting exactly the installed server certificate's leaf by `status_hub_tls_server_name`:
+a peer without a client certificate must be refused with a TLS alert (an HTTP answer, a bare close,
+a plain listener or no listener fails). The hooks never hold the edge's certificate; give them their
+own (`status_hub_health_client_cert_ref`/`_key_ref`, signed by the client CA, its name
+`status_hub_health_client_name`, which joins the pin, **bound to the hub's own address**: the unit
+passes `--client-name NAME@ADDRESS`, so the same certificate presented from any other host, the
+edge's included, is closed in the handshake rather than answered) and they also fetch `/status.json`
+over mTLS and check it is the status document. Without one, the end-to-end check is the edge's own health of
+the hub's route.
+
+### The edge side of the hop (`edge_tls`, registry 2.10)
+
+The front-door secret proves only that a request carries a value the edge knows. With mTLS the
+hub also requires the **edge's client certificate**, so "came from the edge" is a property of
+the TLS session, not of a source address. The registry declares both sides on the hub's row:
+
+```yaml
+status-hub:
+  protocol: http
+  port: 8099
+  tls: mtls                       # the hub serves TLS and requires a client certificate
+  public_hostname: hub.example.internal
+  front_door: {header: X-Hnx-Front-Door, secret: "secret:status/front-door-secret"}
+  edge_tls:
+    client_cert: "secret:edge/hub-client-cert"   # the edge's client certificate (PEM)
+    client_key: "secret:edge/hub-client-key"     # its key (PEM)
+    ca: "secret:pki/internal-ca"                 # the CA the hub's server certificate chains to
+    server_name: status-hub.svc.example.internal # optional: default, the alias the edge dials
+```
+
+and the generated site reaches the hub with:
+
+```caddyfile
+reverse_proxy https://<the hub's capability alias and port> {
+	header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
+	transport http {
+		tls
+		tls_client_auth /etc/hnx/edge-tls/edge/hub-client-cert.pem /etc/hnx/edge-tls/edge/hub-client-key.pem
+		tls_trust_pool file /etc/hnx/edge-tls/pki/internal-ca.pem
+		tls_server_name status-hub.svc.example.internal
+	}
+}
+```
+
+- **The material is never in a generated file.** Each `edge_tls` entry names a secret; the
+  Caddyfile names the file `/etc/hnx/edge-tls/<secret path>.pem`, and the generator writes
+  `caddy/edge_tls.json` listing every file (path, secret, mode `0600` for a key and `0644` for a
+  certificate, the sites that read it) for the edge's role to write from the secret store.
+- **Verification is never off.** The upstream's certificate is checked against `ca` (not the
+  system roots) for `server_name`. The generator refuses to render `tls_insecure_skip_verify`,
+  a test fails if any registry in the tree renders it, and `tools/tls_verify_lint.py` fails any
+  Caddyfile in the tree that holds it.
+- **The rules** (the registry refuses each, the generator again for a hand-built model): a
+  public `tls: mtls` row needs `edge_tls`; `edge_tls` needs a `public_hostname` and `tls:
+  internal` or `mtls`; `client_cert` and `client_key` go together, are required for `mtls` and
+  refused otherwise; the key is never the certificate or the CA. `tls: internal` with only `ca`
+  is the IdP's case: TLS verified against the lab CA, no client certificate.
+
+### One deployment's edge (`--edge-host`)
+
+A registry can hold two deployments, as an overlay does while a new lab is built beside an old
+one. By default the `caddy` generator publishes every public primary, which is right for a
+registry that is one deployment and is what it always did. **An edge that serves one deployment
+of a shared registry renders with its hosts:**
+
+```sh
+hnx registry generate services.yml out/ --only caddy \
+  --edge-host edge-01 --edge-host core-01 --edge-host idp-01
+```
+
+- Only the public rows on those hosts become sites; every other row (the old lab's) is left out.
+- **A dial outside the hosts is refused**, not skipped. For a valid registry the case that
+  matters is the forward-auth proxy: an in-scope `auth: idp` site whose `auth-proxy` primary is on
+  another deployment's host is refused, so the new edge can never ask the old lab to sign anyone
+  in. (A site dials its own row's capability alias, which is that row, so its own dial is in scope
+  by construction; the generator checks it again for a hand-built model.) When no in-scope site
+  needs forward auth, the `hnx_forward_auth` snippet is not rendered at all.
+- An unknown host name, a set with no public row, and `--edge-host` with no generator that takes
+  it (`--only dns_zone`) are refused, so a typo cannot render a harmless-looking empty edge.
+
+The default stays "every public primary" because every existing registry is one deployment and
+the lint (`tools/caddy_lint.py`) renders each one whole. That leaves the shared-registry case to
+the caller: **an edge module for a shared registry must always pass `--edge-host`** (an acceptance
+check of the edge module, H3: its role refuses to render without it). Only the edge is scoped:
+the other generators (the DNS zone, the IdP realm's clients, the hosts block) still render every
+row of a shared registry.
+
+### Other proxies' identity headers
+
+The hub reads only the platform's identity headers (`X-Auth-Request-*`), which the edge deletes
+from the client and the auth proxy alone sets. An app behind the edge may instead read
+`X-Forwarded-User`, `X-Forwarded-Groups`, `X-Forwarded-Email`, `X-Forwarded-Preferred-Username`,
+`X-Forwarded-Access-Token`, the `Remote-User` family or `X-WEBAUTH-USER`; the edge never sets
+those, so every client-sent copy is deleted too, in every `-`/`_` spelling, at site level before
+forward auth runs (the generated `hnx_strip_foreign_identity` snippet, which every site imports;
+`homelabnext.edge_identity.FOREIGN_IDENTITY`). It deletes every header containing one of the
+stems (`forwarded-user`, `forwarded-group`, `remote-user`, `webauth`, ...), so `-Username` and
+`-Groups` variants go too; it is a deny-list and cannot be complete, so an app that trusts some
+other header needs its own strip.
 
 ### The Approvals page (broker stage 2b)
 
@@ -865,7 +1019,8 @@ same-origin` (the rest of the hub sends `no-referrer`, under which a browser pos
 approval expired shows its form again, and one whose approval was consumed (it ran) is no longer
 awaiting approval (`409`).
 
-**The broker side.** Run the hub as its own system user (`hnx-hub`) in the broker socket's group
+**The broker side.** The `status_hub` role ([deploying with Ansible](broker.md#deploying-with-ansible))
+does what this paragraph says. Run the hub as its own system user (`hnx-hub`) in the broker socket's group
 and list it in the broker manifest's `approval_relays` with the same `issuer`; add each person who
 may approve to the manifest's `approvers` (`{issuer: sso, subject: <username>, kind: human}`).
 **Caddy:** the generated site for the hub's service (the `caddy` generator, `caddy/sites.caddy`)
@@ -890,7 +1045,7 @@ them from `tests/status/fixtures/`.
 | Uptime Kuma | kind `poll-uptime-kuma` | `server/routers/status-page-router.js`, `model/{status_page,group,monitor,heartbeat,incident}.js` (1.23 and 2.5); a real 1.23.16 and 2.5.6 | fixtures (recorded) + lab-in-a-box nightly |
 | StackStorm | kind `poll-stackstorm` | `st2common/openapi.yaml` (`/api/v1/executions`), `ActionExecutionAPI`, `constants/action.py` | fixtures only: it needs MongoDB, RabbitMQ and a dozen st2 services, far over the 4 GB lab's remaining 256 MB |
 | Apache NiFi | kind `poll-nifi` | `FlowResource` (`/flow/status`, `/flow/bulletin-board`), `ControllerStatusDTO`, `BulletinBoardEntity`, `BulletinEntity`/`BulletinDTO` | fixtures only: its default JVM heap alone is 1 GB (`bootstrap.conf`), four times what the 4 GB lab has left |
-| LLM orchestrator | builtin `orchestrator-queue` | `internal/api/server.go` (routes), `internal/store` `QueueSummary` | fixtures only (the maintainer's own service, not in the lab) |
+| LLM orchestrator | builtin `orchestrator-queue` | `internal/api/server.go` (routes), `orchestrator/internal/store` `QueueSummary` | fixtures only (the maintainer's own service, not in the lab) |
 | Agentmetry | builtin `agentmetry-audit` | `apps/orchestrator/api/routes/audit.py` (`/audit/status`), `core/auth.py` (`X-API-Key`) | fixtures only |
 
 ### Prometheus (`poll-prometheus`)

@@ -16,7 +16,9 @@ description: Resubmit an agent job once, at lower priority, when it failed for a
 trigger:
   event: homelabnext.agent.job.failed
   where:
-    - {ref: $event.source, equals: "svc:llm-orchestrator"}  # the producer: the controller (its default events.source)
+    # the producer: the controller, under its source or, for the one-release overlap, the private
+    # controller's (ADR-0026 decision 16); svc:llm-orchestrator goes at cutover+1
+    - {ref: $event.source, in: ["svc:orchestrator", "svc:llm-orchestrator"]}
     - {ref: $event.data.reason, in: [capacity, stall, timeout, backend-down]}
     - {ref: $event.data.resubmits, in: [0]}
     - {ref: $event.data.retried_by_run_id, exists: false}  # retried already (a resubmit or the scheduler)
@@ -27,7 +29,7 @@ steps:
   - id: resubmit
     kind: action
     action: agent.job.submit
-    target: svc:orchestration
+    target: svc:orchestrator
     params:
       agent_key: $event.data.agent_key
       retry_of_run_id: $event.data.run_id
@@ -39,7 +41,7 @@ fixtures:
     event:
       specversion: "1.0"
       id: evt-job-0001
-      source: svc:llm-orchestrator
+      source: svc:orchestrator
       type: homelabnext.agent.job.failed
       time: "2026-01-01T00:00:00Z"
       subject: run-0001
@@ -47,14 +49,14 @@ fixtures:
     expect:
       calls:
         - action: agent.job.submit
-          target: svc:orchestration
+          target: svc:orchestrator
           params: {agent_key: triage, retry_of_run_id: run-0001, idempotency_key: run-0001, priority: 90, reason: capacity}
           result: executed
   - name: resubmitted-job-not-retried-again
     event:
       specversion: "1.0"
       id: evt-job-0002
-      source: svc:llm-orchestrator
+      source: svc:orchestrator
       type: homelabnext.agent.job.failed
       time: "2026-01-01T00:20:00Z"
       subject: run-0002
@@ -66,7 +68,7 @@ fixtures:
     event:
       specversion: "1.0"
       id: evt-job-0003
-      source: svc:llm-orchestrator
+      source: svc:orchestrator
       type: homelabnext.agent.job.failed
       time: "2026-01-01T00:30:00Z"
       subject: run-0003
@@ -78,7 +80,7 @@ fixtures:
     event:
       specversion: "1.0"
       id: evt-job-0004
-      source: svc:llm-orchestrator
+      source: svc:orchestrator
       type: homelabnext.agent.job.failed
       time: "2026-01-01T00:40:00Z"
       subject: run-0004
@@ -90,11 +92,38 @@ fixtures:
     event:
       specversion: "1.0"
       id: evt-job-0006
-      source: svc:llm-orchestrator
+      source: svc:orchestrator
       type: homelabnext.agent.job.failed
       time: "2026-01-01T00:50:00Z"
       subject: run-0006
       data: {run_id: run-0006, agent_key: triage, state: failed, reason: timeout, failure_class: timeout, attempts: 1, resubmits: 0, auto_retry_scheduled: true}
+    expect:
+      triggered: false
+      calls: []
+  - name: capacity-failure-under-the-old-source-resubmitted
+    event:
+      specversion: "1.0"
+      id: evt-job-0007
+      source: svc:llm-orchestrator
+      type: homelabnext.agent.job.failed
+      time: "2026-01-01T00:10:00Z"
+      subject: run-0007
+      data: {run_id: run-0007, agent_key: triage, state: failed, reason: capacity, failure_class: capacity, attempts: 2, resubmits: 0}
+    expect:
+      calls:
+        - action: agent.job.submit
+          target: svc:orchestrator
+          params: {agent_key: triage, retry_of_run_id: run-0007, idempotency_key: run-0007, priority: 90, reason: capacity}
+          result: executed
+  - name: another-producer-not-retried
+    event:
+      specversion: "1.0"
+      id: evt-job-0008
+      source: svc:status-hub
+      type: homelabnext.agent.job.failed
+      time: "2026-01-01T00:15:00Z"
+      subject: run-0008
+      data: {run_id: run-0008, agent_key: triage, state: failed, reason: capacity, failure_class: capacity, attempts: 2, resubmits: 0}
     expect:
       triggered: false
       calls: []

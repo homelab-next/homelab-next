@@ -116,7 +116,7 @@ def test_the_committed_bridge_file_loads_and_pins_each_subjects_producers():
     assert cfg.api_key == "secret:stackstorm/webhook-key"
     by = {s.subject: s for s in cfg.subscriptions}
     assert by["homelabnext.proposal.created"].sources == {"svc:broker"}
-    assert by["homelabnext.agent.job.failed"].sources == {st2.ORCHESTRATOR_SOURCE}
+    assert by["homelabnext.agent.job.failed"].sources == set(st2.ORCHESTRATOR_SOURCES)
 
 
 @pytest.mark.parametrize(
@@ -595,8 +595,18 @@ def test_a_transport_failure_reconnects_and_reopens_the_durables(hook):
     assert b.stats()["state"] == "ok"
 
 
-def provisioned(limits: bool = True) -> FakeJetStreamWire:
-    """A server where the operator created the stream and its DLQ (docs/stackstorm.md)."""
+def bridge_durables(ack_wait: float = sb.ACK_WAIT_S, **kw) -> list[dict]:
+    """The bridge's durables as the provisioner declares them (events_bus_durables)."""
+    return [{"durable": s.durable, "filter": f"hnx.{s.subject}", "ack_wait": ack_wait,
+             "max_deliver": 100, **kw} for s in sb.load_bridge(BRIDGE).subscriptions]  # fmt: skip
+
+
+def provisioned(
+    limits: bool = True, *, durables: bool = True, ack_wait: float = sb.ACK_WAIT_S
+) -> FakeJetStreamWire:
+    """A server where the operator created the stream and its DLQ (docs/stackstorm.md) and,
+    unless ``durables`` is false, the bridge's pull durables, as the events bus role's
+    provisioner does (the bridge creates neither)."""
     wire = FakeJetStreamWire()
     cap = {"max_bytes": 1 << 30, "max_age": 30 * 86400 * 10**9} if limits else {}
     adv = "$JS.EVENT.ADVISORY.CONSUMER"
@@ -606,6 +616,8 @@ def provisioned(limits: bool = True) -> FakeJetStreamWire:
     ):
         body = {"name": name, "subjects": subjects, "retention": "limits", **cap}
         wire.request(f"$JS.API.STREAM.CREATE.{name}", json.dumps(body).encode(), timeout=1)
+    if durables:
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(ack_wait))
     return wire
 
 
@@ -621,7 +633,7 @@ def standing(wire: FakeJetStreamWire, ack_wait: float = sb.ACK_WAIT_S):
 
 
 def test_the_bridge_creates_no_stream_and_refuses_an_unbounded_one():
-    """It reads the stream and manages its durables, nothing else: a missing stream, or one a
+    """It reads the stream and binds to its durables, nothing else: a missing stream, or one a
     poison flood could grow without bound, is a configuration error, never created."""
     with pytest.raises(EventsError, match="does not exist"):
         standing(FakeJetStreamWire())
@@ -629,21 +641,58 @@ def test_the_bridge_creates_no_stream_and_refuses_an_unbounded_one():
         standing(provisioned(limits=False))
     wire = provisioned()
     before = len(wire.log)
-    standing(wire)
-    assert not [s for s, _p, _h in wire.log[before:] if ".STREAM.CREATE." in s]
+    bridge(standing(wire), lambda _ev: 202)
+    assert not [s for s, _p, _h in wire.log[before:] if ".CREATE." in s]
+
+
+def test_the_bridge_creates_no_durable_and_refuses_a_missing_or_push_one():
+    """Round 4 (security F1): a client that may create a consumer may point a push
+    deliver_subject anywhere, so the bridge only binds; a durable the provisioner has not
+    created, or one that is a push consumer, is a configuration error (exit 2), never created
+    or used."""
+    wire = provisioned(durables=False)
+    before = len(wire.log)
+    with pytest.raises(sb.BridgeError, match=r"does not exist.*provisioner"):
+        bridge(standing(wire), lambda _ev: 202)
+    assert not [s for s, _p, _h in wire.log[before:] if ".CONSUMER.CREATE." in s]
+    # one made some other way as a push consumer (the fake models pull consumers only, so its
+    # recorded configuration is edited): never bound to, never taken as provisioned
+    wire = provisioned()
+    [first, *_] = sb.load_bridge(BRIDGE).subscriptions
+    wire.streams["HNX"].consumers[first.durable].config["deliver_subject"] = "_INBOX.other.x"
+    with pytest.raises(sb.BridgeError, match="push consumer"):
+        bridge(standing(wire), lambda _ev: 202)
+    with pytest.raises(EventsError, match="push consumer"):  # nor does the provisioner take it
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables()[:1])
 
 
 def test_the_lease_outlasts_a_post(hook):
     """A delivery leased for less than the POST timeout would be handed out again mid-POST."""
     hook = webhook(hook)
     assert hook.timeout + sb.LEASE_MARGIN_S <= sb.ACK_WAIT_S
-    wire = provisioned()
-    with pytest.raises(sb.BridgeError, match="ack_wait 3s"):
-        bridge(standing(wire, ack_wait=3.0), hook)
-    # the durable keeps the lease it was created with: a reopen with a longer one still refuses
-    with pytest.raises(sb.BridgeError, match="nats consumer edit"):
-        bridge(standing(wire), hook)
+    # the durable keeps the lease it was provisioned with, whatever the client asks for
+    with pytest.raises(sb.BridgeError, match=r"ack_wait 3s.*nats consumer edit"):
+        bridge(standing(provisioned(ack_wait=3.0)), hook)
     bridge(standing(provisioned()), hook)
+
+
+def test_a_durable_that_dead_letters_before_the_bridge_would_is_warned_about(caplog):
+    """The server dead-letters at the DURABLE's max_deliver: one provisioned with the
+    provisioner's default (5) under the bridge's --max-deliver (100) loses an event after five
+    failed POSTs, so the bridge says so when it binds (its docs: declare 100)."""
+    import logging
+
+    logger = sb.log.name
+    wire = provisioned(durables=False)
+    nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(max_deliver=5))
+    with caplog.at_level(logging.WARNING, logger=logger):
+        bridge(standing(wire), lambda _ev: 202)
+    warned = [r.getMessage() for r in caplog.records if "max_deliver 5" in r.getMessage()]
+    assert len(warned) == 3 and "--max-deliver 100" in warned[0], warned
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger=logger):
+        bridge(standing(provisioned()), lambda _ev: 202)  # declared with 100: nothing to say
+    assert not [r for r in caplog.records if "max_deliver" in r.getMessage()]
 
 
 def test_reopening_several_durables_waits_out_one_lease_not_one_each():
@@ -682,8 +731,8 @@ class Wall:
 def test_a_new_durable_forwards_what_was_published_before_it_existed(hook):
     """The reviewer's r4: durables were created deliver_policy new, so whatever the relay
     published before the bridge's first start (or after a durable was recreated) was skipped for
-    good.  A durable the bridge creates now starts REPLAY_S back: no further, so a
-    long-retention stream does not replay its history."""
+    good.  A durable the provisioner creates with replay_s REPLAY_S starts that far back: no
+    further, so a long-retention stream does not replay its history."""
     wall = Wall()
     wire = FakeJetStreamWire(wall=wall)
     for name, subjects in (
@@ -695,12 +744,15 @@ def test_a_new_durable_forwards_what_was_published_before_it_existed(hook):
         wire.request(f"$JS.API.STREAM.CREATE.{name}", json.dumps(body).encode(), timeout=1)
     bus = nj.JetStreamBus(
         wire, stream="HNX", subject_prefix="hnx", ack_wait=sb.ACK_WAIT_S, provision=False,
-        replay_s=sb.REPLAY_S, wall=wall,
+        wall=wall,
     )  # fmt: skip
     publish(bus, proposal(0))  # ancient: older than admit's memory
     wall.t += sb.REPLAY_S + 3600
     publish(bus, proposal(1))  # the relay published it before the bridge's first start
     wall.t += 60
+    # the provisioner creates the durables just before the bridge first starts
+    nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(replay_s=sb.REPLAY_S),
+                           wall=wall)  # fmt: skip
     b = bridge(bus, webhook(hook))
     publish(bus, proposal(2))
     while b.poll():
@@ -710,13 +762,15 @@ def test_a_new_durable_forwards_what_was_published_before_it_existed(hook):
     assert got == ["evt-bridge-1", "evt-bridge-2"]
 
 
-def test_the_bridge_creates_pull_durables_through_the_filtered_create_only():
+def test_the_provisioner_creates_pull_durables_through_the_filtered_create_only():
     """SEC5: CONSUMER.CREATE.<stream>.<durable> takes any config, a push deliver_subject or
-    another filter included.  The adapter creates pull durables only, through the 2.9+ form whose
-    subject carries the filter, so the bus ACL can grant exactly that."""
-    wire = provisioned()
+    another filter included.  The provisioner creates pull durables only, through the 2.9+ form
+    whose subject carries the filter; the bridge then binds to them and creates nothing."""
+    wire = provisioned(durables=False)
     before = len(wire.log)
-    bridge(standing(wire), lambda _ev: 202)
+    assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables()) == [
+        s.durable for s in sb.load_bridge(BRIDGE).subscriptions
+    ]
     creates = [(s, json.loads(p)) for s, p, _h in wire.log[before:] if ".CONSUMER.CREATE." in s]
     assert len(creates) == 3
     for subject, body in creates:
@@ -725,6 +779,15 @@ def test_the_bridge_creates_pull_durables_through_the_filtered_create_only():
             subject == f"$JS.API.CONSUMER.CREATE.HNX.{cfg['durable_name']}.{cfg['filter_subject']}"
         )
         assert "deliver_subject" not in cfg and cfg["ack_policy"] == "explicit"
+    # a second run creates nothing; the bridge binds and creates nothing either
+    assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables()) == []
+    before = len(wire.log)
+    bridge(standing(wire), lambda _ev: 202)
+    assert not [s for s, _p, _h in wire.log[before:] if ".CONSUMER.CREATE." in s]
+    for bad in ({"deliver_subject": "_INBOX.x.y"}, {"ack_policy": "none"},
+                {"deliver_policy": "last"}):  # fmt: skip
+        with pytest.raises(EventsError):
+            nj.provision_consumers(wire, stream="HNX", durables=[dict(bridge_durables()[0], **bad)])
     with pytest.raises(EventsError, match="did not match filtered subject"):
         nj._api(
             wire,
@@ -732,6 +795,79 @@ def test_the_bridge_creates_pull_durables_through_the_filtered_create_only():
             {"stream_name": "HNX", "config": {"durable_name": "x", "filter_subject": "hnx.>"}},
             timeout=1,
         )
+
+
+def test_the_provisioner_names_a_durable_that_drifted_from_its_declaration():
+    """Security audit of overlay #19 (finding 3): an existing durable is never changed, so one
+    created with another lease, max_deliver or start keeps it silently.  The provisioner now
+    refuses it, naming each field (live and declared) and whether it can be edited in place; it
+    never recreates or edits it, and the bridge's own bind is unchanged."""
+    wire = provisioned(ack_wait=3.0)
+    before = len(wire.log)
+    first = bridge_durables()[:1]
+    with pytest.raises(nj.NotProvisioned) as exc:
+        nj.provision_consumers(wire, stream="HNX", durables=first)
+    msg = str(exc.value)
+    assert f"durable {first[0]['durable']!r} on stream 'HNX' differs from its declaration" in msg
+    assert "ack_wait is 3s, declared 30s" in msg and "nats consumer edit" in msg, msg
+    assert "max_deliver" not in msg and "cannot be changed" not in msg, msg
+    # nothing was created, updated or deleted: INFO only
+    assert [s for s, _p, _h in wire.log[before:]] == [
+        f"$JS.API.CONSUMER.INFO.HNX.{first[0]['durable']}"
+    ]
+    with pytest.raises(nj.NotProvisioned, match=r"ack_wait is 3s, declared 30s; max_deliver is "
+                       r"100, declared 5"):  # fmt: skip
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(max_deliver=5)[:1])
+    # where it starts is fixed at creation: delete and recreate, never in place
+    with pytest.raises(nj.NotProvisioned) as exc:
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0, start_seq=4)[:1])
+    msg = str(exc.value)
+    assert "deliver_policy is new, declared by_start_sequence" in msg, msg
+    assert "opt_start_seq is unset, declared 4" in msg, msg
+    assert "deliver_policy, opt_start_seq cannot be changed on an existing durable" in msg, msg
+    with pytest.raises(nj.NotProvisioned, match="deliver_policy is new, declared by_start_time"):
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0, replay_s=60)[:1])
+    with pytest.raises(nj.NotProvisioned, match="deliver_policy is new, declared all"):
+        nj.provision_consumers(wire, stream="HNX",
+                               durables=bridge_durables(3.0, deliver_policy="all")[:1])  # fmt: skip
+    # as declared: nothing to say, nothing created
+    assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0)) == []
+    # every drifted durable is named in one error, and a missing one is still created first
+    new = {"durable": "bridge-new", "filter": "hnx.homelabnext.new", "ack_wait": 3.0,
+           "max_deliver": 100}  # fmt: skip
+    with pytest.raises(nj.NotProvisioned) as exc:
+        nj.provision_consumers(wire, stream="HNX", durables=[*bridge_durables(), new])
+    msg = str(exc.value)
+    assert msg.count("differs from its declaration") == 3 and msg.endswith(
+        "(created first: bridge-new)"), msg  # fmt: skip
+    assert "bridge-new" in wire.streams["HNX"].consumers
+    # fields a provisioned durable never sets, made some other way (the fake's config edited)
+    cfg = wire.streams["HNX"].consumers[first[0]["durable"]].config
+    cfg["backoff"] = [10**9, 5 * 10**9]
+    with pytest.raises(nj.NotProvisioned, match=r"backoff is \[1s, 5s\], declared none"):
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0)[:1])
+    del cfg["backoff"]
+    cfg["headers_only"] = True
+    # headers_only is refused at the client's bind too: every body would read as empty
+    with pytest.raises(nj.NotProvisioned, match="headers_only is true, declared none"):
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(3.0)[:1])
+    with pytest.raises(sb.BridgeError, match="headers only"):
+        bridge(standing(wire, ack_wait=3.0), lambda _ev: 202)
+
+
+def test_a_durable_started_at_a_sequence_matches_only_that_sequence():
+    """A durable created at a start sequence (the fake creates new/all/by_start_time only, so its
+    recorded configuration is edited the way the server records one) matches that declaration."""
+    wire = provisioned()
+    for d in bridge_durables():
+        cfg = wire.streams["HNX"].consumers[d["durable"]].config
+        cfg.update(deliver_policy="by_start_sequence", opt_start_seq=4)
+    assert nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(start_seq=4)) == []
+    with pytest.raises(nj.NotProvisioned, match="opt_start_seq is 4, declared 9"):
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables(start_seq=9))
+    with pytest.raises(nj.NotProvisioned, match="deliver_policy is by_start_sequence, declared "
+                       "new; opt_start_seq is 4, declared none"):  # fmt: skip
+        nj.provision_consumers(wire, stream="HNX", durables=bridge_durables())
 
 
 def test_the_bridge_over_the_jetstream_adapter(hook):
@@ -743,6 +879,36 @@ def test_the_bridge_over_the_jetstream_adapter(hook):
     assert b.poll() == 2
     assert [r["headers"]["Idempotency-Key"] for r in hook.requests] == ["evt-bridge-7"]
     assert b.poll() == 0
+
+
+#: ``hnx workflows <slot> bridge`` on the repository's bridge file and a stand-in webhook URL
+BRIDGE_ARGV = ["st2", "bridge", "--bridge-file", str(BRIDGE), "--st2-url",
+               "https://st2.example.internal", "--stream", "HOMELABNEXT", "--subject-prefix", "lab"]  # fmt: skip
+
+
+def test_the_bridge_at_the_default_prefix_on_a_client_account_names_the_flag(monkeypatch, capsys):
+    """Round 6: on the events bus role's bus the bridge left at --events-api-prefix's default is
+    refused its first $JS.API call: exit 2, and the message names the prefix to pass."""
+    from homelabnext.workflows import cli
+
+    class ClientAccount:  # the server: $JS.API.* is not in this user's allow-list
+        def request(self, subject, *a, **kw):
+            raise nj.WireError(nj.permission_denied(subject), permanent=True)
+
+        def pull(self, *a, **kw):
+            raise AssertionError("never reached")
+
+        def close(self):
+            pass
+
+    real = nj.make
+    monkeypatch.setattr(nj, "make", lambda **kw: real(wire=ClientAccount(), **{
+        k: v for k, v in kw.items() if k not in ("user", "password_secret")}))  # fmt: skip
+    rc = cli.main(BRIDGE_ARGV)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "permission denied: publish $JS.API.STREAM.INFO.HOMELABNEXT" in err, err
+    assert "pass api_prefix JS.<account>.API (--events-api-prefix" in err, err
 
 
 def test_the_bridge_command_passes_its_bus_credentials(monkeypatch):
@@ -758,16 +924,7 @@ def test_the_bridge_command_passes_its_bus_credentials(monkeypatch):
     monkeypatch.setattr(nj, "make", fake_make)
     rc = cli.main(
         [
-            "st2",
-            "bridge",
-            "--bridge-file",
-            str(ROOT / "workflows" / "stackstorm" / "bridge.json"),
-            "--st2-url",
-            "https://st2.example.internal",
-            "--stream",
-            "HOMELABNEXT",
-            "--subject-prefix",
-            "lab",
+            *BRIDGE_ARGV,
             "--events-user",
             "hnx-st2-bridge",
             "--events-password-secret",
@@ -781,5 +938,6 @@ def test_the_bridge_command_passes_its_bus_credentials(monkeypatch):
     assert seen["password_secret"] == "secret:events/st2-bridge-password"
     assert seen["ca_file"] == "/etc/fake/nats-ca.pem"
     assert seen["allow_plaintext"] is False
-    assert seen["provision"] is False
-    assert seen["replay_s"] == sb.REPLAY_S == 86400.0  # what admit remembers, no more
+    assert seen["provision"] is False  # binds to the provisioner's durables, creates none
+    assert "replay_s" not in seen  # where a durable starts is the provisioner's (REPLAY_S)
+    assert sb.REPLAY_S == 86400.0  # what admit remembers, no more

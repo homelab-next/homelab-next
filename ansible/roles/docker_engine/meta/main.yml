@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: Docker Engine from the vendor's signed repository, pinned and held, with bounded container logs.
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

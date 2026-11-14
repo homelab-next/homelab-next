@@ -89,8 +89,9 @@ CATALOG_DIR = "mcp"
 #: case), glibc's module, locale, resolver and allocator knobs (GCONV_PATH, LOCPATH, NLSPATH,
 #: HOSTALIASES, RES_OPTIONS, LOCALDOMAIN, GLIBC_TUNABLES, MALLOC_*, TZDIR), the other
 #: interpreters' option and library variables (JAVA_TOOL_OPTIONS, _JAVA_OPTIONS,
-#: JDK_JAVA_OPTIONS, PERL5OPT, PERL5LIB, PERLLIB, RUBYOPT, RUBYLIB) and the shell's
-#: (BASH_FUNC_* exported functions, SHELLOPTS, BASHOPTS, PS4).  The orchestrator's grants loader
+#: JDK_JAVA_OPTIONS, every PERL5 variable (PERL5OPT, PERL5LIB, PERL5DB, ...), PERLLIB, RUBYOPT, RUBYLIB), the
+#: shell's (BASH_FUNC_* exported functions, SHELLOPTS, BASHOPTS, PS4, IFS) and the temporary
+#: directory every one of them writes to (TMPDIR).  The orchestrator's grants loader
 #: denies the same keys (``orchestrator/internal/grants``, ``DeniedEnvPattern``: this pattern
 #: character for character, held equal by tests/mcp/test_mcp_clients.py).
 DENIED_ENV = re.compile(
@@ -101,7 +102,7 @@ DENIED_ENV = re.compile(
     r"|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN"
     r"|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSLKEYLOGFILE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES"
     r"|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS"
-    r"|JDK_JAVA_OPTIONS|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4",
+    r"|JDK_JAVA_OPTIONS|PERL5\w+|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4|TMPDIR|IFS",
     re.I,
 )
 

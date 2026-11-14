@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Look for the server binary and its configuration
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ events_bus_bin }}"
+        - "{{ events_bus_config_dir }}/nats.conf"
+      register: events_bus_ready
+    - name: Fail unless both are in place (the bus depends on nothing else)
+      ansible.builtin.assert:
+        that: events_bus_ready.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "events_bus: missing {{ events_bus_ready.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }} (run main)"
+  tags: [readiness]

@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read the rendered realm (the idp_realm generator's idp/realm.json, on the controller) and refuse
+# one that is not this lab's, carries a literal client secret, offers a one-time code, lets a
+# direct grant through, or does not refuse the reserved usernames. The same checks run again in
+# keycloak_api.py before anything is sent.
+- name: Read the rendered realm
+  ansible.builtin.set_fact:
+    keycloak_realm_doc: "{{ lookup('ansible.builtin.file', keycloak_realm_file) | from_json }}"
+  tags: [health, backup, restore, export, readiness]
+
+- name: Name what the rendered realm holds
+  ansible.builtin.set_fact:
+    keycloak_realm_flows: "{{ keycloak_realm_doc.authenticationFlows | default([]) }}"
+    keycloak_realm_steps: >-
+      {{ keycloak_realm_doc.authenticationFlows | default([])
+         | map(attribute='authenticationExecutions') | flatten
+         | selectattr('authenticator', 'defined') | map(attribute='authenticator') | list }}
+    keycloak_realm_reserved: >-
+      {{ (keycloak_realm_doc.attributes | default({})).get('hnx.reserved_usernames', '')
+         | split(',') | select | list }}
+    keycloak_client_ids: "{{ keycloak_realm_doc.clients | default([]) | map(attribute='clientId') | list }}"
+  tags: [health, backup, restore, export, readiness]
+
+- name: The rendered realm is this lab's, passkey-only, refusing direct grants and the reserved names
+  ansible.builtin.assert:
+    that:
+      - keycloak_realm_doc.realm | default('') == keycloak_realm
+      - keycloak_realm_doc.browserFlow | default('') in (keycloak_realm_flows | map(attribute='alias') | list)
+      - keycloak_realm_doc.directGrantFlow | default('') in (keycloak_realm_flows | map(attribute='alias') | list)
+      - "'webauthn-authenticator' in keycloak_realm_steps"
+      - "'deny-access-authenticator' in keycloak_realm_steps"
+      - keycloak_realm_steps | select('search', 'otp') | list | length == 0
+      - keycloak_realm_doc.registrationAllowed | default(true) == false
+      - keycloak_realm_doc.resetPasswordAllowed | default(true) == false
+      - keycloak_realm_reserved | length > 0
+      - keycloak_reserved_usernames | difference(keycloak_realm_reserved) | length == 0
+      - >-
+        keycloak_realm_doc.clients | default([]) | map(attribute='secret')
+        | reject('match', keycloak_placeholder_pattern) | list | length == 0
+      - keycloak_client_ids | reject('match', keycloak_client_id_pattern) | list | length == 0
+    fail_msg: >-
+      keycloak: {{ keycloak_realm_file }} is not this lab's rendered realm ({{ keycloak_realm }}),
+      or it offers a one-time code, lets a direct grant through, allows registration or reset,
+      carries a literal client secret, or does not refuse every reserved username
+      ({{ keycloak_reserved_usernames | join(', ') }}): render it with `hnx registry generate
+      --only idp_realm` and the site's --reserved-username list
+  tags: [health, backup, restore, export, readiness]

@@ -1,0 +1,9 @@
+{
+  "type": "tool_call",
+  "server": "lake",
+  "tool": "query",
+  "start": "2026-01-01T00:00:01Z",
+  "duration_ms": 420,
+  "outcome": "ok",
+  "span_id": "b7ad6b7169203331"
+}

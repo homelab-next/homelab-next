@@ -11,6 +11,5 @@ resources:
 image: {logical: debian-12-standard, kind: tarball, os_type: debian}
 network: {zone: data, ip: 192.0.2.140}
 capability: cap:events
-capability_groups: [cap_orchestration]
 tags: [prod]
 owners: {primary: platform-team}

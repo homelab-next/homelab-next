@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/homelab-next/homelab-next/orchestrator/internal/gatewaytag"
 )
 
 // MaxBodyBytes is the largest request body the gateway reads.
@@ -192,7 +194,7 @@ func (s *Server) usageRange(w http.ResponseWriter, r *http.Request, c *caller) {
 	}
 	q := r.URL.Query()
 	tag := q.Get("tag")
-	if tag != "" && !tagRE.MatchString(tag) {
+	if tag != "" && !gatewaytag.Valid(tag) {
 		badRequest("invalid_tag", "tag is not a gateway tag").write(w)
 		return
 	}

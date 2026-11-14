@@ -41,6 +41,17 @@ ones never copied included.
 
 A lab with another auth proxy changes this one declaration (and so every consumer at once); a
 set is validated when it is built, so a header that does not carry its mark cannot be declared.
+
+**Other proxies' identity headers.**  An app behind the edge may read an identity header the
+platform never sets: oauth2-proxy's upstream headers (``X-Forwarded-User``, ``-Groups``,
+``-Email``, ``-Preferred-Username``, ``-Access-Token``), the ``Remote-User`` family of Authelia
+and Caddy examples, Grafana's ``X-WEBAUTH-USER``.  Nothing at the edge sets one, so a copy that
+reaches the app was written by the client.  The edge deletes every client-sent copy too, in every
+``-``/``_`` spelling (:data:`FOREIGN_IDENTITY`, :func:`foreign_strip_lines`), at site level,
+which Caddy runs before every ``route`` and so before ``forward_auth``; an app that falls back to
+one of them cannot be told a name by the client.  The list is a deny-list of stems and cannot be
+complete: an app that trusts some other header must be fronted by its own strip.  They are not
+the platform's identity: no consumer reads them.
 """
 
 from __future__ import annotations
@@ -60,6 +71,11 @@ AUTH_PROXY_PREFIX = "/oauth2/*"
 USERNAME_CLAIM = "preferred_username"
 #: where the IdP sends a signed-in user back to the auth proxy (each guarded site's own host)
 AUTH_PROXY_CALLBACK = "/oauth2/callback"
+#: the auth proxy's session cookie (a host-only ``__Host-`` cookie; a large session is split into
+#: ``<name>_0``, ``<name>_1``, ...): the edge deletes it from a request once ``forward_auth`` has
+#: read it, so no upstream ever sees the session (a logging or compromised upstream could replay
+#: it against another site, the Approvals page included); the auth proxy's role sets this name
+AUTH_PROXY_COOKIE = "__Host-hnx_auth"
 
 _HEADER = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$")
 _MARK = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -68,6 +84,15 @@ _MARK = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 def fold(name: str) -> str:
     """A header name as a CGI-style upstream compares it: lower case, ``_`` read as ``-``."""
     return name.lower().replace("_", "-")
+
+
+def _spellings(name: str) -> tuple[str, ...]:
+    """Every spelling of a lower-case ``-``-joined name with ``-`` or ``_`` at each separator."""
+    parts = name.split("-")
+    out = [parts[0]]
+    for part in parts[1:]:
+        out = [f"{o}{sep}{part}" for o in out for sep in "-_"]
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -108,11 +133,7 @@ class IdentityHeaders:
 
     def mark_spellings(self) -> tuple[str, ...]:
         """Every spelling of the mark with ``-`` or ``_`` at each separator, lower case."""
-        parts = self.mark.split("-")
-        out = [parts[0]]
-        for part in parts[1:]:
-            out = [f"{o}{sep}{part}" for o in out for sep in "-_"]
-        return tuple(out)
+        return _spellings(self.mark)
 
     def strip_patterns(self) -> tuple[str, ...]:
         """The ``request_header -<pattern>`` deletes that remove every client-sent identity
@@ -132,3 +153,31 @@ IDENTITY_HEADERS = IdentityHeaders(
     username="X-Auth-Request-Preferred-Username",
     mark="auth-request",
 )
+
+
+#: stems of identity headers other auth proxies and apps read, which the edge never sets: every
+#: client-sent header containing one is deleted, in every spelling (see the module docstring)
+FOREIGN_IDENTITY = (
+    "forwarded-user",  # and -username
+    "forwarded-group",  # and -groups
+    "forwarded-email",
+    "forwarded-preferred-username",
+    "forwarded-access-token",
+    "remote-user",
+    "remote-group",
+    "remote-email",
+    "remote-name",
+    "webauth",  # X-WEBAUTH-USER and its kin
+)
+
+
+def foreign_strip_patterns() -> tuple[str, ...]:
+    """The ``request_header -<pattern>`` deletes of :data:`FOREIGN_IDENTITY`: one
+    contains-wildcard per spelling of each name (Caddy matches it in any case, anywhere in the
+    header name, so ``X-Forwarded-User`` and ``Forwarded_User`` both go)."""
+    return tuple(f"*{s}*" for name in FOREIGN_IDENTITY for s in _spellings(name))
+
+
+def foreign_strip_lines(indent: str = "") -> str:
+    """The deletes of :func:`foreign_strip_patterns` as Caddyfile lines, each ending in a newline."""
+    return "".join(f"{indent}request_header -{p}\n" for p in foreign_strip_patterns())

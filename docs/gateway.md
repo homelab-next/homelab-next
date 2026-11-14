@@ -98,6 +98,14 @@ with its paths and listen address, is the private overlay's (ADR-0026 decision 3
   one with a case variant of `model` or `stream` (`Model`, `STREAM`, a Unicode fold) is a 400
   `invalid_request`. A role with `leaves_lab: true` must have a `tlp_ceiling` of `green` or
   `clear`.
+- **The config contract, both ways.** The loader refuses everything the contract's schema
+  refuses (its patterns, lengths, minimums, and a `null` wherever the schema allows none), and
+  adds rules the schema cannot state (deployment ids by position, sorted keys, one principal per
+  environment name, fallbacks of the same kind, a cloud deployment only on a role that leaves the
+  lab). It is looser in one place: it serves any `1.x` minor, still refusing any key it does not
+  know. Its tests parse every example and negative of the schema in place, and every vector of
+  `conformance/fixtures/gateway_config_vectors.json`, which the Python tests regenerate with the
+  schema and which names each intentional difference.
 - **In flight.** Model calls running at once are capped in all and per key; a call over a cap gets
   429 `concurrency_limited` (`Retry-After: 1`) right after auth, before its body is read, and
   consumes no limit and writes no usage record (refusals are logged at most once a second).

@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: Apache-2.0
+# The edge provider on Caddy (docs/modules.md; README.md beside this file): the front door of one
+# deployment. Role caddy runs stock Caddy (pinned image) with the sites the edge generator renders
+# for the deployment's own hosts only (hnx registry generate --only caddy --edge-host ..., which the
+# role runs itself and refuses to run without an edge host), a public-trust certificate obtained on
+# the host by the pinned ACME client (lego, DNS-01), and the edge's client certificate for the
+# upstreams that require one (the generated caddy/edge_tls.json). Role caddy_auth_proxy runs the
+# forward-auth proxy (oauth2-proxy) the generated sites ask about every request. Every real value
+# (the guest, the names, the registry, the secret values) is the site's.
+manifest_version: "1.0"
+id: caddy
+kind: provider
+title: The edge on Caddy, with forward auth
+description: Fills the edge slot with stock Caddy (pinned image) serving only one deployment's
+  generated sites over a public-trust certificate obtained on the host by the pinned ACME client
+  (DNS-01), with forward authentication to the IdP through oauth2-proxy and mTLS to the upstreams
+  that require it; proved by the edge suite through the Caddy adapter.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: caddy
+  version: 2.11.7
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:caddy/acme-dns-token
+    identity: api-token
+    holder: provider
+    purpose: the DNS provider's API token for the DNS-01 challenge (Zone DNS edit on the edge's names only), read by the renewal script alone
+  - secret: secret:caddy/auth-proxy-cookie-secret
+    identity: cookie-key
+    holder: provider
+    purpose: the forward-auth proxy's session cookie key (32 bytes); rotating it signs every user out
+  - secret: secret:caddy/hub-client-cert
+    identity: certificate
+    holder: provider
+    purpose: the edge's client certificate for an upstream that requires one (a row's edge_tls.client_cert), issued by the lab's CA
+  - secret: secret:caddy/hub-client-key
+    identity: key-pair
+    holder: provider
+    purpose: the private key of the edge's client certificate (a row's edge_tls.client_key)
+identifiers:
+  - {kind: secret-name, name: caddy, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the DNS token, the cookie key, the client certificate and key and the IdP client secret are read by name at deploy time
+    - cap: cap:idp
+      version: "1.0"
+      hosts: [edge]
+      purpose: the forward-auth proxy signs users in at the IdP (OIDC, authorization code with PKCE) and reads their groups from its tokens
+  hosts:
+    - role: edge
+      kind: vm
+      footprint: {cpu: 1, memory_mb: 768, disk_gb: 4}
+      guest:
+        capability: [cap:edge]
+        baselines: [base]
+      roles: [role:caddy, role:caddy_auth_proxy]
+      purpose: runs Caddy and the forward-auth proxy (docker_engine applied first, compose_app renders both) and the ACME client's daily renewal unit
+provides:
+  slots:
+    edge:
+      adapter: homelabnext.conform.adapters.caddy:make
+      conformance:
+        target: conformance/target.yml
+egress:
+  - host: edge
+    to: [internet]
+    purpose: the ACME directory (Let's Encrypt) and the DNS provider's API (Cloudflare) for DNS-01, from the host's ACME client; the IdP is reached by requirement
+contributes:
+  roles:
+    - file: roles/caddy
+    - file: roles/caddy_auth_proxy
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:caddy, hook: readiness}
+    - {role: role:caddy_auth_proxy, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: acme
+    kind: state
+    description: The ACME client's account (its key and registration) and the edge's rendered configuration (Caddyfile, generated sites); the certificate is reissued from the account when lost.
+    export: {formats: [object-tree], via: role:caddy}
+    import: {formats: [object-tree], via: role:caddy}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest) of Caddy or the auth proxy: the role's upgrade hook validates and records it, then it converges"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

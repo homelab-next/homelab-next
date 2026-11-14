@@ -1,0 +1,137 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run oauth2-proxy as the edge's forward-auth check and OIDC sign-in (PKCE), the identity headers on its answer.
+    options:
+      caddy_auth_proxy_logical_id: &logical_id
+        type: str
+        description: The auth-proxy row's registry id (the row the generated sites dial, e.g. auth-proxy).
+        required: true
+      caddy_auth_proxy_issuer_url: &issuer_url
+        type: str
+        description: 'The realm''s OIDC issuer: https://<the IdP''s public name>/realms/<realm>.'
+        required: true
+      caddy_auth_proxy_image: &image
+        type: str
+        description: repository:tag@sha256:<digest> of the oauth2-proxy image (its alpine variant, which has wget for the healthcheck).
+        default: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5-alpine@sha256:8e4bec4f9fe4de10de63070209204075e4407503170aa19893d6e8d99f083d1b
+      caddy_auth_proxy_bind: &bind
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      caddy_auth_proxy_port: &port
+        type: int
+        description: Host port (the auth-proxy row's port).
+        default: 4180
+      caddy_auth_proxy_dir: &dir
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/caddy-auth-proxy
+      caddy_auth_proxy_owner: &owner
+        type: str
+        description: Owner of the compose project.
+        default: root
+      caddy_auth_proxy_uid: &uid
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61011
+      caddy_auth_proxy_gid: &gid
+        type: int
+        description: The container's group id.
+        default: 61011
+      caddy_auth_proxy_client_id: &client_id
+        type: str
+        description: 'The IdP client''s id: the auth-proxy row''s name, which the realm generator names the client after.'
+        default: auth-proxy
+      caddy_auth_proxy_client_ref: &client_ref
+        type: str
+        description: 'secret: reference of the IdP client''s secret (the realm generator''s secret:idp/clients/auth-proxy for a row named auth-proxy).'
+        default: secret:idp/clients/auth-proxy
+      caddy_auth_proxy_cookie_ref: &cookie_ref
+        type: str
+        description: 'secret: reference of the session cookie key (16, 24 or 32 bytes).'
+        default: secret:caddy/auth-proxy-cookie-secret
+      caddy_auth_proxy_sites: &sites
+        type: list
+        elements: str
+        description: 'The sites it signs users in for: the sign-in return target must be one of them (default the edge''s names).'
+        default: '{{ caddy_acme_domains | default([]) }}'
+      caddy_auth_proxy_cookie_expire: &cookie_expire
+        type: str
+        description: Session lifetime (like 4h, at most 12h); with no refresh, a user removed at the IdP keeps a session this long.
+        default: 4h
+      caddy_auth_proxy_mem_limit: &mem_limit
+        type: str
+        description: Container memory limit.
+        default: 128m
+      caddy_auth_proxy_start: &start
+        type: bool
+        description: Run docker compose up after rendering.
+        default: true
+      caddy_auth_proxy_validate_with_docker: &validate_with_docker
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      caddy_auth_proxy_health_timeout: &health_timeout
+        type: int
+        description: Seconds for each health request.
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy, /ping answers, the check refuses a request with no session and signing in starts the code flow (PKCE) at the issuer for each site.
+    options:
+      caddy_auth_proxy_logical_id: *logical_id
+      caddy_auth_proxy_issuer_url: *issuer_url
+      caddy_auth_proxy_image: *image
+      caddy_auth_proxy_bind: *bind
+      caddy_auth_proxy_port: *port
+      caddy_auth_proxy_dir: *dir
+      caddy_auth_proxy_owner: *owner
+      caddy_auth_proxy_uid: *uid
+      caddy_auth_proxy_gid: *gid
+      caddy_auth_proxy_client_id: *client_id
+      caddy_auth_proxy_client_ref: *client_ref
+      caddy_auth_proxy_cookie_ref: *cookie_ref
+      caddy_auth_proxy_sites: *sites
+      caddy_auth_proxy_cookie_expire: *cookie_expire
+      caddy_auth_proxy_mem_limit: *mem_limit
+      caddy_auth_proxy_start: *start
+      caddy_auth_proxy_validate_with_docker: *validate_with_docker
+      caddy_auth_proxy_health_timeout: *health_timeout
+  readiness:
+    short_description: Fail unless the container engine is ready and both credentials resolve in their form.
+    options:
+      caddy_auth_proxy_client_ref: *client_ref
+      caddy_auth_proxy_cookie_ref: *cookie_ref
+  backup:
+    short_description: Nothing to back up; the auth proxy keeps no state.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main renders it again.
+    options: {}
+  export:
+    short_description: Nothing to export; the auth proxy holds no data of its own.
+    options: {}
+  upgrade:
+    short_description: Validate an image bump (tag and digest, same repository) and record it as pending.
+    options:
+      caddy_auth_proxy_logical_id: *logical_id
+      caddy_auth_proxy_issuer_url: *issuer_url
+      caddy_auth_proxy_image: *image
+      caddy_auth_proxy_bind: *bind
+      caddy_auth_proxy_port: *port
+      caddy_auth_proxy_dir: *dir
+      caddy_auth_proxy_owner: *owner
+      caddy_auth_proxy_uid: *uid
+      caddy_auth_proxy_gid: *gid
+      caddy_auth_proxy_client_id: *client_id
+      caddy_auth_proxy_client_ref: *client_ref
+      caddy_auth_proxy_cookie_ref: *cookie_ref
+      caddy_auth_proxy_sites: *sites
+      caddy_auth_proxy_cookie_expire: *cookie_expire
+      caddy_auth_proxy_mem_limit: *mem_limit
+      caddy_auth_proxy_start: *start
+      caddy_auth_proxy_validate_with_docker: *validate_with_docker
+      caddy_auth_proxy_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true

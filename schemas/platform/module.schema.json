@@ -1016,6 +1016,34 @@
         "footprint": {
           "$ref": "#/$defs/footprint"
         },
+        "guest": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "capability": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/cap_ref"
+              },
+              "minItems": 1,
+              "description": "The guest's own capability (platform/guest capability) is one of these."
+            },
+            "baselines": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 40,
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$(?!\\n)"
+              },
+              "minItems": 1,
+              "description": "Every one of these is among the guest's baselines (platform/guest baseline.names, with what they extend when the guests' baseline set is read)."
+            }
+          },
+          "description": "What the guest under this role must provide, judged when the site's host references a guest (hosts.<name>.guest, loader); on a stand-in host it is noted as not checked. Not on a kind external role (loader).",
+          "minProperties": 1
+        },
         "roles": {
           "type": "array",
           "uniqueItems": true,
@@ -1030,7 +1058,24 @@
           "maxLength": 200
         }
       },
-      "description": "A host or guest the module needs, by role, never by name."
+      "description": "A host or guest the module needs, by role, never by name.",
+      "if": {
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "const": "external"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "guest"
+          ]
+        }
+      }
     },
     "requires": {
       "type": "object",

@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# The export (object-tree): db/keycloak.dump (pg_dump's custom format, written in the database's
+# container as its own user, so the file is the database's and never root's) and realm.json (the
+# realm's partial export through the admin API), then listing.jsonl (key, size, sha256). A
+# snapshot: every run writes a new one (the hook reports changed).
+- name: Dump the database (pg_dump, custom format, in its container)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", exec, -T, postgres,
+           pg_dump, -U, "{{ keycloak_db_user }}", -d, "{{ keycloak_db_name }}", -Fc,
+           -f, "{{ keycloak_container_export }}/.keycloak.dump.tmp"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Put the dump in place
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", exec, -T, postgres,
+           mv, -f, "{{ keycloak_container_export }}/.keycloak.dump.tmp",
+           "{{ keycloak_container_export }}/keycloak.dump"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Export the realm (clients, groups, roles, flows, settings; secrets masked, no users)
+  ansible.builtin.include_tasks: api.yml
+  vars:
+    keycloak_api_mode: export
+  tags: [backup, export]
+
+- name: Write the realm's export
+  ansible.builtin.copy:
+    content: "{{ keycloak_api_result.realm | to_nice_json(sort_keys=true) }}\n"
+    dest: "{{ keycloak_data_root }}/export/realm.json"
+    owner: "{{ keycloak_owner }}"
+    group: "{{ keycloak_group }}"
+    mode: "0600"
+  tags: [backup, export]
+
+- name: List the export (key, size, sha256)
+  ansible.builtin.command:
+    argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', keycloak_scripts ~ '/keycloak_backup.py') }}",
+           listing, "{{ keycloak_data_root }}/export"]
+  register: keycloak_export
+  changed_when: false
+  tags: [backup, export]
+
+- name: Write the listing
+  ansible.builtin.copy:
+    content: "{{ (keycloak_export.stdout | from_json) | map('to_json', sort_keys=true) | join('\n') }}\n"
+    dest: "{{ keycloak_data_root }}/export/listing.jsonl"
+    owner: "{{ keycloak_owner }}"
+    group: "{{ keycloak_group }}"
+    mode: "0600"
+  tags: [backup, export]

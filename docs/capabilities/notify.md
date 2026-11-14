@@ -148,7 +148,7 @@ Each is a deliberately broken fake (`hnx conform run notify --target broken:<mut
 The `notify` contract on ntfy (pinned: ntfy 2.33), stdlib HTTP.
 
 - Target file: [`compose/lab-in-a-box/targets/notify.yml`](../../compose/lab-in-a-box/targets/notify.yml) (target `lab-notify`)
-- Factory: `make(*, topic: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`
+- Factory: `make(*, topic: str | None=None, token_env: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`
 
 **Product limits recorded by the adapter:**
 
@@ -164,6 +164,8 @@ Findings (fidelity limits of the channel, not of this adapter):
   shortens a longer title (so it does not round-trip) and refuses such tags itself; the key tag is
   the key's UTF-8 bytes in hex, so a key over 246 bytes (fewer with the message's own tags) cannot
   be sent through this target.
+* The same 512-byte budget covers a recovery's tags, and a recovery adds `recovered` to its
+  problem's tags.  Keep a problem's own tags within 502 bytes, or ntfy refuses its recovery.
 * Messages live in ntfy's cache for `cache-duration` (12h by default); `received()` sees only
   what is still cached.
 
@@ -200,6 +202,8 @@ Findings (fidelity limits of the channel, not of this adapter):
   shortens a longer title (so it does not round-trip) and refuses such tags itself; the key tag is
   the key's UTF-8 bytes in hex, so a key over 246 bytes (fewer with the message's own tags) cannot
   be sent through this target.
+* The same 512-byte budget covers a recovery's tags, and a recovery adds `recovered` to its
+  problem's tags.  Keep a problem's own tags within 502 bytes, or ntfy refuses its recovery.
 * Messages live in ntfy's cache for `cache-duration` (12h by default); `received()` sees only
   what is still cached.
 
@@ -213,7 +217,7 @@ Provided by (`examples/services.yml`):
 |---|---|
 | [notify](../systems/notify.md) ([[systems/notify\|notify]]) | `ntfy` |
 
-Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-runtime|agent-runtime]]), [metrics](../systems/metrics.md) ([[systems/metrics|metrics]])
+Depended on by: [metrics](../systems/metrics.md) ([[systems/metrics|metrics]]), [orchestrator](../systems/orchestrator.md) ([[systems/orchestrator|orchestrator]])
 
 ## Integrating a new product
 
@@ -232,7 +236,7 @@ Depended on by: [agent-runtime](../systems/agent-runtime.md) ([[systems/agent-ru
    def make(**config) -> NotifyTarget: ...
    ```
 
-   The factory this repository ships: `homelabnext.conform.adapters.ntfy:make` is `make(*, topic: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`.
+   The factory this repository ships: `homelabnext.conform.adapters.ntfy:make` is `make(*, topic: str | None=None, token_env: str | None=None, timeout: float=10.0, allow_plaintext: bool=False, capability: str='notify') -> NtfyTarget`.
 
 3. **Describe the target** (YAML; `features` lists only what the product really offers; the test hooks `fault-injection` are for fakes; `waive:` takes SHOULD check ids with a reason, never a MUST):
 

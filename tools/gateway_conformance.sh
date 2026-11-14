@@ -33,7 +33,7 @@
 #   kind: tool
 #   purpose: Run the inference conformance suite against the repository's own gateway binary and the fake inference server on loopback, holding every check to a pass.
 #   owner: maintainers
-#   trigger: [ci:ci/gateway-conformance]
+#   trigger: [ci:ci/gateway-conformance, ci:ci/orchestration-conformance]
 #   inputs: HNX_VENV, HNX_PYTHON, GATEWAY_BIN, WORK_DIR; the conformance gateway spec and the own-gateway target under compose/lab-in-a-box/
 #   outputs: WORK_DIR (render, usage.jsonl, fake.log, gateway.log, conform-inference.json); a verdict line, also to $GITHUB_STEP_SUMMARY when set
 #   exit:

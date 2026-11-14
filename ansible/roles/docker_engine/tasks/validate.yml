@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Values become apt package versions, an apt source and daemon settings: refuse anything that is
+# not a plain token.
+- name: Validate the versions, repository, key fingerprints and log bounds
+  ansible.builtin.assert:
+    that:
+      - docker_engine_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - docker_engine_containerd_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - docker_engine_buildx_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - docker_engine_compose_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - docker_engine_repository is match('^https://[A-Za-z0-9.-]+(?::[0-9]+)?(?:/[A-Za-z0-9._~-]+)*\Z')
+      - docker_engine_key_fingerprints | length > 0
+      - docker_engine_key_fingerprints | select('match', '^[0-9A-F]{40}\Z') | list | length == docker_engine_key_fingerprints | length
+      - docker_engine_log_max_size is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - docker_engine_log_max_file | int >= 1
+      - docker_engine_log_max_file | int <= 100
+    fail_msg: >-
+      docker_engine: versions x.y.z, an https repository and its key's fingerprints (40
+      upper-case hex digits), a log max-size like 10m and a max-file count of 1 to 100

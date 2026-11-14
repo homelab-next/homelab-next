@@ -1,6 +1,6 @@
 ---
 summary: 'Model serving behind the gateway: one model store, the serving spec, the model_store, vllm_server and open_webui roles, adding a model and GPU notes.'
-summary_of: outline:sha256:f38ae12ce36437d6
+summary_of: outline:sha256:53cc0533da49dd12
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Model serving: one store, few engines
@@ -235,6 +235,20 @@ the verdict `error`. The key goes over plain http to a non-loopback backend only
 call is refused before anything is sent and the verdict is `error`. The model client follows no
 redirect and ignores `HTTP_PROXY`/`HTTPS_PROXY`. Consumers, and `hnx golden run` by default,
 go through the gateway with their own key instead (`GatewayResolver`; ADR-0007 decisions 2 and 3).
+
+#### vLLM version notes
+
+- **Allowlisted arguments vLLM no longer has.** The `model_serving` allowlist
+  (`ALLOWED_ARGS` in `homelabnext/models/serving.py`, mirrored in
+  `ansible/roles/vllm_server/vars/main.yml`) still accepts `swap-space`, `calculate-kv-scales`
+  and `max-num-partial-prefills`, and `tokenizer-mode: slow`. None of these exists in the source of
+  vLLM 0.31.0 or 0.32.0: both releases' docs say `--swap-space` was removed, and `slow` is no
+  tokenizer mode either release registers. An instance that sets one passes validation and then
+  fails when vLLM starts. Taking them off the allowlist narrows the schema's `args` names, a major
+  change under ADR-0001, so it is a pending change of its own. Until then, do not set them.
+- **Python.** vLLM 0.32.0 requires Python `>=3.11,<3.15` (0.31.0 accepted 3.10). The role's
+  virtualenv needs an interpreter from 3.11 to 3.14: 3.15 already ships, and vLLM's metadata
+  refuses it.
 
 ### `open_webui`
 

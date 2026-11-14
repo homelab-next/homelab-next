@@ -19,11 +19,21 @@ Names and numbers only: nothing here ever holds a prompt, task text, tool input 
 model output, and the event schema and the turn mapping are both closed allow-lists.
 """
 
-from .model import CONTROLLER_SOURCE, FINISHED_EVENT, ROLLUP_SCHEMA, percentile, rollup
+from .model import (
+    CONTROLLER_OLD_SOURCE,
+    CONTROLLER_SOURCE,
+    CONTROLLER_SOURCES,
+    FINISHED_EVENT,
+    ROLLUP_SCHEMA,
+    percentile,
+    rollup,
+)
 from .store import TelemetryStore
 
 __all__ = [
+    "CONTROLLER_OLD_SOURCE",
     "CONTROLLER_SOURCE",
+    "CONTROLLER_SOURCES",
     "FINISHED_EVENT",
     "ROLLUP_SCHEMA",
     "TelemetryStore",

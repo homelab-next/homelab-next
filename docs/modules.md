@@ -66,7 +66,7 @@ what it needs, what it offers and every entry it adds to a registry the core bui
 ## Where modules live
 
 ```text
-modules/<id>/module.yml           a module shipped with homelab-next (none yet: this is the target)
+modules/<id>/module.yml           a module shipped with homelab-next (modules/ntfy, notify; modules/caddy, edge)
   python/hnx_modules/<id_>/       its code: hnx_modules is a PEP 420 namespace package, so overlay
                                   modules add code without touching the repository
   roles/<id_>[_<role>]/           its Ansible roles (role interface v1)
@@ -203,13 +203,16 @@ on one of these pages.
 | [TLP labels](modules/tlp.md) | TLP labels (ADR-0033) |
 | [placement, isolation and the supply chain](modules/supply-chain.md) | Placement and isolation; Supply chain |
 | [site selection](modules/selection.md) | Site selection (`platform/module_selection` 1.0, a draft schema) |
+| [planned core slots](modules/planned.md) | Planned core slots: not served yet |
+| [registry rows](modules/registry-rows.md) | Registry rows: checked, not generated |
 | [the network scope](modules/network-scope.md) | The network scope |
 | [what the loader checks](modules/loader.md) | What the loader checks |
 | [the loader at deploy time](modules/loader-deploy.md) | The loader at deploy time |
+| [the apply path](modules/apply.md) | From a selection to Ansible; Running it in an overlay |
 | [what the census gathers](modules/census.md) | What the census gathers |
 | [how a swap works](modules/swap-flow.md) | How a swap works, end to end; Swap record 1.2 (draft: `platform/module_swap` 1.0) |
 | [the product-name lint](modules/name-lint.md) | The product-name lint (rule 1) |
-| [record changes, migration and follow-ups](modules/follow-ups.md) | Prerequisite record changes; Migration path (no code moves in this draft); Contract follow-ups (per slot); The follow-ups: each one's status; Open questions |
+| [record changes, migration and follow-ups](modules/follow-ups.md) | Prerequisite record changes; Migration path (no code moves in this draft); Contract follow-ups (per slot); The follow-ups: each one's status; Follow-up ADRs; Open questions |
 
 ## See also
 

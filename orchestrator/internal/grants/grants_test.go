@@ -238,7 +238,7 @@ func TestDeniedEnv(t *testing.T) {
 		"_PROXY", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GCONV_PATH", "LOCPATH", "NLSPATH",
 		"HOSTALIASES", "RES_OPTIONS", "LOCALDOMAIN", "GLIBC_TUNABLES", "TZDIR", "JAVA_TOOL_OPTIONS",
 		"_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "PERL5OPT", "PERL5LIB", "PERLLIB", "RUBYOPT", "RUBYLIB",
-		"SHELLOPTS", "BASHOPTS", "PS4", " PATH ",
+		"SHELLOPTS", "BASHOPTS", "PS4", " PATH ", "PERL5DB", "TMPDIR", "IFS",
 	} {
 		for _, v := range []string{k, strings.ToLower(k)} {
 			if !DeniedEnv(v) {

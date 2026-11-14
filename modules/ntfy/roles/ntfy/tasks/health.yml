@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, the server answers /v1/health, deny-all is in
+# force (an anonymous publish and an anonymous read are refused, and the publisher may not read a
+# topic outside the scratch prefix), the admin signs in with the stored password, the publisher's
+# token publishes to a scratch topic and reads the message back, and the user database holds no
+# account or token the environment does not provision (the drift check).
+# One deviation from role interface v1's "health does not mutate the service": the round trip
+# leaves one message in a scratch topic's cache, expired after the cache duration. Nothing else
+# changes.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: ntfy
+        compose_app_dir: "{{ ntfy_app.compose_app_dir }}"
+        compose_app_spec: "{{ ntfy_app.compose_app_spec }}"
+    - name: The server answers /v1/health and says it is healthy
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/v1/health"
+        status_code: 200
+        return_content: true
+        timeout: "{{ ntfy_health_timeout | int }}"
+      register: ntfy_health
+      changed_when: false
+      failed_when: ntfy_health.status != 200 or not (ntfy_health.json.healthy | default(false))
+    - name: Name this run's scratch topic
+      ansible.builtin.set_fact:
+        ntfy_health_topic: "{{ ntfy_scratch_prefix }}health-{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=16) }}"
+        ntfy_health_marker: "hnx-health-{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=16) }}"
+    - name: An anonymous publish is refused (deny-all)
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/{{ ntfy_health_topic }}"
+        method: POST
+        body: "{{ ntfy_health_marker }}"
+        status_code: [401, 403]
+        timeout: "{{ ntfy_health_timeout | int }}"
+      changed_when: false
+    - name: An anonymous read is refused (deny-all)
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/{{ ntfy_health_topic }}/json?poll=1&since=all"
+        status_code: [401, 403]
+        timeout: "{{ ntfy_health_timeout | int }}"
+      changed_when: false
+    - name: The publisher may not read a topic outside the scratch prefix (write-only)
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/hnx-health-{{ ntfy_health_marker[-16:] }}/json?poll=1&since=all"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', ntfy_publisher_key_ref) }}"
+        status_code: [403]
+        timeout: "{{ ntfy_health_timeout | int }}"
+      changed_when: false
+      no_log: true
+    - name: The admin signs in with the stored password
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/v1/account"
+        url_username: "{{ ntfy_admin_user }}"
+        url_password: "{{ lookup('hnx_secret', ntfy_admin_login_ref) }}"
+        force_basic_auth: true
+        status_code: 200
+        return_content: true
+        timeout: "{{ ntfy_health_timeout | int }}"
+      register: ntfy_admin_account
+      changed_when: false
+      no_log: true
+    - name: The signed-in account is the admin
+      ansible.builtin.assert:
+        that:
+          - ntfy_admin_account.json.username | default('') == ntfy_admin_user
+          - ntfy_admin_account.json.role | default('') == 'admin'
+        fail_msg: "ntfy: the admin password does not sign in as {{ ntfy_admin_user }} (does the stored hash match it?)"
+    - name: The publisher's token publishes to the scratch topic
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/{{ ntfy_health_topic }}"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', ntfy_publisher_key_ref) }}"
+          Title: hnx health
+        body: "{{ ntfy_health_marker }}"
+        status_code: 200
+        timeout: "{{ ntfy_health_timeout | int }}"
+      changed_when: false
+      no_log: true
+    - name: The publisher's token reads the message back from the cache
+      ansible.builtin.uri:
+        url: "http://{{ ntfy_bind }}:{{ ntfy_port | int }}/{{ ntfy_health_topic }}/json?poll=1&since=all"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', ntfy_publisher_key_ref) }}"
+        status_code: 200
+        return_content: true
+        timeout: "{{ ntfy_health_timeout | int }}"
+      register: ntfy_poll
+      changed_when: false
+      no_log: true
+    - name: The message came back as published
+      ansible.builtin.assert:
+        that: ntfy_health_marker in ntfy_poll.content | default('')
+        fail_msg: "ntfy: the publisher's message to {{ ntfy_health_topic }} was not read back"
+    - name: Read the user the play runs as on the host
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: ntfy_health_uid
+      changed_when: false
+    - name: List the accounts and tokens the environment does not provision (read-only)
+      ansible.builtin.command:
+        argv: >-
+          {{ ([] if (ntfy_health_uid.stdout | trim | int) == (ntfy_uid | int) else
+              ['setpriv', '--reuid=' ~ (ntfy_uid | int), '--regid=' ~ (ntfy_gid | int),
+               '--clear-groups', '--no-new-privs'])
+             + ['python3', '-I', '-c', ntfy_drift_script, ntfy_data_root ~ '/db/auth.db'] }}
+      register: ntfy_drift
+      changed_when: false
+    - name: The user database holds only what the environment provisions
+      ansible.builtin.assert:
+        that:
+          - (ntfy_drift.stdout | from_json).minted == 0
+          - (ntfy_drift.stdout | from_json).users | length == 0
+        fail_msg: >-
+          ntfy: the user database holds {{ (ntfy_drift.stdout | from_json).minted }} token(s) and
+          the account(s) {{ (ntfy_drift.stdout | from_json).users }} that the environment does not
+          provision (a token minted through the API, or an account a restore brought in): they
+          survive a rotation of the secrets. Remove them (README, "Known limits").
+  tags: [health]

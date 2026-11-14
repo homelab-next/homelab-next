@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - ntfy_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - ntfy_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - ntfy_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - ntfy_bind != '0.0.0.0'
+      - ntfy_port | int >= 1 and ntfy_port | int <= 65535
+      - ntfy_uid | int >= 1000 and ntfy_gid | int >= 1000
+      - ntfy_admin_user is match(ntfy_username_pattern)
+      - ntfy_publisher_user is match(ntfy_username_pattern)
+      - ntfy_admin_user != ntfy_publisher_user
+      - ntfy_admin_login_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - ntfy_admin_hash_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - ntfy_publisher_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
+      - >-
+        [ntfy_admin_login_ref, ntfy_admin_hash_ref, ntfy_publisher_key_ref]
+        | unique | length == 3
+      - ntfy_publisher_topics is sequence and ntfy_publisher_topics is not string
+      - ntfy_publisher_topics | length > 0
+      - ntfy_publisher_topics | reject('string') | list | length == 0
+      - ntfy_publisher_topics | reject('match', ntfy_topic_pattern_pattern) | list | length == 0
+      # the scratch prefix is a plain prefix (no wildcard of its own) that leaves room for a topic
+      - ntfy_scratch_prefix is match('^[-_A-Za-z0-9]{3,40}\Z')
+      # a publisher pattern inside the scratch prefix would shadow or narrow its read-write grant
+      - ntfy_publisher_topics | select('match', ntfy_scratch_prefix) | list | length == 0
+      # absolute, canonical paths (no //, no . or .. component, no trailing /, nothing a SQLite
+      # URI or a shell would read differently)
+      - >-
+        [ntfy_dir, ntfy_data_root] | reject('match', ntfy_path_pattern) | list | length == 0
+      - ntfy_cache_duration is match('^[1-9][0-9]{0,4}[smhd]\Z')
+      - ntfy_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      ntfy: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish
+      on (not all interfaces), a port, a container uid and gid of 1000 or more, two
+      distinct account names ntfy accepts, three distinct secret: references, one or more topic
+      patterns ([-_*A-Za-z0-9], at most 64) none inside the scratch prefix, a scratch prefix
+      without a wildcard, absolute canonical directories, a cache duration
+      like 12h and a memory limit like 256m
+  tags: [health, backup, restore, export, upgrade]

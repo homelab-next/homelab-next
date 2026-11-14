@@ -78,10 +78,30 @@ def schema_problems(doc: Any) -> list[str]:
         raise RoleTableError(
             "validating a role table needs jsonschema: pip install 'homelabnext[core]'"
         ) from exc
+    from homelabnext._schema_text import safe_message
+
+    def where(e: Any) -> str:
+        # a key that is no plain name is told as <key>: a file that is not a role table (one of
+        # credentials, say) read as one must not have its keys or values echoed into a CI log
+        parts = [
+            str(p) if isinstance(p, int) or _PLAIN_KEY.match(str(p)) else "<key>"
+            for p in e.absolute_path
+        ]
+        return "/".join(parts) or "$"
+
+    def what(e: Any) -> str:
+        if e.validator == "additionalProperties":
+            return "has properties the schema does not allow"
+        return safe_message(e)
+
     return [
-        f"{'/'.join(map(str, e.absolute_path)) or '$'}: {e.message[:200]}"
+        f"{where(e)}: {what(e)}"
         for e in sorted(v.iter_errors(doc), key=lambda e: list(map(str, e.absolute_path)))
     ]
+
+
+#: a key told as itself in a role-table problem: a role, backend or field name's shape
+_PLAIN_KEY = re.compile(r"[a-z][a-z0-9_]*(?:-[a-z0-9]+)*\Z")
 
 
 def normalize_role(name: str) -> str:
@@ -243,11 +263,18 @@ class RoleTable:
 
     @classmethod
     def load(cls, path: str | Path) -> RoleTable:
-        """Read a role table file: it must satisfy ``schemas/platform/model_roles.json`` (so a key
-        the schema refuses is an error, not silently ignored), then :meth:`from_dict`."""
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        """Read a role table file (:meth:`loads`)."""
+        return cls.loads(Path(path).read_bytes(), str(path))
+
+    @classmethod
+    def loads(cls, data: bytes | str, where: str = "<role table>") -> RoleTable:
+        """A role table from its JSON text: it must satisfy ``schemas/platform/model_roles.json``
+        (so a key the schema refuses is an error, not silently ignored), then :meth:`from_dict`.
+        Every reader of a role table file goes through here, so their validation cannot drift."""
+        text = data.decode("utf-8") if isinstance(data, bytes) else data
+        doc = json.loads(text)
         if problems := schema_problems(doc):
-            raise RoleTableError(f"{path}: role table does not match model_roles.json", problems)
+            raise RoleTableError(f"{where}: role table does not match model_roles.json", problems)
         return cls.from_dict(doc)
 
     def unpinned(self) -> list[str]:
@@ -304,8 +331,18 @@ class ResolvedModel:
         return self.endpoint.url
 
 
+class NonPrimaryBinding(ResolutionError):
+    """A role binding names an ``eval``, ``retiring`` or ``legacy`` row (ADR-0039 decision 3): a
+    consumer binds only to a primary, so this is raised, never skipped over to the next binding
+    or the fallback, which would reroute the role silently."""
+
+
 class ModelResolver:
-    """Role alias -> backend endpoint through the registry and the capability resolver."""
+    """Role alias -> backend endpoint through the registry and the capability resolver.
+
+    A binding's ``svc:<name>`` names a primary row or a capability (meaning its primary).  One
+    naming a non-primary row raises :class:`NonPrimaryBinding`; only the egress canary runner
+    reaches an ``eval`` row, through :meth:`resolve_binding` with ``allow_eval=True``."""
 
     def __init__(self, registry: Registry, table: RoleTable, resolver: Resolver | None = None):
         self.registry = registry
@@ -315,6 +352,14 @@ class ModelResolver:
     def _capability_of(self, backend: str) -> str:
         svc = self.registry.services.get(backend) or self.registry.by_capability(backend)
         if svc is None:
+            other = self.registry.row(backend, "eval", "retiring", "legacy")
+            if other is not None:
+                article = "an" if other.standing[:1] in "aeiou" else "a"
+                raise NonPrimaryBinding(
+                    f"svc:{backend}",
+                    f"is {article} {other.standing} row; a role binding reaches only a primary "
+                    "(ADR-0039 decision 3)",
+                )
             raise ResolutionError(backend, "backend is not a service in the registry")
         return svc.capability
 
@@ -327,6 +372,8 @@ class ModelResolver:
             for b in r.bindings:
                 try:
                     ep = self.resolver.resolve(self._capability_of(b.backend))
+                except NonPrimaryBinding:
+                    raise  # never rerouted to the next binding or the fallback
                 except ResolutionError as exc:
                     trail.append(f"{cur}: svc:{b.backend} unresolved ({str(exc)[:80]})")
                     continue
@@ -336,11 +383,23 @@ class ModelResolver:
             cur = r.fallback
         raise ResolutionError(f"mdl:{asked}", "no binding or fallback resolved", trail)
 
-    def resolve_binding(self, role: str, binding: Binding) -> ResolvedModel:
+    def resolve_binding(
+        self, role: str, binding: Binding, *, allow_eval: bool = False
+    ) -> ResolvedModel:
         """One given binding of a role, with no fallback (the egress canary runs every binding
-        of a role, not the first that resolves)."""
+        of a role, not the first that resolves).
+
+        ``allow_eval`` is passed by the egress canary runner alone
+        (:func:`homelabnext.golden.cli._binding_completer`): it vets a candidate before its
+        switch, so a binding naming an ``eval`` row then resolves that row by its row name
+        (ADR-0039 decision 2), never through its capability.  Without it, and for a
+        ``retiring`` or ``legacy`` row always, :class:`NonPrimaryBinding` is raised."""
         asked = normalize_role(role)
         r = self.table.get(asked)
+        # only the literal True: a truthy stand-in (1, "yes") is no grant of the exception
+        candidate = self.registry.row(binding.backend, "eval") if allow_eval is True else None
+        if candidate is not None:
+            return _resolved(r, asked, binding, self.resolver.resolve_row(candidate.name), ())
         return _resolved(
             r, asked, binding, self.resolver.resolve(self._capability_of(binding.backend)), ()
         )

@@ -7,6 +7,7 @@ summary_of: outline:sha256:3f0c77e3a4567c7a
 - **Status:** proposed
 - **Date:** 2026-10-15
 - **Related:** ADR-0003, ADR-0004, ADR-0007, `docs/interfaces.md`
+- **Amended-by:** ADR-0039
 
 ## Context
 

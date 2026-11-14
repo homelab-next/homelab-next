@@ -30,6 +30,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/homelab-next/homelab-next/orchestrator/internal/pathscope"
+	"github.com/homelab-next/homelab-next/orchestrator/internal/runner"
 )
 
 // Kind is one MCP server program as the catalog defines it. Command, Args and the fixed Env are
@@ -205,14 +206,6 @@ type Set struct {
 	Shadow []Grant `yaml:"shadow"`
 }
 
-// Server is one rendered server: what the runner starts for a job.
-type Server struct {
-	Command string
-	Args    []string
-	Env     map[string]string // nil when empty
-	Timeout int               // seconds; 0 = the runner's default
-}
-
 // UnmarshalYAML decodes a grants block strictly (unknown fields refused), wherever it is
 // embedded: a typo'd lane or field (`reall:`, `knd:`, `evn:`) would otherwise grant nothing, or a
 // server without its scoping env.
@@ -303,11 +296,11 @@ func cloneGrants(in []Grant) []Grant {
 // (the loader, the search path and home, the interpreters and package launchers, git, the config
 // directories they read, the container CLI's own settings, the TLS stack's configuration and key
 // log, every proxy, the C library's module, locale, resolver and allocator knobs, other
-// interpreters' option variables and the shell's). It is homelab-next's DENIED_ENV
+// interpreters' option variables, the shell's and the temporary directory). It is homelab-next's DENIED_ENV
 // (homelabnext/mcp/servers.py) character for character, which tests/mcp/test_mcp_clients.py holds
 // equal, so a record the catalog accepts and a grant this package accepts are refused for the same
 // keys.
-const DeniedEnvPattern = `(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSLKEYLOGFILE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PERL5OPT|PERL5LIB|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4`
+const DeniedEnvPattern = `(?:LD_|DYLD_|PYTHON|NODE_|NPM_CONFIG_|UV_|PIP_|PIPX_|BUN_|COREPACK_|YARN_|PNPM_|GIT_|CONTAINER|XDG_|BUILDKIT|COMPOSE_|DOCKER_(?:TLS|CONTENT_TRUST|CLI_)|OPENSSL_|SSL_CERT_|MALLOC_|BASH_FUNC_).*|DOCKER_(?:HOST|CONFIG|CERT_PATH|CONTEXT|API_VERSION|DEFAULT_PLATFORM|BUILDKIT|CUSTOM_HEADERS)|PATH|HOME|SHELL|BASH_ENV|ENV|HERMES_HOME|NODE|NPM_TOKEN|\w*_PROXY|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|SSLKEYLOGFILE|GCONV_PATH|LOCPATH|NLSPATH|HOSTALIASES|RES_OPTIONS|LOCALDOMAIN|GLIBC_TUNABLES|TZDIR|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS|PERL5\w+|PERLLIB|RUBYOPT|RUBYLIB|SHELLOPTS|BASHOPTS|PS4|TMPDIR|IFS`
 
 var (
 	nameRe      = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
@@ -351,29 +344,36 @@ const MaxCatalogBytes = 4 << 20
 // following a symbolic link in its last component, of at most max bytes. The size is checked on
 // the open descriptor, so a file swapped after a check cannot be read instead.
 func ReadConfigFile(file string, max int64) ([]byte, error) {
-	f, err := os.OpenFile(file, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	data, _, err := ReadConfigFileMode(file, max)
+	return data, err
+}
+
+// ReadConfigFileMode is ReadConfigFile that also returns the file's permission bits, taken from
+// the descriptor it read, so a rewrite can keep the mode of the file it read.
+func ReadConfigFileMode(file string, max int64) ([]byte, os.FileMode, error) {
+	f, err := os.OpenFile(file, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: not a regular file", file)
+		return nil, 0, fmt.Errorf("%s: not a regular file", file)
 	}
 	if fi.Size() > max {
-		return nil, fmt.Errorf("%s: larger than %d bytes", file, max)
+		return nil, 0, fmt.Errorf("%s: larger than %d bytes", file, max)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if int64(len(data)) > max {
-		return nil, fmt.Errorf("%s: larger than %d bytes", file, max)
+		return nil, 0, fmt.Errorf("%s: larger than %d bytes", file, max)
 	}
-	return data, nil
+	return data, fi.Mode().Perm(), nil
 }
 
 // ParseCatalog decodes a catalog strictly (unknown fields refused, a repeated key refused) and
@@ -969,12 +969,13 @@ func laneName(shadow bool) string {
 	return "real"
 }
 
-// Render turns one lane's grants into the servers a job is given, by server name. It fails closed
+// Render turns one lane's grants into the servers a job is given, by server name, in the
+// runner seam's own form (runner.Server: a Session's Servers). It fails closed
 // on any unknown kind, duplicate or malformed name, env key the kind does not allow, value the
 // catalog does not pin, or profile-bound value (Kind.ProfileScope) the owning profile o does not
 // hold.
-func (c *Catalog) Render(gs []Grant, o Owner) (map[string]Server, error) {
-	out := make(map[string]Server, len(gs))
+func (c *Catalog) Render(gs []Grant, o Owner) (map[string]runner.Server, error) {
+	out := make(map[string]runner.Server, len(gs))
 	for _, g := range gs {
 		if !nameRe.MatchString(g.Name) {
 			return nil, fmt.Errorf("%w: server name %q", ErrInvalid, g.Name)
@@ -1039,7 +1040,7 @@ func (c *Catalog) Render(gs []Grant, o Owner) (map[string]Server, error) {
 		if err := k.checkOwner(g, env, o, c.zones); err != nil {
 			return nil, err
 		}
-		s := Server{Command: k.Command, Args: append([]string{}, k.Args...)}
+		s := runner.Server{Command: k.Command, Args: append([]string{}, k.Args...)}
 		if len(env) > 0 {
 			s.Env = env
 		}

@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - keycloak_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - keycloak_hostname is match(keycloak_hostname_pattern)
+      - keycloak_tls_server_name is match(keycloak_hostname_pattern)
+      - keycloak_realm is match('^[a-z][a-z0-9-]{1,31}\Z')
+      - keycloak_realm != 'master'
+      - keycloak_realm_file is match('^/')
+      - keycloak_image is match(keycloak_pinned_ref_pattern)
+      - keycloak_postgres_image is match(keycloak_pinned_ref_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - keycloak_bind is match(keycloak_ipv4_pattern)
+      - keycloak_bind != '0.0.0.0'
+      - keycloak_port | int >= 1 and keycloak_port | int <= 65535
+      - keycloak_edge_addresses is sequence and keycloak_edge_addresses is not string
+      - keycloak_edge_addresses | length > 0
+      - keycloak_edge_addresses | reject('string') | list | length == 0
+      - keycloak_edge_addresses | reject('match', keycloak_ipv4_pattern) | list | length == 0
+      - keycloak_edge_addresses | select('equalto', '0.0.0.0') | list | length == 0
+      - keycloak_uid | int >= 1000 and keycloak_db_uid | int >= 1000 and keycloak_db_gid | int >= 1000
+      - keycloak_uid | int != keycloak_db_uid | int
+      - keycloak_db_name is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - keycloak_db_user is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - keycloak_admin_user is match(keycloak_username_pattern)
+      - >-
+        [keycloak_admin_login_ref, keycloak_db_login_ref, keycloak_tls_cert_ref,
+         keycloak_tls_key_ref, keycloak_ca_ref] | reject('match', keycloak_ref_pattern) | list | length == 0
+      - >-
+        [keycloak_admin_login_ref, keycloak_db_login_ref, keycloak_tls_cert_ref,
+         keycloak_tls_key_ref, keycloak_ca_ref] | unique | length == 5
+      - keycloak_reserved_usernames is sequence and keycloak_reserved_usernames is not string
+      - keycloak_reserved_usernames | reject('string') | list | length == 0
+      - keycloak_reserved_usernames | reject('match', keycloak_username_pattern) | list | length == 0
+      # the break-glass admin is the master realm's, but a reserved name is never given to anyone
+      - keycloak_admin_user not in keycloak_reserved_usernames
+      - >-
+        [keycloak_dir, keycloak_data_root] | reject('match', keycloak_path_pattern) | list | length == 0
+      - keycloak_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - keycloak_db_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      keycloak: a registry id, a public hostname and a certificate name (DNS names), a realm
+      (the lab's name, not master), an absolute realm file, two images pinned by tag and digest,
+      the guest's IPv4 address to publish on (not all interfaces), a port, the edge's IPv4
+      addresses, distinct container uids of 1000 or more, a database and role name, an admin
+      name, five distinct secret: references, reserved usernames in the IdP's form, absolute
+      canonical directories and memory limits like 512m
+  tags: [health, backup, restore, export, upgrade]

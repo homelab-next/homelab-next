@@ -345,6 +345,72 @@ jobs:
           HNX_PUSH_BEFORE: ${{ github.event.before }}
         run: hnx modules swap-gate --overlay . --ci-base
 
+  # Consumers bind only to a primary (ADR-0039 decision 3): the lab registry's upstreams, its role
+  # table, the canary bindings of its evaluation report as this change and the pull request's
+  # BASE have it (the base copy is the one the swap gate trusts), the workflow packs the pinned
+  # commit deploys, and its selection's requires.  Each optional file is checked
+  # when present.  hnx is the pinned commit, the base is read through git, no secret.
+  registry-bindings:
+    name: registry bindings
+    needs: hnx-pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: refuse an unpinned hnx
+        env:
+          HNX_REF: ${{ needs.hnx-pin.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$HNX_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::HNX_REF must be a full commit SHA"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # the base commit
+          persist-credentials: false
+
+      - name: refuse an hnx/ the change itself carries
+        # the pinned checkout goes to hnx/ and is installed from there: a pull request that
+        # tracks hnx/ must not get its own files under the pinned commit's name
+        run: |
+          set -euo pipefail
+          if [ -e hnx ] || [ -L hnx ]; then echo "::error::the overlay tracks hnx/, where the pinned homelab-next goes"; exit 1; fi
+
+      - name: homelab-next at the pinned commit (the check)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: homelab-next/homelab-next
+          ref: ${{ needs.hnx-pin.outputs.sha }}
+          path: hnx
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: hnx, hash-pinned bootstrap
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes --no-deps -r hnx/constraints/bootstrap.txt
+          python -m pip install --disable-pip-version-check -c hnx/constraints/ci.txt PyYAML jsonschema referencing setuptools
+          python -m pip install --disable-pip-version-check --no-deps --no-build-isolation ./hnx
+
+      - name: every binding reaches a primary
+        # optional inputs are checked when present; a link counts as present, and the check
+        # refuses a symbolic link on a lab/ input's path
+        env:
+          HNX_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HNX_PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -e lab/model_roles.json ] || [ -L lab/model_roles.json ]; then args+=(--roles lab/model_roles.json); fi
+          if [ -e lab/llm-gateway/gateway.yml ] || [ -L lab/llm-gateway/gateway.yml ]; then args+=(--gateway lab/llm-gateway/gateway.yml); fi
+          args+=(--eval-report lab/model_roles.eval.json --ci-base)
+          # the packs the pinned commit's deploy manifest pins: the ones deployed against this lab
+          args+=(--packs hnx/workflows/packs --deployed hnx/workflows/deploy.yml)
+          if [ -e lab/modules.yml ] || [ -L lab/modules.yml ]; then args+=(--site lab/modules.yml --modules hnx/modules --modules lab/modules); fi
+          hnx registry bindings lab/services.yml "${args[@]}"
+
   # The one check main's branch protection requires: it passes only when every other job here
   # succeeded, so a job added later blocks a merge once it is listed in needs (a test checks that
   # every job is), and no single job can be left out of the protection by accident.  always():
@@ -352,7 +418,7 @@ jobs:
   checks:
     name: checks
     if: always()
-    needs: [hnx-pin, private-leak-check, module-loader, lab-specs, site-review-tier, swap-gate]
+    needs: [hnx-pin, private-leak-check, module-loader, lab-specs, site-review-tier, swap-gate, registry-bindings]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

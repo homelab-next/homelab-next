@@ -20,9 +20,14 @@ type sseEvent struct {
 
 type sseReader struct{ sc *bufio.Scanner }
 
-func newSSEReader(r io.Reader) *sseReader {
+func newSSEReader(r io.Reader) *sseReader { return newSSEReaderSize(r, maxSSELine) }
+
+// newSSEReaderSize is newSSEReader with a line bound of maxLine bytes (its tests use a small one).
+// The scanner's first buffer is never larger than the bound, because bufio.Scanner takes the
+// larger of the two as its limit.
+func newSSEReaderSize(r io.Reader, maxLine int) *sseReader {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), maxSSELine)
+	sc.Buffer(make([]byte, 0, min(64*1024, maxLine)), maxLine)
 	return &sseReader{sc: sc}
 }
 

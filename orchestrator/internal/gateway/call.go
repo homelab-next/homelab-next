@@ -10,14 +10,12 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
-)
 
-// tagRE is an X-HNX-Tag value: the turn-record TAG pattern exactly (ADR-0038 d6).
-var tagRE = regexp.MustCompile(`^[A-Za-z0-9._:/-]{0,64}[A-Za-z0-9._:-]{1,128}$`)
+	"github.com/homelab-next/homelab-next/orchestrator/internal/gatewaytag"
+)
 
 // call is one model request on its way through admission and routing.
 type call struct {
@@ -143,11 +141,11 @@ func (s *Server) parseCall(w http.ResponseWriter, r *http.Request, c *caller, ki
 			}
 		}
 	}
-	switch tags := r.Header.Values("X-HNX-Tag"); {
+	switch tags := r.Header.Values(gatewaytag.Header); {
 	case len(tags) > 1:
-		return nil, badRequest("invalid_tag", "X-HNX-Tag is given more than once")
-	case len(tags) == 1 && !tagRE.MatchString(tags[0]):
-		return nil, badRequest("invalid_tag", "X-HNX-Tag is not a gateway tag")
+		return nil, badRequest("invalid_tag", gatewaytag.Header+" is given more than once")
+	case len(tags) == 1 && !gatewaytag.Valid(tags[0]):
+		return nil, badRequest("invalid_tag", gatewaytag.Header+" is not a gateway tag")
 	case len(tags) == 1:
 		cl.tag = &tags[0]
 	}

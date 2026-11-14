@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: Apache-2.0
+# The idp provider on Keycloak (docs/modules.md; README.md beside this file): the IdP and its
+# PostgreSQL as two compose_app containers in the module's slice. The realm is the idp_realm
+# generator's (ADR-0034): a password and a passkey on every browser sign-in, every direct grant
+# refused, no one-time code, the reserved usernames refused. TLS from the lab's internal CA on the
+# guest's own address; no public route except through the edge (the row's public_hostname is the
+# site's). Every real value (the guest, its address, the public name, the secret values) is the
+# site's: the overlay's lab/modules.yml, lab/services.yml, group variables and secret store.
+manifest_version: "1.0"
+id: keycloak
+kind: provider
+title: Identity on Keycloak
+description: Fills the idp slot with Keycloak and its PostgreSQL as compose_app containers, the
+  generated realm imported and converged (passkey second factor, reserved usernames refused);
+  proved by the idp conformance suite through the Keycloak adapter.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: keycloak
+  version: 26.8.1
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:keycloak/admin-password
+    identity: password
+    holder: provider
+    purpose: the master realm's break-glass admin (ADR-0034 decision 6); the role converges the realm and its health hook signs in with it
+  - secret: secret:keycloak/db-password
+    identity: password
+    holder: provider
+    purpose: the database role's password, given to PostgreSQL at its first start and to the IdP at every start
+  - secret: secret:keycloak/tls-cert
+    identity: certificate
+    holder: provider
+    purpose: the server certificate the lab's internal CA issued for the IdP's internal name (the edge verifies it)
+  - secret: secret:keycloak/tls-key
+    identity: private-key
+    holder: provider
+    purpose: the server certificate's private key, written readable by the IdP's container only
+  - secret: secret:keycloak/ca
+    identity: certificate
+    holder: provider
+    purpose: the lab CA's certificate the role's hooks verify the IdP with (a copy of the CA the edge's edge_tls.ca names)
+identifiers:
+  - {kind: secret-name, name: keycloak, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the admin and database passwords, the certificate, its key, the CA and every client secret are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 2560, disk_gb: 8}
+      guest:
+        baselines: [base]
+      roles: [role:keycloak]
+      purpose: runs the IdP and its PostgreSQL (docker_engine applied first, compose_app renders both)
+provides:
+  slots:
+    idp:
+      adapter: homelabnext.conform.adapters.keycloak:make
+      conformance:
+        target: conformance/target.yml
+      migration: {formats: [json], export: role:keycloak, import: role:keycloak}
+egress: none
+contributes:
+  roles:
+    - file: roles/keycloak
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:keycloak, hook: readiness}
+  docs:
+    - file: README.md
+    - file: CHANGELOG.md
+data:
+  - id: realm
+    kind: state
+    description: The realm's configuration (clients, groups, roles, flows, settings) as the IdP's partial export; client secrets masked, no users. Re-converged from the rendered realm at every run.
+    export: {formats: [json], via: role:keycloak}
+    import: {formats: [json], via: role:keycloak}
+    retention: {keep: forever}
+  - id: database
+    kind: database
+    description: The PostgreSQL database - the realm with its users, their passwords' hashes and their passkeys - as pg_dump's custom format with a sha256 listing.
+    export: {formats: [object-tree], via: role:keycloak}
+    import: {formats: [object-tree], via: role:keycloak}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest) of the IdP, or of PostgreSQL within its major version: the role's upgrade hook validates and records it, the database and realm are exported, then it converges"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

@@ -47,6 +47,23 @@ def messages(report_or_list):
     return [str(p) for p in items]
 
 
+def ship_unshipped(d, doc):
+    """Write the roles (a directory with a task file) and playbooks a fixture module names
+    without shipping, as a real module would ship them."""
+    for kind, rel in [
+        *ld.contributed_files(doc),
+        *(("lifecycle", p) for p in ld.lifecycle_playbooks(doc)),
+    ]:
+        if not rel.startswith(ld.FIXTURE_UNSHIPPED) or (d / rel).exists():
+            continue
+        if kind == "roles":
+            (d / rel / "tasks").mkdir(parents=True)
+            (d / rel / "tasks" / "main.yml").write_text("- {}\n")
+        else:
+            (d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (d / rel).write_text("- {}\n")
+
+
 def overlay_module(tmp_path, mid, edit=None):
     """A copy of an example module in an overlay, with the roles/ and playbooks/ files it names
     (an overlay ships them: the fixture exemption is not its)."""
@@ -54,10 +71,7 @@ def overlay_module(tmp_path, mid, edit=None):
     d = overlay / "lab" / "modules" / mid
     shutil.copytree(EXAMPLES / mid, d)
     doc = ld.load_yaml(d / "module.yml")
-    for _, rel in ld.contributed_files(doc):
-        if rel.startswith(ld.FIXTURE_UNSHIPPED) and not (d / rel).exists():
-            (d / rel).parent.mkdir(parents=True, exist_ok=True)
-            (d / rel).write_text("- {}\n")
+    ship_unshipped(d, doc)
     if edit:
         edit(doc)
         (d / "module.yml").write_text(yaml.safe_dump(doc))
@@ -699,9 +713,14 @@ def test_the_roles_and_playbooks_exemption_is_the_fixture_root_s_only(tmp_path):
     tree, found = ld.discover(fixtures=tmp_path / "fixtures", overlay=overlay)
     assert found == []
     got = messages(check(tree, (tmp_path / "fixtures",)))
-    roles = [r for _, r in ld.contributed_files(tree.mods["publishing"]) if r.startswith("roles/")]
+    mod = tree.mods["publishing"]
+    roles = [r for k, r in ld.contributed_files(mod) if k == "roles"]
+    books = list(ld.lifecycle_playbooks(mod))
     assert roles and all(
-        f"publishing: {r}: not a regular file in the module" in got for r in roles
+        f"publishing: {r}: not a role directory in the module" in got for r in roles
+    ), got
+    assert books and all(
+        f"publishing: {b}: not a regular file in the module" in got for b in books
     ), got
 
 
@@ -1105,8 +1124,9 @@ def test_the_cli_exits_0_clean_and_names_what_it_did_not_check(capsys):
     assert code == 0
     assert "note: no inventory of what runs" in out.out
     assert "note: the core registry is the repository's example" in out.out
-    assert "note: the public modules/ tree" in out.out
-    assert out.out.rstrip().endswith("16 module(s), 0 problem(s)")
+    # the public modules/ tree ships modules/ntfy and modules/caddy, so it is neither missing nor empty
+    assert "note: the public modules/ tree" not in out.out
+    assert out.out.rstrip().endswith("19 module(s), 0 problem(s)")
 
 
 def test_the_cli_exits_1_on_a_problem_and_prints_json(capsys):

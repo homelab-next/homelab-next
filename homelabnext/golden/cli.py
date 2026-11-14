@@ -232,11 +232,14 @@ def _binding_completer(
     resolver: ModelResolver, client_kwargs: Mapping[str, Any] | None = None
 ):  # pragma: no cover - needs a real model server
     """``(role, binding) -> (completer, "live")``: the canary's completer for one binding, which
-    returns the whole ChatResult so the canary sees ``finish_reason``."""
+    returns the whole ChatResult so the canary sees ``finish_reason``.  This is the egress canary
+    runner, the one caller that passes ``allow_eval`` (ADR-0039 decision 3): the canary vets a
+    candidate ``eval`` row before its switch."""
     from homelabnext.registry.models import ModelClient
 
     def canary_for(role: str, binding: Any) -> tuple[Any, str]:
-        client = ModelClient(resolver.resolve_binding(role, binding), **(client_kwargs or {}))
+        resolved = resolver.resolve_binding(role, binding, allow_eval=True)
+        client = ModelClient(resolved, **(client_kwargs or {}))
         return (lambda messages, params: client.chat(messages, **params)), "live"
 
     return canary_for

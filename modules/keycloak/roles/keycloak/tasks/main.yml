@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Read and check the rendered realm
+  ansible.builtin.include_tasks: realm.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Write the certificate, its key and the CA
+  ansible.builtin.include_tasks: tls.yml
+
+# The passwords reach only the env_files (0600). POSTGRES_PASSWORD sets the role's password when
+# the cluster is first created and is ignored afterwards; KC_BOOTSTRAP_ADMIN_PASSWORD creates the
+# break-glass admin when the master realm is first created (README, "Rotating").
+- name: Read the database and admin passwords
+  ansible.builtin.set_fact:
+    keycloak_secret_env:
+      postgres:
+        POSTGRES_PASSWORD: "{{ lookup('hnx_secret', keycloak_db_login_ref) }}"
+      keycloak:
+        KC_DB_PASSWORD: "{{ lookup('hnx_secret', keycloak_db_login_ref) }}"
+        KC_BOOTSTRAP_ADMIN_PASSWORD: "{{ lookup('hnx_secret', keycloak_admin_login_ref) }}"
+  no_log: true
+
+- name: Refuse a malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Render and start the database and the IdP
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ keycloak_app.compose_app_name }}"
+    compose_app_dir: "{{ keycloak_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ keycloak_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ keycloak_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ keycloak_app.compose_app_owner }}"
+    compose_app_group: "{{ keycloak_app.compose_app_group }}"
+    compose_app_start: "{{ keycloak_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ keycloak_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ keycloak_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ keycloak_secret_env }}"
+    compose_app_allow_root_group: true
+    compose_app_bind_roots: ["{{ keycloak_dir }}", "{{ keycloak_data_root }}"]
+  no_log: true
+
+- name: Restart the IdP when its certificate changed (it reads it at start)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", restart, keycloak]
+  when: keycloak_start | bool and keycloak_tls_files is changed
+  changed_when: true
+
+- name: Converge the realm
+  ansible.builtin.include_tasks: converge.yml
+  when: keycloak_start | bool

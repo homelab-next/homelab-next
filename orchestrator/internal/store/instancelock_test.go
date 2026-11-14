@@ -16,7 +16,7 @@ import (
 func TestLockInstance(t *testing.T) {
 	dir := t.TempDir()
 	db := filepath.Join(dir, "orch.db")
-	release, err := LockInstance(db)
+	lock, err := LockInstance(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,19 +26,22 @@ func TestLockInstance(t *testing.T) {
 	if _, err := LockInstance(db); !errors.Is(err, ErrInstanceLocked) {
 		t.Fatalf("second LockInstance = %v, want ErrInstanceLocked", err)
 	}
-	if err := release(); err != nil {
+	if err := lock.Release(); err != nil {
 		t.Fatal(err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatalf("a second Release = %v, want nothing", err)
 	}
 	again, err := LockInstance(db)
 	if err != nil {
 		t.Fatalf("after release: %v", err)
 	}
-	again()
+	again.Release()
 	other, err := LockInstance(filepath.Join(dir, "other.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	other()
+	other.Release()
 
 	target := filepath.Join(dir, "elsewhere")
 	if err := os.WriteFile(target, nil, 0o600); err != nil {
@@ -48,8 +51,8 @@ func TestLockInstance(t *testing.T) {
 	if err := os.Symlink(target, linked+".lock"); err != nil {
 		t.Fatal(err)
 	}
-	if rel, err := LockInstance(linked); err == nil {
-		rel()
+	if l, err := LockInstance(linked); err == nil {
+		l.Release()
 		t.Fatal("a symbolic link at the lock's path was followed")
 	}
 }

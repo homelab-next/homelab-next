@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.internal/homelabnext/runner/usage_record/1.0",
+  "x-draft": "ADR-0051 (proposed): the agent-runner contract's surface, step 2; not frozen, may change before acceptance",
+  "title": "Agent-runner usage record",
+  "description": "One record of a runner body's usage stream, one JSON object per line of usage.jsonl (ADR-0051 decision 4). Names and numbers only: no prompt, task text, tool input or output, or model text (ADR-0025 decision 2). The stream is append-only: call and tool_call records as they happen, then one end record.",
+  "type": "object",
+  "properties": {
+    "type": {
+      "enum": [
+        "call",
+        "tool_call",
+        "signal",
+        "end"
+      ]
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "call"
+          },
+          "sized": {
+            "const": true
+          }
+        },
+        "required": [
+          "type",
+          "sized"
+        ]
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "const": "call"
+          },
+          "role": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "sized": {
+            "const": true
+          },
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cache_read_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "span_id": {
+            "type": "string",
+            "pattern": "^(?!0{16})[0-9a-f]{16}$(?!\\n)"
+          }
+        },
+        "required": [
+          "type",
+          "role",
+          "sized",
+          "input_tokens",
+          "output_tokens",
+          "span_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "call"
+          },
+          "sized": {
+            "const": false
+          }
+        },
+        "required": [
+          "type",
+          "sized"
+        ]
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "const": "call"
+          },
+          "role": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "sized": {
+            "const": false
+          },
+          "span_id": {
+            "type": "string",
+            "pattern": "^(?!0{16})[0-9a-f]{16}$(?!\\n)"
+          }
+        },
+        "required": [
+          "type",
+          "role",
+          "sized",
+          "span_id"
+        ],
+        "additionalProperties": false,
+        "description": "A call the runtime could not size: reported, never left out."
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "call"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "required": [
+          "sized"
+        ],
+        "properties": {
+          "sized": {
+            "type": "boolean",
+            "description": "Exactly true or false: a call record that is neither matches no closed shape."
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "tool_call"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "const": "tool_call"
+          },
+          "server": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/slug"
+          },
+          "tool": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.-]+$(?!\\n)"
+          },
+          "start": {
+            "$ref": "https://schemas.example.internal/homelabnext/ids/common/1.0#/$defs/timestamp"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outcome": {
+            "enum": [
+              "ok",
+              "error",
+              "refused"
+            ]
+          },
+          "span_id": {
+            "type": "string",
+            "pattern": "^(?!0{16})[0-9a-f]{16}$(?!\\n)"
+          }
+        },
+        "required": [
+          "type",
+          "server",
+          "tool",
+          "start",
+          "duration_ms",
+          "outcome",
+          "span_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "signal"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "const": "signal"
+          },
+          "signal": {
+            "enum": [
+              "backend_absent"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "signal"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "end"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "type": {
+            "const": "end"
+          },
+          "session_id": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$(?!\\n)"
+          },
+          "turns": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "budget_exhausted": {
+            "enum": [
+              "input_tokens",
+              "output_tokens",
+              "cost_usd",
+              "tool_calls"
+            ]
+          },
+          "class": {
+            "enum": [
+              "ContextExceeded",
+              "ToolCallParse",
+              "TurnCap",
+              "ConcurrencyLimited"
+            ],
+            "description": "A class only the runtime can see (ADR-0051 decision 6)."
+          }
+        },
+        "required": [
+          "type",
+          "turns"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

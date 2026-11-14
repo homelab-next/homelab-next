@@ -168,7 +168,18 @@ func missingFields(data []byte, t reflect.Type, path string, probs *[]string) er
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
-			if !f.IsExported() || name == "" || opts == "omitempty" {
+			if !f.IsExported() || name == "" {
+				continue
+			}
+			// encoding/json reads a null into a non-pointer field as no change (false, "", a nil
+			// slice), so a null where the contract has no null would pass as a zero value: only
+			// a pointer field may be null
+			if raw, ok := obj[name]; ok && f.Type.Kind() != reflect.Pointer &&
+				bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				*probs = append(*probs, fmt.Sprintf("%s.%s: null is not allowed", path, name))
+				continue
+			}
+			if opts == "omitempty" {
 				continue // omitempty marks the contract's optional keys
 			}
 			raw, ok := obj[name]

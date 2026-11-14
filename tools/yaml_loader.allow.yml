@@ -1,0 +1,162 @@
+# SPDX-License-Identifier: Apache-2.0
+# Reviewed uses of yaml.safe_load / yaml.SafeLoader in package code (tools/yaml_loader_lint.py).
+# New code parses YAML through homelabnext/_yaml.py's budgeted loaders (safe_load, BudgetedLoader,
+# UniqueKeyLoader); each entry below is a file that predates them, at the number of uses it had.
+# The gate fails a file above its count and one below it, so this list only shrinks.
+allow:
+  - path: homelabnext/agent/cli.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/agent/compiler.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/agent/injection.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/agent/keyring.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/agent/memory.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/agent/prompts_cli.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/agent/readers.py
+    count: 8
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/agent/template.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/allowlist.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/broker/service.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/capability_names.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/compute/baselines.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/customization/links.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/decide/impact_scan.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/decide/lint.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/decide/safety.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/decide/spec.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/decommission/planes.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/detections/attack.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/detections/detmap.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/generators/fleet_units.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/generators/llm_gateway.py
+    count: 2
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/golden/canary.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/golden/fakes.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/golden/tasks.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/graph/sources.py
+    count: 2
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/identity/aliases.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/identity/migrate.py
+    count: 3
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/invariants/plugins/pillar_x.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/mcp/clients.py
+    count: 5
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/mcp/importer.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/mcp/servers.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/memory_admin/principal.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/projects/openproject/setup.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/reviews.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/scaffold/core.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/schemas/module_negatives.py
+    count: 4
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/scope/policy.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/scripts/header.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/scripts/reality.py
+    count: 2
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/sop/capabilities.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/sop/facts.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/sop/pages.py
+    count: 5
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/state/store.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/status/collectors.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/status/maps/schedule.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/strategy/doctrine.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/strategy/records.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/swap/decommission.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/swap/flip.py
+    count: 2
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/workflows/pack.py
+    count: 2
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry
+  - path: homelabnext/workflows/st2.py
+    count: 1
+    reason: predates the budgeted loaders (#350); move it to homelabnext._yaml and drop the entry

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# A physical machine with no resources declared: its capacity is unknown to the module loader.
+id: guest:box-1
+kind: host
+provisioning: host-only
+placement: {node: box-1}
+network: {zone: data, ip: 192.0.2.14}
+capability: cap:object-store
+power: {ups: [ups-1]}
+owners: {primary: platform-team}
+baseline: {names: [server]}

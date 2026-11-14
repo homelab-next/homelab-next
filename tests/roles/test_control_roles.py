@@ -10,6 +10,7 @@ refusal is shown failing on a bad input and passing on a good one."""
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -132,6 +133,76 @@ def test_chrony_refuses_bad_inputs(first):
     assert not (tmp_path / "chrony.conf").exists()
 
 
+def _first(tmp_path):
+    v = {
+        **chrony_vars(tmp_path),
+        "chrony_server_ids": [],
+        "chrony_pools": ["pool.example.internal"],
+    }
+    return {"role": "chrony", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_chrony_accepts_a_pool_alone_when_the_lab_has_no_time_server(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    conf = (tmp_path / "chrony.conf").read_text()
+    assert "pool pool.example.internal iburst" in conf
+    assert "\nserver " not in conf
+
+
+def _first(tmp_path):
+    v = chrony_vars(tmp_path)
+    return {"role": "chrony", "tasks_from": "config", "extra_vars": v, "setup": {"v": v}}
+
+
+@first_run(_first)
+def test_chrony_leaves_nothing_beside_the_live_file(first):
+    """The check runs on a copy beside the live file (AppArmor lets chronyd read there, not
+    Ansible's temporary directory), and the copy is gone afterwards, refused or not; so is the
+    staged file an earlier version of the role left."""
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not list(tmp_path.glob(".homelabnext*"))
+    (tmp_path / ".homelabnext-staged.conf").write_text("server old iburst\n")
+    assert run_role(tmp_path, "chrony", "config", {**v, "chrony_max_offset": 2.0}).returncode == 0
+    bad = run_role(tmp_path, "chrony", "config", {**v, "chrony_pools": ["bogus.example.internal"]})
+    assert bad.returncode != 0
+    assert not list(tmp_path.glob(".homelabnext*"))
+
+
+def _first(tmp_path):
+    etc = tmp_path / "etc-chrony"  # not there yet: the package that creates it is not installed
+    v = chrony_vars(tmp_path, chrony_config_file=str(etc / "chrony.conf"))
+    return {
+        "role": "chrony",
+        "tasks_from": "config",
+        "extra_vars": v,
+        "check": True,
+        "setup": {"v": v, "etc": etc},
+    }
+
+
+@first_run(_first)
+def test_chrony_config_runs_in_check_mode_against_an_empty_target(first):
+    """--check on a guest the role never ran on: it reports the configuration it would write and
+    the restart it would owe, and writes, runs and leaves nothing (no staged file to be missing on
+    the first run, or stale on later ones)."""
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Write the configuration" in r.stdout and "changed=" in r.stdout
+    assert not first.setup["etc"].exists() and not (tmp_path / "state").exists()
+    assert calls(tmp_path) == []
+    # and against a target that already holds the configuration: nothing to change
+    (first.setup["etc"]).mkdir()
+    assert run_role(tmp_path, "chrony", "config", v).returncode == 0
+    again = run_role(tmp_path, "chrony", "config", v, check=True)
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert "changed=0" in again.stdout and not list(first.setup["etc"].glob(".homelabnext*"))
+
+
 CHRONY_TRACKING = [
     ("C0000201,time-01,3,1792500000.1,-0.000012,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", True),
     ("C0000201,time-01,3,1792500000.1,1.5,0.0,0.0,1.0,0.0,0.1,0.01,0.01,64.0,Normal", False),
@@ -158,6 +229,53 @@ def test_chrony_health_reads_the_tracking_line(first):
 
 
 # ---------------------------------------------------------------- unattended_upgrades
+# Fake logind: the file ``logind`` holds "<type> <usec>" ("-" for an empty type) while a shutdown
+# is scheduled.  busctl prints the ScheduledShutdown property (fails while ``busctl.fails``
+# exists, prints something else while ``busctl.garbled`` does); shutdown -c removes the file
+# (unless ``cancel.sticky`` exists, and exits 1 while ``cancel.fails`` does) and --show answers
+# as systemd's does, on stderr (garbled while ``show.garbled`` exists).  Both log their calls.
+FAKE_BUSCTL = r"""
+import os, sys
+open(LOG, "a").write("busctl " + " ".join(sys.argv[1:]) + "\n")
+if os.path.exists(os.path.join(BASE, "busctl.fails")):
+    sys.exit("Failed to connect to bus: No such file or directory")
+if os.path.exists(os.path.join(BASE, "busctl.garbled")):
+    sys.exit(print("Unknown property or interface."))
+state = os.path.join(BASE, "logind")
+kind, usec = open(state).read().split() if os.path.exists(state) else ("", "18446744073709551615")
+print('(st) "%s" %s' % ("" if kind == "-" else kind, usec))
+"""
+FAKE_SHUTDOWN = r"""
+import os, sys
+open(LOG, "a").write("shutdown " + " ".join(sys.argv[1:]) + "\n")
+state = os.path.join(BASE, "logind")
+if sys.argv[1:] == ["-c"]:
+    if os.path.exists(state) and not os.path.exists(os.path.join(BASE, "cancel.sticky")):
+        os.remove(state)
+    sys.exit(1 if os.path.exists(os.path.join(BASE, "cancel.fails")) else 0)
+elif sys.argv[1:] == ["--show"]:
+    if os.path.exists(os.path.join(BASE, "show.garbled")):
+        sys.exit("shutdown: unrecognized option '--show'")
+    if not os.path.exists(state):
+        sys.exit("No scheduled shutdown.")
+    sys.stderr.write("Reboot scheduled for Fri 2026-11-13 04:30:00 UTC, use 'shutdown -c' to cancel.\n")
+"""
+# 2026-11-13 04:30:00 UTC, in microseconds (logind's unit)
+USEC_0430 = "1794544200000000"
+
+
+def uu_logind(tmp_path) -> dict:
+    def body(text):
+        return text.replace("LOG", repr(str(tmp_path / "calls.log"))).replace(
+            "BASE", repr(str(tmp_path))
+        )
+
+    return {
+        "unattended_upgrades_busctl_cli": fake(tmp_path / "busctl", body(FAKE_BUSCTL)),
+        "unattended_upgrades_shutdown_cli": fake(tmp_path / "shutdown", body(FAKE_SHUTDOWN)),
+    }
+
+
 def uu_vars(tmp_path, **kw):
     d = {
         "unattended_upgrades_reboot_time": "03:30",
@@ -165,9 +283,205 @@ def uu_vars(tmp_path, **kw):
         "unattended_upgrades_config_file": str(tmp_path / "52hnx"),
         "unattended_upgrades_stamp_file": str(tmp_path / "stamp"),
         "unattended_upgrades_state_dir": str(tmp_path / "state"),
+        **uu_logind(tmp_path),
     }
     d.update(kw)
     return d
+
+
+def changed(r) -> int:
+    m = re.search(r"localhost\s*:\s*ok=\d+\s+changed=(\d+)\s", r.stdout)
+    assert m, r.stdout + r.stderr
+    return int(m.group(1))
+
+
+def _first(tmp_path):
+    (tmp_path / "logind").write_text(f"reboot {USEC_0430}\n")
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_never_cancels_a_reboot_logind_still_holds(first):
+    """A reboot unattended-upgrades scheduled under an earlier window survives the switch to
+    "never" (Automatic-Reboot "false" governs only the next run; a secret store then reboots
+    sealed): config cancels it, names it, and a second run is changed=0."""
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "logind").exists()
+    assert "shutdown -c" in calls(tmp_path)
+    assert "cancelled the reboot at 2026-11-13 04:30:00 UTC" in r.stdout, r.stdout
+    again = run_role(tmp_path, "unattended_upgrades", "config", first.setup["v"])
+    assert again.returncode == 0 and changed(again) == 0, again.stdout
+    assert calls(tmp_path).count("shutdown -c") == 1
+
+
+def _first(tmp_path):
+    (tmp_path / "logind").write_text(f"reboot {USEC_0430}\n")
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v,
+            "check": True, "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_check_mode_reports_the_cancel_it_would_make(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert changed(r) >= 1 and "would cancel the reboot at 2026-11-13 04:30:00 UTC" in r.stdout
+    assert (tmp_path / "logind").exists() and "shutdown -c" not in calls(tmp_path)
+
+
+def _first(tmp_path):
+    (tmp_path / "logind").write_text(f"reboot {USEC_0430}\n")
+    v = uu_vars(tmp_path)  # a reboot window: the scheduled reboot is the policy working
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_unattended_upgrades_leaves_a_reboot_window_s_reboot_alone(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "logind").exists()
+    assert not [c for c in calls(tmp_path) if c.startswith(("busctl", "shutdown"))]
+
+
+def _first(tmp_path):
+    (tmp_path / "busctl.fails").touch()
+    (tmp_path / "logind").write_text(f"reboot {USEC_0430}\n")
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_falls_back_to_shutdown_show(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "cancelled the reboot at Fri 2026-11-13 04:30:00 UTC" in r.stdout, r.stdout
+    assert not (tmp_path / "logind").exists()
+    again = run_role(tmp_path, "unattended_upgrades", "config", first.setup["v"])
+    assert again.returncode == 0 and changed(again) == 0, again.stdout
+
+
+def _first(tmp_path):
+    for f in ("busctl.fails", "show.garbled"):
+        (tmp_path / f).touch()
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    (tmp_path / "logind").write_text(f"reboot {USEC_0430}\n")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_fails_when_the_schedule_cannot_be_read_or_cancelled(first):
+    r, tmp_path = first
+    assert r.returncode != 0 and "cannot read the scheduled shutdown" in r.stdout, r.stdout
+    assert "Failed to connect to bus" in r.stdout and "unrecognized option" in r.stdout
+    (tmp_path / "busctl.fails").unlink()
+    (tmp_path / "cancel.sticky").touch()
+    r = run_role(tmp_path, "unattended_upgrades", "config", first.setup["v"])
+    assert r.returncode != 0 and "is still scheduled after" in r.stdout, r.stdout
+
+
+def _first(tmp_path):
+    (tmp_path / "logind").write_text(f"poweroff {USEC_0430}\n")
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_never_leaves_a_scheduled_poweroff_alone(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "left the poweroff at 2026-11-13 04:30:00 UTC alone" in r.stdout, r.stdout
+    assert (tmp_path / "logind").exists() and "shutdown -c" not in calls(tmp_path)
+    (tmp_path / "stamp").touch()
+    health = run_role(tmp_path, "unattended_upgrades", "health", first.setup["v"])
+    assert health.returncode == 0, health.stdout
+
+
+def _first(tmp_path):
+    (tmp_path / "logind").write_text(f"- {USEC_0430}\n")
+    (tmp_path / "cancel.fails").touch()  # exits 1, yet the shutdown is gone: the re-read decides
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_unattended_upgrades_never_reads_an_untyped_shutdown_as_a_reboot(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "cancelled the shutdown of unknown type (read as a reboot) at 2026-11-13" in r.stdout
+    assert not (tmp_path / "logind").exists()
+
+
+def _first(tmp_path):
+    (tmp_path / "busctl.garbled").touch()  # exits 0 with an answer that is not the property
+    (tmp_path / "logind").write_text(f"reboot {USEC_0430}\n")
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v}
+
+
+@first_run(_first)
+def test_unattended_upgrades_reads_shutdown_show_when_busctl_answers_something_else(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "shutdown --show" in calls(tmp_path) and "shutdown -c" in calls(tmp_path)
+    assert not (tmp_path / "logind").exists()
+
+
+def _first(tmp_path):
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    run_role(tmp_path, "unattended_upgrades", "config", v)  # converged: the file is written
+    return {"role": "unattended_upgrades", "tasks_from": "config", "extra_vars": v,
+            "check": True}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_check_mode_with_nothing_scheduled_is_clean(first):
+    r, _ = first
+    assert r.returncode == 0 and changed(r) == 0, r.stdout + r.stderr
+
+
+def _first(tmp_path):
+    (tmp_path / "busctl.fails").touch()
+    (tmp_path / "show.garbled").touch()
+    (tmp_path / "stamp").touch()
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "health", "extra_vars": v}
+
+
+@first_run(_first)
+def test_unattended_upgrades_health_fails_when_the_schedule_cannot_be_read(first):
+    r, _ = first
+    assert r.returncode != 0 and "cannot read the scheduled shutdown" in r.stdout, r.stdout
+
+
+def _first(tmp_path):
+    (tmp_path / "logind").write_text(f"reboot {USEC_0430}\n")
+    (tmp_path / "stamp").touch()
+    v = uu_vars(tmp_path, unattended_upgrades_reboot_time="never")
+    return {"role": "unattended_upgrades", "tasks_from": "health", "extra_vars": v,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_health_fails_while_a_reboot_never_host_has_one_scheduled(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode != 0, r.stdout
+    assert (
+        "reboot_time is never but logind holds a pending reboot at 2026-11-13 04:30:00 UTC"
+        in r.stdout
+    )
+    window = run_role(tmp_path, "unattended_upgrades", "health",
+                      {**v, "unattended_upgrades_reboot_time": "03:30"})  # fmt: skip
+    assert window.returncode == 0, window.stdout
+    (tmp_path / "logind").unlink()
+    assert run_role(tmp_path, "unattended_upgrades", "health", v).returncode == 0
+    assert "shutdown -c" not in calls(tmp_path)  # health reads, never cancels
 
 
 def _first(tmp_path):
@@ -264,11 +578,19 @@ def test_unattended_upgrades_refuses_bad_inputs(first):
     assert not (tmp_path / "52hnx").exists()
 
 
-def test_unattended_upgrades_health_reads_the_stamp(tmp_path):
+def _first(tmp_path):
+    v = uu_vars(tmp_path)
+    return {"role": "unattended_upgrades", "tasks_from": "health", "extra_vars": v,
+            "setup": {"v": v}}  # fmt: skip
+
+
+@first_run(_first)
+def test_unattended_upgrades_health_reads_the_stamp(first):
     import os
 
-    v = uu_vars(tmp_path)
-    assert run_role(tmp_path, "unattended_upgrades", "health", v).returncode != 0  # never ran
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode != 0  # never ran
     (tmp_path / "stamp").touch()
     assert run_role(tmp_path, "unattended_upgrades", "health", v).returncode == 0
     os.utime(tmp_path / "stamp", (86400, 86400))  # 1970: long stale
@@ -477,6 +799,48 @@ def test_ssh_hardening_tests_the_drop_in_then_installs_and_reloads(first):
     assert len(calls(tmp_path)) == 3  # unchanged: not tested or reloaded again
     health = run_role(tmp_path, "ssh_hardening", "health", v)
     assert health.returncode == 0, health.stdout
+
+
+def _first(tmp_path):
+    v = ssh_setup(tmp_path)
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v, "check": True}
+
+
+@first_run(_first)
+def test_ssh_hardening_check_mode_reads_the_account_and_writes_nothing(first):
+    """--check (the overlay's "--check --diff first") runs the lockout guard against the real
+    account, not a skipped getent and /nonexistent (LL-563), and changes nothing: the drop-in it
+    would write is reported, not installed, and sshd is neither tested on it nor reloaded."""
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "would lock it out" not in r.stdout
+    assert not (tmp_path / "sshd_config.d" / "00-homelabnext-hardening.conf").exists()
+    assert not (tmp_path / "state").exists()
+    assert calls(tmp_path) == []
+
+
+def test_ssh_hardening_check_mode_on_a_converged_host_is_clean(tmp_path):
+    v = ssh_setup(tmp_path)
+    assert run_role(tmp_path, "ssh_hardening", "config", v).returncode == 0
+    before = calls(tmp_path)
+    r = run_role(tmp_path, "ssh_hardening", "config", v, check=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert re.search(r"localhost\s*:\s*ok=\d+\s+changed=0\s", r.stdout), r.stdout
+    assert calls(tmp_path) == before
+
+
+def _first(tmp_path):
+    v = ssh_setup(tmp_path)
+    (tmp_path / "home" / ".ssh" / "authorized_keys").write_text("")
+    return {"role": "ssh_hardening", "tasks_from": "config", "extra_vars": v, "check": True}
+
+
+@first_run(_first)
+def test_ssh_hardening_check_mode_still_refuses_an_account_without_a_key(first):
+    """The guard reads the account under --check too, so a real lockout still fails the dry run."""
+    r, tmp_path = first
+    assert r.returncode != 0 and "key-only SSH would lock it out" in r.stdout
+    assert calls(tmp_path) == []
 
 
 def _first(tmp_path):
@@ -838,13 +1202,8 @@ def test_nftables_host_renders_the_models_rules_checks_and_loads_once(first):
     assert len(calls(tmp_path)) == 1
 
 
-def test_nftables_host_renders_a_physical_model_runtime_default_deny(tmp_path):
-    """gpu-1 (kind host, cap:inference; tests/compute/physical) end to end: the inventory the
-    compute model renders for it is what the role is fed, and the ruleset that passes nft's own
-    check drops every outbound packet its lab allows do not name."""
+def _first(tmp_path):
     import importlib.util
-
-    import yaml
 
     from homelabnext.compute import load_fleet, render
 
@@ -858,8 +1217,17 @@ def test_nftables_host_renders_a_physical_model_runtime_default_deny(tmp_path):
     egress = "egress-filter" in hv["hnx_controls"]
     v = nft_vars(tmp_path, nftables_host_firewall=hv["hnx_firewall"],
                  nftables_host_require_egress=egress)  # fmt: skip
-    r = run_role(tmp_path, "nftables_host", "config", v)
-    assert egress and r.returncode == 0, r.stdout + r.stderr
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v,
+            "setup": {"egress": egress}}  # fmt: skip
+
+
+@first_run(_first)
+def test_nftables_host_renders_a_physical_model_runtime_default_deny(first):
+    """gpu-1 (kind host, cap:inference; tests/compute/physical) end to end: the inventory the
+    compute model renders for it is what the role is fed, and the ruleset that passes nft's own
+    check drops every outbound packet its lab allows do not name."""
+    r, tmp_path = first
+    assert first.setup["egress"] and r.returncode == 0, r.stdout + r.stderr
     text = (tmp_path / "nftables.conf").read_text()
     out = text.split("chain output {", 1)[1]
     assert "type filter hook output priority filter; policy drop;" in out
@@ -891,48 +1259,52 @@ def test_nftables_host_accept_egress_refuses_only_the_metadata_services(first):
     assert "accept" not in out.split("policy accept;", 1)[1] and "hnx-egress-drop" not in out
 
 
-def test_nftables_host_refuses_cloud_metadata_before_any_allow(tmp_path):
+def _first(tmp_path, policy):
+    fw = {
+        "policy_out": policy,
+        "inbound_allow": [],
+        "outbound_allow": []
+        if policy == "ACCEPT"
+        else [{"name": "link-local", "proto": "tcp", "ports": "80", "dest": "169.254.0.0/16"}],
+    }
+    v = nft_vars(tmp_path, nftables_host_firewall=fw, nftables_host_require_egress=False)
+    return {"role": "nftables_host", "tasks_from": "config", "extra_vars": v}
+
+
+@pytest.mark.parametrize("policy", ["ACCEPT", "DROP"])
+@first_run(_first)
+def test_nftables_host_refuses_cloud_metadata_before_any_allow(first, policy):
     """No outbound_allow (here the whole link-local range) and no policy reopens the metadata
     services: their drop is the output chain's first verdict, ahead of established flows."""
-    for policy in ("ACCEPT", "DROP"):
-        fw = {
-            "policy_out": policy,
-            "inbound_allow": [],
-            "outbound_allow": []
-            if policy == "ACCEPT"
-            else [{"name": "link-local", "proto": "tcp", "ports": "80", "dest": "169.254.0.0/16"}],
-        }
-        v = nft_vars(tmp_path, nftables_host_firewall=fw, nftables_host_require_egress=False)
-        assert run_role(tmp_path, "nftables_host", "config", v).returncode == 0
-        out = (tmp_path / "nftables.conf").read_text().split("chain output {", 1)[1]
-        lines = [
-            ln.strip() for ln in out.splitlines() if ln.strip() and not ln.strip().startswith("#")
-        ]
-        verdicts = [
-            ln
-            for ln in lines[1:]
-            if ln.endswith(("accept", "drop")) or '" accept' in ln or "drop comment" in ln
-        ]
-        assert (
-            verdicts[0]
-            == (
-                "ip daddr { 169.254.169.254, 169.254.170.2, 192.0.0.192, 100.100.100.200 } "  # scrub-allow: cloud metadata, refused
-                'drop comment "homelabnext-refused-destination"'
-            )
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = (tmp_path / "nftables.conf").read_text().split("chain output {", 1)[1]
+    lines = [ln.strip() for ln in out.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    verdicts = [
+        ln
+        for ln in lines[1:]
+        if ln.endswith(("accept", "drop")) or '" accept' in ln or "drop comment" in ln
+    ]
+    assert (
+        verdicts[0]
+        == (
+            "ip daddr { 169.254.169.254, 169.254.170.2, 192.0.0.192, 100.100.100.200 } "  # scrub-allow: cloud metadata, refused
+            'drop comment "homelabnext-refused-destination"'
         )
-        assert (
-            verdicts[1]
-            == 'ip6 daddr { fd00:ec2::254 } drop comment "homelabnext-refused-destination"'  # scrub-allow: cloud metadata, refused
-        )
-        assert lines[1].endswith('log prefix "hnx-egress-refused: " level warn')
-        assert ("hnx-egress-drop: " in out) is (policy == "DROP")
-        # forwarded (container bridge) traffic: the same refusal, ahead of a container engine's
-        # forward chains (priority filter is 0), and nothing else
-        text = (tmp_path / "nftables.conf").read_text()
-        fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
-        assert "type filter hook forward priority filter - 10; policy accept;" in fwd
-        assert fwd.count('drop comment "homelabnext-refused-destination"') == 2
-        assert "accept comment" not in fwd and "hnx-egress-drop" not in fwd
+    )
+    assert (
+        verdicts[1]
+        == 'ip6 daddr { fd00:ec2::254 } drop comment "homelabnext-refused-destination"'  # scrub-allow: cloud metadata, refused
+    )
+    assert lines[1].endswith('log prefix "hnx-egress-refused: " level warn')
+    assert ("hnx-egress-drop: " in out) is (policy == "DROP")
+    # forwarded (container bridge) traffic: the same refusal, ahead of a container engine's
+    # forward chains (priority filter is 0), and nothing else
+    text = (tmp_path / "nftables.conf").read_text()
+    fwd = text.split("chain forward {", 1)[1].split("chain output {", 1)[0]
+    assert "type filter hook forward priority filter - 10; policy accept;" in fwd
+    assert fwd.count('drop comment "homelabnext-refused-destination"') == 2
+    assert "accept comment" not in fwd and "hnx-egress-drop" not in fwd
 
 
 def _verdict_lines(chain: str) -> list[str]:
@@ -1461,11 +1833,16 @@ def test_disk_encryption_check_needs_a_reason_for_each_accepted_volume(first):
     assert r.returncode != 0 and "non-empty reason" in r.stdout
 
 
-@pytest.mark.requires_tool("lsblk")
-def test_disk_encryption_check_reads_the_real_lsblk(tmp_path):
+def _first(tmp_path):
     v = disk_vars(tmp_path)
     del v["disk_encryption_check_lsblk_cli"]
-    r = run_role(tmp_path, "disk_encryption_check", "main", v)
+    return {"role": "disk_encryption_check", "tasks_from": "main", "extra_vars": v}
+
+
+@pytest.mark.requires_tool("lsblk")
+@first_run(_first)
+def test_disk_encryption_check_reads_the_real_lsblk(first):
+    r, tmp_path = first
     assert r.returncode == 0, r.stdout + r.stderr
     assert isinstance(
         json.loads((tmp_path / "state" / "report.json").read_text())["unencrypted"], list
@@ -2226,12 +2603,7 @@ def test_rkhunter_health_follows_the_checks_exit_status(first, rc, ok):
 
 
 # ---------------------------------------------------------------- clamav
-@pytest.mark.parametrize(
-    ("rc", "fresh", "ok"), [(0, True, True), (1, True, False), (0, False, False)]
-)
-def test_clamav_scans_the_paths_that_exist_and_health_wants_fresh_signatures(
-    tmp_path, rc, fresh, ok
-):
+def _first(tmp_path, rc, fresh, ok):
     import os
 
     share = tmp_path / "share"
@@ -2249,7 +2621,18 @@ def test_clamav_scans_the_paths_that_exist_and_health_wants_fresh_signatures(
     v = scanner_vars(tmp_path, "clamav", clamav_paths=[str(share), str(tmp_path / "absent")], clamav_cli=cli,
                      clamav_exclude_dirs=["^/srv/cache"], clamav_database_dir=str(db),
                      clamav_freshclam_config=str(tmp_path / "freshclam.conf"))  # fmt: skip
-    assert run_role(tmp_path, "clamav", "config", v).returncode == 0
+    return {"role": "clamav", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v, "share": share}}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("rc", "fresh", "ok"), [(0, True, True), (1, True, False), (0, False, False)]
+)
+@first_run(_first)
+def test_clamav_scans_the_paths_that_exist_and_health_wants_fresh_signatures(first, rc, fresh, ok):
+    r, tmp_path = first
+    v, share = first.setup["v"], first.setup["share"]
+    assert r.returncode == 0, r.stdout + r.stderr
     run_scan(tmp_path)
     argv = (tmp_path / "argv").read_text()
     assert argv.startswith("--recursive --infected --no-summary --exclude-dir=^/srv/cache --log=")
@@ -2575,11 +2958,18 @@ def mails(tmp_path):
     return [m for m in p.read_text().split("\0") if m] if p.exists() else []
 
 
-def test_needrestart_is_list_only_and_alerts_only_when_the_set_changes(tmp_path):
+def _first(tmp_path):
+    v, out = nr_setup(tmp_path)
+    return {"role": "needrestart", "tasks_from": "config", "extra_vars": v,
+            "setup": {"v": v, "out": out}}  # fmt: skip
+
+
+@first_run(_first)
+def test_needrestart_is_list_only_and_alerts_only_when_the_set_changes(first):
     import os
 
-    v, out = nr_setup(tmp_path)
-    r = run_role(tmp_path, "needrestart", "config", v)
+    r, tmp_path = first
+    v, out = first.setup["v"], first.setup["out"]
     assert r.returncode == 0, r.stdout + r.stderr
     conf = (tmp_path / "50-homelabnext.conf").read_text()
     assert "$nrconf{restart} = 'l';" in conf and "$nrconf{kernelhints} = 1;" in conf

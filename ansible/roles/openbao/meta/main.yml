@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The secret store in server mode: the pinned, checksum-verified release, raft storage, TLS, a file audit device and a hardened unit; initialising and unsealing stay the operator's."
+  license: Apache-2.0
+  min_ansible_version: "2.16"
+dependencies: []

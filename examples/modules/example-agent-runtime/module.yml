@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
-# A provider of the agent-runtime slot (fictional "Adatum Runtime"). The slot has no contract
-# yet, so the entry is provisional with a reason; agent-runtime is required in the core but is not
-# a privileged slot, so provisional is allowed until its contract lands.
+# A provider of the agent-runtime slot (fictional "Adatum Runtime"), held to the slot's contract,
+# the agent-runner suite (ADR-0051), by its conformance target.
 manifest_version: "1.0"
 id: example-agent-runtime
 kind: provider
@@ -30,8 +29,7 @@ provides:
   slots:
     agent-runtime:
       adapter: hnx_modules.example_agent_runtime.agent_runtime:make
-      provisional: true
-      reason: the agent-runtime slot has no contract or conformance suite yet
+      conformance: {target: conformance/target.yml}
 contributes:
   roles:
     - file: roles/example_agent_runtime

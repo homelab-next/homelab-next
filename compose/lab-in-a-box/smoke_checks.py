@@ -26,6 +26,10 @@ The broker check runs the broker end-to-end scenario (``broker_e2e.py run --json
 command in ``LAB_BROKER_E2E`` (a JSON argv; the smoke script sets it to a ``docker compose exec``
 into the ``broker-edge`` container) and passes only when every step of it did.
 
+The orchestration check submits one job to the controller's job API (``LAB_PORT_ORCHESTRATOR``,
+with ``LAB_ORCHESTRATOR_TOKEN``), waits for it to be claimed and to finish, and passes only when
+it ended ``done`` on the lab's backend with its session's answer.
+
     smoke_checks.py --report build/lab-smoke/checks.json
 """
 
@@ -269,6 +273,39 @@ def check_broker(b: Mapping[str, str]) -> str:
     return f"{len(steps)} steps passed: " + ", ".join(s["step"] for s in steps)
 
 
+def check_orchestration(b: Mapping[str, str]) -> str:
+    """One job through the controller's job API: submitted, claimed (admitted or running), and
+    finished done with the session's answer."""
+    base, auth = b["orchestration"], {"Authorization": f"Bearer {b['orchestration-token']}"}
+    status, _ = http("GET", f"{base}/healthz")
+    expect(status, (200,), "orchestration healthz")
+    key = f"lab-smoke-{time.time_ns()}"
+    status, doc = http(
+        "POST", f"{base}/jobs", {"agent_key": "lab-smoke", "idempotency_key": key}, auth
+    )
+    expect(status, (201,), "orchestration submit", doc)
+    run = doc["run_id"]
+    seen: list[str] = []
+    deadline = time.monotonic() + 90
+    while True:
+        status, job = http("GET", f"{base}/jobs/{run}", headers=auth)
+        expect(status, (200,), "orchestration job", job)
+        if not seen or seen[-1] != job["state"]:
+            seen.append(job["state"])
+        if job["state"] in ("done", "failed", "budget_killed", "cancelled"):
+            break
+        if time.monotonic() > deadline:
+            raise CheckError(f"job {run} still {job['state']} after 90s (states seen: {seen})")
+        time.sleep(0.25)
+    if job["state"] != "done" or "lab-smoke-ok" not in job.get("response_body", ""):
+        raise CheckError(
+            f"job {run} ended {job['state']}: {job.get('local_failed_reason', '')[:200]}"
+        )
+    if not job.get("started_at") or job.get("local_backend_used") != "engine-a":
+        raise CheckError(f"job {run} is done but was never claimed by a backend: {job}")
+    return f"job {run} claimed on engine-a and done (states seen: {' -> '.join(seen)})"
+
+
 CHECKS: dict[str, Callable[[Mapping[str, str]], str]] = {
     "object-store": check_object_store,
     "lake-catalog": check_lake_catalog,
@@ -281,6 +318,7 @@ CHECKS: dict[str, Callable[[Mapping[str, str]], str]] = {
     "metrics": check_metrics,
     "uptime": check_uptime,
     "broker": check_broker,
+    "orchestration": check_orchestration,
 }
 
 
@@ -298,10 +336,12 @@ def bases_from_env(environ: Mapping[str, str]) -> dict[str, str]:
         "cases": "LAB_PORT_CASES",
         "metrics": "LAB_PORT_METRICS",
         "uptime": "LAB_PORT_UPTIME",
+        "orchestration": "LAB_PORT_ORCHESTRATOR",
     }
     out = {k: f"http://{bind}:{environ[v]}" for k, v in ports.items() if bind and v in environ}
     out["warehouse"] = environ.get("LAB_WAREHOUSE", "")
     out["secrets-token"] = environ.get("LAB_SECRETS_DEV_TOKEN", "")
+    out["orchestration-token"] = environ.get("LAB_ORCHESTRATOR_TOKEN", "")
     if environ.get("LAB_BROKER_E2E"):  # set by the smoke script, not a setting
         out["broker-e2e"] = environ["LAB_BROKER_E2E"]
     return out

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Create the backup directory
+      ansible.builtin.file:
+        path: "{{ status_hub_backup_dir }}"
+        state: directory
+        mode: "0700"
+    - name: Write the backup manifest
+      ansible.builtin.copy:
+        dest: "{{ status_hub_backup_dir }}/backup-manifest.json"
+        content: "{{ {'service': status_hub_logical_id, 'paths': [status_hub_state_dir, status_hub_config_dir],
+                      'note': 'activity.db is SQLite: copy it with the unit stopped or with sqlite3 .backup'} | to_nice_json }}\n"
+        mode: "0600"
+  tags: [backup]

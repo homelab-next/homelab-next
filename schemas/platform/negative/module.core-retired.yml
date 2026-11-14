@@ -20,7 +20,7 @@ requires:
     version: '1.0'
     purpose: runs the staff agents' jobs
   - cap: cap:agent-runtime
-    provisional: true
+    version: '1.0'
     purpose: the runtime staff jobs are dispatched to
   model_roles:
   - role: mdl:main-reasoner

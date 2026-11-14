@@ -1,6 +1,6 @@
 ---
-summary: 'Module manifest reference: a site''s module selection (draft platform/module_selection 1.0): hosts, slot choices, bindings and grants.'
-summary_of: outline:sha256:14c502670559e594
+summary: 'Module manifest reference: a site''s module selection (draft platform/module_selection 1.0): hosts, slots, incumbents, planned slots, bindings and grants.'
+summary_of: outline:sha256:ff40bb097e250b11
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Modules: site selection
@@ -19,8 +19,11 @@ changes far more often than the site). Shape, as in the three profiles:
 
 ```text
 profile: full
-hosts:      {<name>: {kind, isolated, capacity: {cpu, memory_mb, disk_gb, gpu_memory_mb}, resources: [{name: gpu0, kind: gpu}], headroom: {memory_mb}}}
+hosts:      {<name>: {guest: guest:<id>, isolated, resources: [{name: gpu0, kind: gpu}], headroom: {memory_mb}}}   # a guest record (below)
+            # or a stand-in: {<name>: {kind, isolated, capacity: {cpu, memory_mb, disk_gb, gpu_memory_mb}, addresses, resources, headroom}}
 slots:      {<slot>: [{provider, instance, placement: {<host role>: <host>}}] | none | pass-through}
+incumbents: {<slot>: {service: <core registry row>, why}}   # served outside modules (below)
+planned:    {<slot>: {why, review_by: "YYYY-MM-DD"}}       # a required core slot not served yet
 features:   {<module>: {placement, config, agents: {<key>: {lanes: {real: <orchestration instance>, shadow: ...}}}}}
 core:       {<module>: {placement, config, agents: {...}}}   # core modules are always selected
 providers:  {<module>: {agents: {...}}}             # a provider's agents (placement and config are per instance)
@@ -99,12 +102,124 @@ human-approve (`hnx site review-tier`); removing a namespace, changing a `why` o
 where it was absent (every other namespace is then judged) is owner, and a list that is not a list
 of distinct `{namespace, why}` at either end (a `null` included) fails the gate.
 
+### Incumbents: slots served outside modules
+
+A lab takes up modules one at a time, and until a module provides a slot something else already
+serves it: a core role (the secret store, the broker, the events bus, the status hub) or a service
+of the lab that predates modules. `incumbents` (optional) says so, per slot, by the core registry
+row (`lab/services.yml`) that serves it:
+
+```yaml
+incumbents:
+  secrets: {service: secrets, why: "the core's secret store role on the control-plane host"}
+  orchestration: {service: orchestrator, why: "the lab's existing orchestrator, not yet a module"}
+```
+
+The loader judges each one against the registry it reads (`--services`, or the overlay's
+`lab/services.yml`): the slot must be in the slot registry; it must not also be under `slots` (a
+provider, `none` or `pass-through`: one answer per slot); the row must exist, its `capability` must
+be the slot's name (a row of `edge-proxy` does not serve `edge`), and it must be its capability's
+primary (an `eval`, `retiring` or `legacy` row serves no consumer, ADR-0039). Without a registry
+every incumbent is a problem, never taken on trust. A selection that names a required core slot in
+neither `slots`, `incumbents` nor `planned` is the same error as before ("a required core slot
+has no provider"); a staged lab names the core slots it has not built yet under `planned`, each a
+warning with a review date that `--deploy` enforces, never served
+([planned core slots](planned.md)).
+
+An incumbent counts as selected for a required core slot, for a module that requires or prefers the
+slot, for a dataset's slot and for a service row's upstream (an authority upstream still needs
+`grants.upstreams`). A required `instance` of an incumbent slot is, deliberately, the incumbent's
+registry row name (for a provider it is the instance the site names; the two cannot collide, since
+an instance may not take a core row's name). A `pass-through` stage next to an incumbent is
+refused: the selection declares no formats for an incumbent, so the formats cannot be shown to
+meet. It is never a
+provider or an instance: `provider_for` refuses the slot with "served outside modules", `hnx
+modules providers` lists it as an incumbent, and the registry's `impl:` for it is not compared.
+Nor is it an egress target: `svc:<slot>` or `svc:<row>` is refused as no service, and `hnx modules
+render` opens no path to it (DNS included, when `dns` is an incumbent), so a placed module role
+reaches an incumbent only once the egress generator learns the registry's addresses, which is a
+later change. Moving a slot from its incumbent to a module is a cutover-ledger step (ADR-0043) and
+one selection edit that removes the incumbent and adds the provider, not a module swap (`hnx
+modules swap-*` moves a slot between two modules; its check counts an incumbent as selected for
+the incoming module's requirements, but a swap record cannot name an incumbent as its outgoing
+side). A registry promotion that demotes an incumbent's row (ADR-0039) is caught by the next
+check ("not its capability's primary"), so the `incumbents` edit goes in the same change.
+
+Two limits to know: `hnx modules check` notes each selected module whose requirements reach an
+incumbent (the egress render opens no path to it), and an agent lane binds only to a module
+`orchestration` instance, so with `orchestration` an incumbent a module that contributes agents
+cannot be bound yet ("lane ... bound to unselected instance"). `hnx modules providers` lists the
+incumbents as declared; only `hnx modules check` judges them.
+
+### Hosts that are guests
+
+A site host is the guest it runs on. `hosts.<name>.guest` names that guest's `platform/guest`
+record by id, and the loader reads it instead of trusting a copy:
+
+```yaml
+hosts:
+  apps: {guest: guest:apps-01, headroom: {memory_mb: 512}}   # lab/guests/apps-01.yml
+features:
+  example-feature: {placement: {server: apps}}
+```
+
+`hnx modules check` and `render` read the guest records from `--guests DIR`, or with `--overlay`
+from `DIR/lab/guests/`, with the guest loader `hnx guests` uses (the same schema, the same refusal
+of a file whose name is not its id), and only when the selection references a guest. A host that
+references a guest takes from it, before any other rule reads the selection:
+
+- `kind`: the guest's `kind` (`vm`, `lxc` or `host`);
+- `capacity`: `cpu` its `resources.cpu.cores`, `memory_mb` its `resources.memory.size_mb`,
+  `disk_gb` the sum of its `resources.disks` (`gpu_memory_mb` 0: a role with a GPU footprint stays
+  on a stand-in host for now);
+- `addresses`: its `network.ip`, then `network.extra_addresses`, which the egress policy takes as
+  the host's own.
+
+So `kind`, `capacity` and `addresses` are not written beside `guest` (the schema refuses them);
+`isolated`, `resources` and `headroom` are the selection's and go with either form. The footprint
+sum, the slices and the egress policy then judge the guest's real size and addresses.
+
+The loader refuses, each problem naming the host and the guest:
+
+- a reference with no guest records read (neither `--guests` nor `lab/guests/`);
+- an unknown guest, or one whose file fails the guest schema (`hnx guests validate` says why);
+- a `retired` guest (a `live` or `planned` one takes a placement);
+- a guest with no `resources`, whose capacity is unknown;
+- one guest named by two hosts (its capacity would count twice).
+
+And for each host role placed on a guest it refuses, naming the module, the role, the host and the
+guest:
+
+- a role `kind` of `vm`, `lxc` or `host` that is not the guest's (`any` takes every kind; an
+  `external` role lands only on an external stand-in, as before);
+- a footprint the guest cannot hold on its own: the role's `cpu` (vCPUs), `memory_mb` (against
+  the guest's memory less the host's headroom) and `disk_gb`, times its `count`; the host's sum
+  over every role on it is the footprint rule as before, the guest named beside the host;
+- the role's guest requirements, which a manifest states on the role
+  (`requires.hosts[].guest`): `capability`, a list the guest's own `capability` must be one of,
+  and `baselines`, each of which must be among the guest's baselines (`baseline.names`, with every
+  baseline they `extend` when the guest directory holds its baseline set, `_baselines.yml`). A
+  role on a stand-in host has no guest to judge, so `hnx modules check` notes its requirements as
+  not checked.
+
+A role too big for its guest is named twice when it is the host's only occupant: once by the role
+and once by the host's sum. A role with a GPU footprint on a guest host is refused with one line
+saying so (a guest record holds no GPU memory yet). Every lab host's own address, a guest's or a
+stand-in's (an `external` host aside), must be private or in `scope.trusted.nets`, since the egress
+policy lets a role reach it and counts it as never the internet. The guest directory's files must
+be its own regular files (a symbolic link is refused), and two files with one id refuse that id.
+
+The selection names no hypervisor node, so a guest's `placement.node` is not judged; nor is a
+guest's own validity beyond its schema (zones, firewall rules, backup), which is
+`hnx guests validate`'s. The stand-in form stays for an external host and for a host with no guest
+record (the public example profiles, whose labs ship none).
+
 A provider's agents have one lane binding for the module, under `providers.<id>`: it covers every
 instance the site selects of that provider (per-instance agent bindings would be a later, additive
 field). A config value must be a key the module declares; a secret-typed value is a secret in the module's
 own namespace or one granted to it in `grants.secrets`, the same rule as a manifest default.
-`capacity` stands in for the host's `platform/guest` `resources`, which a real selection references
-by guest id instead of re-declaring. A multi-slot provider is placed once per instance. At run time a
+A stand-in host's `capacity` stands in for a guest's `resources`; a host that references its guest
+record takes them from it ([above](#hosts-that-are-guests)). A multi-slot provider is placed once per instance. At run time a
 consumer resolves a slot with **`provider_for(slot, instance)`** from the selection
 (`homelabnext.modules.providers.provider_for(site, mods, slot, instance)`: the serving module with
 its product and licence, `None` for `none` or `pass-through`, and a refusal, never a guess, for a
@@ -114,6 +229,7 @@ selected instance that way. `hnx modules check` compares the core registry's `im
 whose capability is a selected slot names the product (or an alias) of a provider selected for that
 slot, and a row for a slot the site selects `none` or `pass-through` for is a problem; with the
 repository's example registry (another lab) the comparison is a note. Nothing consumes it at run
-time yet (`homelabnext/broker/cli.py` still reads a conformance target file), the baselines'
-`role` bindings are not compared, and the registry is not generated from the selection (an
-operator decision). Model choice stays one line in the role table.
+time yet (`homelabnext/broker/cli.py` still reads a conformance target file), and the baselines'
+`role` bindings are not compared. The registry is not generated from the selection (an operator
+decision); its rows are checked against the modules instead
+([registry rows](registry-rows.md)). Model choice stays one line in the role table.

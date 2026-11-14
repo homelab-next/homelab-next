@@ -3,7 +3,10 @@
 # Proxmox and a 128 GiB ZFS ARC; three pools (NVMe mirrors for guest disks, one U.3 SSD for
 # write-heavy rebuildable data, the raidz2 for bulk); and a mirror of its guests' traffic to a
 # spare NIC cabled straight to sensor-1's second capture NIC (`hnx guests render --target
-# node-mirror`). Replace the NIC and bridge names with the host's own (`ip -br link`).
+# node-mirror`). Replace the NIC and bridge names with the host's own (`ip -br link`). Its own
+# notifications (a failed backup job, fencing, mail to root) go to a notify topic, not to a
+# mailbox with no relay (`hnx guests render --target node-notify`); replace the URL with your
+# server's.
 nodes:
   main-1:
     firewall: enabled
@@ -18,3 +21,4 @@ nodes:
       write: {size_gb: 3300, media: ssd}
       bulk: {size_gb: 27000, media: hdd}
     mirror: {to: enp65s0f1, bridges: [vmbr0]}
+    notify: {url: "https://notify.example.org/", topic: node-alerts}

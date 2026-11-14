@@ -40,7 +40,11 @@ checks").
     the request and its HTTP status, never what the catalog answered.
 ``hnx modules render --site FILE [--network FILE] --out DIR [...]``
     the same check, then (only when it is clean) the footprint limits and the egress policy for
-    the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``.  ``DIR`` must not exist or be
+    the site's hosts, under ``DIR/limits/`` and ``DIR/egress/``, and the apply path
+    (:mod:`homelabnext.modules.apply`, docs/modules/apply.md): ``DIR/modules.yml``, which installs
+    each placed module's host roles on its ``mod_<module>_<host role>`` inventory group in the
+    order of the modules' hard requirements, and ``DIR/checks/<module>.yml``, its roles'
+    readiness and health hooks; the role paths are relative to ``DIR``.  ``DIR`` must not exist or be
     empty: a render never mixes with stale files from an earlier one.  ``--network`` is the
     network model (``site.yml``; with ``--overlay``, ``DIR/lab/site.yml`` by default): its zone
     ``subnet6`` and ``delegated_prefixes6`` prefixes are
@@ -85,6 +89,9 @@ is ``DIR/lab/modules.yml``, the lock ``DIR/lab/modules.lock``, the review policy
 ``DIR/lab/services.yml`` and, for ``render``, the network model ``DIR/lab/site.yml`` when they
 exist, otherwise the repository's examples
 (``examples/model_roles.json``, ``examples/services.yml``), each such fallback printed as a note.
+When the selection's hosts reference guest records (``hosts.<name>.guest``), they are read from
+``--guests DIR`` or the overlay's ``DIR/lab/guests/`` (:mod:`homelabnext.modules.guest_hosts`);
+with neither, each reference is a problem.
 The core's own names (:class:`homelabnext.modules.loader.CoreNames`) are read from the registry,
 the MCP catalog, the keyring's agent principals, the OCSF tables and the core's notify pairs.
 With ``--overlay`` the catalog is ``DIR/lab/mcp/`` and the keyring ``DIR/lab/keyring/keyring.json``,
@@ -99,6 +106,7 @@ Exit: 0 clean, 1 problems, 2 usage or an input that cannot be read, 100 an inter
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import sys
@@ -107,6 +115,7 @@ from typing import Any
 
 from homelabnext import paths
 from homelabnext.gitbase import add_base_arguments
+from homelabnext.modules import guest_hosts as gh
 from homelabnext.modules import loader as ld
 from homelabnext.modules.authority import slot_flag_problems
 
@@ -243,6 +252,38 @@ def _core(
     return core, [*problems, *found]
 
 
+def _guests(
+    args: argparse.Namespace, lab: Path | None, site: Any, notes: list[str]
+) -> gh.Guests | None:
+    """The guest records, read only when the selection references one (``hosts.<name>.guest``):
+    ``--guests DIR``, else the overlay's ``lab/guests/``.  None when nothing is read, which makes
+    every reference a problem (:func:`homelabnext.modules.guest_hosts.resolve`)."""
+    if not isinstance(site, dict) or not gh.references(site):
+        return None
+    where = args.guests
+    if where is None and lab is not None and (lab / gh.GUESTS_DIR).is_dir():
+        where = lab / gh.GUESTS_DIR
+    if where is None:
+        return None
+    try:
+        guests = gh.read(where)
+    except gh.GuestsUnreadable as exc:
+        raise ld.LoaderError(f"guest records {where}: {exc}") from None
+    notes.append(f"{len(guests.hosts)} guest record(s) read from {where}")
+    return guests
+
+
+def _judged_on() -> dt.date:
+    """The date a deploy's check is judged on: ``HNX_TODAY`` when set, else the local date
+    (:func:`homelabnext.registry.standing.today`, the one reader of ``HNX_TODAY``)."""
+    from homelabnext.registry.standing import today
+
+    try:
+        return today()
+    except ValueError as exc:
+        raise ld.LoaderError(str(exc)) from None
+
+
 def _impl_problems(site: Any, mods: dict[str, Any], registry: Any) -> list[ld.Problem]:
     """The core registry's ``impl:`` against the selection (:mod:`homelabnext.modules.providers`):
     the selection is the one answer to which product serves a slot."""
@@ -297,6 +338,12 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--mcp-catalog", type=Path, help="the core MCP catalog directory")
         p.add_argument("--lock", type=Path, help="lab/modules.lock")
         p.add_argument("--review-policy", type=Path, help="the review policy")
+        p.add_argument(
+            "--guests",
+            type=Path,
+            help="the guest records a site host may reference (hosts.<name>.guest; "
+            "default with --overlay: lab/guests/)",
+        )
         p.add_argument("--json", action="store_true")
         if name == "check":
             p.add_argument("--running", type=Path, help="what runs (platform/module_inventory)")
@@ -483,6 +530,13 @@ def _providers(args: argparse.Namespace) -> int:
         bad = [str(p) for p in found]
         raise ld.LoaderError(f"{exc}" + (f" ({'; '.join(bad)})" if bad else "")) from None
     unserved = {s: v for s, v in sorted(site["slots"].items()) if not isinstance(v, list)}
+    incumbents = {
+        s: v["service"] for s, v in sorted((site.get("incumbents") or {}).items())
+    }  # the schema holds each to {service, why}
+    planned = {
+        s: {"why": v["why"], "review_by": v["review_by"]}
+        for s, v in sorted((site.get("planned") or {}).items())
+    }  # the schema holds each to {why, review_by}
     if args.json:
         doc = {
             "providers": [
@@ -497,6 +551,8 @@ def _providers(args: argparse.Namespace) -> int:
                 for p in rows
             ],
             "unserved": unserved,
+            "incumbents": incumbents,
+            "planned": planned,
         }
         print(json.dumps(doc, indent=2))
         return 0
@@ -504,6 +560,10 @@ def _providers(args: argparse.Namespace) -> int:
         print(f"{p.slot}/{p.instance}: {p.module} ({p.product} {p.version}; licence {p.licence})")
     for slot, v in unserved.items():
         print(f"{slot}: {v}")
+    for slot, svc in incumbents.items():
+        print(f"{slot}: incumbent (registry row {svc}, outside modules; not checked here)")
+    for slot, plan in planned.items():
+        print(f"{slot}: planned, not served yet ({plan['why']}; review by {plan['review_by']})")
     return 0
 
 
@@ -704,6 +764,7 @@ def _run(args: argparse.Namespace) -> int:
         "mcp_catalog",
         "lock",
         "review_policy",
+        "guests",
     ):
         _given(getattr(args, flag), "--" + flag.replace("_", "-"))
     _given(getattr(args, "running", None), "--running")
@@ -788,6 +849,7 @@ def _run(args: argparse.Namespace) -> int:
             "in-tree modules load"
         )
     site = _read(site_path, "site selection", budget) if site_path else None
+    guests = _guests(args, lab, site, notes)
     network = None
     if args.cmd == "render":
         # the overlay's own network model by default, as the role table and registry are
@@ -812,6 +874,9 @@ def _run(args: argparse.Namespace) -> int:
         if not isinstance(doc, dict):
             raise ld.LoaderError(f"the {what} is not a mapping")
     slot_entries, slot_problems = _slot_entries(slots)
+    # the lab's own registry, read once: the impl: comparison and registry equality both judge
+    # it; the repository's example registry describes another lab, so neither judges that
+    lab_registry = None if example_registry or site is None else _read(services, "registry", budget)
     report = ld.check(
         tree,
         slots=slot_entries,
@@ -824,6 +889,9 @@ def _run(args: argparse.Namespace) -> int:
         inventory=_read(running, "inventory", budget) if running else None,
         budget=budget,
         empty_selection=empty,
+        guests=guests,
+        lab_registry=lab_registry,
+        today=_judged_on() if deploy else None,
     )
     impl_problems: list[ld.Problem] = []
     if site is not None and not any(
@@ -835,7 +903,7 @@ def _run(args: argparse.Namespace) -> int:
                 "registry is the repository's example, which describes another lab)"
             )
         else:
-            impl_problems = _impl_problems(site, tree.mods, _read(services, "registry", budget))
+            impl_problems = _impl_problems(site, tree.mods, lab_registry)
     found = sorted(
         {
             *problems,
@@ -850,28 +918,42 @@ def _run(args: argparse.Namespace) -> int:
     written: dict[str, int] = {}
     error = None
     if not found and args.cmd == "render":
-        written, error = _render(args, tree, site, network)
+        # the selection as checked: guest references resolved to the guests' kind, capacity and
+        # addresses, which the slices and the egress policy take
+        written, error = _render(args, tree, report.site or site, network)
     if args.json:
-        doc = {"problems": [str(p) for p in found], "notes": notes, "modules": len(tree.mods)}
+        doc = {
+            "problems": [str(p) for p in found],
+            "warnings": report.warnings,
+            "notes": notes,
+            "modules": len(tree.mods),
+        }
         if args.cmd == "render":
             doc["written"] = written
         if error:
             doc["error"] = error
         print(json.dumps(doc, indent=2))
-        for n in notes:  # the report is JSON on stdout; what was not checked also on stderr
+        for w in report.warnings:  # the report is JSON on stdout; warnings and notes on stderr
+            print(f"warning: {w}", file=sys.stderr)
+        for n in notes:  # what was not checked also on stderr
             print(f"note: {n}", file=sys.stderr)
     else:
         for p in found:
             print(p)
+        for w in report.warnings:
+            print(f"warning: {w}")
         for n in notes:
             print(f"note: {n}")
         if written:
+            from homelabnext.modules.apply import CHECKS_DIR as apply_checks
+            from homelabnext.modules.apply import PLAYBOOK as apply_book
             from homelabnext.modules.tlp_sources import FILE as tlp_sources_file
 
             print(
                 f"hnx modules render: wrote {written['limits']} limits and {written['egress']} "
                 f"egress file(s), {written['tlp_sources']} TLP source(s) in "
-                f"{tlp_sources_file}"
+                f"{tlp_sources_file}, {apply_book} with {written['checks']} module check "
+                f"playbook(s) in {apply_checks}/"
                 + (
                     f", {written['lake_readers']} lake reader rule(s) in lake-access.json"
                     if "lake_readers" in written
@@ -879,7 +961,8 @@ def _run(args: argparse.Namespace) -> int:
                 )
                 + f", under {args.out}"
             )
-        print(f"hnx modules: {len(tree.mods)} module(s), {len(found)} problem(s)")
+        warned = f", {len(report.warnings)} warning(s)" if report.warnings else ""
+        print(f"hnx modules: {len(tree.mods)} module(s), {len(found)} problem(s){warned}")
     if error:
         print(f"hnx modules render: {error}", file=sys.stderr)
     return 1 if found or error else 0
@@ -932,30 +1015,64 @@ def _tlp_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _write_new(out: Path, files: dict[str, str]) -> None:
+    """Write each file under ``out`` as a new file: never through a symbolic link (a directory
+    or the file itself) and never over a file already there, so a link planted after the
+    ``--out`` check cannot redirect a playbook outside the render."""
+    for rel, text in sorted(files.items()):
+        path = out / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        d = path.parent
+        while True:  # every directory from the file's up to --out itself
+            if d.is_symlink():
+                raise ld.LoaderError(f"--out {out}: {d} is a symbolic link")
+            if d == out or d == d.parent:
+                break
+            d = d.parent
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags, 0o600)  # private: it names the overlay's modules
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+
+
 def _render(
     args: argparse.Namespace, tree: ld.Tree, site: dict, network: dict | None = None
 ) -> tuple[dict[str, int], str | None]:
     """(files written per output, or the generator's refusal)."""
     from homelabnext.logpipeline.tlp_labels import SourceTableError
-    from homelabnext.modules import egress, lake_access, limits, tlp_sources
+    from homelabnext.modules import apply, egress, lake_access, limits, tlp_sources
+    from homelabnext.modules.rules import selected
 
     ins = ld.inputs(tree)
+    out = args.out.resolve()
     try:
         lim = limits.render(site, tree.mods, ld.units_fn(ins))
         egr = egress.render(site, tree.mods, ld.rows_fn(ins), ld.units_fn(ins), network)
         src = tlp_sources.render(site, tree.mods)
         access = lake_access.render(site)
+        sel = selected(site, tree.mods)
+        # each module's directory as the playbooks reach it: relative to where they are
+        # written, so the render and the checkouts move together
+        dirs = {m: os.path.relpath(tree.dirs[m].resolve(), out) for m in sel}
+        books = apply.render(site, sel, dirs, lim)
     except (
         limits.LimitsError,
         egress.EgressError,
         SourceTableError,
         lake_access.LakeAccessError,
+        apply.ApplyError,
     ) as exc:
         return {}, str(exc)
     limits.write(lim, args.out / "limits")
     egress.write(egr, args.out / "egress")
     tlp_sources.write(src, args.out)
-    written = {"limits": len(lim), "egress": len(egr), "tlp_sources": len(src["sources"])}
+    _write_new(args.out, books)
+    written = {
+        "limits": len(lim),
+        "egress": len(egr),
+        "tlp_sources": len(src["sources"]),
+        "checks": sum(1 for rel in books if rel.startswith(apply.CHECKS_DIR + "/")),
+    }
     if access is not None:
         lake_access.write(access, args.out)
         written["lake_readers"] = len(access["tables"])

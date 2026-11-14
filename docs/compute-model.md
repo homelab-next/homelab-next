@@ -1,6 +1,6 @@
 ---
-summary: 'The compute model: one vendor-neutral file per guest, its validation, and generators that render IaC, cloud-init, inventory, firewall, backups and baselines.'
-summary_of: outline:sha256:f23de4f8cd98e49e
+summary: 'The compute model: one vendor-neutral file per guest, its validation, generators for IaC, cloud-init, inventory, firewall and baselines, and applying them.'
+summary_of: outline:sha256:e44d0871696e8680
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -73,12 +73,13 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `network.zone` exists in the site model | no guest on an undeclared network |
 | `ip` inside the zone subnet, outside the DHCP pool, not network/broadcast/gateway | no collisions with leases |
 | a guest that is a host of the service registry (`--registry`, default the `services.yml` next to the site file when there is one) has the registry's `address` as its `ip` and the registry's `zone` as its zone | the router's service exceptions, DNS and DHCP read the registry, the hypervisor, cloud-init and the guest firewall read the guest file: one fact in two files |
+| with a registry (as above), a guest's `capability` and capability groups are the ones the registry places on its host (see [Guests against the registry](#guests-against-the-registry)) | `cap:orchestration` fits only the guest that runs the orchestrator: a capability or group borrowed from another host is wrong data in every place it is read |
 | `vmid_scheme: freeform` is the default; `octet` pins `vmid` to the last octet of `ip` for a readable id | pick whichever reads better for your layout |
 | ids, `(node, vmid)` and ips are unique | |
 | each `network.extra_addresses` entry (guest 1.6) is canonical, with no IPv4 written inside IPv6; not loopback, link-local, multicast, reserved or a cloud metadata address; in IPv4, inside the guest's own zone subnet (or a zone-less overlay range, a tailnet's) and never inside another zone's; in IPv6, never an anycast address of its /64, and inside the guest's own zone's `subnet6` (site 1.4) and never inside another zone's, or, where the guest's zone has no `subnet6`, a unique-local or documentation address outside every zone's; not a zone's gateway, network or broadcast address, a gateway a guest names, or inside a DHCP pool; not an address the site's static DNS names for something else; and not the guest's own `ip` or an address (`ip` or extra) of any other guest, named once; a zone lookup that cannot list its zones (`ZoneLookup.all`) is itself a problem then | the log pipeline labels each one like `ip`, so it must name this guest and no other ([log pipeline](log-pipeline.md)); the network sensor counts each in `HOME_NET` and the topology map resolves each to its guest; nothing is configured from them |
 | `gpu` requires `kind: vm` | passthrough is a VM feature |
 | `provisioning: manual` requires `requires_root_steps` | the hand work is written down |
-| `capability` is a capability the platform names: one the capability-class table `homelabnext/agent/tool_classes.yml` classes (it classes every capability the registry, the conformance contracts, `capabilities.yml` and the module slots name), or a core or extended conformance suite; so an edge, DNS, backup or hypervisor guest says `cap:edge`, `cap:dns`, `cap:backup` or `cap:hypervisor`, not the nearest of the eighteen core capabilities in `docs/interfaces.md` | the registry's host `role`, the inventory's `hnx_capability` and the runtime labels are read from it, so a borrowed name is wrong data downstream; one vocabulary (the one the agent and MCP rules use), not a third list |
+| `capability` is a capability the platform names, or, with a registry, one a row on the guest's own host serves (a site's own capability names never enter the public class table; `render`, `plan` and `baselines` read the same registry as `validate`, so they accept the same guests; the same holds for its `cap_<capability>` group): one the capability-class table `homelabnext/agent/tool_classes.yml` classes (it classes every capability the registry, the conformance contracts, `capabilities.yml` and the module slots name), or a core or extended conformance suite; so an edge, DNS, backup or hypervisor guest says `cap:edge`, `cap:dns`, `cap:backup` or `cap:hypervisor`, not the nearest of the eighteen core capabilities in `docs/interfaces.md` | the registry's host `role`, the inventory's `hnx_capability` and the runtime labels are read from it, so a borrowed name is wrong data downstream; one vocabulary (the one the agent and MCP rules use), not a third list |
 | `capability_groups` are known inventory groups (`docs/role-interface.md` section 5, or `cap_<capability>`) | playbooks target groups |
 | `backup.policy` is defined (or `none`) | |
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
@@ -88,6 +89,31 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | with a baseline set, every guest (vm, lxc and host) has `baseline.names` or `baseline.exemption.reason`; names, `extends`, `add` and `remove` resolve; no `extends` cycle; no baseline resolves to nothing | see [Baselines and defense layers](#baselines-and-defense-layers) |
 | a control with `apply: central` names a `group`, a control applied per guest names none, and the group is a known inventory group | see [Bound products](#bound-products) |
 | with `capacity` in `_nodes.yml`, a node's guests (every one not `retired`: a `planned` guest will be built) ask for no more cores than its threads after the reserve times `cpu_overcommit`, and no more memory than its reserve leaves; with `pools`, every disk names one of the node's pools and the disks fit in it | see [Node capacity and pools](#node-capacity-and-pools) |
+
+### Guests against the registry
+
+With a registry (`--registry`, or the `services.yml` beside the site file), every `hnx guests`
+subcommand judges each guest against the registry host of its name
+([ADR-0039](adr/0039-one-primary-per-capability.md) decision 7). `validate` refuses:
+
+- a guest holding another registry host's address under a new name (addresses are compared as
+  addresses, so `2001:DB8::0:14` and `2001:db8::14` are one);
+- on a host carrying rows, a `capability` that is not the capability of one of them, of any
+  standing;
+- `cap:agent-runtime` anywhere but on a registry host whose `role` is `agent-runtime`, rows or
+  not: no row carries the runner slot, and `hnx agent access` finds the runner by that role;
+- on a host carrying no row, a capability the registry places on another host, and any
+  capability unless the guest is a physical host (`kind: host`), `planned` or `retired`, declares
+  one that serves no consumer (`ROW_FREE` in `homelabnext/compute/gen/registry_hosts.py`:
+  `detonation`, `exposure-management`, `siem-source`), or declares its registry host's own
+  `role` (a site names its own row-free roles there);
+- a `cap_<capability>` group of a registry capability on a guest whose host carries no row of it,
+  and the group of a capability no row serves anywhere (other than a named role group of
+  docs/role-interface.md) on a guest that does not declare that capability.
+
+A capability or group the registry places on the guest's host (a row's capability, or a row-less
+host's role) is accepted even outside the platform vocabulary: a site's own capability names never
+enter the public class table. Every other guest is held to the vocabulary below.
 
 ### Node capacity and pools
 
@@ -156,6 +182,102 @@ bridge's MTU. Cable `to` to the sensor only; on an ordinary switch port it would
 traffic onto the network. Interface names are checked (Linux names,
 at most 15 characters), and a mirroring node's name must be one a guest can name.
 
+### Node notifications
+
+Proxmox VE sends its own notifications (a failed backup job, fencing, replication, and the mail
+the node forwards to root from cron, smartd and ZFS) through `/etc/pve/notifications.cfg`. Out of
+the box one matcher sends all of them to `mail-to-root`, the email address of `root@pam`, through
+the node's own MTA; a node with no relay host delivers that nowhere (an external mailbox rejects
+mail from a residential address), so a failed backup reaches no one. A node can send them to an
+ntfy topic instead, with no MTA involved:
+
+```yaml
+nodes:
+  hv-1:
+    notify:
+      url: https://ntfy.example.org/         # the ntfy server (http or https, no query, no user)
+      topic: proxmox-alerts
+      severities: [warning, error, unknown]  # the default; unknown is forwarded system mail
+      priority: 4                            # ntfy priority 1-5, default 4
+      default_mail: false                    # the default: turn off the built-in mail matcher
+      credential: secret:token               # optional: publish with a bearer token (below)
+```
+
+`hnx guests render --target node-notify` writes `notify/<node>/hnx-notify.sh`. Run on the node as
+root, it creates or updates a webhook target `hnx-notify-<node>` that POSTs each notification to
+`url` as ntfy JSON (`topic`, `title` prefixed with the node name, `message`, `priority`, and the
+tags `hypervisor` and the severity), and a matcher `hnx-notify-<node>-route` that sends the listed
+severities raised on this node (`match-field exact:hostname=<node>`) to it. It then sends a test
+notification through the target and exits non-zero (with `pvesh`'s status) if that is not
+delivered; only after a delivered test, and with `default_mail: false`, does it disable Proxmox's
+built-in `default-matcher`, so mail is never turned off in favour of a target that does not
+deliver. The test goes straight to the target and does not pass through the matcher: it proves the
+URL, the topic and the server, not that a real notification satisfies the severity and `hostname`
+match. The evidence that the matcher works is a live run on a Proxmox VE 9.2 node: a real failed
+`vzdump` job was routed through `hnx-notify-<node>-route` and arrived on the topic, and so did
+root's mail forwarded by `proxmox-mail-forward`. Replication, fencing and ZFS (ZED) notifications
+were not checked against the `hostname` match. A re-run leaves a correct config unchanged but sends
+one more test, so the script is meant for a manual run or a deploy, not for cron; a re-run also
+undoes a hand edit of the two entries: a `disable`, an `invert-match`, a calendar rule, and any
+header or secret added to the target. `hnx-notify.sh --test` sends only the test; `--remove` first
+enables `default-matcher` again, whatever `default_mail` says now (it is the Proxmox default, and
+enabling an enabled matcher is harmless), then deletes this node's matcher and target, so a delete
+that fails leaves the node two routes, not none. Deleting `notify` from a node's entry renders no
+script for it at all, so nothing rendered afterwards can undo an earlier apply: to undo, run the
+old script's `--remove` on the node first, then delete the key.
+
+`notifications.cfg` is one file for every node of a Proxmox cluster. The names and the `hostname`
+match are per node, so two nodes never overwrite or answer for each other, but `default-matcher`
+is one cluster-wide entry: in a cluster, give every node a `notify` before any of them turns it
+off, and know that `--remove` on one node turns mail back on for all. Once mail is off the node
+has no other route, so a server that is down drops its alerts; the test on every apply is the
+check, and the topic is worth an uptime probe of its own.
+
+The body is rendered here and carried base64-encoded, the form `pvesh` takes, so no value of the
+node entry reaches the shell outside double quotes; Proxmox fills its `{{ escape title }}`,
+`{{ escape message }}` and `{{ severity }}` when it sends. A backup job uses this only with
+`notification-mode notification-system` (or the default `auto` with no `mailto`). A backup log can
+be long: the server's message size limit must allow it (ntfy's default is 4 KB). The URL is plain
+`http` or `https` with a host name or IPv4 address, an optional port and base path, and no user,
+query or fragment; with `http` the notification (backup logs, host names) crosses the network in
+clear. Targets and matchers share one namespace in `notifications.cfg`, so the two names differ.
+
+**A publish credential.** Without `credential` the server must accept publishing with none, and
+every apply removes any header or secret added to the target by hand. A deny-all server (the ntfy
+module's) needs a bearer token, named by `credential: secret:<name>` (lower case, digits and `_`,
+at most 32), and the target then sends `Authorization: Bearer {{ secrets.<name> }}` and holds the token as
+its Proxmox notification secret `<name>` (in `/etc/pve/priv/`; `pvesh get` never shows it). The
+value is never in `_nodes.yml`, never in the rendered script and never one of the script's
+arguments: an apply reads it from the `HNX_NOTIFY_SECRET` environment variable or, when that is
+unset and stdin is not a terminal, from the first line of stdin, and exits 2 before changing
+anything when there is none (or it holds a space or a control character). `--test` and `--remove`
+need no value. Every apply gives both headers and the secret in full, so a re-run converges them,
+and rotating the token is a re-run with the new value; removing `credential` drops the header and
+the secret on the next apply. Pipe the value from the secret store straight into the script (the
+KV v2 mount and field `hnx secrets seed` writes, `secret` and `value`, by default):
+
+```sh
+bao kv get -field=value secret/ntfy/publisher-token | ssh root@hv-1 sh /root/hnx-notify.sh
+```
+
+`pvesh` takes parameters only as arguments, so while the target is written the value (base64) is
+in that `pvesh` command line on the node. A stock Proxmox VE node mounts `/proc` without
+`hidepid`, so every local account can read it: mount `/proc` with `hidepid=2` if the node has
+accounts other than administrators, and never run the script under `sh -x` (it prints the
+command lines). For an unattended run give the value in `HNX_NOTIFY_SECRET`: the stdin read waits
+for a line or the end of input. Rotating the token under the same name is a re-run with the new
+value; renaming the credential (`secret:token` to another name) leaves the old secret on the
+target, so run the old script's `--remove` first, then apply the new one. A target configured by hand in this shape
+(target `hnx-notify-<node>`, header `Authorization: Bearer {{ secrets.token }}`, secret `token`) is
+adopted by declaring the same `url`, `topic` and `credential: secret:token`: the first apply
+rewrites it in place.
+
+This target is deliberately not a client of the [notify capability](capabilities/notify.md): a
+hypervisor must be able to alert when no guest, the notify service included, is up. The node
+talks to the server its own entry names, in ntfy's JSON publish shape (a POST of the whole message
+to the server root, where the capability's sender posts to `<endpoint>/<topic>`), and `hnx swap`
+of the notify product does not move it: a swap re-points `url` by hand.
+
 The guest model (`homelabnext.compute.model`, `validate`) reads zones through a small protocol:
 
 ```python
@@ -173,7 +295,21 @@ validation uses the network validator's IPv6 prefix rules. It does not validate 
 
 ## Rendering
 
-`hnx guests render DIR --site SITE --target T [--out OUT [--prune]] [--keys KEYS] [--policies FILE] [--baselines FILE]`
+`hnx guests render DIR --site SITE --target T [--node NODE [--allow-empty]] [--out OUT [--prune]] [--keys KEYS] [--policies FILE] [--baselines FILE]`
+
+`--node NODE` (also on `plan`) renders only what belongs to `NODE`, after the whole set has
+validated: a standalone hypervisor's Terraform (one provider endpoint) must not carry another
+node's guests, and one directory of state per node keeps a plan from proposing to destroy them.
+It is taken only by the **per-node** targets, whose output one node applies: `terraform-proxmox`,
+`libvirt`, `cloudinit`, `firewall-rules` (the node's `/etc/pve/firewall`), `node-mirror` (that
+node's `mirror/<node>/`) and `node-notify` (that node's `notify/<node>/`). The **fleet-wide** targets (`inventory`, `registry-hosts`,
+`tailscale-acl`, `backup-jobs`, `baseline-playbook`, `runtime-labels`) are one document for every
+node, so narrowed to one they would silently drop the others' guests: `--node` with one of them is
+a usage error (exit 2); render them without it. A node that no guest and no `_nodes.yml` entry
+names is refused, so a typo never renders an empty plan, and so is a known node that holds none
+of the guests the target renders (exit 1): applied to that node's state, an empty Terraform render
+reads as "destroy everything in it". `--allow-empty` renders it anyway, for the day that is
+meant.
 
 `--out` writes only the files that differ, with the same writer as `hnx site render`. A file in
 `--out` that carries the generated-file header but is no longer rendered (a removed guest's
@@ -183,16 +319,17 @@ another target's files as stale.
 
 | Target | Output |
 |---|---|
-| `terraform-proxmox` | `vm-*.tf`, `ct-*.tf`, `providers.tf`, `variables.tf`, `MANUAL.md` (bpg/proxmox resource shapes; text only) |
+| `terraform-proxmox` | `vm-*.tf`, `ct-*.tf`, `providers.tf`, `variables.tf`, `MANUAL.md`, `USER_DATA.md` (bpg/proxmox resource shapes; text only) |
 | `libvirt` | one `virt-install` script per VM plus `SKIPPED.txt`; refuses guests it cannot isolate (below) |
 | `cloudinit` | `<name>/user-data`, `meta-data`, `network-config` per VM |
-| `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`), `host_vars/<fqdn>.yml` (with `hnx_firewall`, the guest's firewall rules with zones resolved; with a set, `hnx_baselines`, `hnx_controls` and the baseline settings of its per-guest controls) |
+| `inventory` | `hosts.yml` with `cap_*` and `tag_*` groups (and, with a baseline set, `baseline_<name>` and `control_<id>`; with `--selection lab/modules.yml`, a `mod_<module>_<host role>` group per placed module host role, [the module apply path](modules/apply.md)), `host_vars/<fqdn>.yml` (with `hnx_firewall`, the guest's firewall rules with zones resolved; with a set, `hnx_baselines`, `hnx_controls` and the baseline settings of its per-guest controls) |
 | `registry-hosts` | a `zones:`/`hosts:` fragment for `services.yml` |
 | `backup-jobs` | members, retention and export hooks per policy |
 | `baseline-playbook` | `baseline.yml`: one play per bound control, applying its `role` to `control_<id>`, or, for an `apply: central` control, once to its product host's `group` with `<role>_guests`; unbound controls as commented blocks |
 | `runtime-labels` | `runtime-labels.json`: each guest's addresses (`network.ip` and `network.extra_addresses`) and its `hnx_runtime` label (`model` for a model runtime, else `none`), which the log pipeline joins on ([log pipeline](log-pipeline.md)) |
 | `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows, the deploy tag's declared access with policy tests); see [Bound products](#bound-products) |
 | `node-mirror` | `mirror/<node>/hnx-mirror.sh`, `.service` and `.timer` for each node with a `mirror` in `_nodes.yml`, and `mirror/README.md`; see [Node mirror](#node-mirror) |
+| `node-notify` | `notify/<node>/hnx-notify.sh` for each node with a `notify` in `_nodes.yml` (a webhook target and matcher sending its Proxmox notifications to ntfy), and `notify/README.md`; see [Node notifications](#node-notifications) |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
@@ -207,6 +344,27 @@ remote backend with locking (for example an S3-compatible bucket with server-sid
 OpenTofu's client-side state encryption): state holds the API token's effects, guest addresses and
 anything a provider marks sensitive, in plain JSON. The renderer does not emit a backend block,
 because the backend and its credentials belong to the environment, not to the guest files.
+
+`proxmox_api_token` is an **ephemeral** variable (`ephemeral = true`, so `providers.tf` asks for
+Terraform 1.10 or later in 1.x, `~> 1.10`): Terraform keeps it out of a saved plan file and out
+of state, and asks for it again at `apply` (pass it as `TF_VAR_proxmox_api_token` both times).
+The rendered files need Terraform 1.10 or later: an older Terraform refuses them on
+`required_version`, and OpenTofu before 1.11 cannot parse `ephemeral`. Never work around that by
+editing the rendered files; a non-ephemeral token variable is written in plain text into any saved
+plan (`terraform plan -out`) and into state.
+
+A VM whose `cloudinit` sets a sudo rule or packages takes its user-data as a snippet
+(`user_data_file_id = var.cloudinit_user_data["<name>"]`), because the provider's `user_account`
+block can express neither. The render says which VMs those are, three ways: the
+`cloudinit_user_data` variable's `validation` block names every one (a missing entry fails before
+the plan, by name), `USER_DATA.md` lists them with their node, vmid and the sha256 of the
+`cloudinit` target's `<name>/user-data` rendered with the same `--keys` (compare it with
+`sha256sum` of the uploaded snippet; the row says "unresolved" when a key name is), and
+`render --out` prints them. **On the snippet path the SSH keys come from the `cloudinit` render's
+`--keys`, not from `var.ssh_keys`**: the snippet creates the user, keys included, and replaces
+the `user_account` block, so a key rotated only in `terraform.tfvars` does not reach those VMs;
+re-render the cloudinit target and re-upload the snippet. A changed snippet does not replace a
+running VM by itself.
 
 ### cloud-init and sudo
 
@@ -223,10 +381,17 @@ is usually what an automation account needs, so it is allowed, but it is an expl
 guest file rather than a blanket default for every account. A restricted rule (named commands
 only) belongs in the configuration-management role that knows the commands.
 
-The `terraform-proxmox` target configures the user through the provider's `user_account` block,
-which does not set sudo: the image's default-user policy applies there (many cloud images grant
-passwordless sudo to it). To apply `cloudinit.sudo` on that path, upload the `cloudinit` target's
-`user-data` as a snippet and point the VM's `initialization.user_data_file_id` at it.
+The `terraform-proxmox` target configures a user that only needs a name and keys through the
+provider's `user_account` block. That block cannot carry a sudo rule or packages, so a VM whose
+`cloudinit` sets `sudo` (other than `none`) or `packages` is rendered with
+`initialization.user_data_file_id = var.cloudinit_user_data["<name>"]` instead: upload the
+`cloudinit` target's `<name>/user-data` as a snippet (Proxmox: a storage with the `snippets`
+content type, for example `local:snippets/<name>-user-data.yaml`) and map the guest's name to it
+in that variable. It is an index, not a lookup with a default: a missing entry fails the plan
+rather than booting a guest without its sudo rule or packages. The `cloudinit` user-data starts
+`qemu-guest-agent` when it installs it (Debian's unit is bound to a device that appeared before the
+package was installed, so nothing else starts it until a reboot, and the provider's `agent` block
+waits for an agent that never answers).
 
 ### libvirt
 
@@ -287,7 +452,10 @@ cost of listing what it needs (resolvers, package mirrors, time, the services it
 the accept default and switch a guest to `DROP` once its outbound needs are known.
 
 Guest rules only take effect while the datacenter firewall is on (`enable: 1` under `[OPTIONS]` in
-`cluster.fw`). That file also holds the operator's own cluster rules, so it is not generated;
+`cluster.fw`). Install a guest's `<vmid>.fw` **after** Terraform has created the guest, and again
+after any replacement: Proxmox deletes `/etc/pve/firewall/<vmid>.fw` when it destroys the guest (a
+tainted resource's replace included), so a file installed first is gone by the time the new guest
+boots. `verify-datacenter.sh` reports it missing. That file also holds the operator's own cluster rules, so it is not generated;
 `firewall/verify-datacenter.sh`, run on a cluster node after installing the files, exits non-zero
 if the switch is off or any rendered `<vmid>.fw` is missing or differs.
 
@@ -709,7 +877,7 @@ owed (a pending marker) until a later run succeeds.
 | `network-sensor` | `suricata_enroll` | central, `cap_sensor` | refuses an address the guest model would (an IPv4 extra address outside the row's zone `subnet`, or that is the zone's `gateway` or inside its `dhcp_range` when the row carries them, or, without one, outside private, shared and documentation space; an IPv6 one outside the row's `subnet6`, or, without one, outside unique-local and documentation space; anything special-purpose, non-canonical or an anycast address of its /64), then writes `hnx-address-groups.yaml` (`HOME_NET` = every address of the enrolled guests, `ip` and `extra_addresses`, IPv6 included; `HNX_ZONE_<ZONE>` per zone, the stock groups), stages a changed file and runs `suricata -T` on a staged copy of `suricata.yaml` that includes it, installs it only if that passes, then `suricatasc -c reload-rules` (a rule reload re-reads `vars`); a reload that fails, or is turned off, stays owed and is retried on the next run | `suricatasc -c uptime` | `suricata.yaml` must hold `vars: address-groups: include: hnx-address-groups.yaml` (checked, never rewritten); mirroring the traffic to the sensor is the network's job |
 | `vuln-scan` | `greenbone_target` | central, `cap_scanner` | over gvmd's socket with `gvm-cli` (as `_gvm`; it refuses root), finds the operator's scan login by name and creates a target `hnx-<guest>` per guest that lacks one | GMP `get_version` | targets are matched by name: an address change or a guest that leaves is not followed; scan tasks and schedules stay in Greenbone |
 | `time-sync` | `chrony` | guest | renders chrony.conf from the registry's time sources (`chrony_server_ids`; public pools opt-in), checked with `chronyd -p`, restart owed until it succeeds | `chronyc -c tracking`: synchronised, stratum 1-15, offset under `chrony_max_offset` (1 s) | the whole chrony.conf is the role's |
-| `patching` | `unattended_upgrades` | guest | one apt.conf.d file after the package's: `#clear` drops the package's origin lists, then only the distribution's security origin (plus opt-in extras), a required reboot window (`HH:MM` or `never`), optional mail; checked with `apt-config -c FILE dump` | the run stamp is under 48 h old | held packages (the pinned agents) are never moved; it does not list pending updates |
+| `patching` | `unattended_upgrades` | guest | one apt.conf.d file after the package's: `#clear` drops the package's origin lists, then only the distribution's security origin (plus opt-in extras), a required reboot window (`HH:MM` or `never`), optional mail; checked with `apt-config -c FILE dump`. With `never` it also cancels (`shutdown -c`, a change naming the type and time; a would-change under `--check`) a reboot logind still holds (a scheduled poweroff or halt is left alone; a guest with no logind fails by name), read from `ScheduledShutdown` with `busctl` (`shutdown --show` where busctl gives no answer): `Automatic-Reboot "false"` governs only the next run, so a reboot unattended-upgrades scheduled under an earlier window would otherwise still happen | the run stamp is under 48 h old; with `never`, no reboot is scheduled (the type and time are named) | held packages (the pinned agents) are never moved; it does not list pending updates |
 | `restart-required` | `needrestart` | guest | the distribution's needrestart in list-only mode (`$nrconf{restart} = 'l'` in a conf.d drop-in checked with `perl -c`; kernel and microcode hints on), so its apt hook only lists and nothing is ever restarted automatically; a timer after the patch run (`After=apt-daily-upgrade.service`, 07:40 UTC) runs `needrestart -b` and writes the services and kernel state to an owner-only `state.json`; it alerts state-diffed, only when the set of services needing a restart differs from the last one alerted (once more when it empties; a failed alert stays owed). `needrestart_notify`: `notify` posts to the notify capability's ntfy endpoint by logical id (`<url>/<topic>`, Title, Priority, Tags; a token by secret reference, never over plain http), `mail` sends local mail (`sendmail -t`), `auto` (the base baseline's choice) is mail where the host has a local MTA and `/etc/aliases` forwards root, else none | the state file is under 48 h old | to avoid double alerts, needrestart owns service restarts and reboots stay with patching (unattended-upgrades mails its reboot notice and reboots in its window); a pending kernel is recorded, and alerted only with `needrestart_alert_kernel` |
 | `ssh-hardening` | `ssh_hardening` | guest | one drop-in sorting first in `sshd_config.d`: key-only, no root, `AllowGroups`, client-alive limits; the kept account (`ssh_hardening_keep_user`, never root) must exist and hold a key, and a staged drop-in must pass `sshd -t` and, through `sshd -T -C user=<kept>`, be key-only, refuse root and admit one of its groups before it goes live; on central-auth guests it reads directory keys through `sss_ssh_authorizedkeys`; with `ssh_hardening_trusted_user_ca_keys` it trusts SSH user certificates from that CA (`TrustedUserCAKeys`, each key parsed by `ssh-keygen -l` first) for the principals `ssh_hardening_authorized_principals` lists per account (`AuthorizedPrincipalsFile`; an unlisted account's file is removed), and `ssh_hardening_revoked_keys` becomes `RevokedKeys`; the kept account needs an unrevoked key unless `ssh_hardening_keep_user_cert_only` accepts the CA and a principal instead (docs/private-overlay.md, "SSH certificates") | the live `sshd -T` for the kept account, including the CA, principals and revocation files | a drop-in that sorts before `00-homelabnext-hardening.conf` wins (health catches it); a CA key that parses may still be the wrong CA (hence the opt-in); MFA for SSH is the identity provider's, at the OIDC login that signs a certificate |
 | `central-auth` | `sssd_ldap` | guest | **superseded for SSH sign-on** by SSH certificates from the secrets store with an OIDC login (the chosen identity provider has no LDAP outpost; docs/private-overlay.md, "SSH certificates"); kept for a lab whose identity provider has one. sssd against the identity provider's LDAP outpost by logical id, LDAPS only (`ldap_tls_reqcert = demand`), Authentik's layout by default, `simple_allow_groups`; the bind credential by secret reference in a 0600 sssd.conf checked with `sssctl config-check`; the break-glass account must exist in the local files, passwd must resolve `files` first, and sssd filters that name | `sssctl domain-status --online` and the break-glass check | the bind credential is on disk (sssd needs it); MFA is the identity provider's (a code with the password on the outpost) |
@@ -788,7 +956,13 @@ writes it.
 `registry-hosts` produces the `zones:` and `hosts:` sections of a service registry.
 `homelabnext.compute.gen.registry_hosts.merge_into_registry(doc, fragment)` overlays them on a
 registry document (a conflicting entry is an error), and the existing registry generators (DNS,
-proxy, monitoring, firewall matrix) then see the guests. A registry kept by hand is held against
+proxy, monitoring, firewall matrix) then see the guests. The fragment carries no host `role`: a role is
+the registry's own fact (the agent runner's host is found by it), and a guest's `capability` is a
+claim the registry judges, so merging the fragment never turns one into the other. A host's
+`role` is read by the agent session's access block (`hnx agent pack`: the one host with role
+`agent-runtime` is the runner's), by `hnx guests validate --registry` (a row-free host's own role,
+and `cap:agent-runtime` only on a host with that role) and, as a label only, by the topology map
+and the knowledge graph. A registry kept by hand is held against
 the guests by `hnx guests validate` (`registry_hosts.registry_problems`): a host whose address or
 zone differs from its guest's is an error.
 
@@ -801,7 +975,77 @@ change, as `hnx site plan --exit-code` does (2 is an input that cannot be read).
 is not a swap seam (ADR-0012): another hypervisor's target, rendered from the same files, is what
 a rebuild on new hardware applies, compared with this plan before the move.
 
-## SERVER (not implemented)
+## Applying to a real node
 
-Applying the output (`terraform apply`, `virt-install`, `virsh autostart`) needs a hypervisor.
-The generators only produce text; the plan command is the review step.
+The generators only produce text; `plan` is the review step and applying is the environment's.
+The path below was first proven end to end on a standalone Proxmox VE 9.2 node with bpg/proxmox
+0.116.1 (a canary VM rendered, applied, baselined, checked and destroyed); a private overlay keeps
+its own runbook with its addresses.
+
+1. **An identity for Terraform.** A Proxmox user and API token (privilege separation on, the ACLs
+   given to both the user and the token, since a separated token gets the intersection) with
+   custom roles: `VM.Allocate`, `VM.Clone`, `VM.Audit`, `VM.Config.{CPU,Memory,Disk,Network,
+   Options,Cloudinit,CDROM,HWType}`, `VM.PowerMgmt` and `VM.GuestAgent.Audit` (the provider reads
+   addresses through the agent; Proxmox VE 9 has no `VM.Monitor`) on `/vms`;
+   `Datastore.AllocateSpace` and `Datastore.Audit` on the guest-disk storage and on the storage
+   holding the snippets (referencing a snippet in `cicustom` needs `AllocateSpace` there, not only
+   `Audit`); `SDN.Use` on `/sdn/zones/localnetwork/<bridge>`; `Sys.Audit` on `/nodes/<node>`.
+   Nothing on `/` and no `Sys.Modify`, `Permissions.Modify` or `Datastore.Allocate`.
+2. **A template** per logical image: the cloud image imported as the template's `scsi0` on the
+   guest-disk storage, a cloud-init drive, `agent: enabled=1`, a serial console, `qm template`;
+   never booted, so every clone generates its own SSH host keys. Its vmid is the
+   `vm_templates` entry for the image's `logical` name.
+3. **Render** the per-node targets (`terraform-proxmox`, `cloudinit`, `firewall-rules`, and
+   `node-mirror`/`node-notify` for a node that declares them) with
+   `--node <node>`, each into its own directory, **one directory per node** (`tf/<node>/`,
+   `cloudinit/<node>/`, ...): each `tf/<node>/` is that node's own Terraform root and state, so a
+   plan in it never proposes to destroy another node's guests. Render the fleet-wide targets
+   (`inventory`, `baseline-playbook`, ...) once, without `--node`. Keep the hand-written
+   `terraform.tfvars` (endpoint, `default_bridge`, `pools`, `vm_templates`, `ssh_keys`,
+   `cloudinit_user_data`) and a `*_override.tf` pinning the provider build beside each node's
+   render (a module has one `required_providers` block; an override file narrows the rendered
+   constraint without editing a generated file). The token reaches Terraform as
+   `TF_VAR_proxmox_api_token`, never a file in the directory (it is ephemeral: see the provider
+   section above on saved plans).
+4. **Upload** the snippets `USER_DATA.md` lists (the `cloudinit` render's `<name>/user-data`,
+   with the same `--keys`) to a snippets datastore on that node, check each one's `sha256sum`
+   against the table, then `terraform init`, `plan` (read it), `apply`, and `plan` again (no
+   changes).
+5. **Install** the `firewall-rules` output into `/etc/pve/firewall/` (after the apply, see
+   [Firewall on by default](#firewall-on-by-default)) and run `verify-datacenter.sh`.
+6. **Trust the host key out of band**: read its fingerprint through the guest agent
+   (`qm guest exec <vmid> -- ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), compare it with
+   `ssh-keyscan`, then record it in the `known_hosts` the inventory uses.
+7. **Baselines**: `ansible-playbook` the `baseline-playbook` render against the `inventory` render;
+   a second run must report `changed=0`.
+8. **Modules**: render the inventory with `--selection lab/modules.yml` and `hnx modules render`,
+   then `ansible-playbook` its `modules.yml` and each module's `checks/<module>.yml`
+   ([the module apply path](modules/apply.md#running-it-in-an-overlay)).
+
+### Upgrading past 82341a4e (user-data snippets) and its follow-up (ephemeral token)
+
+An overlay whose guests were rendered before 82341a4e ("Guests: fix what the first real apply to
+a Proxmox VE 9 node found", #357) has VMs with a `user_account` block. After it, every VM whose
+`cloudinit` sets `sudo` (other than `none`) or `packages` renders `user_data_file_id` instead, and
+its plan fails until `cloudinit_user_data` names a snippet for it. To upgrade:
+
+1. Render `terraform-proxmox` per node (above) and read `USER_DATA.md`: it lists exactly the VMs
+   that need a snippet on that node, with the digest each must have.
+2. Render `cloudinit` with the same `--node` and `--keys`, and upload each listed VM's
+   `<name>/user-data` to a datastore with the `snippets` content type on its node (for example
+   `/var/lib/vz/snippets/<name>-user-data.yaml` on `local`); `sha256sum` it against the table.
+3. Add one line per VM to that node's `terraform.tfvars`:
+   `cloudinit_user_data = { "<name>" = "local:snippets/<name>-user-data.yaml" }`.
+4. `terraform plan`: an existing VM shows its initialization changing (the snippet replaces the
+   `user_account` block); read whether the provider replaces or updates it before you apply.
+
+The follow-up makes `proxmox_api_token` ephemeral and asks for Terraform `~> 1.10`: upgrade the
+binary (or, on an older one, stop saving plan files, above) and keep passing the token as
+`TF_VAR_proxmox_api_token`, at `plan` and again at `apply`. `--node` is now refused with a
+fleet-wide target: drop it from those renders.
+
+What this does not give yet: the remote, encrypted, locked state backend the provider section
+above asks for (state stays local to the render directory), credentials from the secrets store
+instead of a local file, the firewall rules under Terraform (they are a separate install that a
+replace deletes), DNS resolvers in the rendered cloud-init (Proxmox falls back to the node's own
+`resolv.conf` when `initialization.dns` is unset), and the CI deploy that runs these steps.

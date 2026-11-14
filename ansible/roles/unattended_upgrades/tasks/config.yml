@@ -10,3 +10,8 @@
     dest: "{{ unattended_upgrades_config_file }}"
     mode: "0644"
     validate: "{{ unattended_upgrades_apt_config_cli }} -c %s dump"
+
+# Automatic-Reboot "false" governs the next run only: a reboot already scheduled is cancelled here.
+- name: Cancel a reboot logind still holds (reboot_time never)
+  ansible.builtin.include_tasks: cancel_reboot.yml
+  when: unattended_upgrades_reboot_time == 'never'

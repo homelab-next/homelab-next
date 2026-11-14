@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# The smoke's one agent: a local-only job the lab controller runs on its /bin/sh session.
+id: lab-smoke-v1
+agent_key: lab-smoke
+toolsets: {real: lab-smoke, shadow: lab-smoke}
+local_only: true
+default_task_description: The lab smoke's job.

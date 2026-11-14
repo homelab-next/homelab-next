@@ -17,7 +17,8 @@ Callers are discovered, never declared.  Each becomes a trigger string in the he
                     a **timer**
 ``timer:R/U``       role ``R`` ships ``U.timer`` and ``U.service`` whose ``ExecStart`` (or
                     ``ExecStartPre``/``ExecStopPost``, the last-run writer) runs it: a **timer**
-``role:R``          a task file of role ``R`` names a script shipped in that role
+``role:R``          a task file of role ``R`` (a core role, or a public module's
+                    ``modules/<id>/roles/R``) names a script shipped in that role
 ``profile:P``       a file of profile ``P`` names a script shipped in that profile
 ==================  ====================================================================
 
@@ -428,6 +429,10 @@ def _roles_and_profiles(real: Reality, idx: _Index) -> None:
         parts = rel.split("/")
         if rel.startswith("ansible/roles/") and len(parts) > 3:
             groups[("role", parts[2])].append(rel)
+        elif rel.startswith("modules/") and len(parts) > 5 and parts[2] == "roles":
+            # a public module's role (modules/<id>/roles/<role>/): one role namespace with the
+            # core's, as the module rules name them (role:<id>...)
+            groups[("role", parts[3])].append(rel)
         elif rel.startswith("profiles/") and len(parts) > 2:
             groups[("profile", parts[1])].append(rel)
     for (kind, name), rels in sorted(groups.items()):

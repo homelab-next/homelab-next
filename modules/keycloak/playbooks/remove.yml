@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the database and the realm (export_first), stop and remove both containers, and
+# delete the env_files (the database and admin passwords) and the server's key. The data root
+# (with the export in it) and the rest of the compose project are kept for the operator to
+# archive or delete; the decommission audit (module.yml lifecycle.remove.audit) checks nothing
+# still names the service. Every user's passkey is in the database: removing the module and its
+# data root ends every sign-in.
+- name: Remove Keycloak
+  hosts: mod_keycloak_server
+  become: true
+  tasks:
+    - name: Export the database and the realm first
+      ansible.builtin.include_role:
+        name: keycloak
+        tasks_from: export
+    - name: Stop and remove the containers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ keycloak_dir | default('/opt/compose/keycloak') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the containers were given and the server's key
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ keycloak_dir | default('/opt/compose/keycloak') }}/secrets/postgres.env"
+        - "{{ keycloak_dir | default('/opt/compose/keycloak') }}/secrets/keycloak.env"
+        - "{{ keycloak_dir | default('/opt/compose/keycloak') }}/tls/server.key"

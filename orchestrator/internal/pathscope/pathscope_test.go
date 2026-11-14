@@ -4,6 +4,8 @@ package pathscope
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -194,5 +196,36 @@ func TestShadowMarked(t *testing.T) {
 		if ShadowMarked(v) {
 			t.Errorf("ShadowMarked(%q) = true", v)
 		}
+	}
+}
+
+// A path is refused for what no prefix may hold (a backslash, a NUL, a control or line-break
+// character) and for a hidden segment once cleaned, quoting the path as given; a path that climbs
+// out of the tree keeps its "not under any prefix" refusal.
+func TestCheck_RefusesBadCharactersHiddenSegmentsAndKeepsTheEscapeRefusal(t *testing.T) {
+	s := Scope{WritablePrefixes: []string{"inbox/"}, ReadablePrefixes: []string{"owner/approved/"}}
+	for _, p := range []string{"inbox/a\\b.md", "inbox/a\x00b", "inbox/a\nb", "inbox/a\rb", "inbox/a\tb", "inbox/a\x7fb", "inbox/a\u0085b", "inbox/a b", "inbox/a b", "owner/approved/x\x1b.md"} {
+		for name, check := range map[string]func(Scope, string) error{"CheckWrite": CheckWrite, "CheckRead": CheckRead} {
+			err := check(s, p)
+			if !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), "control or line-break character") {
+				t.Errorf("%s(%q) = %v, want a refusal of the character", name, p, err)
+			}
+		}
+	}
+	for _, p := range []string{"inbox/.git/config", "inbox/x/../.env", "owner/approved/.hidden"} {
+		for name, check := range map[string]func(Scope, string) error{"CheckWrite": CheckWrite, "CheckRead": CheckRead} {
+			err := check(s, p)
+			if !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), "hidden file") || !strings.Contains(err.Error(), strconv.Quote(p)) {
+				t.Errorf("%s(%q) = %v, want a hidden-segment refusal quoting the path as given", name, p, err)
+			}
+		}
+	}
+	for _, p := range []string{"..", "../x", "inbox/../../.git"} {
+		if err := CheckRead(s, p); !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), "not under any") {
+			t.Errorf("CheckRead(%q) = %v, want the not-under-any-prefix refusal", p, err)
+		}
+	}
+	if err := CheckWrite(s, "inbox/café/a.md"); err != nil {
+		t.Errorf("a non-ASCII letter is refused: %v", err)
 	}
 }

@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Read <openbao_state_dir>/highest-release (release_seen.yml writes it) into
+# openbao_release_recorded: the release it names, or '' when there is no record. A file there that
+# is not a release record fails, by name, rather than being read as "nothing recorded" (which would
+# let a lower pin through) or written over unseen. Shared by downgrade.yml and release_seen.yml.
+- name: Ask whether a release is recorded
+  ansible.builtin.stat:
+    path: "{{ openbao_state_dir }}/highest-release"
+    follow: false
+    get_checksum: false
+  register: openbao_release_record_file
+
+- name: Read the recorded release
+  ansible.builtin.slurp:
+    src: "{{ openbao_state_dir }}/highest-release"
+  register: openbao_release_record
+  when: openbao_release_record_file.stat.exists and openbao_release_record_file.stat.isreg
+
+- name: Refuse a record that is not one
+  ansible.builtin.assert:
+    that:
+      - openbao_release_record_file.stat.isreg
+      - openbao_release_record.content | b64decode is match(openbao_release_record_shape)
+    fail_msg: "openbao: {{ openbao_state_dir }}/highest-release is not a release record; remove or fix it"
+    quiet: true
+  vars:
+    openbao_release_record_shape: '^\s*\{\s*"version"\s*:\s*"[0-9]+\.[0-9]+\.[0-9]+"\s*\}\s*\Z'
+  when: openbao_release_record_file.stat.exists
+
+- name: Note the recorded release
+  ansible.builtin.set_fact:
+    openbao_release_recorded: >-
+      {{ (openbao_release_record.content | b64decode | regex_search('[0-9]+\.[0-9]+\.[0-9]+'))
+         if openbao_release_record_file.stat.exists else '' }}

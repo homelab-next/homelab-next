@@ -95,7 +95,7 @@ def test_count_multiplies_and_cpu_is_a_percentage_of_one_core():
     assert "CPUQuota=50%\n" in body
     assert f"MemoryMax={host['footprint']['memory_mb'] * 2}M\n" in body
     assert (
-        f"run example-lake {host['footprint']['disk_gb'] * 2}\n"
+        f"run guest_disk example-lake {host['footprint']['disk_gb'] * 2} vm "
         in files["data/hnx-module-quota.sh"]
     )
 
@@ -140,7 +140,10 @@ def test_two_instances_of_one_provider_on_one_host_share_the_slice_summed():
     files = render(site)
     body = files["data/hnx-example_object_store-store.slice"]
     assert f"MemoryMax={fp['memory_mb'] * 2}M\n" in body
-    assert f"run example-object-store {fp['disk_gb'] * 2}\n" in files["data/hnx-module-quota.sh"]
+    assert (
+        f"run guest_disk example-object-store {fp['disk_gb'] * 2} vm "
+        in files["data/hnx-module-quota.sh"]
+    )
 
 
 def test_a_module_s_fleet_units_run_in_its_slice_under_their_rendered_names():
@@ -212,7 +215,7 @@ def test_disk_zero_is_no_cap_and_gpu_memory_is_reported_unenforced():
     assert "example-lake" not in files["data/hnx-module-quota.sh"]
     assert "| core | example-inference | server |" in files["README.md"]
     assert "(not enforced)" in files["README.md"]
-    assert "run external-collector 10\n" in files["data/hnx-module-quota.sh"]
+    assert "run guest_disk external-collector 10 vm " in files["data/hnx-module-quota.sh"]
 
 
 def test_render_is_deterministic():
@@ -251,10 +254,14 @@ case "$(basename "$0")" in
   systemd-escape) echo "escaped-$(basename "$3").mount" ;;
   fallocate) if [ -f "$HNX_MNT/fallocate.fail" ]; then exit 1; fi; truncate -s "$2" "$3" ;;
   mkfs.ext4) if [ -f "$HNX_MNT/mkfs.fail" ]; then exit 1; fi ;;
+  df)
+    # df -P -k DIR: the filesystem's size in KiB from $HNX_MNT/df (10 GiB when absent)
+    echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+    echo "/dev/sda1 $(cat "$HNX_MNT/df" 2>/dev/null || echo 10485760) 1 1 1% /" ;;
 esac
 exit 0
 """
-TOOLS = ("findmnt", "zfs", "losetup", "mkfs.ext4", "systemctl", "systemd-escape", "fallocate")
+TOOLS = ("findmnt", "zfs", "losetup", "mkfs.ext4", "systemctl", "systemd-escape", "fallocate", "df")
 G = 1073741824
 
 
@@ -278,9 +285,9 @@ def host(tmp_path):
         for k, v in fields.items():
             (mnt / f"{key}.{k}").write_text(v + "\n")
 
-    def run(*args, caps=None):
+    def run(*args, caps=None, guest_kind=None):
         script = tmp_path / "quota.sh"
-        body = ml._quota_script(caps or {"m": 2}, str(root), str(units_dir))
+        body = ml._quota_script(caps or {"m": 2}, str(root), str(units_dir), guest_kind)
         assert ml.DATA_ROOT not in body and ml.UNIT_DIR not in body
         script.write_text(body)
         script.chmod(0o755)
@@ -473,3 +480,83 @@ def test_the_readme_says_how_each_kind_of_cap_changes_size():
     assert "An image cap is not resized in place" in readme
     assert "A ZFS cap is resized in place" in readme
     assert "A cap is not grown in place" not in readme
+
+
+# ---------------------------------------------------------------- a guest's own disk is the cap
+
+
+def test_on_a_vm_or_lxc_host_the_guest_s_disk_is_the_cap_and_nothing_is_mounted():
+    site = copy.deepcopy(SITES["small-lab"])
+    files = render(site)
+    data, core = files["data/hnx-module-quota.sh"], files["core/hnx-module-quota.sh"]
+    assert SITES["small-lab"]["hosts"]["data"]["kind"] == "vm"
+    assert "\nrun guest_disk external-collector 10 vm " in data
+    assert "\nrun cap " not in data
+    assert "\nrun cap " in core and "guest_disk example" not in core  # kind: host is capped
+    readme = files["README.md"]
+    assert (
+        "`/var/lib/hnx-modules/external-collector` (10 GiB footprint): not capped per module, "
+        "the vm's own disk is the cap" in readme
+    )
+    assert "share the vm's disk: one can fill it under the others" in readme
+    site["hosts"]["data"]["kind"] = "lxc"
+    assert "\nrun guest_disk external-collector 10 lxc " in render(site)["data/hnx-module-quota.sh"]
+
+
+def test_only_a_guest_kind_s_disk_stands_in_for_a_cap():
+    for bad in ("host", "external", "vm; rm -rf /"):
+        with pytest.raises(ml.LimitsError, match="own disk"):
+            ml._quota_script({"m": 1}, guest_kind=bad)
+
+
+@pytest.mark.parametrize("kind", ml.GUEST_DISK_KINDS)
+def test_a_data_root_holding_data_on_a_guest_passes_check_and_apply_untouched(host, kind):
+    """The first live module's case: its data root already held data on an ext4 VM, so the
+    image cap could never be put in place and every run failed at the limits play."""
+    root, _m, units_dir, _mount, run = host
+    (root / "m").mkdir(parents=True)
+    (root / "m" / "auth.db").write_text("x")
+    for args in (("--check",), ()):
+        r, calls = run(*args, guest_kind=kind)
+        assert r.returncode == 0, r.stderr
+        assert f"m: no per-module cap on a {kind}: the guest's own disk is the cap" in r.stdout
+        assert "10485760K; 2G footprint" in r.stdout and "WARNING" not in r.stderr
+        assert [c.split()[0] for c in calls] == ["df"]  # read-only: no mount, mkfs or zfs
+    assert (root / "m" / "auth.db").read_text() == "x"
+    assert not (root / ".images").exists() and not any(units_dir.iterdir())
+
+
+def test_a_guest_filesystem_smaller_than_the_footprint_is_a_warning_not_a_failure(host):
+    root, mnt, _u, _mount, run = host
+    (root / "m").mkdir(parents=True)
+    (mnt / "df").write_text("1048576")  # 1 GiB, the footprint is 2
+    r, _ = run("--check", guest_kind="vm")
+    assert r.returncode == 0
+    assert "WARNING: the filesystem holding" in r.stderr and "smaller than the 2G" in r.stderr
+
+
+def test_the_guest_filesystem_is_compared_with_every_footprint_that_shares_it(host):
+    root, mnt, _u, _mount, run = host
+    for m in ("m", "n"):
+        (root / m).mkdir(parents=True)
+    (mnt / "df").write_text(str(4 * 1048576))  # 4 GiB: each footprint fits, the two (5) do not
+    r, _ = run("--check", caps={"m": 2, "n": 3}, guest_kind="vm")
+    assert r.returncode == 0
+    assert r.stderr.count("smaller than the 5G the footprints on this host add up to") == 2
+
+
+def test_a_missing_data_root_on_a_guest_is_reported_not_created(host):
+    root, _m, _u, _mount, run = host
+    root.mkdir()
+    r, calls = run(guest_kind="vm")
+    assert r.returncode == 0 and "not created yet" in r.stdout
+    assert not (root / "m").exists() and calls == []
+
+
+def test_a_symbolic_link_is_refused_on_a_guest_too(host, tmp_path):
+    root, _m, _u, _mount, run = host
+    root.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    os.symlink(tmp_path / "elsewhere", root / "m")
+    r, _ = run("--check", guest_kind="vm")
+    assert r.returncode == 3 and "symbolic link" in r.stderr

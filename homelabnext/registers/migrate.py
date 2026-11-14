@@ -20,6 +20,8 @@ import pathlib
 import re
 from collections.abc import Mapping
 
+from homelabnext._yaml import safe_load as _yaml_safe_load
+
 from . import events as ev
 from .records import RECORD_KINDS, _diff, dir_events, load_texts, parse_record, read_dir
 from .schema import RegisterError
@@ -121,7 +123,6 @@ def migrate_records(d) -> list[pathlib.Path]:
 
 def migrate_pages(d) -> list[pathlib.Path]:
     """The ``reviews:`` of every docs/systems page into ``<service>.events/``."""
-    import yaml
 
     from homelabnext.sop.pages import FRONT_RE, page_digest
 
@@ -135,7 +136,7 @@ def migrate_pages(d) -> list[pathlib.Path]:
             continue  # the template is the generator's skeleton, not a page
         text = p.read_text(encoding="utf-8")
         m = FRONT_RE.match(text)
-        fm = yaml.safe_load(m["fm"]) if m else None
+        fm = _yaml_safe_load(m["fm"]) if m else None
         if not isinstance(fm, Mapping) or fm.get("type") != "system" or "reviews" not in fm:
             continue
         _, planned = ev.backfill({"reviews": fm["reviews"]}, "system-page")
@@ -148,7 +149,7 @@ def migrate_pages(d) -> list[pathlib.Path]:
         if page_digest(stripped) != page_digest(text):
             raise RegisterError("system page", [f"{p.name}: the migration changed its digest"])
         pending = [ev.Event(ev.event_name(x, w), x, ev.stamp_of(w), 1) for x, w in new]
-        fm_after = yaml.safe_load(FRONT_RE.match(stripped)["fm"])
+        fm_after = _yaml_safe_load(FRONT_RE.match(stripped)["fm"])
         # before: the inline list plus the events that are not copies of it (a review already
         # written as an event, or an interrupted earlier run's); after: every event
         was = ev.derive(dict(fm), unmatched, "system-page", problems, p.name)

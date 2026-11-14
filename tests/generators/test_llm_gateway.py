@@ -266,6 +266,47 @@ def test_a_registry_service_in_a_cloud_zone_is_not_local(tmp_path):
     assert "inference.svc.example.internal" in files["litellm/config.yaml"]
 
 
+def test_a_primary_alias_host_meets_the_registry_s_locality_check(tmp_path):
+    # the alias names the registry service: a self-declared host may not skip its zone check
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    port = doc["services"]["inference"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-alias": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": port,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-alias"
+    reg = registry_with(tmp_path, "cloud")
+    with pytest.raises(
+        gw.GatewaySpecError, match=r"registry service inference .*is not in a lab zone"
+    ):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    reg = registry_with(tmp_path, "compute")
+    gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_primary_alias_host_with_another_scheme_is_refused(tmp_path):
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    svc = doc["services"]["inference"]
+    other = "http" if svc.get("tls", "none") != "none" or svc["protocol"] == "https" else "https"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-alias": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": svc["port"],
+            "scheme": other,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-alias"
+    reg = registry_with(tmp_path, "compute")
+    with pytest.raises(gw.GatewaySpecError, match=f"scheme {other} is not registry service"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
 def test_a_cloud_api_domain_named_as_the_lab_domain_is_refused(tmp_path):
     # the spec's own domain cannot make a provider's API internal (review of #32)
     host = {"locality": "local", "host": "x.api.anthropic.com", "port": 443, "scheme": "https"}
@@ -281,6 +322,133 @@ def test_audit_counts_a_host_under_a_cloud_api_domain_as_cloud(tmp_path):
         gw.load_spec(make_spec(tmp_path)), service_domain="api.anthropic.com"
     )
     assert not gw.internal_host(spec, "x.api.anthropic.com")
+
+
+def registry_with_candidate(tmp_path, tier):
+    """The example registry plus an inference row of standing ``tier`` named
+    ``inference-candidate`` (ADR-0039)."""
+    doc = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
+    row = copy.deepcopy(doc["services"]["inference"])
+    row.pop("env_var", None)
+    row.pop("mcp", None)
+    row.pop("status_sources", None)
+    row.pop("public_hostname", None)
+    row["port"] = row["port"] + 1
+    row["standing"] = {"tier": tier, "until": "2027-01-31", "why": "a candidate engine"}
+    doc["services"]["inference-candidate"] = row
+    (tmp_path / "registry.yml").write_text(yaml.safe_dump(doc))
+    return "registry.yml"
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring", "legacy"])
+def test_a_gateway_backend_naming_a_non_primary_row_is_refused(tmp_path, tier):
+    backends = spec_doc()["backends"] | {"svc:inference-candidate": {"locality": "local"}}
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:inference-candidate"
+    reg = registry_with_candidate(tmp_path, tier)
+    with pytest.raises(gw.GatewaySpecError, match=f"inference-candidate is an? {tier} row"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+@pytest.mark.parametrize("tier", ["eval", "retiring"])
+def test_a_backend_of_another_name_may_not_reach_a_non_primary_row_by_its_host(tmp_path, tier):
+    reg = registry_with_candidate(tmp_path, tier)
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    row = doc["services"]["inference-candidate"]
+    host = f"inference-candidate.{doc['lab']['svc_label']}.{doc['lab']['domain']}"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": row["port"]}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match=f"host {host} is an? {tier} row's record"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+@pytest.mark.parametrize("kind", ["capability", "row"])
+def test_a_self_declared_host_naming_a_registry_row_or_capability_is_refused(tmp_path, kind):
+    reg = registry_with_candidate(tmp_path, "eval")
+    services = yaml.safe_load((tmp_path / reg).read_text())["services"]
+    caps = {v["capability"] for v in services.values()}
+    # a primary row named apart from its capability: its name and its capability are both
+    # registry names that no record of this form answers by
+    row, svc = next((k, v) for k, v in services.items() if k not in caps and "standing" not in v)
+    label = svc["capability"] if kind == "capability" else row
+    host = f"{label}.extra.svc.example.internal"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": 9}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    words = f"names registry {kind} {label} but is not a capability's primary alias"
+    with pytest.raises(gw.GatewaySpecError, match=re.escape(words)):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_the_primary_alias_with_a_candidate_s_port_is_refused(tmp_path):
+    # a candidate engine shares the primary's host; the alias with its port reaches it
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    port = doc["services"]["inference-candidate"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {
+            "locality": "local",
+            "host": "inference.svc.example.internal",
+            "port": port,
+        }
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match=r"is not registry service inference's port"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_made_up_name_under_a_non_primary_row_s_record_is_refused(tmp_path):
+    reg = registry_with_candidate(tmp_path, "eval")
+    host = "x.inference-candidate.svc.example.internal"
+    backends = spec_doc()["backends"] | {
+        "svc:llm-shadow": {"locality": "local", "host": host, "port": 9}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-shadow"
+    with pytest.raises(gw.GatewaySpecError, match=f"host {re.escape(host)} is under an eval row"):
+        gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+
+
+def test_a_backend_with_no_host_is_held_to_its_default_alias(tmp_path):
+    # a backend named after a capability (not a row) defaults to that capability's alias: the
+    # primary's port only
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    caps = {v["capability"] for v in doc["services"].values()}
+    _row, svc = next(
+        (k, v) for k, v in doc["services"].items() if k not in caps and "standing" not in v
+    )
+    cap = svc["capability"]
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = f"svc:{cap}"
+    for port, ok in ((svc["port"] + 1, False), (svc["port"], True)):
+        backends = spec_doc()["backends"] | {f"svc:{cap}": {"locality": "local", "port": port}}
+        spec = make_spec(tmp_path, roles, registry=reg, backends=backends)
+        if ok:
+            gw.render_file(spec)
+        else:
+            with pytest.raises(gw.GatewaySpecError, match=r"is not registry service \S+'s port"):
+                gw.render_file(spec)
+
+
+def test_a_self_declared_host_at_a_capability_s_primary_alias_is_accepted(tmp_path):
+    reg = registry_with_candidate(tmp_path, "eval")
+    doc = yaml.safe_load((tmp_path / reg).read_text())
+    host = f"inference.{doc['lab']['svc_label']}.{doc['lab']['domain']}"
+    port = doc["services"]["inference"]["port"]
+    backends = spec_doc()["backends"] | {
+        "svc:llm-main": {"locality": "local", "host": host, "port": port}
+    }
+    roles = copy.deepcopy(ROLES)
+    roles["roles"]["agent-local"]["bindings"][0]["backend"] = "svc:llm-main"
+    files = gw.render_file(make_spec(tmp_path, roles, registry=reg, backends=backends))
+    assert host in files[PROXY_CONFIG]
 
 
 def test_a_spec_domain_that_differs_from_the_registry_is_refused(tmp_path):
@@ -1004,7 +1172,7 @@ def test_a_role_table_ceiling_the_rules_refuse_is_refused(tmp_path):
     roles = _roles_with(tlp_ceiling="amber")
     roles["roles"]["cloud-reasoner"]["bindings"][0]["leaves_lab"] = True
     # the role table's schema refuses it before the rules see it (RoleTable.load)
-    with pytest.raises(gw.GatewaySpecError, match="tlp_ceiling: 'amber' is not one of"):
+    with pytest.raises(gw.GatewaySpecError, match="tlp_ceiling: is not one of"):
         gw.load_spec(make_spec(tmp_path, roles))
 
 
@@ -1808,3 +1976,71 @@ def test_a_lab_check_refuses_a_test_only_render_and_the_reverse(tmp_path, capsys
 def test_the_test_only_audit_refuses_hand_edits(tmp_path, edit, words):
     problems = _audit_edit(_conformance_spec(tmp_path), edit)
     assert any(words in p for p in problems), problems
+
+
+def test_the_spec_s_role_table_is_not_read_through_a_symbolic_link(tmp_path):
+    spec = make_spec(tmp_path)
+    outside = tmp_path / "outside.json"
+    (tmp_path / "roles.json").rename(outside)
+    (tmp_path / "roles.json").symlink_to(outside)
+    with pytest.raises(gw.GatewaySpecError, match="a symbolic link on its path"):
+        gw.render_file(spec)
+    # a linked directory on the path is refused too
+    (tmp_path / "roles.json").unlink()
+    real = tmp_path / "real"
+    real.mkdir()
+    outside.rename(real / "roles.json")
+    (tmp_path / "linked").symlink_to(real, target_is_directory=True)
+    doc = yaml.safe_load(spec.read_text())
+    doc["roles"] = "linked/roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(gw.GatewaySpecError, match="a symbolic link on its path"):
+        gw.render_file(spec)
+    doc["roles"] = "real/roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    gw.render_file(spec)
+
+
+def test_the_spec_s_role_table_stays_inside_the_checkout(tmp_path):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    spec = make_spec(spec_dir)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (spec_dir / "roles.json").rename(outside / "roles.json")
+    # tmp_path is in no git checkout, so the spec's own directory is the root
+    for roles, words in (
+        (str(outside / "roles.json"), "an absolute path"),
+        ("../outside/roles.json", "outside the root"),
+    ):
+        doc = yaml.safe_load(spec.read_text())
+        doc["roles"] = roles
+        spec.write_text(yaml.safe_dump(doc))
+        with pytest.raises(gw.GatewaySpecError, match=words):
+            gw.render_file(spec)
+    # an absolute path through a linked directory is refused before any link is followed
+    (tmp_path / "linkdir").symlink_to(outside, target_is_directory=True)
+    doc["roles"] = str(tmp_path / "linkdir" / "roles.json")
+    spec.write_text(yaml.safe_dump(doc))
+    with pytest.raises(gw.GatewaySpecError, match="an absolute path"):
+        gw.render_file(spec)
+
+
+def test_a_role_table_path_with_dotdot_inside_the_checkout_is_read():
+    # the lab-in-a-box spec names ../../../../schemas/...: inside the repository, so allowed
+    assert ".." in yaml.safe_load(LAB_SPEC.read_text())["roles"]
+    assert gw.render_file(LAB_SPEC)
+
+
+def test_render_takes_the_root_its_role_table_stays_in(tmp_path, capsys):
+    spec_dir = tmp_path / "spec"
+    spec_dir.mkdir()
+    spec = make_spec(spec_dir)
+    (spec_dir / "roles.json").rename(tmp_path / "roles.json")
+    doc = yaml.safe_load(spec.read_text())
+    doc["roles"] = "../roles.json"
+    spec.write_text(yaml.safe_dump(doc))
+    out = tmp_path / "out"
+    assert hnx(["gen", "gateway", "render", str(spec), str(out)]) == 1
+    assert "outside the root" in capsys.readouterr().err
+    assert hnx(["gen", "gateway", "render", str(spec), str(out), "--root", str(tmp_path)]) == 0

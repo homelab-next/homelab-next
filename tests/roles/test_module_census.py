@@ -344,6 +344,7 @@ def test_module_census_writes_each_hosts_answer_and_gather_reads_it(first):
             {"module_census_hnx_cli": fake(tmp_path / "hnx-noisy", NOISY)},
         ],
         env=BECOME_ENV,
+        parallel=True,  # 36 refusals, each on its own input: no case reads what another wrote
     )
     assert results[0][0] and "the notify pairs directory an absolute" in results[0][1]
     for failed, said in results[1:4]:

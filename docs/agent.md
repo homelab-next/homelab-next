@@ -423,8 +423,9 @@ manifest's `must_cite` sources are cited by an `ok` report.
 gets its pack: it renders the profile's **access block** and adds it as a required `stable`
 section named `access`, then calls `assemble_pack`. The block is derived from the profile, a
 `VerifiedProfile` (verified against the policy and the lock; a dict is refused), and the
-registry, for the host the agent runs on (default: the host of the registry's `agent-runtime`
-service):
+registry, for the host the agent runs on (default: the one registry host whose `role` is
+`agent-runtime`; none or several is refused, so name it with `--runs-on`. `agent-runtime` is the
+runner slot and no service row carries it, ADR-0039 decision 7):
 
 - who it is, where it runs (host and zone), model role, data tier, whether it reads untrusted
   content, broker tier, its own memory scopes and budgets;

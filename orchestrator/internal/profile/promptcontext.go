@@ -58,6 +58,9 @@ type PromptContext struct {
 	// cursorTemplate is the template CursorFile was validated against at
 	// load (CursorTemplate()).
 	cursorTemplate CursorTemplate
+	// stateResolved is StateFile with its symbolic links resolved once, at load
+	// (ResolvedStateFile).
+	stateResolved string
 	// Facts names an entry of the controller's facts_commands catalog
 	// (LoadOptions.FactsCommands). The command runs at dispatch; its trimmed
 	// stdout is injected as [deterministic-facts]. Empty = off. A failure,
@@ -91,8 +94,8 @@ type PromptContext struct {
 // "/" is refused because it would depend on the controller's working
 // directory.
 //
-// The process gets a scrubbed environment: only BaseFactsEnv (PATH, HOME,
-// LANG, LC_*, TZ) plus the variables named in Env, each with the value it has
+// The process gets a scrubbed environment: only BaseFactsEnv (PATH, HOME, TZ
+// and the POSIX locale names) plus the variables named in Env, each with the value it has
 // in the controller's environment (a name the controller does not have is
 // left unset). Nothing else of the controller's environment -- API keys,
 // tokens -- reaches the command, so its output cannot carry them into a
@@ -109,9 +112,11 @@ var factsEnvNameRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 // so ten minutes is already far beyond any real one (and keeps the value a valid time.Duration).
 const maxFactsTimeoutS = 600
 
-// BaseFactsEnv are the variables every facts command inherits from the
-// controller; a trailing "*" is a prefix match.
-var BaseFactsEnv = []string{"PATH", "HOME", "LANG", "LC_*", "TZ"}
+// BaseFactsEnv are the variables every facts command inherits from the controller, each by its
+// exact name: the locale ones are POSIX's own list, never a prefix (an LC_ prefix would pass any
+// variable a deployment happened to name that way).
+var BaseFactsEnv = []string{"PATH", "HOME", "TZ", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
+	"LC_COLLATE", "LC_NUMERIC", "LC_TIME", "LC_MONETARY"}
 
 // Validate reports a malformed catalog entry.
 func (f FactsCommand) Validate() error {
@@ -143,11 +148,7 @@ func (f FactsCommand) Validate() error {
 func (f FactsCommand) Environ(environ []string) []string {
 	keep := func(name string) bool {
 		for _, b := range BaseFactsEnv {
-			if p, ok := strings.CutSuffix(b, "*"); ok {
-				if strings.HasPrefix(name, p) {
-					return true
-				}
-			} else if name == b {
+			if name == b {
 				return true
 			}
 		}
@@ -236,6 +237,30 @@ func (e promptEnv) readPromptFile(name string) ([]byte, error) {
 	return safefs.FS{Root: e.promptDir, Label: "prompt_dir"}.ReadFile(name, maxPromptFileBytes)
 }
 
+// ResolvedStateFile is the state file the prompt builder opens: StateFile with the symbolic links
+// in its path resolved when the profile was loaded, so a link the operator made is followed once,
+// and a link swapped in later (at the file, or along its path) is not. The builder opens it
+// without following a link at the file itself. For a profile not loaded through LoadRegistry it
+// is StateFile.
+func (c PromptContext) ResolvedStateFile() string {
+	if c.stateResolved != "" {
+		return c.stateResolved
+	}
+	return c.StateFile
+}
+
+// resolveLinks resolves the links in path; for a file that does not exist yet, those of its
+// directory. A path that cannot be resolved at all is returned as it is.
+func resolveLinks(path string) string {
+	if r, err := filepath.EvalSymlinks(path); err == nil {
+		return r
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		return filepath.Join(dir, filepath.Base(path))
+	}
+	return path
+}
+
 // Label is StateLabel, or the state file's base name.
 func (c PromptContext) Label() string {
 	if c.StateLabel != "" {
@@ -305,6 +330,7 @@ func (c *PromptContext) resolve(env promptEnv, agentKey string) ([]byte, error) 
 		if !filepath.IsAbs(c.StateFile) || filepath.Clean(c.StateFile) != c.StateFile || !env.stateFiles[c.StateFile] {
 			return nil, fmt.Errorf("prompt_context: state_file %q is not in the controller's prompt_state_files", c.StateFile)
 		}
+		c.stateResolved = resolveLinks(c.StateFile)
 	}
 	if c.Facts != "" {
 		fc, ok := env.facts[c.Facts]

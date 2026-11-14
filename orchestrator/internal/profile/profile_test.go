@@ -383,3 +383,41 @@ func TestDeepCopy_IsAliasSafe(t *testing.T) {
 		t.Fatalf("deepCopy on a cyclic node did not return cleanly: %v\n%.400s", err, out)
 	}
 }
+
+// LaneToolsets is the one derivation of a session's toolsets: a profile's toolsets entry for the
+// lane, split, or, with grants, its lane's granted server names, sorted.
+func TestLaneToolsets(t *testing.T) {
+	reg, err := loadOne(t, testProfileYAML+"toolsets: {real: \"notes,web\", shadow: notes}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := reg.Resolve("test-agent")
+	if got, err := p.LaneToolsets("real"); err != nil || strings.Join(got, ",") != "notes,web" {
+		t.Errorf("real = %v, %v", got, err)
+	}
+	if got, err := p.LaneToolsets("shadow"); err != nil || strings.Join(got, ",") != "notes" {
+		t.Errorf("shadow = %v, %v", got, err)
+	}
+	if _, err := p.LaneToolsets("staging"); err == nil {
+		t.Error("an unknown lane was accepted")
+	}
+	g, err := loadOne(t, testProfileYAML+"toolsets: {real: ignored}\ngrants:\n  real: [{name: zeta, kind: k}, {name: alpha, kind: k}]\n  shadow: [{name: beta, kind: k}]\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gp, _ := g.Resolve("test-agent")
+	if got, _ := gp.LaneToolsets("real"); strings.Join(got, ",") != "alpha,zeta" {
+		t.Errorf("granted real = %v", got)
+	}
+	if got, _ := gp.LaneToolsets("shadow"); strings.Join(got, ",") != "beta" {
+		t.Errorf("granted shadow = %v", got)
+	}
+	empty, err := loadOne(t, testProfileYAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep, _ := empty.Resolve("test-agent")
+	if got, err := ep.LaneToolsets("real"); err != nil || got != nil {
+		t.Errorf("no toolsets = %v, %v", got, err)
+	}
+}

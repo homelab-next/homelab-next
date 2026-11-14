@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role status_hub); local changes are overwritten.
+# Every view and export declares its TLP ceiling (ADR-0033): the public ones are clear; the
+# Approvals page is private (listed only through the front door, never in status.json).
+{{ {'views_version': 1,
+    'shell': {'title': status_hub_title, 'main': 'overview'},
+    'exports': {'status.json': {'tlp': 'clear'}, 'activity.csv': {'tlp': 'clear'}, 'activity.jsonl': {'tlp': 'clear'}},
+    'menu': [{'id': 'overview', 'title': 'Overview', 'panel': 'exceptions', 'tlp': 'clear'},
+             {'id': 'sources', 'title': 'Sources', 'panel': 'sources', 'tlp': 'clear'}]
+            + ([{'id': 'approvals', 'title': 'Approvals', 'panel': 'approvals', 'group': 'private', 'tlp': 'red'}]
+               if status_hub_approvals_socket else [])}
+   | to_nice_yaml(indent=2, sort_keys=false) }}

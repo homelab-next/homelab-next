@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Ask the machine for its architecture
+  ansible.builtin.command:
+    argv: [uname, -m]
+  register: openbao_uname
+  changed_when: false
+  check_mode: false  # read-only: a --check run needs the answer too
+
+- name: Refuse an architecture the pinned release has no checksum for
+  ansible.builtin.assert:
+    that:
+      - (openbao_uname.stdout | trim) in openbao_arch_names
+      - openbao_arch_names[openbao_uname.stdout | trim] in openbao_checksums
+    fail_msg: >-
+      openbao: no pinned checksum for {{ openbao_uname.stdout | trim }} (openbao_checksums has
+      {{ openbao_checksums.keys() | list | join(', ') }})
+
+- name: Note the release architecture
+  ansible.builtin.set_fact:
+    openbao_arch: "{{ openbao_arch_names[openbao_uname.stdout | trim] }}"
+
+- name: Read the active swap areas
+  ansible.builtin.slurp:
+    src: "{{ openbao_proc_swaps }}"
+  register: openbao_swaps
+
+# Defence in depth: the unit also sets MemorySwapMax=0 (cgroup v2), so the server's own memory is
+# never swapped whatever the host does; this refuses the host whose other processes could be.
+- name: Refuse active swap (the release never locks memory, so secrets could be paged to disk)
+  ansible.builtin.assert:
+    that: >-
+      openbao_allow_swap | bool or
+      (openbao_swaps.content | b64decode).splitlines()[1:] | select | list | length == 0
+    fail_msg: >-
+      openbao: swap is active ({{ (openbao_swaps.content | b64decode).splitlines()[1:] | map('split') | map('first') | join(', ') }}).
+      This release never locks its memory, so unsealed keys and secrets can be written to swap.
+      Turn swap off (or encrypt it and set openbao_allow_swap: true).

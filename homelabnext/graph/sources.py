@@ -334,9 +334,9 @@ def read_capabilities(b: Builder) -> None:
     from homelabnext.sop import capabilities as caps
 
     for name in CAPABILITIES:
-        b.declare(f"cap:{name}", "cap", "homelabnext/conform/registry.py", conformance="core")
+        b.declare(f"cap:{name}", "cap", "homelabnext/capability_names.py", conformance="core")
     for name in EXTENDED:
-        b.declare(f"cap:{name}", "cap", "homelabnext/conform/registry.py", conformance="extended")
+        b.declare(f"cap:{name}", "cap", "homelabnext/capability_names.py", conformance="extended")
     for name in declared_capabilities(b.root) or ():  # the one validated reader of the file
         b.declare(f"cap:{name}", "cap", "capabilities.yml")
     tc = _yaml(b.root / "homelabnext/agent/tool_classes.yml") or {}
@@ -1207,9 +1207,13 @@ def read_customizations(b: Builder) -> None:
 
 
 def read_ansible(b: Builder) -> None:
-    """``ansible/roles/*`` and ``ansible/playbooks/*.yml``: playbook -targets-> cap (a
-    ``cap_<name>`` host group), playbook -applies-> role."""
-    for d in sorted((b.root / "ansible/roles").glob("*/")):
+    """``ansible/roles/*``, the public modules' ``modules/*/roles/*`` (one role namespace) and
+    ``ansible/playbooks/*.yml``: playbook -targets-> cap (a ``cap_<name>`` host group), playbook
+    -applies-> role."""
+    roles = sorted((b.root / "ansible/roles").glob("*/")) + sorted(
+        (b.root / "modules").glob("*/roles/*/")
+    )
+    for d in roles:
         if d.is_dir():
             b.define(f"role:{d.name}", "role", d.name, b.rel(d), b.rel(d))
     for f in sorted((b.root / "ansible/playbooks").glob("*.yml")):

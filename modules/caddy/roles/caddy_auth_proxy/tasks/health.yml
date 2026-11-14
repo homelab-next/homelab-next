@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, /ping answers, the check refuses a request
+# with no session (401: the edge turns it into the sign-in redirect), and signing in for each site
+# starts the authorization code flow at the configured issuer (a 302 to its authorization endpoint
+# for this client, with PKCE S256 and the site's own callback), which proves the proxy read the
+# IdP's discovery document. Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: caddy-auth-proxy
+        compose_app_dir: "{{ caddy_auth_proxy_app.compose_app_dir }}"
+        compose_app_spec: "{{ caddy_auth_proxy_app.compose_app_spec }}"
+    - name: The proxy answers /ping
+      ansible.builtin.uri:
+        url: "http://{{ caddy_auth_proxy_bind }}:{{ caddy_auth_proxy_port | int }}/ping"
+        status_code: 200
+        timeout: "{{ caddy_auth_proxy_health_timeout | int }}"
+      changed_when: false
+    - name: The check refuses a request with no session
+      ansible.builtin.uri:
+        url: "http://{{ caddy_auth_proxy_bind }}:{{ caddy_auth_proxy_port | int }}/oauth2/auth"
+        status_code: 401
+        timeout: "{{ caddy_auth_proxy_health_timeout | int }}"
+      changed_when: false
+    - name: Signing in for each site starts the authorization code flow at the issuer
+      ansible.builtin.uri:
+        url: "http://{{ caddy_auth_proxy_bind }}:{{ caddy_auth_proxy_port | int }}/oauth2/sign_in?rd=https%3A%2F%2F{{ item }}%2F"
+        headers:
+          X-Forwarded-Host: "{{ item }}"
+          X-Forwarded-Proto: https
+        follow_redirects: none
+        status_code: 302
+        timeout: "{{ caddy_auth_proxy_health_timeout | int }}"
+      register: caddy_auth_proxy_sign_in
+      changed_when: false
+      loop: "{{ caddy_auth_proxy_sites }}"
+    - name: The sign-in goes to the issuer's authorization endpoint for this client with PKCE
+      ansible.builtin.assert:
+        that:
+          - item.location is match('^' ~ (caddy_auth_proxy_issuer_url | regex_escape) ~ '/protocol/openid-connect/auth\?')
+          - item.location is search('[?&]client_id=' ~ (caddy_auth_proxy_client_id | regex_escape) ~ '(&|$)')
+          - item.location is search('[?&]code_challenge_method=S256(&|$)')
+          - item.location is search('[?&]redirect_uri=https%3A%2F%2F' ~ (item.item | regex_escape) ~ '%2Foauth2%2Fcallback(&|$)')
+        fail_msg: "caddy_auth_proxy: signing in for {{ item.item }} goes to {{ item.location | default('nowhere') }}"
+      loop: "{{ caddy_auth_proxy_sign_in.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+  tags: [health]

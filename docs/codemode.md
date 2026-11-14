@@ -604,7 +604,7 @@ settled:
 
 - **Where they go.** An extended suite, `codemode-executor-isolation`, beside the executor suite
   (which is near the 24-check maximum, `MAX_CHECKS` in `tests/conform/test_conform_suites.py`),
-  registered in `EXTENDED` (`homelabnext/conform/registry.py`) and in `ONLY_ITS_OWN`
+  registered in `EXTENDED` (`homelabnext/capability_names.py`) and in `ONLY_ITS_OWN`
   (`tests/conform_sweeps/test_conform_mutants.py`), with its own `conformance/codemode-executor-isolation/`
   test folder. A suite needs at least six checks (`MIN_CHECKS`), so it lands with its first six
   probes, not empty.

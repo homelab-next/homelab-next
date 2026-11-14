@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The status hub (hnx status serve) as a hardened systemd unit under its own user, over the lab's registry, with the private tier and the broker's Approvals page behind the front door."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

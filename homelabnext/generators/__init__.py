@@ -11,11 +11,13 @@ from .core import (
     generate,
     write_tree,
 )
+from .safe import GeneratorRefusal
 
 __all__ = [
     "GENERATORS",
     "MARKER",
     "Generator",
+    "GeneratorRefusal",
     "WriteResult",
     "check_tree",
     "flatten",

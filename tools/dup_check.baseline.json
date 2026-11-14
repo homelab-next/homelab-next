@@ -6,10 +6,10 @@
   "min_lines": 5
  },
  "summary": {
-  "clones": 34,
-  "duplicated_lines": 409,
-  "total_lines": 163501,
-  "duplicated_percent": 0.25
+  "clones": 32,
+  "duplicated_lines": 376,
+  "total_lines": 178412,
+  "duplicated_percent": 0.21
  },
  "increases": [
   {
@@ -94,19 +94,6 @@
     "00620e6587",
     "13125cf328",
     "1ac8308707"
-   ]
-  },
-  "6cd4cfc1eb62d158": {
-   "tokens": 53,
-   "lines": 9,
-   "count": 1,
-   "files": [
-    "homelabnext/endpoints_scan.py",
-    "tools/workstation_refs.py"
-   ],
-   "fingerprints": [
-    "0424b35911",
-    "058248b370"
    ]
   },
   "7b2d1d3e3382e36f": {
@@ -286,18 +273,6 @@
     "00de33fd6f",
     "0ca20fd0a6",
     "0fff124342"
-   ]
-  },
-  "d96a187bdda54736": {
-   "tokens": 51,
-   "lines": 7,
-   "count": 1,
-   "files": [
-    "homelabnext/workflows/pack.py",
-    "tools/schema_check.py"
-   ],
-   "fingerprints": [
-    "13f29ea55d"
    ]
   },
   "e436e0fb014ab108": {

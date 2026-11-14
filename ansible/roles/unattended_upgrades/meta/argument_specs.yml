@@ -45,12 +45,20 @@ argument_specs:
         type: str
         description: The apt-config command (it parses the file before it is installed).
         default: apt-config
+      unattended_upgrades_busctl_cli: &busctl
+        type: str
+        description: The busctl command (reads logind's ScheduledShutdown when reboot_time is never).
+        default: busctl
+      unattended_upgrades_shutdown_cli: &shutdown
+        type: str
+        description: The shutdown command (`--show` where busctl cannot answer, `-c` to cancel a pending shutdown when reboot_time is never).
+        default: shutdown
       unattended_upgrades_state_dir: &state
         type: path
         description: Where the hooks write their records.
         default: /var/lib/homelabnext/unattended-upgrades
   config:
-    short_description: Write the apt configuration, parsed by apt-config before it goes live.
+    short_description: Write the apt configuration, parsed by apt-config before it goes live; with reboot_time never, cancel a shutdown logind still holds.
     options:
       unattended_upgrades_reboot_time: *reboot
       unattended_upgrades_distribution: *dist
@@ -60,11 +68,16 @@ argument_specs:
       unattended_upgrades_remove_unused: *unused
       unattended_upgrades_config_file: *conf
       unattended_upgrades_apt_config_cli: *aptcfg
+      unattended_upgrades_busctl_cli: *busctl
+      unattended_upgrades_shutdown_cli: *shutdown
   health:
-    short_description: Fail unless an unattended run finished within unattended_upgrades_max_age_hours.
+    short_description: Fail unless an unattended run finished within unattended_upgrades_max_age_hours and, with reboot_time never, no shutdown is scheduled.
     options:
+      unattended_upgrades_reboot_time: *reboot
       unattended_upgrades_stamp_file: *stamp
       unattended_upgrades_max_age_hours: *age
+      unattended_upgrades_busctl_cli: *busctl
+      unattended_upgrades_shutdown_cli: *shutdown
   readiness:
     short_description: Fail unless apt's configuration parses (the package sources are the mirror's concern).
     options:

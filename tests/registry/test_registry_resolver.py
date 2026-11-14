@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Resolver order: env override, registry shape, DNS, hosts file; failures raise."""
 
+import dataclasses
+import re
 from pathlib import Path
 
 import pytest
@@ -176,3 +178,89 @@ def test_zone_served_by_generated_dns_matches_resolver_expectations():
 def test_parse_hosts_handles_comments_and_blank_lines():
     h = parse_hosts(f"# c\n\n{ADDR} A.example.internal b  # trailing\nbroken\n")
     assert h == {"a.example.internal": [ADDR], "b": [ADDR]}
+
+
+# ---- ADR-0039 decision 2: a capability answers by its primary, a row by its own name ----------
+TIERS = load(
+    Path(__file__).resolve().parents[2] / "tests/generators/fixtures/all-tiers.services.yml"
+)
+HUB, CAND = "status-hub.svc.example.internal", "hub-candidate.svc.example.internal"
+#: a DNS answering every name a row could have, the legacy row's included
+EVERY_NAME = {
+    f"{s.name if not s.is_primary else s.capability}.svc.example.internal": [
+        TIERS.hosts[s.host].address
+    ]
+    for s in TIERS.rows("primary", "eval", "retiring", "legacy")
+}
+
+
+def test_an_eval_row_is_reachable_by_its_row_name_and_never_by_the_capability_alias():
+    r = make(registry=TIERS, dns=FakeDNS(a=EVERY_NAME))
+    ep = r.resolve_row("hub-candidate")
+    assert ep.url == u("https", CAND, 8443) and ep.source == "dns"
+    # the capability alias is the primary's, whatever rows share the capability
+    assert r.resolve("status-hub").url == u("https", HUB, 8443)
+    # and a row name is no capability: the error says so and names the way to reach it
+    with pytest.raises(UnknownCapability, match=r"is an eval row, not a capability.*--row"):
+        r.resolve("hub-candidate")
+    with pytest.raises(UnknownCapability, match=r"is a retiring row, not a capability"):
+        r.resolve("hub-rollback")
+
+
+def test_a_row_name_override_is_its_own_variable_never_the_capabilitys():
+    env = {"HNX_ENDPOINT_HUB_CANDIDATE": u("https", "shadow.test", 9443)}
+    r = make(registry=TIERS, env=env, dns=FakeDNS(a=EVERY_NAME))
+    assert r.resolve_row("hub-candidate").url == u("https", "shadow.test", 9443)
+    assert r.resolve("status-hub").url == u("https", HUB, 8443)
+    env = {"HNX_ENDPOINT_STATUS_HUB": u("https", "break-glass.test", 9443)}
+    r = make(registry=TIERS, env=env, dns=FakeDNS(a=EVERY_NAME))
+    assert r.resolve_row("hub-candidate").url == u("https", CAND, 8443)
+
+
+def test_a_retiring_row_is_reachable_by_its_row_name_through_the_hosts_fallback():
+    hosts = parse_hosts(TIERS.hosts["prev-core"].address + " hub-rollback.svc.example.internal\n")
+    ep = make(registry=TIERS, hosts=hosts).resolve_row("hub-rollback")
+    assert ep.source == "hosts" and ep.url == u("https", "hub-rollback.svc.example.internal", 8443)
+
+
+@pytest.mark.parametrize(
+    "name,why",
+    [
+        ("hub-oldlab", "a legacy row answers by no name"),
+        ("status-hub", "a primary answers by its capability; resolve 'status-hub'"),
+        ("reports", "a primary answers by its capability"),
+        ("nope", "no such registry row"),
+    ],
+)
+def test_resolve_row_refuses_a_legacy_row_a_primary_and_an_unknown_name(name, why):
+    with pytest.raises(UnknownCapability, match=re.escape(why)):
+        make(registry=TIERS, dns=FakeDNS(a=EVERY_NAME)).resolve_row(name)
+
+
+def test_resolve_row_needs_a_registry():
+    with pytest.raises(ResolutionError, match="only with a registry"):
+        make(registry=None, domain="example.internal").resolve_row("hub-candidate")
+
+
+def test_a_capability_with_no_primary_names_its_rows():
+    reg = dataclasses.replace(
+        TIERS, services={k: v for k, v in TIERS.services.items() if k != "status-hub"}
+    )
+    with pytest.raises(UnknownCapability, match=r"no primary .*hub-candidate.*answer only by"):
+        make(registry=reg).resolve("status-hub")
+
+
+def test_a_row_lookup_names_a_row_not_a_capability():
+    """resolve_row's errors are about a row (the capability wording would send a reader to the
+    wrong table), the override and DNS failures included."""
+    r = make(registry=TIERS)
+    for name in ("hub-oldlab", "nope", "hub-candidate"):
+        with pytest.raises(ResolutionError) as ei:
+            r.resolve_row(name)
+        assert str(ei.value).startswith(f"cannot resolve row {name!r}: "), ei.value
+        assert ei.value.what == "row"
+    env = {"HNX_ENDPOINT_HUB_CANDIDATE": "not a url"}
+    with pytest.raises(InvalidOverride, match=r"^cannot resolve row 'hub-candidate'"):
+        make(registry=TIERS, env=env).resolve_row("hub-candidate")
+    with pytest.raises(ResolutionError, match=r"^cannot resolve capability 'status-hub'"):
+        r.resolve("status-hub")

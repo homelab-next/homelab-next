@@ -3,7 +3,9 @@
 - name: Validate the time sources and limits
   ansible.builtin.assert:
     that:
-      - chrony_server_ids | length > 0
+      # at least one source: the lab's own, or an opted-in public pool (a lab with no time
+      # server of its own yet)
+      - (chrony_server_ids | length) + (chrony_pools | length) > 0
       - chrony_server_ids | select('match', '^[a-z0-9][a-z0-9-]*\Z') | list | length == chrony_server_ids | length
       - chrony_server_hosts | select('match', '^[A-Za-z0-9][A-Za-z0-9.:-]*\Z') | list | length == chrony_server_hosts | length
       - chrony_pools | select('match', '^[A-Za-z0-9][A-Za-z0-9.-]*\Z') | list | length == chrony_pools | length
@@ -13,4 +15,4 @@
       - chrony_service is match('^[A-Za-z0-9@._-]+\Z')
     fail_msg: >-
       chrony: time sources are registry logical ids whose hosts are plain names or addresses,
-      pools are plain host names, and the step threshold and offset limit are positive numbers
+      pools are plain host names, at least one source or pool is given, and the step threshold and offset limit are positive numbers

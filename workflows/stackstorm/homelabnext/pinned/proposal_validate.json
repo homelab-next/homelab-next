@@ -3,7 +3,7 @@
     "key": "$event.data.proposal_id",
     "window_s": 3600
   },
-  "digest": "sha256:38f5f7f2c0b32fefeaa6d94531c626351680151e31528cf9291b72a9d8e93dab",
+  "digest": "sha256:da650073ee0bc27b652bdbd6f45c5917c06cb4471208bc5c46f538e91367a0ce",
   "mode": "shadow",
   "pack": {
     "actor": "profile:workflow-agents",
@@ -37,7 +37,7 @@
                 "task_description": "records/inbox/2026-01-01-triage-tune-auth-rule.md"
               },
               "result": "executed",
-              "target": "svc:orchestration"
+              "target": "svc:orchestrator"
             }
           ]
         },
@@ -76,7 +76,7 @@
           "priority": 40,
           "task_description": "$event.data.note"
         },
-        "target": "svc:orchestration"
+        "target": "svc:orchestrator"
       }
     ],
     "trigger": {

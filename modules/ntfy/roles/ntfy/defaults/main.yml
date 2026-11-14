@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# ntfy, the notify provider (modules/ntfy): one container, deny-all auth, no egress. Every account,
+# access entry and token is provisioned from the server's environment at each start (ntfy's
+# auth-users, auth-access and auth-tokens), so what runs is what these settings and the secrets say.
+# ntfy_logical_id (required): the instance's registry id, e.g. notify
+ntfy_image: "docker.io/binwiederhier/ntfy:v2.35.0@sha256:6f0c9abab7b99a978d816611cc90dabb4849b81f60c53114e91cd07931085dc0"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# guest firewall admits the lab's publishers
+ntfy_bind: "{{ ansible_host }}"
+ntfy_port: 80
+ntfy_dir: /opt/compose/ntfy
+# owner and group of the compose project and the data root (db/ and export/ are the container's).
+# The group is the container's gid, so the container's user can pass through the data root (0750)
+# to db/ and export/ (the export runs as that user); no account on the host has that gid.
+ntfy_owner: root
+ntfy_group: "{{ ntfy_gid }}"
+# the module's data root on its host (docs/modules/data.md): db/ (the container's) and export/
+ntfy_data_root: /var/lib/hnx-modules/ntfy
+# the container's user and group: an id no account on the host has
+ntfy_uid: 61000
+ntfy_gid: 61000
+ntfy_admin_user: admin
+ntfy_admin_login_ref: secret:ntfy/admin-password
+ntfy_admin_hash_ref: secret:ntfy/admin-password-hash
+ntfy_publisher_user: publisher
+ntfy_publisher_key_ref: secret:ntfy/publisher-token
+# topic patterns the publisher may publish to (write-only: it never reads them)
+ntfy_publisher_topics: ["*"]
+# the scratch topics (this prefix, then anything) the publisher may also read back: the health
+# hook's round trip and the conformance suite's topics (the shared adapter's hnxconf-<hex>)
+ntfy_scratch_prefix: hnxconf-
+ntfy_cache_duration: 12h
+ntfy_mem_limit: 256m
+ntfy_start: true
+ntfy_validate_with_docker: true
+ntfy_health_timeout: 10

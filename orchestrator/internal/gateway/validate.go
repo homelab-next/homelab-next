@@ -10,14 +10,37 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
+// The patterns and lengths are those of schemas/platform/gateway_config.schema.json, which a test
+// holds this reader to (conformance/fixtures/gateway_config_vectors.json): anything the schema
+// refuses, this reader refuses. Go's $ matches only at the end of the text, as the schema's
+// $(?!\n) does.
 var (
 	slugRE    = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 	envRE     = regexp.MustCompile(`^HNX_SECRET_[A-Z0-9_]+$`)
 	versionRE = regexp.MustCompile(`^([0-9]+)\.([0-9]+)$`)
-	profileRE = regexp.MustCompile(`^profile:[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	profileRE = regexp.MustCompile(`^profile:[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+	modelRE   = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
+	// a base URL's host is lower-case letters, digits, dots and hyphens, starting and ending
+	// with a letter or digit, and its port at most five digits
+	baseURLRE = regexp.MustCompile(`^https?://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?$`)
 )
+
+// The schema's maxLength values (counted in characters, as JSON Schema counts them).
+const (
+	maxSlug    = 64  // name, role and key aliases, backend
+	maxEnv     = 128 // every *_env
+	maxModel   = 128 // model
+	maxOwner   = 128 // owner
+	maxBaseURL = 256 // base_url
+)
+
+// matches reports whether s matches re and is at most max characters long.
+func matches(re *regexp.Regexp, s string, max int) bool {
+	return re.MatchString(s) && utf8.RuneCountInString(s) <= max
+}
 
 type problems []string
 
@@ -28,7 +51,7 @@ func (c *Config) validate() []string {
 	if m := versionRE.FindStringSubmatch(c.Version); m == nil || m[1] != "1" {
 		p.add("version %q: this gateway reads contract version 1.x", c.Version)
 	}
-	if c.Name != "" && !slugRE.MatchString(c.Name) {
+	if c.Name != "" && !matches(slugRE, c.Name, maxSlug) {
 		p.add("name %q is not a slug", c.Name)
 	}
 	checkEnv(&p, "admin_key_env", c.AdminKeyEnv)
@@ -57,14 +80,16 @@ func (c *Config) validate() []string {
 }
 
 func checkEnv(p *problems, where, name string) {
-	if !envRE.MatchString(name) {
-		p.add("%s %q is not an environment name HNX_SECRET_[A-Z0-9_]+", where, name)
+	if !matches(envRE, name, maxEnv) {
+		p.add("%s %q is not an environment name HNX_SECRET_[A-Z0-9_]+ of at most %d characters", where, name, maxEnv)
 	}
 }
 
+// checkCount: a count limit is null (no limit) or at least 1; a limit of 0 would refuse every
+// call, which the contract spells as a role or key not listed.
 func checkCount(p *problems, where string, v *int) {
-	if v != nil && *v < 0 {
-		p.add("%s: %d is negative", where, *v)
+	if v != nil && *v < 1 {
+		p.add("%s: %d must be at least 1 or null", where, *v)
 	}
 }
 
@@ -74,10 +99,17 @@ func checkNumber(p *problems, where string, v *float64) {
 	}
 }
 
+// checkPositive: a cost limit is null (no limit) or above 0.
+func checkPositive(p *problems, where string, v *float64) {
+	if v != nil && (math.IsNaN(*v) || math.IsInf(*v, 0) || *v <= 0) {
+		p.add("%s: must be a number > 0 or null", where)
+	}
+}
+
 func (c *Config) validateRole(p *problems, r *Role) {
 	w := "role " + r.alias
-	if !slugRE.MatchString(r.alias) {
-		p.add("%s: the alias is not a slug", w)
+	if !matches(slugRE, r.alias, maxSlug) {
+		p.add("%s: the alias is not a slug of at most %d characters", w, maxSlug)
 	}
 	if r.Kind != "chat" && r.Kind != "embedding" {
 		p.add("%s: kind %q is not chat or embedding", w, r.Kind)
@@ -108,7 +140,7 @@ func (c *Config) validateRole(p *problems, r *Role) {
 		}
 		checkCount(p, w+": limits.max_requests", l.MaxRequests)
 		checkCount(p, w+": limits.max_tokens", l.MaxTokens)
-		checkNumber(p, w+": limits.max_cost", l.MaxCost)
+		checkPositive(p, w+": limits.max_cost", l.MaxCost)
 		if l.MaxCost != nil && r.CostPer1KTokens == nil {
 			p.add("%s: limits.max_cost needs cost_per_1k_tokens", w)
 		}
@@ -121,8 +153,8 @@ func validateDeployment(p *problems, r *Role, i int, d *Deployment) {
 	if want := r.alias + "-" + strconv.Itoa(i+1); d.ID != want {
 		p.add("%s: id %q, expected %q", w, d.ID, want)
 	}
-	if strings.TrimSpace(d.Backend) == "" {
-		p.add("%s: backend is empty", w)
+	if !matches(slugRE, d.Backend, maxSlug) {
+		p.add("%s: backend %q is not a slug of at most %d characters", w, d.Backend, maxSlug)
 	}
 	if d.Locality != "local" && d.Locality != "cloud" {
 		p.add("%s: locality %q is not local or cloud", w, d.Locality)
@@ -130,14 +162,17 @@ func validateDeployment(p *problems, r *Role, i int, d *Deployment) {
 	if d.Protocol != "openai" && d.Protocol != "anthropic" {
 		p.add("%s: protocol %q is not openai or anthropic", w, d.Protocol)
 	}
-	if strings.TrimSpace(d.Model) == "" {
-		p.add("%s: model is empty", w)
+	if !matches(modelRE, d.Model, maxModel) {
+		p.add("%s: model %q is not 1 to %d of A-Z a-z 0-9 . _ : / -", w, d.Model, maxModel)
 	}
 	if d.APIKeyEnv != nil {
 		checkEnv(p, w+": api_key_env", *d.APIKeyEnv)
 	}
 	if err := checkBaseURL(d.BaseURL); err != "" {
 		p.add("%s: base_url %q %s", w, d.BaseURL, err)
+	} else if !matches(baseURLRE, d.BaseURL, maxBaseURL) {
+		p.add("%s: base_url %q: the host must be lower-case letters, digits, dots and hyphens "+
+			"(no IPv6 literal, no trailing dot), the port 1 to 5 digits, at most %d characters", w, d.BaseURL, maxBaseURL)
 	}
 	if d.Protocol == "anthropic" && r.Kind == "embedding" {
 		p.add("%s: an embedding role cannot be served by an anthropic deployment", w)
@@ -208,8 +243,8 @@ func (c *Config) validateKeys(p *problems) {
 			continue
 		}
 		w := "key " + k.Alias
-		if !slugRE.MatchString(k.Alias) {
-			p.add("%s: the alias is not a slug", w)
+		if !matches(slugRE, k.Alias, maxSlug) {
+			p.add("%s: the alias is not a slug of at most %d characters", w, maxSlug)
 		}
 		if aliases[k.Alias] {
 			p.add("%s: the alias is declared twice", w)
@@ -253,7 +288,7 @@ func nonNil(r *Role) []*Deployment {
 }
 
 func (c *Config) validateKey(p *problems, w string, k *Key) {
-	if k.Owner != k.Alias && !profileRE.MatchString(k.Owner) {
+	if k.Owner != k.Alias && !matches(profileRE, k.Owner, maxOwner) {
 		p.add("%s: owner %q is neither profile:<id> nor the alias", w, k.Owner)
 	}
 	if k.DataTier != "local-only" && k.DataTier != "cloud-allowed" {

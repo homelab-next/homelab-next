@@ -38,8 +38,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -410,7 +411,9 @@ def module_swap_problems(
             out.append("legs' orders must be 1..n, each once")
     for ask in mods[to].get("requires", {}).get("capabilities", []):
         need = ask["cap"].removeprefix("cap:")
-        if not _lines(site, need):
+        if need in (site.get("planned") or {}) and not _lines(site, need):
+            out.append(f"{to} requires {ask['cap']}, which the site plans but does not serve yet")
+        elif not _lines(site, need) and need not in (site.get("incumbents") or {}):
             out.append(f"{to} requires {ask['cap']}, which the site does not select")
     try:
         want_report = dependants_report(swap, mods, site)
@@ -520,4 +523,331 @@ def apply_selection_diff(
                 f"{d['slot']}/{d['instance']}: the site does not select it from {d['from']}"
             )
         lines[0]["provider"] = d["to"]
+    return out
+
+
+def _product(mods: dict[str, Doc], mid: str) -> str | None:
+    return ((mods.get(mid) or {}).get("product") or {}).get("name")
+
+
+def _promotion_problems(swap: Doc, mods: dict[str, Doc], doc: Doc, promotion: Any) -> list[str]:
+    """Why ``promotion`` is not this swap's standing half: its capability is no slot the swap's
+    selection diff moves, its row does not run the incoming provider's product (nor its
+    incumbent the outgoing one's, for a ``retiring`` incumbent), or it changes anything but the
+    standing fields of those two rows."""
+
+    cap = promotion.capability
+    # a slot's name is its capability: the slot registry (examples/modules/slots.yml) is keyed by
+    # capability name, and a selection line's slot is the capability its provider serves
+    diff = (swap.get("route") or {}).get("selection_diff") or []
+    lines = [d for d in diff if d.get("slot") == cap]
+    if not lines:
+        slots = sorted({str(d.get("slot")) for d in diff})
+        return [
+            f"the promotion is of {cap}, and the swap's selection diff moves no {cap} line "
+            f"(it moves {', '.join(slots) or 'nothing'})"
+        ]
+    out = []
+    rows = doc.get("services") or {}
+    incoming = {_product(mods, d.get("to")) for d in lines}
+    impl = (rows.get(promotion.row) or {}).get("impl")
+    if impl not in incoming:
+        out.append(
+            f"the promoted row {promotion.row} runs {impl!r}, not the incoming provider's product "
+            f"({', '.join(sorted(str(p) for p in incoming))})"
+        )
+    outgoing = {_product(mods, d.get("from")) for d in lines} - {None}
+    ours = sorted({str(d.get("from")) for d in lines if d.get("from") in mods})
+    if promotion.incumbent and promotion.incumbent_tier == "legacy" and ours:
+        out.append(
+            f"the incumbent {promotion.incumbent} is promoted out as legacy, but the swap's "
+            f"outgoing provider ({', '.join(ours)}) is a module this repository deploys: it goes "
+            "retiring, kept restorable for its rollback window (legacy is the old lab's)"
+        )
+    if promotion.incumbent and outgoing:
+        was = (rows.get(promotion.incumbent) or {}).get("impl")
+        if was not in outgoing:
+            out.append(
+                f"the {promotion.incumbent_tier} row {promotion.incumbent} runs {was!r}, not the "
+                f"outgoing provider's product ({', '.join(sorted(outgoing))})"
+            )
+    return out + _field_problems(promotion)
+
+
+def _field_problems(promotion: Any) -> list[str]:
+    """A promotion changes only the standing fields of its two rows."""
+    from homelabnext.swap.flip import PROMOTION_FIELDS
+
+    out = []
+    for c in promotion.changes:
+        parts = str(c.path).split(".")
+        ok = (
+            len(parts) == 3
+            and parts[0] == "services"
+            and parts[1] in {promotion.row, promotion.incumbent}
+            and parts[2] in PROMOTION_FIELDS
+        )
+        if not ok:
+            out.append(f"the promotion changes {c.path}, which no promotion touches")
+    return out
+
+
+def apply_switch(
+    site: Doc,
+    swap: Doc,
+    mods: dict[str, Doc],
+    registry_text: str,
+    promotion: Any,
+    *,
+    models: ModelEvidence | None = None,
+    today: Any = None,
+) -> tuple[Doc, str]:
+    """The switch of ADR-0040 decision 5 step 6: both halves of the one reviewed change, the
+    selection diff (:func:`apply_selection_diff`) and the registry standing promotion (ADR-0039
+    decision 6, a :class:`homelabnext.swap.flip.PromotePlan`).
+
+    The promotion must be this swap's: its capability a slot the selection diff moves, its row
+    the incoming provider's product, and the plan exactly the one ``plan_promote`` computes from
+    this registry (a plan read with ``from_dict`` is not trusted as given).  Returns ``(site,
+    registry text)`` after the switch, the registry written by ``promote_text`` (only the changed
+    fields, with a byte-exact inverse), or raises with neither applied.  The caller writes **both
+    files in one commit** (the overlay's one reviewed pull request): a selection switched without
+    its promotion, or the reverse, leaves consumers bound to a row that no longer answers.  The
+    promotion's inverse with the selection before the switch is the rollback.
+
+    The promotion must be dated ``today`` (default ``HNX_TODAY``, else the local date) and never
+    after the real local date, so its ``until`` runs from the day it is computed and applied,
+    not the day the pull request merges (merge lag shortens the window: re-run it on the day a
+    waiting pull request merges), and its window is at most
+    ``flip.MAX_ROLLBACK_DAYS``, until ADR-0043's ledger row binds both.  An incumbent leaving as
+    ``legacy`` is refused when the swap's outgoing provider is one of ``mods`` (a module this
+    repository deploys goes ``retiring``); an old-lab switch is a promotion without a module swap.
+    A slot's name is its capability (the slot registry is keyed by capability)."""
+    from homelabnext.swap.flip import FlipError, promote_text
+
+    _checked_promotion(registry_text, promotion, today, swap_problems=(swap, mods))
+    after_site = apply_selection_diff(site, swap, mods, models=models)
+    try:
+        after_text = promote_text(registry_text, promotion)
+    except FlipError as exc:
+        raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
+    return after_site, after_text
+
+
+#: how many days before today's real date a promotion may be dated: an override of a few days
+#: (a pull request computed yesterday, or across a timezone) is accepted, an older one would write
+#: a rollback window already spent
+MAX_PROMOTION_AGE_DAYS = 3
+
+
+def _real_today() -> Any:
+    """Today's real date in UTC, the bound a promotion's date is held to: never ``HNX_TODAY`` or
+    ``today=`` (those only say which day the promotion claims), and the same on every machine
+    whatever its timezone."""
+    import datetime
+
+    return datetime.datetime.now(datetime.UTC).date()  # hermetic: allow the real date bound
+
+
+def _checked_promotion(
+    registry_text: str, promotion: Any, today: Any, *, swap_problems: tuple | None = None
+) -> Doc:
+    """Every check a standing promotion meets before it is written, with or without a module
+    swap: it is ``plan_promote``'s (not its inverse), dated ``today`` (``HNX_TODAY``, else today's
+    real UTC date: one clock), never after today's real UTC date (an override may not post-date a window:
+    ``until`` stays within ``MAX_ROLLBACK_DAYS`` of the day it is really applied) and no more than
+    :data:`MAX_PROMOTION_AGE_DAYS` before it (a stale override would write an ``until`` already
+    spent), it changes only
+    the standing fields of its two rows (and, with ``swap_problems=(swap, mods)``, it is that
+    swap's), and it is exactly the plan ``plan_promote`` computes from this registry.  Returns
+    the parsed registry; raises ``ValueError`` (``cutover refused: ...``)."""
+    import datetime
+
+    from homelabnext.registry.standing import today as judged_on
+    from homelabnext.swap.flip import FlipError, PromotePlan, load_doc, plan_promote
+
+    if not isinstance(promotion, PromotePlan) or promotion.reverted:
+        raise ValueError("the switch takes a promotion from plan_promote, not its inverse")
+    # one clock: with no date given and no HNX_TODAY, the day is today's real UTC date, the same
+    # one the bounds below use (a local date ran a day ahead east of UTC for part of every day)
+    on = judged_on(
+        today if today is not None or os.environ.get("HNX_TODAY") else _real_today()
+    ).isoformat()
+    if promotion.switched_on != on:
+        raise ValueError(
+            f"cutover refused: the promotion is dated {promotion.switched_on}, and the switch is "
+            f"on {on}: its rollback window runs from the day it is applied (recompute it today)"
+        )
+    real = _real_today()
+    try:
+        dated = datetime.date.fromisoformat(promotion.switched_on)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"cutover refused: the promotion's date {promotion.switched_on!r} is not a date"
+        ) from None
+    if dated > real:
+        raise ValueError(
+            f"cutover refused: the promotion is dated {promotion.switched_on}, after today's "
+            f"real date {real.isoformat()} (UTC): an overridden date may not post-date its "
+            "rollback window (HNX_TODAY and today= do not move this bound)"
+        )
+    if (real - dated).days > MAX_PROMOTION_AGE_DAYS:
+        raise ValueError(
+            f"cutover refused: the promotion is dated {promotion.switched_on}, more than "
+            f"{MAX_PROMOTION_AGE_DAYS} days before today's real date {real.isoformat()} (UTC): "
+            "its window would already be spent (recompute it today)"
+        )
+    try:
+        doc = load_doc(registry_text)
+    except FlipError as exc:
+        raise ValueError(f"cutover refused: {exc}") from None
+    problems = (
+        _promotion_problems(swap_problems[0], swap_problems[1], doc, promotion)
+        if swap_problems is not None
+        else _field_problems(promotion)
+    )
+    if problems:
+        raise ValueError("cutover refused: " + "; ".join(problems))
+    why = next(
+        (
+            c.after.get("why")
+            for c in promotion.changes
+            if c.path == f"services.{promotion.incumbent}.standing" and isinstance(c.after, dict)
+        ),
+        None,
+    )
+    try:
+        rebuilt = plan_promote(
+            doc,
+            promotion.capability,
+            promotion.row,
+            promotion.switched_on,
+            promotion.rollback_days,
+            old_lab=promotion.incumbent_tier == "legacy",
+            why=why,
+        )
+    except FlipError as exc:
+        raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
+    if rebuilt != promotion:
+        raise ValueError(
+            "cutover refused: the promotion is not the one plan_promote computes from this "
+            "registry (recompute it; a plan is never applied as given)"
+        )
+    return doc
+
+
+def apply_promotion(
+    registry_text: str,
+    promotion: Any,
+    *,
+    site: Doc,
+    mods: dict[str, Doc],
+    today: Any = None,
+) -> str:
+    """A standing promotion with no selection diff (ADR-0039 decision 6): the step-10 switches.
+    It meets every check :func:`apply_switch`'s promotion half meets (:func:`_checked_promotion`:
+    the date and its real-date bounds; the standing fields only; the plan ``plan_promote``
+    computes) and returns the registry text ``promote_text`` writes, whose inverse is the
+    rollback.
+
+    What is deployed is read from ``site``'s selection, with ``mods`` only the manifests its
+    providers are looked up in (every selected provider must have one, so an empty ``mods``
+    cannot hide a deployment).  Allowed, as nothing in the selection moves:
+
+    * an old-lab switch: neither the candidate nor the incumbent runs a selected provider's
+      product, and the capability is no slot the site selects;
+    * an own-product candidate already selected (shadowed, ADR-0040) replacing an old-lab
+      incumbent: the capability's selected providers run the candidate's product and none runs
+      the incumbent's, and the incumbent leaves ``legacy`` or ``retiring``.
+
+    Everything else moves a selection line and goes through :func:`apply_switch`: a deployed
+    incumbent (a selected provider runs its product) leaving as anything but ``retiring``, a
+    selected capability whose candidate is not its selected product, or a candidate that is a
+    deployed product selected for another capability.  Products and aliases compare without
+    case."""
+    from homelabnext.swap.flip import FlipError, promote_text
+
+    doc = _checked_promotion(registry_text, promotion, today)
+    problems = _module_backed_problems(site, mods, doc, promotion)
+    if problems:
+        raise ValueError("cutover refused: " + "; ".join(problems))
+    try:
+        return promote_text(registry_text, promotion)
+    except FlipError as exc:
+        raise ValueError(f"cutover refused: the standing promotion does not apply: {exc}") from None
+
+
+def _selected_products(site: Doc, mods: dict[str, Doc]) -> dict[str, set[str]]:
+    """``{slot: the lower-cased products and aliases of its selected providers}``; a selection
+    of the wrong shape, or a selected provider with no manifest in ``mods``, is a ValueError."""
+    if not isinstance(site, Mapping):
+        raise ValueError("cutover refused: the site selection is not a mapping")
+    slots = site.get("slots", {})
+    if slots is None:
+        slots = {}
+    if not isinstance(slots, Mapping):
+        raise ValueError(
+            "cutover refused: the site selection's slots is not a mapping of slot to lines"
+        )
+    out: dict[str, set[str]] = {}
+    for slot, lines in slots.items():
+        if isinstance(lines, str):  # none / pass-through: nothing selected
+            continue
+        if not isinstance(lines, list) or not all(
+            isinstance(ln, Mapping) and isinstance(ln.get("provider"), str) for ln in lines
+        ):
+            raise ValueError(
+                f"cutover refused: the site selection's slots.{slot} is not a list of lines with a "
+                "provider"
+            )
+        names: set[str] = set()
+        for ln in lines:
+            m = mods.get(ln["provider"])
+            if not isinstance(m, Mapping):
+                raise ValueError(
+                    f"cutover refused: slots.{slot} selects {ln['provider']}, which has no module "
+                    "manifest here: what is deployed cannot be told"
+                )
+            prod = m.get("product") or {}
+            for name in (prod.get("name"), *(prod.get("aliases") or ())):
+                if isinstance(name, str):
+                    names.add(name.lower())
+        out[str(slot)] = names
+    return out
+
+
+def _module_backed_problems(site: Doc, mods: dict[str, Doc], doc: Doc, promotion: Any) -> list[str]:
+    """Why a promotion is not one :func:`apply_promotion` may write without a selection diff."""
+    chosen = _selected_products(site, mods)
+    cap = promotion.capability
+    rows = doc.get("services") or {}
+
+    def impl(name: str | None) -> str | None:
+        v = (rows.get(name) or {}).get("impl") if name else None
+        return v.lower() if isinstance(v, str) else None
+
+    inc, cand = impl(promotion.incumbent), impl(promotion.row)
+    here = chosen.get(cap)
+    everywhere = set().union(*chosen.values()) if chosen else set()
+    out = []
+    if here:  # the capability is a slot this site selects
+        if not (
+            cand in here and inc not in here and promotion.incumbent_tier in ("legacy", "retiring")
+        ):
+            out.append(
+                f"{cap} is a slot this site selects: unless its selected provider already runs "
+                f"the candidate {promotion.row}'s product and none runs the incumbent's, the "
+                "switch moves the selection and goes through apply_switch"
+            )
+    elif cand in everywhere:
+        out.append(
+            f"the candidate {promotion.row} runs a product the site selects for another "
+            f"capability, not for {cap}: switch it through apply_switch"
+        )
+    if inc in everywhere and promotion.incumbent_tier != "retiring":
+        out.append(
+            f"the incumbent {promotion.incumbent} runs a product the site deploys (a selected "
+            "provider's): it leaves as retiring through apply_switch, kept restorable with its "
+            "backups"
+        )
     return out

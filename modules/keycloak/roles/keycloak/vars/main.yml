@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# HTTPS only (no plain listener), the hostname fixed (every issuer and redirect is the public
+# name), the admin console served under the internal name only, proxy headers read only from the
+# edge's addresses, health on the management port in the container (never published), no
+# metrics, the database by its compose service name on the project's own network.
+keycloak_fixed_env:
+  KC_HTTP_ENABLED: "false"
+  KC_HTTPS_PORT: "8443"
+  KC_HTTPS_CERTIFICATE_FILE: /opt/keycloak/conf/hnx-tls/server.crt
+  KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/conf/hnx-tls/server.key
+  KC_HOSTNAME_STRICT: "true"
+  KC_PROXY_HEADERS: xforwarded
+  KC_HEALTH_ENABLED: "true"
+  KC_METRICS_ENABLED: "false"
+  KC_HTTP_MANAGEMENT_SCHEME: http
+  KC_HTTP_MANAGEMENT_PORT: "9000"
+  KC_DB: postgres
+  KC_DB_URL_HOST: postgres
+  KC_DB_URL_PORT: "5432"
+  KC_FEATURES_DISABLED: impersonation,kerberos
+  KC_LOG: console
+keycloak_container_tls_dir: /opt/keycloak/conf/hnx-tls
+keycloak_container_pgdata: /var/lib/postgresql/data
+keycloak_container_export: /var/lib/postgresql/export
+keycloak_repository: "{{ keycloak_image.split('@')[0].rsplit(':', 1)[0] }}"
+keycloak_tag: "{{ keycloak_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+keycloak_digest: "{{ keycloak_image.split('@')[1] | default('') }}"
+keycloak_db_repository: "{{ keycloak_postgres_image.split('@')[0].rsplit(':', 1)[0] }}"
+keycloak_db_tag: "{{ keycloak_postgres_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+keycloak_db_digest: "{{ keycloak_postgres_image.split('@')[1] | default('') }}"
+keycloak_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+keycloak_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+keycloak_hostname_pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+\Z'
+keycloak_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+keycloak_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+# a password the env_file can carry (no quote, no line break) and long enough to matter
+keycloak_login_value_pattern: '^[A-Za-z0-9._~+/=@%^*-]{24,256}\Z'
+keycloak_username_pattern: '^[a-z0-9](?:[a-z0-9._@-]{0,62}[a-z0-9])?\Z'
+# the secret-store area of the OIDC clients' secrets (the idp_realm generator's, ADR-0034)
+keycloak_client_area: secret:idp/clients
+keycloak_scripts: "{{ role_path }}/files"
+keycloak_placeholder_pattern: '^\$\(env:[A-Z0-9_]+\)\Z'
+keycloak_client_id_pattern: '^[a-z][a-z0-9-]{0,62}\Z'
+# a client secret the env_file and the realm import carry as they are
+keycloak_client_value_pattern: '^[A-Za-z0-9._~+/=-]{32,256}\Z'

@@ -2585,7 +2585,11 @@ def scan(
         findings += got
         counts["adapted" if judged else "text_only"] += 1
     configs = set(ctx.parsed) | {i.rel.split(" (", 1)[0] for i in pending} | json_files
-    return apply_allowlist(findings, allow or [], configs), counts
+    # a template's semantic finding exists only where the semantic check is required, so a
+    # `semantic` exemption is judged stale only there (a local run, or CI's test job, has no
+    # binary or does not require it, and the same entry must hold in both)
+    stale_semantic = adapter is not None and required
+    return apply_allowlist(findings, allow or [], configs, stale_semantic), counts
 
 
 class AllowlistError(Exception):
@@ -2639,12 +2643,17 @@ def load_allowlist(path: Path | None) -> list[AllowEntry]:
 
 
 def apply_allowlist(
-    findings: list[Finding], allow: list[AllowEntry], configs: set[str] | None = None
+    findings: list[Finding],
+    allow: list[AllowEntry],
+    configs: set[str] | None = None,
+    stale_semantic: bool = True,
 ) -> list[Finding]:
     """The findings no entry excuses (an entry excuses only its own rules), plus an
     ``allowlist`` finding for each rule of an entry that excuses nothing (a stale entry would
     silently waive the next real finding in that file) and for each glob entry that names a
-    file the lint reads as a Caddy config (a config is excused file by file, by name)."""
+    file the lint reads as a Caddy config (a config is excused file by file, by name).  A
+    ``semantic`` rule is judged stale only with ``stale_semantic`` (the semantic check required
+    and run): a template's semantic finding exists nowhere else."""
     used: set[tuple[int, str]] = set()
     kept = []
     for f in findings:
@@ -2657,7 +2666,7 @@ def apply_allowlist(
             kept.append(f)
     for i, e in enumerate(allow):
         for rule in e.rules:
-            if (i, rule) not in used:
+            if (i, rule) not in used and (stale_semantic or rule != "semantic"):
                 kept.append(
                     Finding(
                         DEFAULT_ALLOWLIST, 0, "allowlist", f"entry {e.path!r} excuses no {rule}"

@@ -193,10 +193,15 @@ def test_example_service_unknown_dependency_fails(first):
     assert "unknown service id 'nope'" in r.stdout + r.stderr
 
 
-def test_example_service_missing_required_input_fails(tmp_path):
+def _first(tmp_path):
     v = svc_vars(tmp_path)
     del v["example_service_logical_id"]
-    r = run_role(tmp_path, "example_service", "main", v)
+    return {"role": "example_service", "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first)
+def test_example_service_missing_required_input_fails(first):
+    r, _ = first
     assert r.returncode != 0
     assert "example_service_logical_id" in r.stdout + r.stderr
 
@@ -726,6 +731,77 @@ def test_compose_app_refuses_a_bind_root_or_listing_that_is_too_wide(first, over
 
 def services_of(tmp_path):
     return yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"]
+
+
+def _first(tmp_path):
+    # hnx_module_slice is what the module apply path sets on a module play
+    v = app_vars(tmp_path, hnx_module_slice="hnx-web_app-server.slice")
+    return {"runner": run_role, "role": "compose_app", "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_first)
+def test_compose_app_puts_every_container_under_the_module_role_slice(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    for name, svc in services_of(tmp_path).items():
+        assert svc["cgroup_parent"] == "hnx-web_app-server.slice", name
+    if not docker_compose_ok():
+        return
+    c = subprocess.run(
+        ["docker", "compose", "-f", str(tmp_path / "app" / "docker-compose.yml"), "config",
+         "--format", "json"],
+        capture_output=True, text=True,
+    )  # fmt: skip
+    assert c.returncode == 0, c.stderr
+    for svc in json.loads(c.stdout)["services"].values():
+        assert svc["cgroup_parent"] == "hnx-web_app-server.slice"
+
+
+#: never a slice outside the module slices: system.slice and the root slice escape the role's
+#: limits, a path is a cgroupfs location, and a value may not add YAML of its own
+BAD_PARENTS = [
+    "system.slice",
+    "-.slice",
+    "hnx.slice",
+    "hnx-web_app.slice",
+    "/hnx.slice/hnx-web_app.slice",
+    "hnx-web_app-server",
+    "hnx-Web-server.slice",
+    "hnx-web_app-server.slice\n    privileged: true",
+    "hnx-a-b-c.slice",
+]
+
+
+def _bad_parent(tmp, parent):
+    v = app_vars(tmp, compose_app_validate_with_docker=False, compose_app_cgroup_parent=parent)
+    return {"runner": run_role, "role": "compose_app", "tasks_from": "main", "extra_vars": v}
+
+
+def _other_slice(tmp):
+    v = app_vars(
+        tmp,
+        compose_app_validate_with_docker=False,
+        hnx_module_slice="hnx-web_app-server.slice",
+        compose_app_cgroup_parent="hnx-other-server.slice",
+    )
+    return {"runner": run_role, "role": "compose_app", "tasks_from": "main", "extra_vars": v}
+
+
+@first_run(_other_slice)
+def test_compose_app_in_a_module_play_takes_only_its_own_role_slice(first):
+    r, tmp_path = first
+    assert r.returncode != 0
+    assert "never another module's" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+@pytest.mark.parametrize("parent", BAD_PARENTS)
+@first_run(_bad_parent)
+def test_compose_app_refuses_a_cgroup_parent_that_is_no_module_role_slice(first, parent):
+    r, tmp_path = first
+    assert r.returncode != 0, parent
+    assert "must be empty or a module role slice" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
 def _first(tmp_path):

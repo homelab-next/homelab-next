@@ -359,6 +359,7 @@ SwapRunner.create(record_path, backend, *, swap_id, capability, from_adapter, to
     .rollback(reason) -> dict                                # RollbackRefused after decommission
     .status() / .record() / .note(text)
 plan_flip(registry_doc, service, host=..., port=..., impl=..., version=...) -> FlipPlan ; flip_text(text, plan)
+plan_promote(registry_doc, capability, row, switched_on, rollback_days, *, old_lab=False, why=None) -> PromotePlan ; promote_text(text, plan)
 DualWriter(primary, secondary) ; Retired(...) ; scan(roots, retired, registry=..., allow=...) -> list[Finding]
 # homelabnext.swap.record: new_record/load/save/problems/verify_evidence/dumps/head/verify_anchor (hash-chained
 #   transition log with state digests, optional HMAC key via HNX_SWAP_CHAIN_KEY; schema platform/swap_record 1.1).
@@ -376,7 +377,9 @@ Suite(name, summary, protocol) ; @suite.check(id, summary, *, severity="must", r
 run(capability, binding_mapping, root=None) -> list[CheckResult]           # {"fake": True} or {"adapter": "pkg.mod:factory", ...}
 run_capability(capability, target, root=None, *, only=None) -> CapabilityRun  # target: "fake" | "broken[:M]" | file | name
 build_report(root=None, target="fake", ...) -> dict                          # capabilities_without_passing_test
-CAPABILITIES (eighteen) / EXTENDED (backup, dns, edge, broker-tokens, orchestration-features, migration, log-pipeline) ; ConformError (misconfiguration, exit 2)
+CAPABILITIES (eighteen) / EXTENDED (backup, dns, edge, broker-tokens, orchestration-features, migration, log-pipeline, agent-runner) ; ConformError (misconfiguration, exit 2)
+# agent-runner is the agent-runtime slot's contract (cap:agent-runtime 1.0); it tracks the x-draft
+# schemas/runner until ADR-0051 is accepted
 # the suites, Protocols and fakes live in conformance/ of the source tree (hnx conform --root DIR); an
 # installed wheel lists the eighteen names and says "no suite" until pointed at a checkout.
 # invariant X-10 (plugins/x10_conformance.py) is registered through the homelabnext.invariants.checks entry point.
@@ -427,6 +430,34 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
   from the caller, raise `homelabnext.lake.EndpointNotConfigured` when none was supplied; `tools/no_raw_endpoints.py` gates the tree (ADR-0002).
 - Environment variables use the prefix `HNX_`. Endpoint overrides are `HNX_ENDPOINT_<NAME>` with
   the service name upper-cased and `-` replaced by `_`.
+- Bindings reach a primary only (ADR-0039 decision 3). A binding is a row's `upstreams`, a role
+  binding's `backend: svc:<name>`, an LLM gateway spec's backends, a workflow pack's `svc:`
+  targets and event sources, and a module's `requires` through the site selection; `svc:<name>`
+  names a row or a capability, and a capability means its primary. `hnx registry bindings
+  REGISTRY [--roles FILE] [--eval-report FILE [--base REV | --ci-base]] [--packs PATH [--deployed
+  MANIFEST]] [--gateway SPEC] [--target FILE] [--site FILE --modules DIR]` refuses each one naming
+  an `eval`, `retiring` or `legacy` row, a capability with no primary, a malformed `svc:` id, a
+  gateway backend whose host reaches a non-primary row (a self-declared host in the alias zone
+  is a capability's primary alias with the primary's port, or a name that answers nothing: `hnx
+  site validate` refuses a static record there), or (in a pack) a name that is no row, no
+  capability and none of the declared platform sources (`svc:broker`, and the controller's old
+  `svc:llm-orchestrator` for its overlap, an event source only: as a `target` it is refused). A capability the registry places no row of is a note
+  only where `bindings.UNPLACED` declares it for that pack, with its reason and its end, and only
+  over the reference examples (`--reference-examples`, which only `make check` passes). Two
+  declared exceptions (`homelabnext/registry/bindings.py`): an evaluation report's `canary`
+  bindings may name an `eval` row (the report is read from the change and, with a base, from the
+  base too), and a conformance target file any non-legacy row. Status sources, the census,
+  `hnx decommission` and the ledger read every tier, and agent lanes name executors, so none of
+  them is a binding. Inputs are read without following a symbolic link on a relative path. At run
+  time `ModelResolver` raises `NonPrimaryBinding` instead of falling back past such a binding, and
+  `resolve_binding(..., allow_eval=True)` (the literal `True`), passed only by the egress canary
+  runner, resolves an `eval` row by its row name. `make check` runs it over the examples, every
+  pack and the example gateway specs (`bindings-check`); the overlay's `checks.yml` runs it over
+  `lab/` (its gateway spec too, when present) and the packs the pinned commit's deploy manifest
+  pins.
+- The platform's capability names (the conformance contracts and the capability-class table) are
+  one list, `homelabnext.capability_names`; registry validation reads it without importing the
+  MCP catalog or the conformance harness.
 
 ## 4. Logical ids
 
@@ -444,7 +475,7 @@ schemas/<dir>/examples/<name>.<n>.json     at least one valid example per schema
 schemas/<dir>/negative/<name>.<n>.json     at least one example that MUST be rejected
 ```
 
-Directories: <!-- hnx:gen:fact:schema-dirs -->`agent`, `broker`, `codemode`, `conform`, `events`, `ids`, `ocsf`, `platform`, `records`, `registers`, `status`, `strategy`, `workflows`<!-- /hnx:gen -->. A schema may also be named
+Directories: <!-- hnx:gen:fact:schema-dirs -->`agent`, `broker`, `codemode`, `conform`, `events`, `ids`, `ocsf`, `platform`, `records`, `registers`, `runner`, `status`, `strategy`, `workflows`<!-- /hnx:gen -->. A schema may also be named
 `<name>.json` (`model_roles`, `decision_spec`, `service`) or `<class>.v1.json` (the OCSF subsets);
 `tests/schemas/test_schema_contracts.py` pins the exact set.
 JSON Schema draft 2020-12. Each schema file declares `title`, `description` and `$id`. Registers
@@ -525,7 +556,7 @@ change until its ADR is accepted):
 | `platform/orchestrator_profile` | 1.0 | `schemas/platform/orchestrator_profile.schema.json` | draft |
 | `platform/role_interface` | 1.0 | `schemas/platform/role_interface.schema.json` | stable |
 | `platform/script_header` | 1.0 | `schemas/platform/script_header.schema.json` | stable |
-| `platform/service` | 2.8 | `schemas/platform/service.json` | stable |
+| `platform/service` | 2.10 | `schemas/platform/service.json` | stable |
 | `platform/site` | 1.6 | `schemas/platform/site.schema.json` | stable |
 | `platform/slot` | 1.0 | `schemas/platform/slot.schema.json` | draft |
 | `platform/swap_record` | 1.1 | `schemas/platform/swap_record.schema.json` | stable |
@@ -533,9 +564,12 @@ change until its ADR is accepted):
 | `registers/decision_spec` | 1.3 | `schemas/registers/decision_spec.json` | stable |
 | `registers/invariant` | 1.0 | `schemas/registers/invariant.schema.json` | stable |
 | `registers/kanban_item` | 1.0 | `schemas/registers/kanban_item.schema.json` | stable |
-| `registers/lesson` | 2.1 | `schemas/registers/lesson.schema.json` | stable |
+| `registers/lesson` | 2.2 | `schemas/registers/lesson.schema.json` | stable |
 | `registers/register_event` | 1.3 | `schemas/registers/register_event.schema.json` | stable |
-| `registers/runbook` | 2.2 | `schemas/registers/runbook.schema.json` | stable |
+| `registers/runbook` | 2.3 | `schemas/registers/runbook.schema.json` | stable |
+| `runner/grants` | 1.0 | `schemas/runner/grants.schema.json` | draft |
+| `runner/session` | 1.0 | `schemas/runner/session.schema.json` | draft |
+| `runner/usage_record` | 1.0 | `schemas/runner/usage_record.schema.json` | draft |
 | `status/agent_activity` | 1.0 | `schemas/status/agent_activity.schema.json` | stable |
 | `status/agent_activity_detail` | 1.0 | `schemas/status/agent_activity_detail.schema.json` | stable |
 | `status/agents` | 1.4 | `schemas/status/agents.schema.json` | stable |
@@ -559,6 +593,10 @@ change until its ADR is accepted):
 
 - Distribution version: SemVer, `0.x` until the first stable drop. The single source is
   `homelabnext/_version.py`; `CHANGELOG.md` must hold a section for it (`tools/check_changelog.py`).
+  A release that bumps it bumps the example registry's `orchestrator` row (`examples/services.yml`,
+  and its copy `schemas/platform/examples/service.valid.yml`) to the same version in the same
+  change: that row is this repository's controller (ADR-0026 decision 15), and
+  `tools/tests/test_pin_consistency.py` fails while the two differ.
 - Schemas: the major version is in `$id` and, for versioned families, the filename
   (`<class>.v1.json`). Within a major version evolution is **additive only**: new optional
   properties, new enum values, relaxed bounds, a wider type. Every enum may grow within a major,

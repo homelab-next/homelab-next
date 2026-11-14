@@ -1,6 +1,6 @@
 ---
-summary: 'Module manifest reference: prerequisite record changes, the migration path, per-slot contract follow-ups, each follow-up''s status and open questions.'
-summary_of: outline:sha256:59ec989c77b36c2c
+summary: 'Module manifest reference: prerequisite record changes, the migration path, per-slot contract follow-ups, each follow-up''s status, follow-up ADRs, open items.'
+summary_of: outline:sha256:88e7a9c112c56143
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Modules: record changes, migration and follow-ups
@@ -46,7 +46,7 @@ summary_of: outline:sha256:59ec989c77b36c2c
 | `events` | State the contract over CloudEvents with bus semantics as features. |
 | `dns` | The DNS protocol and RFC 2136 as the contract, zone files as export; promote `dns`, `edge` and `backup` from extended suites. |
 | `idp` | OIDC (discovery, JWKS, introspection). |
-| `edge` | It is the front door and a privileged slot: its extended suite becomes a full contract before any provider is selected through a module. |
+| `edge` | It is the front door and a privileged slot. `modules/caddy` provides it against the extended suite (`conformance/protocols/edge.py`, which the slot registry names as its contract), with the human review tier; the suite still becomes a full contract (TLS served, the auth proxy's 403 for a user outside the allowed groups, upstream mTLS). |
 | `secrets` | Keep the semantics, add a neutral encrypted export. |
 | `notify` | The `Sender`/`Message.click` contract is ntfy-shaped (one product's priorities, tags and click actions); state it over neutral fields with product mapping in providers. The 100+ files that name the product are migration-path work. |
 | `lake-catalog` | The Iceberg REST catalog as the contract. |
@@ -130,6 +130,22 @@ exist in no form.
     does, there is no MUST round-trip check per slot, and X-07 is not slot-keyed. See
     [`data:` and lifecycle safety](data.md#data-and-lifecycle-safety).
 
+## Follow-up ADRs
+
+Pieces of the old lab that no ADR owns yet. The operator decided on 2026-11-08 that each gets an
+ADR of its own before it is ported
+([ADR-0049](../adr/0049-the-soc-data-plane-and-the-lab-checks-move-as-modules.md), "Out of
+scope"). Until each ADR is written, its timers or flows are `undecided` rows on the cutover ledger
+([ADR-0043](../adr/0043-the-cutover-is-a-ledger-per-service.md)).
+
+| Follow-up | What the ADR must decide | State |
+|---|---|---|
+| Risk-based alerting | the engine's scoring, beside ADR-0036's first-seen analyzer and the decide cascade | not written |
+| The external CTI pipeline | its ingest, extraction and publishing, and what it may publish | not written |
+| The interactive-session runbook gate | the successor of the gate that hands a session its runbook before it acts | not written |
+
+The live 24-hour dataflow page is not a follow-up: it is retired, a `retire` row on the ledger.
+
 ## Open questions
 
 The operator answered the twelve questions of the first draft provisionally (2026-10-23), and
@@ -165,8 +181,9 @@ Still open:
   marks secrets, idp, edge, dns, backup, notify, events, broker, orchestration, records,
   agent-runtime and inference as required, and the lake as optional (single-box falls back to the
   hot index).
-- **Contracts for privileged slots that lack one** (`edge` has only an extended suite): until they
-  exist no module can provide them, by the privileged-slot rule.
+- **Contracts for privileged slots that lack one** (`edge` has only an extended suite): the slot
+  registry names it as the contract, so `modules/caddy` provides `edge` against it, privileged
+  (always a conformance run and the human review tier); promoting it to a full contract stays open.
 - **The loader's own trust boundary**: whether module code runs in-process (as specified) or in a
   sandboxed worker for third-party origins.
 - The `contributions` decommission plane is specified, not implemented: the loader accepts it in

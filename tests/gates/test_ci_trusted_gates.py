@@ -107,10 +107,17 @@ def _ratchets_elsewhere() -> set[str]:
     return out
 
 
+#: ratchets whose base copy cannot run here yet, because no base has the tool: each is added to
+#: RATCHETS (and its step to the job) in the first change after it is on main, and its own tests
+#: keep the open follow-up in CONTRIBUTING.md until then
+PENDING = {"allowlist_ratchet"}
+
+
 def test_a_ratchet_another_job_runs_also_runs_here():
     # fix_has_test proves the change's own tests, which trusted-gates never runs: its job runs
     # the base's copy of the judge instead (below)
-    assert _ratchets_elsewhere() - {"fix_has_test"} <= set(RATCHETS)
+    assert _ratchets_elsewhere() - {"fix_has_test"} <= set(RATCHETS) | PENDING
+    assert not PENDING & set(RATCHETS)  # added here: drop it from PENDING
     assert set(RATCHETS) <= _ratchets_elsewhere()  # the quick-feedback copies are still there
 
 

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Every agent starts knowing its access (checklist M-14): session start injects the access block."""
 
+import ipaddress
 import json
 from pathlib import Path
 
@@ -344,3 +345,62 @@ def test_cli_pack_ages_pre_gates_at_now(tmp_path, capsys):
     for bad in ("2026-01-15T10:15:00", "tomorrow"):  # usage error: no offset, not a time
         assert cli.main([*args, *out, "--now", bad]) == 2
         assert "RFC 3339 time with an offset" in capsys.readouterr().err
+
+
+def _hosts_only_registry(tmp_path, *, runners=1):
+    """A registry no service row of which carries ``agent-runtime``, with ``runners`` hosts of
+    role ``agent-runtime`` (the example's ``runtime-core`` and copies of it at free addresses)."""
+    doc = yaml.safe_load((REPO / "examples" / "services.yml").read_text())
+    doc["services"] = {
+        k: v for k, v in doc["services"].items() if v.get("capability") != "agent-runtime"
+    }
+    base = doc["hosts"]["runtime-core"]
+    used = {h["address"] for h in doc["hosts"].values()}
+    addr = ipaddress.ip_address(base["address"])
+    for n in range(2, runners + 1):
+        while str(addr) in used:
+            addr += 1
+        used.add(str(addr))
+        doc["hosts"][f"runtime-{n}"] = {**base, "address": str(addr)}
+    path = tmp_path / "services.yml"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    return load(path)
+
+
+def test_the_runner_host_is_found_by_host_role_with_no_agent_runtime_row(profile, tmp_path):
+    reg = _hosts_only_registry(tmp_path)
+    assert reg.by_capability("agent-runtime") is None
+    block = access_block(profile, reg)
+    assert block["runs_on"] == {"host": "runtime-core", "zone": "compute"}
+
+
+def test_two_hosts_with_the_runner_role_are_refused_not_guessed(profile, tmp_path):
+    reg = _hosts_only_registry(tmp_path, runners=2)
+    with pytest.raises(SpecError, match=r"several registry hosts have role agent-runtime"):
+        access_block(profile, reg)
+    assert access_block(profile, reg, runs_on="runtime-2")["runs_on"]["host"] == "runtime-2"
+
+
+def test_no_host_with_the_runner_role_is_refused(profile, tmp_path):
+    doc = yaml.safe_load((REPO / "examples" / "services.yml").read_text())
+    doc["hosts"]["runtime-core"]["role"] = "compute"
+    path = tmp_path / "services.yml"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    with pytest.raises(SpecError, match=r"no registry host has role agent-runtime"):
+        access_block(profile, load(path))
+
+
+def test_cli_pack_finds_the_runner_by_role_and_refuses_an_ambiguous_one(profile, tmp_path, capsys):
+    for name, doc in {"m.json": manifest(), "i.json": inputs(), "p.json": profile.data()}.items():
+        (tmp_path / name).write_text(json.dumps(doc))
+    policy, lock = write_policy_lock(tmp_path, profile)
+    out = tmp_path / "pack.json"
+    args = ["agent", "pack", str(tmp_path / "m.json"), "--inputs", str(tmp_path / "i.json")]
+    pl = ["--policy", str(policy), "--lock", str(lock), "--profile", str(tmp_path / "p.json")]
+    _hosts_only_registry(tmp_path)
+    reg = ["--registry", str(tmp_path / "services.yml")]
+    assert cli.main([*args, *pl, *reg, "--out", str(out)]) == 0
+    _hosts_only_registry(tmp_path, runners=2)
+    assert cli.main([*args, *pl, *reg, "--out", str(out)]) == 1
+    assert "several registry hosts have role agent-runtime" in capsys.readouterr().err
+    assert cli.main([*args, *pl, *reg, "--runs-on", "runtime-2", "--out", str(out)]) == 0

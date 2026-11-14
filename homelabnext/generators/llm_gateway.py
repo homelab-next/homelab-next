@@ -392,11 +392,69 @@ def _profile_slug(pid: str) -> str:
     return pid.removeprefix("profile:")
 
 
+def _registry_host_problem(registry: Any, host: str, service_domain: str, port: Any) -> str | None:
+    """Why a self-declared local ``host`` (with ``port``) in the registry's alias zone may not be
+    a backend (ADR-0039 decision 3: a gateway backend binds only a primary):
+
+    * a capability's primary alias is that registry service, judged by the registry checks
+      (zone, port, scheme) before this is called: a candidate usually shares the primary's
+      host, so the alias with another port would reach it;
+    * any other host with a label that names a registry row or capability is refused: a row's
+      record (an ``eval`` or ``retiring`` row answers by its row name) or a made-up name under it.
+
+    Any other name in the alias zone answers nothing: the registry generates every record there
+    and site validation refuses a static one (``hnx site validate``)."""
+    from homelabnext.registry.model import STANDINGS
+
+    prefix = host[: -len(service_domain) - 1]
+    if registry.by_capability(prefix) is not None:
+        return None  # a primary alias is the registry service (spec_from_dict's registry checks)
+    rows = {r.name: r for r in registry.rows(*STANDINGS)}
+    caps = {r.capability for r in rows.values()}
+    for label in prefix.split("."):
+        row = rows.get(label)
+        if row is not None and not row.is_primary:
+            article = "an" if row.standing == "eval" else "a"
+            where = "is" if label == prefix else "is under"
+            return (
+                f"host {host} {where} {article} {row.standing} row's record ({row.name}); a "
+                "gateway backend binds only a primary (ADR-0039 decision 3)"
+            )
+        if row is not None or label in caps:
+            kind = "row" if row is not None else "capability"
+            return (
+                f"host {host} names registry {kind} {label} but is not a capability's primary "
+                "alias; name the registry row as the backend, or use the capability alias"
+            )
+    return None
+
+
+def _role_table(base: Path, rel: str, root: Path | None = None) -> tuple[RoleTable, Any]:
+    """The spec's role table and its raw ``roles``, read inside ``root`` (the caller's: default
+    the working directory ``hnx`` runs in, never one discovered from the spec's directory)
+    without following a symbolic link (:func:`homelabnext.modules.loader.read_contained`, as
+    ``hnx registry bindings`` reads it) and validated by :meth:`RoleTable.loads`."""
+    from homelabnext.modules import loader as ld
+
+    try:
+        data = ld.read_contained(base, rel, root)
+    except ld.Unreadable as exc:
+        raise OSError(str(exc)) from None
+    table = RoleTable.loads(data, rel)
+    return table, json.loads(data.decode("utf-8"))["roles"]
+
+
 def load_spec(
-    path: str | Path, *, conformance: bool = False, conformance_host: str | None = None
+    path: str | Path,
+    *,
+    conformance: bool = False,
+    conformance_host: str | None = None,
+    registry: Any = None,
+    root: Path | None = None,
 ) -> Spec:
     """Read and validate a gateway spec; relative paths in it resolve against its directory.
-    ``conformance`` (and ``conformance_host``) select the test-only render (module docstring)."""
+    ``conformance`` (and ``conformance_host``) select the test-only render (module docstring);
+    ``registry`` replaces the spec's own ``registry:`` file."""
     path = Path(path)
     doc = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
     return spec_from_dict(
@@ -405,6 +463,8 @@ def load_spec(
         source=path.as_posix(),
         conformance=conformance,
         conformance_host=conformance_host,
+        registry=registry,
+        root=root,
     )
 
 
@@ -415,7 +475,12 @@ def spec_from_dict(
     source: str = "<spec>",
     conformance: bool = False,
     conformance_host: str | None = None,
+    registry: Any = None,
+    root: Path | None = None,
 ) -> Spec:
+    """``root`` bounds the role table's path (default: the working directory when the spec is
+    in it, else the spec's directory).  ``registry`` (a loaded :class:`~homelabnext.registry.model.Registry`) is used instead of
+    the spec's own ``registry:`` file when given (``hnx registry bindings --gateway``)."""
     problems: list[str] = []
     if not isinstance(doc, Mapping):
         raise GatewaySpecError(f"{source}: the gateway spec must be a mapping")
@@ -438,16 +503,14 @@ def spec_from_dict(
     if not isinstance(roles_path, str):
         raise GatewaySpecError(f"{source}: 'roles' (the role table path) is required")
     try:
-        table = RoleTable.load(base / roles_path)
-        raw_roles = json.loads((base / roles_path).read_text(encoding="utf-8"))["roles"]
+        table, raw_roles = _role_table(base, roles_path, root)
     except RoleTableError as exc:
         raise GatewaySpecError(f"{source}: role table invalid", exc.problems) from None
     except (OSError, ValueError) as exc:
         raise GatewaySpecError(f"{source}: cannot read role table {roles_path}: {exc}") from None
     problems += [f"{roles_path}: {p}" for p in module_rules.role_ceiling_problems(raw_roles)]
 
-    registry = None
-    if doc.get("registry"):
+    if registry is None and doc.get("registry"):
         from homelabnext.registry import load as load_registry
 
         registry = load_registry(base / str(doc["registry"]))
@@ -502,23 +565,50 @@ def spec_from_dict(
             backends[name] = Backend(name, loc, provider=str(prov), api_key=key)
             continue
         svc = registry.services.get(name) if registry else None
+        other = registry.row(name, "eval", "retiring", "legacy") if registry else None
+        if svc is None and other is not None:
+            # its row-name record would take the non-registry path below and reach the row
+            problems.append(
+                f"{where}: registry row {name} is {'an' if other.standing == 'eval' else 'a'} "
+                f"{other.standing} row; a gateway backend binds only a primary (ADR-0039 "
+                "decision 3)"
+            )
+            continue
+        if svc is None and registry is not None:
+            # a self-declared host that is a capability's primary alias is that registry
+            # service: it meets the registry checks below (zone, port, scheme), never the
+            # self-declared path's, which does not know where the service runs
+            alias = str(b.get("host") or f"{name}.{svc_label}.{domain}").lower()
+            if alias.endswith("." + service_domain):
+                svc = registry.by_capability(alias[: -len(service_domain) - 1])
+            via = f" (host {alias} is its capability alias)" if svc is not None else ""
+        else:
+            via = ""
         if svc is not None:
             if _cloud_zone(registry, svc):
                 problems.append(
-                    f"{where}: registry service {name} is not in a lab zone, so it is not local"
+                    f"{where}: registry service {svc.name}{via} is not in a lab zone, so it is "
+                    "not local"
                 )
                 continue
             host = f"{svc.capability}.{svc_label}.{domain}".lower()
             if "port" in b and b["port"] != svc.port:
                 problems.append(
                     f"{where}: port {b['port']} (the spec or the serving plan) is not registry "
-                    f"service {name}'s port {svc.port}; the gateway would call one and the engine "
-                    "listen on the other (make them agree)"
+                    f"service {svc.name}'s port {svc.port}{via}; the gateway would call one and "
+                    "the engine listen on the other (make them agree; a second API port is a "
+                    "second registry row)"
                 )
                 continue
             if b.get("host") and str(b["host"]).lower() != host:
                 problems.append(
-                    f"{where}: host {b['host']} is not registry service {name}'s {host}"
+                    f"{where}: host {b['host']} is not registry service {svc.name}'s {host}"
+                )
+                continue
+            if "scheme" in b and str(b["scheme"]) != svc.scheme:
+                problems.append(
+                    f"{where}: scheme {b['scheme']} is not registry service {svc.name}'s "
+                    f"{svc.scheme}{via}"
                 )
                 continue
             port, scheme = svc.port, svc.scheme
@@ -531,6 +621,10 @@ def spec_from_dict(
                     f"{where}: locality local is not self-declared: {host} is neither a registry "
                     f"service nor under the lab's service domain {service_domain}"
                 )
+                continue
+            why = _registry_host_problem(registry, host, service_domain, port) if registry else None
+            if why:
+                problems.append(f"{where}: {why}")
                 continue
         if not isinstance(port, int) or not 0 < port < 65536:
             problems.append(f"{where}: a local backend needs a port (or a registry service)")
@@ -2088,6 +2182,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         metavar="HOST",
         help=f"with --conformance: move every deployment to HOST ({', '.join(CONFORMANCE_HOSTS)})",
     )
+    rd.add_argument(
+        "--root",
+        help="the checkout the spec belongs to: its role table must stay inside it (default: the "
+        "nearest checkout holding the spec, up to the working directory; then this package's "
+        "own checkout; a spec in no checkout gets its own directory, so pass --root for a spec "
+        "outside one)",
+    )
     hm = sub.add_parser("homes", help=agent_homes.HOMES_HELP, description=agent_homes.HOMES_HELP)
     agent_homes.add_arguments(hm)
     pv = sub.add_parser("provision", help="create the virtual keys of litellm/keys.json")
@@ -2131,7 +2232,10 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 0
     try:
         spec = load_spec(
-            args.spec, conformance=args.conformance, conformance_host=args.conformance_host
+            args.spec,
+            conformance=args.conformance,
+            conformance_host=args.conformance_host,
+            root=Path(args.root) if args.root else None,
         )
         files = render(spec)
     except GatewaySpecError as exc:

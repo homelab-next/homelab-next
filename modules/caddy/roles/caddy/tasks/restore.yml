@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the ACME account and the configuration from an export (vars/main.yml
+# caddy_restore_script): the source is checked first, without writing (root's, writable by no one
+# else, the listing naming only acme/ and config/ files, each a single-link regular file of the
+# listed size and sha256); then each file is copied through the descriptor that was checked and
+# renamed into place (root only, 0600). Run main afterwards: it renders the configuration again
+# (the restored config/ is the record of what ran) and reinstalls the certificate from the
+# restored store, renewing it with the restored account when due.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Refuse a source that is not an absolute canonical directory outside the data root
+      ansible.builtin.assert:
+        that:
+          - caddy_restore_source is match(caddy_path_pattern)
+          - not (caddy_restore_source ~ '/').startswith(caddy_data_root ~ '/') or caddy_restore_source.startswith(caddy_data_root ~ '/export/')
+        fail_msg: "caddy: caddy_restore_source is an absolute canonical directory (an export), not {{ caddy_restore_source }}"
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ caddy_restore_script }}", check, "{{ caddy_restore_source }}", "{{ caddy_data_root }}"]
+      changed_when: false
+    - name: Restore the account and the configuration
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ caddy_restore_script }}", apply, "{{ caddy_restore_source }}", "{{ caddy_data_root }}"]
+      changed_when: true
+  tags: [restore]

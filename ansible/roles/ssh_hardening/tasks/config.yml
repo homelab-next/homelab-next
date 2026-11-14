@@ -13,12 +13,15 @@
 - name: Validate the inputs
   ansible.builtin.include_tasks: validate.yml
 
+# A pure read, so it runs under --check too: skipped, it registered no home, the keys path fell
+# back to /nonexistent and the guard below failed a dry run on a host that was fine.
 - name: Look up the kept account (name:x:uid:gid:gecos:home:shell)
   ansible.builtin.command:
     argv: ["{{ ssh_hardening_getent_cli }}", passwd, "{{ ssh_hardening_keep_user }}"]
   register: ssh_hardening_account
   changed_when: false
   failed_when: false
+  check_mode: false
 
 - name: Look for the kept account's authorized keys
   ansible.builtin.stat:
@@ -127,8 +130,13 @@
   check_mode: true
   register: ssh_hardening_written
 
+# Under --check nothing is staged, so there is no file for sshd to judge or to install: the dry
+# run reports the drop-in it would write (the comparison above, with --diff), and the real run
+# tests it before it goes live. So a green --check proves the lockout guard and the diff only: the
+# sshd -t / sshd -T checks and ssh-keygen's validate: of the CA and revoked files run for real only
+# (a real run that fails one stops before anything goes live).
 - name: Test the new drop-in, then install it
-  when: ssh_hardening_written is changed
+  when: ssh_hardening_written is changed and not ansible_check_mode
   vars:
     ssh_hardening_staged: "{{ ssh_hardening_state_dir }}/staged.conf"
     ssh_hardening_test_config: "{{ ssh_hardening_state_dir }}/test-sshd_config"

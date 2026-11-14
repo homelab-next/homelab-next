@@ -330,7 +330,7 @@ def test_a_registry_service_port_that_is_not_the_plans_is_refused(tmp_path):
     8000.  Both say where the backend is, so they must agree."""
     workdir(tmp_path)
     reg = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())
-    svc = dict(reg["services"]["inference"], capability="inference-large")
+    svc = copy.deepcopy(dict(reg["services"]["inference"], capability="inference-large"))
     reg["services"]["inference"]["port"] = 8100  # frees 8000 on that host for the plan's backend
     reg["services"]["inference-large"] = svc
     g = yaml.safe_load((tmp_path / "gateway.yml").read_text())

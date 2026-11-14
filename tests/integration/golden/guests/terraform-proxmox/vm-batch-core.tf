@@ -48,9 +48,6 @@ resource "proxmox_virtual_environment_vm" "batch_core" {
         gateway = "192.0.2.129"
       }
     }
-    user_account {
-      username = "ansible"
-      keys     = [var.ssh_keys["operator"]]
-    }
+    user_data_file_id = var.cloudinit_user_data["batch-core"]
   }
 }

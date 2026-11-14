@@ -1,7 +1,7 @@
 {
   "specversion": "1.0",
   "id": "evt-0001",
-  "source": "svc:agent-runtime",
+  "source": "svc:orchestrator",
   "type": "homelabnext.status.observed",
   "time": "2026-10-20T08:00:00Z",
   "severity": "info",
@@ -12,7 +12,7 @@
     "item": "nightly-digest",
     "state": "green",
     "summary": "last run succeeded in 41s",
-    "link": "svc:agent-runtime",
+    "link": "svc:orchestrator",
     "observed_at": "2026-10-20T08:00:00Z",
     "expires_at": "2026-10-20T08:15:00Z"
   }
