@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.internal/homelabnext/platform/model_serving/1.0",
+  "$id": "https://schemas.example.internal/homelabnext/platform/model_serving/2.0",
   "title": "Model serving spec",
   "description": "Joins the model store and the role table (ADR-0023): per svc: backend the role table binds, the engine that serves it (vllm or llama-server; Unsloth Studio is the GUI, not a backend), its port, GPUs and engine settings. homelabnext.models.serving derives the one store entry each backend serves and renders the vllm_server role's instances (--served-model-name = the binding's model id, --max-model-len = the roles' max_context_tokens, --scheduling-policy priority); the LLM gateway generator reads the same file (serving: in a gateway spec) for its local backends. Semantic rules (bindings resolve, one model per vLLM backend, tp x pp = number of GPUs, unique ports and GPUs) are checked there (`hnx models serving check`).",
   "type": "object",
@@ -92,7 +92,6 @@
               "enum": [
                 "async-scheduling",
                 "block-size",
-                "calculate-kv-scales",
                 "cpu-offload-gb",
                 "disable-custom-all-reduce",
                 "disable-fastapi-docs",
@@ -115,7 +114,6 @@
                 "max-log-len",
                 "max-logprobs",
                 "max-num-batched-tokens",
-                "max-num-partial-prefills",
                 "max-num-seqs",
                 "no-enable-prefix-caching",
                 "num-gpu-blocks-override",
@@ -124,11 +122,19 @@
                 "response-role",
                 "return-tokens-as-token-ids",
                 "seed",
-                "swap-space",
                 "tokenizer-mode",
                 "tool-call-parser",
                 "uvicorn-log-level"
               ]
+            },
+            "properties": {
+              "tokenizer-mode": {
+                "enum": [
+                  "auto",
+                  "hf",
+                  "mistral"
+                ]
+              }
             },
             "additionalProperties": {
               "anyOf": [

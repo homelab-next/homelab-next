@@ -6,6 +6,9 @@ has no section below.
 
 ## [Unreleased]
 
+### Breaking
+- `model_serving` schema 2.0 removes the vLLM args `swap-space`, `calculate-kv-scales` and `max-num-partial-prefills`, and rejects `tokenizer-mode: slow` (use `hf`); migrate serving specs to flags and tokenizer modes accepted by the pinned vLLM release.
+
 ### Added
 - The edge module, `modules/caddy/` (Stage 5, H3; [README](modules/caddy/README.md)): the `edge` provider on stock Caddy 2.11.7 (image pinned by tag and digest). Role `caddy` runs the edge generator itself on the controller with `--edge-host` for every host of `caddy_edge_hosts` and refuses to render without one, so one deployment's edge never serves or dials another's rows; the sites must be exactly `caddy_acme_domains`, the front doors' placeholders exactly `caddy_front_door_refs`. The certificate is a public-trust one obtained and renewed on the host by lego 5.6.0 over DNS-01 (role `openbao`'s ACME pattern: a `secret:` token, a root-only token file, a daily timer, a reload never a restart); the upstream TLS files of the generated `caddy/edge_tls.json` come from the secret store. Role `caddy_auth_proxy` runs oauth2-proxy 7.15.5 as the forward-auth check and the OIDC sign-in (PKCE S256). Health checks TLS by name, the sign-in redirect, a catch-all 404, the identity strip in the running configuration and the hub's mTLS refusal; export, backup and restore cover the ACME account and the configuration.
 - The `edge` conformance adapter for Caddy (`homelabnext.conform.adapters.caddy:make`): a Caddy of its own on loopback with the generator's forward-auth snippet and strips; CI's `schemas` job runs the edge suite through `modules/caddy`'s target against the pinned release.

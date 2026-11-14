@@ -121,7 +121,6 @@ ALLOWED_ARGS: dict[str, Arg] = {
     # scheduling and batching
     "max-num-seqs": Arg("int", 1, 65536),
     "max-num-batched-tokens": Arg("int", 1, 1 << 24),
-    "max-num-partial-prefills": Arg("int", 1, 64),
     "long-prefill-token-threshold": Arg("int", 0, 1 << 24),
     "enable-chunked-prefill": BOOL,
     "enable-prefix-caching": BOOL,
@@ -130,10 +129,8 @@ ALLOWED_ARGS: dict[str, Arg] = {
     # memory and the KV cache
     "block-size": Arg("enum", choices=("8", "16", "32", "64", "128")),
     "kv-cache-dtype": Arg("enum", choices=("auto", "bfloat16", "fp8", "fp8_e4m3", "fp8_e5m2")),
-    "swap-space": Arg("float", 0, 1024),
     "cpu-offload-gb": Arg("float", 0, 4096),
     "num-gpu-blocks-override": Arg("int", 1, 1 << 24),
-    "calculate-kv-scales": BOOL,
     "enforce-eager": BOOL,
     "disable-custom-all-reduce": BOOL,
     "enable-expert-parallel": BOOL,
@@ -144,7 +141,7 @@ ALLOWED_ARGS: dict[str, Arg] = {
     "seed": Arg("int", 0, (1 << 32) - 1),
     "max-logprobs": Arg("int", 0, 100000),
     "generation-config": Arg("enum", choices=("auto", "vllm")),
-    "tokenizer-mode": Arg("enum", choices=("auto", "slow", "mistral")),
+    "tokenizer-mode": Arg("enum", choices=("auto", "hf", "mistral")),
     # the OpenAI-compatible frontend
     "enable-auto-tool-choice": BOOL,
     "tool-call-parser": NAME,

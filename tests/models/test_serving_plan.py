@@ -19,6 +19,7 @@ from homelabnext.models import serving as sv
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "model-serving"
+VLLM_HELP_SNAPSHOT = ROOT / "tests" / "models" / "fixtures" / "vllm_serve_help_0.32.0.json"
 
 
 def spec() -> dict:
@@ -199,7 +200,10 @@ def test_bad_backends_are_refused(tmp_path, edit, needle):
         ({"max-num-seqs": 2.5}, "is not a whole number"),
         ({"max-num-seqs": True}, "is not a whole number"),
         ({"dtype": "float64"}, "is not one of auto"),
-        ({"swap-space": -1}, "is not a number in [0, 1024]"),
+        ({"swap-space": 4.5}, "--swap-space is not an allowed vLLM flag"),
+        ({"calculate-kv-scales": True}, "--calculate-kv-scales is not an allowed vLLM flag"),
+        ({"max-num-partial-prefills": 1}, "--max-num-partial-prefills is not an allowed vLLM flag"),
+        ({"tokenizer-mode": "slow"}, "is not one of auto, hf, mistral"),
         ({"enable-prefix-caching": "yes"}, "true (a bare flag) or false"),
     ],
 )
@@ -214,12 +218,12 @@ def test_allowed_args_render_typed_and_false_booleans_are_omitted(tmp_path):
     s = spec()
     s["backends"]["svc:inference-large"]["args"] = {
         "enforce-eager": False, "enable-prefix-caching": True, "block-size": 16,
-        "swap-space": 4.5, "kv-cache-dtype": "fp8", "quantization": "compressed-tensors",
+        "kv-cache-dtype": "fp8", "quantization": "compressed-tensors", "tokenizer-mode": "hf",
     }  # fmt: skip
     plan = sv.load_plan(workdir(tmp_path, s))
     assert plan.backends["inference-large"].args == (
         "--block-size", "16", "--enable-prefix-caching", "--kv-cache-dtype", "fp8",
-        "--quantization", "compressed-tensors", "--swap-space", "4.5",
+        "--quantization", "compressed-tensors", "--tokenizer-mode", "hf",
     )  # fmt: skip
     assert not set(sv.ALLOWED_ARGS) & sv.OWNED_FLAGS
 
@@ -232,6 +236,15 @@ def test_the_schema_and_the_role_share_the_plans_allowlist():
     assert role_vars.read_text() == sv.role_vars_text(), (
         f"regenerate {sv.ROLE_VARS} from homelabnext.models.serving.role_vars_text()"
     )
+
+
+def test_allowlisted_args_exist_in_the_pinned_vllm_serve_help():
+    snapshot = json.loads(VLLM_HELP_SNAPSHOT.read_text())
+    pin = yaml.safe_load((ROOT / "ansible/roles/vllm_server/defaults/main.yml").read_text())[
+        "vllm_server_version"
+    ]
+    assert snapshot["version"] == pin, "verify and refresh the help snapshot when moving the pin"
+    assert set(sv.ALLOWED_ARGS) <= set(snapshot["options"])
 
 
 def test_a_plan_with_bad_inputs_says_which(tmp_path):
