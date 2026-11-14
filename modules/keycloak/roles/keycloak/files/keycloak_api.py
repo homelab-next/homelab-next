@@ -212,8 +212,15 @@ def _text(value) -> str:
 #: them): the only extras ``sync`` ignores.  Any other key on the live side is a difference (a
 #: hand-widened ``post.logout.redirect.uris`` or token lifespan is put back), so an IdP release
 #: that adds a key shows as a change until it is listed here, loudly, never silently.
+#: ``realm_client`` is computed into every client representation the server returns (Keycloak
+#: 26.8.1 ``ModelToRepresentation.toRepresentation(ClientModel)``: whether the client is a realm's
+#: built-in one) and dropped again on write (``RepresentationToModel.updateClient`` skips it), so a
+#: rendered client never carries it.  The IdP's other additions on creation, read from the same
+#: source: ``client.secret.creation.time`` (``KeycloakModelUtils.generateSecret``) and, for a
+#: SAML client only, ``saml.artifact.binding.identifier``: not listed, no client here is SAML.
 IDP_CLIENT_ATTRIBUTES = frozenset(
     {
+        "realm_client",
         "client.secret.creation.time",
         "post.logout.redirect.uris",
         "client.introspection.response.allow.jwt.claim.enabled",

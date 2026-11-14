@@ -190,6 +190,7 @@ def _normalise(client: dict) -> None:
     client["attributes"] = {
         "client.secret.creation.time": "1767225600",
         "post.logout.redirect.uris": "+",
+        "realm_client": "false",  # computed into every representation the server returns
         **{k: _text(v) for k, v in client.get("attributes", {}).items()},
     }
     for key in ("redirectUris", "webOrigins", "defaultClientScopes", "optionalClientScopes"):
