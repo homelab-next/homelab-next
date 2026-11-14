@@ -523,9 +523,7 @@ def prometheus(reg: Registry) -> dict[str, str]:
         if auth:
             ref = auth["secret"]
             if not re.fullmatch(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*", ref):
-                raise GeneratorRefusal(
-                    f"{s.name}: metrics auth must name a secret: reference"
-                )
+                raise GeneratorRefusal(f"{s.name}: metrics auth must name a secret: reference")
             file_name = ref.removeprefix("secret:") + ".credentials"
             path = f"/etc/hnx/scrape-credentials/{file_name}"
             credentials[ref] = {"secret": ref, "path": path, "mode": "0600"}
@@ -534,9 +532,7 @@ def prometheus(reg: Registry) -> dict[str, str]:
             elif auth["kind"] == "bearer":
                 job["authorization"] = {"type": "Bearer", "credentials_file": path}
             else:
-                raise GeneratorRefusal(
-                    f"{s.name}: metrics auth kind must be basic or bearer"
-                )
+                raise GeneratorRefusal(f"{s.name}: metrics auth kind must be basic or bearer")
         jobs.append(job)
     scrape_path = "prometheus/scrape_configs.yml"
     credentials_path = scrape_path.rpartition("/")[0] + "/credentials.json"
