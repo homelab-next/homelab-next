@@ -270,7 +270,7 @@ services:
   # ==========================================================================================
   secrets:
     <<: [*restart, *hardened]
-    image: openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+    image: openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f
     # the image's own default since 2.2: the root token is not written to ~/.vault-token
     command: ["server", "-dev", "-dev-no-store-token"]
     environment:
@@ -392,7 +392,7 @@ services:
   # Kuma tries `sudo service nscd start` and logs that it failed: no-new-privileges, by design.
   uptime:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:2.5.7-slim-rootless@sha256:a2b9fc59ac8f43daf5c728d233dd7bf23fae25c819b20067ee2b5143606bc061
+    image: louislam/uptime-kuma:2.5.8-slim-rootless@sha256:970f01d661de548b88c7e6012d3574666d033b1de6a323fc1bebfc3cb3b4c437
     environment:
       UPTIME_KUMA_DB_TYPE: sqlite
     volumes:
@@ -418,7 +418,7 @@ services:
   # healthy only then, so `up --wait` returns with the page in place.
   uptime-init:
     <<: [*restart, *hardened]
-    image: louislam/uptime-kuma:2.5.7-slim-rootless@sha256:a2b9fc59ac8f43daf5c728d233dd7bf23fae25c819b20067ee2b5143606bc061
+    image: louislam/uptime-kuma:2.5.8-slim-rootless@sha256:970f01d661de548b88c7e6012d3574666d033b1de6a323fc1bebfc3cb3b4c437
     entrypoint: ["node", "/provision/provision.js"]
     working_dir: /app
     environment:
@@ -599,7 +599,7 @@ services:
   llm-gateway:
     <<: [*restart, *hardened]
     profiles: [gateway]
-    image: litellm/litellm-database:v1.106.4@sha256:db36453d25e76c9eb689d7d51b8e5fa48843243d7a86ed1284cf574ce0107b3f
+    image: litellm/litellm-database:v1.106.6@sha256:7ef0e78fe00ad5ea7ea45666cc1d1f02cb7076aee69091543bf397de52db33ce
     command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
     environment:
       HNX_SECRET_LLM_GATEWAY_MASTER_KEY: ${LAB_GATEWAY_MASTER_KEY:?see .env.example}
