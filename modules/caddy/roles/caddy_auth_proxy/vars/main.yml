@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# oauth2-proxy as a forward-auth check and sign-in only: no upstream (a static 202), the identity
+# headers on its answer (X-Auth-Request-*, homelabnext.edge_identity), sign-in by the OIDC
+# authorization code flow with PKCE, only the openid scope (the realm's client mappers add the
+# username and the groups to every token, so no e-mail address is needed: the username is the
+# user id and the e-mail claim), a host-only, Secure, HttpOnly, SameSite=Lax session cookie, no
+# access token or Authorization header passed on, no provider button, no debug page.
+caddy_auth_proxy_fixed_env:
+  OAUTH2_PROXY_HTTP_ADDRESS: ":4180"
+  OAUTH2_PROXY_PROVIDER: oidc
+  OAUTH2_PROXY_SCOPE: openid
+  OAUTH2_PROXY_USER_ID_CLAIM: preferred_username
+  OAUTH2_PROXY_OIDC_EMAIL_CLAIM: preferred_username
+  OAUTH2_PROXY_OIDC_GROUPS_CLAIM: groups
+  OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+  OAUTH2_PROXY_CODE_CHALLENGE_METHOD: S256
+  OAUTH2_PROXY_REVERSE_PROXY: "true"
+  OAUTH2_PROXY_REAL_CLIENT_IP_HEADER: X-Real-IP
+  OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+  OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "false"
+  OAUTH2_PROXY_UPSTREAMS: "static://202"
+  OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+  OAUTH2_PROXY_SHOW_DEBUG_ON_ERROR: "false"
+  OAUTH2_PROXY_COOKIE_NAME: __Host-hnx_auth
+  OAUTH2_PROXY_COOKIE_SECURE: "true"
+  OAUTH2_PROXY_COOKIE_HTTPONLY: "true"
+  OAUTH2_PROXY_COOKIE_SAMESITE: lax
+caddy_auth_proxy_container_port: 4180
+# the image reference's parts (compose_app takes them apart)
+caddy_auth_proxy_image_parts:
+  repository: "{{ caddy_auth_proxy_image.split('@')[0].rsplit(':', 1)[0] }}"
+  tag: "{{ caddy_auth_proxy_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+  digest: "{{ caddy_auth_proxy_image.split('@')[1] | default('') }}"
+caddy_auth_proxy_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+caddy_auth_proxy_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+caddy_auth_proxy_name_pattern: '^(?=.{1,253}\Z)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?\Z'
+caddy_auth_proxy_ref_pattern: '^secret:[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*\Z'
+caddy_auth_proxy_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+# the issuer: https, a host name, /realms/<realm> (the IdP's OIDC issuer form)
+caddy_auth_proxy_issuer_pattern: '^https://(?=.{1,253}/)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?/realms/[A-Za-z0-9][A-Za-z0-9_.-]{0,62}\Z'
+# a client secret (printable, no quote, space or line break: it goes into an env_file) and the
+# cookie key (16, 24 or 32 bytes as text, or 32 bytes URL-safe base64: what oauth2-proxy accepts)
+caddy_auth_proxy_client_value_pattern: '^[!#-&(-~]{16,256}\Z'
+caddy_auth_proxy_cookie_value_pattern: '^([A-Za-z0-9_-]{16}|[A-Za-z0-9_-]{24}|[A-Za-z0-9_-]{32}|[A-Za-z0-9_-]{43}=?)\Z'

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the edge suite through the
+# Caddy adapter, which runs a Caddy of its own on loopback (never the lab's edge) configured with
+# the production pieces (the generator's forward-auth snippet and strips, the role's catch-all).
+# The binary is $HNX_CADDY, else caddy on PATH: the release CI installs, or the one in the
+# module's pinned image (docker cp <container>:/usr/bin/caddy).
+#   HNX_CADDY=/path/to/caddy hnx conform --root <checkout> run edge \
+#     --target modules/caddy/conformance/target.yml
+name: caddy
+capabilities:
+  edge:
+    adapter: homelabnext.conform.adapters.caddy:make
+    config: {caddy_env: HNX_CADDY}

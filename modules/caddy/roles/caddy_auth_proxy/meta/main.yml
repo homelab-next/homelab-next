@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "oauth2-proxy, the edge's forward-auth proxy (modules/caddy): OIDC sign-in at the IdP with PKCE, the identity headers on its answer, no upstream."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

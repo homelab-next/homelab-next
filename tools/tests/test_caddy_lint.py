@@ -2344,3 +2344,15 @@ def test_a_non_default_identity_set_is_enforced(platform_identity, monkeypatch):
     fixed = text.replace(site, other.strip_lines("\t")).replace(route, other.strip_lines("\t\t"))
     fixed = fixed.replace(" ".join(platform_identity.headers), " ".join(other.headers))
     assert lint.lint_caddy(fixed) == []
+
+
+def test_a_semantic_exemption_is_stale_only_where_the_semantic_check_is_required():
+    """A template's ``semantic`` finding exists only where the check is required (CI's schemas
+    job), so the same allowlist entry must not read as stale in a run that does not require it
+    (CI's test job, a local run); where it is required, an unused one still is."""
+    entry = lint.AllowEntry("modules/x/templates/Caddyfile.j2", "rendered at deploy", ("semantic",))
+    stale = [f.rule for f in lint.apply_allowlist([], [entry], set(), stale_semantic=True)]
+    assert stale == ["allowlist"]
+    assert lint.apply_allowlist([], [entry], set(), stale_semantic=False) == []
+    used = lint.Finding("modules/x/templates/Caddyfile.j2", 0, "semantic", "a template")
+    assert lint.apply_allowlist([used], [entry], set(), stale_semantic=True) == []

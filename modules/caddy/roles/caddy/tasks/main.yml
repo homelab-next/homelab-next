@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Render the sites for this deployment's hosts only (the edge generator, on the controller)
+  ansible.builtin.include_tasks: generate.yml
+
+- name: Refuse a credential that is not in its form before anything is written
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Install the configuration and the upstream TLS files
+  ansible.builtin.include_tasks: render.yml
+
+# Caddy loads the certificate at start and refuses to start without it, so it is obtained first.
+- name: Obtain the certificate on the host (ACME, DNS-01) and install its renewal
+  ansible.builtin.include_tasks: acme.yml
+
+- name: Read the front doors' shared secrets (the sites read them from the environment)
+  ansible.builtin.set_fact:
+    caddy_secret_env: >-
+      {%- set env = {} -%}
+      {%- for ref in caddy_front_door_refs -%}
+      {%-   set _ = env.update({'HNX_SECRET_' ~ (ref | regex_replace('^secret:', '') | regex_replace('[^A-Za-z0-9]', '_') | upper): lookup('hnx_secret', ref)}) -%}
+      {%- endfor -%}
+      {{ {'caddy': env} if env else {} }}
+  no_log: true
+
+- name: Check the configuration with Caddy itself before it is started (caddy validate)
+  ansible.builtin.command:
+    argv: "{{ caddy_validate_argv[:3] + (['--cgroup-parent=' ~ hnx_module_slice] if hnx_module_slice | default('') else []) + caddy_validate_argv[3:] }}"
+  vars:
+    caddy_validate_argv:
+      - docker
+      - run
+      - --rm
+      - --network=none
+      - --read-only
+      - --cap-drop=ALL
+      - --cap-add=NET_BIND_SERVICE
+      - --security-opt=no-new-privileges:true
+      - "--user={{ caddy_uid | int }}:{{ caddy_gid | int }}"
+      - "--volume={{ caddy_data_root }}/config:{{ caddy_container_config_dir }}:ro"
+      - "--volume={{ caddy_data_root }}/certs:{{ caddy_container_certs_dir }}:ro"
+      - "--volume={{ caddy_data_root }}/edge-tls:{{ caddy_edge_tls_dir }}:ro"
+      - "--tmpfs=/data"
+      - "--tmpfs=/config"
+      - "--env=XDG_DATA_HOME=/data"
+      - "--env=XDG_CONFIG_HOME=/config"
+      - "--env=HOME=/data"
+      - "{{ caddy_image }}"
+      - caddy
+      - validate
+      - --config
+      - "{{ caddy_container_config_dir }}/Caddyfile"
+      - --adapter
+      - caddyfile
+  changed_when: false
+  when: caddy_validate_with_docker | bool and not ansible_check_mode
+
+- name: Render and start Caddy
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ caddy_app.compose_app_name }}"
+    compose_app_dir: "{{ caddy_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ caddy_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ caddy_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ caddy_app.compose_app_owner }}"
+    compose_app_group: "{{ caddy_app.compose_app_group }}"
+    compose_app_start: "{{ caddy_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ caddy_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ caddy_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ caddy_secret_env }}"
+  no_log: true
+
+# A running Caddy reads its configuration and the TLS files only at start or reload: when one
+# changed, reload it (a reload, never a restart; retried while a fresh container's admin API comes
+# up).
+- name: Reload Caddy when its configuration or a TLS file changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ caddy_dir }}/docker-compose.yml", exec, -T, caddy, caddy, reload,
+           --config, "{{ caddy_container_config_dir }}/Caddyfile", --adapter, caddyfile, --force]
+  register: caddy_reload
+  until: caddy_reload.rc == 0
+  retries: 10
+  delay: 2
+  changed_when: true
+  when: >-
+    caddy_start | bool and not ansible_check_mode and
+    (caddy_sites_written is changed or caddy_caddyfile_written is changed
+     or caddy_edge_tls_written is changed or caddy_edge_tls_removed is changed)

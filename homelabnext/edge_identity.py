@@ -71,6 +71,11 @@ AUTH_PROXY_PREFIX = "/oauth2/*"
 USERNAME_CLAIM = "preferred_username"
 #: where the IdP sends a signed-in user back to the auth proxy (each guarded site's own host)
 AUTH_PROXY_CALLBACK = "/oauth2/callback"
+#: the auth proxy's session cookie (a host-only ``__Host-`` cookie; a large session is split into
+#: ``<name>_0``, ``<name>_1``, ...): the edge deletes it from a request once ``forward_auth`` has
+#: read it, so no upstream ever sees the session (a logging or compromised upstream could replay
+#: it against another site, the Approvals page included); the auth proxy's role sets this name
+AUTH_PROXY_COOKIE = "__Host-hnx_auth"
 
 _HEADER = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$")
 _MARK = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")

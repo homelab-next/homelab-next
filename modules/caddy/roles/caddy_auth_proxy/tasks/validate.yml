@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - caddy_auth_proxy_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - caddy_auth_proxy_image is match(caddy_auth_proxy_pinned_ref_pattern)
+      - caddy_auth_proxy_bind is match(caddy_auth_proxy_ipv4_pattern)
+      - caddy_auth_proxy_bind != '0.0.0.0'
+      - caddy_auth_proxy_port | int >= 1 and caddy_auth_proxy_port | int <= 65535
+      - caddy_auth_proxy_uid | int >= 1000 and caddy_auth_proxy_gid | int >= 1000
+      - caddy_auth_proxy_dir is match(caddy_auth_proxy_path_pattern)
+      - caddy_auth_proxy_issuer_url is match(caddy_auth_proxy_issuer_pattern)
+      - caddy_auth_proxy_client_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - caddy_auth_proxy_client_ref is match(caddy_auth_proxy_ref_pattern)
+      - caddy_auth_proxy_cookie_ref is match(caddy_auth_proxy_ref_pattern)
+      - caddy_auth_proxy_client_ref != caddy_auth_proxy_cookie_ref
+      - caddy_auth_proxy_sites is sequence and caddy_auth_proxy_sites is not string
+      - caddy_auth_proxy_sites | length > 0
+      - caddy_auth_proxy_sites | reject('match', caddy_auth_proxy_name_pattern) | list | length == 0
+      - caddy_auth_proxy_cookie_expire is match('^([1-9][0-9]?m|[1-6][0-9]{2}m|7[01][0-9]m|720m|[1-9]h|1[0-2]h)\Z')
+      - caddy_auth_proxy_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      caddy_auth_proxy: the auth-proxy row's id, an image pinned by tag and digest, the guest's
+      IPv4 address (not all interfaces), a port, a container uid and gid of 1000 or more, an
+      absolute canonical directory, the realm's issuer (https://<name>/realms/<realm>), the IdP
+      client's id, two distinct secret: references, the sites it signs users in for (one or more
+      DNS names), a cookie lifetime of at most 12h (like 4h) and a memory limit like 128m
+  tags: [health, backup, restore, export, upgrade]

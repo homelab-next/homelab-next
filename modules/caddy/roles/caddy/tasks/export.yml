@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data acme, object-tree): <data root>/export/{acme/...,config/...,listing.jsonl},
+# the ACME client's account and certificates and the rendered configuration, each file with its
+# size and sha256. Root only (the account key is the account); a new snapshot on every run.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the account and the configuration and list them
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ caddy_export_script }}", "{{ caddy_data_root }}", "{{ caddy_data_root }}/export/snapshot"]
+      changed_when: true
+  tags: [export]

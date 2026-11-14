@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# The configuration on the host: the generated sites and the role's Caddyfile (config/, read-only
+# in the container), and every upstream TLS file the sites name (edge-tls/, mounted read-only at
+# the generator's directory), written from the secret store by reference, owned by the container's
+# user with the mode the generator gives (a key 0600). A file the sites no longer name is removed.
+- name: Install the generated sites
+  ansible.builtin.copy:
+    dest: "{{ caddy_data_root }}/config/sites.caddy"
+    content: "{{ caddy_sites_text }}"
+    owner: "{{ caddy_owner }}"
+    group: "{{ caddy_gid | int }}"
+    mode: "0640"
+  register: caddy_sites_written
+
+- name: Render the Caddyfile (global options, the health site, the catch-all, the sites)
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ caddy_data_root }}/config/Caddyfile"
+    owner: "{{ caddy_owner }}"
+    group: "{{ caddy_gid | int }}"
+    mode: "0640"
+  register: caddy_caddyfile_written
+
+- name: Create the upstream TLS files' directories
+  ansible.builtin.file:
+    path: "{{ caddy_data_root }}/edge-tls{{ item }}"
+    state: directory
+    owner: "{{ caddy_owner }}"
+    group: "{{ caddy_gid | int }}"
+    mode: "0750"
+  loop: "{{ caddy_edge_tls_files | map(attribute='path') | map('dirname') | map('replace', caddy_edge_tls_dir, '', 1) | reject('equalto', '') | unique | sort }}"
+
+- name: Write each upstream TLS file from the secret store
+  ansible.builtin.copy:
+    dest: "{{ caddy_data_root }}/edge-tls{{ item.path | replace(caddy_edge_tls_dir, '', 1) }}"
+    content: "{{ lookup('hnx_secret', item.secret) | trim }}\n"
+    owner: "{{ caddy_uid | int }}"
+    group: "{{ caddy_gid | int }}"
+    mode: "{{ item.mode }}"
+  loop: "{{ caddy_edge_tls_files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: caddy_edge_tls_written
+  no_log: true
+  diff: false
+
+- name: List the upstream TLS files on the host
+  ansible.builtin.find:
+    paths: "{{ caddy_data_root }}/edge-tls"
+    recurse: true
+    file_type: any
+    hidden: true
+  register: caddy_edge_tls_found
+
+- name: Remove an upstream TLS file the sites no longer name
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ caddy_edge_tls_found.files | rejectattr('isdir') | map(attribute='path') | sort
+       | difference(caddy_edge_tls_files | map(attribute='path')
+                    | map('replace', caddy_edge_tls_dir, caddy_data_root ~ '/edge-tls', 1) | list) }}
+  register: caddy_edge_tls_removed

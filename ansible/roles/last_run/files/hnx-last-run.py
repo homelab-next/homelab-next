@@ -5,7 +5,7 @@
 #   kind: job
 #   purpose: Write a scheduled job's last-run record (schemas/status/last_run.schema.json) when its service starts and again when it stops, whatever the outcome.
 #   owner: platform
-#   trigger: [role:last_run, timer:aide/scan, timer:clamav/scan, timer:lynis/scan, timer:needrestart/check, timer:openbao/acme-renew, timer:rkhunter/scan, timer:trivy/scan]
+#   trigger: [role:last_run, timer:aide/scan, timer:caddy/acme-renew, timer:clamav/scan, timer:lynis/scan, timer:needrestart/check, timer:openbao/acme-renew, timer:rkhunter/scan, timer:trivy/scan]
 #   inputs: the job's id, unit, schedule and record directory (arguments); systemd's SERVICE_RESULT, EXIT_CODE and EXIT_STATUS (finish)
 #   outputs: <dir>/<job id as a file name>.json, mode 0640, group-readable by --group
 #   installs_to: /usr/local/libexec/homelabnext/hnx-last-run

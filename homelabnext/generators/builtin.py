@@ -34,6 +34,7 @@ from homelabnext.edge_identity import (
     AUTH_PROXY_CALLBACK,
     AUTH_PROXY_CAPABILITY,
     AUTH_PROXY_CHECK,
+    AUTH_PROXY_COOKIE,
     AUTH_PROXY_PREFIX,
     AUTH_PROXY_SIGN_IN,
     IDENTITY_HEADERS,
@@ -224,9 +225,16 @@ def _forward_auth_snippet(endpoint: str, identity: IdentityHeaders | None = None
         f"\t\t\t\tredir * {AUTH_PROXY_SIGN_IN}?rd={{scheme}}://{{host}}{{http.request.uri_escaped}}\n"
         "\t\t\t}\n"
         "\t\t}\n"
+        "\t\t# the session cookie is the auth proxy's alone: no upstream sees it (after the check)\n"
+        f'\t\trequest_header Cookie "{SESSION_COOKIE_FIND}" "$1"\n'
         "\t}\n"
         "}\n"
     )
+
+
+#: the regular expression that deletes every part of the auth proxy's session cookie from a
+#: ``Cookie`` header (keeping the separator before it; any other cookie stays), case-insensitively
+SESSION_COOKIE_FIND = rf"(?i)(^|;\s*){AUTH_PROXY_COOKIE}[^=;]*=[^;]*"
 
 
 #: the auth proxy check's query parameter naming the groups a signed-in user must be in one of

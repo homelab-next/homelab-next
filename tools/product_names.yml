@@ -22,7 +22,6 @@ products:
   - {name: prometheus, why: the metrics service's reference product}
   - {name: grafana, why: the dashboards' reference product}
   - {name: uptime-kuma, why: the uptime monitor's reference product}
-  - {name: caddy, why: the edge's reference product}
   - {name: authentik, why: the idp's reference product}
   - {name: wazuh, why: the SIEM's reference product}
   - {name: suricata, why: a network sensor product}
@@ -60,6 +59,12 @@ allow:
     reason: "the deny-all front the ntfy module's tests put before the loopback stand-in of the product's API (conformance/fakes/ntfy_api.py, in the baseline)"
   - path: "tests/roles/test_ntfy_role.py"
     reason: "the tests of the ntfy module's role (modules/ntfy/roles/ntfy), named for the module id as a module role must be (role:<module id>)"
+  - path: "tests/modules/test_edge_module.py"
+    reason: "the tests of the caddy provider module (modules/caddy): its manifest, conformance target, an overlay that selects it and its Caddyfile adapted by the product, by the module's id, which is its product's name"
+  - path: "tests/roles/test_caddy_role.py"
+    reason: "the tests of the caddy module's roles (modules/caddy/roles/caddy and caddy_auth_proxy), named for the module id as a module role must be (role:<module id>)"
+  - path: "homelabnext/conform/adapters/caddy.py"
+    reason: "the edge provider module's conformance adapter (modules/caddy's provides.slots.edge.adapter), a shared adapter as the module rules require, named for its module like the ntfy one; it drives the product's own binary"
   - path: "docs/scripts/catalog.json"
     reason: generated from the scripts' hnx-script header comments, which are prose
   - path: "tools/*.allow.yml"

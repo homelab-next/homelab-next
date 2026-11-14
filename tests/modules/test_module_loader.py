@@ -1124,9 +1124,9 @@ def test_the_cli_exits_0_clean_and_names_what_it_did_not_check(capsys):
     assert code == 0
     assert "note: no inventory of what runs" in out.out
     assert "note: the core registry is the repository's example" in out.out
-    # the public modules/ tree ships modules/ntfy, so it is neither missing nor empty
+    # the public modules/ tree ships modules/ntfy and modules/caddy, so it is neither missing nor empty
     assert "note: the public modules/ tree" not in out.out
-    assert out.out.rstrip().endswith("17 module(s), 0 problem(s)")
+    assert out.out.rstrip().endswith("18 module(s), 0 problem(s)")
 
 
 def test_the_cli_exits_1_on_a_problem_and_prints_json(capsys):

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: the edge itself, keyed by the slot
+# and renamed to the instance the site selects; version is product.version (never repeated here),
+# and host is the module's host role, which the site places on a guest. The lab registry
+# (lab/services.yml) must carry it exactly as bound (hnx modules check,
+# docs/modules/registry-rows.md). The edge publishes no route of its own: the sites it serves are
+# the public rows of the deployment's hosts (each with its own public_hostname, auth: idp or own).
+# The forward-auth proxy's row (capability auth-proxy, which the generated sites dial) is the
+# lab's own row, not contributed here: a provider contributes only rows keyed by the slots it
+# fills, and auth-proxy is not a slot (README.md, "Using it in a site", gives the row).
+services:
+  edge:
+    capability: edge
+    impl: caddy  # caddy-lint: allow a provider's row never repeats its version; the site binds product.version (2.11.7) into it
+    host: edge
+    protocol: https
+    port: 443
+    health: {kind: tcp}
+    owner: operator
+    tls: public
+    auth: own
+    tags: [edge]
+    description: Caddy, the deployment's front door; serves only the generated sites of the deployment's own hosts over a public-trust certificate, forward auth through the auth proxy.

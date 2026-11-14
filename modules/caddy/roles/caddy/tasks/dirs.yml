@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is root's, with the container's group so its user passes through to what it
+# reads: config/, certs/ and edge-tls/ (read-only in the container), data/ and state/ (Caddy's own,
+# the container user's). acme/ and acme-env/ (the ACME account and the DNS token) and export/ are
+# root's alone.
+- name: Create the data root and its directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ caddy_data_root }}", owner: "{{ caddy_owner }}", group: "{{ caddy_gid | int }}", mode: "0750"}
+    - {path: "{{ caddy_data_root }}/config", owner: "{{ caddy_owner }}", group: "{{ caddy_gid | int }}", mode: "0750"}
+    - {path: "{{ caddy_data_root }}/certs", owner: "{{ caddy_owner }}", group: "{{ caddy_gid | int }}", mode: "0750"}
+    - {path: "{{ caddy_data_root }}/edge-tls", owner: "{{ caddy_owner }}", group: "{{ caddy_gid | int }}", mode: "0750"}
+    - {path: "{{ caddy_data_root }}/data", owner: "{{ caddy_uid | int }}", group: "{{ caddy_gid | int }}", mode: "0700"}
+    - {path: "{{ caddy_data_root }}/state", owner: "{{ caddy_uid | int }}", group: "{{ caddy_gid | int }}", mode: "0700"}
+    - {path: "{{ caddy_acme_dir }}", owner: "{{ caddy_owner }}", group: "{{ caddy_owner_group }}", mode: "0700"}
+    - {path: "{{ caddy_acme_env_file | dirname }}", owner: "{{ caddy_owner }}", group: "{{ caddy_owner_group }}", mode: "0700"}
+    - {path: "{{ caddy_data_root }}/export", owner: "{{ caddy_owner }}", group: "{{ caddy_owner_group }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

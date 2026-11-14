@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role caddy) for {{ caddy_logical_id }}. Do not edit.
+[Unit]
+Description=Edge (Caddy) ACME certificate renewal, daily ({{ caddy_logical_id }})
+
+[Timer]
+OnCalendar={{ caddy_acme_schedule }}
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

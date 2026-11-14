@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main to render and start the auth proxy again)
+  ansible.builtin.debug:
+    msg: caddy_auth_proxy keeps no data of its own; re-running main renders it again from the secret store
+  tags: [restore]

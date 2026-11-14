@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to back up (the auth proxy keeps no state; sessions live in the users' cookies)
+  ansible.builtin.debug:
+    msg: caddy_auth_proxy keeps no data a backup must capture; its credentials are in the secret store
+  tags: [backup]
