@@ -30,10 +30,33 @@
   loop: [service, timer]
   register: trivy_units
 
-- name: Reload systemd and enable the timer when the units changed
+- name: Ask whether the trivy timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ trivy_systemctl_cli }}", is-enabled, hnx-trivy.timer]
+  register: trivy_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the trivy timer is started
+  ansible.builtin.command:
+    argv: ["{{ trivy_systemctl_cli }}", is-active, hnx-trivy.timer]
+  register: trivy_timer_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
   ansible.builtin.command:
     argv: "{{ [trivy_systemctl_cli] + item }}"
-  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-trivy.timer']] if trivy_units is changed else [] }}"
+  vars:
+    trivy_timer_owed: >-
+      {{ trivy_units is changed
+         or trivy_timer_enabled.stdout | default('') | trim != 'enabled'
+         or trivy_timer_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if trivy_units is changed else [])
+       + ([['enable', '--now', 'hnx-trivy.timer']] if trivy_timer_owed | bool else []) }}
   loop_control:
     label: "{{ item | join(' ') }}"
   changed_when: true

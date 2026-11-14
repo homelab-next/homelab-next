@@ -84,10 +84,33 @@
   loop: [service, timer]
   register: lynis_units
 
-- name: Reload systemd and enable the timer when the units changed
+- name: Ask whether the lynis timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ lynis_systemctl_cli }}", is-enabled, hnx-lynis.timer]
+  register: lynis_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the lynis timer is started
+  ansible.builtin.command:
+    argv: ["{{ lynis_systemctl_cli }}", is-active, hnx-lynis.timer]
+  register: lynis_timer_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
   ansible.builtin.command:
     argv: "{{ [lynis_systemctl_cli] + item }}"
-  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-lynis.timer']] if lynis_units is changed else [] }}"
+  vars:
+    lynis_timer_owed: >-
+      {{ lynis_units is changed
+         or lynis_timer_enabled.stdout | default('') | trim != 'enabled'
+         or lynis_timer_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if lynis_units is changed else [])
+       + ([['enable', '--now', 'hnx-lynis.timer']] if lynis_timer_owed | bool else []) }}
   loop_control:
     label: "{{ item | join(' ') }}"
   changed_when: true
