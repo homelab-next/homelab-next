@@ -415,7 +415,10 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
 ## 3. Registry and naming
 
 - Registry file: `services.yml` (the example lives at `examples/services.yml`), validated by
-  `schemas/platform/service.json`. A service row has at least: `name` (logical id slug), `guest`,
+  `schemas/platform/service.json` and `homelabnext.registry.model.semantic_problems`. Validation
+  refuses service or metrics listeners that claim the same host, port and transport; `hnx registry
+  validate` applies this rule to overlay `services.yml` files too. A service row has at least:
+  `name` (logical id slug), `guest`,
   `ports` (named), `hostname`, `auth`, `health`, `metrics`, `backup`, `depends_on`, `version`,
   `impl` (current product), `replaced_by` (optional).
 - Capability alias: `<capability>.svc.example.internal`, for example

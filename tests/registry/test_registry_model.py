@@ -67,7 +67,7 @@ NEGATIVES = {
     ),
     "duplicate-port-on-host": (
         lambda d: d["services"]["metrics"].update(port=8080),
-        "already used",
+        "is claimed by",
     ),
     "unknown-upstream": (
         lambda d: d["services"]["metrics"].update(upstreams=["ghost"]),
@@ -159,6 +159,17 @@ def test_negative_is_refused(name):
         build_registry(mutate(fn))
     assert needle in str(exc.value)
     assert exc.value.problems
+
+
+def test_listener_clash_negative_fixture_is_schema_valid_but_registry_invalid():
+    from homelabnext.registry.model import build_registry, schema_problems
+
+    path = ROOT / "schemas/platform/negative/service.listener-clash.yml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert schema_problems(doc) == []
+    with pytest.raises(RegistryError) as exc:
+        build_registry(doc)
+    assert "core-01 tcp/8099 is claimed by auth-proxy metrics, status-hub" in str(exc.value)
 
 
 def test_duplicate_yaml_key_is_refused():
