@@ -77,10 +77,33 @@
   loop: [service, timer]
   register: aide_units
 
-- name: Reload systemd and enable the timer when the units changed
+- name: Ask whether the aide timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ aide_systemctl_cli }}", is-enabled, hnx-aide.timer]
+  register: aide_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the aide timer is started
+  ansible.builtin.command:
+    argv: ["{{ aide_systemctl_cli }}", is-active, hnx-aide.timer]
+  register: aide_timer_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
   ansible.builtin.command:
     argv: "{{ [aide_systemctl_cli] + item }}"
-  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-aide.timer']] if aide_units is changed else [] }}"
+  vars:
+    aide_timer_owed: >-
+      {{ aide_units is changed
+         or aide_timer_enabled.stdout | default('') | trim != 'enabled'
+         or aide_timer_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if aide_units is changed else [])
+       + ([['enable', '--now', 'hnx-aide.timer']] if aide_timer_owed | bool else []) }}
   loop_control:
     label: "{{ item | join(' ') }}"
   changed_when: true

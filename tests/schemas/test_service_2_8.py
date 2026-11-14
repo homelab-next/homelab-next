@@ -46,8 +46,13 @@ def test_version_is_2_8_frozen_and_additive():
 def test_tlp_ceiling_validates_in_2_8_only_and_reaches_the_model():
     doc = _with_ceiling("green")
     assert sc.errors_for(CURRENT, doc, REG) == [] and _problems(doc) == []
-    assert sc.errors_for(FROZEN_28, doc, REG) == []
-    assert sc.errors_for(FROZEN_27, doc, REG) != []
+    legacy = copy.deepcopy(doc)
+    for service in legacy["services"].values():
+        if service.get("metrics"):
+            service["metrics"].pop("scheme", None)
+            service["metrics"].pop("auth", None)
+    assert sc.errors_for(FROZEN_28, legacy, REG) == []
+    assert sc.errors_for(FROZEN_27, legacy, REG) != []
     assert build_registry(doc).by_capability("notify").tlp_ceiling == "green"
     assert build_registry(DOC).by_capability("notify").tlp_ceiling is None
 

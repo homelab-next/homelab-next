@@ -3,7 +3,7 @@
 # an auth key named by a secret reference (secret:<name>, resolved by the hnx_secret lookup),
 # and advertises tag:zone-<zone> for its zone, the same tag the tailscale-acl target writes
 # policy for. No exit node and no subnet routes are advertised.
-tailscale_node_version: "1.88.4"
+tailscale_node_version: "1.104.4"
 # The vendor package repository's track root (stable); the role appends debian/ or ubuntu/ for
 # the guest. Point it at a lab mirror (same layout) to control what is served.
 tailscale_node_repository: "https://pkgs.tailscale.com/stable"

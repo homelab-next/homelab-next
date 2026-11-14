@@ -180,8 +180,8 @@ jobs:
       # a module sum (go.sum's h1:) as hex: the SHA-256 of the module's file tree
       ACTIONLINT_SUM_SHA256: "bd0e0678937ce82d101fe81351072cf0c7262bad8e2d3de499a90f32d1166276"
       # the lab image's version (compose/lab-in-a-box/docker-compose.yml): bump the two together
-      NATS_SERVER_VERSION: "v2.15.1"
-      NATS_SERVER_SUM_SHA256: "7cadc07981488e2d529a783ad23074855a003d97b303f533b1a23706a5c53442"
+      NATS_SERVER_VERSION: "v2.15.2"
+      NATS_SERVER_SUM_SHA256: "c8bb20b7692c960ca6bf1be316ad56196724e6191ab766187db5ef435e39b735"
       ZIZMOR_VERSION: "1.31.1"  # docs/private-overlay.md names the version the templates pass
       ZIZMOR_SHA256: "58e878eb2dbd2c6183c105e1ac28c14f7dd1eca44a783f1fe2a69647d012c410"  # manylinux_2_28_x86_64 wheel
     steps:

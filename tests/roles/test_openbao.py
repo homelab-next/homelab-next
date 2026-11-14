@@ -93,7 +93,7 @@ BAD = [
     {"openbao_api_addr": ADDR.replace("//", "//user@")},
     {"openbao_cluster_addr": f"http://{HOST}:8201"},
     {"openbao_version": "2.7"},
-    {"openbao_version": "2.7.1\nevil"},
+    {"openbao_version": "2.7.2\nevil"},
     {"openbao_checksums": {"amd64": "0" * 63}},
     {"openbao_checksums": {"riscv64": "0" * 64}},
     {"openbao_checksums": {}},
@@ -467,7 +467,7 @@ def test_check_mode_on_a_fresh_host_skips_what_needs_the_archive(tmp_path, pki):
     version check (which need the archive and the command) are skipped, not failed."""
     with fake_openbao(pki, 200, ACTIVE) as mirror:  # a mirror that would answer, never asked
         v = base(
-            tmp_path, openbao_release_repository=mirror, openbao_release_version="2.7.1",
+            tmp_path, openbao_release_repository=mirror, openbao_release_version="2.7.2",
             openbao_release_checksums={"amd64": "0" * 64}, openbao_arch="amd64",
         )  # fmt: skip
         r = check_run(tmp_path, "release", v, env={"SSL_CERT_FILE": str(pki / "ca.pem")})
@@ -505,9 +505,9 @@ def test_platform_refuses_active_swap_unless_allowed(tmp_path, swaps, allow, ref
 @pytest.mark.parametrize(
     ("running", "allow", "refused"),
     [
-        ("2.8.0", False, True),  # the pin (2.7.1) is older than what runs
+        ("2.8.0", False, True),  # the pin (2.7.2) is older than what runs
         ("2.8.0", True, False),
-        ("2.7.1", False, False),
+        ("2.7.2", False, False),
         ("2.7.0", False, False),  # an upgrade
         (None, False, False),  # nothing answers: a fresh host
     ],
@@ -535,14 +535,14 @@ def closed_port() -> int:
         return sock.getsockname()[1]
 
 
-OLDER = "the pin is 2.7.1, older than what this host has run ("
+OLDER = "the pin is 2.7.2, older than what this host has run ("
 NOT_A_RECORD = "highest-release is not a release record; remove or fix it"
 STOPPED = [
     # (the release the command points at, the record's content, allow, refused with)
     ("2.8.0", None, False, OLDER + "linked 2.8.0"),  # the command points at a newer release
     (None, "2.8.0", False, OLDER + "recorded 2.8.0"),  # a newer release answered here once
     ("2.8.0", "2.9.0", True, None),  # the operator's explicit downgrade
-    ("2.7.1", "2.7.1", False, None),  # the pin itself
+    ("2.7.2", "2.7.2", False, None),  # the pin itself
     ("2.7.0", "2.7.0", False, None),  # an upgrade
     (None, None, False, None),  # a fresh host
     # a record that is not one fails by name, never read as "nothing recorded"
@@ -600,7 +600,7 @@ def test_main_records_the_release_that_answered_and_an_explicit_rollback_lowers_
     the switch; without the switch, an older release answering never lowers it."""
     with (
         fake_openbao(pki, 200, dict(ACTIVE, version="2.8.0")) as newer,
-        fake_openbao(pki, 200, ACTIVE) as pinned,  # 2.7.1, the pin
+        fake_openbao(pki, 200, ACTIVE) as pinned,  # 2.7.2, the pin
     ):
         port = int(newer.rsplit(":", 1)[1])  # something listening for the service step's wait
 
@@ -616,7 +616,7 @@ def test_main_records_the_release_that_answered_and_an_explicit_rollback_lowers_
         steps = [
             (newer, {}, "2.8.0"),  # raised
             (pinned, {}, "2.8.0"),  # an older release answering, no switch: kept
-            (pinned, {"openbao_allow_downgrade": True}, "2.7.1"),  # the explicit rollback
+            (pinned, {"openbao_allow_downgrade": True}, "2.7.2"),  # the explicit rollback
         ]
         for url, kw, want in steps:
             r = service(url, **kw)
@@ -772,14 +772,14 @@ def hook_vars(tmp_path, pki, url, **kw):
     return v
 
 
-ACTIVE = {"initialized": True, "sealed": False, "standby": False, "version": "2.7.1"}
+ACTIVE = {"initialized": True, "sealed": False, "standby": False, "version": "2.7.2"}
 STATES = {
     # name: (status without the query, body, health fails with, readiness says)
     "active": (200, ACTIVE, None, "unsealed-active"),
     "standby": (429, dict(ACTIVE, standby=True), None, "unsealed-standby"),
     "sealed": (503, dict(ACTIVE, sealed=True), "SEALED", "sealed"),
     "uninitialised": (501, dict(ACTIVE, initialized=False, sealed=True), "UNINITIALISED", "uninitialised"),
-    "old release": (200, dict(ACTIVE, version="2.7.0"), "runs 2.7.0, the pin is 2.7.1", "unsealed-active"),
+    "old release": (200, dict(ACTIVE, version="2.7.0"), "runs 2.7.0, the pin is 2.7.2", "unsealed-active"),
 }  # fmt: skip
 
 
@@ -972,7 +972,7 @@ def test_snapshot_hooks_write_the_snapshot_and_a_manifest_naming_its_writer(
     assert oct(snap.stat().st_mode & 0o777) == "0o600"
     assert not snap.with_name(name + ".partial").exists()
     manifest = json.loads(snap.with_name(name + ".json").read_text())
-    assert manifest["written_by"] == "2.7.1" and manifest["kind"] == "raft-snapshot"
+    assert manifest["written_by"] == "2.7.2" and manifest["kind"] == "raft-snapshot"
     assert manifest["sha256"] == hashlib.sha256(SNAP).hexdigest()
     assert manifest["bytes"] == len(SNAP) and manifest["service"] == "secrets"
     assert "not an open format" in manifest["format"]
@@ -1043,7 +1043,7 @@ def test_no_token_reaches_a_command_line_or_the_output_even_at_vvv(tmp_path, pki
     src.parent.mkdir()
     src.write_bytes(SNAP)
     src.with_name("raft.snap.json").write_text(
-        json.dumps({"kind": "raft-snapshot", "sha256": hashlib.sha256(SNAP).hexdigest(), "written_by": "2.7.1"})
+        json.dumps({"kind": "raft-snapshot", "sha256": hashlib.sha256(SNAP).hexdigest(), "written_by": "2.7.2"})
     )  # fmt: skip
     with fake_api(pki) as (url, api):
         runs = [
@@ -1069,7 +1069,7 @@ def restore_case(tmp_path, *, manifest="good", data=SNAP):
     src = tmp_path / "export" / "raft.snap"  # under openbao_export_dir
     src.parent.mkdir(exist_ok=True)
     src.write_bytes(data)
-    m = {"kind": "raft-snapshot", "sha256": hashlib.sha256(SNAP).hexdigest(), "written_by": "2.7.1"}
+    m = {"kind": "raft-snapshot", "sha256": hashlib.sha256(SNAP).hexdigest(), "written_by": "2.7.2"}
     if manifest == "newer":
         m["written_by"] = "2.8.0"
     if manifest != "missing":
@@ -1120,7 +1120,7 @@ def test_restore_checks_the_manifest_takes_a_pre_restore_snapshot_then_restores(
     [
         ({"manifest": "missing"}, "the snapshot's manifest, is missing"),
         ({"data": b"tampered-snapshot-bytes"}, "is not the one in its manifest"),
-        ({"manifest": "newer"}, "release 2.8.0 wrote it and 2.7.1 runs"),
+        ({"manifest": "newer"}, "release 2.8.0 wrote it and 2.7.2 runs"),
     ],
 )
 def test_restore_refuses_a_snapshot_without_a_matching_manifest_or_from_a_newer_release(
@@ -1271,7 +1271,7 @@ def test_an_unrestricted_source_on_another_filesystem_is_refused(tmp_path, pki):
         m = {
             "kind": "raft-snapshot",
             "sha256": hashlib.sha256(SNAP).hexdigest(),
-            "written_by": "2.7.1",
+            "written_by": "2.7.2",
         }
         src.with_name("raft.snap.json").write_text(json.dumps(m))
         with fake_api(pki) as (url, api):
@@ -1333,7 +1333,7 @@ def test_restore_refuses_a_source_someone_else_could_have_written(tmp_path, pki)
         m = {
             "kind": "raft-snapshot",
             "sha256": hashlib.sha256(SNAP).hexdigest(),
-            "written_by": "2.7.1",
+            "written_by": "2.7.2",
         }
         src.with_name("raft.snap.json").write_text(json.dumps(m))
         over = {}
@@ -1402,7 +1402,7 @@ def test_restore_refuses_a_source_someone_else_could_have_written(tmp_path, pki)
 @pytest.mark.parametrize(
     "target",
     [
-        {"openbao_target_version": "2.7.1"},  # a no-op
+        {"openbao_target_version": "2.7.2"},  # a no-op
         {"openbao_target_version": "2.6.5"},  # a downgrade
         {"openbao_target_version": "2.8"},
         {"openbao_target_checksums": {"amd64": "z" * 64}},
@@ -1443,7 +1443,7 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
     argv; HOME and BAO_TOKEN are throwaway, so no ~/.vault-token is read or sent). CI has no
     `bao`, so this skips there."""
     bao = subprocess.run(["bao", "version"], capture_output=True, text=True, check=True).stdout
-    assert bao.startswith("OpenBao v2.7.1 "), bao  # the pin, nothing else
+    assert bao.startswith("OpenBao v2.7.2 "), bao  # the pin, nothing else
     port, cport = free_port(), free_port()
     url = f"https://{LOOPBACK}:{port}"
     v = hook_vars(tmp_path, pki, url, openbao_listen_address=LOOPBACK, openbao_port=port,
@@ -1564,16 +1564,16 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
     finally:
         server.terminate()
         server.wait(timeout=30)
-    # the server is stopped: sys/health says nothing; the command still points at 2.7.1 (as main
+    # the server is stopped: sys/health says nothing; the command still points at 2.7.2 (as main
     # links it: <install_dir>/<version>/bao), which refuses a lower pin
-    (tmp_path / "opt" / "2.7.1").mkdir(parents=True)
-    (tmp_path / "opt" / "2.7.1" / "bao").write_text("")
+    (tmp_path / "opt" / "2.7.2").mkdir(parents=True)
+    (tmp_path / "opt" / "2.7.2" / "bao").write_text("")
     (tmp_path / "bin").mkdir(exist_ok=True)
-    (tmp_path / "bin" / "bao").symlink_to(tmp_path / "opt" / "2.7.1" / "bao")
+    (tmp_path / "bin" / "bao").symlink_to(tmp_path / "opt" / "2.7.2" / "bao")
     r = run_role(
         tmp_path, ROLE, "downgrade", dict(v, openbao_version="2.7.0", openbao_health_timeout=2)
     )
-    assert r.returncode != 0 and "older than what this host has run (linked 2.7.1" in r.stdout, (
+    assert r.returncode != 0 and "older than what this host has run (linked 2.7.2" in r.stdout, (
         r.stdout
     )
 

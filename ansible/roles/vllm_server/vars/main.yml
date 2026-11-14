@@ -5,7 +5,6 @@
 vllm_server_arg_rules:
   async-scheduling: null
   block-size: ^(8|16|32|64|128)\Z
-  calculate-kv-scales: null
   cpu-offload-gb: ^[0-9]{1,6}(\.[0-9]{1,8})?\Z
   disable-custom-all-reduce: null
   disable-fastapi-docs: null
@@ -28,7 +27,6 @@ vllm_server_arg_rules:
   max-log-len: ^[0-9]{1,10}\Z
   max-logprobs: ^[0-9]{1,10}\Z
   max-num-batched-tokens: ^[0-9]{1,10}\Z
-  max-num-partial-prefills: ^[0-9]{1,10}\Z
   max-num-seqs: ^[0-9]{1,10}\Z
   no-enable-prefix-caching: null
   num-gpu-blocks-override: ^[0-9]{1,10}\Z
@@ -37,7 +35,6 @@ vllm_server_arg_rules:
   response-role: ^[a-z0-9][a-z0-9_.-]{0,31}\Z
   return-tokens-as-token-ids: null
   seed: ^[0-9]{1,10}\Z
-  swap-space: ^[0-9]{1,6}(\.[0-9]{1,8})?\Z
-  tokenizer-mode: ^(auto|slow|mistral)\Z
+  tokenizer-mode: ^(auto|hf|mistral)\Z
   tool-call-parser: ^[a-z0-9][a-z0-9_.-]{0,31}\Z
   uvicorn-log-level: ^(critical|error|warning|info|debug|trace)\Z

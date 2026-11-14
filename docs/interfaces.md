@@ -415,7 +415,10 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
 ## 3. Registry and naming
 
 - Registry file: `services.yml` (the example lives at `examples/services.yml`), validated by
-  `schemas/platform/service.json`. A service row has at least: `name` (logical id slug), `guest`,
+  `schemas/platform/service.json` and `homelabnext.registry.model.semantic_problems`. Validation
+  refuses service or metrics listeners that claim the same host, port and transport; `hnx registry
+  validate` applies this rule to overlay `services.yml` files too. A service row has at least:
+  `name` (logical id slug), `guest`,
   `ports` (named), `hostname`, `auth`, `health`, `metrics`, `backup`, `depends_on`, `version`,
   `impl` (current product), `replaced_by` (optional).
 - Capability alias: `<capability>.svc.example.internal`, for example
@@ -430,6 +433,13 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
   from the caller, raise `homelabnext.lake.EndpointNotConfigured` when none was supplied; `tools/no_raw_endpoints.py` gates the tree (ADR-0002).
 - Environment variables use the prefix `HNX_`. Endpoint overrides are `HNX_ENDPOINT_<NAME>` with
   the service name upper-cased and `-` replaced by `_`.
+- A metrics listener may set `metrics.scheme` when it differs from the service endpoint scheme.
+  Authenticated scrape targets use `metrics.auth: {kind: basic, username: ..., secret: secret:<name>}`
+  or `{kind: bearer, secret: secret:<name>}`. Values never belong in the registry or generated
+  Prometheus config: `prometheus/credentials.json` maps each secret reference to its fixed
+  `/etc/hnx/scrape-credentials/` file and mode `0600`, which the monitoring role writes.
+  Product documentation must identify the scrape principal's required permissions (for example,
+  Trino's metrics principal needs system-information read permission).
 - Bindings reach a primary only (ADR-0039 decision 3). A binding is a row's `upstreams`, a role
   binding's `backend: svc:<name>`, an LLM gateway spec's backends, a workflow pack's `svc:`
   targets and event sources, and a module's `requires` through the site selection; `svc:<name>`
@@ -545,7 +555,7 @@ change until its ADR is accepted):
 | `platform/lake_table` | 1.0 | `schemas/platform/lake_table.schema.json` | draft |
 | `platform/mcp_server` | 1.4 | `schemas/platform/mcp_server.schema.json` | stable |
 | `platform/model_roles` | 1.4 | `schemas/platform/model_roles.json` | stable |
-| `platform/model_serving` | 1.0 | `schemas/platform/model_serving.schema.json` | stable |
+| `platform/model_serving` | 2.0 | `schemas/platform/model_serving.schema.json` | stable |
 | `platform/model_store` | 1.0 | `schemas/platform/model_store.schema.json` | stable |
 | `platform/module` | 1.0 | `schemas/platform/module.schema.json` | draft |
 | `platform/module_inventory` | 1.0 | `schemas/platform/module_inventory.schema.json` | draft |
@@ -556,7 +566,7 @@ change until its ADR is accepted):
 | `platform/orchestrator_profile` | 1.0 | `schemas/platform/orchestrator_profile.schema.json` | draft |
 | `platform/role_interface` | 1.0 | `schemas/platform/role_interface.schema.json` | stable |
 | `platform/script_header` | 1.0 | `schemas/platform/script_header.schema.json` | stable |
-| `platform/service` | 2.10 | `schemas/platform/service.json` | stable |
+| `platform/service` | 2.11 | `schemas/platform/service.json` | stable |
 | `platform/site` | 1.6 | `schemas/platform/site.schema.json` | stable |
 | `platform/slot` | 1.0 | `schemas/platform/slot.schema.json` | draft |
 | `platform/swap_record` | 1.1 | `schemas/platform/swap_record.schema.json` | stable |

@@ -25,9 +25,9 @@ DOC = yaml.safe_load((ROOT / "examples/services.yml").read_text())
 
 
 def test_version_is_2_10_frozen_and_additive():
-    assert CURRENT["$id"].endswith("/platform/service/2.10")
-    assert CURRENT == FROZEN_210
-    assert sc.is_additive(FROZEN_29, CURRENT) == []
+    assert FROZEN_210["$id"].endswith("/platform/service/2.10")
+    assert sc.is_additive(FROZEN_29, FROZEN_210) == []
+    assert sc.is_additive(FROZEN_210, CURRENT) == []
 
 
 def test_edge_tls_validates_in_2_10_only_and_reaches_the_model():

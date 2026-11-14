@@ -10,7 +10,7 @@
 # needs TLS (the adapter refuses a password over plaintext nats:// to anything but loopback), which
 # this role does not set up yet.
 # events_bus_archive_url and _sha256 pin the server (no default: the playbook pins the release).
-events_bus_version: "2.15.1"
+events_bus_version: "2.15.2"
 events_bus_user: hnx-events
 events_bus_group: hnx-events
 events_bus_bin: /usr/local/libexec/homelabnext/nats-server
