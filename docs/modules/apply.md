@@ -41,6 +41,13 @@ check` first. `--selection` is for the `inventory` target only (`render` and
 `plan`); a selection the schema refuses is exit 1, one that cannot be read exit 2. The inventory is
 fleet-wide, so `--node` does not narrow it: render it once.
 
+**`--out` never silently drops module groups.** A `hosts.yml` already in `--out` that holds `mod_*`
+or `modhost_*` groups the new render lacks (the render has no `--selection`, or another one) is
+refused, exit 1, nothing written, naming the groups: the module plays would otherwise match no
+host and `ansible-playbook` exit 0. Pass the same `--selection`, or `--drop-module-groups` to drop
+them on purpose. A fresh directory, or one whose inventory has no module groups, needs no flag;
+`plan` only prints the difference.
+
 **The install playbook (`modules.yml`).** One play per placed host role of each selected module,
 the modules in **install order**: each after every module that serves a slot it hard-requires
 (`requires.capabilities`: the provider of the named instance, or of every instance of the slot

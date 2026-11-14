@@ -142,11 +142,40 @@ def _selection(path: str | None) -> dict | None:
     return doc
 
 
+def _dropped_module_groups(out, files: dict[str, str]) -> list[str]:
+    """The module groups (``mod_*``, ``modhost_*``) the ``hosts.yml`` already in ``out`` holds and
+    the one about to be written there does not: what an inventory render WITHOUT ``--selection``
+    (or with another selection) would silently delete, and with it every module play's hosts
+    (``ansible-playbook`` on an empty group matches no host and exits 0).  An unreadable existing
+    file holds none."""
+    import yaml
+
+    from homelabnext.modules.apply import GROUP_PREFIX, HOST_GROUP_PREFIX
+
+    def groups(text: str) -> set[str]:
+        try:
+            children = ((yaml.safe_load(text) or {}).get("all") or {}).get("children") or {}
+        except (yaml.YAMLError, AttributeError):
+            return set()
+        return {g for g in children if str(g).startswith((GROUP_PREFIX, HOST_GROUP_PREFIX))}
+
+    existing = out / "hosts.yml"
+    try:
+        old = groups(existing.read_text(encoding="utf-8")) if existing.is_file() else set()
+    except (OSError, UnicodeDecodeError):
+        return []
+    return sorted(old - groups(files.get("hosts.yml", "")))
+
+
 def _node_usage(args: argparse.Namespace) -> str | None:
     """Why ``--node``/``--allow-empty``/``--selection`` cannot be used as given (a usage error),
     or None."""
     if getattr(args, "selection", None) is not None and args.target not in SELECTION_TARGETS:
         return f"--selection is for the inventory target; {args.target} does not take it"
+    if getattr(args, "drop_module_groups", False) and (
+        args.cmd != "render" or args.target != "inventory"
+    ):
+        return "--drop-module-groups is for `render --target inventory --out`"
     if getattr(args, "group_vars", None) is not None and args.target != "inventory":
         return f"--group-vars is for the inventory target; {args.target} does not take it"
     if args.node is None:
@@ -209,6 +238,13 @@ def build_parser() -> argparse.ArgumentParser:
     _selection_arg(r)
     _group_vars_arg(r)
     r.add_argument("--out", help="write files here (default: print a file list)")
+    r.add_argument(
+        "--drop-module-groups",
+        action="store_true",
+        help="inventory --out: let this render delete the mod_*/modhost_* groups the hosts.yml "
+        "already in --out holds and this render lacks (it is refused otherwise: render without "
+        "--selection, or from another one, would silently drop every module's hosts)",
+    )
     r.add_argument(
         "--prune",
         action="store_true",
@@ -362,6 +398,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     "hnx guests: refusing --out with unresolved ssh key names "
                     "(pass --keys with every name; stdout render keeps the placeholder)",
+                    file=sys.stderr,
+                )
+                return 1
+
+            if (
+                args.target == "inventory"
+                and not args.drop_module_groups
+                and (dropped := _dropped_module_groups(Path(args.out), files))
+            ):
+                print(
+                    f"hnx guests: refusing --out {args.out}: its hosts.yml holds module groups "
+                    f"this render lacks ({', '.join(dropped)}); a render without the "
+                    "--selection that made them would delete them, and every module play "
+                    "then matches no host.  Pass the same --selection, or "
+                    "--drop-module-groups to drop them on purpose",
                     file=sys.stderr,
                 )
                 return 1

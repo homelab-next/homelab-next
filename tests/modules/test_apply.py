@@ -221,6 +221,42 @@ def test_the_cli_writes_the_groups_and_plan_takes_the_selection(tmp_path, capsys
     assert code == 0, capsys.readouterr().out
 
 
+def test_rendering_the_inventory_without_its_selection_refuses_to_drop_the_module_groups(
+    tmp_path, capsys
+):
+    """The first Stage 5 re-render wrote an inventory without `--selection` over one that had the
+    `mod_*` and `modhost_*` groups, and every module play then matched no host (ansible-playbook
+    exits 0 on an empty group).  The render refuses (exit 1, nothing written) and names the
+    groups; the same selection, a render onto a directory with no module groups, and the explicit
+    `--drop-module-groups` still work."""
+    out = tmp_path / "inv"
+    assert _guests_render("--selection", str(FLEET_SELECTION), "--out", str(out)) == 0
+    hosts = out / "hosts.yml"
+    hosts.write_text(hosts.read_text() + "    modhost_ghost:\n      hosts:\n        lake-core:\n")
+    kept = hosts.read_text()
+    capsys.readouterr()
+
+    assert _guests_render("--out", str(out)) == 1  # no selection: groups would be lost
+    err = capsys.readouterr().err
+    assert "module groups this render lacks" in err and "mod_example_siem_suite_suite" in err
+    assert "modhost_ghost" in err and "--drop-module-groups" in err
+    assert hosts.read_text() == kept  # nothing was written
+    assert _guests_render("--selection", str(FLEET_SELECTION), "--out", str(out)) == 1  # modhost_
+    assert hosts.read_text() == kept
+    capsys.readouterr()
+
+    assert _guests_render("--out", str(out), "--drop-module-groups") == 0
+    assert "mod_" not in hosts.read_text()
+    assert _guests_render("--out", str(out)) == 0  # nothing left to drop: no flag needed
+    assert _guests_render("--out", str(tmp_path / "fresh")) == 0  # a new directory
+    assert _guests_render("--selection", str(FLEET_SELECTION), "--out", str(out)) == 0
+
+
+def test_drop_module_groups_is_for_the_inventory_render_only(tmp_path, capsys):
+    assert _guests_render("--drop-module-groups", target="cloudinit") == 2
+    assert "--drop-module-groups is for" in capsys.readouterr().err
+
+
 # ----------------------------------------------------------------------------- install order
 
 
