@@ -1589,3 +1589,15 @@ def test_status_hub_hooks_probe_the_tls_listener(tmp_path, hook):
     tmp.mkdir()
     r, _ = _hub_hooks(tmp, hook, probe_cert=False, fails=True)
     assert r.returncode != 0
+
+
+@pytest.mark.parametrize("hook", ["health", "readiness"])
+def test_status_hub_hooks_report_changed_0_even_with_the_probe_directory(tmp_path, hook):
+    """The probe's private directory (``tempfile``) and its removal are scaffolding, not state of
+    the host: a hook run, and so a control-plane run that includes it, never reports changed.
+    The first real deploy read changed=1 on every run (and 2 on a hook), so no second run could
+    be the changed=0 the convergence gate asks for."""
+    r, log = _hub_hooks(tmp_path, hook, probe_cert=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert len([line for line in log if " probe-tls " in line]) == 2, log  # the directory was made
+    assert "changed=0" in r.stdout, r.stdout
