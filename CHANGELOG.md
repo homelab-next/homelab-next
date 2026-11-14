@@ -6,6 +6,8 @@ has no section below.
 
 ## [Unreleased]
 
+### Breaking
+- `model_serving` schema 2.0 removes the vLLM args `swap-space`, `calculate-kv-scales` and `max-num-partial-prefills`, and rejects `tokenizer-mode: slow` (use `hf`); migrate serving specs to flags and tokenizer modes accepted by the pinned vLLM release.
 ### Fixed
 - The `needrestart`, `lynis`, `aide`, `clamav`, `rkhunter` and `trivy` roles now check each scheduled timer's enabled and active state on every run, and re-enable/start it when it has been disabled or stopped by hand. Converged runs remain unchanged.
 
