@@ -81,14 +81,7 @@
         that: caddy_found.tls | dict2items | rejectattr('value', 'equalto', 'ok') | list | length == 0
         fail_msg: "caddy: TLS on {{ caddy_bind }}:{{ caddy_port }} failed for {{ caddy_found.tls | dict2items | rejectattr('value', 'equalto', 'ok') | items2dict }}"
     - name: An unauthenticated request to a gated site is sent to sign in (forward auth)
-      ansible.builtin.assert:
-        that:
-          - item.value[0] == 302
-          - item.value[1].startswith('/oauth2/sign_in?rd=https://' ~ item.key ~ '/')
-        fail_msg: "caddy: {{ item.key }} answered an unauthenticated request with {{ item.value }}, not the sign-in redirect"
-      loop: "{{ caddy_found.redirect | dict2items }}"
-      loop_control:
-        label: "{{ item.key }}"
+      ansible.builtin.include_tasks: health_redirect.yml
     - name: A name no site has answers 404 (the catch-all)
       ansible.builtin.assert:
         that: caddy_found.catch_all == 404

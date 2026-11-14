@@ -94,6 +94,35 @@ def run_steps(tmp_path: Path, role: str, steps: list[str], extra: dict, env: dic
 
 # ----------------------------------------------------------------------------- caddy
 
+def test_the_health_check_reads_the_sign_in_redirect_encoded_or_not_but_only_to_its_own_site(
+    tmp_path,
+):
+    """oauth2-proxy URL-encodes the return target (`rd=https%3A%2F%2Fhub...%2F`); the assertion
+    decoded it wrong as a literal and failed a healthy edge.  Both spellings pass; a wrong host, a
+    host that merely starts with the right one, a wrong scheme, a status that is not 302 and a
+    target that is not the site's root still fail."""
+    ok = "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal%2F"
+    literal = "/oauth2/sign_in?rd=https://hub.example.internal/"
+    bad = [
+        [302, "/oauth2/sign_in?rd=https%3A%2F%2Fevil.example.internal%2F"],
+        [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal.evil.test%2F"],
+        [302, "/oauth2/sign_in?rd=http%3A%2F%2Fhub.example.internal%2F"],
+        [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal"],
+        [302, "/elsewhere?rd=https%3A%2F%2Fhub.example.internal%2F"],
+        [200, ok],
+    ]
+
+    def run(loc):
+        found = {"redirect": {"hub.example.internal": loc}}
+        return run_role(tmp_path, CADDY, "health_redirect", {"caddy_found": found})
+
+    for good in ([302, ok], [302, literal], [302, ok + "dashboard%3Fx%3D1"]):
+        r = run(good)
+        assert r.returncode == 0, (good, r.stdout)
+    for loc in bad:
+        r = run(loc)
+        assert r.returncode != 0 and "not the sign-in redirect" in r.stdout, (loc, r.stdout)
+
 
 def test_main_never_renders_without_an_edge_host(tmp_path):
     r = run_role(tmp_path, CADDY, "main", caddy_vars(tmp_path, caddy_edge_hosts=[]), env=SECRETS)
