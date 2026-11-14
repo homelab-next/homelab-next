@@ -208,17 +208,52 @@ def _text(value) -> str:
     return str(value)
 
 
-def covers(live, want) -> bool:
+#: the client attributes and mapper settings the IdP adds on its own (a rendered client never lists
+#: them): the only extras ``sync`` ignores.  Any other key on the live side is a difference (a
+#: hand-widened ``post.logout.redirect.uris`` or token lifespan is put back), so an IdP release
+#: that adds a key shows as a change until it is listed here, loudly, never silently.
+IDP_CLIENT_ATTRIBUTES = frozenset(
+    {
+        "client.secret.creation.time",
+        "post.logout.redirect.uris",
+        "client.introspection.response.allow.jwt.claim.enabled",
+        "client.use.lightweight.access.token.enabled",
+        "backchannel.logout.session.required",
+        "backchannel.logout.revoke.offline.tokens",
+        "display.on.consent.screen",
+        "oauth2.device.authorization.grant.enabled",
+        "oidc.ciba.grant.enabled",
+        "use.jwks.url",
+        "require.pushed.authorization.requests",
+        "tls.client.certificate.bound.access.tokens",
+        "acr.loa.map",
+        "frontchannel.logout.session.required",
+    }
+)
+IDP_MAPPER_SETTINGS = frozenset(
+    {
+        "introspection.token.claim",
+        "lightweight.claim",
+        "userinfo.token.claim",
+        "access.tokenResponse.claim",
+    }
+)
+
+
+def covers(live, want, extra_ok=None) -> bool:
     """Does the live representation hold what the rendered one says?  The IdP normalises what it
     stores (attributes and mapper settings come back as strings, with defaults of its own added;
     a set comes back in its own order; an empty value may be absent), so a byte comparison of the
     two never settles and every run would report a change.  A rendered dict is held when each of
-    its keys is (extra keys on the live side are the IdP's own); a rendered list of scalars when
+    its keys is (``extra_ok``, when given, is the set of extra live keys the IdP adds itself:
+    any other extra key is a difference; without it extras are ignored); a rendered list of scalars when
     the live one has the same members in any order; a rendered scalar when the live one reads the
     same.  Anything that differs in a rendered key, a member or a value is still a difference."""
     if isinstance(want, dict):
         if not isinstance(live, dict):
             return not want
+        if extra_ok is not None and set(live) - set(want) - extra_ok:
+            return False  # a live key nobody rendered and the IdP does not add by itself
         return all(covers(live.get(k), v) for k, v in want.items())
     if isinstance(want, list):
         if not isinstance(live, list):
@@ -520,7 +555,14 @@ def sync(api: Api, cfg: dict) -> dict:
         if live is None:
             raise Refused(f"client {want['clientId']} was not created")
         cid = live["id"]
-        diff = {k: want[k] for k in CLIENT_FIELDS if k in want and not covers(live.get(k), want[k])}
+        diff = {
+            k: want[k]
+            for k in CLIENT_FIELDS
+            if k in want
+            and not covers(
+                live.get(k), want[k], IDP_CLIENT_ATTRIBUTES if k == "attributes" else None
+            )
+        }
         if diff:
             api.call("PUT", f"{base}/clients/{_q(cid)}", {**live, **diff}, ok=(204,))
             changed.append(f"client {want['clientId']} settings")
@@ -538,9 +580,8 @@ def sync(api: Api, cfg: dict) -> dict:
             if cur is None:
                 api.call("POST", f"{base}/clients/{_q(cid)}/protocol-mappers/models", m, ok=(201,))
                 changed.append(f"client {want['clientId']} mapper {m['name']}")
-            elif not covers(
-                {k: cur.get(k) for k in ("protocolMapper", "config")},
-                {k: m[k] for k in ("protocolMapper", "config") if k in m},
+            elif cur.get("protocolMapper") != m["protocolMapper"] or not covers(
+                cur.get("config"), m.get("config") or {}, IDP_MAPPER_SETTINGS
             ):
                 api.call(
                     "PUT",

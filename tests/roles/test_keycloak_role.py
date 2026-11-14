@@ -404,6 +404,16 @@ def test_sync_reports_changed_only_when_the_live_realm_differs(tmp_path, pki):
         assert r["changed"] == ["client auth-proxy settings", "client auth-proxy mapper audience"]
         assert "https://stray.lab.example/oauth2/callback" not in client["redirectUris"]
         assert json.loads(_script("sync", _settings(kc, pki)).stdout)["changed"] == []
+        # a key nobody rendered and the IdP does not add itself is drift too (a loosened setting)
+        client["attributes"]["access.token.lifespan"] = "31536000"
+        client["protocolMappers"][2]["config"]["extra.claim.setting"] = "x"
+        r = json.loads(_script("sync", _settings(kc, pki)).stdout)
+        assert r["changed"] == [
+            "client auth-proxy settings",
+            "client auth-proxy mapper groups",
+        ], r
+        assert "access.token.lifespan" not in client["attributes"]
+        assert json.loads(_script("sync", _settings(kc, pki)).stdout)["changed"] == []
 
 
 def test_sync_refuses_a_drifted_flow_and_never_edits_it(tmp_path, pki):

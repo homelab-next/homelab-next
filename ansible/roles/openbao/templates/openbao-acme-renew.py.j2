@@ -29,7 +29,6 @@ asks this before it starts the unit, so a converged host is left alone.
 The token is read from the root-only environment file by this script and reaches lego in its
 environment only (never an argument, never the unit's environment); nothing here prints it."""
 
-import errno
 import json
 import os
 import re
@@ -186,11 +185,17 @@ def install_pair():
     staged temporary file outlives the call, and no OSError escapes it. Returns (why the new pair
     was refused, with what was done about it, or None; whether the files are as they were)."""
     old = {CONF["key"]: read(CONF["key"]), CONF["cert"]: read(CONF["cert"])}
-    staged, replaced, held = {}, [], []
+    staged, replaced, held, aside = {}, [], [], {}
     try:
         staged[CONF["key"]] = stage(contents(STORED_KEY), CONF["key"], 0o640, held)
         staged[CONF["cert"]] = stage(contents(STORED_CERT), CONF["cert"], 0o644)
         for dest, tmp in staged.items():
+            if old[dest] is UNREADABLE:
+                # the earlier file cannot be read here to be written back: set it aside by rename
+                # (directory access only) and put the same inode back on a rollback
+                prev = os.path.join(os.path.dirname(dest), ".acme-prev-" + os.path.basename(dest))
+                os.rename(dest, prev)
+                aside[dest] = prev
             os.replace(tmp, dest)
             replaced.append(dest)
         key_pem = held_key(held[0], CONF["key"])
@@ -205,14 +210,18 @@ def install_pair():
     for fd in held:
         os.close(fd)
     if not why:
+        for prev in aside.values():
+            discard(prev)
         return None, True
     try:
+        for dest, prev in aside.items():
+            os.replace(prev, dest)  # the unreadable earlier file, as it was
         for dest in replaced:
+            if dest in aside:
+                continue
             if old[dest] is None:
                 discard(dest)
                 continue
-            if old[dest] is UNREADABLE:  # the earlier key was never read: there is nothing to write back
-                raise OSError(errno.EACCES, "the earlier key cannot be read here")
             tmp = stage(old[dest], dest, 0o640 if dest == CONF["key"] else 0o644)
             try:
                 os.replace(tmp, dest)
@@ -223,7 +232,7 @@ def install_pair():
         why += (f"; putting the old pair back failed too ({e.strerror}): {CONF['cert']} and"
                 f" {CONF['key']} may not match, the next run installs the stored pair again")  # fmt: skip
         return why, False
-    if not replaced:
+    if not replaced and not aside:
         return f"{why}; the installed pair is unchanged", True
     if all(old[dest] is None for dest in replaced):
         return f"{why}; nothing is installed", True

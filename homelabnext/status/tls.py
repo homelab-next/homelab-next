@@ -49,9 +49,12 @@ def canonical_address(addr: str | None) -> str | None:
     """``addr`` (a peer's or a configured source address) in one spelling, or None when it is not
     an IP address."""
     try:
-        return str(ipaddress.ip_address((addr or "").strip().strip("[]")))
+        ip = ipaddress.ip_address((addr or "").strip().strip("[]"))
     except ValueError:
         return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:  # a dual-stack socket's spelling
+        ip = ip.ipv4_mapped
+    return str(ip)
 
 
 class TLSConfigError(ValueError):

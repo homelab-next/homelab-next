@@ -208,6 +208,7 @@ def test_a_name_bound_to_addresses_fails_closed_without_a_source_and_in_the_cli_
     assert s.name_allowed(cert, DOC_A) and s.name_allowed(cert, "2001:db8:0::1")
     assert not s.name_allowed(cert, DOC_B) and not s.name_allowed(cert, None)
     assert not s.name_allowed(cert, "not-an-address")
+    assert s.name_allowed(cert, f"::ffff:{DOC_A}")  # a dual-stack socket's spelling of the address
     assert s.name_allowed({"subjectAltName": (("DNS", EDGE),)}, None)  # unbound: any source
     for bad in (f"{HEALTH}@", f"{HEALTH}@edge.example.internal", f"{HEALTH}@{DOC_A},x"):
         with pytest.raises(TLSConfigError, match="IP addresses"):

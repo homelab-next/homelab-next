@@ -189,23 +189,29 @@ def test_a_later_run_does_not_reinstall_a_current_pair_it_cannot_open(
 
 
 @pytest.mark.parametrize("template", [CADDY, OPENBAO], ids=["caddy", "openbao"])
-def test_an_earlier_key_that_cannot_be_read_is_never_discarded_as_absent(
+def test_a_refused_pair_over_an_unreadable_key_is_rolled_back_and_not_called_current(
     tmp_path, pki, monkeypatch, template
 ):
-    """A failed check after a second install must not delete the key (it used to read as "no
-    earlier key" and be discarded, leaving the old certificate with no key): the run says the old
-    pair could not be put back, and the files are reported as not as they were."""
+    """The earlier key cannot be read here to be written back, so it is set aside by rename and the
+    same file put back: after a failed check the OLD pair is in place (the old key's inode, the old
+    certificate), nothing is left over, and the next run does not treat the refused pair as
+    current (the stored certificate still differs from the installed one)."""
     mod = render(template, tmp_path, pki)
     store(mod, tmp_path, pki)
     readers_key_is_unreadable(monkeypatch)
     assert mod.install_pair() == (None, True)
-    store(mod, tmp_path, pki, "two")
+    key = Path(mod.CONF["key"])
+    inode = key.stat().st_ino
+    d = store(mod, tmp_path, pki, "two")
     real = mod.problem
     mod.problem = lambda c, *a: "it did not verify" if c == mod.CONF["cert"] else real(c, *a)
     why, intact = mod.install_pair()
-    assert "it did not verify; putting the old pair back failed too" in why, why
-    assert "the earlier key cannot be read here" in why and not intact
-    assert sorted(p.name for p in Path(mod.CONF["key"]).parent.glob(".acme-*")) == []
+    assert why.endswith("it did not verify; the old pair is back") and intact, why
+    assert key.stat().st_ino == inode
+    assert Path(mod.CONF["cert"]).read_bytes() == (pki / "one.crt").read_bytes()
+    assert sorted(p.name for p in key.parent.glob(".acme-*")) == []
+    assert not mod.same(mod.STORED_CERT, mod.CONF["cert"])  # the next run installs the stored pair
+    assert (d / f"{mod.stored}.crt").exists()
 
 
 @pytest.mark.parametrize("name", sorted(SERVICES))

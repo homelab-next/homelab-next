@@ -130,9 +130,12 @@ def strip_identity(headers: Any) -> list[str]:
 
 def _canonical(addr: str | None) -> str | None:
     try:
-        return str(ipaddress.ip_address((addr or "").strip("[]")))
+        ip = ipaddress.ip_address((addr or "").strip("[]"))
     except ValueError:
         return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:  # a dual-stack socket's spelling
+        ip = ip.ipv4_mapped
+    return str(ip)
 
 
 def host_header_name(value: str | None) -> str | None:

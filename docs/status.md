@@ -809,7 +809,7 @@ hnx status serve --agents agents.yml --bind <address> --allow-remote --allowed-h
   HTTP answer. The handshake runs on the connection's own thread with a 5 s deadline (and a whole
   TLS connection has 60 s), so a peer that connects and stalls cannot stop the hub accepting
   others. Refused connections are counted, with one line on stderr at most once a minute.
-- **`--client-name` pins the edge** (repeatable): a certificate the CA signed that names none of
+- **`--client-name` pins the edge** (repeatable; `NAME@ADDRESS[,ADDRESS...]` also binds the name to the source addresses it is accepted from, IPv4-mapped spellings included: the hooks' own certificate is bound to the hub's address): a certificate the CA signed that names none of
   them (its DNS subjectAltNames, or its CN only when it has no subjectAltName extension at all;
   exact, no wildcard) is closed
   right after the handshake. Without it, any certificate the CA signed is admitted.
