@@ -150,11 +150,12 @@ def _dropped_module_groups(out, files: dict[str, str]) -> list[str]:
     file holds none."""
     import yaml
 
+    from homelabnext._yaml import safe_load
     from homelabnext.modules.apply import GROUP_PREFIX, HOST_GROUP_PREFIX
 
     def groups(text: str) -> set[str]:
         try:
-            children = ((yaml.safe_load(text) or {}).get("all") or {}).get("children") or {}
+            children = ((safe_load(text) or {}).get("all") or {}).get("children") or {}
         except (yaml.YAMLError, AttributeError):
             return set()
         return {g for g in children if str(g).startswith((GROUP_PREFIX, HOST_GROUP_PREFIX))}
