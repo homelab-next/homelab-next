@@ -10,6 +10,11 @@ status_hub_health_cert: "{{ (status_hub_health_client_cert_ref | length > 0) and
 status_hub_pinned_names: >-
   {{ (status_hub_client_names + ([status_hub_health_client_name] if (status_hub_client_names | length > 0
       and status_hub_health_client_name | length > 0) else [])) | unique }}
+# The addresses the hooks' own certificate may be presented from: the hub's own, which is the
+# source the hooks' probe connects from (it dials status_hub_bind_address on this host). The
+# certificate is bound to them, so a copy on any other host, the edge included, is refused in the
+# handshake, not merely not trusted as a proxy.
+status_hub_health_sources: "{{ ['127.0.0.1', '::1'] if status_hub_bind_address == 'localhost' else [status_hub_bind_address] }}"  # no-raw-endpoint: allow the loopback names themselves
 # The registry's hosts (on the controller) and each trusted proxy resolved to its host name: an
 # entry is a host name, or the address of exactly the host the registry gives it.
 status_hub_registry_hosts: "{{ (lookup('ansible.builtin.file', status_hub_registry) | from_yaml).hosts | default({}, true) }}"

@@ -384,6 +384,9 @@ def test_status_hub_refuses_bad_tls_inputs(tmp_path):
         {"status_hub_health_client_cert_ref": "secret:status/hub-probe-cert"},
         {"status_hub_health_client_cert_ref": "secret:status/hub-probe-cert",
          "status_hub_health_client_key_ref": "secret:status/hub-probe-key"},
+        # the hooks' name is bound to the hub's address, so it cannot also be the edge's (any source)
+        {"status_hub_client_names": ["edge.example.internal"],
+         "status_hub_health_client_name": "edge.example.internal"},
     ])  # fmt: skip
 
 
@@ -537,7 +540,8 @@ def test_status_hub_unit_serves_mtls_with_the_pin_or_plain_http_by_opt_in(tmp_pa
     assert argv[argv.index("--tls-key") + 1] == f"{tls}/server.key"
     assert argv[argv.index("--client-ca") + 1] == f"{tls}/client-ca.crt"
     names = [argv[i + 1] for i, a in enumerate(argv) if a == "--client-name"]
-    assert names == ["edge.example.internal", "hub-probe.example.internal"]
+    # the hooks' own certificate is bound to the hub's address (the edge's is not)
+    assert names == ["edge.example.internal", f"hub-probe.example.internal@{HUB_ADDR}"]
     assert "--plain-http" not in argv
     plain = _directives(_render(tmp_path / "plain", "status_hub", HUB)["hnx-hub.service"])
     argv = plain["ExecStart"][0].split()

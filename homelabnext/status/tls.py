@@ -24,6 +24,7 @@ alone, as before Stage 5.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import ssl
@@ -42,6 +43,15 @@ MAX_PROBE_BYTES = 16 << 20
 _NAME_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$"
 )
+
+
+def canonical_address(addr: str | None) -> str | None:
+    """``addr`` (a peer's or a configured source address) in one spelling, or None when it is not
+    an IP address."""
+    try:
+        return str(ipaddress.ip_address((addr or "").strip().strip("[]")))
+    except ValueError:
+        return None
 
 
 class TLSConfigError(ValueError):
@@ -70,12 +80,17 @@ def peer_names(cert: Mapping[str, Any] | None) -> frozenset[str]:
 @dataclass(frozen=True)
 class TLSSettings:
     """The listener's certificate and key, the CA bundle client certificates must chain to, and
-    the client names pinned (empty: any certificate that CA signed)."""
+    the client names pinned (empty: any certificate that CA signed).  ``client_sources`` binds a
+    pinned name to the source addresses it may be presented from (canonical spellings): a name
+    with an entry is accepted from those addresses only, one without from any (the edge's: its
+    address is then judged by the trusted proxies).  The hub's health certificate is bound to the
+    hub's own address, so a copy presented from anywhere else, the edge's included, is refused."""
 
     cert_file: Path
     key_file: Path
     client_ca_file: Path
     client_names: frozenset[str] = field(default_factory=frozenset)
+    client_sources: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
     @classmethod
     def from_args(
@@ -87,8 +102,33 @@ class TLSSettings:
     ) -> TLSSettings | None:
         """The settings from the command line, or None when no TLS option is given.  All three
         files are required together; a client name needs them and must pass
-        :func:`client_name_ok`."""
-        names = [n.strip().lower().rstrip(".") for n in client_names if n.strip()]
+        :func:`client_name_ok`.  A client name may carry the addresses it is bound to:
+        ``NAME@ADDRESS[,ADDRESS...]`` (``--client-name``'s value)."""
+        names: list[str] = []
+        sources: dict[str, frozenset[str]] = {}
+        bare: set[str] = set()
+        for raw in client_names:
+            if not raw.strip():
+                continue
+            name, at, addrs = raw.strip().partition("@")
+            name = name.strip().lower().rstrip(".")
+            if at:
+                bound = [canonical_address(a) for a in addrs.split(",")]
+                if not addrs or None in bound:
+                    raise TLSConfigError(
+                        f"--client-name {raw!r}: NAME@ADDRESS[,ADDRESS...] takes IP addresses"
+                    )
+                new = frozenset(b for b in bound if b)
+                if sources.setdefault(name, new) != new:
+                    raise TLSConfigError(f"--client-name {name!r} is bound to two address sets")
+            else:
+                bare.add(name)
+            names.append(name)
+        both = bare & set(sources)
+        if both:
+            raise TLSConfigError(
+                f"--client-name {sorted(both)[0]!r} is given both bound and unbound (choose one)"
+            )
         given = [x for x in (cert, key, client_ca) if x]
         if not given:
             if names:
@@ -101,7 +141,7 @@ class TLSSettings:
             raise TLSConfigError(
                 f"--client-name {bad[0]!r}: a DNS name, no wildcard (it pins the edge's certificate)"
             )
-        return cls(Path(cert), Path(key), Path(client_ca), frozenset(names))  # type: ignore[arg-type]
+        return cls(Path(cert), Path(key), Path(client_ca), frozenset(names), sources)  # type: ignore[arg-type]
 
     def context(self) -> ssl.SSLContext:
         """A server context: TLS 1.2 or later, this certificate, and a client certificate
@@ -128,11 +168,20 @@ class TLSSettings:
         ctx.verify_mode = ssl.CERT_REQUIRED
         return ctx
 
-    def name_allowed(self, cert: Mapping[str, Any] | None) -> bool:
-        """Whether a verified peer certificate passes the pin (no pin: any certificate)."""
+    def name_allowed(self, cert: Mapping[str, Any] | None, source: str | None = None) -> bool:
+        """Whether a verified peer certificate, presented from ``source``, passes the pin (no
+        pin: any certificate).  A pinned name bound to addresses passes only from one of them;
+        with no source known it does not pass (fail closed)."""
         if not cert:
             return False
-        return not self.client_names or bool(peer_names(cert) & self.client_names)
+        if not self.client_names:
+            return True
+        here = canonical_address(source)
+        for name in peer_names(cert) & self.client_names:
+            bound = self.client_sources.get(name)
+            if bound is None or (here is not None and here in bound):
+                return True
+        return False
 
 
 # ---------------------------------------------------------------- the hooks' probe

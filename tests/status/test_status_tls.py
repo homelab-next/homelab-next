@@ -38,6 +38,9 @@ pytestmark = pytest.mark.requires_tool("openssl")
 
 EDGE = "edge.example.internal"
 OTHER = "other.example.internal"
+HEALTH = "hub-health.example.internal"
+HUB_SOURCE = "127.0.0.1"  # the hub's own address in these tests: the health certificate's source
+ELSE_SOURCE = "127.0.0.2"  # another host on the same wire (the edge's, in the lab)
 HUB_HOST = "status.lab.example"
 DOC = {"schema_version": 1, "generated_at": "2026-11-13T00:00:00Z", "sources": [], "menu": []}
 #: not loopback (the example registry's edge address, never connected to): a front door that
@@ -86,6 +89,7 @@ def pki(tmp_path_factory):
         "server": _leaf(d, "server", ca, san=f"DNS:localhost,IP:{LOOPBACK}", eku="serverAuth"),
         "edge": _leaf(d, "edge", ca, san=f"DNS:{EDGE}", eku="clientAuth"),
         "other": _leaf(d, "other", ca, san=f"DNS:{OTHER}", eku="clientAuth"),
+        "health": _leaf(d, "health", ca, san=f"DNS:{HEALTH}", eku="clientAuth"),
         "server_only": _leaf(d, "srvonly", ca, san=f"DNS:{EDGE}", eku="serverAuth"),
         "rogue": _leaf(d, "rogue", rogue, san=f"DNS:{EDGE}", eku="clientAuth"),
     }
@@ -120,11 +124,13 @@ def _client_ctx(pki, cert: str | None) -> ssl.SSLContext:
     return ctx
 
 
-def _get(port: int, pki, cert: str | None, path="/status.json", headers=None):
-    """(status, body) over TLS, or raises the TLS/socket error the hub's refusal produced."""
+def _get(port: int, pki, cert: str | None, path="/status.json", headers=None, source=None):
+    """(status, body) over TLS, or raises the TLS/socket error the hub's refusal produced;
+    ``source``: the address to connect from (another loopback address stands in for another host)."""
     conn = http.client.HTTPSConnection(
-        "localhost", port, context=_client_ctx(pki, cert), timeout=10
-    )
+        "localhost", port, context=_client_ctx(pki, cert), timeout=10,
+        source_address=(source, 0) if source else None,
+    )  # fmt: skip
     try:
         conn.request("GET", path, headers={"Host": HUB_HOST, **(headers or {})})
         r = conn.getresponse()
@@ -170,6 +176,45 @@ def test_the_pin_admits_only_the_edges_name(serve, pki):
     assert _get(port, pki, "edge")[0] == 200
     with pytest.raises(REFUSED):
         _get(port, pki, "other")  # signed by the CA, but not the edge
+
+
+def _bound(pki) -> TLSSettings:
+    """The pin as the role writes it: the edge's name (any source), the hooks' own bound to the hub."""
+    crt, key = pki["server"]
+    return TLSSettings.from_args(
+        str(crt), str(key), str(pki["ca"]), [EDGE, f"{HEALTH}@{HUB_SOURCE}"]
+    )
+
+
+def test_the_hooks_certificate_is_accepted_only_from_the_hubs_own_address(serve, pki):
+    """Finding G of the first real deploy: the health certificate got 200 from the edge's address
+    too, because the pin judged the name alone. Bound to the hub's address it is refused in the
+    handshake from any other source, and the edge's certificate, unbound, is unaffected."""
+    port = serve(tls=_bound(pki))
+    assert _get(port, pki, "health", source=HUB_SOURCE)[0] == 200
+    with pytest.raises(REFUSED):
+        _get(port, pki, "health", source=ELSE_SOURCE)
+    assert _get(port, pki, "edge", source=ELSE_SOURCE)[0] == 200
+    assert _get(port, pki, "edge", source=HUB_SOURCE)[0] == 200
+
+
+def test_a_name_bound_to_addresses_fails_closed_without_a_source_and_in_the_cli_form():
+    cert = {"subjectAltName": (("DNS", HEALTH),)}
+    s = TLSSettings.from_args("a.crt", "a.key", "ca.crt", [f"{HEALTH}@192.0.2.9,2001:db8::1", EDGE])
+    assert s.client_sources == {HEALTH: frozenset({"192.0.2.9", "2001:db8::1"})}
+    assert s.name_allowed(cert, "192.0.2.9") and s.name_allowed(cert, "2001:db8:0::1")
+    assert not s.name_allowed(cert, "192.0.2.10") and not s.name_allowed(cert, None)
+    assert not s.name_allowed(cert, "not-an-address")
+    assert s.name_allowed({"subjectAltName": (("DNS", EDGE),)}, None)  # unbound: any source
+    for bad in (f"{HEALTH}@", f"{HEALTH}@edge.example.internal", f"{HEALTH}@192.0.2.9,x"):
+        with pytest.raises(TLSConfigError, match="IP addresses"):
+            TLSSettings.from_args("a.crt", "a.key", "ca.crt", [bad])
+    with pytest.raises(TLSConfigError, match="both bound and unbound"):
+        TLSSettings.from_args("a.crt", "a.key", "ca.crt", [HEALTH, f"{HEALTH}@192.0.2.9"])
+    with pytest.raises(TLSConfigError, match="two address sets"):
+        TLSSettings.from_args(
+            "a.crt", "a.key", "ca.crt", [f"{HEALTH}@192.0.2.9", f"{HEALTH}@192.0.2.8"]
+        )
 
 
 def test_a_stalled_peer_does_not_stop_the_hub_accepting(serve, pki):
