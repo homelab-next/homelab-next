@@ -85,7 +85,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["path"],
-            "properties": {
+          "properties": {
             "path": {"type": "string", "pattern": "^/[A-Za-z0-9._~/%:@+-]*$(?!\\n)", "maxLength": 200},
             "port": {"type": "integer", "minimum": 1, "maximum": 65535},
             "scheme": {"enum": ["http", "https"], "description": "(2.11) Scheme of the metrics listener; absent means the service's derived scheme."},
