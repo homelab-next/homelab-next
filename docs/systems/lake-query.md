@@ -58,12 +58,12 @@ author: unknown
 
 ## How to use it
 
+<!-- hnx:todo:use -->
 The Trino `/metrics` endpoint uses the registry's `metrics.auth` scrape identity. Provision the
 `lake/trino-scraper-password` secret for the `prometheus-scraper` user and grant that user
 system-information read permission; the monitoring role writes the secret to the generated
 credentials file with mode `0600`.
 
-<!-- hnx:todo:use -->
 > TODO(human): the everyday commands or clicks, with one worked example.
 <!-- /hnx:todo -->
 
