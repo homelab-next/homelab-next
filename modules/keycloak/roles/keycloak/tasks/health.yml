@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: both containers run and are healthy; the database answers (pg_isready in its
+# container); OIDC discovery for the realm answers over TLS verified by the certificate's name
+# against the lab CA, with the issuer the edge's auth proxy is configured with and a key set; the
+# realm binds the rendered flows, the approvers' browser sign-in REQUIRES a passkey, no flow
+# offers a one-time code and the direct grant refuses everyone; the passkey's registration is a
+# default action and the code's is off; the user profile refuses the reserved usernames and **no
+# user holds one**; every rendered client and group exists and each group holds exactly its
+# rendered roles. Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read and check the rendered realm
+      ansible.builtin.include_tasks: realm.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: keycloak
+        compose_app_dir: "{{ keycloak_app.compose_app_dir }}"
+        compose_app_spec: "{{ keycloak_app.compose_app_spec }}"
+    - name: The database answers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", exec, -T, postgres,
+               pg_isready, -U, "{{ keycloak_db_user }}", -d, "{{ keycloak_db_name }}"]
+      changed_when: false
+    - name: Discovery, flows, enrolment, the user profile, reserved users, clients and groups
+      ansible.builtin.include_tasks: api.yml
+      vars:
+        keycloak_api_mode: health
+    - name: The realm is as rendered and no reserved username is held
+      ansible.builtin.assert:
+        that: keycloak_api_result.problems | length == 0
+        fail_msg: "keycloak: {{ keycloak_api_result.problems | join('; ') }}"
+  tags: [health]

@@ -89,6 +89,12 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:docker_engine/docker_engine_compose_version": ("github", "docker/compose"),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
+    "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
+    "role:keycloak/keycloak_postgres_image": (
+        "none",
+        "the Docker official image (docker.io/library/postgres): compare its tags with the "
+        "PostgreSQL release page by hand, within the pinned major version",
+    ),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
@@ -120,6 +126,14 @@ NOTES: dict[str, str] = {
     "role:caddy_auth_proxy/caddy_auth_proxy_image": (
         "an image (modules/caddy, the -alpine variant): bump the tag and its digest together, with "
         "the lab registry's auth-proxy version"
+    ),
+    "role:keycloak/keycloak_image": (
+        "an image (modules/keycloak): bump the tag and its digest together, with product.version "
+        "in modules/keycloak/module.yml and the lab registry's version"
+    ),
+    "role:keycloak/keycloak_postgres_image": (
+        "an image (modules/keycloak): the tag and its digest together, a minor version only "
+        "(a major one is a dump and a restore)"
     ),
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "

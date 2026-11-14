@@ -61,11 +61,17 @@ dashboards.lab.example {
 }
 
 login.lab.example {
-	# service idp (idp) owner=identity-team
+	# service idp (idp) owner=identity-team: only the realm's paths are published
 	request_header -*auth-request*
 	request_header -*auth_request*
 	import hnx_strip_foreign_identity
-	reverse_proxy https://idp.svc.example.internal:8443
+	@hnx_published path /realms/northwind/* /resources/*
+	handle @hnx_published {
+		reverse_proxy https://idp.svc.example.internal:8443
+	}
+	handle {
+		respond 404
+	}
 }
 
 metrics.lab.example {

@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree, docs/modules/data.md): <data root>/export/{db/keycloak.dump,
+# realm.json,listing.jsonl}. The dump is the restore's source (the realm, its users and their
+# credentials); realm.json is the readable, product-format copy of the realm's configuration that
+# an import into another instance starts from (README, "Export and import").
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read and check the rendered realm
+      ansible.builtin.include_tasks: realm.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Dump, export and list
+      ansible.builtin.include_tasks: dump.yml
+  tags: [export]

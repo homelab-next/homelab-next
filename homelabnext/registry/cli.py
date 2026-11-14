@@ -140,6 +140,15 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             "only the public rows on these hosts and refuses any dial outside them, so one lab's "
             "edge never proxies to another's (default: every public primary)",
         )
+        p.add_argument(
+            "--reserved-username",
+            action="append",
+            default=None,
+            metavar="NAME",
+            help="a username the IdP realm must refuse (repeatable), beside the built-in ones "
+            "(the Stage 4 proof approver): the idp_realm generator renders a user-profile "
+            "validator refusing each, and lists them for the IdP module's health hook",
+        )
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -186,7 +195,13 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             print(f"hnx: {exc}", file=err)
             return 1
     try:
-        files = flatten(generate(reg, args.only, {"edge_hosts": args.edge_host}))
+        files = flatten(
+            generate(
+                reg,
+                args.only,
+                {"edge_hosts": args.edge_host, "reserved_usernames": args.reserved_username},
+            )
+        )
     except KeyError as exc:
         print(f"hnx: {exc.args[0]}", file=err)
         return 2

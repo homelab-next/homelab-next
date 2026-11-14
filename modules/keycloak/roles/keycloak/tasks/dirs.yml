@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root and export/ are root's; pgdata/ (the database's cluster) and export/db/ (where
+# pg_dump writes in the container) belong to the database's user. tls/ holds the server's key:
+# readable by root's group, which the IdP's container user is in (gid 0), by no one else.
+- name: Create the data root, the database's and the export directories, and tls/
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ keycloak_data_root }}", owner: "{{ keycloak_owner }}", group: "{{ keycloak_group }}", mode: "0750"}
+    - {path: "{{ keycloak_data_root }}/pgdata", owner: "{{ keycloak_db_uid | int }}", group: "{{ keycloak_db_gid | int }}", mode: "0700"}
+    - {path: "{{ keycloak_data_root }}/export", owner: "{{ keycloak_owner }}", group: "{{ keycloak_group }}", mode: "0700"}
+    - {path: "{{ keycloak_data_root }}/export/db", owner: "{{ keycloak_db_uid | int }}", group: "{{ keycloak_db_gid | int }}", mode: "0700"}
+    - {path: "{{ keycloak_dir }}", owner: "{{ keycloak_owner }}", group: "{{ keycloak_group }}", mode: "0750"}
+    - {path: "{{ keycloak_dir }}/tls", owner: "{{ keycloak_owner }}", group: "{{ keycloak_group }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

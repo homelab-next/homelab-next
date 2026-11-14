@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The server's certificate, its key and the lab CA, from the secret store into tls/ (root's group
+# reads them: the IdP's container user is in it; the key is never world-readable). A changed
+# certificate restarts the IdP (main), which reads it at start.
+- name: Write the server certificate, its key and the CA
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', item.ref) | trim ~ '\n' }}"
+    dest: "{{ keycloak_dir }}/tls/{{ item.name }}"
+    owner: "{{ keycloak_owner }}"
+    group: "{{ keycloak_group }}"
+    mode: "0640"
+  loop:
+    - {name: server.crt, ref: "{{ keycloak_tls_cert_ref }}"}
+    - {name: server.key, ref: "{{ keycloak_tls_key_ref }}"}
+    - {name: ca.pem, ref: "{{ keycloak_ca_ref }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  register: keycloak_tls_files
+  no_log: true

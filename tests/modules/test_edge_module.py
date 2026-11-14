@@ -150,7 +150,8 @@ def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
     assert code == 0, out
-    assert out.rstrip().endswith("2 module(s), 0 problem(s)")
+    public = sum(1 for p in (ROOT / "modules").iterdir() if (p / "module.yml").is_file())
+    assert out.rstrip().endswith(f"{public} module(s), 0 problem(s)")
 
 
 def test_roles_holds_only_the_contributed_roles():

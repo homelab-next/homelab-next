@@ -97,7 +97,7 @@ def test_a_non_primary_row_places_its_capability_on_its_host(tmp_path):
         "  status-hub:\n",
         "  sso-trial:\n"
         "    capability: idp\n"
-        "    impl: keycloak\n"
+        "    impl: example-idp\n"
         "    host: hub-1\n"
         "    port: 8443\n"
         "    protocol: https\n"
