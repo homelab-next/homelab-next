@@ -49,7 +49,7 @@ author: unknown
 ## Outputs
 
 <!-- hnx:gen:outputs -->
-- Metrics: none declared
+- Metrics: `/metrics` on port 9100
 - MCP: none
 <!-- /hnx:gen -->
 
@@ -58,6 +58,9 @@ author: unknown
 <!-- /hnx:todo -->
 
 ## How to use it
+
+Lakekeeper's metrics-exporter-prometheus listener is plain HTTP on its own port. In the example it
+uses port `9100` (`LAKEKEEPER__METRICS_PORT`), separate from the service's HTTPS listener.
 
 <!-- hnx:todo:use -->
 > TODO(human): the everyday commands or clicks, with one worked example.

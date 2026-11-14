@@ -430,6 +430,13 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
   from the caller, raise `homelabnext.lake.EndpointNotConfigured` when none was supplied; `tools/no_raw_endpoints.py` gates the tree (ADR-0002).
 - Environment variables use the prefix `HNX_`. Endpoint overrides are `HNX_ENDPOINT_<NAME>` with
   the service name upper-cased and `-` replaced by `_`.
+- A metrics listener may set `metrics.scheme` when it differs from the service endpoint scheme.
+  Authenticated scrape targets use `metrics.auth: {kind: basic, username: ..., secret: secret:<name>}`
+  or `{kind: bearer, secret: secret:<name>}`. Values never belong in the registry or generated
+  Prometheus config: `prometheus/credentials.json` maps each secret reference to its fixed
+  `/etc/hnx/prometheus-credentials/` file and mode `0600`, which the monitoring role writes.
+  Product documentation must identify the scrape principal's required permissions (for example,
+  Trino's metrics principal needs system-information read permission).
 - Bindings reach a primary only (ADR-0039 decision 3). A binding is a row's `upstreams`, a role
   binding's `backend: svc:<name>`, an LLM gateway spec's backends, a workflow pack's `svc:`
   targets and event sources, and a module's `requires` through the site selection; `svc:<name>`

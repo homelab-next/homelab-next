@@ -78,6 +78,7 @@ class Service:
     tls: str
     impl: str = ""
     health: dict = field(default_factory=lambda: {"kind": "none"})
+    #: 2.11: listener scheme override and scrape authentication (secret-store reference only)
     metrics: dict | None = None
     upstreams: tuple[str, ...] = ()
     clients: tuple[str, ...] = ()
