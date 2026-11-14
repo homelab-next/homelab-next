@@ -1065,12 +1065,39 @@ def require_realm_idp(reg: Registry) -> Service:
 def registry_grants(reg: Registry) -> dict[str, dict[str, set[str]]]:
     """``{group: {service: {role, ...}}}`` from the group-to-role table of the rows the realm
     has clients for (primary and ``eval``)."""
+    return _realm_grants(list(reg.rows(*REALM_TIERS)))
+
+
+def _realm_grants(rows: list[Service]) -> dict[str, dict[str, set[str]]]:
     out: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
-    for s in reg.rows(*REALM_TIERS):
+    for s in rows:
         for role, groups in s.roles.items():
             for g in groups:
                 out[g][s.name].add(role)
     return {g: dict(c) for g, c in out.items()}
+
+
+def _realm_services(reg: Registry, edge_hosts) -> list[Service]:
+    """The realm's gated rows: all primary/eval rows by default, or only rows on the edge's
+    deployment hosts when ``--edge-host`` scopes a shared registry."""
+    rows = [s for s in reg.rows(*REALM_TIERS) if s.auth == "idp"]
+    if edge_hosts is None:
+        return rows
+    if isinstance(edge_hosts, str):
+        raise GeneratorRefusal(
+            "idp_realm: edge_hosts is a collection of host names, not one string"
+        )
+    scope = set(edge_hosts)
+    unknown = sorted(scope - set(reg.hosts))
+    if unknown:
+        raise GeneratorRefusal(f"idp_realm: host(s) {', '.join(unknown)} not in the registry")
+    selected = [s for s in rows if s.host in scope]
+    if not selected:
+        raise GeneratorRefusal(
+            f"idp_realm: no auth: idp row is on the edge hosts ({', '.join(sorted(scope))}); "
+            "the realm would have no deployment clients"
+        )
+    return selected
 
 
 @register(
@@ -1079,9 +1106,9 @@ def registry_grants(reg: Registry) -> dict[str, dict[str, set[str]]]:
     "identity provider (realm import)",
     when_named=require_realm_idp,
     dirs=("idp",),
-    options=("reserved_usernames",),
+    options=("reserved_usernames", "edge_hosts"),
 )
-def idp_realm(reg: Registry, reserved_usernames=None) -> dict[str, str]:
+def idp_realm(reg: Registry, reserved_usernames=None, edge_hosts=None) -> dict[str, str]:
     """The IdP's realm as an importable realm document (ADR-0034): one confidential OIDC client
     per ``auth: idp`` service (redirects under its public hostname) and one for the auth proxy
     (its callback on every site it guards), the client roles each service's ``roles`` names, a
@@ -1102,7 +1129,7 @@ def idp_realm(reg: Registry, reserved_usernames=None) -> dict[str, str]:
     reserved = reserved_usernames_of(reserved_usernames)
     if realm_idp(reg) is None:
         return {}
-    gated = [s for s in reg.rows(*REALM_TIERS) if s.auth == "idp"]
+    gated = _realm_services(reg, edge_hosts)
     clients, roles = [], {}
     for s in gated:
         # a redirect is under a public route, which is a primary's alone
@@ -1121,13 +1148,14 @@ def idp_realm(reg: Registry, reserved_usernames=None) -> dict[str, str]:
         )
         clients.append(_client(proxy.name, proxy.owner, callbacks, None))
     clients.sort(key=lambda c: c["clientId"])
+    grants = registry_grants(reg) if edge_hosts is None else _realm_grants(gated)
     groups = [
         {
             "clientRoles": {c: sorted(r) for c, r in sorted(grants.items())},
             "name": g,
             "path": f"/{g}",
         }
-        for g, grants in sorted(registry_grants(reg).items())
+        for g, grants in sorted(grants.items())
     ]
     body = {
         "attributes": {

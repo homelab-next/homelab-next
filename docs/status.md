@@ -921,9 +921,18 @@ hnx registry generate services.yml out/ --only caddy \
 The default stays "every public primary" because every existing registry is one deployment and
 the lint (`tools/caddy_lint.py`) renders each one whole. That leaves the shared-registry case to
 the caller: **an edge module for a shared registry must always pass `--edge-host`** (an acceptance
-check of the edge module, H3: its role refuses to render without it). Only the edge is scoped:
-the other generators (the DNS zone, the IdP realm's clients, the hosts block) still render every
-row of a shared registry.
+check of the edge module, H3: its role refuses to render without it). The same repeatable option
+scopes `idp_realm`: it includes only `auth: idp` clients hosted on those deployment hosts, and
+limits the auth-proxy callback redirects and role grants to those clients. The auth-proxy client
+is still included for the edge. Without the option, the realm keeps its existing all-deployments
+render. For example, render the realm for the deployment above with:
+
+```sh
+hnx registry generate services.yml out/ --only idp_realm \
+  --edge-host edge-01 --edge-host core-01 --edge-host idp-01
+```
+
+The DNS zone and hosts block remain unscoped.
 
 ### Other proxies' identity headers
 
