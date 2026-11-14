@@ -809,7 +809,7 @@ hnx status serve --agents agents.yml --bind <address> --allow-remote --allowed-h
   HTTP answer. The handshake runs on the connection's own thread with a 5 s deadline (and a whole
   TLS connection has 60 s), so a peer that connects and stalls cannot stop the hub accepting
   others. Refused connections are counted, with one line on stderr at most once a minute.
-- **`--client-name` pins the edge** (repeatable): a certificate the CA signed that names none of
+- **`--client-name` pins the edge** (repeatable; `NAME@ADDRESS[,ADDRESS...]` also binds the name to the source addresses it is accepted from, IPv4-mapped spellings included: the hooks' own certificate is bound to the hub's address): a certificate the CA signed that names none of
   them (its DNS subjectAltNames, or its CN only when it has no subjectAltName extension at all;
   exact, no wildcard) is closed
   right after the handshake. Without it, any certificate the CA signed is admitted.
@@ -842,8 +842,10 @@ address, trusting exactly the installed server certificate's leaf by `status_hub
 a peer without a client certificate must be refused with a TLS alert (an HTTP answer, a bare close,
 a plain listener or no listener fails). The hooks never hold the edge's certificate; give them their
 own (`status_hub_health_client_cert_ref`/`_key_ref`, signed by the client CA, its name
-`status_hub_health_client_name`, which joins the pin) and they also fetch `/status.json` over mTLS
-and check it is the status document. Without one, the end-to-end check is the edge's own health of
+`status_hub_health_client_name`, which joins the pin, **bound to the hub's own address**: the unit
+passes `--client-name NAME@ADDRESS`, so the same certificate presented from any other host, the
+edge's included, is closed in the handshake rather than answered) and they also fetch `/status.json`
+over mTLS and check it is the status document. Without one, the end-to-end check is the edge's own health of
 the hub's route.
 
 ### The edge side of the hop (`edge_tls`, registry 2.10)

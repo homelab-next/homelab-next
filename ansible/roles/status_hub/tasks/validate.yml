@@ -85,6 +85,7 @@
       - not status_hub_health_cert | bool or status_hub_tls | bool
       - status_hub_health_client_name == '' or status_hub_health_client_name is match('^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z')
       - not (status_hub_health_cert | bool and status_hub_client_names | length > 0) or status_hub_health_client_name | length > 0
+      - status_hub_health_client_name == '' or status_hub_health_client_name not in status_hub_client_names
     fail_msg: >-
       status_hub: TLS needs all three of status_hub_tls_cert_ref, status_hub_tls_key_ref and
       status_hub_client_ca_ref as secret: references (not also in status_hub_secret_refs: they are

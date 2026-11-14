@@ -89,8 +89,9 @@ def _b64d(s: str) -> bytes:
 
 
 class _Realm:
-    def __init__(self, rep: dict):
+    def __init__(self, rep: dict, normalise: bool = False):
         rep = copy.deepcopy(rep)
+        self.normalise = normalise
         self.name = rep["realm"]
         self.clients: list[dict] = []
         self.roles: dict[str, list[dict]] = {}
@@ -136,6 +137,8 @@ class _Realm:
         c.setdefault("defaultClientScopes", [])
         for m in c.setdefault("protocolMappers", []):
             m["id"] = _id()
+        if self.normalise:
+            _normalise(c)
         self.clients.append(c)
         return c
 
@@ -179,11 +182,43 @@ class _Realm:
         return True
 
 
+def _normalise(client: dict) -> None:
+    """What Keycloak does to a client it stores, which a byte comparison with the rendered
+    document trips on: attribute values become strings and the IdP adds attributes of its own, the
+    sets (redirect URIs, origins, scopes) come back in no particular order, and each protocol
+    mapper's settings gain defaults of the IdP's."""
+    client["attributes"] = {
+        "client.secret.creation.time": "1767225600",
+        "post.logout.redirect.uris": "+",
+        **{k: _text(v) for k, v in client.get("attributes", {}).items()},
+    }
+    for key in ("redirectUris", "webOrigins", "defaultClientScopes", "optionalClientScopes"):
+        if key in client:
+            client[key] = list(reversed(client[key]))
+    for m in client.get("protocolMappers", []):
+        _normalise_mapper(m)
+
+
+def _text(value) -> str:
+    return ("true" if value else "false") if isinstance(value, bool) else str(value)
+
+
+def _normalise_mapper(m: dict) -> None:
+    m["config"] = {
+        "introspection.token.claim": "true",
+        **{k: _text(v) for k, v in m.get("config", {}).items()},
+    }
+
+
 class StandIn:
     """The stand-in: ``with StandIn(tmp, admin=(user, password)) as kc:`` serves on
     ``kc.port`` (loopback) with ``kc.pki`` (``ca``, ``cert``, ``key``)."""
 
-    def __init__(self, tmp: Path, admin: tuple[str, str], *, pki: dict | None = None):
+    def __init__(
+        self, tmp: Path, admin: tuple[str, str], *, pki: dict | None = None, normalise: bool = False
+    ):
+        #: store clients and mappers the way the real IdP does (see ``_normalise``)
+        self.normalise = normalise
         self.pki = pki or make_pki(tmp)
         self.admin = admin
         self.realms: dict[str, _Realm] = {}
@@ -309,7 +344,7 @@ class StandIn:
             if method == "POST":
                 if body["realm"] in self.realms:
                     return 409, None
-                self.realms[body["realm"]] = _Realm(body)
+                self.realms[body["realm"]] = _Realm(body, self.normalise)
                 return 201, None
             return 501, None
         if rest[0] == "master" and len(rest) == 1:
@@ -448,6 +483,9 @@ class StandIn:
             return 200, realm.brokers
         if r[:1] == ["groups"] and r[2:] == ["members"]:
             return 200, [u for u in realm.users if r[1] in u.get("groups", [])]
+        if r[:1] == ["users"] and len(r) == 2 and method == "GET":
+            u = next((u for u in realm.users if u["id"] == r[1]), None)
+            return (200, {"requiredActions": [], **u}) if u else (404, None)
         if r[:1] == ["users"] and r[2:] == ["credentials"]:
             u = next((u for u in realm.users if u["id"] == r[1]), None)
             return (200, u.get("credentials", [])) if u else (404, None)
@@ -488,6 +526,8 @@ class StandIn:
                 keep = c["id"]
                 c.update({k: v for k, v in body.items() if k != "id"})
                 c["id"] = keep
+                if realm.normalise:
+                    _normalise(c)
                 return 204, None
         if rest == ["client-secret"]:
             return 200, {"type": "secret", "value": c.get("secret")}
@@ -498,13 +538,18 @@ class StandIn:
             return 200, realm.roles.get(c["clientId"], [])
         if rest == ["protocol-mappers", "models"]:
             if method == "POST":
-                c["protocolMappers"].append({**body, "id": _id()})
+                m = {**body, "id": _id()}
+                if realm.normalise:
+                    _normalise_mapper(m)
+                c["protocolMappers"].append(m)
                 return 201, None
             return 200, c["protocolMappers"]
         if rest[:2] == ["protocol-mappers", "models"] and method == "PUT":
             for m in c["protocolMappers"]:
                 if m["id"] == rest[2]:
                     m.update(body)
+                    if realm.normalise:
+                        _normalise_mapper(m)
             return 204, None
         if rest[:1] == ["optional-client-scopes"] and method == "PUT":
             if rest[1] not in c["optionalClientScopes"]:

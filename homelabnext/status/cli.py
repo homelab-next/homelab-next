@@ -284,9 +284,10 @@ def main(argv: list[str] | None = None, *, clock: Callable[[], float] = time.tim
         "--client-name",
         action="append",
         default=[],
-        metavar="NAME",
+        metavar="NAME[@ADDRESS,...]",
         help="pin the client certificate's name (DNS subjectAltName, else CN; repeatable): the "
-        "edge's; default: any certificate the CA signed",
+        "edge's; default: any certificate the CA signed.  NAME@ADDRESS[,ADDRESS...] accepts the "
+        "name only from those source addresses (the hooks' own certificate: the hub's address)",
     )
     p.add_argument(
         "--plain-http",

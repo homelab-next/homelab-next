@@ -384,6 +384,9 @@ def test_status_hub_refuses_bad_tls_inputs(tmp_path):
         {"status_hub_health_client_cert_ref": "secret:status/hub-probe-cert"},
         {"status_hub_health_client_cert_ref": "secret:status/hub-probe-cert",
          "status_hub_health_client_key_ref": "secret:status/hub-probe-key"},
+        # the hooks' name is bound to the hub's address, so it cannot also be the edge's (any source)
+        {"status_hub_client_names": ["edge.example.internal"],
+         "status_hub_health_client_name": "edge.example.internal"},
     ])  # fmt: skip
 
 
@@ -537,7 +540,8 @@ def test_status_hub_unit_serves_mtls_with_the_pin_or_plain_http_by_opt_in(tmp_pa
     assert argv[argv.index("--tls-key") + 1] == f"{tls}/server.key"
     assert argv[argv.index("--client-ca") + 1] == f"{tls}/client-ca.crt"
     names = [argv[i + 1] for i, a in enumerate(argv) if a == "--client-name"]
-    assert names == ["edge.example.internal", "hub-probe.example.internal"]
+    # the hooks' own certificate is bound to the hub's address (the edge's is not)
+    assert names == ["edge.example.internal", f"hub-probe.example.internal@{HUB_ADDR}"]
     assert "--plain-http" not in argv
     plain = _directives(_render(tmp_path / "plain", "status_hub", HUB)["hnx-hub.service"])
     argv = plain["ExecStart"][0].split()
@@ -1589,3 +1593,15 @@ def test_status_hub_hooks_probe_the_tls_listener(tmp_path, hook):
     tmp.mkdir()
     r, _ = _hub_hooks(tmp, hook, probe_cert=False, fails=True)
     assert r.returncode != 0
+
+
+@pytest.mark.parametrize("hook", ["health", "readiness"])
+def test_status_hub_hooks_report_changed_0_even_with_the_probe_directory(tmp_path, hook):
+    """The probe's private directory (``tempfile``) and its removal are scaffolding, not state of
+    the host: a hook run, and so a control-plane run that includes it, never reports changed.
+    The first real deploy read changed=1 on every run (and 2 on a hook), so no second run could
+    be the changed=0 the convergence gate asks for."""
+    r, log = _hub_hooks(tmp_path, hook, probe_cert=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert len([line for line in log if " probe-tls " in line]) == 2, log  # the directory was made
+    assert "changed=0" in r.stdout, r.stdout

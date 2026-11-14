@@ -43,7 +43,10 @@ Modes:
   bound flows are the rendered ones, the browser flow requires the passkey and no flow offers a
   one-time code, the direct grant refuses everyone; the enrolment actions are as rendered; the
   user profile refuses the reserved usernames; **no user holds a reserved username**; every
-  rendered client and group exists and each group holds exactly its rendered client roles.
+  rendered client and group exists and each group holds exactly its rendered client roles; every
+  enabled group member holds a passkey, **or has ``webauthn-register`` still pending** (the
+  trust-on-first-use window before the first sign-in: reported in ``pending_first_login``, not a
+  problem; a member with neither is one).
 * ``export``: the realm's partial export (clients, groups, roles, flows, settings; the IdP
   masks every client secret and exports no user), returned as ``realm`` for the role to write.
 """
@@ -69,6 +72,7 @@ OTP_AUTHENTICATORS = {
     "reset-otp",
 }
 SECOND_FACTOR = "webauthn-authenticator"
+PASSKEY_ENROLMENT = "webauthn-register"
 REFUSAL = "deny-access-authenticator"
 PROFILE_PROVIDER = "org.keycloak.userprofile.UserProfileProvider"
 #: the realm settings ``sync`` converges on an existing realm (the rest of the document is
@@ -193,6 +197,71 @@ class Api:
         if not isinstance(token, str) or not token:
             raise Refused("the admin sign-in returned no token")
         self.token = token
+
+
+def _text(value) -> str:
+    """A scalar as the IdP stores it: booleans and numbers as strings, nothing as the empty string."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+#: the client attributes and mapper settings the IdP adds on its own (a rendered client never lists
+#: them): the only extras ``sync`` ignores.  Any other key on the live side is a difference (a
+#: hand-widened ``post.logout.redirect.uris`` or token lifespan is put back), so an IdP release
+#: that adds a key shows as a change until it is listed here, loudly, never silently.
+IDP_CLIENT_ATTRIBUTES = frozenset(
+    {
+        "client.secret.creation.time",
+        "post.logout.redirect.uris",
+        "client.introspection.response.allow.jwt.claim.enabled",
+        "client.use.lightweight.access.token.enabled",
+        "backchannel.logout.session.required",
+        "backchannel.logout.revoke.offline.tokens",
+        "display.on.consent.screen",
+        "oauth2.device.authorization.grant.enabled",
+        "oidc.ciba.grant.enabled",
+        "use.jwks.url",
+        "require.pushed.authorization.requests",
+        "tls.client.certificate.bound.access.tokens",
+        "acr.loa.map",
+        "frontchannel.logout.session.required",
+    }
+)
+IDP_MAPPER_SETTINGS = frozenset(
+    {
+        "introspection.token.claim",
+        "lightweight.claim",
+        "userinfo.token.claim",
+        "access.tokenResponse.claim",
+    }
+)
+
+
+def covers(live, want, extra_ok=None) -> bool:
+    """Does the live representation hold what the rendered one says?  The IdP normalises what it
+    stores (attributes and mapper settings come back as strings, with defaults of its own added;
+    a set comes back in its own order; an empty value may be absent), so a byte comparison of the
+    two never settles and every run would report a change.  A rendered dict is held when each of
+    its keys is (``extra_ok``, when given, is the set of extra live keys the IdP adds itself:
+    any other extra key is a difference; without it extras are ignored); a rendered list of scalars when
+    the live one has the same members in any order; a rendered scalar when the live one reads the
+    same.  Anything that differs in a rendered key, a member or a value is still a difference."""
+    if isinstance(want, dict):
+        if not isinstance(live, dict):
+            return not want
+        if extra_ok is not None and set(live) - set(want) - extra_ok:
+            return False  # a live key nobody rendered and the IdP does not add by itself
+        return all(covers(live.get(k), v) for k, v in want.items())
+    if isinstance(want, list):
+        if not isinstance(live, list):
+            return not want
+        if all(not isinstance(x, (dict, list)) for x in want + live):
+            return sorted(map(_text, live)) == sorted(map(_text, want))
+        return len(live) == len(want) and all(covers(a, b) for a, b in zip(live, want, strict=True))
+    return _text(live) == _text(want)
 
 
 def _safe(path: str) -> str:
@@ -486,7 +555,14 @@ def sync(api: Api, cfg: dict) -> dict:
         if live is None:
             raise Refused(f"client {want['clientId']} was not created")
         cid = live["id"]
-        diff = {k: want[k] for k in CLIENT_FIELDS if k in want and live.get(k) != want[k]}
+        diff = {
+            k: want[k]
+            for k in CLIENT_FIELDS
+            if k in want
+            and not covers(
+                live.get(k), want[k], IDP_CLIENT_ATTRIBUTES if k == "attributes" else None
+            )
+        }
         if diff:
             api.call("PUT", f"{base}/clients/{_q(cid)}", {**live, **diff}, ok=(204,))
             changed.append(f"client {want['clientId']} settings")
@@ -504,7 +580,9 @@ def sync(api: Api, cfg: dict) -> dict:
             if cur is None:
                 api.call("POST", f"{base}/clients/{_q(cid)}/protocol-mappers/models", m, ok=(201,))
                 changed.append(f"client {want['clientId']} mapper {m['name']}")
-            elif any(cur.get(k) != m[k] for k in ("protocolMapper", "config")):
+            elif cur.get("protocolMapper") != m["protocolMapper"] or not covers(
+                cur.get("config"), m.get("config") or {}, IDP_MAPPER_SETTINGS
+            ):
                 api.call(
                     "PUT",
                     f"{base}/clients/{_q(cid)}/protocol-mappers/models/{_q(cur['id'])}",
@@ -629,6 +707,7 @@ def health(api: Api, cfg: dict) -> dict:
         )
         if held:
             problems.append(f"a user holds the reserved username {name!r}")
+    pending: set[str] = set()
     # 6. every rendered client and group, each group with exactly its rendered roles; no client
     #    (rendered or the IdP's own) overrides a flow binding
     clients = _client_ids(api, base)
@@ -655,16 +734,27 @@ def health(api: Api, cfg: dict) -> dict:
         _, members = api.call(
             "GET", f"{base}/groups/{_q(live['id'])}/members?max=1000&briefRepresentation=true"
         )
+        #    A member with no passkey who still has the ``webauthn-register`` required action
+        #    pending is the trust-on-first-use window itself (the account exists, the person has
+        #    not signed in yet): reported as ``pending_first_login``, not a problem.  Without
+        #    that action nothing will ever ask them for a passkey: a problem.
         for u in members or []:
             if not u.get("enabled", True):
                 continue
             _, creds = api.call("GET", f"{base}/users/{_q(u['id'])}/credentials")
-            if not any(c.get("type") == "webauthn" for c in creds or []):
+            if any(c.get("type") == "webauthn" for c in creds or []):
+                continue
+            # the brief representation lists no required actions: ask for the user itself
+            _, full = api.call("GET", f"{base}/users/{_q(u['id'])}")
+            if PASSKEY_ENROLMENT in ((full or {}).get("requiredActions") or []):
+                pending.add(u.get("username") or u["id"])
+            else:
                 problems.append(
                     f"user {u.get('username')!r} in group {g['name']} has no passkey registered "
-                    "(register it in person: the first sign-in registers whoever's key)"
+                    f"and no {PASSKEY_ENROLMENT} action pending (nothing will ask them for one; "
+                    "register it in person: the first sign-in registers whoever's key)"
                 )
-    return {"problems": problems}
+    return {"problems": problems, "pending_first_login": sorted(pending)}
 
 
 def export(api: Api, cfg: dict) -> dict:

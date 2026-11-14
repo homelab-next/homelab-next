@@ -88,7 +88,7 @@ argument_specs:
         default: ""
       status_hub_health_client_name: &hname
         type: str
-        description: "The hooks' certificate's name, added to the pin when status_hub_client_names is set (required then)."
+        description: "The hooks' certificate's name, added to the pin when status_hub_client_names is set (required then), and not one of status_hub_client_names. It is bound to the hub's own address (--client-name NAME@ADDRESS): presented from any other host, the edge included, it is refused in the handshake."
         default: ""
       status_hub_secret_refs: &secrets
         type: list

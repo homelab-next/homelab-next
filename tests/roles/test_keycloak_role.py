@@ -273,6 +273,35 @@ def test_health_fails_on_a_damaged_realm(tmp_path, pki, damage, reason):
     assert r.returncode != 0 and reason in r.stdout, r.stdout
 
 
+def test_health_names_an_approver_pending_first_login_and_still_fails_one_who_never_will(
+    tmp_path, pki
+):
+    """An approver with no passkey whose ``webauthn-register`` action is still pending is the
+    trust-on-first-use window, reported under its own name ("N approvers have no passkey yet
+    (pending first login)") and not a failure; one with no passkey and no such action pending
+    (nothing will ever ask them for one) still fails health."""
+    with StandIn(tmp_path, ADMIN, pki=pki) as kc:
+        env = {**secrets_env(pki), **_docker(tmp_path)}
+        v = _live(tmp_path, kc, keycloak_start=True)
+        assert run_role(tmp_path, ROLE, "main", v, env=env).returncode == 0
+        realm = kc.realms[REALM]
+        group = realm.groups[0]["id"]
+        realm.users.append({"id": "u4", "username": "carol", "enabled": True, "groups": [group],
+                            "requiredActions": ["UPDATE_PASSWORD", "webauthn-register"]})  # fmt: skip
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "1 approvers have no passkey yet" in r.stdout and "pending first login" in r.stdout
+        assert "carol" in r.stdout
+        realm.users.append({"id": "u5", "username": "dave", "enabled": True, "groups": [group],
+                            "requiredActions": ["UPDATE_PASSWORD"]})  # fmt: skip
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+        assert r.returncode != 0, r.stdout
+        assert "user 'dave'" in r.stdout and "no webauthn-register action pending" in r.stdout
+        assert "carol" not in r.stdout  # the pending one is not among the problems
+        realm.users[-1]["credentials"] = [{"type": "webauthn"}]  # dave registered: fine again
+        assert run_role(tmp_path, ROLE, "health", v, env=env).returncode == 0
+
+
 def test_health_fails_when_a_container_is_unhealthy(tmp_path, pki):
     with StandIn(tmp_path, ADMIN, pki=pki) as kc:
         v = _live(tmp_path, kc, keycloak_start=True)
@@ -352,6 +381,39 @@ def test_sync_converges_a_new_reserved_name_on_an_existing_realm(tmp_path, pki):
         r = _script("sync", _settings(kc, pki, doc=doc, client_secrets=secrets))
         assert "client auth-proxy secret" in json.loads(r.stdout)["changed"]
         assert realm.by_client_id("auth-proxy")["secret"] == secrets["auth-proxy"]
+
+
+def test_sync_reports_changed_only_when_the_live_realm_differs(tmp_path, pki):
+    """The first real deploy read every client's settings and mappers as changed on every run:
+    the IdP stores them normalised (string attributes, attributes and mapper defaults of its own,
+    sets in its own order), and a byte comparison with the rendered document never settles. A
+    second sync against such an IdP changes nothing; a rendered value that really differs is
+    still found, put right once, and then settles too."""
+    with StandIn(tmp_path, ADMIN, pki=pki, normalise=True) as kc:
+        first = _script("sync", _settings(kc, pki))
+        assert first.returncode == 0, first.stderr
+        assert json.loads(first.stdout)["created"] is True
+        again = _script("sync", _settings(kc, pki))
+        assert again.returncode == 0, again.stderr
+        assert json.loads(again.stdout) == {"created": False, "changed": []}, again.stdout
+        realm = kc.realms[REALM]
+        client = realm.by_client_id("auth-proxy")
+        client["redirectUris"].append("https://stray.lab.example/oauth2/callback")  # real drift
+        client["protocolMappers"][0]["config"]["included.client.audience"] = "someone-else"
+        r = json.loads(_script("sync", _settings(kc, pki)).stdout)
+        assert r["changed"] == ["client auth-proxy settings", "client auth-proxy mapper audience"]
+        assert "https://stray.lab.example/oauth2/callback" not in client["redirectUris"]
+        assert json.loads(_script("sync", _settings(kc, pki)).stdout)["changed"] == []
+        # a key nobody rendered and the IdP does not add itself is drift too (a loosened setting)
+        client["attributes"]["access.token.lifespan"] = "31536000"
+        client["protocolMappers"][2]["config"]["extra.claim.setting"] = "x"
+        r = json.loads(_script("sync", _settings(kc, pki)).stdout)
+        assert r["changed"] == [
+            "client auth-proxy settings",
+            "client auth-proxy mapper groups",
+        ], r
+        assert "access.token.lifespan" not in client["attributes"]
+        assert json.loads(_script("sync", _settings(kc, pki)).stdout)["changed"] == []
 
 
 def test_sync_refuses_a_drifted_flow_and_never_edits_it(tmp_path, pki):

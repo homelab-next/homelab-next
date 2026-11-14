@@ -130,9 +130,12 @@ def strip_identity(headers: Any) -> list[str]:
 
 def _canonical(addr: str | None) -> str | None:
     try:
-        return str(ipaddress.ip_address((addr or "").strip("[]")))
+        ip = ipaddress.ip_address((addr or "").strip("[]"))
     except ValueError:
         return None
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:  # a dual-stack socket's spelling
+        ip = ip.ipv4_mapped
+    return str(ip)
 
 
 def host_header_name(value: str | None) -> str | None:
@@ -232,9 +235,10 @@ class BoundedHTTPServer(ThreadingHTTPServer):
         try:
             request.settimeout(HANDSHAKE_TIMEOUT_S)
             request.do_handshake()
-            if self.tls.name_allowed(request.getpeercert()):
+            peer = request.getpeername()
+            if self.tls.name_allowed(request.getpeercert(), peer[0] if peer else None):
                 return True
-            why = "client certificate outside the pin"
+            why = "client certificate outside the pin (its name, or its source address)"
         except (OSError, ValueError) as exc:
             why = getattr(exc, "reason", None) or type(exc).__name__
         self._refusal(why)
@@ -482,7 +486,7 @@ def make_server(
                 cert = (
                     self.request.getpeercert() if isinstance(self.request, ssl.SSLSocket) else None
                 )
-                if not tls.name_allowed(cert):
+                if not tls.name_allowed(cert, addr):
                     addr = None
             if addr is None or _canonical(addr) not in trusted_proxies:
                 strip_identity(self.headers)

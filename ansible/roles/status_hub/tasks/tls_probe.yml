@@ -25,6 +25,7 @@
         state: directory
         suffix: .hnx-hub-probe
       register: status_hub_probe_dir
+      changed_when: false  # scratch scaffolding, removed below: never state of the host
       check_mode: false
     - name: Write the hooks' client certificate and key (root only)
       ansible.builtin.copy:
