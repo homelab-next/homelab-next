@@ -129,6 +129,29 @@
     },
     {
       "exit": {
+        "0": "the installed certificate is valid (renewed and installed, or not yet due); with --check, it is valid",
+        "1": "with --check, the installed certificate is missing, invalid or due",
+        "100": "could not measure (openssl cannot be run); nothing was checked or installed",
+        "2": "lego failed, or what it stored is not a valid certificate for the names; nothing was installed",
+        "3": "the certificate was installed but Caddy could not be reloaded (retried next run)"
+      },
+      "id": "caddy-acme-renew",
+      "inputs": "the DNS provider's token (the root-only environment file, read by the script itself); lego's stored certificate",
+      "installs_to": "/usr/local/libexec/homelabnext/caddy-acme-renew",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the edge certificate and key in the module's certs directory; a reload (caddy reload --force) of a running Caddy",
+      "owner": "platform",
+      "path": "modules/caddy/roles/caddy/templates/caddy-acme-renew.py.j2",
+      "purpose": "Renew the edge's public certificate over ACME (DNS-01) when due, install it where Caddy reads it and reload a running Caddy.",
+      "status": "active",
+      "trigger": [
+        "timer:caddy/acme-renew",
+        "role:caddy"
+      ]
+    },
+    {
+      "exit": {
         "0": "clean",
         "1": "a finding (strip, reset, dial, parse, coverage, generate, semantic, pin or allowlist)",
         "2": "usage error, a bad allowlist or a missing dependency (a caddy binary when HNX_CADDY_REQUIRED is set)"
@@ -741,6 +764,7 @@
       "trigger": [
         "role:last_run",
         "timer:aide/scan",
+        "timer:caddy/acme-renew",
         "timer:clamav/scan",
         "timer:lynis/scan",
         "timer:needrestart/check",

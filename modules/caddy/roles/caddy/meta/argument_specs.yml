@@ -1,0 +1,418 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Caddy for one deployment's generated sites (--edge-host) with a public-trust certificate obtained on the host over ACME DNS-01.
+    options:
+      caddy_logical_id: &logical_id
+        type: str
+        description: The instance's registry id (the edge row the site binds, e.g. edge).
+        required: true
+      caddy_image: &image
+        type: str
+        description: repository:tag@sha256:<digest> of the stock Caddy image.
+        default: docker.io/library/caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+      caddy_bind: &bind
+        type: str
+        description: The guest's own IPv4 address the HTTPS port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      caddy_port: &port
+        type: int
+        description: Host port (the registry row's port, 443).
+        default: 443
+      caddy_dir: &dir
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/caddy
+      caddy_data_root: &data_root
+        type: path
+        description: 'The module''s data root on the host: config/, certs/, edge-tls/, acme/, acme-env/, data/, state/, export/.'
+        default: /var/lib/hnx-modules/caddy
+      caddy_owner: &owner
+        type: str
+        description: Owner of the compose project and of the data root's root-only parts.
+        default: root
+      caddy_owner_group: &owner_group
+        type: str
+        description: Group of the data root's root-only parts (acme/, acme-env/, export/).
+        default: root
+      caddy_uid: &uid
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61010
+      caddy_gid: &gid
+        type: int
+        description: 'The container''s group id: the data root''s group, so the container''s user passes through it.'
+        default: 61010
+      caddy_registry: &registry
+        type: str
+        description: The lab registry's absolute path on the controller (the overlay's lab/services.yml).
+        default: ''
+      caddy_edge_hosts: &edge_hosts
+        type: list
+        description: 'The registry hosts of this deployment (hnx registry generate --edge-host): one or more; the role never renders without them.'
+        elements: str
+        default: []
+      caddy_hnx_cli: &hnx_cli
+        type: list
+        description: The controller's hnx command as an argv list (the overlay's pinned hnx).
+        elements: str
+        default: [hnx]
+      caddy_acme_domains: &acme_domains
+        type: list
+        description: 'The public names the edge serves: exactly the generated sites'' names, all on one certificate.'
+        elements: str
+        default: []
+      caddy_front_door_refs: &front_door_refs
+        type: list
+        description: 'secret: references the sites read from the environment (a front door''s shared secret); exactly the ones they name.'
+        elements: str
+        default: []
+      caddy_edge_tls_key_area: &edge_tls_key_area
+        type: str
+        description: The secret-store area (the first path segment of a reference) every upstream client key the sites name must come from, the module's own (caddy), so a registry row cannot make the edge serve another holder's private key.
+        default: caddy
+      caddy_acme_server: &acme_server
+        type: str
+        description: The ACME directory (Let's Encrypt production by default; its staging directory for tests).
+        default: https://acme-v02.api.letsencrypt.org/directory
+      caddy_acme_email: &acme_email
+        type: str
+        description: 'The ACME account''s contact address (empty: none).'
+        default: ''
+      caddy_acme_dns_provider: &acme_dns_provider
+        type: str
+        description: The DNS-01 provider (cloudflare).
+        default: cloudflare
+      caddy_acme_dns_ref: &acme_dns_ref
+        type: str
+        description: 'secret: reference of the DNS provider''s API token (Zone DNS edit).'
+        default: secret:caddy/acme-dns-token
+      caddy_acme_propagation_wait: &acme_propagation_wait
+        type: str
+        description: A fixed wait after the challenge record is written (like 30s), instead of lego's propagation check (split-horizon DNS and blocked outbound DNS defeat it); nothing verifies the record is visible, so a slow provider shows as a failed challenge in the renewal unit's journal, and the fix is a longer wait.
+        default: 30s
+      caddy_acme_renew_days: &acme_renew_days
+        type: int
+        description: Renew when fewer days than this remain (1-45).
+        default: 30
+      caddy_acme_key_type: &acme_key_type
+        type: str
+        description: The certificate's key type (EC256, EC384, RSA2048, RSA3072, RSA4096).
+        default: EC256
+      caddy_acme_schedule: &acme_schedule
+        type: str
+        description: When the renewal unit runs (systemd calendar, UTC).
+        default: '*-*-* 03:41:00 UTC'
+      caddy_acme_health_min_days: &acme_health_min_days
+        type: int
+        description: The health hook fails when fewer days than this remain.
+        default: 14
+      caddy_acme_trust_bundle: &acme_trust_bundle
+        type: path
+        description: The public trust bundle the certificate and the health probe verify against.
+        default: /etc/ssl/certs/ca-certificates.crt
+      caddy_acme_on_failure: &acme_on_failure
+        type: str
+        description: A unit to start when a renewal run fails (OnFailure=), or empty.
+        default: ''
+      caddy_lego_version: &lego_version
+        type: str
+        description: The ACME client (lego) release.
+        default: 5.6.0
+      caddy_lego_checksums: &lego_checksums
+        type: dict
+        description: sha256 of the lego release archive per architecture (lego_<version>_checksums.txt).
+        default: {amd64: f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a, arm64: 34d87a6552d69390c4a4560237045c47713a8e148d899e16db0e97040894ed1f}
+      caddy_lego_checksums_release: &lego_checksums_release
+        type: str
+        description: The release the checksums are from; must equal caddy_lego_version.
+        default: 5.6.0
+      caddy_lego_release_repository: &lego_release_repository
+        type: str
+        description: Where the lego release archives are fetched from (https).
+        default: https://github.com/go-acme/lego/releases/download
+      caddy_install_dir: &install_dir
+        type: path
+        description: Where the ACME client's releases are unpacked.
+        default: /opt/hnx-caddy
+      caddy_unit_dir: &unit_dir
+        type: path
+        description: Where the renewal service and timer are written.
+        default: /etc/systemd/system
+      caddy_systemctl_cli: &systemctl_cli
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      caddy_last_run_dir: &last_run_dir
+        type: path
+        description: Where the renewal unit's last-run record is written (role last_run).
+        default: /var/lib/homelabnext/last-run
+      caddy_last_run_group: &last_run_group
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      caddy_mem_limit: &mem_limit
+        type: str
+        description: Container memory limit.
+        default: 256m
+      caddy_start: &start
+        type: bool
+        description: Run docker compose up after rendering.
+        default: true
+      caddy_validate_with_docker: &validate_with_docker
+        type: bool
+        description: Run caddy validate and docker compose config on the rendered files.
+        default: true
+      caddy_health_timeout: &health_timeout
+        type: int
+        description: Seconds for each health request.
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy, the certificate is current and loaded, every name is served over verified TLS, gated sites redirect to sign in, the catch-all answers 404, the running config strips identity headers and mTLS upstreams refuse a peer without the client certificate.
+    options:
+      caddy_logical_id: *logical_id
+      caddy_image: *image
+      caddy_bind: *bind
+      caddy_port: *port
+      caddy_dir: *dir
+      caddy_data_root: *data_root
+      caddy_owner: *owner
+      caddy_owner_group: *owner_group
+      caddy_uid: *uid
+      caddy_gid: *gid
+      caddy_install_dir: *install_dir
+      caddy_unit_dir: *unit_dir
+      caddy_last_run_dir: *last_run_dir
+      caddy_mem_limit: *mem_limit
+      caddy_start: *start
+      caddy_validate_with_docker: *validate_with_docker
+      caddy_registry: *registry
+      caddy_edge_hosts: *edge_hosts
+      caddy_hnx_cli: *hnx_cli
+      caddy_acme_domains: *acme_domains
+      caddy_front_door_refs: *front_door_refs
+      caddy_edge_tls_key_area: *edge_tls_key_area
+      caddy_acme_server: *acme_server
+      caddy_acme_email: *acme_email
+      caddy_acme_dns_provider: *acme_dns_provider
+      caddy_acme_dns_ref: *acme_dns_ref
+      caddy_acme_propagation_wait: *acme_propagation_wait
+      caddy_acme_renew_days: *acme_renew_days
+      caddy_acme_key_type: *acme_key_type
+      caddy_acme_schedule: *acme_schedule
+      caddy_acme_health_min_days: *acme_health_min_days
+      caddy_acme_trust_bundle: *acme_trust_bundle
+      caddy_acme_on_failure: *acme_on_failure
+      caddy_lego_version: *lego_version
+      caddy_lego_checksums: *lego_checksums
+      caddy_lego_checksums_release: *lego_checksums_release
+      caddy_lego_release_repository: *lego_release_repository
+      caddy_health_timeout: *health_timeout
+  readiness:
+    short_description: Fail unless the container engine is ready, the sites render for this deployment's hosts only (exactly the declared names) and every credential resolves in its form.
+    options:
+      caddy_logical_id: *logical_id
+      caddy_image: *image
+      caddy_bind: *bind
+      caddy_port: *port
+      caddy_dir: *dir
+      caddy_data_root: *data_root
+      caddy_owner: *owner
+      caddy_owner_group: *owner_group
+      caddy_uid: *uid
+      caddy_gid: *gid
+      caddy_install_dir: *install_dir
+      caddy_unit_dir: *unit_dir
+      caddy_last_run_dir: *last_run_dir
+      caddy_mem_limit: *mem_limit
+      caddy_start: *start
+      caddy_validate_with_docker: *validate_with_docker
+      caddy_registry: *registry
+      caddy_edge_hosts: *edge_hosts
+      caddy_hnx_cli: *hnx_cli
+      caddy_acme_domains: *acme_domains
+      caddy_front_door_refs: *front_door_refs
+      caddy_edge_tls_key_area: *edge_tls_key_area
+      caddy_acme_server: *acme_server
+      caddy_acme_email: *acme_email
+      caddy_acme_dns_provider: *acme_dns_provider
+      caddy_acme_dns_ref: *acme_dns_ref
+      caddy_acme_propagation_wait: *acme_propagation_wait
+      caddy_acme_renew_days: *acme_renew_days
+      caddy_acme_key_type: *acme_key_type
+      caddy_acme_schedule: *acme_schedule
+      caddy_acme_health_min_days: *acme_health_min_days
+      caddy_acme_trust_bundle: *acme_trust_bundle
+      caddy_acme_on_failure: *acme_on_failure
+      caddy_lego_version: *lego_version
+      caddy_lego_checksums: *lego_checksums
+      caddy_lego_checksums_release: *lego_checksums_release
+      caddy_lego_release_repository: *lego_release_repository
+  backup:
+    short_description: Export the ACME account and the configuration, then name the data root for the backup.
+    options:
+      caddy_logical_id: *logical_id
+      caddy_image: *image
+      caddy_bind: *bind
+      caddy_port: *port
+      caddy_dir: *dir
+      caddy_data_root: *data_root
+      caddy_owner: *owner
+      caddy_owner_group: *owner_group
+      caddy_uid: *uid
+      caddy_gid: *gid
+      caddy_install_dir: *install_dir
+      caddy_unit_dir: *unit_dir
+      caddy_last_run_dir: *last_run_dir
+      caddy_mem_limit: *mem_limit
+      caddy_start: *start
+      caddy_validate_with_docker: *validate_with_docker
+      caddy_registry: *registry
+      caddy_edge_hosts: *edge_hosts
+      caddy_hnx_cli: *hnx_cli
+      caddy_acme_domains: *acme_domains
+      caddy_front_door_refs: *front_door_refs
+      caddy_edge_tls_key_area: *edge_tls_key_area
+      caddy_acme_server: *acme_server
+      caddy_acme_email: *acme_email
+      caddy_acme_dns_provider: *acme_dns_provider
+      caddy_acme_dns_ref: *acme_dns_ref
+      caddy_acme_propagation_wait: *acme_propagation_wait
+      caddy_acme_renew_days: *acme_renew_days
+      caddy_acme_key_type: *acme_key_type
+      caddy_acme_schedule: *acme_schedule
+      caddy_acme_health_min_days: *acme_health_min_days
+      caddy_acme_trust_bundle: *acme_trust_bundle
+      caddy_acme_on_failure: *acme_on_failure
+      caddy_lego_version: *lego_version
+      caddy_lego_checksums: *lego_checksums
+      caddy_lego_checksums_release: *lego_checksums_release
+      caddy_lego_release_repository: *lego_release_repository
+  restore:
+    short_description: Check an export (listing, sizes, sha256) and restore the ACME account and the configuration from it.
+    options:
+      caddy_logical_id: *logical_id
+      caddy_image: *image
+      caddy_bind: *bind
+      caddy_port: *port
+      caddy_dir: *dir
+      caddy_data_root: *data_root
+      caddy_owner: *owner
+      caddy_owner_group: *owner_group
+      caddy_uid: *uid
+      caddy_gid: *gid
+      caddy_install_dir: *install_dir
+      caddy_unit_dir: *unit_dir
+      caddy_last_run_dir: *last_run_dir
+      caddy_mem_limit: *mem_limit
+      caddy_start: *start
+      caddy_validate_with_docker: *validate_with_docker
+      caddy_registry: *registry
+      caddy_edge_hosts: *edge_hosts
+      caddy_hnx_cli: *hnx_cli
+      caddy_acme_domains: *acme_domains
+      caddy_front_door_refs: *front_door_refs
+      caddy_edge_tls_key_area: *edge_tls_key_area
+      caddy_acme_server: *acme_server
+      caddy_acme_email: *acme_email
+      caddy_acme_dns_provider: *acme_dns_provider
+      caddy_acme_dns_ref: *acme_dns_ref
+      caddy_acme_propagation_wait: *acme_propagation_wait
+      caddy_acme_renew_days: *acme_renew_days
+      caddy_acme_key_type: *acme_key_type
+      caddy_acme_schedule: *acme_schedule
+      caddy_acme_health_min_days: *acme_health_min_days
+      caddy_acme_trust_bundle: *acme_trust_bundle
+      caddy_acme_on_failure: *acme_on_failure
+      caddy_lego_version: *lego_version
+      caddy_lego_checksums: *lego_checksums
+      caddy_lego_checksums_release: *lego_checksums_release
+      caddy_lego_release_repository: *lego_release_repository
+      caddy_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl and the files it lists).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest, same repository) and record it as pending.
+    options:
+      caddy_logical_id: *logical_id
+      caddy_image: *image
+      caddy_bind: *bind
+      caddy_port: *port
+      caddy_dir: *dir
+      caddy_data_root: *data_root
+      caddy_owner: *owner
+      caddy_owner_group: *owner_group
+      caddy_uid: *uid
+      caddy_gid: *gid
+      caddy_install_dir: *install_dir
+      caddy_unit_dir: *unit_dir
+      caddy_last_run_dir: *last_run_dir
+      caddy_mem_limit: *mem_limit
+      caddy_start: *start
+      caddy_validate_with_docker: *validate_with_docker
+      caddy_registry: *registry
+      caddy_edge_hosts: *edge_hosts
+      caddy_hnx_cli: *hnx_cli
+      caddy_acme_domains: *acme_domains
+      caddy_front_door_refs: *front_door_refs
+      caddy_edge_tls_key_area: *edge_tls_key_area
+      caddy_acme_server: *acme_server
+      caddy_acme_email: *acme_email
+      caddy_acme_dns_provider: *acme_dns_provider
+      caddy_acme_dns_ref: *acme_dns_ref
+      caddy_acme_propagation_wait: *acme_propagation_wait
+      caddy_acme_renew_days: *acme_renew_days
+      caddy_acme_key_type: *acme_key_type
+      caddy_acme_schedule: *acme_schedule
+      caddy_acme_health_min_days: *acme_health_min_days
+      caddy_acme_trust_bundle: *acme_trust_bundle
+      caddy_acme_on_failure: *acme_on_failure
+      caddy_lego_version: *lego_version
+      caddy_lego_checksums: *lego_checksums
+      caddy_lego_checksums_release: *lego_checksums_release
+      caddy_lego_release_repository: *lego_release_repository
+      caddy_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true
+  export:
+    short_description: Write the open-format exit copy (object-tree) of the ACME account and the configuration to <data root>/export.
+    options:
+      caddy_logical_id: *logical_id
+      caddy_image: *image
+      caddy_bind: *bind
+      caddy_port: *port
+      caddy_dir: *dir
+      caddy_data_root: *data_root
+      caddy_owner: *owner
+      caddy_owner_group: *owner_group
+      caddy_uid: *uid
+      caddy_gid: *gid
+      caddy_install_dir: *install_dir
+      caddy_unit_dir: *unit_dir
+      caddy_last_run_dir: *last_run_dir
+      caddy_mem_limit: *mem_limit
+      caddy_start: *start
+      caddy_validate_with_docker: *validate_with_docker
+      caddy_registry: *registry
+      caddy_edge_hosts: *edge_hosts
+      caddy_hnx_cli: *hnx_cli
+      caddy_acme_domains: *acme_domains
+      caddy_front_door_refs: *front_door_refs
+      caddy_edge_tls_key_area: *edge_tls_key_area
+      caddy_acme_server: *acme_server
+      caddy_acme_email: *acme_email
+      caddy_acme_dns_provider: *acme_dns_provider
+      caddy_acme_dns_ref: *acme_dns_ref
+      caddy_acme_propagation_wait: *acme_propagation_wait
+      caddy_acme_renew_days: *acme_renew_days
+      caddy_acme_key_type: *acme_key_type
+      caddy_acme_schedule: *acme_schedule
+      caddy_acme_health_min_days: *acme_health_min_days
+      caddy_acme_trust_bundle: *acme_trust_bundle
+      caddy_acme_on_failure: *acme_on_failure
+      caddy_lego_version: *lego_version
+      caddy_lego_checksums: *lego_checksums
+      caddy_lego_checksums_release: *lego_checksums_release
+      caddy_lego_release_repository: *lego_release_repository

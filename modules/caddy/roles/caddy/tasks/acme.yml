@@ -1,0 +1,208 @@
+# SPDX-License-Identifier: Apache-2.0
+# The edge's public-trust certificate for caddy_acme_domains, obtained and renewed ON THE HOST by
+# the pinned ACME client (lego) with a DNS-01 challenge: the same client, pin and pattern as role
+# openbao's ACME mode. Stock Caddy obtains certificates itself only over HTTP-01 or TLS-ALPN-01
+# (the edge's names never resolve publicly) or with a DNS provider module compiled in (a custom
+# build nobody pins). The renewal unit (a daily timer) runs the renewal script, which asks lego to
+# renew when fewer than caddy_acme_renew_days remain, checks what lego stored (exactly the names,
+# the chain against caddy_acme_trust_bundle, the key), installs it where Caddy reads it and
+# reloads a running Caddy (caddy reload --force through its admin API in the container: a reload,
+# never a restart). A converged host with a valid certificate reports no change: the role starts
+# the unit only when the installed certificate is missing, names other domains, does not verify,
+# or is due. It runs before Caddy starts, which cannot start without the certificate it loads.
+- name: Read the machine's architecture (the pinned client's archive is per architecture)
+  ansible.builtin.command:
+    argv: [uname, -m]
+  register: caddy_uname
+  changed_when: false
+  check_mode: false  # read-only
+
+- name: Name the architecture as the release does
+  ansible.builtin.set_fact:
+    caddy_arch: "{{ caddy_arch_names[caddy_uname.stdout | trim] | default(caddy_uname.stdout | trim) }}"
+
+- name: Create the ACME client's release directory
+  ansible.builtin.file:
+    path: "{{ caddy_install_dir }}/lego/{{ caddy_lego_version }}"
+    state: directory
+    owner: "{{ caddy_owner }}"
+    group: "{{ caddy_owner_group }}"
+    mode: "0755"
+
+- name: Look for the ACME client's archive and command (a --check run on a fresh host has neither)
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+  loop:
+    - "{{ caddy_install_dir }}/lego/{{ caddy_lego_version }}/lego_v{{ caddy_lego_version }}_linux_{{ caddy_arch }}.tar.gz"
+    - "{{ caddy_install_dir }}/lego/{{ caddy_lego_version }}/lego"
+    - "{{ caddy_install_dir }}/lego/{{ caddy_lego_version }}"
+  register: caddy_lego_files
+
+- name: Refuse an architecture the pinned ACME client has no checksum for
+  ansible.builtin.assert:
+    that: caddy_arch in caddy_lego_checksums
+    fail_msg: "caddy: no pinned lego checksum for {{ caddy_arch }} (caddy_lego_checksums)"
+
+- name: Fetch the ACME client's release archive, refused unless its sha256 is the pinned one
+  ansible.builtin.get_url:
+    url: "{{ caddy_lego_release_repository }}/v{{ caddy_lego_version }}/lego_v{{ caddy_lego_version }}_linux_{{ caddy_arch }}.tar.gz"
+    dest: "{{ caddy_install_dir }}/lego/{{ caddy_lego_version }}/lego_v{{ caddy_lego_version }}_linux_{{ caddy_arch }}.tar.gz"
+    checksum: "sha256:{{ caddy_lego_checksums[caddy_arch] }}"
+    owner: "{{ caddy_owner }}"
+    group: "{{ caddy_owner_group }}"
+    mode: "0644"
+    use_proxy: true
+  when: not ansible_check_mode or caddy_lego_files.results[2].stat.exists
+
+- name: Unpack the ACME client (again whenever the archive and the command differ)
+  ansible.builtin.unarchive:
+    src: "{{ caddy_install_dir }}/lego/{{ caddy_lego_version }}/lego_v{{ caddy_lego_version }}_linux_{{ caddy_arch }}.tar.gz"
+    dest: "{{ caddy_install_dir }}/lego/{{ caddy_lego_version }}"
+    remote_src: true
+    include: [lego, LICENSE]
+    owner: "{{ caddy_owner }}"
+    group: "{{ caddy_owner_group }}"
+  when: not ansible_check_mode or caddy_lego_files.results[0].stat.exists
+
+- name: Ask the unpacked ACME client for its version
+  ansible.builtin.command:
+    argv: ["{{ caddy_install_dir }}/lego/{{ caddy_lego_version }}/lego", --version]
+  register: caddy_lego_found
+  changed_when: false
+  check_mode: false  # read-only
+  when: not ansible_check_mode or caddy_lego_files.results[1].stat.exists
+
+- name: Refuse an ACME client that is not the release asked for
+  ansible.builtin.assert:
+    that: caddy_lego_found.stdout is search('^lego version ' ~ (caddy_lego_version | regex_escape) ~ ' ')
+    fail_msg: "caddy: the unpacked lego reports {{ caddy_lego_found.stdout | trim }}, the pin is {{ caddy_lego_version }}"
+  when: not ansible_check_mode or caddy_lego_files.results[1].stat.exists
+
+- name: Create the ACME directories (root only, for the account key, the certificates and the token)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ caddy_owner }}"
+    group: "{{ caddy_owner_group }}"
+    mode: "0700"
+  loop: ["{{ caddy_acme_dir }}", "{{ caddy_acme_env_file | dirname }}"]
+
+- name: Write the DNS provider's token into the root-only environment file (0600)
+  block:
+    - name: Read the DNS provider's token (secret reference, never a value in the inventory)
+      ansible.builtin.set_fact:
+        caddy_acme_value: "{{ lookup('hnx_secret', caddy_acme_dns_ref) }}"
+      no_log: true
+    - name: Refuse a token that would not survive an environment file unchanged
+      ansible.builtin.assert:
+        that: caddy_acme_value is match('^[A-Za-z0-9._~+/=-]{1,512}\Z')
+        fail_msg: "caddy: the token behind {{ caddy_acme_dns_ref }} is not a single printable word ([A-Za-z0-9._~+/=-])"
+      no_log: true
+    - name: Write the token (read by the renewal script, never by the unit's environment)
+      ansible.builtin.copy:
+        dest: "{{ caddy_acme_env_file }}"
+        content: "{{ caddy_acme_token_env[caddy_acme_dns_provider] }}={{ caddy_acme_value }}\n"
+        owner: "{{ caddy_owner }}"
+        group: "{{ caddy_owner_group }}"
+        mode: "0600"
+      no_log: true
+      diff: false
+  always:
+    - name: Forget the token, whatever happened above
+      ansible.builtin.set_fact:
+        caddy_acme_value: ""
+      no_log: true
+
+- name: Create the script directory
+  ansible.builtin.file:
+    path: "{{ caddy_acme_script | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Write the renewal script
+  ansible.builtin.template:
+    src: caddy-acme-renew.py.j2
+    dest: "{{ caddy_acme_script }}"
+    owner: "{{ caddy_owner }}"
+    group: "{{ caddy_owner_group }}"
+    mode: "0700"
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ caddy_last_run_dir }}"
+    last_run_group: "{{ caddy_last_run_group }}"
+    last_run_writer: "{{ caddy_last_run_writer }}"
+
+- name: Write the renewal service and timer
+  ansible.builtin.template:
+    src: "acme-renew.{{ item }}.j2"
+    dest: "{{ caddy_unit_dir }}/{{ caddy_acme_unit }}.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: caddy_acme_units
+
+- name: Reload systemd and enable the timer when the units changed
+  ansible.builtin.command:
+    argv: "{{ [caddy_systemctl_cli] + item }}"
+  loop: "{{ [['daemon-reload'], ['enable', '--now', caddy_acme_unit ~ '.timer']] if caddy_acme_units is changed else [] }}"
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true
+
+- name: Look for the renewal script (a --check run on a fresh host has none)
+  ansible.builtin.stat:
+    path: "{{ caddy_acme_script }}"
+    get_checksum: false
+  register: caddy_acme_script_stat
+
+- name: Ask whether the installed certificate is valid (names, chain, key, not yet due)
+  ansible.builtin.command:
+    argv: ["{{ caddy_acme_script }}", --check]
+  register: caddy_acme_check
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only
+  when: caddy_acme_script_stat.stat.exists
+
+# 0 valid, 1 missing, invalid or due (start the unit). Anything else, 100 above all (openssl cannot
+# be run), means the certificate could not be checked: starting the unit would not help.
+- name: Fail when the installed certificate could not be checked at all (not the same as invalid)
+  ansible.builtin.assert:
+    that: caddy_acme_check.rc in [0, 1]
+    fail_msg: >-
+      caddy: cannot check the installed certificate, so nothing was started
+      (exit {{ caddy_acme_check.rc }}: {{ (caddy_acme_check.stdout | default('') + ' ' + caddy_acme_check.stderr | default('')) | trim }})
+  when: caddy_acme_script_stat.stat.exists
+
+- name: "--check: say a certificate would be obtained (no renewal script yet, or the installed one is not valid)"
+  ansible.builtin.debug:
+    msg: "caddy: would start {{ caddy_acme_unit }}.service to obtain or renew the certificate"
+  changed_when: true
+  when: ansible_check_mode and caddy_acme_check.rc | default(1) != 0
+
+- name: Obtain or renew the certificate now (the renewal unit, so the run is in its journal)
+  ansible.builtin.command:
+    argv: ["{{ caddy_systemctl_cli }}", start, "{{ caddy_acme_unit }}.service"]
+  when: caddy_acme_check.rc | default(1) != 0
+  changed_when: true
+  register: caddy_acme_issue
+
+- name: Ask again (refuse to continue without a valid certificate)
+  ansible.builtin.command:
+    argv: ["{{ caddy_acme_script }}", --check]
+  register: caddy_acme_recheck
+  changed_when: false
+  failed_when: false
+  check_mode: false  # read-only
+  when: caddy_acme_issue is changed and not ansible_check_mode
+
+- name: Fail unless the certificate is now installed and valid
+  ansible.builtin.assert:
+    that: caddy_acme_recheck.rc == 0
+    fail_msg: >-
+      caddy: no valid ACME certificate after the renewal unit ran
+      ({{ caddy_acme_recheck.stdout | default('') | trim }}): journalctl -u {{ caddy_acme_unit }}.service
+  when: caddy_acme_issue is changed and not ansible_check_mode

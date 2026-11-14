@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# The auth proxy's dependencies at install: the container engine (docker_engine) and its two
+# credentials in their form. The IdP is not asked here: its public name is served by this same
+# edge, which is not up before the module's first install; health proves the sign-in path.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+  tags: [readiness]

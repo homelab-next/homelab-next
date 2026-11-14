@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# The forward-auth proxy of the edge (modules/caddy): oauth2-proxy, which the generated sites ask
+# about every request (forward_auth to the registry's auth-proxy row) and which signs users in at
+# the IdP (OIDC, authorization code with PKCE). It answers with the identity headers
+# (--set-xauthrequest) the edge copies, and with 403 for a signed-in user outside the site's
+# allowed groups. No upstream: it only answers the edge.
+# caddy_auth_proxy_logical_id (required): the auth-proxy row's registry id, e.g. auth-proxy
+# caddy_auth_proxy_issuer_url (required): the realm's issuer, https://<the IdP's public name>/realms/<realm>
+caddy_auth_proxy_image: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5-alpine@sha256:8e4bec4f9fe4de10de63070209204075e4407503170aa19893d6e8d99f083d1b"  # caddy-lint: allow the auth proxy (oauth2-proxy), not Caddy: the key is the role's prefix
+# published on the guest's own address, where the edge dials it (the auth-proxy row's alias
+# resolves to the guest); the hypervisor's per-VM firewall admits no one else on this port
+caddy_auth_proxy_bind: "{{ ansible_host }}"
+caddy_auth_proxy_port: 4180
+caddy_auth_proxy_dir: /opt/compose/caddy-auth-proxy
+caddy_auth_proxy_owner: root
+caddy_auth_proxy_uid: 61011
+caddy_auth_proxy_gid: 61011
+# the IdP client: the realm generator names it after the auth-proxy row and reads its secret from
+# secret:idp/clients/auth-proxy for a row named auth-proxy (homelabnext.generators.builtin.client_secret_ref), so both sides of the
+# client read one secret
+caddy_auth_proxy_client_id: auth-proxy
+caddy_auth_proxy_client_ref: secret:idp/clients/auth-proxy
+caddy_auth_proxy_cookie_ref: secret:caddy/auth-proxy-cookie-secret
+# the sites it signs users in for (the sign-in return target must be one of them): the edge's names
+caddy_auth_proxy_sites: "{{ caddy_acme_domains | default([]) }}"
+# the session lifetime: no refresh (scope openid only), so a user removed or disabled at the IdP
+# keeps a session this long; at most 12h (validate.yml)
+caddy_auth_proxy_cookie_expire: 4h
+caddy_auth_proxy_mem_limit: 128m
+caddy_auth_proxy_start: true
+caddy_auth_proxy_validate_with_docker: true
+caddy_auth_proxy_health_timeout: 10

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the auth proxy holds no data of its own)
+  ansible.builtin.debug:
+    msg: caddy_auth_proxy holds no data of its own to export
+  tags: [export]

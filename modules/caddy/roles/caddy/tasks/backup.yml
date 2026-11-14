@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's
+# paths): the ACME account (acme/), the rendered configuration (config/) and the export, which
+# writes a listed copy of both first. The data root ALSO holds private keys and a credential in
+# clear (certs/edge.key, the upstream client key under edge-tls/, the ACME account key, the DNS
+# token under acme-env/), so the backup target must be encrypted and access-controlled like the
+# secret store (README, "Data"). A restore needs only the export: the certificate is reissued
+# from the account, and the TLS files and the token come from the secret store on the next main.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Write the export first (a listed copy of the account and the configuration)
+      ansible.builtin.include_tasks: export.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: caddy
+        compose_app_dir: "{{ caddy_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ caddy_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ caddy_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ caddy_app.compose_app_owner }}"
+        compose_app_group: "{{ caddy_app.compose_app_group }}"
+        compose_app_spec: "{{ caddy_app.compose_app_spec }}"
+  tags: [backup]

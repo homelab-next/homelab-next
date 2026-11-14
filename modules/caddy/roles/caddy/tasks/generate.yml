@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+# The sites, rendered on the controller by the edge generator for THIS deployment's hosts only:
+# `hnx registry generate <registry> <scratch> --only caddy --edge-host <host> ...`. With
+# --edge-host the generator renders only the public rows on those hosts and refuses any dial
+# (an upstream, the forward-auth proxy) outside them, so this edge can never render or proxy to
+# another deployment's hosts (the old lab's); validate.yml refuses an empty caddy_edge_hosts, so
+# the role never runs it without one. Read-only on the controller (a scratch directory, removed
+# whatever happens), so it runs under --check too.
+- name: Render the sites with the edge generator (on the controller)
+  block:
+    - name: Make a scratch directory on the controller
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: hnx-caddy-sites-
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: caddy_scratch
+    - name: Run the edge generator for the deployment's hosts (--edge-host, never without)
+      ansible.builtin.command:
+        argv: >-
+          {{ caddy_hnx_cli + ['registry', 'generate', caddy_registry, caddy_scratch.path,
+             '--only', 'caddy'] + (caddy_edge_hosts | map('regex_replace', '^', '--edge-host=') | list) }}
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+    - name: Look for the upstream TLS list (written only when a site names TLS material)
+      ansible.builtin.stat:
+        path: "{{ caddy_scratch.path }}/{{ caddy_edge_tls_file }}"
+        get_checksum: false
+      delegate_to: localhost
+      become: false
+      register: caddy_edge_tls_stat
+    - name: Read the generated sites and the upstream TLS list
+      ansible.builtin.set_fact:
+        caddy_sites_text: "{{ lookup('ansible.builtin.file', caddy_scratch.path ~ '/' ~ caddy_sites_file, rstrip=false) }}"
+        caddy_edge_tls_files: >-
+          {{ (lookup('ansible.builtin.file', caddy_scratch.path ~ '/' ~ caddy_edge_tls_file) | from_json).files
+             if caddy_edge_tls_stat.stat.exists else [] }}
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ caddy_scratch.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      when: caddy_scratch.path is defined
+  tags: [health, readiness]
+
+# What the generator rendered is held to what the overlay declared, so no route appears that the
+# overlay did not name: the sites are exactly caddy_acme_domains (each on the certificate), the
+# front doors' environment placeholders exactly caddy_front_door_refs, the forward-auth proxy the
+# auth proxy role's port, and every upstream TLS file under the generator's directory.
+- name: Read what the sites name
+  ansible.builtin.set_fact:
+    caddy_site_names: "{{ caddy_sites_text | regex_findall(caddy_site_pattern) | sort }}"
+    caddy_site_envs: "{{ caddy_sites_text | regex_findall(caddy_env_pattern) | unique | sort }}"
+    caddy_front_door_envs: >-
+      {{ caddy_front_door_refs | map('regex_replace', '^secret:', '')
+         | map('regex_replace', '[^A-Za-z0-9]', '_') | map('upper')
+         | map('regex_replace', '^', 'HNX_SECRET_') | unique | sort }}
+    caddy_forward_auth: "{{ caddy_sites_text | regex_findall(caddy_forward_auth_pattern) | unique }}"
+  tags: [health, readiness]
+
+- name: The sites are exactly the declared names, front doors and TLS files
+  ansible.builtin.assert:
+    that:
+      - caddy_site_names == caddy_acme_domains | sort
+      - caddy_site_envs == caddy_front_door_envs
+      - caddy_forward_auth | length <= 1
+      - caddy_forward_auth | length == 0 or (caddy_forward_auth[0][1] | int) == (caddy_auth_proxy_port | default(4180) | int)
+      - caddy_edge_tls_files | rejectattr('path', 'match', '^' ~ (caddy_edge_tls_dir | regex_escape) ~ '(/[a-z][a-z0-9_-]*)+\.pem\Z') | list | length == 0
+      - caddy_edge_tls_files | rejectattr('secret', 'match', caddy_ref_pattern) | list | length == 0
+      - caddy_edge_tls_files | rejectattr('mode', 'in', ['0644', '0600']) | list | length == 0
+      - caddy_edge_tls_files | selectattr('mode', 'equalto', '0600') | map(attribute='secret') | reject('match', '^secret:' ~ (caddy_edge_tls_key_area | regex_escape) ~ '/') | list | length == 0
+    fail_msg: >-
+      caddy: the generated sites name {{ caddy_site_names }}, the declared names
+      (caddy_acme_domains) are {{ caddy_acme_domains | sort }}; their front doors read
+      {{ caddy_site_envs }}, caddy_front_door_refs gives {{ caddy_front_door_envs }}; the forward-auth
+      proxy is {{ caddy_forward_auth }} (the auth proxy role's port is
+      {{ caddy_auth_proxy_port | default(4180) }}); every upstream TLS file is a .pem under
+      {{ caddy_edge_tls_dir }} named by a secret: reference, a client key in the store area {{ caddy_edge_tls_key_area }}. A name the overlay did not declare never
+      gets a route: fix the registry rows or the declaration, not this check.
+  tags: [health, readiness]

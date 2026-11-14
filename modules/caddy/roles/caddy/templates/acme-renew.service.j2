@@ -1,0 +1,56 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by Ansible (role caddy) for {{ caddy_logical_id }}. Do not edit.
+# Renews the edge's certificate over ACME (DNS-01) when it is due, installs it where Caddy reads it
+# and reloads a running Caddy (caddy reload --force in its container; never a restart). A failed
+# run leaves this unit failed and its last-run record failed{{ ', and starts ' ~ caddy_acme_on_failure if caddy_acme_on_failure else '' }}.
+[Unit]
+Description=Edge (Caddy) ACME certificate renewal ({{ caddy_logical_id }})
+Wants=network-online.target
+After=network-online.target
+{% if caddy_acme_on_failure %}
+OnFailure={{ caddy_acme_on_failure }}
+{% endif %}
+
+[Service]
+Type=oneshot
+{% if hnx_module_slice | default('') %}
+# the module role's slice (the module play's hnx_module_slice): its CPU and memory limits apply
+Slice={{ hnx_module_slice }}
+{% endif %}
+# The DNS provider's token is in {{ caddy_acme_env_file }} (root, 0600): the script reads it
+# itself and hands it to lego alone, so it is never an argument, never in the unit, and never in
+# the environment of the last-run writer or docker.
+# (the paths are caddy_acme_script and caddy_last_run_writer, vars/main.yml: fixed)
+# the job's last-run record (role last_run), written on start and again on stop, whatever
+# the outcome; a writer problem never changes the job's own result (the - prefix)
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ caddy_last_run_dir }} --group {{ caddy_last_run_group }} --job timer:caddy/acme-renew --unit %n --calendar "{{ caddy_acme_schedule }}" --delay 1800
+ExecStart=/usr/local/libexec/homelabnext/caddy-acme-renew
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ caddy_last_run_dir }} --group {{ caddy_last_run_group }} --job timer:caddy/acme-renew --unit %n --calendar "{{ caddy_acme_schedule }}" --delay 1800
+TimeoutStartSec=15min
+UMask=0077
+# the docker CLI (the reload) keeps its configuration in the private /tmp, not root's home
+Environment=DOCKER_CONFIG=/tmp/docker
+# Root, for the account key, the install and the reload (through the docker socket), but
+# confined: it writes only the ACME directory, the certificate directory and its last-run record,
+# and keeps only the capability to give a file to the container's user.
+CapabilityBoundingSet=CAP_CHOWN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ caddy_acme_dir }} {{ caddy_cert_file | dirname }} {{ caddy_last_run_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

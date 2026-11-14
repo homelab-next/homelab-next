@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; the installed certificate outlives the renewal
+# margin and is the one Caddy loaded (no reload owed); and, probed on the edge's own address
+# (caddy_probe_script), every declared name is served over TLS that verifies against the public
+# trust bundle by that name, an unauthenticated request to a gated site is redirected to the
+# sign-in page, a name no site has answers 404 (the catch-all), the RUNNING configuration (read
+# from Caddy's admin API in the container) deletes every spelling of the identity headers at the
+# top of every site, before anything the site proxies, and every mTLS upstream refuses a TLS peer
+# without the edge's client certificate and answers with it (each other TLS upstream verified
+# against the lab's CA by name). A forged identity header reaching an upstream is the edge
+# suite's to prove end to end (modules/caddy/conformance, the same binary and snippet); here the
+# strip is held in the live configuration. Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: caddy
+        compose_app_dir: "{{ caddy_app.compose_app_dir }}"
+        compose_app_spec: "{{ caddy_app.compose_app_spec }}"
+    - name: Ask whether the installed certificate outlives the renewal margin
+      ansible.builtin.command:
+        argv: [openssl, x509, -noout, -in, "{{ caddy_cert_file }}", -checkend, "{{ (caddy_acme_health_min_days | int) * 86400 }}"]
+      register: caddy_cert_days
+      changed_when: false
+      failed_when: false
+    - name: Fail when renewal has not kept the certificate ahead of its expiry
+      ansible.builtin.assert:
+        that: caddy_cert_days.rc == 0
+        fail_msg: >-
+          caddy: the installed certificate expires within {{ caddy_acme_health_min_days }} days
+          (or cannot be read): renewal is failing (systemctl status {{ caddy_acme_unit }}.service;
+          journalctl -u {{ caddy_acme_unit }}.service)
+    - name: Read whether a reload of the installed certificate is owed
+      ansible.builtin.stat:
+        path: "{{ caddy_acme_dir }}/reload-owed"
+        get_checksum: false
+      register: caddy_reload_owed
+    - name: Fail while Caddy has not loaded the installed certificate (a reload failed)
+      ansible.builtin.assert:
+        that: not caddy_reload_owed.stat.exists
+        fail_msg: >-
+          caddy: a reload after the last renewal failed, so Caddy may serve the certificate it
+          replaced (systemctl start {{ caddy_acme_unit }}.service; journalctl -u {{ caddy_acme_unit }}.service)
+    - name: Read the deployed sites
+      ansible.builtin.slurp:
+        src: "{{ caddy_data_root }}/config/sites.caddy"
+      register: caddy_sites_deployed
+    - name: Read the running configuration from Caddy's admin API (in the container)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ caddy_dir }}/docker-compose.yml", exec, -T, caddy,
+               wget, -q, -T, "5", -O, -, "http://127.0.0.1:2019/config/"]  # no-raw-endpoint: allow the admin API on the container's own loopback
+      register: caddy_live_config
+      changed_when: false
+    - name: Probe the edge on its own address
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -I
+          - -c
+          - "{{ caddy_probe_script }}"
+          - >-
+            {{ {'bind': caddy_bind, 'port': caddy_port | int, 'names': caddy_acme_domains,
+                'bundle': caddy_acme_trust_bundle, 'timeout': caddy_health_timeout | int,
+                'sites': caddy_sites_deployed.content | b64decode,
+                'tls_dir': caddy_edge_tls_dir, 'tls_root': caddy_data_root ~ '/edge-tls',
+                'marks': caddy_identity_marks} | to_json }}
+        stdin: "{{ caddy_live_config.stdout }}"
+      register: caddy_probe
+      changed_when: false
+    - name: Read the probe's findings
+      ansible.builtin.set_fact:
+        caddy_found: "{{ caddy_probe.stdout | from_json }}"
+    - name: Every name is served over TLS that verifies by that name
+      ansible.builtin.assert:
+        that: caddy_found.tls | dict2items | rejectattr('value', 'equalto', 'ok') | list | length == 0
+        fail_msg: "caddy: TLS on {{ caddy_bind }}:{{ caddy_port }} failed for {{ caddy_found.tls | dict2items | rejectattr('value', 'equalto', 'ok') | items2dict }}"
+    - name: An unauthenticated request to a gated site is sent to sign in (forward auth)
+      ansible.builtin.assert:
+        that:
+          - item.value[0] == 302
+          - item.value[1].startswith('/oauth2/sign_in?rd=https://' ~ item.key ~ '/')
+        fail_msg: "caddy: {{ item.key }} answered an unauthenticated request with {{ item.value }}, not the sign-in redirect"
+      loop: "{{ caddy_found.redirect | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+    - name: A name no site has answers 404 (the catch-all)
+      ansible.builtin.assert:
+        that: caddy_found.catch_all == 404
+        fail_msg: "caddy: a request for a name no site has answered {{ caddy_found.catch_all }}, not 404"
+    - name: The running configuration strips every client-sent identity header first, on every site
+      ansible.builtin.assert:
+        that:
+          - caddy_found.strip.keys() | list | sort == caddy_acme_domains | sort
+          - caddy_found.strip.values() | select | list | length == 0
+        fail_msg: "caddy: the running configuration does not delete {{ caddy_found.strip }} at the top of these sites (the generator's strip is missing from what Caddy runs)"
+    - name: Every mTLS upstream refuses a peer without the client certificate and answers with it
+      ansible.builtin.assert:
+        that:
+          - item.value.without == 'refused'
+          - item.value.with == 'answered'
+        fail_msg: "caddy: the mTLS upstream of {{ item.key }}: {{ item.value }}"
+      loop: "{{ caddy_found.mtls | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+    - name: Every other TLS upstream verifies against the lab's CA by name
+      ansible.builtin.assert:
+        that: caddy_found.upstream_tls | dict2items | rejectattr('value', 'equalto', 'ok') | list | length == 0
+        fail_msg: "caddy: {{ caddy_found.upstream_tls }}"
+  tags: [health]

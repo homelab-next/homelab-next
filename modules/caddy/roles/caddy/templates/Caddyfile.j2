@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Managed by Ansible (role caddy) for {{ caddy_logical_id }}. Do not edit.
+# The sites are the edge generator's (sites.caddy beside this file, rendered for this deployment's
+# hosts only); this file adds what is the role's: the global options, a health site on the
+# container's own loopback, and the catch-all that loads the certificate and answers 404 for every
+# name no site has.
+{
+	admin 127.0.0.1:2019  # no-raw-endpoint: allow the admin API on the container's own loopback (caddy reload, the health hook)
+	http_port {{ caddy_container_http_port }}
+	https_port {{ caddy_container_https_port }}
+	# the certificate comes from the host's ACME client (loaded below): Caddy obtains none, and
+	# there is no plain-HTTP listener to redirect from (the edge serves 443 only)
+	auto_https disable_certs disable_redirects
+	persist_config off
+	grace_period 10s
+	servers {
+		protocols h1 h2
+	}
+}
+
+http://127.0.0.1:{{ caddy_container_health_port }} {  # no-raw-endpoint: allow the healthcheck's site, on the container's own loopback
+	bind 127.0.0.1  # no-raw-endpoint: allow bound to the container's own loopback only
+	respond "ok" 200
+}
+
+https:// {
+	tls {{ caddy_container_certs_dir }}/edge.crt {{ caddy_container_certs_dir }}/edge.key
+	respond "no such site" 404
+}
+
+import sites.caddy

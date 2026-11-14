@@ -382,6 +382,10 @@ jobs:
         env:
           HNX_CADDY_REQUIRED: "1"  # the semantic check must run here; a local run may skip it
         run: python tools/caddy_lint.py .
+      - name: "the edge provider module against the pinned release above: the edge suite through its target, and its configuration with the generated sites as the server adapts it"
+        env:
+          HNX_EDGE_SERVER_REQUIRED: "1"  # installed above: a skip here would hide the edge's conformance run
+        run: python -m pytest -q -rs -p no:cacheprovider tests/modules/test_edge_module.py
       - name: nothing at runtime points at the workstation (F-17)
         run: python tools/workstation_refs.py .
       - name: every pinned package and compose image has a reviewed licence, no linked one copyleft (ADR-0011)

@@ -123,12 +123,29 @@ def test_the_server_mode_secret_store_role_installs_the_lab_image_version():
     assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in defaults["openbao_checksums"].values())
 
 
+def test_the_edge_module_runs_the_caddy_ci_checks_with_and_the_secrets_roles_acme_client():
+    """modules/caddy: its product version (and image tag) is the Caddy CI adapts every Caddyfile
+    and runs the edge suite with, and its ACME client is the pin role openbao's ACME mode uses
+    (one lego release, one set of checksums, moved together)."""
+    module = ROOT / "modules" / "caddy"
+    manifest = yaml.safe_load((module / "module.yml").read_text())
+    caddy = yaml.safe_load((module / "roles" / "caddy" / "defaults" / "main.yml").read_text())
+    bao = yaml.safe_load((ROOT / "ansible/roles/openbao/defaults/main.yml").read_text())
+    ci = job_env("schemas", "CADDY_VERSION")
+    assert manifest["product"]["version"] == ci
+    assert caddy["caddy_image"].split("@")[0].endswith(f":{ci}-alpine")
+    for key in ("lego_version", "lego_checksums", "lego_checksums_release"):
+        assert caddy["caddy_" + key] == bao["openbao_" + key], key
+
+
 def _image_sources() -> list[Path]:
     return [
         COMPOSE,
         *sorted((ROOT / "compose").rglob("Dockerfile")),
         *sorted((ROOT / "ansible" / "roles").glob("*/defaults/main.yml")),
         *sorted((ROOT / "ansible" / "roles").glob("*/meta/argument_specs.yml")),
+        *sorted((ROOT / "modules").glob("*/roles/*/defaults/main.yml")),
+        *sorted((ROOT / "modules").glob("*/roles/*/meta/argument_specs.yml")),
     ]
 
 

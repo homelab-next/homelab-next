@@ -81,6 +81,9 @@ SOURCES: dict[str, tuple[str, str]] = {
         "moby/moby tags engine releases docker-vX.Y.Z, which the github source does not parse: "
         "compare with its releases page by hand",
     ),
+    "role:caddy/caddy_image": ("github", "caddyserver/caddy"),
+    "role:caddy/caddy_lego_version": ("github", "go-acme/lego"),
+    "role:caddy_auth_proxy/caddy_auth_proxy_image": ("github", "oauth2-proxy/oauth2-proxy"),
     "role:docker_engine/docker_engine_containerd_version": ("github", "containerd/containerd"),
     "role:docker_engine/docker_engine_buildx_version": ("github", "docker/buildx"),
     "role:docker_engine/docker_engine_compose_version": ("github", "docker/compose"),
@@ -106,6 +109,18 @@ NOTES: dict[str, str] = {
     "role:wazuh_agent/wazuh_agent_version": "never newer than the manager it reports to",
     "role:docker_engine/docker_engine_version": "docker-ce and docker-ce-cli move with it",
     "role:open_webui/open_webui_image": "an image: bump the tag and its digest together",
+    "role:caddy/caddy_image": (
+        "an image (modules/caddy): bump the tag and its digest together, with product.version in "
+        "modules/caddy/module.yml, the lab registry's version and the CI CADDY_VERSION/CADDY_SHA512"
+    ),
+    "role:caddy/caddy_lego_version": (
+        "moves with caddy_lego_checksums and caddy_lego_checksums_release, and with role openbao's "
+        "lego pin (tools/tests/test_pin_consistency.py holds them equal)"
+    ),
+    "role:caddy_auth_proxy/caddy_auth_proxy_image": (
+        "an image (modules/caddy, the -alpine variant): bump the tag and its digest together, with "
+        "the lab registry's auth-proxy version"
+    ),
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "
         "modules/ntfy/module.yml and the lab registry's version"

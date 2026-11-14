@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - caddy_auth_proxy_target_image is match(caddy_auth_proxy_pinned_ref_pattern)
+          - caddy_auth_proxy_target_image.split('@')[0].rsplit(':', 1)[0] == caddy_auth_proxy_image_parts.repository
+        fail_msg: "caddy_auth_proxy: the target must be {{ caddy_auth_proxy_image_parts.repository }}:<tag>@sha256:<64 hex>"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: caddy-auth-proxy
+        compose_app_dir: "{{ caddy_auth_proxy_app.compose_app_dir }}"
+        compose_app_owner: "{{ caddy_auth_proxy_app.compose_app_owner }}"
+        compose_app_group: "{{ caddy_auth_proxy_app.compose_app_group }}"
+        compose_app_spec: "{{ caddy_auth_proxy_app.compose_app_spec }}"
+        compose_app_upgrade_service: auth-proxy
+        compose_app_upgrade_tag: "{{ caddy_auth_proxy_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ caddy_auth_proxy_target_image.split('@')[1] }}"
+  tags: [upgrade]

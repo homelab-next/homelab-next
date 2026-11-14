@@ -46,7 +46,7 @@ summary_of: outline:sha256:88e7a9c112c56143
 | `events` | State the contract over CloudEvents with bus semantics as features. |
 | `dns` | The DNS protocol and RFC 2136 as the contract, zone files as export; promote `dns`, `edge` and `backup` from extended suites. |
 | `idp` | OIDC (discovery, JWKS, introspection). |
-| `edge` | It is the front door and a privileged slot: its extended suite becomes a full contract before any provider is selected through a module. |
+| `edge` | It is the front door and a privileged slot. `modules/caddy` provides it against the extended suite (`conformance/protocols/edge.py`, which the slot registry names as its contract), with the human review tier; the suite still becomes a full contract (TLS served, the auth proxy's 403 for a user outside the allowed groups, upstream mTLS). |
 | `secrets` | Keep the semantics, add a neutral encrypted export. |
 | `notify` | The `Sender`/`Message.click` contract is ntfy-shaped (one product's priorities, tags and click actions); state it over neutral fields with product mapping in providers. The 100+ files that name the product are migration-path work. |
 | `lake-catalog` | The Iceberg REST catalog as the contract. |
@@ -181,8 +181,9 @@ Still open:
   marks secrets, idp, edge, dns, backup, notify, events, broker, orchestration, records,
   agent-runtime and inference as required, and the lake as optional (single-box falls back to the
   hot index).
-- **Contracts for privileged slots that lack one** (`edge` has only an extended suite): until they
-  exist no module can provide them, by the privileged-slot rule.
+- **Contracts for privileged slots that lack one** (`edge` has only an extended suite): the slot
+  registry names it as the contract, so `modules/caddy` provides `edge` against it, privileged
+  (always a conformance run and the human review tier); promoting it to a full contract stays open.
 - **The loader's own trust boundary**: whether module code runs in-process (as specified) or in a
   sandboxed worker for third-party origins.
 - The `contributions` decommission plane is specified, not implemented: the loader accepts it in

@@ -20,6 +20,8 @@
 				redir * /oauth2/sign_in?rd={scheme}://{host}{http.request.uri_escaped}
 			}
 		}
+		# the session cookie is the auth proxy's alone: no upstream sees it (after the check)
+		request_header Cookie "(?i)(^|;\s*)__Host-hnx_auth[^=;]*=[^;]*" "$1"
 	}
 }
 
