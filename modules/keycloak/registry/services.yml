@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes. It is keyed by the slot and
+# renamed to the instance the site selects; version is product.version (never repeated here), and
+# host is the module's host role, which the site places on a guest. The lab registry
+# (lab/services.yml) must carry it as bound (hnx modules check, docs/modules/registry-rows.md): the
+# instance's name, the placed guest's name as host, the product's version, and at most the lab's
+# own standing, backup_job and scope beside it.
+# Public through the edge only: public_hostname and edge_tls are declared here with example values
+# and are the SITE's to fill (their presence is compared, not their value): the site's sign-in name
+# (sso.<domain>) and the secret name of the lab CA the edge verifies this row's certificate with
+# (edge_tls.server_name too, when the certificate is not issued for the capability alias). The
+# IdP's own login is the route's auth (auth: own); the edge reaches it over TLS (tls: internal).
+# The health path is the master realm's discovery document, which every instance has.
+services:
+  idp:
+    capability: idp
+    impl: keycloak
+    host: server
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /realms/master/.well-known/openid-configuration, expect_status: 200}
+    owner: operator
+    tls: internal
+    auth: own
+    public_hostname: sso.example.internal
+    edge_tls: {ca: secret:keycloak/ca}
+    tags: [identity]
+    description: Keycloak with its own PostgreSQL; the generated realm (a password and a passkey, no one-time code, reserved usernames refused). Public only through the edge.

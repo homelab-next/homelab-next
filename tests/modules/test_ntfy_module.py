@@ -130,7 +130,7 @@ def test_the_public_tree_loads_clean(capsys):
     code = mcli.main(["check", "--root", str(ROOT)])
     out = capsys.readouterr().out
     assert code == 0, out
-    assert out.rstrip().endswith("1 module(s), 0 problem(s)")
+    assert out.rstrip().endswith("2 module(s), 0 problem(s)")
 
 
 def test_roles_holds_only_the_contributed_role():

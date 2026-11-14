@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from homelabnext.generators import builtin, generate
+from homelabnext.generators.realm_format import REALM_PRODUCT
 from homelabnext.generators.safe import UnsafeValueError, checked, control_char_paths
 from homelabnext.registry import RegistryError, load
 from homelabnext.registry.model import build_registry
@@ -48,7 +49,7 @@ def test_review_payload_is_rejected_by_the_registry():
         (("services", "edge-proxy", "owner"), CADDY_BREAKOUT),
         (("services", "idp", "owner"), REALM_ENTRY),
         (("services", "idp", "owner"), "identity-team\n"),
-        (("services", "idp", "impl"), "keycloak\n"),
+        (("services", "idp", "impl"), REALM_PRODUCT + "\n"),
         (("services", "idp", "backup_job"), "daily-core\n"),
         (("services", "idp", "health", "path"), "/-/health/live/\n"),
         (("hosts", "idp-core", "role"), "identity\n"),

@@ -1,0 +1,203 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Keycloak and its PostgreSQL as compose_app containers, then import or converge the generated realm.
+    options:
+      keycloak_logical_id: &logical
+        type: str
+        description: "The instance's registry id (the service row the site binds, e.g. idp)."
+        required: true
+      keycloak_hostname: &hostname
+        type: str
+        description: "The public sign-in name the edge serves (sso.<domain>): the issuer is https://<it>/realms/<realm>."
+        required: true
+      keycloak_realm: &realm
+        type: str
+        description: "The realm's name: the registry's lab name, which the idp_realm generator names it."
+        required: true
+      keycloak_realm_file: &realmfile
+        type: path
+        description: "The rendered idp/realm.json on the controller (hnx registry generate, with the site's --reserved-username list)."
+        required: true
+      keycloak_tls_server_name: &servername
+        type: str
+        description: "The name the server certificate is issued for (the edge's edge_tls.server_name, by default the capability alias); the hooks verify the server by it."
+        required: true
+      keycloak_edge_addresses: &edges
+        type: list
+        elements: str
+        description: "The edge guests' IPv4 addresses: the only proxies whose X-Forwarded-* headers the IdP reads."
+        required: true
+      keycloak_image: &image
+        type: str
+        description: "repository:tag@sha256:<digest> of the Keycloak image."
+        default: "quay.io/keycloak/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b"
+      keycloak_postgres_image: &dbimage
+        type: str
+        description: "repository:tag@sha256:<digest> of the PostgreSQL image."
+        default: "docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317"
+      keycloak_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address the IdP is published on (never all interfaces)."
+        default: "{{ ansible_host }}"
+      keycloak_port: &port
+        type: int
+        description: "Host port (the registry row's port)."
+        default: 8443
+      keycloak_dir: &dir
+        type: path
+        description: "The compose project directory (tls/ and secrets/ under it)."
+        default: /opt/compose/keycloak
+      keycloak_owner: &owner
+        type: str
+        description: "Owner of the compose project, the data root, export/ and tls/."
+        default: root
+      keycloak_group: &group
+        type: str
+        description: "Their group: root's (gid 0), which the IdP's container user is in, so it reads tls/."
+        default: root
+      keycloak_data_root: &root
+        type: path
+        description: "The module's data root: pgdata/, export/ and export/db/."
+        default: /var/lib/hnx-modules/keycloak
+      keycloak_uid: &uid
+        type: int
+        description: "The IdP container's user id (group 0; no account on the host has it)."
+        default: 61020
+      keycloak_db_uid: &dbuid
+        type: int
+        description: "The database container's user id; owns pgdata/ and export/db/."
+        default: 61021
+      keycloak_db_gid: &dbgid
+        type: int
+        description: "The database container's group id."
+        default: 61021
+      keycloak_db_name: &dbname
+        type: str
+        description: "The database's name."
+        default: keycloak
+      keycloak_db_user: &dbuser
+        type: str
+        description: "The database role the IdP connects as."
+        default: keycloak
+      keycloak_admin_user: &admin
+        type: str
+        description: "The master realm's break-glass admin (created at the first start)."
+        default: hnx-admin
+      keycloak_admin_login_ref: &adminpw
+        type: str
+        description: "secret:<name> of the break-glass admin's password."
+        default: secret:keycloak/admin-password
+      keycloak_db_login_ref: &dbpw
+        type: str
+        description: "secret:<name> of the database role's password."
+        default: secret:keycloak/db-password
+      keycloak_tls_cert_ref: &cert
+        type: str
+        description: "secret:<name> of the server certificate (PEM) the lab CA issued for keycloak_tls_server_name."
+        default: secret:keycloak/tls-cert
+      keycloak_tls_key_ref: &key
+        type: str
+        description: "secret:<name> of the server certificate's private key (PEM)."
+        default: secret:keycloak/tls-key
+      keycloak_ca_ref: &ca
+        type: str
+        description: "secret:<name> of the lab CA's certificate (PEM): the hooks verify the server with it."
+        default: secret:keycloak/ca
+      keycloak_reserved_usernames: &reserved
+        type: list
+        elements: str
+        description: "Usernames health refuses beside the rendered realm's own list (a floor)."
+        default: [operator-one]
+      keycloak_mem_limit:
+        type: str
+        description: "The IdP container's memory limit."
+        default: 1536m
+      keycloak_db_mem_limit:
+        type: str
+        description: "The database container's memory limit."
+        default: 512m
+      keycloak_start:
+        type: bool
+        description: "Start the containers and converge the realm (false renders only)."
+        default: true
+      keycloak_validate_with_docker:
+        type: bool
+        description: "Run docker compose config on the rendered file."
+        default: true
+      keycloak_health_timeout: &htimeout
+        type: int
+        description: "Seconds for each request to the IdP."
+        default: 15
+      keycloak_ready_timeout: &ready
+        type: int
+        description: "Seconds main waits for the IdP to answer after a start."
+        default: 300
+  health:
+    short_description: Fail unless both containers are healthy, the database answers, OIDC discovery gives the expected issuer, the approvers' flow requires a passkey, no one-time code is offered, the direct grant is refused and no user holds a reserved username.
+    options: &appopts
+      keycloak_logical_id: *logical
+      keycloak_hostname: *hostname
+      keycloak_realm: *realm
+      keycloak_realm_file: *realmfile
+      keycloak_tls_server_name: *servername
+      keycloak_edge_addresses: *edges
+      keycloak_image: *image
+      keycloak_postgres_image: *dbimage
+      keycloak_bind: *bind
+      keycloak_port: *port
+      keycloak_dir: *dir
+      keycloak_owner: *owner
+      keycloak_group: *group
+      keycloak_data_root: *root
+      keycloak_uid: *uid
+      keycloak_db_uid: *dbuid
+      keycloak_db_gid: *dbgid
+      keycloak_db_name: *dbname
+      keycloak_db_user: *dbuser
+      keycloak_admin_user: *admin
+      keycloak_admin_login_ref: *adminpw
+      keycloak_db_login_ref: *dbpw
+      keycloak_tls_cert_ref: *cert
+      keycloak_tls_key_ref: *key
+      keycloak_ca_ref: *ca
+      keycloak_reserved_usernames: *reserved
+      keycloak_health_timeout: *htimeout
+      keycloak_ready_timeout: *ready
+  readiness:
+    short_description: Fail unless the container engine is ready, every credential resolves in its form and the rendered realm is this lab's, passkey-only and refusing the reserved usernames.
+    options:
+      keycloak_realm: *realm
+      keycloak_realm_file: *realmfile
+      keycloak_admin_login_ref: *adminpw
+      keycloak_db_login_ref: *dbpw
+      keycloak_tls_cert_ref: *cert
+      keycloak_tls_key_ref: *key
+      keycloak_ca_ref: *ca
+      keycloak_reserved_usernames: *reserved
+  backup:
+    short_description: Export the database (pg_dump) and the realm (partial export) with a sha256 listing, then name the data root for the backup.
+    options: *appopts
+  export:
+    short_description: Write the open-format exit copy (object-tree) to <data root>/export, the database dump and the realm's partial export, with a sha256 listing.
+    options: *appopts
+  restore:
+    short_description: Check an export (listing, sizes, sha256) and restore the database from its dump with the IdP stopped, then start it again.
+    options:
+      <<: *appopts
+      keycloak_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl, db/keycloak.dump, realm.json).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) of the IdP or the database and record it as pending.
+    options:
+      <<: *appopts
+      keycloak_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move the IdP to."
+        default: ""
+      keycloak_target_postgres_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move the database to (a minor version: a major one needs a dump and restore)."
+        default: ""

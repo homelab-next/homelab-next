@@ -271,14 +271,21 @@ def _sign_in_paths(flows: dict, alias: str) -> set[frozenset[str]]:
     return alts | {frozenset()} if alts and all_skippable else alts
 
 
-#: the steps that check a password, and those that check a one-time code, in any sign-in flow
+#: the steps that check a password, and those that check the second factor (a passkey), in any
+#: sign-in flow; a one-time code is not a second factor here (declined 2026-11-13, ADR-0034)
 PASSWORD_STEPS = {"auth-username-password-form", "direct-grant-validate-password"}
-OTP_STEPS = {"auth-otp-form", "direct-grant-validate-otp"}
+SECOND_FACTOR_STEPS = {"webauthn-authenticator"}
+#: the one-time-code steps and actions the realm must never offer
+OTP_STEPS = {"auth-otp-form", "direct-grant-validate-otp", "auth-conditional-otp-form"}
+#: a step that always refuses: a path through it signs nobody in
+REFUSAL_STEPS = {"deny-access-authenticator"}
 #: the realm's flow bindings that sign a user in, and those the realm must leave unreachable
 USER_FLOW_BINDINGS = ("browserFlow", "directGrantFlow")
+#: the bindings that must sign somebody in (the others may refuse everyone)
+MUST_SIGN_IN = ("browserFlow",)
 #: the user-facing flows a realm flag gates: the flag must be off, and a flow the render binds
-#: there anyway is held to the same password-and-OTP rule, so turning the flag back on cannot open
-#: a way in that skips the second factor
+#: there anyway is held to the same password-and-passkey rule, so turning the flag back on cannot
+#: open a way in that skips the second factor
 GATED_FLOW_BINDINGS = dict(
     zip(
         ("registrationAllowed", "resetPasswordAllowed"),
@@ -291,24 +298,32 @@ GATED_FLOW_BINDINGS = dict(
 def _flow_problems(flows: dict, binding: str, alias) -> list[str]:
     if alias not in flows:
         return [f"{binding}: {alias!r} is not a rendered flow (the built-in one runs)"]
-    paths = [p for p in _sign_in_paths(flows, alias) if "auth-cookie" not in p]
-    out = [] if paths else [f"{binding}: no path signs a user in"]
+    paths = [
+        p
+        for p in _sign_in_paths(flows, alias)
+        if "auth-cookie" not in p and not (p & REFUSAL_STEPS)
+    ]
+    out = [] if paths or binding not in MUST_SIGN_IN else [f"{binding}: no path signs a user in"]
     for p in paths:
-        if not (p & PASSWORD_STEPS and p & OTP_STEPS):
-            out.append(f"{binding}: a path without a password and an OTP: {sorted(p)}")
+        if not (p & PASSWORD_STEPS and p & SECOND_FACTOR_STEPS):
+            out.append(f"{binding}: a path without a password and a passkey: {sorted(p)}")
+        if p & OTP_STEPS:
+            out.append(f"{binding}: a path offers a one-time code: {sorted(p)}")
     return out
 
 
 def _sign_in_problems(realm: dict) -> list[str]:
-    """Every way a rendered realm could sign a user in without a password and a one-time code.
+    """Every way a rendered realm could sign a user in without a password and a passkey.
 
     Each user sign-in binding (browser, direct grant) must name a flow the realm renders (an
-    unbound one falls back to the IdP's built-in flow, which has no required OTP), and every
-    path through it that is not an existing session must run a password step and an OTP step.
-    Registration and credential reset, the other user-facing bindings, must be off, and a flow
-    bound to either (``registrationFlow``, ``resetCredentialsFlow``) must be a rendered one that
-    meets the same rule; no identity provider (a broker login flow) and no per-client flow
-    override may exist; no client may allow direct access grants.
+    unbound one falls back to the IdP's built-in flow, which has no required second factor), and
+    every path through it that is not an existing session, and does not end in a refusal, must
+    run a password step and a passkey step and no one-time code.  The browser flow must sign
+    somebody in; the direct grant may (and does) refuse everyone.  Registration and credential
+    reset, the other user-facing bindings, must be off, and a flow bound to either
+    (``registrationFlow``, ``resetCredentialsFlow``) must be a rendered one that meets the same
+    rule; no identity provider (a broker login flow) and no per-client flow override may exist;
+    no client may allow direct access grants; the one-time code's enrolment action is disabled.
 
     Only the rendered document is read: the clients the IdP creates on import (its own account
     and admin consoles) are not in it, so this says nothing about them; they sign in through the
@@ -329,6 +344,11 @@ def _sign_in_problems(realm: dict) -> list[str]:
             out.append(f"client {c['clientId']} overrides a flow binding")
         if c.get("directAccessGrantsEnabled") is not False:
             out.append(f"client {c['clientId']} allows direct access grants")
+    for a in realm.get("requiredActions", []):
+        if a["providerId"] == "CONFIGURE_TOTP" and (a["enabled"] or a["defaultAction"]):
+            out.append("requiredActions: CONFIGURE_TOTP is enabled (a one-time code is offered)")
+    if not any(a["providerId"] == "CONFIGURE_TOTP" for a in realm.get("requiredActions", [])):
+        out.append("requiredActions: CONFIGURE_TOTP is not rendered disabled")
     return out
 
 
@@ -349,46 +369,71 @@ def _bind_open_registration(realm: dict) -> None:
     realm["registrationFlow"] = "open registration"
 
 
+def _flow(realm: dict, binding: str) -> dict:
+    return next(f for f in realm["authenticationFlows"] if f["alias"] == realm[binding])
+
+
 def test_idp_realm_has_no_sign_in_without_a_second_factor():
     """No flow the realm binds or leaves reachable signs a user in on a password alone: the
-    browser flow and the direct grant flow both run a password and an OTP step on every path
-    that is not an existing session; the OTP form is REQUIRED with no ALTERNATIVE beside it (an
-    alternative the user has not configured is skipped); and a user with no OTP yet is made to
-    enrol it in the browser (CONFIGURE_TOTP, enabled, a default action)."""
+    browser flow runs a password and a passkey step on every path that is not an existing
+    session; the passkey is REQUIRED with no ALTERNATIVE beside it (an alternative the user has
+    not configured is skipped); a user with no key yet is made to register one in the browser
+    (webauthn-register, enabled, a default action); the direct grant refuses everyone; no
+    one-time code is offered anywhere (ADR-0034 decision 2, amended 2026-11-13)."""
     realm = _realm()
     assert _sign_in_problems(realm) == []
     flows = {f["alias"]: f for f in realm["authenticationFlows"]}
-    for step in OTP_STEPS:
-        holders = [
-            f for f in flows.values()
-            if any(e.get("authenticator") == step for e in f["authenticationExecutions"])
-        ]  # fmt: skip
-        assert len(holders) == 1, step
-        siblings = holders[0]["authenticationExecutions"]
-        [otp] = [e for e in siblings if e.get("authenticator") == step]
-        assert otp["requirement"] == "REQUIRED"
-        assert not [e for e in siblings if e["requirement"] == "ALTERNATIVE"]
+    holders = [
+        f for f in flows.values()
+        if any(e.get("authenticator") == "webauthn-authenticator"
+               for e in f["authenticationExecutions"])
+    ]  # fmt: skip
+    assert len(holders) == 1
+    siblings = holders[0]["authenticationExecutions"]
+    [key] = [e for e in siblings if e.get("authenticator") == "webauthn-authenticator"]
+    assert key["requirement"] == "REQUIRED"
+    assert not [e for e in siblings if e["requirement"] == "ALTERNATIVE"]
+    assert [e.get("authenticator") for e in _flow(realm, "directGrantFlow")[
+        "authenticationExecutions"]] == ["deny-access-authenticator"]  # fmt: skip
+    for f in flows.values():
+        for e in f["authenticationExecutions"]:
+            assert e.get("authenticator") not in OTP_STEPS, e
     actions = {a["alias"]: a for a in realm["requiredActions"]}
-    totp = actions["CONFIGURE_TOTP"]
-    assert totp["enabled"] is True and totp["defaultAction"] is True
-    assert totp["providerId"] == "CONFIGURE_TOTP"
+    reg = actions["webauthn-register"]
+    assert reg["enabled"] is True and reg["defaultAction"] is True
+    assert reg["providerId"] == "webauthn-register"
+    for off in ("CONFIGURE_TOTP", "webauthn-register-passwordless"):
+        assert actions[off]["enabled"] is False and actions[off]["defaultAction"] is False
+    # the key verifies its user (a passkey), not bare possession
+    assert realm["webAuthnPolicyUserVerificationRequirement"] == "required"
 
 
 @pytest.mark.parametrize(
     "mutate,binding",
     [
-        # the direct grant flow loses its OTP step: a password alone gets a token
-        (lambda r: next(f for f in r["authenticationFlows"] if f["alias"] == r["directGrantFlow"])[
-            "authenticationExecutions"].pop(), "directGrantFlow"),
+        # the direct grant's refusal becomes conditional: it may be skipped, and nothing is left
+        (lambda r: _flow(r, "directGrantFlow")["authenticationExecutions"][0].update(
+            requirement="CONDITIONAL"), "directGrantFlow"),
+        # the refusal is swapped for a password: a password alone gets a token
+        (lambda r: _flow(r, "directGrantFlow")["authenticationExecutions"][0].update(
+            authenticator="direct-grant-validate-password"), "directGrantFlow"),
         # the realm stops binding it: the IdP's built-in direct grant (OTP conditional) runs
         (lambda r: r.pop("directGrantFlow"), "directGrantFlow"),
+        # the passkey becomes an alternative beside the password: skipped, a password alone
+        (lambda r: next(f for f in r["authenticationFlows"] if f["alias"].endswith("-forms"))[
+            "authenticationExecutions"][1].update(requirement="ALTERNATIVE"), "browserFlow"),
         (lambda r: r.update(resetPasswordAllowed=True), "resetPasswordAllowed"),
         (lambda r: r.update(registrationAllowed=True), "registrationAllowed"),
         (lambda r: r.pop("registrationAllowed"), "registrationAllowed"),
-        # a flag-gated binding names the IdP's built-in flow, or a rendered one with no OTP
+        # a flag-gated binding names the IdP's built-in flow, or a rendered one with no key
         (lambda r: r.update(resetCredentialsFlow="reset credentials"), "resetCredentialsFlow"),
         (_bind_open_registration, "registrationFlow"),
         (lambda r: r["clients"][0].update(directAccessGrantsEnabled=True), "direct access"),
+        # a one-time code is offered again
+        (lambda r: next(a for a in r["requiredActions"] if a["alias"] == "CONFIGURE_TOTP").update(
+            enabled=True), "CONFIGURE_TOTP"),
+        (lambda r: r.update(requiredActions=[a for a in r["requiredActions"]
+                                             if a["alias"] != "CONFIGURE_TOTP"]), "CONFIGURE_TOTP"),
     ],
 )  # fmt: skip
 def test_sign_in_reader_catches_a_flow_without_a_second_factor(mutate, binding):
@@ -398,8 +443,17 @@ def test_sign_in_reader_catches_a_flow_without_a_second_factor(mutate, binding):
     assert problems and any(binding in p for p in problems), problems
 
 
+def test_sign_in_reader_catches_a_one_time_code_in_the_browser_flow():
+    realm = _realm()
+    forms = next(f for f in realm["authenticationFlows"] if f["alias"].endswith("-forms"))
+    forms["authenticationExecutions"].append(
+        {"authenticator": "auth-otp-form", "priority": 30, "requirement": "REQUIRED"}
+    )
+    assert any("one-time code" in p for p in _sign_in_problems(realm))
+
+
 def test_sign_in_path_reader_sees_a_skippable_second_factor():
-    """The reader above flags the shape it guards against: OTP and a key as ALTERNATIVEs."""
+    """The reader above flags the shape it guards against: a code and a key as ALTERNATIVEs."""
     flows = {
         "top": {"authenticationExecutions": [
             {"authenticator": "auth-cookie", "priority": 10, "requirement": "ALTERNATIVE"},
@@ -417,6 +471,80 @@ def test_sign_in_path_reader_sees_a_skippable_second_factor():
         ]},
     }  # fmt: skip
     assert frozenset({"auth-username-password-form"}) in _sign_in_paths(flows, "top")
+
+
+# ------------------------------------------------------------------ reserved usernames
+
+
+def _profile(realm: dict) -> dict:
+    from homelabnext.generators.realm_format import USER_PROFILE_PROVIDER
+
+    [comp] = realm["components"][USER_PROFILE_PROVIDER]
+    assert comp["providerId"] == "declarative-user-profile"
+    return json.loads(comp["config"]["kc.user.profile.config"][0])
+
+
+def _username_pattern(realm: dict):
+    import re
+
+    [attr] = [a for a in _profile(realm)["attributes"] if a["name"] == "username"]
+    pat = attr["validations"]["pattern"]
+    assert pat["error-message"] == "hnx-reserved-username"
+    # Java's Matcher.matches() is a whole-value match; the pattern also anchors itself
+    return re.compile(pat["pattern"])
+
+
+def test_idp_realm_refuses_the_stage_4_proof_approver_by_default():
+    """``operator-one`` (the Stage 4 proof manifest's approver) is refused by the realm's user
+    profile whatever the site passes, and listed for the module's health hook."""
+    realm = _realm()
+    pat = _username_pattern(realm)
+    for name in ("operator-one", "OPERATOR-ONE", "Operator-One"):
+        assert not pat.fullmatch(name), name
+    for name in ("operator", "operator-onex", "xoperator-one", "operator_one", "alice"):
+        assert pat.fullmatch(name), name
+    assert realm["attributes"]["hnx.reserved_usernames"] == "operator-one"
+
+
+def test_idp_realm_adds_the_sites_reserved_usernames():
+    from homelabnext.generators import generate as gen
+
+    text = gen(REG, ["idp_realm"], {"reserved_usernames": ["ops.proof", "e2e@lab"]})
+    realm = json.loads(text["idp_realm"]["idp/realm.json"])
+    pat = _username_pattern(realm)
+    for name in ("operator-one", "ops.proof", "e2e@lab", "OPS.PROOF"):
+        assert not pat.fullmatch(name), name
+    # the dot is escaped: a look-alike with another character in its place is not reserved
+    assert pat.fullmatch("opsxproof")
+    assert realm["attributes"]["hnx.reserved_usernames"] == "e2e@lab,operator-one,ops.proof"
+
+
+@pytest.mark.parametrize("bad", ["Operator-One", "a b", "-lead", "x" * 65, "", "ops)|(.*"])
+def test_idp_realm_refuses_a_reserved_name_the_idp_would_never_store(bad):
+    from homelabnext.generators import GeneratorRefusal
+    from homelabnext.generators import generate as gen
+
+    with pytest.raises(GeneratorRefusal, match="reserved username"):
+        gen(REG, ["idp_realm"], {"reserved_usernames": [bad]})
+
+
+def test_idp_realm_refuses_a_bare_string_for_the_reserved_list():
+    from homelabnext.generators import GeneratorRefusal
+    from homelabnext.generators import generate as gen
+
+    with pytest.raises(GeneratorRefusal, match="not one string"):
+        gen(REG, ["idp_realm"], {"reserved_usernames": "operator-two"})
+
+
+def test_idp_realm_user_profile_keeps_the_idps_default_attributes():
+    """Rendering the user profile replaces the IdP's default; it keeps every default attribute
+    and validator (a profile without them would let a username take any shape), and only an
+    admin may set a username."""
+    attrs = {a["name"]: a for a in _profile(_realm())["attributes"]}
+    assert set(attrs) == {"username", "email", "firstName", "lastName"}
+    v = attrs["username"]["validations"]
+    assert {"length", "username-prohibited-characters", "up-username-not-idn-homograph"} <= set(v)
+    assert attrs["username"]["permissions"]["edit"] == ["admin"]
 
 
 def test_idp_realm_grants_each_group_exactly_the_registry_roles():

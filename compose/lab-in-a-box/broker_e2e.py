@@ -938,7 +938,7 @@ def hub_files(directory: Path, *, edge_address: str, socket_path: str) -> dict[s
                            "health": {"kind": "http", "path": "/ping", "expect_status": 200},
                            "upstreams": ["idp"], "version": "7.15.5", "tls": "none",
                            "auth": "own"},
-            "idp": {**svc, "capability": "idp", "impl": "keycloak", "protocol": "https",
+            "idp": {**svc, "capability": "idp", "impl": "example-idp", "protocol": "https",
                     "port": 9443, "health": {"kind": "tcp"}, "version": "0.0.0", "tls": "internal"},
             "status-hub": {**svc, "capability": "status-hub", "impl": "homelabnext",
                            "protocol": "http", "port": 8099,

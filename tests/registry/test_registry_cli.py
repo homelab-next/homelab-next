@@ -2,6 +2,7 @@
 import io
 from pathlib import Path
 
+from homelabnext.generators.realm_format import REALM_PRODUCT
 from homelabnext.registry.cli import main
 from homelabnext.registry.dns import SystemDNS
 
@@ -77,7 +78,7 @@ def test_resolve_row_by_its_row_name(monkeypatch):
 def test_a_generator_refusing_the_registry_exits_1_with_its_reason(tmp_path):
     minimal = str(Path(EXAMPLE).parent / "minimal" / "services.yml")
     rc, _, err = run("generate", minimal, str(tmp_path), "--only", "idp_realm")
-    assert rc == 1 and "no primary or eval idp row has impl 'keycloak'" in err
+    assert rc == 1 and f"no primary or eval idp row has impl '{REALM_PRODUCT}'" in err
     assert not any(tmp_path.iterdir())
 
 
@@ -98,6 +99,23 @@ def test_a_full_generate_prunes_a_stale_realm(tmp_path):
     assert (tmp_path / "idp" / "realm.json").is_file()
     rc, _, _ = run("generate", minimal, str(tmp_path))
     assert rc == 0 and not (tmp_path / "idp" / "realm.json").exists()
+
+
+def test_reserved_usernames_reach_the_realm_and_check_sees_them(tmp_path):
+    """``--reserved-username`` adds a name the realm refuses; ``check`` without it is drift (the
+    realm the IdP holds would no longer refuse it), and a malformed one exits 1 by name."""
+    import json
+
+    args = ("--only", "idp_realm", "--reserved-username", "ops-proof")
+    assert run("generate", EXAMPLE, str(tmp_path), *args)[0] == 0
+    realm = json.loads((tmp_path / "idp" / "realm.json").read_text())
+    assert realm["attributes"]["hnx.reserved_usernames"] == "operator-one,ops-proof"
+    assert run("check", EXAMPLE, str(tmp_path), *args)[0] == 0
+    rc, _, err = run("check", EXAMPLE, str(tmp_path), "--only", "idp_realm")
+    assert rc == 1 and "differs: idp/realm.json" in err
+    rc, _, err = run("generate", EXAMPLE, str(tmp_path), "--only", "idp_realm",
+                     "--reserved-username", "Ops Proof")  # fmt: skip
+    assert rc == 1 and "reserved username" in err
 
 
 # ---- hnx registry standing (ADR-0039 decision 8, checklist X-12) -----------------------------

@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the database from an export's dump (README, "Restore drill"): the source is checked
+# first and nothing is written until it passes (keycloak_backup.py check: no links, trusted
+# owners, the listing's two files with their sizes and sha256). Then, with the IdP stopped, the
+# dump is staged in export/db/ as the database's user, hashed again (what is restored is what was
+# checked), and restored with pg_restore --clean --if-exists in one transaction; the staged copy
+# is removed and the IdP started again whatever happened. realm.json is not used here: the dump
+# holds the realm, its users and their keys. Run health afterwards.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Read and check the rendered realm
+      ansible.builtin.include_tasks: realm.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the source (nothing is written)
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', keycloak_scripts ~ '/keycloak_backup.py') }}",
+               check, "{{ keycloak_restore_source }}", "{{ keycloak_db_uid | int }}"]
+      register: keycloak_restore_check
+      changed_when: false
+    - name: Restore with the IdP stopped
+      block:
+        - name: Stop the IdP
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", stop, keycloak]
+          changed_when: true
+        - name: Stage the dump as the database's user
+          ansible.builtin.copy:
+            src: "{{ keycloak_restore_source }}/db/keycloak.dump"
+            dest: "{{ keycloak_data_root }}/export/db/.restore.dump"
+            remote_src: true
+            owner: "{{ keycloak_db_uid | int }}"
+            group: "{{ keycloak_db_gid | int }}"
+            mode: "0600"
+            follow: false
+        - name: Hash the staged copy
+          ansible.builtin.stat:
+            path: "{{ keycloak_data_root }}/export/db/.restore.dump"
+            checksum_algorithm: sha256
+            follow: false
+          register: keycloak_staged
+        - name: The staged copy is the one that was checked
+          ansible.builtin.assert:
+            that:
+              - keycloak_staged.stat.isreg
+              - keycloak_staged.stat.checksum == (keycloak_restore_check.stdout | from_json)['db/keycloak.dump'].sha256
+            fail_msg: "keycloak: the staged dump differs from the checked one; nothing was restored"
+        - name: Restore the database (one transaction)
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", exec, -T, postgres,
+                   pg_restore, -U, "{{ keycloak_db_user }}", -d, "{{ keycloak_db_name }}",
+                   --clean, --if-exists, --no-owner, --single-transaction, --exit-on-error,
+                   "{{ keycloak_container_export }}/.restore.dump"]
+          changed_when: true
+      always:
+        - name: Remove the staged copy
+          ansible.builtin.file:
+            path: "{{ keycloak_data_root }}/export/db/.restore.dump"
+            state: absent
+        - name: Start the IdP again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", up, -d, keycloak]
+          changed_when: true
+  tags: [restore]

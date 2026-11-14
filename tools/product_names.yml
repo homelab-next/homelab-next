@@ -60,6 +60,31 @@ allow:
     reason: "the deny-all front the ntfy module's tests put before the loopback stand-in of the product's API (conformance/fakes/ntfy_api.py, in the baseline)"
   - path: "tests/roles/test_ntfy_role.py"
     reason: "the tests of the ntfy module's role (modules/ntfy/roles/ntfy), named for the module id as a module role must be (role:<module id>)"
+  - path: "homelabnext/generators/realm_format.py"
+    reason: "the two names of the IdP realm format the idp_realm generator renders (ADR-0034 decision 2: the realm is the reference IdP's own import format): its registry impl and its user-profile component; every other module takes them from here"
+  - path: "homelabnext/conform/adapters/keycloak.py"
+    reason: "the shared conformance adapter of the idp slot's provider module (modules/keycloak), on the product's own admin and OIDC endpoints; a provider's adapter lives in homelabnext.conform.adapters until module code is loaded (docs/modules.md, the adapter allowlist), as the ntfy adapter's debt is in the baseline"
+  - path: "tests/modules/test_keycloak_module.py"
+    reason: "the tests of the idp provider module (modules/keycloak): its manifest, conformance target and an overlay that selects it, by the module's id, which is its product's name"
+  - path: "tests/modules/keycloak_stand_in.py"
+    reason: "the HTTPS stand-in of the idp provider's admin and OIDC API that the module's tests and its adapter's conformance run use"
+  - path: "tests/roles/test_keycloak_role.py"
+    reason: "the tests of the idp provider module's role (modules/keycloak/roles/keycloak), named for the module id as a module role must be (role:<module id>)"
+  - path: "tests/generators/golden/idp/**"
+    products: [keycloak]
+    reason: "the golden of the idp_realm generator, in the realm format's product's own representation (its user-profile component); the format's names are counted where they live, homelabnext/generators/realm_format.py"
+  - path: "tests/generators/tiers/golden/idp/**"
+    products: [keycloak]
+    reason: "the all-tiers golden of the idp_realm generator (ADR-0039 step 3), in the realm format's product's own representation; the format's names are counted where they live, homelabnext/generators/realm_format.py"
+  - path: "tests/generators/fixtures/all-tiers.services.yml"
+    products: [keycloak]
+    reason: "the all-tiers registry fixture's eval idp row names the realm format's product as its impl, which is what makes the realm render for it (generators/realm_format.py); any other product here is still linted"
+  - path: "examples/services.yml"
+    products: [keycloak]
+    reason: "the example lab's idp row names the realm format's product as its impl, which is what makes the example realm render (generators/realm_format.py, ADR-0034 decision 2); every other product here stays in the baseline"
+  - path: "schemas/platform/examples/service.valid.yml"
+    products: [keycloak]
+    reason: "the schema-layout copy of examples/services.yml (tests/registry/test_schema_example_sync.py holds them equal), so its idp row's impl is the realm format's product too; every other product here stays in the baseline"
   - path: "docs/scripts/catalog.json"
     reason: generated from the scripts' hnx-script header comments, which are prose
   - path: "tools/*.allow.yml"

@@ -336,3 +336,49 @@ def test_hnx_modules_check_names_a_row_missing_from_the_lab_registry(tmp_path, c
     assert f"registry: services.samples: {STORE} (instance samples) contributes this row" in out, (
         out
     )
+
+
+# ------------------------------------------------------- site-bound fields (public_hostname)
+
+
+def _with_public_store(rows_public: dict):
+    """The rows with the store's row declaring ``rows_public`` (a module whose row is public)."""
+    rows = copy.deepcopy(dict(ROWS))
+    rows[STORE] = {**rows[STORE], "object-store": {**rows[STORE]["object-store"], **rows_public}}
+    return rows
+
+
+DECLARED = {"public_hostname": "store.example.internal", "edge_tls": {"ca": "secret:pki/lab-ca"}}
+
+
+def test_a_declared_public_hostname_takes_the_sites_value():
+    rows = _with_public_store(DECLARED)
+    reg = lab_registry()
+    reg["services"]["samples"].update(
+        public_hostname="store.lab.example", edge_tls={"ca": "secret:site/ca"}
+    )
+    sel = mr.selected(SITE, TREE.mods)
+    assert rr.row_problems(SITE, sel, rows, reg) == []
+
+
+def test_a_declared_public_hostname_the_registry_lacks_is_named():
+    rows = _with_public_store(DECLARED)
+    sel = mr.selected(SITE, TREE.mods)
+    got = rr.row_problems(SITE, sel, rows, lab_registry())
+    assert sorted(got) == [
+        f"services.samples.edge_tls: {STORE} (instance samples) declares one (its row "
+        "object-store) (its value is the site's), the lab registry has (absent)",
+        f"services.samples.public_hostname: {STORE} (instance samples) declares one (its row "
+        "object-store) (its value is the site's), the lab registry has (absent)",
+    ]
+
+
+def test_a_site_cannot_make_an_internal_row_public():
+    """Only a field the module declares is the site's to fill: added to a row whose module
+    has none, it is a difference like any other."""
+    reg = lab_registry()
+    reg["services"]["samples"]["public_hostname"] = "store.lab.example"
+    assert problems(registry=reg) == [
+        f"services.samples.public_hostname: {STORE} (instance samples) contributes (absent) "
+        '(its row object-store), the lab registry has "store.lab.example"'
+    ]

@@ -21,7 +21,9 @@ must carry is that row **as bound by the site** (:func:`expected_rows`):
 :func:`row_problems` then names every difference, field by field: a row the registry lacks, a
 field whose value differs, a field one side has and the other does not.  The fields in
 :data:`SITE_FIELDS` are the lab's own facts about a row (a generic module cannot know them) and are
-compared only when the module's row sets them.  A host role the site does not place is a problem
+compared only when the module's row sets them; the fields in :data:`SITE_BOUND_FIELDS`
+(``public_hostname``, ``edge_tls``) must be present when the module's row declares them, with
+whatever value the site gives.  A host role the site does not place is a problem
 of its own (the registry's ``host`` cannot be judged), and the other fields are still compared.
 """
 
@@ -34,7 +36,7 @@ from typing import Any
 
 Doc = dict[str, Any]
 
-__all__ = ["SITE_FIELDS", "Expected", "expected_rows", "row_problems"]
+__all__ = ["SITE_BOUND_FIELDS", "SITE_FIELDS", "Expected", "expected_rows", "row_problems"]
 
 #: the fields of a registry row that are the lab's, not the module's: compared only when the
 #: module's row sets them.  ``standing`` (ADR-0039: whether this row is the capability's primary,
@@ -44,6 +46,15 @@ __all__ = ["SITE_FIELDS", "Expected", "expected_rows", "row_problems"]
 #: agent access map), so a registry that adds them differs from the module, and the module must
 #: say so too
 SITE_FIELDS = frozenset({"standing", "backup_job", "scope"})
+
+#: the fields whose *value* is the site's but whose *presence* is the module's: a module that
+#: publishes a row (an IdP's sign-in pages) declares ``public_hostname`` (and, for a ``tls:
+#: internal`` or ``mtls`` row, ``edge_tls``) with an example value, which makes the row public in
+#: every check a module's rows meet (``grants.public_routes``, a public route needs auth); the
+#: site's registry must then carry the field with its own value (its domain, its CA's secret
+#: name), whatever it is.  A row whose module does not declare the field stays compared as any
+#: other, so a site can never make a module's internal row public
+SITE_BOUND_FIELDS = frozenset({"public_hostname", "edge_tls"})
 
 #: the longest value a problem prints before it is cut (a row's field can be a large mapping)
 SHOWN = 120
@@ -198,6 +209,13 @@ def row_problems(
             if field in SITE_FIELDS and field not in e.row:
                 continue
             want, got = e.row.get(field, _ABSENT), have.get(field, _ABSENT)
+            if field in SITE_BOUND_FIELDS and want is not _ABSENT:
+                if got is _ABSENT:
+                    out.append(
+                        f"{where}.{_name(field)}: {e.who} declares one{src} (its value is the "
+                        "site's), the lab registry has (absent)"
+                    )
+                continue
             if not _same(field, want, got):
                 out.append(
                     f"{where}.{_name(field)}: {e.who} contributes {_shown(want)}{src}, "
