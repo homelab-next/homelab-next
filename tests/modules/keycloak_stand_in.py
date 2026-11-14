@@ -483,6 +483,9 @@ class StandIn:
             return 200, realm.brokers
         if r[:1] == ["groups"] and r[2:] == ["members"]:
             return 200, [u for u in realm.users if r[1] in u.get("groups", [])]
+        if r[:1] == ["users"] and len(r) == 2 and method == "GET":
+            u = next((u for u in realm.users if u["id"] == r[1]), None)
+            return (200, {"requiredActions": [], **u}) if u else (404, None)
         if r[:1] == ["users"] and r[2:] == ["credentials"]:
             u = next((u for u in realm.users if u["id"] == r[1]), None)
             return (200, u.get("credentials", [])) if u else (404, None)

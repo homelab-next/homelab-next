@@ -6,7 +6,9 @@
 # offers a one-time code and the direct grant refuses everyone; the passkey's registration is a
 # default action and the code's is off; the user profile refuses the reserved usernames and **no
 # user holds one**; every rendered client and group exists and each group holds exactly its
-# rendered roles. Read-only.
+# rendered roles; every enabled group member holds a passkey or still has `webauthn-register`
+# pending (reported as "N approvers have no passkey yet (pending first login)", not a failure:
+# ADR-0034's trust on first use). Read-only.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
@@ -35,4 +37,11 @@
       ansible.builtin.assert:
         that: keycloak_api_result.problems | length == 0
         fail_msg: "keycloak: {{ keycloak_api_result.problems | join('; ') }}"
+    - name: Approvers who have not signed in yet are a named state, not a failure
+      ansible.builtin.debug:
+        msg: >-
+          keycloak: {{ keycloak_api_result.pending_first_login | length }} approvers have no passkey yet
+          (pending first login: {{ keycloak_api_result.pending_first_login | join(', ') }}); the
+          webauthn-register action is still pending for each, so the first sign-in registers it
+      when: keycloak_api_result.pending_first_login | default([]) | length > 0
   tags: [health]

@@ -43,7 +43,10 @@ Modes:
   bound flows are the rendered ones, the browser flow requires the passkey and no flow offers a
   one-time code, the direct grant refuses everyone; the enrolment actions are as rendered; the
   user profile refuses the reserved usernames; **no user holds a reserved username**; every
-  rendered client and group exists and each group holds exactly its rendered client roles.
+  rendered client and group exists and each group holds exactly its rendered client roles; every
+  enabled group member holds a passkey, **or has ``webauthn-register`` still pending** (the
+  trust-on-first-use window before the first sign-in: reported in ``pending_first_login``, not a
+  problem; a member with neither is one).
 * ``export``: the realm's partial export (clients, groups, roles, flows, settings; the IdP
   masks every client secret and exports no user), returned as ``realm`` for the role to write.
 """
@@ -69,6 +72,7 @@ OTP_AUTHENTICATORS = {
     "reset-otp",
 }
 SECOND_FACTOR = "webauthn-authenticator"
+PASSKEY_ENROLMENT = "webauthn-register"
 REFUSAL = "deny-access-authenticator"
 PROFILE_PROVIDER = "org.keycloak.userprofile.UserProfileProvider"
 #: the realm settings ``sync`` converges on an existing realm (the rest of the document is
@@ -662,6 +666,7 @@ def health(api: Api, cfg: dict) -> dict:
         )
         if held:
             problems.append(f"a user holds the reserved username {name!r}")
+    pending: set[str] = set()
     # 6. every rendered client and group, each group with exactly its rendered roles; no client
     #    (rendered or the IdP's own) overrides a flow binding
     clients = _client_ids(api, base)
@@ -688,16 +693,27 @@ def health(api: Api, cfg: dict) -> dict:
         _, members = api.call(
             "GET", f"{base}/groups/{_q(live['id'])}/members?max=1000&briefRepresentation=true"
         )
+        #    A member with no passkey who still has the ``webauthn-register`` required action
+        #    pending is the trust-on-first-use window itself (the account exists, the person has
+        #    not signed in yet): reported as ``pending_first_login``, not a problem.  Without
+        #    that action nothing will ever ask them for a passkey: a problem.
         for u in members or []:
             if not u.get("enabled", True):
                 continue
             _, creds = api.call("GET", f"{base}/users/{_q(u['id'])}/credentials")
-            if not any(c.get("type") == "webauthn" for c in creds or []):
+            if any(c.get("type") == "webauthn" for c in creds or []):
+                continue
+            # the brief representation lists no required actions: ask for the user itself
+            _, full = api.call("GET", f"{base}/users/{_q(u['id'])}")
+            if PASSKEY_ENROLMENT in ((full or {}).get("requiredActions") or []):
+                pending.add(u.get("username") or u["id"])
+            else:
                 problems.append(
                     f"user {u.get('username')!r} in group {g['name']} has no passkey registered "
-                    "(register it in person: the first sign-in registers whoever's key)"
+                    f"and no {PASSKEY_ENROLMENT} action pending (nothing will ask them for one; "
+                    "register it in person: the first sign-in registers whoever's key)"
                 )
-    return {"problems": problems}
+    return {"problems": problems, "pending_first_login": sorted(pending)}
 
 
 def export(api: Api, cfg: dict) -> dict:
