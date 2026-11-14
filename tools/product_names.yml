@@ -61,6 +61,8 @@ allow:
     reason: "the tests of the ntfy module's role (modules/ntfy/roles/ntfy), named for the module id as a module role must be (role:<module id>)"
   - path: "tests/modules/test_edge_module.py"
     reason: "the tests of the caddy provider module (modules/caddy): its manifest, conformance target, an overlay that selects it and its Caddyfile adapted by the product, by the module's id, which is its product's name"
+  - path: "tests/roles/test_acme_unit_capabilities.py"
+    reason: "the regression tests of the two ACME renewal scripts' install under their unit's capability set (modules/caddy's and role openbao's), named for the two products whose templates they render"
   - path: "tests/roles/test_caddy_role.py"
     reason: "the tests of the caddy module's roles (modules/caddy/roles/caddy and caddy_auth_proxy), named for the module id as a module role must be (role:<module id>)"
   - path: "homelabnext/conform/adapters/caddy.py"

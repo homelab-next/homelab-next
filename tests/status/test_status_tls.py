@@ -39,8 +39,11 @@ pytestmark = pytest.mark.requires_tool("openssl")
 EDGE = "edge.example.internal"
 OTHER = "other.example.internal"
 HEALTH = "hub-health.example.internal"
-HUB_SOURCE = "127.0.0.1"  # the hub's own address in these tests: the health certificate's source
-ELSE_SOURCE = "127.0.0.2"  # another host on the same wire (the edge's, in the lab)
+HUB_SOURCE = "127.0.0.1"  # no-raw-endpoint: allow loopback, the hub's own address here: the health certificate's source
+ELSE_SOURCE = "127.0.0.2"  # no-raw-endpoint: allow loopback, another host on the same wire (the edge's, in the lab)
+DOC_A = "192.0.2.9"  # no-raw-endpoint: allow a documentation address, bound in the parsing tests
+DOC_B = "192.0.2.10"  # no-raw-endpoint: allow a documentation address
+DOC_C = "192.0.2.8"  # no-raw-endpoint: allow a documentation address
 HUB_HOST = "status.lab.example"
 DOC = {"schema_version": 1, "generated_at": "2026-11-13T00:00:00Z", "sources": [], "menu": []}
 #: not loopback (the example registry's edge address, never connected to): a front door that
@@ -200,20 +203,20 @@ def test_the_hooks_certificate_is_accepted_only_from_the_hubs_own_address(serve,
 
 def test_a_name_bound_to_addresses_fails_closed_without_a_source_and_in_the_cli_form():
     cert = {"subjectAltName": (("DNS", HEALTH),)}
-    s = TLSSettings.from_args("a.crt", "a.key", "ca.crt", [f"{HEALTH}@192.0.2.9,2001:db8::1", EDGE])
-    assert s.client_sources == {HEALTH: frozenset({"192.0.2.9", "2001:db8::1"})}
-    assert s.name_allowed(cert, "192.0.2.9") and s.name_allowed(cert, "2001:db8:0::1")
-    assert not s.name_allowed(cert, "192.0.2.10") and not s.name_allowed(cert, None)
+    s = TLSSettings.from_args("a.crt", "a.key", "ca.crt", [f"{HEALTH}@{DOC_A},2001:db8::1", EDGE])
+    assert s.client_sources == {HEALTH: frozenset({DOC_A, "2001:db8::1"})}
+    assert s.name_allowed(cert, DOC_A) and s.name_allowed(cert, "2001:db8:0::1")
+    assert not s.name_allowed(cert, DOC_B) and not s.name_allowed(cert, None)
     assert not s.name_allowed(cert, "not-an-address")
     assert s.name_allowed({"subjectAltName": (("DNS", EDGE),)}, None)  # unbound: any source
-    for bad in (f"{HEALTH}@", f"{HEALTH}@edge.example.internal", f"{HEALTH}@192.0.2.9,x"):
+    for bad in (f"{HEALTH}@", f"{HEALTH}@edge.example.internal", f"{HEALTH}@{DOC_A},x"):
         with pytest.raises(TLSConfigError, match="IP addresses"):
             TLSSettings.from_args("a.crt", "a.key", "ca.crt", [bad])
     with pytest.raises(TLSConfigError, match="both bound and unbound"):
-        TLSSettings.from_args("a.crt", "a.key", "ca.crt", [HEALTH, f"{HEALTH}@192.0.2.9"])
+        TLSSettings.from_args("a.crt", "a.key", "ca.crt", [HEALTH, f"{HEALTH}@{DOC_A}"])
     with pytest.raises(TLSConfigError, match="two address sets"):
         TLSSettings.from_args(
-            "a.crt", "a.key", "ca.crt", [f"{HEALTH}@192.0.2.9", f"{HEALTH}@192.0.2.8"]
+            "a.crt", "a.key", "ca.crt", [f"{HEALTH}@{DOC_A}", f"{HEALTH}@{DOC_C}"]
         )
 
 
