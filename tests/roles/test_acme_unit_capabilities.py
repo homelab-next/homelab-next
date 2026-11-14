@@ -32,7 +32,6 @@ jinja2 = pytest.importorskip("jinja2")  # present wherever ansible is
 pytestmark = [
     pytest.mark.requires_tool("ansible-playbook"),  # the job that has ansible has jinja2
     pytest.mark.requires_tool("openssl"),
-    pytest.mark.skipif(os.geteuid() == 0, reason="root opens any file: the denial cannot be shown"),
 ]
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -120,6 +119,9 @@ def store(mod, tmp_path, pki, which="one"):
 
 def readers_key_is_unreadable(monkeypatch):
     """The unit's denial: giving the key to its reader (fchown) leaves this process unable to open it."""
+
+    # root opens any file, so the denial cannot be shown to it: fail loudly rather than skip
+    assert os.geteuid() != 0, "run this test unprivileged (CI does)"
 
     def fchown(fd, uid, gid):
         if not os.fstat(fd).st_mode & 0o004:  # the key (the certificate is world-readable)
