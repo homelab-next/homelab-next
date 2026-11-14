@@ -234,6 +234,8 @@ def test_the_realm_prefers_a_keycloak_primary_over_a_keycloak_eval():
     doc = _with_idp_tiers(idp=None)
     # a Keycloak upgrade under test, sorted before the primary: the primary still wins
     nxt = {**doc["services"]["kc-trial"], "port": 8444, "version": "27.0.0"}
+    if nxt.get("metrics", {}).get("port"):  # a second listener of its own, not the primary's
+        nxt["metrics"] = {**nxt["metrics"], "port": nxt["metrics"]["port"] + 1}
     doc["services"]["kc-trial"].pop("standing")
     doc["services"] = {"aa-kc-next": nxt, **doc["services"]}
     reg = build_registry(doc)
