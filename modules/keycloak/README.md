@@ -26,6 +26,11 @@ overlay grant (`grants.upstreams.<module>: [cap:idp]`).
 
 The realm is not written here: it is the `idp_realm` generator's `idp/realm.json`, rendered from
 the lab's registry (`hnx registry generate --only idp_realm`), and the role refuses any other.
+For a registry shared by deployments, pass the IdP deployment's hosts with repeatable
+`--edge-host HOST` options; the realm then contains only that deployment's `auth: idp` clients,
+redirects and role grants, plus the auth-proxy client used by its edge. Unknown hosts and a host
+set without an `auth: idp` row are refused. Without `--edge-host`, generation still includes every
+deployment as before. The same option scopes the edge's Caddy output.
 
 - **A password and a passkey** on every browser sign-in. The browser flow is the session cookie,
   or the username/password form and the WebAuthn form (`webauthn-authenticator`), both
