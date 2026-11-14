@@ -134,9 +134,8 @@ services:
     protocol: https
     port: 8181
     health: {kind: http, path: /health, expect_status: 200}
-    # no metrics block yet: Lakekeeper serves metrics on its own plain-HTTP listener, default
-    # 9000, configurable via LAKEKEEPER__METRICS_PORT; not scraped until metrics.scheme exists
-    # (https://github.com/homelab-next/homelab-next/issues/250), and 9000 is taken by the object store in this example
+    # Lakekeeper's metrics-exporter-prometheus listener is plain HTTP on its own port.
+    metrics: {path: /metrics, port: 9100, scheme: http}
     upstreams: [object-store, idp, records-db]
     owner: data-team
     version: "0.14.1"
@@ -151,10 +150,10 @@ services:
     protocol: https
     port: 8443
     health: {kind: http, path: /v1/info, expect_status: 200, interval_s: 30}
-    # Trino serves OpenMetrics at /metrics on its own HTTP(S) port, behind its authentication:
-    # the generated job sends no credentials, so it gets 401 until scrape auth exists
-    # (https://github.com/homelab-next/homelab-next/issues/251)
-    metrics: {path: /metrics}
+    # The scrape principal needs Trino system-information read permission.
+    metrics:
+      path: /metrics
+      auth: {kind: basic, username: prometheus-scraper, secret: "secret:lake/trino-scraper-password"}
     upstreams: [lake-catalog, object-store, idp]
     owner: data-team
     version: "484.0"

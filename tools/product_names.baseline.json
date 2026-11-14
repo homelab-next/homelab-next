@@ -1391,12 +1391,6 @@
   "tests/generators/golden/env/agentmetry.env.generated": {
    "agentmetry": 2
   },
-  "tests/generators/golden/prometheus/": {
-   "prometheus": 1
-  },
-  "tests/generators/golden/prometheus/scrape_configs.yml": {
-   "minio": 1
-  },
   "tests/generators/test_agent_homes.py": {
    "example-27b": 9,
    "example-4b": 4,

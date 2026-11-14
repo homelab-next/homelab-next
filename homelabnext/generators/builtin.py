@@ -500,25 +500,48 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
 )
 def prometheus(reg: Registry) -> dict[str, str]:
     jobs = []
+    credentials = {}
     for s in reg.rows(*OBSERVED_TIERS):
         if not s.metrics:
             continue
         port = s.metrics.get("port", s.port)
-        jobs.append(
-            {
-                # a primary's job is its capability's, an eval row's its row name's
-                "job_name": s.answers_by,
-                "metrics_path": s.metrics["path"],
-                "scheme": s.scheme if s.scheme in ("http", "https") else "http",
-                "static_configs": [
-                    {
-                        "targets": [f"{reg.address_of(s)}:{port}"],
-                        "labels": {"owner": s.owner, "service": s.name, "version": s.version},
-                    }
-                ],
-            }
-        )
-    return {"prometheus/scrape_configs.yml": _yaml_doc(reg, {"scrape_configs": jobs})}
+        job = {
+            # a primary's job is its capability's, an eval row's its row name's
+            "job_name": s.answers_by,
+            "metrics_path": s.metrics["path"],
+            "scheme": s.metrics.get(
+                "scheme", s.scheme if s.scheme in ("http", "https") else "http"
+            ),
+            "static_configs": [
+                {
+                    "targets": [f"{reg.address_of(s)}:{port}"],
+                    "labels": {"owner": s.owner, "service": s.name, "version": s.version},
+                }
+            ],
+        }
+        auth = s.metrics.get("auth")
+        if auth:
+            ref = auth["secret"]
+            if not re.fullmatch(r"secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*", ref):
+                raise GeneratorRefusal(f"{s.name}: metrics auth must name a secret: reference")
+            file_name = ref.removeprefix("secret:") + ".credentials"
+            path = f"/etc/hnx/scrape-credentials/{file_name}"
+            credentials[ref] = {"secret": ref, "path": path, "mode": "0600"}
+            if auth["kind"] == "basic":
+                job["basic_auth"] = {"username": auth["username"], "password_file": path}
+            elif auth["kind"] == "bearer":
+                job["authorization"] = {"type": "Bearer", "credentials_file": path}
+            else:
+                raise GeneratorRefusal(f"{s.name}: metrics auth kind must be basic or bearer")
+        jobs.append(job)
+    scrape_path = "prometheus/scrape_configs.yml"
+    credentials_path = scrape_path.rpartition("/")[0] + "/credentials.json"
+    return {
+        scrape_path: _yaml_doc(reg, {"scrape_configs": jobs}),
+        credentials_path: _json_doc(
+            reg, {"credentials": [credentials[k] for k in sorted(credentials)]}
+        ),
+    }
 
 
 # 5 ---------------------------------------------------------------- blackbox
