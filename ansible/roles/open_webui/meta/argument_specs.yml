@@ -10,7 +10,7 @@ argument_specs:
       open_webui_image: &image
         type: str
         description: "repository:tag@sha256:<digest> of the Open WebUI image."
-        default: "ghcr.io/open-webui/open-webui:v0.12.3@sha256:a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def"
+        default: "ghcr.io/open-webui/open-webui:v0.12.5@sha256:03443b8de6b617da9d900edd09b4bf1cb0ddbfdcba6afb42c548336a0b821ded"
       open_webui_gateway_key_ref: &gwkey
         type: str
         description: "secret:<name> of this app's gateway key (a key of the gateway spec)."

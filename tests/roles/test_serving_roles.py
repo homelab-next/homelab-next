@@ -1029,8 +1029,8 @@ def test_open_webui_points_at_the_gateway_with_its_own_key(first):
     doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
     svc = doc["services"]["open-webui"]
     assert svc["image"] == (
-        "ghcr.io/open-webui/open-webui:v0.12.3@sha256:"
-        "a537bbe1e6b428820f52ed4a029d7fff97062e24d5cf32c365fba36fd0542def"
+        "ghcr.io/open-webui/open-webui:v0.12.5@sha256:"
+        "03443b8de6b617da9d900edd09b4bf1cb0ddbfdcba6afb42c548336a0b821ded"
     )
     env = svc["environment"]
     gateway = "https://gateway-01.example.internal:4000"  # no-raw-endpoint: allow the stub registry

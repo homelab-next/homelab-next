@@ -253,7 +253,7 @@ go through the gateway with their own key instead (`GatewayResolver`; ADR-0007 d
 ### `open_webui`
 
 `open_webui` runs Open WebUI as a [compose_app](role-interface.md), pinned
-`ghcr.io/open-webui/open-webui:v0.12.3@sha256:a537bbe1…`:
+`ghcr.io/open-webui/open-webui:v0.12.5@sha256:03443b8d…`:
 
 - `OPENAI_API_BASE_URLS` is the gateway's registry URL plus `/v1` (`open_webui_gateway_id`,
   required). A backend id (`inference-*`, `vllm*`, `llama*`, `ollama*`) is refused, and the id is

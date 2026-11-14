@@ -10,7 +10,7 @@ argument_specs:
       tailscale_node_version: &version
         type: str
         description: Pinned client version (x.y.z).
-        default: 1.88.4
+        default: 1.104.4
       tailscale_node_repository:
         type: str
         description: Vendor package repository track root (https), stable; the role appends /debian or /ubuntu for the guest. A lab mirror with the same layout may stand in for it.
