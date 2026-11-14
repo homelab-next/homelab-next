@@ -2377,8 +2377,26 @@ def test_scanner_units_are_oncalendar_timers_enabled_once(first):
     # the unit names the script's catalogued install path (docs/scripts.md, installs_to)
     service = (tmp_path / "units" / "hnx-lynis.service").read_text()
     assert "ExecStart=/usr/local/libexec/homelabnext/lynis-scan\n" in service
-    assert calls(tmp_path) == ["systemctl daemon-reload", "systemctl enable --now hnx-lynis.timer"]
-    assert run_role(tmp_path, "lynis", "config", v).returncode == 0 and len(calls(tmp_path)) == 2
+    # a first run asks the timer's state, finds it neither enabled nor active, and enables it
+    assert calls(tmp_path) == [
+        "systemctl is-enabled hnx-lynis.timer",
+        "systemctl is-active hnx-lynis.timer",
+        "systemctl daemon-reload",
+        "systemctl enable --now hnx-lynis.timer",
+    ]
+    # the timer is now enabled and active: a second run only asks, and enables nothing
+    fake(
+        Path(v["lynis_systemctl_cli"]),
+        "import sys\n"
+        f"log = {str(tmp_path / 'calls.log')!r}\n"
+        "open(log, 'a').write('systemctl ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+        "print({'is-enabled': 'enabled', 'is-active': 'active'}.get(sys.argv[1], ''))\n",
+    )
+    assert run_role(tmp_path, "lynis", "config", v).returncode == 0 and len(calls(tmp_path)) == 6
+    assert calls(tmp_path)[4:] == [
+        "systemctl is-enabled hnx-lynis.timer",
+        "systemctl is-active hnx-lynis.timer",
+    ]
     bad = run_role(tmp_path, "lynis", "config", {**v, "lynis_schedule": "daily\nExecStart=/bin/sh"})
     assert bad.returncode != 0 and "lynis: an OnCalendar schedule ending in UTC" in bad.stdout
 

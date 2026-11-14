@@ -415,7 +415,10 @@ measures.completion_reading(items, mop, now=) (MOP only) ; pages.ProjectsSite (h
 ## 3. Registry and naming
 
 - Registry file: `services.yml` (the example lives at `examples/services.yml`), validated by
-  `schemas/platform/service.json`. A service row has at least: `name` (logical id slug), `guest`,
+  `schemas/platform/service.json` and `homelabnext.registry.model.semantic_problems`. Validation
+  refuses service or metrics listeners that claim the same host, port and transport; `hnx registry
+  validate` applies this rule to overlay `services.yml` files too. A service row has at least:
+  `name` (logical id slug), `guest`,
   `ports` (named), `hostname`, `auth`, `health`, `metrics`, `backup`, `depends_on`, `version`,
   `impl` (current product), `replaced_by` (optional).
 - Capability alias: `<capability>.svc.example.internal`, for example
@@ -552,7 +555,7 @@ change until its ADR is accepted):
 | `platform/lake_table` | 1.0 | `schemas/platform/lake_table.schema.json` | draft |
 | `platform/mcp_server` | 1.4 | `schemas/platform/mcp_server.schema.json` | stable |
 | `platform/model_roles` | 1.4 | `schemas/platform/model_roles.json` | stable |
-| `platform/model_serving` | 1.0 | `schemas/platform/model_serving.schema.json` | stable |
+| `platform/model_serving` | 2.0 | `schemas/platform/model_serving.schema.json` | stable |
 | `platform/model_store` | 1.0 | `schemas/platform/model_store.schema.json` | stable |
 | `platform/module` | 1.0 | `schemas/platform/module.schema.json` | draft |
 | `platform/module_inventory` | 1.0 | `schemas/platform/module_inventory.schema.json` | draft |
