@@ -52,7 +52,7 @@ BUS_USERS = [
 ]  # fmt: skip
 EVENTS = {
     "events_bus_logical_id": "events",
-    "events_bus_archive_url": "https://releases.example.internal/nats-server-v2.15.1-linux-amd64.tar.gz",
+    "events_bus_archive_url": "https://releases.example.internal/nats-server-v2.15.2-linux-amd64.tar.gz",
     "events_bus_archive_sha256": SHA,
     "events_bus_users": BUS_USERS,
     "events_bus_streams": [{"name": "LAB", "subject_prefix": "lab", "max_bytes": 1048576}],
@@ -161,7 +161,7 @@ def test_events_bus_refuses_bad_inputs(tmp_path):
         {"events_bus_listen_address": "0.0.0.0"},  # no-raw-endpoint: allow the refused wildcard
         # loopback only until the role has a TLS listener (a password would cross the wire)
         {"events_bus_listen_address": HUB_ADDR},
-        {"events_bus_archive_url": "http://releases.example.internal/nats-server-v2.15.1-linux-amd64.tar.gz"},
+        {"events_bus_archive_url": "http://releases.example.internal/nats-server-v2.15.2-linux-amd64.tar.gz"},
         {"events_bus_archive_url": "https://releases.example.internal/nats-server-v2.14.0-linux-amd64.tar.gz"},
         {"events_bus_archive_sha256": "0"},
         # the subject ceiling, token by token (not only the literal spellings)
