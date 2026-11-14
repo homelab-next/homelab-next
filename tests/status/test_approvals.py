@@ -243,6 +243,27 @@ def test_cross_origin_posts_are_refused(served, broker, tmp_path, origin, extra,
     assert _log(tmp_path)[-1]["reason"] == reason
 
 
+@pytest.mark.parametrize("origin", ["null", "https://sso.example.internal"])
+def test_a_page_load_after_a_cross_site_sign_in_redirect_is_served(served, broker, origin):
+    """A browser reaches /approvals at the end of the IdP's redirect chain and sends
+    ``Origin: null`` (or the IdP's origin) on that navigation (``Sec-Fetch-Mode: navigate``,
+    which a script cannot set), so the page is served; a script's fetch is still refused and the
+    write keeps its Origin check (the case above, "null")."""
+    base, _site = served()
+    nav = {**APPROVER, "Origin": origin, "Sec-Fetch-Mode": "navigate"}
+    status, _, body = request(base, "/approvals", headers=nav)
+    assert status == 200, body
+    # a script's fetch (no navigate mode) with the same Origin is still refused
+    status, _, body = request(base, "/approvals", headers={**APPROVER, "Origin": origin})
+    assert status == 403 and b"host not allowed" in body
+
+
+def test_a_read_still_needs_an_allowed_host(served, broker):
+    base, _site = served()
+    status, _, body = request(base, "/approvals", headers={**APPROVER, "Host": "evil.example"})
+    assert status == 403 and b"host not allowed" in body
+
+
 def test_another_port_on_the_same_host_is_another_origin(served, broker, tmp_path):
     """The check compared hostnames only, so a page on another port of the hub's host (another
     service, another origin) could post a decision."""

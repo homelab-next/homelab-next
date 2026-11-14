@@ -493,8 +493,19 @@ def make_server(
             return addr
 
         def _guard(self) -> bool:
-            """403 unless Host (and Origin, if sent) name an allowed host (DNS rebinding)."""
-            if host_allowed(self.headers.get("Host"), self.headers.get("Origin"), allowed):
+            """403 unless Host names an allowed host (DNS rebinding) and Origin, if sent, does too,
+            except on a top-level navigation: a GET or HEAD the browser marks
+            ``Sec-Fetch-Mode: navigate`` (a forbidden header name: a page's script cannot set it).
+            A browser that reaches the hub at the end of a cross-site redirect chain (the IdP's
+            sign-in form, then the front door's callback) sends ``Origin: null`` or the IdP's
+            origin on that navigation, and refusing it would refuse every sign-in.  A script's
+            cross-origin fetch is still refused, and the one write, POST /approvals/decide, keeps
+            its own Origin check and its form token."""
+            navigation = self.command in ("GET", "HEAD") and (
+                (self.headers.get("Sec-Fetch-Mode") or "").strip().lower() == "navigate"
+            )
+            origin = None if navigation else self.headers.get("Origin")
+            if host_allowed(self.headers.get("Host"), origin, allowed):
                 return True
             self._reply(403, "text/plain; charset=utf-8", b"forbidden: host not allowed\n")
             return False
