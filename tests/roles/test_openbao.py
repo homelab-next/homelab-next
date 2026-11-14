@@ -29,6 +29,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+import yaml
 from rolerun import _invocation, calls, fake, run_cases, run_role
 
 pytestmark = pytest.mark.requires_tool("ansible-playbook", "openssl")
@@ -653,25 +654,38 @@ def test_the_playbook_runs_only_the_seven_entry_points(tmp_path):
     inv.write_text("[cap_secrets]\nlocalhost ansible_connection=local\n")
     root = Path(__file__).resolve().parents[2]
     env = dict(os.environ, ANSIBLE_CONFIG=str(root / "ansible/ansible.cfg"),
-               ANSIBLE_HOME=str(tmp_path / ".ansible"), ANSIBLE_NOCOLOR="1")  # fmt: skip
-
-    def play(*extra):
-        return subprocess.run(
-            ["ansible-playbook", "-i", str(inv), str(root / "ansible/playbooks/openbao.yml"),
-             "-e", "ansible_become=false", "-e", f"ansible_python_interpreter={sys.executable}",
-             *extra],
-            capture_output=True, text=True, env=env, cwd=tmp_path,
-        )  # fmt: skip
-
+               ANSIBLE_HOME=str(tmp_path / ".ansible"),
+               ANSIBLE_REMOTE_TEMP=str(tmp_path / "remote-tmp"), ANSIBLE_NOCOLOR="1")  # fmt: skip
+    source = root / "ansible/playbooks/openbao.yml"
+    # Run every gate case as its own play in one Ansible process. The copied assertion ignores
+    # expected refusals so Ansible can continue to the next play; the role include only runs for
+    # accepted hooks, as it would after the real assertion passes.
+    plays = []
+    for hook in ("snapshot", "validate", "service", None):
+        play = yaml.safe_load(source.read_text())[0]
+        play["gather_facts"] = False
+        play["tasks"][0]["ignore_errors"] = True
+        play["tasks"][1]["when"] = (
+            "openbao_hook | default('main') in "
+            "['main', 'health', 'readiness', 'backup', 'restore', 'upgrade', 'export']"
+        )
+        if hook is not None:
+            play["vars"] = {"openbao_hook": hook}
+        plays.append(play)
+    pb = tmp_path / "openbao-entry-points.yml"
+    pb.write_text(yaml.safe_dump(plays))
+    r = subprocess.run(
+        ["ansible-playbook", "-i", str(inv), str(pb), "-e", "ansible_become=false",
+         "-e", f"ansible_python_interpreter={sys.executable}"],
+        capture_output=True, text=True, env=env, cwd=tmp_path,
+    )  # fmt: skip
     for hook in ("snapshot", "validate", "service"):
-        r = play("-e", f"openbao_hook={hook}")
-        assert r.returncode != 0, r.stdout
         assert f"export (not {hook})" in r.stdout, r.stdout
-    # no hook named: main, which gets past the gate (and fails later on its missing inputs)
-    r = play()
+    # The final play has no hook: main gets past the gate and fails later on its missing inputs.
     assert "Refuse a hook that is not one of the role's entry points" in r.stdout
     assert "All assertions passed" in r.stdout or "ok: [localhost]" in r.stdout, r.stdout
-    assert "openbao_hook is one of" not in r.stdout
+    assert "(not main)" not in r.stdout
+    assert "missing required arguments: openbao_api_addr, openbao_listen_address" in r.stdout
 
 
 # ---------------------------------------------------------------- health and readiness

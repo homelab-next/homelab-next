@@ -218,9 +218,10 @@ def calls(tmp_path: Path) -> list[str]:
 
 
 def run_cases(tmp_path, role, tasks_from, base_vars, overrides, env=None, parallel=False):
-    """Run one hook once per override in a single ansible-playbook process (one ``block`` with a
-    ``rescue`` per case, so a failing case does not stop the others).  Returns, per override,
-    ``(failed, message)``: whether the hook failed for that case, and its failure message.
+    """Run one hook (or sequence of task files) per override in one ansible-playbook process (one
+    ``block`` with a ``rescue`` per case, so a failing case does not stop the others).  Returns,
+    per override, ``(failed, message)``: whether the hook failed for that case, and its failure
+    message.
 
     ``parallel=True`` splits the cases, in order, over up to :func:`workers` processes run at once
     (each its own play, so a fact one case sets never reaches a case of another chunk): for a long
@@ -244,15 +245,22 @@ def run_cases(tmp_path, role, tasks_from, base_vars, overrides, env=None, parall
 
 def _run_case_chunk(tmp_path, tag, role, tasks_from, base_vars, overrides, env):
     """``run_cases`` for one list of cases, in one process; ``tag`` names its files."""
+    task_files = [tasks_from] if isinstance(tasks_from, str) else tasks_from
     tasks = []
     for i, over in enumerate(overrides):
         tasks.append(
             {
                 "block": [
-                    {
-                        "ansible.builtin.include_role": {"name": role, "tasks_from": tasks_from},
-                        "vars": over,
-                    },
+                    *[
+                        {
+                            "ansible.builtin.include_role": {
+                                "name": role,
+                                "tasks_from": task_file,
+                            },
+                            "vars": over,
+                        }
+                        for task_file in task_files
+                    ],
                     {"ansible.builtin.set_fact": {f"hnx_case_{i}": {"failed": False, "msg": ""}}},
                 ],
                 "rescue": [

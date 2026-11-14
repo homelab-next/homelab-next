@@ -21,9 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
-from rolerun import _invocation, calls, fake, run_role
+from rolerun import _invocation, calls, fake, run_cases, run_role
 
 from homelabnext.edge_identity import AUTH_PROXY_COOKIE
 
@@ -167,6 +166,7 @@ def test_the_health_check_reads_the_sign_in_redirect_encoded_or_not_but_only_to_
     target that is not the site's root still fail."""
     ok = "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal%2F"
     literal = "/oauth2/sign_in?rd=https://hub.example.internal/"
+    good = [[302, ok], [302, literal], [302, ok + "dashboard%3Fx%3D1"]]
     bad = [
         [302, "/oauth2/sign_in?rd=https%3A%2F%2Fevil.example.internal%2F"],
         [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal.evil.test%2F"],
@@ -179,17 +179,17 @@ def test_the_health_check_reads_the_sign_in_redirect_encoded_or_not_but_only_to_
         [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal%40evil.test%2F"],
         [200, ok],
     ]
-
-    def run(loc):
-        found = {"redirect": {"hub.example.internal": loc}}
-        return run_role(tmp_path, CADDY, "health_redirect", {"caddy_found": found})
-
-    for good in ([302, ok], [302, literal], [302, ok + "dashboard%3Fx%3D1"]):
-        r = run(good)
-        assert r.returncode == 0, (good, r.stdout)
-    for loc in bad:
-        r = run(loc)
-        assert r.returncode != 0 and "not the sign-in redirect" in r.stdout, (loc, r.stdout)
+    locations = good + bad
+    results = run_cases(
+        tmp_path,
+        CADDY,
+        "health_redirect",
+        {},
+        [{"caddy_found": {"redirect": {"hub.example.internal": loc}}} for loc in locations],
+    )
+    assert all(not failed for failed, _ in results[: len(good)]), results
+    for loc, (failed, message) in zip(bad, results[len(good) :], strict=True):
+        assert failed and "not the sign-in redirect" in message, (loc, message)
 
 
 def test_main_never_renders_without_an_edge_host(tmp_path):
@@ -230,32 +230,45 @@ def test_the_sites_are_the_generators_for_one_deployment_and_converge(tmp_path):
     assert third.returncode == 0 and "changed=0" in third.stdout, third.stdout
 
 
-@pytest.mark.parametrize(
-    "over, env, says",
-    [
-        ({"caddy_acme_domains": ["hub.example.internal"]}, {}, "the declared names"),
+def test_what_the_overlay_did_not_declare_is_refused(tmp_path):
+    cases = [
+        ({"caddy_acme_domains": ["hub.example.internal"]}, "the declared names"),
         (
-            {"caddy_acme_domains": ["hub.example.internal", "sso.example.internal", "x.example.internal"]},
-            {},
+            {
+                "caddy_acme_domains": [
+                    "hub.example.internal",
+                    "sso.example.internal",
+                    "x.example.internal",
+                ]
+            },
             "the declared names",
         ),
-        ({"caddy_front_door_refs": []}, {}, "caddy_front_door_refs gives"),
-        ({"caddy_edge_hosts": ["edge-01", "core-01", "idp-01", "nope-01"]}, {}, "not in the registry"),
+        ({"caddy_front_door_refs": []}, "caddy_front_door_refs gives"),
+        ({"caddy_edge_hosts": ["edge-01", "core-01", "idp-01", "nope-01"]}, "not in the registry"),
         # without the IdP's host the IdP's site is not rendered, so a declared name has no site
-        ({"caddy_edge_hosts": ["edge-01", "core-01"]}, {}, "the declared names"),
-        ({}, {"HNX_SECRET_PKI_INTERNAL_CA": CERT + "\n" + KEY}, "not in its form"),
-        ({}, {"HNX_SECRET_EDGE_HUB_CLIENT_KEY": CERT}, "not in its form"),
-        ({}, {"HNX_SECRET_STATUS_FRONT_DOOR_SECRET": "short"}, "not in its form"),
+        ({"caddy_edge_hosts": ["edge-01", "core-01"]}, "the declared names"),
+        ({"HNX_SECRET_PKI_INTERNAL_CA": CERT + "\n" + KEY}, "not in its form"),
+        ({"HNX_SECRET_EDGE_HUB_CLIENT_KEY": CERT}, "not in its form"),
+        ({"HNX_SECRET_STATUS_FRONT_DOOR_SECRET": "short"}, "not in its form"),
         # a client key from outside the module's own secret area is refused (the default area)
-        ({"caddy_edge_tls_key_area": DEFAULT_KEY_AREA}, {}, "a client key in the store area " + DEFAULT_KEY_AREA),
+        (
+            {"caddy_edge_tls_key_area": DEFAULT_KEY_AREA},
+            "a client key in the store area " + DEFAULT_KEY_AREA,
+        ),
         # the controller command is the overlay's hnx, nothing else
-        ({"caddy_hnx_cli": ["/bin/sh", "-c", "true"]}, {}, "hnx entry point"),
-    ],
-)  # fmt: skip
-def test_what_the_overlay_did_not_declare_is_refused(tmp_path, over, env, says):
-    r = run_steps(tmp_path, CADDY, RENDER, caddy_vars(tmp_path, **over), {**SECRETS, **env})
-    assert r.returncode != 0
-    assert says in r.stdout, r.stdout
+        ({"caddy_hnx_cli": ["/bin/sh", "-c", "true"]}, "hnx entry point"),
+    ]
+    results = run_cases(
+        tmp_path,
+        CADDY,
+        RENDER,
+        caddy_vars(tmp_path),
+        [over for over, _ in cases],
+        env=SECRETS,
+    )
+    for (failed, message), (_, says) in zip(results, cases, strict=True):
+        assert failed
+        assert says in message, message
     assert not (tmp_path / "data" / "config" / "sites.caddy").exists()
 
 
@@ -315,9 +328,8 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
 
-@pytest.mark.parametrize(
-    "over, env",
-    [
+def test_the_auth_proxy_refuses_bad_inputs(tmp_path):
+    cases = [
         ({}, {"HNX_SECRET_CADDY_AUTH_PROXY_COOKIE_SECRET": "short"}),
         ({}, {"HNX_SECRET_IDP_CLIENTS_AUTH_PROXY": "has a space in it, which is refused"}),
         ({"caddy_auth_proxy_issuer_url": "https://sso.example.internal/"}, {}),
@@ -326,9 +338,19 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
         ({"caddy_acme_domains": []}, {}),
         ({"caddy_auth_proxy_cookie_expire": "13h"}, {}),  # at most 12h: no refresh
         ({"caddy_auth_proxy_cookie_expire": "721m"}, {}),
-    ],
-)
-def test_the_auth_proxy_refuses_bad_inputs(tmp_path, over, env):
-    r = run_role(tmp_path, AUTH, "main", auth_vars(tmp_path, **over), env={**AUTH_SECRETS, **env})
-    assert r.returncode != 0, r.stdout
+    ]
+    shared_env_cases = [(over, env) for over, env in cases if not env]
+    results = run_cases(
+        tmp_path,
+        AUTH,
+        "main",
+        auth_vars(tmp_path),
+        [over for over, _ in shared_env_cases],
+        env=AUTH_SECRETS,
+    )
+    assert all(failed for failed, _ in results), results
+    for over, env in cases[:2]:
+        r = run_role(tmp_path, AUTH, "main", auth_vars(tmp_path, **over),
+                     env={**AUTH_SECRETS, **env})  # fmt: skip
+        assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
