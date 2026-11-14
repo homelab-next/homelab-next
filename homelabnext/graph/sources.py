@@ -1207,9 +1207,14 @@ def read_customizations(b: Builder) -> None:
 
 
 def read_ansible(b: Builder) -> None:
-    """``ansible/roles/*`` and ``ansible/playbooks/*.yml``: playbook -targets-> cap (a
+    """``ansible/roles/*`` (and a public module's ``modules/*/roles/*``) and
+    ``ansible/playbooks/*.yml``: playbook -targets-> cap (a
     ``cap_<name>`` host group), playbook -applies-> role."""
     for d in sorted((b.root / "ansible/roles").glob("*/")):
+        if d.is_dir():
+            b.define(f"role:{d.name}", "role", d.name, b.rel(d), b.rel(d))
+    # a public module's roles share the core's role namespace (modules/<id>/roles/<role>/)
+    for d in sorted((b.root / "modules").glob("*/roles/*/")):
         if d.is_dir():
             b.define(f"role:{d.name}", "role", d.name, b.rel(d), b.rel(d))
     for f in sorted((b.root / "ansible/playbooks").glob("*.yml")):

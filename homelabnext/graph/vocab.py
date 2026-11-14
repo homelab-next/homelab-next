@@ -49,7 +49,7 @@ NODE_KINDS: dict[str, tuple[str, str]] = {
     "broker": ("broker:<manifest_id>", "the keyring sources' broker manifest"),
     "action": ("action:<name>", "broker manifest actions"),
     "custom": ("custom:<name>", "profiles/*/customization.yml"),
-    "role": ("role:<name>", "ansible/roles/*"),
+    "role": ("role:<name>", "ansible/roles/*, modules/*/roles/*"),
     "playbook": ("playbook:<name>", "ansible/playbooks/*.yml"),
     "doc": ("doc:<path>", "tracked Markdown pages (not tests, examples or docs/graph/)"),
     "adr": ("adr:<slug>", "docs/adr/NNNN-<slug>.md"),
