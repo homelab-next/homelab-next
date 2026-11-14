@@ -164,7 +164,7 @@ def test_negative_is_refused(name):
 def test_listener_clash_negative_fixture_is_schema_valid_but_registry_invalid():
     from homelabnext.registry.model import build_registry, schema_problems
 
-    path = ROOT / "schemas/platform/negative/service.listener-clash.yml"
+    path = ROOT / "tests/registry/fixtures/service.listener-clash.yml"
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert schema_problems(doc) == []
     with pytest.raises(RegistryError) as exc:

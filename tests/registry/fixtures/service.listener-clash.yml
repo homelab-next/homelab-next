@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Negative registry: auth-proxy's metrics listener clashes with status-hub's service listener.
+# Schema-valid but registry-invalid (not a schema negative): auth-proxy's metrics listener clashes with status-hub's service listener.
 # Fictional: RFC 5737 addresses, example.internal names.
 registry_version: 1
 
