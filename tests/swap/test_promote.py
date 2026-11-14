@@ -291,7 +291,7 @@ def _notify_text(ceiling: str | None = "amber") -> str:
         text = text.replace(
             "    tags: [ops, notify]\n", f"    tags: [ops, notify]\n    tlp_ceiling: {ceiling}\n", 1
         )
-    return text.replace("  metrics:\n", NOTIFY_B + "  metrics:\n", 1)
+    return text.replace("\n  metrics:\n", "\n" + NOTIFY_B + "  metrics:\n", 1)
 
 
 @pytest.mark.parametrize("ceiling", ["amber", "green"])
