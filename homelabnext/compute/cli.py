@@ -146,25 +146,41 @@ def _dropped_module_groups(out, files: dict[str, str]) -> list[str]:
     """The module groups (``mod_*``, ``modhost_*``) the ``hosts.yml`` already in ``out`` holds and
     the one about to be written there does not: what an inventory render WITHOUT ``--selection``
     (or with another selection) would silently delete, and with it every module play's hosts
-    (``ansible-playbook`` on an empty group matches no host and exits 0).  An unreadable existing
-    file holds none."""
+    (``ansible-playbook`` on an empty group matches no host and exits 0).  An existing file that
+    cannot be read as an inventory is :class:`ComputeUnreadable` (exit 2): it may hold groups, and
+    the guard must not fail open."""
     import yaml
 
     from homelabnext._yaml import safe_load
     from homelabnext.modules.apply import GROUP_PREFIX, HOST_GROUP_PREFIX
 
     def groups(text: str) -> set[str]:
-        try:
-            children = ((safe_load(text) or {}).get("all") or {}).get("children") or {}
-        except (yaml.YAMLError, AttributeError):
+        node = safe_load(text)
+        for key in (
+            "all",
+            "children",
+        ):  # an empty level holds no groups; a non-mapping is no inventory
+            if node is None:
+                return set()
+            if not isinstance(node, dict):
+                raise ValueError(f"{key} is not under a mapping")
+            node = node.get(key)
+        if node is None:
             return set()
-        return {g for g in children if str(g).startswith((GROUP_PREFIX, HOST_GROUP_PREFIX))}
+        if not isinstance(node, dict):
+            raise ValueError("all.children is not a mapping")
+        return {g for g in node if str(g).startswith((GROUP_PREFIX, HOST_GROUP_PREFIX))}
 
     existing = out / "hosts.yml"
-    try:
-        old = groups(existing.read_text(encoding="utf-8")) if existing.is_file() else set()
-    except (OSError, UnicodeDecodeError):
+    if not existing.is_file():
         return []
+    try:
+        old = groups(existing.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValueError, AttributeError) as exc:
+        raise ComputeUnreadable(
+            f"{existing} cannot be read as an inventory ({exc.__class__.__name__}), so the module "
+            "groups it may hold cannot be checked: fix or remove it, or pass --drop-module-groups"
+        ) from None
     return sorted(old - groups(files.get("hosts.yml", "")))
 
 
@@ -174,7 +190,7 @@ def _node_usage(args: argparse.Namespace) -> str | None:
     if getattr(args, "selection", None) is not None and args.target not in SELECTION_TARGETS:
         return f"--selection is for the inventory target; {args.target} does not take it"
     if getattr(args, "drop_module_groups", False) and (
-        args.cmd != "render" or args.target != "inventory"
+        args.cmd != "render" or args.target != "inventory" or not args.out
     ):
         return "--drop-module-groups is for `render --target inventory --out`"
     if getattr(args, "group_vars", None) is not None and args.target != "inventory":
@@ -403,11 +419,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 1
 
-            if (
-                args.target == "inventory"
-                and not args.drop_module_groups
-                and (dropped := _dropped_module_groups(Path(args.out), files))
-            ):
+            try:
+                dropped = (
+                    []
+                    if args.target != "inventory" or args.drop_module_groups
+                    else _dropped_module_groups(Path(args.out), files)
+                )
+            except ComputeUnreadable as exc:
+                print(f"hnx guests: refusing --out {args.out}: {exc}", file=sys.stderr)
+                return 2
+            if dropped:
                 print(
                     f"hnx guests: refusing --out {args.out}: its hosts.yml holds module groups "
                     f"this render lacks ({', '.join(dropped)}); a render without the "

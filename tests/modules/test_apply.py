@@ -252,6 +252,28 @@ def test_rendering_the_inventory_without_its_selection_refuses_to_drop_the_modul
     assert _guests_render("--selection", str(FLEET_SELECTION), "--out", str(out)) == 0
 
 
+def test_an_existing_inventory_that_cannot_be_read_is_never_overwritten_unasked(tmp_path, capsys):
+    """The guard must not fail open: a hosts.yml that is not YAML, or whose `all.children` is not
+    a mapping, may hold module groups, so the render stops (exit 2, no traceback, nothing written)
+    until the file is fixed or `--drop-module-groups` is given."""
+    out = tmp_path / "inv"
+    out.mkdir()
+    hosts = out / "hosts.yml"
+    for bad in ("all: [unclosed\n", "all:\n  children: 5\n", "- a list\n"):
+        hosts.write_text(bad)
+        assert _guests_render("--out", str(out)) == 2, bad
+        err = capsys.readouterr().err
+        assert "cannot be read as an inventory" in err and "Traceback" not in err
+        assert hosts.read_text() == bad
+    assert _guests_render("--out", str(out), "--drop-module-groups") == 0
+    assert "mod_" not in hosts.read_text() and hosts.read_text().startswith("#")
+
+
+def test_drop_module_groups_needs_out(capsys):
+    assert _guests_render("--drop-module-groups") == 2
+    assert "--drop-module-groups is for" in capsys.readouterr().err
+
+
 def test_drop_module_groups_is_for_the_inventory_render_only(tmp_path, capsys):
     assert _guests_render("--drop-module-groups", target="cloudinit") == 2
     assert "--drop-module-groups is for" in capsys.readouterr().err

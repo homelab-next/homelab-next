@@ -173,6 +173,10 @@ def test_the_health_check_reads_the_sign_in_redirect_encoded_or_not_but_only_to_
         [302, "/oauth2/sign_in?rd=http%3A%2F%2Fhub.example.internal%2F"],
         [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal"],
         [302, "/elsewhere?rd=https%3A%2F%2Fhub.example.internal%2F"],
+        [302, "/oauth2/sign_in%3Frd=https%3A%2F%2Fhub.example.internal%2F"],  # encoded `?`
+        [302, "/oauth2/sign_in?x=1&rd=https%3A%2F%2Fhub.example.internal%2F"],
+        [302, "/oauth2/sign_in?rd=https%253A%252F%252Fhub.example.internal%252F"],  # double
+        [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal%40evil.test%2F"],
         [200, ok],
     ]
 
