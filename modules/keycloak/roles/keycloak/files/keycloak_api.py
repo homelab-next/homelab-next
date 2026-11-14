@@ -1,4 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: keycloak-api
+#   kind: tool
+#   purpose: Import or converge the generated realm through the IdP's admin API, and check it (the keycloak role's sync, health and export).
+#   owner: platform
+#   trigger: [role:keycloak]
+#   inputs: "the mode as the one argument (wait, sync, health, export); every setting, the admin's password and the client secrets as one JSON document on stdin"
+#   outputs: one JSON document on stdout (sync - created and changed; health - problems; export - the realm's partial export)
+#   exit:
+#     "0": the mode did its work (health reports its findings in problems)
+#     "1": refused input, an error from the IdP, or flow drift sync will not touch (the reason on stderr)
+#     "2": usage error
 """The keycloak role's one client of the IdP's admin API (modules/keycloak/README.md).
 
     python3 -I keycloak_api.py wait|sync|health|export   < settings.json
@@ -238,6 +250,13 @@ def username_pattern(config: dict):
     return None
 
 
+def username_validations(config: dict) -> dict:
+    for a in config.get("attributes") or []:
+        if a.get("name") == "username":
+            return a.get("validations") or {}
+    return {}
+
+
 def top_flows(doc: dict) -> list[str]:
     return sorted(f["alias"] for f in doc.get("authenticationFlows") or [] if f.get("topLevel"))
 
@@ -378,11 +397,16 @@ def sync(api: Api, cfg: dict) -> dict:
     full = with_secrets(doc, cfg.get("client_secrets") or {})
     api.sign_in(cfg["admin_user"], cfg["admin_password"])
     base = _realm_path(realm)
+    changed: list[str] = []
+    # the master realm (the break-glass admin's, password only): brute-force protection on
+    _, master = api.call("GET", "/admin/realms/master")
+    if (master or {}).get("bruteForceProtected") is not True:
+        api.call("PUT", "/admin/realms/master", {"bruteForceProtected": True}, ok=(204,))
+        changed.append("master brute-force protection")
     status, current = api.call("GET", base, ok=(200, 404))
     if status == 404:
         api.call("POST", "/admin/realms", full, ok=(201,))
-        return {"created": True, "changed": ["realm"]}
-    changed: list[str] = []
+        return {"created": True, "changed": ["realm", *changed]}
     # 1. flows: create the missing ones, refuse drift in the existing ones (never edited)
     _, listed = api.call("GET", f"{base}/authentication/flows")
     existing = {f["alias"] for f in listed or []}
@@ -547,8 +571,12 @@ def health(api: Api, cfg: dict) -> dict:
             problems.append(f"{flag} is not false")
     if rep.get("webAuthnPolicyUserVerificationRequirement") != "required":
         problems.append("the WebAuthn policy does not require user verification")
-    if rep.get("identityProviders"):
+    _, brokers = api.call("GET", f"{base}/identity-provider/instances")
+    if brokers:
         problems.append("an identity provider is configured (a broker login flow)")
+    _, master = api.call("GET", "/admin/realms/master")
+    if (master or {}).get("bruteForceProtected") is not True:
+        problems.append("the master realm has no brute-force protection")
     _, flows = api.call("GET", f"{base}/authentication/flows")
     names = {f["alias"] for f in flows or []}
     for binding in ("browserFlow", "directGrantFlow"):
@@ -579,6 +607,8 @@ def health(api: Api, cfg: dict) -> dict:
     want = username_pattern(profile_config(doc))
     if username_pattern(live_profile or {}) != want:
         problems.append("the user profile's reserved-username pattern differs from the rendered")
+    if username_validations(live_profile or {}) != username_validations(profile_config(doc)):
+        problems.append("the user profile's username validators differ from the rendered")
     # 5. no user holds a reserved username (an import or a restore bypasses the validator)
     reserved = sorted(
         {n.lower() for n in cfg.get("reserved") or []}
@@ -599,8 +629,12 @@ def health(api: Api, cfg: dict) -> dict:
         )
         if held:
             problems.append(f"a user holds the reserved username {name!r}")
-    # 6. every rendered client and group, each group with exactly its rendered roles
+    # 6. every rendered client and group, each group with exactly its rendered roles; no client
+    #    (rendered or the IdP's own) overrides a flow binding
     clients = _client_ids(api, base)
+    for cid, c in sorted(clients.items()):
+        if c.get("authenticationFlowBindingOverrides"):
+            problems.append(f"client {cid} overrides a flow binding")
     for c in doc.get("clients") or []:
         if c["clientId"] not in clients:
             problems.append(f"client {c['clientId']} is missing")
@@ -616,6 +650,20 @@ def health(api: Api, cfg: dict) -> dict:
             have = _group_roles(api, base, live["id"], clients[client]["id"])
             if have != set((g.get("clientRoles") or {}).get(client, [])):
                 problems.append(f"group {g['name']}: its roles on {client} differ")
+        # 7. trust on first use: every enabled member holds a registered passkey (until they do,
+        #    whoever first signs in with their password registers one)
+        _, members = api.call(
+            "GET", f"{base}/groups/{_q(live['id'])}/members?max=1000&briefRepresentation=true"
+        )
+        for u in members or []:
+            if not u.get("enabled", True):
+                continue
+            _, creds = api.call("GET", f"{base}/users/{_q(u['id'])}/credentials")
+            if not any(c.get("type") == "webauthn" for c in creds or []):
+                problems.append(
+                    f"user {u.get('username')!r} in group {g['name']} has no passkey registered "
+                    "(register it in person: the first sign-in registers whoever's key)"
+                )
     return {"problems": problems}
 
 

@@ -274,7 +274,10 @@ def test_a_missing_admin_variable_fails_when_the_target_is_built(monkeypatch):
         _target_factory()()
 
 
-def test_the_adapter_refuses_plain_http(monkeypatch):
+def test_the_adapter_refuses_plain_http(tmp_path, monkeypatch):
+    ca = tmp_path / "ca.pem"
+    ca.write_text("not read before the scheme is checked\n")
+    monkeypatch.setenv("HNX_IDP_CA_FILE", str(ca))
     monkeypatch.setenv("HNX_ENDPOINT_IDP", f"http://{SERVER_NAME}:8080")
     monkeypatch.setenv("HNX_IDP_ADMIN_USER", ADMIN[0])
     monkeypatch.setenv("HNX_IDP_ADMIN_PASSWORD", ADMIN[1])
@@ -304,3 +307,29 @@ def test_role_lint_passes_the_role_and_the_lifecycle_playbooks():
     r = subprocess.run([*lint, "--playbook", *books, "--inventory", inv],
                        capture_output=True, text=True)  # fmt: skip
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_the_adapter_needs_the_lab_ca_and_works_only_in_a_scratch_realm(tmp_path, monkeypatch):
+    from homelabnext.conform.adapters.keycloak import KeycloakIdP
+
+    monkeypatch.setenv("HNX_ENDPOINT_IDP", f"https://{SERVER_NAME}:8443")
+    monkeypatch.setenv("HNX_IDP_ADMIN_USER", ADMIN[0])
+    monkeypatch.setenv("HNX_IDP_ADMIN_PASSWORD", ADMIN[1])
+    monkeypatch.delenv("HNX_IDP_CA_FILE", raising=False)
+    with pytest.raises(AdapterConfigError, match="HNX_IDP_CA_FILE"):
+        _target_factory()()
+    with pytest.raises(ValueError, match="scratch realm"):
+        KeycloakIdP(f"https://{SERVER_NAME}:8443", lambda: ADMIN, realm="northwind")
+
+
+@pytestmark_tls
+def test_a_failed_set_up_leaves_no_scratch_realm(tmp_path, monkeypatch):
+    from homelabnext.conform.adapters import keycloak as kca
+
+    with StandIn(tmp_path, ADMIN) as kc:
+        _env(monkeypatch, kc)
+        monkeypatch.setattr(kca.KeycloakIdP, "_discover", lambda self: (_ for _ in ()).throw(
+            KeycloakError("boom")))  # fmt: skip
+        with pytest.raises(KeycloakError, match="boom"):
+            _target_factory()()
+        assert kc.realms == {}

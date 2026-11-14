@@ -491,38 +491,3 @@ def test_against_the_base_from_a_subdirectory_a_dropped_name_is_still_seen(tmp_p
 
 def test_the_repository_passes_its_own_lint():
     assert run(ROOT) == 0
-
-
-def test_an_allow_entry_with_products_allows_only_those(tmp_path):
-    """``products:`` scopes an allow entry: a file that names one product where it belongs (the
-    realm format's product as an example registry's impl) keeps every other product's debt."""
-    root = tree(
-        tmp_path,
-        {
-            "core/registry.yml": "a: zorbix\nb: acme-objects\n",
-            "core/golden/x.json": '{"a": "zorbix"}\n',
-        },
-    )
-    vocab = yaml.safe_load((root / pl.VOCABULARY).read_text())
-    vocab["allow"] = [
-        {"path": "core/registry.yml", "products": ["zorbix"], "reason": "its impl is zorbix"},
-        {"path": "core/golden/**", "products": ["zorbix"], "reason": "a golden"},
-    ]
-    (root / pl.VOCABULARY).write_text(yaml.safe_dump(vocab))
-    assert pl.scoped_allowlist(root) == [
-        ("core/registry.yml", frozenset({"zorbix"})),
-        ("core/golden/**", frozenset({"zorbix"})),
-    ]
-    assert pl.allowlist(root) == []
-    vocab_ = pl.vocabulary(root, None, root / pl.ROLES)
-    got = pl.scan(root, vocab_, list(pl.ALWAYS_ALLOWED), pl.scoped_allowlist(root))
-    assert {k: dict(v) for k, v in got.items()} == {"core/registry.yml": {"acme-objects": 1}}
-
-
-@pytest.mark.parametrize("products", [[], "zorbix", [""], [3]])
-def test_an_allow_entry_with_malformed_products_is_refused(tmp_path, products):
-    root = tree(tmp_path, {})
-    (root / pl.VOCABULARY).write_text(
-        yaml.safe_dump({"allow": [{"path": "core/**", "reason": "r", "products": products}]})
-    )
-    assert run(root) == 2

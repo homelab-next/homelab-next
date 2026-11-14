@@ -533,6 +533,44 @@
     },
     {
       "exit": {
+        "0": "the mode did its work (health reports its findings in problems)",
+        "1": "refused input, an error from the IdP, or flow drift sync will not touch (the reason on stderr)",
+        "2": "usage error"
+      },
+      "id": "keycloak-api",
+      "inputs": "the mode as the one argument (wait, sync, health, export); every setting, the admin's password and the client secrets as one JSON document on stdin",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one JSON document on stdout (sync - created and changed; health - problems; export - the realm's partial export)",
+      "owner": "platform",
+      "path": "modules/keycloak/roles/keycloak/files/keycloak_api.py",
+      "purpose": "Import or converge the generated realm through the IdP's admin API, and check it (the keycloak role's sync, health and export).",
+      "status": "active",
+      "trigger": [
+        "role:keycloak"
+      ]
+    },
+    {
+      "exit": {
+        "0": "listed, checked or staged",
+        "1": "the export or the source is refused (the reason on stderr)",
+        "2": "usage error"
+      },
+      "id": "keycloak-backup",
+      "inputs": "listing EXPORT_DIR | check SOURCE DB_UID | stage SOURCE DEST DB_UID DB_GID",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "the listing's rows, or the checked files' size and sha256, as JSON on stdout; stage also writes DEST (0600, the database's user)",
+      "owner": "platform",
+      "path": "modules/keycloak/roles/keycloak/files/keycloak_backup.py",
+      "purpose": "List the keycloak role's export, and check an export (and stage its dump through the checked descriptor) before a restore.",
+      "status": "active",
+      "trigger": [
+        "role:keycloak"
+      ]
+    },
+    {
+      "exit": {
         "0": "safe to start",
         "3": "the compose configuration could not be resolved (nothing was run)",
         "4": "refused"

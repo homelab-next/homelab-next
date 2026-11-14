@@ -229,6 +229,11 @@ def test_main_imports_the_realm_then_converges_it_and_health_passes(tmp_path, pk
         again = run_role(tmp_path, ROLE, "main", v, env=env)
         assert again.returncode == 0, again.stdout
         assert "realm northwind: unchanged" in again.stdout
+        # an approver who registered a passkey is fine; the master realm is brute-force protected
+        realm.users.append({"id": "u9", "username": "approver-a", "enabled": True,
+                            "groups": [realm.groups[0]["id"]],
+                            "credentials": [{"type": "password"}, {"type": "webauthn"}]})  # fmt: skip
+        assert kc.master["bruteForceProtected"] is True
         health = run_role(tmp_path, ROLE, "health", v, env=env)
         assert health.returncode == 0, health.stdout + health.stderr
         log = (tmp_path / "docker.log").read_text()
@@ -249,6 +254,13 @@ def test_main_imports_the_realm_then_converges_it_and_health_passes(tmp_path, pk
         (lambda r: r.profile["attributes"][0]["validations"].pop("pattern"),
          "reserved-username pattern"),
         (lambda r: r.mappings.clear(), "roles on status-hub differ"),
+        (lambda r: r.brokers.append({"alias": "elsewhere"}), "an identity provider is configured"),
+        (lambda r: r.clients[0].update(authenticationFlowBindingOverrides={"browser": "x"}),
+         "overrides a flow binding"),
+        (lambda r: r.profile["attributes"][0]["validations"].pop("up-username-not-idn-homograph"),
+         "username validators differ"),
+        (lambda r: r.users.append({"id": "u3", "username": "alice", "enabled": True,
+                                   "groups": [r.groups[0]["id"]]}), "has no passkey registered"),
     ],
 )  # fmt: skip
 def test_health_fails_on_a_damaged_realm(tmp_path, pki, damage, reason):

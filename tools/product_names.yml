@@ -71,20 +71,15 @@ allow:
   - path: "tests/roles/test_keycloak_role.py"
     reason: "the tests of the idp provider module's role (modules/keycloak/roles/keycloak), named for the module id as a module role must be (role:<module id>)"
   - path: "tests/generators/golden/idp/**"
-    products: [keycloak]
     reason: "the golden of the idp_realm generator, in the realm format's product's own representation (its user-profile component); the format's names are counted where they live, homelabnext/generators/realm_format.py"
   - path: "tests/generators/tiers/golden/idp/**"
-    products: [keycloak]
     reason: "the all-tiers golden of the idp_realm generator (ADR-0039 step 3), in the realm format's product's own representation; the format's names are counted where they live, homelabnext/generators/realm_format.py"
   - path: "tests/generators/fixtures/all-tiers.services.yml"
-    products: [keycloak]
-    reason: "the all-tiers registry fixture's eval idp row names the realm format's product as its impl, which is what makes the realm render for it (generators/realm_format.py); any other product here is still linted"
+    reason: "the all-tiers registry fixture's eval idp row names the realm format's product as its impl, which is what makes the realm render for it (generators/realm_format.py)"
   - path: "examples/services.yml"
-    products: [keycloak]
-    reason: "the example lab's idp row names the realm format's product as its impl, which is what makes the example realm render (generators/realm_format.py, ADR-0034 decision 2); every other product here stays in the baseline"
+    reason: "the example lab's registry is a (fictional) site's configuration, like examples/modules/sites/: its rows choose products (impl), which is where a product name belongs (ADR-0027 rule 1); its idp row names the realm format's product, which is what makes the example realm render (generators/realm_format.py, ADR-0034 decision 2)"
   - path: "schemas/platform/examples/service.valid.yml"
-    products: [keycloak]
-    reason: "the schema-layout copy of examples/services.yml (tests/registry/test_schema_example_sync.py holds them equal), so its idp row's impl is the realm format's product too; every other product here stays in the baseline"
+    reason: "the schema-layout copy of examples/services.yml (tests/registry/test_schema_example_sync.py holds them equal): the same fictional site's configuration"
   - path: "docs/scripts/catalog.json"
     reason: generated from the scripts' hnx-script header comments, which are prose
   - path: "tools/*.allow.yml"

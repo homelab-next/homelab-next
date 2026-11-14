@@ -173,6 +173,14 @@ def _name(text: str) -> str:
 _ABSENT = object()
 
 
+def _site_bound_ok(field: str, value: Any) -> bool:
+    """The site's value of a site-bound field has the field's shape: a non-empty host name, or a
+    mapping naming the CA by a secret reference (the registry schema checks the rest)."""
+    if field == "public_hostname":
+        return isinstance(value, str) and bool(value.strip())
+    return isinstance(value, Mapping) and str(value.get("ca", "")).startswith("secret:")
+
+
 def _same(field: str, a: Any, b: Any) -> bool:
     if field == "version" and a is not _ABSENT and b is not _ABSENT:
         return str(a) == str(b)  # an unquoted YAML version reads as a number
@@ -214,6 +222,11 @@ def row_problems(
                     out.append(
                         f"{where}.{_name(field)}: {e.who} declares one{src} (its value is the "
                         "site's), the lab registry has (absent)"
+                    )
+                elif not _site_bound_ok(field, got):
+                    out.append(
+                        f"{where}.{_name(field)}: {e.who} declares one{src}, the lab registry has "
+                        f"{_shown(got)}, which is not one (a host name; a mapping with a ca)"
                     )
                 continue
             if not _same(field, want, got):

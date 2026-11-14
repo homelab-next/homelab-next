@@ -2,7 +2,7 @@
 """The ``idp`` contract on Keycloak (pinned: 26.8), stdlib HTTP and RS256.
 
 ``make(**config)`` returns a :class:`KeycloakIdP` on ``HNX_ENDPOINT_IDP`` (https only, verified
-against the CA file named by ``ca_file_env``, or the system roots without one).  The adapter signs
+against the lab CA file named by ``ca_file_env``, which is required).  The adapter signs
 in as the break-glass admin (the master realm's ``admin-cli``; the variables named by
 ``admin_user_env`` and ``admin_password_env``, read at each sign-in) and works **only in a scratch
 realm of its own**, ``hnxconf-<hex>``, created when the target is built and deleted by
@@ -142,6 +142,8 @@ class KeycloakIdP:
         self._opener = credential_opener(ca_file)
         self.timeout = timeout
         self.realm = realm or f"hnxconf-{secrets.token_hex(6)}"
+        if not self.realm.startswith("hnxconf-"):
+            raise ValueError("the adapter works only in a scratch realm named hnxconf-*")
         self._admin_token: tuple[str, float] | None = None
         self._clients: dict[str, tuple[str, str, str]] = {}  # subject -> (clientId, uuid, secret)
         self._by_client: dict[str, str] = {}  # clientId -> secret
@@ -149,8 +151,13 @@ class KeycloakIdP:
         self._keys: dict[str, tuple[int, int]] = {}
         self._verifier: tuple[str, str] | None = None
         self._created = False
-        self._create_realm()
-        self.issuer = self._discover()
+        try:
+            self._create_realm()
+            self.issuer = self._discover()
+        except BaseException:
+            # a realm created before the failure is deleted: nothing is left on the IdP
+            self.close()
+            raise
 
     def __repr__(self) -> str:
         return f"KeycloakIdP(realm={self.realm!r})"
@@ -429,19 +436,21 @@ def make(
     *,
     admin_user_env: str = "HNX_IDP_ADMIN_USER",
     admin_password_env: str = "HNX_IDP_ADMIN_PASSWORD",
-    ca_file_env: str | None = "HNX_IDP_CA_FILE",
+    ca_file_env: str = "HNX_IDP_CA_FILE",
     timeout: float = 15.0,
     capability: str = "idp",
 ) -> KeycloakIdP:
     """A target on the ``idp`` endpoint (``HNX_ENDPOINT_IDP``, https): the admin's name and
     password from the named variables (read now, so a missing one fails at once, and again at
-    each sign-in), the server verified against the CA file named by ``ca_file_env`` when that
-    variable is set (else the system roots)."""
+    each sign-in), the server verified against the CA file named by ``ca_file_env`` (required:
+    the lab CA, so the admin's password reaches only the internal name)."""
     import os
 
     admin = env_reader(admin_user_env, admin_password_env)
-    ca_file = os.environ.get(ca_file_env) if ca_file_env else None
-    if ca_file is not None and not os.path.isfile(ca_file):
-        raise AdapterConfigError(f"{ca_file_env} names no file")
+    # the admin's password goes only to the server the lab CA vouches for (the internal name),
+    # never to whatever the system roots trust (the public name, through the edge)
+    ca_file = os.environ.get(ca_file_env or "")
+    if not ca_file or not os.path.isfile(ca_file):
+        raise AdapterConfigError(f"{ca_file_env} must name the lab CA's certificate file")
     ep = resolve(capability, env_only=True, schemes=("https",))
     return KeycloakIdP(ep.url, admin, ca_file=ca_file, timeout=timeout)

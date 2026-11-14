@@ -412,6 +412,7 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
     it every public primary is a site, as for a registry that is one deployment."""
     sites = _edge_sites(reg, edge_hosts)
     proxy = _auth_proxy(reg, sites)
+    realm = realm_idp(reg)
     gated = any(s.auth == "idp" for s in sites)
     parts = [_hdr(reg)]
     if proxy and (edge_hosts is None or gated):
@@ -449,10 +450,25 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
         if s.edge_tls:
             inner += _edge_transport(reg, s)
         proxy_block = " {\n" + "".join(inner) + "\t}" if inner else ""
+        raw = {"auth_block": auth_block, "proxy_block": proxy_block, "note": "",
+               "route_open": "", "route_close": ""}  # fmt: skip
+        if realm is not None and s.name == realm.name:
+            # the realm's IdP publishes its sign-in pages only: the realm's own paths and the
+            # static resources; the master realm (the break-glass admin's, password only) and
+            # the admin console answer 404 at the edge (ADR-0034 decision 6)
+            # the lab's name is a slug (registry schema), so each path is plain text
+            paths = " ".join(realm_paths(reg))
+            raw = {
+                "auth_block": auth_block,
+                "proxy_block": proxy_block.replace("\n\t", "\n\t\t"),
+                "note": ": only the realm's paths are published",
+                "route_open": f"\t@hnx_published path {paths}\n\thandle @hnx_published {{\n\t",
+                "route_close": "\n\t}\n\thandle {\n\t\trespond 404\n\t}",
+            }
         parts.append(
             render(
                 "caddy_site",
-                raw={"auth_block": auth_block, "proxy_block": proxy_block},
+                raw=raw,
                 hostname=s.public_hostname,
                 service=s.name,
                 capability=s.capability,
@@ -815,7 +831,12 @@ def reserved_usernames_of(extra=None) -> tuple[str, ...]:
         raise GeneratorRefusal(
             "idp_realm: reserved_usernames is a collection of usernames, not one string"
         )
-    names = set(RESERVED_USERNAMES) | set(extra or ())
+    try:
+        names = set(RESERVED_USERNAMES) | set(extra or ())
+    except TypeError:
+        raise GeneratorRefusal(
+            "idp_realm: reserved_usernames is a collection of usernames"
+        ) from None
     bad = sorted(
         repr(n) for n in names if not (isinstance(n, str) and RESERVED_USERNAME_SHAPE.match(n))
     )
@@ -1006,6 +1027,13 @@ def realm_idp(reg: Registry) -> Service | None:
     ``retiring`` or ``legacy`` row."""
     rows = [s for s in reg.rows(*REALM_TIERS) if s.capability == "idp" and s.impl == REALM_PRODUCT]
     return min(rows, key=lambda s: (not s.is_primary, s.name)) if rows else None
+
+
+def realm_paths(reg: Registry) -> tuple[str, ...]:
+    """The paths the edge publishes for the realm's IdP (:func:`realm_idp`): the realm's own
+    (sign-in, its OIDC endpoints, the account pages) and the static resources its pages load.
+    Every other path, the master realm and the admin console among them, is a 404 at the edge."""
+    return (f"/realms/{reg.lab_name}/*", "/resources/*")
 
 
 def require_realm_idp(reg: Registry) -> Service:

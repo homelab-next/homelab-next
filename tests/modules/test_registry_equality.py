@@ -382,3 +382,17 @@ def test_a_site_cannot_make_an_internal_row_public():
         f"services.samples.public_hostname: {STORE} (instance samples) contributes (absent) "
         '(its row object-store), the lab registry has "store.lab.example"'
     ]
+
+
+@pytest.mark.parametrize(
+    "field,value", [("public_hostname", ""), ("edge_tls", {}), ("edge_tls", "secret:site/ca")]
+)
+def test_a_malformed_site_value_for_a_declared_field_is_named(field, value):
+    rows = _with_public_store(DECLARED)
+    reg = lab_registry()
+    reg["services"]["samples"].update(
+        public_hostname="store.lab.example", edge_tls={"ca": "secret:site/ca"}
+    )
+    reg["services"]["samples"][field] = value
+    got = rr.row_problems(SITE, mr.selected(SITE, TREE.mods), rows, reg)
+    assert len(got) == 1 and f"services.samples.{field}:" in got[0] and "is not one" in got[0]

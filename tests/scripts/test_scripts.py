@@ -525,6 +525,11 @@ def test_the_repository_catalog_is_current_and_matches_reality():
     assert runner_problems(cat, real, allow) == []
     kinds = {e["id"]: e["kind"] for e in cat.entries}
     assert kinds["leak-scan"] == "check" and kinds["lab-smoke"] == "tool"
+    # a public module's role is a role: its task files are the callers of its scripts
+    module_scripts = [e["path"] for e in cat.entries if e["path"].startswith("modules/")]
+    assert module_scripts
+    for path in module_scripts:
+        assert real.callers[path] == {f"role:{path.split('/')[3]}"}, path
 
 
 def test_the_register_runs_m01_m02_m04_on_the_repository():

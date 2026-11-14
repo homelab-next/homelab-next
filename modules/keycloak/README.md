@@ -99,10 +99,10 @@ the master realm must never be public (see "The edge").
 | Hook | What it checks or does |
 |---|---|
 | `readiness` (also the module's preflight) | `docker_engine` readiness; the rendered realm is this lab's (`keycloak_realm`), binds rendered flows, requires `webauthn-authenticator`, refuses the direct grant, has no OTP step, registration and reset off, no literal client secret, and lists every reserved username the role's floor names; every credential resolves in its form (the passwords 24 to 256 safe characters and different, the certificate and CA PEM certificates, the key an unencrypted PEM key, every client secret 32 characters or more) |
-| `health` | both containers running and healthy; **the database answers** (`pg_isready` in its container); **OIDC discovery** for the realm answers over verified TLS with the issuer `https://<keycloak_hostname>/realms/<realm>` and a key set; the bound flows are the rendered ones, **WebAuthn is `REQUIRED` in the approvers' browser flow**, no flow offers a one-time code, the direct grant is refused; `webauthn-register` is an enabled default action and `CONFIGURE_TOTP` is not enabled; the WebAuthn policy requires user verification; the user profile's reserved-username pattern is the rendered one; **no user holds a reserved username**; every rendered client and group exists and each group holds exactly its rendered client roles. Read-only |
+| `health` | the master realm brute-force protected; no identity provider (broker) configured; no client overriding a flow binding; the username's validators exactly the rendered ones; **every enabled member of a rendered group has a registered passkey** (until then whoever first signs in with their password registers one); and: both containers running and healthy; **the database answers** (`pg_isready` in its container); **OIDC discovery** for the realm answers over verified TLS with the issuer `https://<keycloak_hostname>/realms/<realm>` and a key set; the bound flows are the rendered ones, **WebAuthn is `REQUIRED` in the approvers' browser flow**, no flow offers a one-time code, the direct grant is refused; `webauthn-register` is an enabled default action and `CONFIGURE_TOTP` is not enabled; the WebAuthn policy requires user verification; the user profile's reserved-username pattern is the rendered one; **no user holds a reserved username**; every rendered client and group exists and each group holds exactly its rendered client roles. Read-only |
 | `export` | `export/db/keycloak.dump` (`pg_dump -Fc` in the database's container, as its own user), `export/realm.json` (the realm's partial export through the admin API: clients, groups, roles, flows, settings; client secrets masked, no users) and `export/listing.jsonl` (key, size, sha256) |
 | `backup` | the export, then `compose_app`'s backup manifest (the data root, export included) |
-| `restore` | checks the source first and writes nothing until it passes (`files/keycloak_backup.py check`: no links, root or the database's user owning each file, writable by no one else, the listing's two files with their sizes and sha256); then, with the IdP stopped, stages the dump as the database's user, hashes the staged copy again, and runs `pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error`; the staged copy is removed and the IdP started again whatever happened |
+| `restore` | checks the source first and writes nothing until it passes (`files/keycloak_backup.py check`: no links, root or the database's user owning each file, writable by no one else, the listing's two files with their sizes and sha256); then, with the IdP stopped, stages the dump as the database's user through the very descriptor it checked, hashing what it writes (`keycloak_backup.py stage`), and runs `pg_restore --clean --if-exists --no-owner --single-transaction --exit-on-error`; the staged copy is removed and the IdP started again whatever happened; then the realm is converged onto the rendered document and `health` runs (an older dump may hold an older flow or a reserved user) |
 | `upgrade` | one target: the IdP's image, or PostgreSQL's within its major version; refuses a target not pinned by tag and digest or from another repository, then records the bump (`compose_app` upgrade) |
 
 Two deviations from the role interface table, on purpose: `export` (so `backup`) writes a new
@@ -201,10 +201,16 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
   FORWARD chains), so it is not the control.
 - The edge reaches the IdP over TLS verified against the lab CA (`edge_tls`, H2's `tls:
   internal`, `ca` only: no client certificate on this hop), by the certificate's name.
-- **The edge must publish only the realm's paths**: `/realms/<lab name>/` and `/resources/`. The
-  master realm (password-only, the break-glass admin's) and `/admin/` must never be reachable
-  from the public name; the admin console's URL is the internal name (`KC_HOSTNAME_ADMIN`), reached
-  from the deploy host or the edge guest only.
+- **The edge publishes only the realm's paths.** The generated edge (`hnx registry generate`,
+  the `caddy` generator) renders the realm's IdP row (`realm_idp`: the `idp` row whose `impl` is
+  the realm format's product) as `@hnx_published path /realms/<lab name>/* /resources/*`, proxied,
+  and **404 for every other path**: the master realm (password only, the break-glass admin's)
+  and `/admin/` are never reachable under the public name; the admin console's URL is the
+  internal name (`KC_HOSTNAME_ADMIN`), reached from the deploy host or the edge guest only. An
+  edge that does not render from that generator must do the same before the row is granted a
+  public route. Prove it once the edge is up, from outside the lab: `/admin/` and
+  `/realms/master/` under the public name answer 404. The master realm also gets brute-force
+  protection (`main` turns it on; `health` checks it).
 
 ## Conformance
 
@@ -226,11 +232,24 @@ HNX_IDP_ADMIN_USER=hnx-admin HNX_IDP_ADMIN_PASSWORD=<from the secret store> \
 
 ## Known limits
 
+- **Upgrading from an OTP-era realm.** A realm imported from a render before 2026-11-13 binds
+  the same browser-flow alias with an OTP step: `main` refuses it as flow drift. Follow "Flow
+  drift" (export, recreate on a realm with no users to keep, or ship the flow under a new alias).
+- **The public name is the passkeys' relying party.** Renaming `keycloak_hostname` (the site's
+  sign-in name) orphans every registered passkey: each person registers again.
+
 - **Flow drift is refused, not fixed.** A realm whose bound flow differs from the rendered one
   (a hand edit, or a generator change to a flow) fails `main` with `flow ... differs`. Fix it by
   rendering a flow under a **new alias** (the change ships a new alias, the role creates it, then
   rebinds), or, on a realm with no users to keep, by exporting, deleting the realm and running
   `main`. Never edit the bound flow by hand.
+- **The adapter needs the lab CA** (`HNX_IDP_CA_FILE`): the admin's password goes only to the
+  internal name the lab CA vouches for; point `HNX_ENDPOINT_IDP` at the internal name, never the
+  public one.
+- **What `sync` does not converge**: session and token lifespans, the password policy,
+  `loginWithEmailAllowed` and other realm settings the generator does not render keep the IdP's
+  values; `sync` overwrites only what the rendered document names (the user profile, the rendered
+  clients' settings and secrets, the rendered groups' roles).
 - **Passwords are set once.** `POSTGRES_PASSWORD` and `KC_BOOTSTRAP_ADMIN_PASSWORD` act only on
   the first start. To rotate: change the role's password in the database (`ALTER ROLE` in the
   database's container) or the admin's (the admin console), then the secret; `health` fails while

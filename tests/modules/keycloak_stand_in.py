@@ -99,6 +99,7 @@ class _Realm:
         self.scopes: list[dict] = []
         self.mappings: dict[tuple[str, str], set[str]] = {}
         self.revoked: set[str] = set()
+        self.brokers: list[dict] = []
         self.flows = {f["alias"]: f for f in rep.pop("authenticationFlows", None) or []}
         self.actions = {a["alias"]: a for a in rep.pop("requiredActions", None) or []}
         comps = (rep.pop("components", None) or {}).get(
@@ -190,6 +191,7 @@ class StandIn:
         self.requests: list[tuple[str, str]] = []
         self.lock = threading.Lock()
         self.kid = "k-stand-in"
+        self.master: dict = {"bruteForceProtected": False}
 
     # ------------------------------------------------------------- signing
     def sign(self, claims: dict) -> str:
@@ -309,6 +311,11 @@ class StandIn:
                 self.realms[body["realm"]] = _Realm(body)
                 return 201, None
             return 501, None
+        if rest[0] == "master" and len(rest) == 1:
+            if method == "PUT":
+                self.master.update(body)
+                return 204, None
+            return 200, {"realm": "master", **self.master}
         realm = self.realms.get(rest[0])
         if realm is None:
             return 404, None
@@ -436,6 +443,13 @@ class StandIn:
             return 200, realm.scopes
         if r == ["groups"] and method == "GET":
             return 200, realm.groups
+        if r == ["identity-provider", "instances"]:
+            return 200, realm.brokers
+        if r[:1] == ["groups"] and r[2:] == ["members"]:
+            return 200, [u for u in realm.users if r[1] in u.get("groups", [])]
+        if r[:1] == ["users"] and r[2:] == ["credentials"]:
+            u = next((u for u in realm.users if u["id"] == r[1]), None)
+            return (200, u.get("credentials", [])) if u else (404, None)
         if r[:1] == ["groups"] and r[2:4] == ["role-mappings", "clients"]:
             key = (r[1], r[4])
             have = realm.mappings.setdefault(key, set())

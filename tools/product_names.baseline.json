@@ -416,21 +416,6 @@
   "examples/registers/runbooks/01a15f29-ff7e-764c-a17e-d2d50c304e9b.events/20261022T120001Z-review-agent-example-auditor.yml": {
    "openbao": 1
   },
-  "examples/services.yml": {
-   "agentmetry": 9,
-   "caddy": 1,
-   "grafana": 1,
-   "minio": 3,
-   "nifi": 4,
-   "ntfy": 1,
-   "openbao": 1,
-   "prometheus": 4,
-   "stackstorm": 4,
-   "technitium": 1,
-   "trino": 1,
-   "uptime-kuma": 2,
-   "vllm": 1
-  },
   "examples/status/roster.yml": {
    "stackstorm": 2
   },
@@ -696,21 +681,6 @@
    "prometheus": 1,
    "technitium": 1,
    "trino": 1,
-   "vllm": 1
-  },
-  "schemas/platform/examples/service.valid.yml": {
-   "agentmetry": 9,
-   "caddy": 1,
-   "grafana": 1,
-   "minio": 3,
-   "nifi": 4,
-   "ntfy": 1,
-   "openbao": 1,
-   "prometheus": 4,
-   "stackstorm": 4,
-   "technitium": 1,
-   "trino": 1,
-   "uptime-kuma": 2,
    "vllm": 1
   },
   "schemas/platform/examples/site.port-mirror.yml": {

@@ -773,3 +773,18 @@ def test_write_tree_refuses_nothing_outside_root(tmp_path):
         fl({"x": {"ok": "no newline"}})
     with pytest.raises(RuntimeError, match="both write"):
         fl({"x": {"p": "a\n"}, "y": {"p": "b\n"}})
+
+
+def test_the_edge_publishes_only_the_realms_paths_for_the_realm_idp():
+    """The realm's IdP is public for its sign-in pages only: the master realm (the break-glass
+    admin's, password only) and the admin console answer 404 at the edge."""
+    idp = REG.services["idp"]
+    text = next(t for t in flatten(generate(REG)).values() if f"\n{idp.public_hostname} {{" in t)
+    site = text[text.index(f"{idp.public_hostname} {{") :]
+    site = site[: site.index("\n}\n")]
+    assert f"@hnx_published path /realms/{REG.lab_name}/* /resources/*" in site
+    assert "handle @hnx_published {" in site and "respond 404" in site
+    # the proxy is reached only inside the published handle
+    head, _, rest = site.partition("handle @hnx_published {")
+    assert "reverse_proxy" not in head and "reverse_proxy" in rest.split("handle {")[0]
+    assert "/realms/master" not in site and "/admin" not in site

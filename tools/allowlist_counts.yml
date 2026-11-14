@@ -20,7 +20,7 @@ counts:
   scrub-allow-markers: 71
   no-raw-endpoint-markers: 336
 digests:
-  product-names-allow: sha256:a7f751d67abbce03fa3200ddc262925b7b46e6e498e8a9ed0f1a0c991cfaaa8e
+  product-names-allow: sha256:841c3ad51495f70a621969c7244d807d4438e1f488e7fcfba7943fc5bafc708d
   no-raw-endpoints-allow: sha256:4cd649047149dfe3e3a6ca94977736a0a5af97f559aefa2f7c4ec3a92dd925a2
   scripts-allow: sha256:c3e32a259837ad9c5706f62ee6cba55f411d01b6c1aa09db5f24ad7e8e7513bb
   caddy-lint-allow: sha256:ce7e5fc1469ba8390c4618b84c8b8d61b3f3bde5a7e49623e70bd09257947844

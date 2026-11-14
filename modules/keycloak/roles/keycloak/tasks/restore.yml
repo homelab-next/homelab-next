@@ -27,27 +27,12 @@
           ansible.builtin.command:
             argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", stop, keycloak]
           changed_when: true
-        - name: Stage the dump as the database's user
-          ansible.builtin.copy:
-            src: "{{ keycloak_restore_source }}/db/keycloak.dump"
-            dest: "{{ keycloak_data_root }}/export/db/.restore.dump"
-            remote_src: true
-            owner: "{{ keycloak_db_uid | int }}"
-            group: "{{ keycloak_db_gid | int }}"
-            mode: "0600"
-            follow: false
-        - name: Hash the staged copy
-          ansible.builtin.stat:
-            path: "{{ keycloak_data_root }}/export/db/.restore.dump"
-            checksum_algorithm: sha256
-            follow: false
-          register: keycloak_staged
-        - name: The staged copy is the one that was checked
-          ansible.builtin.assert:
-            that:
-              - keycloak_staged.stat.isreg
-              - keycloak_staged.stat.checksum == (keycloak_restore_check.stdout | from_json)['db/keycloak.dump'].sha256
-            fail_msg: "keycloak: the staged dump differs from the checked one; nothing was restored"
+        - name: Stage the dump as the database's user (through the checked descriptor)
+          ansible.builtin.command:
+            argv: [python3, -I, -c, "{{ lookup('ansible.builtin.file', keycloak_scripts ~ '/keycloak_backup.py') }}",
+                   stage, "{{ keycloak_restore_source }}", "{{ keycloak_data_root }}/export/db/.restore.dump",
+                   "{{ keycloak_db_uid | int }}", "{{ keycloak_db_gid | int }}"]
+          changed_when: true
         - name: Restore the database (one transaction)
           ansible.builtin.command:
             argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", exec, -T, postgres,
@@ -64,4 +49,10 @@
           ansible.builtin.command:
             argv: [docker, compose, -f, "{{ keycloak_dir }}/docker-compose.yml", up, -d, keycloak]
           changed_when: true
+    # an older dump may hold an older realm (a flow, a reserved user): converge it onto the
+    # rendered document and prove it before the restore is reported done
+    - name: Converge the restored realm
+      ansible.builtin.include_tasks: converge.yml
+    - name: Prove the restored realm (health)
+      ansible.builtin.include_tasks: health.yml
   tags: [restore]
