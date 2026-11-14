@@ -9,6 +9,7 @@ has no section below.
 ### Breaking
 - `model_serving` schema 2.0 removes the vLLM args `swap-space`, `calculate-kv-scales` and `max-num-partial-prefills`, and rejects `tokenizer-mode: slow` (use `hf`); migrate serving specs to flags and tokenizer modes accepted by the pinned vLLM release.
 ### Fixed
+- `hnx status serve`: a top-level navigation (`GET`/`HEAD` with `Sec-Fetch-Mode: navigate`) is no longer refused "host not allowed" for its `Origin`: a browser arriving at the end of the IdP sign-in redirect chain sends `Origin: null` or the IdP's origin, so every sign-in to the Approvals page was refused. The Host guard still applies to every request; a script's cross-origin fetch and `POST /approvals/decide` keep the Origin check.
 - The `needrestart`, `lynis`, `aide`, `clamav`, `rkhunter` and `trivy` roles now check each scheduled timer's enabled and active state on every run, and re-enable/start it when it has been disabled or stopped by hand. Converged runs remain unchanged.
 
 ### Added
