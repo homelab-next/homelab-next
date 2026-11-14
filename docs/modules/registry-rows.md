@@ -41,6 +41,18 @@ appear in the lab registry **identically, as the site binds it**
   zones widen who may reach the service, so a registry that adds them differs from the module.
   So the overlay's copy of a module's row is the bound row plus, at most, these three (an eval
   instance beside the primary: the module's fields exactly, and `standing`);
+- two fields have a value that is the site's and a presence that is the module's:
+  `public_hostname` and `edge_tls`. A module whose row is published at the edge (an IdP's
+  sign-in pages) declares them with an example value (`sso.example.internal`, the CA's example
+  secret name), which makes the row public in every check a module's rows meet (a public route
+  needs auth and `grants.public_routes`); the lab registry must then carry each with **its own**
+  value (its domain, its CA's secret name), which is not compared. A row whose module declares
+  neither is compared as any other, so a site can never make a module's internal row public:
+
+  ```text
+  registry: services.idp.public_hostname: keycloak (instance idp) declares one (its value is the site's), the lab registry has (absent)
+  ```
+
 - a provider's row never sets `version` (the loader refuses one that does), so the product's
   version is the only one there is;
 - a host role the site places on no host is a problem of its own (the registry's `host` cannot be

@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# Keycloak, the idp provider (modules/keycloak): the IdP and its PostgreSQL, two compose_app
+# containers in the module's slice. The IdP listens with TLS (a certificate from the lab's
+# internal CA) on the guest's own address and nowhere else; PostgreSQL has no published port.
+# The realm is the idp_realm generator's idp/realm.json, imported and converged through the
+# admin API by files/keycloak_api.py.
+# Required, with no default (the site's): keycloak_logical_id (the instance's registry id),
+# keycloak_hostname (the public sign-in name the edge serves, e.g. sso.<domain>: the issuer is
+# https://<it>/realms/<realm>), keycloak_realm (the registry's lab name), keycloak_realm_file
+# (the rendered idp/realm.json on the controller), keycloak_tls_server_name (the name the server
+# certificate is issued for, the edge's server_name) and keycloak_edge_addresses (the edge
+# guests' addresses: the only proxies whose forwarded headers the IdP reads).
+keycloak_image: "quay.io/keycloak/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b"
+keycloak_postgres_image: "docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits the edge guest alone on this port
+keycloak_bind: "{{ ansible_host }}"
+keycloak_port: 8443
+keycloak_dir: /opt/compose/keycloak
+# owner and group of the compose project, the data root, export/ and tls/: the group is root's
+# (gid 0), which the IdP's container user is in, so it reads tls/ (the key 0640) and no one else
+keycloak_owner: root
+keycloak_group: root
+# the module's data root (docs/modules/data.md): pgdata/ (the database's), export/ (root's) and
+# export/db/ (the database's, where pg_dump writes)
+keycloak_data_root: /var/lib/hnx-modules/keycloak
+# the IdP container's user (group 0: the image is built for an arbitrary uid in the root group)
+# and the database container's user and group: ids no account on the host has
+keycloak_uid: 61020
+keycloak_db_uid: 61021
+keycloak_db_gid: 61021
+keycloak_db_name: keycloak
+keycloak_db_user: keycloak
+# the break-glass admin (ADR-0034 decision 6) of the master realm; its password is in the
+# secret store, never in the IdP's own realm or this repository
+keycloak_admin_user: hnx-admin
+keycloak_admin_login_ref: secret:keycloak/admin-password
+keycloak_db_login_ref: secret:keycloak/db-password
+# the server certificate and key (PEM) the lab's internal CA issued for keycloak_tls_server_name,
+# and that CA's certificate (PEM; the hooks verify the server with it)
+keycloak_tls_cert_ref: secret:keycloak/tls-cert
+keycloak_tls_key_ref: secret:keycloak/tls-key
+keycloak_ca_ref: secret:keycloak/ca
+# usernames health refuses beside the realm's own list (the rendered hnx.reserved_usernames):
+# a floor, so a realm rendered without the site's list still keeps the proof approver out
+keycloak_reserved_usernames: [operator-one]
+keycloak_mem_limit: 1536m
+keycloak_db_mem_limit: 512m
+keycloak_start: true
+keycloak_validate_with_docker: true
+keycloak_health_timeout: 15
+# seconds main waits for the IdP to answer after a start (it builds itself on the first one)
+keycloak_ready_timeout: 300

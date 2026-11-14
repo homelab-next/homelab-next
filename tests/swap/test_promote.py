@@ -36,7 +36,7 @@ CANDIDATE = """  query-b:
 #: the old lab's sign-in, beside the repository's IdP as its candidate
 OLD_IDP = """  sso-next:
     capability: idp
-    impl: keycloak
+    impl: example-idp
     host: lake-core-2
     protocol: https
     port: 8443

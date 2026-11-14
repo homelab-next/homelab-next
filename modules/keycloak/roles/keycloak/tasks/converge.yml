@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Wait for the IdP, then import the rendered realm or converge it (main; restore after a load).
+- name: Wait until the IdP answers
+  ansible.builtin.include_tasks: api.yml
+  vars:
+    keycloak_api_mode: wait
+- name: Read every client's secret (in the client area of the store) for the sync's stdin
+  ansible.builtin.set_fact:
+    keycloak_api_extra:
+      client_secrets: >-
+        {{ (keycloak_api_extra | default({})).client_secrets | default({})
+           | combine({item: lookup('hnx_secret', keycloak_client_area ~ '/' ~ item)}) }}
+  loop: "{{ keycloak_client_ids }}"
+  no_log: true
+- name: Import the realm, or converge it
+  ansible.builtin.include_tasks: api.yml
+  vars:
+    keycloak_api_mode: sync
+- name: Report what changed in the realm
+  ansible.builtin.debug:
+    msg: "realm {{ keycloak_realm }}: {{ 'created' if keycloak_api_result.created else (keycloak_api_result.changed | join('; ') or 'unchanged') }}"
+  changed_when: keycloak_api_result.created or keycloak_api_result.changed | length > 0

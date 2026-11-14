@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app): the database
+# (no published port, the project's own network only) and the IdP (TLS on the guest's address,
+# its certificate read-only from tls/). Neither environment holds a secret: the passwords go in
+# compose_app_secret_env.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    keycloak_app:
+      compose_app_name: keycloak
+      compose_app_dir: "{{ keycloak_dir }}"
+      compose_app_data_dir: "{{ keycloak_data_root }}"
+      compose_app_export_dir: "{{ keycloak_data_root }}/export"
+      compose_app_owner: "{{ keycloak_owner }}"
+      compose_app_group: "{{ keycloak_group }}"
+      compose_app_start: "{{ keycloak_start }}"
+      compose_app_validate_with_docker: "{{ keycloak_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          postgres:
+            image: "{{ keycloak_db_repository }}"
+            tag: "{{ keycloak_db_tag }}"
+            digest: "{{ keycloak_db_digest }}"
+            user: "{{ keycloak_db_uid | int }}:{{ keycloak_db_gid | int }}"
+            environment:
+              POSTGRES_DB: "{{ keycloak_db_name }}"
+              POSTGRES_USER: "{{ keycloak_db_user }}"
+              PGDATA: "{{ keycloak_container_pgdata }}"
+            volumes:
+              - "{{ keycloak_data_root }}/pgdata:{{ keycloak_container_pgdata }}"
+              - "{{ keycloak_data_root }}/export/db:{{ keycloak_container_export }}"
+            mem_limit: "{{ keycloak_db_mem_limit }}"
+            healthcheck:
+              test: [CMD, pg_isready, -q, -U, "{{ keycloak_db_user }}", -d, "{{ keycloak_db_name }}"]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 30s
+          keycloak:
+            image: "{{ keycloak_repository }}"
+            tag: "{{ keycloak_tag }}"
+            digest: "{{ keycloak_digest }}"
+            command: [start]
+            # the image runs as an arbitrary uid in the root group (its files are group-writable)
+            user: "{{ keycloak_uid | int }}:0"
+            depends_on: [postgres]
+            environment: >-
+              {{ keycloak_fixed_env | combine({
+                   'KC_HOSTNAME': 'https://' ~ keycloak_hostname,
+                   'KC_HOSTNAME_ADMIN': 'https://' ~ keycloak_tls_server_name ~ ':' ~ (keycloak_port | int),
+                   'KC_PROXY_TRUSTED_ADDRESSES': keycloak_edge_addresses | join(','),
+                   'KC_DB_URL_DATABASE': keycloak_db_name,
+                   'KC_DB_USERNAME': keycloak_db_user,
+                   'KC_BOOTSTRAP_ADMIN_USERNAME': keycloak_admin_user}) }}
+            ports: ["{{ keycloak_bind }}:{{ keycloak_port | int }}:8443"]
+            volumes: ["{{ keycloak_dir }}/tls:{{ keycloak_container_tls_dir }}:ro"]
+            mem_limit: "{{ keycloak_mem_limit }}"
+            healthcheck:
+              # the management port answers in the container only (never published); the image
+              # has bash and no HTTP client
+              test:
+                - CMD
+                - bash
+                - -c
+                - "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r s <&3 && [[ $s == *' 200 '* ]]"  # no-raw-endpoint: allow the container probes itself
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 120s
+  tags: [health, backup, restore, export, upgrade]

@@ -14,6 +14,7 @@ import yaml
 
 from homelabnext import tlp
 from homelabnext.generators import GeneratorRefusal, flatten, generate
+from homelabnext.generators.realm_format import REALM_PRODUCT
 from homelabnext.notify.ceiling import channel_ceiling
 from homelabnext.registry import RegistryError
 from homelabnext.registry.model import build_registry, schema_problems, semantic_problems
@@ -40,7 +41,7 @@ def _problems(doc):
 def _eval_idp():
     doc = _doc()
     row = copy.deepcopy(doc["services"]["idp"])
-    row.update(impl="keycloak", host="hub-1")
+    row.update(impl=REALM_PRODUCT, host="hub-1")
     row["standing"] = {"tier": "eval", **UNTIL, "why": "candidate IdP"}
     return _first(doc, "aaa-idp", row)
 
@@ -86,7 +87,9 @@ def test_an_eval_row_reaches_only_the_outputs_its_tier_is_given():
         _added(base["blackbox/targets_http.yml"], cand["blackbox/targets_http.yml"])
     )
     # the realm: none for the Authentik primary alone (asked for by name, refused)
-    with pytest.raises(GeneratorRefusal, match="no primary or eval idp row has impl 'keycloak'"):
+    with pytest.raises(
+        GeneratorRefusal, match=f"no primary or eval idp row has impl '{REALM_PRODUCT}'"
+    ):
         generate(build_registry(_doc()), ["idp_realm"])
 
 

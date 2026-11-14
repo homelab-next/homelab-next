@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Run files/keycloak_api.py in mode keycloak_api_mode on the guest. Its settings (the admin's
+# password and, for sync, the client secrets among them) go on stdin, never in argv; the result
+# is keycloak_api_result (parsed JSON). The connection verifies the server by its certificate name
+# against the lab CA written to tls/ca.pem.
+- name: Settings for the IdP's admin API ({{ keycloak_api_mode }})
+  ansible.builtin.set_fact:
+    keycloak_api_settings: >-
+      {{ {'address': keycloak_bind, 'port': keycloak_port | int,
+          'server_name': keycloak_tls_server_name, 'cafile': keycloak_dir ~ '/tls/ca.pem',
+          'timeout': keycloak_health_timeout | int, 'wait_s': keycloak_ready_timeout | int,
+          'realm': keycloak_realm, 'issuer': 'https://' ~ keycloak_hostname ~ '/realms/' ~ keycloak_realm,
+          'admin_user': keycloak_admin_user,
+          'admin_password': lookup('hnx_secret', keycloak_admin_login_ref),
+          'reserved': keycloak_reserved_usernames,
+          'doc': keycloak_realm_doc | default({})}
+         | combine(keycloak_api_extra | default({})) }}
+  no_log: true
+
+- name: The IdP's admin API ({{ keycloak_api_mode }})
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -I
+      - -c
+      - "{{ lookup('ansible.builtin.file', keycloak_scripts ~ '/keycloak_api.py') }}"
+      - "{{ keycloak_api_mode }}"
+    stdin: "{{ keycloak_api_settings | to_json }}"
+  register: keycloak_api_run
+  changed_when: false
+  no_log: true
+  failed_when: false
+
+- name: The IdP's admin API answered ({{ keycloak_api_mode }})
+  ansible.builtin.assert:
+    that: keycloak_api_run.rc == 0
+    fail_msg: "{{ keycloak_api_run.stderr | default('') | regex_replace('(?s)\\n.*', '') }}"
+
+- name: Keep the result ({{ keycloak_api_mode }})
+  ansible.builtin.set_fact:
+    keycloak_api_result: "{{ keycloak_api_run.stdout | from_json }}"

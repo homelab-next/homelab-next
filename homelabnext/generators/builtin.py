@@ -52,6 +52,7 @@ from homelabnext.registry.model import (
 )
 
 from .core import MARKER, register
+from .realm_format import REALM_PRODUCT, USER_PROFILE_PROVIDER
 from .safe import GeneratorRefusal, check_fields, checked
 from .templates import render
 
@@ -419,6 +420,7 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
     it every public primary is a site, as for a registry that is one deployment."""
     sites = _edge_sites(reg, edge_hosts)
     proxy = _auth_proxy(reg, sites)
+    realm = realm_idp(reg)
     gated = any(s.auth == "idp" for s in sites)
     parts = [_hdr(reg)]
     if proxy and (edge_hosts is None or gated):
@@ -456,10 +458,25 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
         if s.edge_tls:
             inner += _edge_transport(reg, s)
         proxy_block = " {\n" + "".join(inner) + "\t}" if inner else ""
+        raw = {"auth_block": auth_block, "proxy_block": proxy_block, "note": "",
+               "route_open": "", "route_close": ""}  # fmt: skip
+        if realm is not None and s.name == realm.name:
+            # the realm's IdP publishes its sign-in pages only: the realm's own paths and the
+            # static resources; the master realm (the break-glass admin's, password only) and
+            # the admin console answer 404 at the edge (ADR-0034 decision 6)
+            # the lab's name is a slug (registry schema), so each path is plain text
+            paths = " ".join(realm_paths(reg))
+            raw = {
+                "auth_block": auth_block,
+                "proxy_block": proxy_block.replace("\n\t", "\n\t\t"),
+                "note": ": only the realm's paths are published",
+                "route_open": f"\t@hnx_published path {paths}\n\thandle @hnx_published {{\n\t",
+                "route_close": "\n\t}\n\thandle {\n\t\trespond 404\n\t}",
+            }
         parts.append(
             render(
                 "caddy_site",
-                raw={"auth_block": auth_block, "proxy_block": proxy_block},
+                raw=raw,
                 hostname=s.public_hostname,
                 service=s.name,
                 capability=s.capability,
@@ -658,12 +675,13 @@ def firewall_matrix(reg: Registry) -> dict[str, str]:
 
 
 # 9 ---------------------------------------------------------------- IdP realm
-#: the browser flow every sign-in goes through: a session cookie, or a password AND a one-time code
+#: the browser flow every sign-in goes through: a session cookie, or a password AND a passkey
 MFA_BROWSER_FLOW = "hnx-browser-mfa"
-#: the direct grant flow (``grant_type=password``, e.g. the IdP's own ``admin-cli``): a username,
-#: a password AND a one-time code, each REQUIRED; a user with no OTP is refused (a direct grant
-#: cannot run a required action, so there is no enrolment on this path)
-MFA_DIRECT_GRANT_FLOW = "hnx-direct-grant-mfa"
+#: the direct grant flow (``grant_type=password``, e.g. the IdP's own ``admin-cli``): refused for
+#: every user.  A passkey cannot be presented on a direct grant, and a direct grant cannot run a
+#: required action, so no direct grant can carry the second factor: the flow is one REQUIRED
+#: ``deny-access-authenticator`` (ADR-0034 decision 2, amended 2026-11-13)
+MFA_DIRECT_GRANT_FLOW = "hnx-direct-grant-refused"
 #: the scopes a token carries without asking (everything else only when requested)
 DEFAULT_CLIENT_SCOPES = ("basic",)
 OPTIONAL_CLIENT_SCOPES = ("email", "profile")
@@ -687,50 +705,80 @@ def _execution(requirement: str, priority: int, *, authenticator: str = "", flow
     return out
 
 
-#: the second factor every browser sign-in requires, and the required action that enrols it
-SECOND_FACTOR, SECOND_FACTOR_SETUP = "auth-otp-form", "CONFIGURE_TOTP"
-#: the same factor in the direct grant flow (fails for a user with no OTP configured)
-DIRECT_GRANT_SECOND_FACTOR = "direct-grant-validate-otp"
-#: the realm's required actions: a new user enrols OTP at first sign-in (a default action), and
-#: an admin-set temporary password is changed then (listing them replaces Keycloak's defaults)
+#: the second factor every browser sign-in requires (a passkey: WebAuthn, the possession of a
+#: registered key, verified with its user verification), and the required action that enrols it
+SECOND_FACTOR, SECOND_FACTOR_SETUP = "webauthn-authenticator", "webauthn-register"
+#: the step that refuses every direct grant (no second factor can be carried on one)
+DIRECT_GRANT_REFUSAL = "deny-access-authenticator"
+#: the one-time-code factor the operator declined (2026-11-13): never in a flow, and its
+#: enrolment action rendered disabled, so the account console offers no way to add one
+DECLINED_FACTOR_SETUP = "CONFIGURE_TOTP"
+
+
+def _action(alias: str, name: str, priority: int, *, enabled: bool, default: bool) -> dict:
+    return {
+        "alias": alias,
+        "config": {},
+        "defaultAction": default,
+        "enabled": enabled,
+        "name": name,
+        "priority": priority,
+        "providerId": alias,
+    }
+
+
+#: the realm's required actions: a new user registers a passkey at first sign-in (a default
+#: action), an admin-set temporary password is changed then, and the declined factors' actions
+#: (a one-time code, a passwordless key) are rendered disabled.  Listing them replaces the IdP's
+#: defaults, and rendering the disabled ones turns them off on a realm that had them
 REALM_REQUIRED_ACTIONS = (
-    {
-        "alias": SECOND_FACTOR_SETUP,
-        "config": {},
-        "defaultAction": True,
-        "enabled": True,
-        "name": "Configure OTP",
-        "priority": 10,
-        "providerId": SECOND_FACTOR_SETUP,
-    },
-    {
-        "alias": "UPDATE_PASSWORD",
-        "config": {},
-        "defaultAction": False,
-        "enabled": True,
-        "name": "Update Password",
-        "priority": 30,
-        "providerId": "UPDATE_PASSWORD",
-    },
+    _action(SECOND_FACTOR_SETUP, "Webauthn Register", 10, enabled=True, default=True),
+    _action("UPDATE_PASSWORD", "Update Password", 30, enabled=True, default=False),
+    _action(DECLINED_FACTOR_SETUP, "Configure OTP", 40, enabled=False, default=False),
+    _action(
+        "webauthn-register-passwordless",
+        "Webauthn Register Passwordless",
+        50,
+        enabled=False,
+        default=False,
+    ),
 )
+
+#: the realm's WebAuthn policy (the second factor's): the user verifies themselves on the key
+#: (a PIN or biometric: a passkey, not a bare possession check), ES256 or RS256, any authenticator
+#: attachment.  The relying party id is left to the IdP, which takes it from the realm's frontend
+#: host (the site's public name, never this repository's)
+WEBAUTHN_POLICY = {
+    "webAuthnPolicyAcceptableAaguids": [],
+    "webAuthnPolicyAttestationConveyancePreference": "not specified",
+    "webAuthnPolicyAuthenticatorAttachment": "not specified",
+    "webAuthnPolicyAvoidSameAuthenticatorRegister": True,
+    "webAuthnPolicyCreateTimeout": 0,
+    "webAuthnPolicyExtraOrigins": [],
+    "webAuthnPolicyRequireResidentKey": "not specified",
+    "webAuthnPolicyRpEntityName": "hnx",
+    "webAuthnPolicySignatureAlgorithms": ["ES256", "RS256"],
+    "webAuthnPolicyUserVerificationRequirement": "required",
+}
 
 
 def _mfa_flows() -> list[dict]:
     """The realm's user sign-in flows: the browser flow (the session cookie, or the
-    username/password form AND the OTP form) and the direct grant flow (username, password AND
-    ``direct-grant-validate-otp``, all REQUIRED: a user with no OTP gets no token, as a direct
-    grant cannot run the enrolment action).  The realm binds both (``browserFlow``,
+    username/password form AND the WebAuthn form) and the direct grant flow, which refuses every
+    user (``deny-access-authenticator``, REQUIRED: a direct grant can carry no passkey, and
+    cannot run the enrolment action).  The realm binds both (``browserFlow``,
     ``directGrantFlow``); registration and credential reset are off, so their flows are
     unreachable, and no identity provider is rendered, so no broker login flow runs.
 
-    The second factor is one execution, ``auth-otp-form``, **REQUIRED** in the same subflow as
-    the password, with no alternative beside it: the only way through the flow without a session
-    is a password and a valid one-time code.  A REQUIRED authenticator that is not configured for
-    the user (no OTP credential yet) adds its setup action, ``CONFIGURE_TOTP``, which the realm
-    enables as a default action (:data:`REALM_REQUIRED_ACTIONS`): a user with no factor is made
-    to enrol one before the sign-in completes, never let through on the password alone (and,
-    were the action disabled, refused).  WebAuthn is not in the flow: an ALTERNATIVE beside OTP
-    is skipped when the user has no key, which is exactly the ambiguity this flow avoids."""
+    The second factor is one execution, ``webauthn-authenticator``, **REQUIRED** in the same
+    subflow as the password, with no alternative beside it: the only way through the flow
+    without a session is a password and a registered passkey.  A REQUIRED authenticator that is
+    not configured for the user (no key yet) adds its setup action, ``webauthn-register``, which
+    the realm enables as a default action (:data:`REALM_REQUIRED_ACTIONS`): a user with no factor
+    is made to register one before the sign-in completes, never let through on the password
+    alone (and, were the action disabled, refused).  No one-time code is offered (ADR-0034
+    decision 2, amended 2026-11-13): an ALTERNATIVE beside the key is skipped when the user has
+    none of it configured, the ambiguity this flow avoids."""
 
     def flow(alias: str, top: bool, executions: list[dict], what: str) -> dict:
         return {
@@ -751,7 +799,7 @@ def _mfa_flows() -> list[dict]:
                 _execution("ALTERNATIVE", 10, authenticator="auth-cookie"),
                 _execution("ALTERNATIVE", 20, flow=forms),
             ],
-            "browser sign-in: a session, or a password and a one-time code (ADR-0034)",
+            "browser sign-in: a session, or a password and a passkey (ADR-0034)",
         ),
         flow(
             forms,
@@ -760,19 +808,131 @@ def _mfa_flows() -> list[dict]:
                 _execution("REQUIRED", 10, authenticator="auth-username-password-form"),
                 _execution("REQUIRED", 20, authenticator=SECOND_FACTOR),
             ],
-            "username and password, then a one-time code (set up at first sign-in)",
+            "username and password, then a passkey (registered at first sign-in)",
         ),
         flow(
             MFA_DIRECT_GRANT_FLOW,
             True,
-            [
-                _execution("REQUIRED", 10, authenticator="direct-grant-validate-username"),
-                _execution("REQUIRED", 20, authenticator="direct-grant-validate-password"),
-                _execution("REQUIRED", 30, authenticator=DIRECT_GRANT_SECOND_FACTOR),
-            ],
-            "direct grant: username, password and a one-time code; no OTP, no token (ADR-0034)",
+            [_execution("REQUIRED", 10, authenticator=DIRECT_GRANT_REFUSAL)],
+            "direct grant: refused for every user; no passkey can be presented (ADR-0034)",
         ),
     ]
+
+
+#: the usernames the realm refuses whatever the site adds: the Stage 4 proof manifest's approver
+#: (``examples/broker/manifest*.yml``, the broker scenario's default ``--approver``), whom
+#: whoever held the name could approve as
+RESERVED_USERNAMES = ("operator-one",)
+#: a reserved name: the IdP's own username rules (lower case, its separators), so the refusal
+#: and the health check compare like for like
+RESERVED_USERNAME_SHAPE = re.compile(r"[a-z0-9](?:[a-z0-9._@-]{0,62}[a-z0-9])?\Z")
+#: the realm attribute listing the reserved names (the module's health hook reads it)
+RESERVED_ATTRIBUTE = "hnx.reserved_usernames"
+#: the error the user-profile validator answers a reserved name with
+RESERVED_ERROR = "hnx-reserved-username"
+
+
+def reserved_usernames_of(extra=None) -> tuple[str, ...]:
+    """The built-in reserved names and ``extra`` (the site's), sorted, each checked; a malformed
+    one is refused rather than silently matching nothing."""
+    if isinstance(extra, str):
+        raise GeneratorRefusal(
+            "idp_realm: reserved_usernames is a collection of usernames, not one string"
+        )
+    try:
+        names = set(RESERVED_USERNAMES) | set(extra or ())
+    except TypeError:
+        raise GeneratorRefusal(
+            "idp_realm: reserved_usernames is a collection of usernames"
+        ) from None
+    bad = sorted(
+        repr(n) for n in names if not (isinstance(n, str) and RESERVED_USERNAME_SHAPE.match(n))
+    )
+    if bad:
+        raise GeneratorRefusal(
+            f"idp_realm: reserved username(s) {', '.join(bad)} are not usernames the IdP stores "
+            "(lower case letters, digits and . _ @ -, starting and ending with a letter or digit, "
+            "at most 64): a name in another form would never match one"
+        )
+    return tuple(sorted(names))
+
+
+def reserved_username_pattern(names) -> str:
+    """The user-profile ``pattern`` that refuses exactly ``names`` (case-insensitive, whole
+    value): a negative lookahead the IdP's (Java) regex engine reads as Python's does."""
+    alts = "|".join(re.escape(n) for n in names)
+    return f"(?i)^(?!(?:{alts})$).+$"
+
+
+def _user_profile(names) -> dict:
+    """The declarative user profile (the IdP's default attributes) with one addition: the
+    username refuses a reserved name, for every way a user is created or renamed (the admin API,
+    the admin console, a self-service form).  A realm import or partial import of users
+    bypasses validators, so the module's health hook also fails while such a user exists."""
+    both = {"edit": ["admin", "user"], "view": ["admin", "user"]}
+
+    def attr(name: str, validations: dict, *, required: bool, edit=None) -> dict:
+        out = {
+            "displayName": "${" + name + "}",
+            "multivalued": False,
+            "name": name,
+            "permissions": {"edit": edit or both["edit"], "view": both["view"]},
+            "validations": validations,
+        }
+        if required:
+            out["required"] = {"roles": ["user"]}
+        return out
+
+    config = {
+        "attributes": [
+            attr(
+                "username",
+                {
+                    "length": {"max": 255, "min": 3},
+                    "pattern": {
+                        "error-message": RESERVED_ERROR,
+                        "pattern": reserved_username_pattern(names),
+                    },
+                    "up-username-not-idn-homograph": {},
+                    "username-prohibited-characters": {},
+                },
+                required=False,
+                edit=["admin"],
+            ),
+            attr("email", {"email": {}, "length": {"max": 255}}, required=True),
+            attr(
+                "firstName",
+                {"length": {"max": 255}, "person-name-prohibited-characters": {}},
+                required=True,
+            ),
+            attr(
+                "lastName",
+                {"length": {"max": 255}, "person-name-prohibited-characters": {}},
+                required=True,
+            ),
+        ],
+        "groups": [
+            {
+                "displayDescription": "Attributes, which refer to user metadata",
+                "displayHeader": "User metadata",
+                "name": "user-metadata",
+            }
+        ],
+    }
+    return {
+        USER_PROFILE_PROVIDER: [
+            {
+                "config": {
+                    "kc.user.profile.config": [
+                        json.dumps(config, sort_keys=True, separators=(",", ":"))
+                    ]
+                },
+                "name": "declarative-user-profile",
+                "providerId": "declarative-user-profile",
+                "subComponents": {},
+            }
+        ]
+    }
 
 
 def _mappers(client: str) -> list[dict]:
@@ -864,8 +1024,6 @@ def realm_grants(realm: dict) -> dict[str, dict[str, set[str]]]:
     }
 
 
-#: the product whose realm format :func:`idp_realm` renders (ADR-0034, ADR-0039 decision 2)
-REALM_PRODUCT = "keycloak"
 #: the tiers the realm is rendered for, and whose ``auth: idp`` rows get its clients
 REALM_TIERS = ("primary", "eval")
 
@@ -877,6 +1035,13 @@ def realm_idp(reg: Registry) -> Service | None:
     ``retiring`` or ``legacy`` row."""
     rows = [s for s in reg.rows(*REALM_TIERS) if s.capability == "idp" and s.impl == REALM_PRODUCT]
     return min(rows, key=lambda s: (not s.is_primary, s.name)) if rows else None
+
+
+def realm_paths(reg: Registry) -> tuple[str, ...]:
+    """The paths the edge publishes for the realm's IdP (:func:`realm_idp`): the realm's own
+    (sign-in, its OIDC endpoints, the account pages) and the static resources its pages load.
+    Every other path, the master realm and the admin console among them, is a 404 at the edge."""
+    return (f"/realms/{reg.lab_name}/*", "/resources/*")
 
 
 def require_realm_idp(reg: Registry) -> Service:
@@ -914,8 +1079,9 @@ def registry_grants(reg: Registry) -> dict[str, dict[str, set[str]]]:
     "identity provider (realm import)",
     when_named=require_realm_idp,
     dirs=("idp",),
+    options=("reserved_usernames",),
 )
-def idp_realm(reg: Registry) -> dict[str, str]:
+def idp_realm(reg: Registry, reserved_usernames=None) -> dict[str, str]:
     """The IdP's realm as an importable realm document (ADR-0034): one confidential OIDC client
     per ``auth: idp`` service (redirects under its public hostname) and one for the auth proxy
     (its callback on every site it guards), the client roles each service's ``roles`` names, a
@@ -928,7 +1094,12 @@ def idp_realm(reg: Registry) -> dict[str, str]:
     It is rendered only for the :func:`realm_idp` row (with none it renders nothing, and a full
     generate prunes a stale realm; asked for by name it is refused), and its clients are for the ``auth: idp``
     rows that are primary or ``eval`` (an eval row has no public hostname, so no redirect); the
-    auth proxy's client is the primary auth proxy's (ADR-0039 decision 2)."""
+    auth proxy's client is the primary auth proxy's (ADR-0039 decision 2).
+
+    ``reserved_usernames`` (the site's, a collection) adds to :data:`RESERVED_USERNAMES`: the
+    realm's user profile refuses every one of them as a username (a ``pattern`` validator), and
+    the realm attribute :data:`RESERVED_ATTRIBUTE` lists them for the module's health hook."""
+    reserved = reserved_usernames_of(reserved_usernames)
     if realm_idp(reg) is None:
         return {}
     gated = [s for s in reg.rows(*REALM_TIERS) if s.auth == "idp"]
@@ -959,12 +1130,16 @@ def idp_realm(reg: Registry) -> dict[str, str]:
         for g, grants in sorted(registry_grants(reg).items())
     ]
     body = {
-        "attributes": {"hnx.generated": _hdr(reg, "").strip()},
+        "attributes": {
+            "hnx.generated": _hdr(reg, "").strip(),
+            RESERVED_ATTRIBUTE: ",".join(reserved),
+        },
         "authenticationFlows": _mfa_flows(),
         "browserFlow": MFA_BROWSER_FLOW,
         "directGrantFlow": MFA_DIRECT_GRANT_FLOW,
         "bruteForceProtected": True,
         "clients": clients,
+        "components": _user_profile(reserved),
         "displayName": reg.lab_name,
         # the username is the platform's one name for a person (edge_identity.USERNAME_CLAIM):
         # a user who could rename themselves could take a name an allowlist lists
@@ -977,6 +1152,7 @@ def idp_realm(reg: Registry) -> dict[str, str]:
         "resetPasswordAllowed": False,
         "roles": {"client": roles},
         "sslRequired": "all",
+        **WEBAUTHN_POLICY,
     }
     return {"idp/realm.json": json.dumps(body, indent=2, sort_keys=True) + "\n"}
 

@@ -7,7 +7,7 @@
 # digests: the sha256 of each entry list's sorted entries, so an entry edited in place (a glob
 # widened, a path swapped) changes this file too; `make allowlist-counts` records it.
 counts:
-  product-names-allow: 34
+  product-names-allow: 44
   no-raw-endpoints-allow: 75
   scripts-allow: 23
   caddy-lint-allow: 4
@@ -18,9 +18,9 @@ counts:
   workstation-refs-allow: 2
   yaml-loader-allow: 52
   scrub-allow-markers: 71
-  no-raw-endpoint-markers: 343
+  no-raw-endpoint-markers: 346
 digests:
-  product-names-allow: sha256:687d86464d787eeea0e7947a0e99b53530b41bae07572b51cb3d560e31570f8c
+  product-names-allow: sha256:5b3503a8b7acfc9247901dc1a3a4c4a068c9ef778d975e26720792271e09f874
   no-raw-endpoints-allow: sha256:4cd649047149dfe3e3a6ca94977736a0a5af97f559aefa2f7c4ec3a92dd925a2
   scripts-allow: sha256:c3e32a259837ad9c5706f62ee6cba55f411d01b6c1aa09db5f24ad7e8e7513bb
   caddy-lint-allow: sha256:b14357e3e396abaf43255c870a43e23f4acedbdb85692c67777de507fe0740c8
