@@ -30,6 +30,7 @@ host is left alone.
 The token is read from the root-only environment file by this script and reaches lego in its
 environment only (never an argument, never the unit's environment); nothing here prints it."""
 
+import errno
 import json
 import os
 import re
@@ -77,8 +78,10 @@ def openssl(*args, data=None):
         raise CannotMeasure(f"cannot run openssl ({e.strerror}); the host needs it") from None
 
 
-def problem(cert_path, key_path, due_days):
-    """Why the certificate at ``cert_path`` (leaf first, then its chain) is not usable, or None."""
+def problem(cert_path, key_path, due_days, key_pem=None):
+    """Why the certificate at ``cert_path`` (leaf first, then its chain) is not usable, or None.
+    ``key_pem``: the key's bytes when the caller holds them already (an installed key this process
+    cannot open by path: ``held_key``); without it the key is read from ``key_path``."""
     try:
         with open(cert_path, "rb") as f:
             pem = f.read()
@@ -106,16 +109,19 @@ def problem(cert_path, key_path, due_days):
     if r.returncode != 0:
         return f"{cert_path} expires within {due_days} days"
     want = openssl("x509", "-noout", "-pubkey", data=leaf).stdout
-    got = openssl("pkey", "-pubout", "-in", key_path)
+    got = (openssl("pkey", "-pubout", data=key_pem) if key_pem is not None
+           else openssl("pkey", "-pubout", "-in", key_path))  # fmt: skip
     if got.returncode != 0 or not want or got.stdout != want:
         return f"{key_path} is not the key of {cert_path}"
     return None
 
 
-def stage(data, dest, mode):
+def stage(data, dest, mode, held=None):
     """A temporary file beside ``dest`` holding ``data``, owned by the container's user (which
     reads it through a read-only mount), written and synced: renamed over ``dest`` by
-    ``install_pair``."""
+    ``install_pair``. With ``held`` (a list)
+    the descriptor stays open and is appended to it: the caller reads the file back through it once it
+    is owned by an account this process cannot read as (the unit keeps CAP_CHOWN only)."""
     uid, gid = CONF["uid"], CONF["gid"]
     fd, tmp = tempfile.mkstemp(prefix=".acme-", dir=os.path.dirname(dest))
     try:
@@ -127,7 +133,10 @@ def stage(data, dest, mode):
         os.close(fd)
         os.unlink(tmp)
         raise
-    os.close(fd)
+    if held is None:
+        os.close(fd)
+    else:
+        held.append(fd)
     return tmp
 
 
@@ -136,12 +145,30 @@ def contents(path):
         return f.read()
 
 
+#: an installed file that exists but cannot be read here (the key, in the unit: see ``held_key``)
+UNREADABLE = object()
+
+
 def read(path):
     try:
         with open(path, "rb") as f:
             return f.read()
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError:
+        return UNREADABLE
+
+
+def held_key(fd, path):
+    """The key as the staged file holds it, read through the descriptor ``stage`` kept open, or None
+    when ``path`` is no longer that file. The unit has CAP_CHOWN and no CAP_DAC_READ_SEARCH: once
+    the key is owned by its reader it cannot be opened by path, but a descriptor opened before the
+    chown keeps working, and it names the very inode that was renamed into place (stat of the path
+    needs no read access), so this checks the installed key, not a copy of it."""
+    held, now = os.fstat(fd), os.stat(path)
+    if (held.st_dev, held.st_ino) != (now.st_dev, now.st_ino):
+        return None
+    return os.pread(fd, held.st_size, 0)
 
 
 def discard(path):
@@ -158,20 +185,24 @@ def install_pair():
     staged temporary file outlives the call, and no OSError escapes it. Returns (why the new pair
     was refused, with what was done about it, or None; whether the files are as they were)."""
     old = {CONF["key"]: read(CONF["key"]), CONF["cert"]: read(CONF["cert"])}
-    staged, replaced = {}, []
+    staged, replaced, held = {}, [], []
     try:
-        staged[CONF["key"]] = stage(contents(STORED_KEY), CONF["key"], 0o600)
+        staged[CONF["key"]] = stage(contents(STORED_KEY), CONF["key"], 0o600, held)
         staged[CONF["cert"]] = stage(contents(STORED_CERT), CONF["cert"], 0o644)
         for dest, tmp in staged.items():
             os.replace(tmp, dest)
             replaced.append(dest)
-        why = problem(CONF["cert"], CONF["key"], 0)
+        key_pem = held_key(held[0], CONF["key"])
+        why = (problem(CONF["cert"], CONF["key"], 0, key_pem) if key_pem is not None
+               else f"{CONF['key']} is not the key that was staged")
     except OSError as e:
         why = f"install failed: {e.strerror}"
     except CannotMeasure as e:  # installed but not checkable: never left in place unchecked
         why = str(e)
     for tmp in staged.values():
         discard(tmp)
+    for fd in held:
+        os.close(fd)
     if not why:
         return None, True
     try:
@@ -179,6 +210,8 @@ def install_pair():
             if old[dest] is None:
                 discard(dest)
                 continue
+            if old[dest] is UNREADABLE:  # the earlier key was never read: there is nothing to write back
+                raise OSError(errno.EACCES, "the earlier key cannot be read here")
             tmp = stage(old[dest], dest, 0o600 if dest == CONF["key"] else 0o644)
             try:
                 os.replace(tmp, dest)
@@ -218,6 +251,21 @@ def same(a, b):
         return False
 
 
+def key_current():
+    """Is the installed key the stored one? The unit cannot open an installed key (owned by its
+    reader, no CAP_DAC_READ_SEARCH), so an unreadable one counts as current when the certificate
+    beside it is: ``install_pair`` renames the key first, so a current certificate means the key
+    went in with it (a crash between the two renames leaves the old certificate, which differs)."""
+    want = contents(STORED_KEY)
+    try:
+        with open(CONF["key"], "rb") as f:
+            return f.read() == want
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
 def renew():
     openssl("version")  # no openssl: CannotMeasure before lego orders what could not be checked
     env = {k: os.environ[k] for k in PASS_ENV if k in os.environ}
@@ -243,7 +291,7 @@ def renew():
     if why:
         print(f"caddy-acme: refusing what lego stored: {why}; nothing installed")
         return 2
-    if same(STORED_CERT, CONF["cert"]) and same(STORED_KEY, CONF["key"]):
+    if same(STORED_CERT, CONF["cert"]) and key_current():
         if not os.path.exists(RELOAD_OWED):
             print("caddy-acme: the installed certificate is current")
             return 0
