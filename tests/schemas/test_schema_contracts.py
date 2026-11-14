@@ -107,7 +107,11 @@ def test_schema_has_examples_and_negatives_and_they_behave(path):
         assert exs and negs
 
 
-MAJOR_BUMPED = {"registers/lesson.schema.json", "registers/runbook.schema.json"}
+MAJOR_BUMPED = {
+    "platform/model_serving.schema.json",
+    "registers/lesson.schema.json",
+    "registers/runbook.schema.json",
+}
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=IDS)

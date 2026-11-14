@@ -78,6 +78,7 @@ class Service:
     tls: str
     impl: str = ""
     health: dict = field(default_factory=lambda: {"kind": "none"})
+    #: 2.11: listener scheme override and scrape authentication (secret-store reference only)
     metrics: dict | None = None
     upstreams: tuple[str, ...] = ()
     clients: tuple[str, ...] = ()
@@ -169,6 +170,22 @@ def row_name_label(sname: str, s: Mapping[str, Any]) -> str | None:
     if tier in ANSWERING_TIERS:
         return sname
     return None
+
+
+def listener_clashes(doc: dict, src: str = "<registry>") -> list[str]:
+    """Listeners (service and metrics ports) claimed more than once on a host."""
+    seen: dict[tuple[str, str, int], list[str]] = {}
+    for name, service in sorted((doc.get("services") or {}).items()):
+        transport = "udp" if service.get("protocol") in ("udp", "dns") else "tcp"
+        seen.setdefault((service["host"], transport, service["port"]), []).append(name)
+        metrics = service.get("metrics")
+        if metrics and metrics.get("port") not in (None, service["port"]):
+            seen.setdefault((service["host"], "tcp", metrics["port"]), []).append(f"{name} metrics")
+    return [
+        f"{src}: {host} {transport}/{port} is claimed by {', '.join(sorted(names))}"
+        for (host, transport, port), names in seen.items()
+        if len(names) > 1
+    ]
 
 
 def env_var_name(capability: str) -> str:
@@ -316,19 +333,11 @@ def semantic_problems(doc: dict) -> list[str]:
             problems.append(f"capability {cap} has {count} primaries: {', '.join(names)}")
     primary = {cap: services[names[0]] for cap, names in primaries.items()}
     problems += _standing_problems(services, primary)
-    ports: dict[tuple[str, int, str], str] = {}
     pubs: dict[str, str] = {}
     mcps: dict[str, str] = {}
     for sname, s in services.items():
         if s["host"] not in hosts:
             problems.append(f"service {sname}: unknown host {s['host']!r}")
-        l4 = "udp" if s["protocol"] in ("udp", "dns") else "tcp"
-        key = (s["host"], s["port"], l4)
-        if key in ports:
-            problems.append(
-                f"service {sname}: port {s['port']}/{l4} on {s['host']} already used by {ports[key]}"
-            )
-        ports[key] = sname
         pub = s.get("public_hostname")
         if pub:
             if pub in pubs:
@@ -414,6 +423,7 @@ def semantic_problems(doc: dict) -> list[str]:
     problems += _name_claim_problems(services, caps)
     problems += status_source_problems(services)
     problems += secret_ref_problems(service_secret_refs(services))
+    problems += listener_clashes(doc)
     return problems
 
 

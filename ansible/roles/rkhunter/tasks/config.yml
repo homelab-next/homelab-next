@@ -88,10 +88,33 @@
   loop: [service, timer]
   register: rkhunter_units
 
-- name: Reload systemd and enable the timer when the units changed
+- name: Ask whether the rkhunter timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ rkhunter_systemctl_cli }}", is-enabled, hnx-rkhunter.timer]
+  register: rkhunter_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the rkhunter timer is started
+  ansible.builtin.command:
+    argv: ["{{ rkhunter_systemctl_cli }}", is-active, hnx-rkhunter.timer]
+  register: rkhunter_timer_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
   ansible.builtin.command:
     argv: "{{ [rkhunter_systemctl_cli] + item }}"
-  loop: "{{ [['daemon-reload'], ['enable', '--now', 'hnx-rkhunter.timer']] if rkhunter_units is changed else [] }}"
+  vars:
+    rkhunter_timer_owed: >-
+      {{ rkhunter_units is changed
+         or rkhunter_timer_enabled.stdout | default('') | trim != 'enabled'
+         or rkhunter_timer_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if rkhunter_units is changed else [])
+       + ([['enable', '--now', 'hnx-rkhunter.timer']] if rkhunter_timer_owed | bool else []) }}
   loop_control:
     label: "{{ item | join(' ') }}"
   changed_when: true

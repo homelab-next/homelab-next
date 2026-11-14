@@ -182,11 +182,11 @@ def test_bad_backends_are_refused(tmp_path, edit, needle):
         ({"tool-call-parser": "--trust-remote-code"}, "is not a short name"),
         ({"tool-call-parser": "-x"}, "is not a short name"),
         # argparse prefix matching and short options: exact allowlisted names only
-        ({"trust-remote": True}, "--trust-remote is not an allowed vLLM flag"),
-        ({"hos": "0.0.0.0"}, "--hos is not an allowed vLLM flag"),
-        ({"tp": 1}, "--tp is not an allowed vLLM flag"),
+        ({"trust-remote": True}, "--trust-remote is not an allowed"),
+        ({"hos": "0.0.0.0"}, "--hos is not an allowed"),
+        ({"tp": 1}, "--tp is not an allowed"),
         # flags the plan does not own but that load files, code or remote config
-        ({"config": "/tmp/x.yaml"}, "--config is not an allowed vLLM flag"),
+        ({"config": "/tmp/x.yaml"}, "--config is not an allowed"),
         ({"allowed-local-media-path": "/"}, "--allowed-local-media-path is not an allowed"),
         ({"middleware": "evil.mod"}, "--middleware is not an allowed"),
         ({"tokenizer": "org/remote"}, "--tokenizer is not an allowed"),
@@ -199,7 +199,10 @@ def test_bad_backends_are_refused(tmp_path, edit, needle):
         ({"max-num-seqs": 2.5}, "is not a whole number"),
         ({"max-num-seqs": True}, "is not a whole number"),
         ({"dtype": "float64"}, "is not one of auto"),
-        ({"swap-space": -1}, "is not a number in [0, 1024]"),
+        ({"swap-space": 4.5}, "--swap-space is not an allowed"),
+        ({"calculate-kv-scales": True}, "--calculate-kv-scales is not an allowed"),
+        ({"max-num-partial-prefills": 1}, "--max-num-partial-prefills is not an allowed"),
+        ({"tokenizer-mode": "slow"}, "is not one of auto, hf, mistral"),
         ({"enable-prefix-caching": "yes"}, "true (a bare flag) or false"),
     ],
 )
@@ -214,12 +217,12 @@ def test_allowed_args_render_typed_and_false_booleans_are_omitted(tmp_path):
     s = spec()
     s["backends"]["svc:inference-large"]["args"] = {
         "enforce-eager": False, "enable-prefix-caching": True, "block-size": 16,
-        "swap-space": 4.5, "kv-cache-dtype": "fp8", "quantization": "compressed-tensors",
+        "kv-cache-dtype": "fp8", "quantization": "compressed-tensors", "tokenizer-mode": "hf",
     }  # fmt: skip
     plan = sv.load_plan(workdir(tmp_path, s))
     assert plan.backends["inference-large"].args == (
         "--block-size", "16", "--enable-prefix-caching", "--kv-cache-dtype", "fp8",
-        "--quantization", "compressed-tensors", "--swap-space", "4.5",
+        "--quantization", "compressed-tensors", "--tokenizer-mode", "hf",
     )  # fmt: skip
     assert not set(sv.ALLOWED_ARGS) & sv.OWNED_FLAGS
 

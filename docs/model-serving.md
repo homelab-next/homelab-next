@@ -135,8 +135,9 @@ a module or JSON (`config`, `chat-template`, `tokenizer`, `allowed-local-media-p
 `speculative-config`, `lora-modules`, ...) are never on it. The `vllm_server` role re-checks the
 rendered argv against the same list: its `vars/main.yml` is generated from it
 (`role_vars_text()`, held equal by a test), so a hand-edited instances file with `-tp=4` or an
-unlisted flag fails before a unit is written. Moving `vllm_server_version` means checking every
-allowlisted name still exists exactly in `vllm serve --help=all`.
+unlisted flag fails before a unit is written. Moving `vllm_server_version` means checking every allowlisted name still exists exactly in
+`vllm serve --help=all`; a test holds the checked names to the pinned vLLM CLI help snapshot, and
+requires the snapshot version to match the role's pin.
 
 ## The roles
 
@@ -238,14 +239,13 @@ go through the gateway with their own key instead (`GatewayResolver`; ADR-0007 d
 
 #### vLLM version notes
 
-- **Allowlisted arguments vLLM no longer has.** The `model_serving` allowlist
-  (`ALLOWED_ARGS` in `homelabnext/models/serving.py`, mirrored in
-  `ansible/roles/vllm_server/vars/main.yml`) still accepts `swap-space`, `calculate-kv-scales`
-  and `max-num-partial-prefills`, and `tokenizer-mode: slow`. None of these exists in the source of
-  vLLM 0.31.0 or 0.32.0: both releases' docs say `--swap-space` was removed, and `slow` is no
-  tokenizer mode either release registers. An instance that sets one passes validation and then
-  fails when vLLM starts. Taking them off the allowlist narrows the schema's `args` names, a major
-  change under ADR-0001, so it is a pending change of its own. Until then, do not set them.
+- **Allowlisted arguments vLLM does not accept.** `model_serving` 2.0 removes `swap-space`,
+  `calculate-kv-scales` and `max-num-partial-prefills`, and removes `slow` from `tokenizer-mode`.
+  Neither vLLM 0.31.0 nor 0.32.0 accepts these (both releases were checked from their sdists);
+  `tokenizer-mode: hf` is accepted. These invalid values previously passed
+  validation and failed only when vLLM started. This is a breaking schema major under ADR-0001;
+  migrate stored serving specs by removing those flags and replacing `tokenizer-mode: slow` with a
+  supported mode.
 - **Python.** vLLM 0.32.0 requires Python `>=3.11,<3.15` (0.31.0 accepted 3.10). The role's
   virtualenv needs an interpreter from 3.11 to 3.14: 3.15 already ships, and vLLM's metadata
   refuses it.

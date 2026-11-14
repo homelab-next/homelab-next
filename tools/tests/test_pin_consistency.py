@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from homelabnext._version import VERSION
+from homelabnext.registry.model import listener_clashes
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
@@ -250,7 +251,6 @@ def test_the_example_registries_run_the_caddy_ci_checks_with():
 
 # --- metrics: the scrape target each pinned version really serves -------------------------------
 
-ISSUES = "https://github.com/homelab-next/homelab-next/issues/"
 #: the example registry's controller row: this repository's controller, at this repository's
 #: version (ADR-0026 decisions 15 and 16), so its facts are read from this checkout's source
 ORCHESTRATOR_ROW = "examples/services.yml"
@@ -324,22 +324,6 @@ def metrics_mismatches(doc: dict, src: str = "<registry>") -> list[str]:
     return out
 
 
-def listener_clashes(doc: dict, src: str = "<registry>") -> list[str]:
-    """Two listeners (service ports and metrics ports) on one host, port and transport."""
-    seen: dict[tuple, list[str]] = defaultdict(list)
-    for name, s in sorted((doc.get("services") or {}).items()):
-        transport = "udp" if s.get("protocol") == "udp" else "tcp"
-        seen[(s["host"], transport, s["port"])].append(name)
-        m = s.get("metrics")
-        if m and m.get("port") not in (None, s["port"]):
-            seen[(s["host"], "tcp", m["port"])].append(f"{name} metrics")
-    return [
-        f"{src}: {host} {transport}/{port} is claimed by {', '.join(sorted(names))}"
-        for (host, transport, port), names in seen.items()
-        if len(names) > 1
-    ]
-
-
 def _registries() -> list[tuple[str, dict]]:
     # the schema negatives are not: each exists to be rejected, so no generator reads one
     out = []
@@ -388,11 +372,6 @@ def test_the_lab_runs_the_metrics_facts_versions_on_their_default_ports():
         f"{ORCHESTRATOR_ROUTES} no longer serves GET /metrics: update the orchestrator entry of "
         f"{FACTS}"
     )
-
-
-def test_the_unscraped_metrics_link_their_issues():
-    text = read("examples/services.yml")
-    assert f"{ISSUES}250" in text and f"{ISSUES}251" in text
 
 
 @pytest.mark.parametrize(
