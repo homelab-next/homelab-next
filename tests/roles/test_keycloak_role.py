@@ -398,6 +398,9 @@ def test_sync_reports_changed_only_when_the_live_realm_differs(tmp_path, pki):
         assert json.loads(again.stdout) == {"created": False, "changed": []}, again.stdout
         realm = kc.realms[REALM]
         client = realm.by_client_id("auth-proxy")
+        # the IdP's own computed attribute, which the first real deploy reported as a change on
+        # every run, is on the live client and still changes nothing
+        assert client["attributes"]["realm_client"] == "false"
         client["redirectUris"].append("https://stray.lab.example/oauth2/callback")  # real drift
         client["protocolMappers"][0]["config"]["included.client.audience"] = "someone-else"
         r = json.loads(_script("sync", _settings(kc, pki)).stdout)

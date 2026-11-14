@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Reads caddy_found.redirect ({name: [status, location]}): an unauthenticated request to each gated
+# site must be answered 302 to the sign-in page, with the site's own https URL as the return
+# target.  oauth2-proxy writes that target URL-encoded (rd=https%3A%2F%2Fname%2F...), so the
+# value of `rd` (everything after the literal `/oauth2/sign_in?rd=`) is decoded: the encoded and
+# the literal spelling both pass, and only the right target does (the same prefix, for the same name, as before: a different host, scheme or a
+# target that is not the site's root fails either way).
+- name: The sign-in redirect of every gated site is a 302 to the sign-in page, returning to that site
+  ansible.builtin.assert:
+    that:
+      - item.value[0] == 302
+      - item.value[1].startswith('/oauth2/sign_in?rd=')
+      - (item.value[1][19:] | urldecode).startswith('https://' ~ item.key ~ '/')
+    fail_msg: "caddy: {{ item.key }} answered an unauthenticated request with {{ item.value }}, not the sign-in redirect"
+  loop: "{{ caddy_found.redirect | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"

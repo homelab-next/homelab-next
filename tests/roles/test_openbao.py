@@ -1638,6 +1638,24 @@ FAKE_SYSTEMCTL = r"""
 import os, subprocess, sys
 a = sys.argv[1:]
 open(LOG, "a").write("systemctl " + " ".join(a) + "\n")
+if a[0] in ("is-enabled", "is-active", "enable", "disable") and a[-1].endswith(".timer"):
+    # a timer is enabled and started together (`enable --now`), and stopped by `disable --now`
+    en, act = MARK + ".timer-enabled", MARK + ".timer-active"
+    if a[0] == "enable":
+        open(en, "w").close()
+        if "--now" in a:
+            open(act, "w").close()
+    elif a[0] == "disable":
+        for f in (en, act):
+            if os.path.exists(f):
+                os.unlink(f)
+    elif a[0] == "is-enabled":
+        print("enabled" if os.path.exists(en) else "disabled")
+        sys.exit(0 if os.path.exists(en) else 1)
+    else:
+        print("active" if os.path.exists(act) else "inactive")
+        sys.exit(0 if os.path.exists(act) else 3)
+    sys.exit(0)
 if a[0] == "is-active":
     sys.exit(0 if os.path.exists(MARK + ".active") else 3)
 if a[:4] == ["show", "-p", "ActiveState", "--value"]:
@@ -1787,6 +1805,41 @@ def test_acme_obtains_installs_and_reloads_and_a_rerun_changes_nothing(tmp_path,
     timer = (tmp_path / "units" / "hnx-openbao-acme.timer").read_text()
     assert "\nOnCalendar=*-*-* 03:17:00 UTC\n" in timer and "\nPersistent=true\n" in timer
     assert DNS_TOKEN not in (tmp_path / "bin" / "openbao-acme-renew").read_text()
+
+
+def test_acme_timer_disabled_by_hand_is_enabled_again_on_the_next_run(tmp_path, pki):
+    """The timer was enabled only when its unit files changed, so one disabled (or stopped) by hand
+    stayed off and the certificate stopped renewing unnoticed.  Every run now reads the timer and
+    runs `enable --now` only when it is not both enabled and active: a converged host runs
+    nothing, a timer disabled by hand is enabled and started again, one merely stopped is started,
+    and the run after that changes nothing."""
+    (tmp_path / "openbao.active").write_text("")
+    with lego_mirror(pki, tmp_path) as (mirror, sha):
+        v = acme_vars(tmp_path, pki, mirror, sha)
+        first = run_role(tmp_path, ROLE, "tls", v, env=acme_env(pki))
+        assert first.returncode == 0, first.stdout[-4000:] + first.stderr
+        assert "systemctl enable --now hnx-openbao-acme.timer" in calls(tmp_path)
+        enabled, started = tmp_path / "openbao.timer-enabled", tmp_path / "openbao.timer-active"
+        assert enabled.exists() and started.exists()
+
+        def rerun():
+            (tmp_path / "calls.log").unlink()
+            r = run_role(tmp_path, ROLE, "tls", v, env=acme_env(pki))
+            assert r.returncode == 0, r.stdout[-4000:] + r.stderr
+            return r, [c for c in calls(tmp_path) if c.startswith("systemctl enable")]
+
+        r, enable = rerun()  # converged: nothing to do
+        assert enable == [] and re.search(r"localhost\s*: ok=\d+\s+changed=0 ", r.stdout), r.stdout
+        for gone in (enabled, started):  # disabled by hand: `systemctl disable --now`
+            gone.unlink()
+        r, enable = rerun()
+        assert enable == ["systemctl enable --now hnx-openbao-acme.timer"], enable
+        assert re.search(r"changed=1 ", r.stdout) and enabled.exists() and started.exists()
+        started.unlink()  # stopped by hand, still enabled
+        _, enable = rerun()
+        assert enable == ["systemctl enable --now hnx-openbao-acme.timer"] and started.exists()
+        r, enable = rerun()
+        assert enable == [] and re.search(r"changed=0 ", r.stdout), r.stdout
 
 
 def stat_mode(p: Path) -> int:

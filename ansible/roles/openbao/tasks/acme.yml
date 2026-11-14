@@ -131,13 +131,8 @@
   loop: [service, timer]
   register: openbao_acme_units
 
-- name: Reload systemd and enable the timer when the units changed
-  ansible.builtin.command:
-    argv: "{{ [openbao_systemctl_cli] + item }}"
-  loop: "{{ [['daemon-reload'], ['enable', '--now', openbao_acme_unit ~ '.timer']] if openbao_acme_units is changed else [] }}"
-  loop_control:
-    label: "{{ item | join(' ') }}"
-  changed_when: true
+- name: Reload systemd and make sure the renewal timer is enabled and started
+  ansible.builtin.include_tasks: acme_timer.yml
 
 - name: Look for the renewal script (a --check run on a fresh host has none)
   ansible.builtin.stat:

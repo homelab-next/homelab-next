@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import _invocation, run_role
+from rolerun import _invocation, calls, fake, run_role
 
 from homelabnext.edge_identity import AUTH_PROXY_COOKIE
 
@@ -93,6 +93,103 @@ def run_steps(tmp_path: Path, role: str, steps: list[str], extra: dict, env: dic
 
 
 # ----------------------------------------------------------------------------- caddy
+
+# a systemctl that keeps a timer's state in two files: `enable --now` writes both, `disable --now`
+# removes them, and the is-* queries answer from them (every call is logged)
+FAKE_SYSTEMCTL = r"""
+import os, sys
+a = sys.argv[1:]
+open(LOG, "a").write("systemctl " + " ".join(a) + "\n")
+en, act = STATE + ".enabled", STATE + ".active"
+if a[0] == "enable":
+    open(en, "w").close()
+    if "--now" in a:
+        open(act, "w").close()
+elif a[0] == "disable":
+    for f in (en, act):
+        os.path.exists(f) and os.unlink(f)
+elif a[0] == "is-enabled":
+    print("enabled" if os.path.exists(en) else "disabled")
+    sys.exit(0 if os.path.exists(en) else 1)
+elif a[0] == "is-active":
+    print("active" if os.path.exists(act) else "inactive")
+    sys.exit(0 if os.path.exists(act) else 3)
+"""
+
+
+def test_the_acme_timer_is_enabled_and_started_on_every_run_not_only_when_its_units_change(
+    tmp_path,
+):
+    """The renewal timer was enabled only when its unit files changed, so a timer disabled by hand
+    stayed off and the certificate stopped renewing unnoticed.  The role now reads the timer on
+    every run and runs `enable --now` only when it is not both enabled and active: a converged host
+    runs nothing (changed=0), a timer disabled by hand is enabled and started again, one merely
+    stopped is started, and a changed unit gets its daemon-reload first."""
+    body = FAKE_SYSTEMCTL.replace("LOG", repr(str(tmp_path / "calls.log"))).replace(
+        "STATE", repr(str(tmp_path / "timer"))
+    )
+    v = {
+        "caddy_systemctl_cli": fake(tmp_path / "systemctl", body),
+        "caddy_acme_units": {"changed": False},
+    }
+    enabled, started = tmp_path / "timer.enabled", tmp_path / "timer.active"
+
+    def run(**kw):
+        (tmp_path / "calls.log").unlink(missing_ok=True)
+        r = run_role(tmp_path, CADDY, "acme_timer", {**v, **kw})
+        assert r.returncode == 0, r.stdout + r.stderr
+        return r, [c for c in calls(tmp_path) if not c.startswith("systemctl is-")]
+
+    r, acts = run()  # never started, units unchanged (the first run failed after writing them)
+    assert acts == ["systemctl enable --now hnx-caddy-acme.timer"] and "changed=1" in r.stdout
+    assert enabled.exists() and started.exists()
+    r, acts = run()  # converged: reads only
+    assert acts == [] and "changed=0" in r.stdout, r.stdout
+    enabled.unlink()
+    started.unlink()  # disabled by hand
+    r, acts = run()
+    assert acts == ["systemctl enable --now hnx-caddy-acme.timer"] and started.exists()
+    started.unlink()  # stopped by hand, still enabled
+    r, acts = run()
+    assert acts == ["systemctl enable --now hnx-caddy-acme.timer"] and started.exists()
+    r, acts = run(caddy_acme_units={"changed": True})  # new units: reload, then enable
+    assert acts == ["systemctl daemon-reload", "systemctl enable --now hnx-caddy-acme.timer"]
+    r, acts = run()
+    assert acts == [] and "changed=0" in r.stdout
+
+
+def test_the_health_check_reads_the_sign_in_redirect_encoded_or_not_but_only_to_its_own_site(
+    tmp_path,
+):
+    """oauth2-proxy URL-encodes the return target (`rd=https%3A%2F%2Fhub...%2F`); the assertion
+    decoded it wrong as a literal and failed a healthy edge.  Both spellings pass; a wrong host, a
+    host that merely starts with the right one, a wrong scheme, a status that is not 302 and a
+    target that is not the site's root still fail."""
+    ok = "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal%2F"
+    literal = "/oauth2/sign_in?rd=https://hub.example.internal/"
+    bad = [
+        [302, "/oauth2/sign_in?rd=https%3A%2F%2Fevil.example.internal%2F"],
+        [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal.evil.test%2F"],
+        [302, "/oauth2/sign_in?rd=http%3A%2F%2Fhub.example.internal%2F"],
+        [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal"],
+        [302, "/elsewhere?rd=https%3A%2F%2Fhub.example.internal%2F"],
+        [302, "/oauth2/sign_in%3Frd=https%3A%2F%2Fhub.example.internal%2F"],  # encoded `?`
+        [302, "/oauth2/sign_in?x=1&rd=https%3A%2F%2Fhub.example.internal%2F"],
+        [302, "/oauth2/sign_in?rd=https%253A%252F%252Fhub.example.internal%252F"],  # double
+        [302, "/oauth2/sign_in?rd=https%3A%2F%2Fhub.example.internal%40evil.test%2F"],
+        [200, ok],
+    ]
+
+    def run(loc):
+        found = {"redirect": {"hub.example.internal": loc}}
+        return run_role(tmp_path, CADDY, "health_redirect", {"caddy_found": found})
+
+    for good in ([302, ok], [302, literal], [302, ok + "dashboard%3Fx%3D1"]):
+        r = run(good)
+        assert r.returncode == 0, (good, r.stdout)
+    for loc in bad:
+        r = run(loc)
+        assert r.returncode != 0 and "not the sign-in redirect" in r.stdout, (loc, r.stdout)
 
 
 def test_main_never_renders_without_an_edge_host(tmp_path):
