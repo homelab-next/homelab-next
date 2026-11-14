@@ -354,6 +354,29 @@ def test_sync_converges_a_new_reserved_name_on_an_existing_realm(tmp_path, pki):
         assert realm.by_client_id("auth-proxy")["secret"] == secrets["auth-proxy"]
 
 
+def test_sync_reports_changed_only_when_the_live_realm_differs(tmp_path, pki):
+    """The first real deploy read every client's settings and mappers as changed on every run:
+    the IdP stores them normalised (string attributes, attributes and mapper defaults of its own,
+    sets in its own order), and a byte comparison with the rendered document never settles. A
+    second sync against such an IdP changes nothing; a rendered value that really differs is
+    still found, put right once, and then settles too."""
+    with StandIn(tmp_path, ADMIN, pki=pki, normalise=True) as kc:
+        first = _script("sync", _settings(kc, pki))
+        assert first.returncode == 0, first.stderr
+        assert json.loads(first.stdout)["created"] is True
+        again = _script("sync", _settings(kc, pki))
+        assert again.returncode == 0, again.stderr
+        assert json.loads(again.stdout) == {"created": False, "changed": []}, again.stdout
+        realm = kc.realms[REALM]
+        client = realm.by_client_id("auth-proxy")
+        client["redirectUris"].append("https://stray.lab.example/oauth2/callback")  # real drift
+        client["protocolMappers"][0]["config"]["included.client.audience"] = "someone-else"
+        r = json.loads(_script("sync", _settings(kc, pki)).stdout)
+        assert r["changed"] == ["client auth-proxy settings", "client auth-proxy mapper audience"]
+        assert "https://stray.lab.example/oauth2/callback" not in client["redirectUris"]
+        assert json.loads(_script("sync", _settings(kc, pki)).stdout)["changed"] == []
+
+
 def test_sync_refuses_a_drifted_flow_and_never_edits_it(tmp_path, pki):
     with StandIn(tmp_path, ADMIN, pki=pki) as kc:
         assert _script("sync", _settings(kc, pki)).returncode == 0

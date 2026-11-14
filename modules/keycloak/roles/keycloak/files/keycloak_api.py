@@ -195,6 +195,36 @@ class Api:
         self.token = token
 
 
+def _text(value) -> str:
+    """A scalar as the IdP stores it: booleans and numbers as strings, nothing as the empty string."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def covers(live, want) -> bool:
+    """Does the live representation hold what the rendered one says?  The IdP normalises what it
+    stores (attributes and mapper settings come back as strings, with defaults of its own added;
+    a set comes back in its own order; an empty value may be absent), so a byte comparison of the
+    two never settles and every run would report a change.  A rendered dict is held when each of
+    its keys is (extra keys on the live side are the IdP's own); a rendered list of scalars when
+    the live one has the same members in any order; a rendered scalar when the live one reads the
+    same.  Anything that differs in a rendered key, a member or a value is still a difference."""
+    if isinstance(want, dict):
+        if not isinstance(live, dict):
+            return not want
+        return all(covers(live.get(k), v) for k, v in want.items())
+    if isinstance(want, list):
+        if not isinstance(live, list):
+            return not want
+        if all(not isinstance(x, (dict, list)) for x in want + live):
+            return sorted(map(_text, live)) == sorted(map(_text, want))
+        return len(live) == len(want) and all(covers(a, b) for a, b in zip(live, want, strict=True))
+    return _text(live) == _text(want)
+
+
 def _safe(path: str) -> str:
     return path.split("?", 1)[0]
 
@@ -486,7 +516,7 @@ def sync(api: Api, cfg: dict) -> dict:
         if live is None:
             raise Refused(f"client {want['clientId']} was not created")
         cid = live["id"]
-        diff = {k: want[k] for k in CLIENT_FIELDS if k in want and live.get(k) != want[k]}
+        diff = {k: want[k] for k in CLIENT_FIELDS if k in want and not covers(live.get(k), want[k])}
         if diff:
             api.call("PUT", f"{base}/clients/{_q(cid)}", {**live, **diff}, ok=(204,))
             changed.append(f"client {want['clientId']} settings")
@@ -504,7 +534,10 @@ def sync(api: Api, cfg: dict) -> dict:
             if cur is None:
                 api.call("POST", f"{base}/clients/{_q(cid)}/protocol-mappers/models", m, ok=(201,))
                 changed.append(f"client {want['clientId']} mapper {m['name']}")
-            elif any(cur.get(k) != m[k] for k in ("protocolMapper", "config")):
+            elif not covers(
+                {k: cur.get(k) for k in ("protocolMapper", "config")},
+                {k: m[k] for k in ("protocolMapper", "config") if k in m},
+            ):
                 api.call(
                     "PUT",
                     f"{base}/clients/{_q(cid)}/protocol-mappers/models/{_q(cur['id'])}",
