@@ -277,6 +277,7 @@ class StandIn:
 
         self.httpd = ThreadingHTTPServer((LOOPBACK, 0), Handler)
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(str(self.pki["cert"]), str(self.pki["key"]))
         self.httpd.socket = ctx.wrap_socket(self.httpd.socket, server_side=True)
         self.port = self.httpd.server_address[1]

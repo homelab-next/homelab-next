@@ -297,6 +297,7 @@ def test_the_realm_refuses_to_create_a_reserved_user(tmp_path, pki):
         import ssl
 
         ctx = ssl.create_default_context(cafile=str(pki["ca"]))
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         base = f"https://{LOOPBACK}:{kc.port}"
         form = f"grant_type=password&client_id=admin-cli&username={ADMIN[0]}&password={ADMIN[1]}"
         tok = json.loads(urllib.request.urlopen(urllib.request.Request(
