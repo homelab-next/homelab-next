@@ -25,10 +25,12 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
-import jinja2
 import pytest
 
+jinja2 = pytest.importorskip("jinja2")  # present wherever ansible is
+
 pytestmark = [
+    pytest.mark.requires_tool("ansible-playbook"),  # the job that has ansible has jinja2
     pytest.mark.requires_tool("openssl"),
     pytest.mark.skipif(os.geteuid() == 0, reason="root opens any file: the denial cannot be shown"),
 ]
