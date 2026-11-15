@@ -242,15 +242,18 @@ def _sha256(path: Path) -> tuple[int, str]:
     return n, h.hexdigest()
 
 
+#: places a dump must never be staged: world-writable scratch space (the dump holds every
+#: account's password hash)
+SCRATCH_DIRS = ("/tmp", "/var/tmp", "/dev/shm")
+
+
 def _refuse_scratch(out_dir: Path) -> None:
-    """A dump holds every account's password hash: never in a world-writable scratch place."""
     here = out_dir.resolve()
-    for bad in {
-        Path(tempfile.gettempdir()).resolve(),
-        Path("/tmp"),
-        Path("/var/tmp"),
-        Path("/dev/shm"),
-    }:
+    bad_dirs = {
+        Path(d).resolve()
+        for d in (*SCRATCH_DIRS, *([tempfile.gettempdir()] if SCRATCH_DIRS else []))
+    }
+    for bad in bad_dirs:
         if here == bad or bad in here.parents:
             raise MigrateError(
                 f"{out_dir}: refusing to stage a dump under {bad}; name a private directory"

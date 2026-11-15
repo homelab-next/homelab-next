@@ -181,6 +181,13 @@ def ctx(host):
     return mt._Ctx(runner=host)
 
 
+@pytest.fixture(autouse=True)
+def _private_tmp(monkeypatch):
+    """pytest's tmp_path lives under the system temp directory, which the tool refuses; the
+    refusal tests put the real list back."""
+    monkeypatch.setattr(mt, "SCRATCH_DIRS", ())
+
+
 @pytest.fixture
 def source():
     return Host(projects=37, work_packages=101, users=7, attachments=[f"f{i}" for i in range(6)])
@@ -258,7 +265,8 @@ def test_dump_notes_a_source_that_changed_while_it_was_dumped(source, tmp_path):
 
 
 @pytest.mark.parametrize("where", ["/tmp/x", "/var/tmp/x", "/dev/shm/x"])
-def test_dump_never_stages_in_a_temporary_directory(source, where):
+def test_dump_never_stages_in_a_temporary_directory(source, where, monkeypatch):
+    monkeypatch.setattr(mt, "SCRATCH_DIRS", ("/tmp", "/var/tmp", "/dev/shm"))
     with pytest.raises(mt.MigrateError, match="refusing to stage"):
         mt.dump(source_endpoint(), where, _ctx=ctx(source))
     assert source.log == []  # not even a read happened
