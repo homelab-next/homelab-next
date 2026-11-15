@@ -944,6 +944,24 @@
     },
     {
       "exit": {
+        "0": "imported and verified, or counts printed",
+        "1": "the import failed or its counts differ from the source (the target is kept for inspection)"
+      },
+      "id": "media-config-import",
+      "inputs": "a stopped (or snapshotted) source config/data directory and an empty target; --map old=new library path prefixes",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "a JSON report of the counts at both ends and every change made beyond the copy; counts prints the server id and counts of one directory",
+      "owner": "maintainers",
+      "path": "tools/migrate/jellyfin.py",
+      "purpose": "Import a media server's config/data directory into a new one, keeping its server id, users, devices and watch state, mapping library paths and checking the counts.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "every file was read (a missing file is a result, not a failure)",
         "1": "a file could not be read (permission, a link loop); the role stops"
       },

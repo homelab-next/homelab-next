@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A read-only probe for the provisional ``media`` slot.
+"""A read-only probe for the provisional ``media`` slot (the shared adapter of modules/media).
 
 The slot has no contract or conformance suite yet, so this is not one: it asks the server the
 three things the role's health hook asks (``/health`` says Healthy, ``/System/Info/Public``

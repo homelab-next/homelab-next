@@ -209,11 +209,8 @@ def test_a_guest_without_the_base_baseline_is_refused(tmp_path, capsys):
 
 
 def test_the_probe_reads_the_three_endpoints_from_the_resolved_endpoint(monkeypatch):
-    sys.path.insert(0, str(MODULE / "python"))
-    try:
-        from hnx_modules.media.adapter import make
-    finally:
-        sys.path.remove(str(MODULE / "python"))
+    from homelabnext.conform.adapters.media import make
+
     monkeypatch.delenv("HNX_ENDPOINT_MEDIA", raising=False)
     with pytest.raises(AdapterConfigError, match="HNX_ENDPOINT_MEDIA"):
         make()  # no default endpoint

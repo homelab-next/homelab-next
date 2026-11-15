@@ -41,7 +41,7 @@ requires:
 provides:
   slots:
     media:
-      adapter: hnx_modules.media.adapter:make
+      adapter: homelabnext.conform.adapters.media:make
       provisional: true
       reason: media has no contract yet; the obvious standard is the server answering a health check and its public system info, with the library readable and the accounts local
       migration: {formats: [object-tree], export: role:media, import: role:media}

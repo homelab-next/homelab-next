@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: media-config-import
+#   kind: tool
+#   purpose: Import a media server's config/data directory into a new one, keeping its server id, users, devices and watch state, mapping library paths and checking the counts.
+#   owner: maintainers
+#   trigger: [manual]
+#   inputs: a stopped (or snapshotted) source config/data directory and an empty target; --map old=new library path prefixes
+#   outputs: a JSON report of the counts at both ends and every change made beyond the copy; counts prints the server id and counts of one directory
+#   exit:
+#     "0": imported and verified, or counts printed
+#     "1": the import failed or its counts differ from the source (the target is kept for inspection)
 """Import an existing media-server config/data directory into a new one, keeping its identity.
 
 A client (a TV app, a set-top box) remembers a server by its id and its signed-in device tokens.
