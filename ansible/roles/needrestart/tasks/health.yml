@@ -11,3 +11,17 @@
           - (now(utc=true).timestamp() - needrestart_state.stat.mtime) < needrestart_max_age_hours | int * 3600
         fail_msg: "needrestart: no check in the last {{ needrestart_max_age_hours }}h ({{ needrestart_state_dir }}/state.json is missing or older)"
   tags: [health]
+
+- block:
+    - name: Read the pending-reboot check's state file
+      ansible.builtin.stat:
+        path: "{{ needrestart_state_dir }}/reboot-state.json"
+      register: needrestart_reboot_state
+    - name: Fail unless the pending-reboot check ran recently
+      ansible.builtin.assert:
+        that:
+          - needrestart_reboot_state.stat.exists
+          - (now(utc=true).timestamp() - needrestart_reboot_state.stat.mtime) < needrestart_max_age_hours | int * 3600
+        fail_msg: "needrestart: no pending-reboot check in the last {{ needrestart_max_age_hours }}h ({{ needrestart_state_dir }}/reboot-state.json is missing or older)"
+  when: needrestart_alert_reboot | bool
+  tags: [health]

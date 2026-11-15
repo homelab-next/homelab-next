@@ -25,6 +25,12 @@ from homelabnext.status.serve import (
     make_server,
 )
 
+UPSTREAM_HOST = (
+    "status-hub.svc.example.internal:8099"  # no-raw-endpoint: allow a Host header value under test
+)
+
+CLIENT_A = "198.51.100.1"  # no-raw-endpoint: allow a forwarded client address under test
+CLIENT_B = "198.51.100.2"  # no-raw-endpoint: allow a forwarded client address under test
 SETTINGS = ApprovalsSettings(
     socket=Path("/run/x.sock"), issuer="sso", approver_groups=frozenset({"hub-approvers"})
 )
@@ -70,7 +76,7 @@ def test_a_refused_host_is_logged_with_what_the_guard_saw(hub, capsys):
     base, access = hub()
     hdrs = {
         **AUTHORIZED,
-        "Host": "status-hub.svc.example.internal:8099",
+        "Host": UPSTREAM_HOST,
         "X-Forwarded-Host": "hub.example.internal",
         "Origin": "https://sso.example.internal",
         "Sec-Fetch-Mode": "cors",
@@ -82,13 +88,13 @@ def test_a_refused_host_is_logged_with_what_the_guard_saw(hub, capsys):
     assert status == 403 and b"host not allowed" in body
     err = capsys.readouterr().err
     assert 'refused host not allowed: GET "/approvals"' in err
-    for seen in ("status-hub.svc.example.internal:8099", "hub.example.internal", "cors",
-                 "cross-site", "https://sso.example.internal", "client=127.0.0.1"):  # fmt: skip
+    for seen in (UPSTREAM_HOST, "hub.example.internal", "cors",
+                 "cross-site", "https://sso.example.internal", f"client={LOOPBACK}"):  # fmt: skip
         assert seen in err
     (rec,) = _records(access)
     assert rec["outcome"] == "refused" and rec["reason"] == "host not allowed"
-    assert rec["method"] == "GET" and rec["view"] == "approvals" and rec["client"] == "127.0.0.1"
-    assert rec["host"] == "status-hub.svc.example.internal:8099"
+    assert rec["method"] == "GET" and rec["view"] == "approvals" and rec["client"] == LOOPBACK
+    assert rec["host"] == UPSTREAM_HOST
     assert rec["x_forwarded_host"] == "hub.example.internal"
     assert rec["sec_fetch_site"] == "cross-site"
     everything = err + access.read_text()
@@ -172,3 +178,36 @@ def test_the_post_route_still_logs_one_access_record(hub, capsys):
     assert capsys.readouterr().err.count("refused host not allowed: POST") == 1
     recs = _records(access)
     assert len(recs) == 1 and recs[0]["reason"] == "host not allowed"
+
+
+def test_a_flood_from_rotating_addresses_is_bounded_overall():
+    now = [0.0]
+    lim = RefusalLimiter(10, total=25, clock=lambda: now[0])
+    logged = sum(lim.take(f"c{i}")[0] for i in range(200))
+    assert logged == 25
+    now[0] = 61.0
+    assert lim.take("c1")[0]
+
+
+def test_a_failing_log_still_sends_the_403(hub, monkeypatch):
+    from homelabnext.status.agents.auth import AccessLog
+
+    def boom(*a, **k):
+        raise RuntimeError("log broke")
+
+    monkeypatch.setattr(AccessLog, "append", boom)
+    base, _ = hub()
+    status, _, body = request(base, "/", headers={"Host": "evil.example"})
+    assert status == 403 and b"host not allowed" in body
+
+
+def test_behind_the_trusted_proxy_the_forwarded_client_is_named_and_judged(hub, capsys):
+    base, access = hub()
+    for ip in (CLIENT_A, CLIENT_B):
+        for _ in range(10):
+            request(base, "/", headers={"Host": "evil.example", "X-Forwarded-For": f"x, {ip}"})
+    err = capsys.readouterr().err
+    assert err.count("\n") == 20  # each forwarded client has its own budget, not the proxy's
+    assert f'forwarded_for="{CLIENT_B}"' in err
+    assert _records(access)[-1]["forwarded_for"] == CLIENT_B
+    assert "X-Forwarded-For" not in err

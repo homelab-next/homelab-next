@@ -157,11 +157,14 @@ def test_the_reboot_required_file_alerts_once_then_clears_once(host, notify):
     path, hdrs, body = notify.seen[0]
     assert path == "/topic"
     assert hdrs["Title"].startswith("reboot required on ")
-    assert (
-        "the reboot-required file is set by linux-base, linux-image-6.1.0-26-amd64" in hdrs["Title"]
-    )
+    assert hdrs["Title"].endswith("the reboot-required file is set")
+    assert "Packages asking for it: linux-base, linux-image-6.1.0-26-amd64" in body
     assert hdrs["Authorization"] == "Bearer " + TOKEN and hdrs["Priority"] == "4"
     assert "reboot-required" in hdrs["Tags"] and "never reboot by itself" in body
+    # more packages joining the list is the same state: not posted again
+    (host.t / "reboot-required.pkgs").write_text("linux-image-6.1.0-26-amd64\nlinux-base\nlibc6\n")
+    # more packages joining the list is the same state: not posted again
+    (host.t / "reboot-required.pkgs").write_text("linux-image-6.1.0-26-amd64\nlinux-base\nlibc6\n")
     for _ in range(3):  # the same state is never posted twice
         assert host.run().returncode == 0
     assert len(notify.seen) == 1

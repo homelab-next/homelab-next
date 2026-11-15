@@ -176,6 +176,7 @@ def host_allowed(host: str | None, origin: str | None, allowed: frozenset[str]) 
 REFUSAL_HEADERS = ("Host", "Origin", "Sec-Fetch-Mode", "Sec-Fetch-Site", "X-Forwarded-Host")
 REFUSAL_VALUE_MAX = 200
 REFUSALS_PER_MINUTE = 10  # logged refusals per client per minute; the rest are only counted
+REFUSALS_PER_MINUTE_ALL = 120  # and across all clients, so rotating addresses cannot multiply it
 REFUSAL_CLIENTS_MAX = 1024  # clients the limiter remembers (oldest dropped), so it cannot grow
 _UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
@@ -196,8 +197,11 @@ class RefusalLimiter:
         *,
         clock: Callable[[], float] = time.monotonic,
         clients: int = REFUSAL_CLIENTS_MAX,
+        total: int = REFUSALS_PER_MINUTE_ALL,
     ):
         self.per_minute = per_minute
+        self.total = total
+        self._all: deque[float] = deque()
         self.clock = clock
         self.clients = clients
         self._lock = threading.Lock()
@@ -216,10 +220,13 @@ class RefusalLimiter:
                 gone = next(iter(self._seen))
                 del self._seen[gone]
                 self._dropped.pop(gone, None)
-            if len(q) >= self.per_minute:
+            while self._all and now - self._all[0] >= 60.0:
+                self._all.popleft()
+            if len(q) >= self.per_minute or len(self._all) >= self.total:
                 self._dropped[client] = self._dropped.get(client, 0) + 1
                 return False, 0
             q.append(now)
+            self._all.append(now)
             return True, self._dropped.pop(client, 0)
 
 
@@ -572,13 +579,29 @@ def make_server(
             return False
 
         def _log_refusal(self, *, journal: bool = True) -> None:
+            """Log a refusal; whatever goes wrong while logging, the 403 is still sent."""
+            try:
+                self._log_refusal_line(journal=journal)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    print("hnx-status: refusal log failed", file=sys.stderr)
+
+        def _log_refusal_line(self, *, journal: bool = True) -> None:
             """One line for a host-guard refusal, so the cause is not silent: method and route
             (no query), the :data:`REFUSAL_HEADERS` the guard judged, and the peer address, to
             stderr (the journal) and, as ``outcome: refused``, to the access log.  Rate-limited
             per client; never a cookie, credential or the front-door secret header."""
             peer = self.client_address[0] if self.client_address else "-"
             client = clean_value(peer, 64) or "-"
-            ok, dropped = limiter.take(client)
+            fwd = ""
+            if self._client() is not None and _canonical(peer) in trusted_proxies:
+                # behind the trusted front door every peer is the proxy: judge (and name) the
+                # client it forwarded, its own last X-Forwarded-For entry
+                fwd = clean_value(
+                    (self.headers.get("X-Forwarded-For") or "").split(",")[-1].strip(), 64
+                )
+            key = f"{client}>{fwd}" if fwd else client
+            ok, dropped = limiter.take(key)
             if not ok:
                 return
             method = clean_value(self.command or "-", 16)
@@ -588,7 +611,8 @@ def make_server(
             extra = f" suppressed={dropped}" if dropped else ""
             line = (
                 f"hnx-status: refused host not allowed: {method} {json.dumps(route)} "
-                f"client={client} {' '.join(parts)}{extra}"
+                f"client={client}{' forwarded_for=' + json.dumps(fwd) if fwd else ''} "
+                f"{' '.join(parts)}{extra}"
             )
             with contextlib.suppress(OSError, ValueError):
                 print(line, file=sys.stderr, flush=True)
@@ -596,6 +620,8 @@ def make_server(
                 fields = {h.lower().replace("-", "_"): v for h, v in seen.items()}
                 if dropped:
                     fields["suppressed"] = str(dropped)
+                if fwd:
+                    fields["forwarded_for"] = fwd
                 try:
                     refusal_log.append(
                         "", route.lstrip("/") or "/", outcome="refused",

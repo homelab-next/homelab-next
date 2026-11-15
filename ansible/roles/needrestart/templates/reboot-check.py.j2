@@ -52,7 +52,8 @@ REBOOT_TYPES = ("reboot", "kexec", "soft-reboot", "")
 BUSCTL_RE = re.compile(r'^\(st\) "([^"]*)" ([0-9]+)$')
 SHOW_RE = re.compile(r"([A-Z][\w-]*(?: [a-z][\w-]*)?) scheduled for (.+?), use ")
 NO_SHUTDOWN_USEC = (0, 18446744073709551615)
-SAFE = re.compile(r"[^A-Za-z0-9.+_:~ -]")
+DETAIL = []  # extra lines for the alert body; never part of the state
+SAFE = re.compile(r"[^A-Za-z0-9.+_:~/ -]")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -85,10 +86,9 @@ def read_reboot_file():
             pkgs = sorted({clean(x) for x in fh.read().split() if clean(x)})
     except OSError:
         pass
-    why = "the reboot-required file is set"
-    if pkgs:
-        why += " by " + ", ".join(pkgs[:5]) + (f" and {len(pkgs) - 5} more" if len(pkgs) > 5 else "")
-    return [why], True
+    if pkgs:  # detail for the body only: a longer list is not a new state
+        DETAIL.append("Packages asking for it: " + ", ".join(pkgs[:10]) + (f" and {len(pkgs) - 10} more" if len(pkgs) > 10 else ""))
+    return ["the reboot-required file is set"], True
 
 
 def parse_needrestart(text):
@@ -170,6 +170,7 @@ def message(host, reasons, services):
     title = f"reboot required on {host}: " + "; ".join(reasons)
     body = "A reboot is pending (nothing was rebooted; this host's policy is to never reboot by itself):\n"
     body += "\n".join(f"- {r}" for r in reasons)
+    body += "".join("\n" + d for d in DETAIL)
     if services:
         body += "\nServices that also need a restart: " + ", ".join(services[:20])
     return title[:200], body
@@ -193,13 +194,13 @@ def send(title, body):
             resp.read()
     elif MODE == "mail":
         mail = f"To: {MAIL_TO}\nSubject: {title}\n\n{body}\n"
-        subprocess.run([SENDMAIL, "-t"], input=mail, text=True, check=True)
+        subprocess.run([SENDMAIL, "-t"], input=mail, text=True, check=True, timeout=30)
     else:
         raise ValueError(f"alert channel {MODE!r} cannot deliver")
 
 
 def main():
-    host = os.uname().nodename
+    host = clean(os.uname().nodename, 64)
     reasons, readable = [], True
     r, ok = read_reboot_file()
     reasons += r
@@ -236,6 +237,8 @@ def main():
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump({"reasons": reasons, "alerted": alerted, "readable": readable}, fh, indent=2, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, STATE)
     return rc
 
