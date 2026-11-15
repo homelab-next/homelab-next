@@ -180,7 +180,7 @@ def test_a_hand_built_wildcard_is_refused_too():
         pve_host_firewall.check_spec("hv-a", {**hf()["hv-a"]["host_firewall"], "policy_in": "x"})
 
 
-def test_the_lock_out_refusal_writes_no_file(tmp_path):
+def test_a_node_with_no_management_source_is_refused_by_the_lock_out_guard(tmp_path):
     p = nodes_file(tmp_path, {"hv-a": {"host_firewall": {"management": {}}}})
     with pytest.raises(ComputeError, match="lock-out guard"):
         load_nodes(p)

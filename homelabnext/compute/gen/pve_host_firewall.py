@@ -2,7 +2,9 @@
 """The Proxmox node's own firewall: ``nodes/<node>/host.fw`` (``_nodes.yml`` ``host_firewall``).
 
 The ``host-firewall`` baseline control binds ``nftables_host``, which refuses to run beside
-``pve-firewall``; a hypervisor therefore has no host firewall at all unless PVE's own is configured.
+``pve-firewall``; a hypervisor therefore has no host firewall the model declares unless PVE's own is configured
+(PVE's built-in rules still let the datacenter ``management`` set reach 22, 8006, the consoles and
+SPICE; the declared sources add to that set and do not narrow it).
 PVE reads a node's rules from ``/etc/pve/nodes/<node>/host.fw``.  A node that declares
 ``host_firewall`` gets, under ``nodes/<node>/``:
 
