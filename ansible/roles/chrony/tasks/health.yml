@@ -8,6 +8,7 @@
         argv: ["{{ chrony_cli }}", -c, tracking]
       register: chrony_tracking
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
     - name: Fail unless the clock is synchronised to a source, with a small offset
       vars:
         chrony_fields: "{{ chrony_tracking.stdout.strip().split(',') }}"

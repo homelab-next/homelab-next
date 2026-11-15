@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: Apache-2.0
+# The pending-reboot check (needrestart_alert_reboot): its script, a service and an hourly timer.
+# Off: the timer is disabled and the three files are removed, so a host moved back to a reboot
+# window does not keep a second alert.
+- name: A pending reboot must reach somebody, so the check needs an alert channel
+  ansible.builtin.assert:
+    that: needrestart_mode != 'none'
+    fail_msg: >-
+      needrestart: alert_reboot is on but notify resolves to none (auto found no local MTA and root
+      alias); set notify to notify or mail, or a pending reboot would be detected and told to nobody
+  when: needrestart_alert_reboot | bool
+
+- name: Install the check, its units and its timer
+  when: needrestart_alert_reboot | bool
+  block:
+    - name: Write the pending-reboot check script
+      ansible.builtin.template:
+        src: reboot-check.py.j2
+        dest: "{{ needrestart_reboot_script }}"
+        mode: "0700"
+    - name: Write the pending-reboot service and timer units
+      ansible.builtin.template:
+        src: "reboot.{{ item }}.j2"
+        dest: "{{ needrestart_unit_dir }}/hnx-needrestart-reboot.{{ item }}"
+        mode: "0644"
+      loop: [service, timer]
+      register: needrestart_reboot_units
+    - name: Ask whether the pending-reboot timer is enabled
+      ansible.builtin.command:
+        argv: ["{{ needrestart_systemctl_cli }}", is-enabled, hnx-needrestart-reboot.timer]
+      register: needrestart_reboot_enabled
+      changed_when: false
+      failed_when: false
+      check_mode: false
+    - name: Ask whether the pending-reboot timer is started
+      ansible.builtin.command:
+        argv: ["{{ needrestart_systemctl_cli }}", is-active, hnx-needrestart-reboot.timer]
+      register: needrestart_reboot_active
+      changed_when: false
+      failed_when: false
+      check_mode: false
+    - name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
+      ansible.builtin.command:
+        argv: "{{ [needrestart_systemctl_cli] + item }}"
+      vars:
+        needrestart_reboot_owed: >-
+          {{ needrestart_reboot_units is changed
+             or needrestart_reboot_enabled.stdout | default('') | trim != 'enabled'
+             or needrestart_reboot_active.stdout | default('') | trim != 'active' }}
+      loop: >-
+        {{ ([['daemon-reload']] if needrestart_reboot_units is changed else [])
+           + ([['enable', '--now', 'hnx-needrestart-reboot.timer']] if needrestart_reboot_owed | bool else []) }}
+      loop_control:
+        label: "{{ item | join(' ') }}"
+      changed_when: true
+
+- name: Remove the pending-reboot check (alert_reboot is off)
+  when: not (needrestart_alert_reboot | bool)
+  block:
+    - name: Look for the pending-reboot timer unit
+      ansible.builtin.stat:
+        path: "{{ needrestart_unit_dir }}/hnx-needrestart-reboot.timer"
+      register: needrestart_reboot_unit
+    - name: Disable and stop the timer
+      ansible.builtin.command:
+        argv: ["{{ needrestart_systemctl_cli }}", disable, --now, hnx-needrestart-reboot.timer]
+      when: needrestart_reboot_unit.stat.exists
+      changed_when: true
+    - name: Remove the units and the script
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ needrestart_unit_dir }}/hnx-needrestart-reboot.timer"
+        - "{{ needrestart_unit_dir }}/hnx-needrestart-reboot.service"
+        - "{{ needrestart_reboot_script }}"
+    - name: Reload systemd (the units are gone)
+      ansible.builtin.command:
+        argv: ["{{ needrestart_systemctl_cli }}", daemon-reload]
+      when: needrestart_reboot_unit.stat.exists
+      changed_when: true

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# expect: console port to every address
+nodes:
+  hv-a:
+    host_firewall:
+      management: {ssh: [zone:mgmt]}
+      console: [any]

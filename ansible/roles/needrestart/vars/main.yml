@@ -6,3 +6,6 @@ needrestart_notify_auth_file: /etc/homelabnext/needrestart-notify.auth
 # Fixed, not a setting: where the shared last-run writer (role last_run) is installed (the
 # service's ExecStartPre= and ExecStopPost= name it).
 needrestart_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+# The pending-reboot check (needrestart_alert_reboot): where it is installed (the service's
+# ExecStart names it) and the units' names.
+needrestart_reboot_script: /usr/local/libexec/homelabnext/needrestart-reboot-check

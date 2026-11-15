@@ -283,3 +283,18 @@ def test_config_refuses_colliding_secret_names_and_shared_tokens(tmp_path):
         load_config(bad, reg, same.get)
     with pytest.raises(ValueError, match="same token"):
         IngestSettings(senders=(Sender("a", "fake-t"), Sender("b", "fake-t")))
+
+
+def test_a_refusal_record_with_markup_in_it_renders_inert_in_the_access_log(served, tmp_path):
+    """The host guard's refusal records carry attacker-chosen text (route, Host, Origin); the
+    access-log page escapes every cell and does not print the header fields at all."""
+    base, _ = served(front_door(tmp_path))
+    evil = "/<script>alert(1)</script><img/src=x/onerror=alert(2)>"
+    assert request(base, evil, headers={"Host": "<script>alert(3)</script>"})[0] == 403
+    rec = AccessLog(tmp_path / "access.jsonl").entries()[0]
+    assert rec["outcome"] == "refused" and "<script>" in rec["view"]  # the record is raw text
+    code, _, body = request(base, "/private/access-log", headers=AUTHORIZED)
+    page = body.decode()
+    assert code == 200 and "refused host not allowed" in page
+    assert "<script>" not in page and "<img" not in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page

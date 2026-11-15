@@ -128,6 +128,7 @@ one no longer alerts:
 
 <!-- host-scan-alerts -->
 - `needrestart-check` (control `restart-required`)
+- `needrestart-reboot-check` (control `restart-required`, the pending-reboot alert)
 - `lynis-dpkg-verify` (control `host-assessment`, the package integrity sweep)
 <!-- /host-scan-alerts -->
 

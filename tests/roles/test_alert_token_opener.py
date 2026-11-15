@@ -28,7 +28,8 @@ LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback
 TOKEN = "tk-test-not-a-secret"
 
 
-def _vars(prefix, url, token_file):
+def _vars(role, url, token_file):
+    prefix = PREFIX.get(role, role)
     common = {
         "state_dir": "/nonexistent",
         "notify_url": url,
@@ -40,7 +41,14 @@ def _vars(prefix, url, token_file):
         "mail_to": "root",
     }
     extra = {
-        "needrestart": {"cli": "/bin/false", "mode": "notify", "alert_kernel": False},
+        "needrestart": {
+            "cli": "/bin/false",
+            "mode": "notify",
+            "alert_kernel": False,
+            "reboot_required_file": "/nonexistent",
+            "busctl_cli": "/bin/false",
+            "shutdown_cli": "/bin/false",
+        },
         "lynis": {
             "dpkg_cli": "/bin/false",
             "debsums_cli": "/bin/false",
@@ -56,7 +64,9 @@ def _vars(prefix, url, token_file):
 TEMPLATES = {
     "needrestart": "ansible/roles/needrestart/templates/needrestart-check.py.j2",
     "lynis": "ansible/roles/lynis/templates/dpkg-verify.py.j2",
+    "needrestart-reboot": "ansible/roles/needrestart/templates/reboot-check.py.j2",
 }
+PREFIX = {"needrestart-reboot": "needrestart"}  # the role whose variables a template reads
 
 
 def render(tmp_path, role, url, token=TOKEN, **over):
@@ -66,7 +76,10 @@ def render(tmp_path, role, url, token=TOKEN, **over):
     env.filters["bool"] = lambda v: v is True or str(v).lower() in ("yes", "true", "1", "on")
     token_file = tmp_path / "token"
     token_file.write_text(token + "\n")
-    values = {**_vars(role, url, token_file), **{f"{role}_{k}": v for k, v in over.items()}}
+    values = {
+        **_vars(role, url, token_file),
+        **{f"{PREFIX.get(role, role)}_{k}": v for k, v in over.items()},
+    }
     text = env.from_string((ROOT / TEMPLATES[role]).read_text()).render(values)
     script = tmp_path / f"{role}_alert.py"
     script.write_text(text)
@@ -213,7 +226,13 @@ def alert_job(tmp_path, role, url, token):
     cli = tmp_path / "fake-cli"
     cli.write_text(f"#!{sys.executable}\n" + FAKE_CLI)
     cli.chmod(0o755)
-    clis = {"needrestart": {"cli": str(cli)}, "lynis": {"dpkg_cli": str(cli)}}[role]
+    flag = tmp_path / "reboot-required"
+    flag.write_text("")
+    clis = {
+        "needrestart": {"cli": str(cli)},
+        "needrestart-reboot": {"cli": str(cli), "reboot_required_file": str(flag)},
+        "lynis": {"dpkg_cli": str(cli)},
+    }[role]
     return render(tmp_path, role, url, token=token, state_dir=str(tmp_path / "state"), **clis)
 
 

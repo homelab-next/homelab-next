@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# expect: takes allow_any_management
+nodes:
+  hv-a:
+    host_firewall:
+      management: {ssh: [zone:mgmt]}
+      policy_in: ACCEPT

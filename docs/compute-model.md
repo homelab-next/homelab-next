@@ -1,6 +1,6 @@
 ---
 summary: 'The compute model: one vendor-neutral file per guest, its validation, generators for IaC, cloud-init, inventory, firewall and baselines, and applying them.'
-summary_of: outline:sha256:e44d0871696e8680
+summary_of: outline:sha256:efa822d6faba296b
 ---
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Compute (guest) model
@@ -83,6 +83,7 @@ trailing newline), then the schema, then `homelabnext.compute.validate`:
 | `capability_groups` are known inventory groups (`docs/role-interface.md` section 5, or `cap_<capability>`) | playbooks target groups |
 | `backup.policy` is defined (or `none`) | |
 | a NIC with `firewall: disabled` on a node that enforces a firewall needs `network.firewall_exemption.reason` | see below |
+| a node's `host_firewall` (in `_nodes.yml`) declares an `ssh` or a `web` management source, names no `any` or `/0` for 22, 8006, the consoles or SPICE without `allow_any_management: true`, no key it does not take, no source or rule twice, and only zones that exist | see [Node host firewall](#node-host-firewall) |
 | `firewall_rules`: unique names, ports for tcp/udp (none for icmp), valid port ranges, existing `zone:` sources and destinations, valid CIDRs; on vm/lxc only with the flag on, on a host only when its baselines resolve `host-firewall` or `egress-filter` (a host's rules reach its own `nftables_host` ruleset, never a hypervisor file) | rules that cannot be rendered are errors, not skips |
 | `firewall_rules.outbound_allow` needs `policy_out: DROP` or `REJECT` | an allow list under an accept-all policy is dead text |
 | a model runtime (`cap:inference` or `cap:codemode-executor`, as its capability or in `capability_groups`) has `policy_out: DROP` or `REJECT` and no `outbound_allow` reaching the internet (a CIDR, or a `zone:`'s subnet), or a disabled NIC firewall with `firewall_exemption.filtered_by` and an unexpired `review_by`; with a baseline set that defines `egress-filter`, its baselines include it. A physical one (`kind: host`) has `policy_out: DROP` or `REJECT`, no internet `outbound_allow`, and baselines that resolve `egress-filter`, which the set must define; no exemption stands in for it. On every guest, any `filtered_by` resolves to another guest that filters (its baselines resolve `host-firewall` or `egress-filter`, its own `policy_out` is DROP or REJECT where it states one, a host only when it carries `firewall_rules`, and it is not exempted or retired: a guest's own NIC firewall filters only itself) or a zone, a `review_by` is a real date, and no `outbound_allow` holds a cloud metadata address | see [Model runtimes](#model-runtimes) |
@@ -293,6 +294,104 @@ The site is read through the network package, never a second reader:
 validation uses the network validator's IPv6 prefix rules. It does not validate the site; run
 `hnx site validate` for that. Tests can also pass a stub (`MappingZones`).
 
+### Node host firewall
+
+The `host-firewall` baseline control binds `nftables_host`, which refuses to run beside
+`pve-firewall`; a Proxmox node would therefore have no firewall the model declares. PVE's own form is
+the node's file, `/etc/pve/nodes/<node>/host.fw`, and a node declares it in `_nodes.yml`:
+
+```yaml
+nodes:
+  hv-1:
+    host_firewall:
+      management:
+        ssh: [zone:mgmt, 198.51.100.7/32]   # port 22
+        web: [zone:mgmt, 198.51.100.7/32]   # the web interface and API, port 8006
+      icmp: [zone:mgmt]                     # optional
+      console: [zone:mgmt]                  # optional: 5900-5999 (VNC consoles)
+      spice: [zone:mgmt]                    # optional: 3128 (SPICE proxy)
+      cluster: {peers: [192.0.2.11/32]}     # optional: corosync 5405-5412/udp, multi-node clusters only
+      rollback_minutes: 5                   # 1-60, default 5
+      allow_any_management: false           # default
+```
+
+A source is `zone:<id>` (the zone's subnet, and its `subnet6` where it has one: one line per
+address family, ICMP as ICMPv6 on the IPv6 line), a CIDR with its host bits clear, or `any`.
+
+`hnx guests render --target pve-host-firewall [--node NODE]` writes, for each node with a
+`host_firewall` (a per-node target made of the node's `_nodes.yml` entry, so a node with no
+guests renders without `--allow-empty`), under `nodes/<node>/`:
+
+- `host.fw`: `[OPTIONS] enable: 1` and the allow rules, in a fixed order (22, 8006, ICMP, 5900-5999,
+  3128, corosync), each only when declared. **The node's default policy is the datacenter's.**
+  A node file has no `policy_in`/`policy_out` option: inbound is DROP and outbound ACCEPT unless
+  `cluster.fw` says otherwise, and the file is inert while the datacenter firewall is off. The
+  apply script refuses both (a datacenter firewall that is off, or `policy_in` ACCEPT/REJECT).
+- `hnx-host-firewall.sh`, run on the node as root: `apply` (default), `confirm`, `rollback`,
+  `status`.
+- `hnx-host-firewall-run.sh SSH_TARGET [CHECK_HOST]`, run from the controller.
+- `nodes/README.md`: the table of nodes, their sources and rollback windows.
+
+**The allows are additive.** According to the PVE documentation, PVE's built-in rules always let
+the datacenter `management` IP set (by default `local_network`, the node's own network, unless
+`cluster.fw` overrides it) reach 22, 8006, 5900-5999 and 3128. The declared sources therefore add
+to that set and do not narrow it: to restrict management to the declared sources, define the
+`management` IP set in `cluster.fw` too. `apply` prints the node's local network, and a controller
+inside it passes the port check whatever `host.fw` says, so the check proves the controller is not
+locked out, not that the declared sources are enough.
+
+**Refused before any file is written** (`hnx guests validate` runs the same checks): a node whose
+`management` has neither `ssh` nor `web` (the lock-out guard); `any` or a `/0` for `ssh`, `web`,
+`console` or `spice` unless `allow_any_management: true`; a key the block does not take (a
+`policy_in`, a third management port); a source list that is empty, a source listed twice, a
+CIDR with host bits set or no prefix; `cluster.peers` that are `any`; a zone that does not exist;
+and a rule written twice once zones have resolved (a zone and its own CIDR are one network).
+
+**Applying it, with the BMC console open.** A wrong rule locks you out of the node's SSH and web
+interface (guest traffic is not host INPUT and keeps flowing). Open the node's BMC or IPMI console
+and a root login on it first, record `qm list; pct list`, and keep a second SSH session. Then, from
+the controller:
+
+```sh
+hnx guests render guests/ --site site.yml --target pve-host-firewall --node hv-1 --out out/hostfw
+sh out/hostfw/nodes/hv-1/hnx-host-firewall-run.sh ops@hv-1.example.internal
+```
+
+The controller script copies `host.fw` and the node script to a private directory on the node
+(`mktemp -d`, mode 700, removed afterwards), then:
+
+1. `apply` checks the datacenter firewall, saves the previous `host.fw` (or notes there was none)
+   under `/var/lib/hnx/host-firewall-<node>/`, **arms a `systemd-run --on-active=Nm` timer that
+   restores it**, and only then installs the file, runs `pve-firewall compile` and `restart`, and
+   checks `pveproxy`, `pvedaemon` and `pve-firewall` are active (`HNX_HEALTH_UNITS`) and that the
+   optional `HNX_HEALTH_HOOK` (an executable on the node, given the node name) passes. Hook paths
+   (`HNX_HEALTH_HOOK`, `HNX_VERIFY_HOOK`) are operator-supplied and must contain no spaces or shell
+   metacharacters. Any failure
+   rolls back at once; a timer that cannot be armed leaves the node untouched.
+2. The controller tries each declared management port (`nc -z`; `HNX_PORT_CHECK`) from where it
+   runs, up to `HNX_CHECK_TRIES` times, then the optional `HNX_VERIFY_HOOK` (given the address).
+   **The controller's address must be among the declared sources**: otherwise the check fails and
+   the file is rolled back, which is the safe way to fail.
+3. Only then `confirm` stops the timer. If a port does not answer the controller asks the node to
+   `rollback`; if it cannot reach the node at all, the timer restores the previous file within
+   `rollback_minutes`, and the BMC console is the way back if that does not happen.
+
+A `confirm` after a rollback (or a second one) fails, and a timer that fires after a `confirm`
+changes nothing, so neither can undo or misreport the other. A second `apply` while one is pending
+is refused, so the original file is never overwritten by the saved copy of a half-applied one.
+A reboot inside the window cancels the transient timer, so `apply` also installs a boot-time unit
+(`hnx-hostfw-rollback-<node>-boot.service`, conditional on the pending marker) that restores the
+previous file; `confirm` and `rollback` remove it. The unit is ordered `After=pve-cluster.service`
+without `Requires=`: a node that boots without quorum has a read-only `/etc/pve`, so the restore
+fails visibly and keeps its marker, which is safe (nothing is half-restored) and is retried by
+running `rollback` once quorum returns. The runner needs a declared SSH source (it works
+over SSH; a web-only node is applied by hand), waits and needs two port checks in a row, and reports
+an SSH connection that dropped during `apply` as "may be ON and unconfirmed". Limits: `pve-firewall` reloads rules on
+its own cycle, so the rules are what `restart` loaded, not what a later hand edit adds.
+
+The `hypervisor` baseline should remove `host-firewall` with the reason "pve-firewall owns the
+host: `host_firewall` in `_nodes.yml`" and list the node's file as its replacement.
+
 ## Rendering
 
 `hnx guests render DIR --site SITE --target T [--node NODE [--allow-empty]] [--out OUT [--prune]] [--keys KEYS] [--policies FILE] [--baselines FILE]`
@@ -302,7 +401,7 @@ validated: a standalone hypervisor's Terraform (one provider endpoint) must not 
 node's guests, and one directory of state per node keeps a plan from proposing to destroy them.
 It is taken only by the **per-node** targets, whose output one node applies: `terraform-proxmox`,
 `libvirt`, `cloudinit`, `firewall-rules` (the node's `/etc/pve/firewall`), `node-mirror` (that
-node's `mirror/<node>/`) and `node-notify` (that node's `notify/<node>/`). The **fleet-wide** targets (`inventory`, `registry-hosts`,
+node's `mirror/<node>/`) and `node-notify` (that node's `notify/<node>/`) and `pve-host-firewall` (that node's `nodes/<node>/`). The **fleet-wide** targets (`inventory`, `registry-hosts`,
 `tailscale-acl`, `backup-jobs`, `baseline-playbook`, `runtime-labels`) are one document for every
 node, so narrowed to one they would silently drop the others' guests: `--node` with one of them is
 a usage error (exit 2); render them without it. A node that no guest and no `_nodes.yml` entry
@@ -330,6 +429,7 @@ another target's files as stale.
 | `tailscale-acl` | `tailscale-policy.hujson`: the tailnet policy for the guests bound to `tailscale_node` (a tag per zone, admins on SSH, the site's zone-to-zone allows, the deploy tag's declared access with policy tests); see [Bound products](#bound-products) |
 | `node-mirror` | `mirror/<node>/hnx-mirror.sh`, `.service` and `.timer` for each node with a `mirror` in `_nodes.yml`, and `mirror/README.md`; see [Node mirror](#node-mirror) |
 | `node-notify` | `notify/<node>/hnx-notify.sh` for each node with a `notify` in `_nodes.yml` (a webhook target and matcher sending its Proxmox notifications to ntfy), and `notify/README.md`; see [Node notifications](#node-notifications) |
+| `pve-host-firewall` | `nodes/<node>/host.fw` (PVE's per-node firewall file), `hnx-host-firewall.sh` (timed-rollback apply, on the node) and `hnx-host-firewall-run.sh` (from the controller) for each node with a `host_firewall` in `_nodes.yml`, and `nodes/README.md`; see [Node host firewall](#node-host-firewall) |
 | `firewall-rules` | `firewall/<vmid>.fw` per guest (inbound drop, the outbound policy, the guest's allow rules), `firewall/verify-datacenter.sh` and `firewall/EXEMPTIONS.md` |
 
 Output is a pure function of the files: no clock, no randomness, no environment.  The `terraform-proxmox` target was validated against the real `bpg/proxmox` provider **version 0.116.1** (`terraform init && terraform validate` plus a one-guest live `plan` / `apply` / `destroy` cycle on a scoped scratch pool).  A trimmed snapshot of the provider's resource schemas is committed at `tests/compute/fixtures/bpg_proxmox_schema.json` and used by `tests/compute/test_terraform_proxmox_schema.py` as a CI-safe shape check.  Note that the real provider enforces `vm_id >= 100`, so the example fleet uses vmids in the `110-230` range; the `octet` scheme is still available but requires IPs whose last octet is `>= 100`. SSH keys are
@@ -878,7 +978,7 @@ owed (a pending marker) until a later run succeeds.
 | `vuln-scan` | `greenbone_target` | central, `cap_scanner` | over gvmd's socket with `gvm-cli` (as `_gvm`; it refuses root), finds the operator's scan login by name and creates a target `hnx-<guest>` per guest that lacks one | GMP `get_version` | targets are matched by name: an address change or a guest that leaves is not followed; scan tasks and schedules stay in Greenbone |
 | `time-sync` | `chrony` | guest | renders chrony.conf from the registry's time sources (`chrony_server_ids`; public pools opt-in), checked with `chronyd -p`, restart owed until it succeeds | `chronyc -c tracking`: synchronised, stratum 1-15, offset under `chrony_max_offset` (1 s) | the whole chrony.conf is the role's |
 | `patching` | `unattended_upgrades` | guest | one apt.conf.d file after the package's: `#clear` drops the package's origin lists, then only the distribution's security origin (plus opt-in extras), a required reboot window (`HH:MM` or `never`), optional mail; checked with `apt-config -c FILE dump`. With `never` it also cancels (`shutdown -c`, a change naming the type and time; a would-change under `--check`) a reboot logind still holds (a scheduled poweroff or halt is left alone; a guest with no logind fails by name), read from `ScheduledShutdown` with `busctl` (`shutdown --show` where busctl gives no answer): `Automatic-Reboot "false"` governs only the next run, so a reboot unattended-upgrades scheduled under an earlier window would otherwise still happen | the run stamp is under 48 h old; with `never`, no reboot is scheduled (the type and time are named) | held packages (the pinned agents) are never moved; it does not list pending updates |
-| `restart-required` | `needrestart` | guest | the distribution's needrestart in list-only mode (`$nrconf{restart} = 'l'` in a conf.d drop-in checked with `perl -c`; kernel and microcode hints on), so its apt hook only lists and nothing is ever restarted automatically; a timer after the patch run (`After=apt-daily-upgrade.service`, 07:40 UTC) runs `needrestart -b` and writes the services and kernel state to an owner-only `state.json`; it alerts state-diffed, only when the set of services needing a restart differs from the last one alerted (once more when it empties; a failed alert stays owed). `needrestart_notify`: `notify` posts to the notify capability's ntfy endpoint by logical id (`<url>/<topic>`, Title, Priority, Tags; a token by secret reference, never over plain http), `mail` sends local mail (`sendmail -t`), `auto` (the base baseline's choice) is mail where the host has a local MTA and `/etc/aliases` forwards root, else none | the state file is under 48 h old | to avoid double alerts, needrestart owns service restarts and reboots stay with patching (unattended-upgrades mails its reboot notice and reboots in its window); a pending kernel is recorded, and alerted only with `needrestart_alert_kernel` |
+| `restart-required` | `needrestart` | guest | the distribution's needrestart in list-only mode (`$nrconf{restart} = 'l'` in a conf.d drop-in checked with `perl -c`; kernel and microcode hints on), so its apt hook only lists and nothing is ever restarted automatically; a timer after the patch run (`After=apt-daily-upgrade.service`, 07:40 UTC) runs `needrestart -b` and writes the services and kernel state to an owner-only `state.json`; it alerts state-diffed, only when the set of services needing a restart differs from the last one alerted (once more when it empties; a failed alert stays owed). `needrestart_notify`: `notify` posts to the notify capability's ntfy endpoint by logical id (`<url>/<topic>`, Title, Priority, Tags; a token by secret reference, never over plain http), `mail` sends local mail (`sendmail -t`), `auto` (the base baseline's choice) is mail where the host has a local MTA and `/etc/aliases` forwards root, else none | the state file is under 48 h old | to avoid double alerts, needrestart owns service restarts and reboots stay with patching (unattended-upgrades mails its reboot notice and reboots in its window); a pending kernel is recorded, and alerted only with `needrestart_alert_kernel`; for a host whose patching policy never reboots it (`reboot_time: never`) set `alert_reboot: true`: a second, hourly timer (`reboot_schedule`) runs `needrestart-reboot-check`, which reads the reboot-required file (and its package list), `needrestart -b` (a newer kernel or microcode update waiting) and logind's `ScheduledShutdown` (a poweroff or halt is not a reboot), posts `reboot required on <host>: <reason>` through the same channel and token reference once per change of that set and `reboot cleared on <host>` once when it empties, and never repeats a state (a failed post stays owed; a reader that fails keeps what was last alerted instead of reading as cleared). It needs a channel other than none, and `health` then also wants a fresh `reboot-state.json`; with `alert_kernel` as well, a pending kernel is told by both checks |
 | `ssh-hardening` | `ssh_hardening` | guest | one drop-in sorting first in `sshd_config.d`: key-only, no root, `AllowGroups`, client-alive limits; the kept account (`ssh_hardening_keep_user`, never root) must exist and hold a key, and a staged drop-in must pass `sshd -t` and, through `sshd -T -C user=<kept>`, be key-only, refuse root and admit one of its groups before it goes live; on central-auth guests it reads directory keys through `sss_ssh_authorizedkeys`; with `ssh_hardening_trusted_user_ca_keys` it trusts SSH user certificates from that CA (`TrustedUserCAKeys`, each key parsed by `ssh-keygen -l` first) for the principals `ssh_hardening_authorized_principals` lists per account (`AuthorizedPrincipalsFile`; an unlisted account's file is removed), and `ssh_hardening_revoked_keys` becomes `RevokedKeys`; the kept account needs an unrevoked key unless `ssh_hardening_keep_user_cert_only` accepts the CA and a principal instead (docs/private-overlay.md, "SSH certificates") | the live `sshd -T` for the kept account, including the CA, principals and revocation files | a drop-in that sorts before `00-homelabnext-hardening.conf` wins (health catches it); a CA key that parses may still be the wrong CA (hence the opt-in); MFA for SSH is the identity provider's, at the OIDC login that signs a certificate |
 | `central-auth` | `sssd_ldap` | guest | **superseded for SSH sign-on** by SSH certificates from the secrets store with an OIDC login (the chosen identity provider has no LDAP outpost; docs/private-overlay.md, "SSH certificates"); kept for a lab whose identity provider has one. sssd against the identity provider's LDAP outpost by logical id, LDAPS only (`ldap_tls_reqcert = demand`), Authentik's layout by default, `simple_allow_groups`; the bind credential by secret reference in a 0600 sssd.conf checked with `sssctl config-check`; the break-glass account must exist in the local files, passwd must resolve `files` first, and sssd filters that name | `sssctl domain-status --online` and the break-glass check | the bind credential is on disk (sssd needs it); MFA is the identity provider's (a code with the password on the outpost) |
 | `os-hardening` | `os_hardening` | guest | CIS-lite, each item named in the required `os_hardening_items`: kernel settings (pointer and dmesg restrictions, ptrace, protected links, no setuid dumps, redirects and source routes off; forwarding untouched), unused filesystem modules refused, desktop and print services masked, file modes, no core dumps; no reboot | the live kernel settings and file modes | a module already loaded stays loaded until a reboot; its verify is the host-assessment audit |
@@ -996,7 +1096,7 @@ its own runbook with its addresses.
    never booted, so every clone generates its own SSH host keys. Its vmid is the
    `vm_templates` entry for the image's `logical` name.
 3. **Render** the per-node targets (`terraform-proxmox`, `cloudinit`, `firewall-rules`, and
-   `node-mirror`/`node-notify` for a node that declares them) with
+   `node-mirror`/`node-notify`/`pve-host-firewall` for a node that declares them) with
    `--node <node>`, each into its own directory, **one directory per node** (`tf/<node>/`,
    `cloudinit/<node>/`, ...): each `tf/<node>/` is that node's own Terraform root and state, so a
    plan in it never proposes to destroy another node's guests. Render the fleet-wide targets

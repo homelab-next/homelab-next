@@ -806,6 +806,7 @@
         "timer:clamav/scan",
         "timer:lynis/scan",
         "timer:needrestart/check",
+        "timer:needrestart/reboot",
         "timer:openbao/acme-renew",
         "timer:rkhunter/scan",
         "timer:trivy/scan"
@@ -1015,6 +1016,27 @@
       "status": "active",
       "trigger": [
         "timer:needrestart/check",
+        "role:needrestart"
+      ]
+    },
+    {
+      "exit": {
+        "0": "checked (and alerted, if the state changed)",
+        "1": "a reader failed; what was last alerted is kept (a new reason is still alerted)",
+        "2": "the alert could not be sent; it stays owed to the next run"
+      },
+      "id": "needrestart-reboot-check",
+      "inputs": "the reboot-required file, needrestart -b (kernel and microcode state), logind's ScheduledShutdown; the previous state file",
+      "installs_to": "/usr/local/libexec/homelabnext/needrestart-reboot-check",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the state file (owner-only) and, on a change of the pending-reboot state, one alert (ntfy or local mail)",
+      "owner": "platform",
+      "path": "ansible/roles/needrestart/templates/reboot-check.py.j2",
+      "purpose": "Alert once when a host that never reboots by itself has a reboot pending, and once when it clears.",
+      "status": "active",
+      "trigger": [
+        "timer:needrestart/reboot",
         "role:needrestart"
       ]
     },

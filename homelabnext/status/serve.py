@@ -54,13 +54,16 @@ from __future__ import annotations
 import contextlib
 import copy
 import ipaddress
+import json
 import os
+import re
 import socket
 import ssl
 import sys
 import threading
 import time
 import urllib.parse
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -166,6 +169,65 @@ def host_allowed(host: str | None, origin: str | None, allowed: frozenset[str]) 
     if host_header_name(host) not in allowed:
         return False
     return origin is None or origin_name(origin) in allowed
+
+
+# What a refusal's log line may say about the request: these headers only (never Cookie,
+# Authorization or the front-door secret header), each capped and stripped of control characters.
+REFUSAL_HEADERS = ("Host", "Origin", "Sec-Fetch-Mode", "Sec-Fetch-Site", "X-Forwarded-Host")
+REFUSAL_VALUE_MAX = 200
+REFUSALS_PER_MINUTE = 10  # logged refusals per client per minute; the rest are only counted
+REFUSALS_PER_MINUTE_ALL = 120  # and across all clients, so rotating addresses cannot multiply it
+REFUSAL_CLIENTS_MAX = 1024  # clients the limiter remembers (oldest dropped), so it cannot grow
+_UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def clean_value(value: object, limit: int = REFUSAL_VALUE_MAX) -> str:
+    """``value`` with control characters (CR, LF, ESC, C1, line separators) removed and at most
+    ``limit`` characters, so a hostile header cannot forge or split a log line."""
+    return _UNPRINTABLE.sub("", str(value))[:limit]
+
+
+class RefusalLimiter:
+    """At most ``per_minute`` logged refusals per client per 60 s; the others are counted and the
+    count is reported on that client's next logged line."""
+
+    def __init__(
+        self,
+        per_minute: int = REFUSALS_PER_MINUTE,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        clients: int = REFUSAL_CLIENTS_MAX,
+        total: int = REFUSALS_PER_MINUTE_ALL,
+    ):
+        self.per_minute = per_minute
+        self.total = total
+        self._all: deque[float] = deque()
+        self.clock = clock
+        self.clients = clients
+        self._lock = threading.Lock()
+        self._seen: dict[str, deque[float]] = {}
+        self._dropped: dict[str, int] = {}
+
+    def take(self, client: str) -> tuple[bool, int]:
+        """(log this one?, refusals suppressed since this client's last logged line)."""
+        now = self.clock()
+        with self._lock:
+            q = self._seen.pop(client, None) or deque()
+            while q and now - q[0] >= 60.0:
+                q.popleft()
+            self._seen[client] = q  # most recently used last
+            while len(self._seen) > self.clients:
+                gone = next(iter(self._seen))
+                del self._seen[gone]
+                self._dropped.pop(gone, None)
+            while self._all and now - self._all[0] >= 60.0:
+                self._all.popleft()
+            if len(q) >= self.per_minute or len(self._all) >= self.total:
+                self._dropped[client] = self._dropped.get(client, 0) + 1
+                return False, 0
+            q.append(now)
+            self._all.append(now)
+            return True, self._dropped.pop(client, 0)
 
 
 class BoundedHTTPServer(ThreadingHTTPServer):
@@ -460,6 +522,11 @@ def make_server(
         except ReleaseError:
             return None
 
+    limiter = RefusalLimiter()
+    refusal_log = next(
+        (lg for lg in (getattr(s, "access_log", None) for s in (approvals, agents)) if lg), None
+    )
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "hnx-status"
         sys_version = ""
@@ -507,8 +574,62 @@ def make_server(
             origin = None if navigation else self.headers.get("Origin")
             if host_allowed(self.headers.get("Host"), origin, allowed):
                 return True
+            self._log_refusal()
             self._reply(403, "text/plain; charset=utf-8", b"forbidden: host not allowed\n")
             return False
+
+        def _log_refusal(self, *, journal: bool = True) -> None:
+            """Log a refusal; whatever goes wrong while logging, the 403 is still sent."""
+            try:
+                self._log_refusal_line(journal=journal)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    print("hnx-status: refusal log failed", file=sys.stderr)
+
+        def _log_refusal_line(self, *, journal: bool = True) -> None:
+            """One line for a host-guard refusal, so the cause is not silent: method and route
+            (no query), the :data:`REFUSAL_HEADERS` the guard judged, and the peer address, to
+            stderr (the journal) and, as ``outcome: refused``, to the access log.  Rate-limited
+            per client; never a cookie, credential or the front-door secret header."""
+            peer = self.client_address[0] if self.client_address else "-"
+            client = clean_value(peer, 64) or "-"
+            fwd = ""
+            if self._client() is not None and _canonical(peer) in trusted_proxies:
+                # behind the trusted front door every peer is the proxy: judge (and name) the
+                # client it forwarded, its own last X-Forwarded-For entry
+                fwd = clean_value(
+                    (self.headers.get("X-Forwarded-For") or "").split(",")[-1].strip(), 64
+                )
+            key = f"{client}>{fwd}" if fwd else client
+            ok, dropped = limiter.take(key)
+            if not ok:
+                return
+            method = clean_value(self.command or "-", 16)
+            route = clean_value(self.path.partition("?")[0].partition("#")[0]) or "-"
+            seen = {h: clean_value(self.headers.get(h) or "") for h in REFUSAL_HEADERS}
+            parts = [f"{h}={json.dumps(v)}" for h, v in seen.items()]
+            extra = f" suppressed={dropped}" if dropped else ""
+            line = (
+                f"hnx-status: refused host not allowed: {method} {json.dumps(route)} "
+                f"client={client}{' forwarded_for=' + json.dumps(fwd) if fwd else ''} "
+                f"{' '.join(parts)}{extra}"
+            )
+            with contextlib.suppress(OSError, ValueError):
+                print(line, file=sys.stderr, flush=True)
+            if journal and refusal_log is not None:
+                fields = {h.lower().replace("-", "_"): v for h, v in seen.items()}
+                if dropped:
+                    fields["suppressed"] = str(dropped)
+                if fwd:
+                    fields["forwarded_for"] = fwd
+                try:
+                    refusal_log.append(
+                        "", route.lstrip("/") or "/", outcome="refused",
+                        reason="host not allowed", method=method, client=client, **fields,
+                    )  # fmt: skip
+                except OSError as exc:
+                    with contextlib.suppress(OSError, ValueError):
+                        print(f"hnx-status: access log not written: {exc}", file=sys.stderr)
 
         def _get(self) -> None:
             if not self._guard():
@@ -595,6 +716,7 @@ def make_server(
             client = self._client()
             if not host_allowed(self.headers.get("Host"), self.headers.get("Origin"), allowed):
                 # the same DNS-rebinding refusal as every route, and logged like every attempt
+                self._log_refusal(journal=False)  # (the access record is the approvals site's)
                 self._reply(*approvals.refuse(client, self.headers, 403, "host not allowed"))
                 return
             self._reply(*approvals.decide(document(), client, self.headers, self.rfile.read))

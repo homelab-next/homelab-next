@@ -14,6 +14,7 @@ from .gen import (
     libvirt,
     node_mirror,
     node_notify,
+    pve_host_firewall,
     registry_hosts,
     runtime_labels,
     tailscale_acl,
@@ -33,6 +34,7 @@ TARGETS: dict[str, Callable[[Fleet], dict[str, str]]] = {
     "tailscale-acl": tailscale_acl.render,
     "node-mirror": node_mirror.render,
     "node-notify": node_notify.render,
+    "pve-host-firewall": pve_host_firewall.render,
     "runtime-labels": runtime_labels.render,
 }
 

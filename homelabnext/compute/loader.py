@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from collections.abc import Mapping
@@ -105,7 +106,9 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
     holds (``capacity`` and ``pools``, checked against its guests by
     :func:`homelabnext.compute.validate.validate`), where it copies its guests' traffic for a
     network sensor (``mirror``, rendered by the ``node-mirror`` target), and where its own
-    notifications go (``notify``, rendered by the ``node-notify`` target)."""
+    notifications go (``notify``, rendered by the ``node-notify`` target), and which sources may
+    reach its own SSH, web and API ports (``host_firewall``, rendered by the ``pve-host-firewall``
+    target)."""
     p = Path(path)
     try:
         doc = yaml.load(sops.read_text(p), Loader=_UniqueKeyLoader)
@@ -131,6 +134,8 @@ def load_nodes(path: str | Path) -> dict[str, Mapping[str, Any]]:
             out[str(name)]["mirror"] = _mirror(p, name, spec["mirror"])
         if isinstance(spec, dict) and "notify" in spec:
             out[str(name)]["notify"] = _notify(p, name, spec["notify"])
+        if isinstance(spec, dict) and "host_firewall" in spec:
+            out[str(name)]["host_firewall"] = _host_firewall(p, name, spec["host_firewall"])
     return out
 
 
@@ -296,6 +301,117 @@ def _notify(p: Path, name: Any, raw: Any) -> dict[str, Any]:
                 "32), never a value"
             )
         out["credential"] = m["name"]
+    return out
+
+
+#: a ``host_firewall`` source: ``any``, ``zone:<id>`` or a CIDR (the guest firewall rules' forms)
+_HF_ZONE_RE = re.compile(r"^zone:[a-z][a-z0-9-]{0,31}\Z")
+_HF_KEYS = {
+    "management",
+    "icmp",
+    "console",
+    "spice",
+    "cluster",
+    "allow_any_management",
+    "rollback_minutes",
+}
+#: the management ports the lock-out guard is about: ``management.ssh`` and ``management.web``
+HF_MANAGEMENT = {"ssh": 22, "web": 8006}
+HF_ROLLBACK_DEFAULT = 5
+
+
+def hf_is_wildcard(source: str) -> bool:
+    """``any``, or a CIDR that matches every address of its family."""
+    if source == "any":
+        return True
+    try:
+        return ipaddress.ip_network(source, strict=False).prefixlen == 0
+    except ValueError:
+        return False
+
+
+def _hf_sources(where: str, raw: Any) -> list[str]:
+    if not isinstance(raw, list) or not raw:
+        raise ComputeError(f"{where}: a non-empty list of sources (any, zone:<id> or a CIDR)")
+    out: list[str] = []
+    for src in raw:
+        if not isinstance(src, str):
+            raise ComputeError(f"{where}: {src!r} is not a source (any, zone:<id> or a CIDR)")
+        if src == "any" or _HF_ZONE_RE.match(src):
+            norm = src
+        else:
+            try:
+                if "/" not in src:
+                    raise ValueError(src)
+                norm = str(ipaddress.ip_network(src, strict=True))
+            except ValueError:
+                raise ComputeError(
+                    f"{where}: {src!r} is not a source (any, zone:<id> or a network address "
+                    "with a prefix length, host bits clear)"
+                ) from None
+        if norm in out:
+            raise ComputeError(f"{where}: {norm!r} is listed twice")
+        out.append(norm)
+    return out
+
+
+def _host_firewall(p: Path, name: Any, raw: Any) -> dict[str, Any]:
+    """``{management: {ssh, web}, icmp, console, spice, cluster: {peers}, allow_any_management,
+    rollback_minutes}``: the sources the node's own ``host.fw`` lets in (target
+    ``pve-host-firewall``).  Everything else inbound is dropped by the datacenter policy.
+
+    ``management.ssh`` (port 22) and ``management.web`` (the web interface and API, 8006) are the
+    way back in: a node declaring neither is refused (the lock-out guard), and ``any`` or a /0 for
+    either, or for ``console``/``spice``, is refused unless ``allow_any_management: true``.
+    ``console`` is 5900-5999 (VNC), ``spice`` is 3128; each is allowed only when declared.
+    ``cluster.peers`` are the other nodes of a multi-node cluster (corosync, 5405-5412/udp); a
+    standalone node declares none.  ``rollback_minutes`` (default 5) is the apply script's dead
+    man's switch."""
+    where = f"{p}: node {name!r}: host_firewall"
+    if not isinstance(raw, dict) or set(raw) - _HF_KEYS:
+        raise ComputeError(f"{where}: takes {', '.join(sorted(_HF_KEYS))}")
+    out: dict[str, Any] = {}
+    mgmt = raw.get("management")
+    if not isinstance(mgmt, dict) or set(mgmt) - set(HF_MANAGEMENT):
+        raise ComputeError(f"{where}.management: takes ssh (port 22) and web (port 8006)")
+    out["management"] = {k: _hf_sources(f"{where}.management.{k}", v) for k, v in mgmt.items()}
+    if not out["management"]:
+        raise ComputeError(
+            f"{where}.management: declares no source for ssh (22) or web (8006); the node "
+            "would be unreachable once the file is on (lock-out guard)"
+        )
+    for key in ("icmp", "console", "spice"):
+        if key in raw:
+            out[key] = _hf_sources(f"{where}.{key}", raw[key])
+    if "cluster" in raw:
+        cl = raw["cluster"]
+        if not isinstance(cl, dict) or set(cl) != {"peers"}:
+            raise ComputeError(f"{where}.cluster: takes peers (the other nodes), nothing else")
+        peers = _hf_sources(f"{where}.cluster.peers", cl["peers"])
+        if any(hf_is_wildcard(x) for x in peers):
+            raise ComputeError(f"{where}.cluster.peers: the cluster's nodes, never any or /0")
+        out["cluster"] = {"peers": peers}
+    anyok = raw.get("allow_any_management", False)
+    if not isinstance(anyok, bool):
+        raise ComputeError(f"{where}.allow_any_management: true or false")
+    out["allow_any_management"] = anyok
+    mins = raw.get("rollback_minutes", HF_ROLLBACK_DEFAULT)
+    if isinstance(mins, bool) or not isinstance(mins, int) or not 1 <= mins <= 60:
+        raise ComputeError(f"{where}.rollback_minutes: a whole number of minutes from 1 to 60")
+    out["rollback_minutes"] = mins
+    if not anyok:
+        for key in ("ssh", "web"):
+            if any(hf_is_wildcard(x) for x in out["management"].get(key, [])):
+                raise ComputeError(
+                    f"{where}.management.{key}: any (or a /0) opens port {HF_MANAGEMENT[key]} to "
+                    "every address; name the sources, or set allow_any_management: true"
+                )
+        for key in ("console", "spice"):
+            if any(hf_is_wildcard(x) for x in out.get(key, [])):
+                raise ComputeError(
+                    f"{where}.{key}: any (or a /0) opens a console port to every address; name "
+                    "the sources, or set allow_any_management: true"
+                )
     return out
 
 
