@@ -60,6 +60,14 @@ Data lives under `garage_data_root` (`/var/lib/hnx-modules/garage`, `root:<gid>`
 | `restore` | stops the server, unpacks `garage_restore_source/garage.tar.gz` over the data root, restarts |
 | `upgrade` | validates a tag@digest bump of the same repository and major version and records it |
 
+## Network exposure
+
+The S3 API is signed, but the lake key it admits can read and delete the whole lake. Limit inbound
+3900 at the **Proxmox VM-level firewall rendered from the overlay's guest file** to the named
+consumers (the catalog and the query engine on the same guest, and the lake's writers): a firewall
+on the guest does not protect a Docker-published port. Cutover check: from a non-admitted host,
+`curl -m5 http://<store host>:3900/` must time out.
+
 ## Known limits
 
 - The exit copy is a crash-consistent archive of a running store: the metadata is snapshotted first

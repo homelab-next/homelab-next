@@ -22,6 +22,7 @@
       - >-
         [iceberg_rest_dir, iceberg_rest_data_root, iceberg_rest_export_dir]
         | reject('match', iceberg_rest_path_pattern) | list | length == 0
+      - iceberg_rest_image_archive == '' or iceberg_rest_image_archive is match(iceberg_rest_path_pattern)
       - iceberg_rest_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
     fail_msg: >-
       iceberg-rest: a registry id, an image pinned by tag and digest, the guest's IPv4 address to

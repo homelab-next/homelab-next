@@ -491,3 +491,33 @@ def test_against_the_base_from_a_subdirectory_a_dropped_name_is_still_seen(tmp_p
 
 def test_the_repository_passes_its_own_lint():
     assert run(ROOT) == 0
+
+
+def test_a_products_allow_entry_exempts_only_the_named_product_in_that_file(tmp_path):
+    vocab = {
+        "products": [{"name": "zorbix", "why": "no provider yet"}, {"name": "quuxd", "why": "x"}],
+        "allow": [
+            {"path": "stack/*.yml", "products": ["zorbix"], "reason": "the stack runs zorbix"},
+            {"path": "whole/*.yml", "reason": "every product is allowed here"},
+        ],
+    }
+    root = tree(
+        tmp_path,
+        {
+            "tools/product_names.yml": yaml.safe_dump(vocab),
+            "stack/a.yml": "image: zorbix\nsink: quuxd\n",
+            "whole/b.yml": "image: zorbix\nsink: quuxd\n",
+        },
+    )
+    pv = pl.vocabulary(root, None, root / pl.ROLES)
+    globs = [*pl.ALWAYS_ALLOWED, *(g for g, _ in pl.allowlist(root))]
+    hits = {k: dict(v) for k, v in pl.scan(root, pv, globs, pl.product_allowlist(root)).items()}
+    # zorbix is exempt in stack/a.yml, quuxd is still counted there; whole/b.yml is exempt for both
+    assert hits == {"stack/a.yml": {"quuxd": 1}}
+
+
+def test_a_products_allow_entry_needs_a_list_of_names(tmp_path):
+    vocab = {"products": [], "allow": [{"path": "x", "reason": "r", "products": "zorbix"}]}
+    root = tree(tmp_path, {"tools/product_names.yml": yaml.safe_dump(vocab)})
+    with pytest.raises(pl.LintError, match="list of names"):
+        pl.allowlist(root)

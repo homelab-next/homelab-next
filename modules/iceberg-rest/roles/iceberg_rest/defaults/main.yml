@@ -33,6 +33,12 @@ iceberg_rest_busy_timeout_ms: 30000
 iceberg_rest_mem_limit: 2g
 # the JVM's share of the container's memory limit
 iceberg_rest_heap_percent: 60
+# optional: a local `docker save` of the pinned image (a path on the guest). The digest has no tag
+# upstream and may leave the registry; when the daemon lacks it, the role loads this archive and
+# refuses to go on if the digest is still missing. Empty: pull from the registry as usual. The
+# daemon must keep image digests across save and load (the containerd image store, the default of
+# current Docker).
+iceberg_rest_image_archive: ""
 iceberg_rest_start: true
 iceberg_rest_validate_with_docker: true
 iceberg_rest_health_timeout: 10

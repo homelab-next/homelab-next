@@ -236,6 +236,11 @@ argument_specs:
         type: str
         description: Group of the maintenance script, state, credentials and units.
         default: root
+      trino_access_unrestricted:
+        type: bool
+        description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
+          it an empty trino_access_rules_src is refused.'
+        default: false
   readiness:
     short_description: Fail unless the container engine is ready, every credential resolves in its form
       and the catalog and the object store answer.
@@ -517,6 +522,11 @@ argument_specs:
         type: str
         description: The systemctl command.
         default: systemctl
+      trino_access_unrestricted:
+        type: bool
+        description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
+          it an empty trino_access_rules_src is refused.'
+        default: false
   backup:
     short_description: Name the data root for the backup (the engine is stateless).
     options:
@@ -732,6 +742,11 @@ argument_specs:
         type: str
         description: The systemctl command.
         default: systemctl
+      trino_access_unrestricted:
+        type: bool
+        description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
+          it an empty trino_access_rules_src is refused.'
+        default: false
   restore:
     short_description: 'Nothing to restore: the engine is stateless.'
     options:
@@ -947,6 +962,11 @@ argument_specs:
         type: str
         description: The systemctl command.
         default: systemctl
+      trino_access_unrestricted:
+        type: bool
+        description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
+          it an empty trino_access_rules_src is refused.'
+        default: false
   upgrade:
     short_description: Validate an image bump (tag and digest) and record it as pending.
     options:
@@ -1166,6 +1186,11 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> to move to.
         required: true
+      trino_access_unrestricted:
+        type: bool
+        description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
+          it an empty trino_access_rules_src is refused.'
+        default: false
   export:
     short_description: 'Nothing to export: the engine is stateless.'
     options:
@@ -1381,3 +1406,8 @@ argument_specs:
         type: str
         description: The systemctl command.
         default: systemctl
+      trino_access_unrestricted:
+        type: bool
+        description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
+          it an empty trino_access_rules_src is refused.'
+        default: false

@@ -20,7 +20,10 @@
 
 For each reference row, ``SELECT count(*) FROM <catalog>."<schema>"."<table>" FOR VERSION AS OF
 <snapshot_id>`` is run on the engine under test and compared with the reference. A count at a
-snapshot id is immutable, so a writer cannot make it drift: a difference is the copy's. A snapshot
+snapshot id is immutable, so a writer cannot make it drift: a difference is the copy's. Nothing
+here checks that the reference was taken after the source's writers were frozen and their final
+delta copied: the cutover (Task 3.4) must freeze the writers of the kept tables, take the final
+delta, and only then produce the reference TSV this tool is given. A snapshot
 the copy does not hold (the old lake's archive keeps the CURRENT snapshot only; older ones are
 intentionally not restorable) is an ERROR naming the engine's message, never a pass.
 

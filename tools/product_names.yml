@@ -166,12 +166,15 @@ allow:
   - path: "tools/tests/test_lake_verify.py"
     reason: "the tests of tools/migrate/lake_verify.py against a stand-in for the query engine's statement protocol"
   - path: "compose/lab-in-a-box/.env.example"
+    products: [garage]
     reason: "the lab-in-a-box's object store is Garage: its key and bucket settings (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "compose/lab-in-a-box/config/garage.toml"
     reason: "the lab-in-a-box's object store configuration (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "compose/lab-in-a-box/docker-compose.yml"
+    products: [garage]
     reason: "the lab-in-a-box's compose stack runs Garage as its object store (image pinned by digest, its settings, its aliases) (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "tests/agent/test_agent_knowledge.py"
+    products: [garage]
     reason: "lesson tags and the knowledge graph's product nodes, which resolve a lesson tagged with the object store's name to its product (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "tests/compose/test_lab_init.py"
     reason: "the lab-in-a-box initialiser's object-store step against a loopback fake of the product's admin API v2 (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
@@ -180,8 +183,10 @@ allow:
   - path: "tests/conform/fake_s3.py"
     reason: "a loopback S3 server shaped like the product's path-style API and its v2 signature rules, for the adapter tests (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "tests/conform/test_conform_lab_adapters.py"
+    products: [garage]
     reason: "the lab adapters' tests, which build the object-store adapter the lab-in-a-box runs against the product (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "tests/conform/test_s3_adapter.py"
     reason: "the S3 adapter's tests against a fake of the product's signature behaviour (v1 and v2) (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
   - path: "tests/graph/test_graph.py"
+    products: [garage]
     reason: "the knowledge graph's image-to-product mapping, whose examples are the lab's images (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"

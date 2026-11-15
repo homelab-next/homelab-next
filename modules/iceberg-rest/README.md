@@ -58,7 +58,9 @@ The archived catalog (`iceberg_catalog.db`, a SQLite online backup taken after t
 restored with the **restore hook** from an export directory holding it and a `listing.jsonl`
 (`key`, `size`, `sha256`): the source is checked without writing, the server is stopped, the file
 is installed as the container's user's and the server started again. Load the bucket first (the
-catalog points at objects in it). `tools/migrate/lake_verify.py` then compares per-table counts.
+catalog points at objects in it). At the final cutover (Task 3.4) freeze the old writers of the kept
+tables and take the final delta **before** the reference counts are produced: the verification
+pins counts to snapshot ids, so it cannot tell a reference taken while writers were still running. `tools/migrate/lake_verify.py` then compares per-table counts.
 
 ## Migration
 
@@ -80,9 +82,39 @@ from its metadata file in the bucket. This module does not write Parquet itself.
 | `restore` | checks an export, stops the server, installs the file, starts it again |
 | `upgrade` | validates a tag@digest bump of the same repository and records it |
 
+## The catalog has no sign-in: the network is the only control
+
+`auth: none`. Anything that can reach port 8181 can create, drop and purge tables, register
+arbitrary metadata locations and write the bucket with the catalog's object-store key: that is,
+destroy the lake. So these are hard requirements of the deployment, not advice:
+
+1. **The control is the Proxmox VM-level firewall rendered from the overlay's guest file** (the
+   NIC firewall of the guest). A firewall on the guest itself does **not** protect this port:
+   Docker publishes the port through its own NAT chain, which bypasses the guest's `INPUT` chain
+   (ufw, nftables input rules).
+2. Inbound 8181 is limited to **named consumers**: the query engine (same guest) and the lake's
+   writers (the pipeline flows, the log-lake writers). Nothing else, and no public route, ever.
+3. The object store's port (3900) is limited the same way, to the same named consumers.
+
+**Negative probe, part of the cutover verification (and of any change to the guest's rules):** from
+a host that is *not* on the allow list, `curl -m5 http://<catalog host>:8181/v1/config` must **time
+out** (not refuse, not answer); the same for `:3900`. From an admitted host it answers 200. A
+catalog that answers a non-admitted host is a failed cutover, whatever else passed.
+
+## Preserving the exact image
+
+The digest has no tag upstream, so it can be garbage-collected from the registry, and the build that
+wrote the SQLite file must be the one that reads it. Keep a `docker save` of this exact digest
+(`docker save apache/iceberg-rest-fixture@sha256:db8de90b... | zstd -o <name>.tar.zst`) in the
+PBS-backed backup directory, with its sha256, and set `iceberg_rest_image_archive` to its path on
+the guest: when the daemon lacks the digest, the role runs `docker load -i` on it and refuses to go
+on if the digest is still missing (the daemon must keep image digests across save and load, as the
+containerd image store does). Cutover step: confirm the archive's sha256, then `docker load` it on
+the guest before the first run. The image has no CVE feed; see
+[the follow-ups](../../docs/modules/follow-ups.md).
+
 ## Known limits
 
 - Single writer. Concurrent committers queue on SQLite's lock for up to the busy timeout; a commit
   that waits longer fails. The lake's writers must keep their commit rate low (LL-330: a timer that
   fires every N minutes regardless of new data is what floods snapshots).
-- No sign-in: the guest firewall admits only the query engine and the lake's writers.

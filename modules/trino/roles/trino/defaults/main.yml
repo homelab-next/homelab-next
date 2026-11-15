@@ -50,6 +50,11 @@ trino_orphan_min_retention: 3d
 # to install; empty means no access rules file. The maintenance user must be allowed ALTER TABLE
 # EXECUTE on the lake's tables in it.
 trino_access_rules_src: ""
+# Without access rules every signed-in reader may drop and alter tables, so the role REFUSES an
+# empty trino_access_rules_src unless the site says, on purpose, that the engine is unrestricted.
+# files/lake-access.example.json is the shape to start from: the maintenance user owns and
+# changes the lake (ALTER TABLE EXECUTE needs the table's ownership), every other user reads only.
+trino_access_unrestricted: false
 # the engine's own address for the hooks (scheme://host:port): empty resolves the row of
 # trino_logical_id from the registry (the name its certificate is issued for)
 trino_self_url: ""

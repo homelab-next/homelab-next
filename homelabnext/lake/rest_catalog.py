@@ -56,8 +56,9 @@ class RestCatalog:
         self._timeout = timeout
         self.max_bytes = max_bytes
         self._prefix: str | None = None
-        #: a catalog whose config names no warehouse prefix (the Apache REST catalog serves
-        #: ``/v1/namespaces`` directly) is an error unless the caller says that is its shape
+        #: set per target, never as a default: a catalog whose config names no warehouse prefix
+        #: (the Apache REST catalog serves ``/v1/namespaces`` directly) is an error unless the
+        #: caller says that is its shape
         self._prefix_optional = prefix_optional
         #: how requests are sent: by default same-origin redirects only, and only for GET/HEAD
         #: (writes follow none); a caller that sends a credential passes

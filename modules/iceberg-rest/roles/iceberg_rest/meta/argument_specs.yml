@@ -97,6 +97,11 @@ argument_specs:
         type: int
         description: Seconds each health probe waits.
         default: 10
+      iceberg_rest_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: pull.'
+        default: ''
   readiness:
     short_description: Fail unless the container engine is ready, both credentials resolve in their form
       and the object store answers.
@@ -207,6 +212,11 @@ argument_specs:
         type: int
         description: Seconds each health probe waits.
         default: 10
+      iceberg_rest_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: pull.'
+        default: ''
   backup:
     short_description: Copy the catalog file consistently, then name the data root for the backup.
     options:
@@ -291,6 +301,11 @@ argument_specs:
         type: int
         description: Seconds each health probe waits.
         default: 10
+      iceberg_rest_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: pull.'
+        default: ''
   restore:
     short_description: Check an export (listing, size, sha256, integrity) and restore the catalog file
       from it, the server stopped meanwhile.
@@ -380,6 +395,11 @@ argument_specs:
         type: path
         description: Directory holding an export (listing.jsonl and the catalog file it lists).
         required: true
+      iceberg_rest_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: pull.'
+        default: ''
   upgrade:
     short_description: Validate an image bump (tag and digest) and record it as pending.
     options:
@@ -468,6 +488,11 @@ argument_specs:
         type: str
         description: repository:tag@sha256:<digest> to move to.
         required: true
+      iceberg_rest_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: pull.'
+        default: ''
   export:
     short_description: Write the open-format exit copy (object-tree) of the catalog file to the export
       directory.
@@ -553,3 +578,8 @@ argument_specs:
         type: int
         description: Seconds each health probe waits.
         default: 10
+      iceberg_rest_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest; empty: pull.'
+        default: ''

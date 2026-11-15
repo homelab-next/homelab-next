@@ -19,6 +19,10 @@
         AWS_SECRET_ACCESS_KEY: "{{ lookup('hnx_secret', iceberg_rest_signing_ref) }}"
   no_log: true
 
+- name: Load the pinned image from the local archive when the daemon lacks it
+  ansible.builtin.include_tasks: image.yml
+  when: iceberg_rest_image_archive != ''
+
 - name: Render and start the catalog
   ansible.builtin.include_role:
     name: compose_app

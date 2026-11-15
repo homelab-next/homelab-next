@@ -255,6 +255,46 @@ def test_catalog_refuses_a_registry_row_that_is_not_an_object_store(tmp_path):
     assert r.returncode != 0 and "not an object-store" in r.stdout + r.stderr
 
 
+def _fake_docker(tmp_path: Path, *, has_image: bool) -> dict:
+    """A docker that knows the pinned digest only when has_image (or after `docker load`) and
+    logs its calls."""
+    bindir = tmp_path / "dbin"
+    bindir.mkdir(exist_ok=True)
+    flag, log = tmp_path / "image-present", tmp_path / "docker.log"
+    if has_image:
+        flag.touch()
+    fake(
+        bindir / "docker",
+        "import os, sys\n"
+        f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        f"flag = {str(flag)!r}\n"
+        "if sys.argv[1:3] == ['image', 'inspect']:\n    sys.exit(0 if os.path.exists(flag) else 1)\n"
+        "if sys.argv[1] == 'load':\n    open(flag, 'w').close()\n",
+    )
+    return {"PATH": f"{bindir}:{os.environ['PATH']}"}
+
+
+def test_catalog_loads_the_pinned_image_from_the_archive_only_when_the_daemon_lacks_it(tmp_path):
+    archive = tmp_path / "image.tar.zst"
+    archive.write_bytes(b"not read by the fake")
+    v = catalog_vars(tmp_path, iceberg_rest_image_archive=str(archive))
+    env = {**CATALOG_SECRETS, **_fake_docker(tmp_path, has_image=False)}
+    assert run_role(tmp_path, CATALOG, "main", v, env=env).returncode == 0
+    log = (tmp_path / "docker.log").read_text()
+    assert f"load -i {archive}" in log
+    (tmp_path / "docker.log").unlink()
+    assert run_role(tmp_path, CATALOG, "main", v, env=env).returncode == 0  # present now: no load
+    assert "load" not in (tmp_path / "docker.log").read_text()
+
+
+def test_catalog_refuses_when_the_archive_is_missing_or_does_not_bring_the_digest(tmp_path):
+    v = catalog_vars(tmp_path, iceberg_rest_image_archive=str(tmp_path / "absent.tar.zst"))
+    env = {**CATALOG_SECRETS, **_fake_docker(tmp_path, has_image=False)}
+    r = run_role(tmp_path, CATALOG, "main", v, env=env)
+    assert r.returncode != 0 and "not a regular file" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
 def _catalog_db(path: Path) -> None:
     c = sqlite3.connect(path)
     c.execute("CREATE TABLE iceberg_tables (name TEXT)")
@@ -378,6 +418,7 @@ def trino_vars(tmp: Path, **kw) -> dict:
         "trino_s3_url": S3_URL,
         "trino_self_url": SELF_URL,
         "trino_notify_url": NOTIFY_URL,
+        "trino_access_unrestricted": True,
         "trino_start": False,
         "trino_validate_with_docker": False,
         "trino_maintenance_script": str(tmp / "libexec" / "hnx-lake-maintenance"),
@@ -515,6 +556,29 @@ def test_trino_notify_token_over_plain_http_needs_the_site_opt_in(tmp_path):
                   trino_vars(tmp_path, trino_notify_url=plain, trino_notify_allow_plain_http=True),
                   env=TRINO_SECRETS)  # fmt: skip
     assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def test_trino_refuses_to_run_without_access_rules_unless_unrestricted_is_said(tmp_path):
+    v = trino_vars(tmp_path, trino_access_unrestricted=False)
+    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert r.returncode != 0 and "trino_access_unrestricted" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+    rules = Path(TRINO) / "files" / "lake-access.example.json"
+    ok = run_role(
+        tmp_path, TRINO, "main", {**v, "trino_access_rules_src": str(rules)}, env=TRINO_SECRETS
+    )
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def test_the_shipped_example_rules_let_only_the_maintenance_user_change_the_lake():
+    rules = json.loads((Path(TRINO) / "files" / "lake-access.example.json").read_text())
+    tables = rules["tables"]
+    assert (
+        tables[0]["user"] == "maintenance" and "OWNERSHIP" in tables[0]["privileges"]
+    )  # ALTER TABLE EXECUTE
+    assert tables[-1] == {"privileges": ["SELECT"]}  # everyone else reads only
+    assert {"catalog": "iceberg", "allow": "read-only"} in rules["catalogs"]
+    assert {"owner": False} in rules["schemas"]
 
 
 def test_trino_installs_the_access_rules_when_given_and_removes_them_when_not(tmp_path):

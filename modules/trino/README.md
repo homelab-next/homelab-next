@@ -29,9 +29,16 @@ a real host, address, VM id or secret value.
 - **Every reader signs in** with a password: the file authenticator over a password file
   (`secret:trino/password-db`, one `user:bcrypt` line per reader, the maintenance user included,
   reloaded every 5 s), the internal-communication shared secret (`secret:trino/internal-secret`).
-  An optional file-based access-control rules file (`trino_access_rules_src`, the rendered
-  `lake-access.json`) is installed when given; the maintenance user must be allowed `ALTER TABLE
-  EXECUTE` in it.
+  **Access rules are required**: the role refuses an empty `trino_access_rules_src` unless the site
+  sets `trino_access_unrestricted: true` on purpose (otherwise every signed-in user may drop and
+  alter tables). `files/lake-access.example.json` is the shape to start from: the `maintenance`
+  user owns the lake's schemas and tables (table procedures such as `ALTER TABLE ... EXECUTE`
+  need the table's ownership) and every other user is `SELECT` only on the `iceberg` catalog, with
+  no access to `system`. Add a rule for each writer user (INSERT, DELETE; UPDATE if it needs it)
+  before it writes. Checked against the real engine: a reader is refused INSERT and DROP and the
+  `system` catalog. One limit: the engine's file rules do not govern table procedures, so a
+  reader can still run `ALTER TABLE ... EXECUTE` (the retention floors below are what bound the
+  damage; ADR-0033's row filters refuse it on filtered tables).
 - **The `iceberg` catalog** (the name is fixed: the lake's writers say `iceberg.<schema>.<table>`)
   is the REST catalog (`iceberg_rest` row) over the S3 object store, path-style, region `garage`,
   warehouse `s3://iceberg-warehouse/`; the key pair is read from the container's environment

@@ -31,6 +31,8 @@
         [trino_dir, trino_data_root, trino_maintenance_state_dir, trino_maintenance_env_file, trino_maintenance_script]
         | reject('match', trino_path_pattern) | list | length == 0
       - trino_access_rules_src == '' or trino_access_rules_src is match(trino_path_pattern)
+      # no rules file is a decision, not a default: it needs trino_access_unrestricted: true
+      - trino_access_rules_src != '' or trino_access_unrestricted | bool
       # memory: the per-query bound and the engine's headroom (30 percent of the heap) fit the heap, and
       # the container's limit leaves two GB over the heap for code cache, metaspace and threads
       - trino_heap is match(trino_heap_pattern)
@@ -59,7 +61,8 @@
       trino: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish on
       (not all interfaces), a port, a container uid and gid of 1000 or more, the catalog name iceberg,
       a warehouse like s3://bucket/, nine distinct secret: references, absolute canonical paths,
-      a heap like 14G with a per-query bound of at most 70 percent of it and a container limit at
+      an access-rules file (trino_access_rules_src; files/lake-access.example.json is the shape) or
+      an explicit trino_access_unrestricted: true, a heap like 14G with a per-query bound of at most 70 percent of it and a container limit at
       least 2 GB above it, retention of whole days not below the engine's floors, a retain-last of
       1 to 1000 and a notify topic, priority and schedule
   tags: [health, backup, restore, export, upgrade]

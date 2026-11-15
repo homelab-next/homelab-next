@@ -2,8 +2,11 @@
 # The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
 # instance the site selects; version is product.version, host the module's host role (docs/modules/
 # registry-rows.md). Internal only, no public route. The catalog server has no sign-in of its own
-# (auth: none): the guest's firewall admits only the query engine and the lake's writers, and the
-# one SQLite file allows a single writer at a time (busy_timeout in the role).
+# (auth: none), so the network is the only control and it is a HARD REQUIREMENT: the Proxmox
+# VM-level (NIC) firewall rendered from the overlay's guest file admits only the query engine and the
+# lake's writers to 8181. A firewall on the guest does not help: Docker's published ports bypass
+# its INPUT chain. From a non-admitted host, 8181 must time out (README, "The catalog has no
+# sign-in"). The one SQLite file allows a single writer at a time (busy_timeout in the role).
 services:
   lake-catalog:
     capability: lake-catalog
