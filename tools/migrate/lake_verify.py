@@ -253,7 +253,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("lake_verify: the reference lists no table", file=sys.stderr)
         return 2
     if a.password_env not in os.environ or not os.environ[a.password_env]:
-        print("lake_verify: the variable named by --password-env is not set or is empty", file=sys.stderr)
+        print(
+            "lake_verify: the variable named by --password-env is not set or is empty",
+            file=sys.stderr,
+        )
         return 2
     parts = urllib.parse.urlsplit(a.url)
     if parts.scheme != "https" and not (parts.scheme == "http" and is_loopback(parts.hostname)):
