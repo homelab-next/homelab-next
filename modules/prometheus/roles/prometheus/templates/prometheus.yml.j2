@@ -16,12 +16,12 @@ storage:
 rule_files:
   - {{ prometheus_container_config_dir }}/rules.yml
 
-# one job per service row with a metrics block, generated from the registry (do not edit)
+# one job per service row with a metrics block, rendered from the registry by the role (it overwrites the file)
 scrape_config_files:
   - {{ prometheus_container_config_dir }}/{{ prometheus_generated_dir }}/scrape_configs.yml
 
 scrape_configs:
-  # the host exporter on every registry host, generated from the registry (do not edit)
+  # the host exporter on every registry host, rendered from the registry by the role (it overwrites the file)
   - job_name: node
     file_sd_configs:
       - files:
