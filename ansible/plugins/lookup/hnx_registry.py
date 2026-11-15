@@ -12,7 +12,19 @@ by the full registry resolver behind the same lookup name and arguments.
     services:
       <logical-id>: {host: <fqdn>, port: <int>, scheme: <name>, capability: <name>}
 
-``scheme`` is free text (``https``, ``http``, ``tcp``, ``udp``, ``ldaps``, ``ssh`` in the example
+A registry in the platform shape (the one ``homelabnext.registry.model`` loads: a ``lab:`` block,
+a ``hosts:`` map, and rows carrying ``protocol:`` and ``tls:`` instead of ``scheme:``) is read the
+way the model reads it, because a row's ``host`` there is a logical host id, never an address:
+
+* the scheme is ``Service.scheme``: ``protocol: http`` is ``https`` only with ``tls`` internal,
+  public or mtls, ``https`` is always ``https``, any other protocol is its own scheme;
+* the host is the name the row answers by (``Registry.address_of``, ADR-0002), which is
+  ``<capability>.<svc_label>.<domain>`` for a primary and ``<row>.<svc_label>.<domain>`` for an
+  ``eval`` or ``retiring`` row; a ``legacy`` row answers by no name and is refused.  A client names
+  the alias, never an address, so a cutover changes DNS only.  The row's host id must still be in
+  ``hosts:``, or the row is refused by name.
+
+``scheme`` (stub shape) is free text (``https``, ``http``, ``tcp``, ``udp``, ``ldaps``, ``ssh`` in the example
 registry) and defaults to ``https`` in a url; ``host`` and ``port`` are required for ``url`` and
 for the field asked, and a row without one is refused by name.
 
@@ -42,6 +54,41 @@ options:
 """
 
 
+def _platform_scheme(row: dict) -> str:
+    """``homelabnext.registry.model.Service.scheme``, restated so the plugin needs only PyYAML
+    (a parity test pins the two together)."""
+    protocol = row["protocol"]
+    if protocol in ("http", "https"):
+        upgraded = protocol == "https" or row.get("tls") in ("internal", "public", "mtls")
+        return "https" if upgraded else "http"
+    return protocol
+
+
+def _platform_name(term: str, row: dict, doc: dict) -> str:
+    """The name the row answers by (``Registry.address_of``), after checking its host id."""
+    for key in ("protocol", "host", "capability"):
+        if row.get(key) in (None, ""):
+            raise AnsibleLookupError(f"hnx_registry: service '{term}' has no {key}")
+    if row["host"] not in (doc.get("hosts") or {}):
+        raise AnsibleLookupError(
+            f"hnx_registry: service '{term}' names host '{row['host']}', which is not in the "
+            "registry's hosts map"
+        )
+    lab = doc.get("lab") or {}
+    if not lab.get("domain"):
+        raise AnsibleLookupError("hnx_registry: the registry has no lab.domain")
+    tier = (row.get("standing") or {}).get("tier", "primary")
+    if tier == "primary":
+        label = row["capability"]
+    elif tier in ("eval", "retiring"):
+        label = term
+    else:
+        raise AnsibleLookupError(
+            f"hnx_registry: service '{term}' is a {tier} row: it answers by no name"
+        )
+    return f"{label}.{lab.get('svc_label', 'svc')}.{lab['domain']}"
+
+
 class LookupModule(LookupBase):
     def run(self, terms, variables=None, **kwargs):
         field = kwargs.get("field", "url")
@@ -58,7 +105,8 @@ class LookupModule(LookupBase):
             )
         try:
             with open(path, encoding="utf-8") as fh:
-                services = (yaml.safe_load(fh) or {}).get("services", {})
+                doc = yaml.safe_load(fh) or {}
+            services = doc.get("services", {})
         except OSError as exc:
             raise AnsibleLookupError(f"hnx_registry: cannot read registry: {exc}") from exc
         out = []
@@ -70,6 +118,15 @@ class LookupModule(LookupBase):
                 raise AnsibleLookupError(f"hnx_registry: service '{term}' is not a mapping")
             if field == "capability":
                 out.append(str(row.get("capability", "")))
+                continue
+            if "hosts" in doc and field in ("url", "host"):  # the platform shape
+                name = _platform_name(term, row, doc)
+                if row.get("port") in (None, ""):
+                    raise AnsibleLookupError(f"hnx_registry: service '{term}' has no port")
+                if field == "host":
+                    out.append(name)
+                else:
+                    out.append(f"{_platform_scheme(row)}://{name}:{row['port']}")
                 continue
             needs = ("host", "port") if field == "url" else (field,)
             missing = [k for k in needs if row.get(k) in (None, "")]

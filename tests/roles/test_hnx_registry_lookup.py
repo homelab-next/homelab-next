@@ -89,3 +89,76 @@ def test_a_templated_registry_path_is_resolved(tmp_path):
     loader = DataLoader()
     plugin = mod.LookupModule(loader=loader, templar=Templar(loader=loader, variables=variables))
     assert plugin.run(["bus"], variables, field="port") == [4222]
+
+
+# ------------------------------------------------ the platform shape (protocol/tls, a hosts map)
+PLATFORM = """\
+lab: {name: demo, domain: example.internal, svc_label: svc, owner: platform-team}
+hosts:
+  hnx-apps-01: {zone: mgmt}
+services:
+  alert: {capability: notify, host: hnx-apps-01, protocol: http, port: 80, tls: none}
+  alert-tls: {capability: notify-tls, host: hnx-apps-01, protocol: http, port: 443, tls: internal}
+  gateway: {capability: llm-gateway, host: hnx-apps-01, protocol: https, port: 4000, tls: public}
+  bus: {capability: events, host: hnx-apps-01, protocol: nats, port: 4222, tls: none}
+  alert-eval: {capability: notify, host: hnx-apps-01, protocol: http, port: 8080, tls: none,
+              standing: {tier: eval, until: "2027-01-01", why: trial}}
+  alert-old: {capability: notify, host: hnx-apps-01, protocol: http, port: 81, tls: none,
+             standing: {tier: legacy, until: "2027-01-01", why: old lab}}
+  lost: {capability: lost, host: hnx-gone-01, protocol: http, port: 80, tls: none}
+"""
+
+
+@pytest.fixture
+def platform(tmp_path):
+    spec = importlib.util.spec_from_file_location("hnx_registry", PLUGIN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    reg = tmp_path / "platform.yml"
+    reg.write_text(PLATFORM)
+    plugin = mod.LookupModule()
+    return lambda terms, **kw: plugin.run(terms, {"hnx_registry_file": str(reg)}, **kw)
+
+
+def test_a_platform_row_takes_its_scheme_from_protocol_and_tls_and_names_its_alias(platform):
+    # protocol http + tls none: plain http, on the alias a client resolves, never the host id
+    zone = "svc.example.internal"
+    want = {  # row: (scheme, the label it answers by, port)
+        "alert": ("http", "notify", 80),
+        "alert-tls": ("https", "notify-tls", 443),
+        "gateway": ("https", "llm-gateway", 4000),
+        "bus": ("nats", "events", 4222),
+        "alert-eval": ("http", "alert-eval", 8080),
+    }
+    for row, (scheme, label, port) in want.items():
+        assert platform([row]) == [f"{scheme}://{label}.{zone}:{port}"], row
+    assert platform(["alert"], field="host") == ["notify.svc.example.internal"]
+    assert platform(["alert"], field="port") == [80]
+
+
+@pytest.mark.parametrize(
+    ("terms", "message"),
+    [
+        (["nope"], "unknown service id 'nope'"),
+        (["lost"], "names host 'hnx-gone-01', which is not in the registry's hosts map"),
+        (["alert-old"], "is a legacy row: it answers by no name"),
+    ],
+)
+def test_a_platform_row_with_an_unknown_host_or_no_name_is_refused(platform, terms, message):
+    with pytest.raises(AnsibleLookupError, match=message):
+        platform(terms)
+
+
+def test_the_scheme_agrees_with_the_registry_model_for_every_protocol_and_tls():
+    """The plugin restates ``Service.scheme`` so it needs only PyYAML; this pins the two."""
+    model = pytest.importorskip("homelabnext.registry.model")
+    spec = importlib.util.spec_from_file_location("hnx_registry", PLUGIN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for protocol in ("http", "https", "grpc", "tcp", "udp", "postgres", "nats", "dns", "ssh"):
+        for tls in ("none", "internal", "public", "mtls"):
+            svc = model.Service(
+                name="x", capability="x", host="h", protocol=protocol, port=1,
+                owner="o", version="1", tls=tls,
+            )  # fmt: skip
+            assert mod._platform_scheme({"protocol": protocol, "tls": tls}) == svc.scheme
