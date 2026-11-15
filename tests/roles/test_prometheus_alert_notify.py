@@ -288,6 +288,7 @@ def test_the_units_run_the_script_report_their_runs_and_tick_on_the_schedule():
     env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
     values = {
         "prometheus_alert_schedule": "*-*-* *:*:00 UTC",
+        "prometheus_state_dir": "/var/lib/homelabnext/prometheus",
         "prometheus_last_run_dir": "/var/lib/homelabnext/last-run",
         "prometheus_last_run_group": "root",
     }
