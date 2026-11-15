@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# expect: declares no source
+nodes:
+  hv-a:
+    host_firewall:
+      management: {}

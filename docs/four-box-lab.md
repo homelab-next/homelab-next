@@ -83,7 +83,7 @@ Guest-to-internet traffic therefore arrives on both NICs. What neither copy show
 hnx site validate examples/four-box-lab/site.yml
 hnx guests validate examples/four-box-lab/guests --site examples/four-box-lab/site.yml
 hnx site render examples/four-box-lab/site.yml --adapter unifi --out /tmp/four-box/site
-for t in terraform-proxmox cloudinit firewall-rules inventory backup-jobs node-mirror node-notify; do
+for t in terraform-proxmox cloudinit firewall-rules inventory backup-jobs node-mirror node-notify pve-host-firewall; do
   hnx guests render examples/four-box-lab/guests --site examples/four-box-lab/site.yml \
     --target "$t" --out "/tmp/four-box/$t"
 done

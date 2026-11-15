@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# expect: listed twice
+nodes:
+  hv-a:
+    host_firewall:
+      management: {ssh: [zone:mgmt, zone:mgmt]}

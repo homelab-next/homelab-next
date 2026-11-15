@@ -6,7 +6,9 @@
 # node-mirror`). Replace the NIC and bridge names with the host's own (`ip -br link`). Its own
 # notifications (a failed backup job, fencing, mail to root) go to a notify topic, not to a
 # mailbox with no relay (`hnx guests render --target node-notify`); replace the URL with your
-# server's.
+# server's. Its own firewall (`host.fw`, with a timed-rollback apply script) lets in SSH and the web
+# interface from the mgmt zone only (`--target pve-host-firewall`); add the controller's address
+# if it is not in mgmt.
 nodes:
   main-1:
     firewall: enabled
@@ -22,3 +24,8 @@ nodes:
       bulk: {size_gb: 27000, media: hdd}
     mirror: {to: enp65s0f1, bridges: [vmbr0]}
     notify: {url: "https://notify.example.org/", topic: node-alerts}
+    host_firewall:
+      management:
+        ssh: [zone:mgmt]
+        web: [zone:mgmt]
+      icmp: [zone:mgmt]

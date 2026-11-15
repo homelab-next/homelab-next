@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# expect: opens port 8006 to every address
+nodes:
+  hv-a:
+    host_firewall:
+      management: {web: [0.0.0.0/0]}

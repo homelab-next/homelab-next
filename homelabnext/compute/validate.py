@@ -754,6 +754,7 @@ def validate(fleet: Fleet, *, require_baselines: bool = True) -> list[Problem]:
         out += _metadata_allows(g, fleet)
     out += _power(fleet)
     out += _capacity(fleet)
+    out += _host_firewall(fleet)
     return out
 
 
@@ -855,6 +856,24 @@ def usage_lines(fleet: Fleet) -> list[str]:
             parts.append(f"{pool} {u['disk_gb'].get(pool, 0)}/{ps['size_gb']} GB")
         lines.append(f"{node}: " + ", ".join(parts))
     return lines
+
+
+def _host_firewall(fleet: Fleet) -> list[Problem]:
+    """A node's ``host_firewall`` must render: its zones exist, no rule is written twice, and the
+    node keeps a way in (the render refuses otherwise)."""
+    from homelabnext.generators.safe import GeneratorRefusal
+
+    from .gen import pve_host_firewall
+
+    out = []
+    for node in sorted(fleet.nodes):
+        if "host_firewall" not in fleet.nodes[node]:
+            continue
+        try:
+            pve_host_firewall.node_files(fleet, node)
+        except (ComputeError, GeneratorRefusal) as exc:
+            out.append(Problem(f"_nodes.yml {node}", str(exc)))
+    return out
 
 
 def _power(fleet: Fleet) -> list[Problem]:

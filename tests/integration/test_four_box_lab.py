@@ -95,6 +95,16 @@ def test_main_1_sends_its_notifications_to_the_topic(fleet):
     assert script.index("/test") < script.index("--disable 1")
 
 
+def test_main_1_lets_ssh_and_the_web_interface_in_from_mgmt_only(fleet):
+    out = render(fleet, "pve-host-firewall")
+    rules = [
+        line for line in out["nodes/main-1/host.fw"].splitlines() if line.startswith("IN ACCEPT")
+    ]
+    assert rules and all(" -source " in line for line in rules)  # no rule without a source
+    ports = {line.split("-dport ")[1].split()[0] for line in rules if "-dport" in line}
+    assert ports == {"22", "8006"}
+
+
 def test_every_rendered_guest_lets_ssh_in_from_mgmt_only(fleet):
     files = render(fleet, "firewall-rules")
     rules = {k: v for k, v in files.items() if k.endswith(".fw")}
