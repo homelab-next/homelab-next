@@ -40,8 +40,9 @@ names a real host, address, VM id or secret value; those live only in the privat
   | Alert | Fires when | For | Severity |
   |---|---|---|---|
   | `TargetDown` | `up == 0` | 10m | critical |
+  | `NoTargets` | no host target is scraped at all (the generated list is empty or was not loaded) | 10m | critical |
   | `DiskAlmostFull` | a filesystem is over 90 % used | 10m | warning |
-  | `FilesystemReadOnly` | `node_filesystem_readonly == 1` | 2m | critical |
+  | `FilesystemReadOnly` | `node_filesystem_readonly == 1`, less the mount points of `prometheus_alert_readonly_ignore` (deliberate read-only mounts) | 2m | critical |
   | `MemoryPressure` | under 10 % of memory available | 10m | warning |
 
   The rules are proved with the product's own `promtool test rules` against series that should
@@ -58,6 +59,17 @@ names a real host, address, VM id or secret value; those live only in the privat
   (an alert manager) is run: this is one rule set and one channel. **It also covers the case the
   service cannot cover itself**: when the service cannot be asked for
   `prometheus_unreachable_after_minutes` in a row, that is posted once, and so is its recovery.
+- **Who watches the watcher.** The service cannot page about itself, and the forwarder runs on
+  the same guest, so three things look from outside or at the forwarder: (1) the forwarder alerts
+  once if the service cannot be asked, and on its recovery; (2) every forwarder run writes the
+  shared **last-run record** (`/var/lib/homelabnext/last-run/timer%3Aprometheus%2Falerts.json`,
+  role `last_run`), which the status hub's `job-last-run` mapping reads and judges for lateness from
+  the calendar the record carries, so a dead timer or a dead guest is a red item on the hub, not
+  silence; the unit's `ReadWritePaths` names that directory, and the role's `health` hook fails when
+  the record is missing or older than five runs (the unit ignores a writer failure by design, so
+  health is what makes it visible: LL-567); (3) the registry row's `health` probe (`/-/healthy`) is
+  what the hub and the hypervisor-side checks poll. The overlay should ship the last-run directory
+  to the hub as it does for the other role timers.
 - **Nothing reloads through an HTTP API.** The lifecycle API stays off (anyone who could reach the
   port could shut the server down); a changed configuration is a `SIGHUP`, sent once the service
   reports ready (a signal sent earlier kills a process that has not installed its handler).
@@ -97,6 +109,16 @@ controls:
 ```
 
 and listed in the baseline every guest names (`base`), with `with: {port: 9100}`.
+
+**The hypervisor (pm205 in the first lab) is a target too** and is not a module guest: it is
+covered by the same control through its own baseline. The `hypervisor` baseline (or whatever the
+overlay names the one its nodes use) lists `metrics-agent` with the same `port`; `hnx guests
+baselines` then shows the hypervisor covered, and the role runs on it as on any Debian-family
+host (`apt`, `ansible_host` as the bind address). The hypervisor's own host firewall
+(`host_firewall` in `_nodes.yml`) admits the metrics guest on that port. A hypervisor that is not
+Debian-family, or that the site does not manage with this role, is named in
+`prometheus_node_exporter_exclude` and monitored another way; it is never left as a permanent
+`TargetDown`.
 
 ## Reaching the interface (the decision)
 
@@ -154,7 +176,7 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
    <instance>`, `prometheus_registry: <absolute path of lab/services.yml on the controller>`,
    `prometheus_node_exporter_port: 9100`, and the `hnx` command (`prometheus_hnx_cli`, default
    `[hnx]`), optionally `prometheus_node_exporter_exclude`, `prometheus_retention_time`,
-   `prometheus_notify_id`/`prometheus_notify_topic`, and `prometheus_notify_allow_plain_http: true`
+   `prometheus_notify_id`/`prometheus_notify_topic`, `prometheus_alert_readonly_ignore`, `prometheus_alert_schedule` (every minute, or every 30 seconds), and `prometheus_notify_allow_plain_http: true`
    while the notify service has no TLS (LAN only; the role says so in the run).
 6. **Apply**: `docker_engine` on the module group (`mod_prometheus_server`), the exporter role on
    every guest (the baseline), then the rendered `modules.yml` twice (the second `changed=0`),
@@ -170,8 +192,8 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
   resolver must serve them to the metrics guest; a name that does not resolve is a `TargetDown`.
 - **One channel, no inhibition or grouping.** A burst of unrelated alerts is one message per
   change of the set. An alert manager is the answer if the lab outgrows that.
-- **The exporter starts on all interfaces for the seconds between the package install and the
-  role's restart**; the per-VM firewall covers it.
+- **The exporter never listens on all interfaces**: the role writes its arguments before the package
+  can start the service (the package keeps an existing argument file).
 - **The container's network is Docker's default bridge**, so `egress: none` is what the service is
   configured to do, not a network rule.
 - **Removal** stops the timer, removes its units, the script and the token, and takes the container

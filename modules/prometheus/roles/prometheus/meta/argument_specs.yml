@@ -109,6 +109,10 @@ argument_specs:
         type: str
         description: "How long a filesystem must stay read-only before FilesystemReadOnly fires."
         default: "2m"
+      prometheus_alert_readonly_ignore: &alert_readonly_ignore
+        type: str
+        description: "Mount points (a regular expression) on which a read-only mount is deliberate; empty for none."
+        default: ""
       prometheus_alert_memory_available_percent: &alert_memory_available_percent
         type: int
         description: "MemoryPressure fires below this available-memory percentage (1-99)."
@@ -139,12 +143,8 @@ argument_specs:
         default: false
       prometheus_alert_schedule: &alert_schedule
         type: str
-        description: "The forwarder timer's OnCalendar (ending in UTC); keep it in step with the interval below."
+        description: "The forwarder timer's OnCalendar: \"*-*-* *:*:00 UTC\" (every minute) or \"*-*-* *:*:00,30 UTC\" (every 30 seconds)."
         default: "*-*-* *:*:00 UTC"
-      prometheus_alert_interval_seconds: &alert_interval_seconds
-        type: int
-        description: "How often the forwarder asks which alerts fire (30 or 60)."
-        default: 60
       prometheus_unreachable_after_minutes: &unreachable_after_minutes
         type: int
         description: "Minutes of failed asks in a row before the metrics service is alerted as unreachable."
@@ -200,6 +200,7 @@ argument_specs:
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
       prometheus_alert_readonly_for: *alert_readonly_for
+      prometheus_alert_readonly_ignore: *alert_readonly_ignore
       prometheus_alert_memory_available_percent: *alert_memory_available_percent
       prometheus_alert_memory_for: *alert_memory_for
       prometheus_notify_id: *notify_id
@@ -208,7 +209,6 @@ argument_specs:
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
       prometheus_alert_schedule: *alert_schedule
-      prometheus_alert_interval_seconds: *alert_interval_seconds
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
       prometheus_last_run_dir: *last_run_dir
@@ -242,6 +242,7 @@ argument_specs:
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
       prometheus_alert_readonly_for: *alert_readonly_for
+      prometheus_alert_readonly_ignore: *alert_readonly_ignore
       prometheus_alert_memory_available_percent: *alert_memory_available_percent
       prometheus_alert_memory_for: *alert_memory_for
       prometheus_notify_id: *notify_id
@@ -250,7 +251,6 @@ argument_specs:
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
       prometheus_alert_schedule: *alert_schedule
-      prometheus_alert_interval_seconds: *alert_interval_seconds
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
       prometheus_last_run_dir: *last_run_dir
@@ -282,6 +282,7 @@ argument_specs:
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
       prometheus_alert_readonly_for: *alert_readonly_for
+      prometheus_alert_readonly_ignore: *alert_readonly_ignore
       prometheus_alert_memory_available_percent: *alert_memory_available_percent
       prometheus_alert_memory_for: *alert_memory_for
       prometheus_notify_id: *notify_id
@@ -290,7 +291,6 @@ argument_specs:
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
       prometheus_alert_schedule: *alert_schedule
-      prometheus_alert_interval_seconds: *alert_interval_seconds
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
       prometheus_last_run_dir: *last_run_dir
@@ -327,6 +327,7 @@ argument_specs:
       prometheus_alert_disk_used_percent: *alert_disk_used_percent
       prometheus_alert_disk_for: *alert_disk_for
       prometheus_alert_readonly_for: *alert_readonly_for
+      prometheus_alert_readonly_ignore: *alert_readonly_ignore
       prometheus_alert_memory_available_percent: *alert_memory_available_percent
       prometheus_alert_memory_for: *alert_memory_for
       prometheus_notify_id: *notify_id
@@ -335,7 +336,6 @@ argument_specs:
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
       prometheus_alert_schedule: *alert_schedule
-      prometheus_alert_interval_seconds: *alert_interval_seconds
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
       prometheus_last_run_dir: *last_run_dir

@@ -70,4 +70,9 @@
           ({{ (prometheus_send_status.content | default('e30=') | b64decode | from_json).error | default('') }},
           at {{ (prometheus_send_status.content | default('e30=') | b64decode | from_json).time | default('?') }}):
           the notify service or the publish token needs attention
+    - name: The alert forwarder ran lately (its last-run record is fresh)
+      ansible.builtin.include_tasks:
+        file: forwarder.yml
+        apply:
+          tags: [health]
   tags: [health]

@@ -13,5 +13,5 @@ ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ promet
 Nice=10
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths={{ prometheus_state_dir }}
+ReadWritePaths={{ prometheus_state_dir }} {{ prometheus_last_run_dir }}
 PrivateTmp=true

@@ -299,4 +299,6 @@ def test_the_units_run_the_script_report_their_runs_and_tick_on_the_schedule():
     assert "ExecStart=/usr/local/libexec/homelabnext/prometheus-alert-notify\n" in service
     assert "--job timer:prometheus/alerts" in service
     assert service.count("hnx-last-run start") == 1 and service.count("hnx-last-run finish") == 1
+    rw = next(l for l in service.splitlines() if l.startswith("ReadWritePaths="))
+    assert "/var/lib/homelabnext/last-run" in rw and "/var/lib/homelabnext/prometheus" in rw
     assert "OnCalendar=*-*-* *:*:00 UTC\n" in timer and "Persistent=false" in timer

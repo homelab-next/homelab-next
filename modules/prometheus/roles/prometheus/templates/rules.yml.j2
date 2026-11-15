@@ -14,6 +14,13 @@ groups:
 {% raw %}
           summary: "{{ $labels.job }} target {{ $labels.instance }} has been unreachable"
 {% endraw %}
+      - alert: NoTargets
+        expr: absent(up{job="node"})
+        for: {{ prometheus_alert_target_down_for }}
+        labels:
+          severity: critical
+        annotations:
+          summary: "no host target is being scraped: the generated target list is empty or was not loaded"
       - alert: DiskAlmostFull
         expr: (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 > {{ prometheus_alert_disk_used_percent | int }} and node_filesystem_size_bytes > 0
         for: {{ prometheus_alert_disk_for }}
@@ -24,7 +31,7 @@ groups:
           summary: "{{ $labels.instance }} {{ $labels.mountpoint }} is over {% endraw %}{{ prometheus_alert_disk_used_percent | int }}{% raw %}% full"
 {% endraw %}
       - alert: FilesystemReadOnly
-        expr: node_filesystem_readonly == 1
+        expr: node_filesystem_readonly{% if prometheus_alert_readonly_ignore != '' %}{mountpoint!~"{{ prometheus_alert_readonly_ignore }}"}{% endif %} == 1
         for: {{ prometheus_alert_readonly_for }}
         labels:
           severity: critical

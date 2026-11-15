@@ -17,6 +17,7 @@ nothing is started): the steps main does before the container.
 
 from __future__ import annotations
 
+import json
 import os
 import pwd
 import shutil
@@ -116,7 +117,8 @@ def render(tmp_path: Path, **kw):
         {"prometheus_registry": "relative/services.yml"},
         {"prometheus_node_exporter_exclude": ["Not A Host"]},
         {"prometheus_notify_auth_ref": "not-a-ref"},
-        {"prometheus_alert_interval_seconds": 45},
+        {"prometheus_alert_schedule": "*-*-* *:*:00/5 UTC"},
+        {"prometheus_alert_readonly_ignore": '/boot"} or vector(1) #'},
         {"prometheus_uid": 10},
         {"prometheus_data_root": "/var/lib/../etc"},
     ],
@@ -229,12 +231,25 @@ def test_the_four_default_rules_use_the_settings(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
     by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
-    assert sorted(by) == ["DiskAlmostFull", "FilesystemReadOnly", "MemoryPressure", "TargetDown"]
+    assert sorted(by) == [
+        "DiskAlmostFull", "FilesystemReadOnly", "MemoryPressure", "NoTargets", "TargetDown",
+    ]  # fmt: skip
     assert by["TargetDown"]["for"] == "20m" and by["TargetDown"]["expr"] == "up == 0"
     assert "> 85" in by["DiskAlmostFull"]["expr"]
     assert "< 15" in by["MemoryPressure"]["expr"]
     assert by["FilesystemReadOnly"]["expr"] == "node_filesystem_readonly == 1"
     assert "{{ $labels.instance }}" in by["MemoryPressure"]["annotations"]["summary"]
+
+
+def test_a_deliberate_read_only_mount_can_be_left_out_of_the_rule(tmp_path):
+    r = render(tmp_path, prometheus_alert_readonly_ignore="/boot/efi|/mnt/media")
+    assert r.returncode == 0, r.stdout + r.stderr
+    rules = yaml.safe_load((tmp_path / "data/config/rules.yml").read_text())
+    by = {x["alert"]: x for g in rules["groups"] for x in g["rules"]}
+    assert (
+        by["FilesystemReadOnly"]["expr"]
+        == 'node_filesystem_readonly{mountpoint!~"/boot/efi|/mnt/media"} == 1'
+    )
 
 
 def test_the_scrape_credential_is_written_group_readable_and_removed_when_unnamed(tmp_path):
@@ -328,6 +343,16 @@ tests:
         exp_alerts:
           - exp_labels: {severity: critical, instance: a, mountpoint: "/data"}
             exp_annotations: {summary: "a /data is mounted read-only"}
+  - name: an empty host target list fires, a scraped one does not
+    interval: 1m
+    input_series:
+      - {series: 'up{job="other", instance="a"}', values: '1x20'}
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NoTargets
+        exp_alerts:
+          - exp_labels: {severity: critical, job: node}
+            exp_annotations: {summary: "no host target is being scraped: the generated target list is empty or was not loaded"}
   - name: a host short of memory fires, one with enough does not
     interval: 1m
     input_series:
@@ -358,3 +383,53 @@ def test_the_default_rules_fire_on_what_they_should_and_not_on_what_they_should_
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert "SUCCESS" in r.stdout
+
+
+# ----------------------------------------------------------------------------- the forwarder's record
+
+
+def _record(tmp_path: Path, finished: str | None):
+    d = tmp_path / "last-run"
+    d.mkdir(exist_ok=True)
+    rec = {"job": "timer:prometheus/alerts", "finished_at": finished, "running": finished is None}
+    (d / "timer%3Aprometheus%2Falerts.json").write_text(json.dumps(rec))
+    return d
+
+
+def _forwarder(tmp_path: Path, d: Path):
+    return run_role(tmp_path, ROLE, "forwarder", {"prometheus_last_run_dir": str(d)})
+
+
+def _ago(seconds: int) -> str:
+    """The host's own clock, as the role's check reads it."""
+    out = subprocess.run(
+        ["date", "-u", "-d", f"{seconds} seconds ago", "+%Y-%m-%dT%H:%M:%SZ"],
+        capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    return out.stdout.strip()
+
+
+def test_health_passes_when_the_forwarder_finished_lately(tmp_path):
+    r = _forwarder(tmp_path, _record(tmp_path, _ago(30)))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_forwarder_that_cannot_write_its_record_fails_health_visibly(tmp_path):
+    """The unit ignores a failed last-run write (the - prefix), so a timer that runs but cannot
+    write (ProtectSystem=strict without the directory) has no record: health must say so."""
+    d = tmp_path / "last-run"
+    d.mkdir()
+    r = _forwarder(tmp_path, d)
+    assert r.returncode != 0
+    assert "no fresh last-run record" in r.stdout and "ReadWritePaths" in r.stdout
+
+
+@pytest.mark.parametrize("finished", [None, "garbage"], ids=["never-finished", "malformed"])
+def test_an_unfinished_or_malformed_record_fails_health(tmp_path, finished):
+    r = _forwarder(tmp_path, _record(tmp_path, finished))
+    assert r.returncode != 0 and "no fresh last-run record" in r.stdout
+
+
+def test_a_stale_record_fails_health(tmp_path):
+    r = _forwarder(tmp_path, _record(tmp_path, _ago(3600)))
+    assert r.returncode != 0 and "no fresh last-run record" in r.stdout

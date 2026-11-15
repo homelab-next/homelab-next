@@ -38,8 +38,8 @@
       - prometheus_notify_priority | int >= 1 and prometheus_notify_priority | int <= 5
       - prometheus_notify_auth_ref is match(prometheus_ref_pattern)
       - prometheus_notify_allow_plain_http | bool is boolean
-      - prometheus_alert_interval_seconds | int in [30, 60]
-      - prometheus_alert_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
+      - prometheus_alert_schedule in prometheus_alert_schedules
+      - prometheus_alert_readonly_ignore is match(prometheus_alert_ignore_pattern)
       - prometheus_unreachable_after_minutes | int >= 1 and prometheus_unreachable_after_minutes | int <= 1440
     fail_msg: >-
       prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
@@ -48,5 +48,5 @@
       evaluation intervals like 30s, a memory limit like 768m, the hnx command (bare or by absolute
       path, or an absolute python running homelabnext.cli), an absolute registry path, plain host names to exclude, alert durations like 10m and
       percentages 1-99, a notify logical id and topic, a priority 1-5, a secret:<name> token
-      reference, an alert interval of 30 or 60 seconds and a positive number of minutes
+      reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes
   tags: [health, backup, restore, export, upgrade, readiness]

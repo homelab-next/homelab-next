@@ -39,6 +39,9 @@ prometheus_alert_target_down_for: 10m
 prometheus_alert_disk_used_percent: 90
 prometheus_alert_disk_for: 10m
 prometheus_alert_readonly_for: 2m
+# Mount points a read-only mount is deliberate on (a regular expression matched against the whole
+# mount point, e.g. "/boot/efi|/mnt/media"); empty: none, every read-only filesystem alerts.
+prometheus_alert_readonly_ignore: ""
 prometheus_alert_memory_available_percent: 10
 prometheus_alert_memory_for: 10m
 # The alert forwarder: a timer asks the metrics service which alerts fire and posts to the notify
@@ -52,10 +55,10 @@ prometheus_notify_auth_ref: secret:prometheus/notify-token
 # Explicit opt-in, LAN only, for a notify endpoint that has no TLS: the write-only publish token
 # then travels in clear. Off: the role refuses a token over plain http.
 prometheus_notify_allow_plain_http: false
-# The forwarder's timer (OnCalendar, ending in UTC) and the seconds between its runs, which the
-# unreachable counter divides by: keep the two in step (every minute: 60).
+# The forwarder's timer (OnCalendar, ending in UTC): every minute, or every 30 seconds. The seconds
+# between its runs (prometheus_alert_interval_seconds, vars/main.yml) are derived from it, so the
+# unreachable counter can never disagree with the timer.
 prometheus_alert_schedule: "*-*-* *:*:00 UTC"
-prometheus_alert_interval_seconds: 60
 prometheus_unreachable_after_minutes: 5
 # Run the forwarder's --test (one low-priority message through the real send path) once at deploy
 # when the channel changed, failing the play with the script's error (LL-567). Skipped in --check.
