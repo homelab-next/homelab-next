@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "tunnel, the connector of a remotely managed tunnel: one compose_app container, outbound only, the token its only credential, no ingress configuration."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

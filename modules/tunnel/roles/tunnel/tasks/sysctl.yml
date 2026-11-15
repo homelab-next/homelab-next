@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# QUIC's UDP buffers (LL-173): an undersized net.core.rmem_max starved quic-go and the connector's
+# connections to the edge timed out under loss, while every container and LAN check stayed green.
+# The role keeps both ceilings at least tunnel_udp_buffer_bytes, persisted and applied now.
+- name: Persist the UDP buffer ceilings
+  ansible.builtin.copy:
+    dest: "{{ tunnel_sysctl_file }}"
+    owner: "{{ tunnel_owner }}"
+    group: "{{ tunnel_group }}"
+    mode: "0644"
+    content: |
+      # managed by the tunnel module (QUIC needs large UDP buffers)
+      net.core.rmem_max = {{ tunnel_udp_buffer_bytes | int }}
+      net.core.wmem_max = {{ tunnel_udp_buffer_bytes | int }}
+  register: tunnel_sysctl_written
+
+- name: Apply them now
+  ansible.builtin.command:
+    argv: [sysctl, -p, "{{ tunnel_sysctl_file }}"]
+  when: tunnel_sysctl_apply | bool and tunnel_sysctl_written is changed
+  changed_when: true

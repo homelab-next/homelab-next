@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the connector holds no data of its own)
+  ansible.builtin.debug:
+    msg: tunnel keeps no data of its own; its token is in the secret store and re-running main renders it again
+  tags: [export]
