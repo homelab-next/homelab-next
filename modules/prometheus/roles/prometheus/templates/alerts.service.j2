@@ -1,0 +1,13 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role prometheus); local changes are overwritten.
+[Unit]
+Description=homelabnext metrics alert forwarder (posts firing alerts to the notify service)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/homelabnext/prometheus-alert-notify
+Nice=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{ prometheus_state_dir }}
+PrivateTmp=true

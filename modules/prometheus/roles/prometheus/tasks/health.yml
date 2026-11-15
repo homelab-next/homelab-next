@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy; the server is ready; the configuration it runs
+# is the one on disk (the last reload succeeded) with the configured retention; the four default
+# alert rules are loaded and healthy; the host-exporter and registry-generated jobs have targets;
+# and the alert forwarder's last send reached the notify service. A target that is down is an alert,
+# not a failure of the service. Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: prometheus
+        compose_app_dir: "{{ prometheus_app.compose_app_dir }}"
+        compose_app_spec: "{{ prometheus_app.compose_app_spec }}"
+    - name: The service is ready
+      ansible.builtin.uri:
+        url: "http://{{ prometheus_bind }}:{{ prometheus_port | int }}/-/ready"
+        status_code: 200
+        timeout: "{{ prometheus_health_timeout | int }}"
+      changed_when: false
+    - name: Read the loaded configuration state, retention and rules
+      ansible.builtin.uri:
+        url: "http://{{ prometheus_bind }}:{{ prometheus_port | int }}/api/v1/{{ item }}"
+        status_code: 200
+        return_content: true
+        timeout: "{{ prometheus_health_timeout | int }}"
+      loop: [status/runtimeinfo, rules, targets]
+      register: prometheus_api
+      changed_when: false
+    - name: Read the rule names and the retention that are loaded
+      ansible.builtin.set_fact:
+        prometheus_runtime: "{{ prometheus_api.results[0].json.data }}"
+        prometheus_loaded_rules: >-
+          {{ prometheus_api.results[1].json.data.groups | map(attribute='rules') | flatten
+             | map(attribute='name') | list }}
+        prometheus_loaded_rule_health: >-
+          {{ prometheus_api.results[1].json.data.groups | map(attribute='rules') | flatten
+             | rejectattr('health', 'equalto', 'ok') | map(attribute='name') | list }}
+        prometheus_active_jobs: >-
+          {{ prometheus_api.results[2].json.data.activeTargets | map(attribute='scrapePool') | unique | list }}
+    - name: The loaded configuration is the one on disk, with the configured retention and rules
+      ansible.builtin.assert:
+        that:
+          - prometheus_runtime.reloadConfigSuccess | bool
+          - prometheus_runtime.storageRetention | default('') is search('^' ~ prometheus_retention_time)
+          - prometheus_rule_names | difference(prometheus_loaded_rules) | length == 0
+          - prometheus_loaded_rule_health | length == 0
+          - "'node' in prometheus_active_jobs"
+        fail_msg: >-
+          prometheus: the running service does not match its configuration (last reload ok:
+          {{ prometheus_runtime.reloadConfigSuccess }}; retention {{ prometheus_runtime.storageRetention | default('?') }},
+          wanted {{ prometheus_retention_time }}; missing rules
+          {{ prometheus_rule_names | difference(prometheus_loaded_rules) }}; rules not ok {{ prometheus_loaded_rule_health }};
+          jobs {{ prometheus_active_jobs }}); check the container's log for the reload error
+    - name: Look for the alert forwarder's last send record
+      ansible.builtin.slurp:
+        src: "{{ prometheus_state_dir }}/send-status.json"
+      register: prometheus_send_status
+      failed_when: false
+    - name: The last alert (or test) reached the notify service
+      ansible.builtin.assert:
+        that: prometheus_send_status.content is not defined or (prometheus_send_status.content | b64decode | from_json).ok | bool
+        fail_msg: >-
+          prometheus: the last alert could not be sent
+          ({{ (prometheus_send_status.content | default('e30=') | b64decode | from_json).error | default('') }},
+          at {{ (prometheus_send_status.content | default('e30=') | b64decode | from_json).time | default('?') }}):
+          the notify service or the publish token needs attention
+  tags: [health]

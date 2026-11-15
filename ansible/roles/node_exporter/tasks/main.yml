@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Control metrics-agent: the distribution's node exporter on the guest's own address. A changed
+# argument file leaves a restart-pending marker that only a successful restart removes, so a
+# failed (or disabled) restart is retried on the next run even though the file no longer changes.
+- name: Refuse a host that is not Debian-family (the role installs the distribution's package)
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "node_exporter supports Debian-family guests only (got {{ ansible_facts['os_family'] }})"
+
+- name: Install the node exporter
+  ansible.builtin.apt:
+    name: prometheus-node-exporter
+    state: present
+
+- name: Write the arguments and restart while a restart is owed
+  ansible.builtin.include_tasks: config.yml
+
+- name: Enable and start the exporter
+  ansible.builtin.systemd_service:
+    name: "{{ node_exporter_service }}"
+    enabled: true
+    state: started

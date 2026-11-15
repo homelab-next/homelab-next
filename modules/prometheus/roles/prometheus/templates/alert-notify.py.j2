@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: prometheus-alert-notify
+#   kind: job
+#   purpose: Post to the notify service when the set of firing alerts of the metrics service changes, and when the metrics service itself cannot be asked.
+#   owner: platform
+#   trigger: [timer:prometheus/alerts, role:prometheus]
+#   inputs: the metrics service's /api/v1/alerts on this host; the previous state file
+#   outputs: the state file and the last send's outcome (owner-only) and, on a change of the firing set, one alert to the notify service (ntfy, publish token)
+#   installs_to: /usr/local/libexec/homelabnext/prometheus-alert-notify
+#   exit:
+#     "0": checked (and alerted, if the firing set changed)
+#     "1": the metrics service could not be asked (alerted once after the configured number of minutes) (or, with --test, the channel did not deliver)
+#     "2": the alert could not be sent; it stays owed to the next run
+"""Managed by homelabnext (role prometheus); local changes are overwritten.  The metrics service
+evaluates the alert rules; this posts what fires.  State-diffed, as every alerting control here:
+a message goes out only when the SET of firing alerts differs from the set last posted (new ones
+named, resolved ones named, "cleared" once when it empties), never once per run; a failed post
+stays owed and is retried.  The metrics service cannot page about itself being down, so when it
+cannot be asked for `UNREACHABLE_AFTER` runs in a row that is posted once, and so is its recovery.
+The post follows no redirect and takes no proxy from the environment, and the token never appears
+in an error."""
+
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+
+STATE_DIR = {{ prometheus_state_dir | to_json }}
+API = {{ ('http://' ~ prometheus_bind ~ ':' ~ (prometheus_port | int | string)) | to_json }}
+NOTIFY_URL = {{ prometheus_notify_url | to_json }}
+TOPIC = {{ prometheus_notify_topic | to_json }}
+PRIORITY = {{ prometheus_notify_priority | int }}
+TOKEN_FILE = {{ prometheus_notify_auth_file | to_json }}
+LAB = {{ prometheus_logical_id | to_json }}
+UNREACHABLE_AFTER = {{ ((prometheus_unreachable_after_minutes | int * 60) // (prometheus_alert_interval_seconds | int)) | int }}
+STATE = os.path.join(STATE_DIR, "alert-state.json")
+SEND_STATUS = os.path.join(STATE_DIR, "send-status.json")
+SAFE = re.compile(r"[^A-Za-z0-9.+_:/ %~=,()-]")
+CRITICAL = 4  # the priority of a message that names a critical alert
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow no redirect: the 3xx is the HTTPError.  urllib's stock handler resends a POST
+    answered 301/302/303 as a GET with no body, to any origin, and copies the Authorization
+    header along with it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# the post carries the access token.  The role refuses a token over plain http unless
+# prometheus_notify_allow_plain_http opts in (a LAN endpoint with no TLS)
+OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+_SECRETS = []  # the token, once read: scrubbed from any error text that is printed or recorded
+
+
+def describe(exc):
+    """The failure in one line and never the token: an HTTP status is named, anything else is its
+    class and message, bounded and scrubbed."""
+    if isinstance(exc, urllib.error.HTTPError):
+        text = f"HTTP {exc.code} from the notify endpoint"
+    else:
+        text = f"{type(exc).__name__}: {exc}"
+    for secret in _SECRETS:
+        text = text.replace(secret, "[token]")
+    return " ".join(text.split())[:200]
+
+
+def clean(text, limit=160):
+    """Printable text only, bounded: a label read off a scrape goes into a header."""
+    return SAFE.sub("", str(text))[:limit]
+
+
+def write_private(path, doc):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def record(error=None):
+    """The last send attempt (time, ok, error) beside the state: the role's health fails when it
+    failed.  A state directory that cannot be written is not a second failure."""
+    doc = {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "ok": error is None, "error": error or ""}
+    try:
+        write_private(SEND_STATUS, doc)
+    except OSError:
+        pass
+
+
+def firing_alerts():
+    """{key: (severity, summary)} for the alerts in the firing state (pending is not yet)."""
+    req = urllib.request.Request(API + "/api/v1/alerts", headers={"Accept": "application/json"})
+    with OPENER.open(req, timeout=10) as resp:
+        doc = json.load(resp)
+    if doc.get("status") != "success":
+        raise ValueError("the metrics service answered a status other than success")
+    found = {}
+    for alert in doc["data"]["alerts"]:
+        if alert.get("state") != "firing":
+            continue
+        labels = alert.get("labels", {})
+        key = "|".join([clean(labels.get("alertname", "?"), 64)] + [f"{k}={clean(v, 64)}" for k, v in sorted(labels.items()) if k not in ("alertname", "severity")])
+        summary = clean(alert.get("annotations", {}).get("summary") or key)
+        found[key] = (clean(labels.get("severity", ""), 16), summary)
+    return found
+
+
+def _deliver(title, body, priority):
+    with open(TOKEN_FILE, encoding="utf-8") as fh:
+        token = fh.read().strip()
+    if not token:
+        raise ValueError(f"the token file {TOKEN_FILE} is empty")
+    if not (token.isascii() and token.isprintable()):
+        # never quoted: http.client's own refusal would print the whole header value
+        raise ValueError(f"the token in {TOKEN_FILE} is not printable ASCII")
+    _SECRETS.append(token)
+    headers = {"Title": title, "Priority": str(priority), "Tags": "homelabnext,prometheus",
+               "Content-Type": "text/plain; charset=utf-8", "Authorization": "Bearer " + token}
+    req = urllib.request.Request(f"{NOTIFY_URL}/{TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
+    with OPENER.open(req, timeout=10) as resp:
+        resp.read()
+        if not 200 <= resp.status < 300:
+            raise ValueError(f"the notify endpoint answered HTTP {resp.status}")
+
+
+def send(title, body, priority=None):
+    """Deliver one alert and record the outcome (the last attempt, for health)."""
+    try:
+        _deliver(title, body, priority or PRIORITY)
+    except Exception as exc:
+        record(describe(exc))
+        raise
+    record()
+
+
+def run_test():
+    """`--test`: one low-priority message through exactly the path a real alert takes.  Exits 0
+    when the channel delivered, 1 with the error (never the token) when it did not."""
+    text = f"metrics alert channel test from {LAB}"
+    try:
+        send(text, text, priority=1)
+    except Exception as exc:
+        print(f"channel test failed: {describe(exc)}", file=sys.stderr)
+        return 1
+    print(f"channel test ok: {text}")
+    return 0
+
+
+def load_state():
+    try:
+        with open(STATE, encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except (OSError, ValueError):
+        prev = {}
+    alerted = prev.get("alerted", {})
+    if not isinstance(alerted, dict):
+        alerted = {}
+    misses = prev.get("misses", 0)
+    return alerted, misses if isinstance(misses, int) else 0, prev.get("unreachable_posted") is True
+
+
+def message(firing, alerted, recovered):
+    new = sorted(set(firing) - set(alerted))
+    gone = sorted(set(alerted) - set(firing))
+    names = sorted({k.split("|")[0] for k in firing})
+    if firing:
+        title = f"{len(firing)} alert(s) firing on {LAB}: {', '.join(names)}"
+    else:
+        title = f"alerts cleared on {LAB}"
+    lines = []
+    if recovered:
+        lines.append("The metrics service answers again.")
+    lines += [f"FIRING {firing[k][1]}" for k in new]
+    lines += [f"RESOLVED {alerted[k]}" for k in gone]
+    still = sorted(set(firing) & set(alerted))
+    if still:
+        lines.append("Still firing: " + "; ".join(firing[k][1] for k in still))
+    critical = any(firing[k][0] == "critical" for k in new)
+    return title[:200], "\n".join(lines), (CRITICAL if critical else PRIORITY)
+
+
+def main():
+    if "--test" in sys.argv[1:]:
+        return run_test()
+    alerted, misses, unreachable_posted = load_state()
+    rc = 0
+    try:
+        firing = firing_alerts()
+    except Exception as exc:
+        misses += 1
+        print(f"the metrics service could not be asked: {describe(exc)}", file=sys.stderr)
+        if misses >= UNREACHABLE_AFTER and not unreachable_posted:
+            try:
+                send(f"metrics service unreachable on {LAB}", f"The metrics service on {LAB} has not answered {misses} checks in a row ({describe(exc)}). Alerts are not being evaluated.", CRITICAL)
+                unreachable_posted = True
+            except Exception as sent:
+                print(f"alert not sent: {describe(sent)}", file=sys.stderr)
+                rc = 2
+        write_private(STATE, {"alerted": alerted, "misses": misses, "unreachable_posted": unreachable_posted})
+        return rc or 1
+    recovered = unreachable_posted
+    summaries = {k: v[1] for k, v in firing.items()}
+    if set(firing) != set(alerted) or recovered:
+        title, body, priority = message(firing, alerted, recovered)
+        try:
+            send(title, body, priority)
+            alerted, unreachable_posted = summaries, False
+        except Exception as exc:  # the alert stays owed
+            print(f"alert not sent: {describe(exc)}", file=sys.stderr)
+            rc = 2
+    write_private(STATE, {"alerted": alerted, "misses": 0, "unreachable_posted": unreachable_posted})
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

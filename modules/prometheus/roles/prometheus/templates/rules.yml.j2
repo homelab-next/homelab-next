@@ -1,0 +1,43 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role prometheus); local changes are overwritten.
+# The default alert rules: a scrape target down, a full disk, a filesystem gone read-only and a
+# host short of memory. The forwarder posts what fires to the notify service.
+groups:
+  - name: hnx-default
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: {{ prometheus_alert_target_down_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.job }} target {{ $labels.instance }} has been unreachable"
+{% endraw %}
+      - alert: DiskAlmostFull
+        expr: (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 > {{ prometheus_alert_disk_used_percent | int }} and node_filesystem_size_bytes > 0
+        for: {{ prometheus_alert_disk_for }}
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} is over {% endraw %}{{ prometheus_alert_disk_used_percent | int }}{% raw %}% full"
+{% endraw %}
+      - alert: FilesystemReadOnly
+        expr: node_filesystem_readonly == 1
+        for: {{ prometheus_alert_readonly_for }}
+        labels:
+          severity: critical
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} is mounted read-only"
+{% endraw %}
+      - alert: MemoryPressure
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes * 100 < {{ prometheus_alert_memory_available_percent | int }}
+        for: {{ prometheus_alert_memory_for }}
+        labels:
+          severity: warning
+        annotations:
+{% raw %}
+          summary: "{{ $labels.instance }} has under {% endraw %}{{ prometheus_alert_memory_available_percent | int }}{% raw %}% of its memory available"
+{% endraw %}

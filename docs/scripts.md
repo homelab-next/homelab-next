@@ -130,6 +130,7 @@ one no longer alerts:
 - `needrestart-check` (control `restart-required`)
 - `needrestart-reboot-check` (control `restart-required`, the pending-reboot alert)
 - `lynis-dpkg-verify` (control `host-assessment`, the package integrity sweep)
+- `prometheus-alert-notify` (module `prometheus`, not a host scan: it relays the metrics service's own firing alerts, whose rules are the checks, to the notify service state-diffed; its health is the last-send record the role's `health` hook reads)
 <!-- /host-scan-alerts -->
 
 ## The reviewed allowlist

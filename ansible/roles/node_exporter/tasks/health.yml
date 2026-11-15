@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the exporter answers on the guest's own address and exposes the families the
+# metrics service's default alert rules read (disk, read-only filesystem, memory).
+- block:
+    - name: Validate the settings
+      ansible.builtin.include_tasks: validate.yml
+    - name: The exporter answers /metrics
+      ansible.builtin.uri:
+        url: "http://{{ node_exporter_bind }}:{{ node_exporter_port | int }}/metrics"
+        return_content: true
+        status_code: 200
+        timeout: "{{ node_exporter_health_timeout | int }}"
+      register: node_exporter_metrics
+      changed_when: false
+      check_mode: false  # read-only: it runs in --check too
+    - name: Every family the default alert rules read is exposed
+      ansible.builtin.assert:
+        that: >-
+          node_exporter_required_families
+          | reject('in', node_exporter_metrics.content | regex_findall('(?m)^# TYPE (\S+) '))
+          | list | length == 0
+        fail_msg: >-
+          node_exporter: /metrics lacks a metric family the alert rules read
+          ({{ node_exporter_required_families }}); a collector was disabled
+  tags: [health]

@@ -1,0 +1,28 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role prometheus); local changes are overwritten.
+# Retention is set here (storage.tsdb.retention); the command-line flag is deprecated in 3.x.
+global:
+  scrape_interval: {{ prometheus_scrape_interval }}
+  evaluation_interval: {{ prometheus_evaluation_interval }}
+
+storage:
+  tsdb:
+    retention:
+      time: {{ prometheus_retention_time }}
+{% if prometheus_retention_size != '' %}
+      size: {{ prometheus_retention_size }}
+{% endif %}
+
+rule_files:
+  - {{ prometheus_container_config_dir }}/rules.yml
+
+# one job per service row with a metrics block, generated from the registry (do not edit)
+scrape_config_files:
+  - {{ prometheus_container_config_dir }}/{{ prometheus_generated_dir }}/scrape_configs.yml
+
+scrape_configs:
+  # the host exporter on every registry host, generated from the registry (do not edit)
+  - job_name: node
+    file_sd_configs:
+      - files:
+          - {{ prometheus_container_config_dir }}/{{ prometheus_generated_dir }}/node_targets.yml

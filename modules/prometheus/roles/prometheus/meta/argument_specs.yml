@@ -1,0 +1,327 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the metrics service as a compose_app with targets generated from the registry, default alert rules and a state-diffed alert forwarder.
+    options:
+      prometheus_logical_id: &logical_id
+        type: str
+        description: "The instance's registry id (the service row the site binds, e.g. metrics, the instance name)."
+        required: true
+      prometheus_registry: &registry
+        type: path
+        description: "Absolute path of the lab registry (services.yml) on the controller, the targets' source."
+        required: true
+      prometheus_node_exporter_port: &node_exporter_port
+        type: int
+        description: "The port of the host exporter on every registry host (the site's one choice, also the exporter role's)."
+        required: true
+      prometheus_image: &image
+        type: str
+        description: "repository:tag@sha256:<digest> of the metrics service image."
+        default: "docker.io/prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+      prometheus_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address the port is published on (never all interfaces)."
+        default: "{{ ansible_host }}"
+      prometheus_port: &port
+        type: int
+        description: "Host port (the registry row's port)."
+        default: 9090
+      prometheus_dir: &dir
+        type: path
+        description: "The compose project directory."
+        default: "/opt/compose/prometheus"
+      prometheus_owner: &owner
+        type: str
+        description: "Owner of the compose project and the data root."
+        default: "root"
+      prometheus_group: &group
+        type: str
+        description: "Group of the compose project and the data root: the container's gid, so its user reads config/ and the credentials."
+        default: "{{ prometheus_gid }}"
+      prometheus_data_root: &data_root
+        type: path
+        description: "The module's data root on the host: config/, tsdb/, scrape-credentials/, export/."
+        default: "/var/lib/hnx-modules/prometheus"
+      prometheus_uid: &uid
+        type: int
+        description: "The container's user id (no account on the host has it); owns tsdb/."
+        default: 61001
+      prometheus_gid: &gid
+        type: int
+        description: "The container's group id."
+        default: 61001
+      prometheus_retention_time: &retention_time
+        type: str
+        description: "How long samples are kept (a number and s, m, h, d, w or y)."
+        default: "30d"
+      prometheus_retention_size: &retention_size
+        type: str
+        description: "Optional size cap beside the time (a number and KB, MB, GB or TB); empty for none."
+        default: ""
+      prometheus_scrape_interval: &scrape_interval
+        type: str
+        description: "Default scrape interval (a number and s or m)."
+        default: "30s"
+      prometheus_evaluation_interval: &evaluation_interval
+        type: str
+        description: "Rule evaluation interval (a number and s or m)."
+        default: "30s"
+      prometheus_mem_limit: &mem_limit
+        type: str
+        description: "Container memory limit."
+        default: "768m"
+      prometheus_start: &start
+        type: bool
+        description: "Run docker compose up after rendering."
+        default: true
+      prometheus_validate_with_docker: &validate_with_docker
+        type: bool
+        description: "Run docker compose config on the rendered file."
+        default: true
+      prometheus_health_timeout: &health_timeout
+        type: int
+        description: "Seconds for each health request."
+        default: 10
+      prometheus_hnx_cli: &hnx_cli
+        type: list
+        elements: str
+        description: "The hnx command as a one-element list (bare, or by absolute path); run on the controller to render the targets."
+        default: ["hnx"]
+      prometheus_node_exporter_exclude: &node_exporter_exclude
+        type: list
+        elements: str
+        description: "Registry hosts that run no host exporter, left out of the host target list."
+        default: []
+      prometheus_alert_target_down_for: &alert_target_down_for
+        type: str
+        description: "How long a target must be down before TargetDown fires."
+        default: "10m"
+      prometheus_alert_disk_used_percent: &alert_disk_used_percent
+        type: int
+        description: "DiskAlmostFull fires above this used percentage (1-99)."
+        default: 90
+      prometheus_alert_disk_for: &alert_disk_for
+        type: str
+        description: "How long a filesystem must stay over the threshold."
+        default: "10m"
+      prometheus_alert_readonly_for: &alert_readonly_for
+        type: str
+        description: "How long a filesystem must stay read-only before FilesystemReadOnly fires."
+        default: "2m"
+      prometheus_alert_memory_available_percent: &alert_memory_available_percent
+        type: int
+        description: "MemoryPressure fires below this available-memory percentage (1-99)."
+        default: 10
+      prometheus_alert_memory_for: &alert_memory_for
+        type: str
+        description: "How long memory must stay short."
+        default: "10m"
+      prometheus_notify_id: &notify_id
+        type: str
+        description: "Registry logical id of the notify service the alerts are posted to."
+        default: "notify"
+      prometheus_notify_topic: &notify_topic
+        type: str
+        description: "The notify topic alerts are posted to."
+        default: "homelabnext-alerts"
+      prometheus_notify_priority: &notify_priority
+        type: int
+        description: "Priority (1-5) of an alert; a message naming a critical alert is sent at 4."
+        default: 3
+      prometheus_notify_auth_ref: &notify_auth_ref
+        type: str
+        description: "secret:<name> of the publish token for the notify service (sent as a Bearer token)."
+        default: "secret:prometheus/notify-token"
+      prometheus_notify_allow_plain_http: &notify_allow_plain_http
+        type: bool
+        description: "Explicit opt-in, LAN only: send the token to a notify endpoint with no TLS."
+        default: false
+      prometheus_alert_interval_seconds: &alert_interval_seconds
+        type: int
+        description: "How often the forwarder asks which alerts fire (30 or 60)."
+        default: 60
+      prometheus_unreachable_after_minutes: &unreachable_after_minutes
+        type: int
+        description: "Minutes of failed asks in a row before the metrics service is alerted as unreachable."
+        default: 5
+      prometheus_notify_test_on_change: &notify_test_on_change
+        type: bool
+        description: "Send one test message at deploy when the channel changed; fail the play if it does not deliver."
+        default: true
+      prometheus_systemctl_cli: &systemctl_cli
+        type: str
+        description: "The systemctl command."
+        default: "systemctl"
+      prometheus_unit_dir: &unit_dir
+        type: path
+        description: "Where the forwarder's units are written."
+        default: "/etc/systemd/system"
+      prometheus_state_dir: &state_dir
+        type: path
+        description: "Where the forwarder keeps its state, its last send record and the channel-test digest."
+        default: "/var/lib/homelabnext/prometheus"
+  health:
+    short_description: "Fail unless the service is healthy and ready, runs the configuration on disk with the configured retention, has its default rules loaded and ok, and the last alert reached the notify service."
+    options:
+      prometheus_logical_id: *logical_id
+      prometheus_registry: *registry
+      prometheus_node_exporter_port: *node_exporter_port
+      prometheus_image: *image
+      prometheus_bind: *bind
+      prometheus_port: *port
+      prometheus_dir: *dir
+      prometheus_owner: *owner
+      prometheus_group: *group
+      prometheus_data_root: *data_root
+      prometheus_uid: *uid
+      prometheus_gid: *gid
+      prometheus_retention_time: *retention_time
+      prometheus_retention_size: *retention_size
+      prometheus_scrape_interval: *scrape_interval
+      prometheus_evaluation_interval: *evaluation_interval
+      prometheus_mem_limit: *mem_limit
+      prometheus_health_timeout: *health_timeout
+      prometheus_hnx_cli: *hnx_cli
+      prometheus_node_exporter_exclude: *node_exporter_exclude
+      prometheus_alert_target_down_for: *alert_target_down_for
+      prometheus_alert_disk_used_percent: *alert_disk_used_percent
+      prometheus_alert_disk_for: *alert_disk_for
+      prometheus_alert_readonly_for: *alert_readonly_for
+      prometheus_alert_memory_available_percent: *alert_memory_available_percent
+      prometheus_alert_memory_for: *alert_memory_for
+      prometheus_notify_id: *notify_id
+      prometheus_notify_topic: *notify_topic
+      prometheus_notify_priority: *notify_priority
+      prometheus_notify_auth_ref: *notify_auth_ref
+      prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_alert_interval_seconds: *alert_interval_seconds
+      prometheus_unreachable_after_minutes: *unreachable_after_minutes
+      prometheus_state_dir: *state_dir
+      prometheus_start: *start
+      prometheus_validate_with_docker: *validate_with_docker
+  readiness:
+    short_description: "Fail unless the container engine is ready, the targets render from the registry and every credential resolves in its form."
+    options:
+      prometheus_logical_id: *logical_id
+      prometheus_registry: *registry
+      prometheus_node_exporter_port: *node_exporter_port
+      prometheus_image: *image
+      prometheus_bind: *bind
+      prometheus_port: *port
+      prometheus_dir: *dir
+      prometheus_owner: *owner
+      prometheus_group: *group
+      prometheus_data_root: *data_root
+      prometheus_uid: *uid
+      prometheus_gid: *gid
+      prometheus_retention_time: *retention_time
+      prometheus_retention_size: *retention_size
+      prometheus_scrape_interval: *scrape_interval
+      prometheus_evaluation_interval: *evaluation_interval
+      prometheus_mem_limit: *mem_limit
+      prometheus_health_timeout: *health_timeout
+      prometheus_hnx_cli: *hnx_cli
+      prometheus_node_exporter_exclude: *node_exporter_exclude
+      prometheus_alert_target_down_for: *alert_target_down_for
+      prometheus_alert_disk_used_percent: *alert_disk_used_percent
+      prometheus_alert_disk_for: *alert_disk_for
+      prometheus_alert_readonly_for: *alert_readonly_for
+      prometheus_alert_memory_available_percent: *alert_memory_available_percent
+      prometheus_alert_memory_for: *alert_memory_for
+      prometheus_notify_id: *notify_id
+      prometheus_notify_topic: *notify_topic
+      prometheus_notify_priority: *notify_priority
+      prometheus_notify_auth_ref: *notify_auth_ref
+      prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_alert_interval_seconds: *alert_interval_seconds
+      prometheus_unreachable_after_minutes: *unreachable_after_minutes
+      prometheus_state_dir: *state_dir
+  backup:
+    short_description: "Name the data root for the backup (the rolling window and the scrape credentials ride along)."
+    options:
+      prometheus_logical_id: *logical_id
+      prometheus_registry: *registry
+      prometheus_node_exporter_port: *node_exporter_port
+      prometheus_image: *image
+      prometheus_bind: *bind
+      prometheus_port: *port
+      prometheus_dir: *dir
+      prometheus_owner: *owner
+      prometheus_group: *group
+      prometheus_data_root: *data_root
+      prometheus_uid: *uid
+      prometheus_gid: *gid
+      prometheus_retention_time: *retention_time
+      prometheus_retention_size: *retention_size
+      prometheus_scrape_interval: *scrape_interval
+      prometheus_evaluation_interval: *evaluation_interval
+      prometheus_mem_limit: *mem_limit
+      prometheus_health_timeout: *health_timeout
+      prometheus_hnx_cli: *hnx_cli
+      prometheus_node_exporter_exclude: *node_exporter_exclude
+      prometheus_alert_target_down_for: *alert_target_down_for
+      prometheus_alert_disk_used_percent: *alert_disk_used_percent
+      prometheus_alert_disk_for: *alert_disk_for
+      prometheus_alert_readonly_for: *alert_readonly_for
+      prometheus_alert_memory_available_percent: *alert_memory_available_percent
+      prometheus_alert_memory_for: *alert_memory_for
+      prometheus_notify_id: *notify_id
+      prometheus_notify_topic: *notify_topic
+      prometheus_notify_priority: *notify_priority
+      prometheus_notify_auth_ref: *notify_auth_ref
+      prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_alert_interval_seconds: *alert_interval_seconds
+      prometheus_unreachable_after_minutes: *unreachable_after_minutes
+      prometheus_state_dir: *state_dir
+      prometheus_start: *start
+      prometheus_validate_with_docker: *validate_with_docker
+  restore:
+    short_description: "Nothing to restore; re-running main renders the configuration and a new window starts."
+    options: {}
+  upgrade:
+    short_description: "Validate an image bump (tag and digest) and record it as pending."
+    options:
+      prometheus_logical_id: *logical_id
+      prometheus_registry: *registry
+      prometheus_node_exporter_port: *node_exporter_port
+      prometheus_image: *image
+      prometheus_bind: *bind
+      prometheus_port: *port
+      prometheus_dir: *dir
+      prometheus_owner: *owner
+      prometheus_group: *group
+      prometheus_data_root: *data_root
+      prometheus_uid: *uid
+      prometheus_gid: *gid
+      prometheus_retention_time: *retention_time
+      prometheus_retention_size: *retention_size
+      prometheus_scrape_interval: *scrape_interval
+      prometheus_evaluation_interval: *evaluation_interval
+      prometheus_mem_limit: *mem_limit
+      prometheus_health_timeout: *health_timeout
+      prometheus_hnx_cli: *hnx_cli
+      prometheus_node_exporter_exclude: *node_exporter_exclude
+      prometheus_alert_target_down_for: *alert_target_down_for
+      prometheus_alert_disk_used_percent: *alert_disk_used_percent
+      prometheus_alert_disk_for: *alert_disk_for
+      prometheus_alert_readonly_for: *alert_readonly_for
+      prometheus_alert_memory_available_percent: *alert_memory_available_percent
+      prometheus_alert_memory_for: *alert_memory_for
+      prometheus_notify_id: *notify_id
+      prometheus_notify_topic: *notify_topic
+      prometheus_notify_priority: *notify_priority
+      prometheus_notify_auth_ref: *notify_auth_ref
+      prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_alert_interval_seconds: *alert_interval_seconds
+      prometheus_unreachable_after_minutes: *unreachable_after_minutes
+      prometheus_state_dir: *state_dir
+      prometheus_start: *start
+      prometheus_validate_with_docker: *validate_with_docker
+      prometheus_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to."
+        required: true
+  export:
+    short_description: "Nothing to export; the samples are a rolling window the targets produce again."
+    options: {}

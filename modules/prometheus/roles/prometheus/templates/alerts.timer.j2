@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role prometheus); local changes are overwritten.
+[Unit]
+Description=homelabnext metrics alert forwarder, every {{ prometheus_alert_interval_seconds }} seconds
+
+[Timer]
+OnCalendar=*-*-* *:*:{{ '00,30' if (prometheus_alert_interval_seconds | int) == 30 else '00' }}
+AccuracySec=5s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

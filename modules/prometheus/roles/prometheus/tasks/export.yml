@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to export (the samples are a rolling window the targets produce again)
+  ansible.builtin.debug:
+    msg: the metrics service keeps a rolling window of samples (retention); there is no dataset to carry out
+  tags: [export]
