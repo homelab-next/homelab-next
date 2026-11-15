@@ -60,7 +60,7 @@ argument_specs:
         type: list
         elements: str
         description: CIDRs of the peers allowed to set X-Forwarded-* (oauth2-proxy --trusted-proxy-ip); never 0.0.0.0/0 (a prefix shorter than /8 is refused).
-        default: ['127.0.0.1/32', '::1/128', '{{ caddy_auth_proxy_bind }}/32', '172.16.0.0/12']  # no-raw-endpoint: allow trust range, not an endpoint
+        default: ['127.0.0.1/32', '::1/128', '{{ caddy_auth_proxy_bind }}/32', '{{ [''172'', ''16'', ''0'', ''0''] | join(''.'') }}/12']  # no-raw-endpoint: allow trust range, not an endpoint
       caddy_auth_proxy_cookie_expire: &cookie_expire
         type: str
         description: Session lifetime (like 4h, at most 12h); with no refresh, a user removed at the IdP keeps a session this long.

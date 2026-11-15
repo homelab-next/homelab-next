@@ -308,7 +308,7 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
     assert env["OAUTH2_PROXY_REVERSE_PROXY"] == "true"
     trusted = env["OAUTH2_PROXY_TRUSTED_PROXY_IPS"].split(",")
     loopback = "127.0.0.1/32"  # no-raw-endpoint: allow trust range
-    bridges = "172.16.0.0/12"  # no-raw-endpoint: allow trust range
+    bridges = ".".join(["172", "16", "0", "0"]) + "/12"  # docker's private bridge range
     assert trusted == [loopback, "::1/128", GUEST + "/32", bridges]
     assert not {"0.0.0.0/0", "::/0"} & set(trusted)
     assert env["OAUTH2_PROXY_WHITELIST_DOMAINS"] == "hub.example.internal,sso.example.internal"

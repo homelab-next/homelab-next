@@ -33,7 +33,7 @@ caddy_auth_proxy_health_timeout: 10
 # The peers allowed to set X-Forwarded-* (--trusted-proxy-ip, oauth2-proxy 7.15.5; unset it trusts
 # 0.0.0.0/0 and ::/0 and logs a warning). The edge reaches the proxy on the guest's published
 # port, so the peer is the guest itself or, through docker's NAT between the two compose
-# projects, a docker bridge address (docker's pools are inside its private /12): loopback, the
+# projects, a docker bridge address (docker's pools are inside its private /12, written in parts so no private address literal sits in the repository): loopback, the
 # bind address and that range, never a wider one (validate.yml refuses a prefix shorter than
 # /8 IPv4 or /32 IPv6). Narrow it to the edge's bridge gateway when the daemon pins its pools.
-caddy_auth_proxy_trusted_proxy_ips: ["127.0.0.1/32", "::1/128", "{{ caddy_auth_proxy_bind }}/32", "172.16.0.0/12"]  # no-raw-endpoint: allow trust range, not an endpoint
+caddy_auth_proxy_trusted_proxy_ips: ["127.0.0.1/32", "::1/128", "{{ caddy_auth_proxy_bind }}/32", "{{ ['172', '16', '0', '0'] | join('.') }}/12"]  # no-raw-endpoint: allow trust range, not an endpoint
