@@ -385,7 +385,57 @@ Then, in this order, with the root token still set:
    ```
 
 5. **Revoke the root token**: `bao token revoke -self`. A later repair that needs root generates
-   one from the shares (`bao operator generate-root`) and revokes it afterwards.
+   one from the shares through the admin socket (next section) and revokes it afterwards.
+
+## A new root token (the admin socket)
+
+Since OpenBao 2.5.3 the unauthenticated `/sys/generate-root/*` endpoints are disabled on every
+listener (`disable_unauthed_generate_root_endpoints`, default true) and the 2.7 CLI's
+`bao operator generate-root` uses only the authenticated `/sys/generate-root-token`. With the
+initial root token revoked, the shares alone therefore mint nothing unless a listener re-enables
+the legacy endpoints. `openbao_admin_socket: true` renders one: a unix listener at
+`openbao_admin_socket_path` (default `/run/openbao/admin.sock`, validated to sit under `/run`),
+socket mode `0600` inside a `RuntimeDirectory` of mode `0700`, so only root on the host reaches it.
+Nothing listens on the network for it.
+
+**Enable it only for the root-generation window**: set the variable, run the playbook, restart
+and unseal (a configuration change is an owed restart like any other, and obeys
+`openbao_allow_restart`; the role adds no restart path), generate, then set it back to `false`
+and repeat. Then, on the host, with the shares at the console (never through an agent):
+
+```sh
+S=/run/openbao/admin.sock
+sudo curl -s --unix-socket $S -X PUT http://local/v1/sys/generate-root/attempt \
+  -d '{}'                       # the response holds the nonce and an "otp"; keep both
+sudo curl -s --unix-socket $S -X PUT http://local/v1/sys/generate-root/update \
+  -d '{"key": "<one share>", "nonce": "<nonce>"}'   # once per share; the last answers
+                                                     # with "complete": true and "encoded_token"
+```
+
+Decode locally (the CLI's `-decode` contacts the server and is useless without a token): the
+`encoded_token` is base64 (no padding) of the root token XOR the OTP, byte for byte:
+
+```sh
+python3 -c 'import base64,sys; e,o=sys.argv[1:]; t=base64.b64decode(e+"="*(-len(e)%4)); \
+print("".join(chr(a^b) for a,b in zip(t,o.encode())))' "<encoded_token>" "<otp>"
+```
+
+Use the token, then `bao token revoke -self`, then turn the socket off.
+
+**Why the unit allows `@chown` (and why only then).** The unit's
+`SystemCallFilter=~@privileged @resources` includes the `@chown` group. The listener code
+(`internal/command/server/listener_unix.go` and `internal/helper/listenerutil/listener.go`,
+`setFilePermissions`) calls `os.Chown` only when `socket_user` or `socket_group` is set; with
+neither, it does `unlink`, `socket`/`bind`/`listen` and `chmod` (the latter two allowed by
+`@system-service`). A live host on 2.7.x was nevertheless killed with SIGSYS at socket setup,
+without `socket_user`/`socket_group`, and allowing `@chown` fixed it. A rerun on a workstation
+(bao 2.7.1 under `systemd-run --user` with the same two filter lines) started with and without
+`@chown`, so the exact syscall was not isolated; the live host's kernel, systemd or Go runtime
+evidently differs. The role therefore adds `@chown`, the narrowest group that contains the
+chown family, only while the socket is on (`openbao_admin_socket_syscalls`; set it to `""` to
+add nothing, if your host does not need it). It widens nothing else: the unit still has
+`NoNewPrivileges`, an empty capability set and no `socket_user`/`socket_group`, so the service
+can chown only what it already owns.
 
 **After every restart** (a reboot, an upgrade, `openbao_allow_restart`): `bao operator unseal`,
 threshold times, then the `health` hook.

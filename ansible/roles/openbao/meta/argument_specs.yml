@@ -231,6 +231,18 @@ argument_specs:
         type: bool
         description: "Restart a running server whose release, configuration or unit changed (a new TLS certificate or key is reloaded with SIGHUP instead, and the server stays unsealed). A restart SEALS it: set only while the operator can unseal."
         default: false
+      openbao_admin_socket:
+        type: bool
+        description: "Render a local unix listener (mode 0600, under /run, legacy unauthenticated generate-root endpoints enabled) so an operator holding the unseal shares can mint a root token after the initial one was revoked. Enable only for the root-generation window; a change is an owed restart like any configuration change."
+        default: false
+      openbao_admin_socket_path:
+        type: path
+        description: "The admin socket: /run/<dir>/<name>.sock; <dir> becomes the unit's RuntimeDirectory (0700). Used only with openbao_admin_socket."
+        default: /run/openbao/admin.sock
+      openbao_admin_socket_syscalls:
+        type: str
+        description: "SystemCallFilter allow-list added to the unit while the admin socket is on (empty adds none)."
+        default: "@chown"
       openbao_health_timeout: &htimeout
         type: int
         description: "Seconds per health request."

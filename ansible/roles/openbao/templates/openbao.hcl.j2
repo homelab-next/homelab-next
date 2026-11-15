@@ -24,6 +24,19 @@ listener "tcp" {
   tls_cipher_suites = {{ openbao_tls_cipher_suites | join(',') | to_json }}
 }
 
+{% if openbao_admin_socket | bool %}
+# Opt-in local admin socket (openbao_admin_socket), for the root-generation window only. Since 2.5.3
+# the unauthenticated /sys/generate-root/* endpoints are off on every listener, and the CLI uses
+# only the authenticated /sys/generate-root-token, so with the initial root token revoked
+# (ADR-0042 decision 6) this listener is the one way to mint a root token from the unseal shares.
+# Mode 0600 in a 0700 directory of the service account: reachable by root on the host alone.
+listener "unix" {
+  address = {{ openbao_admin_socket_path | to_json }}
+  socket_mode = "0600"
+  disable_unauthed_generate_root_endpoints = false
+}
+
+{% endif %}
 # Every request and response, HMAC'd, to a file only the service account reads, and to syslog
 # (the journal, and from there the log pipeline). Declared here, so they exist from the first
 # unseal and the API cannot remove them. With two devices a request is served while at least one

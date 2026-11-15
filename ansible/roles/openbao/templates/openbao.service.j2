@@ -59,6 +59,16 @@ RemoveIPC=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+{% if openbao_admin_socket | bool %}
+# Admin socket (openbao_admin_socket): systemd creates /run/{{ openbao_admin_socket_runtime_dir }} for the
+# service account, 0700, and removes it on stop.
+RuntimeDirectory={{ openbao_admin_socket_runtime_dir }}
+RuntimeDirectoryMode=0700
+{% if openbao_admin_socket_syscalls | length > 0 %}
+# Observed to kill the server with SIGSYS when the unix listener starts; see the role README.
+SystemCallFilter={{ openbao_admin_socket_syscalls }}
+{% endif %}
+{% endif %}
 
 [Install]
 WantedBy=multi-user.target

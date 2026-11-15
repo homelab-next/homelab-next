@@ -124,6 +124,21 @@ openbao_last_run_group: root
 # (readiness reports it) and leaves the server running.
 openbao_allow_restart: false
 openbao_health_timeout: 10
+# Opt-in local admin socket: a unix listener with the legacy unauthenticated /sys/generate-root/*
+# endpoints enabled (listener parameter disable_unauthed_generate_root_endpoints, true by default
+# since OpenBao 2.5.3 on every listener). The 2.7 CLI's `bao operator generate-root` uses only the
+# authenticated /sys/generate-root-token, so once the initial root token is revoked (ADR-0042
+# decision 6) an operator holding the unseal shares can mint a new root token ONLY through this
+# socket. Enable it for the root-generation window and turn it off again (a config change: the
+# usual owed restart, so openbao_allow_restart applies). Procedure: README, "A new root token".
+# The path must be /run/<dir>/<name>.sock; <dir> becomes the unit's RuntimeDirectory (0700) and
+# the socket is mode 0600, so only root on the host reaches it.
+openbao_admin_socket: false
+openbao_admin_socket_path: /run/openbao/admin.sock
+# Extra syscalls the unit allows while the socket is on. @chown (chown, fchown, fchownat, lchown
+# and their 32-bit forms) is what a live 2.7.x host needed (the unit's ~@privileged kills the
+# server with SIGSYS at unix-listener setup); see the README for why it is narrow and optional.
+openbao_admin_socket_syscalls: "@chown"
 # Where the backup hook writes the raft snapshot and its manifest, the export hook its copy, and
 # upgrade and restore their pre-upgrade and pre-restore snapshots.
 openbao_backup_dir: /var/backups/openbao
