@@ -93,6 +93,10 @@ argument_specs:
         type: int
         description: "ntfy priority 1-5 (with notify)."
         default: 4
+      lynis_notify_test_on_change: &test_on_change
+        type: bool
+        description: "Run the integrity sweep's --test once at deploy when the channel (mode, URL, topic, priority, token or recipient) changed, and fail the play with its error; skipped in check mode, with notify none and without dpkg_verify."
+        default: true
       lynis_notify_auth_ref: &auth
         type: str
         description: "Secret reference (secret:<name>) of an ntfy access token; empty = none."
@@ -140,6 +144,7 @@ argument_specs:
       lynis_notify_topic: *topic
       lynis_notify_priority: *priority
       lynis_notify_auth_ref: *auth
+      lynis_notify_test_on_change: *test_on_change
       lynis_mail_to: *mail_to
       lynis_dpkg_cli: *dpkg
       lynis_debsums_cli: *debsums
