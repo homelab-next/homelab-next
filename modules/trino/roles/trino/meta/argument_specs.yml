@@ -178,10 +178,6 @@ argument_specs:
         type: str
         description: systemd OnCalendar of the timer.
         default: '*-*-* 03:30:00 UTC'
-      trino_maintenance_delay:
-        type: str
-        description: systemd RandomizedDelaySec of the timer.
-        default: 10min
       trino_notify_id:
         type: str
         description: The notify row's registry id; its url is resolved from the registry.
@@ -245,6 +241,18 @@ argument_specs:
         type: str
         description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
         default: ''
+      trino_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      trino_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      trino_maintenance_max_age_hours:
+        type: int
+        description: Health fails when the maintenance last finished longer ago than this many hours.
+        default: 50
   readiness:
     short_description: Fail unless the container engine is ready, every credential resolves in its form
       and the catalog and the object store answer.
@@ -476,10 +484,6 @@ argument_specs:
         type: str
         description: systemd OnCalendar of the timer.
         default: '*-*-* 03:30:00 UTC'
-      trino_maintenance_delay:
-        type: str
-        description: systemd RandomizedDelaySec of the timer.
-        default: 10min
       trino_notify_id:
         type: str
         description: The notify row's registry id; its url is resolved from the registry.
@@ -535,6 +539,18 @@ argument_specs:
         type: str
         description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
         default: ''
+      trino_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      trino_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      trino_maintenance_max_age_hours:
+        type: int
+        description: Health fails when the maintenance last finished longer ago than this many hours.
+        default: 50
   backup:
     short_description: Name the data root for the backup (the engine is stateless).
     options:
@@ -700,10 +716,6 @@ argument_specs:
         type: str
         description: systemd OnCalendar of the timer.
         default: '*-*-* 03:30:00 UTC'
-      trino_maintenance_delay:
-        type: str
-        description: systemd RandomizedDelaySec of the timer.
-        default: 10min
       trino_notify_id:
         type: str
         description: The notify row's registry id; its url is resolved from the registry.
@@ -759,6 +771,18 @@ argument_specs:
         type: str
         description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
         default: ''
+      trino_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      trino_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      trino_maintenance_max_age_hours:
+        type: int
+        description: Health fails when the maintenance last finished longer ago than this many hours.
+        default: 50
   restore:
     short_description: 'Nothing to restore: the engine is stateless.'
     options:
@@ -924,10 +948,6 @@ argument_specs:
         type: str
         description: systemd OnCalendar of the timer.
         default: '*-*-* 03:30:00 UTC'
-      trino_maintenance_delay:
-        type: str
-        description: systemd RandomizedDelaySec of the timer.
-        default: 10min
       trino_notify_id:
         type: str
         description: The notify row's registry id; its url is resolved from the registry.
@@ -983,6 +1003,18 @@ argument_specs:
         type: str
         description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
         default: ''
+      trino_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      trino_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      trino_maintenance_max_age_hours:
+        type: int
+        description: Health fails when the maintenance last finished longer ago than this many hours.
+        default: 50
   upgrade:
     short_description: Validate an image bump (tag and digest) and record it as pending.
     options:
@@ -1148,10 +1180,6 @@ argument_specs:
         type: str
         description: systemd OnCalendar of the timer.
         default: '*-*-* 03:30:00 UTC'
-      trino_maintenance_delay:
-        type: str
-        description: systemd RandomizedDelaySec of the timer.
-        default: 10min
       trino_notify_id:
         type: str
         description: The notify row's registry id; its url is resolved from the registry.
@@ -1211,6 +1239,18 @@ argument_specs:
         type: str
         description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
         default: ''
+      trino_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      trino_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      trino_maintenance_max_age_hours:
+        type: int
+        description: Health fails when the maintenance last finished longer ago than this many hours.
+        default: 50
   export:
     short_description: 'Nothing to export: the engine is stateless.'
     options:
@@ -1376,10 +1416,6 @@ argument_specs:
         type: str
         description: systemd OnCalendar of the timer.
         default: '*-*-* 03:30:00 UTC'
-      trino_maintenance_delay:
-        type: str
-        description: systemd RandomizedDelaySec of the timer.
-        default: 10min
       trino_notify_id:
         type: str
         description: The notify row's registry id; its url is resolved from the registry.
@@ -1435,3 +1471,15 @@ argument_specs:
         type: str
         description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
         default: ''
+      trino_last_run_dir:
+        type: path
+        description: The shared last-run record directory (role last_run).
+        default: /var/lib/homelabnext/last-run
+      trino_last_run_group:
+        type: str
+        description: The group that may read the last-run records.
+        default: root
+      trino_maintenance_max_age_hours:
+        type: int
+        description: Health fails when the maintenance last finished longer ago than this many hours.
+        default: 50

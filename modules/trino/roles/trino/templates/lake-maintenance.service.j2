@@ -8,12 +8,17 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile={{ trino_maintenance_env_file }}
+# the job's last-run record (role last_run), written on start and again on stop, whatever the
+# outcome; a writer problem never changes the job's own result (the - prefix), so the role's health
+# looks at the record
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ trino_last_run_dir }} --group {{ trino_last_run_group }} --job timer:trino/lake-maintenance --unit %n --calendar "{{ trino_maintenance_schedule }}" --delay 600
 ExecStart=/usr/local/libexec/homelabnext/hnx-lake-maintenance
 # a statement may run for an hour (remove_orphan_files lists the whole table prefix)
 TimeoutStartSec=6h
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ trino_last_run_dir }} --group {{ trino_last_run_group }} --job timer:trino/lake-maintenance --unit %n --calendar "{{ trino_maintenance_schedule }}" --delay 600
 Nice=10
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths={{ trino_maintenance_state_dir }}
+ReadWritePaths={{ trino_maintenance_state_dir }} {{ trino_last_run_dir }}

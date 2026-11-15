@@ -6,7 +6,7 @@ Description=Lake maintenance, nightly (snapshot expiry and orphan-file removal)
 [Timer]
 OnCalendar={{ trino_maintenance_schedule }}
 Persistent=true
-RandomizedDelaySec={{ trino_maintenance_delay }}
+RandomizedDelaySec=10min
 
 [Install]
 WantedBy=timers.target

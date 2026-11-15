@@ -850,6 +850,7 @@
         "timer:openbao/acme-renew",
         "timer:prometheus/alerts",
         "timer:rkhunter/scan",
+        "timer:trino/lake-maintenance",
         "timer:trivy/scan"
       ]
     },

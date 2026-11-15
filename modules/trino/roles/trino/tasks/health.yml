@@ -65,7 +65,47 @@
         argv: ["{{ trino_systemctl_cli }}", is-active, hnx-lake-maintenance.timer]
       changed_when: false
       when: trino_maintenance_enabled | bool
-    - name: Read the last maintenance run
+    - name: Read the maintenance timer's last-run record (the unit ignores a writer failure, so health looks)
+      ansible.builtin.slurp:
+        src: "{{ trino_last_run_dir }}/timer%3Atrino%2Flake-maintenance.json"
+      register: trino_last_run
+      failed_when: false
+      when: trino_maintenance_enabled | bool
+    - name: Read the timer unit's age (a timer installed lately has not been due yet)
+      ansible.builtin.stat:
+        path: "{{ trino_unit_dir }}/hnx-lake-maintenance.timer"
+      register: trino_timer_unit
+      when: trino_maintenance_enabled | bool
+    - name: Read the time now, on the host
+      ansible.builtin.command:
+        argv: [date, -u, +%s]
+      register: trino_now
+      changed_when: false
+      check_mode: false
+      when: trino_maintenance_enabled | bool
+    - name: Name when the maintenance last finished
+      ansible.builtin.set_fact:
+        trino_ended: "{{ (trino_last_run.content | default('e30=') | b64decode | from_json).finished_at | default('') }}"
+      when: trino_maintenance_enabled | bool
+    - name: Read that time on the host
+      ansible.builtin.command:
+        argv: "{{ ['date', '-u', '-d', trino_ended, '+%s'] if trino_ended is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z\\Z') else ['echo', '0'] }}"
+      register: trino_ended_at
+      changed_when: false
+      check_mode: false
+      when: trino_maintenance_enabled | bool
+    - name: The maintenance ran lately (or the timer is too new to have been due)
+      ansible.builtin.assert:
+        that:
+          - >-
+            (trino_now.stdout | int) - (trino_ended_at.stdout | int) < (trino_maintenance_max_age_hours | int) * 3600
+            or (trino_ended == '' and (trino_now.stdout | int) - (trino_timer_unit.stat.mtime | default(0) | int) < (trino_maintenance_max_age_hours | int) * 3600)
+        fail_msg: >-
+          trino: the lake maintenance has no fresh last-run record in {{ trino_last_run_dir }}
+          (last finished {{ trino_ended or 'never' }}): its timer is not running, or its unit cannot
+          write the record (ReadWritePaths); snapshots and orphan files are not being cleaned
+      when: trino_maintenance_enabled | bool
+    - name: Read the last maintenance run's state
       ansible.builtin.slurp:
         src: "{{ trino_maintenance_state_dir }}/state.json"
       register: trino_maintenance_state

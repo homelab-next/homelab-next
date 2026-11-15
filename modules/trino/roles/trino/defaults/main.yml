@@ -79,8 +79,14 @@ trino_orphan_retention: 3d
 trino_expire_timeout: 600
 trino_orphan_timeout: 3600
 # after the writers' night window; OnCalendar, not a boot-relative timer (LL-041)
+# the timer's last-run record (role last_run, docs/role-interface.md section 8): the shared per-host
+# directory the status hub's job-last-run mapping reads, and the group that may read it
+trino_last_run_dir: /var/lib/homelabnext/last-run
+trino_last_run_group: root
+# the record is stale (health fails) when the last finish is older than this: a nightly timer, its
+# randomized delay and a night of grace
+trino_maintenance_max_age_hours: 50
 trino_maintenance_schedule: "*-*-* 03:30:00 UTC"
-trino_maintenance_delay: 10min
 # the failure alert: the notify row's registry id (or trino_notify_url, scheme://host:port), the
 # topic, the publish token by secret reference. A token goes over https unless
 # trino_notify_allow_plain_http is set (a LAN endpoint with no TLS; the token is write-only).

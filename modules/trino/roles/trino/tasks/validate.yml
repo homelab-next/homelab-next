@@ -53,7 +53,8 @@
       - trino_orphan_timeout | int >= 10 and trino_orphan_timeout | int <= 86400
       - trino_maintenance_user is match(trino_user_pattern)
       - trino_maintenance_schedule is match('^[-A-Za-z0-9:*,./ ]{3,80}\Z')
-      - trino_maintenance_delay is match('^[0-9]{1,4}(s|min|h)\Z')
+      - trino_last_run_dir is match(trino_path_pattern)
+      - trino_last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
       - trino_notify_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
       - trino_notify_url == '' or trino_notify_url is match(trino_url_pattern)
       - trino_notify_topic is match('^[-_A-Za-z0-9]{1,64}\Z')

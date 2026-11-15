@@ -30,3 +30,5 @@ trino_digest: "{{ trino_image.split('@')[1] | default('') }}"
 trino_heap_gb: "{{ (trino_heap[:-1] | int) / (1 if trino_heap.endswith('G') else 1024) }}"
 trino_query_gb: "{{ (trino_query_max_memory[:-2] | int) / (1 if trino_query_max_memory.endswith('GB') else 1024) }}"
 trino_mem_limit_gb: "{{ (trino_mem_limit[:-1] | int) / (1 if trino_mem_limit.endswith('g') else 1024) }}"
+# the shared last-run writer (role last_run) the maintenance service names
+trino_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run

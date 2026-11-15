@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import fake, run_role
+from rolerun import fake, last_run_vars, run_role
 
 ROOT = Path(__file__).resolve().parents[2]
 USER = pwd.getpwuid(os.getuid()).pw_name
@@ -426,6 +426,7 @@ def trino_vars(tmp: Path, **kw) -> dict:
         "trino_maintenance_env_file": str(tmp / "etc-hnx" / "maintenance.env"),
         "trino_unit_dir": str(tmp / "units"),
         "trino_systemctl_cli": str(bindir / "systemctl"),
+        **last_run_vars(tmp, "trino"),
         "trino_maintenance_owner": USER,
         "trino_maintenance_group": pwd.getpwuid(os.getuid()).pw_name,
     }
@@ -486,6 +487,15 @@ def test_trino_main_installs_the_maintenance_timer_with_the_lake_retention_value
     service = (tmp_path / "units" / "hnx-lake-maintenance.service").read_text()
     assert "ExecStart=/usr/local/libexec/homelabnext/hnx-lake-maintenance" in service
     assert f"EnvironmentFile={tmp_path}/etc-hnx/maintenance.env" in service
+    # the timer reports its runs like every role timer (role last_run), and a failed write is
+    # visible: the writer is installed, the unit names it, and the record directory is writable
+    assert "ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start" in service
+    assert "ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish" in service
+    assert (
+        "--job timer:trino/lake-maintenance" in service and f"--dir {tmp_path}/last-run" in service
+    )
+    assert os.access(tmp_path / "bin" / "hnx-last-run", os.X_OK)
+    assert (tmp_path / "last-run").is_dir()
     env_file = tmp_path / "etc-hnx" / "maintenance.env"
     assert oct(env_file.stat().st_mode & 0o777) == "0o600"
     assert f"HNX_LAKE_MAINT_PASSWORD={MAINT_PW}" in env_file.read_text()
