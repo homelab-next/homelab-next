@@ -200,9 +200,11 @@ def test_import_skips_caches_and_logs(src, tmp_path):
 def test_import_refuses_a_target_that_already_has_a_database(src, tmp_path):
     dst = tmp_path / "dst"
     mm.import_config(src, dst)
-    with pytest.raises(mm.ImportFailed, match="already holds a database"):
+    with pytest.raises(mm.ImportFailed, match="already holds a data root"):
         mm.import_config(src, dst)
-    mm.import_config(src, dst, replace=True)  # explicit
+    mm.import_config(src, dst, replace=True)  # explicit: the old root is moved aside, not deleted
+    assert (tmp_path / "dst.before-import" / "data" / "device.txt").is_file()
+    assert (dst / "data" / "device.txt").read_text() == SERVER_ID
 
 
 def test_import_fails_when_the_counts_differ(src, tmp_path, monkeypatch):
@@ -246,3 +248,177 @@ def test_map_boundaries():
     assert rw("/media2/x") == "/media2/x"
     assert rw("/mydata/media/x") == "/mydata/media/x"
     assert rw("http://h/media/x") == "http://h/media/x"
+
+
+# ----------------------------------------------------------------------------- review hardening
+
+
+def test_replace_never_touches_the_source(src, tmp_path):
+    before = sorted(str(p.relative_to(src)) for p in src.rglob("*"))
+    with pytest.raises(mm.ImportFailed, match="the source, or inside or around it"):
+        mm.import_config(src, src, replace=True)
+    with pytest.raises(mm.ImportFailed, match="inside or around"):
+        mm.import_config(src, src / "data" / "inner", replace=True)
+    with pytest.raises(mm.ImportFailed, match="inside or around"):
+        mm.import_config(src, src.parent, replace=True)
+    assert sorted(str(p.relative_to(src)) for p in src.rglob("*")) == before
+
+
+def test_replace_refuses_root_shallow_and_unrelated_directories(src, tmp_path):
+    for bad in ("/", "/srv", "/srv/media"):
+        with pytest.raises(mm.ImportFailed, match="too shallow"):
+            mm.import_config(src, Path(bad), replace=True)
+    other = tmp_path / "other" / "precious"
+    other.mkdir(parents=True)
+    (other / "keep.txt").write_text("keep")
+    with pytest.raises(mm.ImportFailed, match="not a media server data root"):
+        mm.import_config(src, other, replace=True)
+    assert (other / "keep.txt").read_text() == "keep"
+    assert not (tmp_path / "other" / "precious.partial").exists()
+
+
+def test_a_target_outside_the_data_root_or_around_a_library_root_is_refused(src, tmp_path):
+    with pytest.raises(mm.ImportFailed, match="outside the module's data root"):
+        mm.import_config(src, tmp_path / "x" / "y" / "dst", data_root=tmp_path / "elsewhere")
+    lib = tmp_path / "lib" / "media" / "movies"
+    with pytest.raises(mm.ImportFailed, match="library root"):
+        mm.import_config(src, tmp_path / "lib" / "media", {"/media": str(lib)})
+
+
+def test_a_failed_import_leaves_the_previous_target_intact(src, tmp_path, monkeypatch):
+    dst = tmp_path / "dst"
+    mm.import_config(src, dst)
+    marker = dst / "marker"
+    marker.write_text("previous")
+
+    real = mm._copy_db
+
+    def lossy(s, d):
+        real(s, d)
+        c = sqlite3.connect(d)
+        c.execute("DELETE FROM Users WHERE Id = 'u2'") if c.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'Users'"
+        ).fetchone() else None
+        c.commit()
+        c.close()
+
+    monkeypatch.setattr(mm, "_copy_db", lossy)
+    with pytest.raises(mm.ImportFailed, match="counts differ"):
+        mm.import_config(src, dst, replace=True)
+    assert marker.read_text() == "previous" and (dst / "data" / "device.txt").exists()
+    assert (tmp_path / "dst.partial").is_dir()  # kept for inspection
+    with pytest.raises(mm.ImportFailed, match="left by an earlier import"):
+        mm.import_config(src, dst, replace=True)
+
+
+def test_an_unrecognised_schema_or_zero_users_is_not_verified(tmp_path):
+    root = tmp_path / "s" / "a" / "src"
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "device.txt").write_text(SERVER_ID)
+    c = sqlite3.connect(root / "data" / "main.db")
+    c.execute("CREATE TABLE Foo (x)")
+    c.commit()
+    c.close()
+    with pytest.raises(mm.ImportFailed, match="unrecognised schema"):
+        mm.import_config(root, tmp_path / "t" / "a" / "dst")
+    c = sqlite3.connect(root / "data" / "main.db")
+    c.execute("CREATE TABLE Users (Id TEXT)")
+    c.execute("CREATE TABLE Devices (Id INTEGER)")
+    c.commit()
+    c.close()
+    with pytest.raises(mm.ImportFailed, match="no users"):
+        mm.import_config(root, tmp_path / "t" / "a" / "dst")
+    mm.import_config(root, tmp_path / "t" / "a" / "dst", allow_empty=True)
+
+
+def test_relative_and_missing_inputs_are_clean_refusals(src, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(src.parent)
+    assert mm.counts(Path("src"))["users"] == 2  # a relative DIR is resolved
+    assert mm.main(["counts", "nowhere"]) == 1
+    assert "is this a config/data directory" in capsys.readouterr().err
+    # a source with no config/ directory still imports; system.xml is created with Quick Connect
+    import shutil
+
+    shutil.rmtree(src / "config")
+    mm.import_config(src, tmp_path / "t" / "a" / "dst")
+    assert (
+        "QuickConnectAvailable"
+        in (tmp_path / "t" / "a" / "dst" / "config" / "system.xml").read_text()
+    )
+
+
+def test_host_paths_are_blanked_or_reported_and_symlinks_listed(src, tmp_path):
+    (src / "config" / "system.xml").write_text(
+        "<ServerConfiguration>\n  <MetadataPath>/mnt/bulk/metadata</MetadataPath>\n"
+        "  <CachePath>/cache</CachePath>\n  <CertificatePath>/etc/ssl/old.pfx</CertificatePath>\n"
+        "</ServerConfiguration>\n"
+    )
+    (src / "config" / "encoding.xml").write_text(
+        "<EncodingOptions>\n  <EncoderAppPath>/usr/lib/old/ffmpeg</EncoderAppPath>\n"
+        "  <HardwareAccelerationType>nvenc</HardwareAccelerationType>\n</EncodingOptions>\n"
+    )
+    bulk = src.parent / "bulk"
+    bulk.mkdir()
+    (src / "metadata").symlink_to(bulk, target_is_directory=True)
+    (src / "config" / "link.xml").symlink_to(src / "config" / "system.xml")
+    dst = tmp_path / "t" / "a" / "dst"
+    rep = mm.import_config(src, dst)
+    sysx = (dst / "config" / "system.xml").read_text()
+    assert "<MetadataPath></MetadataPath>" in sysx and "<CachePath>/cache</CachePath>" in sysx
+    assert "<EncoderAppPath></EncoderAppPath>" in (dst / "config" / "encoding.xml").read_text()
+    assert any("MetadataPath=/mnt/bulk/metadata" in x for x in rep["changes"]["host_paths_blanked"])
+    assert rep["host_paths"] == ["system.xml:CertificatePath=/etc/ssl/old.pfx"]
+    assert sorted(rep["skipped_symlinks"]) == ["config/link.xml", "metadata"]
+    with pytest.raises(mm.ImportFailed, match="may not have"):
+        mm.import_config(src, tmp_path / "t" / "a" / "dst2", strict=True)
+
+
+def test_map_rules_apply_in_one_pass_and_a_root_prefix_is_refused():
+    rw = mm._rewriter({"/a": "/b", "/b": "/c"})
+    assert rw("/a/x") == "/b/x" and rw("/b/y") == "/c/y"  # no chaining
+    rw = mm._rewriter({"/media": "/srv/m", "/media/old": "/srv/o"})
+    assert rw("/media/old/x") == "/srv/o/x"  # the longest prefix wins
+    with pytest.raises(mm.ImportFailed, match="root prefix"):
+        mm._rewriter({"/": "/srv"})
+    with pytest.raises(mm.ImportFailed, match="root prefix"):
+        mm._rewriter({"": "/srv"})
+
+
+def test_blob_columns_are_rewritten_when_json_and_refused_when_binary(tmp_path):
+    root = make_source(tmp_path / "src", legacy=True)
+    c = sqlite3.connect(root / "data" / "library.db")
+    c.execute("CREATE TABLE Blobs (id INT, data BLOB)")
+    c.execute("INSERT INTO Blobs VALUES (1, ?)", (b'{"Path":"/media/movies/a/a.mkv"}',))
+    c.commit()
+    c.close()
+    dst = tmp_path / "t" / "a" / "dst"
+    mm.import_config(root, dst, {"/media": "/srv/media"})
+    c = sqlite3.connect(dst / "data" / "library.db")
+    (v,) = c.execute("SELECT data FROM Blobs").fetchone()
+    assert isinstance(v, bytes) and v == b'{"Path":"/srv/media/movies/a/a.mkv"}'
+    c.close()
+    # a binary (non-JSON) blob that holds an old path is refused, listing where
+    c = sqlite3.connect(root / "data" / "library.db")
+    c.execute("UPDATE Blobs SET data = ?", (b"\x0a\x14/media/movies/a.mkv\x00",))
+    c.commit()
+    c.close()
+    with pytest.raises(mm.ImportFailed, match=r"library\.db:Blobs\.data"):
+        mm.import_config(root, tmp_path / "t" / "a" / "dst2", {"/media": "/srv/media"})
+
+
+def test_crlf_survives_and_identity_bytes_and_tokens_are_kept(src, tmp_path):
+    (src / "root" / "default" / "Movies" / "options.xml").write_bytes(
+        b"<LibraryOptions>\r\n<Path>/media/movies</Path>\r\n</LibraryOptions>\r\n"
+    )
+    dst = tmp_path / "t" / "a" / "dst"
+    mm.import_config(src, dst, {"/media": "/srv/media"})
+    out = (dst / "root" / "default" / "Movies" / "options.xml").read_bytes()
+    assert out == b"<LibraryOptions>\r\n<Path>/srv/media/movies</Path>\r\n</LibraryOptions>\r\n"
+    assert (dst / "data" / "device.txt").read_bytes() == (src / "data" / "device.txt").read_bytes()
+    assert mm._device_tokens(dst) == mm._device_tokens(src) == ["tok-a", "tok-b", "tok-c"]
+
+
+def test_a_remaining_old_prefix_fails_the_import(src, tmp_path, monkeypatch):
+    monkeypatch.setattr(mm, "_rewrite_db", lambda *a, **k: 0)  # a rewrite that silently did nothing
+    with pytest.raises(mm.ImportFailed, match="old library prefix remains"):
+        mm.import_config(src, tmp_path / "t" / "a" / "dst", {"/media": "/srv/media"})

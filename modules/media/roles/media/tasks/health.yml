@@ -7,6 +7,8 @@
       ansible.builtin.include_tasks: validate.yml
     - name: Build the application spec
       ansible.builtin.include_tasks: app.yml
+    - name: The library is still mounted
+      ansible.builtin.include_tasks: library.yml
     - name: Every container of the spec is running and healthy
       ansible.builtin.include_role:
         name: compose_app

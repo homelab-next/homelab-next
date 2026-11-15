@@ -5,17 +5,8 @@
 - name: Build the application spec
   ansible.builtin.include_tasks: app.yml
 
-- name: Refuse a library path that is not there (a missing mount would be served as an empty library)
-  ansible.builtin.stat:
-    path: "{{ media_library_path }}"
-  register: media_library_stat
-  when: media_start | bool
-- name: The library is a directory on this guest
-  ansible.builtin.assert:
-    that: media_library_stat.stat.isdir | default(false)
-    fail_msg: >-
-      media: {{ media_library_path }} is not a directory on this guest. Mount the library there (the
-      site's source), or set media_library_path; the server would otherwise start with an empty library.
+- name: The library is mounted (a mount point or marked), before the container can start
+  ansible.builtin.include_tasks: library.yml
   when: media_start | bool
 
 - name: Create the data directories

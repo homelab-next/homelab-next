@@ -17,6 +17,7 @@
       - not (media_data_root ~ '/').startswith(media_library_path ~ '/')
       - not (media_cache_dir ~ '/').startswith(media_library_path ~ '/')
       - media_library_path not in ['/srv', '/mnt', '/media', '/home', '/opt', '/var', '/usr', '/etc']
+      - media_library_marker is match('^\.?[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\Z')
       - media_quick_connect is boolean
       - media_hwaccel in media_hwaccel_values
       - media_timezone is match('^[A-Za-z][A-Za-z0-9_+/-]{0,63}\Z')

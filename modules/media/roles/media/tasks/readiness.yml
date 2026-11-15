@@ -8,4 +8,6 @@
         tasks_from: readiness
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
+    - name: The library is mounted
+      ansible.builtin.include_tasks: library.yml
   tags: [readiness]

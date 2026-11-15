@@ -10,6 +10,10 @@ media_dir: /opt/compose/media
 # the library as the guest sees it, mounted read-only into the container at the same path. The
 # site supplies the real source (a mount of its own on the guest); the role never writes to it.
 media_library_path: /srv/media
+# proof that the library is really there: the server must not start on an empty directory (an
+# unmounted mount point is one) and prune its database on the next scan. The path must be a mount
+# point (mountpoint -q) or hold this marker file, which the operator places on the library itself.
+media_library_marker: .hnx-media-library
 # owner and group of the compose project and the data root
 media_owner: root
 media_group: "{{ media_gid }}"

@@ -36,6 +36,7 @@ GUEST = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["hosts"
 def media_vars(tmp_path: Path, **kw) -> dict:
     lib = tmp_path / "library"
     lib.mkdir(exist_ok=True)
+    (lib / ".hnx-media-library").write_text("")  # the operator's marker on a mounted library
     v = {
         "media_logical_id": "media",
         "ansible_host": GUEST,
@@ -146,7 +147,21 @@ def test_main_refuses_to_start_on_a_library_that_is_not_there(tmp_path):
     """No mount at the library path would be served as an empty library (and pruned on a scan)."""
     v = media_vars(tmp_path, media_start=True, media_library_path=str(tmp_path / "not-mounted"))
     r = run_role(tmp_path, ROLE, "main", v)
-    assert r.returncode != 0 and "is not a directory on this guest" in r.stdout
+    assert r.returncode != 0 and "is not a mounted library" in r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_main_refuses_to_start_on_an_empty_directory_that_is_not_a_mount(tmp_path):
+    """An unmounted mount point is an existing, empty directory: is-a-directory proves nothing."""
+    empty = tmp_path / "empty-library"
+    empty.mkdir()
+    r = run_role(
+        tmp_path,
+        ROLE,
+        "main",
+        media_vars(tmp_path, media_start=True, media_library_path=str(empty)),
+    )
+    assert r.returncode != 0 and "is not a mounted library" in r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
 
 
@@ -192,6 +207,19 @@ def test_health_fails_when_quick_connect_is_off(tmp_path):
     with Server(quick_connect="false") as srv:
         r = _health(tmp_path, srv)
     assert r.returncode != 0 and "Quick Connect is off" in r.stdout
+
+
+def test_health_fails_when_the_library_is_no_longer_mounted(tmp_path):
+    with Server() as srv:
+        (tmp_path / "library").mkdir()
+        (tmp_path / "library" / ".hnx-media-library").unlink(missing_ok=True)
+        host, port = srv.addr
+        v = media_vars(tmp_path, media_bind=host, media_port=port)
+        (
+            tmp_path / "library" / ".hnx-media-library"
+        ).unlink()  # the mount (and its marker) went away
+        r = run_role(tmp_path, ROLE, "health", v, env=_docker(tmp_path))
+    assert r.returncode != 0 and "is not a mounted library" in r.stdout
 
 
 def test_health_fails_when_the_container_is_unhealthy(tmp_path):
@@ -320,3 +348,75 @@ def test_upgrade_refuses_an_unpinned_target_and_records_a_pinned_one(tmp_path):
     assert ok.returncode == 0, ok.stdout + ok.stderr
     pending = json.loads((tmp_path / "app" / "pending-upgrade.json").read_text())
     assert pending == {"service": "media", "tag": "10.99.0", "digest": "sha256:" + "a" * 64}
+
+
+def _export_for_restore(tmp_path):
+    v = media_vars(tmp_path)
+    _config(tmp_path / "data")
+    log = _docker_log(tmp_path)
+    env = {"PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    assert run_role(tmp_path, ROLE, "export", v, env=env).returncode == 0
+    src = tmp_path / "src"
+    src.mkdir()
+    for p in (tmp_path / "data" / "export").iterdir():
+        (src / p.name).write_bytes(p.read_bytes())
+    log.unlink(missing_ok=True)
+    return v, src, log, env
+
+
+def _write_archive(src: Path, add) -> None:
+    archive = src / "media-config.tar.gz"
+    with tarfile.open(archive, "w:gz") as t:
+        data = SERVER_ID.encode()
+        info = tarfile.TarInfo("data/device.txt")
+        info.size = len(data)
+        t.addfile(info, __import__("io").BytesIO(data))
+        add(t)
+    (src / "listing.jsonl").write_text(
+        json.dumps(
+            {"key": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()}
+        )
+        + "\n"
+    )
+
+
+@pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE])
+def test_restore_refuses_link_and_special_members_before_stopping_anything(tmp_path, kind):
+    v, src, log, env = _export_for_restore(tmp_path)
+
+    def add(t):
+        info = tarfile.TarInfo("data/evil")
+        info.type = kind
+        info.linkname = "data/device.txt" if kind == tarfile.LNKTYPE else "/etc/passwd"
+        t.addfile(info)
+
+    _write_archive(src, add)
+    bad = run_role(tmp_path, ROLE, "restore", {**v, "media_restore_source": str(src)}, env=env)
+    assert bad.returncode != 0 and "link or special file" in bad.stdout
+    assert not log.exists()  # the server was never stopped
+    assert not (tmp_path / "data" / "config.restoring").exists()
+
+
+def test_restore_with_another_server_id_leaves_the_server_running_and_the_config_alone(tmp_path):
+    v, src, log, env = _export_for_restore(tmp_path)
+    other = "f" * 32
+    bad = run_role(
+        tmp_path, ROLE, "restore",
+        {**v, "media_restore_source": str(src), "media_expected_server_id": other}, env=env,
+    )  # fmt: skip
+    assert bad.returncode != 0 and "is not the expected" in bad.stdout
+    assert not log.exists()  # never stopped
+    assert (tmp_path / "data" / "config" / "data" / "device.txt").read_text() == SERVER_ID
+    assert not (tmp_path / "data" / "config.before-restore").exists()
+
+
+def test_restore_starts_the_server_only_after_the_swap(tmp_path):
+    v, src, log, env = _export_for_restore(tmp_path)
+    ok = run_role(
+        tmp_path, ROLE, "restore",
+        {**v, "media_restore_source": str(src), "media_expected_server_id": SERVER_ID, "media_start": True}, env=env,
+    )  # fmt: skip
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    calls = log.read_text().splitlines()
+    assert calls[0].endswith(" stop") and calls[-1].endswith(" up -d")
+    assert (tmp_path / "data" / "config" / "data" / "device.txt").read_text() == SERVER_ID
