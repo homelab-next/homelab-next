@@ -74,7 +74,7 @@ argument_specs:
       tunnel_sysctl_file: &sysctl_file
         type: path
         description: "The sysctl.d file the ceilings are written to."
-        default: /etc/sysctl.d/90-hnx-tunnel.conf
+        default: /etc/sysctl.d/00-hnx-tunnel-udp.conf
       tunnel_start: &start
         type: bool
         description: "Run docker compose up after rendering."

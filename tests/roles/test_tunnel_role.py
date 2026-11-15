@@ -193,7 +193,7 @@ class Ready:
 
 def _health(tmp_path, connections: int, **kw):
     with Ready(connections) as (host, port):
-        v = tunnel_vars(tmp_path, tunnel_bind=host, tunnel_port=port)
+        v = tunnel_vars(tmp_path, tunnel_bind=host, tunnel_port=port, tunnel_start=True)
         env = {**SECRETS, **_docker(tmp_path, port=f"{host}:{port}"), **kw}
         return run_role(tmp_path, ROLE, "health", v, env=env)
 
@@ -211,7 +211,7 @@ def test_health_fails_with_no_ready_connection(tmp_path):
 
 def test_health_fails_when_the_port_is_published_on_another_address(tmp_path):
     with Ready(2) as (host, port):
-        v = tunnel_vars(tmp_path, tunnel_bind=host, tunnel_port=port)
+        v = tunnel_vars(tmp_path, tunnel_bind=host, tunnel_port=port, tunnel_start=True)
         env = {**SECRETS, **_docker(tmp_path, port=f"{GUEST}:{port}")}
         r = run_role(tmp_path, ROLE, "health", v, env=env)
     assert r.returncode != 0 and "bound to the guest's address only" in r.stdout
@@ -317,3 +317,51 @@ def test_remove_is_idempotent_and_deletes_the_token_file(tmp_path):
     r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr  # a half-removed host: no compose file at all
     assert log.read_text().count("down") == 2
+
+
+def _logging_docker(tmp_path: Path) -> tuple[dict, Path]:
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    log = tmp_path / "docker.log"
+    fake(
+        bindir / "docker",
+        f"import sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\n",
+    )
+    return {"PATH": f"{bindir}:{os.environ['PATH']}"}, log
+
+
+def test_a_rotated_token_recreates_the_running_connector_and_an_unchanged_one_does_not(tmp_path):
+    env, log = _logging_docker(tmp_path)
+    v = tunnel_vars(tmp_path, tunnel_start=True)
+    first = run_role(tmp_path, ROLE, "main", v, env={**SECRETS, **env})
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert log.read_text().count("--force-recreate") == 1  # the token file was just written
+    again = run_role(tmp_path, ROLE, "main", v, env={**SECRETS, **env})
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+    assert log.read_text().count("--force-recreate") == 1  # same token: left running
+    rotated = _b64({"a": "other" * 6, "t": "11111111-2222-3333-4444-555555555555", "s": "n" * 40})
+    third = run_role(tmp_path, ROLE, "main", v, env={ENV: rotated, **env})
+    assert third.returncode == 0, third.stdout + third.stderr
+    assert log.read_text().count("--force-recreate") == 2  # a rotated token is picked up
+    assert (tmp_path / "data" / "join" / "token").read_text() == rotated
+    assert rotated not in third.stdout
+
+
+def test_nothing_is_recreated_when_the_connector_is_deliberately_not_started(tmp_path):
+    env, log = _logging_docker(tmp_path)
+    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path), env={**SECRETS, **env})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not log.exists() or "--force-recreate" not in log.read_text()
+
+
+def test_health_reports_not_started_by_design_instead_of_failing(tmp_path):
+    env, log = _logging_docker(tmp_path)
+    r = run_role(tmp_path, ROLE, "health", tunnel_vars(tmp_path), env={**SECRETS, **env})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "deliberately not running" in r.stdout
+    assert not log.exists()  # no container or endpoint was asked
+
+
+def test_the_sysctl_drop_in_sorts_first():
+    defaults = yaml.safe_load((Path(ROLE) / "defaults" / "main.yml").read_text())
+    assert Path(defaults["tunnel_sysctl_file"]).name.startswith("00-")

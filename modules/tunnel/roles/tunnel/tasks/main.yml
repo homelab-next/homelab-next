@@ -31,6 +31,7 @@
     owner: "{{ tunnel_uid | int }}"
     group: "{{ tunnel_gid | int }}"
     mode: "0400"
+  register: tunnel_join_written
   no_log: true
 
 # No blanket no_log here: docker pull / compose up failures stay readable. compose_app hides the
@@ -48,3 +49,11 @@
     compose_app_start: "{{ tunnel_app.compose_app_start }}"
     compose_app_validate_with_docker: "{{ tunnel_app.compose_app_validate_with_docker }}"
     compose_app_spec: "{{ tunnel_app.compose_app_spec }}"
+
+# cloudflared reads the token file only at start and compose does not see a bind-mounted file's
+# content change, so a rotated secret:tunnel/token needs the container recreated.
+- name: Recreate the connector so a changed token is used
+  ansible.builtin.command:
+    argv: ["{{ tunnel_docker_cli }}", compose, -f, "{{ tunnel_app.compose_app_dir }}/docker-compose.yml", up, -d, --force-recreate, tunnel]
+  when: tunnel_join_written is changed and tunnel_start | bool
+  changed_when: true
