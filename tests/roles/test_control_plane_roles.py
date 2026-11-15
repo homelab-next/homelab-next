@@ -342,6 +342,34 @@ def test_broker_deploys_builtin_only_manifests_under_any_id(tmp_path):
     assert results == [(False, "")] * 4, results
 
 
+def _platform_registry(tmp_path, bus_host: str) -> str:
+    """A platform-shape registry (a ``hosts:`` map, rows with ``protocol:``) whose events bus is
+    placed on ``bus_host``: there ``field='host'`` names the service alias, never a host."""
+    doc = {
+        "lab": {"name": "demo", "domain": "example.internal", "svc_label": "svc", "owner": "ops"},
+        "hosts": {"localhost": {"zone": "mgmt"}, "other-01": {"zone": "mgmt"}},
+        "services": {
+            "events": {"capability": "events", "host": bus_host, "protocol": "nats",
+                       "port": 4222, "tls": "none"},
+        },
+    }  # fmt: skip
+    path = tmp_path / f"platform-{bus_host}.yml"
+    path.write_text(yaml.safe_dump(doc))
+    return str(path)
+
+
+def test_broker_places_a_loopback_bus_by_host_id_on_a_platform_registry(tmp_path):
+    """Regression: the placement check compared the alias's first label (the capability) with the
+    inventory host, so it refused a bus that is on this host; it compares the row's host id."""
+    base = {**BROKER, "broker_manifest": _manifest(tmp_path, "lab-broker-proof")}
+    results = run_cases(tmp_path, "broker", "validate", base, [
+        {"hnx_registry_file": _platform_registry(tmp_path, "localhost")},
+        {"hnx_registry_file": _platform_registry(tmp_path, "other-01")},
+    ])  # fmt: skip
+    assert results[0] == (False, ""), results[0]
+    assert results[1][0], results[1]
+
+
 def test_status_hub_refuses_bad_inputs(tmp_path):
     _refusals(tmp_path, "status_hub", HUB, [
         {"status_hub_bind_address": "0.0.0.0"},  # no-raw-endpoint: allow the refused wildcard
