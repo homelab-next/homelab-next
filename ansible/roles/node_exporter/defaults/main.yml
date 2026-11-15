@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Host metrics (control metrics-agent, applied per guest): the distribution's node exporter, so the
+# metrics service can scrape CPU, memory, filesystem and network of every guest. The exporter
+# listens on the guest's own address only, never all interfaces; the guest firewall admits the
+# metrics service alone (the site's grants), because the endpoint has no authentication of its own.
+node_exporter_bind: "{{ ansible_host }}"
+# node_exporter_port (required): the port the metrics service scrapes, the site's one choice (the
+# generator is given the same number: hnx registry generate --node-exporter-port)
+# Filesystem types the filesystem collector skips, beside the package's own exclusions (a pseudo,
+# overlay or container-runtime mount would alert as a full disk).
+node_exporter_fs_types_exclude: "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|tmpfs)$"
+node_exporter_defaults_file: /etc/default/prometheus-node-exporter
+node_exporter_service: prometheus-node-exporter
+node_exporter_systemctl_cli: systemctl
+node_exporter_restart: true
+node_exporter_health_timeout: 10
+node_exporter_state_dir: /var/lib/homelabnext/node_exporter

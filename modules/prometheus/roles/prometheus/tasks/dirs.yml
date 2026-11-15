@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); tsdb/ belongs to the container's user (it writes
+# there), config/ and scrape-credentials/ are root's and readable by the container's group.
+- name: Create the data root and its directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ prometheus_data_root }}", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+    - {path: "{{ prometheus_data_root }}/tsdb", owner: "{{ prometheus_uid | int }}", group: "{{ prometheus_gid | int }}", mode: "0700"}
+    - {path: "{{ prometheus_data_root }}/config", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+    - {path: "{{ prometheus_data_root }}/config/{{ prometheus_generated_dir }}", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+    - {path: "{{ prometheus_data_root }}/scrape-credentials", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+    - {path: "{{ prometheus_data_root }}/export", owner: "{{ prometheus_owner }}", group: "{{ prometheus_group }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

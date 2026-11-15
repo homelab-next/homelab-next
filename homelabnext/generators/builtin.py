@@ -501,8 +501,9 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
     "prometheus",
     "Prometheus scrape_configs for services exposing metrics",
     "monitoring (Prometheus)",
+    options=("node_targets",),
 )
-def prometheus(reg: Registry) -> dict[str, str]:
+def prometheus(reg: Registry, node_targets=None) -> dict[str, str]:
     jobs = []
     credentials = {}
     for s in reg.rows(*OBSERVED_TIERS):
@@ -540,12 +541,48 @@ def prometheus(reg: Registry) -> dict[str, str]:
         jobs.append(job)
     scrape_path = "prometheus/scrape_configs.yml"
     credentials_path = scrape_path.rpartition("/")[0] + "/credentials.json"
-    return {
+    out = {
         scrape_path: _yaml_doc(reg, {"scrape_configs": jobs}),
         credentials_path: _json_doc(
             reg, {"credentials": [credentials[k] for k in sorted(credentials)]}
         ),
     }
+    if node_targets is not None:
+        out[scrape_path.rpartition("/")[0] + "/node_targets.yml"] = _yaml_doc(
+            reg, _node_targets(reg, node_targets)
+        )
+    return out
+
+
+def _node_targets(reg: Registry, spec) -> list[dict]:
+    """The host-metrics targets (``node_targets`` option, ``{port, exclude}``): one file_sd entry
+    for every host of this registry on ``port``, less the ``exclude``d hosts, so a deployment's
+    targets are exactly its own registry's hosts and none of another lab's.  A host that runs no
+    exporter (an appliance) is listed in ``exclude``, never left to alert as down."""
+    if not isinstance(spec, dict) or set(spec) - {"port", "exclude"} or "port" not in spec:
+        raise GeneratorRefusal("node_targets: a mapping with a port and optionally exclude")
+    port = spec["port"]
+    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+        raise GeneratorRefusal("node_targets: port must be an integer from 1 to 65535")
+    exclude = spec.get("exclude", [])
+    if isinstance(exclude, str) or any(not isinstance(h, str) for h in exclude):
+        raise GeneratorRefusal("node_targets: exclude is a list of host names")
+    unknown = sorted(set(exclude) - set(reg.hosts))
+    if unknown:
+        raise GeneratorRefusal(f"node_targets: exclude names no registry host: {unknown}")
+    entries = []
+    for name in sorted(reg.hosts):
+        if name in exclude:
+            continue
+        host = reg.hosts[name]
+        address = f"[{host.address}]" if ":" in host.address else host.address
+        entries.append(
+            {
+                "targets": [f"{address}:{port}"],
+                "labels": {"host": name, "role": host.role, "zone": host.zone},
+            }
+        )
+    return entries
 
 
 # 5 ---------------------------------------------------------------- blackbox

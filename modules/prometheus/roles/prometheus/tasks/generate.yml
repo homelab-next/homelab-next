@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+# The scrape targets, rendered on the controller by the metrics generator from THIS deployment's
+# registry: `hnx registry generate <registry> <scratch> --only prometheus --node-exporter-port N
+# [--node-exporter-exclude HOST]...`. A service row with a metrics block is a job; every registry
+# host is a host-exporter target. The lab's registry holds the new lab only, so no other lab's host
+# can become a target. Read-only on the controller (a scratch directory, removed whatever
+# happens), so it runs under --check too.
+- name: Render the target lists with the generator (on the controller)
+  block:
+    - name: Make a scratch directory on the controller
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: hnx-metrics-targets-
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: prometheus_scratch
+    - name: Run the generator for this registry
+      ansible.builtin.command:
+        argv: >-
+          {{ prometheus_hnx_cli + ['registry', 'generate', prometheus_registry, prometheus_scratch.path,
+             '--only', 'prometheus', '--node-exporter-port', (prometheus_node_exporter_port | int | string)]
+             + (prometheus_node_exporter_exclude | map('regex_replace', '^', '--node-exporter-exclude=') | list) }}
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+    - name: Read the generated target lists and credential list
+      ansible.builtin.set_fact:
+        prometheus_scrape_text: "{{ lookup('ansible.builtin.file', prometheus_scratch.path ~ '/' ~ prometheus_scrape_file, rstrip=false) }}"
+        prometheus_node_text: "{{ lookup('ansible.builtin.file', prometheus_scratch.path ~ '/' ~ prometheus_node_targets_file, rstrip=false) }}"
+        prometheus_scrape_auths: "{{ (lookup('ansible.builtin.file', prometheus_scratch.path ~ '/' ~ prometheus_authlist_file) | from_json).credentials }}"
+      no_log: true
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ prometheus_scratch.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      when: prometheus_scratch.path is defined
+  tags: [health, readiness]
+
+# What the generator rendered is held to its own contract: every credential is a secret: reference
+# written under the credentials directory the generated jobs name, with an owner-only mode, so the
+# role never writes a file elsewhere or reads a secret outside the store's naming.
+- name: The generated credential list is what the role may write
+  ansible.builtin.assert:
+    that:
+      - prometheus_scrape_auths | rejectattr('secret', 'match', prometheus_ref_pattern) | list | length == 0
+      - prometheus_scrape_auths | rejectattr('path', 'match', '^' ~ (prometheus_container_authfiles_dir | regex_escape) ~ '(/[a-z][a-z0-9_-]*)+\.credentials\Z') | list | length == 0
+      - prometheus_scrape_auths | rejectattr('mode', 'equalto', '0600') | list | length == 0
+    fail_msg: >-
+      prometheus: the generated scrape credentials must each be a secret: reference at a .credentials
+      file under {{ prometheus_container_authfiles_dir }} with mode 0600; fix the registry rows, not this check
+  tags: [health, readiness]

@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: Apache-2.0
+# The alert forwarder: the notify endpoint (by logical id), the publish token (owner-only), the
+# script, its timer, and one test message through the real send path when the channel changed
+# (LL-567: a control deployed green whose channel could never deliver).
+- name: Resolve the notify endpoint
+  ansible.builtin.set_fact:
+    prometheus_notify_url: "{{ lookup('hnx_registry', prometheus_notify_id, field='url') }}"
+
+- name: Refuse a notify endpoint that is not http(s), or a token over plain http
+  ansible.builtin.assert:
+    that:
+      - prometheus_notify_url is match('^https?://')
+      - prometheus_notify_url is match('^https://') or prometheus_notify_allow_plain_http | bool
+    fail_msg: "prometheus: the notify endpoint {{ prometheus_notify_url }} is not http(s), or the token would go over plain http (set prometheus_notify_allow_plain_http for a LAN endpoint with no TLS)"
+
+- name: Warn that the token goes over plain http (the explicit opt-in)
+  ansible.builtin.debug:
+    msg: "prometheus: the publish token goes in clear to {{ prometheus_notify_url }} (prometheus_notify_allow_plain_http); LAN only, prefer TLS"
+  when: prometheus_notify_url is not match('^https://')
+
+- name: Write the publish token (owner-only)
+  block:
+    - name: Ensure the token directory exists
+      ansible.builtin.file:
+        path: "{{ prometheus_notify_auth_file | dirname }}"
+        state: directory
+        mode: "0700"
+    - name: Write the token
+      ansible.builtin.copy:
+        dest: "{{ prometheus_notify_auth_file }}"
+        content: "{{ lookup('hnx_secret', prometheus_notify_auth_ref) | trim }}\n"
+        mode: "0600"
+      no_log: true
+
+- name: Ensure the state and script directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ prometheus_state_dir }}", mode: "0700"}
+    - {path: "{{ prometheus_alert_script | dirname }}", mode: "0755"}
+
+- name: Write the alert forwarder
+  ansible.builtin.template:
+    src: alert-notify.py.j2
+    dest: "{{ prometheus_alert_script }}"
+    mode: "0700"
+
+- name: Test the alert channel once when it changed (--test; skipped in check mode)
+  when: prometheus_notify_test_on_change | bool and not ansible_check_mode
+  block:
+    - name: Fingerprint the channel (URL, topic, priority, token digest)
+      ansible.builtin.set_fact:
+        prometheus_channel_fp: >-
+          {{ [prometheus_notify_url, prometheus_notify_topic, prometheus_notify_priority | string,
+              lookup('hnx_secret', prometheus_notify_auth_ref) | trim | hash('sha256')]
+             | join('|') | hash('sha256') }}
+      no_log: true
+    - name: Look for the digest of the channel last tested
+      ansible.builtin.slurp:
+        src: "{{ prometheus_state_dir }}/channel-test.sha256"
+      register: prometheus_channel_tested
+      failed_when: false
+    - name: Send one test message through the script's own send path
+      ansible.builtin.command:
+        argv: ["{{ prometheus_alert_script }}", --test]
+      register: prometheus_channel_test
+      when: >-
+        prometheus_channel_tested.content is not defined
+        or (prometheus_channel_tested.content | b64decode | trim) != prometheus_channel_fp
+      changed_when: true
+      failed_when: false
+    - name: Fail the play with the script's error when the channel could not deliver
+      ansible.builtin.assert:
+        that: prometheus_channel_test is skipped or prometheus_channel_test.rc == 0
+        fail_msg: >-
+          prometheus: the alert channel did not deliver its test message
+          ({{ (prometheus_channel_test.stderr | default('') | trim) or (prometheus_channel_test.stdout | default('') | trim) }});
+          alerts that cannot be delivered are not alerts (set prometheus_notify_test_on_change: false to skip the test)
+    - name: Remember the tested channel, so an unchanged one is not tested again
+      ansible.builtin.copy:
+        dest: "{{ prometheus_state_dir }}/channel-test.sha256"
+        content: "{{ prometheus_channel_fp }}\n"
+        mode: "0600"
+      when: prometheus_channel_test is not skipped
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ prometheus_last_run_dir }}"
+    last_run_group: "{{ prometheus_last_run_group }}"
+    last_run_writer: "{{ prometheus_last_run_writer }}"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "alerts.{{ item }}.j2"
+    dest: "{{ prometheus_unit_dir }}/hnx-prometheus-alerts.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: prometheus_units
+
+- name: Ask whether the forwarder's timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ prometheus_systemctl_cli }}", is-enabled, hnx-prometheus-alerts.timer]
+  register: prometheus_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the forwarder's timer is started
+  ansible.builtin.command:
+    argv: ["{{ prometheus_systemctl_cli }}", is-active, hnx-prometheus-alerts.timer]
+  register: prometheus_timer_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
+  ansible.builtin.command:
+    argv: "{{ [prometheus_systemctl_cli] + item }}"
+  vars:
+    prometheus_timer_owed: >-
+      {{ prometheus_units is changed
+         or prometheus_timer_enabled.stdout | default('') | trim != 'enabled'
+         or prometheus_timer_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if prometheus_units is changed else [])
+       + ([['enable', '--now', 'hnx-prometheus-alerts.timer']] if prometheus_timer_owed | bool else []) }}
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true
