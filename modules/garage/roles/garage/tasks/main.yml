@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the project and data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Refuse a malformed credential before the server sees it (it would not start)
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Render the server configuration (no secret in it)
+  ansible.builtin.template:
+    src: garage.toml.j2
+    dest: "{{ garage_dir }}/garage.toml"
+    owner: "{{ garage_owner }}"
+    group: "{{ garage_group }}"
+    mode: "0644"
+
+- name: Read the credentials the server is given in its environment
+  ansible.builtin.set_fact:
+    garage_secret_env:
+      garage:
+        GARAGE_RPC_SECRET: "{{ lookup('hnx_secret', garage_rpc_ref) }}"
+        GARAGE_ADMIN_TOKEN: "{{ lookup('hnx_secret', garage_admin_ref) }}"
+        GARAGE_DEFAULT_ACCESS_KEY: "{{ lookup('hnx_secret', garage_access_key_ref) }}"
+        GARAGE_DEFAULT_SECRET_KEY: "{{ lookup('hnx_secret', garage_signing_ref) }}"
+  no_log: true
+
+- name: Render and start Garage
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ garage_app.compose_app_name }}"
+    compose_app_dir: "{{ garage_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ garage_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ garage_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ garage_app.compose_app_owner }}"
+    compose_app_group: "{{ garage_app.compose_app_group }}"
+    compose_app_start: "{{ garage_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ garage_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ garage_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ garage_secret_env }}"
+  no_log: true

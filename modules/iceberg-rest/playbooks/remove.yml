@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the catalog file first (export_first), stop and remove the container, and delete the
+# env_file that holds the object store key pair. The data root and the
+# export are kept for the operator to archive or delete; the decommission audit
+# (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove the Iceberg REST catalog
+  hosts: mod_iceberg_rest_server
+  become: true
+  tasks:
+    - name: Export the catalog file first
+      ansible.builtin.include_role:
+        name: iceberg_rest
+        tasks_from: export
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ iceberg_rest_dir | default('/opt/compose/iceberg_rest') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the container was given
+      ansible.builtin.file:
+        path: "{{ iceberg_rest_dir | default('/opt/compose/iceberg_rest') }}/secrets/iceberg_rest.env"
+        state: absent

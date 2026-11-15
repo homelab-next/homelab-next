@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The catalog's dependencies are the container engine (docker_engine, applied to the guest before
+# this module), its credentials in the secret store and the object store it writes to.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Resolve the object store's address
+      ansible.builtin.include_tasks: endpoint.yml
+    - name: The object store answers (200, or 403 to an unsigned request)
+      ansible.builtin.uri:
+        url: "{{ iceberg_rest_s3_endpoint }}/"
+        status_code: [200, 403]
+        timeout: "{{ iceberg_rest_health_timeout | int }}"
+      changed_when: false
+  tags: [readiness]

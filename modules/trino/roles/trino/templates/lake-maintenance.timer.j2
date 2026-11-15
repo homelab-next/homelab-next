@@ -1,0 +1,12 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module trino, role trino); local changes are overwritten.
+[Unit]
+Description=Lake maintenance, nightly (snapshot expiry and orphan-file removal)
+
+[Timer]
+OnCalendar={{ trino_maintenance_schedule }}
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

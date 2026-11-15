@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore from an export (README, "Migrating in" and "Restore drill"): the source is checked first
+# and nothing is written until it passes (listing.jsonl names exactly the dump and the archive,
+# with the sizes and sha256 the files have). Then, with the web app and the worker STOPPED, the
+# dump is staged in export/db/ as the database's user, hashed again (what is restored is what was
+# checked), and restored with pg_restore --clean --if-exists in one transaction; the attachments
+# directory is emptied and the archive unpacked into it and given to the app's user; the staged copy is
+# removed and the app started again whatever happened, after the seeder has brought the schema to
+# the running image. Run again with a newer export for the final delta after a freeze: --clean
+# replaces everything the first restore wrote. Run health afterwards.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the source's listing
+      ansible.builtin.slurp:
+        src: "{{ openproject_restore_source }}/listing.jsonl"
+      register: openproject_restore_listing
+    - name: Read the source's files (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ openproject_restore_source }}/{{ item }}"
+        checksum_algorithm: sha256
+        follow: false
+      loop: [db/projects.dump, attachments.tar]
+      register: openproject_restore_stat
+    - name: Refuse a source that is not exactly what its listing says (nothing is written)
+      ansible.builtin.assert:
+        that:
+          - >-
+            (openproject_restore_listing.content | b64decode).splitlines() | reject('equalto', '')
+            | map('from_json') | map(attribute='key') | sort == ['attachments.tar', 'db/projects.dump']
+          - openproject_restore_stat.results | rejectattr('stat.exists') | list | length == 0
+          - openproject_restore_stat.results | selectattr('stat.islnk', 'equalto', true) | list | length == 0
+          - >-
+            openproject_restore_stat.results | map(attribute='stat') | map(attribute='checksum') | sort
+            == (openproject_restore_listing.content | b64decode).splitlines() | reject('equalto', '')
+               | map('from_json') | map(attribute='sha256') | sort
+          - >-
+            openproject_restore_stat.results | map(attribute='stat') | map(attribute='size') | map('int') | sort
+            == (openproject_restore_listing.content | b64decode).splitlines() | reject('equalto', '')
+               | map('from_json') | map(attribute='size') | map('int') | sort
+        fail_msg: "projects: {{ openproject_restore_source }} is not an intact export (listing, sizes or sha256 differ)"
+    - name: Restore with the web app and the worker stopped
+      block:
+        - name: Make sure the database is up
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", up, -d, --wait, postgres, cache]
+          changed_when: false
+        - name: Stop the web app and the worker
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", stop, web, worker]
+          changed_when: true
+        - name: Stage the dump as the database's user
+          ansible.builtin.copy:
+            src: "{{ openproject_restore_source }}/db/projects.dump"
+            dest: "{{ openproject_data_root }}/export/db/.restore.dump"
+            remote_src: true
+            owner: "{{ openproject_db_uid | int }}"
+            group: "{{ openproject_db_gid | int }}"
+            mode: "0600"
+        - name: Hash the staged copy
+          ansible.builtin.stat:
+            path: "{{ openproject_data_root }}/export/db/.restore.dump"
+            checksum_algorithm: sha256
+          register: openproject_staged
+        - name: What is staged is what was checked
+          ansible.builtin.assert:
+            that: openproject_staged.stat.checksum == openproject_restore_stat.results[0].stat.checksum
+            fail_msg: "projects: the staged dump differs from the checked one"
+        - name: Restore the database (one transaction)
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", exec, -T, postgres,
+                   pg_restore, -U, "{{ openproject_db_user }}", -d, "{{ openproject_db_name }}",
+                   --clean, --if-exists, --no-owner, --no-acl, --single-transaction, --exit-on-error,
+                   "{{ openproject_container_export }}/.restore.dump"]
+          changed_when: true
+        - name: Empty the attachments directory (a delta replaces, it does not add)
+          ansible.builtin.command:
+            argv: [find, "{{ openproject_data_root }}/assets", -mindepth, "1", -delete]
+          changed_when: true
+        - name: Unpack the attachments (extracted by root, never taking the archive's owners)
+          ansible.builtin.command:
+            argv: [tar, --extract, --no-same-owner, --no-same-permissions,
+                   --file, "{{ openproject_restore_source }}/attachments.tar",
+                   --directory, "{{ openproject_data_root }}/assets"]
+          changed_when: true
+        - name: Give the attachments to the app's user
+          ansible.builtin.file:
+            path: "{{ openproject_data_root }}/assets"
+            state: directory
+            recurse: true
+            owner: "{{ openproject_app_uid | int }}"
+            group: "{{ openproject_app_gid | int }}"
+      always:
+        - name: Remove the staged copy
+          ansible.builtin.file:
+            path: "{{ openproject_data_root }}/export/db/.restore.dump"
+            state: absent
+    # the restored schema is brought to the running image before the app opens it
+    - name: Migrate the restored database and start the app
+      ansible.builtin.include_tasks: seed.yml
+      vars:
+        openproject_seed_force: true
+    - name: Start the web app and the worker
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", up, -d, web, worker]
+      changed_when: true
+    - name: Prove the restored service (health)
+      ansible.builtin.include_tasks: health.yml
+  tags: [restore]

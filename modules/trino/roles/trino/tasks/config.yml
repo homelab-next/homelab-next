@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+# The engine's configuration files, the certificate and key, the password file and (when given) the
+# access rules. Every file is root's with the container's group (0640), so the container's user
+# reads it and no one else does. A changed file (the password file excepted: the engine reloads it)
+# restarts the engine, which reads its configuration at start.
+- name: Render the configuration files
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ trino_dir }}/etc/{{ item.dest }}"
+    owner: "{{ trino_owner }}"
+    group: "{{ trino_group }}"
+    mode: "0640"
+  loop:
+    - {src: config.properties.j2, dest: config.properties}
+    - {src: jvm.config.j2, dest: jvm.config}
+    - {src: node.properties.j2, dest: node.properties}
+    - {src: iceberg.properties.j2, dest: "catalog/{{ trino_catalog_name }}.properties"}
+    - {src: password-authenticator.properties.j2, dest: password-authenticator.properties}
+    - src: iceberg.properties.j2
+      dest: "catalog/{{ trino_reader_catalog }}.properties"
+      read_only: true
+  loop_control:
+    label: "{{ item.dest }}"
+  when: not (item.read_only | default(false)) or trino_reader_catalog != ''
+  register: trino_config_files
+
+- name: Write the server certificate with its key (one PEM) and the CA
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ trino_dir }}/etc/tls/{{ item.name }}"
+    owner: "{{ trino_owner }}"
+    group: "{{ trino_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - name: server.pem
+      mode: "0640"
+      content: "{{ lookup('hnx_secret', trino_tls_cert_ref) | trim ~ '\n' ~ lookup('hnx_secret', trino_tls_key_ref) | trim ~ '\n' }}"
+    - name: ca.pem
+      mode: "0644"
+      content: "{{ lookup('hnx_secret', trino_ca_ref) | trim ~ '\n' }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: trino_tls_files
+  no_log: true
+
+- name: Write the password file (the engine reloads it without a restart)
+  ansible.builtin.copy:
+    content: "{{ lookup('hnx_secret', trino_users_ref) | trim ~ '\n' }}"
+    dest: "{{ trino_dir }}/etc/password.db"
+    owner: "{{ trino_owner }}"
+    group: "{{ trino_group }}"
+    mode: "0640"
+  no_log: true
+
+- name: Install the access rules, or leave none
+  block:
+    - name: Copy the rules file and the access-control configuration
+      ansible.builtin.copy:
+        src: "{{ trino_access_rules_src }}"
+        dest: "{{ trino_dir }}/etc/lake-access.json"
+        owner: "{{ trino_owner }}"
+        group: "{{ trino_group }}"
+        mode: "0640"
+      register: trino_rules_file
+    - name: Render the access-control configuration
+      ansible.builtin.template:
+        src: access-control.properties.j2
+        dest: "{{ trino_dir }}/etc/access-control.properties"
+        owner: "{{ trino_owner }}"
+        group: "{{ trino_group }}"
+        mode: "0640"
+      register: trino_rules_conf
+  when: trino_access_rules_src != ''
+
+- name: Remove the access rules when none are given
+  ansible.builtin.file:
+    path: "{{ trino_dir }}/etc/{{ item }}"
+    state: absent
+  loop: [lake-access.json, access-control.properties]
+  when: trino_access_rules_src == ''
+  register: trino_rules_gone
+
+- name: Note whether the engine must restart to read what changed
+  ansible.builtin.set_fact:
+    trino_restart_owed: >-
+      {{ trino_config_files is changed or trino_tls_files is changed
+         or (trino_rules_file | default({})) is changed or (trino_rules_conf | default({})) is changed
+         or trino_rules_gone is changed }}

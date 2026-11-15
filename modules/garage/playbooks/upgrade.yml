@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump within a major version (garage_target_image, tag
+# and digest), export the data root first, then converge with the new pin (set garage_image to the
+# target in the overlay).
+#   ansible-playbook -i <inventory> modules/garage/playbooks/upgrade.yml -e garage_target_image=<ref>
+- name: Upgrade Garage
+  hosts: mod_garage_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: garage
+        tasks_from: upgrade
+    - name: Export the data root before the new image opens it
+      ansible.builtin.include_role:
+        name: garage
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: garage
+      vars:
+        garage_image: "{{ garage_target_image }}"

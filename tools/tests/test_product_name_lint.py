@@ -491,3 +491,123 @@ def test_against_the_base_from_a_subdirectory_a_dropped_name_is_still_seen(tmp_p
 
 def test_the_repository_passes_its_own_lint():
     assert run(ROOT) == 0
+
+
+def test_a_products_allow_entry_exempts_only_the_named_product_in_that_file(tmp_path):
+    vocab = {
+        "products": [{"name": "zorbix", "why": "no provider yet"}, {"name": "quuxd", "why": "x"}],
+        "allow": [
+            {"path": "stack/*.yml", "products": ["zorbix"], "reason": "the stack runs zorbix"},
+            {"path": "whole/*.yml", "reason": "every product is allowed here"},
+        ],
+    }
+    root = tree(
+        tmp_path,
+        {
+            "tools/product_names.yml": yaml.safe_dump(vocab),
+            "stack/a.yml": "image: zorbix\nsink: quuxd\n",
+            "whole/b.yml": "image: zorbix\nsink: quuxd\n",
+        },
+    )
+    pv = pl.vocabulary(root, None, root / pl.ROLES)
+    globs = [*pl.ALWAYS_ALLOWED, *(g for g, _ in pl.allowlist(root))]
+    hits = {k: dict(v) for k, v in pl.scan(root, pv, globs, pl.product_allowlist(root)).items()}
+    # zorbix is exempt in stack/a.yml, quuxd is still counted there; whole/b.yml is exempt for both
+    assert hits == {"stack/a.yml": {"quuxd": 1}}
+
+
+def test_a_products_allow_entry_needs_a_list_of_names(tmp_path):
+    vocab = {"products": [], "allow": [{"path": "x", "reason": "r", "products": "zorbix"}]}
+    root = tree(tmp_path, {"tools/product_names.yml": yaml.safe_dump(vocab)})
+    with pytest.raises(pl.LintError, match="list of names"):
+        pl.allowlist(root)
+
+
+def _partial_tree(tmp_path, products, baseline=None):
+    vocab = {
+        "products": [{"name": "zorbix", "why": "new"}, {"name": "quuxd", "why": "old"}],
+        "allow": [{"path": "stack/*.yml", "products": products, "reason": "the stack runs it"}],
+    }
+    files = {"tools/product_names.yml": yaml.safe_dump(vocab), "stack/a.yml": "image: zorbix\n"}
+    root = tree(tmp_path, files)
+    if baseline is not None:
+        (root / pl.BASELINE).write_text(json.dumps({"version": 1, "counts": baseline}))
+    return root
+
+
+def _problems(root):
+    vocab = pl.vocabulary(root, None, root / pl.ROLES)
+    return pl.partial_problems(
+        pl.product_allowlist(root), vocab, pl.load_baseline(root / pl.BASELINE), "the baseline"
+    )
+
+
+def test_a_per_product_exemption_for_a_product_new_to_the_lint_is_accepted(tmp_path):
+    root = _partial_tree(tmp_path, ["zorbix"], {"stack/a.yml": {"quuxd": 3}})
+    assert _problems(root) == []
+
+
+def test_a_per_product_exemption_for_an_unknown_product_is_an_error(tmp_path):
+    root = _partial_tree(tmp_path, ["nosuchproduct"])
+    assert any("'nosuchproduct' is not a known product" in p for p in _problems(root))
+    assert run(root) == 1
+
+
+def test_a_per_product_exemption_cannot_erase_counted_debt(tmp_path):
+    # quuxd is already counted in a matching path: exempting it would drop that debt unpaid
+    root = _partial_tree(tmp_path, ["quuxd"], {"stack/a.yml": {"quuxd": 3}})
+    problems = _problems(root)
+    assert len(problems) == 1 and "already has 3 counted in stack/a.yml" in problems[0]
+    assert run(root) == 1
+    # counted somewhere the glob does not match: fine
+    root2 = _partial_tree(tmp_path / "b", ["quuxd"], {"other/x.yml": {"quuxd": 3}})
+    assert _problems(root2) == []
+
+
+def _based(tmp_path, then_vocab, then_baseline, now_vocab, now_baseline, allow_products):
+    """A repo whose base commit has ``then_*`` and whose working tree has ``now_*`` plus an allow
+    entry exempting ``allow_products`` in ``stack/*.yml``."""
+    products = {"zorbix": {"name": "zorbix", "why": "x"}, "quuxd": {"name": "quuxd", "why": "x"}}
+    base_vocab = {"products": [products[p] for p in then_vocab], "allow": []}
+    root = tree(
+        tmp_path, {"tools/product_names.yml": yaml.safe_dump(base_vocab), "stack/a.yml": "x: 1\n"}
+    )
+    (root / pl.BASELINE).write_text(json.dumps({"version": 1, "counts": then_baseline}))
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "base")
+    now = {
+        "products": [products[p] for p in now_vocab],
+        "allow": [
+            {"path": "stack/*.yml", "products": allow_products, "reason": "the stack runs it"}
+        ],
+    }
+    (root / "tools/product_names.yml").write_text(yaml.safe_dump(now))
+    (root / pl.BASELINE).write_text(json.dumps({"version": 1, "counts": now_baseline}))
+    return root
+
+
+def test_a_product_already_linted_at_the_base_cannot_be_exempted_even_with_no_debt(
+    tmp_path, capsys
+):
+    # quuxd was linted at the base and has no count in stack/: not new to the lint, so refused
+    root = _based(tmp_path, ["quuxd"], {}, ["quuxd"], {}, ["quuxd"])
+    assert run(root, "--base", "HEAD") == 1
+    assert "'quuxd' was already linted at the base commit" in capsys.readouterr().out
+
+
+def test_a_product_new_since_the_base_may_be_exempted(tmp_path):
+    root = _based(tmp_path, ["quuxd"], {}, ["quuxd", "zorbix"], {}, ["zorbix"])
+    assert run(root, "--base", "HEAD") == 0
+
+
+def test_debt_at_the_base_that_the_working_baseline_dropped_is_still_refused(tmp_path, capsys):
+    # drives against_base: the working baseline has no count (a hand edit), the base still has it
+    root = _based(tmp_path, ["zorbix"], {"stack/a.yml": {"zorbix": 4}}, ["zorbix"], {}, ["zorbix"])
+    vocab = pl.vocabulary(root, None, root / pl.ROLES)
+    problems = pl.against_base(root, "HEAD", pl.load_baseline(root / pl.BASELINE), vocab)
+    assert any("already has 4 counted in stack/a.yml in the baseline at" in p for p in problems), (
+        problems
+    )
+    assert run(root, "--base", "HEAD") == 1
+    assert "already has 4 counted" in capsys.readouterr().out

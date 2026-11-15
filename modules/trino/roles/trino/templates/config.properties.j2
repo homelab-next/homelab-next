@@ -1,0 +1,24 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module trino); local changes are overwritten. No secret is in this file:
+# the shared secret is read from the container's environment (${ENV:...}).
+coordinator=true
+node-scheduler.include-coordinator=true
+# the engine's own listener, for its internal communication only (not published)
+http-server.http.port={{ trino_internal_port }}
+discovery.uri=http://{{ trino_discovery_host }}:{{ trino_internal_port }}
+# the published listener: HTTPS only, every reader signs in with a password
+http-server.https.enabled=true
+http-server.https.port={{ trino_container_port }}
+http-server.https.keystore.path={{ trino_container_etc }}/tls/server.pem
+http-server.authentication.type=PASSWORD
+internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}
+# A runaway query fails on its own with EXCEEDED_MEMORY_LIMIT instead of taking the JVM down.
+query.max-memory={{ trino_query_max_memory }}
+query.max-memory-per-node={{ trino_query_max_memory }}
+# Pin the session time zone server-side (LL-392): a bare timestamp literal is evaluated in the
+# session zone, which is otherwise the client's, so the same SQL answered differently per client.
+sql.forced-session-time-zone=UTC
+http-server.log.enabled=true
+{% if trino_access_rules_src != '' %}
+access-control.config-files={{ trino_container_etc }}/access-control.properties
+{% endif %}

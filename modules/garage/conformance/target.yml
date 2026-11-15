@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the object-store suite
+# through the shared S3 adapter, which resolves the endpoint from HNX_ENDPOINT_OBJECT_STORE (never
+# a URL here) and reads the key pair and the region from the variables below at every request.
+#   HNX_ENDPOINT_OBJECT_STORE=http://<host>:3900 HNX_S3_ACCESS_KEY=<id> HNX_S3_SECRET_KEY=<secret> \
+#     HNX_S3_REGION=garage hnx conform run object-store --target modules/garage/conformance/target.yml
+# The suite creates its own scratch buckets (a per-run prefix), which the lake key may do only when
+# it holds createBucket: run it with a key made for the purpose (garage key allow --create-bucket),
+# never by widening the lake key. The lab reaches the store over plain http inside its own
+# network: a run against the lab's instance sets allow_plaintext: true in a copy of this file, and
+# the lab's own domain in place of example.internal (the endpoint override above names the endpoint;
+# the adapter needs a domain or a resolver, and has no default).
+name: garage
+capabilities:
+  object-store:
+    adapter: homelabnext.conform.adapters.s3:make_object_store
+    config:
+      domain: example.internal
+      bucket_prefix: auto
+      access_key_env: HNX_S3_ACCESS_KEY
+      secret_key_env: HNX_S3_SECRET_KEY
+      region_env: HNX_S3_REGION
+    features: [metadata]

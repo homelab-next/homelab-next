@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop the maintenance timer and delete its credentials, stop and remove the container, and
+# delete the env_file that holds the key pair and the shared secret. The engine is stateless (no
+# export is owed: tables and files are the catalog's and the object store's); the project
+# directory and its configuration are kept for the operator to archive or delete. The
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove Trino
+  hosts: mod_trino_server
+  become: true
+  tasks:
+    - name: Stop and disable the maintenance timer
+      ansible.builtin.command:
+        argv: [systemctl, disable, --now, hnx-lake-maintenance.timer]
+      changed_when: true
+      failed_when: false
+    - name: Delete the maintenance credentials
+      ansible.builtin.file:
+        path: "{{ trino_maintenance_env_file | default('/etc/hnx-modules/trino/maintenance.env') }}"
+        state: absent
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ trino_dir | default('/opt/compose/trino') }}/docker-compose.yml", down]
+      changed_when: true
+    - name: Delete the credentials the container was given
+      ansible.builtin.file:
+        path: "{{ trino_dir | default('/opt/compose/trino') }}/secrets/trino.env"
+        state: absent

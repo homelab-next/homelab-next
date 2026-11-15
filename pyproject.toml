@@ -155,7 +155,10 @@ suite_budgets = [
   # slowest figure. 2800 since modules/caddy, modules/keycloak and their role suites (#392, #393,
   # #394, #395) joined: on 2026-11-14 3.12 measured 2312.4s (#398, red over 2150; a rerun failed
   # the same) and 3.11 1782s. 2800 is about 1.2x the slowest figure
-  "tests/roles = 2800",
+  # 3700 since the cutover wave-1 modules (prometheus #421, openproject #420, garage/iceberg-rest/
+  # trino #424, media #423 and tunnel #422) and their role suites: on 2026-11-15 3.12 measured
+  # 3018.8s (#424, red over 2800); 3700 is about 1.2x the slowest figure with two still to land
+  "tests/roles = 3700",
   # 300 since the orchestration conformance harness's strict fault-injection test (stage 2.8)
   # builds the controller and runs the whole suite against it: main measured 180-186 s summed
   # over the shards (2026-11-09), and the pull request that added it 245.8 s, over 240
@@ -178,8 +181,9 @@ suite_budgets = [
   # on a local 4-core box (2026-10-28, over the 60 s default) after the swap gate's role-trust
   # cases, each of which builds two git commits; 90 is about 1.5x that; 150 since the apply path
   # runs its limits plays with ansible-playbook (#378): 58.8 s locally (2026-11-13), CI measured
-  # 109.9 s on 3.11 and 104.7 s on 3.12 (ansible-playbook starts are slower there)
-  "tests/modules = 150",
+  # 109.9 s on 3.11 and 104.7 s on 3.12 (ansible-playbook starts are slower there); 200 since the
+  # cutover wave-1 modules joined: 3.12 measured 152.2 s (#424, red over 150), about 1.3x
+  "tests/modules = 200",
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
   # 100 since CI measured 91s with 30 ADRs; 130 since CI measured 100.8s with 32 ADRs and the

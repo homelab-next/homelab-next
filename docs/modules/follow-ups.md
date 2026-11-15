@@ -188,3 +188,22 @@ Still open:
   sandboxed worker for third-party origins.
 - The `contributions` decommission plane is specified, not implemented: the loader accepts it in
   `lifecycle.remove.audit`, but `hnx decommission` has no such plane, so nothing audits it yet.
+- **The lake catalog's image has no release feed or CVE tracking** (`modules/iceberg-rest`): it is
+  a build of the Apache Iceberg main branch (commit `b0df3ca`, 2026-04-29) that the project
+  published only as `:latest`, run in the old lab as the project's testing "fixture" server and
+  pinned here by digest so the build that wrote the SQLite catalog is the one that reads it.
+  Nothing watches it (`tools/pin_freshness.py` has no source for it, and an untagged digest is
+  invisible to a tag-based scanner), and the digest can leave the registry (the role's
+  `iceberg_rest_image_archive` loads a `docker save` of it). Open: a scheduled image scan of the
+  running digest (the lab's vulnerability scanner reading the compose project's image id), a
+  recorded decision per advisory for the server and its bundled libraries, and the move to a
+  database-backed catalog with sign-in, after which the SQLite file and this pin retire.
+- **Readers of the lake can run table procedures** (`modules/trino`): measured on Trino 484, a
+  read-only user with file-based access rules succeeds with `ALTER TABLE ... EXECUTE` `optimize`,
+  `optimize_manifests`, `expire_snapshots`, `remove_orphan_files` and `drop_extended_stats` (the
+  file rules do not govern table procedures; `add_files` is disabled and `add_files_from_table`
+  needs INSERT). The retention floors bound the damage. The mechanism that closes it is the
+  connector's `iceberg.security=read-only`, which refuses every write and procedure: the role can
+  render a second read-only catalog (`trino_reader_catalog`), but readers still say `iceberg`, so
+  moving them (their clients, the lake adapter's `trino_catalog`, and the rules denying them the
+  writable catalog) is open, with the writers and the maintenance user keeping `iceberg`.

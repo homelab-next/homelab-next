@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
+# instance the site selects; version is product.version, host the module's host role (docs/modules/
+# registry-rows.md). Internal only, no public route. The S3 API is signed (auth: own) and the lab
+# reaches it over plain http inside its own network, so the row is tls: none.
+services:
+  object-store:
+    capability: object-store
+    impl: garage
+    host: server
+    protocol: http
+    port: 3900
+    health: {kind: tcp}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [data, storage]
+    description: Garage, one node; the S3 API on the guest's own address, the admin API unpublished. Bucket iceberg-warehouse.

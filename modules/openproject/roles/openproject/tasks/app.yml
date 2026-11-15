@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). No
+# environment holds a secret: the database URL, the session key and the seed password go in
+# compose_app_secret_env. The web app and the worker are one image with two commands.
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    openproject_app:
+      compose_app_name: openproject
+      compose_app_dir: "{{ openproject_dir }}"
+      compose_app_data_dir: "{{ openproject_data_root }}"
+      compose_app_export_dir: "{{ openproject_data_root }}/export"
+      compose_app_owner: "{{ openproject_owner }}"
+      compose_app_group: "{{ openproject_group }}"
+      compose_app_start: "{{ openproject_start }}"
+      compose_app_validate_with_docker: "{{ openproject_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          postgres:
+            image: "{{ openproject_db_repository }}"
+            tag: "{{ openproject_db_tag }}"
+            digest: "{{ openproject_db_digest }}"
+            user: "{{ openproject_db_uid | int }}:{{ openproject_db_gid | int }}"
+            environment:
+              POSTGRES_DB: "{{ openproject_db_name }}"
+              POSTGRES_USER: "{{ openproject_db_user }}"
+              PGDATA: "{{ openproject_container_pgdata }}"
+            volumes:
+              - "{{ openproject_data_root }}/pgdata:{{ openproject_container_pgdata }}"
+              - "{{ openproject_data_root }}/export/db:{{ openproject_container_export }}"
+            mem_limit: "{{ openproject_db_mem_limit }}"
+            healthcheck:
+              test: [CMD, pg_isready, -q, -U, "{{ openproject_db_user }}", -d, "{{ openproject_db_name }}"]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 30s
+          cache:
+            image: "{{ openproject_cache_repository }}"
+            tag: "{{ openproject_cache_tag }}"
+            digest: "{{ openproject_cache_digest }}"
+            mem_limit: "{{ openproject_cache_mem_limit }}"
+            healthcheck:
+              test: [CMD, sh, -c, "echo version | nc -w 2 localhost {{ openproject_cache_port }} | grep -q VERSION"]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 10s
+          web:
+            image: "{{ openproject_repository }}"
+            tag: "{{ openproject_tag }}"
+            digest: "{{ openproject_digest }}"
+            command: [./docker/prod/web]
+            user: "{{ openproject_app_uid | int }}:{{ openproject_app_gid | int }}"
+            depends_on: [postgres, cache]
+            environment: >-
+              {{ openproject_fixed_env | combine({'OPENPROJECT_HOST__NAME': openproject_hostname}) }}
+            ports: ["{{ openproject_bind }}:{{ openproject_port | int }}:{{ openproject_container_port }}"]
+            volumes: ["{{ openproject_data_root }}/assets:{{ openproject_container_assets }}"]
+            mem_limit: "{{ openproject_mem_limit }}"
+            healthcheck:
+              test: [CMD, curl, -fsS, -o, /dev/null, "http://localhost:{{ openproject_container_port }}/health_checks/default"]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 120s
+          worker:
+            image: "{{ openproject_repository }}"
+            tag: "{{ openproject_tag }}"
+            digest: "{{ openproject_digest }}"
+            command: [./docker/prod/worker]
+            user: "{{ openproject_app_uid | int }}:{{ openproject_app_gid | int }}"
+            depends_on: [postgres, cache]
+            environment: >-
+              {{ openproject_fixed_env | combine({'OPENPROJECT_HOST__NAME': openproject_hostname}) }}
+            volumes: ["{{ openproject_data_root }}/assets:{{ openproject_container_assets }}"]
+            mem_limit: "{{ openproject_worker_mem_limit }}"
+            healthcheck:
+              test: [CMD, pgrep, -f, good_job]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 120s
+  tags: [health, backup, restore, export, upgrade]

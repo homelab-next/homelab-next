@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the projects suite through
+# the shared adapter, against the real instance the file named by `config` describes (base URL,
+# work project, service user; the API token is read by its secret name from
+# HNX_SECRET_OPENPROJECT_API_TOKEN, never written here). Copy docs/projects.md's example to
+# openproject.yml, run the admin setup once (types, statuses, custom fields), then:
+#   HNX_SECRET_OPENPROJECT_API_TOKEN=<token> \
+#     hnx conform --root <checkout> run projects --target modules/openproject/conformance/target.yml
+# The recorded fake (conformance/targets/projects-openproject.yml) proves the adapter without a
+# running instance; this target proves the instance.
+name: openproject
+capabilities:
+  projects:
+    adapter: homelabnext.conform.adapters.openproject:make
+    config: {config: openproject.yml}

@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, the server answers its config, and it can read
+# its catalog (a namespaces listing opens the SQLite file). Nothing is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: iceberg-rest
+        compose_app_dir: "{{ iceberg_rest_app.compose_app_dir }}"
+        compose_app_spec: "{{ iceberg_rest_app.compose_app_spec }}"
+    - name: The server answers its config
+      ansible.builtin.uri:
+        url: "http://{{ iceberg_rest_bind }}:{{ iceberg_rest_port | int }}/v1/config"
+        status_code: 200
+        return_content: true
+        timeout: "{{ iceberg_rest_health_timeout | int }}"
+      register: iceberg_rest_config
+      changed_when: false
+    - name: The server lists its namespaces (the catalog file opens)
+      ansible.builtin.uri:
+        url: "http://{{ iceberg_rest_bind }}:{{ iceberg_rest_port | int }}/v1/namespaces"
+        status_code: 200
+        return_content: true
+        timeout: "{{ iceberg_rest_health_timeout | int }}"
+      register: iceberg_rest_namespaces
+      changed_when: false
+    - name: The listing is a namespaces list
+      ansible.builtin.assert:
+        that: iceberg_rest_namespaces.json.namespaces is defined and iceberg_rest_namespaces.json.namespaces is sequence
+        fail_msg: "iceberg-rest: /v1/namespaces did not answer a namespaces list"
+  tags: [health]

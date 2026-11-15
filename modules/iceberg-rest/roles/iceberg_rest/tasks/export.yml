@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data catalog, object-tree): <export dir>/{iceberg_catalog.db,listing.jsonl}.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Copy the catalog file consistently (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+  tags: [export]

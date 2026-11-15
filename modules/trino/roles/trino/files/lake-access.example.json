@@ -1,0 +1,15 @@
+{
+  "catalogs": [
+    {"user": "maintenance", "catalog": "iceberg", "allow": "all"},
+    {"catalog": "iceberg", "allow": "read-only"},
+    {"catalog": "system", "allow": "none"}
+  ],
+  "schemas": [
+    {"user": "maintenance", "owner": true},
+    {"owner": false}
+  ],
+  "tables": [
+    {"user": "maintenance", "privileges": ["SELECT", "INSERT", "DELETE", "UPDATE", "OWNERSHIP"]},
+    {"privileges": ["SELECT"]}
+  ]
+}

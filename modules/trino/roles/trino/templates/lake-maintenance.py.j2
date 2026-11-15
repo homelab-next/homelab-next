@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: lake-maintenance
+#   kind: job
+#   purpose: Expire old snapshots and remove orphan files of every lake table through the query engine, and alert when the set of failing steps changes.
+#   owner: platform
+#   trigger: [timer:trino/lake-maintenance, role:trino]
+#   inputs: the query engine's table list (information_schema); the maintenance user's password and the notify token (the service's environment file); the previous state file
+#   outputs: the state file (owner-only) and, when the set of failing steps changes, one alert on the notify channel
+#   installs_to: /usr/local/libexec/homelabnext/hnx-lake-maintenance
+#   exit:
+#     "0": every step ran
+#     "1": one or more steps failed (alerted once per change of the failing set)
+#     "2": the tables could not be listed (engine unreachable, sign-in refused)
+# Managed by homelabnext (module trino, role trino); local changes are overwritten.
+"""Lake maintenance: expire old snapshots and remove orphan files, table by table.
+
+Run by the hnx-lake-maintenance timer. For every Iceberg base table the query engine lists:
+
+  1. ALTER TABLE ... EXECUTE expire_snapshots(retention_threshold => '<expire>', retain_last => <n>,
+     clean_expired_metadata => true)       snapshots older than <expire>, always keeping the last <n>
+  2. ALTER TABLE ... EXECUTE remove_orphan_files(retention_threshold => '<orphan>')
+                                           files no snapshot references and older than <orphan>
+
+Why both, and why retain_last is always spelled out. expire_snapshots drops snapshot METADATA and the
+files only those snapshots used; it never removes a file no snapshot references (LL-052), so orphans
+(a writer that died between writing a data file and committing it) need their own call. The engine
+defaults retain_last to 1 when it is omitted, so a run on a quiet table would expire it down to a
+single snapshot: it is passed on every call. The engine refuses a retention below its own floor
+(iceberg.expire-snapshots.min-retention / iceberg.remove-orphan-files.min-retention in the catalog
+properties, which the role sets to the values below), so a typo here cannot delete live data.
+
+Outputs: the state file (owner-only) and, when the SET of failing steps changes, one alert on the
+notify channel (state-diffed: an unchanged failing set is silent, and one more message says when the
+set empties). Exit: 0 every step ran; 1 one or more steps failed; 2 the tables could not be listed
+(engine unreachable, sign-in refused). With --test-notify: one low-priority message through the
+alert path; with --dry-run: the statements, executed nowhere.
+"""
+
+import base64
+import json
+import os
+import re
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+CONFIG = {{ trino_maintenance_config | to_json }}
+STATE = os.path.join(CONFIG["state_dir"], "state.json")
+NAME = re.compile(r"[A-Za-z0-9_]{1,128}\Z")
+_SECRETS = []
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow no redirect: a credential must reach only the endpoint it was given for."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _opener():
+    ctx = ssl.create_default_context(cafile=CONFIG["ca_file"])
+    return urllib.request.build_opener(
+        _NoRedirect, urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx)
+    )
+
+
+def scrub(text):
+    for secret in _SECRETS:
+        text = text.replace(secret, "[secret]")
+    return " ".join(text.split())[:300]
+
+
+class EngineError(Exception):
+    pass
+
+
+def run_sql(opener, sql, timeout):
+    """Run one statement through the engine's REST protocol; return its rows. Raises EngineError
+    (never carrying the credential) on a refusal, a query failure or the deadline."""
+    password = os.environ.get("HNX_LAKE_MAINT_PASSWORD", "")
+    if not password:
+        raise EngineError("HNX_LAKE_MAINT_PASSWORD is not set")
+    _SECRETS.append(password)
+    basic = base64.b64encode(f"{CONFIG['user']}:{password}".encode()).decode()
+    headers = {"X-Trino-User": CONFIG["user"], "Authorization": "Basic " + basic,
+               "X-Trino-Source": "hnx-lake-maintenance"}
+    deadline = time.monotonic() + timeout
+    req = urllib.request.Request(CONFIG["url"] + "/v1/statement", data=sql.encode(), headers=headers,
+                                 method="POST")
+    rows = []
+    while True:
+        try:
+            with opener.open(req, timeout=max(1.0, min(60.0, deadline - time.monotonic()))) as resp:
+                doc = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            raise EngineError(f"HTTP {exc.code} from the query engine") from None
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise EngineError(scrub(f"{type(exc).__name__}: {exc}")) from None
+        if doc.get("error"):
+            raise EngineError(scrub(str(doc["error"].get("message", "query failed"))))
+        rows.extend(doc.get("data") or [])
+        nxt = doc.get("nextUri")
+        if not nxt:
+            return rows
+        if time.monotonic() > deadline:
+            raise EngineError(f"no result within {timeout} s")
+        time.sleep(0.2)
+        req = urllib.request.Request(nxt, headers=headers, method="GET")
+
+
+def tables(opener):
+    sql = ("SELECT table_schema, table_name FROM " + CONFIG["catalog"] + ".information_schema.tables "
+           "WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('information_schema', 'system') "
+           "ORDER BY table_schema, table_name")
+    return [(r[0], r[1]) for r in run_sql(opener, sql, 120)]
+
+
+def statements(schema, table):
+    """The two steps for one table: (step name, SQL, timeout)."""
+    full = f'{CONFIG["catalog"]}."{schema}"."{table}"'
+    return [
+        ("expire_snapshots",
+         f"ALTER TABLE {full} EXECUTE expire_snapshots(retention_threshold => '{CONFIG['expire']}', "
+         f"retain_last => {int(CONFIG['retain_last'])}, clean_expired_metadata => true)",
+         int(CONFIG["expire_timeout"])),
+        ("remove_orphan_files",
+         f"ALTER TABLE {full} EXECUTE remove_orphan_files(retention_threshold => '{CONFIG['orphan']}')",
+         int(CONFIG["orphan_timeout"])),
+    ]
+
+
+def _send(title, body, priority):
+    host = os.uname().nodename
+    headers = {"Title": f"{host}: {title}", "Priority": str(priority), "Tags": "homelabnext,lake-maintenance",
+               "Content-Type": "text/plain; charset=utf-8"}
+    token = os.environ.get("HNX_LAKE_MAINT_NOTIFY_TOKEN", "")
+    if token:
+        if not (token.isascii() and token.isprintable()):
+            raise ValueError("the notify token is not printable ASCII")  # never quoted
+        _SECRETS.append(token)
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(CONFIG["notify_url"] + "/" + CONFIG["notify_topic"], data=body.encode(),
+                                 headers=headers, method="POST")
+    plain = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+    with plain.open(req, timeout=10) as resp:
+        resp.read()
+        if not 200 <= resp.status < 300:
+            raise ValueError(f"the notify endpoint answered HTTP {resp.status}")
+
+
+def alert(title, body, priority=None):
+    """Deliver one alert; False (with the reason on stderr) when the channel did not take it."""
+    try:
+        _send(title, body, priority or CONFIG["notify_priority"])
+        return True
+    except Exception as exc:  # the alert stays owed
+        print(f"alert not sent: {scrub(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
+        return False
+
+
+def load_state():
+    try:
+        with open(STATE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(doc):
+    os.makedirs(CONFIG["state_dir"], mode=0o700, exist_ok=True)
+    tmp = STATE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2, sort_keys=True)
+    os.replace(tmp, STATE)
+
+
+def report(failed, ran, state):
+    """State-diffed alert: only when the set of failing steps differs from the set last alerted."""
+    now = sorted(failed)
+    prior = sorted(state.get("alerted", []))
+    if now == prior:
+        return prior
+    if now:
+        lines = [f"- {k}: {failed[k]}" for k in now]
+        ok = alert(f"lake maintenance: {len(now)} step(s) failing",
+                   f"{len(now)} maintenance step(s) failed in a run of {ran} table(s):\n" + "\n".join(lines))
+    else:
+        ok = alert("lake maintenance: recovered", "Every maintenance step ran this time.", priority=3)
+    return now if ok else prior
+
+
+def main(argv):
+    if "--test-notify" in argv:
+        text = f"lake maintenance channel test from {os.uname().nodename}"
+        return 0 if alert(text, text, priority=1) else 1
+    dry = "--dry-run" in argv
+    opener = _opener()
+    state = load_state()
+    failed = {}
+    try:
+        found = tables(opener)
+    except EngineError as exc:
+        failed["run:list-tables"] = str(exc)
+        print(f"cannot list the tables: {exc}", file=sys.stderr)
+        state.update({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "failed": failed})
+        state["alerted"] = report(failed, 0, state)
+        save_state(state)
+        return 2
+    for schema, table in found:
+        if not (NAME.match(schema) and NAME.match(table)):
+            failed[f"{schema}.{table}"] = "name not safe to put in a statement; skipped"
+            continue
+        for step, sql, timeout in statements(schema, table):
+            if dry:
+                print(sql)
+                continue
+            try:
+                run_sql(opener, sql, timeout)
+            except EngineError as exc:
+                failed[f"{schema}.{table}:{step}"] = str(exc)
+                print(f"{schema}.{table}: {step} failed: {exc}", file=sys.stderr)
+    if dry:
+        return 0
+    state.update({"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tables": len(found),
+                  "failed": failed})
+    state["alerted"] = report(failed, len(found), state)
+    save_state(state)
+    print(f"{len(found)} table(s), {len(failed)} failing step(s)")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - trino_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - trino_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - trino_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - trino_bind != '0.0.0.0'
+      - trino_port | int >= 1 and trino_port | int <= 65535
+      - trino_uid | int >= 1000 and trino_gid | int >= 1000
+      # the catalog name is fixed: the lake's writers and readers say iceberg.<schema>.<table>
+      - trino_catalog_name == 'iceberg'
+      - trino_warehouse is match(trino_warehouse_pattern)
+      - trino_region is match(trino_region_pattern)
+      - trino_catalog_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - trino_object_store_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - trino_catalog_url == '' or trino_catalog_url is match(trino_url_pattern)
+      - trino_s3_url == '' or trino_s3_url is match(trino_url_pattern)
+      - trino_self_url == '' or trino_self_url is match(trino_url_pattern)
+      - >-
+        [trino_access_key_ref, trino_signing_ref, trino_tls_cert_ref, trino_tls_key_ref, trino_ca_ref,
+         trino_users_ref, trino_shared_ref, trino_maintenance_ref, trino_notify_ref]
+        | reject('match', trino_ref_pattern) | list | length == 0
+      - >-
+        [trino_access_key_ref, trino_signing_ref, trino_tls_cert_ref, trino_tls_key_ref, trino_ca_ref,
+         trino_users_ref, trino_shared_ref, trino_maintenance_ref, trino_notify_ref]
+        | unique | length == 9
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [trino_dir, trino_data_root, trino_maintenance_state_dir, trino_maintenance_env_file, trino_maintenance_script]
+        | reject('match', trino_path_pattern) | list | length == 0
+      - trino_reader_catalog == '' or (trino_reader_catalog is match('^[a-z][a-z0-9_]{0,31}\\Z') and trino_reader_catalog != trino_catalog_name)
+      - trino_access_rules_src == '' or trino_access_rules_src is match(trino_path_pattern)
+      # no rules file is a decision, not a default: it needs trino_access_unrestricted: true
+      - trino_access_rules_src != '' or trino_access_unrestricted | bool
+      # memory: the per-query bound and the engine's headroom (30 percent of the heap) fit the heap, and
+      # the container's limit leaves two GB over the heap for code cache, metaspace and threads
+      - trino_heap is match(trino_heap_pattern)
+      - trino_query_max_memory is match(trino_memory_pattern)
+      - trino_mem_limit is match('^[1-9][0-9]{0,5}[mg]\Z')
+      - trino_query_gb | float <= trino_heap_gb | float * 0.7
+      - trino_mem_limit_gb | float >= trino_heap_gb | float + 2
+      # the engine's floors on the maintenance procedures, and the retention the timer asks for
+      - trino_expire_min_retention is match(trino_duration_pattern)
+      - trino_orphan_min_retention is match(trino_duration_pattern)
+      - trino_expire_retention is match(trino_duration_pattern)
+      - trino_orphan_retention is match(trino_duration_pattern)
+      - trino_expire_retention[:-1] | int >= trino_expire_min_retention[:-1] | int
+      - trino_orphan_retention[:-1] | int >= trino_orphan_min_retention[:-1] | int
+      - trino_retain_last | int >= 1 and trino_retain_last | int <= 1000
+      - trino_expire_timeout | int >= 10 and trino_expire_timeout | int <= 86400
+      - trino_orphan_timeout | int >= 10 and trino_orphan_timeout | int <= 86400
+      - trino_maintenance_user is match(trino_user_pattern)
+      - trino_maintenance_schedule is match('^[-A-Za-z0-9:*,./ ]{3,80}\Z')
+      - trino_last_run_dir is match(trino_path_pattern)
+      - trino_last_run_group is match('^[a-z_][a-z0-9_-]{0,31}\Z')
+      - trino_notify_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - trino_notify_url == '' or trino_notify_url is match(trino_url_pattern)
+      - trino_notify_topic is match('^[-_A-Za-z0-9]{1,64}\Z')
+      - trino_notify_priority | int >= 1 and trino_notify_priority | int <= 5
+    fail_msg: >-
+      trino: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish on
+      (not all interfaces), a port, a container uid and gid of 1000 or more, the catalog name iceberg,
+      a warehouse like s3://bucket/, nine distinct secret: references, absolute canonical paths,
+      an access-rules file (trino_access_rules_src; files/lake-access.example.json is the shape) or
+      an explicit trino_access_unrestricted: true, a heap like 14G with a per-query bound of at most 70 percent of it and a container limit at
+      least 2 GB above it, retention of whole days not below the engine's floors, a retain-last of
+      1 to 1000 and a notify topic, priority and schedule
+  tags: [health, backup, restore, export, upgrade]

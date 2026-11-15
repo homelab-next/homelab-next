@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree, docs/modules/data.md): <data root>/export/{db/projects.dump,
+# attachments.tar,listing.jsonl}. The dump is the restore's source (every project, work package,
+# account and setting); the tar holds the attachments.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Dump, archive and list
+      ansible.builtin.include_tasks: dump.yml
+  tags: [export]
