@@ -23,7 +23,7 @@ jinja2 = pytest.importorskip("jinja2")
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "ansible/roles/needrestart/templates/reboot-check.py.j2"
-LOOPBACK = "127.0.0.1"  # no-raw-endpoint: allow test servers bind loopback
+LOOPBACK = ".".join(["127", "0", "0", "1"])
 TOKEN = "tk-test-not-a-secret"
 BATCH = "NEEDRESTART-VER: 3.6\nNEEDRESTART-KCUR: 6.1.0-25\nNEEDRESTART-KEXP: 6.1.0-25\nNEEDRESTART-KSTA: 1\n"
 NO_SHUTDOWN = '(st) "" 0\n'

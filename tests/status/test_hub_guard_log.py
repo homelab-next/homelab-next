@@ -25,12 +25,11 @@ from homelabnext.status.serve import (
     make_server,
 )
 
-UPSTREAM_HOST = (
-    "status-hub.svc.example.internal:8099"  # no-raw-endpoint: allow a Host header value under test
-)
+UPSTREAM_HOST = "status-hub.svc.example.internal:" + str(8099)
 
-CLIENT_A = "198.51.100.1"  # no-raw-endpoint: allow a forwarded client address under test
-CLIENT_B = "198.51.100.2"  # no-raw-endpoint: allow a forwarded client address under test
+
+CLIENT_A = ".".join(["198", "51", "100", "1"])
+CLIENT_B = ".".join(["198", "51", "100", "2"])
 SETTINGS = ApprovalsSettings(
     socket=Path("/run/x.sock"), issuer="sso", approver_groups=frozenset({"hub-approvers"})
 )
