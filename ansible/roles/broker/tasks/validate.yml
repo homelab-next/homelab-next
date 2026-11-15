@@ -62,18 +62,19 @@
   when: broker_relay | bool
 
 # A loopback endpoint reaches the bus only when the bus runs on this host, on the registry's port:
-# the registry's row for it must name this host (compared in short form on both sides, so an
+# the registry's row for it must place it on this host (its host_id, never the alias a client
+# names; compared in short form on both sides, so an
 # FQDN row matches a short inventory name and the other way round) and the endpoint's port must
 # be the row's, or the relay would publish to whatever listens on that port here while the
 # registry says the bus is elsewhere.
 - name: Validate that a loopback bus is this host's own, on the registry's port
   ansible.builtin.assert:
     that:
-      - (lookup('hnx_registry', broker_relay_events_id, field='host') | split('.') | first) == (inventory_hostname | split('.') | first)
+      - (lookup('hnx_registry', broker_relay_events_id, field='host_id') | split('.') | first) == (inventory_hostname | split('.') | first)
       - (broker_relay_events_endpoint | regex_replace('^.*:([0-9]+)$', '\\1') | int) == (lookup('hnx_registry', broker_relay_events_id, field='port') | int)
     fail_msg: >-
       broker: the relay's endpoint {{ broker_relay_events_endpoint }} is loopback, but the registry
-      puts {{ broker_relay_events_id }} on {{ lookup('hnx_registry', broker_relay_events_id, field='host') }}
+      puts {{ broker_relay_events_id }} on {{ lookup('hnx_registry', broker_relay_events_id, field='host_id') }}
       port {{ lookup('hnx_registry', broker_relay_events_id, field='port') }}: it must be this host
       ({{ inventory_hostname }}) and the endpoint's explicit port (required: never a default);
       run the relay beside the bus, or give the bus a TLS listener and the relay a tls:// endpoint
