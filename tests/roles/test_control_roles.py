@@ -3272,7 +3272,7 @@ def sweep_setup(tmp_path, verify_out, **kw):
         tmp_path, "lynis", lynis_min_hardening_index=60,
         lynis_cli=fake(tmp_path / "lynis-cli", LYNIS.replace("REPORT", repr("hardening_index=70\n"))),
         lynis_dpkg_cli=fake(tmp_path / "dpkg", DPKG.replace("OUT", repr(str(out)))),
-        lynis_verify_script=str(tmp_path / "bin" / "verify"), lynis_notify="mail", lynis_sendmail_cli=mail,
+        lynis_verify_script=str(tmp_path / "bin" / "verify"), lynis_notify="mail", lynis_notify_test_on_change=False, lynis_sendmail_cli=mail,
         lynis_dpkg_verify_allow=[{"package": "vendor-agent", "reason": "the vendor patches its own binary in place"}],
         lynis_dpkg_cfg_files=[str(tmp_path / "dpkg.cfg.d")],
         **kw,
