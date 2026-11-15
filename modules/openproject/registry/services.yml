@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes. It is keyed by the slot and
+# renamed to the instance the site selects; version is product.version (never repeated here), and
+# host is the module's host role, which the site places on a guest. The lab registry
+# (lab/services.yml) must carry it as bound (hnx modules check, docs/modules/registry-rows.md): the
+# instance's name, the placed guest's name as host, the product's version, and at most the lab's
+# own standing, backup_job and scope beside it.
+# Public through the edge only: public_hostname is declared here with an example value and is the
+# SITE's to fill (its presence is compared, not its value): the name people open
+# (projects.<domain>). The app's own local accounts are the route's auth (auth: own): the edge
+# does not put a sign-in in front of it, so outside people sign in with their account here. The
+# edge reaches the app over the lab's own network in plain http (tls: none) and adds
+# X-Forwarded-Proto: https. The health path is the app's own default health check.
+services:
+  projects:
+    capability: projects
+    impl: openproject
+    host: server
+    protocol: http
+    port: 8080
+    health: {kind: http, path: /health_checks/default, expect_status: 200}
+    owner: operator
+    tls: none
+    auth: own
+    public_hostname: projects.example.internal
+    tags: [work]
+    description: The project manager with its own PostgreSQL, cache and attachments; local accounts. Public only through the edge.

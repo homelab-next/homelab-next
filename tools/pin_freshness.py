@@ -107,6 +107,17 @@ SOURCES: dict[str, tuple[str, str]] = {
         "PostgreSQL release page by hand, within the pinned major version",
     ),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
+    "role:openproject/openproject_image": ("github", "opf/openproject"),
+    "role:openproject/openproject_postgres_image": (
+        "none",
+        "the Docker official image (docker.io/library/postgres): compare its tags with the "
+        "PostgreSQL release page by hand, within the pinned major version",
+    ),
+    "role:openproject/openproject_cache_image": (
+        "none",
+        "the Docker official image (docker.io/library/memcached): compare its tags with the "
+        "memcached release notes by hand",
+    ),
     "role:prometheus/prometheus_image": ("github", "prometheus/prometheus"),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
@@ -165,6 +176,18 @@ NOTES: dict[str, str] = {
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "
         "modules/ntfy/module.yml and the lab registry's version"
+    ),
+    "role:openproject/openproject_image": (
+        "an image (modules/openproject, the -slim variant): bump the tag and its digest together, "
+        "with product.version in modules/openproject/module.yml and the lab registry's version; "
+        "one minor series at a time, the seeder migrates the database"
+    ),
+    "role:openproject/openproject_postgres_image": (
+        "an image (modules/openproject): the tag and its digest together, a minor version only "
+        "(a major one is a dump and a restore)"
+    ),
+    "role:openproject/openproject_cache_image": (
+        "an image (modules/openproject): bump the tag and its digest together"
     ),
     "role:prometheus/prometheus_image": (
         "an image (modules/prometheus): bump the tag and its digest together, with product.version "

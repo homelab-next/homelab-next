@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Whether the seeder must run: the image changed since the last run, or a restore asks
+# (openproject_seed_force). The marker holds the digest the seeder last ran for.
+- name: Read the marker of the last seeded image
+  ansible.builtin.slurp:
+    src: "{{ openproject_data_root }}/seeded"
+  register: openproject_seeded
+  failed_when: false
+  tags: [restore]
+
+- name: Decide whether the seeder runs
+  ansible.builtin.set_fact:
+    openproject_seed_needed: >-
+      {{ (openproject_seed_force | default(false) | bool) or
+         (openproject_seeded.content | default('') | b64decode | trim) != openproject_digest }}
+  tags: [restore]

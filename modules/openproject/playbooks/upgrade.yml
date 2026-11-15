@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (openproject_target_image, or
+# openproject_target_postgres_image within its major version, or openproject_target_cache_image),
+# export first, then converge with the new pin (set openproject_image, openproject_postgres_image or
+# openproject_cache_image to the target in the overlay). The seeder migrates the database for a new
+# app image before the app opens it.
+#   ansible-playbook -i <inventory> modules/openproject/playbooks/upgrade.yml -e openproject_target_image=<ref>
+- name: Upgrade the projects provider
+  hosts: mod_openproject_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: openproject
+        tasks_from: upgrade
+    - name: Export the database and the attachments before the new image opens them
+      ansible.builtin.include_role:
+        name: openproject
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: openproject
+      vars:
+        openproject_image: "{{ openproject_target_image | default(openproject_image, true) }}"
+        openproject_postgres_image: "{{ openproject_target_postgres_image | default(openproject_postgres_image, true) }}"
+        openproject_cache_image: "{{ openproject_target_cache_image | default(openproject_cache_image, true) }}"

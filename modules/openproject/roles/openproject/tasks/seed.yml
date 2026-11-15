@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# The product migrates and seeds its database with a one-off command (the seeder) that must have
+# run, against the image about to serve, before the app opens the database. It is idempotent, so
+# it runs when the image changed since the last one (the marker holds the digest it last ran for)
+# or when a restore asks (openproject_seed_force). The database and the cache are brought up first
+# and waited for; nothing else is started.
+- name: Decide whether the seeder runs
+  ansible.builtin.include_tasks: seed_decide.yml
+
+- name: Run the seeder
+  ansible.builtin.include_tasks: seed_run.yml

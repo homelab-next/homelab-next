@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Run the seeder when seed_decide.yml said so. The database and the cache are brought up first
+# and waited for; nothing else is started.
+- name: Bring up the database and the cache
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", up, -d, --wait, postgres, cache]
+  changed_when: false
+  when: openproject_seed_needed | bool
+  tags: [restore]
+
+- name: Run the seeder (migrations, then seed) with the app's own configuration
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", run, --rm, -T, --no-deps,
+           web, ./docker/prod/seeder]
+  changed_when: true
+  when: openproject_seed_needed | bool
+  timeout: "{{ openproject_ready_timeout | int }}"
+  tags: [restore]
+
+- name: Record the image the seeder ran for
+  ansible.builtin.copy:
+    content: "{{ openproject_digest }}\n"
+    dest: "{{ openproject_data_root }}/seeded"
+    owner: "{{ openproject_owner }}"
+    group: "{{ openproject_group }}"
+    mode: "0600"
+  when: openproject_seed_needed | bool
+  tags: [restore]

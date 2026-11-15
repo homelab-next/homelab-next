@@ -258,6 +258,7 @@ MIGRATION_PROOF = {
     "lake-catalog": "reference: the lake protocol has no export/import_ yet",
     "object-store": "reference: the object_store protocol has no export/import_ yet",
     "orchestration": "reference: the orchestration protocol has no export/import_ yet",
+    "projects": "reference: the projects protocol has no export/import_ yet",
     "records": "reference: the records protocol has no export/import_ yet",
     "secrets": "reference: the secrets protocol has no export/import_ yet",
 }
