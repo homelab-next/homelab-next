@@ -40,7 +40,7 @@ controls:
     layer: host
     description: Services and kernels left running old code after patching are listed and reported.
     role: needrestart
-    settings: [notify, notify_id, notify_topic, notify_priority, notify_auth_ref, mail_to, alert_kernel, schedule, alert_reboot, reboot_schedule]
+    settings: [notify, notify_id, notify_topic, notify_priority, notify_auth_ref, notify_allow_plain_http, mail_to, alert_kernel, schedule, alert_reboot, reboot_schedule]
     verify: the restart check ran in the last two days and nothing it lists has waited unreported
   os-hardening:
     layer: host

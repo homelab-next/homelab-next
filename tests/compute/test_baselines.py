@@ -491,3 +491,21 @@ def test_serve_routes_the_page():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_restart_required_allow_plain_http_is_a_control_setting(tmp_path):
+    """``with: {notify_allow_plain_http: true}`` validates and renders ``needrestart_notify_allow_plain_http``."""
+    from homelabnext.compute import open_site
+
+    d = tmp_path / "guests"
+    shutil.copytree(EXAMPLE, d)
+    p = d / "_baselines.yml"
+    doc = yaml.safe_load(p.read_text())
+    for c in doc["baselines"]["base"]["controls"]:
+        if isinstance(c, dict) and c["id"] == "restart-required":
+            c["with"] = {"notify": "notify", "notify_allow_plain_http": True}
+    p.write_text(yaml.safe_dump(doc, sort_keys=False))
+    fleet = load_fleet(d, open_site(EXAMPLE_SITE)[0])
+    out = render(fleet, "inventory")
+    hv = yaml.safe_load(out[next(k for k in sorted(out) if k.startswith("host_vars/"))])
+    assert hv["needrestart_notify_allow_plain_http"] is True

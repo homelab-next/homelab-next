@@ -67,7 +67,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-# the alert carries the access token.  The role already refuses a token over plain http; as
+# the alert carries the access token.  The role refuses a token over plain http unless
+# needrestart_notify_allow_plain_http opts in (a LAN endpoint with no TLS); as
 # defence in depth the post follows no redirect and takes no proxy from the environment
 OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
 
