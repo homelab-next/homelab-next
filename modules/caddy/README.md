@@ -89,7 +89,7 @@ Data root `caddy_data_root` (`/var/lib/hnx-modules/caddy`, `root:<caddy_gid>` 07
 
 oauth2-proxy as the forward-auth check and the sign-in only: no upstream (`static://202`),
 `--set-xauthrequest` (the identity headers the edge copies: `X-Auth-Request-User`, `-Groups`,
-`-Email`, `-Preferred-Username`), `--reverse-proxy`, the OIDC authorization code flow with **PKCE
+`-Email`, `-Preferred-Username`), `--reverse-proxy` with `--trusted-proxy-ip` set (`caddy_auth_proxy_trusted_proxy_ips`: loopback, the bind address and docker's private bridge range; never `0.0.0.0/0`, so no start-up warning), the OIDC authorization code flow with **PKCE
 S256** (the realm requires it) at `caddy_auth_proxy_issuer_url`, scope `openid` only (the realm's
 client mappers add `preferred_username` and `groups` to every token; the username is the user id
 and the e-mail claim, so no address is needed), a host-only `__Host-` cookie (Secure, HttpOnly,

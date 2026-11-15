@@ -18,7 +18,7 @@ counts:
   workstation-refs-allow: 2
   yaml-loader-allow: 52
   scrub-allow-markers: 71
-  no-raw-endpoint-markers: 352
+  no-raw-endpoint-markers: 355
 digests:
   product-names-allow: sha256:567c33564490b192cc537501516208449a294f19742ec42dea0aa6236a322374
   no-raw-endpoints-allow: sha256:4cd649047149dfe3e3a6ca94977736a0a5af97f559aefa2f7c4ec3a92dd925a2
