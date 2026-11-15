@@ -178,8 +178,9 @@ suite_budgets = [
   # on a local 4-core box (2026-10-28, over the 60 s default) after the swap gate's role-trust
   # cases, each of which builds two git commits; 90 is about 1.5x that; 150 since the apply path
   # runs its limits plays with ansible-playbook (#378): 58.8 s locally (2026-11-13), CI measured
-  # 109.9 s on 3.11 and 104.7 s on 3.12 (ansible-playbook starts are slower there)
-  "tests/modules = 150",
+  # 109.9 s on 3.11 and 104.7 s on 3.12 (ansible-playbook starts are slower there); 200 since the
+  # cutover wave-1 modules joined: 3.12 measured 152.2 s (#424, red over 150), about 1.3x
+  "tests/modules = 200",
   "tests/packaging = 120",  # builds and installs the wheel and the sdist
   # each test builds the whole repository graph (about 2s a build), so the suite grows with the docs;
   # 100 since CI measured 91s with 30 ADRs; 130 since CI measured 100.8s with 32 ADRs and the
