@@ -40,3 +40,14 @@ needrestart_state_dir: /var/lib/homelabnext/needrestart
 # per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
 needrestart_last_run_dir: /var/lib/homelabnext/last-run
 needrestart_last_run_group: root
+# A pending reboot reaches the operator (for a host whose patching policy never reboots it, e.g.
+# reboot_time never: nothing else will). A second timer, hourly, posts once when a reboot becomes
+# pending (the reboot-required file, a newer kernel or microcode update waiting in needrestart's
+# batch output, or a reboot logind has scheduled) and once when it clears, through the channel
+# chosen above. Off by default: on a host that reboots in its patch window unattended-upgrades
+# already says so, and a second alert would be a duplicate. On, it needs a channel (not none).
+needrestart_alert_reboot: false
+needrestart_reboot_schedule: "*-*-* *:17:00 UTC"
+needrestart_reboot_required_file: /var/run/reboot-required
+needrestart_busctl_cli: busctl
+needrestart_shutdown_cli: shutdown
