@@ -297,7 +297,7 @@ validation uses the network validator's IPv6 prefix rules. It does not validate 
 ### Node host firewall
 
 The `host-firewall` baseline control binds `nftables_host`, which refuses to run beside
-`pve-firewall`; a Proxmox node would therefore have no host firewall at all. PVE's own form is
+`pve-firewall`; a Proxmox node would therefore have no firewall the model declares. PVE's own form is
 the node's file, `/etc/pve/nodes/<node>/host.fw`, and a node declares it in `_nodes.yml`:
 
 ```yaml
@@ -331,6 +331,14 @@ guests renders without `--allow-empty`), under `nodes/<node>/`:
   `status`.
 - `hnx-host-firewall-run.sh SSH_TARGET [CHECK_HOST]`, run from the controller.
 - `nodes/README.md`: the table of nodes, their sources and rollback windows.
+
+**The allows are additive.** According to the PVE documentation, PVE's built-in rules always let
+the datacenter `management` IP set (by default `local_network`, the node's own network, unless
+`cluster.fw` overrides it) reach 22, 8006, 5900-5999 and 3128. The declared sources therefore add
+to that set and do not narrow it: to restrict management to the declared sources, define the
+`management` IP set in `cluster.fw` too. `apply` prints the node's local network, and a controller
+inside it passes the port check whatever `host.fw` says, so the check proves the controller is not
+locked out, not that the declared sources are enough.
 
 **Refused before any file is written** (`hnx guests validate` runs the same checks): a node whose
 `management` has neither `ssh` nor `web` (the lock-out guard); `any` or a `/0` for `ssh`, `web`,
@@ -369,8 +377,11 @@ The controller script copies `host.fw` and the node script to a private director
 A `confirm` after a rollback (or a second one) fails, and a timer that fires after a `confirm`
 changes nothing, so neither can undo or misreport the other. A second `apply` while one is pending
 is refused, so the original file is never overwritten by the saved copy of a half-applied one.
-Limits: the timer is transient, so a reboot of the node inside the window cancels it (the next
-`apply` is then refused until `rollback` clears the marker); and `pve-firewall` reloads rules on
+A reboot inside the window cancels the transient timer, so `apply` also installs a boot-time unit
+(`hnx-hostfw-rollback-<node>-boot.service`, conditional on the pending marker) that restores the
+previous file; `confirm` and `rollback` remove it. The runner needs a declared SSH source (it works
+over SSH; a web-only node is applied by hand), waits and needs two port checks in a row, and reports
+an SSH connection that dropped during `apply` as "may be ON and unconfirmed". Limits: `pve-firewall` reloads rules on
 its own cycle, so the rules are what `restart` loaded, not what a later hand edit adds.
 
 The `hypervisor` baseline should remove `host-firewall` with the reason "pve-firewall owns the

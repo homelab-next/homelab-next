@@ -8,14 +8,16 @@
 # Open the node's BMC console before the first apply (docs/compute-model.md, PVE host firewall).
 # Environment: HNX_HEALTH_HOOK (an executable run with the node name after the restart; non-zero
 # rolls back), HNX_HEALTH_UNITS (units that must be active, default "pveproxy pvedaemon
-# pve-firewall"), and for a test HNX_PVE_NODE_DIR, HNX_PVE_CLUSTER_FW, HNX_STATE_DIR.
+# pve-firewall"), and for a test HNX_UNIT_DIR, HNX_PVE_NODE_DIR, HNX_PVE_CLUSTER_FW, HNX_STATE_DIR.
 set -eu
+umask 077
 NODE="hv-c"
 MINUTES="5"
 UNIT="hnx-hostfw-rollback-hv-c"
 NODE_DIR="${HNX_PVE_NODE_DIR:-/etc/pve/nodes/$NODE}"
 CLUSTER_FW="${HNX_PVE_CLUSTER_FW:-/etc/pve/firewall/cluster.fw}"
 STATE_DIR="${HNX_STATE_DIR:-/var/lib/hnx/host-firewall-$NODE}"
+UNIT_DIR="${HNX_UNIT_DIR:-/etc/systemd/system}"
 HEALTH_UNITS="${HNX_HEALTH_UNITS:-pveproxy pvedaemon pve-firewall}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RULES="$HERE/host.fw"
@@ -38,8 +40,13 @@ restore() {
     echo "$0: no record of the previous host.fw in $STATE_DIR; nothing restored" >&2
     return 1
   fi
-  pve-firewall restart || true
+  if ! pve-firewall restart; then
+    echo "$0: pve-firewall did not restart after the restore; the pending marker is kept" >&2
+    return 1
+  fi
   rm -f "$PENDING"
+  systemctl disable "$UNIT-boot.service" >/dev/null 2>&1 || true
+  rm -f "$UNIT_DIR/$UNIT-boot.service"
 }
 
 rollback() {
@@ -99,6 +106,21 @@ apply() {
     echo "$0: could not arm the rollback timer; host.fw not touched" >&2
     exit 1
   fi
+  # the transient timer does not survive a reboot: a boot-time unit, run only while the marker
+  # exists, restores the previous file then
+  cat > "$UNIT_DIR/$UNIT-boot.service" <<UNITEOF
+[Unit]
+Description=hnx: restore host.fw of $NODE if an apply was never confirmed
+ConditionPathExists=$PENDING
+After=pve-cluster.service
+[Service]
+Type=oneshot
+ExecStart=/bin/sh $STATE_DIR/hnx-host-firewall.sh rollback
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable "$UNIT-boot.service" >/dev/null 2>&1 || true
   cp "$RULES" "$TARGET.hnx-new" || fail_back "could not stage the new host.fw"
   mv "$TARGET.hnx-new" "$TARGET" || fail_back "could not install the new host.fw"
   grep -qx 'enable: 1' "$TARGET" || fail_back "the installed host.fw does not set enable: 1"
@@ -110,6 +132,9 @@ apply() {
   if [ -n "${HNX_HEALTH_HOOK:-}" ]; then
     "$HNX_HEALTH_HOOK" "$NODE" || fail_back "the health hook failed"
   fi
+  echo "note: PVE's built-in rules also let the datacenter 'management' set (by default the node's"
+  echo "own network: $(pve-firewall localnet 2>/dev/null | tr '\n' ' ')) reach 22, 8006, 5900-5999 and 3128;"
+  echo "these allows are additional, and a controller inside that network passes the check regardless"
   echo "host.fw of $NODE installed.  UNCONFIRMED: it is restored in $MINUTES minute(s) unless"
   echo "the controller reaches the node and runs: $0 confirm"
 }
@@ -121,6 +146,8 @@ confirm() {
   fi
   systemctl stop "$UNIT.timer" || { echo "$0: could not stop $UNIT.timer; still armed" >&2; exit 1; }
   rm -f "$PENDING"
+  systemctl disable "$UNIT-boot.service" >/dev/null 2>&1 || true
+  rm -f "$UNIT_DIR/$UNIT-boot.service"
   echo "host.fw of $NODE confirmed; the previous file is kept in $STATE_DIR"
 }
 

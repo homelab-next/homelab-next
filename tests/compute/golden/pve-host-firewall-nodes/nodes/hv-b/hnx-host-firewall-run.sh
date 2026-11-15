@@ -43,24 +43,40 @@ ports_answer() {
 # a private directory made by this login (mode 700): root runs the script from it, so no other
 # account on the node may be able to replace it between the copy and the run
 DIR="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" 'mktemp -d /var/tmp/hnx-hostfw.XXXXXX')"
-case "$DIR" in /var/tmp/hnx-hostfw.*) ;; *) echo "$0: no scratch directory on the node" >&2; exit 1 ;; esac
+case "$DIR" in /var/tmp/hnx-hostfw.??????) ;; *) echo "$0: no scratch directory on the node" >&2; exit 1 ;; esac
 cleanup() {
   ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "rm -rf $DIR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 scp -q "$HERE/host.fw" "$HERE/hnx-host-firewall.sh" "$TARGET:$DIR/"
 
-if ! remote apply; then
+case " $PORTS " in
+  *" 22 "*) ;;
+  *) echo "$0: this runner works over SSH and no source for port 22 is declared; copy the files and run hnx-host-firewall.sh by hand" >&2; exit 1 ;;
+esac
+
+remote apply && rc=0 || rc=$?
+if [ "$rc" -eq 255 ]; then
+  echo "$0: the connection dropped during apply: host.fw may be ON and unconfirmed; its timer restores the previous file within 5 minute(s)" >&2
+  exit 1
+elif [ "$rc" -ne 0 ]; then
   echo "$0: apply failed on the node (it rolls itself back); host.fw is as before" >&2
   exit 1
 fi
 
 n=0
 ok=0
+streak=0
 while [ "$n" -lt "$TRIES" ]; do
   n=$((n + 1))
-  if ports_answer; then ok=1; break; fi
+  # two passes in a row, after a pause: the first look can precede the reload
   sleep "$PAUSE"
+  if ports_answer; then
+    streak=$((streak + 1))
+    [ "$streak" -ge 2 ] && { ok=1; break; }
+  else
+    streak=0
+  fi
 done
 
 if [ "$ok" -eq 1 ] && [ -n "${HNX_VERIFY_HOOK:-}" ]; then
@@ -79,5 +95,5 @@ if [ "$ok" -ne 1 ]; then
   exit 1
 fi
 
-remote confirm
+remote confirm || { echo "$0: confirm failed; the timer may still restore the previous host.fw" >&2; exit 1; }
 echo "host.fw of $NODE is on and confirmed"

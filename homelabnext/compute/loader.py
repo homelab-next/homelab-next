@@ -322,7 +322,12 @@ HF_ROLLBACK_DEFAULT = 5
 
 def hf_is_wildcard(source: str) -> bool:
     """``any``, or a CIDR that matches every address of its family."""
-    return source == "any" or source.endswith("/0")
+    if source == "any":
+        return True
+    try:
+        return ipaddress.ip_network(source, strict=False).prefixlen == 0
+    except ValueError:
+        return False
 
 
 def _hf_sources(where: str, raw: Any) -> list[str]:

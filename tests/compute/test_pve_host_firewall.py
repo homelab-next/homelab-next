@@ -250,7 +250,8 @@ class Node:
         self.node_dir = self.root / "pve" / "nodes" / "hv-a"
         self.state = self.root / "state"
         self.log = self.root / "log"
-        for d in (self.bin, self.flags, self.node_dir):
+        self.units = self.root / "units"
+        for d in (self.bin, self.flags, self.node_dir, self.units):
             d.mkdir(parents=True)
         self.log.write_text("")
         self.cluster_fw = self.root / "pve" / "cluster.fw"
@@ -281,6 +282,7 @@ class Node:
             self.bin / "systemd-run",
             'echo "systemd-run $*" >> "$LOG"\n'
             '[ ! -e "$FLAGS/arm-fails" ] || exit 1\n'
+            'cp "$NODE_DIR/host.fw" "$FLAGS/host.fw.at-arm" 2>/dev/null || echo none > "$FLAGS/host.fw.at-arm"\n'
             'cmd=""; for a in "$@"; do case "$a" in --*) ;; *) cmd="$cmd $a" ;; esac; done\n'
             'echo "$cmd" > "$FLAGS/armed-cmd"; : > "$FLAGS/timer"\n',
         )
@@ -293,6 +295,7 @@ class Node:
             "HNX_PVE_NODE_DIR": str(self.node_dir),
             "HNX_PVE_CLUSTER_FW": str(self.cluster_fw),
             "HNX_STATE_DIR": str(self.state),
+            "HNX_UNIT_DIR": str(self.units),
         }
 
     def run(self, *args: str, **env: str) -> subprocess.CompletedProcess:
@@ -332,6 +335,8 @@ def test_apply_arms_the_timer_before_it_changes_anything(tmp_path):
     arm = next(i for i, c in enumerate(calls) if c.startswith("systemd-run"))
     restart = calls.index("pve-firewall restart")
     assert arm < restart
+    # the file was still the old one when the timer was armed
+    assert (n.flags / "host.fw.at-arm").read_text() == "OLD RULES\n"
     assert "--unit=hnx-hostfw-rollback-hv-a" in calls[arm] and "--on-active=5m" in calls[arm]
     assert n.host_fw.read_text() == n.rendered
     assert (n.state / "host.fw.prev").read_text() == "OLD RULES\n"
@@ -414,7 +419,8 @@ def test_a_failed_step_rolls_back_at_once(tmp_path, flag, what):
     r = n.run()
     assert r.returncode == 1 and what in r.stderr
     assert n.host_fw.read_text() == "OLD RULES\n"
-    assert not n.armed and not (n.state / "pending").exists()
+    # a restart that keeps failing cannot confirm the restore: the marker (and boot unit) stay
+    assert (n.state / "pending").exists() == (flag == "pve-firewall-restart-fails")
 
 
 def test_a_failing_health_hook_rolls_back_and_a_passing_one_does_not(tmp_path):
@@ -466,7 +472,6 @@ def test_apply_refuses_a_file_that_is_not_enabled(tmp_path):
 def test_the_rollback_minutes_reach_the_timer_and_the_message(tmp_path):
     out = render(fleet_with(tmp_path, hf(rollback_minutes=12)), TARGET)
     assert 'MINUTES="12"' in out["nodes/hv-a/hnx-host-firewall.sh"]
-    assert "within 12 minute(s)" not in out["nodes/hv-a/hnx-host-firewall-run.sh"]
     assert "@MINUTES@" not in out["nodes/hv-a/hnx-host-firewall-run.sh"]
     assert "12 minute(s)" in out["nodes/hv-a/hnx-host-firewall-run.sh"]
 
@@ -544,7 +549,10 @@ def test_the_ports_answering_confirms(tmp_path):
     assert r.returncode == 0, r.stderr
     assert c.verbs() == ["apply", "confirm"]
     ports = [x for x in c.calls() if x.startswith("portcheck")]
-    assert ports == ["portcheck node.example.internal 22", "portcheck node.example.internal 8006"]
+    # two passes in a row
+    assert (
+        ports == ["portcheck node.example.internal 22", "portcheck node.example.internal 8006"] * 2
+    )
     assert any(x.startswith("scp") and "host.fw" in x for x in c.calls())
     assert any(
         "sudo -n" in x and "hnx-hostfw.abc123/hnx-host-firewall.sh apply" in x for x in c.calls()
@@ -606,3 +614,53 @@ def test_the_checked_ports_are_the_declared_ones(tmp_path):
     (tmp_path / "both").mkdir()
     both = render(fleet_with(tmp_path / "both", hf()), TARGET)
     assert 'PORTS="22 8006"' in both["nodes/hv-a/hnx-host-firewall-run.sh"]
+
+
+def test_a_boot_unit_restores_after_a_reboot_and_is_removed_on_confirm(tmp_path):
+    n = Node(tmp_path)
+    assert n.run().returncode == 0
+    unit = (n.units / "hnx-hostfw-rollback-hv-a-boot.service").read_text()
+    assert f"ConditionPathExists={n.state}/pending" in unit and "rollback" in unit
+    assert n.run("confirm").returncode == 0
+    assert not (n.units / "hnx-hostfw-rollback-hv-a-boot.service").exists()
+
+
+def test_a_restore_whose_restart_fails_keeps_the_marker(tmp_path):
+    n = Node(tmp_path)
+    assert n.run().returncode == 0
+    n.flag("pve-firewall-restart-fails")
+    r = n.fire_timer()
+    assert r.returncode != 0 and (n.state / "pending").exists()
+
+
+@pytest.mark.parametrize("src", ["0.0.0.0/00", "::/0", "::/00"])
+def test_a_hand_built_wildcard_spelling_is_refused(src):
+    with pytest.raises(ComputeError, match="open to any address"):
+        pve_host_firewall.check_spec("hv-a", {"management": {"ssh": [src]}})
+    with pytest.raises(ComputeError, match="never any"):
+        pve_host_firewall.check_spec(
+            "hv-a", {"management": {"ssh": ["192.0.2.0/24"]}, "cluster": {"peers": [src]}}
+        )
+
+
+def test_the_runner_needs_ssh_and_survives_a_dropped_connection(tmp_path):
+    c = Controller(tmp_path)
+    c.flag("rc.apply")
+    # exit 255 is ssh's own: the file may be on
+    stub(
+        c.bin / "ssh",
+        'echo "ssh $*" >> "$LOG"\ncase "$*" in *mktemp*) echo /var/tmp/hnx-hostfw.abc123;; *apply) exit 255;; esac\n',
+    )
+    r = c.run()
+    assert r.returncode == 1 and "may be ON and unconfirmed" in r.stderr
+
+
+def test_a_web_only_node_gets_a_runner_that_refuses(tmp_path):
+    (tmp_path / "w").mkdir()
+    out = render(
+        fleet_with(
+            tmp_path / "w", {"hv-a": {"host_firewall": {"management": {"web": ["zone:mgmt"]}}}}
+        ),
+        TARGET,
+    )
+    assert "no source for port 22 is declared" in out["nodes/hv-a/hnx-host-firewall-run.sh"]
