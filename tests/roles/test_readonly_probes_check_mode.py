@@ -5,7 +5,7 @@ Under --check a command task is skipped, so its registered result is empty (rc u
 and the assert after it fails on a healthy host ("docker_engine: unit docker is unknown ...").  A
 probe that registers a result and changes nothing (``changed_when: false``) therefore carries
 ``check_mode: false``, on the task or on an enclosing block.  Checked statically for every role's
-health and readiness hook, and for the vllm_server version probe."""
+health and readiness hook, and for the version probes in a role's main.yml."""
 
 import pathlib
 
@@ -13,8 +13,10 @@ import pytest
 import yaml
 
 ROLES = pathlib.Path(__file__).resolve().parents[2] / "ansible" / "roles"
+# a role's main.yml holds a version probe too when a task there asks the binary "for its version"
+VERSION_PROBES = [p for p in ROLES.glob("*/tasks/main.yml") if "for its version" in p.read_text()]
 FILES = sorted(
-    [*ROLES.glob("*/tasks/health.yml"), *ROLES.glob("*/tasks/readiness.yml"), ROLES / "vllm_server/tasks/main.yml"]
+    [*ROLES.glob("*/tasks/health.yml"), *ROLES.glob("*/tasks/readiness.yml"), *VERSION_PROBES]
 )
 COMMANDS = {"ansible.builtin.command", "ansible.builtin.shell", "command", "shell"}
 
@@ -37,5 +39,14 @@ def test_every_registered_read_only_command_runs_in_check_mode(path):
 
 
 def test_the_docker_engine_readiness_probes_are_found():
-    names = [n for n, _ in _probes(yaml.safe_load((ROLES / "docker_engine/tasks/readiness.yml").read_text()))]
+    names = [
+        n
+        for n, _ in _probes(
+            yaml.safe_load((ROLES / "docker_engine/tasks/readiness.yml").read_text())
+        )
+    ]
     assert len(names) == 2, names
+
+
+def test_a_version_probe_in_a_main_tasks_file_is_found():
+    assert VERSION_PROBES
