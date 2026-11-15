@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# hnx-script:
+#   id: needrestart-reboot-check
+#   kind: job
+#   purpose: Alert once when a host that never reboots by itself has a reboot pending, and once when it clears.
+#   owner: platform
+#   trigger: [timer:needrestart/reboot, role:needrestart]
+#   inputs: the reboot-required file, needrestart -b (kernel and microcode state), logind's ScheduledShutdown; the previous state file
+#   outputs: the state file (owner-only) and, on a change of the pending-reboot state, one alert (ntfy or local mail)
+#   installs_to: /usr/local/libexec/homelabnext/needrestart-reboot-check
+#   exit:
+#     "0": checked (and alerted, if the state changed)
+#     "1": a reader failed; what was last alerted is kept (a new reason is still alerted)
+#     "2": the alert could not be sent; it stays owed to the next run
+"""Managed by homelabnext (role needrestart, control restart-required); local changes are
+overwritten.  For a host whose patching policy never reboots it (reboot_time never): a reboot that
+is pending is not a surprise to a person unless something says so.  Three readers, none of which
+restarts anything: the reboot-required file (and its package list), `needrestart -b` (a kernel or
+microcode update that waits, NEEDRESTART-KSTA and NEEDRESTART-UCSTA 2 or 3; the services that need a
+restart are named in the alert's body, the other check alerts on them) and logind's
+ScheduledShutdown (a reboot a patch run scheduled with `shutdown -r`).  The reasons found are the
+state: an alert goes out only when they differ from the set last alerted (so the same state is never
+posted twice), "cleared" once when they empty, and a failed alert is retried.  A reader that fails
+is not "nothing pending": what was last alerted is kept (a reason found now is still added) and the
+run exits 1."""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+
+STATE_DIR = {{ needrestart_state_dir | to_json }}
+REBOOT_FILE = {{ needrestart_reboot_required_file | to_json }}
+NEEDRESTART = {{ needrestart_cli | to_json }}
+BUSCTL = {{ needrestart_busctl_cli | to_json }}
+SHUTDOWN = {{ needrestart_shutdown_cli | to_json }}
+MODE = {{ needrestart_mode | to_json }}
+NOTIFY_URL = {{ needrestart_notify_url | to_json }}
+TOPIC = {{ needrestart_notify_topic | to_json }}
+PRIORITY = {{ needrestart_notify_priority | int }}
+TOKEN_FILE = {{ (needrestart_notify_auth_file if needrestart_notify_auth_ref else '') | to_json }}
+SENDMAIL = {{ needrestart_sendmail_cli | to_json }}
+MAIL_TO = {{ needrestart_mail_to | to_json }}
+STATE = os.path.join(STATE_DIR, "reboot-state.json")
+
+# logind types that restart the host (a poweroff or halt scheduled on purpose is not a reboot)
+REBOOT_TYPES = ("reboot", "kexec", "soft-reboot", "")
+BUSCTL_RE = re.compile(r'^\(st\) "([^"]*)" ([0-9]+)$')
+SHOW_RE = re.compile(r"([A-Z][\w-]*(?: [a-z][\w-]*)?) scheduled for (.+?), use ")
+NO_SHUTDOWN_USEC = (0, 18446744073709551615)
+LOGIND = "".join(["org.free", "desk", "top.login1"])  # logind's D-Bus name, built so it is not read as a host
+LOGIND_PATH = "/" + LOGIND.replace(".", "/")
+DETAIL = []  # extra lines for the alert body; never part of the state
+SAFE = re.compile(r"[^A-Za-z0-9.+_:/ ~-]")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow no redirect: the 3xx is the HTTPError.  urllib's stock handler resends a POST
+    answered 301/302/303 as a GET with no body, to any origin, and copies the Authorization
+    header along with it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# the alert carries the access token.  The role already refuses a token over plain http; as
+# defence in depth the post follows no redirect and takes no proxy from the environment
+OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+
+
+def clean(text, limit=80):
+    """Printable text only, bounded: a package or kernel name read off the host goes into a
+    header and a mail subject."""
+    return SAFE.sub("", str(text))[:limit]
+
+
+def read_reboot_file():
+    """(reasons, readable) from the reboot-required file and its package list."""
+    if not os.path.exists(REBOOT_FILE):
+        return [], True
+    pkgs = []
+    try:
+        with open(REBOOT_FILE + ".pkgs", encoding="utf-8", errors="replace") as fh:
+            pkgs = sorted({clean(x) for x in fh.read().split() if clean(x)})
+    except OSError:
+        pass
+    if pkgs:  # detail for the body only: a longer list is not a new state
+        DETAIL.append("Packages asking for it: " + ", ".join(pkgs[:10]) + (f" and {len(pkgs) - 10} more" if len(pkgs) > 10 else ""))
+    return ["the reboot-required file is set"], True
+
+
+def parse_needrestart(text):
+    """(reasons, services) from `needrestart -b` batch output."""
+    k, svcs = {}, []
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        value = value.strip()
+        if key == "NEEDRESTART-SVC" and value:
+            svcs.append(clean(value))
+        elif key in ("NEEDRESTART-KSTA", "NEEDRESTART-KCUR", "NEEDRESTART-KEXP", "NEEDRESTART-UCSTA"):
+            k[key[12:].lower()] = value
+    reasons = []
+    if k.get("ksta") in ("2", "3"):
+        reasons.append(f"a newer kernel waits ({clean(k.get('kexp', '?'))}; running {clean(k.get('kcur', '?'))})")
+    if k.get("ucsta") in ("2", "3"):
+        reasons.append("a microcode update waits")
+    return reasons, sorted(set(svcs))
+
+
+def read_needrestart():
+    """(reasons, services, readable)."""
+    try:
+        run = subprocess.run([NEEDRESTART, "-b"], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"needrestart -b failed: {clean(exc, 200)}", file=sys.stderr)
+        return [], [], False
+    if run.returncode != 0:
+        print(f"needrestart -b exited {run.returncode}: {clean(run.stderr, 200)}", file=sys.stderr)
+        return [], [], False
+    reasons, svcs = parse_needrestart(run.stdout)
+    return reasons, svcs, True
+
+
+def utc(usec):
+    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(int(usec) // 1000000))
+
+
+def read_logind():
+    """(reasons, readable): a reboot logind holds (`ScheduledShutdown`), by busctl, else by
+    `shutdown --show`.  A poweroff or halt is not a reboot and is not reported."""
+    try:
+        run = subprocess.run(
+            [BUSCTL, "get-property", LOGIND, LOGIND_PATH, LOGIND + ".Manager", "ScheduledShutdown"],
+            capture_output=True, text=True, timeout=30)
+        m = BUSCTL_RE.match(run.stdout.strip()) if run.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        m = None
+    if m:
+        kind, usec = m.group(1), int(m.group(2))
+        if kind == "" and usec in NO_SHUTDOWN_USEC:
+            return [], True
+        if kind in REBOOT_TYPES:
+            when = utc(usec) if usec not in NO_SHUTDOWN_USEC else "an unknown time"
+            return [f"a reboot is scheduled for {when}"], True
+        return [], True
+    try:
+        run = subprocess.run([SHUTDOWN, "--show"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        print("neither busctl nor shutdown --show could be read", file=sys.stderr)
+        return [], False
+    text = run.stdout + " " + run.stderr
+    found = SHOW_RE.search(text)
+    if found:
+        kind = found.group(1).lower()
+        if kind in ("reboot", "kexec", "soft-reboot"):
+            return [f"a reboot is scheduled for {clean(found.group(2))}"], True
+        return [], True
+    if "no scheduled shutdown" in text.lower():
+        return [], True
+    print("logind's scheduled shutdown could not be read", file=sys.stderr)
+    return [], False
+
+
+def message(host, reasons, services):
+    if not reasons:
+        return f"reboot cleared on {host}", f"No reboot is pending on {host} any more."
+    title = f"reboot required on {host}: " + "; ".join(reasons)
+    body = "A reboot is pending (nothing was rebooted; this host's policy is to never reboot by itself):\n"
+    body += "\n".join(f"- {r}" for r in reasons)
+    body += "".join("\n" + d for d in DETAIL)
+    if services:
+        body += "\nServices that also need a restart: " + ", ".join(services[:20])
+    return title[:200], body
+
+
+def send(title, body):
+    if MODE == "notify":
+        headers = {"Title": title, "Priority": str(PRIORITY),
+                   "Tags": "homelabnext,reboot-required", "Content-Type": "text/plain; charset=utf-8"}
+        if TOKEN_FILE:
+            with open(TOKEN_FILE, encoding="utf-8") as fh:
+                token = fh.read().strip()
+            if not token:
+                raise ValueError(f"the token file {TOKEN_FILE} is empty")
+            if not (token.isascii() and token.isprintable()):
+                # never quoted: http.client's own refusal would print the whole header value
+                raise ValueError(f"the token in {TOKEN_FILE} is not printable ASCII")
+            headers["Authorization"] = "Bearer " + token
+        req = urllib.request.Request(f"{NOTIFY_URL}/{TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
+        with OPENER.open(req, timeout=10) as resp:
+            resp.read()
+    elif MODE == "mail":
+        mail = f"To: {MAIL_TO}\nSubject: {title}\n\n{body}\n"
+        subprocess.run([SENDMAIL, "-t"], input=mail, text=True, check=True, timeout=30)
+    else:
+        raise ValueError(f"alert channel {MODE!r} cannot deliver")
+
+
+def main():
+    host = clean(os.uname().nodename, 64)
+    reasons, readable = [], True
+    r, ok = read_reboot_file()
+    reasons += r
+    readable = readable and ok
+    r, services, ok = read_needrestart()
+    reasons += r
+    readable = readable and ok
+    r, ok = read_logind()
+    reasons += r
+    readable = readable and ok
+    reasons = sorted(set(reasons))
+    try:
+        with open(STATE, encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except (OSError, ValueError):
+        prev = {}
+    alerted = prev.get("alerted", [])
+    if not isinstance(alerted, list):
+        alerted = []
+    rc = 0
+    if not readable:
+        # an unread reader is not "nothing pending": what was alerted stays, a new reason adds
+        rc = 1
+        reasons = sorted(set(reasons) | set(alerted))
+    if reasons != alerted:
+        try:
+            send(*message(host, reasons, services))
+            alerted = reasons
+        except Exception as exc:  # the alert stays owed
+            print(f"alert not sent: {clean(exc, 200)}", file=sys.stderr)
+            rc = 2
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = STATE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"reasons": reasons, "alerted": alerted, "readable": readable}, fh, indent=2, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, STATE)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -32,6 +32,26 @@ argument_specs:
         type: bool
         description: Also alert when a newer kernel waits for a reboot (off by default; unattended-upgrades owns reboots).
         default: false
+      needrestart_alert_reboot: &alert_reboot
+        type: bool
+        description: Install the pending-reboot check, an hourly timer that alerts once when a reboot becomes pending (the reboot-required file, a newer kernel or microcode update, or a reboot logind has scheduled) and once when it clears; for a host whose patching policy never reboots it. Needs an alert channel (notify not none).
+        default: false
+      needrestart_reboot_schedule: &reboot_schedule
+        type: str
+        description: When the pending-reboot check runs (systemd OnCalendar, ending in UTC).
+        default: "*-*-* *:17:00 UTC"
+      needrestart_reboot_required_file: &reboot_file
+        type: path
+        description: The file the distribution's package hooks create when a reboot is required.
+        default: /var/run/reboot-required
+      needrestart_busctl_cli: &busctl
+        type: str
+        description: The busctl command (reads logind's ScheduledShutdown).
+        default: busctl
+      needrestart_shutdown_cli: &shutdown
+        type: str
+        description: The shutdown command (--show, where busctl gives no answer).
+        default: shutdown
       needrestart_schedule: &schedule
         type: str
         description: When the check runs (systemd OnCalendar, ending in UTC), after the patch run.
@@ -91,6 +111,11 @@ argument_specs:
       needrestart_mail_to: *mail_to
       needrestart_alert_kernel: *kernel
       needrestart_schedule: *schedule
+      needrestart_alert_reboot: *alert_reboot
+      needrestart_reboot_schedule: *reboot_schedule
+      needrestart_reboot_required_file: *reboot_file
+      needrestart_busctl_cli: *busctl
+      needrestart_shutdown_cli: *shutdown
       needrestart_cli: *cli
       needrestart_sendmail_cli: *sendmail
       needrestart_perl_cli: *perl
