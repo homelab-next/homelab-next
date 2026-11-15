@@ -30,3 +30,15 @@ caddy_auth_proxy_mem_limit: 128m
 caddy_auth_proxy_start: true
 caddy_auth_proxy_validate_with_docker: true
 caddy_auth_proxy_health_timeout: 10
+# The peers allowed to set X-Forwarded-* (--trusted-proxy-ip, oauth2-proxy 7.15.5; unset it trusts
+# 0.0.0.0/0 and ::/0 and logs a warning). "auto" (the default) trusts exactly one address: the
+# gateway of the proxy's own compose network, read from docker at deploy time. The edge dials the
+# proxy's PUBLISHED port, docker-proxy forwards it, and the proxy sees every connection coming from
+# that gateway, never from the edge container. Or a list of single addresses (a /32 IPv4 or /128
+# IPv6 each; never 0.0.0.0/0 or ::/0). SECURITY PREMISE: because docker-proxy rewrites the source,
+# ANY client that reaches the published port looks like the gateway and is trusted to set
+# X-Forwarded-*, so the guest firewall must keep the port closed to everything but the edge's own
+# container traffic (health.yml asserts the port is published on the bind address only).
+caddy_auth_proxy_trusted_proxy_ips: auto
+# the docker client the role runs (the gateway lookup, the network pre-creation, the port check)
+caddy_auth_proxy_docker_cli: docker

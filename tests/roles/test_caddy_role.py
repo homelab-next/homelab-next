@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from rolerun import _invocation, calls, fake, run_role
+from rolerun import _invocation, calls, fake, logging_fake, run_role
 
 from homelabnext.edge_identity import AUTH_PROXY_COOKIE
 
@@ -280,6 +280,7 @@ def auth_vars(tmp_path: Path, **kw) -> dict:
         "caddy_auth_proxy_owner": USER,
         "caddy_auth_proxy_start": False,
         "caddy_auth_proxy_validate_with_docker": False,
+        "caddy_auth_proxy_docker_cli": "/nonexistent/docker",  # no docker: nothing to inspect
     }
     v.update(kw)
     return v
@@ -304,6 +305,10 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
     # the cookie the edge strips before any upstream (homelabnext.edge_identity.AUTH_PROXY_COOKIE)
     assert env["OAUTH2_PROXY_COOKIE_NAME"] == AUTH_PROXY_COOKIE
     assert env["OAUTH2_PROXY_COOKIE_EXPIRE"] == "4h"
+    # --reverse-proxy without --trusted-proxy-ip trusts 0.0.0.0/0 and ::/0 (oauth2-proxy warns at
+    # start): with nothing started and no network yet, only the placeholder (IPv6 loopback)
+    assert env["OAUTH2_PROXY_REVERSE_PROXY"] == "true"
+    assert env["OAUTH2_PROXY_TRUSTED_PROXY_IPS"] == "::1/128"
     assert env["OAUTH2_PROXY_WHITELIST_DOMAINS"] == "hub.example.internal,sso.example.internal"
     text = (tmp_path / "app" / "docker-compose.yml").read_text()
     assert CLIENT not in text and COOKIE not in text
@@ -324,6 +329,15 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
         ({"caddy_auth_proxy_issuer_url": "http://sso.example.internal/realms/twolab"}, {}),
         ({"caddy_auth_proxy_image": "quay.io/oauth2-proxy/oauth2-proxy:latest"}, {}),
         ({"caddy_acme_domains": []}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": ["0.0.0.0/0"]}, {}),  # the default it warns about
+        ({"caddy_auth_proxy_trusted_proxy_ips": ["0.0.0.0/32"]}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": ["::/0"]}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": ["::/128"]}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": ["2001::/16"]}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": [GUEST + "/24"]}, {}),  # a range, not one address
+        ({"caddy_auth_proxy_trusted_proxy_ips": [GUEST]}, {}),  # no prefix
+        ({"caddy_auth_proxy_trusted_proxy_ips": []}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": "any"}, {}),
         ({"caddy_auth_proxy_cookie_expire": "13h"}, {}),  # at most 12h: no refresh
         ({"caddy_auth_proxy_cookie_expire": "721m"}, {}),
     ],
@@ -332,3 +346,90 @@ def test_the_auth_proxy_refuses_bad_inputs(tmp_path, over, env):
     r = run_role(tmp_path, AUTH, "main", auth_vars(tmp_path, **over), env={**AUTH_SECRETS, **env})
     assert r.returncode != 0, r.stdout
     assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+GATEWAY = GUEST.rsplit(".", 1)[0] + ".1"  # the proxy network's gateway, in the test range
+
+
+def trusted_of(tmp_path: Path) -> list[str]:
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    env = doc["services"]["auth-proxy"]["environment"]
+    return env["OAUTH2_PROXY_TRUSTED_PROXY_IPS"].split(",")
+
+
+def test_auto_trusts_exactly_the_gateway_docker_reports_for_the_project_network(tmp_path):
+    docker = logging_fake(tmp_path, "docker", GATEWAY + "\n")
+    v = auth_vars(tmp_path, caddy_auth_proxy_docker_cli=docker)
+    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert trusted_of(tmp_path) == [GATEWAY + "/32"]
+    assert any(
+        c.startswith("docker network inspect caddy-auth-proxy_default") for c in calls(tmp_path)
+    )
+
+
+@pytest.mark.parametrize("gateway", ["not-an-address\n", "0.0.0.0\n", GATEWAY + "/16\n", "::1\n"])
+def test_auto_refuses_a_gateway_that_is_not_one_ipv4_address(tmp_path, gateway):
+    docker = logging_fake(tmp_path, "docker", gateway)
+    v = auth_vars(tmp_path, caddy_auth_proxy_docker_cli=docker)
+    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_an_override_is_rendered_as_given_and_docker_is_not_asked(tmp_path):
+    docker = logging_fake(tmp_path, "docker", GATEWAY + "\n")
+    v = auth_vars(
+        tmp_path,
+        caddy_auth_proxy_docker_cli=docker,
+        caddy_auth_proxy_trusted_proxy_ips=[GUEST + "/32", "::1/128"],
+    )
+    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert trusted_of(tmp_path) == [GUEST + "/32", "::1/128"]
+    assert not calls(tmp_path)
+
+
+def test_a_missing_network_renders_only_the_placeholder_never_every_address(tmp_path):
+    docker = logging_fake(tmp_path, "docker", "")
+    (tmp_path / "docker.fails").write_text("")  # `docker network inspect` fails: no such network
+    v = auth_vars(tmp_path, caddy_auth_proxy_docker_cli=docker)
+    r = run_role(tmp_path, AUTH, "main", v, env=AUTH_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert trusted_of(tmp_path) == ["::1/128"]
+
+
+def test_the_first_start_creates_the_network_then_trusts_its_gateway(tmp_path):
+    # a docker that knows no network until `compose up --no-start` has run, then reports a gateway
+    state = tmp_path / "network.created"
+    body = (
+        "import sys\n"
+        f"log = open({str(tmp_path / 'calls.log')!r}, 'a')\n"
+        "log.write('docker ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+        f"state = {str(state)!r}\n"
+        "import os\n"
+        "if sys.argv[1:3] == ['network', 'inspect']:\n"
+        "    if not os.path.exists(state):\n"
+        "        sys.exit(1)\n"
+        f"    print({GATEWAY!r})\n"
+        "elif '--no-start' in sys.argv:\n"
+        "    open(state, 'w').close()\n"
+    )
+    (tmp_path / "bin").mkdir()
+    fake(tmp_path / "bin" / "docker", body)  # compose_app runs `docker` from PATH
+    v = auth_vars(
+        tmp_path,
+        caddy_auth_proxy_docker_cli="docker",
+        caddy_auth_proxy_start=True,
+        caddy_auth_proxy_validate_with_docker=False,
+    )
+    env = {**AUTH_SECRETS, "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}"}
+    r = run_role(tmp_path, AUTH, "main", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = calls(tmp_path)
+    assert any("--no-start" in c for c in log)
+    assert any(c.endswith("up -d --remove-orphans") for c in log)
+    assert log.index(next(c for c in log if "--no-start" in c)) < log.index(
+        next(c for c in log if c.endswith("up -d --remove-orphans"))
+    )
+    assert trusted_of(tmp_path) == [GATEWAY + "/32"]

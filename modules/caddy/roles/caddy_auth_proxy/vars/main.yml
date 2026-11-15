@@ -43,3 +43,10 @@ caddy_auth_proxy_issuer_pattern: '^https://(?=.{1,253}/)([a-z0-9]([a-z0-9-]{0,61
 # cookie key (16, 24 or 32 bytes as text, or 32 bytes URL-safe base64: what oauth2-proxy accepts)
 caddy_auth_proxy_client_value_pattern: '^[!#-&(-~]{16,256}\Z'
 caddy_auth_proxy_cookie_value_pattern: '^([A-Za-z0-9_-]{16}|[A-Za-z0-9_-]{24}|[A-Za-z0-9_-]{32}|[A-Za-z0-9_-]{43}=?)\Z'
+# an explicitly trusted proxy: one address, never a range (a /32 IPv4 or /128 IPv6; the all-zero
+# address is refused in validate.yml)
+caddy_auth_proxy_trusted_cidr_pattern: '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}/32|[0-9A-Fa-f:]*:[0-9A-Fa-f:]*/128)\Z'
+# the compose project's default network, whose gateway is the one address the proxy sees
+caddy_auth_proxy_network: caddy-auth-proxy_default
+# what an unresolved "auto" renders while nothing is started: IPv6 loopback only, never every address
+caddy_auth_proxy_placeholder_trusted: ["::1/128"]

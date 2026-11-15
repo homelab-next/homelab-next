@@ -89,7 +89,7 @@ Data root `caddy_data_root` (`/var/lib/hnx-modules/caddy`, `root:<caddy_gid>` 07
 
 oauth2-proxy as the forward-auth check and the sign-in only: no upstream (`static://202`),
 `--set-xauthrequest` (the identity headers the edge copies: `X-Auth-Request-User`, `-Groups`,
-`-Email`, `-Preferred-Username`), `--reverse-proxy`, the OIDC authorization code flow with **PKCE
+`-Email`, `-Preferred-Username`), `--reverse-proxy` with `--trusted-proxy-ip` set (`caddy_auth_proxy_trusted_proxy_ips`: `auto` trusts exactly the gateway of the proxy's own compose network, read from docker at deploy time; see "Who the proxy trusts" below), the OIDC authorization code flow with **PKCE
 S256** (the realm requires it) at `caddy_auth_proxy_issuer_url`, scope `openid` only (the realm's
 client mappers add `preferred_username` and `groups` to every token; the username is the user id
 and the e-mail claim, so no address is needed), a host-only `__Host-` cookie (Secure, HttpOnly,
@@ -103,6 +103,27 @@ against another site. The client is the realm
 generator's client for the auth-proxy row: client id = the row's name, secret
 `secret:idp/clients/auth-proxy` for a row named `auth-proxy`. The container runs as 61011, read-only, every capability dropped,
 published on the guest's address at 4180 (the row's port), where the edge dials it.
+
+### Who the proxy trusts
+
+oauth2-proxy runs with `--reverse-proxy`, so it believes `X-Forwarded-*` only from the peers in
+`--trusted-proxy-ip` (unset, it trusts `0.0.0.0/0` and `::/0` and warns at start). The edge dials the
+proxy's **published** port on the guest, docker-proxy forwards it, and the proxy sees every
+connection coming from the **gateway of its own compose network** (`caddy-auth-proxy_default`),
+never from the edge container. With `caddy_auth_proxy_trusted_proxy_ips: auto` (the default) the role
+reads that gateway with `docker network inspect`, refuses anything that is not one IPv4 address, and
+renders it as a /32. On the first deploy the network does not exist yet, so `main` renders the
+project unstarted, runs `docker compose up --no-start` to create the network and the stopped
+container, reads the gateway, then renders and starts for real; nothing ever runs with a trust list
+that is empty or open. The override is a list of single addresses (`/32` IPv4, `/128` IPv6); any
+range, `0.0.0.0/0`, `::/0` and the all-zero address are refused.
+
+**Security premise.** Because docker-proxy rewrites the source address, **any** client that can reach
+the published port looks like the gateway and is trusted to set `X-Forwarded-*` (and so the host and
+scheme the sign-in uses). The guest firewall must therefore keep the port closed to everything but
+the edge (the edge guest admits only 443 from outside). The `health` hook asserts the port is
+published on the bind address and nowhere else (`docker compose port`); it cannot see the firewall,
+so keeping the port closed there remains the deployment's job.
 
 ## Hooks
 
