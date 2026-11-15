@@ -4,6 +4,7 @@
     argv: [docker, compose, -f, "{{ compose_app_dir }}/docker-compose.yml", ps, --all, --format, json]
   register: compose_app_ps
   changed_when: false
+  check_mode: false  # read-only: it runs in --check too
   tags: [health]
 
 # `docker compose ps --format json` prints one JSON object per line (compose 2.21+) or one array

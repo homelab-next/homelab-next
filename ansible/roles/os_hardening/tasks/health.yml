@@ -10,6 +10,7 @@
         argv: "{{ [os_hardening_sysctl_cli, '-n'] + (os_hardening_sysctl | sort) }}"
       register: os_hardening_live
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
       when: "'sysctl' in os_hardening_items and os_hardening_sysctl | length > 0"
     - name: Fail unless every kernel setting is live
       vars:

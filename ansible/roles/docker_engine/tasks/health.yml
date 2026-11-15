@@ -23,11 +23,13 @@
         argv: ["{{ docker_engine_cli }}", info, --format, json]
       register: docker_engine_health
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
     - name: Read the compose plugin's version
       ansible.builtin.command:
         argv: ["{{ docker_engine_cli }}", compose, version, --short]
       register: docker_engine_compose_health
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
     - name: Read the installed packages' versions and selections
       ansible.builtin.command:
         argv: >-
@@ -35,6 +37,7 @@
              + (docker_engine_packages | map(attribute='name') | list) }}
       register: docker_engine_dpkg_health
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
       failed_when: false
     - name: Fail unless the engine answers at its pinned version with bounded json-file logs
       vars:

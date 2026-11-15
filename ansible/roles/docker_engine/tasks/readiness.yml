@@ -7,12 +7,14 @@
         argv: ["{{ docker_engine_systemctl_cli }}", is-active, "{{ docker_engine_service }}"]
       register: docker_engine_ready_unit
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
       failed_when: false
     - name: Ask the daemon for its state
       ansible.builtin.command:
         argv: ["{{ docker_engine_cli }}", info, --format, json]
       register: docker_engine_ready_info
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
       failed_when: false
     - name: Fail unless the unit is active and the daemon answers
       ansible.builtin.assert:
