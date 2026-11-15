@@ -29,9 +29,10 @@ names a host, an address or a lab.
 * :func:`restore` -- onto a target: checks the manifest (and, with ``expect_counts``, that the
   dump is the frozen state ``freeze`` reported), stops the target's writers, restores the
   database in one transaction (``--clean`` replaces everything a previous restore wrote), empties
-  and unpacks the attachments, then **verifies the target against the manifest** (counts,
+  and builds the attachments in a sibling directory, then **verifies the target against the manifest** (counts,
   fingerprint, every attachment file's sha256) before running the product's migrations and
-  starting it.  A failed restore leaves the target stopped.
+  swaps them in by rename and starts it.  A failed restore leaves the target stopped and the old
+  attachments as they were.
 * :func:`counts` -- row counts of an endpoint (a read).
 * :func:`freeze` / :func:`unfreeze` -- stop / start **every** writer of the endpoint (a *write*,
   done only in the cutover window, only to stop and start): the database keeps running so it can
@@ -43,8 +44,8 @@ is the database again: the restore is idempotent, so the cutover is ``freeze(sou
 returned>, require_quiescent=True)``: the target equals the frozen source by counts, content
 fingerprint and attachment files.
 
-**Destructive paths.** The only recursive deletes (``find -delete`` and ``chown -R``) act on the
-attachments directory, which must be an absolute canonical path of at least three components with
+**Destructive paths.** The only recursive deletes (``find -delete``) act on the ``.restore-old`` /
+``.restore-new`` siblings of the attachments directory (``chown -R`` on the new one), which must be an absolute canonical path of at least three components with
 no ``..``, resolve to itself on the endpoint (no symlink anywhere in it) and, for a host path,
 lie strictly inside the named data root.
 """
@@ -326,11 +327,13 @@ def tar_files(archive: Path) -> dict:
     return _files_digest(entries)
 
 
-def endpoint_files(ep: Endpoint, *, _ctx: _Ctx | None = None) -> dict:
+def endpoint_files(ep: Endpoint, *, directory: str | None = None, _ctx: _Ctx | None = None) -> dict:
     """``{count, sha256}`` of the regular files under the endpoint's attachments directory
     (a read: ``find ... -exec sha256sum``)."""
     ctx = _ctx or _Ctx()
-    script = f"cd {shlex.quote(ep.assets_dir)} && find . -type f -exec sha256sum -- {{}} +"
+    script = (
+        f"cd {shlex.quote(directory or ep.assets_dir)} && find . -type f -exec sha256sum -- {{}} +"
+    )
     inner = ["sh", "-c", script]
     if ep.assets_container:
         inner = ["docker", "exec", ep.assets_container, *inner]
@@ -364,6 +367,7 @@ def dump(
     source: Endpoint,
     out_dir: str | os.PathLike,
     *,
+    allow_empty: bool = False,
     scratch_dirs: Sequence[str] = (*SCRATCH_DIRS, tempfile.gettempdir()),
     _ctx: _Ctx | None = None,
 ) -> dict:
@@ -397,6 +401,7 @@ def dump(
         size, digest = _sha256(path)
         meta[name] = {"size": size, "sha256": digest}
     after = (counts(source, _ctx=ctx), fingerprint(source, _ctx=ctx))
+    _refuse_vacuous_source(after[0], tar_files(out / ATTACHMENTS_FILE), allow_empty)
     frozen = (
         bool(source.writers)
         and not any(_writers_running(ctx, source).values())
@@ -415,6 +420,24 @@ def dump(
     }
     (out / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return manifest
+
+
+def _refuse_vacuous_source(
+    c: Mapping[str, int], files: Mapping[str, object], allow_empty: bool
+) -> None:
+    """A dump that proves nothing is an error, not a pass: a source with no projects or no
+    accounts is the wrong database (or the wrong schema), and attachment rows with no files mean
+    the attachments were not read."""
+    if not allow_empty and (c["projects"] == 0 or c["users"] == 0 or c["work_packages"] == 0):
+        raise MigrateError(
+            f"the source has {c['projects']} projects, {c['work_packages']} work packages and "
+            f"{c['users']} users: refusing a vacuous dump (wrong database? --allow-empty if it is empty)"
+        )
+    if c["attachments"] > 0 and files["count"] == 0:
+        raise MigrateError(
+            f"the source has {c['attachments']} attachment rows but its tar holds no file: "
+            "the attachments directory was not read"
+        )
 
 
 def _read_manifest(dump_dir: Path) -> dict:
@@ -463,6 +486,7 @@ def restore(
     *,
     expect_counts: Mapping[str, int] | None = None,
     require_quiescent: bool = False,
+    source: Endpoint | None = None,
     _ctx: _Ctx | None = None,
 ) -> dict[str, int]:
     """Restore a dump onto ``target``, verify it, start it, and return the target's counts.
@@ -472,8 +496,11 @@ def restore(
     a frozen source and an ``expect_counts``.  Verification compares the target with the
     manifest (counts, content fingerprint, every attachment file) right after the restore, before
     the migrations run; a mismatch, like any failure, leaves the target **stopped**.  Run again
-    with a newer dump for the final delta: the database is replaced and the attachments directory
-    emptied and unpacked again.
+    with a newer dump for the final delta: the database is replaced and the attachments are
+    unpacked into a sibling directory, verified, and swapped in by rename (the old ones are
+    removed only after that), so a failure before the swap leaves them as they were.  Zero rows
+    on the target where the dump has some is an error.  ``source`` (optional) lets the tool refuse
+    a target that is, or lies inside or around, the source's own data on the same host.
     """
     ctx = _ctx or _Ctx()
     src = Path(dump_dir)
@@ -490,8 +517,20 @@ def restore(
         raise CountMismatch(expect_counts, manifest["counts"])
     if target.assets_container:
         raise MigrateError("a restore stops the containers: name assets_host_path for the target")
-    assets = _guarded_assets(ctx, target)
+    if source is not None:
+        _refuse_same_data(source, target)
+    assets = _guarded_assets(ctx, target, target.assets_dir)
+    fresh, old = assets + ".restore-new", assets + ".restore-old"
+    for sibling in (fresh, old):
+        _guarded_assets(ctx, target, sibling)
+        if _run(
+            ctx, target, ["sh", "-c", f"test ! -e {shlex.quote(sibling)} || echo exists"]
+        ).strip():
+            raise MigrateError(
+                f"{sibling}: left by an earlier restore; inspect and remove it first"
+            )
     _stop(ctx, target)
+    staged = False
     try:
         with (src / DB_FILE).open("rb") as f:
             _run(ctx, target,
@@ -499,21 +538,29 @@ def restore(
                   "-d", target.db_name, "--clean", "--if-exists", "--no-owner", "--no-acl",
                   "--single-transaction", "--exit-on-error"],
                  stdin=f)  # fmt: skip
-        _run(ctx, target, ["find", assets, "-xdev", "-mindepth", "1", "-delete"])
+        # the attachments are built beside the live directory and swapped in by rename: a failure
+        # before the swap leaves the old attachments exactly as they were
+        _run(ctx, target, ["mkdir", "--", fresh])
+        staged = True
         with (src / ATTACHMENTS_FILE).open("rb") as f:
             _run(ctx, target, ["tar", "--extract", "--no-same-owner", "--no-same-permissions",
-                               "--file", "-", "--directory", assets], stdin=f)  # fmt: skip
-        _run(ctx, target, ["chown", "-R", "-h", target.assets_owner, assets])
+                               "--file", "-", "--directory", fresh], stdin=f)  # fmt: skip
+        _run(ctx, target, ["chown", "-R", "-h", target.assets_owner, fresh])
         wanted = dict(expect_counts) if expect_counts is not None else manifest["counts"]
         got = counts(target, _ctx=ctx)
+        _refuse_vacuous_target(manifest["counts"], got)
         if got != wanted:
             raise CountMismatch(wanted, got)
         if fingerprint(target, _ctx=ctx) != manifest["fingerprint"]:
             raise VerifyMismatch("the target's content fingerprint differs from the dump's")
-        if endpoint_files(target, _ctx=ctx) != manifest["attachment_files"]:
+        if endpoint_files(target, directory=fresh, _ctx=ctx) != manifest["attachment_files"]:
             raise VerifyMismatch(
                 "the target's attachment files differ from the dump's (count or sha256)"
             )
+        _run(ctx, target, ["mv", "--", assets, old])
+        _run(ctx, target, ["mv", "--", fresh, assets])
+        staged = False
+        _rm_tree(ctx, target, old)
         if target.compose_file:
             _run(
                 ctx, target, _compose(target, "up", "-d", "--wait", *target.compose_infra_services)
@@ -521,16 +568,50 @@ def restore(
             _run(ctx, target, _compose(target, "run", "--rm", "-T", "--no-deps",
                                        target.compose_seed_service, target.compose_seed_command))  # fmt: skip
     except BaseException as e:
+        if staged:
+            try:
+                _rm_tree(ctx, target, fresh)
+            except MigrateError:
+                e.add_note(f"{fresh} was left behind; remove it before restoring again")
         e.add_note("the target's writers are left stopped; fix the cause and restore again")
         raise
     _start(ctx, target)
     return counts(target, _ctx=ctx)
 
 
-def _guarded_assets(ctx: _Ctx, ep: Endpoint) -> str:
-    """The attachments directory, after the endpoint itself says it resolves to the same path
-    (no symlink anywhere in it) and, for a host path, inside the data root."""
-    path = ep.assets_dir
+def _refuse_same_data(source: Endpoint, target: Endpoint) -> None:
+    """A target that is the source's own database or attachments (or nested with them) would
+    be overwritten by its own copy."""
+    if source.ssh != target.ssh:
+        return
+    if (source.db_container, source.db_name) == (target.db_container, target.db_name):
+        raise MigrateError("the target is the source's own database")
+    a, b = PurePosixPath(source.assets_dir), PurePosixPath(target.assets_dir)
+    if a == b or a in b.parents or b in a.parents:
+        raise MigrateError(
+            f"the target's attachments {b} and the source's {a} are the same or nested"
+        )
+
+
+def _refuse_vacuous_target(want: Mapping[str, int], got: Mapping[str, int]) -> None:
+    """Zero rows on the target where the source had rows is an error however the rest compares."""
+    empty = [k for k in COUNT_KEYS if want[k] > 0 and got[k] == 0]
+    if empty:
+        raise VerifyMismatch(
+            f"the target has no rows in {', '.join(empty)} where the source has some"
+        )
+
+
+def _rm_tree(ctx: _Ctx, ep: Endpoint, path: str) -> None:
+    """Delete a directory this tool created beside the attachments (guarded, link-free)."""
+    _guarded_assets(ctx, ep, path)
+    _run(ctx, ep, ["find", path, "-xdev", "-mindepth", "1", "-delete"])
+    _run(ctx, ep, ["rmdir", "--", path])
+
+
+def _guarded_assets(ctx: _Ctx, ep: Endpoint, path: str) -> str:
+    """A directory beside or at the attachments, after the endpoint itself says it resolves to
+    the same path (no symlink anywhere in it) and it lies inside the data root."""
     guard_dir(path, root=ep.data_root if ep.assets_host_path else None)
     real = _run(ctx, ep, ["readlink", "-f", "--", path]).decode().strip()
     if real != path:
@@ -604,6 +685,7 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--compose-file", help="on the endpoint's host: lets restore migrate and start")
     ap.add_argument("--dir", help="dump: the (empty) directory to write; restore: the one to read")
     ap.add_argument("--expect-counts", help="restore: what freeze printed (JSON or @file)")
+    ap.add_argument("--allow-empty", action="store_true", help="dump: accept a source with no rows")
     ap.add_argument("--require-quiescent", action="store_true",
                     help="restore: refuse a dump not taken from a frozen source (needs --expect-counts)")  # fmt: skip
     return ap
@@ -616,7 +698,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if a.command in ("dump", "restore") and not a.dir:
             raise MigrateError(f"{a.command} needs --dir")
         if a.command == "dump":
-            result = dump(ep, a.dir)
+            result = dump(ep, a.dir, allow_empty=a.allow_empty)
         elif a.command == "restore":
             result = restore(ep, a.dir, expect_counts=_expect(a.expect_counts),
                              require_quiescent=a.require_quiescent)  # fmt: skip

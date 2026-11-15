@@ -73,8 +73,8 @@ container that writes** (`--writer`, repeatable: the web app, the worker, any sc
    members, versions, custom fields), a content fingerprint of those tables, the number and
    digest of the attachment files, and whether every writer was stopped (`frozen`). The source is
    only read. `restore(target, out_dir)` checks the manifest, stops the target's writers,
-   restores in one transaction, replaces the attachments, then **verifies the target** (counts,
-   fingerprint, the sha256 of every attachment file), runs the seeder and starts it. Any failure
+   restores in one transaction, builds the attachments in a sibling directory, **verifies the target** (counts,
+   fingerprint, the sha256 of every attachment file; zero rows where the source has rows is an error), swaps the attachments in by rename (the old ones are removed only then), runs the seeder and starts it. Any failure
    leaves the target stopped and says so. The rehearsal passes when the restore returns.
 2. **Cutover: freeze, final delta, re-count.** Writes on the source do not stop by themselves, so
    a copy taken while people work is already stale. The cutover is:
@@ -93,9 +93,7 @@ container that writes** (`--writer`, repeatable: the web app, the worker, any sc
    5. *Rollback* is `unfreeze(source)` (start the writers again) and the old route; the target is
       simply wiped by the next restore.
 
-The only recursive deletes are on the attachments directory, which must be an absolute canonical
-path of at least three components, inside the target's data root, and which the endpoint must
-resolve to itself (no link anywhere in it).
+The only recursive deletes are on the attachments directory's `.restore-old`/`.restore-new` siblings, which (like the directory) must be an absolute canonical path of at least three components, inside the target's data root, and which the endpoint must resolve to itself (no link anywhere in it); a sibling left by an earlier restore is refused, not removed. A dump of a source with no projects, work packages or accounts, or with attachment rows and no files, is refused (`--allow-empty` for a genuinely empty one).
 
 Not carried by this module or tool: the calendar (ICS) bridge and its feed token; the cutover
 plan must give them an owner.

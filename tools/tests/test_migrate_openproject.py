@@ -63,7 +63,7 @@ class Host:
         self.db.executemany("INSERT INTO users(body, type) VALUES (?, ?)",
                             [("anon", "AnonymousUser"), ("sys", "SystemUser"), ("gone", "DeletedUser")])  # fmt: skip
         self.add(projects, work_packages, users)
-        self.files: dict[str, bytes] = {}
+        self.trees: dict[str, dict[str, bytes]] = {ASSETS: {}}
         for name in attachments:
             self.attach(name)
         self.running = {"web", "worker"}
@@ -73,7 +73,15 @@ class Host:
         self.on_dump = None  # called when pg_dump runs (a write during the dump)
         self.drop_on_restore = False
         self.corrupt_files_on_restore = False
+        self.empty_on_restore = False
         self.links: dict[str, str] = {}  # path -> what readlink -f says
+
+    @property
+    def files(self):
+        return self.trees[ASSETS]
+
+    def _tree(self, path):
+        return self.trees[path] if path in self.trees else self.trees[ASSETS]
 
     def add(self, projects=0, work_packages=0, users=0):
         for i in range(projects):
@@ -88,11 +96,11 @@ class Host:
         self.db.execute("UPDATE work_packages SET body = body || '!' WHERE id = 1")
 
     def attach(self, name):
-        self.files[f"./files/{name}"] = name.encode() * 10
+        self.trees[ASSETS][f"./files/{name}"] = name.encode() * 10
         self.db.execute("INSERT INTO attachments(body) VALUES (?)", (name,))
 
     def unattach(self, name):
-        self.files.pop(f"./files/{name}")
+        self.trees[ASSETS].pop(f"./files/{name}")
         self.db.execute("DELETE FROM attachments WHERE body = ?", (name,))
 
     def rows(self):
@@ -170,6 +178,8 @@ class Host:
             data = json.loads(stdin.read()[5:])
             for t, rows in data.items():
                 self.db.execute(f"DELETE FROM {t}")
+                if self.empty_on_restore:
+                    continue
                 for r in (
                     rows[: len(rows) - 1] if self.drop_on_restore and t == "projects" else rows
                 ):
@@ -178,7 +188,7 @@ class Host:
         if c[0] == "tar" and "--create" in c:
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w") as t:
-                for name, data in sorted(self.files.items()):
+                for name, data in sorted(self._tree(c[c.index("--directory") + 1]).items()):
                     ti = tarfile.TarInfo(name)
                     ti.size = len(data)
                     ti.mtime = 0
@@ -186,20 +196,35 @@ class Host:
             return buf.getvalue()
         if c[0] == "tar" and "--extract" in c:
             assert "--no-same-owner" in c
+            tree = self.trees[c[c.index("--directory") + 1]]
             with tarfile.open(fileobj=io.BytesIO(stdin.read()), mode="r") as t:
                 for m in t.getmembers():
                     data = t.extractfile(m).read()
                     if self.corrupt_files_on_restore:
                         data = data + b"x"
-                    self.files[m.name] = data
+                    tree[m.name] = data
+            return b""
+        if c[0] == "mkdir":
+            assert c[-1] not in self.trees
+            self.trees[c[-1]] = {}
+            return b""
+        if c[0] == "mv":
+            self.trees[c[-1]] = self.trees.pop(c[-2])
+            return b""
+        if c[0] == "rmdir":
+            assert not self.trees[c[-1]], "rmdir of a directory with files"
+            del self.trees[c[-1]]
             return b""
         if c[0] == "find" and "-delete" in c:
             assert "-mindepth" in c and "-xdev" in c
-            self.files.clear()
+            self.trees[c[1]].clear()
             return b""
+        if c[0] == "sh" and "test !" in c[2]:
+            return b"exists\n" if shlex.split(c[2])[3] in self.trees else b""
         if c[0] == "sh" and "sha256sum" in c[2]:
+            tree = self._tree(shlex.split(c[2])[1])
             return "".join(
-                f"{hashlib.sha256(d).hexdigest()}  {n}\n" for n, d in sorted(self.files.items())
+                f"{hashlib.sha256(d).hexdigest()}  {n}\n" for n, d in sorted(tree.items())
             ).encode()
         if c[0] == "readlink":
             return (self.links.get(c[-1], c[-1]) + "\n").encode()
@@ -430,6 +455,97 @@ def test_restore_refuses_a_target_whose_attachments_are_reached_through_a_contai
     with pytest.raises(mt.MigrateError, match="assets_host_path"):
         mt.restore(ep, d, _ctx=ctx(target))
     assert target.log == []
+
+
+def test_the_attachments_are_built_beside_and_swapped_in_by_rename(source, private):
+    target, d = _dumped(source, private)
+    target.attach("old-live")
+    mt.restore(target_endpoint(), d, _ctx=ctx(target))
+    flat = [" ".join(c) for c in target.log]
+    order = [next(i for i, c in enumerate(flat) if c.startswith(k)) for k in
+             ("mkdir -- /srv/data/assets.restore-new", "mv -- /srv/data/assets /srv/data/assets.restore-old",
+              "mv -- /srv/data/assets.restore-new")]  # fmt: skip
+    assert order == sorted(order)
+    assert target.files == source.files and set(target.trees) == {ASSETS}  # old and new gone
+
+
+@pytest.mark.parametrize(
+    "fault", ["corrupt_files_on_restore", "drop_on_restore", "empty_on_restore"]
+)
+def test_a_failed_verification_leaves_the_old_attachments_untouched(source, private, fault):
+    target, d = _dumped(source, private)
+    target.attach("old-live")
+    live = dict(target.files)
+    setattr(target, fault, True)
+    with pytest.raises(mt.VerifyMismatch):
+        mt.restore(target_endpoint(), d, _ctx=ctx(target))
+    assert target.files == live  # not deleted, not replaced
+    assert set(target.trees) == {ASSETS}  # the half-built sibling was removed
+    assert target.running == set()
+
+
+@pytest.mark.parametrize("left", ["/srv/data/assets.restore-new", "/srv/data/assets.restore-old"])
+def test_a_sibling_left_by_an_earlier_restore_is_refused_before_anything_is_written(
+    source, private, left
+):
+    target, d = _dumped(source, private)
+    target.trees[left] = {"./x": b"keep me"}
+    with pytest.raises(mt.MigrateError, match="left by an earlier restore"):
+        mt.restore(target_endpoint(), d, _ctx=ctx(target))
+    assert target.trees[left] == {"./x": b"keep me"} and target.running == {"web", "worker"}
+    assert not any("pg_restore" in c or c[0] == "mv" for c in target.log)
+
+
+def test_the_siblings_are_guarded_like_the_directory_itself(source, private):
+    target, d = _dumped(source, private)
+    target.links["/srv/data/assets.restore-old"] = "/etc"
+    with pytest.raises(mt.MigrateError, match="resolves to"):
+        mt.restore(target_endpoint(), d, _ctx=ctx(target))
+    assert not any(c[0] in ("find", "mkdir", "mv") for c in target.log)
+
+
+@pytest.mark.parametrize(
+    "tgt",
+    [{"db_container": "db"}, {"assets_host_path": ASSETS + "/sub", "db_container": "other"}],
+)
+def test_a_target_that_is_the_sources_own_data_is_refused(source, private, tgt):
+    _, d = _dumped(source, private)
+    t = Host()
+    src_ep = source_endpoint(assets_container=None, assets_host_path=ASSETS, data_root=DATA_ROOT)
+    ep = target_endpoint(**tgt)
+    with pytest.raises(mt.MigrateError, match=r"same|own database"):
+        mt.restore(ep, d, source=src_ep, _ctx=ctx(t))
+    assert t.log == []
+    other = target_endpoint(ssh="other@host.example.internal")
+    t2 = Host()
+    # a different host is another place, whatever the paths say (the runner would reject the ssh
+    # destination here, so only the refusal logic is asserted)
+    mt._refuse_same_data(src_ep, other)
+    assert t2.log == []
+
+
+# ----------------------------------------------------------------------------- vacuous passes
+
+
+def test_a_source_with_nothing_in_it_is_not_a_dump(private):
+    empty = Host()
+    with pytest.raises(mt.MigrateError, match="vacuous"):
+        dump(empty, source_endpoint(), private / "d")
+    manifest = mt.dump(source_endpoint(), private / "e", scratch_dirs=("/tmp",), allow_empty=True, _ctx=ctx(empty))  # fmt: skip
+    assert manifest["counts"]["projects"] == 0
+
+
+def test_attachment_rows_with_no_files_in_the_tar_are_not_a_dump(source, private):
+    source.trees[ASSETS].clear()  # the rows remain, the directory that was read is empty
+    with pytest.raises(mt.MigrateError, match="holds no file"):
+        dump(source, source_endpoint(), private / "d")
+
+
+def test_zero_rows_on_the_target_where_the_source_has_some_is_an_error_not_a_pass(source, private):
+    target, d = _dumped(source, private)
+    target.empty_on_restore = True
+    with pytest.raises(mt.VerifyMismatch, match="no rows in projects"):
+        mt.restore(target_endpoint(), d, _ctx=ctx(target))
 
 
 # ----------------------------------------------------------------------------- the guard
