@@ -98,13 +98,13 @@ zones: {mgmt: {cidr: 192.0.2.0/26}}  # no-raw-endpoint: allow documentation rang
 hosts:
   hnx-apps-01: {address: 192.0.2.30, zone: mgmt}  # no-raw-endpoint: allow documentation range
 services:
-  ntfy: {capability: notify, host: hnx-apps-01, protocol: http, port: 80, tls: none}
-  ntfy-tls: {capability: notify-tls, host: hnx-apps-01, protocol: http, port: 443, tls: internal}
+  alert: {capability: notify, host: hnx-apps-01, protocol: http, port: 80, tls: none}
+  alert-tls: {capability: notify-tls, host: hnx-apps-01, protocol: http, port: 443, tls: internal}
   gateway: {capability: llm-gateway, host: hnx-apps-01, protocol: https, port: 4000, tls: public}
   bus: {capability: events, host: hnx-apps-01, protocol: nats, port: 4222, tls: none}
-  ntfy-eval: {capability: notify, host: hnx-apps-01, protocol: http, port: 8080, tls: none,
+  alert-eval: {capability: notify, host: hnx-apps-01, protocol: http, port: 8080, tls: none,
               standing: {tier: eval, until: "2027-01-01", why: trial}}
-  ntfy-old: {capability: notify, host: hnx-apps-01, protocol: http, port: 81, tls: none,
+  alert-old: {capability: notify, host: hnx-apps-01, protocol: http, port: 81, tls: none,
              standing: {tier: legacy, until: "2027-01-01", why: old lab}}
   lost: {capability: lost, host: hnx-gone-01, protocol: http, port: 80, tls: none}
 """
@@ -124,16 +124,16 @@ def platform(tmp_path):
 def test_a_platform_row_takes_its_scheme_from_protocol_and_tls_and_names_its_alias(platform):
     # protocol http + tls none: plain http, on the alias a client resolves, never the host id
     want = {
-        "ntfy": "http://notify.svc.example.internal:80",  # no-raw-endpoint: allow lookup output
-        "ntfy-tls": "https://notify-tls.svc.example.internal:443",  # no-raw-endpoint: allow lookup output
+        "alert": "http://notify.svc.example.internal:80",  # no-raw-endpoint: allow lookup output
+        "alert-tls": "https://notify-tls.svc.example.internal:443",  # no-raw-endpoint: allow lookup output
         "gateway": "https://llm-gateway.svc.example.internal:4000",  # no-raw-endpoint: allow lookup output
         "bus": "nats://events.svc.example.internal:4222",  # no-raw-endpoint: allow lookup output
-        "ntfy-eval": "http://ntfy-eval.svc.example.internal:8080",  # no-raw-endpoint: allow lookup output
+        "alert-eval": "http://alert-eval.svc.example.internal:8080",  # no-raw-endpoint: allow lookup output
     }  # fmt: skip
     for row, url in want.items():
         assert platform([row]) == [url], row
-    assert platform(["ntfy"], field="host") == ["notify.svc.example.internal"]
-    assert platform(["ntfy"], field="port") == [80]
+    assert platform(["alert"], field="host") == ["notify.svc.example.internal"]
+    assert platform(["alert"], field="port") == [80]
 
 
 @pytest.mark.parametrize(
@@ -141,7 +141,7 @@ def test_a_platform_row_takes_its_scheme_from_protocol_and_tls_and_names_its_ali
     [
         (["nope"], "unknown service id 'nope'"),
         (["lost"], "names host 'hnx-gone-01', which is not in the registry's hosts map"),
-        (["ntfy-old"], "is a legacy row: it answers by no name"),
+        (["alert-old"], "is a legacy row: it answers by no name"),
     ],
 )
 def test_a_platform_row_with_an_unknown_host_or_no_name_is_refused(platform, terms, message):

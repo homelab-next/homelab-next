@@ -3204,11 +3204,11 @@ def test_needrestart_refuses_a_token_for_a_platform_row_that_is_plain_http(tmp_p
     written; the same row with ``tls: internal`` is https and passes."""
     v, _ = nr_setup(tmp_path)
     reg = tmp_path / "registry.yml"
-    row = "{capability: notify, host: ntfy-01, protocol: http, port: 80, tls: %s}"
+    row = "{capability: notify, host: notify-01, protocol: http, port: 80, tls: %s}"
     head = (
         "lab: {name: demo, domain: example.internal, svc_label: svc, owner: platform-team}\n"
         "zones: {mgmt: {cidr: 192.0.2.0/26}}\n"
-        "hosts:\n  ntfy-01: {address: 192.0.2.30, zone: mgmt}\n"
+        "hosts:\n  notify-01: {address: 192.0.2.30, zone: mgmt}\n"
         "services:\n  notify: "
     )
     plain = {
@@ -3222,7 +3222,13 @@ def test_needrestart_refuses_a_token_for_a_platform_row_that_is_plain_http(tmp_p
     reg.write_text(head + row % "none" + "\n")
     r = run_role(tmp_path, "needrestart", "config", plain, env)
     assert r.returncode != 0 and "a token would go over plain http" in r.stdout
-    assert "http://notify.svc.example.internal:80" in r.stdout
+    import re
+    from urllib.parse import urlsplit
+
+    shown = re.findall(r"notify endpoint ([a-z]+://\S+) is not http", r.stdout)
+    assert len(set(shown)) == 1, r.stdout
+    url = urlsplit(shown[0])
+    assert (url.scheme, url.hostname, url.port) == ("http", "notify.svc.example.internal", 80)
     reg.write_text(head + row % "internal" + "\n")
     r = run_role(tmp_path, "needrestart", "config", plain, env)
     assert r.returncode == 0, r.stdout + r.stderr
