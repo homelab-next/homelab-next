@@ -41,6 +41,7 @@ class RestCatalog:
         *,
         warehouse: str,
         api_root: str = "/catalog",
+        prefix_optional: bool = False,
         auth: Callable[[], str | None] | None = None,
         timeout: float = 15.0,
         max_bytes: int = 16 << 20,
@@ -55,6 +56,9 @@ class RestCatalog:
         self._timeout = timeout
         self.max_bytes = max_bytes
         self._prefix: str | None = None
+        #: a catalog whose config names no warehouse prefix (the Apache REST catalog serves
+        #: ``/v1/namespaces`` directly) is an error unless the caller says that is its shape
+        self._prefix_optional = prefix_optional
         #: how requests are sent: by default same-origin redirects only, and only for GET/HEAD
         #: (writes follow none); a caller that sends a credential passes
         #: :func:`homelabnext._http.credential_opener` (no redirect, no proxy)
@@ -112,13 +116,18 @@ class RestCatalog:
             pre = (doc.get("overrides") or {}).get("prefix") or (doc.get("defaults") or {}).get(
                 "prefix"
             )
-            if not pre:
+            if not pre and not self._prefix_optional:
                 raise LakeError(f"catalog config for warehouse {self.warehouse!r} has no prefix")
-            self._prefix = str(pre)
+            self._prefix = str(pre or "")
         return self._prefix
 
+    @property
+    def _v1(self) -> str:
+        """The API path up to the namespaces: ``/v1/<prefix>``, or ``/v1`` for a prefix-less catalog."""
+        return f"/v1/{_q(self.prefix)}" if self.prefix else "/v1"
+
     def _ns(self, namespace: str) -> str:
-        return f"/v1/{_q(self.prefix)}/namespaces/{_q(namespace)}"
+        return f"{self._v1}/namespaces/{_q(namespace)}"
 
     # ---------------------------------------------------------------- API
     def list_namespaces(
@@ -129,7 +138,7 @@ class RestCatalog:
         names: list[list[str]] = []
         token: str | None = None
         for _ in range(10_000):
-            path = f"/v1/{_q(self.prefix)}/namespaces"
+            path = f"{self._v1}/namespaces"
             query = []
             if parent:
                 query.append(f"parent={_q(chr(0x1F).join(parent))}")

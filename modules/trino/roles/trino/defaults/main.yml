@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: Apache-2.0
+# Trino, the lake-query provider (modules/trino): a single node (coordinator and worker in one JVM)
+# with one Iceberg catalog named `iceberg` over the REST catalog and the S3 object store; HTTPS and
+# password sign-in on the published port; and the lake's maintenance timer.
+# trino_logical_id (required): the instance's registry id, e.g. lake-query
+trino_image: "docker.io/trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f"
+# published on the guest's own address (the inventory's ansible_host), never on all interfaces
+trino_bind: "{{ ansible_host }}"
+trino_port: 8443
+trino_dir: /opt/compose/trino
+trino_data_root: /var/lib/hnx-modules/trino
+trino_owner: root
+# the group of the compose project and of the files the container reads (tls/, the password file):
+# the container's gid, so its user reads them (a key owned root:root 0600 crash-loops the engine, LL-500)
+trino_group: "{{ trino_gid }}"
+# the container's user and group: an id no account on the host has
+trino_uid: 61003
+trino_gid: 61003
+# the catalog name clients use: fixed, queries and the lake's writers say iceberg.<schema>.<table>
+trino_catalog_name: iceberg
+# the warehouse: fixed, the tables' metadata embeds s3://iceberg-warehouse/ paths
+trino_warehouse: s3://iceberg-warehouse/
+trino_region: garage
+# the lake-catalog and object-store rows' registry ids; their urls are resolved from the registry
+# unless trino_catalog_url / trino_s3_url is set (scheme://host:port)
+trino_catalog_id: lake-catalog
+trino_catalog_url: ""
+trino_object_store_id: object-store
+trino_s3_url: ""
+trino_access_key_ref: secret:trino/s3-access-key
+trino_signing_ref: secret:trino/s3-secret-key
+trino_tls_cert_ref: secret:trino/tls-cert
+trino_tls_key_ref: secret:trino/tls-key
+trino_ca_ref: secret:trino/ca
+trino_users_ref: secret:trino/password-db
+trino_shared_ref: secret:trino/internal-secret
+# JVM heap and the per-query memory bound. A runaway query then fails on its own with
+# EXCEEDED_MEMORY_LIMIT instead of pushing the JVM over its ceiling, where
+# -XX:+ExitOnOutOfMemoryError would kill every in-flight query (the old lake's 2026-09 outage). The
+# bound plus the engine's headroom (30 percent of the heap by default) must fit the heap; the
+# container's limit leaves room for code cache, metaspace and threads.
+trino_heap: 14G
+trino_query_max_memory: 9GB
+trino_mem_limit: 20g
+# the floors the engine itself enforces on the maintenance procedures (a retention below them is
+# refused whatever a caller asks): expire_snapshots 7 days, remove_orphan_files 3 days
+trino_expire_min_retention: 7d
+trino_orphan_min_retention: 3d
+# optional: a file-based access-control rules file (the rendered lake-access.json) on the controller
+# to install; empty means no access rules file. The maintenance user must be allowed ALTER TABLE
+# EXECUTE on the lake's tables in it.
+trino_access_rules_src: ""
+# the engine's own address for the hooks (scheme://host:port): empty resolves the row of
+# trino_logical_id from the registry (the name its certificate is issued for)
+trino_self_url: ""
+trino_start: true
+trino_validate_with_docker: true
+trino_health_timeout: 10
+# --- the maintenance timer (the lake's snapshot and orphan-file hygiene) ---
+trino_maintenance_enabled: true
+trino_maintenance_user: maintenance
+trino_maintenance_ref: secret:trino/maintenance-password
+# snapshots older than this are expired, always keeping the last trino_retain_last; orphan files
+# (referenced by no snapshot) older than trino_orphan_retention are removed
+trino_expire_retention: 7d
+trino_retain_last: 10
+trino_orphan_retention: 3d
+# per-statement time limits, seconds
+trino_expire_timeout: 600
+trino_orphan_timeout: 3600
+# after the writers' night window; OnCalendar, not a boot-relative timer (LL-041)
+trino_maintenance_schedule: "*-*-* 03:30:00 UTC"
+trino_maintenance_delay: 10min
+# the failure alert: the notify row's registry id (or trino_notify_url, scheme://host:port), the
+# topic, the publish token by secret reference. A token goes over https unless
+# trino_notify_allow_plain_http is set (a LAN endpoint with no TLS; the token is write-only).
+trino_notify_id: notify
+trino_notify_url: ""
+trino_notify_topic: lake-maintenance
+trino_notify_priority: 4
+trino_notify_ref: secret:trino/notify-token
+trino_notify_allow_plain_http: false
+# the owner of the script, its state, its credentials and the units (root on a real host)
+trino_maintenance_owner: root
+trino_maintenance_group: root
+trino_maintenance_script: /usr/local/libexec/homelabnext/hnx-lake-maintenance
+trino_maintenance_state_dir: /var/lib/hnx-modules/trino-maintenance
+trino_maintenance_env_file: /etc/hnx-modules/trino/maintenance.env
+trino_unit_dir: /etc/systemd/system
+trino_systemctl_cli: systemctl

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Refuse a malformed credential before the server uses it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Read the object store key pair
+  ansible.builtin.set_fact:
+    iceberg_rest_secret_env:
+      iceberg-rest:
+        AWS_ACCESS_KEY_ID: "{{ lookup('hnx_secret', iceberg_rest_access_key_ref) }}"
+        AWS_SECRET_ACCESS_KEY: "{{ lookup('hnx_secret', iceberg_rest_signing_ref) }}"
+  no_log: true
+
+- name: Render and start the catalog
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ iceberg_rest_app.compose_app_name }}"
+    compose_app_dir: "{{ iceberg_rest_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ iceberg_rest_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ iceberg_rest_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ iceberg_rest_app.compose_app_owner }}"
+    compose_app_group: "{{ iceberg_rest_app.compose_app_group }}"
+    compose_app_start: "{{ iceberg_rest_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ iceberg_rest_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ iceberg_rest_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ iceberg_rest_secret_env }}"
+  no_log: true

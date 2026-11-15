@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Nothing to export: the engine is stateless (the slot has no migration). Its tables are the
+# catalog's and its files the object store's, each exported by its own module.
+- name: The engine holds no data of its own
+  ansible.builtin.debug:
+    msg: "trino: stateless - export the lake with the lake-catalog and object-store modules"
+  tags: [export]

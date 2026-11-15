@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The engine is stateless: tables and files live in the catalog and the object store, which back up
+# their own data. What is on this host is configuration the role renders from the secret store and
+# the registry, and a scratch directory; the backup manifest names the data root all the same, so
+# nothing is left out by omission.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: trino
+        compose_app_dir: "{{ trino_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ trino_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ trino_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ trino_app.compose_app_owner }}"
+        compose_app_group: "{{ trino_app.compose_app_group }}"
+        compose_app_spec: "{{ trino_app.compose_app_spec }}"
+  tags: [backup]

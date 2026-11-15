@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
+# instance the site selects; version is product.version, host the module's host role (docs/modules/
+# registry-rows.md). Internal only, no public route. The catalog server has no sign-in of its own
+# (auth: none): the guest's firewall admits only the query engine and the lake's writers, and the
+# one SQLite file allows a single writer at a time (busy_timeout in the role).
+services:
+  lake-catalog:
+    capability: lake-catalog
+    impl: iceberg-rest-fixture
+    host: server
+    protocol: http
+    port: 8181
+    health: {kind: http, path: /v1/config, expect_status: 200}
+    upstreams: [object-store]
+    owner: operator
+    tls: none
+    auth: none
+    tags: [data, catalog]
+    description: The Apache Iceberg REST catalog over one SQLite file; warehouse s3://iceberg-warehouse/. No sign-in, no public route.

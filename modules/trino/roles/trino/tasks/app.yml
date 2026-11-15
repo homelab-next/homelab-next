@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). Only the
+# HTTPS listener is published; the engine's own plain listener stays inside the container. The key
+# pair and the shared secret reach the engine through the 0600 env_file (compose_app_secret_env) and
+# are read by the configuration files as ${ENV:...}.
+- name: Resolve the addresses
+  ansible.builtin.include_tasks: endpoint.yml
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    trino_app:
+      compose_app_name: trino
+      compose_app_dir: "{{ trino_dir }}"
+      compose_app_data_dir: "{{ trino_data_root }}"
+      compose_app_export_dir: "{{ trino_data_root }}/export"
+      compose_app_owner: "{{ trino_owner }}"
+      compose_app_group: "{{ trino_group }}"
+      compose_app_start: "{{ trino_start }}"
+      compose_app_validate_with_docker: "{{ trino_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          trino:
+            image: "{{ trino_repository }}"
+            tag: "{{ trino_tag }}"
+            digest: "{{ trino_digest }}"
+            user: "{{ trino_uid | int }}:{{ trino_gid | int }}"
+            environment:
+              AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+            ports: ["{{ trino_bind }}:{{ trino_port | int }}:{{ trino_container_port }}"]
+            volumes:
+              - "{{ trino_dir }}/etc:{{ trino_container_etc }}:ro"
+              - "{{ trino_data_root }}/node:{{ trino_container_node_dir }}"
+            mem_limit: "{{ trino_mem_limit }}"
+            healthcheck:
+              test: [CMD, /usr/lib/trino/bin/health-check]
+              interval: 10s
+              timeout: 5s
+              retries: 30
+              start_period: 40s
+  tags: [health, backup, restore, export, upgrade]

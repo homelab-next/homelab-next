@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# Garage, the object-store provider (modules/garage): one container, a single node. The bucket and
+# the access key are created by the server itself at start (--default-bucket with the default key
+# and bucket in its environment), so there is no layout or key step to run by hand and a restart
+# converges to the same state.
+# garage_logical_id (required): the instance's registry id, e.g. object-store
+garage_image: "docker.io/dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5"
+# the S3 API is published on the guest's own address (the inventory's ansible_host), never on all
+# interfaces; the guest firewall admits the consumers. The admin API is not published at all: it
+# listens inside the container's network and the health hook reaches the server through the CLI.
+garage_bind: "{{ ansible_host }}"
+garage_s3_port: 3900
+garage_dir: /opt/compose/garage
+garage_data_root: /var/lib/hnx-modules/garage
+garage_owner: root
+# where the exit copy is written: outside the data root, so the archive never contains itself
+garage_export_dir: /var/backups/hnx-modules/garage/export
+garage_group: "{{ garage_gid }}"
+# the container's user and group: an id no account on the host has
+garage_uid: 61001
+garage_gid: 61001
+# the lake's bucket: fixed, the table metadata embeds s3://<bucket>/ paths
+garage_bucket: iceberg-warehouse
+# the region the S3 clients sign with (the catalog and the query engine are configured with it too)
+garage_region: garage
+garage_rpc_ref: secret:garage/rpc-secret
+garage_admin_ref: secret:garage/admin-token
+garage_access_key_ref: secret:garage/access-key
+garage_signing_ref: secret:garage/secret-key
+garage_mem_limit: 2g
+garage_start: true
+garage_validate_with_docker: true
+garage_health_timeout: 10

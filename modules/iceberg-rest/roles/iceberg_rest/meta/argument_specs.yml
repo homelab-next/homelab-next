@@ -1,0 +1,555 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the Apache Iceberg REST catalog as a compose_app over a SQLite catalog file
+      and the object store warehouse.
+    options:
+      iceberg_rest_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. lake-catalog).
+        required: true
+      iceberg_rest_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the catalog image (the build the old lab runs).
+        default: docker.io/apache/iceberg-rest-fixture:2026.4.29-b0df3ca@sha256:db8de90b5b7693d4ac334c336f91d9bbe320d7b19f4f514d26de84cdfbcbfe8d
+      iceberg_rest_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      iceberg_rest_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8181
+      iceberg_rest_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/iceberg-rest
+      iceberg_rest_data_root:
+        type: path
+        description: 'The data root on the host: catalog/ (the SQLite file, mounted in the container).'
+        default: /var/lib/hnx-modules/iceberg-rest
+      iceberg_rest_export_dir:
+        type: path
+        description: Where the exit copy is written.
+        default: /var/backups/hnx-modules/iceberg-rest/export
+      iceberg_rest_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      iceberg_rest_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ iceberg_rest_gid }}'
+      iceberg_rest_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61002
+      iceberg_rest_gid:
+        type: int
+        description: The container's group id.
+        default: 61002
+      iceberg_rest_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      iceberg_rest_region:
+        type: str
+        description: The S3 region the catalog signs with.
+        default: garage
+      iceberg_rest_object_store_id:
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      iceberg_rest_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      iceberg_rest_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:iceberg-rest/s3-access-key
+      iceberg_rest_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:iceberg-rest/s3-secret-key
+      iceberg_rest_busy_timeout_ms:
+        type: int
+        description: 'SQLite busy_timeout in ms: a contending commit waits this long for the lock (LL-407).'
+        default: 30000
+      iceberg_rest_mem_limit:
+        type: str
+        description: The container's memory limit, like 2g.
+        default: 2g
+      iceberg_rest_heap_percent:
+        type: int
+        description: The JVM's share of the container's memory limit (MaxRAMPercentage).
+        default: 60
+      iceberg_rest_start:
+        type: bool
+        description: Start the container after rendering (false renders only).
+        default: true
+      iceberg_rest_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      iceberg_rest_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+  readiness:
+    short_description: Fail unless the container engine is ready, both credentials resolve in their form
+      and the object store answers.
+    options:
+      iceberg_rest_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:iceberg-rest/s3-access-key
+      iceberg_rest_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:iceberg-rest/s3-secret-key
+      iceberg_rest_object_store_id:
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      iceberg_rest_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      iceberg_rest_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy, the server answers its config and lists its
+      namespaces.
+    options:
+      iceberg_rest_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the catalog image (the build the old lab runs).
+        default: docker.io/apache/iceberg-rest-fixture:2026.4.29-b0df3ca@sha256:db8de90b5b7693d4ac334c336f91d9bbe320d7b19f4f514d26de84cdfbcbfe8d
+      iceberg_rest_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      iceberg_rest_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8181
+      iceberg_rest_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/iceberg-rest
+      iceberg_rest_data_root:
+        type: path
+        description: 'The data root on the host: catalog/ (the SQLite file, mounted in the container).'
+        default: /var/lib/hnx-modules/iceberg-rest
+      iceberg_rest_export_dir:
+        type: path
+        description: Where the exit copy is written.
+        default: /var/backups/hnx-modules/iceberg-rest/export
+      iceberg_rest_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      iceberg_rest_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ iceberg_rest_gid }}'
+      iceberg_rest_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61002
+      iceberg_rest_gid:
+        type: int
+        description: The container's group id.
+        default: 61002
+      iceberg_rest_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      iceberg_rest_region:
+        type: str
+        description: The S3 region the catalog signs with.
+        default: garage
+      iceberg_rest_object_store_id:
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      iceberg_rest_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      iceberg_rest_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:iceberg-rest/s3-access-key
+      iceberg_rest_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:iceberg-rest/s3-secret-key
+      iceberg_rest_busy_timeout_ms:
+        type: int
+        description: 'SQLite busy_timeout in ms: a contending commit waits this long for the lock (LL-407).'
+        default: 30000
+      iceberg_rest_mem_limit:
+        type: str
+        description: The container's memory limit, like 2g.
+        default: 2g
+      iceberg_rest_heap_percent:
+        type: int
+        description: The JVM's share of the container's memory limit (MaxRAMPercentage).
+        default: 60
+      iceberg_rest_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+  backup:
+    short_description: Copy the catalog file consistently, then name the data root for the backup.
+    options:
+      iceberg_rest_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the catalog image (the build the old lab runs).
+        default: docker.io/apache/iceberg-rest-fixture:2026.4.29-b0df3ca@sha256:db8de90b5b7693d4ac334c336f91d9bbe320d7b19f4f514d26de84cdfbcbfe8d
+      iceberg_rest_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      iceberg_rest_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8181
+      iceberg_rest_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/iceberg-rest
+      iceberg_rest_data_root:
+        type: path
+        description: 'The data root on the host: catalog/ (the SQLite file, mounted in the container).'
+        default: /var/lib/hnx-modules/iceberg-rest
+      iceberg_rest_export_dir:
+        type: path
+        description: Where the exit copy is written.
+        default: /var/backups/hnx-modules/iceberg-rest/export
+      iceberg_rest_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      iceberg_rest_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ iceberg_rest_gid }}'
+      iceberg_rest_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61002
+      iceberg_rest_gid:
+        type: int
+        description: The container's group id.
+        default: 61002
+      iceberg_rest_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      iceberg_rest_region:
+        type: str
+        description: The S3 region the catalog signs with.
+        default: garage
+      iceberg_rest_object_store_id:
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      iceberg_rest_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      iceberg_rest_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:iceberg-rest/s3-access-key
+      iceberg_rest_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:iceberg-rest/s3-secret-key
+      iceberg_rest_busy_timeout_ms:
+        type: int
+        description: 'SQLite busy_timeout in ms: a contending commit waits this long for the lock (LL-407).'
+        default: 30000
+      iceberg_rest_mem_limit:
+        type: str
+        description: The container's memory limit, like 2g.
+        default: 2g
+      iceberg_rest_heap_percent:
+        type: int
+        description: The JVM's share of the container's memory limit (MaxRAMPercentage).
+        default: 60
+      iceberg_rest_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+  restore:
+    short_description: Check an export (listing, size, sha256, integrity) and restore the catalog file
+      from it, the server stopped meanwhile.
+    options:
+      iceberg_rest_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the catalog image (the build the old lab runs).
+        default: docker.io/apache/iceberg-rest-fixture:2026.4.29-b0df3ca@sha256:db8de90b5b7693d4ac334c336f91d9bbe320d7b19f4f514d26de84cdfbcbfe8d
+      iceberg_rest_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      iceberg_rest_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8181
+      iceberg_rest_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/iceberg-rest
+      iceberg_rest_data_root:
+        type: path
+        description: 'The data root on the host: catalog/ (the SQLite file, mounted in the container).'
+        default: /var/lib/hnx-modules/iceberg-rest
+      iceberg_rest_export_dir:
+        type: path
+        description: Where the exit copy is written.
+        default: /var/backups/hnx-modules/iceberg-rest/export
+      iceberg_rest_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      iceberg_rest_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ iceberg_rest_gid }}'
+      iceberg_rest_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61002
+      iceberg_rest_gid:
+        type: int
+        description: The container's group id.
+        default: 61002
+      iceberg_rest_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      iceberg_rest_region:
+        type: str
+        description: The S3 region the catalog signs with.
+        default: garage
+      iceberg_rest_object_store_id:
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      iceberg_rest_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      iceberg_rest_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:iceberg-rest/s3-access-key
+      iceberg_rest_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:iceberg-rest/s3-secret-key
+      iceberg_rest_busy_timeout_ms:
+        type: int
+        description: 'SQLite busy_timeout in ms: a contending commit waits this long for the lock (LL-407).'
+        default: 30000
+      iceberg_rest_mem_limit:
+        type: str
+        description: The container's memory limit, like 2g.
+        default: 2g
+      iceberg_rest_heap_percent:
+        type: int
+        description: The JVM's share of the container's memory limit (MaxRAMPercentage).
+        default: 60
+      iceberg_rest_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+      iceberg_rest_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl and the catalog file it lists).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      iceberg_rest_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the catalog image (the build the old lab runs).
+        default: docker.io/apache/iceberg-rest-fixture:2026.4.29-b0df3ca@sha256:db8de90b5b7693d4ac334c336f91d9bbe320d7b19f4f514d26de84cdfbcbfe8d
+      iceberg_rest_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      iceberg_rest_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8181
+      iceberg_rest_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/iceberg-rest
+      iceberg_rest_data_root:
+        type: path
+        description: 'The data root on the host: catalog/ (the SQLite file, mounted in the container).'
+        default: /var/lib/hnx-modules/iceberg-rest
+      iceberg_rest_export_dir:
+        type: path
+        description: Where the exit copy is written.
+        default: /var/backups/hnx-modules/iceberg-rest/export
+      iceberg_rest_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      iceberg_rest_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ iceberg_rest_gid }}'
+      iceberg_rest_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61002
+      iceberg_rest_gid:
+        type: int
+        description: The container's group id.
+        default: 61002
+      iceberg_rest_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      iceberg_rest_region:
+        type: str
+        description: The S3 region the catalog signs with.
+        default: garage
+      iceberg_rest_object_store_id:
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      iceberg_rest_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      iceberg_rest_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:iceberg-rest/s3-access-key
+      iceberg_rest_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:iceberg-rest/s3-secret-key
+      iceberg_rest_busy_timeout_ms:
+        type: int
+        description: 'SQLite busy_timeout in ms: a contending commit waits this long for the lock (LL-407).'
+        default: 30000
+      iceberg_rest_mem_limit:
+        type: str
+        description: The container's memory limit, like 2g.
+        default: 2g
+      iceberg_rest_heap_percent:
+        type: int
+        description: The JVM's share of the container's memory limit (MaxRAMPercentage).
+        default: 60
+      iceberg_rest_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+      iceberg_rest_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true
+  export:
+    short_description: Write the open-format exit copy (object-tree) of the catalog file to the export
+      directory.
+    options:
+      iceberg_rest_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the catalog image (the build the old lab runs).
+        default: docker.io/apache/iceberg-rest-fixture:2026.4.29-b0df3ca@sha256:db8de90b5b7693d4ac334c336f91d9bbe320d7b19f4f514d26de84cdfbcbfe8d
+      iceberg_rest_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      iceberg_rest_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8181
+      iceberg_rest_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/iceberg-rest
+      iceberg_rest_data_root:
+        type: path
+        description: 'The data root on the host: catalog/ (the SQLite file, mounted in the container).'
+        default: /var/lib/hnx-modules/iceberg-rest
+      iceberg_rest_export_dir:
+        type: path
+        description: Where the exit copy is written.
+        default: /var/backups/hnx-modules/iceberg-rest/export
+      iceberg_rest_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      iceberg_rest_group:
+        type: str
+        description: 'Group of the compose project and the data root: the container''s gid.'
+        default: '{{ iceberg_rest_gid }}'
+      iceberg_rest_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61002
+      iceberg_rest_gid:
+        type: int
+        description: The container's group id.
+        default: 61002
+      iceberg_rest_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      iceberg_rest_region:
+        type: str
+        description: The S3 region the catalog signs with.
+        default: garage
+      iceberg_rest_object_store_id:
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      iceberg_rest_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      iceberg_rest_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:iceberg-rest/s3-access-key
+      iceberg_rest_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:iceberg-rest/s3-secret-key
+      iceberg_rest_busy_timeout_ms:
+        type: int
+        description: 'SQLite busy_timeout in ms: a contending commit waits this long for the lock (LL-407).'
+        default: 30000
+      iceberg_rest_mem_limit:
+        type: str
+        description: The container's memory limit, like 2g.
+        default: 2g
+      iceberg_rest_heap_percent:
+        type: int
+        description: The JVM's share of the container's memory limit (MaxRAMPercentage).
+        default: 60
+      iceberg_rest_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10

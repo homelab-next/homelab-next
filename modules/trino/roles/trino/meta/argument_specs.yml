@@ -1,0 +1,1383 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Trino as a compose_app (TLS, password sign-in, an Iceberg catalog) and install
+      the lake's maintenance timer.
+    options:
+      trino_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. lake-query).
+        required: true
+      trino_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the engine image.
+        default: docker.io/trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
+      trino_bind:
+        type: str
+        description: The guest's own IPv4 address the HTTPS port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      trino_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 8443
+      trino_dir:
+        type: path
+        description: The compose project directory (etc/ holds the configuration mounted in the container).
+        default: /opt/compose/trino
+      trino_data_root:
+        type: path
+        description: 'The data root on the host: node/ (the engine scratch directory).'
+        default: /var/lib/hnx-modules/trino
+      trino_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      trino_group:
+        type: str
+        description: 'Group of the project and of the files the container reads: the container''s gid.'
+        default: '{{ trino_gid }}'
+      trino_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61003
+      trino_gid:
+        type: int
+        description: The container's group id.
+        default: 61003
+      trino_catalog_name:
+        type: str
+        description: The catalog name clients use; fixed to iceberg.
+        default: iceberg
+      trino_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      trino_region:
+        type: str
+        description: The S3 region the engine signs with.
+        default: garage
+      trino_catalog_id:
+        type: str
+        description: The lake-catalog row's registry id; its url is resolved from the registry.
+        default: lake-catalog
+      trino_catalog_url:
+        type: str
+        description: 'scheme://host:port of the catalog, overriding the registry (empty: resolve it).'
+        default: ''
+      trino_object_store_id:
+        type: str
+        description: The object-store row's registry id; its url is resolved from the registry.
+        default: object-store
+      trino_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:trino/s3-access-key
+      trino_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:trino/s3-secret-key
+      trino_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM, with its chain).'
+        default: secret:trino/tls-cert
+      trino_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:trino/tls-key
+      trino_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA''s certificate (PEM).'
+        default: secret:trino/ca
+      trino_users_ref:
+        type: str
+        description: 'secret: reference of the password file (user:bcrypt lines).'
+        default: secret:trino/password-db
+      trino_shared_ref:
+        type: str
+        description: 'secret: reference of the engine''s internal-communication shared secret.'
+        default: secret:trino/internal-secret
+      trino_heap:
+        type: str
+        description: JVM heap, like 14G.
+        default: 14G
+      trino_query_max_memory:
+        type: str
+        description: Per-query and per-node memory bound, like 9GB (at most 70 percent of the heap).
+        default: 9GB
+      trino_mem_limit:
+        type: str
+        description: The container's memory limit, like 20g (at least 2 GB over the heap).
+        default: 20g
+      trino_expire_min_retention:
+        type: str
+        description: The engine's floor for expire_snapshots, in whole days (iceberg.expire-snapshots.min-retention).
+        default: 7d
+      trino_orphan_min_retention:
+        type: str
+        description: The engine's floor for remove_orphan_files, in whole days (iceberg.remove-orphan-files.min-retention).
+        default: 3d
+      trino_access_rules_src:
+        type: str
+        description: 'Controller path of a file-based access-control rules file to install (empty: none).'
+        default: ''
+      trino_self_url:
+        type: str
+        description: 'The engine''s own scheme://host:port for the hooks and the timer (empty: the registry
+          row of trino_logical_id).'
+        default: ''
+      trino_start:
+        type: bool
+        description: Start the container after rendering (false renders only).
+        default: true
+      trino_validate_with_docker:
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      trino_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+      trino_maintenance_enabled:
+        type: bool
+        description: Install the lake's maintenance timer.
+        default: true
+      trino_maintenance_user:
+        type: str
+        description: The engine user the timer signs in as (its bcrypt line must be in the password file).
+        default: maintenance
+      trino_maintenance_ref:
+        type: str
+        description: 'secret: reference of the maintenance user''s password.'
+        default: secret:trino/maintenance-password
+      trino_expire_retention:
+        type: str
+        description: Snapshots older than this (whole days) are expired.
+        default: 7d
+      trino_retain_last:
+        type: int
+        description: Snapshots always kept per table, however old.
+        default: 10
+      trino_orphan_retention:
+        type: str
+        description: Orphan files older than this (whole days) are removed.
+        default: 3d
+      trino_expire_timeout:
+        type: int
+        description: Seconds an expire_snapshots statement may run.
+        default: 600
+      trino_orphan_timeout:
+        type: int
+        description: Seconds a remove_orphan_files statement may run.
+        default: 3600
+      trino_maintenance_schedule:
+        type: str
+        description: systemd OnCalendar of the timer.
+        default: '*-*-* 03:30:00 UTC'
+      trino_maintenance_delay:
+        type: str
+        description: systemd RandomizedDelaySec of the timer.
+        default: 10min
+      trino_notify_id:
+        type: str
+        description: The notify row's registry id; its url is resolved from the registry.
+        default: notify
+      trino_notify_url:
+        type: str
+        description: 'scheme://host:port of the notify channel, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_notify_topic:
+        type: str
+        description: Topic the failure alert is published to.
+        default: lake-maintenance
+      trino_notify_priority:
+        type: int
+        description: Priority (1 to 5) of the failure alert.
+        default: 4
+      trino_notify_ref:
+        type: str
+        description: 'secret: reference of the notify publish token.'
+        default: secret:trino/notify-token
+      trino_notify_allow_plain_http:
+        type: bool
+        description: Allow the token over plain http to a LAN notify endpoint with no TLS.
+        default: false
+      trino_maintenance_script:
+        type: str
+        description: Where the maintenance script is installed.
+        default: /usr/local/libexec/homelabnext/hnx-lake-maintenance
+      trino_maintenance_state_dir:
+        type: path
+        description: The maintenance run's state directory (owner-only).
+        default: /var/lib/hnx-modules/trino-maintenance
+      trino_maintenance_env_file:
+        type: str
+        description: The owner-only env file the service loads (the maintenance password and the notify
+          token).
+        default: /etc/hnx-modules/trino/maintenance.env
+      trino_unit_dir:
+        type: path
+        description: Where the systemd units are written.
+        default: /etc/systemd/system
+      trino_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      trino_maintenance_owner:
+        type: str
+        description: Owner of the maintenance script, state, credentials and units.
+        default: root
+      trino_maintenance_group:
+        type: str
+        description: Group of the maintenance script, state, credentials and units.
+        default: root
+  readiness:
+    short_description: Fail unless the container engine is ready, every credential resolves in its form
+      and the catalog and the object store answer.
+    options:
+      trino_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:trino/s3-access-key
+      trino_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:trino/s3-secret-key
+      trino_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM, with its chain).'
+        default: secret:trino/tls-cert
+      trino_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:trino/tls-key
+      trino_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA''s certificate (PEM).'
+        default: secret:trino/ca
+      trino_users_ref:
+        type: str
+        description: 'secret: reference of the password file (user:bcrypt lines).'
+        default: secret:trino/password-db
+      trino_shared_ref:
+        type: str
+        description: 'secret: reference of the engine''s internal-communication shared secret.'
+        default: secret:trino/internal-secret
+      trino_maintenance_user:
+        type: str
+        description: The engine user the timer signs in as (its bcrypt line must be in the password file).
+        default: maintenance
+      trino_maintenance_ref:
+        type: str
+        description: 'secret: reference of the maintenance user''s password.'
+        default: secret:trino/maintenance-password
+      trino_notify_ref:
+        type: str
+        description: 'secret: reference of the notify publish token.'
+        default: secret:trino/notify-token
+      trino_catalog_id:
+        type: str
+        description: The lake-catalog row's registry id; its url is resolved from the registry.
+        default: lake-catalog
+      trino_catalog_url:
+        type: str
+        description: 'scheme://host:port of the catalog, overriding the registry (empty: resolve it).'
+        default: ''
+      trino_object_store_id:
+        type: str
+        description: The object-store row's registry id; its url is resolved from the registry.
+        default: object-store
+      trino_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy, the engine answers over HTTPS, refuses anonymous
+      statements, accepts the maintenance user and the timer is active with a clean last run.
+    options:
+      trino_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the engine image.
+        default: docker.io/trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
+      trino_bind:
+        type: str
+        description: The guest's own IPv4 address the HTTPS port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      trino_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 8443
+      trino_dir:
+        type: path
+        description: The compose project directory (etc/ holds the configuration mounted in the container).
+        default: /opt/compose/trino
+      trino_data_root:
+        type: path
+        description: 'The data root on the host: node/ (the engine scratch directory).'
+        default: /var/lib/hnx-modules/trino
+      trino_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      trino_group:
+        type: str
+        description: 'Group of the project and of the files the container reads: the container''s gid.'
+        default: '{{ trino_gid }}'
+      trino_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61003
+      trino_gid:
+        type: int
+        description: The container's group id.
+        default: 61003
+      trino_catalog_name:
+        type: str
+        description: The catalog name clients use; fixed to iceberg.
+        default: iceberg
+      trino_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      trino_region:
+        type: str
+        description: The S3 region the engine signs with.
+        default: garage
+      trino_catalog_id:
+        type: str
+        description: The lake-catalog row's registry id; its url is resolved from the registry.
+        default: lake-catalog
+      trino_catalog_url:
+        type: str
+        description: 'scheme://host:port of the catalog, overriding the registry (empty: resolve it).'
+        default: ''
+      trino_object_store_id:
+        type: str
+        description: The object-store row's registry id; its url is resolved from the registry.
+        default: object-store
+      trino_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:trino/s3-access-key
+      trino_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:trino/s3-secret-key
+      trino_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM, with its chain).'
+        default: secret:trino/tls-cert
+      trino_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:trino/tls-key
+      trino_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA''s certificate (PEM).'
+        default: secret:trino/ca
+      trino_users_ref:
+        type: str
+        description: 'secret: reference of the password file (user:bcrypt lines).'
+        default: secret:trino/password-db
+      trino_shared_ref:
+        type: str
+        description: 'secret: reference of the engine''s internal-communication shared secret.'
+        default: secret:trino/internal-secret
+      trino_heap:
+        type: str
+        description: JVM heap, like 14G.
+        default: 14G
+      trino_query_max_memory:
+        type: str
+        description: Per-query and per-node memory bound, like 9GB (at most 70 percent of the heap).
+        default: 9GB
+      trino_mem_limit:
+        type: str
+        description: The container's memory limit, like 20g (at least 2 GB over the heap).
+        default: 20g
+      trino_expire_min_retention:
+        type: str
+        description: The engine's floor for expire_snapshots, in whole days (iceberg.expire-snapshots.min-retention).
+        default: 7d
+      trino_orphan_min_retention:
+        type: str
+        description: The engine's floor for remove_orphan_files, in whole days (iceberg.remove-orphan-files.min-retention).
+        default: 3d
+      trino_access_rules_src:
+        type: str
+        description: 'Controller path of a file-based access-control rules file to install (empty: none).'
+        default: ''
+      trino_self_url:
+        type: str
+        description: 'The engine''s own scheme://host:port for the hooks and the timer (empty: the registry
+          row of trino_logical_id).'
+        default: ''
+      trino_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+      trino_maintenance_enabled:
+        type: bool
+        description: Install the lake's maintenance timer.
+        default: true
+      trino_maintenance_user:
+        type: str
+        description: The engine user the timer signs in as (its bcrypt line must be in the password file).
+        default: maintenance
+      trino_maintenance_ref:
+        type: str
+        description: 'secret: reference of the maintenance user''s password.'
+        default: secret:trino/maintenance-password
+      trino_expire_retention:
+        type: str
+        description: Snapshots older than this (whole days) are expired.
+        default: 7d
+      trino_retain_last:
+        type: int
+        description: Snapshots always kept per table, however old.
+        default: 10
+      trino_orphan_retention:
+        type: str
+        description: Orphan files older than this (whole days) are removed.
+        default: 3d
+      trino_expire_timeout:
+        type: int
+        description: Seconds an expire_snapshots statement may run.
+        default: 600
+      trino_orphan_timeout:
+        type: int
+        description: Seconds a remove_orphan_files statement may run.
+        default: 3600
+      trino_maintenance_schedule:
+        type: str
+        description: systemd OnCalendar of the timer.
+        default: '*-*-* 03:30:00 UTC'
+      trino_maintenance_delay:
+        type: str
+        description: systemd RandomizedDelaySec of the timer.
+        default: 10min
+      trino_notify_id:
+        type: str
+        description: The notify row's registry id; its url is resolved from the registry.
+        default: notify
+      trino_notify_url:
+        type: str
+        description: 'scheme://host:port of the notify channel, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_notify_topic:
+        type: str
+        description: Topic the failure alert is published to.
+        default: lake-maintenance
+      trino_notify_priority:
+        type: int
+        description: Priority (1 to 5) of the failure alert.
+        default: 4
+      trino_notify_ref:
+        type: str
+        description: 'secret: reference of the notify publish token.'
+        default: secret:trino/notify-token
+      trino_notify_allow_plain_http:
+        type: bool
+        description: Allow the token over plain http to a LAN notify endpoint with no TLS.
+        default: false
+      trino_maintenance_script:
+        type: str
+        description: Where the maintenance script is installed.
+        default: /usr/local/libexec/homelabnext/hnx-lake-maintenance
+      trino_maintenance_state_dir:
+        type: path
+        description: The maintenance run's state directory (owner-only).
+        default: /var/lib/hnx-modules/trino-maintenance
+      trino_maintenance_env_file:
+        type: str
+        description: The owner-only env file the service loads (the maintenance password and the notify
+          token).
+        default: /etc/hnx-modules/trino/maintenance.env
+      trino_unit_dir:
+        type: path
+        description: Where the systemd units are written.
+        default: /etc/systemd/system
+      trino_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+  backup:
+    short_description: Name the data root for the backup (the engine is stateless).
+    options:
+      trino_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the engine image.
+        default: docker.io/trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
+      trino_bind:
+        type: str
+        description: The guest's own IPv4 address the HTTPS port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      trino_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 8443
+      trino_dir:
+        type: path
+        description: The compose project directory (etc/ holds the configuration mounted in the container).
+        default: /opt/compose/trino
+      trino_data_root:
+        type: path
+        description: 'The data root on the host: node/ (the engine scratch directory).'
+        default: /var/lib/hnx-modules/trino
+      trino_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      trino_group:
+        type: str
+        description: 'Group of the project and of the files the container reads: the container''s gid.'
+        default: '{{ trino_gid }}'
+      trino_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61003
+      trino_gid:
+        type: int
+        description: The container's group id.
+        default: 61003
+      trino_catalog_name:
+        type: str
+        description: The catalog name clients use; fixed to iceberg.
+        default: iceberg
+      trino_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      trino_region:
+        type: str
+        description: The S3 region the engine signs with.
+        default: garage
+      trino_catalog_id:
+        type: str
+        description: The lake-catalog row's registry id; its url is resolved from the registry.
+        default: lake-catalog
+      trino_catalog_url:
+        type: str
+        description: 'scheme://host:port of the catalog, overriding the registry (empty: resolve it).'
+        default: ''
+      trino_object_store_id:
+        type: str
+        description: The object-store row's registry id; its url is resolved from the registry.
+        default: object-store
+      trino_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:trino/s3-access-key
+      trino_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:trino/s3-secret-key
+      trino_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM, with its chain).'
+        default: secret:trino/tls-cert
+      trino_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:trino/tls-key
+      trino_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA''s certificate (PEM).'
+        default: secret:trino/ca
+      trino_users_ref:
+        type: str
+        description: 'secret: reference of the password file (user:bcrypt lines).'
+        default: secret:trino/password-db
+      trino_shared_ref:
+        type: str
+        description: 'secret: reference of the engine''s internal-communication shared secret.'
+        default: secret:trino/internal-secret
+      trino_heap:
+        type: str
+        description: JVM heap, like 14G.
+        default: 14G
+      trino_query_max_memory:
+        type: str
+        description: Per-query and per-node memory bound, like 9GB (at most 70 percent of the heap).
+        default: 9GB
+      trino_mem_limit:
+        type: str
+        description: The container's memory limit, like 20g (at least 2 GB over the heap).
+        default: 20g
+      trino_expire_min_retention:
+        type: str
+        description: The engine's floor for expire_snapshots, in whole days (iceberg.expire-snapshots.min-retention).
+        default: 7d
+      trino_orphan_min_retention:
+        type: str
+        description: The engine's floor for remove_orphan_files, in whole days (iceberg.remove-orphan-files.min-retention).
+        default: 3d
+      trino_access_rules_src:
+        type: str
+        description: 'Controller path of a file-based access-control rules file to install (empty: none).'
+        default: ''
+      trino_self_url:
+        type: str
+        description: 'The engine''s own scheme://host:port for the hooks and the timer (empty: the registry
+          row of trino_logical_id).'
+        default: ''
+      trino_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+      trino_maintenance_enabled:
+        type: bool
+        description: Install the lake's maintenance timer.
+        default: true
+      trino_maintenance_user:
+        type: str
+        description: The engine user the timer signs in as (its bcrypt line must be in the password file).
+        default: maintenance
+      trino_maintenance_ref:
+        type: str
+        description: 'secret: reference of the maintenance user''s password.'
+        default: secret:trino/maintenance-password
+      trino_expire_retention:
+        type: str
+        description: Snapshots older than this (whole days) are expired.
+        default: 7d
+      trino_retain_last:
+        type: int
+        description: Snapshots always kept per table, however old.
+        default: 10
+      trino_orphan_retention:
+        type: str
+        description: Orphan files older than this (whole days) are removed.
+        default: 3d
+      trino_expire_timeout:
+        type: int
+        description: Seconds an expire_snapshots statement may run.
+        default: 600
+      trino_orphan_timeout:
+        type: int
+        description: Seconds a remove_orphan_files statement may run.
+        default: 3600
+      trino_maintenance_schedule:
+        type: str
+        description: systemd OnCalendar of the timer.
+        default: '*-*-* 03:30:00 UTC'
+      trino_maintenance_delay:
+        type: str
+        description: systemd RandomizedDelaySec of the timer.
+        default: 10min
+      trino_notify_id:
+        type: str
+        description: The notify row's registry id; its url is resolved from the registry.
+        default: notify
+      trino_notify_url:
+        type: str
+        description: 'scheme://host:port of the notify channel, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_notify_topic:
+        type: str
+        description: Topic the failure alert is published to.
+        default: lake-maintenance
+      trino_notify_priority:
+        type: int
+        description: Priority (1 to 5) of the failure alert.
+        default: 4
+      trino_notify_ref:
+        type: str
+        description: 'secret: reference of the notify publish token.'
+        default: secret:trino/notify-token
+      trino_notify_allow_plain_http:
+        type: bool
+        description: Allow the token over plain http to a LAN notify endpoint with no TLS.
+        default: false
+      trino_maintenance_script:
+        type: str
+        description: Where the maintenance script is installed.
+        default: /usr/local/libexec/homelabnext/hnx-lake-maintenance
+      trino_maintenance_state_dir:
+        type: path
+        description: The maintenance run's state directory (owner-only).
+        default: /var/lib/hnx-modules/trino-maintenance
+      trino_maintenance_env_file:
+        type: str
+        description: The owner-only env file the service loads (the maintenance password and the notify
+          token).
+        default: /etc/hnx-modules/trino/maintenance.env
+      trino_unit_dir:
+        type: path
+        description: Where the systemd units are written.
+        default: /etc/systemd/system
+      trino_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+  restore:
+    short_description: 'Nothing to restore: the engine is stateless.'
+    options:
+      trino_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the engine image.
+        default: docker.io/trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
+      trino_bind:
+        type: str
+        description: The guest's own IPv4 address the HTTPS port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      trino_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 8443
+      trino_dir:
+        type: path
+        description: The compose project directory (etc/ holds the configuration mounted in the container).
+        default: /opt/compose/trino
+      trino_data_root:
+        type: path
+        description: 'The data root on the host: node/ (the engine scratch directory).'
+        default: /var/lib/hnx-modules/trino
+      trino_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      trino_group:
+        type: str
+        description: 'Group of the project and of the files the container reads: the container''s gid.'
+        default: '{{ trino_gid }}'
+      trino_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61003
+      trino_gid:
+        type: int
+        description: The container's group id.
+        default: 61003
+      trino_catalog_name:
+        type: str
+        description: The catalog name clients use; fixed to iceberg.
+        default: iceberg
+      trino_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      trino_region:
+        type: str
+        description: The S3 region the engine signs with.
+        default: garage
+      trino_catalog_id:
+        type: str
+        description: The lake-catalog row's registry id; its url is resolved from the registry.
+        default: lake-catalog
+      trino_catalog_url:
+        type: str
+        description: 'scheme://host:port of the catalog, overriding the registry (empty: resolve it).'
+        default: ''
+      trino_object_store_id:
+        type: str
+        description: The object-store row's registry id; its url is resolved from the registry.
+        default: object-store
+      trino_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:trino/s3-access-key
+      trino_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:trino/s3-secret-key
+      trino_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM, with its chain).'
+        default: secret:trino/tls-cert
+      trino_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:trino/tls-key
+      trino_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA''s certificate (PEM).'
+        default: secret:trino/ca
+      trino_users_ref:
+        type: str
+        description: 'secret: reference of the password file (user:bcrypt lines).'
+        default: secret:trino/password-db
+      trino_shared_ref:
+        type: str
+        description: 'secret: reference of the engine''s internal-communication shared secret.'
+        default: secret:trino/internal-secret
+      trino_heap:
+        type: str
+        description: JVM heap, like 14G.
+        default: 14G
+      trino_query_max_memory:
+        type: str
+        description: Per-query and per-node memory bound, like 9GB (at most 70 percent of the heap).
+        default: 9GB
+      trino_mem_limit:
+        type: str
+        description: The container's memory limit, like 20g (at least 2 GB over the heap).
+        default: 20g
+      trino_expire_min_retention:
+        type: str
+        description: The engine's floor for expire_snapshots, in whole days (iceberg.expire-snapshots.min-retention).
+        default: 7d
+      trino_orphan_min_retention:
+        type: str
+        description: The engine's floor for remove_orphan_files, in whole days (iceberg.remove-orphan-files.min-retention).
+        default: 3d
+      trino_access_rules_src:
+        type: str
+        description: 'Controller path of a file-based access-control rules file to install (empty: none).'
+        default: ''
+      trino_self_url:
+        type: str
+        description: 'The engine''s own scheme://host:port for the hooks and the timer (empty: the registry
+          row of trino_logical_id).'
+        default: ''
+      trino_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+      trino_maintenance_enabled:
+        type: bool
+        description: Install the lake's maintenance timer.
+        default: true
+      trino_maintenance_user:
+        type: str
+        description: The engine user the timer signs in as (its bcrypt line must be in the password file).
+        default: maintenance
+      trino_maintenance_ref:
+        type: str
+        description: 'secret: reference of the maintenance user''s password.'
+        default: secret:trino/maintenance-password
+      trino_expire_retention:
+        type: str
+        description: Snapshots older than this (whole days) are expired.
+        default: 7d
+      trino_retain_last:
+        type: int
+        description: Snapshots always kept per table, however old.
+        default: 10
+      trino_orphan_retention:
+        type: str
+        description: Orphan files older than this (whole days) are removed.
+        default: 3d
+      trino_expire_timeout:
+        type: int
+        description: Seconds an expire_snapshots statement may run.
+        default: 600
+      trino_orphan_timeout:
+        type: int
+        description: Seconds a remove_orphan_files statement may run.
+        default: 3600
+      trino_maintenance_schedule:
+        type: str
+        description: systemd OnCalendar of the timer.
+        default: '*-*-* 03:30:00 UTC'
+      trino_maintenance_delay:
+        type: str
+        description: systemd RandomizedDelaySec of the timer.
+        default: 10min
+      trino_notify_id:
+        type: str
+        description: The notify row's registry id; its url is resolved from the registry.
+        default: notify
+      trino_notify_url:
+        type: str
+        description: 'scheme://host:port of the notify channel, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_notify_topic:
+        type: str
+        description: Topic the failure alert is published to.
+        default: lake-maintenance
+      trino_notify_priority:
+        type: int
+        description: Priority (1 to 5) of the failure alert.
+        default: 4
+      trino_notify_ref:
+        type: str
+        description: 'secret: reference of the notify publish token.'
+        default: secret:trino/notify-token
+      trino_notify_allow_plain_http:
+        type: bool
+        description: Allow the token over plain http to a LAN notify endpoint with no TLS.
+        default: false
+      trino_maintenance_script:
+        type: str
+        description: Where the maintenance script is installed.
+        default: /usr/local/libexec/homelabnext/hnx-lake-maintenance
+      trino_maintenance_state_dir:
+        type: path
+        description: The maintenance run's state directory (owner-only).
+        default: /var/lib/hnx-modules/trino-maintenance
+      trino_maintenance_env_file:
+        type: str
+        description: The owner-only env file the service loads (the maintenance password and the notify
+          token).
+        default: /etc/hnx-modules/trino/maintenance.env
+      trino_unit_dir:
+        type: path
+        description: Where the systemd units are written.
+        default: /etc/systemd/system
+      trino_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      trino_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the engine image.
+        default: docker.io/trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
+      trino_bind:
+        type: str
+        description: The guest's own IPv4 address the HTTPS port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      trino_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 8443
+      trino_dir:
+        type: path
+        description: The compose project directory (etc/ holds the configuration mounted in the container).
+        default: /opt/compose/trino
+      trino_data_root:
+        type: path
+        description: 'The data root on the host: node/ (the engine scratch directory).'
+        default: /var/lib/hnx-modules/trino
+      trino_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      trino_group:
+        type: str
+        description: 'Group of the project and of the files the container reads: the container''s gid.'
+        default: '{{ trino_gid }}'
+      trino_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61003
+      trino_gid:
+        type: int
+        description: The container's group id.
+        default: 61003
+      trino_catalog_name:
+        type: str
+        description: The catalog name clients use; fixed to iceberg.
+        default: iceberg
+      trino_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      trino_region:
+        type: str
+        description: The S3 region the engine signs with.
+        default: garage
+      trino_catalog_id:
+        type: str
+        description: The lake-catalog row's registry id; its url is resolved from the registry.
+        default: lake-catalog
+      trino_catalog_url:
+        type: str
+        description: 'scheme://host:port of the catalog, overriding the registry (empty: resolve it).'
+        default: ''
+      trino_object_store_id:
+        type: str
+        description: The object-store row's registry id; its url is resolved from the registry.
+        default: object-store
+      trino_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:trino/s3-access-key
+      trino_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:trino/s3-secret-key
+      trino_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM, with its chain).'
+        default: secret:trino/tls-cert
+      trino_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:trino/tls-key
+      trino_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA''s certificate (PEM).'
+        default: secret:trino/ca
+      trino_users_ref:
+        type: str
+        description: 'secret: reference of the password file (user:bcrypt lines).'
+        default: secret:trino/password-db
+      trino_shared_ref:
+        type: str
+        description: 'secret: reference of the engine''s internal-communication shared secret.'
+        default: secret:trino/internal-secret
+      trino_heap:
+        type: str
+        description: JVM heap, like 14G.
+        default: 14G
+      trino_query_max_memory:
+        type: str
+        description: Per-query and per-node memory bound, like 9GB (at most 70 percent of the heap).
+        default: 9GB
+      trino_mem_limit:
+        type: str
+        description: The container's memory limit, like 20g (at least 2 GB over the heap).
+        default: 20g
+      trino_expire_min_retention:
+        type: str
+        description: The engine's floor for expire_snapshots, in whole days (iceberg.expire-snapshots.min-retention).
+        default: 7d
+      trino_orphan_min_retention:
+        type: str
+        description: The engine's floor for remove_orphan_files, in whole days (iceberg.remove-orphan-files.min-retention).
+        default: 3d
+      trino_access_rules_src:
+        type: str
+        description: 'Controller path of a file-based access-control rules file to install (empty: none).'
+        default: ''
+      trino_self_url:
+        type: str
+        description: 'The engine''s own scheme://host:port for the hooks and the timer (empty: the registry
+          row of trino_logical_id).'
+        default: ''
+      trino_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+      trino_maintenance_enabled:
+        type: bool
+        description: Install the lake's maintenance timer.
+        default: true
+      trino_maintenance_user:
+        type: str
+        description: The engine user the timer signs in as (its bcrypt line must be in the password file).
+        default: maintenance
+      trino_maintenance_ref:
+        type: str
+        description: 'secret: reference of the maintenance user''s password.'
+        default: secret:trino/maintenance-password
+      trino_expire_retention:
+        type: str
+        description: Snapshots older than this (whole days) are expired.
+        default: 7d
+      trino_retain_last:
+        type: int
+        description: Snapshots always kept per table, however old.
+        default: 10
+      trino_orphan_retention:
+        type: str
+        description: Orphan files older than this (whole days) are removed.
+        default: 3d
+      trino_expire_timeout:
+        type: int
+        description: Seconds an expire_snapshots statement may run.
+        default: 600
+      trino_orphan_timeout:
+        type: int
+        description: Seconds a remove_orphan_files statement may run.
+        default: 3600
+      trino_maintenance_schedule:
+        type: str
+        description: systemd OnCalendar of the timer.
+        default: '*-*-* 03:30:00 UTC'
+      trino_maintenance_delay:
+        type: str
+        description: systemd RandomizedDelaySec of the timer.
+        default: 10min
+      trino_notify_id:
+        type: str
+        description: The notify row's registry id; its url is resolved from the registry.
+        default: notify
+      trino_notify_url:
+        type: str
+        description: 'scheme://host:port of the notify channel, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_notify_topic:
+        type: str
+        description: Topic the failure alert is published to.
+        default: lake-maintenance
+      trino_notify_priority:
+        type: int
+        description: Priority (1 to 5) of the failure alert.
+        default: 4
+      trino_notify_ref:
+        type: str
+        description: 'secret: reference of the notify publish token.'
+        default: secret:trino/notify-token
+      trino_notify_allow_plain_http:
+        type: bool
+        description: Allow the token over plain http to a LAN notify endpoint with no TLS.
+        default: false
+      trino_maintenance_script:
+        type: str
+        description: Where the maintenance script is installed.
+        default: /usr/local/libexec/homelabnext/hnx-lake-maintenance
+      trino_maintenance_state_dir:
+        type: path
+        description: The maintenance run's state directory (owner-only).
+        default: /var/lib/hnx-modules/trino-maintenance
+      trino_maintenance_env_file:
+        type: str
+        description: The owner-only env file the service loads (the maintenance password and the notify
+          token).
+        default: /etc/hnx-modules/trino/maintenance.env
+      trino_unit_dir:
+        type: path
+        description: Where the systemd units are written.
+        default: /etc/systemd/system
+      trino_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl
+      trino_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move to.
+        required: true
+  export:
+    short_description: 'Nothing to export: the engine is stateless.'
+    options:
+      trino_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the engine image.
+        default: docker.io/trinodb/trino:484@sha256:2704eb53935af5e582d63d6033e9bf99d20c325e9b0e30b1016ef59a4773979f
+      trino_bind:
+        type: str
+        description: The guest's own IPv4 address the HTTPS port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      trino_port:
+        type: int
+        description: Host port of the HTTPS listener (the registry row's port).
+        default: 8443
+      trino_dir:
+        type: path
+        description: The compose project directory (etc/ holds the configuration mounted in the container).
+        default: /opt/compose/trino
+      trino_data_root:
+        type: path
+        description: 'The data root on the host: node/ (the engine scratch directory).'
+        default: /var/lib/hnx-modules/trino
+      trino_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      trino_group:
+        type: str
+        description: 'Group of the project and of the files the container reads: the container''s gid.'
+        default: '{{ trino_gid }}'
+      trino_uid:
+        type: int
+        description: The container's user id (no account on the host has it).
+        default: 61003
+      trino_gid:
+        type: int
+        description: The container's group id.
+        default: 61003
+      trino_catalog_name:
+        type: str
+        description: The catalog name clients use; fixed to iceberg.
+        default: iceberg
+      trino_warehouse:
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        default: s3://iceberg-warehouse/
+      trino_region:
+        type: str
+        description: The S3 region the engine signs with.
+        default: garage
+      trino_catalog_id:
+        type: str
+        description: The lake-catalog row's registry id; its url is resolved from the registry.
+        default: lake-catalog
+      trino_catalog_url:
+        type: str
+        description: 'scheme://host:port of the catalog, overriding the registry (empty: resolve it).'
+        default: ''
+      trino_object_store_id:
+        type: str
+        description: The object-store row's registry id; its url is resolved from the registry.
+        default: object-store
+      trino_s3_url:
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_access_key_ref:
+        type: str
+        description: 'secret: reference of the lake key''s id.'
+        default: secret:trino/s3-access-key
+      trino_signing_ref:
+        type: str
+        description: 'secret: reference of the lake key''s secret.'
+        default: secret:trino/s3-secret-key
+      trino_tls_cert_ref:
+        type: str
+        description: 'secret: reference of the server certificate (PEM, with its chain).'
+        default: secret:trino/tls-cert
+      trino_tls_key_ref:
+        type: str
+        description: 'secret: reference of the server certificate''s private key (PEM).'
+        default: secret:trino/tls-key
+      trino_ca_ref:
+        type: str
+        description: 'secret: reference of the lab CA''s certificate (PEM).'
+        default: secret:trino/ca
+      trino_users_ref:
+        type: str
+        description: 'secret: reference of the password file (user:bcrypt lines).'
+        default: secret:trino/password-db
+      trino_shared_ref:
+        type: str
+        description: 'secret: reference of the engine''s internal-communication shared secret.'
+        default: secret:trino/internal-secret
+      trino_heap:
+        type: str
+        description: JVM heap, like 14G.
+        default: 14G
+      trino_query_max_memory:
+        type: str
+        description: Per-query and per-node memory bound, like 9GB (at most 70 percent of the heap).
+        default: 9GB
+      trino_mem_limit:
+        type: str
+        description: The container's memory limit, like 20g (at least 2 GB over the heap).
+        default: 20g
+      trino_expire_min_retention:
+        type: str
+        description: The engine's floor for expire_snapshots, in whole days (iceberg.expire-snapshots.min-retention).
+        default: 7d
+      trino_orphan_min_retention:
+        type: str
+        description: The engine's floor for remove_orphan_files, in whole days (iceberg.remove-orphan-files.min-retention).
+        default: 3d
+      trino_access_rules_src:
+        type: str
+        description: 'Controller path of a file-based access-control rules file to install (empty: none).'
+        default: ''
+      trino_self_url:
+        type: str
+        description: 'The engine''s own scheme://host:port for the hooks and the timer (empty: the registry
+          row of trino_logical_id).'
+        default: ''
+      trino_health_timeout:
+        type: int
+        description: Seconds each health probe waits.
+        default: 10
+      trino_maintenance_enabled:
+        type: bool
+        description: Install the lake's maintenance timer.
+        default: true
+      trino_maintenance_user:
+        type: str
+        description: The engine user the timer signs in as (its bcrypt line must be in the password file).
+        default: maintenance
+      trino_maintenance_ref:
+        type: str
+        description: 'secret: reference of the maintenance user''s password.'
+        default: secret:trino/maintenance-password
+      trino_expire_retention:
+        type: str
+        description: Snapshots older than this (whole days) are expired.
+        default: 7d
+      trino_retain_last:
+        type: int
+        description: Snapshots always kept per table, however old.
+        default: 10
+      trino_orphan_retention:
+        type: str
+        description: Orphan files older than this (whole days) are removed.
+        default: 3d
+      trino_expire_timeout:
+        type: int
+        description: Seconds an expire_snapshots statement may run.
+        default: 600
+      trino_orphan_timeout:
+        type: int
+        description: Seconds a remove_orphan_files statement may run.
+        default: 3600
+      trino_maintenance_schedule:
+        type: str
+        description: systemd OnCalendar of the timer.
+        default: '*-*-* 03:30:00 UTC'
+      trino_maintenance_delay:
+        type: str
+        description: systemd RandomizedDelaySec of the timer.
+        default: 10min
+      trino_notify_id:
+        type: str
+        description: The notify row's registry id; its url is resolved from the registry.
+        default: notify
+      trino_notify_url:
+        type: str
+        description: 'scheme://host:port of the notify channel, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      trino_notify_topic:
+        type: str
+        description: Topic the failure alert is published to.
+        default: lake-maintenance
+      trino_notify_priority:
+        type: int
+        description: Priority (1 to 5) of the failure alert.
+        default: 4
+      trino_notify_ref:
+        type: str
+        description: 'secret: reference of the notify publish token.'
+        default: secret:trino/notify-token
+      trino_notify_allow_plain_http:
+        type: bool
+        description: Allow the token over plain http to a LAN notify endpoint with no TLS.
+        default: false
+      trino_maintenance_script:
+        type: str
+        description: Where the maintenance script is installed.
+        default: /usr/local/libexec/homelabnext/hnx-lake-maintenance
+      trino_maintenance_state_dir:
+        type: path
+        description: The maintenance run's state directory (owner-only).
+        default: /var/lib/hnx-modules/trino-maintenance
+      trino_maintenance_env_file:
+        type: str
+        description: The owner-only env file the service loads (the maintenance password and the notify
+          token).
+        default: /etc/hnx-modules/trino/maintenance.env
+      trino_unit_dir:
+        type: path
+        description: Where the systemd units are written.
+        default: /etc/systemd/system
+      trino_systemctl_cli:
+        type: str
+        description: The systemctl command.
+        default: systemctl

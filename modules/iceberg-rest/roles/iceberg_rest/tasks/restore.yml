@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the catalog file from an export (iceberg_rest_restore_source): the source is checked first,
+# without writing (owner, the listing, a single-link regular file, size, sha256, integrity_check);
+# then the server is stopped, the file is copied through the descriptor that was opened, re-hashed
+# and renamed into place as the container's user's, and the server is started again whatever
+# happened.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: [python3, -I, -c, "{{ iceberg_rest_restore_script }}", check, "{{ iceberg_rest_restore_source }}", "{{ iceberg_rest_db_file }}", "{{ iceberg_rest_uid | int }}"]
+      changed_when: false
+    - name: Replace the catalog file with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ iceberg_rest_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Copy, verify and install the listed file
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -I
+              - -c
+              - "{{ iceberg_rest_restore_script }}"
+              - apply
+              - "{{ iceberg_rest_restore_source }}"
+              - "{{ iceberg_rest_data_root }}/catalog"
+              - "{{ iceberg_rest_uid | int }}"
+              - "{{ iceberg_rest_gid | int }}"
+              - "{{ iceberg_rest_db_file }}"
+          changed_when: true
+      always:
+        - name: Start the server again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ iceberg_rest_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+  tags: [restore]

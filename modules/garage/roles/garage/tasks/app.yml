@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The server
+# creates the bucket and the key itself at start: --default-bucket with GARAGE_DEFAULT_BUCKET and
+# the default key pair in the environment (compose_app_secret_env, written to a 0600 env_file).
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    garage_app:
+      compose_app_name: garage
+      compose_app_dir: "{{ garage_dir }}"
+      compose_app_data_dir: "{{ garage_data_root }}"
+      compose_app_export_dir: "{{ garage_export_dir }}"
+      compose_app_owner: "{{ garage_owner }}"
+      compose_app_group: "{{ garage_group }}"
+      compose_app_start: "{{ garage_start }}"
+      compose_app_validate_with_docker: "{{ garage_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          garage:
+            image: "{{ garage_repository }}"
+            tag: "{{ garage_tag }}"
+            digest: "{{ garage_digest }}"
+            command: [/garage, server, --single-node, --default-bucket]
+            user: "{{ garage_uid | int }}:{{ garage_gid | int }}"
+            environment:
+              GARAGE_CONFIG_FILE: "{{ garage_container_config }}"
+              GARAGE_DEFAULT_BUCKET: "{{ garage_bucket }}"
+              RUST_LOG: garage=info
+            ports:
+              - "{{ garage_bind }}:{{ garage_s3_port | int }}:{{ garage_container_s3_port }}"
+            volumes:
+              - "{{ garage_dir }}/garage.toml:{{ garage_container_config }}:ro"
+              - "{{ garage_data_root }}/meta:{{ garage_container_meta_dir }}"
+              - "{{ garage_data_root }}/data:{{ garage_container_data_dir }}"
+            mem_limit: "{{ garage_mem_limit }}"
+            healthcheck:
+              test: [CMD, /garage, status]
+              interval: 30s
+              timeout: 10s
+              retries: 5
+              start_period: 20s
+  tags: [health, backup, restore, export, upgrade]

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+garage_container_meta_dir: /var/lib/garage/meta
+garage_container_data_dir: /var/lib/garage/data
+garage_container_config: /etc/garage.toml
+# the container's own listeners (the host publishes only the S3 API, as garage_bind:garage_s3_port)
+garage_container_s3_port: 3900
+garage_container_admin_port: 3903
+garage_bucket_pattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\Z'
+garage_region_pattern: '^[a-z][a-z0-9-]{1,31}\Z'
+garage_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+garage_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+# Garage's own forms: a key id is GK and 24 to 32 hex digits (the old lab's is 32), a key secret and
+# the RPC secret are 64 hex digits; the admin token is any printable string of 32 or more characters
+garage_key_id_pattern: '^GK[0-9a-f]{24,32}\Z'
+garage_hex64_pattern: '^[0-9a-f]{64}\Z'
+garage_admin_pattern: '^[A-Za-z0-9_.~+/=-]{32,128}\Z'
+garage_repository: "{{ garage_image.split('@')[0].rsplit(':', 1)[0] }}"
+garage_tag: "{{ garage_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+garage_digest: "{{ garage_image.split('@')[1] | default('') }}"

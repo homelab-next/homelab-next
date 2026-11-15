@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (trino_target_image, tag and digest), then
+# converge with the new pin (set trino_image to the target in the overlay). The engine holds no
+# data of its own, so nothing is exported first; read the release notes of every version crossed
+# (the catalog's properties and the procedures' options change between releases).
+#   ansible-playbook -i <inventory> modules/trino/playbooks/upgrade.yml -e trino_target_image=<ref>
+- name: Upgrade Trino
+  hosts: mod_trino_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: trino
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: trino
+      vars:
+        trino_image: "{{ trino_target_image }}"

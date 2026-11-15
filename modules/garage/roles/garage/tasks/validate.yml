@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - garage_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - garage_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - garage_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - garage_bind != '0.0.0.0'
+      - garage_s3_port | int >= 1 and garage_s3_port | int <= 65535
+      - garage_uid | int >= 1000 and garage_gid | int >= 1000
+      - garage_bucket is match(garage_bucket_pattern)
+      - garage_region is match(garage_region_pattern)
+      - garage_rpc_ref is match(garage_ref_pattern)
+      - garage_admin_ref is match(garage_ref_pattern)
+      - garage_access_key_ref is match(garage_ref_pattern)
+      - garage_signing_ref is match(garage_ref_pattern)
+      - >-
+        [garage_rpc_ref, garage_admin_ref, garage_access_key_ref, garage_signing_ref]
+        | unique | length == 4
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [garage_dir, garage_data_root, garage_export_dir] | reject('match', garage_path_pattern) | list | length == 0
+      - garage_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      garage: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish
+      on (not all interfaces), a port, a container uid and gid of 1000 or more, a
+      bucket name and a region, four distinct secret: references, absolute canonical directories
+      and a memory limit like 2g
+  tags: [health, backup, restore, export, upgrade]

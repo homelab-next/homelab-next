@@ -1,0 +1,19 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module trino, role trino); local changes are overwritten.
+[Unit]
+Description=Lake maintenance: expire snapshots and remove orphan files, per table
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile={{ trino_maintenance_env_file }}
+ExecStart=/usr/local/libexec/homelabnext/hnx-lake-maintenance
+# a statement may run for an hour (remove_orphan_files lists the whole table prefix)
+TimeoutStartSec=6h
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ trino_maintenance_state_dir }}

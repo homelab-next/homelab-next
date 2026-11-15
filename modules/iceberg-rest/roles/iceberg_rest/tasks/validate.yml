@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - iceberg_rest_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - iceberg_rest_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - iceberg_rest_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - iceberg_rest_bind != '0.0.0.0'
+      - iceberg_rest_port | int >= 1 and iceberg_rest_port | int <= 65535
+      - iceberg_rest_uid | int >= 1000 and iceberg_rest_gid | int >= 1000
+      - iceberg_rest_warehouse is match(iceberg_rest_warehouse_pattern)
+      - iceberg_rest_region is match(iceberg_rest_region_pattern)
+      - iceberg_rest_object_store_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - iceberg_rest_s3_url == '' or iceberg_rest_s3_url is match(iceberg_rest_url_pattern)
+      - iceberg_rest_access_key_ref is match(iceberg_rest_ref_pattern)
+      - iceberg_rest_signing_ref is match(iceberg_rest_ref_pattern)
+      - iceberg_rest_access_key_ref != iceberg_rest_signing_ref
+      - iceberg_rest_busy_timeout_ms | int >= 1000 and iceberg_rest_busy_timeout_ms | int <= 600000
+      - iceberg_rest_heap_percent | int >= 20 and iceberg_rest_heap_percent | int <= 80
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [iceberg_rest_dir, iceberg_rest_data_root, iceberg_rest_export_dir]
+        | reject('match', iceberg_rest_path_pattern) | list | length == 0
+      - iceberg_rest_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      iceberg-rest: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
+      publish on (not all interfaces), a port, a container uid and gid of 1000 or more, a warehouse
+      like s3://bucket/, a region, the object store's registry id (or its scheme://host:port), two
+      distinct secret: references, a busy timeout of 1 to 600 s (in ms), absolute canonical
+      directories and a memory limit like 2g
+  tags: [health, backup, restore, export, upgrade]

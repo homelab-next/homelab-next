@@ -1,0 +1,730 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The roles of the three lake modules (modules/garage, modules/iceberg-rest, modules/trino), run on
+localhost against fakes (CI is unprivileged).
+
+* main renders the compose project with no secret in it (the credentials only in the 0600
+  env_file), and a second run is ``changed=0``;
+* a malformed input, or a malformed or UNSET credential, is refused before anything is rendered,
+  naming the ``secret:`` reference (Review Focus 3: never a half-configured service);
+* the query engine's role writes the retention floors the maintenance procedures need, and installs
+  the maintenance timer with its retention values (Review Focus 4), run end to end against a
+  stand-in engine and notify channel, with the failure alert state-diffed;
+* the catalog role restores a catalog file only from a checked export.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import http.server
+import json
+import os
+import pwd
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+from pathlib import Path
+
+import pytest
+import yaml
+from rolerun import fake, run_role
+
+ROOT = Path(__file__).resolve().parents[2]
+USER = pwd.getpwuid(os.getuid()).pw_name
+GUEST = "192.0.2.50"  # no-raw-endpoint: allow a documentation-range guest address
+S3_URL = "http://store.example.internal:3900"  # no-raw-endpoint: allow a fixture URL
+CATALOG_URL = "http://catalog.example.internal:8181"  # no-raw-endpoint: allow a fixture URL
+SELF_URL = "https://query.example.internal:8443"  # no-raw-endpoint: allow a fixture URL
+NOTIFY_URL = "https://notify.example.internal:443"  # no-raw-endpoint: allow a fixture URL
+PLAIN_NOTIFY_URL = "http://notify.example.internal:80"  # no-raw-endpoint: allow a fixture URL
+KEY_ID = "GK" + "ab12" * 6
+KEY_SECRET = "c0de" * 16
+BCRYPT = "$2y$10$" + "f" * 53
+MAINT_PW = "maintenance-pass-1234"
+NOTIFY_TOKEN = "tk_notifytoken1234"
+
+
+def _pki() -> tuple[str, str]:
+    """A throwaway self-signed certificate and its private key (PEM), made once per run, so the
+    tests carry no key material of their own."""
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                        "-subj", "/CN=stand-in", "-keyout", f"{d}/k.pem", "-out", f"{d}/c.pem"],
+                       check=True, capture_output=True)  # fmt: skip
+        return Path(d, "c.pem").read_text().strip(), Path(d, "k.pem").read_text().strip()
+
+
+CERT, PKEY = _pki()
+
+
+# ----------------------------------------------------------------------------- the object store
+
+GARAGE = str(ROOT / "modules" / "garage" / "roles" / "garage")
+GARAGE_SECRETS = {
+    "HNX_SECRET_GARAGE_RPC_SECRET": "1f" * 32,
+    "HNX_SECRET_GARAGE_ADMIN_TOKEN": "admin-token-0123456789abcdef0123456789",
+    "HNX_SECRET_GARAGE_ACCESS_KEY": KEY_ID,
+    "HNX_SECRET_GARAGE_SECRET_KEY": KEY_SECRET,
+}
+
+
+def garage_vars(tmp: Path, **kw) -> dict:
+    v = {
+        "garage_logical_id": "object-store",
+        "ansible_host": GUEST,
+        "garage_dir": str(tmp / "app"),
+        "garage_data_root": str(tmp / "data"),
+        "garage_export_dir": str(tmp / "export"),
+        "garage_owner": USER,
+        "garage_uid": os.getuid(),
+        "garage_gid": os.getgid(),
+        "garage_start": False,
+        "garage_validate_with_docker": False,
+    }
+    v.update(kw)
+    return v
+
+
+def test_garage_main_renders_the_bucket_and_key_with_the_secrets_only_in_the_env_file(tmp_path):
+    v = garage_vars(tmp_path)
+    r = run_role(tmp_path, GARAGE, "main", v, env=GARAGE_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "app" / "docker-compose.yml").read_text()
+    svc = yaml.safe_load(text)["services"]["garage"]
+    assert svc["image"].startswith("docker.io/dxflrs/garage:v2.")
+    assert svc["command"] == ["/garage", "server", "--single-node", "--default-bucket"]
+    assert svc["user"] == f"{os.getuid()}:{os.getgid()}"
+    assert svc["cap_drop"] == ["ALL"] and svc["security_opt"] == ["no-new-privileges:true"]
+    # the S3 API on the guest's own address, nothing else published (the admin API stays inside)
+    assert svc["ports"] == [GUEST + ":3900:3900"]
+    # the bucket is fixed: the table metadata embeds s3://iceberg-warehouse/ paths
+    assert svc["environment"]["GARAGE_DEFAULT_BUCKET"] == "iceberg-warehouse"
+    for value in GARAGE_SECRETS.values():
+        assert value not in text
+    env = (tmp_path / "app" / "secrets" / "garage.env").read_text()
+    for name in ("GARAGE_RPC_SECRET", "GARAGE_ADMIN_TOKEN", "GARAGE_DEFAULT_ACCESS_KEY",
+                 "GARAGE_DEFAULT_SECRET_KEY"):  # fmt: skip
+        assert name + "=" in env
+    assert oct((tmp_path / "app" / "secrets" / "garage.env").stat().st_mode & 0o777) == "0o600"
+    conf = (tmp_path / "app" / "garage.toml").read_text()
+    assert 's3_region = "garage"' in conf and "replication_factor = 1" in conf
+    assert not any(value in conf for value in GARAGE_SECRETS.values())
+    assert oct((tmp_path / "data" / "meta").stat().st_mode & 0o777) == "0o700"
+    assert KEY_SECRET not in r.stdout
+    again = run_role(tmp_path, GARAGE, "main", v, env=GARAGE_SECRETS)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+@pytest.mark.parametrize(
+    "over, env",
+    [
+        ({"garage_image": "docker.io/dxflrs/garage:latest"}, {}),
+        ({"ansible_host": "0.0.0.0"}, {}),
+        ({"garage_bucket": "Bad_Bucket"}, {}),
+        ({"garage_uid": 0}, {}),
+        ({"garage_data_root": "/var/lib/../etc"}, {}),
+        ({"garage_export_dir": "relative"}, {}),
+        ({"garage_signing_ref": "secret:garage/access-key"}, {}),
+        ({}, {"HNX_SECRET_GARAGE_RPC_SECRET": "short"}),
+        ({}, {"HNX_SECRET_GARAGE_SECRET_KEY": "not-hex"}),
+        ({}, {"HNX_SECRET_GARAGE_ACCESS_KEY": "AK123"}),
+        ({}, {"HNX_SECRET_GARAGE_ADMIN_TOKEN": "has space in it and is long enough to pass"}),
+    ],
+)
+def test_garage_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    r = run_role(
+        tmp_path, GARAGE, "main", garage_vars(tmp_path, **over), env={**GARAGE_SECRETS, **env}
+    )
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+    assert KEY_SECRET not in r.stdout
+
+
+def test_garage_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
+    env = {k: v for k, v in GARAGE_SECRETS.items() if k != "HNX_SECRET_GARAGE_RPC_SECRET"}
+    r = run_role(tmp_path, GARAGE, "main", garage_vars(tmp_path), env=env)
+    assert r.returncode != 0
+    assert "secret:garage/rpc-secret" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_garage_upgrade_refuses_another_repository_and_another_major_version(tmp_path):
+    digest = "sha256:" + "a" * 64
+    assert (
+        run_role(tmp_path, GARAGE, "main", garage_vars(tmp_path), env=GARAGE_SECRETS).returncode
+        == 0
+    )
+    for target in (f"docker.io/dxflrs/other:v2.6.0@{digest}", f"docker.io/dxflrs/garage:v3.0.0@{digest}",
+                   "docker.io/dxflrs/garage:v2.6.0"):  # fmt: skip
+        v = garage_vars(tmp_path, garage_target_image=target)
+        assert run_role(tmp_path, GARAGE, "upgrade", v).returncode != 0, target
+    v = garage_vars(tmp_path, garage_target_image=f"docker.io/dxflrs/garage:v2.6.0@{digest}")
+    r = run_role(tmp_path, GARAGE, "upgrade", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    pending = json.loads((tmp_path / "app" / "pending-upgrade.json").read_text())
+    assert pending["tag"] == "v2.6.0" and pending["digest"] == digest
+
+
+# ----------------------------------------------------------------------------- the catalog
+
+CATALOG = str(ROOT / "modules" / "iceberg-rest" / "roles" / "iceberg_rest")
+CATALOG_SECRETS = {
+    "HNX_SECRET_ICEBERG_REST_S3_ACCESS_KEY": KEY_ID,
+    "HNX_SECRET_ICEBERG_REST_S3_SECRET_KEY": KEY_SECRET,
+}
+
+
+def catalog_vars(tmp: Path, **kw) -> dict:
+    v = {
+        "iceberg_rest_logical_id": "lake-catalog",
+        "ansible_host": GUEST,
+        "iceberg_rest_dir": str(tmp / "app"),
+        "iceberg_rest_data_root": str(tmp / "data"),
+        "iceberg_rest_export_dir": str(tmp / "export"),
+        "iceberg_rest_owner": USER,
+        "iceberg_rest_uid": os.getuid(),
+        "iceberg_rest_gid": os.getgid(),
+        "iceberg_rest_s3_url": S3_URL,
+        "iceberg_rest_start": False,
+        "iceberg_rest_validate_with_docker": False,
+    }
+    v.update(kw)
+    return v
+
+
+def test_catalog_main_renders_the_sqlite_catalog_over_the_fixed_warehouse(tmp_path):
+    v = catalog_vars(tmp_path)
+    r = run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "app" / "docker-compose.yml").read_text()
+    svc = yaml.safe_load(text)["services"]["iceberg-rest"]
+    # pinned by digest: the very build the old lake's catalog was written with
+    assert svc["image"].endswith(":2026.4.29-b0df3ca") or ":2026.4.29-b0df3ca" in svc["image"]
+    assert "sha256:db8de90b5b7693d4ac334c336f91d9bbe320d7b19f4f514d26de84cdfbcbfe8d" in text
+    env = svc["environment"]
+    assert env["CATALOG_WAREHOUSE"] == "s3://iceberg-warehouse/"
+    # one SQLite file, with a busy timeout so a contending writer waits instead of dropping its batch
+    assert env["CATALOG_URI"] == "jdbc:sqlite:/data/iceberg_catalog.db?busy_timeout=30000"
+    assert env["CATALOG_S3_ENDPOINT"] == S3_URL and env["AWS_REGION"] == "garage"
+    assert env["AWS_REQUEST_CHECKSUM_CALCULATION"] == "WHEN_REQUIRED"
+    assert env["CATALOG_S3_PATH__STYLE__ACCESS"] == "true"
+    assert svc["ports"] == [GUEST + ":8181:8181"]
+    assert svc["user"] == f"{os.getuid()}:{os.getgid()}"
+    assert KEY_SECRET not in text
+    senv = (tmp_path / "app" / "secrets" / "iceberg-rest.env").read_text()
+    assert "AWS_ACCESS_KEY_ID=" in senv and "AWS_SECRET_ACCESS_KEY=" in senv
+    assert oct((tmp_path / "data" / "catalog").stat().st_mode & 0o777) == "0o700"
+    again = run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+@pytest.mark.parametrize(
+    "over, env",
+    [
+        ({"iceberg_rest_image": "docker.io/apache/iceberg-rest-fixture:latest"}, {}),
+        ({"iceberg_rest_warehouse": "s3://Bad_Bucket/"}, {}),
+        ({"iceberg_rest_warehouse": "s3://iceberg-warehouse"}, {}),
+        ({"iceberg_rest_busy_timeout_ms": 10}, {}),
+        ({"iceberg_rest_s3_url": "store.example.internal"}, {}),
+        ({"iceberg_rest_uid": 0}, {}),
+        ({}, {"HNX_SECRET_ICEBERG_REST_S3_SECRET_KEY": "short"}),
+        ({}, {"HNX_SECRET_ICEBERG_REST_S3_ACCESS_KEY": "not-a-key"}),
+    ],
+)
+def test_catalog_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    r = run_role(
+        tmp_path, CATALOG, "main", catalog_vars(tmp_path, **over), env={**CATALOG_SECRETS, **env}
+    )
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_catalog_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
+    r = run_role(tmp_path, CATALOG, "main", catalog_vars(tmp_path), env={})
+    assert r.returncode != 0
+    assert "secret:iceberg-rest/s3-access-key" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_catalog_refuses_a_registry_row_that_is_not_an_object_store(tmp_path):
+    # the example registry's lake-catalog row is a catalog, not an object store
+    v = catalog_vars(tmp_path, iceberg_rest_s3_url="", iceberg_rest_object_store_id="lake-catalog")
+    r = run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS)
+    assert r.returncode != 0 and "not an object-store" in r.stdout + r.stderr
+
+
+def _catalog_db(path: Path) -> None:
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE iceberg_tables (name TEXT)")
+    c.execute("INSERT INTO iceberg_tables VALUES ('t')")
+    c.commit()
+    c.close()
+
+
+def _catalog_script(name: str) -> str:
+    vars_ = yaml.safe_load((Path(CATALOG) / "vars" / "main.yml").read_text())
+    return vars_[name]
+
+
+def test_catalog_export_is_a_consistent_listed_copy(tmp_path):
+    v = catalog_vars(tmp_path)
+    assert run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS).returncode == 0
+    _catalog_db(tmp_path / "data" / "catalog" / "iceberg_catalog.db")
+    r = run_role(tmp_path, CATALOG, "export", v)
+    assert r.returncode == 0, r.stdout + r.stderr
+    export = tmp_path / "export"
+    listing = json.loads((export / "listing.jsonl").read_text().splitlines()[0])
+    assert listing["key"] == "iceberg_catalog.db"
+    assert (
+        listing["sha256"]
+        == hashlib.sha256((export / "iceberg_catalog.db").read_bytes()).hexdigest()
+    )
+    assert sqlite3.connect(export / "iceberg_catalog.db").execute(
+        "SELECT name FROM iceberg_tables"
+    ).fetchall() == [("t",)]
+
+
+def _restore(mode_args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, "-I", "-c", _catalog_script("iceberg_rest_restore_script"), *mode_args],
+                          capture_output=True, text=True)  # fmt: skip
+
+
+def test_catalog_restore_installs_a_checked_export_and_refuses_a_tampered_one(tmp_path):
+    v = catalog_vars(tmp_path)
+    assert run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS).returncode == 0
+    _catalog_db(tmp_path / "data" / "catalog" / "iceberg_catalog.db")
+    assert run_role(tmp_path, CATALOG, "export", v).returncode == 0
+    export, dest = tmp_path / "export", tmp_path / "restored"
+    dest.mkdir()
+    uid, gid = str(os.getuid()), str(os.getgid())
+    assert _restore(["check", str(export), "iceberg_catalog.db", uid]).returncode == 0
+    r = _restore(["apply", str(export), str(dest), uid, gid, "iceberg_catalog.db"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    got = (
+        sqlite3.connect(dest / "iceberg_catalog.db")
+        .execute("SELECT name FROM iceberg_tables")
+        .fetchall()
+    )
+    assert got == [("t",)]
+    assert oct((dest / "iceberg_catalog.db").stat().st_mode & 0o777) == "0o600"
+    # a stale write-ahead file next to the target must not survive into the restored database
+    (dest / "iceberg_catalog.db-wal").write_text("stale")
+    assert (
+        _restore(["apply", str(export), str(dest), uid, gid, "iceberg_catalog.db"]).returncode == 0
+    )
+    assert not (dest / "iceberg_catalog.db-wal").exists()
+    (export / "iceberg_catalog.db").write_bytes(b"tampered")
+    for args in (["check", str(export), "iceberg_catalog.db", uid],
+                 ["apply", str(export), str(dest), uid, gid, "iceberg_catalog.db"]):  # fmt: skip
+        bad = _restore(args)
+        assert bad.returncode != 0 and "restore refused" in bad.stderr + bad.stdout
+
+
+def test_catalog_restore_refuses_a_link_and_a_file_the_listing_does_not_name(tmp_path):
+    v = catalog_vars(tmp_path)
+    assert run_role(tmp_path, CATALOG, "main", v, env=CATALOG_SECRETS).returncode == 0
+    _catalog_db(tmp_path / "data" / "catalog" / "iceberg_catalog.db")
+    assert run_role(tmp_path, CATALOG, "export", v).returncode == 0
+    export = tmp_path / "export"
+    uid = str(os.getuid())
+    (export / "extra").write_text("x")
+    assert _restore(["check", str(export), "iceberg_catalog.db", uid]).returncode != 0
+    (export / "extra").unlink()
+    link = tmp_path / "link"
+    link.symlink_to(export)
+    assert _restore(["check", str(link), "iceberg_catalog.db", uid]).returncode != 0
+
+
+# ----------------------------------------------------------------------------- the query engine
+
+TRINO = str(ROOT / "modules" / "trino" / "roles" / "trino")
+TRINO_SECRETS = {
+    "HNX_SECRET_TRINO_S3_ACCESS_KEY": KEY_ID,
+    "HNX_SECRET_TRINO_S3_SECRET_KEY": KEY_SECRET,
+    "HNX_SECRET_TRINO_TLS_CERT": CERT,
+    "HNX_SECRET_TRINO_TLS_KEY": PKEY,
+    "HNX_SECRET_TRINO_CA": CERT,
+    "HNX_SECRET_TRINO_PASSWORD_DB": f"maintenance:{BCRYPT}\nalice:{BCRYPT}\n",
+    "HNX_SECRET_TRINO_INTERNAL_SECRET": "s" * 40,
+    "HNX_SECRET_TRINO_MAINTENANCE_PASSWORD": MAINT_PW,
+    "HNX_SECRET_TRINO_NOTIFY_TOKEN": NOTIFY_TOKEN,
+}
+
+
+def trino_vars(tmp: Path, **kw) -> dict:
+    bindir = tmp / "bin"
+    bindir.mkdir(exist_ok=True)
+    flag = tmp / "timer-enabled"
+    fake(
+        bindir / "systemctl",
+        "import os, sys\n"
+        f"flag = {str(flag)!r}\n"
+        "if sys.argv[1:2] == ['enable']:\n    open(flag, 'w').close()\n"
+        "if sys.argv[1:2] in (['is-enabled'], ['is-active']):\n"
+        "    ok = os.path.exists(flag)\n    print('enabled' if sys.argv[1] == 'is-enabled' and ok else 'active' if ok else 'inactive')\n"
+        "    sys.exit(0 if ok else 3)\n",
+    )
+    v = {
+        "trino_logical_id": "lake-query",
+        "ansible_host": GUEST,
+        "trino_dir": str(tmp / "app"),
+        "trino_data_root": str(tmp / "data"),
+        "trino_owner": USER,
+        "trino_uid": os.getuid(),
+        "trino_gid": os.getgid(),
+        "trino_catalog_url": CATALOG_URL,
+        "trino_s3_url": S3_URL,
+        "trino_self_url": SELF_URL,
+        "trino_notify_url": NOTIFY_URL,
+        "trino_start": False,
+        "trino_validate_with_docker": False,
+        "trino_maintenance_script": str(tmp / "libexec" / "hnx-lake-maintenance"),
+        "trino_maintenance_state_dir": str(tmp / "state"),
+        "trino_maintenance_env_file": str(tmp / "etc-hnx" / "maintenance.env"),
+        "trino_unit_dir": str(tmp / "units"),
+        "trino_systemctl_cli": str(bindir / "systemctl"),
+        "trino_maintenance_owner": USER,
+        "trino_maintenance_group": pwd.getpwuid(os.getuid()).pw_name,
+    }
+    (tmp / "units").mkdir(exist_ok=True)
+    v.update(kw)
+    return v
+
+
+def test_trino_main_renders_the_catalog_with_the_retention_floors_and_no_secret_in_a_file(tmp_path):
+    v = trino_vars(tmp_path)
+    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    etc = tmp_path / "app" / "etc"
+    cat = (etc / "catalog" / "iceberg.properties").read_text()
+    assert (
+        "connector.name=iceberg" in cat
+        and "iceberg.rest-catalog.warehouse=s3://iceberg-warehouse/" in cat
+    )
+    assert f"iceberg.rest-catalog.uri={CATALOG_URL}" in cat and f"s3.endpoint={S3_URL}" in cat
+    # the engine's own floors under the maintenance procedures: 7 days to expire, 3 to remove orphans
+    assert "iceberg.expire-snapshots.min-retention=7d" in cat
+    assert "iceberg.remove-orphan-files.min-retention=3d" in cat
+    assert "s3.aws-access-key=${ENV:TRINO_S3_ACCESS_KEY}" in cat
+    conf = (etc / "config.properties").read_text()
+    assert (
+        "http-server.authentication.type=PASSWORD" in conf
+        and "http-server.https.enabled=true" in conf
+    )
+    assert "sql.forced-session-time-zone=UTC" in conf
+    assert "internal-communication.shared-secret=${ENV:TRINO_INTERNAL_SECRET}" in conf
+    assert "access-control" not in conf  # no rules file given
+    text = (tmp_path / "app" / "docker-compose.yml").read_text()
+    svc = yaml.safe_load(text)["services"]["trino"]
+    assert svc["ports"] == [GUEST + ":8443:8443"]  # only the HTTPS listener is published
+    assert svc["image"].startswith("docker.io/trinodb/trino:484")
+    for secret in (KEY_SECRET, MAINT_PW, "s" * 40, NOTIFY_TOKEN):
+        assert secret not in text
+        for f in etc.rglob("*"):
+            if f.is_file() and f.name != "password.db":
+                assert secret not in f.read_text(), f
+    senv = (tmp_path / "app" / "secrets" / "trino.env").read_text()
+    assert "TRINO_S3_SECRET_KEY=" in senv and "TRINO_INTERNAL_SECRET=" in senv
+    # the key is the container's group's to read (LL-500), nobody else's
+    pem = etc / "tls" / "server.pem"
+    assert oct(pem.stat().st_mode & 0o777) == "0o640" and pem.stat().st_gid == os.getgid()
+    assert pem.read_text().index("BEGIN CERTIFICATE") < pem.read_text().index("PRIVATE KEY")
+    again = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_trino_main_installs_the_maintenance_timer_with_the_lake_retention_values(tmp_path):
+    v = trino_vars(tmp_path)
+    r = run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    timer = (tmp_path / "units" / "hnx-lake-maintenance.timer").read_text()
+    assert "OnCalendar=*-*-* 03:30:00 UTC" in timer and "Persistent=true" in timer
+    assert "OnBootSec" not in timer and "OnUnitActiveSec" not in timer  # LL-041
+    service = (tmp_path / "units" / "hnx-lake-maintenance.service").read_text()
+    assert "ExecStart=/usr/local/libexec/homelabnext/hnx-lake-maintenance" in service
+    assert f"EnvironmentFile={tmp_path}/etc-hnx/maintenance.env" in service
+    env_file = tmp_path / "etc-hnx" / "maintenance.env"
+    assert oct(env_file.stat().st_mode & 0o777) == "0o600"
+    assert f"HNX_LAKE_MAINT_PASSWORD={MAINT_PW}" in env_file.read_text()
+    out = subprocess.run([sys.executable, str(tmp_path / "libexec" / "hnx-lake-maintenance"), "--dry-run"],
+                         capture_output=True, text=True, env={**os.environ, "HNX_LAKE_MAINT_PASSWORD": MAINT_PW})  # fmt: skip
+    script = (tmp_path / "libexec" / "hnx-lake-maintenance").read_text()
+    # the retention values the lake keeps: expire older than 7 days keeping the last 10, orphans older than 3 days
+    assert (
+        '"expire": "7d"' in script and '"retain_last": 10' in script and '"orphan": "3d"' in script
+    )
+    assert "retain_last => " in script and "remove_orphan_files(retention_threshold" in script
+    assert out.returncode != 0  # no engine is listening: the run must say so, not pass
+    assert MAINT_PW not in script and NOTIFY_TOKEN not in script
+
+
+@pytest.mark.parametrize(
+    "over, env",
+    [
+        ({"trino_image": "docker.io/trinodb/trino:latest"}, {}),
+        ({"trino_catalog_name": "lake"}, {}),
+        ({"trino_uid": 0}, {}),
+        (
+            {"trino_expire_retention": "3d"},
+            {},
+        ),  # below the engine's floor: it would refuse every run
+        ({"trino_orphan_retention": "1d"}, {}),
+        ({"trino_retain_last": 0}, {}),
+        (
+            {"trino_heap": "4G", "trino_query_max_memory": "9GB"},
+            {},
+        ),  # per-query bound over 70% of the heap
+        ({"trino_mem_limit": "15g"}, {}),  # container limit under heap + 2 GB
+        (
+            {"trino_notify_url": PLAIN_NOTIFY_URL},
+            {},
+        ),
+        ({}, {"HNX_SECRET_TRINO_PASSWORD_DB": "alice:plaintext\n"}),
+        ({}, {"HNX_SECRET_TRINO_PASSWORD_DB": f"alice:{BCRYPT}\n"}),  # no maintenance user
+        ({}, {"HNX_SECRET_TRINO_TLS_KEY": "not a key"}),
+        ({}, {"HNX_SECRET_TRINO_INTERNAL_SECRET": "short"}),
+        ({}, {"HNX_SECRET_TRINO_S3_SECRET_KEY": "short"}),
+    ],
+)
+def test_trino_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    r = run_role(
+        tmp_path, TRINO, "main", trino_vars(tmp_path, **over), env={**TRINO_SECRETS, **env}
+    )
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+    assert MAINT_PW not in r.stdout and KEY_SECRET not in r.stdout
+
+
+def test_trino_main_refuses_an_unset_secret_naming_its_reference(tmp_path):
+    env = {k: v for k, v in TRINO_SECRETS.items() if k != "HNX_SECRET_TRINO_PASSWORD_DB"}
+    r = run_role(tmp_path, TRINO, "main", trino_vars(tmp_path), env=env)
+    assert r.returncode != 0
+    assert "secret:trino/password-db" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_trino_notify_token_over_plain_http_needs_the_site_opt_in(tmp_path):
+    plain = PLAIN_NOTIFY_URL
+    r = run_role(
+        tmp_path, TRINO, "main", trino_vars(tmp_path, trino_notify_url=plain), env=TRINO_SECRETS
+    )
+    assert r.returncode != 0 and "trino_notify_allow_plain_http" in r.stdout + r.stderr
+    ok = run_role(tmp_path, TRINO, "main",
+                  trino_vars(tmp_path, trino_notify_url=plain, trino_notify_allow_plain_http=True),
+                  env=TRINO_SECRETS)  # fmt: skip
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+
+
+def test_trino_installs_the_access_rules_when_given_and_removes_them_when_not(tmp_path):
+    rules = tmp_path / "rules.json"
+    rules.write_text('{"catalogs": []}\n')
+    v = trino_vars(tmp_path, trino_access_rules_src=str(rules))
+    assert run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS).returncode == 0
+    etc = tmp_path / "app" / "etc"
+    assert (etc / "lake-access.json").read_text() == '{"catalogs": []}\n'
+    assert (
+        "security.config-file=/etc/trino/lake-access.json"
+        in (etc / "access-control.properties").read_text()
+    )
+    assert (
+        "access-control.config-files=/etc/trino/access-control.properties"
+        in (etc / "config.properties").read_text()
+    )
+    assert (
+        run_role(tmp_path, TRINO, "main", trino_vars(tmp_path), env=TRINO_SECRETS).returncode == 0
+    )
+    assert (
+        not (etc / "lake-access.json").exists() and not (etc / "access-control.properties").exists()
+    )
+
+
+def test_trino_without_the_maintenance_timer_installs_none_and_needs_none_of_its_secrets(tmp_path):
+    v = trino_vars(tmp_path, trino_maintenance_enabled=False, trino_notify_url="")
+    env = {k: x for k, x in TRINO_SECRETS.items() if "MAINTENANCE" not in k and "NOTIFY" not in k}
+    r = run_role(tmp_path, TRINO, "main", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "units" / "hnx-lake-maintenance.timer").exists()
+    assert not (tmp_path / "libexec").exists()
+
+
+# ----------------------------------------------------------------------------- the maintenance script
+
+
+class _Engine(http.server.ThreadingHTTPServer):
+    """A stand-in for the engine's statement protocol: tables listed, each statement logged, and
+    the statements named in ``fail`` answered with a query error."""
+
+    def __init__(self, tables, fail=(), list_fails=False):
+        super().__init__(("localhost", 0), _EngineHandler)
+        self.tables, self.fail, self.list_fails = tables, set(fail), list_fails
+        self.statements: list[str] = []
+        self.users: list[str] = []
+
+
+class _EngineHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        sql = self.rfile.read(int(self.headers["Content-Length"])).decode()
+        self.server.statements.append(sql)
+        self.server.users.append(self.headers.get("X-Trino-User", ""))
+        body: dict
+        if "information_schema.tables" in sql:
+            body = {"error": {"message": "engine down"}} if self.server.list_fails else {
+                "columns": [{"name": "table_schema"}, {"name": "table_name"}],
+                "data": [list(t) for t in self.server.tables]}  # fmt: skip
+        elif any(f in sql for f in self.server.fail):
+            body = {"error": {"message": "Java heap space", "errorName": "GENERIC_INTERNAL_ERROR"}}
+        else:
+            body = {"columns": [{"name": "metric"}], "data": [["processed_manifests_count"]]}
+        raw = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+
+class _Notify(http.server.ThreadingHTTPServer):
+    def __init__(self):
+        super().__init__(("localhost", 0), _NotifyHandler)
+        self.messages: list[dict] = []
+
+
+class _NotifyHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"])).decode()
+        self.server.messages.append({"path": self.path, "title": self.headers.get("Title"),
+                                     "auth": self.headers.get("Authorization"), "body": body})  # fmt: skip
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+def _serve(server):
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+@pytest.fixture
+def maintenance(tmp_path):
+    """The role's rendered maintenance script, pointed at stand-in engine and notify servers."""
+    env = dict(TRINO_SECRETS)
+    v = trino_vars(tmp_path)
+    assert run_role(tmp_path, TRINO, "main", v, env=env).returncode == 0
+    script = tmp_path / "libexec" / "hnx-lake-maintenance"
+    text = script.read_text()
+    engine_pins = []
+
+    def run(engine, notify, *args):
+        cfg_line = next(line for line in text.splitlines() if line.startswith("CONFIG = "))
+        cfg = json.loads(cfg_line[len("CONFIG = ") :])
+        cfg["url"] = f"http://localhost:{engine.server_port}"
+        cfg["notify_url"] = f"http://localhost:{notify.server_port}"
+        patched = tmp_path / "run-maintenance.py"
+        patched.write_text(text.replace(cfg_line, "CONFIG = " + json.dumps(cfg)))
+        engine_pins.append(cfg)
+        return subprocess.run([sys.executable, str(patched), *args], capture_output=True, text=True,
+                              env={**os.environ, "HNX_LAKE_MAINT_PASSWORD": MAINT_PW,
+                                   "HNX_LAKE_MAINT_NOTIFY_TOKEN": NOTIFY_TOKEN})  # fmt: skip
+
+    run.state = tmp_path / "state" / "state.json"
+    return run
+
+
+def test_maintenance_expires_then_removes_orphans_on_every_table_with_the_lake_retention(
+    maintenance,
+):
+    engine, notify = _serve(_Engine([("cti", "nrd"), ("rba", "rule_runs")])), _serve(_Notify())
+    try:
+        r = maintenance(engine, notify)
+    finally:
+        engine.shutdown(), notify.shutdown()
+    assert r.returncode == 0, r.stdout + r.stderr
+    sql = [s for s in engine.statements if s.startswith("ALTER TABLE")]
+    assert sql == [
+        'ALTER TABLE iceberg."cti"."nrd" EXECUTE expire_snapshots(retention_threshold => \'7d\', retain_last => 10, clean_expired_metadata => true)',
+        'ALTER TABLE iceberg."cti"."nrd" EXECUTE remove_orphan_files(retention_threshold => \'3d\')',
+        'ALTER TABLE iceberg."rba"."rule_runs" EXECUTE expire_snapshots(retention_threshold => \'7d\', retain_last => 10, clean_expired_metadata => true)',
+        'ALTER TABLE iceberg."rba"."rule_runs" EXECUTE remove_orphan_files(retention_threshold => \'3d\')',
+    ]  # fmt: skip
+    # the listing skips the engine's own system schema and views (a procedure on either fails)
+    listing = next(s for s in engine.statements if "information_schema.tables" in s)
+    assert "BASE TABLE" in listing and "'system'" in listing
+    assert set(engine.users) == {"maintenance"}
+    assert notify.messages == []  # nothing failed: nothing is said
+
+
+def test_maintenance_alerts_once_per_change_of_the_failing_set_and_once_when_it_recovers(
+    maintenance,
+):
+    engine, notify = _serve(_Engine([("cti", "nrd")], fail=["expire_snapshots"])), _serve(_Notify())
+    try:
+        first = maintenance(engine, notify)
+        second = maintenance(engine, notify)  # the same failure again: silent
+        assert first.returncode == 1 and second.returncode == 1
+        assert len(notify.messages) == 1
+        m = notify.messages[0]
+        assert m["path"] == "/lake-maintenance" and m["auth"] == f"Bearer {NOTIFY_TOKEN}"
+        assert "cti.nrd:expire_snapshots" in m["body"] and "Java heap space" in m["body"]
+        state = json.loads(maintenance.state.read_text())
+        assert state["alerted"] == ["cti.nrd:expire_snapshots"]
+        assert oct(maintenance.state.stat().st_mode & 0o777) == "0o600"
+        engine.fail = set()  # fixed
+        third = maintenance(engine, notify)
+        assert third.returncode == 0
+        assert len(notify.messages) == 2 and "recovered" in notify.messages[1]["title"]
+        assert maintenance(engine, notify).returncode == 0 and len(notify.messages) == 2
+    finally:
+        engine.shutdown(), notify.shutdown()
+    for r in (first, second, third):
+        assert MAINT_PW not in r.stdout + r.stderr and NOTIFY_TOKEN not in r.stdout + r.stderr
+
+
+def test_maintenance_that_cannot_list_the_tables_exits_two_and_says_so_once(maintenance):
+    engine, notify = _serve(_Engine([], list_fails=True)), _serve(_Notify())
+    try:
+        a, b = maintenance(engine, notify), maintenance(engine, notify)
+    finally:
+        engine.shutdown(), notify.shutdown()
+    assert a.returncode == 2 and b.returncode == 2
+    assert len(notify.messages) == 1 and "run:list-tables" in notify.messages[0]["body"]
+
+
+def test_maintenance_never_puts_an_unsafe_table_name_in_a_statement(maintenance):
+    engine, notify = (
+        _serve(_Engine([("cti", 'x"; DROP TABLE y; --'), ("cti", "ok")])),
+        _serve(_Notify()),
+    )
+    try:
+        r = maintenance(engine, notify)
+    finally:
+        engine.shutdown(), notify.shutdown()
+    assert r.returncode == 1
+    assert not any("DROP" in s for s in engine.statements)
+    assert any('"ok"' in s for s in engine.statements)
+    assert len(notify.messages) == 1
+
+
+def test_maintenance_test_notify_sends_one_low_priority_message(maintenance):
+    engine, notify = _serve(_Engine([])), _serve(_Notify())
+    try:
+        r = maintenance(engine, notify, "--test-notify")
+    finally:
+        engine.shutdown(), notify.shutdown()
+    assert r.returncode == 0 and len(notify.messages) == 1 and engine.statements == []
+
+
+def test_no_rendered_file_names_the_workstation_or_wsl():
+    """Review Focus 5: nothing the lake modules render may call the operator's workstation."""
+    for module in ("garage", "iceberg-rest", "trino"):
+        for f in (ROOT / "modules" / module).rglob("*"):
+            if f.is_file():
+                text = f.read_text()
+                assert not re.search(r"192\.168\.20\.150|wsl", text, re.I), f

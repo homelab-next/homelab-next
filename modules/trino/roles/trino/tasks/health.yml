@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, the engine answers over HTTPS (verified against
+# the lab CA) and has finished starting, an anonymous statement is refused, the maintenance user
+# signs in, and the maintenance timer is enabled and active with its last run clean. Nothing is
+# written to the lake.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: trino
+        compose_app_dir: "{{ trino_app.compose_app_dir }}"
+        compose_app_spec: "{{ trino_app.compose_app_spec }}"
+    - name: The engine answers over HTTPS and has finished starting
+      ansible.builtin.uri:
+        url: "{{ trino_self_endpoint }}/v1/info"
+        ca_path: "{{ trino_dir }}/etc/tls/ca.pem"
+        status_code: 200
+        return_content: true
+        timeout: "{{ trino_health_timeout | int }}"
+      register: trino_info
+      changed_when: false
+      failed_when: trino_info.status != 200 or (trino_info.json.starting | default(true))
+    - name: An anonymous statement is refused
+      ansible.builtin.uri:
+        url: "{{ trino_self_endpoint }}/v1/statement"
+        method: POST
+        body: "SELECT 1"
+        headers:
+          X-Trino-User: anonymous
+        ca_path: "{{ trino_dir }}/etc/tls/ca.pem"
+        status_code: [401, 403]
+        timeout: "{{ trino_health_timeout | int }}"
+      changed_when: false
+    - name: The maintenance user signs in and a statement is accepted
+      ansible.builtin.uri:
+        url: "{{ trino_self_endpoint }}/v1/statement"
+        method: POST
+        body: "SELECT 1"
+        headers:
+          X-Trino-User: "{{ trino_maintenance_user }}"
+        url_username: "{{ trino_maintenance_user }}"
+        url_password: "{{ lookup('hnx_secret', trino_maintenance_ref) }}"
+        force_basic_auth: true
+        ca_path: "{{ trino_dir }}/etc/tls/ca.pem"
+        status_code: 200
+        return_content: true
+        timeout: "{{ trino_health_timeout | int }}"
+      register: trino_signin
+      changed_when: false
+      no_log: true
+      when: trino_maintenance_enabled | bool
+    - name: The maintenance timer is enabled
+      ansible.builtin.command:
+        argv: ["{{ trino_systemctl_cli }}", is-enabled, hnx-lake-maintenance.timer]
+      changed_when: false
+      when: trino_maintenance_enabled | bool
+    - name: The maintenance timer is active
+      ansible.builtin.command:
+        argv: ["{{ trino_systemctl_cli }}", is-active, hnx-lake-maintenance.timer]
+      changed_when: false
+      when: trino_maintenance_enabled | bool
+    - name: Read the last maintenance run
+      ansible.builtin.slurp:
+        src: "{{ trino_maintenance_state_dir }}/state.json"
+      register: trino_maintenance_state
+      failed_when: false
+      when: trino_maintenance_enabled | bool
+    - name: The last maintenance run, if there was one, had no failing step
+      ansible.builtin.assert:
+        that:
+          - (trino_maintenance_state.content | b64decode | from_json).failed | default({}) | length == 0
+        fail_msg: >-
+          trino: the last maintenance run ({{ (trino_maintenance_state.content | b64decode | from_json).time }})
+          had failing steps: {{ (trino_maintenance_state.content | b64decode | from_json).failed.keys() | list }}
+      when: trino_maintenance_enabled | bool and trino_maintenance_state.content is defined
+  tags: [health]

@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# where the module's files are mounted in the container
+trino_container_etc: /etc/trino
+trino_container_node_dir: /data/trino
+trino_container_port: 8443
+# the engine's own plain listener, for its internal communication only: never published, and
+# external requests over it are refused once sign-in is on
+trino_internal_port: 8080
+trino_discovery_host: localhost
+trino_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+trino_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+trino_url_pattern: '^https?://[A-Za-z0-9.-]+:[0-9]{1,5}\Z'
+trino_warehouse_pattern: '^s3://[a-z0-9][a-z0-9-]{1,61}[a-z0-9]/\Z'
+trino_region_pattern: '^[a-z][a-z0-9-]{1,31}\Z'
+trino_key_id_pattern: '^GK[0-9a-f]{24,32}\Z'
+trino_hex64_pattern: '^[0-9a-f]{64}\Z'
+trino_user_pattern: '^[a-z][a-z0-9._-]{0,63}\Z'
+trino_duration_pattern: '^[1-9][0-9]{0,3}d\Z'
+trino_memory_pattern: '^[1-9][0-9]{0,4}(MB|GB)\Z'
+trino_heap_pattern: '^[1-9][0-9]{0,4}[MG]\Z'
+trino_pem_cert_pattern: '(?s)-----BEGIN CERTIFICATE-----.+-----END CERTIFICATE-----'
+trino_pem_key_pattern: '(?s)-----BEGIN (RSA |EC )?PRIVATE KEY-----.+-----END (RSA |EC )?PRIVATE KEY-----'
+# one user:bcrypt line per reader (the engine's file authenticator takes bcrypt of cost 8 or more)
+trino_user_line_pattern: '^[A-Za-z0-9._@-]+:\$2[aby]\$(1[0-9]|2[0-9]|3[01])\$[./A-Za-z0-9]{53}\Z'
+trino_repository: "{{ trino_image.split('@')[0].rsplit(':', 1)[0] }}"
+trino_tag: "{{ trino_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+trino_digest: "{{ trino_image.split('@')[1] | default('') }}"
+# the memory settings in GB, for the sums validate.yml makes (MB and M and m divide by 1024)
+trino_heap_gb: "{{ (trino_heap[:-1] | int) / (1 if trino_heap.endswith('G') else 1024) }}"
+trino_query_gb: "{{ (trino_query_max_memory[:-2] | int) / (1 if trino_query_max_memory.endswith('GB') else 1024) }}"
+trino_mem_limit_gb: "{{ (trino_mem_limit[:-1] | int) / (1 if trino_mem_limit.endswith('g') else 1024) }}"

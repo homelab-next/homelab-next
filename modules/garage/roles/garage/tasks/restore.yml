@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the data root from an export (<garage_restore_source>/garage.tar.gz): the server is
+# stopped, the archive is unpacked over the data root as the container's user, and the server is
+# started again whatever happened. Nothing outside the data root can be written: tar strips a
+# leading / and skips a .. member, and the unpack is of a regular archive from a path the caller
+# names.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: The export is a regular file
+      ansible.builtin.stat:
+        path: "{{ garage_restore_source }}/garage.tar.gz"
+        follow: false
+      register: garage_archive
+    - name: Refuse anything but a regular archive
+      ansible.builtin.assert:
+        that: garage_archive.stat.exists and garage_archive.stat.isreg
+        fail_msg: "garage: {{ garage_restore_source }}/garage.tar.gz is not a regular file"
+    - name: Replace the data root with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ garage_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Unpack the archive over the data root
+          ansible.builtin.command:
+            argv: [tar, -xzf, "{{ garage_restore_source }}/garage.tar.gz", -C, "{{ garage_data_root }}", --no-same-owner, --no-same-permissions]
+          changed_when: true
+        - name: Give the unpacked files to the container's user
+          ansible.builtin.command:
+            argv: [chown, -R, "{{ garage_uid | int }}:{{ garage_gid | int }}", "{{ garage_data_root }}/meta", "{{ garage_data_root }}/data"]
+          changed_when: true
+      always:
+        - name: Start the server again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ garage_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+  tags: [restore]

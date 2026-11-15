@@ -785,6 +785,46 @@
     },
     {
       "exit": {
+        "0": "every step ran",
+        "1": "one or more steps failed (alerted once per change of the failing set)",
+        "2": "the tables could not be listed (engine unreachable, sign-in refused)"
+      },
+      "id": "lake-maintenance",
+      "inputs": "the query engine's table list (information_schema); the maintenance user's password and the notify token (the service's environment file); the previous state file",
+      "installs_to": "/usr/local/libexec/homelabnext/hnx-lake-maintenance",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the state file (owner-only) and, when the set of failing steps changes, one alert on the notify channel",
+      "owner": "platform",
+      "path": "modules/trino/roles/trino/templates/lake-maintenance.py.j2",
+      "purpose": "Expire old snapshots and remove orphan files of every lake table through the query engine, and alert when the set of failing steps changes.",
+      "status": "active",
+      "trigger": [
+        "timer:trino/lake-maintenance",
+        "role:trino"
+      ]
+    },
+    {
+      "exit": {
+        "0": "every table's count at its snapshot equals the reference (and the table count is the expected one)",
+        "1": "a count differs, a snapshot cannot be read, a reference table is missing, or the table count is not the expected one",
+        "2": "usage error or an unreadable reference file"
+      },
+      "id": "lake-verify",
+      "inputs": "a reference TSV (one row per table - the schema, table, snapshot id and row count the source answered); the query engine's URL, a sign-in and its CA",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "one line per table (ok, MISMATCH, ERROR) and a summary, or the same as JSON",
+      "owner": "maintainers",
+      "path": "tools/migrate/lake_verify.py",
+      "purpose": "Compare each lake table's row count at a fixed snapshot with a reference TSV, to prove a copied lake (catalog and bucket) equals its source.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "the record was written",
         "1": "it could not be written (the units ignore it, with the - prefix)",
         "2": "bad arguments"

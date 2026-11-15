@@ -196,11 +196,6 @@
   "ansible/roles/wazuh_agent/vars/main.yml": {
    "wazuh": 2
   },
-  "compose/lab-in-a-box/.env.example": {
-   "litellm": 3,
-   "stackstorm": 1,
-   "uptime-kuma": 1
-  },
   "compose/lab-in-a-box/bind_guard.sh": {
    "openbao": 2
   },
@@ -229,17 +224,6 @@
   },
   "compose/lab-in-a-box/config/trino/node.properties": {
    "trino": 1
-  },
-  "compose/lab-in-a-box/docker-compose.yml": {
-   "example-27b": 1,
-   "example-4b": 1,
-   "litellm": 11,
-   "ntfy": 3,
-   "openbao": 2,
-   "prometheus": 10,
-   "stackstorm": 4,
-   "trino": 5,
-   "uptime-kuma": 3
   },
   "compose/lab-in-a-box/rehearsals/swap-lake-query.sh": {
    "trino": 1
@@ -1291,10 +1275,6 @@
   "tests/compute/test_terraform_proxmox_schema.py": {
    "proxmox": 5
   },
-  "tests/conform/test_conform_lab_adapters.py": {
-   "ntfy": 25,
-   "openbao": 35
-  },
   "tests/conform/test_conform_lake_targets.py": {
    "iceberg": 3
   },
@@ -1422,9 +1402,6 @@
   "tests/golden/test_golden_runner.py": {
    "example-27b": 2,
    "example-4b": 1
-  },
-  "tests/graph/test_graph.py": {
-   "openbao": 15
   },
   "tests/http/test_http_guards.py": {
    "ntfy": 7
