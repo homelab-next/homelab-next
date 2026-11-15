@@ -887,7 +887,7 @@
     {
       "exit": {
         "0": "checked (and alerted, if the set changed)",
-        "1": "neither dpkg --verify nor debsums could run; the result is not rewritten",
+        "1": "neither dpkg --verify nor debsums could run; the result is not rewritten (or, with --test, the channel did not deliver)",
         "2": "the alert could not be sent; it stays owed to the next run"
       },
       "id": "lynis-dpkg-verify",
@@ -1001,7 +1001,7 @@
     {
       "exit": {
         "0": "checked (and alerted, if the set changed)",
-        "1": "needrestart failed; the state file is not rewritten",
+        "1": "needrestart failed; the state file is not rewritten (or, with --test, the channel did not deliver)",
         "2": "the alert could not be sent; it stays owed to the next run"
       },
       "id": "needrestart-check",
@@ -1022,7 +1022,7 @@
     {
       "exit": {
         "0": "checked (and alerted, if the state changed)",
-        "1": "a reader failed; what was last alerted is kept (a new reason is still alerted)",
+        "1": "a reader failed; what was last alerted is kept (a new reason is still alerted) (or, with --test, the channel did not deliver)",
         "2": "the alert could not be sent; it stays owed to the next run"
       },
       "id": "needrestart-reboot-check",

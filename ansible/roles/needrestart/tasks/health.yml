@@ -25,3 +25,32 @@
         fail_msg: "needrestart: no pending-reboot check in the last {{ needrestart_max_age_hours }}h ({{ needrestart_state_dir }}/reboot-state.json is missing or older)"
   when: needrestart_alert_reboot | bool
   tags: [health]
+
+- block:
+    - name: Read the last send attempt of the check
+      ansible.builtin.slurp:
+        src: "{{ needrestart_state_dir }}/send-status.json"
+      register: needrestart_send
+      failed_when: false
+    - name: Fail when the last alert (or channel test) could not be sent
+      vars:
+        needrestart_send_doc: "{{ (needrestart_send.content | b64decode | from_json) if needrestart_send.content is defined else {'ok': true} }}"
+      ansible.builtin.assert:
+        that: needrestart_send_doc.ok | bool
+        fail_msg: "needrestart: the last alert could not be sent ({{ needrestart_send_doc.time | default('') }}): {{ needrestart_send_doc.error | default('') }}; the channel does not deliver"
+  tags: [health]
+
+- block:
+    - name: Read the last send attempt of the pending-reboot check
+      ansible.builtin.slurp:
+        src: "{{ needrestart_state_dir }}/reboot-send-status.json"
+      register: needrestart_reboot_send
+      failed_when: false
+    - name: Fail when the last pending-reboot alert (or channel test) could not be sent
+      vars:
+        needrestart_reboot_send_doc: "{{ (needrestart_reboot_send.content | b64decode | from_json) if needrestart_reboot_send.content is defined else {'ok': true} }}"
+      ansible.builtin.assert:
+        that: needrestart_reboot_send_doc.ok | bool
+        fail_msg: "needrestart: the last pending-reboot alert could not be sent ({{ needrestart_reboot_send_doc.time | default('') }}): {{ needrestart_reboot_send_doc.error | default('') }}; the channel does not deliver"
+  when: needrestart_alert_reboot | bool
+  tags: [health]

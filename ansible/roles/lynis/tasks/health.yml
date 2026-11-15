@@ -73,4 +73,18 @@
           lynis: package integrity: {{ lynis_verify_doc.findings | length }} finding(s) (at most
           {{ lynis_dpkg_verify_max_findings }}): {{ lynis_verify_doc.findings | map(attribute='path') | join(', ') | truncate(400) }}
       when: lynis_dpkg_verify | bool
+
+    - name: Read the last send attempt of the integrity sweep
+      ansible.builtin.slurp:
+        src: "{{ lynis_state_dir }}/send-status.json"
+      register: lynis_send
+      failed_when: false
+      when: lynis_dpkg_verify | bool
+    - name: Fail when the last alert (or channel test) could not be sent
+      vars:
+        lynis_send_doc: "{{ (lynis_send.content | b64decode | from_json) if lynis_send.content is defined else {'ok': true} }}"
+      ansible.builtin.assert:
+        that: lynis_send_doc.ok | bool
+        fail_msg: "lynis: the last alert could not be sent ({{ lynis_send_doc.time | default('') }}): {{ lynis_send_doc.error | default('') }}; the channel does not deliver"
+      when: lynis_dpkg_verify | bool
   tags: [health]

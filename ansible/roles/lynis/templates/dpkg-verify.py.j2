@@ -11,7 +11,7 @@
 #   installs_to: /usr/local/libexec/homelabnext/lynis-dpkg-verify
 #   exit:
 #     "0": checked (and alerted, if the set changed)
-#     "1": neither dpkg --verify nor debsums could run; the result is not rewritten
+#     "1": neither dpkg --verify nor debsums could run; the result is not rewritten (or, with --test, the channel did not deliver)
 #     "2": the alert could not be sent; it stays owed to the next run
 """Managed by homelabnext (role lynis, control host-assessment); local changes are overwritten.
 
@@ -27,6 +27,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 STATE_DIR = {{ lynis_state_dir | to_json }}
@@ -60,6 +62,36 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 # defence in depth the post follows no redirect and takes no proxy from the environment
 # (HTTP(S)_PROXY would be handed the request)
 OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+
+SEND_STATUS = os.path.join(STATE_DIR, "send-status.json")
+_SECRETS = []  # the token, once read: scrubbed from any error text that is printed or recorded
+
+
+def describe(exc):
+    """The failure in one line and never the token: an HTTP status is named, anything else is its
+    class and message, bounded and scrubbed."""
+    if isinstance(exc, urllib.error.HTTPError):
+        text = f"HTTP {exc.code} from the notify endpoint"
+    else:
+        text = f"{type(exc).__name__}: {exc}"
+    for secret in _SECRETS:
+        text = text.replace(secret, "[token]")
+    return " ".join(text.split())[:200]
+
+
+def record(error=None):
+    """The last send attempt (time, ok, error) beside the state: the role's health fails when it
+    failed.  A state directory that cannot be written is not a second failure."""
+    doc = {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "ok": error is None, "error": error or ""}
+    try:
+        os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+        tmp = SEND_STATUS + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, sort_keys=True)
+        os.replace(tmp, SEND_STATUS)
+    except OSError:
+        pass
 
 
 def verify():
@@ -127,10 +159,10 @@ def accepted(path, pkg):
     return None
 
 
-def send(title, body):
+def _deliver(title, body, priority=None):
     host = os.uname().nodename
     if MODE == "notify":
-        headers = {"Title": f"{host}: {title}", "Priority": str(PRIORITY),
+        headers = {"Title": f"{host}: {title}", "Priority": str(priority or PRIORITY),
                    "Tags": "homelabnext,package-integrity", "Content-Type": "text/plain; charset=utf-8"}
         if AUTH_FILE:
             with open(AUTH_FILE, encoding="utf-8") as fh:
@@ -140,16 +172,48 @@ def send(title, body):
             if not (token.isascii() and token.isprintable()):
                 # never quoted: http.client's own refusal would print the whole header value
                 raise ValueError(f"the token in {AUTH_FILE} is not printable ASCII")
+            _SECRETS.append(token)
             headers["Authorization"] = "Bearer " + token
         req = urllib.request.Request(f"{NOTIFY_URL}/{TOPIC}", data=body.encode("utf-8"), headers=headers, method="POST")
         with OPENER.open(req, timeout=10) as resp:
             resp.read()
+            if not 200 <= resp.status < 300:
+                raise ValueError(f"the notify endpoint answered HTTP {resp.status}")
     elif MODE == "mail":
         mail = f"To: {MAIL_TO}\nSubject: {host}: {title}\n\n{body}\n"
         subprocess.run([SENDMAIL, "-t"], input=mail, text=True, check=True)
 
 
+def send(title, body, priority=None):
+    """Deliver one alert and record the outcome (the last attempt, for health)."""
+    try:
+        _deliver(title, body, priority)
+    except Exception as exc:
+        record(describe(exc))
+        raise
+    record()
+
+
+def run_test():
+    """`--test`: one low-priority message through exactly the path a real alert takes.  Exits 0
+    when the channel delivered, 1 with the error (never the token) when it did not."""
+    host = os.uname().nodename
+    if MODE == "none":
+        print("no alert channel is configured (notify none): nothing to test")
+        return 0
+    text = f"lynis channel test from {host}"
+    try:
+        send(text, text, priority=1)
+    except Exception as exc:
+        print(f"channel test failed: {describe(exc)}", file=sys.stderr)
+        return 1
+    print(f"channel test ok: {text}")
+    return 0
+
+
 def main():
+    if "--test" in sys.argv[1:]:
+        return run_test()
     rows = verify()
     if rows is None:
         print("neither dpkg --verify nor debsums -s could run", file=sys.stderr)

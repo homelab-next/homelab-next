@@ -36,6 +36,10 @@ argument_specs:
         type: bool
         description: Install the pending-reboot check, an hourly timer that alerts once when a reboot becomes pending (the reboot-required file, a newer kernel or microcode update, or a reboot logind has scheduled) and once when it clears; for a host whose patching policy never reboots it. Needs an alert channel (notify not none).
         default: false
+      needrestart_notify_test_on_change: &test_on_change
+        type: bool
+        description: Run the alert script's --test once at deploy when the channel (mode, URL, topic, priority, token or recipient) changed, and fail the play with its error; skipped in check mode and with notify none.
+        default: true
       needrestart_reboot_schedule: &reboot_schedule
         type: str
         description: When the pending-reboot check runs (systemd OnCalendar, ending in UTC).
@@ -112,6 +116,7 @@ argument_specs:
       needrestart_alert_kernel: *kernel
       needrestart_schedule: *schedule
       needrestart_alert_reboot: *alert_reboot
+      needrestart_notify_test_on_change: *test_on_change
       needrestart_reboot_schedule: *reboot_schedule
       needrestart_reboot_required_file: *reboot_file
       needrestart_busctl_cli: *busctl

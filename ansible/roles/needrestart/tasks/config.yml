@@ -71,6 +71,46 @@
     dest: "{{ needrestart_script }}"
     mode: "0700"
 
+- name: Test the alert channel once when it changed (--test; skipped in check mode)
+  when: >-
+    needrestart_notify_test_on_change | bool and not ansible_check_mode
+    and needrestart_mode in ['notify', 'mail']
+  block:
+    - name: Fingerprint the channel (mode, URL, topic, priority, recipient, token digest)
+      ansible.builtin.set_fact:
+        needrestart_check_fp: >-
+          {{ [needrestart_mode, needrestart_notify_url, needrestart_notify_topic, needrestart_notify_priority | string, needrestart_mail_to,
+               (lookup('hnx_secret', needrestart_notify_auth_ref) | hash('sha256')) if needrestart_notify_auth_ref != '' else '']
+             | join('|') | hash('sha256') }}
+      no_log: true
+    - name: Look for the digest of the channel last tested
+      ansible.builtin.slurp:
+        src: "{{ needrestart_state_dir }}/check-channel-test.sha256"
+      register: needrestart_check_tested
+      failed_when: false
+    - name: Send one test message through the script's own send path
+      ansible.builtin.command:
+        argv: ["{{ needrestart_script }}", --test]
+      register: needrestart_check_test
+      when: >-
+        needrestart_check_tested.content is not defined
+        or (needrestart_check_tested.content | b64decode | trim) != needrestart_check_fp
+      changed_when: true
+      failed_when: false
+    - name: Fail the play with the script's error when the channel could not deliver
+      ansible.builtin.assert:
+        that: needrestart_check_test is skipped or needrestart_check_test.rc == 0
+        fail_msg: >-
+          needrestart: the alert channel did not deliver its test message
+          ({{ (needrestart_check_test.stderr | default('') | trim) or (needrestart_check_test.stdout | default('') | trim) }});
+          a control whose channel cannot deliver is not a control (set needrestart_notify_test_on_change: false to skip the test)
+    - name: Remember the tested channel, so an unchanged one is not tested again
+      ansible.builtin.copy:
+        dest: "{{ needrestart_state_dir }}/check-channel-test.sha256"
+        content: "{{ needrestart_check_fp }}\n"
+        mode: "0600"
+      when: needrestart_check_test is not skipped
+
 - name: Install the shared last-run writer and the record directory (role last_run)
   ansible.builtin.include_role:
     name: last_run

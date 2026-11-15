@@ -2941,6 +2941,7 @@ def nr_setup(tmp_path, **kw):
     )
     d = {
         "needrestart_notify": "mail",
+        "needrestart_notify_test_on_change": False,  # test_alert_channel_test.py covers the deploy-time test
         "needrestart_cli": fake(
             tmp_path / "needrestart",
             NEEDRESTART.replace("LOG", repr(log)).replace("OUT", repr(str(out))),

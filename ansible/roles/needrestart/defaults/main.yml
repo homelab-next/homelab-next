@@ -51,3 +51,8 @@ needrestart_reboot_schedule: "*-*-* *:17:00 UTC"
 needrestart_reboot_required_file: /var/run/reboot-required
 needrestart_busctl_cli: busctl
 needrestart_shutdown_cli: shutdown
+# Run the script's --test (one low-priority message through the real send path) once at deploy
+# when the channel changed (mode, URL, topic, priority, token or recipient), failing the play with
+# the script's error (LL-567: a control deployed green whose channel could never deliver). Skipped
+# in --check and with notify none.
+needrestart_notify_test_on_change: true
