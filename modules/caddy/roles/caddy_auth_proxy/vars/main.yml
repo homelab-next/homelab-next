@@ -43,3 +43,5 @@ caddy_auth_proxy_issuer_pattern: '^https://(?=.{1,253}/)([a-z0-9]([a-z0-9-]{0,61
 # cookie key (16, 24 or 32 bytes as text, or 32 bytes URL-safe base64: what oauth2-proxy accepts)
 caddy_auth_proxy_client_value_pattern: '^[!#-&(-~]{16,256}\Z'
 caddy_auth_proxy_cookie_value_pattern: '^([A-Za-z0-9_-]{16}|[A-Za-z0-9_-]{24}|[A-Za-z0-9_-]{32}|[A-Za-z0-9_-]{43}=?)\Z'
+# a trusted proxy range: IPv4 CIDR /8../32 or IPv6 CIDR /32../128 (never the whole address space)
+caddy_auth_proxy_trusted_cidr_pattern: '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}/([89]|[12][0-9]|3[0-2])|[0-9A-Fa-f:]*:[0-9A-Fa-f:]*/(3[2-9]|[4-9][0-9]|1[01][0-9]|12[0-8]))\Z'

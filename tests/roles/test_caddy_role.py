@@ -304,6 +304,13 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
     # the cookie the edge strips before any upstream (homelabnext.edge_identity.AUTH_PROXY_COOKIE)
     assert env["OAUTH2_PROXY_COOKIE_NAME"] == AUTH_PROXY_COOKIE
     assert env["OAUTH2_PROXY_COOKIE_EXPIRE"] == "4h"
+    # --reverse-proxy without --trusted-proxy-ip trusts 0.0.0.0/0 and ::/0 (oauth2-proxy warns at start)
+    assert env["OAUTH2_PROXY_REVERSE_PROXY"] == "true"
+    trusted = env["OAUTH2_PROXY_TRUSTED_PROXY_IPS"].split(",")
+    loopback = "127.0.0.1/32"  # no-raw-endpoint: allow trust range
+    bridges = "172.16.0.0/12"  # no-raw-endpoint: allow trust range
+    assert trusted == [loopback, "::1/128", GUEST + "/32", bridges]
+    assert not {"0.0.0.0/0", "::/0"} & set(trusted)
     assert env["OAUTH2_PROXY_WHITELIST_DOMAINS"] == "hub.example.internal,sso.example.internal"
     text = (tmp_path / "app" / "docker-compose.yml").read_text()
     assert CLIENT not in text and COOKIE not in text
@@ -324,6 +331,10 @@ def test_the_auth_proxy_signs_in_with_pkce_and_keeps_its_secrets_in_the_env_file
         ({"caddy_auth_proxy_issuer_url": "http://sso.example.internal/realms/twolab"}, {}),
         ({"caddy_auth_proxy_image": "quay.io/oauth2-proxy/oauth2-proxy:latest"}, {}),
         ({"caddy_acme_domains": []}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": ["0.0.0.0/0"]}, {}),  # the default it warns about
+        ({"caddy_auth_proxy_trusted_proxy_ips": ["::/0"]}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": ["2001::/16"]}, {}),
+        ({"caddy_auth_proxy_trusted_proxy_ips": []}, {}),
         ({"caddy_auth_proxy_cookie_expire": "13h"}, {}),  # at most 12h: no refresh
         ({"caddy_auth_proxy_cookie_expire": "721m"}, {}),
     ],
