@@ -15,3 +15,13 @@
       needrestart: notify is auto, none, notify or mail; a registry logical id; an ntfy topic of
       [A-Za-z0-9_-]; a priority 1-5; a secret:<name> token reference or nothing; a plain mail
       recipient; and an OnCalendar schedule ending in UTC
+
+- name: Validate the pending-reboot check's inputs
+  ansible.builtin.assert:
+    that:
+      - needrestart_alert_reboot | bool is boolean
+      - needrestart_reboot_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
+      - needrestart_reboot_required_file is match('^/[A-Za-z0-9._/-]+\Z')
+    fail_msg: >-
+      needrestart: alert_reboot is a boolean, reboot_schedule an OnCalendar schedule ending in
+      UTC, and reboot_required_file an absolute path
