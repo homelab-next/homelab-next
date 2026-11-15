@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the config directory from an export (media_restore_source: media-config.tar.gz and
+# listing.jsonl): the archive's hash must equal the listing and no member may leave the directory;
+# then the server is stopped, the live config moved aside (never deleted), the archive extracted as
+# the container's user and the server started again whatever happened. Health then proves the
+# restored identity (set media_expected_server_id). A source tree from another host or an older
+# server goes through tools/migrate/jellyfin.py instead, which maps library paths.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the listing and hash the archive
+      ansible.builtin.slurp:
+        src: "{{ media_restore_source }}/listing.jsonl"
+      register: media_listing
+    - name: Hash the archive
+      ansible.builtin.stat:
+        path: "{{ media_restore_source }}/media-config.tar.gz"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: media_restore_archive
+    - name: Refuse an archive that differs from its listing
+      ansible.builtin.assert:
+        that:
+          - (media_listing.content | b64decode | from_json).sha256 == media_restore_archive.stat.checksum
+        fail_msg: "media: the export is not intact (its hash differs from the listing)"
+    - name: List the archive's members
+      ansible.builtin.command:
+        argv: [tar, -tzf, "{{ media_restore_source }}/media-config.tar.gz"]
+      register: media_members
+      changed_when: false
+    - name: Refuse an archive that leaves its directory or holds no server id
+      ansible.builtin.assert:
+        that:
+          - media_members.stdout_lines | select('match', '^/') | list | length == 0
+          - media_members.stdout_lines | select('search', '(^|/)\.\.(/|$)') | list | length == 0
+          - "'data/device.txt' in (media_members.stdout_lines | map('regex_replace', '^\\./', '') | list)"
+        fail_msg: "media: the archive leaves its directory, or holds no data/device.txt (the server id)"
+    - name: Replace the config with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ media_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Move the live config aside
+          ansible.builtin.command:
+            argv: [mv, "{{ media_data_root }}/config", "{{ media_data_root }}/config.before-restore"]
+            removes: "{{ media_data_root }}/config"
+          changed_when: true
+        - name: Create the new config directory
+          ansible.builtin.command:
+            argv: [mkdir, -m, "0700", "{{ media_data_root }}/config"]
+          changed_when: true
+        - name: Extract the archive
+          ansible.builtin.command:
+            argv: [tar, -xzf, "{{ media_restore_source }}/media-config.tar.gz", -C, "{{ media_data_root }}/config", --no-same-owner, --no-same-permissions]
+          changed_when: true
+        - name: Give the config to the container's user
+          ansible.builtin.command:
+            argv: [chown, -R, "{{ media_uid | int }}:{{ media_gid | int }}", "{{ media_data_root }}/config"]
+          changed_when: true
+      always:
+        - name: Start the server again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ media_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+          when: media_start | bool
+  tags: [restore]

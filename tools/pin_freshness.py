@@ -95,6 +95,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "the Docker official image (docker.io/library/postgres): compare its tags with the "
         "PostgreSQL release page by hand, within the pinned major version",
     ),
+    "role:media/media_image": ("github", "jellyfin/jellyfin"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
@@ -134,6 +135,11 @@ NOTES: dict[str, str] = {
     "role:keycloak/keycloak_postgres_image": (
         "an image (modules/keycloak): the tag and its digest together, a minor version only "
         "(a major one is a dump and a restore)"
+    ),
+    "role:media/media_image": (
+        "an image (modules/media): bump the tag and its digest together, with product.version in "
+        "modules/media/module.yml and the lab registry's version; a newer server migrates its own "
+        "databases on first start, so export the config first (the upgrade playbook does)"
     ),
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "

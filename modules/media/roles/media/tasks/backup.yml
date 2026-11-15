@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# The backup manifest names the data root only: the library is the site's own data with its own
+# backup, and compose_app's manifest would list its bind source (a multi-terabyte read-only mount).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Create the compose project directory
+      ansible.builtin.file:
+        path: "{{ media_dir }}"
+        state: directory
+        owner: "{{ media_owner }}"
+        group: "{{ media_group }}"
+        mode: "0750"
+    - name: Write the backup manifest (the data root; not the library, not the cache)
+      ansible.builtin.copy:
+        dest: "{{ media_dir }}/backup-manifest.json"
+        content: "{{ {'app': 'media', 'paths': [media_data_root]} | to_nice_json }}\n"
+        owner: "{{ media_owner }}"
+        group: "{{ media_group }}"
+        mode: "0640"
+  tags: [backup]

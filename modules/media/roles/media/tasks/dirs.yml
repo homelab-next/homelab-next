@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); config/, cache and export/ belong to the container's
+# user, so the server (and the export, run as that user) create files it can open.
+- name: Create the data root, the config directory, the cache and the export directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ media_data_root }}", owner: "{{ media_owner }}", group: "{{ media_group }}", mode: "0750"}
+    - {path: "{{ media_data_root }}/config", owner: "{{ media_uid | int }}", group: "{{ media_gid | int }}", mode: "0700"}
+    - {path: "{{ media_data_root }}/config/config", owner: "{{ media_uid | int }}", group: "{{ media_gid | int }}", mode: "0700"}
+    - {path: "{{ media_data_root }}/export", owner: "{{ media_uid | int }}", group: "{{ media_gid | int }}", mode: "0700"}
+    - {path: "{{ media_cache_dir }}", owner: "{{ media_uid | int }}", group: "{{ media_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]
+
+- name: Seed config/system.xml with Quick Connect on (a fresh install only; an existing file is never touched)
+  ansible.builtin.copy:
+    dest: "{{ media_data_root }}/config/config/system.xml"
+    content: "{{ media_system_xml_seed }}"
+    owner: "{{ media_uid | int }}"
+    group: "{{ media_gid | int }}"
+    mode: "0600"
+    force: false
+  when: media_quick_connect | bool
+  tags: [restore]
