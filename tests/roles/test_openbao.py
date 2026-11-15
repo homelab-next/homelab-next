@@ -1634,16 +1634,29 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
     )
 
 
+FORBIDDEN_ACTS = re.compile(
+    r"operator\s+(init|unseal|generate-root)\b|sys/(init|unseal|generate-root)|unseal_keys|root_token"
+)
+
+
 def test_no_hook_ever_initialises_unseals_or_reads_a_share():
     """The role's whole task tree: the operator initialises and unseals, never the role."""
     text = "\n".join(
         p.read_text() for p in (Path(__file__).resolve().parents[2] / "ansible/roles/openbao").rglob("*")
         if p.is_file() and p.suffix in (".yml", ".j2")
     )  # fmt: skip
-    forbidden = re.compile(
-        r"operator\s+(init|unseal|generate-root)\b|sys/(init|unseal|generate-root)|unseal_keys|root_token"
-    )
-    assert forbidden.findall(text) == []
+    assert FORBIDDEN_ACTS.findall(text) == []
+    # the admin socket only renders a listener parameter; that exact name is not an act, and the
+    # guard still catches every way a task could run or call root generation
+    assert "disable_unauthed_generate_root_endpoints" in text
+    assert FORBIDDEN_ACTS.findall("disable_unauthed_generate_root_endpoints = false") == []
+    for act in (
+        "- ansible.builtin.command: bao operator generate-root -init",
+        "- ansible.builtin.uri: {url: 'https://x/v1/sys/generate-root/attempt'}",
+        "- ansible.builtin.command: bao operator unseal",
+        "- ansible.builtin.command: bao operator init",
+    ):
+        assert FORBIDDEN_ACTS.findall(act), act
 
 
 # ---------------------------------------------------------------- a public certificate (ACME)

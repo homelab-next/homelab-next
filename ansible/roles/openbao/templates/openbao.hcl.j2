@@ -26,9 +26,9 @@ listener "tcp" {
 
 {% if openbao_admin_socket | bool %}
 # Opt-in local admin socket (openbao_admin_socket), for the root-generation window only. Since 2.5.3
-# the unauthenticated /sys/generate-root/* endpoints are off on every listener, and the CLI uses
-# only the authenticated /sys/generate-root-token, so with the initial root token revoked
-# (ADR-0042 decision 6) this listener is the one way to mint a root token from the unseal shares.
+# the legacy unauthenticated root-generation endpoints are off on every listener (this parameter
+# turns them back on for this one), so with the initial root token revoked (ADR-0042 decision 6)
+# this listener is the one way to mint a root token from the unseal shares (README.md).
 # Mode 0600 in a 0700 directory of the service account: reachable by root on the host alone.
 listener "unix" {
   address = {{ openbao_admin_socket_path | to_json }}

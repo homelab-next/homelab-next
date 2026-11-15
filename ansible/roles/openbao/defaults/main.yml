@@ -124,10 +124,10 @@ openbao_last_run_group: root
 # (readiness reports it) and leaves the server running.
 openbao_allow_restart: false
 openbao_health_timeout: 10
-# Opt-in local admin socket: a unix listener with the legacy unauthenticated /sys/generate-root/*
+# Opt-in local admin socket: a unix listener with the legacy unauthenticated root-generation
 # endpoints enabled (listener parameter disable_unauthed_generate_root_endpoints, true by default
-# since OpenBao 2.5.3 on every listener). The 2.7 CLI's `bao operator generate-root` uses only the
-# authenticated /sys/generate-root-token, so once the initial root token is revoked (ADR-0042
+# since OpenBao 2.5.3 on every listener). The 2.7 CLI mints a root token only through an
+# authenticated endpoint, so once the initial root token is revoked (ADR-0042
 # decision 6) an operator holding the unseal shares can mint a new root token ONLY through this
 # socket. Enable it for the root-generation window and turn it off again (a config change: the
 # usual owed restart, so openbao_allow_restart applies). Procedure: README, "A new root token".
