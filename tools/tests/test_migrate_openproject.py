@@ -73,6 +73,8 @@ class Host:
         self.on_dump = None  # called when pg_dump runs (a write during the dump)
         self.drop_on_restore = False
         self.corrupt_files_on_restore = False
+        self.skew_table = None  # a table whose rows render differently after the restore
+        self.sql_seen: list[str] = []
         self.empty_on_restore = False
         self.links: dict[str, str] = {}  # path -> what readlink -f says
 
@@ -107,7 +109,8 @@ class Host:
         return {t: sorted(self.db.execute(f"SELECT * FROM {t}").fetchall()) for t in TABLES}
 
     def fingerprint(self):
-        return hashlib.md5(json.dumps(self.rows(), sort_keys=True).encode()).hexdigest()
+        rows = self.rows()
+        return {t: hashlib.md5(json.dumps(rows[t]).encode()).hexdigest() for t in TABLES}
 
     # the runner the tool is given
     def __call__(self, argv, *, stdin=None, stdout=None):
@@ -163,9 +166,12 @@ class Host:
     def _cmd(self, c, stdin):
         if c[0] == "psql":
             sql = c[c.index("-c") + 1]
-            assert sql.lstrip().upper().startswith("SELECT")
-            if "md5" in sql:
-                return (self.fingerprint() + "\n").encode()
+            *settings, query = [q.strip() for q in sql.split(";")]
+            assert query.upper().startswith("SELECT") and all(q.upper().startswith("SET ") for q in settings)  # fmt: skip
+            self.sql_seen.append(sql)
+            if "md5" in query:
+                return ("|".join(f"{t}={d}" for t, d in self.fingerprint().items()) + "\n").encode()
+            sql = query
             sql = sql.replace("coalesce", "")
             return ("|".join(str(v) for v in self.db.execute(sql).fetchone()) + "\n").encode()
         if c[0] == "pg_dump":
@@ -183,6 +189,8 @@ class Host:
                 for r in (
                     rows[: len(rows) - 1] if self.drop_on_restore and t == "projects" else rows
                 ):
+                    if t == self.skew_table:  # the same value, rendered differently
+                        r = [r[0], r[1] + "~", *r[2:]]
                     self.db.execute(f"INSERT INTO {t} VALUES ({','.join('?' * len(r))})", r)
             return b""
         if c[0] == "tar" and "--create" in c:
@@ -309,7 +317,8 @@ def test_dump_writes_the_files_and_a_manifest_and_only_reads_the_source(source, 
         data = (d / name).read_bytes()
         assert manifest["files"][name] == {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}  # fmt: skip
     assert manifest["counts"]["projects"] == 37 and manifest["counts"]["attachments"] == 6
-    assert manifest["fingerprint"] == source.fingerprint()
+    assert manifest["fingerprint"] == source.fingerprint()  # one md5 per table
+    assert list(manifest["fingerprint"]) == list(TABLES)
     assert manifest["attachment_files"]["count"] == 6
     assert manifest["frozen"] is False and manifest["quiescent"] is False  # writers were running
     assert manifest["writers"] == {"op-web": True, "op-worker": True}
@@ -333,6 +342,24 @@ def test_a_source_with_only_the_web_stopped_is_not_frozen(source, private):
     source.running = {"worker"}
     manifest = dump(source, source_endpoint(), private / "d")
     assert manifest["frozen"] is False and manifest["quiescent"] is False
+
+
+def test_the_fingerprint_query_pins_the_session_settings_it_renders_under(source):
+    mt.fingerprint(source_endpoint(), _ctx=ctx(source))
+    sql = source.sql_seen[-1]
+    for setting in ("TimeZone = 'UTC'", "DateStyle = 'ISO, MDY'", "IntervalStyle = 'postgres'",
+                    "extra_float_digits = 3", "bytea_output = 'hex'"):  # fmt: skip
+        assert f"SET {setting}" in sql
+    assert sql.index("SET bytea_output") < sql.index("SELECT")  # before the query, same session
+
+
+def test_a_content_mismatch_names_the_table(source, private):
+    target, d = _dumped(source, private)
+    target.skew_table = "work_packages"
+    with pytest.raises(mt.VerifyMismatch, match="differs from the dump's in: work_packages") as e:
+        mt.restore(target_endpoint(), d, _ctx=ctx(target))
+    assert "projects" not in str(e.value).split("in:")[1]
+    assert target.running == set()
 
 
 def test_an_edit_that_moves_no_count_moves_the_fingerprint_and_unsettles_the_dump(source, private):

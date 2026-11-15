@@ -99,13 +99,24 @@ _WHERE = {"users": " WHERE type = 'User'"}
 COUNT_SQL = "SELECT " + ", ".join(
     f"(SELECT count(*) FROM {t}{_WHERE.get(k, '')})" for k, t in COUNT_TABLES.items()
 )
-#: a content fingerprint: the hash of every row of the data tables in id order, so an edit, a
-#: comment or a changed password that moves no count still moves it
+#: a content fingerprint, one md5 per table: the hash of every row in id order, so an edit, a
+#: comment or a changed password that moves no count still moves it, and a mismatch names the
+#: table.  The session is pinned first, so the same stored value renders as the same text on a
+#: source and a target whose server settings differ (time zone, date and interval style, float
+#: digits, bytea output)
 FINGERPRINT_TABLES = tuple(COUNT_TABLES.values())
+FINGERPRINT_SETTINGS = (
+    "SET TimeZone = 'UTC'",
+    "SET DateStyle = 'ISO, MDY'",
+    "SET IntervalStyle = 'postgres'",
+    "SET extra_float_digits = 3",
+    "SET bytea_output = 'hex'",
+)
 FINGERPRINT_SQL = (
-    "SELECT md5("
-    + " || ".join(
-        f"coalesce((SELECT md5(string_agg(md5(x::text), '' ORDER BY x.id)) FROM {t} x), '')"
+    "; ".join(FINGERPRINT_SETTINGS)
+    + "; SELECT concat_ws('|', "
+    + ", ".join(
+        f"'{t}=' || coalesce((SELECT md5(string_agg(md5(x::text), '' ORDER BY x.id)) FROM {t} x), '')"
         for t in FINGERPRINT_TABLES
     )
     + ")"
@@ -259,7 +270,7 @@ def _run(ctx: _Ctx, ep: Endpoint, inner: Sequence[str], *, stdin=None, stdout=No
 def _psql(ep: Endpoint, sql: str) -> list[str]:
     return [
         "docker", "exec", ep.db_container, "psql", "-U", ep.db_user, "-d", ep.db_name,
-        "-At", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", sql,
+        "-qAt", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", sql,
     ]  # fmt: skip
 
 
@@ -276,13 +287,21 @@ def counts(ep: Endpoint, *, _ctx: _Ctx | None = None) -> dict[str, int]:
     return dict(zip(COUNT_KEYS, values, strict=True))
 
 
-def fingerprint(ep: Endpoint, *, _ctx: _Ctx | None = None) -> str:
-    """The content fingerprint of the data tables (a read: one SELECT)."""
+def fingerprint(ep: Endpoint, *, _ctx: _Ctx | None = None) -> dict[str, str]:
+    """The per-table content fingerprint (a read: session settings, then one SELECT)."""
     ctx = _ctx or _Ctx()
     out = _run(ctx, ep, _psql(ep, FINGERPRINT_SQL)).decode().strip().splitlines()
-    if not out or len(out[-1]) != 32:
+    try:
+        fp = dict(part.split("=", 1) for part in out[-1].split("|"))
+    except (IndexError, ValueError) as e:
+        raise MigrateError(f"unreadable fingerprint: {out!r}") from e
+    if list(fp) != list(FINGERPRINT_TABLES) or any(len(v) not in (0, 32) for v in fp.values()):
         raise MigrateError(f"unreadable fingerprint: {out!r}")
-    return out[-1]
+    return fp
+
+
+def _fingerprint_diff(want: Mapping[str, str], got: Mapping[str, str]) -> list[str]:
+    return [t for t in FINGERPRINT_TABLES if want.get(t) != got.get(t)]
 
 
 def _assets_read(ep: Endpoint) -> list[str]:
@@ -457,7 +476,12 @@ def _read_manifest(dump_dir: Path) -> dict:
             )
     if set(manifest.get("counts") or ()) != set(COUNT_KEYS):
         raise MigrateError(f"{dump_dir}: the manifest has no counts")
-    if not manifest.get("fingerprint") or not manifest.get("attachment_files"):
+    fp = manifest.get("fingerprint")
+    if (
+        not isinstance(fp, dict)
+        or set(fp) != set(FINGERPRINT_TABLES)
+        or not manifest.get("attachment_files")
+    ):
         raise MigrateError(f"{dump_dir}: the manifest has no fingerprint or file digest")
     return manifest
 
@@ -551,8 +575,11 @@ def restore(
         _refuse_vacuous_target(manifest["counts"], got)
         if got != wanted:
             raise CountMismatch(wanted, got)
-        if fingerprint(target, _ctx=ctx) != manifest["fingerprint"]:
-            raise VerifyMismatch("the target's content fingerprint differs from the dump's")
+        differs = _fingerprint_diff(manifest["fingerprint"], fingerprint(target, _ctx=ctx))
+        if differs:
+            raise VerifyMismatch(
+                f"the target's content differs from the dump's in: {', '.join(differs)}"
+            )
         if endpoint_files(target, directory=fresh, _ctx=ctx) != manifest["attachment_files"]:
             raise VerifyMismatch(
                 "the target's attachment files differ from the dump's (count or sha256)"

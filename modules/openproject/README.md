@@ -93,6 +93,21 @@ container that writes** (`--writer`, repeatable: the web app, the worker, any sc
    5. *Rollback* is `unfreeze(source)` (start the writers again) and the old route; the target is
       simply wiped by the next restore.
 
+**When the verification fails.** `pg_restore` commits before the checks run, so a failed check
+means the target's database is already replaced while its attachments are still the old ones, and
+its writers stay stopped (correct). That target is not usable: **restore again, or unfreeze the
+source and stay on it; never start the target as it is.** The error names what differed (for a
+fingerprint, the tables).
+
+The content fingerprint is one md5 per table, computed under pinned session settings (time zone
+UTC, ISO/MDY dates, `postgres` intervals, `extra_float_digits = 3`, hex bytea) so a source and a
+target whose servers are configured differently render the same value as the same text. If the
+rehearsal shows a table that still differs for a rendering reason (same data, different text),
+do not loosen the check for the others: for that table fall back to what the dump already
+proves, the source being frozen and quiescent for the whole dump (counts and per-table
+fingerprints unchanged, recorded in the manifest), plus the row counts and the attachment file
+digests on the target, and record the exception in the cutover notes.
+
 The only recursive deletes are on the attachments directory's `.restore-old`/`.restore-new` siblings, which (like the directory) must be an absolute canonical path of at least three components, inside the target's data root, and which the endpoint must resolve to itself (no link anywhere in it); a sibling left by an earlier restore is refused, not removed. A dump of a source with no projects, work packages or accounts, or with attachment rows and no files, is refused (`--allow-empty` for a genuinely empty one).
 
 Not carried by this module or tool: the calendar (ICS) bridge and its feed token; the cutover
