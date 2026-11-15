@@ -46,7 +46,7 @@ database keeps its own accounts and the seed password is ignored.
 
 ## What the overlay adds
 
-- the guest (`hnx-openproject-01` in the cutover plan) and the module's `server` placement;
+- the guest (`hnx-projects-01` in the cutover plan) and the module's `server` placement;
 - the instance and `grants.public_routes` for the public row;
 - the registry row as the module declares it plus the site's `public_hostname`
   (`projects.<domain>`) and, at most, `standing`, `backup_job` and `scope`;
@@ -62,27 +62,43 @@ database keeps its own accounts and the seed password is ignored.
 `tools/migrate/openproject.py` (generic: the source and the target are described by an ssh
 destination and container names, never by this repository) does the copy over ssh pipes:
 
+An endpoint names the ssh destination, the database container and the attachments (a running
+container for a source, a host directory inside a named data root for a target) and **every
+container that writes** (`--writer`, repeatable: the web app, the worker, any scheduler).
+
 1. **Rehearse** (the source keeps serving): `dump(source, out_dir)` runs `pg_dump -Fc` and a tar of
-   the attachments in the source's containers, streams both to files in `out_dir` (a directory
-   the caller names; never `/tmp`) and writes `manifest.json` with the sizes, sha256 and the
-   source's counts. The source is only read. `restore(target, out_dir)` checks the manifest,
-   stops the target's web app and worker, restores in one transaction, replaces the attachments,
-   runs the seeder and starts them again. `counts(target)` returns
-   `{projects, work_packages, users, attachments}`; the rehearsal passes when it equals the
-   source's counts in the manifest.
+   the attachments in the source's containers, streams both to files in `out_dir` (a private
+   directory the caller names; never `/tmp`) and writes `manifest.json`: sizes and sha256, the row
+   counts of nine tables (projects, work packages, users, attachments, journals, time entries,
+   members, versions, custom fields), a content fingerprint of those tables, the number and
+   digest of the attachment files, and whether every writer was stopped (`frozen`). The source is
+   only read. `restore(target, out_dir)` checks the manifest, stops the target's writers,
+   restores in one transaction, replaces the attachments, then **verifies the target** (counts,
+   fingerprint, the sha256 of every attachment file), runs the seeder and starts it. Any failure
+   leaves the target stopped and says so. The rehearsal passes when the restore returns.
 2. **Cutover: freeze, final delta, re-count.** Writes on the source do not stop by themselves, so
    a copy taken while people work is already stale. The cutover is:
-   1. *Freeze* the source: stop its web and worker containers (`freeze(source)`; the database
-      keeps running so it can be dumped). From here nothing writes to the source.
-   2. *Re-dump* the frozen source: `dump(source, final_dir)`. This is the **final delta** (the
-      whole database again, not a diff: it is small, and `--clean` makes a repeat restore exact).
-   3. *Restore* it onto the target (`restore(target, final_dir)`): the target's database is
-      replaced by the frozen state and the attachments directory is emptied and unpacked again, so
-      a file deleted on the source after the rehearsal does not linger.
-   4. *Re-count*: `counts(target)` must equal `counts(source)` taken **after** the freeze (the
-      manifest records them at the dump). Only then move the public name.
-   5. *Rollback* is `unfreeze(source)` (start the containers again) and the old route; the target
-      is simply wiped by the next restore.
+   1. *Freeze* the source: `freeze(source)` stops **every** writer, checks that none runs and
+      prints the counts read after they stopped (the database keeps running so it can be dumped).
+   2. *Re-dump* the frozen source: `dump(source, final_dir)`; the manifest records `frozen: true`.
+      This is the **final delta** (the whole database again, not a diff: it is small, and
+      `--clean` makes a repeat restore exact).
+   3. *Restore* it: `restore(target, final_dir, expect_counts=<what freeze printed>,
+      require_quiescent=True)` (CLI: `--expect-counts '<json>'|@file --require-quiescent`). It
+      refuses a dump that is not of a frozen source or that differs from the freeze counts before
+      writing anything, replaces the database and the attachments, and checks the result against
+      the freeze counts and the dump's fingerprint and files, so an edit that moves no count is
+      caught too.
+   4. Only then move the public name.
+   5. *Rollback* is `unfreeze(source)` (start the writers again) and the old route; the target is
+      simply wiped by the next restore.
+
+The only recursive deletes are on the attachments directory, which must be an absolute canonical
+path of at least three components, inside the target's data root, and which the endpoint must
+resolve to itself (no link anywhere in it).
+
+Not carried by this module or tool: the calendar (ICS) bridge and its feed token; the cutover
+plan must give them an owner.
 
 The role's own `restore` hook does the same from an export already on the host
 (`openproject_restore_source`: a directory with `listing.jsonl`, `db/projects.dump` and

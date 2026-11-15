@@ -102,8 +102,7 @@ def test_main_renders_four_containers_with_the_credentials_only_in_the_env_files
         assert value not in text and value not in r.stdout
     web = (tmp_path / "app" / "secrets" / "web.env").read_text()
     assert "@postgres/openproject?pool=20" in web and f"SECRET_KEY_BASE='{SESSION_KEY}'" in web
-    assert f"OPENPROJECT_SEED_ADMIN_USER_PASSWORD='{ADMIN_PASSWORD}'" in web
-    assert "OPENPROJECT_SEED_ADMIN_USER_PASSWORD_RESET='false'" in web
+    assert ADMIN_PASSWORD not in web  # only the seeder run is given it
     assert ADMIN_PASSWORD not in (tmp_path / "app" / "secrets" / "worker.env").read_text()
     for f in ("postgres", "web", "worker"):
         mode = (tmp_path / "app" / "secrets" / f"{f}.env").stat().st_mode & 0o777
@@ -233,8 +232,12 @@ elif "mv" in a:
     shutil.move(host(a[-2]), host(a[-1]))
 elif "pg_restore" in a:
     sys.exit(0 if os.path.exists(host(a[-1])) else 3)
-elif "run" in a and os.path.exists({str(tmp_path / "seeder.fails")!r}):
-    sys.exit(1)
+elif "run" in a:
+    envfile = {str(tmp_path / "app" / "secrets" / "web.env")!r}
+    open({str(tmp_path / "seed-env.log")!r}, "a").write(
+        ("had-password" if os.path.exists(envfile) and "OPENPROJECT_SEED_ADMIN_USER_PASSWORD=" in open(envfile).read() else "no-password") + "\\n")
+    if os.path.exists({str(tmp_path / "seeder.fails")!r}):
+        sys.exit(1)
 """
     fake(bindir / "docker", body)
     return {"PATH": f"{bindir}:{os.environ['PATH']}"}
@@ -262,6 +265,10 @@ def test_the_seeder_runs_before_the_app_starts_and_once_per_image(tmp_path):
         assert len(seeded) == 1 and len(started) == 1 and seeded[0] < started[0]
         assert "up -d --wait postgres cache" in " ".join(calls[: seeded[0] + 1])
         assert (tmp_path / "data" / "seeded").read_text().startswith("sha256:")
+        # the seed password reached the web env_file for the seeder run only, then was removed
+        assert (tmp_path / "seed-env.log").read_text().split() == ["had-password"]
+        web_env = (tmp_path / "app" / "secrets" / "web.env").read_text()
+        assert ADMIN_PASSWORD not in web_env and "SEED_ADMIN" not in web_env
         # the app is asked for its health with the public name as the Host header
         assert ("/health_checks/default", HOSTNAME) in front.requests
         (tmp_path / "docker.log").unlink()
