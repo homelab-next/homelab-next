@@ -5,6 +5,7 @@
         argv: ["{{ nftables_host_nft_cli }}", -j, list, table, inet, "{{ nftables_host_table }}"]
       register: nftables_host_live
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
     - name: Fail unless inbound (and, where required, outbound and forwarded) defaults to drop
       vars:
         nftables_host_chains: "{{ (nftables_host_live.stdout | from_json).nftables | selectattr('chain', 'defined') | map(attribute='chain') | list }}"

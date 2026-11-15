@@ -7,17 +7,20 @@
         argv: ["{{ etckeeper_git_cli }}", -C, "{{ etckeeper_dir }}", symbolic-ref, --short, HEAD]
       register: etckeeper_branch
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
     - name: Read HEAD and origin's copy of the branch
       ansible.builtin.command:
         argv: ["{{ etckeeper_git_cli }}", -C, "{{ etckeeper_dir }}", rev-parse, HEAD, "refs/remotes/origin/{{ etckeeper_branch.stdout | trim }}"]
       register: etckeeper_heads
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
       failed_when: false
     - name: Read the working tree state
       ansible.builtin.command:
         argv: ["{{ etckeeper_git_cli }}", -C, "{{ etckeeper_dir }}", status, --porcelain]
       register: etckeeper_status
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
     - name: Fail unless everything is committed and pushed
       ansible.builtin.assert:
         that:

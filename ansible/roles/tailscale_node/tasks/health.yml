@@ -5,6 +5,7 @@
         argv: ["{{ tailscale_node_cli }}", status, --json]
       register: tailscale_node_health
       changed_when: false
+      check_mode: false  # read-only: it runs in --check too
     - name: Fail unless the node is running, online and tagged with its zone
       vars:
         tailscale_node_self: "{{ (tailscale_node_health.stdout | from_json).Self | default({}, true) }}"
