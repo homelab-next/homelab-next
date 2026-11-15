@@ -31,8 +31,16 @@
   ansible.builtin.assert:
     that:
       - needrestart_mode != 'notify' or needrestart_notify_url is match('^https?://')
-      - needrestart_mode != 'notify' or needrestart_notify_auth_ref == '' or needrestart_notify_url is match('^https://')
-    fail_msg: "needrestart: the notify endpoint {{ needrestart_notify_url }} is not http(s), or a token would go over plain http"
+      - needrestart_mode != 'notify' or needrestart_notify_auth_ref == '' or needrestart_notify_url is match('^https://') or needrestart_notify_allow_plain_http | bool
+    fail_msg: "needrestart: the notify endpoint {{ needrestart_notify_url }} is not http(s), or a token would go over plain http (set needrestart_notify_allow_plain_http for a LAN endpoint with no TLS)"
+
+- name: Warn that the token goes over plain http (the explicit opt-in)
+  ansible.builtin.debug:
+    msg: "needrestart: the publish token goes in clear to {{ needrestart_notify_url }} (needrestart_notify_allow_plain_http); LAN only, prefer TLS"
+  when:
+    - needrestart_mode == 'notify'
+    - needrestart_notify_auth_ref != ''
+    - needrestart_notify_url is not match('^https://')
 
 - name: Write the ntfy token (owner-only)
   when: needrestart_mode == 'notify' and needrestart_notify_auth_ref != ''

@@ -74,13 +74,14 @@ A role refers to other services by **logical id** and resolves them at run time:
 
 ```jinja
 {{ lookup('hnx_registry', 'query-core', field='url') }}   {# scheme://host:port #}
-{{ lookup('hnx_registry', dep, field='host') }}           {# host / port / url / capability / public_hostname #}
+{{ lookup('hnx_registry', dep, field='host') }}           {# host / host_id / port / url / capability / public_hostname #}
 ```
 
 `ansible/plugins/lookup/hnx_registry.py` is a deliberately small stand-in that
 reads the file named by the inventory variable `hnx_registry_file`
 (`ansible/inventory/example/registry.yml`). The registry resolver replaces it
-behind the same name and arguments. Moving a service changes the registry,
+behind the same name and arguments. `field='host'` and `url` name the alias a client reaches a service by;
+to ask where a service is placed (is it on this host), use `field='host_id'`, the row's logical host id. Moving a service changes the registry,
 never a role.
 
 Secrets are named the same way, by reference, and resolved on the controller only in a task

@@ -12,8 +12,8 @@
 # needrestart_alert_kernel.
 #
 # needrestart_notify: none, notify (POST to the notify capability's ntfy endpoint by logical id:
-# <url>/<topic> with Title, Priority and Tags headers, a token by secret reference, never over
-# plain http), mail (the host's local mail to root: sendmail -t), or auto (mail when the host has
+# <url>/<topic> with Title, Priority and Tags headers, a token by secret reference, over https
+# unless needrestart_notify_allow_plain_http opts in), mail (the host's local mail to root: sendmail -t), or auto (mail when the host has
 # a local MTA, /usr/sbin/sendmail, and /etc/aliases forwards root; else none). It is required, and
 # the example lab's base baseline sets auto: a lab that already forwards host mail
 # (unattended-upgrades' reboot notices included) to its alerting gets these the same way, with
@@ -23,6 +23,11 @@ needrestart_notify_topic: homelabnext-restarts
 needrestart_notify_priority: 3
 # Empty: the ntfy topic is open. Else secret:<name> of an access token (sent as a Bearer token).
 needrestart_notify_auth_ref: ""
+# Explicit opt-in, LAN only, for a notify endpoint that has no TLS: with it set, a token
+# (needrestart_notify_auth_ref) travels in clear over plain http. The token is a write-only publish
+# token, so the blast radius is spoofed alerts. Prefer TLS where the endpoint has it. Off: the
+# role refuses a token over plain http.
+needrestart_notify_allow_plain_http: false
 needrestart_mail_to: root
 needrestart_alert_kernel: false
 # After the daily patch run (apt-daily-upgrade.timer, 06:00 plus up to an hour by default).

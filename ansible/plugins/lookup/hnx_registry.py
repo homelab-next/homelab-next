@@ -24,6 +24,12 @@ way the model reads it, because a row's ``host`` there is a logical host id, nev
   the alias, never an address, so a cutover changes DNS only.  The row's host id must still be in
   ``hosts:``, or the row is refused by name.
 
+``field='host_id'`` is PLACEMENT, not addressing: the row's logical host id, the key of ``hosts:`` in
+the platform shape (refused by name when the row's host is not in ``hosts:``) and the row's ``host``
+as written in the stub shape.  A role asking "is this service placed on THIS host" compares
+``host_id`` with the inventory host's name (short form, both sides); ``host`` and ``url`` are
+how a client reaches the service and name the alias, which no inventory host is called.
+
 ``scheme`` (stub shape) is free text (``https``, ``http``, ``tcp``, ``udp``, ``ldaps``, ``ssh`` in the example
 registry) and defaults to ``https`` in a url; ``host`` and ``port`` are required for ``url`` and
 for the field asked, and a row without one is refused by name.
@@ -49,7 +55,7 @@ options:
     description: Logical service ids.
     required: true
   field:
-    description: One of host, port, url, capability, public_hostname.
+    description: One of host, host_id, port, url, capability, public_hostname.
     default: url
 """
 
@@ -92,7 +98,7 @@ def _platform_name(term: str, row: dict, doc: dict) -> str:
 class LookupModule(LookupBase):
     def run(self, terms, variables=None, **kwargs):
         field = kwargs.get("field", "url")
-        if field not in ("host", "port", "url", "capability", "public_hostname"):
+        if field not in ("host", "host_id", "port", "url", "capability", "public_hostname"):
             raise AnsibleLookupError(f"hnx_registry: unknown field '{field}'")
         path = (variables or {}).get("hnx_registry_file")
         if isinstance(path, str) and "{{" in path and self._templar is not None:
@@ -118,6 +124,17 @@ class LookupModule(LookupBase):
                 raise AnsibleLookupError(f"hnx_registry: service '{term}' is not a mapping")
             if field == "capability":
                 out.append(str(row.get("capability", "")))
+                continue
+            if field == "host_id":
+                host_id = row.get("host")
+                if host_id in (None, ""):
+                    raise AnsibleLookupError(f"hnx_registry: service '{term}' has no host")
+                if "hosts" in doc and host_id not in (doc.get("hosts") or {}):
+                    raise AnsibleLookupError(
+                        f"hnx_registry: service '{term}' names host '{host_id}', which is not "
+                        "in the registry's hosts map"
+                    )
+                out.append(host_id)
                 continue
             if "hosts" in doc and field in ("url", "host"):  # the platform shape
                 name = _platform_name(term, row, doc)

@@ -162,3 +162,23 @@ def test_the_scheme_agrees_with_the_registry_model_for_every_protocol_and_tls():
                 owner="o", version="1", tls=tls,
             )  # fmt: skip
             assert mod._platform_scheme({"protocol": protocol, "tls": tls}) == svc.scheme
+
+
+def test_host_id_is_the_placement_while_host_stays_the_alias(platform):
+    """Placement is not addressing: ``host_id`` is the row's logical host id, ``host`` its alias."""
+    assert platform(["alert", "bus"], field="host_id") == ["hnx-apps-01", "hnx-apps-01"]
+    assert platform(["alert"], field="host") == ["notify.svc.example.internal"]
+
+
+def test_host_id_of_a_row_outside_the_hosts_map_is_refused(platform):
+    with pytest.raises(AnsibleLookupError, match="'lost' names host 'hnx-gone-01'"):
+        platform(["lost"], field="host_id")
+
+
+def test_host_id_in_the_stub_shape_is_the_rows_host(lookup):
+    assert lookup(["query-core", "bus-core"], field="host_id") == [
+        "query.example.test",
+        "bus.example.test",
+    ]
+    with pytest.raises(AnsibleLookupError, match="service 'no-host' has no host"):
+        lookup(["no-host"], field="host_id")

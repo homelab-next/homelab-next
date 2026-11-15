@@ -3235,6 +3235,59 @@ def test_needrestart_refuses_a_token_for_a_platform_row_that_is_plain_http(tmp_p
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def _plain_notify(tmp_path, ref="secret:notify/token-fake", **extra):
+    """A platform-shape registry whose notify row is plain http, and the role vars to use it."""
+    v, _ = nr_setup(tmp_path)
+    reg = tmp_path / "registry.yml"
+    reg.write_text(
+        "lab: {name: demo, domain: example.internal, svc_label: svc, owner: platform-team}\n"
+        "zones: {mgmt: {cidr: 192.0.2.0/26}}\n"
+        "hosts:\n  notify-01: {address: 192.0.2.30, zone: mgmt}\n"
+        "services:\n  notify: "
+        "{capability: notify, host: notify-01, protocol: http, port: 80, tls: none}\n"
+    )
+    token = tmp_path / "token" / "auth"
+    return {
+        **v,
+        "needrestart_notify": "notify",
+        "needrestart_notify_auth_ref": ref,
+        "needrestart_notify_auth_file": str(token),
+        "hnx_registry_file": str(reg),
+        **extra,
+    }, token
+
+
+def test_needrestart_plain_http_opt_in_sends_the_token_to_the_http_endpoint(tmp_path):
+    """Default: a token for a plain-http notify row is refused (the test above).  With
+    ``needrestart_notify_allow_plain_http`` the run passes, says the token goes in clear, writes the
+    token file owner-only and renders the http endpoint into the check script."""
+    from urllib.parse import urlsplit
+
+    env = {"HNX_SECRET_NOTIFY_TOKEN_FAKE": "tk-fake"}
+    v, token = _plain_notify(tmp_path)
+    assert run_role(tmp_path, "needrestart", "config", v, env).returncode != 0
+    v, token = _plain_notify(tmp_path, needrestart_notify_allow_plain_http=True)
+    r = run_role(tmp_path, "needrestart", "config", v, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "the publish token goes in clear" in r.stdout
+    assert token.read_text() == "tk-fake\n" and (token.stat().st_mode & 0o777) == 0o600
+    import re
+
+    script = Path(v["needrestart_script"]).read_text()
+    (shown,) = re.findall(r'^NOTIFY_URL = "([^"]+)"', script, re.M)
+    url = urlsplit(shown)
+    assert (url.scheme, url.hostname, url.port) == ("http", "notify.svc.example.internal", 80)
+
+
+def test_needrestart_plain_http_opt_in_without_a_token_is_a_no_op(tmp_path):
+    """No token, nothing travels in clear: no warning, no token file, same as the default."""
+    env = {}
+    v, token = _plain_notify(tmp_path, ref="", needrestart_notify_allow_plain_http=True)
+    r = run_role(tmp_path, "needrestart", "config", v, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "goes in clear" not in r.stdout and not token.exists()
+
+
 # ---------------------------------------------------------------- lynis: package integrity sweep
 DPKG = r"""
 import os, sys

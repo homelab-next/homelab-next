@@ -24,6 +24,10 @@ argument_specs:
         type: str
         description: Secret reference (secret:<name>) of an ntfy access token, resolved by the hnx_secret lookup; empty = none.
         default: ""
+      needrestart_notify_allow_plain_http: &plain_http
+        type: bool
+        description: Explicit opt-in, LAN only, for a notify endpoint with no TLS. The token (needrestart_notify_auth_ref) then travels in clear over plain http; it is a write-only publish token, so the blast radius is spoofed alerts. Prefer TLS where the endpoint has it. Off, the role refuses a token over plain http.
+        default: false
       needrestart_mail_to: &mail_to
         type: str
         description: Local mail recipient (with mail).
@@ -112,6 +116,7 @@ argument_specs:
       needrestart_notify_topic: *topic
       needrestart_notify_priority: *priority
       needrestart_notify_auth_ref: *token
+      needrestart_notify_allow_plain_http: *plain_http
       needrestart_mail_to: *mail_to
       needrestart_alert_kernel: *kernel
       needrestart_schedule: *schedule
