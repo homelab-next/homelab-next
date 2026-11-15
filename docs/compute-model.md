@@ -364,7 +364,9 @@ The controller script copies `host.fw` and the node script to a private director
    under `/var/lib/hnx/host-firewall-<node>/`, **arms a `systemd-run --on-active=Nm` timer that
    restores it**, and only then installs the file, runs `pve-firewall compile` and `restart`, and
    checks `pveproxy`, `pvedaemon` and `pve-firewall` are active (`HNX_HEALTH_UNITS`) and that the
-   optional `HNX_HEALTH_HOOK` (an executable on the node, given the node name) passes. Any failure
+   optional `HNX_HEALTH_HOOK` (an executable on the node, given the node name) passes. Hook paths
+   (`HNX_HEALTH_HOOK`, `HNX_VERIFY_HOOK`) are operator-supplied and must contain no spaces or shell
+   metacharacters. Any failure
    rolls back at once; a timer that cannot be armed leaves the node untouched.
 2. The controller tries each declared management port (`nc -z`; `HNX_PORT_CHECK`) from where it
    runs, up to `HNX_CHECK_TRIES` times, then the optional `HNX_VERIFY_HOOK` (given the address).
@@ -379,7 +381,10 @@ changes nothing, so neither can undo or misreport the other. A second `apply` wh
 is refused, so the original file is never overwritten by the saved copy of a half-applied one.
 A reboot inside the window cancels the transient timer, so `apply` also installs a boot-time unit
 (`hnx-hostfw-rollback-<node>-boot.service`, conditional on the pending marker) that restores the
-previous file; `confirm` and `rollback` remove it. The runner needs a declared SSH source (it works
+previous file; `confirm` and `rollback` remove it. The unit is ordered `After=pve-cluster.service`
+without `Requires=`: a node that boots without quorum has a read-only `/etc/pve`, so the restore
+fails visibly and keeps its marker, which is safe (nothing is half-restored) and is retried by
+running `rollback` once quorum returns. The runner needs a declared SSH source (it works
 over SSH; a web-only node is applied by hand), waits and needs two port checks in a row, and reports
 an SSH connection that dropped during `apply` as "may be ON and unconfirmed". Limits: `pve-firewall` reloads rules on
 its own cycle, so the rules are what `restart` loaded, not what a later hand edit adds.
