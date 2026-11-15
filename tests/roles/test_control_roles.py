@@ -3051,6 +3051,40 @@ def test_needrestart_leaves_a_pending_kernel_to_patching_unless_asked(first):
     assert "reboot into kernel 6.1.0-26-amd64" in mails(tmp_path)[0]
 
 
+@first_run(_first)
+def test_needrestart_reboot_check_is_installed_only_when_asked_and_removed_when_not(first):
+    r, tmp_path = first
+    v = first.setup["v"]
+    assert r.returncode == 0, r.stdout + r.stderr
+    script = tmp_path / "bin" / "needrestart-reboot-check"
+    units = tmp_path / "units"
+    v = {**v, "needrestart_reboot_script": str(script)}
+    assert not script.exists() and not (units / "hnx-needrestart-reboot.timer").exists()  # off
+    on = {**v, "needrestart_alert_reboot": True}
+    assert run_role(tmp_path, "needrestart", "config", on).returncode == 0
+    assert oct(script.stat().st_mode & 0o777) == "0o700"
+    timer = (units / "hnx-needrestart-reboot.timer").read_text()
+    assert "OnCalendar=*-*-* *:17:00 UTC\n" in timer and "OnBootSec" not in timer
+    service = (units / "hnx-needrestart-reboot.service").read_text()
+    assert "ExecStart=/usr/local/libexec/homelabnext/needrestart-reboot-check\n" in service
+    assert "--job timer:needrestart/reboot" in service
+    assert 'MODE = "mail"' in script.read_text()
+    assert "systemctl enable --now hnx-needrestart-reboot.timer" in calls(tmp_path)
+    off = {**v, "needrestart_alert_reboot": False}
+    assert run_role(tmp_path, "needrestart", "config", off).returncode == 0
+    assert not script.exists() and not (units / "hnx-needrestart-reboot.timer").exists()
+    assert not (units / "hnx-needrestart-reboot.service").exists()
+    assert "systemctl disable --now hnx-needrestart-reboot.timer" in calls(tmp_path)
+
+
+@first_run(_first)
+def test_needrestart_reboot_check_refuses_to_be_installed_with_no_channel(first):
+    _r, tmp_path = first
+    v = {**first.setup["v"], "needrestart_notify": "none", "needrestart_alert_reboot": True}
+    res = run_role(tmp_path, "needrestart", "config", v)
+    assert res.returncode != 0 and "told to nobody" in res.stdout + res.stderr
+
+
 def _auto_notify(tmp, aliases, mode):
     v, _ = nr_setup(tmp, needrestart_notify="auto")
     if aliases is not None:

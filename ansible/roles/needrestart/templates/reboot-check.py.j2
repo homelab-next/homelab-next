@@ -52,7 +52,7 @@ REBOOT_TYPES = ("reboot", "kexec", "soft-reboot", "")
 BUSCTL_RE = re.compile(r'^\(st\) "([^"]*)" ([0-9]+)$')
 SHOW_RE = re.compile(r"([A-Z][\w-]*(?: [a-z][\w-]*)?) scheduled for (.+?), use ")
 NO_SHUTDOWN_USEC = (0, 18446744073709551615)
-SAFE = re.compile(r"[^A-Za-z0-9.+_:~-]")
+SAFE = re.compile(r"[^A-Za-z0-9.+_:~ -]")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
