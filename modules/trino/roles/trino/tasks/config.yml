@@ -16,8 +16,12 @@
     - {src: node.properties.j2, dest: node.properties}
     - {src: iceberg.properties.j2, dest: "catalog/{{ trino_catalog_name }}.properties"}
     - {src: password-authenticator.properties.j2, dest: password-authenticator.properties}
+    - src: iceberg.properties.j2
+      dest: "catalog/{{ trino_reader_catalog }}.properties"
+      read_only: true
   loop_control:
     label: "{{ item.dest }}"
+  when: not (item.read_only | default(false)) or trino_reader_catalog != ''
   register: trino_config_files
 
 - name: Write the server certificate with its key (one PEM) and the CA

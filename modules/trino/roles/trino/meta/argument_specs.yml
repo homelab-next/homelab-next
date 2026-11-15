@@ -241,6 +241,10 @@ argument_specs:
         description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
           it an empty trino_access_rules_src is refused.'
         default: false
+      trino_reader_catalog:
+        type: str
+        description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
+        default: ''
   readiness:
     short_description: Fail unless the container engine is ready, every credential resolves in its form
       and the catalog and the object store answer.
@@ -527,6 +531,10 @@ argument_specs:
         description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
           it an empty trino_access_rules_src is refused.'
         default: false
+      trino_reader_catalog:
+        type: str
+        description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
+        default: ''
   backup:
     short_description: Name the data root for the backup (the engine is stateless).
     options:
@@ -747,6 +755,10 @@ argument_specs:
         description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
           it an empty trino_access_rules_src is refused.'
         default: false
+      trino_reader_catalog:
+        type: str
+        description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
+        default: ''
   restore:
     short_description: 'Nothing to restore: the engine is stateless.'
     options:
@@ -967,6 +979,10 @@ argument_specs:
         description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
           it an empty trino_access_rules_src is refused.'
         default: false
+      trino_reader_catalog:
+        type: str
+        description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
+        default: ''
   upgrade:
     short_description: Validate an image bump (tag and digest) and record it as pending.
     options:
@@ -1191,6 +1207,10 @@ argument_specs:
         description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
           it an empty trino_access_rules_src is refused.'
         default: false
+      trino_reader_catalog:
+        type: str
+        description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
+        default: ''
   export:
     short_description: 'Nothing to export: the engine is stateless.'
     options:
@@ -1411,3 +1431,7 @@ argument_specs:
         description: 'Run with no access-rules file: every signed-in user may alter and drop tables. Without
           it an empty trino_access_rules_src is refused.'
         default: false
+      trino_reader_catalog:
+        type: str
+        description: 'Name of a second, read-only catalog over the same lake (empty: none); not iceberg.'
+        default: ''

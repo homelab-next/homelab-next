@@ -109,8 +109,11 @@ wrote the SQLite file must be the one that reads it. Keep a `docker save` of thi
 PBS-backed backup directory, with its sha256, and set `iceberg_rest_image_archive` to its path on
 the guest: when the daemon lacks the digest, the role runs `docker load -i` on it and refuses to go
 on if the digest is still missing (the daemon must keep image digests across save and load, as the
-containerd image store does). Cutover step: confirm the archive's sha256, then `docker load` it on
-the guest before the first run. The image has no CVE feed; see
+containerd image store does). Cutover step: record the archive's sha256 when it is made
+(`sha256sum <name>.tar.zst > <name>.tar.zst.sha256`, kept beside it and in the cutover notes), and
+**verify it (`sha256sum -c`) before `docker load`** on the guest; a mismatch stops the cutover. The
+role does not hash the archive itself: it checks that the pinned digest is present after the load,
+which is the proof that the right image came in. The image has no CVE feed; see
 [the follow-ups](../../docs/modules/follow-ups.md).
 
 ## Known limits

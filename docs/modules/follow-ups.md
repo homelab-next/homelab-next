@@ -198,3 +198,12 @@ Still open:
   running digest (the lab's vulnerability scanner reading the compose project's image id), a
   recorded decision per advisory for the server and its bundled libraries, and the move to a
   database-backed catalog with sign-in, after which the SQLite file and this pin retire.
+- **Readers of the lake can run table procedures** (`modules/trino`): measured on Trino 484, a
+  read-only user with file-based access rules succeeds with `ALTER TABLE ... EXECUTE` `optimize`,
+  `optimize_manifests`, `expire_snapshots`, `remove_orphan_files` and `drop_extended_stats` (the
+  file rules do not govern table procedures; `add_files` is disabled and `add_files_from_table`
+  needs INSERT). The retention floors bound the damage. The mechanism that closes it is the
+  connector's `iceberg.security=read-only`, which refuses every write and procedure: the role can
+  render a second read-only catalog (`trino_reader_catalog`), but readers still say `iceberg`, so
+  moving them (their clients, the lake adapter's `trino_catalog`, and the rules denying them the
+  writable catalog) is open, with the writers and the maintenance user keeping `iceberg`.

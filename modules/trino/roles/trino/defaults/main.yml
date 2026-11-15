@@ -55,6 +55,11 @@ trino_access_rules_src: ""
 # files/lake-access.example.json is the shape to start from: the maintenance user owns and
 # changes the lake (ALTER TABLE EXECUTE needs the table's ownership), every other user reads only.
 trino_access_unrestricted: false
+# optional: the name of a second catalog over the same lake that the ENGINE holds read-only
+# (iceberg.security=read-only): every write and every table procedure, ALTER TABLE ... EXECUTE
+# included, is refused in it whatever the access rules say. Empty: none. Point readers at it and
+# deny them the writable catalog in the rules (README, "Table procedures and readers").
+trino_reader_catalog: ""
 # the engine's own address for the hooks (scheme://host:port): empty resolves the row of
 # trino_logical_id from the registry (the name its certificate is issued for)
 trino_self_url: ""

@@ -32,13 +32,11 @@ a real host, address, VM id or secret value.
   **Access rules are required**: the role refuses an empty `trino_access_rules_src` unless the site
   sets `trino_access_unrestricted: true` on purpose (otherwise every signed-in user may drop and
   alter tables). `files/lake-access.example.json` is the shape to start from: the `maintenance`
-  user owns the lake's schemas and tables (table procedures such as `ALTER TABLE ... EXECUTE`
-  need the table's ownership) and every other user is `SELECT` only on the `iceberg` catalog, with
+  user owns the lake's schemas and tables (it creates and drops them; the file rules do not
+  check a table procedure at all, see below) and every other user is `SELECT` only on the `iceberg` catalog, with
   no access to `system`. Add a rule for each writer user (INSERT, DELETE; UPDATE if it needs it)
   before it writes. Checked against the real engine: a reader is refused INSERT and DROP and the
-  `system` catalog. One limit: the engine's file rules do not govern table procedures, so a
-  reader can still run `ALTER TABLE ... EXECUTE` (the retention floors below are what bound the
-  damage; ADR-0033's row filters refuse it on filtered tables).
+  `system` catalog. The file rules do **not** cover table procedures: see the next section.
 - **The `iceberg` catalog** (the name is fixed: the lake's writers say `iceberg.<schema>.<table>`)
   is the REST catalog (`iceberg_rest` row) over the S3 object store, path-style, region `garage`,
   warehouse `s3://iceberg-warehouse/`; the key pair is read from the container's environment
@@ -46,6 +44,24 @@ a real host, address, VM id or secret value.
 - **Pinned behaviour the old lake learned the hard way**: the session time zone is forced to UTC
   server-side (LL-392), a per-query memory bound keeps a runaway query from taking the JVM down
   (`ExitOnOutOfMemoryError` kills every in-flight query), and the retention floors below.
+
+## Table procedures and readers
+
+Measured on the real engine (Trino 484, a reader user with the shipped example rules, table in the
+`iceberg` catalog): `ALTER TABLE ... EXECUTE` **succeeds** for a read-only user with `optimize`,
+`optimize_manifests`, `expire_snapshots`, `remove_orphan_files` and `drop_extended_stats`.
+`add_files` is refused ("disabled" in the engine) and `add_files_from_table` is refused (it needs
+INSERT). The file rules never see a table procedure, so a reader can compact, expire (not below
+the 7 day floor) and remove orphans (not below the 3 day floor) on any table. The floors bound the
+damage; they do not make it zero.
+
+The mechanism that does close it is the connector's own security mode: a catalog with
+`iceberg.security=read-only` refuses every write **and every table procedure** (checked: all seven
+above are `Access Denied` for the same reader, and for any user). `trino_reader_catalog: iceberg_ro`
+renders such a second catalog over the same lake. Using it means readers say `iceberg_ro.<schema>.<table>`
+(not the name the lake's readers use today) and the rules deny them the writable `iceberg`
+(the writers and the maintenance user keep `iceberg`). Moving the readers is a follow-up
+(docs/modules/follow-ups.md); the catalog is available now and is off by default.
 
 ## The maintenance timer (the lake's snapshot and orphan hygiene)
 

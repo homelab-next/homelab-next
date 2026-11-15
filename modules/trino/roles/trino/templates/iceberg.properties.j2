@@ -3,7 +3,10 @@
 # tables in the REST catalog, files in the object store; the key pair is read from the container's
 # environment (${ENV:...}), never from this file.
 connector.name=iceberg
-iceberg.catalog.type=rest
+{% if item.read_only | default(false) %}
+# a catalog the engine itself holds read-only: every write and every table procedure is refused
+iceberg.security=read-only
+{% endif %}iceberg.catalog.type=rest
 iceberg.rest-catalog.uri={{ trino_catalog_endpoint }}
 iceberg.rest-catalog.warehouse={{ trino_warehouse }}
 iceberg.rest-catalog.vended-credentials-enabled=false

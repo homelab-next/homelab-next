@@ -30,6 +30,7 @@
       - >-
         [trino_dir, trino_data_root, trino_maintenance_state_dir, trino_maintenance_env_file, trino_maintenance_script]
         | reject('match', trino_path_pattern) | list | length == 0
+      - trino_reader_catalog == '' or (trino_reader_catalog is match('^[a-z][a-z0-9_]{0,31}\\Z') and trino_reader_catalog != trino_catalog_name)
       - trino_access_rules_src == '' or trino_access_rules_src is match(trino_path_pattern)
       # no rules file is a decision, not a default: it needs trino_access_unrestricted: true
       - trino_access_rules_src != '' or trino_access_unrestricted | bool

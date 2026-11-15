@@ -575,10 +575,38 @@ def test_the_shipped_example_rules_let_only_the_maintenance_user_change_the_lake
     tables = rules["tables"]
     assert (
         tables[0]["user"] == "maintenance" and "OWNERSHIP" in tables[0]["privileges"]
-    )  # ALTER TABLE EXECUTE
+    )  # the maintenance user owns the tables
     assert tables[-1] == {"privileges": ["SELECT"]}  # everyone else reads only
     assert {"catalog": "iceberg", "allow": "read-only"} in rules["catalogs"]
     assert {"owner": False} in rules["schemas"]
+
+
+def test_trino_renders_a_read_only_reader_catalog_only_when_asked(tmp_path):
+    cat = tmp_path / "app" / "etc" / "catalog"
+    assert (
+        run_role(tmp_path, TRINO, "main", trino_vars(tmp_path), env=TRINO_SECRETS).returncode == 0
+    )
+    assert sorted(p.name for p in cat.iterdir()) == ["iceberg.properties"]
+    assert "iceberg.security" not in (cat / "iceberg.properties").read_text()
+    v = trino_vars(tmp_path, trino_reader_catalog="iceberg_ro")
+    assert run_role(tmp_path, TRINO, "main", v, env=TRINO_SECRETS).returncode == 0
+    ro = (cat / "iceberg_ro.properties").read_text()
+    assert (
+        "iceberg.security=read-only" in ro
+        and "iceberg.rest-catalog.warehouse=s3://iceberg-warehouse/" in ro
+    )
+    assert (
+        "iceberg.security" not in (cat / "iceberg.properties").read_text()
+    )  # writers keep iceberg
+    for bad in ("iceberg", "Bad-Name"):
+        r = run_role(
+            tmp_path,
+            TRINO,
+            "main",
+            trino_vars(tmp_path, trino_reader_catalog=bad),
+            env=TRINO_SECRETS,
+        )
+        assert r.returncode != 0, bad
 
 
 def test_trino_installs_the_access_rules_when_given_and_removes_them_when_not(tmp_path):

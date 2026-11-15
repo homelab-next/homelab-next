@@ -28,9 +28,7 @@ code change.  The lint reads:
 * **where a name is allowed**: a provider module's directory, for that provider's own product only;
   site configuration (``examples/modules/sites/``, ``examples/private-overlay/``, an overlay's
   ``lab/``); Markdown prose (ADRs and the changelog included); the role table; and the reviewed
-  path globs of ``tools/product_names.yml`` ``allow:`` (each with a reason); an entry with
-  ``products: [name, ...]`` exempts only those products there and every other product stays linted
-  in that file (the way to adopt a newly linted product without exempting the file for all);
+  path globs of ``tools/product_names.yml`` ``allow:`` (each with a reason);
 * **what is linted** everywhere else, over the tracked and untracked-but-not-ignored files
   (``git ls-files`` under ROOT; a directory walk outside a git work tree): Python string and
   bytes constants as Python reads them (escapes decoded, implicit concatenation joined, f-string
@@ -330,7 +328,7 @@ def _section(doc: Any, key: str) -> list:
     return out
 
 
-def _allow_entries(root: Path) -> list[tuple[str, str, list[str]]]:
+def allowlist(root: Path) -> list[tuple[str, str]]:
     vocab = _load_yaml(root / VOCABULARY) if (root / VOCABULARY).is_file() else {}
     out = []
     for i, e in enumerate(_section(vocab, "allow")):
@@ -338,22 +336,8 @@ def _allow_entries(root: Path) -> list[tuple[str, str, list[str]]]:
             raise LintError(f"{VOCABULARY}: allow[{i}] needs a path glob")
         if not str(e.get("reason", "")).strip():
             raise LintError(f"{VOCABULARY}: allow[{i}] ({e['path']}) needs a reason")
-        prods = e.get("products", [])
-        if not isinstance(prods, list) or not all(isinstance(x, str) and x for x in prods):
-            raise LintError(f"{VOCABULARY}: allow[{i}] ({e['path']}): products is a list of names")
-        out.append((str(e["path"]), str(e["reason"]), [x.lower() for x in prods]))
+        out.append((str(e["path"]), str(e["reason"])))
     return out
-
-
-def allowlist(root: Path) -> list[tuple[str, str]]:
-    """The whole-file exemptions: every product is allowed in these paths."""
-    return [(g, r) for g, r, prods in _allow_entries(root) if not prods]
-
-
-def product_allowlist(root: Path) -> list[tuple[str, set[str]]]:
-    """The per-product exemptions (``products:`` on an ``allow:`` entry): only the named
-    products are allowed in these paths; every other product stays linted there."""
-    return [(g, set(prods)) for g, _, prods in _allow_entries(root) if prods]
 
 
 def _matches(rel: str, glob: str) -> bool:
@@ -537,12 +521,7 @@ def tree_files(root: Path) -> list[str]:
     return sorted(out)
 
 
-def scan(
-    root: Path,
-    vocab: Vocabulary,
-    allowed: list[str],
-    partial: list[tuple[str, set[str]]] | None = None,
-) -> dict[str, Counter]:
+def scan(root: Path, vocab: Vocabulary, allowed: list[str]) -> dict[str, Counter]:
     """``{path: Counter(product -> occurrences)}`` outside the allowed paths; a directory is
     keyed ``dir/`` and counted once for its own name."""
     hits: dict[str, Counter] = {}
@@ -553,10 +532,6 @@ def scan(
         owner = next((p for d, p in own if rel == d + "/" or rel.startswith(d + "/")), None)
         if owner:
             c.pop(owner, None)  # a provider module names its own product, nobody else's
-        for glob, names in partial or ():
-            if _matches(rel, glob):
-                for k in [k for k in c if k.lower() in names]:
-                    del c[k]  # a product exempted for this path only; the others stay linted
         if c:
             hits.setdefault(rel, Counter()).update(c)
 
@@ -829,7 +804,7 @@ def _main(argv: list[str] | None) -> int:
     baseline = args.baseline or root / BASELINE
     vocab = vocabulary(root, args.overlay, args.roles or root / ROLES)
     globs = [*ALWAYS_ALLOWED, *(g for g, _ in allowlist(root))]
-    hits = scan(root, vocab, globs, product_allowlist(root))
+    hits = scan(root, vocab, globs)
     if args.init:
         if baseline.exists() or baseline.is_symlink():
             raise LintError(f"{baseline} exists; --init is for the first adoption")
