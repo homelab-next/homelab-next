@@ -72,6 +72,35 @@ def test_the_hub_is_reached_with_the_edges_client_certificate_and_the_lab_ca():
     assert "header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}" in site
 
 
+def _proxy_lines(site: str) -> list[str]:
+    block = site.split("reverse_proxy ", 1)[1].split(" {\n", 1)[1].split("\t\ttransport", 1)[0]
+    return [ln.strip() for ln in block.splitlines()]
+
+
+@pytest.mark.parametrize("hostname", ["hub.example.internal", "sso.example.internal"])
+def test_an_https_upstream_is_sent_the_clients_host_not_its_own_address(hostname):
+    # Caddy sends an https upstream "<alias>:<port>" as Host (the client's goes to
+    # X-Forwarded-Host), so a service checking Host against its public name refused every request
+    # through the edge (found live)
+    site = _site(_edge()["caddy/sites.caddy"], hostname)
+    assert "header_up Host {http.request.host}" in _proxy_lines(site)
+
+
+def test_the_host_line_sits_inside_the_proxy_block_beside_the_front_door_header():
+    lines = _proxy_lines(_site(_edge()["caddy/sites.caddy"], "hub.example.internal"))
+    assert lines == [
+        "header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}",
+        "header_up Host {http.request.host}",
+    ]
+
+
+def test_a_plain_http_upstream_is_left_to_caddys_own_host_handling():
+    out = generate(load(ROOT / "examples" / "services.yml"), ["caddy"])["caddy"][
+        "caddy/sites.caddy"
+    ]
+    assert "header_up Host" not in out
+
+
 def test_a_tls_internal_upstream_is_verified_against_the_ca_with_no_client_certificate():
     site = _site(_edge()["caddy/sites.caddy"], "sso.example.internal")
     assert "tls_trust_pool file /etc/hnx/edge-tls/pki/internal-ca.pem" in site
