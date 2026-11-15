@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# The configuration on the host: prometheus.yml and the rules (rendered), the generated target
+# lists, and the scrape credentials written from the secret store by reference (the container's
+# group reads them; a file the registry no longer names is removed). A changed configuration
+# leaves a reload owed, which only a successful SIGHUP clears.
+- name: Render the configuration and the default alert rules
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ prometheus_data_root }}/config/{{ item.dest }}"
+    owner: "{{ prometheus_owner }}"
+    group: "{{ prometheus_gid | int }}"
+    mode: "0640"
+  loop:
+    - {src: prometheus.yml.j2, dest: prometheus.yml}
+    - {src: rules.yml.j2, dest: rules.yml}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: prometheus_config_written
+
+- name: Install the generated target lists
+  ansible.builtin.copy:
+    dest: "{{ prometheus_data_root }}/config/{{ prometheus_generated_dir }}/{{ item.dest }}"
+    content: "{{ item.text }}"
+    owner: "{{ prometheus_owner }}"
+    group: "{{ prometheus_gid | int }}"
+    mode: "0640"
+  loop:
+    - {dest: scrape_configs.yml, text: "{{ prometheus_scrape_text }}"}
+    - {dest: node_targets.yml, text: "{{ prometheus_node_text }}"}
+  loop_control:
+    label: "{{ item.dest }}"
+  register: prometheus_targets_written
+
+- name: Create the credential subdirectories
+  ansible.builtin.file:
+    path: "{{ prometheus_data_root }}/scrape-credentials{{ item }}"
+    state: directory
+    owner: "{{ prometheus_owner }}"
+    group: "{{ prometheus_gid | int }}"
+    mode: "0750"
+  loop: "{{ prometheus_scrape_auths | map(attribute='path') | map('dirname') | map('replace', prometheus_container_authfiles_dir, '', 1) | reject('equalto', '') | unique | sort }}"
+
+- name: Write each scrape credential from the secret store
+  ansible.builtin.copy:
+    dest: "{{ prometheus_data_root }}/scrape-credentials{{ item.path | replace(prometheus_container_authfiles_dir, '', 1) }}"
+    content: "{{ lookup('hnx_secret', item.secret) | trim }}\n"
+    owner: "{{ prometheus_owner }}"
+    group: "{{ prometheus_gid | int }}"
+    mode: "0640"
+  loop: "{{ prometheus_scrape_auths }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: prometheus_auths_written
+  no_log: true
+  diff: false
+
+- name: List the credential files on the host
+  ansible.builtin.find:
+    paths: "{{ prometheus_data_root }}/scrape-credentials"
+    recurse: true
+    file_type: file
+    hidden: true
+  register: prometheus_auths_found
+
+- name: Remove a credential file the registry no longer names
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ prometheus_auths_found.files | map(attribute='path') | sort
+       | difference(prometheus_scrape_auths | map(attribute='path')
+                    | map('replace', prometheus_container_authfiles_dir, prometheus_data_root ~ '/scrape-credentials', 1) | list) }}
+  register: prometheus_auths_removed

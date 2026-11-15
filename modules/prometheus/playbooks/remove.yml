@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: stop the alert forwarder's timer and its units, stop and remove the container, and delete
+# the publish token and the scrape credentials. The data root (the window, the rendered configuration)
+# and the rest of the compose project are kept for the operator to archive or delete; the
+# decommission audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove the metrics service
+  hosts: mod_prometheus_server
+  become: true
+  tasks:
+    - name: Stop and disable the alert forwarder's timer
+      ansible.builtin.systemd_service:
+        name: hnx-prometheus-alerts.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+    - name: Remove the forwarder's units, script and token
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/hnx-prometheus-alerts.timer
+        - /etc/systemd/system/hnx-prometheus-alerts.service
+        - /usr/local/libexec/homelabnext/prometheus-alert-notify
+        - /etc/homelabnext/prometheus-notify.auth
+    - name: Reload systemd (the forwarder's units are gone)
+      ansible.builtin.command:
+        argv: [systemctl, daemon-reload]
+      changed_when: true
+    - name: Delete the scrape credentials written from the secret store
+      ansible.builtin.file:
+        path: "{{ prometheus_data_root | default('/var/lib/hnx-modules/prometheus') }}/scrape-credentials"
+        state: absent
+    - name: Stop and remove the container
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ prometheus_dir | default('/opt/compose/prometheus') }}/docker-compose.yml", down]
+      changed_when: true

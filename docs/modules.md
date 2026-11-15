@@ -66,7 +66,7 @@ what it needs, what it offers and every entry it adds to a registry the core bui
 ## Where modules live
 
 ```text
-modules/<id>/module.yml           a module shipped with homelab-next (modules/ntfy, notify; modules/caddy, edge; modules/garage, iceberg-rest and trino, the lake)
+modules/<id>/module.yml           a module shipped with homelab-next (modules/ntfy, notify; modules/caddy, edge; modules/prometheus, metrics; modules/garage, iceberg-rest and trino, the lake)
   python/hnx_modules/<id_>/       its code: hnx_modules is a PEP 420 namespace package, so overlay
                                   modules add code without touching the repository
   roles/<id_>[_<role>]/           its Ansible roles (role interface v1)

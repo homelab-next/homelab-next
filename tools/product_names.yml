@@ -19,7 +19,6 @@ products:
   - {name: litellm, why: the LLM gateway's reference product}
   - {name: stackstorm, aliases: [st2], why: the automation slot's reference product (workflow runs and event rules)}
   - {name: nifi, why: the log pipeline's reference product}
-  - {name: prometheus, why: the metrics service's reference product}
   - {name: grafana, why: the dashboards' reference product}
   - {name: uptime-kuma, why: the uptime monitor's reference product}
   - {name: authentik, why: the idp's reference product}
@@ -190,3 +189,15 @@ allow:
   - path: "tests/graph/test_graph.py"
     products: [garage]
     reason: "the knowledge graph's image-to-product mapping, whose examples are the lab's images (the object-store provider module modules/garage makes the name a linted product; these files were counted debt before it)"
+  - path: "tests/modules/test_prometheus_module.py"
+    reason: "the tests of the metrics provider module (modules/prometheus): its manifest, adapter and an overlay that selects it, by the module's id, which is its product's name"
+  - path: "tests/roles/test_prometheus_role.py"
+    reason: "the tests of the metrics module's role (modules/prometheus/roles/prometheus), named for the module id as a module role must be (role:<module id>); they run the product's own promtool for its configuration and rules"
+  - path: "tests/roles/test_prometheus_alert_notify.py"
+    reason: "the tests of the metrics module's alert forwarder, a script of the role named for the module id (modules/prometheus/roles/prometheus/templates)"
+  - path: "tests/generators/test_node_targets.py"
+    reason: "the tests of the metrics generator's host target list (the node_targets option), keyed by the generator's id and its output paths; the generator is counted where it lives, homelabnext/generators/builtin.py"
+  - path: "ansible/roles/node_exporter/**"
+    reason: "the per-guest host-metrics role (control metrics-agent) installs and configures the distribution's package of one product (prometheus-node-exporter), so the package, unit and argument file names are the role itself; reviewed as an exemption until a provider module carries it, as the other roles named for their product"
+  - path: "tests/roles/test_node_exporter_role.py"
+    reason: "the node_exporter role's own tests name the distribution's package, unit and argument file the role manages"

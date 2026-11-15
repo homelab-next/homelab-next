@@ -141,6 +141,22 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
             "renders only auth=idp clients on these hosts (default: each generator's usual output)",
         )
         p.add_argument(
+            "--node-exporter-port",
+            type=int,
+            default=None,
+            metavar="PORT",
+            help="the metrics generator also renders a host-metrics target list: every registry "
+            "host on PORT, less the hosts named by --node-exporter-exclude",
+        )
+        p.add_argument(
+            "--node-exporter-exclude",
+            action="append",
+            default=None,
+            metavar="HOST",
+            help="a registry host with no host-metrics exporter (repeatable); needs "
+            "--node-exporter-port",
+        )
+        p.add_argument(
             "--reserved-username",
             action="append",
             default=None,
@@ -194,12 +210,24 @@ def main(argv: list[str] | None = None, out=None, err=None) -> int:
         except ResolutionError as exc:
             print(f"hnx: {exc}", file=err)
             return 1
+    if args.node_exporter_exclude and args.node_exporter_port is None:
+        print("hnx: --node-exporter-exclude needs --node-exporter-port", file=err)
+        return 2
+    node_targets = (
+        None
+        if args.node_exporter_port is None
+        else {"port": args.node_exporter_port, "exclude": args.node_exporter_exclude or []}
+    )
     try:
         files = flatten(
             generate(
                 reg,
                 args.only,
-                {"edge_hosts": args.edge_host, "reserved_usernames": args.reserved_username},
+                {
+                    "edge_hosts": args.edge_host,
+                    "reserved_usernames": args.reserved_username,
+                    "node_targets": node_targets,
+                },
             )
         )
     except KeyError as exc:

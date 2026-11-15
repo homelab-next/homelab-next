@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Every value reaches the exporter's command line: refuse anything that could add an argument.
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - node_exporter_bind is match(node_exporter_ipv4_pattern)
+      - node_exporter_bind != '0.0.0.0'
+      - node_exporter_port | int >= 1 and node_exporter_port | int <= 65535
+      - node_exporter_fs_types_exclude is match('^\^\([A-Za-z0-9_|?]+\)\$\Z')
+      - node_exporter_service is match('^[A-Za-z0-9@._-]+\Z')
+      - node_exporter_defaults_file is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z')
+      - node_exporter_state_dir is match('^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z')
+      - node_exporter_health_timeout | int > 0
+    fail_msg: >-
+      node_exporter: the guest's own IPv4 address to listen on (not all interfaces), a port, a
+      filesystem-type exclusion of the form ^(a|b)$ and plain absolute paths and unit name
+  tags: [health, readiness]
