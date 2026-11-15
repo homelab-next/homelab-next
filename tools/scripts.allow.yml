@@ -20,6 +20,10 @@ fleet_unit_specs_exclude:
 
 # active scripts with no caller in the tree
 uncalled:
+  lake-verify: >-
+    the operator runs it by hand in the lake's rehearsal and in its cutover window, against the
+    query engine under test and the reference counts the source reported (the lake modules'
+    READMEs); no timer or make target runs it, because it compares one copy with one source once
   decommission-check: >-
     the operator runs it by hand at step 8 of a service swap (docs/swap.md), with the retired
     service's names as arguments; the swap runner calls the same scanner as a library

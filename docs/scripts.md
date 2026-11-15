@@ -120,7 +120,7 @@ they do not watch the fleet.
 **Declared exception: host scans that alert on a change.** M-04 is about checks of the repository
 or the platform. A role may ship a `kind: job` scan of its own host on a role timer that alerts,
 state-diffed, when the host's own set changes (what needs a restart, which package files fail
-their digest): the alert names one host's state, which no invariant criterion reads, and the
+their digest, which maintenance steps of the lake fail): the alert names one host's state, which no invariant criterion reads, and the
 health of the scan itself is the freshness of its state file (docs/compute-model.md, the
 control's health column). Each such scan is listed here; `tests/scripts/test_host_scan_alerts_declared.py`
 fails when a timer-run script whose `outputs` name an alert is missing from the list, or a listed
@@ -130,6 +130,7 @@ one no longer alerts:
 - `needrestart-check` (control `restart-required`)
 - `needrestart-reboot-check` (control `restart-required`, the pending-reboot alert)
 - `lynis-dpkg-verify` (control `host-assessment`, the package integrity sweep)
+- `lake-maintenance` (module `trino`, the lake's snapshot expiry and orphan-file removal: one alert when the set of failing steps changes)
 - `prometheus-alert-notify` (module `prometheus`, not a host scan: it relays the metrics service's own firing alerts, whose rules are the checks, to the notify service state-diffed; its health is the last-send record the role's `health` hook reads)
 <!-- /host-scan-alerts -->
 

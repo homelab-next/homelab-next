@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Nothing to restore: the engine is stateless. Converge the role (main) to rebuild it from the
+# secret store and the registry.
+- name: The engine holds no data of its own
+  ansible.builtin.debug:
+    msg: "trino: stateless - run the role (main) to rebuild it; restore the lake with the lake-catalog and object-store modules"
+  tags: [restore]

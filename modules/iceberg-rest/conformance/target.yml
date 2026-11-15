@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the lake-catalog suite through
+# the shared lake adapter, which resolves both endpoints from HNX_ENDPOINT_LAKE_QUERY and
+# HNX_ENDPOINT_LAKE_CATALOG (never a URL here) and works in its own scratch namespace
+# (hnx_conform_<run>). Both lake suites need the whole client (they seed through the catalog and
+# count through the query engine), so a run needs the query engine too.
+#   HNX_ENDPOINT_LAKE_QUERY=https://<host>:8443 HNX_ENDPOINT_LAKE_CATALOG=http://<host>:8181 \
+#   LAB_WAREHOUSE=s3://iceberg-warehouse/ HNX_SECRET_LAKE_QUERY_READERS_HNX_CONFORM=<password> \
+#     hnx conform run lake-catalog --target modules/iceberg-rest/conformance/target.yml
+# This catalog serves its API at the root (no /catalog prefix) and names no warehouse prefix in its
+# config, so api_root is empty and catalog_prefix_optional is set. The query engine signs readers
+# in (a non-loopback engine is refused without a credential): credential names the secret the
+# reader's password is delivered in, ca_file the lab CA that issued the engine's certificate.
+# The lab reaches the catalog over plain http inside its own network: a run against the lab's
+# instance sets allow_plaintext: true in a copy of this file, with the lab's own domain in place of
+# example.internal (the endpoint overrides above name the endpoints; the adapter needs a domain or
+# a resolver, and has no default).
+name: iceberg-rest
+capabilities:
+  lake-catalog:
+    adapter: homelabnext.conform.adapters.lake:make_lake
+    config:
+      domain: example.internal
+      namespace: auto
+      trino_catalog: iceberg
+      api_root: ""
+      catalog_prefix_optional: true
+      credential: secret:lake-query/readers/hnx-conform

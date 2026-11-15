@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, the node reports healthy, the lake's bucket
+# exists and the lake key may read and write it, and the S3 API refuses an unsigned request.
+# Nothing is written.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: garage
+        compose_app_dir: "{{ garage_app.compose_app_dir }}"
+        compose_app_spec: "{{ garage_app.compose_app_spec }}"
+    - name: The cluster reports its node healthy
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ garage_dir }}/docker-compose.yml", exec, -T, garage, /garage, status]
+      register: garage_status
+      changed_when: false
+      failed_when: garage_status.rc != 0 or 'HEALTHY NODES' not in garage_status.stdout
+    - name: The S3 API refuses an unsigned request
+      ansible.builtin.uri:
+        url: "http://{{ garage_bind }}:{{ garage_s3_port | int }}/"
+        status_code: [403]
+        timeout: "{{ garage_health_timeout | int }}"
+      changed_when: false
+    - name: Read the lake bucket from the server
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ garage_dir }}/docker-compose.yml", exec, -T, garage, /garage, bucket, info, "{{ garage_bucket }}"]
+      register: garage_bucket_info
+      changed_when: false
+    - name: The lake key may read and write the bucket
+      ansible.builtin.assert:
+        that:
+          - >-
+            garage_bucket_info.stdout_lines
+            | select('match', '^RW[O]?\s+' ~ lookup('hnx_secret', garage_access_key_ref) ~ '\s') | list | length == 1
+        fail_msg: "garage: the key {{ garage_access_key_ref }} does not hold read and write on the bucket {{ garage_bucket }}"
+      no_log: true
+  tags: [health]

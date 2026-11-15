@@ -89,6 +89,17 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:docker_engine/docker_engine_compose_version": ("github", "docker/compose"),
     "role:events_bus/events_bus_version": ("github", "nats-io/nats-server"),
     "role:example_service/example_service_version": ("none", "a fictitious example package"),
+    "role:garage/garage_image": (
+        "none",
+        "Garage is released from git.deuxfleurs.fr (no GitHub release feed): compare its tags "
+        "(docker.io/dxflrs/garage) with the project's release page by hand, within the pinned major version",
+    ),
+    "role:iceberg_rest/iceberg_rest_image": (
+        "none",
+        "a build of the Apache Iceberg main branch the project published only as :latest (pinned by "
+        "digest to the build the old lake runs): compare with the project's release tags by hand, and "
+        "move only with a catalog-file backup in hand",
+    ),
     "role:keycloak/keycloak_image": ("github", "keycloak/keycloak"),
     "role:keycloak/keycloak_postgres_image": (
         "none",
@@ -112,6 +123,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
     "role:openbao/openbao_lego_version": ("github", "go-acme/lego"),
     "role:tailscale_node/tailscale_node_version": ("github", "tailscale/tailscale"),
+    "role:trino/trino_image": ("github", "trinodb/trino"),
     "role:trivy/trivy_version": ("github", "aquasecurity/trivy"),
     "role:vllm_server/vllm_server_version": ("pypi", "vllm"),
     "role:wazuh_agent/wazuh_agent_version": ("github", "wazuh/wazuh"),
@@ -146,6 +158,20 @@ NOTES: dict[str, str] = {
     "role:keycloak/keycloak_postgres_image": (
         "an image (modules/keycloak): the tag and its digest together, a minor version only "
         "(a major one is a dump and a restore)"
+    ),
+    "role:garage/garage_image": (
+        "an image (modules/garage): bump the tag and its digest together, with product.version in "
+        "modules/garage/module.yml and the lab registry's version; the same major version only"
+    ),
+    "role:iceberg_rest/iceberg_rest_image": (
+        "an image (modules/iceberg-rest): pinned by digest, the tag labels the build; bump the tag "
+        "and its digest together, with product.version in modules/iceberg-rest/module.yml and the "
+        "lab registry's version, after exporting the catalog file"
+    ),
+    "role:trino/trino_image": (
+        "an image (modules/trino): bump the tag and its digest together, with product.version in "
+        "modules/trino/module.yml and the lab registry's version; read the release notes of every "
+        "version crossed (catalog properties and procedure options change between releases)"
     ),
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "

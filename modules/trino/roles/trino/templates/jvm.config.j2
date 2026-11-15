@@ -1,0 +1,13 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+-server
+-Xms{{ trino_heap }}
+-Xmx{{ trino_heap }}
+-XX:+UseG1GC
+-XX:G1HeapRegionSize=32M
+-XX:+ExitOnOutOfMemoryError
+-XX:+HeapDumpOnOutOfMemoryError
+-XX:HeapDumpPath=/tmp
+-XX:-OmitStackTraceInFastThrow
+-XX:ReservedCodeCacheSize=256M
+-XX:MaxMetaspaceSize=256M
+-Djdk.attach.allowAttachSelf=true

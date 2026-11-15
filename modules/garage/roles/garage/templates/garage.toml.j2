@@ -1,0 +1,19 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (module garage); local changes are overwritten. No secret is in this file:
+# the RPC secret and the admin token reach the server in its environment (GARAGE_RPC_SECRET and
+# GARAGE_ADMIN_TOKEN), the key pair in GARAGE_DEFAULT_ACCESS_KEY and GARAGE_DEFAULT_SECRET_KEY.
+metadata_dir = "{{ garage_container_meta_dir }}"
+data_dir = "{{ garage_container_data_dir }}"
+db_engine = "sqlite"
+
+replication_factor = 1
+
+# the RPC port is the container's own: nothing publishes it and a single node talks to itself
+rpc_bind_addr = "0.0.0.0:3901"
+
+[s3_api]
+s3_region = "{{ garage_region }}"
+api_bind_addr = "0.0.0.0:{{ garage_container_s3_port }}"
+
+[admin]
+api_bind_addr = "0.0.0.0:{{ garage_container_admin_port }}"

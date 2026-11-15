@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
+# instance the site selects; version is product.version, host the module's host role (docs/modules/
+# registry-rows.md). Internal only, no public route: HTTPS with a certificate from the lab's
+# internal CA, every reader signs in with a password (auth: own).
+services:
+  lake-query:
+    capability: lake-query
+    impl: trino
+    host: server
+    protocol: https
+    port: 8443
+    health: {kind: http, path: /v1/info, expect_status: 200, interval_s: 30}
+    upstreams: [lake-catalog, object-store]
+    owner: operator
+    tls: internal
+    auth: own
+    tags: [data, query]
+    description: Trino, single node, catalog iceberg; HTTPS and password sign-in. No public route.
