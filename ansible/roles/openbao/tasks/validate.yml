@@ -32,6 +32,17 @@
       that version (openbao_checksums_release equal to openbao_version), a
       non-root user and group, and dedicated data, audit and configuration directories.
 
+- name: Refuse an admin socket outside /run or with a syscall list that is not plain names
+  when: openbao_admin_socket | bool
+  ansible.builtin.assert:
+    that:
+      - openbao_admin_socket_path is match('^/run/[a-z0-9][a-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9._-]*\.sock\Z')
+      - openbao_admin_socket_syscalls is match('^(@?[a-z0-9_]+( @?[a-z0-9_]+)*)?\Z')
+    fail_msg: >-
+      openbao: openbao_admin_socket_path is /run/<dir>/<name>.sock (the directory is the unit's
+      RuntimeDirectory, so it must sit under /run), and openbao_admin_socket_syscalls is
+      space-separated syscall or @group names (or empty)
+
 - name: Refuse an unknown TLS source
   ansible.builtin.assert:
     that: openbao_tls_source in ['provided', 'acme']

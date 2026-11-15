@@ -289,6 +289,76 @@ def test_config_renders_raft_tls_and_audit_and_a_hardened_unit(tmp_path):
     assert "|| true" not in rotate  # a failed SIGHUP to a running server fails the rotation
 
 
+def test_admin_socket_is_off_by_default_and_rendered_when_asked(tmp_path):
+    off = tmp_path / "off"
+    off.mkdir()
+    r = run_role(off, ROLE, "config", base(off))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'listener "unix"' not in (off / "etc" / "openbao.hcl").read_text()
+    unit = (off / "units" / "openbao.service").read_text()
+    assert "RuntimeDirectory" not in unit and "@chown" not in unit
+
+    on = tmp_path / "on"
+    on.mkdir()
+    r = run_role(on, ROLE, "config", base(on, openbao_admin_socket=True))
+    assert r.returncode == 0, r.stdout + r.stderr
+    hcl = (on / "etc" / "openbao.hcl").read_text()
+    assert hcl.count('listener "unix" {') == 1 and hcl.count('listener "tcp" {') == 1
+    for line in (
+        'address = "/run/openbao/admin.sock"',
+        'socket_mode = "0600"',
+        "disable_unauthed_generate_root_endpoints = false",
+    ):
+        assert f"\n  {line}\n" in hcl, line
+    assert "socket_user" not in hcl and "socket_group" not in hcl
+    # the legacy endpoints stay off on the network listener
+    tcp = hcl.split('listener "tcp" {')[1].split("\n}\n")[0]
+    assert "generate_root" not in tcp
+    unit = (on / "units" / "openbao.service").read_text()
+    for line in (
+        "RuntimeDirectory=openbao",
+        "RuntimeDirectoryMode=0700",
+        "SystemCallFilter=@chown",
+        "SystemCallFilter=~@privileged @resources",
+    ):
+        assert f"\n{line}\n" in unit, line
+    assert unit.index("~@privileged @resources") < unit.index("SystemCallFilter=@chown")
+
+    # a custom directory names the RuntimeDirectory; an empty syscall list adds nothing
+    cu = tmp_path / "custom"
+    cu.mkdir()
+    custom = base(cu, openbao_admin_socket=True, openbao_admin_socket_syscalls="")
+    custom["openbao_admin_socket_path"] = "/run/bao-admin/a.sock"
+    r = run_role(cu, ROLE, "config", custom)
+    assert r.returncode == 0, r.stdout + r.stderr
+    unit = (cu / "units" / "openbao.service").read_text()
+    assert "\nRuntimeDirectory=bao-admin\n" in unit and "@chown" not in unit
+    assert 'address = "/run/bao-admin/a.sock"' in (cu / "etc" / "openbao.hcl").read_text()
+
+
+def test_admin_socket_path_must_sit_under_run(tmp_path):
+    on = {"openbao_admin_socket": True}
+    good = [on, dict(on, openbao_admin_socket_path="/run/bao-admin/a.sock")]
+    bad_paths = (
+        "/tmp/openbao/admin.sock",
+        "/var/run/openbao/admin.sock",
+        "/run/admin.sock",
+        "/run/openbao/../etc/x.sock",
+        "/run/openbao/admin.sock\nevil",
+        "/run/open bao/a.sock",
+        "/run/openbao/admin",
+        '/run/openbao/a".sock',
+    )
+    bad = [dict(on, openbao_admin_socket_path=p) for p in bad_paths]
+    bad.append(dict(on, openbao_admin_socket_syscalls="@chown\nSystemCallFilter=~@chown"))
+    good.append({"openbao_admin_socket_path": "/tmp/x"})  # not enabled: not looked at
+    got = run_cases(tmp_path, ROLE, "validate", base(tmp_path), good + bad, parallel=True)
+    for over, (failed, msg) in zip(good, got[: len(good)], strict=True):
+        assert not failed, (over, msg)
+    for over, (failed, msg) in zip(bad, got[len(good) :], strict=True):
+        assert failed and "openbao" in msg, (over, msg)
+
+
 def test_config_quotes_every_string_it_writes(tmp_path):
     """A value is written JSON-quoted, so it cannot close its string and add a stanza."""
     evil = 'n1"\n}\nlistener "tcp" { tls_disable = true'
@@ -1564,16 +1634,29 @@ def test_the_real_server_reads_the_configuration_and_the_hooks_work_against_it(t
     )
 
 
+FORBIDDEN_ACTS = re.compile(
+    r"operator\s+(init|unseal|generate-root)\b|sys/(init|unseal|generate-root)|unseal_keys|root_token"
+)
+
+
 def test_no_hook_ever_initialises_unseals_or_reads_a_share():
     """The role's whole task tree: the operator initialises and unseals, never the role."""
     text = "\n".join(
         p.read_text() for p in (Path(__file__).resolve().parents[2] / "ansible/roles/openbao").rglob("*")
         if p.is_file() and p.suffix in (".yml", ".j2")
     )  # fmt: skip
-    forbidden = re.compile(
-        r"operator\s+(init|unseal|generate-root)\b|sys/(init|unseal|generate-root)|unseal_keys|root_token"
-    )
-    assert forbidden.findall(text) == []
+    assert FORBIDDEN_ACTS.findall(text) == []
+    # the admin socket only renders a listener parameter; that exact name is not an act, and the
+    # guard still catches every way a task could run or call root generation
+    assert "disable_unauthed_generate_root_endpoints" in text
+    assert FORBIDDEN_ACTS.findall("disable_unauthed_generate_root_endpoints = false") == []
+    for act in (
+        "- ansible.builtin.command: bao operator generate-root -init",
+        "- ansible.builtin.uri: {url: 'https://x/v1/sys/generate-root/attempt'}",
+        "- ansible.builtin.command: bao operator unseal",
+        "- ansible.builtin.command: bao operator init",
+    ):
+        assert FORBIDDEN_ACTS.findall(act), act
 
 
 # ---------------------------------------------------------------- a public certificate (ACME)
