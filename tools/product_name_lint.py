@@ -361,16 +361,25 @@ def partial_problems(
     vocab: Vocabulary,
     counts: dict[str, dict[str, int]],
     where: str,
+    linted_then: set[str] | None = None,
 ) -> list[str]:
     """A ``products:`` exemption is for a product that is NEW to the lint, nothing else: an error
     when a name is not a known product, or when ``counts`` (a baseline) already holds a nonzero
     count for it in a path the entry matches - that debt is counted, and exempting it would erase
-    it from the baseline without paying it down."""
+    it from the baseline without paying it down.  ``linted_then`` (the products linted at the
+    base commit) makes it an error too when the product was already linted there, debt or no
+    debt: it is not new, so its mentions are counted or renamed, not exempted."""
     known = {p.lower() for p in vocab.products}
+    old = {p.lower() for p in linted_then or ()}
     out = []
     for glob, names in partial:
         for name in sorted(names - known):
             out.append(f"{VOCABULARY}: allow {glob!r}: products: {name!r} is not a known product")
+        for name in sorted(names & old):
+            out.append(
+                f"{VOCABULARY}: allow {glob!r}: products: {name!r} was already linted at the base commit: "
+                "a per-product exemption is only for a product new to the lint"
+            )
         for rel, c in sorted(counts.items()):
             if not _matches(rel, glob):
                 continue
@@ -796,7 +805,14 @@ def against_base(
         problems += partial_problems(
             product_allowlist(root), vocab, then, f"the baseline at {rev[:12]}"
         )
-    gone = set(vocabulary_at(root, rev, roles).by_key) - set(vocab.by_key)
+    old_vocab = vocabulary_at(root, rev, roles)
+    # a product already linted at the base is not new to the lint, debt or no debt
+    problems += [
+        p
+        for p in partial_problems(product_allowlist(root), vocab, {}, "", old_vocab.products)
+        if "was already linted" in p
+    ]
+    gone = set(old_vocab.by_key) - set(vocab.by_key)
     gave_up = retired(root)
     for k in sorted(gone & set(gave_up)):
         print(f"product_name_lint: {k!r} retired since {rev[:12]}: {gave_up[k]}")

@@ -562,3 +562,52 @@ def test_a_per_product_exemption_cannot_erase_counted_debt(tmp_path):
     # counted somewhere the glob does not match: fine
     root2 = _partial_tree(tmp_path / "b", ["quuxd"], {"other/x.yml": {"quuxd": 3}})
     assert _problems(root2) == []
+
+
+def _based(tmp_path, then_vocab, then_baseline, now_vocab, now_baseline, allow_products):
+    """A repo whose base commit has ``then_*`` and whose working tree has ``now_*`` plus an allow
+    entry exempting ``allow_products`` in ``stack/*.yml``."""
+    products = {"zorbix": {"name": "zorbix", "why": "x"}, "quuxd": {"name": "quuxd", "why": "x"}}
+    base_vocab = {"products": [products[p] for p in then_vocab], "allow": []}
+    root = tree(
+        tmp_path, {"tools/product_names.yml": yaml.safe_dump(base_vocab), "stack/a.yml": "x: 1\n"}
+    )
+    (root / pl.BASELINE).write_text(json.dumps({"version": 1, "counts": then_baseline}))
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "base")
+    now = {
+        "products": [products[p] for p in now_vocab],
+        "allow": [
+            {"path": "stack/*.yml", "products": allow_products, "reason": "the stack runs it"}
+        ],
+    }
+    (root / "tools/product_names.yml").write_text(yaml.safe_dump(now))
+    (root / pl.BASELINE).write_text(json.dumps({"version": 1, "counts": now_baseline}))
+    return root
+
+
+def test_a_product_already_linted_at_the_base_cannot_be_exempted_even_with_no_debt(
+    tmp_path, capsys
+):
+    # quuxd was linted at the base and has no count in stack/: not new to the lint, so refused
+    root = _based(tmp_path, ["quuxd"], {}, ["quuxd"], {}, ["quuxd"])
+    assert run(root, "--base", "HEAD") == 1
+    assert "'quuxd' was already linted at the base commit" in capsys.readouterr().out
+
+
+def test_a_product_new_since_the_base_may_be_exempted(tmp_path):
+    root = _based(tmp_path, ["quuxd"], {}, ["quuxd", "zorbix"], {}, ["zorbix"])
+    assert run(root, "--base", "HEAD") == 0
+
+
+def test_debt_at_the_base_that_the_working_baseline_dropped_is_still_refused(tmp_path, capsys):
+    # drives against_base: the working baseline has no count (a hand edit), the base still has it
+    root = _based(tmp_path, ["zorbix"], {"stack/a.yml": {"zorbix": 4}}, ["zorbix"], {}, ["zorbix"])
+    vocab = pl.vocabulary(root, None, root / pl.ROLES)
+    problems = pl.against_base(root, "HEAD", pl.load_baseline(root / pl.BASELINE), vocab)
+    assert any("already has 4 counted in stack/a.yml in the baseline at" in p for p in problems), (
+        problems
+    )
+    assert run(root, "--base", "HEAD") == 1
+    assert "already has 4 counted" in capsys.readouterr().out
