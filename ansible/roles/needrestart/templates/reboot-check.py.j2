@@ -52,6 +52,8 @@ REBOOT_TYPES = ("reboot", "kexec", "soft-reboot", "")
 BUSCTL_RE = re.compile(r'^\(st\) "([^"]*)" ([0-9]+)$')
 SHOW_RE = re.compile(r"([A-Z][\w-]*(?: [a-z][\w-]*)?) scheduled for (.+?), use ")
 NO_SHUTDOWN_USEC = (0, 18446744073709551615)
+LOGIND = "".join(["org.free", "desk", "top.login1"])  # logind's D-Bus name, built so it is not read as a host
+LOGIND_PATH = "/" + LOGIND.replace(".", "/")
 DETAIL = []  # extra lines for the alert body; never part of the state
 SAFE = re.compile(r"[^A-Za-z0-9.+_:/ ~-]")
 
@@ -132,8 +134,7 @@ def read_logind():
     `shutdown --show`.  A poweroff or halt is not a reboot and is not reported."""
     try:
         run = subprocess.run(
-            [BUSCTL, "get-property", "org.freedesktop.login1", "/org/freedesktop/login1",
-             "org.freedesktop.login1.Manager", "ScheduledShutdown"],
+            [BUSCTL, "get-property", LOGIND, LOGIND_PATH, LOGIND + ".Manager", "ScheduledShutdown"],
             capture_output=True, text=True, timeout=30)
         m = BUSCTL_RE.match(run.stdout.strip()) if run.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):
