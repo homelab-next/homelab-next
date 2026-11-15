@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Golden input of the pve-host-firewall target: one standalone node, one clustered node, one node
+# that opens its web interface to anywhere on purpose, and one with no host firewall.
+nodes:
+  hv-a:
+    host_firewall:
+      management:
+        ssh: [zone:mgmt, 198.51.100.7/32]
+        web: [zone:mgmt]
+      icmp: [zone:mgmt]
+      console: [zone:mgmt]
+      spice: [198.51.100.7/32]
+      rollback_minutes: 10
+  hv-b:
+    host_firewall:
+      management:
+        ssh: [zone:mgmt]
+        web: [zone:mgmt]
+      cluster:
+        peers: [192.0.2.11/32, 192.0.2.12/32]
+  hv-c:
+    host_firewall:
+      management:
+        web: [any]
+      allow_any_management: true
+  hv-d: {}
