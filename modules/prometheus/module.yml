@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: Apache-2.0
+# The metrics provider on Prometheus (docs/modules.md; README.md beside this file): one container
+# from a pinned image, run by compose_app on a guest that already has docker_engine. Its scrape
+# targets are generated from the site's registry (every service row with a metrics block, and the
+# host exporter on every registry host), it ships a small default set of alert rules, and a timer
+# forwards what fires to the notify service. No public route and no web login: the interface is
+# reached on the guest's address by the zones the site's firewall admits. Every real value (the
+# guest, its address, the registry path, the secret values) is the site's: the overlay's
+# lab/modules.yml, lab/services.yml and secret store.
+manifest_version: "1.0"
+id: prometheus
+kind: provider
+title: Metrics on Prometheus
+description: Fills the metrics slot with Prometheus, a pull-based time-series store with alert rules,
+  run as one compose_app container; scrape targets are generated from the registry, default alert
+  rules cover a target down, a full disk, a read-only filesystem and memory pressure, and a state-diffed
+  forwarder posts what fires to the notify service.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: prometheus
+  version: 3.15.1
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:prometheus/notify-token
+    identity: token
+    holder: provider
+    purpose: a publish token for the notify service, read by the alert forwarder's installer and used as a Bearer token for write-only posts to the alerts topic
+identifiers:
+  - {kind: secret-name, name: prometheus, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the publish token and any scrape credential a registry row names are read by name at deploy time
+    - cap: cap:notify
+      version: "1.0"
+      purpose: the alert forwarder posts the firing alerts to the notify service's alerts topic
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 1024, disk_gb: 40}
+      guest:
+        baselines: [base]
+      roles: [role:prometheus]
+      purpose: runs the metrics container (docker_engine applied first, compose_app renders it) and the alert forwarder's timer
+provides:
+  slots:
+    metrics:
+      adapter: homelabnext.conform.adapters.metrics:make
+      provisional: true
+      reason: metrics has no contract yet; the obvious standard is the OpenMetrics exposition format the scrape reads plus the alerts API
+egress: none
+contributes:
+  roles:
+    - file: roles/prometheus
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:prometheus, hook: readiness}
+  docs:
+    - file: README.md
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest): the role's upgrade hook validates and records it, then it converges; a kept 2.x data directory opens in 3.x but can then be downgraded only to 2.55"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: false
+    discard_reason: the samples are a rolling window the targets produce again; nothing in them is the only copy of anything
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

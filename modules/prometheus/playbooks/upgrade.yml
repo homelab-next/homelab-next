@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (prometheus_target_image, tag and digest), then
+# converge with the new pin (set prometheus_image to the target in the overlay). There is nothing to
+# export first: the samples are a rolling window, and a 2.x data directory opens in 3.x.
+#   ansible-playbook -i <inventory> modules/prometheus/playbooks/upgrade.yml -e prometheus_target_image=<ref>
+- name: Upgrade the metrics service
+  hosts: mod_prometheus_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: prometheus
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: prometheus
+      vars:
+        prometheus_image: "{{ prometheus_target_image }}"

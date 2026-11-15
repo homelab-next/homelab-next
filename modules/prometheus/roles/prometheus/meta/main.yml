@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "The metrics provider: one compose_app container with scrape targets generated from the registry, default alert rules and a state-diffed alert forwarder to the notify service."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []

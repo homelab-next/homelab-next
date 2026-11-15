@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: Apache-2.0
+# The metrics provider (modules/metrics): one container from a pinned image, run by compose_app,
+# with its scrape targets GENERATED from the registry (every service row with `metrics:`, plus the
+# host exporter on every registry host), a small set of default alert rules, and a state-diffed
+# alert forwarder that posts to the notify service. No public route; no egress but the scrapes.
+# prometheus_logical_id (required): the instance's registry id, e.g. metrics
+# prometheus_registry (required): absolute path of the lab registry on the controller (services.yml)
+# prometheus_node_exporter_port (required): the port of the host exporter on every guest
+prometheus_image: "docker.io/prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# guest firewall admits the lab's readers (the status hub, the operator's tooling)
+prometheus_bind: "{{ ansible_host }}"
+prometheus_port: 9090
+prometheus_dir: /opt/compose/prometheus
+prometheus_owner: root
+prometheus_group: "{{ prometheus_gid }}"
+# the module's data root on its host (docs/modules/data.md): config/ (rendered), tsdb/ (the
+# container's), scrape-credentials/ (written from the secret store)
+prometheus_data_root: /var/lib/hnx-modules/prometheus
+# the container's user and group: an id no account on the host has
+prometheus_uid: 61001
+prometheus_gid: 61001
+# how long samples are kept (a number and s, m, h, d, w or y), and optionally a size cap beside it
+# (a number and KB, MB, GB or TB; empty: none). Both go in prometheus.yml (storage.tsdb.retention).
+prometheus_retention_time: 30d
+prometheus_retention_size: ""
+prometheus_scrape_interval: 30s
+prometheus_evaluation_interval: 30s
+prometheus_mem_limit: 768m
+prometheus_start: true
+prometheus_validate_with_docker: true
+prometheus_health_timeout: 10
+# where the target lists come from: the registry (rendered on the controller by the generator)
+prometheus_hnx_cli: [hnx]
+# registry hosts that run no host exporter (an appliance), left out of the host target list
+prometheus_node_exporter_exclude: []
+# The default alert rules (the thresholds are settings; the rule set is the role's).
+prometheus_alert_target_down_for: 10m
+prometheus_alert_disk_used_percent: 90
+prometheus_alert_disk_for: 10m
+prometheus_alert_readonly_for: 2m
+# Mount points a read-only mount is deliberate on (a regular expression matched against the whole
+# mount point, e.g. "/boot/efi|/mnt/media"); empty: none, every read-only filesystem alerts.
+prometheus_alert_readonly_ignore: ""
+prometheus_alert_memory_available_percent: 10
+prometheus_alert_memory_for: 10m
+# The alert forwarder: a timer asks the metrics service which alerts fire and posts to the notify
+# service (ntfy) by logical id, state-diffed (a message only when the set of firing alerts
+# changes, once more when it empties; a failed post stays owed). A metrics service that cannot be
+# asked for prometheus_unreachable_after_minutes in a row is itself alerted, once, and its recovery.
+prometheus_notify_id: notify
+prometheus_notify_topic: homelabnext-alerts
+prometheus_notify_priority: 3
+prometheus_notify_auth_ref: secret:prometheus/notify-token
+# Explicit opt-in, LAN only, for a notify endpoint that has no TLS: the write-only publish token
+# then travels in clear. Off: the role refuses a token over plain http.
+prometheus_notify_allow_plain_http: false
+# The forwarder's timer (OnCalendar, ending in UTC): every minute, or every 30 seconds. The seconds
+# between its runs (prometheus_alert_interval_seconds, vars/main.yml) are derived from it, so the
+# unreachable counter can never disagree with the timer.
+prometheus_alert_schedule: "*-*-* *:*:00 UTC"
+prometheus_unreachable_after_minutes: 5
+# Run the forwarder's --test (one low-priority message through the real send path) once at deploy
+# when the channel changed, failing the play with the script's error (LL-567). Skipped in --check.
+prometheus_notify_test_on_change: true
+prometheus_systemctl_cli: systemctl
+prometheus_unit_dir: /etc/systemd/system
+prometheus_state_dir: /var/lib/homelabnext/prometheus
+# The forwarder's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+prometheus_last_run_dir: /var/lib/homelabnext/last-run
+prometheus_last_run_group: root
