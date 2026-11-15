@@ -3197,6 +3197,37 @@ def test_needrestart_refuses_bad_inputs_and_a_token_over_plain_http(first):
     assert r.returncode != 0 and "a token would go over plain http" in r.stdout
 
 
+def test_needrestart_refuses_a_token_for_a_platform_row_that_is_plain_http(tmp_path):
+    """A registry row carries ``protocol: http`` and ``tls: none``, not ``scheme``: the lookup used
+    to render ``https://<host id>:80`` for it, so the token guard never saw http and the post died
+    on a TLS handshake.  Now the row is http, and the guard fails the deploy before anything is
+    written; the same row with ``tls: internal`` is https and passes."""
+    v, _ = nr_setup(tmp_path)
+    reg = tmp_path / "registry.yml"
+    row = "{capability: notify, host: ntfy-01, protocol: http, port: 80, tls: %s}"
+    head = (
+        "lab: {name: demo, domain: example.internal, svc_label: svc, owner: platform-team}\n"
+        "zones: {mgmt: {cidr: 192.0.2.0/26}}\n"
+        "hosts:\n  ntfy-01: {address: 192.0.2.30, zone: mgmt}\n"
+        "services:\n  notify: "
+    )
+    plain = {
+        **v,
+        "needrestart_notify": "notify",
+        "needrestart_notify_auth_ref": "secret:notify/token-fake",
+        "needrestart_notify_auth_file": str(tmp_path / "token" / "auth"),
+        "hnx_registry_file": str(reg),
+    }
+    env = {"HNX_SECRET_NOTIFY_TOKEN_FAKE": "tk-fake"}
+    reg.write_text(head + row % "none" + "\n")
+    r = run_role(tmp_path, "needrestart", "config", plain, env)
+    assert r.returncode != 0 and "a token would go over plain http" in r.stdout
+    assert "http://notify.svc.example.internal:80" in r.stdout
+    reg.write_text(head + row % "internal" + "\n")
+    r = run_role(tmp_path, "needrestart", "config", plain, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 # ---------------------------------------------------------------- lynis: package integrity sweep
 DPKG = r"""
 import os, sys
