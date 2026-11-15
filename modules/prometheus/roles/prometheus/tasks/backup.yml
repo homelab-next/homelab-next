@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# The samples are a rolling window (retention) of numbers the targets
+# produce again; the backup manifest names the data root all the same (the window and the scrape
+# credentials ride along, so a backup of this host holds them: treat it as the store is treated).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Delegate to compose_app (the backup manifest names the data root)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: backup
+      vars:
+        compose_app_name: prometheus
+        compose_app_dir: "{{ prometheus_app.compose_app_dir }}"
+        compose_app_data_dir: "{{ prometheus_app.compose_app_data_dir }}"
+        compose_app_export_dir: "{{ prometheus_app.compose_app_export_dir }}"
+        compose_app_owner: "{{ prometheus_app.compose_app_owner }}"
+        compose_app_group: "{{ prometheus_app.compose_app_group }}"
+        compose_app_spec: "{{ prometheus_app.compose_app_spec }}"
+  tags: [backup]

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main to render the arguments again)
+  ansible.builtin.debug:
+    msg: the node exporter keeps no data of its own; re-running main renders its arguments
+  tags: [restore]

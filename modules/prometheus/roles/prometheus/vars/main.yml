@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+prometheus_container_config_dir: /etc/prometheus
+prometheus_container_data_dir: /prometheus
+# where the generator's credential paths point (generated scrape_configs name files here)
+prometheus_container_authfiles_dir: /etc/hnx/scrape-credentials
+prometheus_generated_dir: generated
+prometheus_scrape_file: prometheus/scrape_configs.yml
+prometheus_authlist_file: prometheus/credentials.json
+prometheus_node_targets_file: prometheus/node_targets.yml
+prometheus_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+prometheus_ref_pattern: '^secret:[a-z][a-z0-9_-]*(?:/[a-z][a-z0-9_-]*)*\Z'
+prometheus_duration_pattern: '^[1-9][0-9]{0,3}[smhdwy]\Z'
+prometheus_interval_pattern: '^[1-9][0-9]{0,3}[sm]\Z'
+# the rules the role ships, by name (health proves each is loaded)
+prometheus_rule_names: [TargetDown, NoTargets, DiskAlmostFull, FilesystemReadOnly, MemoryPressure]
+# where the forwarder and its token are installed (the service's ExecStart names the script)
+prometheus_alert_script: /usr/local/libexec/homelabnext/prometheus-alert-notify
+prometheus_notify_auth_file: /etc/homelabnext/prometheus-notify.auth
+# the shared last-run writer (role last_run) the forwarder's unit names, and the record directory
+prometheus_last_run_writer: /usr/local/libexec/homelabnext/hnx-last-run
+# The seconds between the forwarder's runs, derived from its schedule (validate.yml allows two)
+prometheus_alert_schedules: {"*-*-* *:*:00 UTC": 60, "*-*-* *:*:00,30 UTC": 30}
+prometheus_alert_interval_seconds: "{{ prometheus_alert_schedules[prometheus_alert_schedule] }}"
+prometheus_alert_ignore_pattern: '^[A-Za-z0-9_/.|^$*+()-]{0,200}\Z'
