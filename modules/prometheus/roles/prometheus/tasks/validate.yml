@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - prometheus_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - prometheus_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - prometheus_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - prometheus_bind != '0.0.0.0'
+      - prometheus_port | int >= 1 and prometheus_port | int <= 65535
+      - prometheus_node_exporter_port | int >= 1 and prometheus_node_exporter_port | int <= 65535
+      - prometheus_uid | int >= 1000 and prometheus_gid | int >= 1000
+      - >-
+        [prometheus_dir, prometheus_data_root, prometheus_state_dir] | reject('match', prometheus_path_pattern) | list | length == 0
+      - prometheus_retention_time is match(prometheus_duration_pattern)
+      - prometheus_retention_size == '' or prometheus_retention_size is match('^[1-9][0-9]{0,5}[KMGT]B\Z')
+      - prometheus_scrape_interval is match(prometheus_interval_pattern)
+      - prometheus_evaluation_interval is match(prometheus_interval_pattern)
+      - prometheus_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - prometheus_hnx_cli is sequence and prometheus_hnx_cli is not string and prometheus_hnx_cli | length > 0
+      - prometheus_hnx_cli | reject('string') | list | length == 0
+      # the overlay's hnx and nothing else: an absolute path to an hnx entry point, or an
+      # absolute python running the homelabnext CLI module (the tests' form)
+      - >-
+        (prometheus_hnx_cli | length == 1 and prometheus_hnx_cli[0] is match('^(hnx|/[A-Za-z0-9_./-]*/hnx)\Z'))
+        or (prometheus_hnx_cli | length == 3 and prometheus_hnx_cli[0] is match('^/[A-Za-z0-9_./-]*/python3?(\.[0-9]+)?\Z')
+            and prometheus_hnx_cli[1:] == ['-m', 'homelabnext.cli'])
+      - prometheus_registry is string and prometheus_registry is match('^/')
+      - prometheus_node_exporter_exclude is sequence and prometheus_node_exporter_exclude is not string
+      - prometheus_node_exporter_exclude | reject('string') | list | length == 0
+      - prometheus_node_exporter_exclude | reject('match', '^[a-z0-9][a-z0-9-]*\Z') | list | length == 0
+      - >-
+        [prometheus_alert_target_down_for, prometheus_alert_disk_for, prometheus_alert_readonly_for, prometheus_alert_memory_for] | reject('match', prometheus_duration_pattern) | list | length == 0
+      - prometheus_alert_disk_used_percent | int >= 1 and prometheus_alert_disk_used_percent | int <= 99
+      - prometheus_alert_memory_available_percent | int >= 1 and prometheus_alert_memory_available_percent | int <= 99
+      - prometheus_notify_id is match('^[a-z0-9][a-z0-9-]*\Z')
+      - prometheus_notify_topic is match('^[A-Za-z0-9_-]{1,64}\Z')
+      - prometheus_notify_priority | int >= 1 and prometheus_notify_priority | int <= 5
+      - prometheus_notify_auth_ref is match(prometheus_ref_pattern)
+      - prometheus_notify_allow_plain_http | bool is boolean
+      - prometheus_alert_schedule in prometheus_alert_schedules
+      - prometheus_alert_readonly_ignore is match(prometheus_alert_ignore_pattern)
+      - prometheus_unreachable_after_minutes | int >= 1 and prometheus_unreachable_after_minutes | int <= 1440
+    fail_msg: >-
+      prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
+      publish on (not all interfaces), ports, a container uid and gid of 1000 or more, absolute
+      canonical directories, a retention like 30d (and a size like 20GB or nothing), scrape and
+      evaluation intervals like 30s, a memory limit like 768m, the hnx command (bare or by absolute
+      path, or an absolute python running homelabnext.cli), an absolute registry path, plain host names to exclude, alert durations like 10m and
+      percentages 1-99, a notify logical id and topic, a priority 1-5, a secret:<name> token
+      reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes
+  tags: [health, backup, restore, export, upgrade, readiness]

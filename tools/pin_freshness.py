@@ -97,6 +97,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
+    "role:prometheus/prometheus_image": ("github", "prometheus/prometheus"),
     "role:open_webui/open_webui_image": ("github", "open-webui/open-webui"),
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
     "role:openbao/openbao_lego_version": ("github", "go-acme/lego"),
@@ -144,6 +145,11 @@ NOTES: dict[str, str] = {
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "
         "modules/ntfy/module.yml and the lab registry's version"
+    ),
+    "role:prometheus/prometheus_image": (
+        "an image (modules/prometheus): bump the tag and its digest together, with product.version "
+        "in modules/prometheus/module.yml and the lab registry's version; a major version also "
+        "changes how a kept data directory opens (docs/architecture.md, the metrics service)"
     ),
     "role:openbao/openbao_lego_version": (
         "moves with openbao_lego_checksums and openbao_lego_checksums_release, taken from the "

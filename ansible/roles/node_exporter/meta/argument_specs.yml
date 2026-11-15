@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Install the distribution's node exporter and run it on the guest's own address.
+    options:
+      node_exporter_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address the exporter listens on (never all interfaces)."
+        default: "{{ ansible_host }}"
+      node_exporter_port: &port
+        type: int
+        description: "The exporter's port (the metrics service scrapes it; the site's one choice, also given to the target generator)."
+        required: true
+      node_exporter_fs_types_exclude: &fs
+        type: str
+        description: "Filesystem types the filesystem collector skips, as ^(a|b)$."
+        default: "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|tmpfs)$"
+      node_exporter_defaults_file: &defaults
+        type: path
+        description: "The package's argument file (the role owns it)."
+        default: /etc/default/prometheus-node-exporter
+      node_exporter_service: &service
+        type: str
+        description: "The exporter's systemd unit."
+        default: prometheus-node-exporter
+      node_exporter_systemctl_cli: &systemctl
+        type: str
+        description: "The systemctl command."
+        default: systemctl
+      node_exporter_restart: &restart
+        type: bool
+        description: "Restart the exporter after a changed argument file (false leaves the restart owed to a later run)."
+        default: true
+      node_exporter_health_timeout: &timeout
+        type: int
+        description: "Seconds for the health request."
+        default: 10
+      node_exporter_state_dir: &state
+        type: path
+        description: "Where the role keeps its restart-pending marker and hook records."
+        default: /var/lib/homelabnext/node_exporter
+  config:
+    short_description: Write the exporter's arguments and restart it while a restart is owed.
+    options:
+      node_exporter_bind: *bind
+      node_exporter_port: *port
+      node_exporter_fs_types_exclude: *fs
+      node_exporter_defaults_file: *defaults
+      node_exporter_service: *service
+      node_exporter_systemctl_cli: *systemctl
+      node_exporter_restart: *restart
+      node_exporter_health_timeout: *timeout
+      node_exporter_state_dir: *state
+  health:
+    short_description: Fail unless /metrics answers and exposes the families the default alert rules read.
+    options:
+      node_exporter_bind: *bind
+      node_exporter_port: *port
+      node_exporter_fs_types_exclude: *fs
+      node_exporter_defaults_file: *defaults
+      node_exporter_service: *service
+      node_exporter_health_timeout: *timeout
+      node_exporter_state_dir: *state
+  readiness:
+    short_description: Fail unless the settings are well formed.
+    options:
+      node_exporter_bind: *bind
+      node_exporter_port: *port
+      node_exporter_fs_types_exclude: *fs
+      node_exporter_defaults_file: *defaults
+      node_exporter_service: *service
+      node_exporter_health_timeout: *timeout
+      node_exporter_state_dir: *state
+  backup:
+    short_description: Record that the exporter holds no data a backup must keep.
+    options:
+      node_exporter_state_dir: *state
+  restore:
+    short_description: Nothing to restore; re-running main renders the arguments again.
+    options: {}
+  upgrade:
+    short_description: Nothing pinned; the distribution package follows the patching control.
+    options: {}
+  export:
+    short_description: Nothing to export; the exporter holds no data of its own.
+    options: {}

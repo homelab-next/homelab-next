@@ -808,6 +808,7 @@
         "timer:needrestart/check",
         "timer:needrestart/reboot",
         "timer:openbao/acme-renew",
+        "timer:prometheus/alerts",
         "timer:rkhunter/scan",
         "timer:trivy/scan"
       ]
@@ -1246,6 +1247,27 @@
         "ci:ci/trusted-gates",
         "make:gates",
         "make:product-names-baseline"
+      ]
+    },
+    {
+      "exit": {
+        "0": "checked (and alerted, if the firing set changed)",
+        "1": "the metrics service could not be asked (alerted once after the configured number of minutes) (or, with --test, the channel did not deliver)",
+        "2": "the alert could not be sent; it stays owed to the next run"
+      },
+      "id": "prometheus-alert-notify",
+      "inputs": "the metrics service's /api/v1/alerts on this host; the previous state file",
+      "installs_to": "/usr/local/libexec/homelabnext/prometheus-alert-notify",
+      "kind": "job",
+      "language": "python",
+      "outputs": "the state file and the last send's outcome (owner-only) and, on a change of the firing set, one alert to the notify service (ntfy, publish token)",
+      "owner": "platform",
+      "path": "modules/prometheus/roles/prometheus/templates/alert-notify.py.j2",
+      "purpose": "Post to the notify service when the set of firing alerts of the metrics service changes, and when the metrics service itself cannot be asked.",
+      "status": "active",
+      "trigger": [
+        "timer:prometheus/alerts",
+        "role:prometheus"
       ]
     },
     {

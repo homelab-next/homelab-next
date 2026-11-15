@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). Everything the
+# container reads is mounted read-only (config/ and the credential files); only tsdb/ is writable.
+# A reload on a changed configuration is a SIGHUP, never the lifecycle HTTP API (which would let
+# anyone who can reach the port shut the server down).
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    prometheus_app:
+      compose_app_name: prometheus
+      compose_app_dir: "{{ prometheus_dir }}"
+      compose_app_data_dir: "{{ prometheus_data_root }}"
+      compose_app_export_dir: "{{ prometheus_data_root }}/export"
+      compose_app_owner: "{{ prometheus_owner }}"
+      compose_app_group: "{{ prometheus_group }}"
+      compose_app_start: "{{ prometheus_start }}"
+      compose_app_validate_with_docker: "{{ prometheus_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          prometheus:
+            image: "{{ prometheus_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ prometheus_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ prometheus_image.split('@')[1] }}"
+            command:
+              - "--config.file={{ prometheus_container_config_dir }}/prometheus.yml"
+              - "--storage.tsdb.path={{ prometheus_container_data_dir }}"
+            user: "{{ prometheus_uid | int }}:{{ prometheus_gid | int }}"
+            read_only: true
+            ports: ["{{ prometheus_bind }}:{{ prometheus_port | int }}:9090"]
+            volumes:
+              - "{{ prometheus_data_root }}/tsdb:{{ prometheus_container_data_dir }}"
+              - "{{ prometheus_data_root }}/config:{{ prometheus_container_config_dir }}:ro"
+              - "{{ prometheus_data_root }}/scrape-credentials:{{ prometheus_container_authfiles_dir }}:ro"
+            mem_limit: "{{ prometheus_mem_limit }}"
+            healthcheck:
+              test: [CMD, promtool, check, ready]  # the tool asks its own default URL, the container itself
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 30s
+  tags: [health, backup, restore, export, upgrade]
