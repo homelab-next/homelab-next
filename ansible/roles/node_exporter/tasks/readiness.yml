@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exporter has no dependency but the package; readiness is that its settings are well formed.
+- name: Validate the settings
+  ansible.builtin.include_tasks:
+    file: validate.yml
+    apply:
+      tags: [readiness]
+  tags: [readiness]

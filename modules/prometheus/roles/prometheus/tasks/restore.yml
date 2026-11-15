@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main to render the configuration and start with an empty window)
+  ansible.builtin.debug:
+    msg: the metrics service restores nothing; re-running main renders its configuration and it collects a new window
+  tags: [restore]

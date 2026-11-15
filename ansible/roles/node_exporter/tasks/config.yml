@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exporter's arguments, and a restart while one is owed (split from main so it runs without the
+# package install).
+- name: Validate the settings
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Ensure the state directory exists
+  ansible.builtin.file:
+    path: "{{ node_exporter_state_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Write the exporter's arguments (listen on the guest's own address only)
+  ansible.builtin.template:
+    src: defaults.j2
+    dest: "{{ node_exporter_defaults_file }}"
+    mode: "0644"
+  register: node_exporter_written
+
+- name: Mark a restart as owed
+  ansible.builtin.copy:
+    dest: "{{ node_exporter_state_dir }}/restart-pending"
+    content: "the arguments changed; the exporter has not been restarted since\n"
+    mode: "0640"
+  when: node_exporter_written is changed
+
+- name: Look for a restart still owed
+  ansible.builtin.stat:
+    path: "{{ node_exporter_state_dir }}/restart-pending"
+  register: node_exporter_pending
+
+- name: Restart the exporter while a restart is owed (it reads its arguments only at start)
+  when: node_exporter_pending.stat.exists and node_exporter_restart | bool
+  block:
+    - name: Restart the exporter
+      ansible.builtin.command:
+        argv: ["{{ node_exporter_systemctl_cli }}", restart, "{{ node_exporter_service }}"]
+      changed_when: true
+    - name: Clear the owed restart
+      ansible.builtin.file:
+        path: "{{ node_exporter_state_dir }}/restart-pending"
+        state: absent
