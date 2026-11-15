@@ -456,6 +456,10 @@ def caddy(reg: Registry, edge_hosts=None) -> dict[str, str]:
             env = checked(secret_env_name(s.front_door["secret"]), "front_door.secret", "caddy")
             inner.append(f"\t\theader_up {header} {{env.{env}}}\n")
         if s.edge_tls:
+            # Caddy sends an https upstream the upstream's own address as Host (and the client's
+            # in X-Forwarded-Host), so a service that checks Host against its public name refuses
+            # every request through the edge; keep the client's Host, as Caddy does for http
+            inner.append("\t\theader_up Host {http.request.host}\n")
             inner += _edge_transport(reg, s)
         proxy_block = " {\n" + "".join(inner) + "\t}" if inner else ""
         raw = {"auth_block": auth_block, "proxy_block": proxy_block, "note": "",

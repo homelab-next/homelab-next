@@ -57,6 +57,7 @@ sso.example.internal {
 	request_header -*auth_request*
 	import hnx_strip_foreign_identity
 	reverse_proxy https://idp.svc.example.internal:8443 {
+		header_up Host {http.request.host}
 		transport http {
 			tls
 			tls_trust_pool file /etc/hnx/edge-tls/pki/internal-ca.pem
@@ -73,6 +74,7 @@ hub.example.internal {
 	import hnx_forward_auth lab-admins,lab-approvers
 	reverse_proxy https://status-hub.svc.example.internal:8099 {
 		header_up X-Hnx-Front-Door {env.HNX_SECRET_STATUS_FRONT_DOOR_SECRET}
+		header_up Host {http.request.host}
 		transport http {
 			tls
 			tls_client_auth /etc/hnx/edge-tls/edge/hub-client-cert.pem /etc/hnx/edge-tls/edge/hub-client-key.pem
