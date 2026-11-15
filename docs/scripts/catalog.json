@@ -808,6 +808,7 @@
         "timer:needrestart/check",
         "timer:needrestart/reboot",
         "timer:openbao/acme-renew",
+        "timer:prometheus/alerts",
         "timer:rkhunter/scan",
         "timer:trivy/scan"
       ]

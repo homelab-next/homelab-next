@@ -282,3 +282,19 @@ def test_hostile_label_text_cannot_inject_into_a_header(tmp_path, env, servers):
     assert run(env(metrics, notify)).returncode == 0
     h = notify.posts[0][2]
     assert "X-Injected" not in h and "\r" not in h["Title"] and "\n" not in h["Title"]
+
+
+def test_the_units_run_the_script_report_their_runs_and_tick_on_the_schedule():
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
+    values = {
+        "prometheus_alert_schedule": "*-*-* *:*:00 UTC",
+        "prometheus_last_run_dir": "/var/lib/homelabnext/last-run",
+        "prometheus_last_run_group": "root",
+    }
+    units = TEMPLATE.parent
+    service = env.from_string((units / "alerts.service.j2").read_text()).render(**values)
+    timer = env.from_string((units / "alerts.timer.j2").read_text()).render(**values)
+    assert "ExecStart=/usr/local/libexec/homelabnext/prometheus-alert-notify\n" in service
+    assert "--job timer:prometheus/alerts" in service
+    assert service.count("hnx-last-run start") == 1 and service.count("hnx-last-run finish") == 1
+    assert "OnCalendar=*-*-* *:*:00 UTC\n" in timer and "Persistent=false" in timer

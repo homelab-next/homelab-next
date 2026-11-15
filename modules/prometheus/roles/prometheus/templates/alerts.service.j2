@@ -5,7 +5,11 @@ Description=homelabnext metrics alert forwarder (posts firing alerts to the noti
 
 [Service]
 Type=oneshot
+# the job's last-run record (role last_run), written on start and again on stop, whatever
+# the outcome; a writer problem never changes the job's own result (the - prefix)
+ExecStartPre=-/usr/local/libexec/homelabnext/hnx-last-run start --dir {{ prometheus_last_run_dir }} --group {{ prometheus_last_run_group }} --job timer:prometheus/alerts --unit %n --calendar "{{ prometheus_alert_schedule }}" --delay 0
 ExecStart=/usr/local/libexec/homelabnext/prometheus-alert-notify
+ExecStopPost=-/usr/local/libexec/homelabnext/hnx-last-run finish --dir {{ prometheus_last_run_dir }} --group {{ prometheus_last_run_group }} --job timer:prometheus/alerts --unit %n --calendar "{{ prometheus_alert_schedule }}" --delay 0
 Nice=10
 NoNewPrivileges=true
 ProtectSystem=strict

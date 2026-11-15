@@ -5,7 +5,7 @@ argument_specs:
     options:
       prometheus_logical_id: &logical_id
         type: str
-        description: "The instance's registry id (the service row the site binds, e.g. metrics, the instance name)."
+        description: "The instance's registry id (the service row the site binds, e.g. metrics)."
         required: true
       prometheus_registry: &registry
         type: path
@@ -137,6 +137,10 @@ argument_specs:
         type: bool
         description: "Explicit opt-in, LAN only: send the token to a notify endpoint with no TLS."
         default: false
+      prometheus_alert_schedule: &alert_schedule
+        type: str
+        description: "The forwarder timer's OnCalendar (ending in UTC); keep it in step with the interval below."
+        default: "*-*-* *:*:00 UTC"
       prometheus_alert_interval_seconds: &alert_interval_seconds
         type: int
         description: "How often the forwarder asks which alerts fire (30 or 60)."
@@ -161,6 +165,14 @@ argument_specs:
         type: path
         description: "Where the forwarder keeps its state, its last send record and the channel-test digest."
         default: "/var/lib/homelabnext/prometheus"
+      prometheus_last_run_dir: &last_run_dir
+        type: path
+        description: "The shared per-host directory of last-run records (role last_run), read by the status hub."
+        default: "/var/lib/homelabnext/last-run"
+      prometheus_last_run_group: &last_run_group
+        type: str
+        description: "The group that may read the last-run records."
+        default: "root"
   health:
     short_description: "Fail unless the service is healthy and ready, runs the configuration on disk with the configured retention, has its default rules loaded and ok, and the last alert reached the notify service."
     options:
@@ -195,9 +207,12 @@ argument_specs:
       prometheus_notify_priority: *notify_priority
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_alert_schedule: *alert_schedule
       prometheus_alert_interval_seconds: *alert_interval_seconds
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
+      prometheus_last_run_dir: *last_run_dir
+      prometheus_last_run_group: *last_run_group
       prometheus_start: *start
       prometheus_validate_with_docker: *validate_with_docker
   readiness:
@@ -234,9 +249,12 @@ argument_specs:
       prometheus_notify_priority: *notify_priority
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_alert_schedule: *alert_schedule
       prometheus_alert_interval_seconds: *alert_interval_seconds
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
+      prometheus_last_run_dir: *last_run_dir
+      prometheus_last_run_group: *last_run_group
   backup:
     short_description: "Name the data root for the backup (the rolling window and the scrape credentials ride along)."
     options:
@@ -271,9 +289,12 @@ argument_specs:
       prometheus_notify_priority: *notify_priority
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_alert_schedule: *alert_schedule
       prometheus_alert_interval_seconds: *alert_interval_seconds
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
+      prometheus_last_run_dir: *last_run_dir
+      prometheus_last_run_group: *last_run_group
       prometheus_start: *start
       prometheus_validate_with_docker: *validate_with_docker
   restore:
@@ -313,9 +334,12 @@ argument_specs:
       prometheus_notify_priority: *notify_priority
       prometheus_notify_auth_ref: *notify_auth_ref
       prometheus_notify_allow_plain_http: *notify_allow_plain_http
+      prometheus_alert_schedule: *alert_schedule
       prometheus_alert_interval_seconds: *alert_interval_seconds
       prometheus_unreachable_after_minutes: *unreachable_after_minutes
       prometheus_state_dir: *state_dir
+      prometheus_last_run_dir: *last_run_dir
+      prometheus_last_run_group: *last_run_group
       prometheus_start: *start
       prometheus_validate_with_docker: *validate_with_docker
       prometheus_target_image:

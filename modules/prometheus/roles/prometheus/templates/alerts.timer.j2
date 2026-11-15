@@ -4,7 +4,7 @@
 Description=homelabnext metrics alert forwarder, every {{ prometheus_alert_interval_seconds }} seconds
 
 [Timer]
-OnCalendar=*-*-* *:*:{{ '00,30' if (prometheus_alert_interval_seconds | int) == 30 else '00' }}
+OnCalendar={{ prometheus_alert_schedule }}
 AccuracySec=5s
 Persistent=false
 

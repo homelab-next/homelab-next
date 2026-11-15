@@ -52,6 +52,9 @@ prometheus_notify_auth_ref: secret:prometheus/notify-token
 # Explicit opt-in, LAN only, for a notify endpoint that has no TLS: the write-only publish token
 # then travels in clear. Off: the role refuses a token over plain http.
 prometheus_notify_allow_plain_http: false
+# The forwarder's timer (OnCalendar, ending in UTC) and the seconds between its runs, which the
+# unreachable counter divides by: keep the two in step (every minute: 60).
+prometheus_alert_schedule: "*-*-* *:*:00 UTC"
 prometheus_alert_interval_seconds: 60
 prometheus_unreachable_after_minutes: 5
 # Run the forwarder's --test (one low-priority message through the real send path) once at deploy
@@ -60,3 +63,7 @@ prometheus_notify_test_on_change: true
 prometheus_systemctl_cli: systemctl
 prometheus_unit_dir: /etc/systemd/system
 prometheus_state_dir: /var/lib/homelabnext/prometheus
+# The forwarder's last-run record (role last_run, docs/role-interface.md section 8): the shared
+# per-host directory the status hub's job-last-run mapping reads, and the group that may read it.
+prometheus_last_run_dir: /var/lib/homelabnext/last-run
+prometheus_last_run_group: root

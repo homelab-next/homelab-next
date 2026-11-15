@@ -39,6 +39,7 @@
       - prometheus_notify_auth_ref is match(prometheus_ref_pattern)
       - prometheus_notify_allow_plain_http | bool is boolean
       - prometheus_alert_interval_seconds | int in [30, 60]
+      - prometheus_alert_schedule is match('^[A-Za-z0-9*:,./~ -]+ UTC\Z')
       - prometheus_unreachable_after_minutes | int >= 1 and prometheus_unreachable_after_minutes | int <= 1440
     fail_msg: >-
       prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
