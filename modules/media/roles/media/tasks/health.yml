@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, /health says Healthy, the public system info
+# answers (with the server id, which must be the expected one when the site sets it), and Quick
+# Connect is enabled (a TV app signs in with it). Read-only: it signs in as no one.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: media
+        compose_app_dir: "{{ media_app.compose_app_dir }}"
+        compose_app_spec: "{{ media_app.compose_app_spec }}"
+    - name: The server answers /health
+      ansible.builtin.uri:
+        url: "http://{{ media_bind }}:{{ media_port | int }}/health"
+        status_code: 200
+        return_content: true
+        timeout: "{{ media_health_timeout | int }}"
+      register: media_health
+      changed_when: false
+      failed_when: media_health.status != 200 or (media_health.content | default('') | trim) != 'Healthy'
+    - name: The public system info answers
+      ansible.builtin.uri:
+        url: "http://{{ media_bind }}:{{ media_port | int }}/System/Info/Public"
+        status_code: 200
+        return_content: true
+        timeout: "{{ media_health_timeout | int }}"
+      register: media_info
+      changed_when: false
+    - name: It is the media server, and the expected one
+      ansible.builtin.assert:
+        that:
+          - media_info.json.Id | default('') is match('^[0-9a-f]{32}\Z')
+          - media_info.json.ProductName | default('') | length > 0
+          - media_expected_server_id == '' or media_info.json.Id == media_expected_server_id
+        fail_msg: >-
+          media: /System/Info/Public did not answer as the expected server (id
+          {{ media_info.json.Id | default('(none)') }}, expected
+          {{ media_expected_server_id | default('(not set)', true) }}). A different id makes every
+          TV client treat this as a new server; restore the config (data/device.txt) and start again.
+    - name: Quick Connect is enabled
+      ansible.builtin.uri:
+        url: "http://{{ media_bind }}:{{ media_port | int }}/QuickConnect/Enabled"
+        status_code: 200
+        return_content: true
+        timeout: "{{ media_health_timeout | int }}"
+      register: media_qc
+      changed_when: false
+      when: media_quick_connect | bool
+    - name: Quick Connect answers true
+      ansible.builtin.assert:
+        that: (media_qc.content | default('') | trim | lower) == 'true'
+        fail_msg: "media: Quick Connect is off (Dashboard, General, Quick Connect); TV apps sign in with it"
+      when: media_quick_connect | bool
+  tags: [health]

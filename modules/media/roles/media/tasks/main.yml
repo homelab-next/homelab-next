@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Refuse a library path that is not there (a missing mount would be served as an empty library)
+  ansible.builtin.stat:
+    path: "{{ media_library_path }}"
+  register: media_library_stat
+  when: media_start | bool
+- name: The library is a directory on this guest
+  ansible.builtin.assert:
+    that: media_library_stat.stat.isdir | default(false)
+    fail_msg: >-
+      media: {{ media_library_path }} is not a directory on this guest. Mount the library there (the
+      site's source), or set media_library_path; the server would otherwise start with an empty library.
+  when: media_start | bool
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Render and start the media server
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ media_app.compose_app_name }}"
+    compose_app_dir: "{{ media_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ media_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ media_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ media_app.compose_app_owner }}"
+    compose_app_group: "{{ media_app.compose_app_group }}"
+    compose_app_start: "{{ media_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ media_app.compose_app_validate_with_docker }}"
+    compose_app_bind_extra: "{{ media_app.compose_app_bind_extra }}"
+    compose_app_spec: "{{ media_app.compose_app_spec }}"
