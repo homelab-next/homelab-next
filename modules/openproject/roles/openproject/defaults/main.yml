@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# The projects provider (modules/openproject): four compose_app containers in the module's slice,
+# the web app and its background worker (one pinned image, two commands), the database and the
+# cache. The web app listens in plain http on the guest's own address and nowhere else (the edge
+# is the only public path and adds X-Forwarded-Proto: https); the database and the cache publish
+# no port. Local accounts are the product's own (auth: own): people sign in with them.
+# Required, with no default (the site's): openproject_logical_id (the instance's registry id) and
+# openproject_hostname (the public name the edge serves, e.g. projects.<domain>: every link and
+# redirect the app writes is https://<it>).
+openproject_image: "docker.io/openproject/openproject:15.5.1-slim@sha256:2b8af8195a0c661411ad651b2d09946c9624d2e2ac5529e078ac6f60c124d146"
+openproject_postgres_image: "docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317"
+openproject_cache_image: "docker.io/library/memcached:1.6.44-alpine@sha256:dfacdbd93e7a6f1ad63801753a1fc959dc678a5a1d2141ff438d57e6d8793fc3"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# hypervisor's per-VM firewall admits the edge guest alone on this port
+openproject_bind: "{{ ansible_host }}"
+openproject_port: 8080
+openproject_dir: /opt/compose/openproject
+openproject_owner: root
+openproject_group: root
+# the module's data root (docs/modules/data.md): pgdata/ (the database's), assets/ (the
+# attachments, the app's) and export/ (root's) with export/db/ (the database's, where pg_dump
+# writes)
+openproject_data_root: /var/lib/hnx-modules/openproject
+# the app's user and group are the image's own (it is built for uid 1000 and writes its tmp and
+# log under /app as that user): not a setting a site may move; the database's are ids no account
+# on the host has
+openproject_app_uid: 1000
+openproject_app_gid: 1000
+openproject_db_uid: 61030
+openproject_db_gid: 61030
+openproject_db_name: openproject
+openproject_db_user: openproject
+# the password of the first administrator (login admin) the seeder creates on an EMPTY database,
+# never the product's well-known default; a restored database brings its own accounts
+openproject_admin_login_ref: secret:openproject/admin-password
+openproject_db_login_ref: secret:openproject/db-password
+# the app's key for sessions and encrypted settings: after a migration it is the SOURCE's value
+openproject_session_key_ref: secret:openproject/secret-key-base
+openproject_mem_limit: 2g
+openproject_worker_mem_limit: 1g
+openproject_db_mem_limit: 1g
+openproject_cache_mem_limit: 128m
+openproject_start: true
+openproject_validate_with_docker: true
+openproject_health_timeout: 15
+# seconds main waits for the app to answer after a start (the first one migrates the database)
+openproject_ready_timeout: 600

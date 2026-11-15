@@ -1232,6 +1232,25 @@
     },
     {
       "exit": {
+        "0": "done (for restore, the target counts equal the manifest counts)",
+        "1": "a count differs or the dump is not intact",
+        "2": "usage error or a command on an endpoint failed"
+      },
+      "id": "projects-migrate",
+      "inputs": "two endpoints named on the command line (an ssh destination and container names, never a literal in this file); for restore, a dump directory written by dump",
+      "kind": "tool",
+      "language": "python",
+      "outputs": "a dump directory (db.dump, attachments.tar, manifest.json) for dump; the four counts as JSON for counts and restore",
+      "owner": "maintainers",
+      "path": "tools/migrate/openproject.py",
+      "purpose": "Copy a projects instance (database and attachments) from one place to another over ssh pipes, count both sides, and freeze or unfreeze the source for a final delta.",
+      "status": "active",
+      "trigger": [
+        "manual"
+      ]
+    },
+    {
+      "exit": {
         "0": "decided",
         "2": "unreadable input or an empty default branch"
       },

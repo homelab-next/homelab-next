@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# https and the public host name (every link the app writes; the edge sets the forwarded
+# protocol, so the app and the sign-in banner agree with what the browser sees), the cache and
+# the database by their compose service names on the project's own network.
+openproject_container_port: 8080
+openproject_cache_port: 11211
+openproject_fixed_env:
+  OPENPROJECT_HTTPS: "true"
+  OPENPROJECT_RAILS__CACHE__STORE: memcache
+  OPENPROJECT_CACHE__MEMCACHE__SERVER: "cache:11211"
+  RAILS_MIN_THREADS: "4"
+  RAILS_MAX_THREADS: "16"
+  PORT: "8080"
+openproject_container_pgdata: /var/lib/postgresql/data
+openproject_container_export: /var/lib/postgresql/export
+openproject_container_assets: /var/openproject/assets
+openproject_repository: "{{ openproject_image.split('@')[0].rsplit(':', 1)[0] }}"
+openproject_tag: "{{ openproject_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+openproject_digest: "{{ openproject_image.split('@')[1] | default('') }}"
+openproject_db_repository: "{{ openproject_postgres_image.split('@')[0].rsplit(':', 1)[0] }}"
+openproject_db_tag: "{{ openproject_postgres_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+openproject_db_digest: "{{ openproject_postgres_image.split('@')[1] | default('') }}"
+openproject_cache_repository: "{{ openproject_cache_image.split('@')[0].rsplit(':', 1)[0] }}"
+openproject_cache_tag: "{{ openproject_cache_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+openproject_cache_digest: "{{ openproject_cache_image.split('@')[1] | default('') }}"
+openproject_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+openproject_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+openproject_hostname_pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+\Z'
+openproject_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+openproject_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+openproject_username_pattern: '^[a-z0-9](?:[a-z0-9._@-]{0,62}[a-z0-9])?\Z'
+# a password that is safe in the database URL and in the env_file (no quote, no line break, no
+# character a URL would read) and long enough to matter
+openproject_db_value_pattern: '^[A-Za-z0-9._~-]{24,128}\Z'
+# the key the app signs sessions with: any env_file-safe string of 64 or more
+openproject_key_value_pattern: '^[A-Za-z0-9._~+/=-]{64,256}\Z'
+# the admin password: the product asks for three of lower, upper, digit and special
+openproject_admin_value_pattern: '^[A-Za-z0-9._~-]{16,128}\Z'

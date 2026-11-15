@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# The product migrates and seeds its database with a one-off command (the seeder) that must have
+# run, against the image about to serve, before the app opens the database. It is idempotent, so
+# it runs when the image changed since the last one (the marker holds the digest it last ran for)
+# or when a restore asks (openproject_seed_force). The database and the cache are brought up first
+# and waited for; nothing else is started.
+- name: Read the marker of the last seeded image
+  ansible.builtin.slurp:
+    src: "{{ openproject_data_root }}/seeded"
+  register: openproject_seeded
+  failed_when: false
+  tags: [restore]
+
+- name: Decide whether the seeder runs
+  ansible.builtin.set_fact:
+    openproject_seed_needed: >-
+      {{ (openproject_seed_force | default(false) | bool) or
+         (openproject_seeded.content | default('') | b64decode | trim) != openproject_digest }}
+  tags: [restore]
+
+- name: Bring up the database and the cache
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", up, -d, --wait, postgres, cache]
+  changed_when: false
+  when: openproject_seed_needed | bool
+  tags: [restore]
+
+- name: Run the seeder (migrations, then seed) with the app's own configuration
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", run, --rm, -T, --no-deps,
+           web, ./docker/prod/seeder]
+  changed_when: true
+  when: openproject_seed_needed | bool
+  timeout: "{{ openproject_ready_timeout | int }}"
+  tags: [restore]
+
+- name: Record the image the seeder ran for
+  ansible.builtin.copy:
+    content: "{{ openproject_digest }}\n"
+    dest: "{{ openproject_data_root }}/seeded"
+    owner: "{{ openproject_owner }}"
+    group: "{{ openproject_group }}"
+    mode: "0600"
+  when: openproject_seed_needed | bool
+  tags: [restore]

@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the four containers run and are healthy; the database answers (pg_isready in its
+# container); the app's own default health check answers 200 and so does its database check (the
+# app reached the database and the schema is migrated), asked on the guest's address with the
+# public name as the Host header. Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: openproject
+        compose_app_dir: "{{ openproject_app.compose_app_dir }}"
+        compose_app_spec: "{{ openproject_app.compose_app_spec }}"
+    - name: The database answers
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", exec, -T, postgres,
+               pg_isready, -U, "{{ openproject_db_user }}", -d, "{{ openproject_db_name }}"]
+      changed_when: false
+      check_mode: false
+    - name: The app answers its health checks (default, database)
+      ansible.builtin.uri:
+        url: "http://{{ openproject_bind }}:{{ openproject_port | int }}/health_checks/{{ item }}"
+        headers:
+          Host: "{{ openproject_hostname }}"
+        status_code: 200
+        timeout: "{{ openproject_health_timeout | int }}"
+      changed_when: false
+      check_mode: false
+      loop: [default, database]
+  tags: [health]

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root and export/ are root's; pgdata/ and export/db/ belong to the database's user and
+# assets/ (the attachments) to the app's. Nothing here is ever removed by the role (a bind-mounted
+# directory taken away under a running container breaks it).
+- name: Create the data root, the database's, the app's and the export directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ openproject_data_root }}", owner: "{{ openproject_owner }}", group: "{{ openproject_group }}", mode: "0750"}
+    - {path: "{{ openproject_data_root }}/pgdata", owner: "{{ openproject_db_uid | int }}", group: "{{ openproject_db_gid | int }}", mode: "0700"}
+    - {path: "{{ openproject_data_root }}/assets", owner: "{{ openproject_app_uid | int }}", group: "{{ openproject_app_gid | int }}", mode: "0750"}
+    - {path: "{{ openproject_data_root }}/export", owner: "{{ openproject_owner }}", group: "{{ openproject_group }}", mode: "0700"}
+    - {path: "{{ openproject_data_root }}/export/db", owner: "{{ openproject_db_uid | int }}", group: "{{ openproject_db_gid | int }}", mode: "0700"}
+    - {path: "{{ openproject_dir }}", owner: "{{ openproject_owner }}", group: "{{ openproject_group }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

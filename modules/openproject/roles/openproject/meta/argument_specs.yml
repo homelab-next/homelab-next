@@ -1,0 +1,663 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the web app, its worker, the database and the cache as compose_app containers; migrate and seed the database before the app opens it.
+    options:
+      openproject_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. projects).
+        required: true
+      openproject_hostname:
+        type: str
+        description: 'The public name the edge serves (projects.<domain>): every link and redirect the app writes is https://<it>.'
+        required: true
+      openproject_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the app image (the web app and the worker).
+        default: docker.io/openproject/openproject:15.5.1-slim@sha256:2b8af8195a0c661411ad651b2d09946c9624d2e2ac5529e078ac6f60c124d146
+      openproject_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      openproject_cache_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image.
+        default: docker.io/library/memcached:1.6.44-alpine@sha256:dfacdbd93e7a6f1ad63801753a1fc959dc678a5a1d2141ff438d57e6d8793fc3
+      openproject_bind:
+        type: str
+        description: The guest's own IPv4 address the app is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      openproject_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      openproject_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/openproject
+      openproject_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      openproject_group:
+        type: str
+        description: Their group.
+        default: root
+      openproject_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, assets/, export/ and export/db/.'
+        default: /var/lib/hnx-modules/openproject
+      openproject_app_uid:
+        type: int
+        description: The app's user id (the image's own).
+        default: 1000
+      openproject_app_gid:
+        type: int
+        description: The app's group id (the image's own).
+        default: 1000
+      openproject_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61030
+      openproject_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61030
+      openproject_db_name:
+        type: str
+        description: The database's name.
+        default: openproject
+      openproject_db_user:
+        type: str
+        description: The database role the app connects as.
+        default: openproject
+      openproject_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password (used only on an empty database).
+        default: secret:openproject/admin-password
+      openproject_db_login_ref:
+        type: str
+        description: secret:<name> of the database role's password.
+        default: secret:openproject/db-password
+      openproject_session_key_ref:
+        type: str
+        description: secret:<name> of the app's session key (after a migration, the source's).
+        default: secret:openproject/secret-key-base
+      openproject_mem_limit:
+        type: str
+        description: The web app container's memory limit.
+        default: 2g
+      openproject_worker_mem_limit:
+        type: str
+        description: The worker container's memory limit.
+        default: 1g
+      openproject_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 1g
+      openproject_cache_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 128m
+      openproject_start:
+        type: bool
+        description: Start the containers (false renders only).
+        default: true
+      openproject_validate_with_docker:
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      openproject_health_timeout:
+        type: int
+        description: Seconds for each request to the app.
+        default: 15
+      openproject_ready_timeout:
+        type: int
+        description: Seconds main waits for the app to answer after a start (the first one migrates).
+        default: 600
+  health:
+    short_description: Fail unless the four containers are healthy, the database answers and the app's default and database health checks give 200.
+    options:
+      openproject_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. projects).
+        required: true
+      openproject_hostname:
+        type: str
+        description: 'The public name the edge serves (projects.<domain>): every link and redirect the app writes is https://<it>.'
+        required: true
+      openproject_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the app image (the web app and the worker).
+        default: docker.io/openproject/openproject:15.5.1-slim@sha256:2b8af8195a0c661411ad651b2d09946c9624d2e2ac5529e078ac6f60c124d146
+      openproject_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      openproject_cache_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image.
+        default: docker.io/library/memcached:1.6.44-alpine@sha256:dfacdbd93e7a6f1ad63801753a1fc959dc678a5a1d2141ff438d57e6d8793fc3
+      openproject_bind:
+        type: str
+        description: The guest's own IPv4 address the app is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      openproject_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      openproject_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/openproject
+      openproject_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      openproject_group:
+        type: str
+        description: Their group.
+        default: root
+      openproject_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, assets/, export/ and export/db/.'
+        default: /var/lib/hnx-modules/openproject
+      openproject_app_uid:
+        type: int
+        description: The app's user id (the image's own).
+        default: 1000
+      openproject_app_gid:
+        type: int
+        description: The app's group id (the image's own).
+        default: 1000
+      openproject_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61030
+      openproject_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61030
+      openproject_db_name:
+        type: str
+        description: The database's name.
+        default: openproject
+      openproject_db_user:
+        type: str
+        description: The database role the app connects as.
+        default: openproject
+      openproject_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password (used only on an empty database).
+        default: secret:openproject/admin-password
+      openproject_db_login_ref:
+        type: str
+        description: secret:<name> of the database role's password.
+        default: secret:openproject/db-password
+      openproject_session_key_ref:
+        type: str
+        description: secret:<name> of the app's session key (after a migration, the source's).
+        default: secret:openproject/secret-key-base
+      openproject_mem_limit:
+        type: str
+        description: The web app container's memory limit.
+        default: 2g
+      openproject_worker_mem_limit:
+        type: str
+        description: The worker container's memory limit.
+        default: 1g
+      openproject_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 1g
+      openproject_cache_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 128m
+      openproject_health_timeout:
+        type: int
+        description: Seconds for each request to the app.
+        default: 15
+  readiness:
+    short_description: Fail unless the container engine is ready and every credential resolves in its form.
+    options:
+      openproject_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password (used only on an empty database).
+        default: secret:openproject/admin-password
+      openproject_db_login_ref:
+        type: str
+        description: secret:<name> of the database role's password.
+        default: secret:openproject/db-password
+      openproject_session_key_ref:
+        type: str
+        description: secret:<name> of the app's session key (after a migration, the source's).
+        default: secret:openproject/secret-key-base
+  backup:
+    short_description: Export the database (pg_dump) and the attachments (tar) with a sha256 listing, then name the data root for the backup.
+    options:
+      openproject_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. projects).
+        required: true
+      openproject_hostname:
+        type: str
+        description: 'The public name the edge serves (projects.<domain>): every link and redirect the app writes is https://<it>.'
+        required: true
+      openproject_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the app image (the web app and the worker).
+        default: docker.io/openproject/openproject:15.5.1-slim@sha256:2b8af8195a0c661411ad651b2d09946c9624d2e2ac5529e078ac6f60c124d146
+      openproject_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      openproject_cache_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image.
+        default: docker.io/library/memcached:1.6.44-alpine@sha256:dfacdbd93e7a6f1ad63801753a1fc959dc678a5a1d2141ff438d57e6d8793fc3
+      openproject_bind:
+        type: str
+        description: The guest's own IPv4 address the app is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      openproject_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      openproject_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/openproject
+      openproject_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      openproject_group:
+        type: str
+        description: Their group.
+        default: root
+      openproject_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, assets/, export/ and export/db/.'
+        default: /var/lib/hnx-modules/openproject
+      openproject_app_uid:
+        type: int
+        description: The app's user id (the image's own).
+        default: 1000
+      openproject_app_gid:
+        type: int
+        description: The app's group id (the image's own).
+        default: 1000
+      openproject_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61030
+      openproject_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61030
+      openproject_db_name:
+        type: str
+        description: The database's name.
+        default: openproject
+      openproject_db_user:
+        type: str
+        description: The database role the app connects as.
+        default: openproject
+      openproject_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password (used only on an empty database).
+        default: secret:openproject/admin-password
+      openproject_db_login_ref:
+        type: str
+        description: secret:<name> of the database role's password.
+        default: secret:openproject/db-password
+      openproject_session_key_ref:
+        type: str
+        description: secret:<name> of the app's session key (after a migration, the source's).
+        default: secret:openproject/secret-key-base
+      openproject_mem_limit:
+        type: str
+        description: The web app container's memory limit.
+        default: 2g
+      openproject_worker_mem_limit:
+        type: str
+        description: The worker container's memory limit.
+        default: 1g
+      openproject_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 1g
+      openproject_cache_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 128m
+      openproject_health_timeout:
+        type: int
+        description: Seconds for each request to the app.
+        default: 15
+  export:
+    short_description: 'Write the open-format exit copy (object-tree) to <data root>/export: the database dump and the attachments'' archive with a sha256 listing.'
+    options:
+      openproject_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. projects).
+        required: true
+      openproject_hostname:
+        type: str
+        description: 'The public name the edge serves (projects.<domain>): every link and redirect the app writes is https://<it>.'
+        required: true
+      openproject_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the app image (the web app and the worker).
+        default: docker.io/openproject/openproject:15.5.1-slim@sha256:2b8af8195a0c661411ad651b2d09946c9624d2e2ac5529e078ac6f60c124d146
+      openproject_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      openproject_cache_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image.
+        default: docker.io/library/memcached:1.6.44-alpine@sha256:dfacdbd93e7a6f1ad63801753a1fc959dc678a5a1d2141ff438d57e6d8793fc3
+      openproject_bind:
+        type: str
+        description: The guest's own IPv4 address the app is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      openproject_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      openproject_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/openproject
+      openproject_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      openproject_group:
+        type: str
+        description: Their group.
+        default: root
+      openproject_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, assets/, export/ and export/db/.'
+        default: /var/lib/hnx-modules/openproject
+      openproject_app_uid:
+        type: int
+        description: The app's user id (the image's own).
+        default: 1000
+      openproject_app_gid:
+        type: int
+        description: The app's group id (the image's own).
+        default: 1000
+      openproject_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61030
+      openproject_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61030
+      openproject_db_name:
+        type: str
+        description: The database's name.
+        default: openproject
+      openproject_db_user:
+        type: str
+        description: The database role the app connects as.
+        default: openproject
+      openproject_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password (used only on an empty database).
+        default: secret:openproject/admin-password
+      openproject_db_login_ref:
+        type: str
+        description: secret:<name> of the database role's password.
+        default: secret:openproject/db-password
+      openproject_session_key_ref:
+        type: str
+        description: secret:<name> of the app's session key (after a migration, the source's).
+        default: secret:openproject/secret-key-base
+      openproject_mem_limit:
+        type: str
+        description: The web app container's memory limit.
+        default: 2g
+      openproject_worker_mem_limit:
+        type: str
+        description: The worker container's memory limit.
+        default: 1g
+      openproject_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 1g
+      openproject_cache_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 128m
+      openproject_health_timeout:
+        type: int
+        description: Seconds for each request to the app.
+        default: 15
+  restore:
+    short_description: Check an export (listing, sizes, sha256) and restore the database and the attachments from it with the web app and the worker stopped, then migrate and start them again.
+    options:
+      openproject_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. projects).
+        required: true
+      openproject_hostname:
+        type: str
+        description: 'The public name the edge serves (projects.<domain>): every link and redirect the app writes is https://<it>.'
+        required: true
+      openproject_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the app image (the web app and the worker).
+        default: docker.io/openproject/openproject:15.5.1-slim@sha256:2b8af8195a0c661411ad651b2d09946c9624d2e2ac5529e078ac6f60c124d146
+      openproject_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      openproject_cache_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image.
+        default: docker.io/library/memcached:1.6.44-alpine@sha256:dfacdbd93e7a6f1ad63801753a1fc959dc678a5a1d2141ff438d57e6d8793fc3
+      openproject_bind:
+        type: str
+        description: The guest's own IPv4 address the app is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      openproject_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      openproject_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/openproject
+      openproject_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      openproject_group:
+        type: str
+        description: Their group.
+        default: root
+      openproject_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, assets/, export/ and export/db/.'
+        default: /var/lib/hnx-modules/openproject
+      openproject_app_uid:
+        type: int
+        description: The app's user id (the image's own).
+        default: 1000
+      openproject_app_gid:
+        type: int
+        description: The app's group id (the image's own).
+        default: 1000
+      openproject_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61030
+      openproject_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61030
+      openproject_db_name:
+        type: str
+        description: The database's name.
+        default: openproject
+      openproject_db_user:
+        type: str
+        description: The database role the app connects as.
+        default: openproject
+      openproject_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password (used only on an empty database).
+        default: secret:openproject/admin-password
+      openproject_db_login_ref:
+        type: str
+        description: secret:<name> of the database role's password.
+        default: secret:openproject/db-password
+      openproject_session_key_ref:
+        type: str
+        description: secret:<name> of the app's session key (after a migration, the source's).
+        default: secret:openproject/secret-key-base
+      openproject_mem_limit:
+        type: str
+        description: The web app container's memory limit.
+        default: 2g
+      openproject_worker_mem_limit:
+        type: str
+        description: The worker container's memory limit.
+        default: 1g
+      openproject_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 1g
+      openproject_cache_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 128m
+      openproject_health_timeout:
+        type: int
+        description: Seconds for each request to the app.
+        default: 15
+      openproject_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl, db/projects.dump, attachments.tar).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) of the app, the database or the cache and record it as pending.
+    options:
+      openproject_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. projects).
+        required: true
+      openproject_hostname:
+        type: str
+        description: 'The public name the edge serves (projects.<domain>): every link and redirect the app writes is https://<it>.'
+        required: true
+      openproject_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the app image (the web app and the worker).
+        default: docker.io/openproject/openproject:15.5.1-slim@sha256:2b8af8195a0c661411ad651b2d09946c9624d2e2ac5529e078ac6f60c124d146
+      openproject_postgres_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the PostgreSQL image.
+        default: docker.io/library/postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      openproject_cache_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the cache image.
+        default: docker.io/library/memcached:1.6.44-alpine@sha256:dfacdbd93e7a6f1ad63801753a1fc959dc678a5a1d2141ff438d57e6d8793fc3
+      openproject_bind:
+        type: str
+        description: The guest's own IPv4 address the app is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      openproject_port:
+        type: int
+        description: Host port (the registry row's port).
+        default: 8080
+      openproject_dir:
+        type: path
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/openproject
+      openproject_owner:
+        type: str
+        description: Owner of the compose project, the data root and export/.
+        default: root
+      openproject_group:
+        type: str
+        description: Their group.
+        default: root
+      openproject_data_root:
+        type: path
+        description: 'The module''s data root: pgdata/, assets/, export/ and export/db/.'
+        default: /var/lib/hnx-modules/openproject
+      openproject_app_uid:
+        type: int
+        description: The app's user id (the image's own).
+        default: 1000
+      openproject_app_gid:
+        type: int
+        description: The app's group id (the image's own).
+        default: 1000
+      openproject_db_uid:
+        type: int
+        description: The database container's user id; owns pgdata/ and export/db/.
+        default: 61030
+      openproject_db_gid:
+        type: int
+        description: The database container's group id.
+        default: 61030
+      openproject_db_name:
+        type: str
+        description: The database's name.
+        default: openproject
+      openproject_db_user:
+        type: str
+        description: The database role the app connects as.
+        default: openproject
+      openproject_admin_login_ref:
+        type: str
+        description: secret:<name> of the first administrator's password (used only on an empty database).
+        default: secret:openproject/admin-password
+      openproject_db_login_ref:
+        type: str
+        description: secret:<name> of the database role's password.
+        default: secret:openproject/db-password
+      openproject_session_key_ref:
+        type: str
+        description: secret:<name> of the app's session key (after a migration, the source's).
+        default: secret:openproject/secret-key-base
+      openproject_mem_limit:
+        type: str
+        description: The web app container's memory limit.
+        default: 2g
+      openproject_worker_mem_limit:
+        type: str
+        description: The worker container's memory limit.
+        default: 1g
+      openproject_db_mem_limit:
+        type: str
+        description: The database container's memory limit.
+        default: 1g
+      openproject_cache_mem_limit:
+        type: str
+        description: The cache container's memory limit.
+        default: 128m
+      openproject_health_timeout:
+        type: int
+        description: Seconds for each request to the app.
+        default: 15
+      openproject_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move the app (web and worker) to.
+        default: ''
+      openproject_target_postgres_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> to move the database to (a minor version: a major one needs a dump and restore).'
+        default: ''
+      openproject_target_cache_image:
+        type: str
+        description: repository:tag@sha256:<digest> to move the cache to.
+        default: ''
