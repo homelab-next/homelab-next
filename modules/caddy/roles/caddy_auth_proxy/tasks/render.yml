@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Render (and, with caddy_auth_proxy_render_start, start) the proxy; main runs it twice when the
+# network does not exist yet: first rendered only, so the network can be created and its gateway
+# read, then for real.
+- name: Render and start the auth proxy
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ caddy_auth_proxy_app.compose_app_name }}"
+    compose_app_dir: "{{ caddy_auth_proxy_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ caddy_auth_proxy_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ caddy_auth_proxy_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ caddy_auth_proxy_app.compose_app_owner }}"
+    compose_app_group: "{{ caddy_auth_proxy_app.compose_app_group }}"
+    compose_app_start: "{{ caddy_auth_proxy_render_start }}"
+    compose_app_validate_with_docker: "{{ caddy_auth_proxy_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ caddy_auth_proxy_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ caddy_auth_proxy_secret_env }}"
+  no_log: true

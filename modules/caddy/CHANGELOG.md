@@ -12,7 +12,7 @@
 - Upstream TLS from the generated `caddy/edge_tls.json`: the edge's client certificate and the
   lab's CA written from the secret store, mounted read-only.
 - Role `caddy_auth_proxy`: oauth2-proxy 7.15.5 as the forward-auth check and the OIDC sign-in
-  (PKCE S256, scope `openid`, `--set-xauthrequest`, a `__Host-` cookie, `--trusted-proxy-ip` so `--reverse-proxy` no longer trusts every address).
+  (PKCE S256, scope `openid`, `--set-xauthrequest`, a `__Host-` cookie, `--trusted-proxy-ip` set to the gateway of the proxy's own compose network, read from docker at deploy time, so `--reverse-proxy` no longer trusts every address).
 - Health: TLS by name, the sign-in redirect, the catch-all 404, the identity strip in the running
   configuration, the hub's mTLS refusal without the client certificate; export, backup and
   restore of the ACME account and the configuration.

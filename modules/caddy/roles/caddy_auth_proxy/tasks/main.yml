@@ -17,18 +17,33 @@
         OAUTH2_PROXY_COOKIE_SECRET: "{{ lookup('hnx_secret', caddy_auth_proxy_cookie_ref) }}"
   no_log: true
 
+# "auto" needs the gateway of the project's network, which exists only once compose has created
+# it: render with a loopback-only placeholder, create the network and the (stopped) container,
+# read the gateway, then render for real. Nothing runs with the placeholder.
+- name: Create the project's network before the first start (auto trusted proxies)
+  when: caddy_auth_proxy_trusted_pending | bool and caddy_auth_proxy_start | bool
+  block:
+    - name: Render the project (not started)
+      ansible.builtin.include_tasks: render.yml
+      vars:
+        caddy_auth_proxy_render_start: false
+    - name: Create the network and the stopped container
+      ansible.builtin.command:
+        argv: ["{{ caddy_auth_proxy_docker_cli }}", compose, -f, "{{ caddy_auth_proxy_dir }}/docker-compose.yml", up, --no-start]
+      register: caddy_auth_proxy_network_created
+      changed_when: true
+
+# outside the block: its condition (a gateway not known yet) is false from here on
+- name: Read the gateway of the new network
+  ansible.builtin.include_tasks: app.yml
+  when: caddy_auth_proxy_network_created is defined and caddy_auth_proxy_network_created is changed
+
+- name: The gateway is known before the proxy starts
+  ansible.builtin.assert:
+    that: not (caddy_auth_proxy_trusted_pending | bool and caddy_auth_proxy_start | bool)
+    fail_msg: "caddy_auth_proxy: the network {{ caddy_auth_proxy_network }} has no gateway: the proxy would trust no proxy, so it is not started"
+
 - name: Render and start the auth proxy
-  ansible.builtin.include_role:
-    name: compose_app
+  ansible.builtin.include_tasks: render.yml
   vars:
-    compose_app_name: "{{ caddy_auth_proxy_app.compose_app_name }}"
-    compose_app_dir: "{{ caddy_auth_proxy_app.compose_app_dir }}"
-    compose_app_data_dir: "{{ caddy_auth_proxy_app.compose_app_data_dir }}"
-    compose_app_export_dir: "{{ caddy_auth_proxy_app.compose_app_export_dir }}"
-    compose_app_owner: "{{ caddy_auth_proxy_app.compose_app_owner }}"
-    compose_app_group: "{{ caddy_auth_proxy_app.compose_app_group }}"
-    compose_app_start: "{{ caddy_auth_proxy_app.compose_app_start }}"
-    compose_app_validate_with_docker: "{{ caddy_auth_proxy_app.compose_app_validate_with_docker }}"
-    compose_app_spec: "{{ caddy_auth_proxy_app.compose_app_spec }}"
-    compose_app_secret_env: "{{ caddy_auth_proxy_secret_env }}"
-  no_log: true
+    caddy_auth_proxy_render_start: "{{ caddy_auth_proxy_app.compose_app_start }}"

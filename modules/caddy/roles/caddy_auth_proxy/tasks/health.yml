@@ -17,6 +17,16 @@
         compose_app_name: caddy-auth-proxy
         compose_app_dir: "{{ caddy_auth_proxy_app.compose_app_dir }}"
         compose_app_spec: "{{ caddy_auth_proxy_app.compose_app_spec }}"
+    - name: The published port is bound to the guest's address only
+      ansible.builtin.command:
+        argv: ["{{ caddy_auth_proxy_docker_cli }}", compose, -f, "{{ caddy_auth_proxy_app.compose_app_dir }}/docker-compose.yml", port, auth-proxy, "{{ caddy_auth_proxy_container_port }}"]
+      register: caddy_auth_proxy_published
+      changed_when: false
+      check_mode: false
+      failed_when: >-
+        caddy_auth_proxy_published.rc != 0 or
+        (caddy_auth_proxy_published.stdout_lines | default([])) | length == 0 or
+        (caddy_auth_proxy_published.stdout_lines | default([])) | reject('equalto', caddy_auth_proxy_bind ~ ':' ~ (caddy_auth_proxy_port | int)) | list | length > 0
     - name: The proxy answers /ping
       ansible.builtin.uri:
         url: "http://{{ caddy_auth_proxy_bind }}:{{ caddy_auth_proxy_port | int }}/ping"
