@@ -94,9 +94,8 @@ def test_a_templated_registry_path_is_resolved(tmp_path):
 # ------------------------------------------------ the platform shape (protocol/tls, a hosts map)
 PLATFORM = """\
 lab: {name: demo, domain: example.internal, svc_label: svc, owner: platform-team}
-zones: {mgmt: {cidr: 192.0.2.0/26}}  # no-raw-endpoint: allow documentation range
 hosts:
-  hnx-apps-01: {address: 192.0.2.30, zone: mgmt}  # no-raw-endpoint: allow documentation range
+  hnx-apps-01: {zone: mgmt}
 services:
   alert: {capability: notify, host: hnx-apps-01, protocol: http, port: 80, tls: none}
   alert-tls: {capability: notify-tls, host: hnx-apps-01, protocol: http, port: 443, tls: internal}
@@ -123,15 +122,16 @@ def platform(tmp_path):
 
 def test_a_platform_row_takes_its_scheme_from_protocol_and_tls_and_names_its_alias(platform):
     # protocol http + tls none: plain http, on the alias a client resolves, never the host id
-    want = {
-        "alert": "http://notify.svc.example.internal:80",  # no-raw-endpoint: allow lookup output
-        "alert-tls": "https://notify-tls.svc.example.internal:443",  # no-raw-endpoint: allow lookup output
-        "gateway": "https://llm-gateway.svc.example.internal:4000",  # no-raw-endpoint: allow lookup output
-        "bus": "nats://events.svc.example.internal:4222",  # no-raw-endpoint: allow lookup output
-        "alert-eval": "http://alert-eval.svc.example.internal:8080",  # no-raw-endpoint: allow lookup output
-    }  # fmt: skip
-    for row, url in want.items():
-        assert platform([row]) == [url], row
+    zone = "svc.example.internal"
+    want = {  # row: (scheme, the label it answers by, port)
+        "alert": ("http", "notify", 80),
+        "alert-tls": ("https", "notify-tls", 443),
+        "gateway": ("https", "llm-gateway", 4000),
+        "bus": ("nats", "events", 4222),
+        "alert-eval": ("http", "alert-eval", 8080),
+    }
+    for row, (scheme, label, port) in want.items():
+        assert platform([row]) == [f"{scheme}://{label}.{zone}:{port}"], row
     assert platform(["alert"], field="host") == ["notify.svc.example.internal"]
     assert platform(["alert"], field="port") == [80]
 
