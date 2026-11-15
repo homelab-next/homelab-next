@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (tunnel_target_image, tag and digest), then
+# converge with the new pin (set tunnel_image to the target in the overlay). The connector keeps no
+# data; a second connector on the same tunnel keeps the public names up while this one restarts.
+#   ansible-playbook -i <inventory> modules/tunnel/playbooks/upgrade.yml -e tunnel_target_image=<ref>
+- name: Upgrade the tunnel connector
+  hosts: mod_tunnel_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: tunnel
+        tasks_from: upgrade
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: tunnel
+      vars:
+        tunnel_image: "{{ tunnel_target_image }}"

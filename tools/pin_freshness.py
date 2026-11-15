@@ -100,6 +100,7 @@ SOURCES: dict[str, tuple[str, str]] = {
     "role:openbao/openbao_version": ("github", "openbao/openbao"),
     "role:openbao/openbao_lego_version": ("github", "go-acme/lego"),
     "role:tailscale_node/tailscale_node_version": ("github", "tailscale/tailscale"),
+    "role:tunnel/tunnel_image": ("github", "cloudflare/cloudflared"),
     "role:trivy/trivy_version": ("github", "aquasecurity/trivy"),
     "role:vllm_server/vllm_server_version": ("pypi", "vllm"),
     "role:wazuh_agent/wazuh_agent_version": ("github", "wazuh/wazuh"),
@@ -138,6 +139,10 @@ NOTES: dict[str, str] = {
     "role:ntfy/ntfy_image": (
         "an image (modules/ntfy): bump the tag and its digest together, with product.version in "
         "modules/ntfy/module.yml and the lab registry's version"
+    ),
+    "role:tunnel/tunnel_image": (
+        "an image (modules/tunnel): bump the tag and its digest together, with product.version in "
+        "modules/tunnel/module.yml and the lab registry's version"
     ),
     "role:openbao/openbao_lego_version": (
         "moves with openbao_lego_checksums and openbao_lego_checksums_release, taken from the "

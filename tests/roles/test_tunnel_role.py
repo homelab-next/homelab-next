@@ -1,0 +1,229 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Role ``tunnel`` (modules/tunnel/roles/tunnel), run on localhost against fakes (CI is
+unprivileged): main renders the connector of a remotely managed tunnel through compose_app with the
+token only in the env_file, no ingress configuration, and a second run is ``changed=0``; an empty,
+malformed or unset token and bad inputs are refused before anything is rendered; health passes
+against a stand-in readiness endpoint and fails with no ready connection or a published port that
+is not the guest's."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import pwd
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+import pytest
+import yaml
+from rolerun import fake, run_role
+
+ROOT = Path(__file__).resolve().parents[2]
+ROLE = str(ROOT / "modules" / "tunnel" / "roles" / "tunnel")
+USER = pwd.getpwuid(os.getuid()).pw_name
+# the guest's address is one the example registry already carries (no literal of our own)
+GUEST = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["hosts"]["edge-core"][
+    "address"
+]
+JOIN_VALUE = base64.b64encode(
+    json.dumps(
+        {"a": "acct" * 8, "t": "11111111-2222-3333-4444-555555555555", "s": "c2VjcmV0" * 4}
+    ).encode()
+).decode()
+ENV = "HNX_SECRET_TUNNEL_TOKEN"
+# the image the role pins by default (read, not repeated): its repository is the only one allowed
+IMAGE = yaml.safe_load((Path(ROLE) / "defaults" / "main.yml").read_text())["tunnel_image"]
+REPO = IMAGE.split("@")[0].rsplit(":", 1)[0]
+SECRETS = {ENV: JOIN_VALUE}
+
+
+def tunnel_vars(tmp_path: Path, **kw) -> dict:
+    v = {
+        "tunnel_logical_id": "tunnel",
+        "ansible_host": GUEST,
+        "tunnel_dir": str(tmp_path / "app"),
+        "tunnel_data_root": str(tmp_path / "data"),
+        "tunnel_owner": USER,
+        "tunnel_group": pwd.getpwuid(os.getuid()).pw_name,
+        "tunnel_uid": os.getuid() if os.getuid() >= 1000 else 65532,
+        "tunnel_gid": os.getgid() if os.getgid() >= 1000 else 65532,
+        "tunnel_sysctl_file": str(tmp_path / "sysctl.conf"),
+        "tunnel_sysctl_apply": False,
+        "tunnel_start": False,
+        "tunnel_validate_with_docker": False,
+    }
+    v.update(kw)
+    return v
+
+
+def test_main_renders_a_remotely_managed_connector_with_the_token_only_in_the_env_file(tmp_path):
+    v = tunnel_vars(tmp_path)
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    compose = (tmp_path / "app" / "docker-compose.yml").read_text()
+    svc = yaml.safe_load(compose)["services"]["tunnel"]
+    assert svc["image"].startswith(REPO + ":") and "@sha256:" in svc["image"]
+    assert svc["cap_drop"] == ["ALL"] and svc["security_opt"] == ["no-new-privileges:true"]
+    assert svc["read_only"] is True
+    # outbound only: the one published port is the metrics/readiness listener, on the guest
+    assert svc["ports"] == [GUEST + ":20241:20241"]
+    # remotely managed: no ingress configuration of any kind
+    assert svc["command"] == ["tunnel", "--no-autoupdate", "--metrics", ":20241", "run"]
+    assert "--config" not in svc["command"] and not svc.get("volumes")
+    assert "ingress" not in compose.lower()
+    assert not list((tmp_path / "app").rglob("config.y*ml"))
+    assert not any(k.startswith("TUNNEL_") for k in svc.get("environment", {}))
+    assert JOIN_VALUE not in compose
+    env_file = tmp_path / "app" / "secrets" / "tunnel.env"
+    assert f"TUNNEL_TOKEN='{JOIN_VALUE}'" in env_file.read_text()
+    assert oct(env_file.stat().st_mode & 0o777) == "0o600"
+    assert JOIN_VALUE not in r.stdout
+    assert "rmem_max = 8388608" in (tmp_path / "sysctl.conf").read_text()
+    again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
+    v = tunnel_vars(tmp_path, hnx_module_slice="hnx-tunnel-server.slice")
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    assert doc["services"]["tunnel"]["cgroup_parent"] == "hnx-tunnel-server.slice"
+
+
+def _b64(obj) -> str:
+    return base64.b64encode(json.dumps(obj).encode()).decode()
+
+
+@pytest.mark.parametrize(
+    "env, word",
+    [
+        ({ENV: ""}, "unset or empty"),
+        ({ENV: "   "}, "unset or empty"),
+        ({ENV: "not a token with spaces " * 4}, "not base64"),
+        ({ENV: "short"}, "not base64"),
+        ({ENV: _b64({"a": "x" * 20, "t": "y" * 20})}, "does not decode"),  # no secret key
+        ({ENV: _b64(["a", "s", "t"] * 10)}, "does not decode"),
+        ({ENV: base64.b64encode(b"plainly not json " * 5).decode()}, "does not decode"),
+    ],
+)
+def test_main_refuses_an_empty_or_malformed_token(tmp_path, env, word):
+    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path), env=env)
+    assert r.returncode != 0, r.stdout
+    assert word in r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+    assert not (tmp_path / "app" / "secrets").exists()
+    assert (JOIN_VALUE not in r.stdout and env[ENV].strip() not in r.stdout) or not env[ENV].strip()
+
+
+def test_main_refuses_an_unset_token_naming_the_secret(tmp_path):
+    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path), env={})
+    assert r.returncode != 0
+    assert "secret:tunnel/token" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"tunnel_image": REPO + ":latest"},
+        {"ansible_host": "0.0.0.0"},
+        {"ansible_host": "edge.example.internal"},
+        {"tunnel_uid": 0},
+        {"tunnel_join_ref": "tunnel/token"},
+        {"tunnel_min_connections": 0},
+        {"tunnel_udp_buffer_bytes": 212992},
+        {"tunnel_dir": "relative/dir"},
+        {"tunnel_data_root": "/var/lib/../etc"},
+        {"tunnel_mem_limit": "lots"},
+    ],
+)
+def test_main_refuses_bad_inputs(tmp_path, over):
+    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path, **over), env=SECRETS)
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def _docker(tmp_path: Path, health: str = "healthy", port: str = f"{GUEST}:20241") -> dict:
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    state = json.dumps({"Service": "tunnel", "State": "running", "Health": health})
+    fake(
+        bindir / "docker",
+        "import sys\n"
+        f"sys.stdout.write({port + chr(10)!r} if 'port' in sys.argv else {state + chr(10)!r})\n",
+    )
+    return {"PATH": f"{bindir}:{os.environ['PATH']}"}
+
+
+class _Ready(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/ready":
+            self.send_response(404)
+            self.end_headers()
+            return
+        n = self.server.connections
+        body = json.dumps({"status": 200 if n else 503, "readyConnections": n}).encode()
+        self.send_response(200 if n else 503)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+class Ready:
+    def __init__(self, connections: int):
+        self.httpd = HTTPServer(("localhost", 0), _Ready)
+        self.httpd.connections = connections
+
+    def __enter__(self):
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        return self.httpd.server_address[:2]
+
+    def __exit__(self, *a):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def _health(tmp_path, connections: int, **kw):
+    with Ready(connections) as (host, port):
+        v = tunnel_vars(tmp_path, tunnel_bind=host, tunnel_port=port)
+        env = {**SECRETS, **_docker(tmp_path, port=f"{host}:{port}"), **kw}
+        return run_role(tmp_path, ROLE, "health", v, env=env)
+
+
+def test_health_passes_with_a_ready_connection(tmp_path):
+    r = _health(tmp_path, 4)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_health_fails_with_no_ready_connection(tmp_path):
+    r = _health(tmp_path, 0)
+    assert r.returncode != 0
+    assert "reports itself ready" in r.stdout
+
+
+def test_health_fails_when_the_port_is_published_on_another_address(tmp_path):
+    with Ready(2) as (host, port):
+        v = tunnel_vars(tmp_path, tunnel_bind=host, tunnel_port=port)
+        env = {**SECRETS, **_docker(tmp_path, port=f"{GUEST}:{port}")}
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+    assert r.returncode != 0 and "bound to the guest's address only" in r.stdout
+
+
+def test_upgrade_refuses_another_repository_and_an_unpinned_target(tmp_path):
+    ok = REPO + ":2026.11.0@sha256:" + "a" * 64
+    (tmp_path / "app").mkdir()
+    r = run_role(
+        tmp_path, ROLE, "upgrade", tunnel_vars(tmp_path, tunnel_target_image=ok), env=SECRETS
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    for bad in (REPO + ":2026.11.0", "docker.io/other/x:1@sha256:" + "a" * 64):
+        r = run_role(
+            tmp_path, ROLE, "upgrade", tunnel_vars(tmp_path, tunnel_target_image=bad), env=SECRETS
+        )
+        assert r.returncode != 0

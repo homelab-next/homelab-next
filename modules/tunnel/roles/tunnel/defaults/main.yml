@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# tunnel, the connector of a remotely managed tunnel (modules/tunnel): one container, outbound only.
+# The ingress rules, public hostnames and Access policies are the tunnel's, in the provider's
+# dashboard; this role renders none of them.
+# tunnel_logical_id (required): the instance's registry id, e.g. edge-tunnel
+tunnel_image: "docker.io/cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba"
+# the metrics and readiness listener is published on the guest's own address (the inventory's
+# ansible_host), never all interfaces; the guest firewall admits the lab's monitoring
+tunnel_bind: "{{ ansible_host }}"
+tunnel_port: 20241
+tunnel_dir: /opt/compose/tunnel
+tunnel_data_root: /var/lib/hnx-modules/tunnel
+tunnel_owner: root
+tunnel_group: root
+# the image runs as its own non-root user (distroless nonroot)
+tunnel_uid: 65532
+tunnel_gid: 65532
+tunnel_join_ref: secret:tunnel/token
+tunnel_mem_limit: 256m
+# health: /ready is 200 only with a connection; this is the least it must report
+tunnel_min_connections: 1
+# QUIC wants a large UDP receive buffer (LL-173: 208 KiB starved quic-go and the connections
+# thrashed): the role keeps net.core.rmem_max/wmem_max at least this many bytes
+tunnel_udp_buffer_bytes: 8388608
+tunnel_sysctl_manage: true
+tunnel_sysctl_apply: true
+tunnel_sysctl_file: /etc/sysctl.d/90-hnx-tunnel.conf
+tunnel_start: true
+tunnel_validate_with_docker: true
+tunnel_docker_cli: docker
+tunnel_health_timeout: 10

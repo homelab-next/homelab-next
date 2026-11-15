@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - tunnel_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - tunnel_image is match(tunnel_pinned_ref_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - tunnel_bind is match(tunnel_ipv4_pattern)
+      - tunnel_bind != '0.0.0.0'
+      - tunnel_port | int >= 1 and tunnel_port | int <= 65535
+      - tunnel_uid | int >= 1000 and tunnel_gid | int >= 1000
+      - tunnel_join_ref is match(tunnel_ref_form)
+      - tunnel_min_connections | int >= 1
+      - tunnel_udp_buffer_bytes | int >= 7340032
+      - >-
+        [tunnel_dir, tunnel_data_root, tunnel_sysctl_file] | reject('match', tunnel_path_pattern) | list | length == 0
+      - tunnel_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+    fail_msg: >-
+      tunnel: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish
+      the metrics and readiness listener on (not all interfaces), a port, a container uid and gid
+      of 1000 or more, a secret: reference for the tunnel token, at least one ready connection,
+      a UDP buffer of at least 7340032 bytes (QUIC), absolute canonical paths and a memory limit
+      like 256m
+  tags: [health, backup, restore, export, upgrade]

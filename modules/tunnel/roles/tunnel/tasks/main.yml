@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+# An empty or malformed token is refused here, before anything is rendered or started.
+- name: Refuse a missing or malformed tunnel token before the connector sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Keep the UDP buffers QUIC needs
+  ansible.builtin.include_tasks: sysctl.yml
+  when: tunnel_sysctl_manage | bool
+
+# Only the env_file (0600) holds the token.
+- name: Read the tunnel token
+  ansible.builtin.set_fact:
+    tunnel_secret_env:
+      tunnel:
+        TUNNEL_TOKEN: "{{ lookup('hnx_secret', tunnel_join_ref) | trim }}"
+  no_log: true
+
+- name: Render and start the connector
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ tunnel_app.compose_app_name }}"
+    compose_app_dir: "{{ tunnel_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ tunnel_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ tunnel_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ tunnel_app.compose_app_owner }}"
+    compose_app_group: "{{ tunnel_app.compose_app_group }}"
+    compose_app_start: "{{ tunnel_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ tunnel_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ tunnel_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ tunnel_secret_env }}"
+  no_log: true
