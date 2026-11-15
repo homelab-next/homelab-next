@@ -45,6 +45,10 @@ lynis_notify_topic: homelabnext-integrity
 lynis_notify_priority: 4
 lynis_notify_auth_ref: ""
 lynis_mail_to: root
+# Run the sweep's --test (one low-priority message through the real send path) once at deploy when
+# the channel changed (mode, URL, topic, priority, token or recipient), failing the play with the
+# script's error (LL-567). Skipped in --check, with notify none and without dpkg_verify.
+lynis_notify_test_on_change: true
 lynis_dpkg_cli: dpkg
 lynis_debsums_cli: debsums
 lynis_sendmail_cli: /usr/sbin/sendmail

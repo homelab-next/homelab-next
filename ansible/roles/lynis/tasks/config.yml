@@ -68,6 +68,51 @@
     mode: "0700"
   when: lynis_dpkg_verify | bool
 
+- name: Test the alert channel once when it changed (--test; skipped in check mode)
+  when: >-
+    lynis_notify_test_on_change | bool and not ansible_check_mode
+    and lynis_notify_mode in ['notify', 'mail'] and lynis_dpkg_verify | bool
+  block:
+    - name: Fingerprint the channel (mode, URL, topic, priority, recipient, token digest)
+      ansible.builtin.set_fact:
+        lynis_sweep_fp: >-
+          {{ [lynis_notify_mode, lynis_notify_url, lynis_notify_topic, lynis_notify_priority | string, lynis_mail_to,
+               (lookup('hnx_secret', lynis_notify_auth_ref) | hash('sha256')) if lynis_notify_auth_ref != '' else '']
+             | join('|') | hash('sha256') }}
+      no_log: true
+    - name: Look for the digest of the channel last tested
+      ansible.builtin.slurp:
+        src: "{{ lynis_state_dir }}/sweep-channel-test.sha256"
+      register: lynis_sweep_tested
+      failed_when: false
+    - name: Send one test message through the script's own send path
+      ansible.builtin.command:
+        argv: ["{{ lynis_verify_script }}", --test]
+      register: lynis_sweep_test
+      when: >-
+        lynis_sweep_tested.content is not defined
+        or (lynis_sweep_tested.content | b64decode | trim) != lynis_sweep_fp
+      changed_when: true
+      failed_when: false
+    - name: Fail the play with the script's error when the channel could not deliver
+      ansible.builtin.assert:
+        that: lynis_sweep_test is skipped or lynis_sweep_test.rc == 0
+        fail_msg: >-
+          lynis: the alert channel did not deliver its test message
+          ({{ (lynis_sweep_test.stderr | default('') | trim) or (lynis_sweep_test.stdout | default('') | trim) }});
+          a control whose channel cannot deliver is not a control (set lynis_notify_test_on_change: false to skip the test)
+    - name: Ensure the state directory exists
+      ansible.builtin.file:
+        path: "{{ lynis_state_dir }}"
+        state: directory
+        mode: "0700"
+    - name: Remember the tested channel, so an unchanged one is not tested again
+      ansible.builtin.copy:
+        dest: "{{ lynis_state_dir }}/sweep-channel-test.sha256"
+        content: "{{ lynis_sweep_fp }}\n"
+        mode: "0600"
+      when: lynis_sweep_test is not skipped
+
 - name: Install the shared last-run writer and the record directory (role last_run)
   ansible.builtin.include_role:
     name: last_run
