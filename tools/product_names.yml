@@ -28,7 +28,6 @@ products:
   - {name: trino, why: the lake query engine's reference product}
   - {name: iceberg, why: "the lake table format's reference product (outside prose the word is only ever the product here)"}
   - {name: minio, why: the object store's reference product}
-  - {name: openproject, why: the projects slot's reference product}
   - {name: proxmox, why: the hypervisor the compute model renders for}
   - {name: unifi, why: the network adapter the site renders for}
   - {name: tailscale, why: the remote-access product}
@@ -98,6 +97,14 @@ allow:
     reason: "the HTTPS stand-in of the idp provider's admin and OIDC API that the module's tests and its adapter's conformance run use"
   - path: "tests/roles/test_keycloak_role.py"
     reason: "the tests of the idp provider module's role (modules/keycloak/roles/keycloak), named for the module id as a module role must be (role:<module id>)"
+  - path: "tests/modules/test_openproject_module.py"
+    reason: "the tests of the projects provider module (modules/openproject): its manifest, conformance target and an overlay that selects it, by the module's id, which is its product's name"
+  - path: "tests/roles/test_openproject_role.py"
+    reason: "the tests of the projects provider module's role (modules/openproject/roles/openproject), named for the module id as a module role must be (role:<module id>); the product's own environment variables and image names are what the role renders"
+  - path: "tools/migrate/openproject.py"
+    reason: "the migration tool of the projects provider module (modules/openproject, README 'Migrating in'): it speaks the product's own schema (its tables, its attachments path) and is named for the module it serves"
+  - path: "tools/tests/test_migrate_openproject.py"
+    reason: "the tests of tools/migrate/openproject.py, named for the tool they test"
   - path: "tests/generators/golden/idp/**"
     reason: "the golden of the idp_realm generator, in the realm format's product's own representation (its user-profile component); the format's names are counted where they live, homelabnext/generators/realm_format.py"
   - path: "tests/generators/tiers/golden/idp/**"

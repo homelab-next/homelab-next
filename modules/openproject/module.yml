@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: Apache-2.0
+# The projects provider on OpenProject (docs/modules.md; README.md beside this file): the web app
+# and its background worker (one image, two commands), PostgreSQL and a cache as compose_app
+# containers in the module's slice, the database and the attachments under the module's data
+# root. Local accounts are the product's own (auth: own, never behind the edge's single sign-on:
+# outside people sign in with them); the public route exists only through the edge (the row's
+# public_hostname is the site's). Every real value (the guest, its address, the public name, the
+# secret values) is the site's: the overlay's lab/modules.yml, lab/services.yml, group variables
+# and secret store.
+manifest_version: "1.0"
+id: openproject
+kind: provider
+title: Projects on OpenProject
+description: Fills the projects slot with OpenProject, its worker, PostgreSQL and a cache as
+  compose_app containers; local accounts; the database and the attachments exportable and
+  restorable, so a migration is a dump, a freeze and a final delta; proved by the projects
+  conformance suite through the shared OpenProject adapter.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: openproject
+  version: 15.5.1
+licence:
+  kind: open-source
+  spdx: GPL-3.0-only
+credentials:
+  - secret: secret:openproject/db-password
+    identity: password
+    holder: provider
+    purpose: the database role's password, given to PostgreSQL at its first start and to the app and the worker at every start
+  - secret: secret:openproject/secret-key-base
+    identity: key
+    holder: provider
+    purpose: the app's session and encryption key; after a migration it is the source instance's value, so its sessions and encrypted settings still open
+  - secret: secret:openproject/admin-password
+    identity: password
+    holder: provider
+    purpose: the first administrator's password, used only when the seeder meets an empty database (a restored database brings its own accounts)
+identifiers:
+  - {kind: secret-name, name: openproject, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the database password, the session key and the admin password are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 4, memory_mb: 6144, disk_gb: 20}
+      guest:
+        baselines: [base]
+      roles: [role:openproject]
+      purpose: runs the web app, its worker, PostgreSQL and the cache (docker_engine applied first, compose_app renders them)
+provides:
+  slots:
+    projects:
+      adapter: homelabnext.conform.adapters.openproject:make
+      conformance:
+        target: conformance/target.yml
+      migration: {formats: [object-tree], export: role:openproject, import: role:openproject}
+egress: none
+contributes:
+  roles:
+    - file: roles/openproject
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:openproject, hook: readiness}
+  docs:
+    - file: README.md
+    - file: CHANGELOG.md
+data:
+  - id: database
+    kind: database
+    description: The PostgreSQL database - every project, work package, journal, account (with its password hash) and setting - as pg_dump's custom format with a sha256 listing.
+    export: {formats: [object-tree], via: role:openproject}
+    import: {formats: [object-tree], via: role:openproject}
+    retention: {keep: forever}
+  - id: attachments
+    kind: files
+    prefix: openproject/assets/
+    description: The attachments directory (the files people attached to work packages), as a tar archive listed beside the database dump.
+    export: {formats: [object-tree], via: role:openproject}
+    import: {formats: [object-tree], via: role:openproject}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest): validated and recorded, the database and attachments exported, then converged; the seeder migrates the database first"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

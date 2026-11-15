@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# The export (object-tree): db/projects.dump (pg_dump's custom format, written in the database's
+# container as its own user, so the file is the database's and never root's), attachments.tar
+# (the attachments directory, written by the host's tar into root's export/), then listing.jsonl
+# (key, size, sha256). A snapshot: every run writes a new one (the hook reports changed). The
+# database is dumped first, then the attachments, so a file an attachment row names is in the
+# tar; freeze the app (stop web and worker) for a cutover copy (README, "Migrating in").
+- name: Dump the database (pg_dump, custom format, in its container)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", exec, -T, postgres,
+           pg_dump, -U, "{{ openproject_db_user }}", -d, "{{ openproject_db_name }}", -Fc, --no-owner, --no-acl,
+           -f, "{{ openproject_container_export }}/.projects.dump.tmp"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Put the dump in place
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ openproject_dir }}/docker-compose.yml", exec, -T, postgres,
+           mv, -f, "{{ openproject_container_export }}/.projects.dump.tmp",
+           "{{ openproject_container_export }}/projects.dump"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Archive the attachments
+  ansible.builtin.command:
+    argv: [tar, --create, --file, "{{ openproject_data_root }}/export/.attachments.tar.tmp",
+           --directory, "{{ openproject_data_root }}/assets", .]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Put the attachments archive in place
+  ansible.builtin.command:
+    argv: [mv, -f, "{{ openproject_data_root }}/export/.attachments.tar.tmp",
+           "{{ openproject_data_root }}/export/attachments.tar"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Read the two files (size, sha256)
+  ansible.builtin.stat:
+    path: "{{ openproject_data_root }}/export/{{ item }}"
+    checksum_algorithm: sha256
+  loop: [db/projects.dump, attachments.tar]
+  register: openproject_export_stat
+  tags: [backup, export]
+
+- name: Write the listing
+  ansible.builtin.copy:
+    content: |
+      {% for r in openproject_export_stat.results %}{{ {'key': r.item, 'size': r.stat.size, 'sha256': r.stat.checksum} | to_json(sort_keys=true) }}
+      {% endfor %}
+    dest: "{{ openproject_data_root }}/export/listing.jsonl"
+    owner: "{{ openproject_owner }}"
+    group: "{{ openproject_group }}"
+    mode: "0600"
+  tags: [backup, export]
