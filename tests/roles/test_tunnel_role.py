@@ -70,17 +70,19 @@ def test_main_renders_a_remotely_managed_connector_with_the_token_only_in_the_en
     # outbound only: the one published port is the metrics/readiness listener, on the guest
     assert svc["ports"] == [GUEST + ":20241:20241"]
     # remotely managed: no ingress configuration of any kind
-    assert svc["command"] == ["tunnel", "--no-autoupdate", "--metrics", ":20241", "run"]
-    assert "--config" not in svc["command"] and not svc.get("volumes")
+    assert svc["command"][:5] == ["tunnel", "--no-autoupdate", "--metrics", ":20241", "run"]
+    assert svc["command"][5] == "--token-file" and "--config" not in svc["command"]
+    # the token is mounted read-only as a file, never in the environment
+    assert svc["volumes"] == [f"{tmp_path}/data/join/token:{svc['command'][6]}:ro"]
     assert "ingress" not in compose.lower()
     assert not list((tmp_path / "app").rglob("config.y*ml"))
     assert not any(k.startswith("TUNNEL_") for k in svc.get("environment", {}))
-    assert JOIN_VALUE not in compose
-    env_file = tmp_path / "app" / "secrets" / "tunnel.env"
-    assert f"TUNNEL_TOKEN='{JOIN_VALUE}'" in env_file.read_text()
-    assert oct(env_file.stat().st_mode & 0o777) == "0o600"
+    assert JOIN_VALUE not in compose and "env_file" not in compose
+    token_file = tmp_path / "data" / "join" / "token"
+    assert token_file.read_text() == JOIN_VALUE
+    assert oct(token_file.stat().st_mode & 0o777) == "0o400"
+    assert not (tmp_path / "app" / "secrets" / "tunnel.env").exists()
     assert JOIN_VALUE not in r.stdout
-    assert "rmem_max = 8388608" in (tmp_path / "sysctl.conf").read_text()
     again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
     assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
 
@@ -227,3 +229,91 @@ def test_upgrade_refuses_another_repository_and_an_unpinned_target(tmp_path):
             tmp_path, ROLE, "upgrade", tunnel_vars(tmp_path, tunnel_target_image=bad), env=SECRETS
         )
         assert r.returncode != 0
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        lambda raw: base64.urlsafe_b64encode(raw).decode(),  # URL-safe, padded
+        lambda raw: base64.b64encode(raw).decode().rstrip("="),  # standard, unpadded
+        lambda raw: base64.urlsafe_b64encode(raw).decode().rstrip("="),  # URL-safe, unpadded
+    ],
+)
+def test_main_accepts_url_safe_and_unpadded_token_forms(tmp_path, form):
+    # a payload whose encoding needs padding and uses + or / in the standard alphabet
+    raw = json.dumps({"a": "acct" * 8, "t": "~~~???" * 6, "s": "\xfb\xff" * 8}).encode()
+    value = form(raw)
+    assert len(value) >= 60
+    r = run_role(tmp_path, ROLE, "main", tunnel_vars(tmp_path), env={ENV: value})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "data" / "join" / "token").read_text() == value
+
+
+def _sysctl(tmp_path: Path, live: int) -> tuple[dict, Path]:
+    bindir = tmp_path / "sbin"
+    bindir.mkdir(exist_ok=True)
+    log = tmp_path / "sysctl.log"
+    fake(
+        bindir / "sysctl",
+        "import sys\n"
+        f"open({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\n"
+        f"sys.stdout.write('{live}' + chr(10)) if '-n' in sys.argv else None\n",
+    )
+    return {"PATH": f"{bindir}:{os.environ['PATH']}"}, log
+
+
+def test_sysctl_only_raises_a_low_ceiling_and_never_lowers_a_higher_one(tmp_path):
+    env, log = _sysctl(tmp_path, live=999999999)
+    v = tunnel_vars(tmp_path, tunnel_sysctl_apply=True)
+    r = run_role(tmp_path, ROLE, "main", v, env={**SECRETS, **env})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (tmp_path / "sysctl.conf").exists()  # above the floor already: nothing written
+    assert " -w " not in " " + log.read_text()
+    low = tmp_path / "low"
+    low.mkdir()
+    env, log = _sysctl(low, live=212992)
+    r = run_role(
+        low, ROLE, "main", tunnel_vars(low, tunnel_sysctl_apply=True), env={**SECRETS, **env}
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "rmem_max = 8388608" in (low / "sysctl.conf").read_text()
+    assert log.read_text().count("-w") == 2
+
+
+def test_remove_is_idempotent_and_deletes_the_token_file(tmp_path):
+    import subprocess
+
+    app = tmp_path / "app"
+    data = tmp_path / "data"
+    (data / "join").mkdir(parents=True)
+    app.mkdir()
+    (app / "docker-compose.yml").write_text("services: {}\n")
+    (data / "join" / "token").write_text(JOIN_VALUE)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    log = tmp_path / "docker.log"
+    fake(
+        bindir / "docker",
+        f"import sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + chr(10))\n",
+    )
+    inv = tmp_path / "inv.ini"
+    inv.write_text("[mod_tunnel_server]\nlocalhost ansible_connection=local\n")
+    play = ROOT / "modules" / "tunnel" / "playbooks" / "remove.yml"
+    env = dict(
+        os.environ,
+        PATH=f"{bindir}:{os.environ['PATH']}",
+        ANSIBLE_CONFIG=str(ROOT / "ansible" / "ansible.cfg"),
+        ANSIBLE_HOME=str(tmp_path / ".ansible"),
+        ANSIBLE_NOCOLOR="1",
+    )
+    cmd = ["ansible-playbook", "-i", str(inv), str(play), "-e", f"tunnel_dir={app}", "-e", f"tunnel_data_root={data}",
+           "-e", "ansible_become=false", "-e", f"ansible_python_interpreter={__import__('sys').executable}"]  # fmt: skip
+    for _ in range(2):  # the second run finds nothing to stop and must still succeed
+        r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tmp_path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert not (data / "join" / "token").exists()
+    assert log.read_text().count("down") == 2
+    (app / "docker-compose.yml").unlink()
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr  # a half-removed host: no compose file at all
+    assert log.read_text().count("down") == 2

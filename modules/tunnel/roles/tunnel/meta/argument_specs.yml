@@ -57,7 +57,7 @@ argument_specs:
         default: 1
       tunnel_udp_buffer_bytes: &udp
         type: int
-        description: "Bytes net.core.rmem_max and wmem_max are kept at least at (QUIC; 7340032 or more)."
+        description: "Bytes net.core.rmem_max and wmem_max are raised to when below (never lowered): (QUIC; 7340032 or more)."
         default: 8388608
       tunnel_sysctl_manage: &sysctl_manage
         type: bool
@@ -67,6 +67,10 @@ argument_specs:
         type: bool
         description: "Apply the ceilings now when the file changed."
         default: true
+      tunnel_sysctl_cli: &sysctl_cli
+        type: str
+        description: "The sysctl command (read the live ceilings, raise them)."
+        default: sysctl
       tunnel_sysctl_file: &sysctl_file
         type: path
         description: "The sysctl.d file the ceilings are written to."
@@ -105,6 +109,7 @@ argument_specs:
       tunnel_min_connections: *minconn
       tunnel_udp_buffer_bytes: *udp
       tunnel_sysctl_file: *sysctl_file
+      tunnel_sysctl_cli: *sysctl_cli
       tunnel_start: *start
       tunnel_validate_with_docker: *validate
       tunnel_docker_cli: *cli
@@ -140,6 +145,7 @@ argument_specs:
       tunnel_min_connections: *minconn
       tunnel_udp_buffer_bytes: *udp
       tunnel_sysctl_file: *sysctl_file
+      tunnel_sysctl_cli: *sysctl_cli
       tunnel_start: *start
       tunnel_validate_with_docker: *validate
       tunnel_docker_cli: *cli

@@ -28,15 +28,17 @@ secret value; those live only in the private overlay.
 - **The image** is `repository:tag@sha256:digest` (the multi-arch index digest of 2026.10.7, 16
   days old when pinned); `tools/pin_freshness.py` watches it.
 - **Remotely managed, so no ingress configuration.** The container is started as
-  `tunnel --no-autoupdate --metrics :20241 run` with `TUNNEL_TOKEN` in its environment. There is
-  no config file, no volume and no `--config`; the role never renders an ingress rule, so the
-  dashboard stays the single place a hostname or origin is decided. Auto-update is off: the pin
-  moves by the upgrade hook only.
-- **The token is the only secret**: `secret:tunnel/token`, written to the compose
-  env_file (`secrets/tunnel.env`, 0600) through `hnx_secret` in `no_log` tasks. The role
-  **refuses an empty token** (and one that is not base64 of the `{a, s, t}` object cloudflared
-  reads) before anything is rendered or started, naming the secret and never printing it. The
-  token is the tunnel's, shared by every connector of that tunnel.
+  `tunnel --no-autoupdate --metrics :20241 run --token-file /run/tunnel-join`. There is no config
+  file and no `--config`; the role never renders an ingress rule, so the dashboard stays the single
+  place a hostname or origin is decided. Auto-update is off: the pin moves by the upgrade hook only.
+- **The token is the only secret**: `secret:tunnel/token`, written by the role to
+  `<tunnel_data_root>/join/token` (0400, owned by the container's user, in a 0700 directory) and mounted
+  read-only into the container. It is **not** in the container's environment, so not in
+  `docker inspect` or `/proc/<pid>/environ`. Only the two tasks that handle it are `no_log`; docker
+  and compose failures stay readable. The role **refuses an empty token** (and one that is not base64
+  of the `{a, s, t}` object cloudflared reads, standard or URL-safe, padded or not) before anything
+  is rendered or started, naming the secret and never printing it. The token is the tunnel's, shared
+  by every connector of that tunnel.
 - **Outbound only.** The only port the container publishes is the metrics and readiness listener,
   on the guest's own address (`tunnel_bind`, default the inventory's `ansible_host`; all
   interfaces is refused) at `tunnel_port` (20241, the registry row's port, the old lab's too).
@@ -45,42 +47,69 @@ secret value; those live only in the private overlay.
   healthcheck (`cloudflared tunnel ready`).
 - **UDP buffers (LL-173).** QUIC wants a large receive buffer; the old lab's tunnel thrashed on
   an undersized `net.core.rmem_max` (208 KiB against ~7 MiB) while every container and LAN check
-  stayed green. The role keeps `net.core.rmem_max` and `wmem_max` at least
-  `tunnel_udp_buffer_bytes` (8 MiB) in a sysctl.d file and applies them (`tunnel_sysctl_manage`
-  false leaves it to the baseline).
+  stayed green. The role only **raises** `net.core.rmem_max` and `wmem_max` to
+  `tunnel_udp_buffer_bytes` (8 MiB): it reads the live values, and when both are already at least
+  that it writes nothing, so it never lowers a higher value another file set. `tunnel_sysctl_manage:
+  false` leaves it to the baseline. The drop-in is kept on removal.
 
 ## Hooks
 
 | Hook | What it checks or does |
 |---|---|
-| `readiness` (also the module's preflight) | `docker_engine` readiness, and the token resolves, is not empty, is base64 and decodes to a JSON object with the keys `a`, `s`, `t` |
+| `readiness` (also the module's preflight) | `docker_engine` readiness, and the token resolves, is not empty, is base64 (URL-safe or unpadded accepted) and decodes to a JSON object with the keys `a`, `s`, `t` |
 | `health` | every container running and healthy; the port published on the guest's address only; `GET /ready` on the metrics port is **200** and its `readyConnections` is at least `tunnel_min_connections` (1). The daemon's own view, read-only |
 | `backup`, `export`, `restore` | nothing to do: the connector keeps no data (the tunnel, names and policies are the provider's) |
 | `upgrade` | refuses a target not pinned by tag and digest or from another repository, then records the bump (`compose_app` upgrade) |
 
 ## Handing the tunnel over from another connector (design section 7)
 
-The same tunnel can have several connectors at once, so a move never has a gap:
+**A tunnel has one ingress configuration shared by every connector, and the provider spreads
+requests across all connected connectors.** So the moment a second connector is connected, a share
+of real traffic reaches the origins in the CURRENT ingress through it; if its guest cannot reach
+them, those requests fail while the module's health stays green. Joining a connector early is
+therefore not traffic-neutral. The procedure keeps the new connector **stopped** until its origin is
+the one in the ingress, and accepts a brief, announced outage window (a few seconds to a minute,
+between stopping the old connector and the new one reporting ready connections).
 
-1. **Add a second connector to the same tunnel.** Deploy this module with the existing tunnel's
-   token (`secret:tunnel/token`); no hostname, origin or Access policy changes. The
-   health hook passes and the dashboard lists two connectors on the tunnel.
-2. **Prove it.** Check the new connector from the Cloudflare edge, never from the LAN: a public
-   name resolves through the LAN's split DNS to the internal front door, so a LAN test never
-   touches the tunnel (LL-107, LL-173). Resolve the name with DoH or `dig` against a public resolver,
-   then `curl --resolve` to the address it returns.
-3. **Repoint the origin** of the public hostname in the dashboard (and the internal DNS name) to
-   the new lab's front door. This is the only step that changes what users reach; the old
-   connector can still serve if it is put back.
-4. **Remove the old connector** only after the new one has run clean for a day: stop its
-   container. The tunnel, its names and its Access policy are untouched.
+1. **Deploy the new connector stopped.** Set `tunnel_start: false` for the first apply, so the
+   container is rendered and the token file written but nothing connects. The health hook is
+   expected to fail until it is started.
+2. **Check the new origin is reachable** from the new guest (the edge service the ingress will
+   point at, on the same guest or the LAN), and announce the window.
+3. **Cutover window**, in this order: (a) in the dashboard change the public hostname's origin to
+   the new edge service; (b) stop the old connector (`docker compose stop` on its host); (c) set
+   `tunnel_start: true` and re-apply the module (or `docker compose up -d` in `<tunnel_dir>`).
+   From (a) to (c) requests fail or go to the old connector's now-changed origin: that is the
+   outage window.
+4. **Verify** (see below): the new connector holds connections, serves requests, and the public
+   name answers from the provider's edge.
+5. **Rollback** is the reverse: stop the new connector, start the old one, set the origin back.
+   The old connector stays stopped, not removed, until the new one has run clean for a day; then
+   run `playbooks/remove.yml` on the old host's equivalent.
 
-Rollback at any point before step 4 is repointing the origin back; after it, start the old
-connector again (it is the same token).
+### Verifying
 
-Public names are verified **via the Cloudflare edge only** (LL-107), never by a LAN resolver. The
-health hook proves only that this connector holds connections; it cannot tell that a name works
-end to end.
+A request through the edge cannot show which connector served it, so attribute it by the new
+connector's own request counter, then check the public name from the provider's edge, never a LAN
+resolver (LL-107; the split DNS answers a public name with the internal front door, so a LAN test
+never touches the tunnel). Placeholders: `<guest>` is the connector's guest address, `<name>` the
+public hostname.
+
+```sh
+# 1. ready connections, and the request counter before
+curl -fsS http://<guest>:20241/ready                       # {"status":200,"readyConnections":N,...}
+curl -fsS http://<guest>:20241/metrics | grep '^cloudflared_tunnel_total_requests'
+# 2. the edge's own answer for the name (DoH to a public resolver, not the LAN's)
+curl -fsS -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?name=<name>&type=A'
+# 3. a request pinned to one of those edge addresses (<edge-ip> from step 2)
+curl -sS -o /dev/null -w '%{http_code}\n' --resolve <name>:443:<edge-ip> https://<name>/
+# 4. the counter after: it must have increased by at least the requests sent
+curl -fsS http://<guest>:20241/metrics | grep '^cloudflared_tunnel_total_requests'
+```
+
+If the counter does not move while the old connector is still running, the old one served the
+request: stop it and repeat. `cloudflared_tunnel_ha_connections` on the same endpoint is the
+number of connections to the edge.
 
 ## Using it in a site
 

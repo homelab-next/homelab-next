@@ -5,6 +5,8 @@
 # The metrics/readiness listener (":20241", no host part) listens on every interface INSIDE the
 # container only so the published port reaches it; the host publishes it on the guest's address alone.
 tunnel_container_metrics_listen: ":20241"
+# where the token file is mounted in the container (read-only)
+tunnel_container_join_path: /run/tunnel-join
 tunnel_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
 tunnel_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
 tunnel_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'

@@ -24,6 +24,7 @@ tunnel_min_connections: 1
 tunnel_udp_buffer_bytes: 8388608
 tunnel_sysctl_manage: true
 tunnel_sysctl_apply: true
+tunnel_sysctl_cli: sysctl
 tunnel_sysctl_file: /etc/sysctl.d/90-hnx-tunnel.conf
 tunnel_start: true
 tunnel_validate_with_docker: true

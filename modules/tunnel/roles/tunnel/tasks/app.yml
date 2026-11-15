@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # The compose_app inputs (shared by main and the hooks that delegate to compose_app): one
 # container as its own non-root user, every capability dropped, a read-only root filesystem, no
-# volume and no config file (the tunnel is remotely managed), published on the guest's address only.
+# config file (the tunnel is remotely managed), the token mounted read-only as a file (never in the
+# container's environment, so not in docker inspect), published on the guest's address only.
 - name: Build the application spec
   ansible.builtin.set_fact:
     tunnel_app:
@@ -19,10 +20,11 @@
             image: "{{ tunnel_repository }}"
             tag: "{{ tunnel_tag }}"
             digest: "{{ tunnel_digest }}"
-            command: "{{ ['tunnel', '--no-autoupdate', '--metrics', tunnel_container_metrics_listen, 'run'] }}"
+            command: "{{ ['tunnel', '--no-autoupdate', '--metrics', tunnel_container_metrics_listen, 'run', '--token-file', tunnel_container_join_path] }}"
             user: "{{ tunnel_uid | int }}:{{ tunnel_gid | int }}"
             read_only: true
             ports: ["{{ tunnel_bind }}:{{ tunnel_port | int }}:{{ tunnel_container_metrics_listen[1:] }}"]
+            volumes: ["{{ tunnel_data_root }}/join/token:{{ tunnel_container_join_path }}:ro"]
             mem_limit: "{{ tunnel_mem_limit }}"
             healthcheck:
               test: [CMD, cloudflared, tunnel, --metrics, "{{ tunnel_container_metrics_listen }}", ready]

@@ -1,18 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
-# Remove: stop and remove the container and delete the env_file that holds the tunnel token. The
-# connector keeps no data, so there is nothing to export. Removing a connector does not delete the
-# tunnel or its public names (they live in the Cloudflare dashboard); remove it only when another
-# connector of the same tunnel is healthy (README, "Handing the tunnel over"). The decommission
-# audit (module.yml lifecycle.remove.audit) checks nothing still names the service.
+# Remove: stop and remove the container and delete the token file the container was given. The
+# connector keeps no data, so there is nothing to export. Safe to run again, or on a half-removed
+# host: a missing compose project is not an error. The sysctl.d drop-in (a floor for the UDP
+# buffers) is deliberately kept: it only raises, other services may rely on it. Removing a
+# connector does not delete the tunnel or its public names (they live in the Cloudflare
+# dashboard); remove it only when another connector of the same tunnel is healthy (README,
+# "Handing the tunnel over"). The decommission audit (module.yml lifecycle.remove.audit) checks
+# nothing still names the service.
 - name: Remove the tunnel connector
   hosts: mod_tunnel_server
   become: true
   tasks:
+    - name: Find the compose project
+      ansible.builtin.stat:
+        path: "{{ tunnel_dir | default('/opt/compose/tunnel') }}/docker-compose.yml"
+      register: tunnel_remove_project
     - name: Stop and remove the container
       ansible.builtin.command:
-        argv: [docker, compose, -f, "{{ tunnel_dir | default('/opt/compose/tunnel') }}/docker-compose.yml", down]
+        argv: ["{{ tunnel_docker_cli | default('docker') }}", compose, -f, "{{ tunnel_dir | default('/opt/compose/tunnel') }}/docker-compose.yml", down]
+      when: tunnel_remove_project.stat.exists
       changed_when: true
-    - name: Delete the credential the container was given (the tunnel token)
+    - name: Delete the credential the container was given (the tunnel token file)
       ansible.builtin.file:
-        path: "{{ tunnel_dir | default('/opt/compose/tunnel') }}/secrets/tunnel.env"
+        path: "{{ tunnel_data_root | default('/var/lib/hnx-modules/tunnel') }}/join/token"
         state: absent
