@@ -122,11 +122,13 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # The lab's orchestrator image is built FROM the Go toolchain image: patch releases only, since
-  # the module's go.mod names the toolchain (GOTOOLCHAIN=local) and a minor bump moves both.
+  # The lab's orchestrator image and the gateway module's image are built FROM the Go toolchain
+  # image: patch releases only, since the module's go.mod names the toolchain (GOTOOLCHAIN=local)
+  # and a minor bump moves both.
   - package-ecosystem: docker
     directories:
       - "/compose/lab-in-a-box/orchestrator"
+      - "/modules/gateway/image"
     schedule:
       interval: weekly
     cooldown:

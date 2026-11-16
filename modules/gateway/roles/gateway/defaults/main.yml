@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# The LLM gateway, the inference provider (modules/gateway): one container, the lab's own gateway
+# (orchestrator/cmd/gateway) built into an image by the module's image/Dockerfile. The model roles,
+# their ordered backends and every caller's key are the site's gateway spec, rendered on the
+# controller; the role installs what the generator wrote and gives the container the keys by name.
+# gateway_logical_id (required): the instance's registry id
+# gateway_spec (required): absolute path, on the controller, of the site's gateway spec (YAML; it
+#   names the role table, the backends by registry row, the caller keys by secret: reference)
+# gateway_image (required): repository:tag@sha256:<digest> of the image built from this repository
+#   (modules/gateway/README.md, "The image"); no default: there is no published image to pin
+gateway_hnx_cli: [hnx]
+# the reference of the admin key: the spec's master_key (the generated config names its variable and
+# main refuses a spec that names another); health lists the served roles with it
+gateway_admin_key_ref: secret:gateway/master-key
+# optional: a local `docker save` of the pinned image (a path on the guest). The image is built by
+# the lab, not pulled from a registry; when the daemon lacks the digest the role loads this
+# archive and refuses to go on if the digest is still missing. Empty: the daemon must have it.
+gateway_image_archive: ""
+# The repositories gateway_image may name. This module runs the lab's own gateway, built by the
+# module's image/Dockerfile and tagged with a repository of the lab's own: an image from anywhere
+# else (another product's, a registry's) is refused by name, whatever its tag or digest. A site that
+# pushes the build to its own registry lists that repository here.
+gateway_build_repositories: [localhost/hnx-llm-gateway]
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# guest firewall admits the lab's callers
+gateway_bind: "{{ ansible_host }}"
+gateway_port: 4100
+gateway_dir: /opt/compose/gateway
+gateway_owner: root
+gateway_group: "{{ gateway_gid }}"
+# the module's data root on its host (docs/modules/data.md): config/ (the rendered gateway.json,
+# read-only in the container), state/ (usage.jsonl, the container's) and export/
+gateway_data_root: /var/lib/hnx-modules/gateway
+# the container's user and group: an id no account on the host has
+gateway_uid: 61004
+gateway_gid: 61004
+# The hosts a role with a cloud binding may call: the rendered config's cloud deployments must all
+# be on one of these, else the role refuses to install it. Empty (the default): no cloud binding
+# is accepted. The site sets the provider's API host here and grants the module `internet` egress
+# (grants.egress.gateway.server) in the same change.
+gateway_cloud_hosts_allowed: []
+# Hosts no deployment may name, whatever the spec says: a site lists what a model backend of the
+# new lab must never be (a host of another lab, a workstation). Compared to each base URL's host.
+gateway_refused_hosts: []
+# secret: references the spec does not spell out, when the generator derives a key's name (a key
+# per agent profile): the role maps each environment variable the config names to a reference it
+# finds in the spec's text or in this list, and refuses one it cannot place
+gateway_key_refs_extra: []
+# the serving flags (docs/gateway.md): model calls in flight in all and per key, the bound on one
+# upstream attempt (a Go duration), the output tokens reserved on a limit when a call names none
+gateway_max_inflight: 256
+gateway_max_inflight_per_key: 32
+gateway_upstream_timeout: 120s
+gateway_reserve_output: 4096
+gateway_mem_limit: 512m
+# the usage file is not rotated by the gateway: health fails past this size (MiB), so the records
+# are exported and the file dealt with before the disk is
+gateway_usage_max_mb: 2048
+gateway_start: true
+# wait, after a start, until the gateway answers /healthz (the container exits on a bad config)
+gateway_wait_ready: true
+gateway_validate_with_docker: true
+gateway_health_timeout: 10

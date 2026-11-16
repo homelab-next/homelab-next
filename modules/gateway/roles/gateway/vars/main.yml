@@ -1,0 +1,165 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# where the config and the usage file are mounted in the container, and the port it listens on
+# inside (the host's published port is gateway_port)
+gateway_container_config_dir: /etc/llm-gateway
+gateway_container_state_dir: /var/lib/llm-gateway
+gateway_container_port: 4100
+gateway_config_file: gateway.json
+gateway_usage_file: usage.jsonl
+gateway_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+# a caller's or the admin's key: what the gateway accepts (32 bytes or more) in the characters a
+# bearer token and a single-quoted env_file value can carry
+gateway_key_pattern: '^[A-Za-z0-9._~+/=-]{32,512}\Z'
+# a provider's key: one line, nothing the env_file's quoting could not carry
+gateway_upstream_key_pattern: '^[A-Za-z0-9._~+/=-]{8,512}\Z'
+gateway_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+gateway_host_pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+\Z'
+gateway_duration_pattern: '^[1-9][0-9]{0,4}(ms|s|m|h)\Z'
+gateway_repository: "{{ gateway_image.split('@')[0].rsplit(':', 1)[0] }}"
+gateway_tag: "{{ gateway_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+gateway_digest: "{{ gateway_image.split('@')[1] | default('') }}"
+# The usage export (docs/modules/data.md, object-tree), run as the container's user (setpriv): the
+# records up to the last complete line, each one a JSON object, into export/usage.jsonl, then
+# listing.jsonl (key, lines, size, sha256). The file is STREAMED line by line (a usage file grows
+# without rotation and may be far larger than memory): one line is held at a time, a line over
+# 1 MiB is refused, and the copy is hashed as it is written. Replaced atomically.
+gateway_export_script: |
+  import hashlib, json, os, sys
+  src, dst = sys.argv[1], sys.argv[2]
+  path = os.path.join(src, "usage.jsonl")
+  if not os.path.isfile(path) or os.path.islink(path):
+      sys.exit("export refused: " + path + " is missing (or a link)")
+  tmp = os.path.join(dst, ".usage.jsonl.tmp")
+  if os.path.lexists(tmp):
+      os.unlink(tmp)
+  fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+  h, size, lines = hashlib.sha256(), 0, 0
+  with open(path, "rb") as f, os.fdopen(fd, "wb") as out:
+      for line in iter(lambda: f.readline((1 << 20) + 1), b""):
+          if len(line) > 1 << 20:
+              os.unlink(tmp)
+              sys.exit("export refused: usage.jsonl line " + str(lines + 1) + " is over 1 MiB")
+          if not line.endswith(b"\n"):
+              break  # the gateway is mid-write: leave the incomplete last line out
+          try:
+              ok = isinstance(json.loads(line), dict)
+          except ValueError:
+              ok = False
+          if not ok:
+              os.unlink(tmp)
+              sys.exit("export refused: usage.jsonl line " + str(lines + 1) + " is not a JSON record")
+          out.write(line)
+          h.update(line)
+          size += len(line)
+          lines += 1
+      out.flush()
+      os.fsync(out.fileno())
+  os.replace(tmp, os.path.join(dst, "usage.jsonl"))
+  row = {"key": "usage.jsonl", "lines": lines, "size": size, "sha256": h.hexdigest()}
+  tmp = os.path.join(dst, ".listing.jsonl.tmp")
+  with open(tmp, "w", encoding="utf-8") as f:
+      f.write(json.dumps(row, sort_keys=True) + "\n")
+  os.chmod(tmp, 0o600)
+  os.replace(tmp, os.path.join(dst, "listing.jsonl"))
+  print(json.dumps(row))
+# The restore (docs/modules/data.md, import): one script, run as root, in two passes.
+#   check SRC UID STATE       reads, never writes
+#   apply SRC STATE UID GID   the gateway stopped: copies, re-verifies, replaces usage.jsonl
+# The source directory and each file are opened once with O_NOFOLLOW and read from that
+# descriptor, in chunks and line by line (never whole); the source and its files must belong to
+# root or the container's user and be writable by no one else; listing.jsonl names exactly
+# usage.jsonl, a single-link regular file of the listed size, sha256 and line count whose every
+# line is a JSON object. The usage file already in STATE is KEPT: apply stages the copy beside it,
+# hashes the staged copy, moves the old file to usage.jsonl.before-restore-<YYYYMMDD> and renames
+# the copy into place as the container's user (0600). If a file of that name exists, both passes
+# refuse (check, before anything stops): the operator decides what to do with it first.
+gateway_restore_script: |
+  import hashlib, json, os, stat, sys, time
+  mode, src = sys.argv[1], sys.argv[2]
+  if mode == "check":
+      uid, state, gid = int(sys.argv[3]), sys.argv[4], None
+  else:
+      state, uid, gid = sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+  def fail(why):
+      sys.exit("restore refused: " + why)
+  live = os.path.join(state, "usage.jsonl")
+  kept = live + ".before-restore-" + time.strftime("%Y%m%d", time.gmtime())
+  if os.path.lexists(live) and os.path.lexists(kept):
+      fail(kept + " already exists: move it away first (the previous usage file is kept, never overwritten)")
+  def trusted(st, what):
+      if st.st_uid not in (0, uid) or st.st_mode & 0o022:
+          fail(what + " must belong to root or the container's user and be writable by no one else")
+  nf = os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+  try:
+      dfd = os.open(src, os.O_RDONLY | os.O_DIRECTORY | nf)
+  except OSError:
+      fail("the source is not a directory (or is a link)")
+  trusted(os.fstat(dfd), "the source directory")
+  def opened(name):
+      try:
+          fd = os.open(name, os.O_RDONLY | nf, dir_fd=dfd)
+      except OSError:
+          fail(name + ": cannot be opened (missing, or a link)")
+      st = os.fstat(fd)
+      if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+          fail(name + ": not a single-link regular file")
+      trusted(st, name)
+      return fd, st
+  fd, _ = opened("listing.jsonl")
+  with os.fdopen(fd, encoding="utf-8") as f:
+      rows = [json.loads(x) for x in f.read(1 << 16).splitlines() if x.strip()]
+  if len(rows) != 1 or rows[0].get("key") != "usage.jsonl":
+      fail("the listing must name usage.jsonl and nothing else")
+  if set(os.listdir(dfd)) != {"listing.jsonl", "usage.jsonl"}:
+      fail("the source holds files the listing does not name, or misses one it does")
+  row = rows[0]
+  fd, st = opened("usage.jsonl")
+  if st.st_size != row.get("size"):
+      fail("usage.jsonl: not the listed size")
+  staged = os.path.join(state, ".usage.jsonl.restore") if mode == "apply" else None
+  out = None
+  if staged:
+      if os.path.lexists(staged):
+          os.unlink(staged)
+      out = os.fdopen(os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nf, 0o600), "wb")
+  h, lines = hashlib.sha256(), 0
+  with os.fdopen(fd, "rb") as f:
+      for line in iter(lambda: f.readline((1 << 20) + 1), b""):
+          if len(line) > 1 << 20 or not line.endswith(b"\n"):
+              fail("usage.jsonl line " + str(lines + 1) + " is over 1 MiB or has no end")
+          try:
+              ok = isinstance(json.loads(line), dict)
+          except ValueError:
+              ok = False
+          if not ok:
+              fail("usage.jsonl line " + str(lines + 1) + " is not a JSON record")
+          h.update(line)
+          lines += 1
+          if out:
+              out.write(line)
+  if h.hexdigest() != row.get("sha256"):
+      fail("usage.jsonl: sha256 differs from the listing")
+  if lines != row.get("lines"):
+      fail("usage.jsonl: not the listed number of complete lines")
+  if out:
+      out.flush()
+      os.fsync(out.fileno())
+      out.close()
+      back = hashlib.sha256()
+      sfd = os.open(staged, os.O_RDONLY | nf)
+      with os.fdopen(sfd, "rb") as g:
+          for chunk in iter(lambda: g.read(1 << 20), b""):
+              back.update(chunk)
+      if back.hexdigest() != row["sha256"]:
+          os.unlink(staged)
+          fail("usage.jsonl: the staged copy differs from the listing")
+      os.chown(staged, uid, gid)
+      if os.path.lexists(live):
+          os.rename(live, kept)
+      os.replace(staged, live)
+  print(json.dumps(row))
+# every secret: reference a spec's text carries (a reference is lower case, as the registry names it)
+gateway_ref_find_pattern: 'secret:[a-z0-9][a-z0-9/_.-]*'
+# the environment variable the admin key arrives in (secret_env_name of gateway_admin_key_ref)
+gateway_admin_env: "HNX_SECRET_{{ gateway_admin_key_ref | regex_replace('^secret:', '') | regex_replace('[^A-Za-z0-9]', '_') | upper }}"

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - gateway_target_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+          - gateway_target_image.split('@')[0].rsplit(':', 1)[1] != 'latest'
+          - gateway_target_image.split('@')[0].rsplit(':', 1)[0] == gateway_repository
+        fail_msg: "gateway: the target must be {{ gateway_repository }}:<tag>@sha256:<64 hex>, a tag other than latest"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: gateway
+        compose_app_dir: "{{ gateway_app.compose_app_dir }}"
+        compose_app_owner: "{{ gateway_app.compose_app_owner }}"
+        compose_app_group: "{{ gateway_app.compose_app_group }}"
+        compose_app_spec: "{{ gateway_app.compose_app_spec }}"
+        compose_app_upgrade_service: gateway
+        compose_app_upgrade_tag: "{{ gateway_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ gateway_target_image.split('@')[1] }}"
+  tags: [upgrade]
