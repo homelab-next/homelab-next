@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Render the configuration for this site's spec (the generator, on the controller)
+  ansible.builtin.include_tasks: generate.yml
+
+- name: Refuse a key that is missing or not in its form before anything is written
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Load the image from its archive when the daemon lacks it
+  ansible.builtin.include_tasks: image.yml
+  when: gateway_image_archive | length > 0
+
+# Read-only in the container: the file the generator rendered and audited, nothing else. It names
+# the environment variables the keys arrive in, never a value.
+- name: Install the configuration
+  ansible.builtin.copy:
+    dest: "{{ gateway_data_root }}/config/{{ gateway_config_file }}"
+    content: "{{ gateway_config_text }}"
+    owner: "{{ gateway_owner }}"
+    group: "{{ gateway_group }}"
+    mode: "0640"
+  register: gateway_config_written
+
+- name: Render and start the gateway
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ gateway_app.compose_app_name }}"
+    compose_app_dir: "{{ gateway_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ gateway_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ gateway_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ gateway_app.compose_app_owner }}"
+    compose_app_group: "{{ gateway_app.compose_app_group }}"
+    compose_app_start: "{{ gateway_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ gateway_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ gateway_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ {'gateway': gateway_secret_values} }}"
+  no_log: true
+
+# The gateway reads its configuration and its keys once, at start; a new file or a rotated key
+# reaches it only through a restart. SIGTERM drains the calls in flight (the upstream timeout and
+# 5 s), so the restart waits that long before it kills. Its rate-limit windows start again.
+- name: Restart the gateway when its configuration or a key changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ gateway_dir }}/docker-compose.yml", restart, -t, "135", gateway]
+  changed_when: true
+  when: >-
+    gateway_start | bool and not ansible_check_mode and
+    (gateway_config_written is changed or compose_app_secrets_written is changed)
+
+- name: Wait until the gateway answers
+  ansible.builtin.uri:
+    url: "http://{{ gateway_bind }}:{{ gateway_port | int }}/healthz"
+    status_code: 200
+    timeout: "{{ gateway_health_timeout | int }}"
+  register: gateway_ready
+  until: gateway_ready.status == 200
+  retries: 30
+  delay: 2
+  changed_when: false
+  when: gateway_start | bool and gateway_wait_ready | bool and not ansible_check_mode

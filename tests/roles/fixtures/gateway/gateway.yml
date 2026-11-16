@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# A fictional lab's gateway spec for the gateway role's tests: two local backends, one cloud
+# provider reached last, one caller key that may send to the cloud role and one that may not.
+name: test-lab
+roles: model_roles.json
+domain: example.internal
+master_key: secret:gateway/master-key
+database_url: secret:gateway/unused-database-url
+backends:
+  svc:fast-classifier: {locality: local, port: 8080}
+  svc:pool: {locality: local, port: 8000}
+  svc:cloud: {locality: cloud, provider: anthropic, api_key: secret:gateway/upstream-cloud}
+telemetry_reader:
+  key: secret:gateway/key-telemetry-reader
+keys:
+  - name: controller
+    key: secret:gateway/key-controller
+    roles: [mdl:fast-classifier, mdl:general, mdl:embedder]
+    data_tier: cloud-allowed
+    tlp_ceiling: clear
+  - name: jobs
+    key: secret:gateway/key-jobs
+    roles: [mdl:fast-classifier, mdl:embedder]
+    data_tier: local-only

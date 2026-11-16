@@ -1,0 +1,186 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Render the gateway's configuration from the site's gateway spec and run the gateway as a compose_app, every caller with its own key.
+    options:
+      gateway_logical_id: &logical
+        type: str
+        description: "The instance's registry id (the service row the site binds)."
+        required: true
+      gateway_spec: &spec
+        type: path
+        description: "Absolute path, on the controller, of the site's gateway spec (YAML): the role table it names, the backends by registry row, the caller keys by secret: reference."
+        required: true
+      gateway_image: &image
+        type: str
+        description: "repository:tag@sha256:<digest> of the gateway image built from this repository (modules/gateway/image/Dockerfile)."
+        required: true
+      gateway_hnx_cli: &cli
+        type: list
+        elements: str
+        description: "The command that runs hnx on the controller (the generator renders the gateway config and audits it)."
+        default: [hnx]
+      gateway_admin_key_ref: &adminkey
+        type: str
+        description: "secret:<name> of the admin key: the gateway spec's master_key (the role refuses a spec that names another); health lists the served roles with it."
+        default: secret:gateway/master-key
+      gateway_build_repositories: &repos
+        type: list
+        elements: str
+        description: "The repositories gateway_image may name (the lab's own build); an image from any other repository is refused."
+        default: [localhost/hnx-llm-gateway]
+      gateway_image_archive: &archive
+        type: str
+        description: "A path, on the guest, of a docker save of the pinned image, loaded when the daemon lacks the digest; empty: the daemon must have it."
+        default: ""
+      gateway_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address the port is published on (never all interfaces)."
+        default: "{{ ansible_host }}"
+      gateway_port: &port
+        type: int
+        description: "Host port (the registry row's port)."
+        default: 4100
+      gateway_dir: &dir
+        type: path
+        description: "The compose project directory."
+        default: /opt/compose/gateway
+      gateway_owner: &owner
+        type: str
+        description: "Owner of the compose project and the data root."
+        default: root
+      gateway_group: &group
+        type: str
+        description: "Group of the compose project and the data root: the container's gid, so its user passes through the data root."
+        default: "{{ gateway_gid }}"
+      gateway_data_root: &root
+        type: path
+        description: "The module's data root on the host: config/ (read-only in the container), state/ (usage.jsonl) and export/."
+        default: /var/lib/hnx-modules/gateway
+      gateway_uid: &uid
+        type: int
+        description: "The container's user id (no account on the host has it); owns state/ and export/."
+        default: 61004
+      gateway_gid: &gid
+        type: int
+        description: "The container's group id."
+        default: 61004
+      gateway_cloud_hosts_allowed: &cloud
+        type: list
+        elements: str
+        description: "Hosts a cloud binding may call (the provider's API host); the rendered config's cloud deployments must all be on one of them. Empty: no cloud binding is accepted."
+        default: []
+      gateway_refused_hosts: &refused
+        type: list
+        elements: str
+        description: "Hosts no deployment may name (compared to each base URL's host)."
+        default: []
+      gateway_key_refs_extra: &extra
+        type: list
+        elements: str
+        description: "secret: references the spec does not spell out (a key the generator names), so the role can place each environment variable the config names."
+        default: []
+      gateway_max_inflight: &inflight
+        type: int
+        description: "Model calls in flight at once, in all (-max-inflight)."
+        default: 256
+      gateway_max_inflight_per_key: &inflightkey
+        type: int
+        description: "Model calls in flight at once per caller key (-max-inflight-per-key)."
+        default: 32
+      gateway_upstream_timeout: &timeout
+        type: str
+        description: "The bound on one upstream attempt, a Go duration like 120s (-upstream-timeout)."
+        default: 120s
+      gateway_reserve_output: &reserve
+        type: int
+        description: "Output tokens a call reserves on token and cost limits when neither it nor its role bounds them (-reserve-tokens)."
+        default: 4096
+      gateway_mem_limit: &mem
+        type: str
+        description: "Container memory limit."
+        default: 512m
+      gateway_usage_max_mb: &usagemax
+        type: int
+        description: "MiB: health fails when usage.jsonl is larger (the gateway does not rotate it)."
+        default: 2048
+      gateway_start: &start
+        type: bool
+        description: "Run docker compose up after rendering."
+        default: true
+      gateway_wait_ready: &wait
+        type: bool
+        description: "After a start, wait until the gateway answers /healthz."
+        default: true
+      gateway_validate_with_docker: &validate
+        type: bool
+        description: "Run docker compose config on the rendered file."
+        default: true
+      gateway_health_timeout: &htimeout
+        type: int
+        description: "Seconds for each health request."
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy, /healthz answers, a call without a key is refused, the admin key lists exactly the configured role aliases, no usage record was dropped and the usage file is within its bound.
+    options:
+      gateway_logical_id: *logical
+      gateway_image: *image
+      gateway_build_repositories: *repos
+      gateway_bind: *bind
+      gateway_port: *port
+      gateway_dir: *dir
+      gateway_owner: *owner
+      gateway_group: *group
+      gateway_data_root: *root
+      gateway_uid: *uid
+      gateway_gid: *gid
+      gateway_usage_max_mb: *usagemax
+      gateway_health_timeout: *htimeout
+      gateway_admin_key_ref: *adminkey
+  readiness:
+    short_description: Fail unless the container engine is ready and every key the gateway's config names resolves in its form.
+    options:
+      gateway_logical_id: *logical
+      gateway_spec: *spec
+      gateway_image: *image
+      gateway_build_repositories: *repos
+      gateway_hnx_cli: *cli
+      gateway_key_refs_extra: *extra
+      gateway_admin_key_ref: *adminkey
+      gateway_cloud_hosts_allowed: *cloud
+      gateway_refused_hosts: *refused
+  backup:
+    short_description: Export the usage records consistently, then name the data root for the backup.
+    options: &appopts
+      gateway_logical_id: *logical
+      gateway_image: *image
+      gateway_build_repositories: *repos
+      gateway_bind: *bind
+      gateway_port: *port
+      gateway_dir: *dir
+      gateway_owner: *owner
+      gateway_group: *group
+      gateway_data_root: *root
+      gateway_uid: *uid
+      gateway_gid: *gid
+  restore:
+    short_description: Check an export (listing, size, sha256, every line a record) and restore the usage records from it, the gateway stopped meanwhile.
+    options:
+      <<: *appopts
+      gateway_wait_ready: *wait
+      gateway_health_timeout: *htimeout
+      gateway_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl and usage.jsonl).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest of the same repository) and record it as pending.
+    options:
+      <<: *appopts
+      gateway_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to."
+        required: true
+  export:
+    short_description: Write the open-format exit copy (object-tree) of the usage records to <data root>/export.
+    options: *appopts

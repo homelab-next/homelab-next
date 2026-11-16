@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "roles": {
+    "embedder": {
+      "kind": "embedding",
+      "tier": "fast",
+      "dimensions": 1024,
+      "bindings": [{"backend": "svc:fast-classifier", "model_id": "example-embed"}]
+    },
+    "fast-classifier": {
+      "tier": "fast",
+      "bindings": [{"backend": "svc:fast-classifier", "model_id": "example-fast"}],
+      "max_context_tokens": 32768
+    },
+    "general": {
+      "tier": "large",
+      "bindings": [
+        {"backend": "svc:pool", "model_id": "example-general", "priority": 0},
+        {"backend": "svc:cloud", "model_id": "example-cloud-chat", "priority": 1, "leaves_lab": true}
+      ]
+    }
+  }
+}
