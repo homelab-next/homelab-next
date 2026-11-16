@@ -569,6 +569,11 @@ REJECTED = {
         devices=["/dev/dri/renderD128", "/dev/dri/renderD128"]
     ),
     "cdi any vendor": lambda s: s["services"]["web"].update(devices=["vendor.com/disk=all"]),
+    "device a mapping": lambda s: s["services"]["web"].update(
+        devices={"/dev/dri/renderD128": "/dev/mem"}
+    ),
+    "group_add a mapping": lambda s: s["services"]["web"].update(group_add={"44": 0}),
+    "group_add over 2^32-1": lambda s: s["services"]["web"].update(group_add=[9999999999]),
     "group_add root": lambda s: s["services"]["web"].update(group_add=[0]),
     "group_add a name": lambda s: s["services"]["web"].update(group_add=["render"]),
     "group_add not a list": lambda s: s["services"]["web"].update(group_add="44"),

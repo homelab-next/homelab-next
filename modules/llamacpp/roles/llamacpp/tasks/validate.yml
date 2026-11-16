@@ -30,8 +30,10 @@
       - llamacpp_render_node is match('^renderD[0-9]{3}\Z')
       - llamacpp_render_gid | string == '' or llamacpp_render_gid | string is match('^[1-9][0-9]{0,9}\Z')
       - llamacpp_models_gid | string == '' or llamacpp_models_gid | string is match('^[1-9][0-9]{0,9}\Z')
+      - llamacpp_render_gid | string == '' or llamacpp_render_gid | int <= llamacpp_gid_max
+      - llamacpp_models_gid | string == '' or llamacpp_models_gid | int <= llamacpp_gid_max
       - llamacpp_gpu_index | int >= 0 and llamacpp_gpu_index | int <= 15
-      - llamacpp_power_cap_max_watts | int >= 1 and llamacpp_power_cap_max_watts | int <= 1000
+      - llamacpp_power_cap_max_watts | int >= 1 and llamacpp_power_cap_max_watts | int <= llamacpp_power_cap_ceiling_watts | int
       - llamacpp_power_cap_attrs is sequence and llamacpp_power_cap_attrs is not string
       - llamacpp_power_cap_attrs | length > 0
       - llamacpp_power_cap_attrs | reject('string') | list | length == 0
@@ -45,6 +47,6 @@
       a container uid and gid of 1000 or more, canonical absolute paths, a model repository, a
       .gguf file, a store id and the entry's sha256 digest, a served model id, a context of 256
       tokens or more per slot, 1 to 32 slots, layers as a count, all or auto, a render node
-      (renderD<NNN>), group ids that are not 0, a power limit in watts and the hwmon attributes
+      (renderD<NNN>), group ids that are not 0, a power limit of 200 W at most (the operator's rule: a setting can only tighten it) and the hwmon attributes
       that carry it
   tags: [health, backup, restore, export, upgrade]

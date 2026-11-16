@@ -138,7 +138,7 @@ pins both facts against a stand-in that behaves like this.
 - Group variables for `mod_llamacpp_server`: `llamacpp_logical_id`, `llamacpp_served_model_name`
   (the role table's model id), `llamacpp_model_*` if not the default model, `llamacpp_context_size`,
   `llamacpp_parallel`, `llamacpp_n_gpu_layers`, `llamacpp_backend` and `llamacpp_image`,
-  `llamacpp_power_cap_max_watts` only to tighten the 200 W default.
+  `llamacpp_power_cap_max_watts` only to tighten the 200 W default (above 200 is refused; the check's sysfs and device roots are fixed role variables, not settings).
 - Model store: an entry in the model store manifest (`format: gguf`, `engines: [llama-server]`,
   the file's sha256 and size, a 40-hex revision) applied by `model_store` **before** this module;
   the guest's `outbound_allow` reaches the lab's mirror for that fetch (`model_store_require_mirror`).

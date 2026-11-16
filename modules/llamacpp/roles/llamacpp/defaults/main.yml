@@ -48,13 +48,11 @@ llamacpp_gpu_index: 0
 # the model store's group id (read from the model's directory when empty): the container reads the
 # weights through it and can write none
 llamacpp_models_gid: ""
-llamacpp_dev_root: /dev
 # the operator's rule: the card's power cap must be at or under this many watts before any load
-# starts (and again on every health run). On Intel the cap is read from the card's hwmon in sysfs,
+# starts (and again on every health run). It can only tighten the rule: 1 to 200, never above. On Intel the cap is read from the card's hwmon in sysfs,
 # every attribute listed (microwatts; absent or 0 refuses), on NVIDIA from nvidia-smi
 llamacpp_power_cap_max_watts: 200
 llamacpp_power_cap_attrs: [power1_cap]
-llamacpp_sysfs_root: /sys
 llamacpp_precheck_bin: /usr/local/libexec/homelabnext/hnx-llamacpp-precheck
 llamacpp_unit_dir: /etc/systemd/system
 llamacpp_systemctl_cli: systemctl

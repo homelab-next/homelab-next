@@ -175,7 +175,10 @@ def test_main_renders_the_container_the_unit_and_converges(tmp_path):
     assert str(tmp_path / "bin" / "precheck") in pre
     assert f"--digest {v[f'{MID}_model_digest']}" in pre
     assert "--backend vulkan --max-watts 200 --render-node renderD128 --attrs power1_cap" in pre
-    assert f"--listing {tmp_path}/store/manifests/listings/{STORE_ID}.sha256" in pre
+    assert (
+        f"--model-file {MODEL_FILE} --listing {tmp_path}/store/manifests/listings/{STORE_ID}.sha256"
+        in pre
+    )
     assert "up --no-color --no-log-prefix --abort-on-container-exit" in unit
     assert "Restart=on-failure" in unit and "TimeoutStartSec=1800" in unit
     assert oct((tmp_path / "bin" / "precheck").stat().st_mode & 0o777) == "0o755"
@@ -229,7 +232,7 @@ def test_main_hands_a_cuda_container_its_card_by_cdi_name_and_a_cpu_one_nothing(
     svc = compose(tmp_path)
     assert svc["devices"] == ["nvidia.com/gpu=1"] and svc["group_add"] == [str(MODELS_GID)]
     unit = next((tmp_path / "units").glob("*.service")).read_text()
-    assert "--backend cuda --max-watts 200 --gpu-index 1 --listing" in unit
+    assert "--backend cuda --max-watts 200 --gpu-index 1 --model-file" in unit
     cpu = tmp_path / "cpu"
     cpu.mkdir()
     store(cpu)
@@ -274,6 +277,10 @@ REFUSED = {
     "a render group that is root's": {"render_gid": 0},
     "a models group that is root's": {"models_gid": 0},
     "a power limit of zero": {"power_cap_max_watts": 0},
+    "a power limit above the operator's 200 W": {"power_cap_max_watts": 201},
+    "a power limit far above it": {"power_cap_max_watts": 1000},
+    "a render group over 2^32-1": {"render_gid": 4294967296},
+    "a models group over 2^32-1": {"models_gid": 9999999999},
     "a power attribute that is a path": {"power_cap_attrs": ["../power1_cap"]},
     "no power attribute": {"power_cap_attrs": []},
 }
@@ -407,7 +414,7 @@ def test_precheck_passes_a_cpu_backend_and_refuses_bad_usage(tmp_path):
 
 def _bytes_args(tmp_path: Path, digest: str) -> list[str]:
     root = tmp_path / "store"
-    return ["--backend", "cpu", "--max-watts", "200", "--listing",
+    return ["--backend", "cpu", "--max-watts", "200", "--model-file", MODEL_FILE, "--listing",
             str(root / "manifests" / "listings" / f"{STORE_ID}.sha256"),
             "--digest", digest, "--model-dir", str(root / "gguf" / REPO)]  # fmt: skip
 
@@ -430,10 +437,51 @@ def test_precheck_passes_the_pinned_bytes_and_refuses_anything_else(tmp_path):
     assert r.returncode == 1 and "run model_store" in r.stderr
 
 
+def test_precheck_requires_the_served_file_to_be_in_the_pinned_listing(tmp_path):
+    """A listing whose digest matches but that omits the file the server loads pins nothing about
+    it: the swapped file used to pass."""
+    mdir = tmp_path / "store" / "gguf" / REPO
+    mdir.mkdir(parents=True)
+    (mdir / "other.bin").write_bytes(b"other")
+    (mdir / MODEL_FILE).write_bytes(b"swapped for anything")
+    listing = f"{hashlib.sha256(b'other').hexdigest()}  other.bin\n"
+    lst = tmp_path / "store" / "manifests" / "listings"
+    lst.mkdir(parents=True)
+    (lst / f"{STORE_ID}.sha256").write_text(listing)
+    digest = "sha256:" + hashlib.sha256(listing.encode()).hexdigest()
+    r = precheck(*_bytes_args(tmp_path, digest))
+    assert r.returncode == 1 and "is not in" in r.stderr and "not pinned" in r.stderr
+    # a listed file passes, whatever sits beside it; a prefix or a path of another name does not count
+    good = store(tmp_path / "ok")
+    assert precheck(*_bytes_args(tmp_path / "ok", good)).returncode == 0
+    for name in (MODEL_FILE[:-2], "sub/" + MODEL_FILE, MODEL_FILE + "x"):
+        (lst / f"{STORE_ID}.sha256").write_text(f"{'0' * 64}  {name}\n")
+        digest = "sha256:" + hashlib.sha256((lst / f"{STORE_ID}.sha256").read_bytes()).hexdigest()
+        assert precheck(*_bytes_args(tmp_path, digest)).returncode == 1, name
+    # an unlisted file swapped in beside a correctly pinned one is still refused as unlisted
+    (mdir / "other.bin").write_bytes(b"other")
+    assert precheck(*_bytes_args(tmp_path, "sha256:" + "0" * 64)).returncode == 1
+
+
+def test_precheck_refuses_a_limit_above_the_operators_200_w(tmp_path):
+    r = precheck("--backend", "cpu", "--max-watts", "201", "--power-only")
+    assert r.returncode == 2
+
+
+def test_the_check_trees_are_not_settings_and_the_ceiling_is_fixed():
+    spec = yaml.safe_load((MODULE / "roles" / MID / "meta" / "argument_specs.yml").read_text())
+    for hook in spec["argument_specs"].values():
+        assert not {f"{MID}_sysfs_root", f"{MID}_dev_root"} & set(hook["options"])
+    assert not {f"{MID}_sysfs_root", f"{MID}_dev_root"} & set(DEFAULTS)
+    fixed = yaml.safe_load((MODULE / "roles" / MID / "vars" / "main.yml").read_text())
+    assert fixed[f"{MID}_sysfs_root"] == "/sys" and fixed[f"{MID}_power_cap_ceiling_watts"] == 200
+
+
 def test_precheck_checks_the_power_before_it_reads_the_weights(tmp_path):
     digest = store(tmp_path)
     r = precheck("--backend", "vulkan", "--max-watts", "100", "--render-node", "renderD128",
-                 "--sysfs-root", str(sysfs(tmp_path, "150000000")), "--listing", "/nonexistent",
+                 "--sysfs-root", str(sysfs(tmp_path, "150000000")), "--model-file", MODEL_FILE,
+                 "--listing", "/nonexistent",
                  "--digest", digest, "--model-dir", str(tmp_path))  # fmt: skip
     assert r.returncode == 1 and "above the 100 W limit" in r.stderr  # not "listing is missing"
 

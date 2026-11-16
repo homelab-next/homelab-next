@@ -43,4 +43,12 @@ llamacpp_precheck_power: >-
         if llamacpp_backend in llamacpp_render_backends else [])
      + (['--gpu-index', llamacpp_gpu_index | string] if llamacpp_backend == 'cuda' else []) }}
 llamacpp_precheck_full: >-
-  {{ llamacpp_precheck_power + ['--listing', llamacpp_listing, '--digest', llamacpp_model_digest, '--model-dir', llamacpp_model_dir] }}
+  {{ llamacpp_precheck_power + ['--model-file', llamacpp_model_file, '--listing', llamacpp_listing, '--digest', llamacpp_model_digest, '--model-dir', llamacpp_model_dir] }}
+# Where the render node and the hwmon power files are read: the guest's own /dev and /sys. Test seams
+# only: a role var, so no inventory or group variable can point the power check at another tree
+# (only an extra variable, which a test passes).
+llamacpp_dev_root: /dev
+llamacpp_sysfs_root: /sys
+# the operator's power rule: no setting raises it above this many watts
+llamacpp_power_cap_ceiling_watts: 200
+llamacpp_gid_max: 4294967295

@@ -103,10 +103,6 @@ argument_specs:
         type: str
         description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
         default: ''
-      llamacpp_dev_root: &a_dev_root
-        type: path
-        description: Where the device nodes are read (/dev); the compose device is always /dev/dri/<node>.
-        default: /dev
       llamacpp_power_cap_max_watts: &a_power_cap_max_watts
         type: int
         description: 'The most the card''s power cap may be before any load starts (and at every health run): the operator''s rule, 200 W.'
@@ -116,10 +112,6 @@ argument_specs:
         description: The hwmon power attributes (microwatts) that must each exist, be above 0 and be within the limit on vulkan and sycl; power1_cap is the card's cap.
         elements: str
         default: [power1_cap]
-      llamacpp_sysfs_root: &a_sysfs_root
-        type: path
-        description: Where sysfs is read (/sys).
-        default: /sys
       llamacpp_precheck_bin: &a_precheck_bin
         type: path
         description: Where the pre-start check (power cap, then the weights' sha256) is installed.
@@ -176,10 +168,8 @@ argument_specs:
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
       llamacpp_models_gid: *a_models_gid
-      llamacpp_dev_root: *a_dev_root
       llamacpp_power_cap_max_watts: *a_power_cap_max_watts
       llamacpp_power_cap_attrs: *a_power_cap_attrs
-      llamacpp_sysfs_root: *a_sysfs_root
       llamacpp_precheck_bin: *a_precheck_bin
       llamacpp_unit_dir: *a_unit_dir
       llamacpp_systemctl_cli: *a_systemctl_cli
@@ -215,10 +205,8 @@ argument_specs:
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
       llamacpp_models_gid: *a_models_gid
-      llamacpp_dev_root: *a_dev_root
       llamacpp_power_cap_max_watts: *a_power_cap_max_watts
       llamacpp_power_cap_attrs: *a_power_cap_attrs
-      llamacpp_sysfs_root: *a_sysfs_root
       llamacpp_precheck_bin: *a_precheck_bin
       llamacpp_unit_dir: *a_unit_dir
       llamacpp_systemctl_cli: *a_systemctl_cli
@@ -263,10 +251,8 @@ argument_specs:
       llamacpp_render_gid: *a_render_gid
       llamacpp_gpu_index: *a_gpu_index
       llamacpp_models_gid: *a_models_gid
-      llamacpp_dev_root: *a_dev_root
       llamacpp_power_cap_max_watts: *a_power_cap_max_watts
       llamacpp_power_cap_attrs: *a_power_cap_attrs
-      llamacpp_sysfs_root: *a_sysfs_root
       llamacpp_precheck_bin: *a_precheck_bin
       llamacpp_unit_dir: *a_unit_dir
       llamacpp_systemctl_cli: *a_systemctl_cli
