@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The project directory and tls/ belong to root with the container's group (0750), so the container's
+# user reads the certificate files; every directory the service writes belongs to the container's
+# user (0700), the data root to root.
+- name: Create the project, certificate and data directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ nifi_dir }}", owner: "{{ nifi_owner }}", group: "{{ nifi_group }}", mode: "0750"}
+    - {path: "{{ nifi_dir }}/tls", owner: "{{ nifi_owner }}", group: "{{ nifi_group }}", mode: "0750"}
+    - {path: "{{ nifi_data_root }}", owner: "{{ nifi_owner }}", group: "{{ nifi_group }}", mode: "0750"}
+    - {path: "{{ nifi_data_root }}/conf", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+    - {path: "{{ nifi_data_root }}/state", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+    - {path: "{{ nifi_data_root }}/flowfile_repository", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+    - {path: "{{ nifi_data_root }}/content_repository", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+    - {path: "{{ nifi_data_root }}/database_repository", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+    - {path: "{{ nifi_data_root }}/provenance_repository", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+    - {path: "{{ nifi_data_root }}/logs", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+    - {path: "{{ nifi_data_root }}/smoke", owner: "{{ nifi_uid | int }}", group: "{{ nifi_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# The service's dependencies are the container engine (docker_engine, applied to the guest before this
+# module), its credentials in the secret store, and the object store, the catalog, the query engine and
+# the bus it talks to (each must accept a connection).
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Resolve the addresses
+      ansible.builtin.include_tasks: endpoint.yml
+    - name: The object store answers (200, or 403 to an unsigned request)
+      ansible.builtin.uri:
+        url: "{{ nifi_s3_endpoint }}/"
+        status_code: [200, 403]
+        timeout: "{{ nifi_health_timeout | int }}"
+      changed_when: false
+    - name: The catalog answers its config
+      ansible.builtin.uri:
+        url: "{{ nifi_catalog_endpoint }}/v1/config"
+        status_code: 200
+        timeout: "{{ nifi_health_timeout | int }}"
+      changed_when: false
+    - name: The query engine and the bus accept a connection
+      ansible.builtin.wait_for:
+        host: "{{ item | urlsplit('hostname') }}"
+        port: "{{ item | urlsplit('port') }}"
+        timeout: "{{ nifi_health_timeout | int }}"
+      loop: ["{{ nifi_query_endpoint }}", "{{ nifi_events_endpoint }}"]
+      changed_when: false
+  tags: [readiness]

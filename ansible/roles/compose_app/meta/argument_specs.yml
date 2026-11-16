@@ -6,7 +6,8 @@ argument_specs:
     - 'Typed application spec. services: mapping of service name to {image (repository, no tag), tag (not
       ''latest''), digest (sha256:<64 hex>), healthcheck {test: list, interval, timeout, retries, start_period}
       (required), optional command, user, env_file, environment, ports (host_ip:host_port:container_port),
-      volumes, depends_on, restart, cap_add, read_only, mem_limit, privileged}. No other key is accepted.'
+      volumes, depends_on, restart, cap_add, read_only, mem_limit, privileged, devices (DRM render nodes or CDI GPU names),
+      group_add (group numbers)}. No other key is accepted.'
     - Every service gets security_opt no-new-privileges and cap_drop ALL. Secrets go in
       compose_app_secret_env, never in environment. Privileged containers, docker socket mounts and
       running as root are refused unless the matching compose_app_allow_* flag is set.
