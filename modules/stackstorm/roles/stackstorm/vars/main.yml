@@ -9,6 +9,8 @@ stackstorm_c_rbac: /opt/stackstorm/rbac
 stackstorm_c_keys: /etc/st2/keys
 stackstorm_c_python_root: /opt/py311
 stackstorm_c_dist: /opt/hnx-dist
+# the runner-only volume the pack's runtime keeps its dedupe/coalesce/submitted state in (StateKV)
+stackstorm_c_state: /opt/hnx-state
 stackstorm_c_export: /export
 stackstorm_c_broker_dir: /run/hnx-broker
 stackstorm_c_broker_socket: /run/hnx-broker/broker.sock
@@ -40,10 +42,11 @@ stackstorm_broker_socket_mask: "{{ stackstorm_broker_socket_masks[stackstorm_bro
 # Who may do what with the pack (docs/stackstorm.md, "Who may run the pack's actions"): operators
 # and the status hub read, the bridge may only post webhooks, and nobody who signs in may run an
 # action. The user rules run executions as (stanley, which has no password and no token anyone
-# holds) is a system admin: the runtime keeps its state in datastore keys named by an HMAC, so no
-# per-key grant can name them, and StackStorm checks the datastore calls of a run as that user
-# (observed on 3.9.0: the config's own key read is refused without it). One role per file, as
-# StackStorm's RBAC loader wants.
+# holds) gets ONE grant: view of the datastore key the pack config reads (kv_key; the config loader
+# checks key_value_pair_view for the run's user before it decrypts, st2common KeyValueLookup).
+# The runtime's own state is not in the datastore but in a file on the runner's volume, because a
+# datastore grant names one key's uid and these names are HMACs: reaching them through the
+# datastore API would need system_admin. One role per file, as StackStorm's RBAC loader wants.
 stackstorm_rbac_roles: >-
   {%- set grants = [{'resource_uid': 'pack:' ~ stackstorm_pack_ref, 'permission_types': ['action_view']},
                     {'permission_types': ['action_list', 'execution_list']}] -%}
@@ -57,6 +60,9 @@ stackstorm_rbac_roles: >-
       {'name': 'hnx_status',
        'description': "the status hub's reader: list executions, and the actions of the packs named",
        'grants': grants},
+      {'name': 'hnx_runner',
+       'description': "what a rule-run execution (stanley) needs: view of the pack config's one datastore key",
+       'grants': [{'resource_uid': 'key_value_pair:st2kv.system:' ~ stackstorm_pack_ref ~ '.kv_key', 'permission_types': ['key_value_pair_view']}]},
       {'name': 'hnx_bridge',
        'description': "the event bridge: post to the pack's webhook, nothing else",
        'grants': [{'resource_uid': 'webhook:' ~ stackstorm_pack_ref, 'permission_types': ['webhook_send']}]}] }}

@@ -22,6 +22,7 @@
     - {path: "{{ stackstorm_data_root }}/rbac/roles", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
     - {path: "{{ stackstorm_data_root }}/rbac/assignments", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
     - {path: "{{ stackstorm_data_root }}/virtualenvs", owner: "{{ stackstorm_uid | int }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
+    - {path: "{{ stackstorm_data_root }}/state", owner: "{{ stackstorm_uid | int }}", group: "{{ stackstorm_gid | int }}", mode: "0700"}
     - {path: "{{ stackstorm_data_root }}/dist", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
     - {path: "{{ stackstorm_data_root }}/pack-releases", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_gid | int }}", mode: "0750"}
     - {path: "{{ stackstorm_data_root }}/export", owner: "{{ stackstorm_owner }}", group: "{{ stackstorm_group }}", mode: "0700"}

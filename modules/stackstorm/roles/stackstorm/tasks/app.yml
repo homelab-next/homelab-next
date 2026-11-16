@@ -159,7 +159,8 @@
             volumes: >-
               {{ [_conf, _keys, _cfgs, _packs, _venvs,
                   stackstorm_data_root ~ '/python:' ~ stackstorm_c_python_root ~ ':ro',
-                  stackstorm_data_root ~ '/dist:' ~ stackstorm_c_dist ~ ':ro']
+                  stackstorm_data_root ~ '/dist:' ~ stackstorm_c_dist ~ ':ro',
+                  stackstorm_data_root ~ '/state:' ~ stackstorm_c_state]
                  + ([stackstorm_broker_socket_dir ~ ':/run/hnx-broker'] if stackstorm_broker_tunnel_enabled | bool else []) }}
             healthcheck: "{{ {'test': _hc_proc + ['/opt/stackstorm/st2/bin/st2actionrunner']} | combine(_hc_times) }}"
           st2rulesengine:

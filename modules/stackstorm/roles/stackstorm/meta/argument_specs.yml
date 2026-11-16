@@ -342,10 +342,10 @@ argument_specs:
       stackstorm_runner_roles:
         type: list
         elements: str
-        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
-          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        description: 'RBAC roles of stanley, the user rules run executions as (hnx_runner: view of the one
+          datastore key the pack config reads, nothing else; the runtime keeps its own state in a file).'
         default:
-        - system_admin
+        - hnx_runner
   health:
     short_description: Fail unless every container is healthy, the pack and its rules are the rendered
       ones, a no-op execution succeeds and the keys are bounded.
@@ -437,10 +437,10 @@ argument_specs:
       stackstorm_runner_roles:
         type: list
         elements: str
-        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
-          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        description: 'RBAC roles of stanley, the user rules run executions as (hnx_runner: view of the one
+          datastore key the pack config reads, nothing else; the runtime keeps its own state in a file).'
         default:
-        - system_admin
+        - hnx_runner
   readiness:
     short_description: Fail unless the container engine, the rendered pack, the wheel and every credential
       are in place.
@@ -532,10 +532,10 @@ argument_specs:
       stackstorm_runner_roles:
         type: list
         elements: str
-        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
-          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        description: 'RBAC roles of stanley, the user rules run executions as (hnx_runner: view of the one
+          datastore key the pack config reads, nothing else; the runtime keeps its own state in a file).'
         default:
-        - system_admin
+        - hnx_runner
   backup:
     short_description: Write a consistent database archive into the data root, then the backup manifest.
     options:
@@ -626,10 +626,10 @@ argument_specs:
       stackstorm_runner_roles:
         type: list
         elements: str
-        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
-          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        description: 'RBAC roles of stanley, the user rules run executions as (hnx_runner: view of the one
+          datastore key the pack config reads, nothing else; the runtime keeps its own state in a file).'
         default:
-        - system_admin
+        - hnx_runner
   export:
     short_description: Write the database archive and its listing (the exit copy).
     options:
@@ -720,10 +720,10 @@ argument_specs:
       stackstorm_runner_roles:
         type: list
         elements: str
-        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
-          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        description: 'RBAC roles of stanley, the user rules run executions as (hnx_runner: view of the one
+          datastore key the pack config reads, nothing else; the runtime keeps its own state in a file).'
         default:
-        - system_admin
+        - hnx_runner
   restore:
     short_description: Restore the st2 database from an export, services stopped, then prove it.
     options:
@@ -818,10 +818,10 @@ argument_specs:
       stackstorm_runner_roles:
         type: list
         elements: str
-        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
-          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        description: 'RBAC roles of stanley, the user rules run executions as (hnx_runner: view of the one
+          datastore key the pack config reads, nothing else; the runtime keeps its own state in a file).'
         default:
-        - system_admin
+        - hnx_runner
   upgrade:
     short_description: Validate and record an image bump.
     options:
@@ -928,7 +928,7 @@ argument_specs:
       stackstorm_runner_roles:
         type: list
         elements: str
-        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
-          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        description: 'RBAC roles of stanley, the user rules run executions as (hnx_runner: view of the one
+          datastore key the pack config reads, nothing else; the runtime keeps its own state in a file).'
         default:
-        - system_admin
+        - hnx_runner

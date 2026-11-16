@@ -510,12 +510,12 @@ class {cls}(Action):
 def _shim(ref: str, name: str) -> str:
     call = {
         "admit": (
-            "admit(\n            kv=st2_runtime.ActionServiceKV(self.action_service, self.config),\n"
+            "admit(\n            kv=st2_runtime.runner_state(self.config),\n"
             "            pinned_dir=PINNED,\n            **params,\n        )"
         ),
         "step": (
             "step(\n            self.config,\n            "
-            "kv=st2_runtime.ActionServiceKV(self.action_service, self.config),\n            "
+            "kv=st2_runtime.runner_state(self.config),\n            "
             "pinned_dir=PINNED,\n            **params,\n        )"
         ),
     }[name]
@@ -689,7 +689,7 @@ def _config(binding: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]
         "secret": True,
         "required": True,
         "description": (
-            "keys the runtime's datastore names (seen, coalesce, submitted) so nobody without it "
+            "keys the names of the runtime's own state (seen, coalesce, submitted) so nobody without it "
             f"can forge or pre-seed one; at least {KV_KEY_MIN} random characters"
         ),
     }

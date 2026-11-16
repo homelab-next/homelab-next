@@ -113,8 +113,8 @@ stackstorm_status_key_ref: secret:stackstorm/status-token
 stackstorm_status_user: st2status
 # packs whose executions the status key may list (the pack's own, and core: the role's no-op check runs there)
 stackstorm_status_packs: [homelabnext, core]
-# the roles of the user rules run executions as (see vars/main.yml, stackstorm_rbac_assignments)
-stackstorm_runner_roles: [system_admin]
+# the roles of the user rules run executions as (see vars/main.yml: hnx_runner = view of the pack config's one datastore key)
+stackstorm_runner_roles: [hnx_runner]
 # operators who may view the pack's actions and executions (never run them)
 stackstorm_operator_users: []
 #
@@ -138,7 +138,7 @@ stackstorm_bridge_state_dir: /var/lib/hnx-st2-bridge
 # The broker has no network listener: a remote caller reaches it through an SSH-forwarded socket,
 # logging in as its own user on the broker host, which the broker's manifest maps to the
 # binding's actor (docs/broker.md, "Remote agents"). This service keeps that forward up. The key
-# is restricted on the broker host to the forward (restrict,port-forwarding,command="/bin/false").
+# is restricted on the broker host to the forward (restrict,port-forwarding,permitopen=<broker socket>,command="/bin/false").
 stackstorm_broker_tunnel_enabled: true
 stackstorm_broker_host: ""
 stackstorm_broker_ssh_user: hnx-agent-st2
