@@ -23,7 +23,6 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -210,21 +209,17 @@ def test_the_readme_lists_each_backends_pinned_image_of_the_same_build():
         repo_tag, digest = m.group(1).split("@")
         assert repo_tag.rsplit(":", 1)[1] == f"{prefix}b{build}", backend
         assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), backend
-    assert date.today() >= date(
-        2026, 11, 16
-    )  # the pin was chosen on 2026-11-16, 14 days after b12033
 
 
 def test_the_default_model_digest_is_the_hash_of_its_one_line_listing():
+    """The entry digest is sha256 of "<file sha256>  <path>\\n" (docs/model-serving.md); the file's
+    sha256 is the one the hub reports for the pinned revision (its LFS metadata, 2026-11-16)."""
     import hashlib
 
     d = ld.load_yaml(ROLE / "defaults" / "main.yml")
-    assert re.fullmatch(r"sha256:[0-9a-f]{64}", d[f"{MID}_model_digest"])
-    assert d[f"{MID}_model_file"].endswith(".gguf")
-    # the entry's listing is "<file sha256>  <path>\n"; its sha256 is the digest the unit checks.
-    # The file's own sha256 is the model store manifest's (the overlay's), so this only holds the
-    # digest to the shape an entry digest has
-    assert hashlib.sha256(b"x").hexdigest() != d[f"{MID}_model_digest"][7:]
+    file_sha = "06a819954debafc9664ac6bf3898818185d21d7efe36d0f01009d9958bf6e1fd"
+    listing = f"{file_sha}  {d[f'{MID}_model_file']}\n"
+    assert d[f"{MID}_model_digest"] == "sha256:" + hashlib.sha256(listing.encode()).hexdigest()
 
 
 # ----------------------------------------------------------------------------- an overlay
