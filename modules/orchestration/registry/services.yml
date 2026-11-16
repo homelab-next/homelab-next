@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes. It is keyed by the slot and
+# renamed to the instance the site selects; version is product.version (never repeated here), and
+# host is the module's host role, which the site places on a guest. The lab registry
+# (lab/services.yml) must carry it exactly as bound (hnx modules check, docs/modules/registry-rows.md).
+# Internal only: no public_hostname and no public route. The API is bearer-token authenticated per
+# caller (auth: own); /metrics is scraped with the metrics caller's token (metrics.auth), and the
+# status hub polls GET /admin/queue-summary with the read caller's (a status source the site adds
+# to its copy of the row, with the site's own secret name).
+services:
+  orchestration:
+    capability: orchestration
+    impl: agent-job-controller
+    host: server
+    protocol: http
+    port: 8088
+    health: {kind: http, path: /healthz, expect_status: 200}
+    metrics:
+      path: /metrics
+      auth: {kind: bearer, secret: "secret:orchestration/metrics-token"}
+    owner: operator
+    tls: none
+    auth: own
+    tags: [compute, agents]
+    description: The orchestration controller; agent jobs arrive through the broker's agent.job.submit. No public route.
