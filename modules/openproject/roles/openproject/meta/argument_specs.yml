@@ -83,6 +83,13 @@ argument_specs:
         type: str
         description: secret:<name> of the app's session key (after a migration, the source's).
         default: secret:openproject/secret-key-base
+      openproject_secret_key_base_migrated:
+        type: bool
+        description: >-
+          Opt-in for a key carried over from a source instance whose effective secret_key_base is short
+          (1 to 256 printable characters, no whitespace or quotes). The role then warns that the key is
+          weak and is to be rotated after the cutover. False keeps the strict rule (64 to 256 characters).
+        default: false
       openproject_mem_limit:
         type: str
         description: The web app container's memory limit.
@@ -198,6 +205,13 @@ argument_specs:
         type: str
         description: secret:<name> of the app's session key (after a migration, the source's).
         default: secret:openproject/secret-key-base
+      openproject_secret_key_base_migrated:
+        type: bool
+        description: >-
+          Opt-in for a key carried over from a source instance whose effective secret_key_base is short
+          (1 to 256 printable characters, no whitespace or quotes). The role then warns that the key is
+          weak and is to be rotated after the cutover. False keeps the strict rule (64 to 256 characters).
+        default: false
       openproject_mem_limit:
         type: str
         description: The web app container's memory limit.
@@ -233,6 +247,13 @@ argument_specs:
         type: str
         description: secret:<name> of the app's session key (after a migration, the source's).
         default: secret:openproject/secret-key-base
+      openproject_secret_key_base_migrated:
+        type: bool
+        description: >-
+          Opt-in for a key carried over from a source instance whose effective secret_key_base is short
+          (1 to 256 printable characters, no whitespace or quotes). The role then warns that the key is
+          weak and is to be rotated after the cutover. False keeps the strict rule (64 to 256 characters).
+        default: false
   backup:
     short_description: Export the database (pg_dump) and the attachments (tar) with a sha256 listing, then name the data root for the backup.
     options:
@@ -316,6 +337,13 @@ argument_specs:
         type: str
         description: secret:<name> of the app's session key (after a migration, the source's).
         default: secret:openproject/secret-key-base
+      openproject_secret_key_base_migrated:
+        type: bool
+        description: >-
+          Opt-in for a key carried over from a source instance whose effective secret_key_base is short
+          (1 to 256 printable characters, no whitespace or quotes). The role then warns that the key is
+          weak and is to be rotated after the cutover. False keeps the strict rule (64 to 256 characters).
+        default: false
       openproject_mem_limit:
         type: str
         description: The web app container's memory limit.
@@ -419,6 +447,13 @@ argument_specs:
         type: str
         description: secret:<name> of the app's session key (after a migration, the source's).
         default: secret:openproject/secret-key-base
+      openproject_secret_key_base_migrated:
+        type: bool
+        description: >-
+          Opt-in for a key carried over from a source instance whose effective secret_key_base is short
+          (1 to 256 printable characters, no whitespace or quotes). The role then warns that the key is
+          weak and is to be rotated after the cutover. False keeps the strict rule (64 to 256 characters).
+        default: false
       openproject_mem_limit:
         type: str
         description: The web app container's memory limit.
@@ -522,6 +557,13 @@ argument_specs:
         type: str
         description: secret:<name> of the app's session key (after a migration, the source's).
         default: secret:openproject/secret-key-base
+      openproject_secret_key_base_migrated:
+        type: bool
+        description: >-
+          Opt-in for a key carried over from a source instance whose effective secret_key_base is short
+          (1 to 256 printable characters, no whitespace or quotes). The role then warns that the key is
+          weak and is to be rotated after the cutover. False keeps the strict rule (64 to 256 characters).
+        default: false
       openproject_mem_limit:
         type: str
         description: The web app container's memory limit.
@@ -629,6 +671,13 @@ argument_specs:
         type: str
         description: secret:<name> of the app's session key (after a migration, the source's).
         default: secret:openproject/secret-key-base
+      openproject_secret_key_base_migrated:
+        type: bool
+        description: >-
+          Opt-in for a key carried over from a source instance whose effective secret_key_base is short
+          (1 to 256 printable characters, no whitespace or quotes). The role then warns that the key is
+          weak and is to be rotated after the cutover. False keeps the strict rule (64 to 256 characters).
+        default: false
       openproject_mem_limit:
         type: str
         description: The web app container's memory limit.

@@ -400,3 +400,54 @@ def test_upgrade_records_only_a_pinned_target_of_the_same_repository(tmp_path):
         r = run_role(tmp_path, ROLE, "upgrade", {**v, **bad}, env=SECRETS)
         assert r.returncode != 0, bad
         assert not (tmp_path / "app" / "pending-upgrade.json").exists()
+
+
+# ------------------------------------------------------------ migrated short session key
+
+SHORT_KEY = "ShortKey1234"  # 12 characters: the source's effective key
+
+
+def _key_run(tmp_path, key, migrated):
+    v = pv(tmp_path)
+    if migrated is not None:
+        v["openproject_secret_key_base_migrated"] = migrated
+    return run_role(
+        tmp_path, ROLE, "main", v, env={**SECRETS, "HNX_SECRET_OPENPROJECT_SECRET_KEY_BASE": key}
+    )
+
+
+def test_a_short_key_is_refused_by_default(tmp_path):
+    r = _key_run(tmp_path, SHORT_KEY, None)
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+    assert SHORT_KEY not in r.stdout + r.stderr
+
+
+def test_a_short_key_is_accepted_with_the_opt_in_and_warns(tmp_path):
+    r = _key_run(tmp_path, SHORT_KEY, True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ROTATE" in r.stdout and "secret:openproject/secret-key-base" in r.stdout
+    web = (tmp_path / "app" / "secrets" / "web.env").read_text()
+    assert f"SECRET_KEY_BASE='{SHORT_KEY}'" in web
+    assert SHORT_KEY not in r.stdout
+
+
+def test_a_strong_key_does_not_warn_without_the_opt_in(tmp_path):
+    r = _key_run(tmp_path, SESSION_KEY, None)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ROTATE" not in r.stdout
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["", "has space", "tab\tinside", "has'quote", 'has"quote', "k" * 257, "line\nbreak", "caf\u00e9"],
+)  # fmt: skip
+def test_the_opt_in_still_refuses_unsafe_or_out_of_range_keys(tmp_path, key):
+    r = _key_run(tmp_path, key, True)
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def test_the_opt_in_accepts_the_longest_key(tmp_path):
+    r = _key_run(tmp_path, "k" * 256, True)
+    assert r.returncode == 0, r.stdout + r.stderr
