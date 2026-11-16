@@ -12,7 +12,7 @@ host, address, VM id or domain; those live in the private overlay.
 | | |
 |---|---|
 | Slot | `documents` (provisional: no contract or suite yet), stateful, object-tree export |
-| Product | Paperless-ngx 3.4.2, `ghcr.io/paperless-ngx/paperless-ngx` pinned by tag and digest; Redis 8.8.3 as its broker |
+| Product | Paperless-ngx 3.4.2, `ghcr.io/paperless-ngx/paperless-ngx` pinned by tag and digest; Redis 7.2.16 as its broker (the pin the automation module also uses) |
 | Host role | `server`: kind `vm`, baseline `base`, footprint 2 vCPU, 3 GB, 20 GB |
 | Role | `documents` (role interface v1), a wrapper of the core `compose_app` |
 | Secrets | `secret:documents/secret-key`, `secret:documents/admin-password`, `secret:documents/api-token` |

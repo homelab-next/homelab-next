@@ -581,7 +581,7 @@ def test_upgrade_records_a_newer_pinned_target_and_refuses_the_rest(tmp_path):
         REPO + ":3.3.9@sha256:" + "c" * 64,
         REPO + ":latest@sha256:" + "c" * 64,
         REPO + ":3.5.0",  # no digest
-        "docker.io/library/redis:8.8.3@sha256:" + "c" * 64,  # another repository
+        "docker.io/library/redis:7.2.16@sha256:" + "c" * 64,  # another repository
     ):
         r = run_role(tmp_path, ROLE, "upgrade", {**v, "documents_target_image": bad}, env=SECRETS)
         assert r.returncode != 0, bad

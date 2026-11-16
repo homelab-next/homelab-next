@@ -7,7 +7,7 @@
 # move to a server database is an export and an import.
 # Required, with no default (the site's): documents_logical_id (the instance's registry id).
 documents_image: "ghcr.io/paperless-ngx/paperless-ngx:3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84"
-documents_broker_image: "docker.io/library/redis:8.8.3@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1"
+documents_broker_image: "docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3"
 # published on the guest's own address (the inventory's ansible_host), never all interfaces; the
 # hypervisor's per-VM firewall admits only the named consumers on this port
 documents_bind: "{{ ansible_host }}"

@@ -16,7 +16,7 @@ argument_specs:
       documents_broker_image:
         type: str
         description: repository:tag@sha256:<digest> of the broker image.
-        default: docker.io/library/redis:8.8.3@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
       documents_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -166,7 +166,7 @@ argument_specs:
       documents_broker_image:
         type: str
         description: repository:tag@sha256:<digest> of the broker image.
-        default: docker.io/library/redis:8.8.3@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
       documents_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -314,7 +314,7 @@ argument_specs:
       documents_broker_image:
         type: str
         description: repository:tag@sha256:<digest> of the broker image.
-        default: docker.io/library/redis:8.8.3@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
       documents_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -461,7 +461,7 @@ argument_specs:
       documents_broker_image:
         type: str
         description: repository:tag@sha256:<digest> of the broker image.
-        default: docker.io/library/redis:8.8.3@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
       documents_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -609,7 +609,7 @@ argument_specs:
       documents_broker_image:
         type: str
         description: repository:tag@sha256:<digest> of the broker image.
-        default: docker.io/library/redis:8.8.3@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
       documents_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -761,7 +761,7 @@ argument_specs:
       documents_broker_image:
         type: str
         description: repository:tag@sha256:<digest> of the broker image.
-        default: docker.io/library/redis:8.8.3@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
       documents_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
@@ -913,7 +913,7 @@ argument_specs:
       documents_broker_image:
         type: str
         description: repository:tag@sha256:<digest> of the broker image.
-        default: docker.io/library/redis:8.8.3@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
       documents_bind:
         type: str
         description: The guest's own IPv4 address the port is published on (never all interfaces).
