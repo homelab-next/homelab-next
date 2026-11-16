@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); meta/ and data/ (the container's) belong to the
+# container's user, so the server creates files it can open.
+- name: Create the compose project directory
+  ansible.builtin.file:
+    path: "{{ garage_dir }}"
+    state: directory
+    owner: "{{ garage_owner }}"
+    group: "{{ garage_group }}"
+    mode: "0750"
+  tags: [backup, export, restore]
+
+- name: Create the data root and the metadata and data directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ garage_data_root }}", owner: "{{ garage_owner }}", group: "{{ garage_group }}", mode: "0750"}
+    - {path: "{{ garage_data_root }}/meta", owner: "{{ garage_uid | int }}", group: "{{ garage_gid | int }}", mode: "0700"}
+    - {path: "{{ garage_data_root }}/data", owner: "{{ garage_uid | int }}", group: "{{ garage_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

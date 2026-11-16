@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: Apache-2.0
+# The lake's maintenance timer: nightly, per table, expire snapshots older than trino_expire_retention
+# (always keeping the last trino_retain_last) and remove orphan files older than
+# trino_orphan_retention, through the engine itself; a failing step is alerted once per change of
+# the failing set (state-diffed). The script, the timer and the service are the role's; the password
+# and the notify token are in an owner-only env file the service loads.
+- name: Build the script's settings
+  ansible.builtin.set_fact:
+    trino_maintenance_config:
+      url: "{{ trino_self_endpoint }}"
+      user: "{{ trino_maintenance_user }}"
+      catalog: "{{ trino_catalog_name }}"
+      ca_file: "{{ trino_dir }}/etc/tls/ca.pem"
+      state_dir: "{{ trino_maintenance_state_dir }}"
+      expire: "{{ trino_expire_retention }}"
+      retain_last: "{{ trino_retain_last | int }}"
+      orphan: "{{ trino_orphan_retention }}"
+      expire_timeout: "{{ trino_expire_timeout | int }}"
+      orphan_timeout: "{{ trino_orphan_timeout | int }}"
+      notify_url: "{{ trino_notify_endpoint }}"
+      notify_topic: "{{ trino_notify_topic }}"
+      notify_priority: "{{ trino_notify_priority | int }}"
+
+- name: Create the script, state and credential directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ trino_maintenance_owner }}"
+    group: "{{ trino_maintenance_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ trino_maintenance_script | dirname }}", mode: "0755"}
+    - {path: "{{ trino_maintenance_state_dir }}", mode: "0700"}
+    - {path: "{{ trino_maintenance_env_file | dirname }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Write the maintenance script
+  ansible.builtin.template:
+    src: lake-maintenance.py.j2
+    dest: "{{ trino_maintenance_script }}"
+    owner: "{{ trino_maintenance_owner }}"
+    group: "{{ trino_maintenance_group }}"
+    mode: "0750"
+
+- name: Write the credentials the service loads (owner-only)
+  ansible.builtin.copy:
+    content: |
+      HNX_LAKE_MAINT_PASSWORD={{ lookup('hnx_secret', trino_maintenance_ref) }}
+      HNX_LAKE_MAINT_NOTIFY_TOKEN={{ lookup('hnx_secret', trino_notify_ref) }}
+    dest: "{{ trino_maintenance_env_file }}"
+    owner: "{{ trino_maintenance_owner }}"
+    group: "{{ trino_maintenance_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Install the shared last-run writer and the record directory (role last_run)
+  ansible.builtin.include_role:
+    name: last_run
+  vars:
+    last_run_dir: "{{ trino_last_run_dir }}"
+    last_run_group: "{{ trino_last_run_group }}"
+    last_run_writer: "{{ trino_last_run_writer }}"
+
+- name: Write the service and timer units
+  ansible.builtin.template:
+    src: "lake-maintenance.{{ item }}.j2"
+    dest: "{{ trino_unit_dir }}/hnx-lake-maintenance.{{ item }}"
+    owner: "{{ trino_maintenance_owner }}"
+    group: "{{ trino_maintenance_group }}"
+    mode: "0644"
+  loop: [service, timer]
+  register: trino_maintenance_units
+
+- name: Ask whether the timer is enabled
+  ansible.builtin.command:
+    argv: ["{{ trino_systemctl_cli }}", is-enabled, hnx-lake-maintenance.timer]
+  register: trino_timer_enabled
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Ask whether the timer is started
+  ansible.builtin.command:
+    argv: ["{{ trino_systemctl_cli }}", is-active, hnx-lake-maintenance.timer]
+  register: trino_timer_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Reload systemd (units changed) and enable and start the timer (changed, or not both)
+  ansible.builtin.command:
+    argv: "{{ [trino_systemctl_cli] + item }}"
+  vars:
+    trino_timer_owed: >-
+      {{ trino_maintenance_units is changed
+         or trino_timer_enabled.stdout | default('') | trim != 'enabled'
+         or trino_timer_active.stdout | default('') | trim != 'active' }}
+  loop: >-
+    {{ ([['daemon-reload']] if trino_maintenance_units is changed else [])
+       + ([['enable', '--now', 'hnx-lake-maintenance.timer']] if trino_timer_owed | bool else []) }}
+  loop_control:
+    label: "{{ item | join(' ') }}"
+  changed_when: true

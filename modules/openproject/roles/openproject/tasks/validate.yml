@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - openproject_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - openproject_hostname is match(openproject_hostname_pattern)
+      - openproject_image is match(openproject_pinned_ref_pattern)
+      - openproject_postgres_image is match(openproject_pinned_ref_pattern)
+      - openproject_cache_image is match(openproject_pinned_ref_pattern)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - openproject_bind is match(openproject_ipv4_pattern)
+      - openproject_bind != '0.0.0.0'
+      - openproject_port | int >= 1 and openproject_port | int <= 65535
+      - openproject_app_uid | int >= 1000 and openproject_app_gid | int >= 1000
+      - openproject_db_uid | int >= 1000 and openproject_db_gid | int >= 1000
+      - openproject_db_name is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - openproject_db_user is match('^[a-z][a-z0-9_]{0,62}\Z')
+      - >-
+        [openproject_admin_login_ref, openproject_db_login_ref, openproject_session_key_ref]
+        | reject('match', openproject_ref_pattern) | list | length == 0
+      - >-
+        [openproject_admin_login_ref, openproject_db_login_ref, openproject_session_key_ref]
+        | unique | length == 3
+      - >-
+        [openproject_dir, openproject_data_root] | reject('match', openproject_path_pattern) | list | length == 0
+      - >-
+        [openproject_mem_limit, openproject_worker_mem_limit, openproject_db_mem_limit, openproject_cache_mem_limit]
+        | reject('match', '^[1-9][0-9]{0,5}[kmg]\Z') | list | length == 0
+    fail_msg: >-
+      projects: a registry id, a public hostname (a DNS name), three images pinned by tag and
+      digest, the guest's IPv4 address to publish on (not all interfaces), a port, container
+      uids of 1000 or more (the app's differing from the database's), a database and role name,
+      three distinct secret: references, absolute canonical directories and memory limits like 512m
+  tags: [health, backup, restore, export, upgrade]

@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+# The passwords reach only the env_files (0600). POSTGRES_PASSWORD sets the role's password when
+# the cluster is first created and is ignored afterwards. The seed password is used only when the
+# seeder meets an empty database. A reference with no value stops the run in credentials.yml,
+# naming it, before any file is written (an unset secret never yields a half-configured service).
+# The seed password is in the web container's environment only for the one-off seeder run: it is
+# included while a seeding is due and the env_file is rewritten without it before the app starts.
+- name: Decide whether the seeder runs
+  ansible.builtin.include_tasks: seed_decide.yml
+  when: openproject_start | bool
+
+- name: Read the credentials
+  ansible.builtin.set_fact:
+    openproject_secret_env_final:
+      postgres:
+        POSTGRES_PASSWORD: "{{ lookup('hnx_secret', openproject_db_login_ref) }}"
+      web:
+        DATABASE_URL: "postgres://{{ openproject_db_user }}:{{ lookup('hnx_secret', openproject_db_login_ref) }}@postgres/{{ openproject_db_name }}?pool=20&encoding=unicode&reconnect=true"
+        SECRET_KEY_BASE: "{{ lookup('hnx_secret', openproject_session_key_ref) }}"
+      worker:
+        DATABASE_URL: "postgres://{{ openproject_db_user }}:{{ lookup('hnx_secret', openproject_db_login_ref) }}@postgres/{{ openproject_db_name }}?pool=20&encoding=unicode&reconnect=true"
+        SECRET_KEY_BASE: "{{ lookup('hnx_secret', openproject_session_key_ref) }}"
+  no_log: true
+
+- name: Add the seed password for the seeder run only
+  ansible.builtin.set_fact:
+    openproject_secret_env: >-
+      {{ openproject_secret_env_final | combine(
+           {'web': openproject_secret_env_final.web | combine({
+              'OPENPROJECT_SEED_ADMIN_USER_PASSWORD': lookup('hnx_secret', openproject_admin_login_ref),
+              'OPENPROJECT_SEED_ADMIN_USER_PASSWORD_RESET': 'false'})}
+           if (openproject_seed_needed | default(false) | bool) else {}) }}
+  no_log: true
+
+# Rendered first and not started: the database must be migrated before the app opens it.
+- name: Render the project (not started)
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ openproject_app.compose_app_name }}"
+    compose_app_dir: "{{ openproject_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ openproject_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ openproject_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ openproject_app.compose_app_owner }}"
+    compose_app_group: "{{ openproject_app.compose_app_group }}"
+    compose_app_start: false
+    compose_app_validate_with_docker: "{{ openproject_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ openproject_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ openproject_secret_env }}"
+    compose_app_bind_roots: ["{{ openproject_dir }}", "{{ openproject_data_root }}"]
+  no_log: true
+
+- name: Migrate and seed the database (once per image)
+  ansible.builtin.include_tasks: seed_run.yml
+  when: openproject_start | bool
+
+# the env_files again, without the seed password, before anything serves
+
+- name: Start the project
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ openproject_app.compose_app_name }}"
+    compose_app_dir: "{{ openproject_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ openproject_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ openproject_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ openproject_app.compose_app_owner }}"
+    compose_app_group: "{{ openproject_app.compose_app_group }}"
+    compose_app_start: true
+    compose_app_validate_with_docker: false
+    compose_app_spec: "{{ openproject_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ openproject_secret_env_final }}"
+    compose_app_bind_roots: ["{{ openproject_dir }}", "{{ openproject_data_root }}"]
+  when: openproject_start | bool
+  no_log: true
+
+- name: Wait for the app to answer
+  ansible.builtin.uri:
+    url: "http://{{ openproject_bind }}:{{ openproject_port | int }}/health_checks/default"
+    headers:
+      Host: "{{ openproject_hostname }}"
+    status_code: 200
+    timeout: "{{ openproject_health_timeout | int }}"
+  register: openproject_up
+  until: openproject_up.status | default(0) == 200
+  retries: "{{ ((openproject_ready_timeout | int) / 5) | int }}"
+  delay: 5
+  changed_when: false
+  when: openproject_start | bool

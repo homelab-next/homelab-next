@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The project directory and its etc/ belong to root with the container's group (0750), so the
+# container's user reads the configuration, the password file and the key (LL-500: a key owned
+# root:root 0600 crash-loops the engine); node/ (the engine's scratch directory) is the container's.
+- name: Create the project, configuration and data directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ trino_dir }}", owner: "{{ trino_owner }}", group: "{{ trino_group }}", mode: "0750"}
+    - {path: "{{ trino_dir }}/etc", owner: "{{ trino_owner }}", group: "{{ trino_group }}", mode: "0750"}
+    - {path: "{{ trino_dir }}/etc/catalog", owner: "{{ trino_owner }}", group: "{{ trino_group }}", mode: "0750"}
+    - {path: "{{ trino_dir }}/etc/tls", owner: "{{ trino_owner }}", group: "{{ trino_group }}", mode: "0750"}
+    - {path: "{{ trino_data_root }}", owner: "{{ trino_owner }}", group: "{{ trino_group }}", mode: "0750"}
+    - {path: "{{ trino_data_root }}/node", owner: "{{ trino_uid | int }}", group: "{{ trino_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

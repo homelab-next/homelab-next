@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copy the catalog file into the export directory with SQLite's online backup (consistent while
+# the server writes), then list it (key, size, sha256). Run as the project's owner (root on a real host);
+# the export is not read by the container.
+- name: Create the export directory
+  ansible.builtin.file:
+    path: "{{ iceberg_rest_export_dir }}"
+    state: directory
+    owner: "{{ iceberg_rest_owner }}"
+    group: "{{ iceberg_rest_group }}"
+    mode: "0700"
+  tags: [backup, export]
+
+- name: Copy the catalog file and list it
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -I
+      - -c
+      - "{{ iceberg_rest_export_script }}"
+      - "{{ iceberg_rest_data_root }}/catalog"
+      - "{{ iceberg_rest_export_dir }}"
+      - "{{ iceberg_rest_db_file }}"
+  register: iceberg_rest_export
+  changed_when: true
+  tags: [backup, export]

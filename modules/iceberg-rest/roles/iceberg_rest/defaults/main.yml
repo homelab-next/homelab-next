@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# The Apache Iceberg REST catalog, the lake-catalog provider (modules/iceberg-rest): one container
+# over one SQLite file. The image is pinned by DIGEST - the very build the old lab's lake runs. The
+# project publishes no tag for it (it is a build of the main branch, commit b0df3ca, 2026-04-29), so
+# the tag is a label of the build and the digest is what Docker resolves; never :latest.
+# iceberg_rest_logical_id (required): the instance's registry id, e.g. lake-catalog
+iceberg_rest_image: "docker.io/apache/iceberg-rest-fixture:2026.4.29-b0df3ca@sha256:db8de90b5b7693d4ac334c336f91d9bbe320d7b19f4f514d26de84cdfbcbfe8d"
+# published on the guest's own address (the inventory's ansible_host), never on all interfaces;
+# the guest firewall admits the query engine and the lake's writers
+iceberg_rest_bind: "{{ ansible_host }}"
+iceberg_rest_port: 8181
+iceberg_rest_dir: /opt/compose/iceberg-rest
+iceberg_rest_data_root: /var/lib/hnx-modules/iceberg-rest
+iceberg_rest_export_dir: /var/backups/hnx-modules/iceberg-rest/export
+iceberg_rest_owner: root
+iceberg_rest_group: "{{ iceberg_rest_gid }}"
+# the container's user and group: an id no account on the host has
+iceberg_rest_uid: 61002
+iceberg_rest_gid: 61002
+# the warehouse: fixed, the tables' metadata embeds s3://iceberg-warehouse/... paths
+iceberg_rest_warehouse: s3://iceberg-warehouse/
+iceberg_rest_region: garage
+# the object store's registry id; its url is resolved from the registry unless iceberg_rest_s3_url
+# is set (scheme://host:port)
+iceberg_rest_object_store_id: object-store
+iceberg_rest_s3_url: ""
+iceberg_rest_access_key_ref: secret:iceberg-rest/s3-access-key
+iceberg_rest_signing_ref: secret:iceberg-rest/s3-secret-key
+# SQLite allows one writer at a time and this one file backs every writer of the lake: without a
+# busy_timeout a transaction that meets the lock fails at once and the writer's whole batch is
+# dropped (LL-407). 30 s makes a contending commit wait instead.
+iceberg_rest_busy_timeout_ms: 30000
+iceberg_rest_mem_limit: 2g
+# the JVM's share of the container's memory limit
+iceberg_rest_heap_percent: 60
+# optional: a local `docker save` of the pinned image (a path on the guest). The digest has no tag
+# upstream and may leave the registry; when the daemon lacks it, the role loads this archive and
+# refuses to go on if the digest is still missing. Empty: pull from the registry as usual. The
+# daemon must keep image digests across save and load (the containerd image store, the default of
+# current Docker).
+iceberg_rest_image_archive: ""
+iceberg_rest_start: true
+iceberg_rest_validate_with_docker: true
+iceberg_rest_health_timeout: 10

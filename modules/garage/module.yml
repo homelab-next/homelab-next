@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: Apache-2.0
+# The object-store provider on Garage (docs/modules.md; README.md beside this file): one compose_app
+# container, single node, the S3 API published on the guest's own address and the admin API not
+# published at all. It carries the old lab's lake as it was: the same bucket name (the table metadata
+# embeds s3://<bucket>/ paths), the same region and the same access key, read from the secret store.
+# Every real value (the guest, its address, the secret values) is the site's: the overlay's
+# lab/modules.yml, lab/services.yml and secret store.
+manifest_version: "1.0"
+id: garage
+kind: provider
+title: Object store on Garage
+description: Fills the object-store slot with Garage, a single-node S3 object store run as one
+  compose_app container with the lake's bucket and key created at start; proved by the
+  object-store conformance suite through the shared S3 adapter.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: garage
+  version: 2.5.0
+licence:
+  kind: open-source
+  spdx: AGPL-3.0-only
+credentials:
+  - secret: secret:garage/rpc-secret
+    identity: rpc-secret
+    holder: provider
+    purpose: the cluster's RPC secret (64 hex characters); a single node still requires one
+  - secret: secret:garage/admin-token
+    identity: token
+    holder: provider
+    purpose: the admin API's bearer token (the API listens inside the container's network only; no host port publishes it)
+  - secret: secret:garage/access-key
+    identity: key-id
+    holder: provider
+    purpose: the lake key's id (GK and hex), created at start with full rights on the bucket; the catalog and the query engine hold their own copies of the value under their own names
+  - secret: secret:garage/secret-key
+    identity: password
+    holder: provider
+    purpose: the lake key's secret (64 hex characters), the catalog and the query engine hold their own copies of the value under their own names
+identifiers:
+  - {kind: bucket, name: iceberg-warehouse, on_remove: keep}
+  - {kind: secret-name, name: garage, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the RPC secret, the admin token and the key pair are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 2048, disk_gb: 300}
+      guest:
+        baselines: [base]
+      roles: [role:garage]
+      purpose: runs the Garage container (docker_engine applied first, compose_app renders it)
+provides:
+  slots:
+    object-store:
+      adapter: homelabnext.conform.adapters.s3:make_object_store
+      features: [metadata]
+      conformance:
+        target: conformance/target.yml
+      migration: {formats: [object-tree], export: role:garage, import: role:garage}
+egress: none
+contributes:
+  roles:
+    - file: roles/garage
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:garage, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: store
+    kind: state
+    description: The data root - Garage's metadata database and its data blocks, holding every object of the lake's bucket (the Iceberg data, delete and metadata files).
+    export: {formats: [object-tree], via: role:garage}
+    import: {formats: [object-tree], via: role:garage}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest) within a major version: the role's upgrade hook validates and records it, the data root is exported, then it converges; a major bump follows the product's own migration guide first"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

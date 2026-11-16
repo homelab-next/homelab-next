@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# The server's dependencies are the container engine (docker_engine, applied to the guest before
+# this module) and the library mount on the guest; it holds no credential in the secret store.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: The library is mounted
+      ansible.builtin.include_tasks: library.yml
+  tags: [readiness]

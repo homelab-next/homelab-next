@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+- block:
+    - name: Refuse a target that is not pinned by tag and digest, or is another repository
+      ansible.builtin.assert:
+        that:
+          - media_target_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+          - media_target_image.split('@')[0].rsplit(':', 1)[0] == media_repository
+        fail_msg: "media: the target must be {{ media_repository }}:<tag>@sha256:<64 hex>"
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Validate and record the bump (compose_app upgrade)
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: upgrade
+      vars:
+        compose_app_name: media
+        compose_app_dir: "{{ media_app.compose_app_dir }}"
+        compose_app_owner: "{{ media_app.compose_app_owner }}"
+        compose_app_group: "{{ media_app.compose_app_group }}"
+        compose_app_spec: "{{ media_app.compose_app_spec }}"
+        compose_app_upgrade_service: media
+        compose_app_upgrade_tag: "{{ media_target_image.split('@')[0].rsplit(':', 1)[1] }}"
+        compose_app_upgrade_digest: "{{ media_target_image.split('@')[1] }}"
+  tags: [upgrade]

@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data config, object-tree): <data root>/export/{media-config.tar.gz,listing.jsonl}.
+# The server is stopped for the copy (its databases are SQLite: a tar of files being written is not
+# a consistent copy) and started again whatever happened; the cache, logs and transcodes are left
+# out. It is a snapshot: every run writes a new one (the hook reports changed).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the config with the server stopped
+      block:
+        - name: Stop the server
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ media_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Archive the config directory
+          ansible.builtin.command:
+            argv: >-
+              {{ ['tar', '-czf', media_data_root ~ '/export/media-config.tar.gz', '-C', media_data_root ~ '/config']
+                 + (media_export_excludes | map('regex_replace', '^(.*)$', '--exclude=\1') | list) + ['.'] }}
+          changed_when: true
+        - name: Hash the archive
+          ansible.builtin.stat:
+            path: "{{ media_data_root }}/export/media-config.tar.gz"
+            checksum_algorithm: sha256
+            get_checksum: true
+          register: media_archive
+        - name: Write the listing
+          ansible.builtin.copy:
+            dest: "{{ media_data_root }}/export/listing.jsonl"
+            content: "{{ {'key': 'media-config.tar.gz', 'size': media_archive.stat.size, 'sha256': media_archive.stat.checksum} | to_json }}\n"
+            owner: "{{ media_uid | int }}"
+            group: "{{ media_gid | int }}"
+            mode: "0600"
+        - name: The archive belongs to the container's user
+          ansible.builtin.file:
+            path: "{{ media_data_root }}/export/media-config.tar.gz"
+            owner: "{{ media_uid | int }}"
+            group: "{{ media_gid | int }}"
+            mode: "0600"
+      always:
+        - name: Start the server again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ media_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+          when: media_start | bool
+  tags: [export]

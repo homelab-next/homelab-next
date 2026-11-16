@@ -98,6 +98,7 @@ def make_clients(
     warehouse_env: str = "LAB_WAREHOUSE",
     user: str = "hnx-conform",
     api_root: str = "/catalog",
+    catalog_prefix_optional: bool = False,
     allow_plaintext: bool = False,
     credential: str | None = None,
     catalog_credential: str | None = None,
@@ -136,6 +137,7 @@ def make_clients(
         catalog_url,
         warehouse=wh,
         api_root=api_root,
+        prefix_optional=catalog_prefix_optional,
         auth=bearer,
         opener=opener,
     )

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data store, object-tree): <export dir>/garage.tar.gz of the data root. The
+# metadata database is snapshotted first (the product's own consistent copy, written under
+# meta/snapshots/), so the archive holds a metadata file that is sound whatever the server was
+# writing. The data blocks are immutable files. The archive is crash-consistent for anything written
+# after the snapshot: freeze the writers first for a copy that must be exact (the lake's cutover does).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Snapshot the metadata database (the product's own consistent copy)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ garage_dir }}/docker-compose.yml", exec, -T, garage, /garage, meta, snapshot]
+      changed_when: true
+    - name: Create the export directory
+      ansible.builtin.file:
+        path: "{{ garage_export_dir }}"
+        state: directory
+        owner: "{{ garage_owner }}"
+        group: "{{ garage_group }}"
+        mode: "0700"
+    - name: Archive the data root
+      ansible.builtin.command:
+        argv: [tar, --numeric-owner, -czf, "{{ garage_export_dir }}/garage.tar.gz", -C, "{{ garage_data_root }}", .]
+      changed_when: true
+  tags: [export]

@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run Garage as a compose_app, single node, with the lake's bucket and key created at start.
+    options:
+      garage_logical_id: &logical
+        type: str
+        description: "The instance's registry id (the service row the site binds, e.g. object-store)."
+        required: true
+      garage_image: &image
+        type: str
+        description: "repository:tag@sha256:<digest> of the Garage image."
+        default: "docker.io/dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5"
+      garage_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address the S3 port is published on (never all interfaces)."
+        default: "{{ ansible_host }}"
+      garage_s3_port: &s3port
+        type: int
+        description: "Host port of the S3 API (the registry row's port)."
+        default: 3900
+      garage_dir: &dir
+        type: path
+        description: "The compose project directory."
+        default: /opt/compose/garage
+      garage_owner: &owner
+        type: str
+        description: "Owner of the compose project and the data root (meta/ and data/ belong to garage_uid)."
+        default: root
+      garage_export_dir: &exportdir
+        type: path
+        description: "Where the exit copy is written; outside the data root."
+        default: /var/backups/hnx-modules/garage/export
+      garage_group: &group
+        type: str
+        description: "Group of the compose project and the data root: the container's gid."
+        default: "{{ garage_gid }}"
+      garage_data_root: &root
+        type: path
+        description: "The module's data root on the host: meta/ and data/ (mounted in the container)."
+        default: /var/lib/hnx-modules/garage
+      garage_uid: &uid
+        type: int
+        description: "The container's user id (no account on the host has it)."
+        default: 61001
+      garage_gid: &gid
+        type: int
+        description: "The container's group id."
+        default: 61001
+      garage_bucket: &bucket
+        type: str
+        description: "The lake's bucket; fixed by the table metadata, which embeds s3://<bucket>/ paths."
+        default: iceberg-warehouse
+      garage_region: &region
+        type: str
+        description: "The S3 region the clients sign with."
+        default: garage
+      garage_rpc_ref: &rpcref
+        type: str
+        description: "secret: reference of the cluster RPC secret (64 hex digits)."
+        default: secret:garage/rpc-secret
+      garage_admin_ref: &admref
+        type: str
+        description: "secret: reference of the admin API token."
+        default: secret:garage/admin-token
+      garage_access_key_ref: &akref
+        type: str
+        description: "secret: reference of the lake key's id (GK and hex digits)."
+        default: secret:garage/access-key
+      garage_signing_ref: &skref
+        type: str
+        description: "secret: reference of the lake key's secret (64 hex digits)."
+        default: secret:garage/secret-key
+      garage_mem_limit: &mem
+        type: str
+        description: "The container's memory limit, like 2g."
+        default: 2g
+      garage_start: &start
+        type: bool
+        description: "Start the container after rendering (false renders only)."
+        default: true
+      garage_validate_with_docker: &vdocker
+        type: bool
+        description: "Validate the rendered compose file with docker compose config."
+        default: true
+      garage_health_timeout: &htimeout
+        type: int
+        description: "Seconds each health probe waits."
+        default: 10
+  readiness:
+    short_description: Fail unless the container engine is ready and every credential resolves in its expected form.
+    options:
+      garage_rpc_ref: *rpcref
+      garage_admin_ref: *admref
+      garage_access_key_ref: *akref
+      garage_signing_ref: *skref
+  health:
+    short_description: Fail unless the container is healthy, the cluster healthy, the bucket there with the lake key on it, and an unsigned S3 request refused.
+    options: &appopts
+      garage_logical_id: *logical
+      garage_image: *image
+      garage_bind: *bind
+      garage_s3_port: *s3port
+      garage_dir: *dir
+      garage_owner: *owner
+      garage_group: *group
+      garage_data_root: *root
+      garage_export_dir: *exportdir
+      garage_uid: *uid
+      garage_gid: *gid
+      garage_bucket: *bucket
+      garage_region: *region
+      garage_rpc_ref: *rpcref
+      garage_admin_ref: *admref
+      garage_access_key_ref: *akref
+      garage_signing_ref: *skref
+      garage_mem_limit: *mem
+      garage_health_timeout: *htimeout
+  backup:
+    short_description: Name the data root for the backup (the VM backup job takes it whole).
+    options: *appopts
+  restore:
+    short_description: Unpack an export over the data root with the server stopped, then start it again.
+    options:
+      <<: *appopts
+      garage_restore_source:
+        type: path
+        description: Directory holding garage.tar.gz (an export).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest, same major version) and record it as pending.
+    options:
+      <<: *appopts
+      garage_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to."
+        required: true
+  export:
+    short_description: Snapshot the metadata, then write the data root as garage.tar.gz to the export directory.
+    options: *appopts

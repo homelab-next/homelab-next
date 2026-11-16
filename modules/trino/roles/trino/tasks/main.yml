@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the project, configuration and data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Refuse a malformed credential before the engine sees it (it would not start)
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Write the configuration, the certificate and key, the password file and the rules
+  ansible.builtin.include_tasks: config.yml
+
+- name: Read the credentials the engine is given in its environment
+  ansible.builtin.set_fact:
+    trino_secret_env:
+      trino:
+        TRINO_S3_ACCESS_KEY: "{{ lookup('hnx_secret', trino_access_key_ref) }}"
+        TRINO_S3_SECRET_KEY: "{{ lookup('hnx_secret', trino_signing_ref) }}"
+        TRINO_INTERNAL_SECRET: "{{ lookup('hnx_secret', trino_shared_ref) }}"
+  no_log: true
+
+- name: Render and start the engine
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ trino_app.compose_app_name }}"
+    compose_app_dir: "{{ trino_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ trino_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ trino_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ trino_app.compose_app_owner }}"
+    compose_app_group: "{{ trino_app.compose_app_group }}"
+    compose_app_start: "{{ trino_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ trino_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ trino_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ trino_secret_env }}"
+  no_log: true
+
+- name: Restart the engine to read the configuration that changed
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ trino_dir }}/docker-compose.yml", restart, trino]
+  when: trino_start | bool and trino_restart_owed | bool
+  changed_when: true
+
+- name: Install the lake's maintenance timer
+  ansible.builtin.include_tasks: maintenance.yml
+  when: trino_maintenance_enabled | bool

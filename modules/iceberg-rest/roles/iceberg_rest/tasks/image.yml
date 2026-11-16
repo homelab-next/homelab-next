@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# The catalog image is a build the project published only as :latest, pinned here by digest. A
+# digest nobody tags can be garbage-collected from the registry, and the build that wrote the
+# SQLite file is the one that must read it. When iceberg_rest_image_archive names a local `docker
+# save` of that exact image (compressed or not; docker load reads gzip, xz and zstd), the image is
+# loaded from it if the daemon lacks the digest, and the role refuses to go on if it is still
+# missing.
+- name: Ask whether the daemon already has the pinned image
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ iceberg_rest_repository }}@{{ iceberg_rest_digest }}"]
+  register: iceberg_rest_have_image
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Load the pinned image from the archive when the daemon lacks it
+  when: iceberg_rest_have_image.rc != 0
+  block:
+    - name: The archive is a regular file
+      ansible.builtin.stat:
+        path: "{{ iceberg_rest_image_archive }}"
+        follow: false
+      register: iceberg_rest_archive
+    - name: Refuse anything but a regular archive
+      ansible.builtin.assert:
+        that: iceberg_rest_archive.stat.exists and iceberg_rest_archive.stat.isreg
+        fail_msg: "iceberg-rest: {{ iceberg_rest_image_archive }} is not a regular file"
+    - name: Load the image
+      ansible.builtin.command:
+        argv: [docker, load, -i, "{{ iceberg_rest_image_archive }}"]
+      changed_when: true
+    - name: The pinned digest is there now
+      ansible.builtin.command:
+        argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ iceberg_rest_repository }}@{{ iceberg_rest_digest }}"]
+      changed_when: false
+      register: iceberg_rest_loaded
+      failed_when: iceberg_rest_loaded.rc != 0

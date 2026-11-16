@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root is the project owner's (root); catalog/ (the SQLite file's directory, which SQLite
+# also writes its journal in) belongs to the container's user.
+- name: Create the data root and the catalog directory
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ iceberg_rest_data_root }}", owner: "{{ iceberg_rest_owner }}", group: "{{ iceberg_rest_group }}", mode: "0750"}
+    - {path: "{{ iceberg_rest_data_root }}/catalog", owner: "{{ iceberg_rest_uid | int }}", group: "{{ iceberg_rest_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

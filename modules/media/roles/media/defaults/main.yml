@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Jellyfin, the media provider (modules/media): one container, local accounts, a read-only library,
+# CPU transcoding. media_logical_id (required): the instance's registry id, e.g. media
+media_image: "docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db"
+# published on the guest's own address (the inventory's ansible_host), never all interfaces; the
+# guest firewall admits the edge and the TV clients' zone
+media_bind: "{{ ansible_host }}"
+media_port: 8096
+media_dir: /opt/compose/media
+# the library as the guest sees it, mounted read-only into the container at the same path. The
+# site supplies the real source (a mount of its own on the guest); the role never writes to it.
+media_library_path: /srv/media
+# proof that the library is really there: the server must not start on an empty directory (an
+# unmounted mount point is one) and prune its database on the next scan. The path must be a mount
+# point (mountpoint -q) or hold this marker file, which the operator places on the library itself.
+media_library_marker: .hnx-media-library
+# owner and group of the compose project and the data root
+media_owner: root
+media_group: "{{ media_gid }}"
+# the module's data root on its host (docs/modules/data.md): config/ (the container's /config:
+# data/, config/, root/, metadata/, plugins/) and export/. Backed up; the library is not here.
+media_data_root: /var/lib/hnx-modules/media
+# transcode scratch and image cache: rebuilt by the server, never backed up, so outside the data root
+media_cache_dir: /var/cache/hnx-modules/media
+# the container's user and group. The library must be readable by this gid (the site chooses the
+# gid of the mount's group, or leaves the library world-readable).
+media_uid: 61010
+media_gid: 61010
+media_timezone: Etc/UTC
+# the URL clients are told to use (JELLYFIN_PublishedServerUrl); empty = none
+media_published_url: ""
+# Quick Connect stays enabled: a TV app signs in with a code approved from a signed-in device.
+# The role seeds config/system.xml with it on a fresh install and health fails if it is off.
+media_quick_connect: true
+# hardware transcoding is off: no GPU dependency. "none" is the only value today; a later value
+# (vaapi, nvenc) also needs compose_app to pass devices through, which it does not yet.
+media_hwaccel: none
+# the server id a restored or imported config must answer with (data/device.txt); empty = not
+# checked. Set it at a cutover so health proves the Fire Cubes' server is the one that answers.
+media_expected_server_id: ""
+media_mem_limit: 8g
+media_start: true
+media_validate_with_docker: true
+media_health_timeout: 10

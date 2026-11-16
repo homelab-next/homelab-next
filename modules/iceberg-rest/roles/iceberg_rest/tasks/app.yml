@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The key pair
+# is the object store client's (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY), delivered through the
+# 0600 env_file, never the compose file.
+- name: Resolve the object store's address
+  ansible.builtin.include_tasks: endpoint.yml
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    iceberg_rest_app:
+      compose_app_name: iceberg-rest
+      compose_app_dir: "{{ iceberg_rest_dir }}"
+      compose_app_data_dir: "{{ iceberg_rest_data_root }}"
+      compose_app_export_dir: "{{ iceberg_rest_export_dir }}"
+      compose_app_owner: "{{ iceberg_rest_owner }}"
+      compose_app_group: "{{ iceberg_rest_group }}"
+      compose_app_start: "{{ iceberg_rest_start }}"
+      compose_app_validate_with_docker: "{{ iceberg_rest_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          iceberg-rest:
+            image: "{{ iceberg_rest_repository }}"
+            tag: "{{ iceberg_rest_tag }}"
+            digest: "{{ iceberg_rest_digest }}"
+            user: "{{ iceberg_rest_uid | int }}:{{ iceberg_rest_gid | int }}"
+            environment: >-
+              {{ iceberg_rest_fixed_env | combine({
+                   'CATALOG_WAREHOUSE': iceberg_rest_warehouse,
+                   'CATALOG_S3_ENDPOINT': iceberg_rest_s3_endpoint,
+                   'AWS_REGION': iceberg_rest_region,
+                   'CATALOG_URI': 'jdbc:sqlite:' ~ iceberg_rest_container_data_dir ~ '/' ~ iceberg_rest_db_file ~ '?busy_timeout=' ~ (iceberg_rest_busy_timeout_ms | int),
+                   'JAVA_TOOL_OPTIONS': '-XX:MaxRAMPercentage=' ~ (iceberg_rest_heap_percent | int)}) }}
+            ports: ["{{ iceberg_rest_bind }}:{{ iceberg_rest_port | int }}:{{ iceberg_rest_container_port }}"]
+            volumes: ["{{ iceberg_rest_data_root }}/catalog:{{ iceberg_rest_container_data_dir }}"]
+            mem_limit: "{{ iceberg_rest_mem_limit }}"
+            healthcheck:
+              test: [CMD, curl, --fail, --silent, --output, /dev/null, "http://localhost:{{ iceberg_rest_container_port }}/v1/config"]
+              interval: 30s
+              timeout: 5s
+              retries: 5
+              start_period: 30s
+  tags: [health, backup, restore, export, upgrade]

@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# The addresses the engine, the hooks and the timer use (scheme://host:port): an override, else the
+# registry row, which must be what it is called for (the catalog and the object store).
+- name: Refuse a row that is not what it is called for
+  ansible.builtin.assert:
+    that:
+      - trino_catalog_url != '' or lookup('hnx_registry', trino_catalog_id, field='capability') == 'lake-catalog'
+      - trino_s3_url != '' or lookup('hnx_registry', trino_object_store_id, field='capability') == 'object-store'
+    fail_msg: "trino: the registry rows {{ trino_catalog_id }} and {{ trino_object_store_id }} must be a lake-catalog and an object-store"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Resolve the catalog's and the object store's addresses
+  ansible.builtin.set_fact:
+    trino_catalog_endpoint: "{{ trino_catalog_url if trino_catalog_url != '' else lookup('hnx_registry', trino_catalog_id, field='url') }}"
+    trino_s3_endpoint: "{{ trino_s3_url if trino_s3_url != '' else lookup('hnx_registry', trino_object_store_id, field='url') }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Resolve the engine's own address
+  ansible.builtin.set_fact:
+    trino_self_endpoint: "{{ trino_self_url if trino_self_url != '' else lookup('hnx_registry', trino_logical_id, field='url') }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Resolve the notify channel's address
+  ansible.builtin.set_fact:
+    trino_notify_endpoint: "{{ trino_notify_url if trino_notify_url != '' else lookup('hnx_registry', trino_notify_id, field='url') }}"
+  when: trino_maintenance_enabled | bool
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Refuse a notify token over plain http unless the site opted in
+  ansible.builtin.assert:
+    that: trino_notify_endpoint is match('^https://') or trino_notify_allow_plain_http | bool
+    fail_msg: "trino: the notify channel {{ trino_notify_endpoint }} is not https; set trino_notify_allow_plain_http for a LAN endpoint with no TLS (the token is write-only)"
+  when: trino_maintenance_enabled | bool
+  tags: [readiness, health, backup, restore, export, upgrade]
