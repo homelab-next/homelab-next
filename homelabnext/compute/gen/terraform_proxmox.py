@@ -27,7 +27,7 @@ terraform {{
   required_providers {{
     proxmox = {{
       source  = "bpg/proxmox"
-      version = "~> 0.60"
+      version = "~> 0.76"
     }}
   }}
 }}
@@ -283,9 +283,15 @@ def _vm(fleet: Fleet, g: Guest) -> str:
 
 def needs_user_data(g: Guest) -> bool:
     """Whether the VM's cloud-init asks for what the provider's ``user_account`` block cannot
-    express (a sudo rule, packages), so its user-data must come from the ``cloudinit`` target."""
+    express (a sudo rule, packages, a virtiofs mount), so its user-data must come from the ``cloudinit`` target."""
     ci = g.cloudinit
-    return bool(ci) and (ci.get("sudo", "none") != "none" or bool(ci.get("packages")))
+    # a mapped share is mounted by the user-data's ``mounts:``, which the provider's own
+    # ``user_account`` block cannot carry
+    return bool(ci) and (
+        ci.get("sudo", "none") != "none"
+        or bool(ci.get("packages"))
+        or any(d.get("mapping") for d in g.shared_dirs)
+    )
 
 
 def _pve_ostype(os_type: str) -> str:

@@ -438,7 +438,7 @@ rendered from a name-to-public-key file (`--keys`). Each name must match `[A-Za-
 Without `--keys` a stdout render shows `<ssh-key:NAME>` placeholders. `render --out` for cloud-init and `validate --keys` refuse a key name the file does not hold, for the VMs the cloud-init target renders; `plan --against` does not check key names. Storage pool ids,
 template ids, the default bridge and the API endpoint stay Terraform variables.
 
-The provider constraint is `~> 0.60` (any 0.x from 0.60; a 1.0 with breaking changes is not picked
+The provider constraint is `~> 0.76` (any 0.x from 0.76, the first release with the VM `virtiofs` block; a 1.0 with breaking changes is not picked
 up silently). Commit the `.terraform.lock.hcl` that `terraform init` writes next to the rendered
 files so every apply uses the same provider build and checksums, and keep state in an encrypted
 remote backend with locking (for example an S3-compatible bucket with server-side encryption, or
@@ -521,10 +521,24 @@ mapping, names the host path, so a VM's `host_path` is documentation. The IaC AP
 
 `mount_path` and `read_only` are applied in the guest: the `cloudinit` target writes a `mounts:`
 entry per share (tag = mapping id, type `virtiofs`, options `defaults,nofail`, plus `ro` when
-`read_only`); a VM without a cloud-init seed gets a `<name>/fstab-virtiofs` file with the same
-lines for the baseline or overlay to apply. A VM item without `mapping` is refused by the render
-(the error names the guest), never dropped; validation holds each mapping to once per guest
-(the tag must be unique). The libvirt target is unchanged (it uses `host_path`).
+`read_only`). A VM with a mapped share always takes its user-data from that snippet (like one with
+a sudo rule or packages), never the provider's `user_account` block, so the entry reaches the
+guest. Every VM with shares also gets a `<name>/fstab-virtiofs` file with the same lines.
+
+A new VM mounts its shares at first boot. An existing guest does not: cloud-init's mounts module
+runs once per instance, and PVE's instance id does not reliably change when a snippet does. So
+for an already-provisioned guest the baseline or overlay applies the `fstab-virtiofs` lines (or
+a one-time `mount`), and the VM needs a stop and start before the virtiofs device appears.
+
+`read_only` is a guest mount option, not a host guarantee. Neither PVE nor the provider offers a
+read-only flag for a directory mapping, and virtiofsd exports the directory writable: the
+guest's root can remount it read-write and write as virtiofsd's user (root on a stock PVE). Where
+read-only matters, share a read-only source instead: a host-side snapshot, or a dataset with
+`zfs set readonly=on` when the host itself never writes to it.
+
+A VM item without `mapping` is refused by the render (the error names the guest), never dropped;
+validation holds each mapping and each `mount_path` to once per guest (the mapping is the mount
+tag). The libvirt target is unchanged (it uses `host_path`).
 
 ### libvirt
 

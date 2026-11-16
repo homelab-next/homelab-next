@@ -278,7 +278,7 @@
           "mapping": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_-]*$",
-            "description": "(1.8) The hypervisor's directory mapping (a PVE cluster resource mapping of type dir) that shares this directory into a VM by virtiofs; the mapping, created by hand like a GPU resource mapping, names the host path, so host_path is documentation for a VM. Required for a VM on the terraform-proxmox target (a VM shared directory without one is refused, never dropped). The guest mounts it by tag = mapping id at mount_path, read-only when read_only. A container ignores it. Each mapping is named once per guest."
+            "description": "(1.8) The hypervisor's directory mapping (a PVE cluster resource mapping of type dir) that shares this directory into a VM by virtiofs; the mapping, created by hand like a GPU resource mapping, names the host path, so host_path is documentation for a VM. Required for a VM on the terraform-proxmox target (a VM shared directory without one is refused, never dropped). The guest mounts it by tag = mapping id at mount_path, with the ro option when read_only; read_only is a guest mount option, not a host guarantee (the host exports the directory writable, and guest root can remount it read-write), so use a read-only source where that matters. A container ignores it. Each mapping is named once per guest."
           }
         }
       }

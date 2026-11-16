@@ -48,8 +48,9 @@ def virtiofs_mounts(g: Guest) -> list[tuple[str, str, str]]:
 
 
 def fstab_virtiofs(g: Guest) -> str:
-    """``fstab-virtiofs``: the same mounts as fstab lines, for a VM whose guest has no cloud-init
-    seed (the baseline or an overlay appends them)."""
+    """``fstab-virtiofs``: the same mounts as fstab lines, rendered for every VM with shares: the
+    way an already-provisioned guest gets its mounts (cloud-init's mounts module runs once per
+    instance), and the only way for one with no cloud-init seed."""
     L = [f"# {HEADER}"]
     L += [f"{t} {p} virtiofs {o} 0 0" for t, p, o in virtiofs_mounts(g)]
     return "\n".join(L) + "\n"
@@ -98,7 +99,7 @@ def network_config(fleet: Fleet, g: Guest) -> str:
 def render(fleet: Fleet) -> dict[str, str]:
     out: dict[str, str] = {}
     for g in fleet.iac():
-        if g.kind == "vm" and not g.cloudinit and virtiofs_mounts(g):
+        if g.kind == "vm" and virtiofs_mounts(g):
             out[f"{g.name}/fstab-virtiofs"] = fstab_virtiofs(g)
         if g.kind != "vm" or not g.cloudinit:
             continue  # containers take cloud-init-like settings from the provider's own block

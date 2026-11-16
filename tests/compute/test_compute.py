@@ -249,6 +249,17 @@ CASES = [
         ),
         "mapping m1 more than once",
     ),
+    (
+        "shared-dir-mount-path-twice",
+        "infer-core",
+        lambda d: d.update(
+            shared_dirs=[
+                {"host_path": "/a", "mount_path": "/m", "mapping": "m1"},
+                {"host_path": "/b", "mount_path": "/m", "mapping": "m2"},
+            ]
+        ),
+        "mount_path /m more than once",
+    ),
     ("manual-without-steps", "secrets-core", lambda d: d.pop("lifecycle"), "requires_root_steps"),
     (
         "unknown-capability",
@@ -674,7 +685,7 @@ def test_hcl_quote_escapes_template_sequences():
 
 def test_terraform_provider_constraint_is_bounded(good):
     tf = _tf(good)["providers.tf"]
-    assert 'version = "~> 0.60"' in tf and ">=" not in tf
+    assert 'version = "~> 0.76"' in tf and ">=" not in tf
 
 
 def test_hnx_guests_reads_the_site_once(monkeypatch):
@@ -720,6 +731,32 @@ def test_vm_shared_dir_without_mapping_is_refused_naming_the_guest(tmp_path):
     with pytest.raises(ComputeError) as ei:
         _tf(f)
     assert "guest:infer-core" in str(ei.value) and "directory mapping" in str(ei.value)
+
+
+def test_vm_share_uses_the_user_data_snippet_even_without_sudo_or_packages(tmp_path):
+    d = mutate(tmp_path, "infer-core", _share(read_only=True))
+    ci = yaml.safe_load((d / "infer-core.yml").read_text())["cloudinit"]
+    assert "sudo" not in ci and "packages" not in ci
+    f = load_fleet(d, STUB)
+    vm = _tf(f)["vm-infer-core.tf"]
+    assert 'user_data_file_id = var.cloudinit_user_data["infer-core"]' in vm
+    assert "user_account" not in vm
+    ud = render(f, "cloudinit")["infer-core/user-data"]
+    assert '"virtiofs", "defaults,nofail,ro"' in ud
+    assert "infer-core" in _tf(f)["USER_DATA.md"]
+
+
+def test_vm_without_share_keeps_the_user_account_block(good):
+    vm = _tf(good)["vm-infer-core.tf"]
+    assert "user_account" in vm and "user_data_file_id" not in vm
+
+
+def test_every_vm_with_shares_gets_fstab_virtiofs(tmp_path):
+    f = load_fleet(mutate(tmp_path, "infer-core", _share(read_only=True)), STUB)
+    out = render(f, "cloudinit")
+    assert (
+        "pcap-share /data/pcap virtiofs defaults,nofail,ro 0 0" in out["infer-core/fstab-virtiofs"]
+    )
 
 
 def test_vm_without_cloudinit_gets_an_fstab_artifact(tmp_path):
