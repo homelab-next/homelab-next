@@ -31,3 +31,8 @@ regexes = ['''^cmd/x/internal/api$''']
 description = "lake ceiling tests: `limit=MAX_LIMIT` (a keyword argument naming a constant), which the generic key rule reads as a value after the auth in authentication"
 regexTarget = "secret"
 regexes = ['''^limit=MAX_LIMIT$''']
+
+[[allowlists]]
+description = "orchestration role tests: the fake model-gateway key planted to prove the role writes it only to the runner homes and never prints it"
+regexTarget = "secret"
+regexes = ['''^gw-key-0123456789$''']
