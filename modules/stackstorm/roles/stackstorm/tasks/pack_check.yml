@@ -25,6 +25,33 @@
       reviewed promotion in the binding (docs/stackstorm.md, "Shadow, then live") and this setting
   tags: [readiness]
 
+# The runtime decides shadow or live from each pinned/<name>.json (st2_runtime.step), not from
+# provenance.json, so the gate reads the pins: what the runtime obeys is what is checked.
+- name: Read the mode every pin gives its pack (what the runtime obeys)
+  ansible.builtin.set_fact:
+    stackstorm_pin_modes: >-
+      {%- set out = {} -%}
+      {%- for f in lookup('ansible.builtin.fileglob', stackstorm_pack_src ~ '/' ~ stackstorm_pack_ref ~ '/pinned/*.json', wantlist=True) | sort -%}
+      {%-   set _ = out.update({(f | basename | replace('.json', '')): (lookup('ansible.builtin.file', f) | from_json).mode | default('')}) -%}
+      {%- endfor -%}
+      {{ out }}
+  tags: [readiness]
+
+- name: Refuse a pin that is live unless the site allowed live rules AND turned that rule on
+  ansible.builtin.assert:
+    that:
+      - stackstorm_pin_modes | length > 0
+      - stackstorm_pin_modes.values() | list | difference(['shadow', 'live']) | length == 0
+      - >-
+        stackstorm_pin_modes | dict2items | selectattr('value', 'equalto', 'live')
+        | map(attribute='key') | map('regex_replace', '^', 'on_') | list
+        | difference(stackstorm_enabled_rules if (stackstorm_allow_live_rules | bool) else []) | length == 0
+    fail_msg: >-
+      stackstorm: a pinned/*.json of the rendered pack is not shadow ({{ stackstorm_pin_modes }}). The runtime obeys the
+      pins, not provenance.json: shadow first. A pin may be live only when stackstorm_allow_live_rules is set AND its
+      rule (on_<pin name>) is in stackstorm_enabled_rules (docs/stackstorm.md, "Shadow, then live")
+  tags: [readiness]
+
 - name: List the rendered rules
   ansible.builtin.find:
     paths: "{{ stackstorm_pack_src }}/{{ stackstorm_pack_ref }}/rules"
