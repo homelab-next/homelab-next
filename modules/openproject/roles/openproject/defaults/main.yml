@@ -36,6 +36,9 @@ openproject_admin_login_ref: secret:openproject/admin-password
 openproject_db_login_ref: secret:openproject/db-password
 # the app's key for sessions and encrypted settings: after a migration it is the SOURCE's value
 openproject_session_key_ref: secret:openproject/secret-key-base
+# true accepts a short key carried over from the source (its effective secret_key_base can be as short
+# as 12 characters) and warns that it is to be rotated after the cutover; false keeps the strict rule
+openproject_secret_key_base_migrated: false
 openproject_mem_limit: 2g
 openproject_worker_mem_limit: 1g
 openproject_db_mem_limit: 1g

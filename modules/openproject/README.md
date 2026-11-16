@@ -54,8 +54,41 @@ database keeps its own accounts and the seed password is ignored.
   variables;
 - the three secrets in the secret store: `secret:openproject/db-password` (24 to 128 of
   `A-Z a-z 0-9 . _ ~ -`), `secret:openproject/secret-key-base` (64 to 256 characters; **the source
-  instance's value when migrating**, so its sessions and encrypted settings still open) and
+  instance's effective value when migrating**, so what it protects still opens; see "Migrating a
+  short key") and
   `secret:openproject/admin-password` (16 to 128 characters, three of lower, upper, digit, special).
+
+### Migrating a short key
+
+Read the source's **effective** key with the app itself, never from the environment variable names:
+run `Rails.application.secret_key_base` through `rails runner` inside the source's web container.
+A source can carry two variables (`SECRET_KEY_BASE` and `OPENPROJECT_SECRET_KEY_BASE`) and Rails uses
+only one: on the 15.5.1 container the one it uses is `SECRET_KEY_BASE`, and the other (128
+characters) is ignored. Copying the ignored one is wrong: it is not the key the source signs with.
+
+The effective key can be short (12 characters on the source this was found on). The module refuses
+that by default (64 to 256 characters). Set `openproject_secret_key_base_migrated: true` to accept
+1 to 256 printable ASCII characters with no whitespace or quotes; the role then prints a warning
+on every run that the key is a migrated weak key. Nothing else changes.
+
+### Rotating a migrated key (after the cutover)
+
+1. Generate a strong key (at least 64 characters of `A-Z a-z 0-9 . _ ~ + / = -`, for example
+   `openssl rand -hex 64`) and store it as the new value of `secret:openproject/secret-key-base`.
+2. Turn the migrated-key option off (`false`, the default) and re-run the role; it recreates the web and
+   worker containers with the new `SECRET_KEY_BASE`.
+3. Sign in again if asked, and check the instance (health checks, an administrator login).
+
+What the key protects, from the upstream source (branch `dev`, read 2026-11-15; not run against a
+live instance): sessions are stored in the database (`active_record_store`), so the session
+record does not depend on the key; the LDAP bind password is encrypted with a separate
+`database_cipher_key` setting (blank by default, so stored as plain text), not with this key.
+What rotation does change is everything Rails derives from `secret_key_base`: signed and
+encrypted cookies and signed tokens in flight, which stop validating (so users may be asked to sign
+in again and links or forms open at that moment fail). We did not find upstream code that encrypts
+stored records with `secret_key_base` in OpenProject 15, so rotation is not expected to lose
+stored data, but this is not proven: take a backup first (`backup` play), and if a deployment
+uses `database_cipher_key` leave that setting alone, it is independent.
 
 ## Migrating in (from another instance of the same product)
 
