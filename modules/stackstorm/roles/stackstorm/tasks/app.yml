@@ -1,0 +1,207 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). Every secret
+# lives in a file the role writes owner-only (st2.user.conf for the st2 services, the env_files
+# compose_app writes for the databases and the broker); nothing secret is in docker-compose.yml.
+# Only st2web is published (the HTTP front: the API has no /api prefix of its own, the status
+# hub's and the bridge's paths are /api/v1/..., and /auth/ is the sign-in service), on the guest's
+# own address; nothing else has a port.
+- name: Read the release the stack was last staged with
+  ansible.builtin.slurp:
+    src: "{{ stackstorm_data_root }}/pack-release.current"
+  register: stackstorm_release_recorded
+  failed_when: false
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Where the mounted pack is (this run's release, else the recorded one)
+  ansible.builtin.set_fact:
+    stackstorm_pack_mount: >-
+      {{ stackstorm_release_dir | default((stackstorm_release_recorded.content | default('') | b64decode | trim) or (stackstorm_data_root ~ '/pack-releases/none')) }}
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Build the application spec
+  vars:
+    _st2: "{{ stackstorm_release_repository }}"
+    _conf: "{{ stackstorm_data_root }}/config/st2.user.conf:{{ stackstorm_c_conf }}:ro"
+    _keys: "{{ stackstorm_data_root }}/keys:{{ stackstorm_c_keys }}:ro"
+    _cfgs: "{{ stackstorm_data_root }}/config/{{ stackstorm_pack_ref }}.yaml:{{ stackstorm_c_configs }}/{{ stackstorm_pack_ref }}.yaml:ro"
+    _packs: "{{ stackstorm_pack_mount }}:{{ stackstorm_c_packs }}:ro"
+    _venvs: "{{ stackstorm_data_root }}/virtualenvs:{{ stackstorm_c_virtualenvs }}"
+    _user: "{{ stackstorm_uid | int }}:{{ stackstorm_gid | int }}"
+    _hc_api: [CMD, curl, -s, -o, /dev/null, --max-time, "3", "http://{{ stackstorm_c_self }}:{{ stackstorm_c_services.api.port }}/v1/"]
+    _hc_auth: [CMD, curl, -s, -o, /dev/null, --max-time, "3", "http://{{ stackstorm_c_self }}:{{ stackstorm_c_services.auth.port }}/"]
+    _hc_stream: [CMD, curl, -s, -o, /dev/null, --max-time, "3", "http://{{ stackstorm_c_self }}:{{ stackstorm_c_services.stream.port }}/"]
+    _hc_proc: [CMD, pgrep, -f]
+    _hc_web: [CMD, curl, -fsS, -o, /dev/null, "http://{{ stackstorm_c_self }}/"]
+    _hc_times: {interval: 30s, timeout: 5s, retries: 5, start_period: 60s}
+  ansible.builtin.set_fact:
+    stackstorm_app:
+      compose_app_name: stackstorm
+      compose_app_dir: "{{ stackstorm_dir }}"
+      compose_app_data_dir: "{{ stackstorm_data_root }}"
+      compose_app_export_dir: "{{ stackstorm_data_root }}/export"
+      compose_app_owner: "{{ stackstorm_owner }}"
+      compose_app_group: "{{ stackstorm_group }}"
+      compose_app_start: "{{ stackstorm_start }}"
+      compose_app_validate_with_docker: "{{ stackstorm_validate_with_docker }}"
+      compose_app_network_subnet: "{{ stackstorm_network_subnet }}"
+      compose_app_bind_extra: >-
+        {{ [{'path': stackstorm_broker_socket_dir,
+             'reason': 'the broker socket the forward keeps up, mounted so the action runner can reach the broker'}]
+           if stackstorm_broker_tunnel_enabled | bool else [] }}
+      compose_app_spec:
+        services:
+          mongo:
+            image: "{{ stackstorm_mongo_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ stackstorm_mongo_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ stackstorm_mongo_image.split('@')[1] }}"
+            command: [mongod, --bind_ip_all, --auth, --wiredTigerCacheSizeGB, "{{ stackstorm_mongo_cache_gb }}"]
+            user: "{{ stackstorm_mongo_uid | int }}:{{ stackstorm_mongo_gid | int }}"
+            mem_limit: "{{ stackstorm_mem_limit.mongo }}"
+            volumes:
+              - "{{ stackstorm_data_root }}/mongo:/data/db"
+              - "{{ stackstorm_data_root }}/mongo-init:/docker-entrypoint-initdb.d:ro"
+              - "{{ stackstorm_data_root }}/export:{{ stackstorm_c_export }}"
+            healthcheck:
+              test: [CMD, mongo, --quiet, --eval, "db.adminCommand('ping').ok"]
+              interval: 15s
+              timeout: 10s
+              retries: 5
+              start_period: 40s
+          rabbitmq:
+            image: "{{ stackstorm_rabbitmq_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ stackstorm_rabbitmq_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ stackstorm_rabbitmq_image.split('@')[1] }}"
+            user: "{{ stackstorm_rabbitmq_uid | int }}:{{ stackstorm_rabbitmq_gid | int }}"
+            environment: {RABBITMQ_DEFAULT_USER: st2, RABBITMQ_DEFAULT_VHOST: /}
+            mem_limit: "{{ stackstorm_mem_limit.rabbitmq }}"
+            volumes:
+              - "{{ stackstorm_data_root }}/rabbitmq:/var/lib/rabbitmq"
+            healthcheck:
+              test: [CMD, rabbitmq-diagnostics, -q, ping]
+              interval: 15s
+              timeout: 15s
+              retries: 5
+              start_period: 40s
+          redis:
+            image: "{{ stackstorm_redis_image.split('@')[0].rsplit(':', 1)[0] }}"
+            tag: "{{ stackstorm_redis_image.split('@')[0].rsplit(':', 1)[1] }}"
+            digest: "{{ stackstorm_redis_image.split('@')[1] }}"
+            # coordination locks only: no persistence; reachable only inside the compose network
+            command: [redis-server, --protected-mode, "no", --save, "", --appendonly, "no"]
+            user: "{{ stackstorm_redis_uid | int }}:{{ stackstorm_redis_gid | int }}"
+            read_only: true
+            mem_limit: "{{ stackstorm_mem_limit.redis }}"
+            healthcheck:
+              test: [CMD, redis-cli, ping]
+              interval: 15s
+              timeout: 5s
+              retries: 5
+              start_period: 10s
+          st2api:
+            image: "{{ _st2 }}/st2api"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2api }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2api }}"
+            depends_on: [mongo, rabbitmq, redis]
+            volumes:
+              - "{{ _conf }}"
+              - "{{ _keys }}"
+              - "{{ _cfgs }}"
+              - "{{ _packs }}"
+              - "{{ stackstorm_data_root }}/rbac:{{ stackstorm_c_rbac }}:ro"
+            healthcheck: "{{ {'test': _hc_api} | combine(_hc_times) }}"
+          st2auth:
+            image: "{{ _st2 }}/st2auth"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2auth }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2auth }}"
+            depends_on: [st2api]
+            volumes:
+              - "{{ _conf }}"
+              - "{{ stackstorm_data_root }}/config/htpasswd:/etc/st2/htpasswd:ro"
+            healthcheck: "{{ {'test': _hc_auth} | combine(_hc_times) }}"
+          st2stream:
+            image: "{{ _st2 }}/st2stream"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2stream }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2stream }}"
+            depends_on: [st2api]
+            volumes: ["{{ _conf }}"]
+            healthcheck: "{{ {'test': _hc_stream} | combine(_hc_times) }}"
+          st2scheduler:
+            image: "{{ _st2 }}/st2scheduler"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2scheduler }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2scheduler }}"
+            depends_on: [st2api]
+            volumes: ["{{ _conf }}"]
+            healthcheck: "{{ {'test': _hc_proc + ['/opt/stackstorm/st2/bin/st2scheduler']} | combine(_hc_times) }}"
+          st2workflowengine:
+            image: "{{ _st2 }}/st2workflowengine"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2workflowengine }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2workflowengine }}"
+            depends_on: [st2api]
+            volumes: ["{{ _conf }}", "{{ _keys }}"]
+            healthcheck: "{{ {'test': _hc_proc + ['/opt/stackstorm/st2/bin/st2workflowengine']} | combine(_hc_times) }}"
+          st2actionrunner:
+            image: "{{ _st2 }}/st2actionrunner"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2actionrunner }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2actionrunner }}"
+            depends_on: [st2api]
+            volumes: >-
+              {{ [_conf, _keys, _cfgs, _packs, _venvs,
+                  stackstorm_data_root ~ '/python:' ~ stackstorm_c_python_root ~ ':ro',
+                  stackstorm_data_root ~ '/dist:' ~ stackstorm_c_dist ~ ':ro']
+                 + ([stackstorm_broker_socket_dir ~ ':/run/hnx-broker'] if stackstorm_broker_tunnel_enabled | bool else []) }}
+            healthcheck: "{{ {'test': _hc_proc + ['/opt/stackstorm/st2/bin/st2actionrunner']} | combine(_hc_times) }}"
+          st2rulesengine:
+            image: "{{ _st2 }}/st2rulesengine"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2rulesengine }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2rulesengine }}"
+            depends_on: [st2api]
+            volumes: ["{{ _conf }}", "{{ _keys }}"]
+            healthcheck: "{{ {'test': _hc_proc + ['/opt/stackstorm/st2/bin/st2rulesengine']} | combine(_hc_times) }}"
+          st2timersengine:
+            image: "{{ _st2 }}/st2timersengine"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2timersengine }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2timersengine }}"
+            depends_on: [st2api]
+            volumes: ["{{ _conf }}"]
+            healthcheck: "{{ {'test': _hc_proc + ['/opt/stackstorm/st2/bin/st2timersengine']} | combine(_hc_times) }}"
+          st2garbagecollector:
+            image: "{{ _st2 }}/st2garbagecollector"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2garbagecollector }}"
+            user: "{{ _user }}"
+            mem_limit: "{{ stackstorm_mem_limit.st2garbagecollector }}"
+            depends_on: [st2api]
+            volumes: ["{{ _conf }}"]
+            healthcheck: "{{ {'test': _hc_proc + ['/opt/stackstorm/st2/bin/st2garbagecollector']} | combine(_hc_times) }}"
+          st2web:
+            image: "{{ _st2 }}/st2web"
+            tag: "{{ stackstorm_release_tag }}"
+            digest: "{{ stackstorm_release_digests.st2web }}"
+            # nginx starts as root and drops to its worker user; nothing else is kept
+            cap_add: [CHOWN, DAC_OVERRIDE, SETGID, SETUID]
+            environment:
+              ST2_AUTH_URL: "http://{{ stackstorm_c_services.auth.host }}:{{ stackstorm_c_services.auth.port }}/"
+              ST2_API_URL: "http://{{ stackstorm_c_services.api.host }}:{{ stackstorm_c_services.api.port }}/"
+              ST2_STREAM_URL: "http://{{ stackstorm_c_services.stream.host }}:{{ stackstorm_c_services.stream.port }}/"
+              ST2WEB_HTTPS: "0"
+            mem_limit: "{{ stackstorm_mem_limit.st2web }}"
+            depends_on: [st2api, st2auth, st2stream]
+            ports: ["{{ stackstorm_bind }}:{{ stackstorm_port | int }}:80"]
+            healthcheck: "{{ {'test': _hc_web} | combine(_hc_times) }}"
+  tags: [health, backup, restore, export, upgrade]

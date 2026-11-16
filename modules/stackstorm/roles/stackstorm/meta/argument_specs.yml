@@ -1,0 +1,934 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the StackStorm stack, the rendered pack, the event bridge and the broker forward;
+      rules ship disabled and in shadow.
+    options:
+      stackstorm_logical_id: &id001
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. automation).
+        required: true
+      stackstorm_network_subnet: &id002
+        type: str
+        description: The pinned compose network, a private IPv4 CIDR from /16 to /29.
+        required: true
+      stackstorm_pack_src: &id003
+        type: path
+        description: The rendered pack on the controller (the checkout's workflows/stackstorm/).
+        required: true
+      stackstorm_hnx_wheel: &id004
+        type: path
+        description: The homelab-next wheel on the controller (from the same commit as the pack).
+        required: true
+      stackstorm_hnx_wheel_sha256: &id005
+        type: str
+        description: 'The wheel''s sha256 (64 hex): the bytes on the host must hash to it.'
+        required: true
+      stackstorm_hnx_constraints: &id006
+        type: path
+        description: 'constraints/ci.txt of the same commit on the controller: every dependency pinned
+          with its hashes.'
+        required: true
+      stackstorm_hnx_bootstrap:
+        type: path
+        description: 'constraints/bootstrap.txt of the same commit on the controller: pip itself, pinned
+          by hash.'
+        required: true
+      stackstorm_release_tag: &id007
+        type: str
+        description: The StackStorm release (the st2 images all carry it).
+        default: 3.9.0
+      stackstorm_release_digests: &id008
+        type: dict
+        description: sha256 digest of each st2 image, by service name (one release, never mixed).
+        default:
+          st2api: sha256:67bae49d085da17b4761496b70376182d88e79f1efca65d9ff79821ca406f14e
+          st2auth: sha256:4d78bb10f707fcbc189012538c4932bea3be548cbbe60b0c2af2178f79d595e7
+          st2stream: sha256:a2bc50d7f5f4909a655272b1080cc50a9feee318074d61422b877a104a7447ba
+          st2scheduler: sha256:890e96c2c4d9a301b40ccb239e4f53a49526deb3aced9974215fd3c39fc5fc42
+          st2workflowengine: sha256:0fc50f762060579070cf8f6ed33a84a6f387db674584f448b86a81fe948a1756
+          st2actionrunner: sha256:4bfd77236d8dd1e76f51f2a06a12dd5839f8311fa1fb6c5a70fb8d9bf8aa3102
+          st2rulesengine: sha256:16c010caa06fbb7f82e2c2a1708ec1b2278c4598a9c379bb1f45bac1627aaf02
+          st2timersengine: sha256:7bb9c5773b704a743da2db879fe346117baa1d1d439d542e29fd20bbce5f3cc9
+          st2garbagecollector: sha256:3a7e0d4b3af4311797472ac93a7401a94e77aebcd95dccfbab0e55b7cc667bad
+          st2web: sha256:859ce1d54fc5ae17a6bae2d0afcd13eaca67684a9d80c41fbd369a4cc59893ea
+      stackstorm_release_repository: &id009
+        type: str
+        description: The registry path of the st2 images (<repository>/<service>).
+        default: docker.io/stackstorm
+      stackstorm_mongo_image: &id010
+        type: str
+        description: repository:tag@sha256:<digest> of the MongoDB image (the 4.4 line StackStorm 3.9
+          supports).
+        default: docker.io/library/mongo:4.4.30@sha256:4be76f674fc4b27859816811b8baa3c51830eb1dbf4ca81a51e26b79edd662ef
+      stackstorm_rabbitmq_image: &id011
+        type: str
+        description: repository:tag@sha256:<digest> of the RabbitMQ image.
+        default: docker.io/library/rabbitmq:3.12.14@sha256:4dc5d5a5076f7c458b7f3468e2282f329a8911cc3c31c4ed4aefcedb27917da2
+      stackstorm_redis_image: &id012
+        type: str
+        description: repository:tag@sha256:<digest> of the Redis image (coordination locks only).
+        default: docker.io/library/redis:7.2.16@sha256:1009f15ccd9ed271996d1c65745a1ab1dadedea188feb3f1ab938602a32e50a3
+      stackstorm_python_provisioner_image: &id013
+        type: str
+        description: repository:tag@sha256:<digest> of the one-shot image that downloads the interpreter
+          the pack needs.
+        default: ghcr.io/astral-sh/uv:0.8.22-bookworm-slim@sha256:c03c1fc1ae46c540a3e6613e8d44396e863bc99c5146ada267e52f40851860c0
+      stackstorm_python_version: &id014
+        type: str
+        description: The CPython 3.11.x build the pack runs on (homelabnext needs 3.11; the st2 images
+          carry 3.10).
+        default: 3.11.13
+      stackstorm_bind: &id015
+        type: str
+        description: The guest's own IPv4 address the front is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      stackstorm_port: &id016
+        type: int
+        description: The front's host port (the registry row's port); the API, the sign-in service and
+          the web UI are all on it.
+        default: 9101
+      stackstorm_dir: &id017
+        type: str
+        description: The compose project directory (secrets/ under it).
+        default: /opt/compose/stackstorm
+      stackstorm_owner: &id018
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      stackstorm_group: &id019
+        type: str
+        description: Their group.
+        default: root
+      stackstorm_data_root: &id020
+        type: str
+        description: The module's data root (mongo/, rabbitmq/, config/, keys/, rbac/, virtualenvs/, python/,
+          dist/, pack-releases/, export/).
+        default: /var/lib/hnx-modules/stackstorm
+      stackstorm_uid: &id021
+        type: int
+        description: The st2 containers' user id (the images' own st2).
+        default: 103
+      stackstorm_gid: &id022
+        type: int
+        description: The st2 containers' group id; the group that reads the configuration and the datastore
+          key.
+        default: 104
+      stackstorm_mongo_uid: &id023
+        type: int
+        description: The MongoDB container's user id; owns mongo/.
+        default: 999
+      stackstorm_mongo_gid: &id024
+        type: int
+        description: The MongoDB container's group id.
+        default: 999
+      stackstorm_rabbitmq_uid: &id025
+        type: int
+        description: The RabbitMQ container's user id; owns rabbitmq/.
+        default: 999
+      stackstorm_rabbitmq_gid: &id026
+        type: int
+        description: The RabbitMQ container's group id.
+        default: 999
+      stackstorm_redis_uid: &id027
+        type: int
+        description: The Redis container's user id.
+        default: 999
+      stackstorm_redis_gid: &id028
+        type: int
+        description: The Redis container's group id.
+        default: 999
+      stackstorm_start: &id029
+        type: bool
+        description: Run docker compose up after rendering, and register, apply and install into the running
+          stack.
+        default: true
+      stackstorm_validate_with_docker: &id030
+        type: bool
+        description: Run docker compose config on the rendered file.
+        default: true
+      stackstorm_health_timeout: &id031
+        type: int
+        description: Seconds for each health request.
+        default: 15
+      stackstorm_ready_timeout: &id032
+        type: int
+        description: Seconds to wait for the stack to answer after a start.
+        default: 300
+      stackstorm_footprint_memory_mb: &id033
+        type: int
+        description: The memory the module's role slice is given (its footprint); the per-service limits
+          must fit in it.
+        default: 6144
+      stackstorm_mem_limit: &id034
+        type: dict
+        description: Container memory limit per service (a number and m or g).
+        default:
+          st2api: 512m
+          st2auth: 192m
+          st2stream: 192m
+          st2scheduler: 256m
+          st2workflowengine: 384m
+          st2actionrunner: 768m
+          st2rulesengine: 256m
+          st2timersengine: 192m
+          st2garbagecollector: 192m
+          st2web: 128m
+          mongo: 1024m
+          rabbitmq: 512m
+          redis: 128m
+      stackstorm_mongo_cache_gb: &id035
+        type: str
+        description: MongoDB's WiredTiger cache in GB (a number).
+        default: '0.25'
+      stackstorm_enabled_rules: &id036
+        type: list
+        description: Rules to turn on, by rule name (on_<pack>); empty ships every rule disabled.
+        default: []
+        elements: str
+      stackstorm_allow_live_rules: &id037
+        type: bool
+        description: 'Deploy a pack that carries a live rule (shadow-first: off).'
+        default: false
+      stackstorm_retention_days: &id038
+        type: int
+        description: Days the garbage collector keeps executions (7 or more; 0 keeps everything).
+        default: 30
+      stackstorm_admin_user: &id039
+        type: str
+        description: The StackStorm administrator's user name.
+        default: st2admin
+      stackstorm_admin_login_ref: &id040
+        type: str
+        description: secret:<name> of the administrator's password.
+        default: secret:stackstorm/admin-password
+      stackstorm_mongo_root_login_ref: &id041
+        type: str
+        description: secret:<name> of the MongoDB root password (first start only).
+        default: secret:stackstorm/mongo-root-password
+      stackstorm_mongo_login_ref: &id042
+        type: str
+        description: secret:<name> of the st2 database user's password.
+        default: secret:stackstorm/mongo-password
+      stackstorm_rabbitmq_login_ref: &id043
+        type: str
+        description: secret:<name> of the message bus user's password.
+        default: secret:stackstorm/rabbitmq-password
+      stackstorm_datastore_key_ref: &id044
+        type: str
+        description: secret:<name> of the datastore's encryption key (the JSON st2-generate-symmetric-crypto-key
+          writes).
+        default: secret:stackstorm/datastore-key
+      stackstorm_kv_key_ref: &id045
+        type: str
+        description: secret:<name> of the key the pack's runtime names its datastore entries with (32
+          characters or more).
+        default: secret:stackstorm/kv-key
+      stackstorm_webhook_key_ref: &id046
+        type: str
+        description: secret:<name> of the bridge's API key (registered by hash; may only post webhooks).
+        default: secret:stackstorm/webhook-key
+      stackstorm_webhook_user: &id047
+        type: str
+        description: The StackStorm user the bridge's key belongs to.
+        default: st2bridge
+      stackstorm_status_key_ref: &id048
+        type: str
+        description: secret:<name> of the status hub's API key (registered by hash; may only read executions).
+        default: secret:stackstorm/status-token
+      stackstorm_status_user: &id049
+        type: str
+        description: The StackStorm user the status hub's key belongs to.
+        default: st2status
+      stackstorm_operator_users: &id050
+        type: list
+        description: StackStorm users who may view the pack and its executions, never run an action.
+        default: []
+        elements: str
+      stackstorm_bridge_enabled: &id051
+        type: bool
+        description: Run the event bridge as a systemd service on this guest.
+        default: true
+      stackstorm_hnx_cli: &id052
+        type: str
+        description: Absolute path of the hnx command on the guest (role hnx_runtime).
+        default: /opt/hnx/bin/hnx
+      stackstorm_events_endpoint: &id053
+        type: str
+        description: The bus endpoint the bridge connects to (tls://host:port; plain nats:// to loopback
+          only).
+        default: ''
+      stackstorm_events_user: &id054
+        type: str
+        description: The bridge's bus user.
+        default: hnx-st2-bridge
+      stackstorm_events_login_ref: &id055
+        type: str
+        description: secret:<name> of the bridge's bus password.
+        default: secret:stackstorm/events-password
+      stackstorm_events_ca_file: &id056
+        type: str
+        description: Absolute path of the CA bundle for the bus endpoint, or empty.
+        default: ''
+      stackstorm_events_stream: &id057
+        type: str
+        description: The JetStream stream the events are in.
+        default: HOMELABNEXT
+      stackstorm_events_subject_prefix: &id058
+        type: str
+        description: The stream's subject prefix.
+        default: lab
+      stackstorm_events_api_prefix: &id059
+        type: str
+        description: Where the bridge's bus account reaches JetStream (JS.<account>.API), or empty for
+          the default.
+        default: ''
+      stackstorm_bridge_user: &id060
+        type: str
+        description: The bridge's service user.
+        default: hnx-st2-bridge
+      stackstorm_bridge_state_dir: &id061
+        type: str
+        description: The bridge's state directory (systemd StateDirectory hnx-st2-bridge).
+        default: /var/lib/hnx-st2-bridge
+      stackstorm_broker_tunnel_enabled: &id062
+        type: bool
+        description: Keep the SSH forward to the broker's socket up as a systemd service.
+        default: true
+      stackstorm_broker_host: &id063
+        type: str
+        description: The broker host's name or address.
+        default: ''
+      stackstorm_broker_ssh_user: &id064
+        type: str
+        description: The user on the broker host the broker's manifest maps to the pack's actor.
+        default: hnx-agent-st2
+      stackstorm_broker_ssh_port: &id065
+        type: int
+        description: The broker host's ssh port.
+        default: 22
+      stackstorm_broker_host_key: &id066
+        type: str
+        description: The broker host's public key line (`name ssh-ed25519 AAAA...`), pinned.
+        default: ''
+      stackstorm_broker_key_ref: &id067
+        type: str
+        description: secret:<name> of the forward's OpenSSH private key.
+        default: secret:stackstorm/broker-ssh-key
+      stackstorm_broker_remote_socket: &id068
+        type: str
+        description: The broker's socket path on its own host.
+        default: /run/hnx-broker/broker.sock
+      stackstorm_broker_socket_dir: &id069
+        type: str
+        description: Where the forwarded socket appears on this guest (mounted into the action runner).
+        default: /run/hnx-st2-broker
+      stackstorm_broker_tunnel_user: &id070
+        type: str
+        description: The forward's service user.
+        default: hnx-st2-broker
+      stackstorm_broker_socket_mode: &id071
+        type: str
+        description: The forwarded socket's mode (0660 or 0600).
+        default: '0660'
+      stackstorm_status_packs:
+        type: list
+        elements: str
+        description: Packs whose actions (and so executions) the status key may view; core is there for
+          the role's own no-op check.
+        default:
+        - homelabnext
+        - core
+      stackstorm_runner_roles:
+        type: list
+        elements: str
+        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
+          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        default:
+        - system_admin
+  health:
+    short_description: Fail unless every container is healthy, the pack and its rules are the rendered
+      ones, a no-op execution succeeds and the keys are bounded.
+    options:
+      stackstorm_logical_id: *id001
+      stackstorm_network_subnet: *id002
+      stackstorm_pack_src: *id003
+      stackstorm_hnx_wheel: *id004
+      stackstorm_hnx_wheel_sha256: *id005
+      stackstorm_hnx_constraints: *id006
+      stackstorm_hnx_bootstrap:
+        type: path
+        description: 'constraints/bootstrap.txt of the same commit on the controller: pip itself, pinned
+          by hash.'
+        required: true
+      stackstorm_release_tag: *id007
+      stackstorm_release_digests: *id008
+      stackstorm_release_repository: *id009
+      stackstorm_mongo_image: *id010
+      stackstorm_rabbitmq_image: *id011
+      stackstorm_redis_image: *id012
+      stackstorm_python_provisioner_image: *id013
+      stackstorm_python_version: *id014
+      stackstorm_bind: *id015
+      stackstorm_port: *id016
+      stackstorm_dir: *id017
+      stackstorm_owner: *id018
+      stackstorm_group: *id019
+      stackstorm_data_root: *id020
+      stackstorm_uid: *id021
+      stackstorm_gid: *id022
+      stackstorm_mongo_uid: *id023
+      stackstorm_mongo_gid: *id024
+      stackstorm_rabbitmq_uid: *id025
+      stackstorm_rabbitmq_gid: *id026
+      stackstorm_redis_uid: *id027
+      stackstorm_redis_gid: *id028
+      stackstorm_start: *id029
+      stackstorm_validate_with_docker: *id030
+      stackstorm_health_timeout: *id031
+      stackstorm_ready_timeout: *id032
+      stackstorm_footprint_memory_mb: *id033
+      stackstorm_mem_limit: *id034
+      stackstorm_mongo_cache_gb: *id035
+      stackstorm_enabled_rules: *id036
+      stackstorm_allow_live_rules: *id037
+      stackstorm_retention_days: *id038
+      stackstorm_admin_user: *id039
+      stackstorm_admin_login_ref: *id040
+      stackstorm_mongo_root_login_ref: *id041
+      stackstorm_mongo_login_ref: *id042
+      stackstorm_rabbitmq_login_ref: *id043
+      stackstorm_datastore_key_ref: *id044
+      stackstorm_kv_key_ref: *id045
+      stackstorm_webhook_key_ref: *id046
+      stackstorm_webhook_user: *id047
+      stackstorm_status_key_ref: *id048
+      stackstorm_status_user: *id049
+      stackstorm_operator_users: *id050
+      stackstorm_bridge_enabled: *id051
+      stackstorm_hnx_cli: *id052
+      stackstorm_events_endpoint: *id053
+      stackstorm_events_user: *id054
+      stackstorm_events_login_ref: *id055
+      stackstorm_events_ca_file: *id056
+      stackstorm_events_stream: *id057
+      stackstorm_events_subject_prefix: *id058
+      stackstorm_events_api_prefix: *id059
+      stackstorm_bridge_user: *id060
+      stackstorm_bridge_state_dir: *id061
+      stackstorm_broker_tunnel_enabled: *id062
+      stackstorm_broker_host: *id063
+      stackstorm_broker_ssh_user: *id064
+      stackstorm_broker_ssh_port: *id065
+      stackstorm_broker_host_key: *id066
+      stackstorm_broker_key_ref: *id067
+      stackstorm_broker_remote_socket: *id068
+      stackstorm_broker_socket_dir: *id069
+      stackstorm_broker_tunnel_user: *id070
+      stackstorm_broker_socket_mode: *id071
+      stackstorm_status_packs:
+        type: list
+        elements: str
+        description: Packs whose actions (and so executions) the status key may view; core is there for
+          the role's own no-op check.
+        default:
+        - homelabnext
+        - core
+      stackstorm_runner_roles:
+        type: list
+        elements: str
+        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
+          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        default:
+        - system_admin
+  readiness:
+    short_description: Fail unless the container engine, the rendered pack, the wheel and every credential
+      are in place.
+    options:
+      stackstorm_logical_id: *id001
+      stackstorm_network_subnet: *id002
+      stackstorm_pack_src: *id003
+      stackstorm_hnx_wheel: *id004
+      stackstorm_hnx_wheel_sha256: *id005
+      stackstorm_hnx_constraints: *id006
+      stackstorm_hnx_bootstrap:
+        type: path
+        description: 'constraints/bootstrap.txt of the same commit on the controller: pip itself, pinned
+          by hash.'
+        required: true
+      stackstorm_release_tag: *id007
+      stackstorm_release_digests: *id008
+      stackstorm_release_repository: *id009
+      stackstorm_mongo_image: *id010
+      stackstorm_rabbitmq_image: *id011
+      stackstorm_redis_image: *id012
+      stackstorm_python_provisioner_image: *id013
+      stackstorm_python_version: *id014
+      stackstorm_bind: *id015
+      stackstorm_port: *id016
+      stackstorm_dir: *id017
+      stackstorm_owner: *id018
+      stackstorm_group: *id019
+      stackstorm_data_root: *id020
+      stackstorm_uid: *id021
+      stackstorm_gid: *id022
+      stackstorm_mongo_uid: *id023
+      stackstorm_mongo_gid: *id024
+      stackstorm_rabbitmq_uid: *id025
+      stackstorm_rabbitmq_gid: *id026
+      stackstorm_redis_uid: *id027
+      stackstorm_redis_gid: *id028
+      stackstorm_start: *id029
+      stackstorm_validate_with_docker: *id030
+      stackstorm_health_timeout: *id031
+      stackstorm_ready_timeout: *id032
+      stackstorm_footprint_memory_mb: *id033
+      stackstorm_mem_limit: *id034
+      stackstorm_mongo_cache_gb: *id035
+      stackstorm_enabled_rules: *id036
+      stackstorm_allow_live_rules: *id037
+      stackstorm_retention_days: *id038
+      stackstorm_admin_user: *id039
+      stackstorm_admin_login_ref: *id040
+      stackstorm_mongo_root_login_ref: *id041
+      stackstorm_mongo_login_ref: *id042
+      stackstorm_rabbitmq_login_ref: *id043
+      stackstorm_datastore_key_ref: *id044
+      stackstorm_kv_key_ref: *id045
+      stackstorm_webhook_key_ref: *id046
+      stackstorm_webhook_user: *id047
+      stackstorm_status_key_ref: *id048
+      stackstorm_status_user: *id049
+      stackstorm_operator_users: *id050
+      stackstorm_bridge_enabled: *id051
+      stackstorm_hnx_cli: *id052
+      stackstorm_events_endpoint: *id053
+      stackstorm_events_user: *id054
+      stackstorm_events_login_ref: *id055
+      stackstorm_events_ca_file: *id056
+      stackstorm_events_stream: *id057
+      stackstorm_events_subject_prefix: *id058
+      stackstorm_events_api_prefix: *id059
+      stackstorm_bridge_user: *id060
+      stackstorm_bridge_state_dir: *id061
+      stackstorm_broker_tunnel_enabled: *id062
+      stackstorm_broker_host: *id063
+      stackstorm_broker_ssh_user: *id064
+      stackstorm_broker_ssh_port: *id065
+      stackstorm_broker_host_key: *id066
+      stackstorm_broker_key_ref: *id067
+      stackstorm_broker_remote_socket: *id068
+      stackstorm_broker_socket_dir: *id069
+      stackstorm_broker_tunnel_user: *id070
+      stackstorm_broker_socket_mode: *id071
+      stackstorm_status_packs:
+        type: list
+        elements: str
+        description: Packs whose actions (and so executions) the status key may view; core is there for
+          the role's own no-op check.
+        default:
+        - homelabnext
+        - core
+      stackstorm_runner_roles:
+        type: list
+        elements: str
+        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
+          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        default:
+        - system_admin
+  backup:
+    short_description: Write a consistent database archive into the data root, then the backup manifest.
+    options:
+      stackstorm_logical_id: *id001
+      stackstorm_network_subnet: *id002
+      stackstorm_pack_src: *id003
+      stackstorm_hnx_wheel: *id004
+      stackstorm_hnx_wheel_sha256: *id005
+      stackstorm_hnx_constraints: *id006
+      stackstorm_hnx_bootstrap:
+        type: path
+        description: 'constraints/bootstrap.txt of the same commit on the controller: pip itself, pinned
+          by hash.'
+        required: true
+      stackstorm_release_tag: *id007
+      stackstorm_release_digests: *id008
+      stackstorm_release_repository: *id009
+      stackstorm_mongo_image: *id010
+      stackstorm_rabbitmq_image: *id011
+      stackstorm_redis_image: *id012
+      stackstorm_python_provisioner_image: *id013
+      stackstorm_python_version: *id014
+      stackstorm_bind: *id015
+      stackstorm_port: *id016
+      stackstorm_dir: *id017
+      stackstorm_owner: *id018
+      stackstorm_group: *id019
+      stackstorm_data_root: *id020
+      stackstorm_uid: *id021
+      stackstorm_gid: *id022
+      stackstorm_mongo_uid: *id023
+      stackstorm_mongo_gid: *id024
+      stackstorm_rabbitmq_uid: *id025
+      stackstorm_rabbitmq_gid: *id026
+      stackstorm_redis_uid: *id027
+      stackstorm_redis_gid: *id028
+      stackstorm_start: *id029
+      stackstorm_validate_with_docker: *id030
+      stackstorm_health_timeout: *id031
+      stackstorm_ready_timeout: *id032
+      stackstorm_footprint_memory_mb: *id033
+      stackstorm_mem_limit: *id034
+      stackstorm_mongo_cache_gb: *id035
+      stackstorm_enabled_rules: *id036
+      stackstorm_allow_live_rules: *id037
+      stackstorm_retention_days: *id038
+      stackstorm_admin_user: *id039
+      stackstorm_admin_login_ref: *id040
+      stackstorm_mongo_root_login_ref: *id041
+      stackstorm_mongo_login_ref: *id042
+      stackstorm_rabbitmq_login_ref: *id043
+      stackstorm_datastore_key_ref: *id044
+      stackstorm_kv_key_ref: *id045
+      stackstorm_webhook_key_ref: *id046
+      stackstorm_webhook_user: *id047
+      stackstorm_status_key_ref: *id048
+      stackstorm_status_user: *id049
+      stackstorm_operator_users: *id050
+      stackstorm_bridge_enabled: *id051
+      stackstorm_hnx_cli: *id052
+      stackstorm_events_endpoint: *id053
+      stackstorm_events_user: *id054
+      stackstorm_events_login_ref: *id055
+      stackstorm_events_ca_file: *id056
+      stackstorm_events_stream: *id057
+      stackstorm_events_subject_prefix: *id058
+      stackstorm_events_api_prefix: *id059
+      stackstorm_bridge_user: *id060
+      stackstorm_bridge_state_dir: *id061
+      stackstorm_broker_tunnel_enabled: *id062
+      stackstorm_broker_host: *id063
+      stackstorm_broker_ssh_user: *id064
+      stackstorm_broker_ssh_port: *id065
+      stackstorm_broker_host_key: *id066
+      stackstorm_broker_key_ref: *id067
+      stackstorm_broker_remote_socket: *id068
+      stackstorm_broker_socket_dir: *id069
+      stackstorm_broker_tunnel_user: *id070
+      stackstorm_broker_socket_mode: *id071
+      stackstorm_status_packs:
+        type: list
+        elements: str
+        description: Packs whose actions (and so executions) the status key may view; core is there for
+          the role's own no-op check.
+        default:
+        - homelabnext
+        - core
+      stackstorm_runner_roles:
+        type: list
+        elements: str
+        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
+          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        default:
+        - system_admin
+  export:
+    short_description: Write the database archive and its listing (the exit copy).
+    options:
+      stackstorm_logical_id: *id001
+      stackstorm_network_subnet: *id002
+      stackstorm_pack_src: *id003
+      stackstorm_hnx_wheel: *id004
+      stackstorm_hnx_wheel_sha256: *id005
+      stackstorm_hnx_constraints: *id006
+      stackstorm_hnx_bootstrap:
+        type: path
+        description: 'constraints/bootstrap.txt of the same commit on the controller: pip itself, pinned
+          by hash.'
+        required: true
+      stackstorm_release_tag: *id007
+      stackstorm_release_digests: *id008
+      stackstorm_release_repository: *id009
+      stackstorm_mongo_image: *id010
+      stackstorm_rabbitmq_image: *id011
+      stackstorm_redis_image: *id012
+      stackstorm_python_provisioner_image: *id013
+      stackstorm_python_version: *id014
+      stackstorm_bind: *id015
+      stackstorm_port: *id016
+      stackstorm_dir: *id017
+      stackstorm_owner: *id018
+      stackstorm_group: *id019
+      stackstorm_data_root: *id020
+      stackstorm_uid: *id021
+      stackstorm_gid: *id022
+      stackstorm_mongo_uid: *id023
+      stackstorm_mongo_gid: *id024
+      stackstorm_rabbitmq_uid: *id025
+      stackstorm_rabbitmq_gid: *id026
+      stackstorm_redis_uid: *id027
+      stackstorm_redis_gid: *id028
+      stackstorm_start: *id029
+      stackstorm_validate_with_docker: *id030
+      stackstorm_health_timeout: *id031
+      stackstorm_ready_timeout: *id032
+      stackstorm_footprint_memory_mb: *id033
+      stackstorm_mem_limit: *id034
+      stackstorm_mongo_cache_gb: *id035
+      stackstorm_enabled_rules: *id036
+      stackstorm_allow_live_rules: *id037
+      stackstorm_retention_days: *id038
+      stackstorm_admin_user: *id039
+      stackstorm_admin_login_ref: *id040
+      stackstorm_mongo_root_login_ref: *id041
+      stackstorm_mongo_login_ref: *id042
+      stackstorm_rabbitmq_login_ref: *id043
+      stackstorm_datastore_key_ref: *id044
+      stackstorm_kv_key_ref: *id045
+      stackstorm_webhook_key_ref: *id046
+      stackstorm_webhook_user: *id047
+      stackstorm_status_key_ref: *id048
+      stackstorm_status_user: *id049
+      stackstorm_operator_users: *id050
+      stackstorm_bridge_enabled: *id051
+      stackstorm_hnx_cli: *id052
+      stackstorm_events_endpoint: *id053
+      stackstorm_events_user: *id054
+      stackstorm_events_login_ref: *id055
+      stackstorm_events_ca_file: *id056
+      stackstorm_events_stream: *id057
+      stackstorm_events_subject_prefix: *id058
+      stackstorm_events_api_prefix: *id059
+      stackstorm_bridge_user: *id060
+      stackstorm_bridge_state_dir: *id061
+      stackstorm_broker_tunnel_enabled: *id062
+      stackstorm_broker_host: *id063
+      stackstorm_broker_ssh_user: *id064
+      stackstorm_broker_ssh_port: *id065
+      stackstorm_broker_host_key: *id066
+      stackstorm_broker_key_ref: *id067
+      stackstorm_broker_remote_socket: *id068
+      stackstorm_broker_socket_dir: *id069
+      stackstorm_broker_tunnel_user: *id070
+      stackstorm_broker_socket_mode: *id071
+      stackstorm_status_packs:
+        type: list
+        elements: str
+        description: Packs whose actions (and so executions) the status key may view; core is there for
+          the role's own no-op check.
+        default:
+        - homelabnext
+        - core
+      stackstorm_runner_roles:
+        type: list
+        elements: str
+        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
+          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        default:
+        - system_admin
+  restore:
+    short_description: Restore the st2 database from an export, services stopped, then prove it.
+    options:
+      stackstorm_logical_id: *id001
+      stackstorm_network_subnet: *id002
+      stackstorm_pack_src: *id003
+      stackstorm_hnx_wheel: *id004
+      stackstorm_hnx_wheel_sha256: *id005
+      stackstorm_hnx_constraints: *id006
+      stackstorm_hnx_bootstrap:
+        type: path
+        description: 'constraints/bootstrap.txt of the same commit on the controller: pip itself, pinned
+          by hash.'
+        required: true
+      stackstorm_release_tag: *id007
+      stackstorm_release_digests: *id008
+      stackstorm_release_repository: *id009
+      stackstorm_mongo_image: *id010
+      stackstorm_rabbitmq_image: *id011
+      stackstorm_redis_image: *id012
+      stackstorm_python_provisioner_image: *id013
+      stackstorm_python_version: *id014
+      stackstorm_bind: *id015
+      stackstorm_port: *id016
+      stackstorm_dir: *id017
+      stackstorm_owner: *id018
+      stackstorm_group: *id019
+      stackstorm_data_root: *id020
+      stackstorm_uid: *id021
+      stackstorm_gid: *id022
+      stackstorm_mongo_uid: *id023
+      stackstorm_mongo_gid: *id024
+      stackstorm_rabbitmq_uid: *id025
+      stackstorm_rabbitmq_gid: *id026
+      stackstorm_redis_uid: *id027
+      stackstorm_redis_gid: *id028
+      stackstorm_start: *id029
+      stackstorm_validate_with_docker: *id030
+      stackstorm_health_timeout: *id031
+      stackstorm_ready_timeout: *id032
+      stackstorm_footprint_memory_mb: *id033
+      stackstorm_mem_limit: *id034
+      stackstorm_mongo_cache_gb: *id035
+      stackstorm_enabled_rules: *id036
+      stackstorm_allow_live_rules: *id037
+      stackstorm_retention_days: *id038
+      stackstorm_admin_user: *id039
+      stackstorm_admin_login_ref: *id040
+      stackstorm_mongo_root_login_ref: *id041
+      stackstorm_mongo_login_ref: *id042
+      stackstorm_rabbitmq_login_ref: *id043
+      stackstorm_datastore_key_ref: *id044
+      stackstorm_kv_key_ref: *id045
+      stackstorm_webhook_key_ref: *id046
+      stackstorm_webhook_user: *id047
+      stackstorm_status_key_ref: *id048
+      stackstorm_status_user: *id049
+      stackstorm_operator_users: *id050
+      stackstorm_bridge_enabled: *id051
+      stackstorm_hnx_cli: *id052
+      stackstorm_events_endpoint: *id053
+      stackstorm_events_user: *id054
+      stackstorm_events_login_ref: *id055
+      stackstorm_events_ca_file: *id056
+      stackstorm_events_stream: *id057
+      stackstorm_events_subject_prefix: *id058
+      stackstorm_events_api_prefix: *id059
+      stackstorm_bridge_user: *id060
+      stackstorm_bridge_state_dir: *id061
+      stackstorm_broker_tunnel_enabled: *id062
+      stackstorm_broker_host: *id063
+      stackstorm_broker_ssh_user: *id064
+      stackstorm_broker_ssh_port: *id065
+      stackstorm_broker_host_key: *id066
+      stackstorm_broker_key_ref: *id067
+      stackstorm_broker_remote_socket: *id068
+      stackstorm_broker_socket_dir: *id069
+      stackstorm_broker_tunnel_user: *id070
+      stackstorm_broker_socket_mode: *id071
+      stackstorm_restore_source:
+        type: path
+        description: An export directory (listing.jsonl and mongo/st2.archive.gz) to restore from.
+        required: true
+      stackstorm_status_packs:
+        type: list
+        elements: str
+        description: Packs whose actions (and so executions) the status key may view; core is there for
+          the role's own no-op check.
+        default:
+        - homelabnext
+        - core
+      stackstorm_runner_roles:
+        type: list
+        elements: str
+        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
+          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        default:
+        - system_admin
+  upgrade:
+    short_description: Validate and record an image bump.
+    options:
+      stackstorm_logical_id: *id001
+      stackstorm_network_subnet: *id002
+      stackstorm_pack_src: *id003
+      stackstorm_hnx_wheel: *id004
+      stackstorm_hnx_wheel_sha256: *id005
+      stackstorm_hnx_constraints: *id006
+      stackstorm_hnx_bootstrap:
+        type: path
+        description: 'constraints/bootstrap.txt of the same commit on the controller: pip itself, pinned
+          by hash.'
+        required: true
+      stackstorm_release_tag: *id007
+      stackstorm_release_digests: *id008
+      stackstorm_release_repository: *id009
+      stackstorm_mongo_image: *id010
+      stackstorm_rabbitmq_image: *id011
+      stackstorm_redis_image: *id012
+      stackstorm_python_provisioner_image: *id013
+      stackstorm_python_version: *id014
+      stackstorm_bind: *id015
+      stackstorm_port: *id016
+      stackstorm_dir: *id017
+      stackstorm_owner: *id018
+      stackstorm_group: *id019
+      stackstorm_data_root: *id020
+      stackstorm_uid: *id021
+      stackstorm_gid: *id022
+      stackstorm_mongo_uid: *id023
+      stackstorm_mongo_gid: *id024
+      stackstorm_rabbitmq_uid: *id025
+      stackstorm_rabbitmq_gid: *id026
+      stackstorm_redis_uid: *id027
+      stackstorm_redis_gid: *id028
+      stackstorm_start: *id029
+      stackstorm_validate_with_docker: *id030
+      stackstorm_health_timeout: *id031
+      stackstorm_ready_timeout: *id032
+      stackstorm_footprint_memory_mb: *id033
+      stackstorm_mem_limit: *id034
+      stackstorm_mongo_cache_gb: *id035
+      stackstorm_enabled_rules: *id036
+      stackstorm_allow_live_rules: *id037
+      stackstorm_retention_days: *id038
+      stackstorm_admin_user: *id039
+      stackstorm_admin_login_ref: *id040
+      stackstorm_mongo_root_login_ref: *id041
+      stackstorm_mongo_login_ref: *id042
+      stackstorm_rabbitmq_login_ref: *id043
+      stackstorm_datastore_key_ref: *id044
+      stackstorm_kv_key_ref: *id045
+      stackstorm_webhook_key_ref: *id046
+      stackstorm_webhook_user: *id047
+      stackstorm_status_key_ref: *id048
+      stackstorm_status_user: *id049
+      stackstorm_operator_users: *id050
+      stackstorm_bridge_enabled: *id051
+      stackstorm_hnx_cli: *id052
+      stackstorm_events_endpoint: *id053
+      stackstorm_events_user: *id054
+      stackstorm_events_login_ref: *id055
+      stackstorm_events_ca_file: *id056
+      stackstorm_events_stream: *id057
+      stackstorm_events_subject_prefix: *id058
+      stackstorm_events_api_prefix: *id059
+      stackstorm_bridge_user: *id060
+      stackstorm_bridge_state_dir: *id061
+      stackstorm_broker_tunnel_enabled: *id062
+      stackstorm_broker_host: *id063
+      stackstorm_broker_ssh_user: *id064
+      stackstorm_broker_ssh_port: *id065
+      stackstorm_broker_host_key: *id066
+      stackstorm_broker_key_ref: *id067
+      stackstorm_broker_remote_socket: *id068
+      stackstorm_broker_socket_dir: *id069
+      stackstorm_broker_tunnel_user: *id070
+      stackstorm_broker_socket_mode: *id071
+      stackstorm_target_release_tag:
+        type: str
+        description: The next st2 release (a patch of the current minor line); with stackstorm_target_release_digests.
+        default: ''
+      stackstorm_target_release_digests:
+        type: dict
+        description: sha256 digest of every st2 image at the target release, by service name.
+        default: {}
+      stackstorm_target_service:
+        type: str
+        description: 'mongo, rabbitmq or redis: the data store to bump (with stackstorm_target_image).'
+        default: ''
+      stackstorm_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the data store target (same repository, same major.minor).
+        default: ''
+      stackstorm_status_packs:
+        type: list
+        elements: str
+        description: Packs whose actions (and so executions) the status key may view; core is there for
+          the role's own no-op check.
+        default:
+        - homelabnext
+        - core
+      stackstorm_runner_roles:
+        type: list
+        elements: str
+        description: 'RBAC roles of stanley, the user rules run executions as (system_admin: the runtime''s
+          datastore keys are named by an HMAC, so no per-key grant can name them).'
+        default:
+        - system_admin

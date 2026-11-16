@@ -275,7 +275,27 @@ def test_rendered_documents_have_the_fields_stackstorm_requires():
         meta | {"parameters": {"bad-name": {"type": "string"}}},
     ):
         assert st2.shape_errors("action", broken)
-    assert st2.shape_errors("pack", {"ref": "homelabnext", "name": "x", "version": "1"})
+    # a pack without an author's email is refused too (what the loader of a real server demands)
+    for thin in ({"ref": "homelabnext", "name": "x", "version": "1"},
+                 {k: v for k, v in yaml.safe_load(res.files["homelabnext/pack.yaml"]).items() if k != "email"}):  # fmt: skip
+        assert st2.shape_errors("pack", thin)
+
+
+def test_the_pack_has_an_email_and_every_criterion_a_pattern_as_a_real_server_registers_them():
+    """Found by registering the rendered tree on a real 3.9.0: the pack loader reads ``email``
+    (a pack without one is "'PackAPI' object has no attribute 'email'") and the rule validator
+    refuses a criterion with no pattern, ``exists`` and ``nexists`` included ("no pattern
+    specified for operator nexists")."""
+    res = go(binding())
+    pack_doc = yaml.safe_load(res.files["homelabnext/pack.yaml"])
+    assert isinstance(pack_doc["email"], str) and "@" in pack_doc["email"]
+    seen_exists = False
+    for path, text in res.files.items():
+        if path.startswith("homelabnext/rules/"):
+            for key, crit in yaml.safe_load(text)["criteria"].items():
+                assert "pattern" in crit and crit["pattern"] is not None, (path, key)
+                seen_exists |= crit["type"] in ("exists", "nexists")
+    assert seen_exists  # the bound-retry rule uses nexists: the case the real registration refused
 
 
 def test_the_tree_check_catches_a_task_that_is_not_a_shim():
@@ -341,9 +361,9 @@ def test_criteria_keys_and_repeated_fields():
     )
     assert crit == {
         "trigger.body.type": {"type": "equals", "pattern": "homelabnext.alert.created"},
-        "trigger.body.data.severity": {"type": "exists"},
+        "trigger.body.data.severity": {"type": "exists", "pattern": ""},
         "trigger.body.data.severity#2": {"type": "inside", "pattern": ["high", "critical"]},
-        "trigger.body.data.title": {"type": "nexists"},
+        "trigger.body.data.title": {"type": "nexists", "pattern": ""},
     }
 
 
@@ -430,8 +450,13 @@ def test_secrets_are_datastore_references_never_values():
     res = go(b)
     cfg = yaml.safe_load(res.files["configs/homelabnext.yaml"])
     schema = yaml.safe_load(res.files["homelabnext/config.schema.yaml"])
-    assert cfg["notify_token"] == "{{ st2kv.system.homelabnext.notify_token | decrypt_kv }}"
+    assert cfg["notify_token"] == "{{ st2kv.system.homelabnext.notify_token }}"
     assert schema["notify_token"]["secret"] is True and cfg["site"] == "lab"
+    # a value marked secret is decrypted by the server itself, which refuses the filter on it
+    assert (
+        "decrypt_kv" not in cfg["notify_token"]
+        and "decrypt_kv" not in res.files["configs/homelabnext.yaml"]
+    )
     bridge = json.loads(res.files["bridge.json"])
     assert bridge["api_key"].startswith("secret:")  # a secret-store name, not a key
 
@@ -1333,7 +1358,7 @@ def test_the_rendered_config_carries_the_kv_key_as_a_datastore_secret():
         "description": "",
     }
     values = yaml.safe_load(res.files["configs/homelabnext.yaml"])
-    assert values["kv_key"] == "{{ st2kv.system.homelabnext.kv_key | decrypt_kv }}"
+    assert values["kv_key"] == "{{ st2kv.system.homelabnext.kv_key }}"
     for shim in ("admit", "step"):
         assert (
             "ActionServiceKV(self.action_service, self.config)"

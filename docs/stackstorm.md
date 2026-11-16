@@ -322,18 +322,22 @@ timer that the rule replaces only after the rule has run in shadow beside it and
 The pack's actions talk only to the broker's Unix socket. The broker takes the caller from the
 peer's credentials (the manifest maps the StackStorm runner's user to the binding's `actor`), so the
 pack needs no token. A `config` entry is a literal (`{value: ...}`) or a datastore key
-(`{st2kv: name}`). A datastore key is rendered as `{{ st2kv.system.<name> | decrypt_kv }}` and marked
-`secret: true` in `config.schema.yaml`. `st2-secret` refuses a literal under a name that looks like a
+(`{st2kv: name}`). A datastore key is rendered as `{{ st2kv.system.<name> }}` and marked
+`secret: true` in `config.schema.yaml`: StackStorm decrypts a value so marked itself and refuses the
+`decrypt_kv` filter on it ("Values specified as secret: True ... automatically decrypted"). `st2-secret` refuses a literal under a name that looks like a
 secret. The event bridge's StackStorm API key appears only as a secret-store name
 (`bridge_api_key: secret:stackstorm/webhook-key`). It belongs to a StackStorm user whose RBAC role
 can only post webhooks.
 
 **Who may run the pack's actions.** Turn StackStorm RBAC on (`[rbac] enable = True`, backend
-`default`). Rules run their actions as the system user (`stanley` by default); give that user, and
-only it, `action_execute` on the `homelabnext` pack's actions (a role with
-`resource_uid: pack:homelabnext`, permission `action_execute`). Operators get `action_view` and
-`execution_view` for the shadow logs, never `action_execute` there; the bridge's user gets
-`webhook_send` and nothing else. Without RBAC every authenticated user can `st2 run
+`default`). Rules run their actions as the system user (`stanley` by default), which has no password
+and no token anyone holds. Observed on 3.9.0: StackStorm checks a run's datastore calls (the config's
+own key read, and the runtime's `seen`/`coalesce`/`submitted` entries, named by an HMAC so no per-key
+grant can name them) as that user, so the user needs the datastore permissions of a system admin;
+nobody who signs in gets `action_execute`. Operators get `pack_view`, `action_view` and `rule_view`
+for the shadow logs (the executions list needs `execution_list`; there is no per-pack
+`execution_view`), never `action_execute`; the status key lists executions and views the actions of
+the packs it names; the bridge's user gets `webhook_send` and nothing else. Without RBAC every authenticated user can `st2 run
 homelabnext.step` with an event of their own. The step still runs only pinned steps in their pinned
 mode, and the broker still decides, but the event is theirs.
 
@@ -387,6 +391,13 @@ those in criteria, parameters and Orquesta inputs, so a literal would become an 
 data never reaches them in clear (above).
 
 ## Installing the rendered pack
+
+The deployed way is the automation provider module, `modules/stackstorm/` (its README): the
+containerised 3.9 stack, this tree mounted read-only, the bridge and the broker forward. What follows
+is the manual path on a host that has StackStorm packages. Either way the pack's actions need
+**Python 3.11**: `homelabnext` imports `tomllib`, `datetime.UTC` and possessive regex quantifiers,
+and StackStorm 3.9's images and Ubuntu 22.04 packages carry 3.10, so point `[actionrunner]
+python_binary` at a 3.11 interpreter before creating the pack's virtualenv (the module does).
 
 On the StackStorm host (3.8 or later; the official production minimum is 16 GB and 4 cores):
 

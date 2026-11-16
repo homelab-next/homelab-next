@@ -10,6 +10,7 @@ keywords:
 - workflows
 version: 0.1.0
 author: homelab-next
+email: homelab-next@example.internal
 python_versions:
 - '3'
 stackstorm_version: '>=3.8.0'

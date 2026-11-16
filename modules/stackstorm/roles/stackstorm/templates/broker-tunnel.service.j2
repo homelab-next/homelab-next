@@ -1,0 +1,30 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role stackstorm); local changes are overwritten.
+[Unit]
+Description=homelabnext broker socket forward for the automation service (ssh -L, the broker's remote-agent path)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ stackstorm_broker_tunnel_user }}
+Group={{ stackstorm_broker_group }}
+# The broker has no network listener; the peer it sees is the sshd session's user on its own host,
+# which its manifest maps to the pack's actor. The host key is pinned (never trusted on first use),
+# the forward is the only thing the key may do, and a socket the forward cannot bind is a failure.
+ExecStart=/usr/bin/ssh -N -T -p {{ stackstorm_broker_ssh_port | int }} \
+  -i {{ stackstorm_broker_state_dir }}/broker.key -o IdentitiesOnly=yes -o BatchMode=yes \
+  -o StrictHostKeyChecking=yes -o UserKnownHostsFile={{ stackstorm_broker_state_dir }}/known_hosts -o GlobalKnownHostsFile=/dev/null \
+  -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+  -o StreamLocalBindUnlink=yes -o StreamLocalBindMask={{ stackstorm_broker_socket_mask }} \
+  -L {{ stackstorm_broker_socket_dir }}/broker.sock:{{ stackstorm_broker_remote_socket }} \
+  {{ stackstorm_broker_ssh_user }}@{{ stackstorm_broker_host }}
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths={{ stackstorm_broker_socket_dir }}
+
+[Install]
+WantedBy=multi-user.target
