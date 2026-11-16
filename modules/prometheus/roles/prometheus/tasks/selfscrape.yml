@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0
+# The service's own row (its job's `service` label is this instance's id) is scraped INSIDE its
+# container at localhost, not through the guest's address: a container reaching the guest's own
+# address arrives on the guest's INPUT chain, which has no rule for it. The `instance` label stays
+# the address the registry gives (a static label wins over the target), so series, dashboards and
+# alerts do not change. Only a plain-http job is rewritten (localhost has no certificate name), and
+# the generator's text is kept byte-for-byte when no job matches (only a matching job re-serialises
+# the file). Input: prometheus_scrape_text (the generated scrape_configs.yml); output: the same fact.
+- name: Find the service's own plain-http jobs in the generated scrape configuration
+  ansible.builtin.set_fact:
+    prometheus_self_jobs: >-
+      {%- set ns = namespace(idx=[]) -%}
+      {%- for j in ((prometheus_scrape_text | from_yaml | default({}, true)).scrape_configs | default([], true)) -%}
+      {%-   set oi = loop.index0 -%}
+      {%-   for sc in (j.static_configs | default([], true)) -%}
+      {%-     if (sc.labels | default({}, true)).service | default('', true) == prometheus_logical_id
+                and (j.scheme | default('http', true)) == 'http' and oi not in ns.idx -%}
+      {%-       set _ = ns.idx.append(oi) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ ns.idx }}
+  no_log: true
+
+- name: Refuse a job of the service's own whose shape is not one static target
+  ansible.builtin.assert:
+    that:
+      - (prometheus_scrape_text | from_yaml).scrape_configs[item].static_configs | length == 1
+      - (prometheus_scrape_text | from_yaml).scrape_configs[item].static_configs[0].targets | default([]) | length == 1
+    fail_msg: >-
+      prometheus: the generated job for this service ({{ prometheus_logical_id }}) must have exactly one
+      static_configs entry with exactly one target to point it at its own container; refusing to guess
+  loop: "{{ prometheus_self_jobs }}"
+  no_log: true
+
+- name: Point the service's own jobs at its own container
+  ansible.builtin.set_fact:
+    prometheus_scrape_text: >-
+      {{ (prometheus_scrape_text | regex_search('\A(#[^\n]*\n)+') | default('', true))
+         ~ ({'scrape_configs': prometheus_scrape_jobs} | to_nice_yaml(indent=2)) }}
+  vars:
+    prometheus_scrape_jobs: >-
+      {%- set ns = namespace(jobs=[]) -%}
+      {%- for j in (prometheus_scrape_text | from_yaml).scrape_configs -%}
+      {%-   if loop.index0 in prometheus_self_jobs -%}
+      {%-     set sc = j.static_configs[0] -%}
+      {%-     set _ = ns.jobs.append(j | combine({'static_configs': [{
+                'targets': ['localhost:' ~ (prometheus_container_port | string)],
+                'labels': (sc.labels | default({}, true)) | combine({'instance': sc.targets[0]})}]})) -%}
+      {%-   else -%}
+      {%-     set _ = ns.jobs.append(j) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ ns.jobs }}
+  when: prometheus_self_jobs | length > 0
+  no_log: true

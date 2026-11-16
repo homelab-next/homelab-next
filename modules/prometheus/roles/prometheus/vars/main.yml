@@ -2,6 +2,8 @@
 # Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
 prometheus_container_config_dir: /etc/prometheus
 prometheus_container_data_dir: /prometheus
+# the port the service listens on INSIDE its container (the published prometheus_port maps to it)
+prometheus_container_port: 9090
 # where the generator's credential paths point (generated scrape_configs name files here)
 prometheus_container_authfiles_dir: /etc/hnx/scrape-credentials
 prometheus_generated_dir: generated

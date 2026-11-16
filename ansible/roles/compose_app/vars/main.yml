@@ -28,6 +28,8 @@ compose_app_sensitive_name_pattern: '(?i)(password|passwd|secret|token|api_?key|
 compose_app_dangerous_caps:
   [ALL, SYS_ADMIN, SYS_MODULE, SYS_RAWIO, SYS_PTRACE, SYS_BOOT, DAC_READ_SEARCH, BPF, PERFMON,
    NET_ADMIN, MAC_ADMIN, MAC_OVERRIDE]
+# an IPv4 CIDR, prefix /16 to /29 (a pinned compose network)
+compose_app_subnet_pattern: '^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(?:1[6-9]|2[0-9])\Z'
 # the only cgroup parent a container may be given: a module role slice (homelabnext.modules.limits
 # names them hnx-<module id>-<host role>.slice, `-` in either written `_`), never system.slice,
 # -.slice or a cgroupfs path that would leave the slice's limits

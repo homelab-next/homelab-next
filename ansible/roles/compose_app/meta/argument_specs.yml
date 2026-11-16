@@ -135,6 +135,13 @@ argument_specs:
           play only that slice is accepted). Starting needs docker's systemd cgroup driver and
           the slice's unit file; with compose_app_start false neither is checked.
         default: "{{ hnx_module_slice | default('') }}"
+      compose_app_network_subnet:
+        type: str
+        description: >-
+          Pin the project's default network to this IPv4 CIDR (prefix /16 to /29), so a host
+          firewall rule keyed on a container's source address stays valid across recreates. Empty:
+          docker picks one. Changing it recreates the network (and its containers).
+        default: ""
   health:
     short_description: Assert every service of the spec has a container and every container is running and healthy.
     options:

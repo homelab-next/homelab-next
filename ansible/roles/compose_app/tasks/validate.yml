@@ -26,6 +26,9 @@
       the name homelabnext.modules.limits gives it), and in a module play its own role's slice
       (hnx_module_slice), never another module's; not {{ compose_app_cgroup_parent | string | truncate(80) | to_json }}
 
+- name: Validate the pinned network subnet (one shared judgement, network_subnet.yml)
+  ansible.builtin.include_tasks: network_subnet.yml
+
 - name: Validate services exist
   ansible.builtin.assert:
     that:

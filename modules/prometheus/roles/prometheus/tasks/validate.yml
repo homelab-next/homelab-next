@@ -50,3 +50,23 @@
       percentages 1-99, a notify logical id and topic, a priority 1-5, a secret:<name> token
       reference, an alert schedule of every minute or every 30 seconds, a read-only mount-point pattern of plain regex characters and a positive number of minutes
   tags: [health, backup, restore, export, upgrade, readiness]
+
+# The pinned compose network is judged in ONE place, compose_app's network_subnet.yml (RFC 1918,
+# /16 to /29, host bits zero, not overlapping the guest's own network or address); a second copy of
+# those rules here would drift from it. Empty is refused: the subnet is required (no default).
+- name: Require the pinned network subnet
+  ansible.builtin.assert:
+    that:
+      - prometheus_network_subnet | string != ''
+    fail_msg: "prometheus_network_subnet is required: a free private /16 to /29 of the site's own (README, The guest's own exporter)"
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: Judge the pinned network subnet with compose_app's rules
+  ansible.builtin.include_role:
+    name: compose_app
+    tasks_from: network_subnet
+    apply:
+      tags: [health, backup, restore, export, upgrade, readiness]
+  vars:
+    compose_app_network_subnet: "{{ prometheus_network_subnet }}"
+  tags: [health, backup, restore, export, upgrade, readiness]

@@ -37,3 +37,8 @@ compose_app_validate_with_docker: true
 # checked: nothing starts).
 compose_app_cgroup_parent: "{{ hnx_module_slice | default('') }}"
 compose_app_start: true
+# Pin the project's default network to this IPv4 CIDR (empty: docker picks one from its pool). A
+# service that must be admitted by a host firewall rule keyed on the container's source address
+# (a container reaching the host's own address arrives on the host's INPUT chain with that source)
+# needs an address that does not move between recreates. Changing it recreates the network.
+compose_app_network_subnet: ""

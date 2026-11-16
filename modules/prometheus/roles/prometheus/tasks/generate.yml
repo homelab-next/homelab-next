@@ -32,6 +32,11 @@
         prometheus_node_text: "{{ lookup('ansible.builtin.file', prometheus_scratch.path ~ '/' ~ prometheus_node_targets_file, rstrip=false) }}"
         prometheus_scrape_auths: "{{ (lookup('ansible.builtin.file', prometheus_scratch.path ~ '/' ~ prometheus_authlist_file) | from_json).credentials }}"
       no_log: true
+    - name: Scrape the service itself inside its own container
+      ansible.builtin.include_tasks:
+        file: selfscrape.yml
+        apply:
+          tags: [health, readiness]
   always:
     - name: Remove the scratch directory
       ansible.builtin.file:

@@ -27,6 +27,10 @@ argument_specs:
         type: int
         description: "Host port (the registry row's port)."
         default: 9090
+      prometheus_network_subnet: &network_subnet
+        type: str
+        description: "IPv4 CIDR (/16 to /29) the container's compose network is pinned to; the guest's firewall_rules admit it to the exporter port, for the scrape of the guest's own exporter."
+        required: true
       prometheus_dir: &dir
         type: path
         description: "The compose project directory."
@@ -183,6 +187,7 @@ argument_specs:
       prometheus_bind: *bind
       prometheus_port: *port
       prometheus_dir: *dir
+      prometheus_network_subnet: *network_subnet
       prometheus_owner: *owner
       prometheus_group: *group
       prometheus_data_root: *data_root
@@ -225,6 +230,7 @@ argument_specs:
       prometheus_bind: *bind
       prometheus_port: *port
       prometheus_dir: *dir
+      prometheus_network_subnet: *network_subnet
       prometheus_owner: *owner
       prometheus_group: *group
       prometheus_data_root: *data_root
@@ -265,6 +271,7 @@ argument_specs:
       prometheus_bind: *bind
       prometheus_port: *port
       prometheus_dir: *dir
+      prometheus_network_subnet: *network_subnet
       prometheus_owner: *owner
       prometheus_group: *group
       prometheus_data_root: *data_root
@@ -310,6 +317,7 @@ argument_specs:
       prometheus_bind: *bind
       prometheus_port: *port
       prometheus_dir: *dir
+      prometheus_network_subnet: *network_subnet
       prometheus_owner: *owner
       prometheus_group: *group
       prometheus_data_root: *data_root
