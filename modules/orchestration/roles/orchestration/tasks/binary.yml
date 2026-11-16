@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: Apache-2.0
+# The controller binary: one release per sha256 under <install dir>/releases/, copied from the
+# control host (never built or downloaded on the guest), hashed where it landed and refused unless it
+# is the pinned one, then switched to through <install dir>/current (the link the unit's command
+# resolves). A failed copy or a wrong hash never touches the release that is running. Releases past
+# orchestration_keep_releases are removed, only directories named as a release, never the current one.
+- name: Create the release directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+    mode: "0755"
+  loop:
+    - "{{ orchestration_install_dir }}"
+    - "{{ orchestration_install_dir }}/bin"
+    - "{{ orchestration_install_dir }}/releases"
+    - "{{ orchestration_release_dir }}"
+
+# The pinned release's file is never written until what is to replace it has been hashed: the
+# incoming copy has its own name, is refused unless it is the pin, and only then renamed over the
+# release (a wrong binary handed to a run never overwrites the one the unit is running).
+- name: Hash the release's binary, when it is there
+  ansible.builtin.stat:
+    path: "{{ orchestration_release_dir }}/controller"
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: orchestration_binary_stat
+
+- name: Replace the release's binary with the pinned one
+  when: not orchestration_binary_stat.stat.exists or orchestration_binary_stat.stat.checksum != orchestration_binary_sha256
+  block:
+    - name: Copy the incoming binary beside it
+      ansible.builtin.copy:
+        src: "{{ orchestration_binary }}"
+        dest: "{{ orchestration_release_dir }}/.controller.incoming"
+        owner: "{{ orchestration_owner }}"
+        group: "{{ orchestration_owner_group }}"
+        mode: "0755"
+    - name: Hash the incoming binary on the host
+      ansible.builtin.stat:
+        path: "{{ orchestration_release_dir }}/.controller.incoming"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: orchestration_incoming_stat
+    # in --check the copy above wrote nothing, so there is no file to hash yet: the pin is checked
+    # on the run that copies it
+    - name: Refuse a binary that is not the pinned one
+      ansible.builtin.assert:
+        that: orchestration_incoming_stat.stat.checksum == orchestration_binary_sha256
+        fail_msg: >-
+          orchestration: {{ orchestration_binary | basename }} hashes to {{ orchestration_incoming_stat.stat.checksum | default('nothing') }}
+          on the host, the pin is {{ orchestration_binary_sha256 }}; the release in use is untouched
+      when: orchestration_incoming_stat.stat.exists or not ansible_check_mode
+    - name: Move it into place (the same directory, so the rename is atomic)
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ orchestration_release_dir }}/.controller.incoming", "{{ orchestration_release_dir }}/controller"]
+      changed_when: true
+      when: orchestration_incoming_stat.stat.exists
+  rescue:
+    - name: Remove the incoming copy (only that file) and stop
+      ansible.builtin.file:
+        path: "{{ orchestration_release_dir }}/.controller.incoming"
+        state: absent
+    - name: Fail with the reason
+      ansible.builtin.fail:
+        msg: "{{ ansible_failed_result.msg | default('the incoming binary was refused') }}"
+
+- name: Keep the release's binary executable and root's
+  ansible.builtin.file:
+    path: "{{ orchestration_release_dir }}/controller"
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+    mode: "0755"
+  when: not ansible_check_mode or orchestration_binary_stat.stat.exists
+
+- name: Switch the current link to this release
+  ansible.builtin.file:
+    src: "{{ orchestration_release_dir }}"
+    dest: "{{ orchestration_install_dir }}/current"
+    state: link
+    force: true
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+  register: orchestration_current_link
+
+- name: Link the command the unit runs
+  ansible.builtin.file:
+    src: ../current/controller
+    dest: "{{ orchestration_bin }}"
+    state: link
+    force: true
+    owner: "{{ orchestration_owner }}"
+    group: "{{ orchestration_owner_group }}"
+
+- name: Find the releases
+  ansible.builtin.find:
+    paths: "{{ orchestration_install_dir }}/releases"
+    file_type: directory
+    recurse: false
+  register: orchestration_releases
+
+- name: Remove the releases past the ones kept (never the current one, never anything but a release directory)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: >-
+    {{ (orchestration_releases.files
+        | rejectattr('path', 'equalto', orchestration_release_dir)
+        | rejectattr('islnk')
+        | selectattr('path', 'match', '^' ~ (orchestration_install_dir ~ '/releases/') | regex_escape ~ '[0-9a-f]{16}\Z')
+        | sort(attribute='mtime', reverse=true) | list)[orchestration_keep_releases | int:] }}
+  loop_control:
+    label: "{{ item.path | basename }}"

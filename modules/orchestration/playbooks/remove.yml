@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Remove: export the store (export_first), stop and disable the unit, delete the unit and the files
+# that hold credentials (the token digests, the events token's environment file, the runner homes'
+# gateway keys). The data root with the export in it, the releases and the rest of the configuration
+# are kept for the operator to archive or delete; the decommission audit (module.yml
+# lifecycle.remove.audit) checks nothing still names the service.
+- name: Remove the orchestration controller
+  hosts: mod_orchestration_server
+  become: true
+  tasks:
+    - name: Export the store first
+      ansible.builtin.include_role:
+        name: orchestration
+        tasks_from: export
+    - name: Stop and disable the unit
+      ansible.builtin.command:
+        argv: ["{{ orchestration_systemctl_cli | default('systemctl') }}", disable, --now, "hnx-{{ orchestration_logical_id }}.service"]
+      changed_when: true
+      failed_when: false
+    - name: Delete the unit
+      ansible.builtin.file:
+        path: "{{ orchestration_systemd_dir | default('/etc/systemd/system') }}/hnx-{{ orchestration_logical_id }}.service"
+        state: absent
+    - name: Delete the files that hold credentials
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ orchestration_config_dir | default('/etc/orchestration') }}/api-tokens.yaml"
+        - "{{ orchestration_config_dir | default('/etc/orchestration') }}/events.env"
+    - name: Reload systemd
+      ansible.builtin.command:
+        argv: ["{{ orchestration_systemctl_cli | default('systemctl') }}", daemon-reload]
+      changed_when: true

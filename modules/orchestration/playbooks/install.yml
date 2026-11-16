@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Install (and converge) the orchestration controller on the guest the site placed the module's
+# `server` role on. The apply path (docs/modules/apply.md) renders its own modules.yml from the
+# selection and does not import this file; it is the module's own entry point, for a lab that runs
+# one module by hand:
+#   ansible-playbook -i <inventory with --selection> modules/orchestration/playbooks/install.yml
+# The role's readiness hook runs first: it refuses an unset secret, a binary that is not the pinned
+# one and an empty profiles directory before anything is written.
+- name: Install the orchestration controller
+  hosts: mod_orchestration_server
+  become: true
+  pre_tasks:
+    - name: Preflight (readiness)
+      ansible.builtin.include_role:
+        name: orchestration
+        tasks_from: readiness
+      tags: [mod_orchestration]
+  roles:
+    - role: orchestration
+      tags: [mod_orchestration]

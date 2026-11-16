@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data store, formats jsonl): <data root>/export/{controller.db, jobs.jsonl,
+# listing.jsonl}; see vars/main.yml orchestration_export_script.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the database and dump its rows (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+  tags: [export]

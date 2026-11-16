@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the store from an export (vars/main.yml orchestration_restore_script): the source is
+# checked first, without writing (owner, modes, the listing, single-link regular files, sizes,
+# sha256, row counts, integrity); then the controller is stopped, the database copied through the
+# descriptor that was opened, hashed and integrity-checked as staged, the stale -wal and -shm
+# removed and the copy renamed into place as the service user; the controller is started again
+# whatever happened, when orchestration_start is true. On start it reconciles what the copy says
+# was running (running becomes failed, admitted becomes queued).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the service user's ids
+      ansible.builtin.command:
+        argv: [id, "{{ item }}", "{{ orchestration_user }}"]
+      register: orchestration_restore_ids
+      changed_when: false
+      loop: ["-u", "-g"]
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: >-
+          {{ ['python3', '-I', '-c', orchestration_restore_script, 'check', orchestration_restore_source,
+              (orchestration_restore_ids.results[0].stdout | trim)] }}
+      changed_when: false
+    - name: Replace the database with the controller stopped
+      block:
+        - name: Stop the controller
+          ansible.builtin.command:
+            argv: ["{{ orchestration_systemctl_cli }}", stop, "{{ orchestration_unit }}"]
+          changed_when: true
+        - name: Copy, verify and install the database
+          ansible.builtin.command:
+            argv: >-
+              {{ ['python3', '-I', '-c', orchestration_restore_script, 'apply', orchestration_restore_source,
+                  orchestration_data_root, (orchestration_restore_ids.results[0].stdout | trim),
+                  (orchestration_restore_ids.results[1].stdout | trim)] }}
+          changed_when: true
+      always:
+        - name: Start the controller again
+          ansible.builtin.command:
+            argv: ["{{ orchestration_systemctl_cli }}", start, "{{ orchestration_unit }}"]
+          changed_when: true
+          when: orchestration_start | bool
+  tags: [restore]

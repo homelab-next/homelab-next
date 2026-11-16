@@ -1,0 +1,105 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+{% macro backend(b, home) -%}
+name: {{ b.name | to_json }}
+home: {{ home | to_json }}
+{% if b.max_concurrent | default(0) | int > 0 %}
+max_concurrent: {{ b.max_concurrent | int }}
+{% endif %}
+{% if b.max_context | default(0) | int > 0 %}
+max_context: {{ b.max_context | int }}
+{% endif %}
+{% if b.weight | default(0) | int > 0 %}
+weight: {{ b.weight | int }}
+{% endif %}
+{% if b.tags | default([]) | length > 0 %}
+tags: {{ b.tags | to_json }}
+{% endif %}
+{% if b.endpoint | default('') != '' %}
+endpoint: {{ b.endpoint | to_json }}
+{% endif %}
+{% if b.health_url | default('') != '' %}
+health_url: {{ b.health_url | to_json }}
+{% endif %}
+{% if b.load_probe_urls | default([]) | length > 0 %}
+load_probe_urls: {{ b.load_probe_urls | to_json }}
+{% endif %}
+needs_interlock: {{ (b.needs_interlock | default(false)) | bool | to_json }}
+{%- endmacro -%}
+# Managed by homelabnext (role orchestration, service {{ orchestration_logical_id }}); local changes are overwritten.
+# docs/orchestration-controller.md, "The controller's configuration". Relative paths are read from
+# this file's directory; every path below is absolute.
+db_path: {{ orchestration_db_path | to_json }}
+http_addr: {{ (orchestration_bind ~ ':' ~ (orchestration_port | int)) | to_json }}
+concurrency: {{ orchestration_concurrency | int }}
+{% if orchestration_backends | selectattr('needs_interlock', 'defined') | selectattr('needs_interlock') | list | length > 0 %}
+lock_path: {{ (orchestration_runtime_dir ~ '/interlock.lock') | to_json }}
+interlock_wait_timeout_seconds: {{ orchestration_interlock_wait_timeout_seconds | int }}
+{% endif %}
+{% if orchestration_orphan_grace_seconds | int != 0 %}
+orphan_grace_seconds: {{ orchestration_orphan_grace_seconds | int }}
+{% endif %}
+runner:
+  kind: exec
+  exec:
+    argv: {{ orchestration_runner_argv | to_json }}
+{% if orchestration_runner_usage_args | length > 0 %}
+    usage_args: {{ orchestration_runner_usage_args | to_json }}
+{% endif %}
+{% if orchestration_runner_toolsets_args | length > 0 %}
+    toolsets_args: {{ orchestration_runner_toolsets_args | to_json }}
+{% endif %}
+{% if orchestration_runner_exit_classes | length > 0 %}
+    exit_classes: {{ orchestration_runner_exit_classes | to_json }}
+{% endif %}
+{% if orchestration_runner_max_response_bytes | int > 0 %}
+    max_response_bytes: {{ orchestration_runner_max_response_bytes | int }}
+{% endif %}
+{% if orchestration_runner_kill_grace_seconds | int > 0 %}
+    kill_grace_seconds: {{ orchestration_runner_kill_grace_seconds | int }}
+{% endif %}
+  timeout_seconds: {{ orchestration_runner_timeout_seconds | int }}
+{% if orchestration_runner_job_timeout_seconds | int > 0 %}
+  job_timeout_seconds: {{ orchestration_runner_job_timeout_seconds | int }}
+{% endif %}
+{% if orchestration_runner_stall_timeout_seconds | int > 0 %}
+  stall_timeout_seconds: {{ orchestration_runner_stall_timeout_seconds | int }}
+{% endif %}
+{% if orchestration_runner_max_turns | int > 0 %}
+  max_turns: {{ orchestration_runner_max_turns | int }}
+{% endif %}
+  run_dir_base: {{ (orchestration_data_root ~ '/runs') | to_json }}
+  env_allowlist: {{ orchestration_runner_env_allowlist | to_json }}
+backends:
+  local:
+    {{ backend(orchestration_backends[0], orchestration_homes_dir ~ '/' ~ orchestration_backends[0].name) | indent(4) }}
+{% if orchestration_backends | length > 1 %}
+  additional:
+{% for b in orchestration_backends[1:] %}
+    - {{ backend(b, orchestration_homes_dir ~ '/' ~ b.name) | indent(6) }}
+{% endfor %}
+{% endif %}
+profiles_dir: {{ orchestration_profiles_dir | to_json }}
+{% if orchestration_grants_catalog_src != '' %}
+grants_catalog: {{ (orchestration_config_dir ~ '/mcp-catalog.yaml') | to_json }}
+{% endif %}
+lessons_disabled: {{ orchestration_lessons_disabled | bool | to_json }}
+prompt_contracts: []
+api_max_unfinished_per_caller: {{ orchestration_api_max_unfinished_per_caller | int }}
+api_auth:
+  enabled: true
+  tokens_file: {{ orchestration_callers_yaml | to_json }}
+{% if orchestration_events_forwarder_url != '' %}
+events:
+  forwarder_url: {{ orchestration_events_forwarder_url | to_json }}
+  source: {{ ('svc:' ~ orchestration_logical_id) | to_json }}
+  token_env: {{ orchestration_events_env_name | to_json }}
+  gateway_tag_prefix: {{ orchestration_gateway_tag_prefix | to_json }}
+{% if orchestration_events_queue_size | int > 0 %}
+  queue_size: {{ orchestration_events_queue_size | int }}
+{% endif %}
+{% else %}
+events:
+  source: {{ ('svc:' ~ orchestration_logical_id) | to_json }}
+  gateway_tag_prefix: {{ orchestration_gateway_tag_prefix | to_json }}
+{% endif %}
+scope: {{ orchestration_scope | to_json }}

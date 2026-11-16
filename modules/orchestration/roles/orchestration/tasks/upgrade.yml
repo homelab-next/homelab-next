@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Validate a binary bump (orchestration_target_binary_sha256) and record it as pending: the target
+# must be a different, well-formed sha256 than the running pin, and the file it names on the control
+# host must hash to it. Nothing is installed here: the playbook exports the store first, then
+# converges with orchestration_binary_sha256 set to the target; a store whose schema must change is
+# refused by the new binary (exit status 3, not restarted) until it is migrated behind a backup
+# (README, "Upgrade").
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Hash the target binary on the control host
+      ansible.builtin.stat:
+        path: "{{ orchestration_binary }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: orchestration_target_stat
+      delegate_to: localhost
+      become: false
+    - name: Refuse a target that is not a different, pinned binary
+      ansible.builtin.assert:
+        that:
+          - orchestration_target_binary_sha256 is match('^[0-9a-f]{64}\Z')
+          - orchestration_target_binary_sha256 != orchestration_binary_sha256
+          - orchestration_target_stat.stat.exists
+          - orchestration_target_stat.stat.checksum == orchestration_target_binary_sha256
+        fail_msg: >-
+          orchestration: the target must be 64 hex that differs from the pin, and
+          {{ orchestration_binary }} (set to the new binary for this run) must hash to it
+    - name: Record the pending bump
+      ansible.builtin.copy:
+        dest: "{{ orchestration_install_dir }}/pending-upgrade.json"
+        content: "{{ {'from': orchestration_binary_sha256, 'to': orchestration_target_binary_sha256} | to_nice_json }}\n"
+        owner: "{{ orchestration_owner }}"
+        group: "{{ orchestration_owner_group }}"
+        mode: "0644"
+  tags: [upgrade]

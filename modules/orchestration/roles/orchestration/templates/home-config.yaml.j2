@@ -1,0 +1,11 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role orchestration): the runner home of backend {{ item.name }}. A session
+# reaches a model only through the gateway: its URL, and the role alias this backend serves
+# (never an engine's address or model id).
+model:
+  base_url: {{ orchestration_gateway_url | to_json }}
+  default: {{ item.role | to_json }}
+{% if item.context_length | default(0) | int > 0 %}
+  context_length: {{ item.context_length | int }}
+{% endif %}
+  api_key: {{ lookup('hnx_secret', orchestration_gateway_key_ref) | to_json }}
