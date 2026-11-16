@@ -1,0 +1,387 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# where the module's files are mounted in the container
+nifi_container_home: /opt/nifi/nifi-current
+nifi_container_tls: /opt/nifi/tls
+nifi_container_port: 9443
+# the product version the health hook expects the service to report
+nifi_product_version: "2.12.0"
+nifi_ref_pattern: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+nifi_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+nifi_url_pattern: '^https?://[A-Za-z0-9.-]+:[0-9]{1,5}\Z'
+nifi_https_url_pattern: '^https://[A-Za-z0-9.-]+:[0-9]{1,5}\Z'
+nifi_issuer_pattern: '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)*\Z'
+nifi_registry_url_pattern: '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)*/?\Z'
+nifi_warehouse_pattern: '^s3://[a-z0-9][a-z0-9-]{1,61}[a-z0-9]/\Z'
+nifi_region_pattern: '^[a-z][a-z0-9-]{1,31}\Z'
+nifi_key_id_pattern: '^GK[0-9a-f]{24,32}\Z'
+nifi_hex64_pattern: '^[0-9a-f]{64}\Z'
+nifi_name_pattern: '^[A-Za-z][A-Za-z0-9._-]{0,62}\Z'
+nifi_user_pattern: '^[A-Za-z][A-Za-z0-9._@-]{0,63}\Z'
+nifi_param_pattern: '^HNX_[A-Z][A-Z0-9_]{0,62}\Z'
+nifi_repo_part_pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z'
+nifi_branch_pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z'
+nifi_registry_path_pattern: '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\Z'
+nifi_heap_pattern: '^[1-9][0-9]{0,4}[mg]\Z'
+nifi_pem_cert_pattern: '(?s)-----BEGIN CERTIFICATE-----.+-----END CERTIFICATE-----'
+nifi_pem_key_pattern: '(?s)-----BEGIN (RSA |EC )?PRIVATE KEY-----.+-----END (RSA |EC )?PRIVATE KEY-----'
+nifi_repository: "{{ nifi_image.split('@')[0].rsplit(':', 1)[0] }}"
+nifi_tag: "{{ nifi_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+nifi_digest: "{{ nifi_image.split('@')[1] | default('') }}"
+# the memory settings in GB, for the sums validate.yml makes (m divides by 1024)
+nifi_heap_gb: "{{ (nifi_heap[:-1] | int) / (1 if nifi_heap.endswith('g') else 1024) }}"
+nifi_mem_limit_gb: "{{ (nifi_mem_limit[:-1] | int) / (1 if nifi_mem_limit.endswith('g') else 1024) }}"
+# the parameters the role always supplies (the fixed names; a site adds more in nifi_extra_parameters)
+nifi_fixed_parameter_names: [HNX_LAKE_S3_ENDPOINT, HNX_LAKE_S3_REGION, HNX_LAKE_WAREHOUSE, HNX_LAKE_CATALOG_URI, HNX_LAKE_QUERY_URL, HNX_EVENTS_URL, HNX_TRUSTSTORE_PATH, HNX_LAKE_S3_ACCESS_KEY, HNX_LAKE_S3_SECRET_KEY, HNX_EVENTS_TOKEN, HNX_TRUSTSTORE_PASSWORD]
+# the configuration files the seed step takes from the image (the others, flow.json.gz, users.xml and
+# authorizations.xml, are the service's state and are never overwritten)
+nifi_seed_files: [nifi.properties, bootstrap.conf, logback.xml, state-management.xml, zookeeper.properties, authorizers.xml, login-identity-providers.xml]
+# the state kept in an export (relative to the data root); conf/nifi.properties and the other seeded files are not
+# (they hold the passwords the container is given) and are rebuilt
+nifi_state_files: [conf/flow.json.gz, conf/users.xml, conf/authorizations.xml]
+nifi_state_dirs: [state, flowfile_repository, content_repository, database_repository]
+nifi_restore_dirs: [state, flowfile_repository, content_repository, database_repository, provenance_repository]
+# builds the keystore (key and chain) and the truststore (the CA) in /tls from its PEM files, with the
+# password read from standard input; the stores are root's with the container's group (0640 and 0644),
+# like the certificate files beside them (run as root; NIFI_GID is the container's group)
+nifi_stores_script: |
+  set -eu
+  umask 027
+  read -r PW
+  export PW
+  openssl pkcs12 -export -inkey /tls/server.key -in /tls/chain.pem -name nifi -out /tls/keystore.p12.new -passout env:PW
+  rm -f /tls/truststore.p12.new
+  keytool -importcert -noprompt -alias lab-ca -file /tls/ca.pem -keystore /tls/truststore.p12.new -storetype PKCS12 -storepass "$PW"
+  chown 0:"$NIFI_GID" /tls/keystore.p12.new /tls/truststore.p12.new
+  chmod 0640 /tls/keystore.p12.new
+  chmod 0644 /tls/truststore.p12.new
+  mv -f /tls/keystore.p12.new /tls/keystore.p12
+  mv -f /tls/truststore.p12.new /tls/truststore.p12
+# the API script (run as python3 -I -c, the command as its first argument and its settings as JSON
+# on its standard input, so no credential is on a command line): wait for the API; converge (the
+# parameter provider and its context, the flow registry client, the smoke flow); health (the
+# authenticated checks); export (every top-level process group's definition); import-flows
+nifi_api_script: |
+  import hashlib, json, os, re, ssl, sys, time, urllib.error, urllib.parse, urllib.request, uuid
+
+  cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+  cfg = json.load(sys.stdin)
+  BASE = cfg["base_url"].rstrip("/") + "/nifi-api"
+  PG_NAME = "hnx-smoke"
+
+
+  def fail(why):
+      sys.exit("nifi: " + why)
+
+
+  class NoRedirect(urllib.request.HTTPRedirectHandler):
+      def redirect_request(self, *a, **k):
+          return None
+
+
+  ctx = ssl.create_default_context(cafile=cfg.get("ca_file") or None)
+  opener = urllib.request.build_opener(
+      NoRedirect, urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx)
+  )
+  TOKEN = None
+
+
+  def call(method, path, body=None, form=None, files=None, auth=True, ok=(200, 201, 202), raw=False):
+      headers, data = {}, None
+      if auth and TOKEN:
+          headers["Authorization"] = "Bearer " + TOKEN
+      if body is not None:
+          data, headers["Content-Type"] = json.dumps(body).encode(), "application/json"
+      elif form is not None:
+          data = urllib.parse.urlencode(form).encode()
+          headers["Content-Type"] = "application/x-www-form-urlencoded"
+      elif files is not None:
+          edge = uuid.uuid4().hex
+          parts = []
+          for k, v in files.items():
+              disp = 'form-data; name="%s"' % k
+              if isinstance(v, tuple):
+                  disp += '; filename="%s"' % v[0]
+                  v = v[1]
+              parts.append(("--%s\r\nContent-Disposition: %s\r\n\r\n" % (edge, disp)).encode() + v.encode() + b"\r\n")
+          data = b"".join(parts) + ("--%s--\r\n" % edge).encode()
+          headers["Content-Type"] = "multipart/form-data; boundary=" + edge
+      req = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
+      try:
+          with opener.open(req, timeout=float(cfg.get("timeout", 30))) as r:
+              status, payload = r.status, r.read(64 << 20)
+      except urllib.error.HTTPError as e:
+          status, payload = e.code, e.read(1 << 16)
+      if status not in ok:
+          fail("%s %s answered HTTP %d: %s" % (method, path, status, payload[:200].decode("utf-8", "replace")))
+      if raw:
+          return status, payload
+      if not payload.strip():
+          return status, None
+      try:
+          return status, json.loads(payload)
+      except ValueError:
+          return status, payload.decode("utf-8", "replace")
+
+
+  def wait_ready():
+      end = time.time() + float(cfg.get("wait_s", 300))
+      while True:
+          try:
+              call("GET", "/flow/about", auth=False, ok=(200, 401, 403))
+              return
+          except (OSError, SystemExit):
+              pass
+          if time.time() > end:
+              fail("the API did not answer in %ss" % cfg.get("wait_s", 300))
+          time.sleep(3)
+
+
+  def login():
+      global TOKEN
+      a = cfg["auth"]
+      if a["mode"] == "bearer":
+          TOKEN = a["token"]
+      elif a["mode"] == "single-user":
+          end = time.time() + 60
+          while True:
+              st, t = call("POST", "/access/token", form={"username": a["username"], "password": a["password"]}, auth=False, ok=(200, 201, 400, 401, 409, 503))
+              if st == 201:
+                  TOKEN = t.strip()
+                  break
+              if st in (400, 401, 409) or time.time() > end:
+                  fail("the sign-in was refused (HTTP %d)" % st)
+              time.sleep(3)
+      else:
+          fail("no API credential (auth mode %r)" % a["mode"])
+      if not TOKEN or any(c in TOKEN for c in "\r\n"):
+          fail("the API credential is not a usable token")
+
+
+  def root_id():
+      return call("GET", "/flow/process-groups/root")[1]["processGroupFlow"]["id"]
+
+
+  def groups(root):
+      flow = call("GET", "/flow/process-groups/%s" % root)[1]["processGroupFlow"]["flow"]
+      return {g["component"]["name"]: g for g in flow["processGroups"]}
+
+
+  def set_state(gid, state):
+      call("PUT", "/flow/process-groups/%s" % gid, body={"id": gid, "state": state, "disconnectedNodeAcknowledged": False})
+
+
+  def group_states(gid):
+      flow = call("GET", "/flow/process-groups/%s" % gid)[1]["processGroupFlow"]["flow"]
+      return [p["component"]["state"] for p in flow["processors"]]
+
+
+  def provider_sync(p):
+      props = {
+          "parameter-group-name": p["group"],
+          "environment-variable-inclusion-strategy": "comma-separated",
+          "include-environment-variables": ",".join(p["env_names"]),
+      }
+      st, lst = call("GET", "/flow/parameter-providers")
+      cur = [x for x in lst["parameterProviders"] if x["component"]["name"] == p["name"]]
+      if cur:
+          pid, rev = cur[0]["id"], cur[0]["revision"]["version"]
+          if any(cur[0]["component"]["properties"].get(k) != v for k, v in props.items()):
+              _, d = call("PUT", "/parameter-providers/%s" % pid, body={"revision": {"version": rev}, "component": {"id": pid, "properties": props}})
+              rev = d["revision"]["version"]
+      else:
+          _, d = call("POST", "/controller/parameter-providers", body={"revision": {"version": 0}, "component": {"name": p["name"], "type": "org.apache.nifi.parameter.EnvironmentVariableParameterProvider", "properties": props}})
+          pid, rev = d["id"], d["revision"]["version"]
+      _, d = call("POST", "/parameter-providers/%s/parameters/fetch-requests" % pid, body={"id": pid, "revision": {"version": rev}})
+      rev = d["revision"]["version"]
+      sens = {n: ("SENSITIVE" if n in p["sensitive"] else "NON_SENSITIVE") for n in p["env_names"]}
+      body = {
+          "id": pid,
+          "parameterProvider": {"id": pid, "revision": {"version": rev}, "component": {"id": pid}},
+          "revision": {"version": rev},
+          "componentRevisions": [{"revision": {"version": rev}, "componentId": pid}],
+          "parameterGroupConfigurations": [{"groupName": p["group"], "parameterContextName": p["context"], "parameterSensitivities": sens, "synchronized": True}],
+      }
+      _, req = call("POST", "/parameter-providers/%s/apply-parameters-requests" % pid, body=body)
+      rid = req["request"]["requestId"]
+      end = time.time() + 120
+      while True:
+          _, st = call("GET", "/parameter-providers/%s/apply-parameters-requests/%s" % (pid, rid))
+          r = st["request"]
+          if r.get("failureReason"):
+              fail("applying the parameters failed: %s" % r["failureReason"])
+          if r.get("complete"):
+              break
+          if time.time() > end:
+              fail("applying the parameters did not finish")
+          time.sleep(1)
+      call("DELETE", "/parameter-providers/%s/apply-parameters-requests/%s" % (pid, rid), ok=(200, 404))
+
+
+  def context_check(p):
+      _, d = call("GET", "/flow/parameter-contexts")
+      ctxs = [c for c in d["parameterContexts"] if c["component"]["name"] == p["context"]]
+      if len(ctxs) != 1:
+          fail("parameter context %s is missing" % p["context"])
+      have = {x["parameter"]["name"]: x["parameter"] for x in ctxs[0]["component"]["parameters"]}
+      bad = sorted(n for n in p["env_names"] if n not in have or not have[n].get("provided") or bool(have[n].get("sensitive")) != (n in p["sensitive"]))
+      if bad:
+          fail("parameter context %s lacks, or holds with the wrong sensitivity: %s" % (p["context"], ", ".join(bad)))
+      return len(p["env_names"])
+
+
+  REG_TYPE = "org.apache.nifi.github.GitHubFlowRegistryClient"
+
+
+  def registry_props(r):
+      props = {
+          "GitHub API URL": r["url"],
+          "Repository Owner": r["owner"],
+          "Repository Name": r["repo"],
+          "Default Branch": r["branch"],
+          "Repository Path": r["path"] or None,
+          "Authentication Type": "PERSONAL_ACCESS_TOKEN" if r.get("token") else "NONE",
+      }
+      if r.get("token"):
+          props["Personal Access Token"] = r["token"]
+      return props
+
+
+  def registry_sync(r, name):
+      _, lst = call("GET", "/controller/registry-clients")
+      cur = [x for x in lst["registries"] if x["component"]["name"] == name]
+      if not r:
+          for x in cur:
+              call("DELETE", "/controller/registry-clients/%s?version=%d" % (x["id"], x["revision"]["version"]))
+          return "absent"
+      props = registry_props(r)
+      if cur:
+          x = cur[0]
+          call("PUT", "/controller/registry-clients/%s" % x["id"], body={"revision": {"version": x["revision"]["version"]}, "component": {"id": x["id"], "name": name, "properties": props}})
+      else:
+          call("POST", "/controller/registry-clients", body={"revision": {"version": 0}, "component": {"name": name, "type": REG_TYPE, "properties": props}})
+      return "present"
+
+
+  def registry_check(r, name):
+      _, lst = call("GET", "/controller/registry-clients")
+      cur = [x for x in lst["registries"] if x["component"]["name"] == name]
+      if bool(r) != bool(cur):
+          fail("the flow registry client %s is %s but %s is configured" % (name, "present" if cur else "absent", "one" if r else "none"))
+      if cur:
+          p = cur[0]["component"]["properties"]
+          for k, v in registry_props(dict(r, token=None)).items():
+              if k != "Authentication Type" and (p.get(k) or None) != v:
+                  fail("the flow registry client %s differs from the configuration at %s" % (name, k))
+      return "present" if cur else "absent"
+
+
+  def upload(root, name, text):
+      call("POST", "/process-groups/%s/process-groups/upload" % root, files={"groupName": name, "positionX": "0", "positionY": "0", "clientId": uuid.uuid4().hex, "disconnectedNodeAcknowledged": "false", "file": (name + ".json", text)})
+
+
+  def smoke_sync(s):
+      root = root_id()
+      g = groups(root)
+      if s["enabled"]:
+          if PG_NAME not in g:
+              upload(root, PG_NAME, s["definition"])
+              g = groups(root)
+          gid = g[PG_NAME]["id"]
+          states = group_states(gid)
+          if not states or any(x != "RUNNING" for x in states):
+              set_state(gid, "RUNNING")
+          return "running"
+      if PG_NAME in g:
+          set_state(g[PG_NAME]["id"], "STOPPED")
+          return "stopped"
+      return "absent"
+
+
+  def smoke_check(s):
+      g = groups(root_id())
+      if not s["enabled"]:
+          return "absent" if PG_NAME not in g else "present"
+      if PG_NAME not in g:
+          fail("the smoke flow %s is not imported" % PG_NAME)
+      states = group_states(g[PG_NAME]["id"])
+      if not states or any(x != "RUNNING" for x in states):
+          fail("the smoke flow has processors that are not running: %s" % sorted(set(states)))
+      return "running"
+
+
+  def flow_import(items):
+      root = root_id()
+      have = groups(root)
+      done = []
+      for name, text in items:
+          if name not in have:
+              upload(root, name, text)
+              done.append(name)
+      return done
+
+
+  def main():
+      if cmd == "wait":
+          wait_ready()
+          print(json.dumps({"ready": True}))
+          return
+      if cmd == "import-flows":
+          wait_ready()
+          login()
+          items = []
+          for row in cfg["flows"]:
+              items.append((row["name"], row["text"]))
+          print(json.dumps({"imported": flow_import(items)}))
+          return
+      wait_ready()
+      st, _ = call("GET", "/flow/about", auth=False, ok=(401, 403, 200))
+      if st == 200:
+          fail("the API answered a request with no credential")
+      login()
+      if cmd == "converge":
+          provider_sync(cfg["provider"])
+          out = {"parameters": context_check(cfg["provider"]), "registry_client": registry_sync(cfg.get("registry"), cfg["registry_name"]), "smoke": smoke_sync(cfg["smoke"])}
+      elif cmd == "health":
+          _, about = call("GET", "/flow/about")
+          if about["about"]["version"] != cfg["expect_version"]:
+              fail("running %s, expected %s" % (about["about"]["version"], cfg["expect_version"]))
+          cs = call("GET", "/flow/cluster/summary")[1]["clusterSummary"]
+          if cs.get("clustered") or cs.get("connectedToCluster"):
+              fail("the node is clustered (a single node is the design): %s" % cs)
+          fs = call("GET", "/flow/status")[1]["controllerStatus"]
+          if fs.get("invalidCount", 0) or fs.get("syncFailureCount", 0):
+              fail("components are invalid or failed to sync: invalid=%s sync-failure=%s" % (fs.get("invalidCount"), fs.get("syncFailureCount")))
+          out = {"version": about["about"]["version"], "clustered": False, "queued": fs.get("flowFilesQueued"), "stopped": fs.get("stoppedCount"), "parameters": context_check(cfg["provider"]), "registry_client": registry_check(cfg.get("registry"), cfg["registry_name"]), "smoke": smoke_check(cfg["smoke"])}
+      elif cmd == "export":
+          dest = os.path.join(cfg["dest"], "flows")
+          os.makedirs(dest, mode=0o700, exist_ok=True)
+          g = groups(root_id())
+          if len(g) < int(cfg.get("expect_min", 0)):
+              fail("%d process groups, at least %s expected" % (len(g), cfg.get("expect_min")))
+          rows, seen = [], set()
+          for name, grp in sorted(g.items()):
+              key = re.sub(r"[^A-Za-z0-9._-]", "_", name) + ".json"
+              if key in seen or key.startswith("."):
+                  fail("process group name %r maps to a duplicate or hidden file" % name)
+              seen.add(key)
+              _, body = call("GET", "/process-groups/%s/download" % grp["id"], raw=True)
+              json.loads(body)
+              tmp = os.path.join(dest, "." + key + ".tmp")
+              with open(tmp, "wb") as f:
+                  f.write(body)
+              os.chmod(tmp, 0o600)
+              os.replace(tmp, os.path.join(dest, key))
+              rows.append({"key": "flows/" + key, "size": len(body), "sha256": hashlib.sha256(body).hexdigest(), "name": name})
+          tmp = os.path.join(dest, ".listing.jsonl.tmp")
+          with open(tmp, "w") as f:
+              f.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+          os.chmod(tmp, 0o600)
+          os.replace(tmp, os.path.join(dest, "listing.jsonl"))
+          out = {"flows": len(rows)}
+      else:
+          fail("unknown command %r" % cmd)
+      print(json.dumps(out, sort_keys=True))
+
+
+  main()

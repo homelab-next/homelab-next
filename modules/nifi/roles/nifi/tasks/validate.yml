@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - nifi_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - nifi_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - nifi_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - nifi_bind != '0.0.0.0'
+      - nifi_port | int >= 1 and nifi_port | int <= 65535
+      - nifi_uid | int >= 1000 and nifi_gid | int >= 1000
+      - nifi_auth in ['single-user', 'oidc']
+      - nifi_single_user_name is match(nifi_user_pattern)
+      - nifi_warehouse is match(nifi_warehouse_pattern)
+      - nifi_region is match(nifi_region_pattern)
+      - >-
+        [nifi_object_store_id, nifi_catalog_id, nifi_query_id, nifi_events_id]
+        | reject('match', '^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z') | list | length == 0
+      - nifi_s3_url == '' or nifi_s3_url is match(nifi_url_pattern)
+      - nifi_catalog_url == '' or nifi_catalog_url is match(nifi_url_pattern)
+      - nifi_query_url == '' or nifi_query_url is match(nifi_url_pattern)
+      - nifi_events_url == '' or nifi_events_url is match(nifi_url_pattern)
+      # the service is reached over TLS only (a bearer token and the sign-in travel to it)
+      - nifi_self_url == '' or nifi_self_url is match(nifi_https_url_pattern)
+      - >-
+        [nifi_tls_cert_ref, nifi_tls_key_ref, nifi_ca_ref, nifi_store_pw_ref, nifi_sensitive_props_key_ref,
+         nifi_user_pw_ref, nifi_oidc_cred_ref, nifi_api_bearer_ref,
+         nifi_s3_access_key_ref, nifi_s3_signing_ref, nifi_events_auth_ref]
+        | reject('match', nifi_ref_pattern) | list | length == 0
+      - >-
+        [nifi_tls_cert_ref, nifi_tls_key_ref, nifi_ca_ref, nifi_store_pw_ref, nifi_sensitive_props_key_ref,
+         nifi_user_pw_ref, nifi_oidc_cred_ref, nifi_api_bearer_ref,
+         nifi_s3_access_key_ref, nifi_s3_signing_ref, nifi_events_auth_ref]
+        | unique | length == 11
+      - nifi_registry_auth_ref == '' or nifi_registry_auth_ref is match(nifi_ref_pattern)
+      # the extra parameters: HNX_ names, secret references, distinct from the fixed ones and from each other
+      - nifi_extra_parameters is mapping
+      - nifi_extra_parameters.keys() | reject('match', nifi_param_pattern) | list | length == 0
+      - nifi_extra_parameters.values() | reject('string') | list | length == 0
+      - nifi_extra_parameters.values() | reject('match', nifi_ref_pattern) | list | length == 0
+      - nifi_extra_parameters.keys() | intersect(nifi_fixed_parameter_names) | length == 0
+      - (nifi_extra_parameters.values() | list + [nifi_s3_access_key_ref, nifi_s3_signing_ref, nifi_events_auth_ref, nifi_store_pw_ref]) | unique | length == (nifi_extra_parameters | length) + 4
+      - nifi_parameter_provider is match(nifi_name_pattern)
+      - nifi_parameter_group is match(nifi_name_pattern)
+      - nifi_parameter_context is match(nifi_name_pattern)
+      - nifi_registry_name is match(nifi_name_pattern)
+      # the sign-in: oidc needs the issuer, the client, an initial administrator and a token for the role's own calls
+      - nifi_auth != 'oidc' or nifi_oidc_issuer_url is match(nifi_issuer_pattern)
+      - nifi_auth != 'oidc' or nifi_oidc_client_id is match(nifi_name_pattern)
+      - nifi_auth != 'oidc' or nifi_initial_admin is match(nifi_user_pattern)
+      - nifi_oidc_claim is match('^[a-z][a-z0-9_]{0,31}\Z')
+      # a flow registry repository: all of url, owner and repository, or none (an empty url is no client)
+      - nifi_registry_url == '' or nifi_registry_url is match(nifi_registry_url_pattern)
+      - nifi_registry_url == '' or (nifi_registry_owner is match(nifi_repo_part_pattern) and nifi_registry_repo is match(nifi_repo_part_pattern))
+      - nifi_registry_branch is match(nifi_branch_pattern)
+      - nifi_registry_path == '' or nifi_registry_path is match(nifi_registry_path_pattern)
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [nifi_dir, nifi_data_root, nifi_export_dir]
+        | reject('match', nifi_path_pattern) | list | length == 0
+      - nifi_restore_source | default('') == '' or nifi_restore_source is match(nifi_path_pattern)
+      - nifi_restore_mode in ['state', 'flows']
+      # memory: the container's limit leaves one GB over the heap for the metaspace, code cache and buffers
+      - nifi_heap is match(nifi_heap_pattern)
+      - nifi_mem_limit is match('^[1-9][0-9]{0,5}[mg]\Z')
+      - nifi_heap_gb | float >= 1
+      - nifi_mem_limit_gb | float >= nifi_heap_gb | float + 1
+      - nifi_smoke_max_age_minutes | int >= 2 and nifi_smoke_max_age_minutes | int <= 1440
+      - nifi_provenance_max_age is match('^[1-9][0-9]{0,3} (hours|days)\Z')
+      - nifi_provenance_max_size is match('^[1-9][0-9]{0,4} (MB|GB)\Z')
+      - nifi_ready_timeout | int >= 30 and nifi_ready_timeout | int <= 3600
+    fail_msg: >-
+      nifi: a registry id, an image pinned by tag and digest, the guest's IPv4 address to publish on
+      (not all interfaces), a port, a container uid and gid of 1000 or more (the image's own is 1000), the sign-in single-user
+      or oidc (oidc with its issuer https URL, client id and initial administrator), the warehouse
+      s3://<bucket>/, an S3 region, eleven distinct secret: references, extra parameters named HNX_*
+      with distinct secret references, a registry repository given whole or not at all (https URL,
+      owner, repository), absolute canonical directories, a heap like 2g with a container limit at
+      least 1 GB above it, and a provenance age like 30 days and size like 10 GB
+  tags: [health, backup, restore, export, upgrade]

@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+- name: Create the project, certificate and data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Refuse a malformed credential before the service sees it (it would not start)
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Write the certificate files and build the stores
+  ansible.builtin.include_tasks: tls.yml
+
+- name: Take the configuration files from the image when they are owed
+  ansible.builtin.include_tasks: seed.yml
+  when: nifi_start | bool
+
+- name: Start the sensitive parameter values empty
+  ansible.builtin.set_fact:
+    nifi_sensitive_values: {}
+
+- name: Read the sensitive parameters' values
+  ansible.builtin.set_fact:
+    nifi_sensitive_values: "{{ nifi_sensitive_values | combine({item.key: lookup('hnx_secret', item.value)}) }}"
+  loop: "{{ nifi_sensitive_parameter_refs | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+
+- name: Read the credentials the service is given in its environment
+  ansible.builtin.set_fact:
+    nifi_secret_env:
+      nifi: >-
+        {{ {'KEYSTORE_PASSWORD': lookup('hnx_secret', nifi_store_pw_ref),
+            'TRUSTSTORE_PASSWORD': lookup('hnx_secret', nifi_store_pw_ref),
+            'NIFI_SENSITIVE_PROPS_KEY': lookup('hnx_secret', nifi_sensitive_props_key_ref)}
+           | combine({'SINGLE_USER_CREDENTIALS_USERNAME': nifi_single_user_name, 'SINGLE_USER_CREDENTIALS_PASSWORD': lookup('hnx_secret', nifi_user_pw_ref)} if nifi_auth == 'single-user' else {})
+           | combine({'NIFI_SECURITY_USER_OIDC_CLIENT_SECRET': lookup('hnx_secret', nifi_oidc_cred_ref)} if nifi_auth == 'oidc' else {})
+           | combine(nifi_sensitive_values) }}
+  no_log: true
+
+- name: Render and start the service
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ nifi_app.compose_app_name }}"
+    compose_app_dir: "{{ nifi_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ nifi_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ nifi_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ nifi_app.compose_app_owner }}"
+    compose_app_group: "{{ nifi_app.compose_app_group }}"
+    compose_app_start: "{{ nifi_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ nifi_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ nifi_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ nifi_secret_env }}"
+  no_log: true
+
+- name: Restart the service to read what changed (the stores, the configuration files)
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ nifi_dir }}/docker-compose.yml", restart, nifi]
+  when: nifi_start | bool and nifi_compose_file.stat.exists and (nifi_tls_changed | bool or nifi_seed_owed | bool)
+  changed_when: true
+
+- name: Wait for the API, then converge the parameter provider, the registry client and the smoke flow
+  ansible.builtin.include_tasks: api.yml
+  vars:
+    nifi_api_command: converge
+  when: nifi_start | bool

@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# The addresses the container's parameters and the hooks use (scheme://host:port): an override, else
+# the registry row, which must be what it is called for.
+- name: Refuse a row that is not what it is called for
+  ansible.builtin.assert:
+    that:
+      - nifi_s3_url != '' or lookup('hnx_registry', nifi_object_store_id, field='capability') == 'object-store'
+      - nifi_catalog_url != '' or lookup('hnx_registry', nifi_catalog_id, field='capability') == 'lake-catalog'
+      - nifi_query_url != '' or lookup('hnx_registry', nifi_query_id, field='capability') == 'lake-query'
+      - nifi_events_url != '' or lookup('hnx_registry', nifi_events_id, field='capability') == 'events'
+    fail_msg: "nifi: the registry rows {{ nifi_object_store_id }}, {{ nifi_catalog_id }}, {{ nifi_query_id }} and {{ nifi_events_id }} must be an object-store, a lake-catalog, a lake-query and an events service"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Resolve the lake's and the bus's addresses
+  ansible.builtin.set_fact:
+    nifi_s3_endpoint: "{{ nifi_s3_url if nifi_s3_url != '' else lookup('hnx_registry', nifi_object_store_id, field='url') }}"
+    nifi_catalog_endpoint: "{{ nifi_catalog_url if nifi_catalog_url != '' else lookup('hnx_registry', nifi_catalog_id, field='url') }}"
+    nifi_query_endpoint: "{{ nifi_query_url if nifi_query_url != '' else lookup('hnx_registry', nifi_query_id, field='url') }}"
+    nifi_events_endpoint: "{{ nifi_events_url if nifi_events_url != '' else lookup('hnx_registry', nifi_events_id, field='url') }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Resolve the service's own address
+  ansible.builtin.set_fact:
+    nifi_self_endpoint: "{{ nifi_self_url if nifi_self_url != '' else lookup('hnx_registry', nifi_logical_id, field='url') }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
+
+- name: Name the hosts a request may be addressed to (the service refuses any other Host header)
+  ansible.builtin.set_fact:
+    nifi_proxy_hosts: "{{ [nifi_self_endpoint | regex_replace('^https://', ''), nifi_bind ~ ':' ~ (nifi_port | int)] | unique | join(',') }}"
+  tags: [readiness, health, backup, restore, export, upgrade]
