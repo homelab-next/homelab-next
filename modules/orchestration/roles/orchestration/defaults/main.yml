@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: Apache-2.0
+# The orchestration controller (modules/orchestration): this repository's own Go controller
+# (orchestrator/cmd/controller, ADR-0026) run as a systemd unit under its own system user, from a
+# binary pinned by sha256 (the model of role hnx_runtime's wheel: copied from the control host,
+# hashed on the host, never built there). Configuration, the job API's token digests, the profiles
+# and the runner homes are rendered from these settings and the site's own files; every real value
+# is the site's (the overlay's group_vars and secret store).
+# orchestration_logical_id (required): the instance's registry id, e.g. orchestrator
+# orchestration_binary (required): absolute path, on the control host, of the controller built for
+#   the guest's architecture (make orchestration-binary prints its sha256)
+# orchestration_binary_sha256 (required): that file's sha256 (64 hex)
+# orchestration_profiles_src (required): absolute path, on the control host, of the directory of
+#   profile files (*.yaml, one agent each); profiles are the site's data, never the module's
+orchestration_bind: "{{ ansible_host }}"
+orchestration_port: 8088
+orchestration_user: hnx-orchestrator
+orchestration_group: hnx-orchestrator
+# create the group and the user (a system account, no login); false when the guest image has them
+orchestration_manage_accounts: true
+# the owner and group of what is root's (the releases, the configuration, the unit); root on a host
+orchestration_owner: root
+orchestration_owner_group: root
+orchestration_install_dir: /opt/hnx-orchestration
+orchestration_keep_releases: 2
+orchestration_config_dir: /etc/orchestration
+# the module's data root on its host (docs/modules/data.md): controller.db (the store, owner-only),
+# runs/ (each session's working directory), usage/ and export/
+orchestration_data_root: /var/lib/hnx-modules/orchestration
+orchestration_systemd_dir: /etc/systemd/system
+orchestration_systemctl_cli: systemctl
+orchestration_start: true
+
+# --- admission and leases, sized by the site ---------------------------------------------------
+# jobs running at once over every backend (one admission pass a second)
+orchestration_concurrency: 2
+# The pool, in order: the first is the local backend, the rest are additional ones. A backend is
+# {name, role?, max_concurrent?, max_context?, weight?, tags?, needs_interlock?, endpoint?,
+# health_url?, load_probe_urls?, context_length?}. max_concurrent caps the sessions on that backend;
+# needs_interlock makes its calls take one exclusive lease (a lock file shared by every backend
+# that needs it, released when the holder's session ends). role is the gateway's model role alias
+# the backend's home names (required with orchestration_gateway_id, forbidden without).
+orchestration_backends:
+  - {name: exec, max_concurrent: 2, needs_interlock: false}
+# seconds a job may wait for the interlock before it falls over to the next backend (0: unbounded)
+orchestration_interlock_wait_timeout_seconds: 0
+# seconds a job may have no live executor before the orphan sweep ends it (0: the controller's 600)
+orchestration_orphan_grace_seconds: 0
+# one submitter's queued, admitted and running jobs at most (a submit past it is a 429)
+orchestration_api_max_unfinished_per_caller: 1000
+
+# --- the runner (exec, the only built-in kind) ---------------------------------------------------
+# The command each session runs, one process per attempt, the prompt on stdin. The default is a
+# smoke session (a shell reading the prompt and answering one fixed line, no model): it proves the
+# queue, the pool, the runner and the store. A real agent's command is the site's, set here with
+# {home}, {run_id}, {usage_path} and {toolsets} as the runner substitutes them.
+orchestration_runner_argv:
+  - /bin/sh
+  - -c
+  - "while read -r line; do :; done; echo hnx-orchestration-ok"
+orchestration_runner_usage_args: []
+orchestration_runner_toolsets_args: []
+# a non-zero exit status -> a runner class name, e.g. {75: concurrency-limited}
+orchestration_runner_exit_classes: {}
+# seconds: one attempt; a job's whole attempt chain (0: twice the attempt); no progress for (0: off)
+orchestration_runner_timeout_seconds: 1800
+orchestration_runner_job_timeout_seconds: 0
+orchestration_runner_stall_timeout_seconds: 0
+orchestration_runner_max_turns: 0
+# a session inherits only these of the controller's environment variables (none by default)
+orchestration_runner_env_allowlist: []
+orchestration_runner_max_response_bytes: 0
+orchestration_runner_kill_grace_seconds: 0
+# systemd bounds over the controller and every session it runs together
+orchestration_tasks_max: 512
+orchestration_memory_max: 2G
+
+# --- profiles, scope, grants ----------------------------------------------------------------------
+# the shared tree's zones: every key present, even when empty
+orchestration_scope:
+  denied_roots: [owner]
+  findings_root: ""
+  shared_write: []
+  reserved_names: []
+# optional: the MCP catalog of kinds (hnx mcp catalog render --client orchestrator), a file on the
+# control host; empty: no profile may declare grants
+orchestration_grants_catalog_src: ""
+# the lessons and runbooks registers are not read: a job's prompt carries none
+orchestration_lessons_disabled: true
+
+# --- the job API's callers (token digests only reach the host) ------------------------------------
+# Each reference resolves to one token of at least 32 characters, no whitespace, written to the host
+# only as its sha256. The scopes are the controller's: jobs (one's own jobs), read (every caller's
+# summaries), metrics (GET /metrics), admin (everything).
+orchestration_admin_ref: secret:orchestration/admin-token
+orchestration_jobs_ref: secret:orchestration/jobs-token
+orchestration_status_ref: secret:orchestration/status-token
+orchestration_metrics_ref: secret:orchestration/metrics-token
+# further callers: [{name, secret, scopes}]
+orchestration_extra_callers: []
+
+# --- telemetry -------------------------------------------------------------------------------------
+# GET /metrics (bearer, metrics scope) is the registry row's metrics block. The job events
+# (agent.job.finished, agent.job.failed) go to a forwarder over HTTP, through the controller's
+# durable outbox; empty: events are off, and the telemetry page sees nothing.
+orchestration_events_forwarder_url: ""
+orchestration_events_ref: secret:orchestration/events-token
+orchestration_events_queue_size: 0
+orchestration_gateway_tag_prefix: "hnx/"
+
+# --- model calls: only through the gateway, found in the registry ----------------------------------
+# The gateway's registry id (e.g. llm-gateway); empty: sessions get no model endpoint. Each backend's
+# home names the gateway's URL and the backend's role alias, never an address or an engine's model id.
+orchestration_gateway_id: ""
+orchestration_gateway_path: /v1
+orchestration_gateway_key_ref: secret:orchestration/gateway-key
+# Explicit opt-in, LAN only, for an events forwarder or a gateway that has no TLS: the bearer token
+# or the gateway key then travels in clear. Off: the role refuses either over plain http.
+orchestration_allow_plain_http: false
+
+# --- health ------------------------------------------------------------------------------------------
+orchestration_health_timeout: 10
+# auto: the round-trip job runs only while the runner is the smoke session above (a real agent's
+# command is never started by a health check); yes and no force it
+orchestration_health_job: auto
+orchestration_health_job_wait_seconds: 60

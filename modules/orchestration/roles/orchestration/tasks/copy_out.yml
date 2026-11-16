@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data store, jsonl): the database copied with SQLite's online backup while the
+# controller runs, then every row dumped, as the service user (setpriv), never as root. A snapshot:
+# every run writes a new one (the hook reports changed).
+- name: Read the service user's ids
+  ansible.builtin.command:
+    argv: [id, "{{ item }}", "{{ orchestration_user }}"]
+  register: orchestration_export_ids
+  changed_when: false
+  check_mode: false
+  loop: ["-u", "-g"]
+  tags: [backup, export]
+
+- name: Read the user the play runs as on the host
+  ansible.builtin.command:
+    argv: [id, -u]
+  register: orchestration_run_uid_export
+  changed_when: false
+  check_mode: false
+  tags: [backup, export]
+
+- name: Copy the database and list it
+  ansible.builtin.command:
+    argv: >-
+      {{ ([] if (orchestration_run_uid_export.stdout | trim) == (orchestration_export_ids.results[0].stdout | trim) else
+          ['setpriv', '--reuid=' ~ (orchestration_export_ids.results[0].stdout | trim),
+           '--regid=' ~ (orchestration_export_ids.results[1].stdout | trim), '--clear-groups', '--no-new-privs'])
+         + ['python3', '-I', '-c', orchestration_export_script, orchestration_db_path, orchestration_export_dir] }}
+  register: orchestration_export
+  changed_when: true
+  tags: [backup, export]

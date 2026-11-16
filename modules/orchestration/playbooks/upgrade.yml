@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a binary bump (the new binary's path in orchestration_binary and its
+# sha256 in orchestration_target_binary_sha256), export the store first, then converge on the new
+# pin (the overlay's orchestration_binary_sha256 becomes the target). A new controller whose store
+# schema must change refuses to start (exit status 3, not restarted); pass -e orchestration_migrate=true
+# to migrate it behind a backup in the same run, with the unit stopped:
+#   ansible-playbook -i <inventory> modules/orchestration/playbooks/upgrade.yml \
+#     -e orchestration_binary=<new binary> -e orchestration_target_binary_sha256=<sha256> [-e orchestration_migrate=true]
+- name: Upgrade the orchestration controller
+  hosts: mod_orchestration_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: orchestration
+        tasks_from: upgrade
+    - name: Export the store before the new binary opens it
+      ansible.builtin.include_role:
+        name: orchestration
+        tasks_from: export
+    - name: Migrate the store behind a backup, with the controller stopped
+      when: orchestration_migrate | default(false) | bool
+      block:
+        - name: Install the new release without starting it
+          ansible.builtin.include_role:
+            name: orchestration
+          vars:
+            orchestration_binary_sha256: "{{ orchestration_target_binary_sha256 }}"
+            orchestration_start: false
+        - name: Stop the controller
+          ansible.builtin.command:
+            argv: ["{{ orchestration_systemctl_cli | default('systemctl') }}", stop, "hnx-{{ orchestration_logical_id }}.service"]
+          changed_when: true
+        - name: Migrate the store (a new backup file in the owner-only export directory)
+          ansible.builtin.command:
+            argv:
+              - setpriv
+              - "--reuid={{ orchestration_user | default('hnx-orchestrator') }}"
+              - "--regid={{ orchestration_group | default('hnx-orchestrator') }}"
+              - --clear-groups
+              - --no-new-privs
+              - "{{ orchestration_install_dir | default('/opt/hnx-orchestration') }}/bin/controller"
+              - serve
+              - --config
+              - "{{ orchestration_config_dir | default('/etc/orchestration') }}/controller.yaml"
+              - --migrate-only
+              - --migrate-backup
+              - "{{ orchestration_data_root | default('/var/lib/hnx-modules/orchestration') }}/export/migrate-{{ ansible_date_time.iso8601_basic_short }}.bak"
+          changed_when: true
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: orchestration
+      vars:
+        orchestration_binary_sha256: "{{ orchestration_target_binary_sha256 }}"

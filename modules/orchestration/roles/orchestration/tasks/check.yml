@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# The controller's own judgement of the rendered set (`controller check`): the configuration, every
+# profile and its grants, the runner and the pool, the token file's ownership and mode. It opens no
+# database, binds no port and reads no secret. Run as the service user (setpriv) when the play runs
+# as anyone else, so it sees the files as the unit will; the unit's ExecStartPre runs it again.
+- name: Read the service user's ids
+  ansible.builtin.command:
+    argv: [id, "{{ item }}", "{{ orchestration_user }}"]
+  register: orchestration_ids
+  changed_when: false
+  check_mode: false
+  loop: ["-u", "-g"]
+  tags: [upgrade]
+
+- name: Read the user the play runs as
+  ansible.builtin.command:
+    argv: [id, -u]
+  register: orchestration_run_uid
+  changed_when: false
+  check_mode: false
+  tags: [upgrade]
+
+- name: The controller accepts the configuration
+  ansible.builtin.command:
+    argv: >-
+      {{ ([] if (orchestration_run_uid.stdout | trim) == (orchestration_ids.results[0].stdout | trim) else
+          ['setpriv', '--reuid=' ~ (orchestration_ids.results[0].stdout | trim),
+           '--regid=' ~ (orchestration_ids.results[1].stdout | trim), '--clear-groups', '--no-new-privs'])
+         + [orchestration_bin, 'check', '--config', orchestration_controller_yaml] }}
+  register: orchestration_check
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+  tags: [upgrade]
