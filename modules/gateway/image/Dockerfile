@@ -2,7 +2,8 @@
 # The lab's own LLM gateway (orchestrator/cmd/gateway, ADR-0038) as an image, built from a
 # checkout of this repository: the module's role runs it from a pinned reference to the image this
 # file builds, so what runs is the code at the commit the image was built from, together with the
-# same go.sum CI's gateway-conformance job built and tested. Build context: the repository root.
+# same go.sum CI's gateway-conformance job built and tested. Build context: the repository root
+# (Dockerfile.dockerignore beside this file sends only orchestrator/ of it).
 #   docker build -f modules/gateway/image/Dockerfile -t hnx-llm-gateway:<version>-<commit> .
 # The gateway imports the standard library only, so the build fetches nothing from a module proxy
 # (GOFLAGS=-mod=readonly, GOTOOLCHAIN=local: the image's Go must be the module's). The runtime image
@@ -20,10 +21,11 @@ RUN mkdir /out \
 RUN mkdir /probe \
  && printf '%s\n' \
       'package main' \
-      'import ("net/http"; "os")' \
+      'import ("net/http"; "os"; "time")' \
       'func main() {' \
       '  if len(os.Args) != 2 { os.Exit(2) }' \
-      '  r, err := http.Get("http://localhost:" + os.Args[1] + "/healthz")' \
+      '  c := http.Client{Timeout: 3 * time.Second}' \
+      '  r, err := c.Get("http://localhost:" + os.Args[1] + "/healthz")' \
       '  if err != nil || r.StatusCode != 200 { os.Exit(1) }' \
       '}' > /probe/main.go \
  && cd /probe && GOFLAGS= go build -trimpath -ldflags='-s -w' -o /out/healthcheck main.go

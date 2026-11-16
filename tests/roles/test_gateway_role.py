@@ -348,7 +348,7 @@ class StandIn:
     /v1/models its role aliases for the admin key."""
 
     def __init__(self, *, open_models=False, roles=None, dropped=0):
-        self.open_models, self.dropped = open_models, dropped
+        self.open_models, self.dropped, self.skipped = open_models, dropped, 0
         self.roles = ROLES if roles is None else roles
         outer = self
 
@@ -367,7 +367,7 @@ class StandIn:
             def do_GET(self):
                 if self.path == "/healthz":
                     return self._send(200, {"status": "ok", "usage_records_dropped": outer.dropped,
-                                            "usage_lines_skipped": 0, "replies_overloaded": 0})  # fmt: skip
+                                            "usage_lines_skipped": outer.skipped, "replies_overloaded": 0})  # fmt: skip
                 if self.path == "/v1/models":
                     auth = self.headers.get("Authorization", "")
                     if auth != f"Bearer {MASTER}" and not outer.open_models:
@@ -525,7 +525,7 @@ def test_restore_checks_the_export_before_it_stops_the_gateway(tmp_path):
         f"import sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n",
     )
     env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
-    (tmp_path / "data" / "state" / "usage.jsonl").write_text("")
+    (tmp_path / "data" / "state" / "usage.jsonl").write_text("previous\n")
     ok = run_role(
         tmp_path,
         ROLE,
@@ -539,8 +539,23 @@ def test_restore_checks_the_export_before_it_stops_the_gateway(tmp_path):
     restored = tmp_path / "data" / "state" / "usage.jsonl"
     assert restored.read_bytes() == (src / "usage.jsonl").read_bytes()
     assert oct(restored.stat().st_mode & 0o777) == "0o600"
-    # a tampered file is refused before anything stops
+    # the file that was there is kept beside it, never overwritten
+    (kept,) = (tmp_path / "data" / "state").glob("usage.jsonl.before-restore-*")
+    assert kept.read_text() == "previous\n"
+    # a second restore the same day refuses (before anything stops) and keeps both files
     log.unlink()
+    again = run_role(
+        tmp_path,
+        ROLE,
+        "restore",
+        {**v, "gateway_restore_source": str(src), "gateway_wait_ready": False},
+        env=env,
+    )
+    assert again.returncode != 0 and "already exists" in again.stdout
+    assert not log.exists() and kept.read_text() == "previous\n"
+    assert restored.read_bytes() == (src / "usage.jsonl").read_bytes()
+    kept.unlink()
+    # a tampered file is refused before anything stops
     with open(src / "usage.jsonl", "ab") as f:
         f.write(b'{"x": 1}\n')
     bad = run_role(
@@ -612,3 +627,96 @@ def test_a_missing_image_is_loaded_from_the_archive_and_a_still_missing_one_refu
         tmp_path, ROLE, "main", {**v, "gateway_image_archive": str(tmp_path / "nope.tar")}, env=env
     )
     assert missing.returncode != 0 and "not a regular file" in missing.stdout
+
+
+# ----------------------------------------------------------------------------- streaming
+
+
+VARS = yaml.safe_load((ROOT / "modules/gateway/roles/gateway/vars/main.yml").read_text())
+BIG = 192 * 1024 * 1024  # a usage file this big; the scripts run under an address-space limit below
+LIMIT = 160 * 1024 * 1024  # smaller than the file: a script that reads it whole cannot finish
+
+
+def _limited():
+    import resource
+
+    resource.setrlimit(resource.RLIMIT_AS, (LIMIT, LIMIT))
+
+
+def _big_usage(path: Path) -> int:
+    row = json.dumps({"caller": "controller", "role": "fast-classifier", "pad": "x" * 400}) + "\n"
+    chunk = row.encode() * 2048
+    n = 0
+    with open(path, "wb") as f:
+        while f.tell() < BIG:
+            f.write(chunk)
+            n += 2048
+    return n
+
+
+def _script(name: str, *args: str):
+    import subprocess
+
+    return subprocess.run(
+        [sys.executable, "-I", "-c", VARS[name], *args],
+        capture_output=True,
+        text=True,
+        preexec_fn=_limited,
+    )
+
+
+def test_export_and_restore_stream_a_usage_file_larger_than_the_memory_they_may_use(tmp_path):
+    state, export = tmp_path / "state", tmp_path / "export"
+    state.mkdir()
+    export.mkdir()
+    lines = _big_usage(state / "usage.jsonl")
+    assert (state / "usage.jsonl").stat().st_size > LIMIT
+    r = _script("gateway_export_script", str(state), str(export))
+    assert r.returncode == 0, r.stderr[-500:]
+    row = json.loads(r.stdout)
+    assert row["lines"] == lines and row["size"] == (state / "usage.jsonl").stat().st_size
+    h = hashlib.sha256()
+    with open(export / "usage.jsonl", "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    assert h.hexdigest() == row["sha256"]
+    uid, gid = str(os.getuid()), str(os.getgid())
+    new = tmp_path / "newstate"
+    new.mkdir()
+    chk = _script("gateway_restore_script", "check", str(export), uid, str(new))
+    assert chk.returncode == 0, chk.stderr[-500:]
+    ap = _script("gateway_restore_script", "apply", str(export), str(new), uid, gid)
+    assert ap.returncode == 0, ap.stderr[-500:]
+    assert (new / "usage.jsonl").stat().st_size == row["size"]
+
+
+def test_a_line_over_the_bound_is_refused_not_buffered(tmp_path):
+    state, export = tmp_path / "state", tmp_path / "export"
+    state.mkdir()
+    export.mkdir()
+    (state / "usage.jsonl").write_bytes(b'{"x": "' + b"y" * (2 * 1024 * 1024) + b'"}\n')
+    r = _script("gateway_export_script", str(state), str(export))
+    assert r.returncode != 0 and "over 1 MiB" in r.stderr
+    assert not (export / "usage.jsonl").exists()
+
+
+def test_health_warns_but_does_not_fail_on_skipped_usage_lines(tmp_path):
+    with StandIn() as srv:
+        srv.skipped = 2
+        r = _health(tmp_path, srv)
+    assert r.returncode == 0, r.stdout
+    assert "WARNING gateway" in r.stdout and "2" in r.stdout
+
+
+def test_the_module_target_has_no_embeddings_feature_until_a_backend_exists():
+    target = yaml.safe_load((ROOT / "modules/gateway/conformance/target.yml").read_text())
+    cap = target["capabilities"]["inference"]
+    assert "embeddings" not in cap["features"] and "embed_model" not in cap["config"]
+    manifest = yaml.safe_load((ROOT / "modules/gateway/module.yml").read_text())
+    assert "embeddings" not in manifest["provides"]["slots"]["inference"]["features"]
+
+
+def test_a_restore_source_that_is_not_a_canonical_absolute_path_is_refused(tmp_path):
+    v = {**gateway_vars(tmp_path), "gateway_restore_source": "relative/../src"}
+    r = run_role(tmp_path, ROLE, "restore", v)
+    assert r.returncode != 0

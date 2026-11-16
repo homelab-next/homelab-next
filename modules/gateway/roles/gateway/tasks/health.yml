@@ -36,6 +36,13 @@
           {{ gateway_health.json.usage_records_dropped | default('?') }} usage records dropped (the
           usage file could not be written fast enough or at all: those calls have no record; check the
           state directory's disk and ownership)
+    - name: Warn about usage lines the gateway could not read at start
+      ansible.builtin.debug:
+        msg: >-
+          WARNING gateway: /healthz reports {{ gateway_health.json.usage_lines_skipped }} unreadable
+          line(s) of the existing usage file (skipped at start; those records are not in the
+          per-caller accounting). Not a failure: look at {{ gateway_usage_file }}.
+      when: gateway_health.json.usage_lines_skipped | default(0) | int > 0
     - name: A call without a key is refused
       ansible.builtin.uri:
         url: "http://{{ gateway_bind }}:{{ gateway_port | int }}/v1/models"

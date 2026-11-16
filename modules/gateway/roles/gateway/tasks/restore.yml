@@ -3,7 +3,7 @@
 # checked first, without writing (owner, modes, the listing, a single-link regular file of the
 # listed size and sha256, every line a record); then the gateway is stopped, the file copied through
 # the descriptor that was opened, hashed again as staged and renamed into place as the container's
-# user; the gateway is started again whatever happened. It replaces the live usage file whole.
+# user; the gateway is started again whatever happened. The previous usage file is kept beside it (usage.jsonl.before-restore-<date>); a file of that name already there refuses the restore.
 - block:
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
@@ -13,7 +13,7 @@
       ansible.builtin.include_tasks: dirs.yml
     - name: Check the export before changing anything
       ansible.builtin.command:
-        argv: "{{ ['python3', '-I', '-c', gateway_restore_script, 'check', gateway_restore_source, (gateway_uid | int | string)] }}"
+        argv: "{{ ['python3', '-I', '-c', gateway_restore_script, 'check', gateway_restore_source, (gateway_uid | int | string), gateway_data_root ~ '/state'] }}"
       changed_when: false
     - name: Replace the usage records with the gateway stopped
       block:
