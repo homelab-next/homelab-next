@@ -13,7 +13,7 @@ VM id or secret value.
 |---|---|
 | Slot | `tts` (provisional: no contract yet; the contract is the one below), stateful (the voice) |
 | Adapter | `homelabnext.conform.adapters.tts:make`, a read-only probe (health, readiness, one render when asked) |
-| Product | `coqui-tts` 0.27.5 (the maintained engine library, MPL-2.0) running the XTTS-v2 model (product version `2.0.0` is the model's major) |
+| Product | `coqui-tts` 0.28.0 (the maintained engine library, MPL-2.0) on `transformers` 5.22 (the 4.x line has open advisories) running the XTTS-v2 model (product version `2.0.0` is the model's major) |
 | Host role | `server`: kind `vm`, baseline `server`, 8 vCPU, 12 GiB, 20 GB; on `cuda` the card is handed over by its CDI device |
 | Role | `tts` (role interface v1), a wrapper of the core `compose_app` |
 | Requires | the voice model in the model store (role `model_store`), the container engine, the operator's recordings in the data root |
@@ -23,8 +23,8 @@ VM id or secret value.
 ## The `/synthesize` contract (unchanged from the old service)
 
 Derived from the archived service (`service/app.py` of the old lab, an XTTS-v2 cloned-voice FastAPI
-app) and its caller (the episode generator), and pinned by `tests/tts/test_tts_contract.py` and
-`tests/tts/test_tts_service.py`:
+app) and its caller (the episode generator), and pinned by `tests/tts_service/test_tts_contract.py` and
+`tests/tts_service/test_tts_service.py`:
 
 * `POST /synthesize`, JSON body `{"text": str, "temperature": float|null, "top_p": float|null}`.
   `text` is required. `temperature` is in (0, 1.5] and `top_p` in (0, 1] when given; a field left out or
@@ -177,12 +177,14 @@ This is a plain reading, not legal advice. The voice recordings are the operator
 ## Facts measured, and what only hardware can show
 
 - Built and run on a CPU workstation (16 cores) from this Dockerfile: image 2.5 GB; the first request
-  after start takes ~30 s (it hashes the 2.1 GB of weights and loads the model), later ones 5.5 s for a
+  after start takes 20-30 s (it hashes the 2.1 GB of weights and loads the model), later ones about 6 s for a
   3 s sentence; the container uses ~3.3 GiB. `GET /ready` before any job is 200 with the model not
   loaded; with `TTS_IDLE_UNLOAD_S=6` the model was unloaded after the idle period (health says
   `model_loaded: false`, memory fell) and the next job reloaded it. The embeddings cache is written by
   the first job (`state/latents-<hash>.pt`, ~130 KB). The cached and uncached paths gave the identical
-  waveform for the same seed.
+  waveform for the same seed. The library rewrites an original-format checkpoint in place after loading it;
+  the service switches `torch.save` off for the load, because the weights are read-only and pinned by
+  sha256 and must never change.
 - **Not provable here** (verify at the first deploy, in order): that `nvidia-smi` inside the container
   (CDI) reports the card's `power.limit` (otherwise the load is refused and `/ready` says why; the fix is
   the container toolkit's spec, not a looser rule); that the CUDA 12.8 build runs on the 64 GB-class CMP

@@ -204,7 +204,7 @@ def test_the_reaper_thread_unloads_by_itself():
 
 
 def make_env(tmp: Path) -> dict[str, str]:
-    from tests.tts.test_tts_gates import make_store
+    from tests.tts_service.test_tts_gates import make_store
 
     model, listing, digest = make_store(tmp)
     voice = tmp / "voice"

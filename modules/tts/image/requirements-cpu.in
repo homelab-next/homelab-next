@@ -4,9 +4,11 @@
 #     --python-platform x86_64-manylinux_2_28 --exclude-newer 2026-11-01T00:00:00Z \
 #     --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
 #     --index-strategy unsafe-best-match -o requirements-cpu.txt
-# then put the extra-index-url line of requirements-cpu.txt back (the compiler drops it).
-coqui-tts[cpu,codec]==0.27.5
-transformers<5
+# then put the extra-index-url line of requirements-cpu.txt back (the compiler drops it) and set setuptools to
+# 84.2.1 (one wheel hash) by hand: torch's metadata asks for <82, which has open advisories, and the install
+# is --no-deps.
+coqui-tts[cpu,codec]==0.28.0
+transformers>=5.10
 torch>=2.11,<2.12
 torchaudio>=2.11,<2.12
 soundfile

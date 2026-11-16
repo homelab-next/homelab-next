@@ -3,7 +3,7 @@
 the publishing pipeline switches over without an edit).
 
 Derived from the archived service (``voice-tts/service/app.py`` of the old lab) and pinned by
-``tests/tts/test_contract.py``:
+``tests/tts_service/test_tts_contract.py``:
 
 * ``POST /synthesize`` takes JSON ``{"text": str, "temperature": float|null, "top_p": float|null}``.
   ``text`` is required; ``temperature`` is in (0, 1.5] and ``top_p`` in (0, 1] when given; a

@@ -219,7 +219,9 @@ def _trusted_checkpoint_loading(torch: Any) -> Iterator[None]:
     """The voice checkpoint is a pickle (``.pth``); torch >= 2.6 refuses it by default.  It is the
     pinned, sha256-verified file of the model store, so loading it is allowed - for the load
     only, and torch.load is put back afterwards.  The audio decoder torchaudio dropped is
-    redirected to soundfile the same way (the old service did both)."""
+    redirected to soundfile the same way (the old service did both).  torch.save is switched off
+    for the load: the library converts an original-format checkpoint in memory and then rewrites
+    the file, which here would change pinned bytes (and fails on the read-only mount)."""
     import soundfile
     import torchaudio
 
@@ -233,10 +235,16 @@ def _trusted_checkpoint_loading(torch: Any) -> Iterator[None]:
         data, rate = soundfile.read(str(path), dtype="float32", always_2d=True)
         return torch.from_numpy(data.T.copy()), rate
 
-    torch.load, torchaudio.load = load, read
+    def no_save(*_a: Any, **_k: Any) -> None:
+        # the library rewrites an original-format checkpoint in place after converting it in
+        # memory; the weights are the model store's, read-only and pinned by sha256: never written
+        return None
+
+    original_save = torch.save
+    torch.load, torchaudio.load, torch.save = load, read, no_save
     try:
         yield
     finally:
-        torch.load = original_load
+        torch.load, torch.save = original_load, original_save
         # torchaudio.load stays the soundfile reader: the references are read at every job
         torchaudio.load = read

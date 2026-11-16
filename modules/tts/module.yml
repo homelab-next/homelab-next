@@ -24,7 +24,7 @@ product:
   display: coqui-tts with the XTTS-v2 voice model
   version: 2.0.0
 licence:
-  # the software (coqui-tts 0.27.5, the engine library) is MPL-2.0. The voice MODEL is not open source:
+  # the software (coqui-tts 0.28.0, the engine library) is MPL-2.0. The voice MODEL is not open source:
   # it is under the Coqui Public Model License 1.0.0, non-commercial use only (README.md, "Licence")
   kind: open-source
   spdx: MPL-2.0
@@ -48,7 +48,7 @@ provides:
     tts:
       adapter: homelabnext.conform.adapters.tts:make
       provisional: true
-      reason: tts has no contract yet; the standard is the contract the old service had (POST /synthesize, a WAV out), probed here read-only (health, readiness) and pinned by tests/tts/test_tts_contract.py
+      reason: tts has no contract yet; the standard is the contract the old service had (POST /synthesize, a WAV out), probed here read-only (health, readiness) and pinned by tests/tts_service/test_tts_contract.py
       migration: {formats: [object-tree], export: role:tts, import: role:tts}
 egress: none
 contributes:
