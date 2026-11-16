@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). Only the HTTPS
+# listener is published. The passwords, the sensitive-props key and the sensitive parameters reach the
+# service through the 0600 env_file (compose_app_secret_env, built in main.yml); what is not secret
+# (the sign-in's names, the lake's endpoints) is the plain environment.
+- name: Resolve the addresses
+  ansible.builtin.include_tasks: endpoint.yml
+
+- name: Name the parameters the service supplies to flows (an environment variable each)
+  ansible.builtin.set_fact:
+    nifi_plain_parameters:
+      HNX_LAKE_S3_ENDPOINT: "{{ nifi_s3_endpoint }}"
+      HNX_LAKE_S3_REGION: "{{ nifi_region }}"
+      HNX_LAKE_WAREHOUSE: "{{ nifi_warehouse }}"
+      HNX_LAKE_CATALOG_URI: "{{ nifi_catalog_endpoint }}"
+      HNX_LAKE_QUERY_URL: "{{ nifi_query_endpoint }}"
+      HNX_EVENTS_URL: "{{ nifi_events_endpoint }}"
+      HNX_TRUSTSTORE_PATH: "{{ nifi_container_tls }}/truststore.p12"
+    nifi_sensitive_parameter_refs: >-
+      {{ dict(nifi_sensitive_fixed_names
+              | zip([nifi_s3_access_key_ref, nifi_s3_signing_ref, nifi_events_auth_ref, nifi_store_pw_ref]))
+         | combine(nifi_extra_parameters) }}
+
+- name: Name the sign-in's settings
+  ansible.builtin.set_fact:
+    nifi_auth_env: >-
+      {{ ({'AUTH': 'tls',
+           'NIFI_SECURITY_USER_AUTHORIZER': 'single-user-authorizer',
+           'NIFI_SECURITY_USER_LOGIN_IDENTITY_PROVIDER': 'single-user-provider'}
+          if nifi_auth == 'single-user' else
+          {'AUTH': 'oidc',
+           'INITIAL_ADMIN_IDENTITY': nifi_initial_admin,
+           'NIFI_SECURITY_USER_OIDC_DISCOVERY_URL': nifi_oidc_issuer_url | regex_replace('/\Z', '') ~ '/.well-known/openid-configuration',
+           'NIFI_SECURITY_USER_OIDC_CLIENT_ID': nifi_oidc_client_id,
+           'NIFI_SECURITY_USER_OIDC_CLAIM_IDENTIFYING_USER': nifi_oidc_claim,
+           'NIFI_SECURITY_USER_OIDC_PREFERRED_JWSALGORITHM': 'RS256',
+           'NIFI_SECURITY_USER_OIDC_CONNECT_TIMEOUT': '5 secs',
+           'NIFI_SECURITY_USER_OIDC_READ_TIMEOUT': '5 secs',
+           'NIFI_SECURITY_USER_OIDC_TRUSTSTORE_STRATEGY': 'NIFI'}) }}
+
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    nifi_app:
+      compose_app_name: nifi
+      compose_app_dir: "{{ nifi_dir }}"
+      compose_app_data_dir: "{{ nifi_data_root }}"
+      compose_app_export_dir: "{{ nifi_export_dir }}"
+      compose_app_owner: "{{ nifi_owner }}"
+      compose_app_group: "{{ nifi_group }}"
+      compose_app_start: "{{ nifi_start }}"
+      compose_app_validate_with_docker: "{{ nifi_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          nifi:
+            image: "{{ nifi_repository }}"
+            tag: "{{ nifi_tag }}"
+            digest: "{{ nifi_digest }}"
+            user: "{{ nifi_uid | int }}:{{ nifi_gid | int }}"
+            environment: >-
+              {{ nifi_plain_parameters | combine(nifi_auth_env) | combine({
+                   'NIFI_WEB_HTTPS_PORT': nifi_container_port | string,
+                   'NIFI_WEB_PROXY_HOST': nifi_proxy_hosts,
+                   'NIFI_JVM_HEAP_INIT': nifi_heap,
+                   'NIFI_JVM_HEAP_MAX': nifi_heap,
+                   'KEYSTORE_PATH': nifi_container_tls ~ '/keystore.p12',
+                   'KEYSTORE_TYPE': 'PKCS12',
+                   'TRUSTSTORE_PATH': nifi_container_tls ~ '/truststore.p12',
+                   'TRUSTSTORE_TYPE': 'PKCS12'}) }}
+            ports: ["{{ nifi_bind }}:{{ nifi_port | int }}:{{ nifi_container_port }}"]
+            volumes:
+              - "{{ nifi_dir }}/tls:{{ nifi_container_tls }}:ro"
+              - "{{ nifi_data_root }}/conf:{{ nifi_container_home }}/conf"
+              - "{{ nifi_data_root }}/state:{{ nifi_container_home }}/state"
+              - "{{ nifi_data_root }}/flowfile_repository:{{ nifi_container_home }}/flowfile_repository"
+              - "{{ nifi_data_root }}/content_repository:{{ nifi_container_home }}/content_repository"
+              - "{{ nifi_data_root }}/database_repository:{{ nifi_container_home }}/database_repository"
+              - "{{ nifi_data_root }}/provenance_repository:{{ nifi_container_home }}/provenance_repository"
+              - "{{ nifi_data_root }}/logs:{{ nifi_container_home }}/logs"
+              - "{{ nifi_data_root }}/smoke:{{ nifi_container_home }}/smoke"
+            mem_limit: "{{ nifi_mem_limit }}"
+            healthcheck:
+              # the service answers nothing without a credential: up and enforcing the sign-in is a 401; it listens on the
+              # container's own address (the start-up script's default), not on localhost, and refuses a Host
+              # header that is not one of the proxy hosts
+              test: [CMD-SHELL, "test \"$(curl -s -k -o /dev/null -w '%{http_code}' -H 'Host: {{ nifi_proxy_hosts.split(',')[0] }}' https://$(hostname):{{ nifi_container_port }}/nifi-api/flow/about)\" = 401"]
+              interval: 30s
+              timeout: 10s
+              retries: 10
+              start_period: 180s
+  tags: [health, backup, restore, export, upgrade]

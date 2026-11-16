@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data state, json): <export dir>/{flows/*.json, state.tar.gz, listing.jsonl}.
+# The flow definitions (every top-level process group, sensitive values blank) come through the API
+# while the service runs; the stored flow, users, component state and repositories are archived with
+# the service STOPPED (a tar of files being written is not a consistent copy) and it is started again
+# whatever happened. Nothing is deleted: each file is written under a temporary name and renamed over
+# the last export's, and the listing, written last, names what this run wrote (a run that stopped half
+# way leaves a listing that no longer matches its files, which a restore refuses). The seeded
+# configuration files (nifi.properties and the others) are left out: they hold the passwords the
+# container is given and are rebuilt from the image. Every run writes a new snapshot (the hook
+# reports changed).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Create the export directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ nifi_owner }}"
+        group: "{{ nifi_group }}"
+        mode: "0700"
+      loop: ["{{ nifi_export_dir }}", "{{ nifi_export_dir }}/flows"]
+    - name: Write the flow definitions through the API (the service must be running)
+      ansible.builtin.include_tasks: api.yml
+      vars:
+        nifi_api_command: export
+        nifi_api_extra: {dest: "{{ nifi_export_dir }}", expect_min: "{{ 1 if nifi_smoke_enabled | bool else 0 }}"}
+    - name: Read which state files exist
+      ansible.builtin.stat:
+        path: "{{ nifi_data_root }}/{{ item }}"
+      loop: "{{ nifi_state_files }}"
+      register: nifi_state_stat
+    - name: Refuse to export a service that has no stored flow
+      ansible.builtin.assert:
+        that: (nifi_state_stat.results | selectattr('item', 'equalto', 'conf/flow.json.gz') | first).stat.exists
+        fail_msg: "nifi: {{ nifi_data_root }}/conf/flow.json.gz does not exist (the service has not run, or its data root is not this one); nothing to export"
+    - name: Name what the archive holds
+      ansible.builtin.set_fact:
+        nifi_archive_members: >-
+          {{ (nifi_state_stat.results | selectattr('stat.exists') | map(attribute='item') | list)
+             + nifi_state_dirs + (['provenance_repository'] if nifi_export_provenance | bool else []) }}
+    - name: Archive the state with the service stopped
+      block:
+        - name: Stop the service
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ nifi_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Archive the state
+          ansible.builtin.command:
+            argv: >-
+              {{ ['tar', '--numeric-owner', '-czf', nifi_export_dir ~ '/.state.tar.gz.tmp', '-C', nifi_data_root] + nifi_archive_members }}
+          changed_when: true
+      always:
+        - name: Start the service again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ nifi_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+          when: nifi_start | bool
+    - name: The archive belongs to the owner, readable by it alone
+      ansible.builtin.file:
+        path: "{{ nifi_export_dir }}/.state.tar.gz.tmp"
+        owner: "{{ nifi_owner }}"
+        group: "{{ nifi_group }}"
+        mode: "0600"
+    - name: Move the archive into place
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ nifi_export_dir }}/.state.tar.gz.tmp", "{{ nifi_export_dir }}/state.tar.gz"]
+      changed_when: true
+    - name: Hash the archive
+      ansible.builtin.stat:
+        path: "{{ nifi_export_dir }}/state.tar.gz"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: nifi_archive
+    - name: Read the flow definitions' listing
+      ansible.builtin.slurp:
+        src: "{{ nifi_export_dir }}/flows/listing.jsonl"
+      register: nifi_flows_listing
+    - name: Write the listing
+      ansible.builtin.copy:
+        dest: "{{ nifi_export_dir }}/listing.jsonl"
+        content: |
+          {{ {'key': 'state.tar.gz', 'size': nifi_archive.stat.size, 'sha256': nifi_archive.stat.checksum} | to_json }}
+          {{ nifi_flows_listing.content | b64decode | trim }}
+        owner: "{{ nifi_owner }}"
+        group: "{{ nifi_group }}"
+        mode: "0600"
+  when: not (ansible_check_mode | bool)
+  tags: [export]

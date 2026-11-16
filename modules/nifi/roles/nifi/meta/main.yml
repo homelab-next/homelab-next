@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+galaxy_info:
+  author: HomelabNext contributors
+  description: "Apache NiFi, the dataflow provider: one compose_app container (single node) with TLS from the lab CA, a single-user or OpenID Connect sign-in, the lake's endpoints and credentials as parameters from secret references, and an optional Git flow registry client."
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+dependencies: []
