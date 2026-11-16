@@ -1,0 +1,694 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: 'Run Apache NiFi as a compose_app: certificate stores, configuration from the image,
+      parameters from secret references, then converge the registry client and the smoke flow.'
+    options:
+      nifi_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dataflow).
+        required: true
+      nifi_image: &id001
+        type: str
+        description: repository:tag@sha256:<digest> of the NiFi image (2.12.0, published 2026-09-14).
+        default: docker.io/apache/nifi:2.12.0@sha256:6f7f2840dbf178c6dd3fa13435b9b358f3be3c6fb7417de467a35a267f4d28ad
+      nifi_bind: &id002
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      nifi_port: &id003
+        type: int
+        description: Host port (the registry row's port); the query engine on the same guest uses 8443.
+        default: 9443
+      nifi_dir: &id004
+        type: path
+        description: The compose project directory (the certificate files and stores are under tls/).
+        default: /opt/compose/nifi
+      nifi_data_root: &id005
+        type: path
+        description: 'The data root on the host: conf/, state/, the four repositories, logs/ and smoke/
+          (each mounted in the container).'
+        default: /var/lib/hnx-modules/nifi
+      nifi_export_dir: &id006
+        type: path
+        description: Where the exit copy is written (flows/, state.tar.gz, listing.jsonl).
+        default: /var/backups/hnx-modules/nifi/export
+      nifi_owner: &id007
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      nifi_group: &id008
+        type: str
+        description: 'Group of the compose project and the files the container reads: the container''s
+          gid.'
+        default: '{{ nifi_gid }}'
+      nifi_uid: &id009
+        type: int
+        description: 'The container''s user id: the image''s own, 1000 (its installation is readable by
+          that id alone).'
+        default: 1000
+      nifi_gid: &id010
+        type: int
+        description: 'The container''s group id: the image''s own, 1000.'
+        default: 1000
+      nifi_heap: &id011
+        type: str
+        description: JVM heap, initial and maximum (for example 2g).
+        default: 2g
+      nifi_mem_limit: &id012
+        type: str
+        description: The container's memory limit, at least 1 GB over the heap.
+        default: 4g
+      nifi_auth: &id013
+        type: str
+        description: 'The sign-in: single-user (its own user, the default) or oidc (OpenID Connect against
+          the identity provider).'
+        default: single-user
+      nifi_single_user_name: &id014
+        type: str
+        description: The single sign-in user.
+        default: admin
+      nifi_user_pw_ref: &id015
+        type: str
+        description: 'secret: reference of the single user''s password (12 to 128 characters).'
+        default: secret:nifi/single-user-password
+      nifi_oidc_issuer_url: &id016
+        type: str
+        description: The identity provider's issuer URL (https://<name>/realms/<realm>); required with
+          oidc.
+        default: ''
+      nifi_oidc_client_id: &id017
+        type: str
+        description: The identity provider's client id for this service; required with oidc.
+        default: ''
+      nifi_oidc_cred_ref: &id018
+        type: str
+        description: 'secret: reference of that client''s secret.'
+        default: secret:nifi/oidc-client-secret
+      nifi_oidc_claim: &id019
+        type: str
+        description: The claim whose value names the person.
+        default: preferred_username
+      nifi_initial_admin: &id020
+        type: str
+        description: The first administrator's identity (the value of that claim); required with oidc.
+        default: ''
+      nifi_api_bearer_ref: &id021
+        type: str
+        description: 'secret: reference of a bearer token the service accepts, for the role''s own API
+          calls with oidc.'
+        default: secret:nifi/api-token
+      nifi_tls_cert_ref: &id022
+        type: str
+        description: 'secret: reference of the server certificate (PEM, with its chain).'
+        default: secret:nifi/tls-cert
+      nifi_tls_key_ref: &id023
+        type: str
+        description: 'secret: reference of the certificate''s private key (PEM).'
+        default: secret:nifi/tls-key
+      nifi_ca_ref: &id024
+        type: str
+        description: 'secret: reference of the lab CA''s certificate (PEM).'
+        default: secret:nifi/ca
+      nifi_store_pw_ref: &id025
+        type: str
+        description: 'secret: reference of the keystore and truststore password (16 to 128 characters).'
+        default: secret:nifi/store-password
+      nifi_sensitive_props_key_ref: &id026
+        type: str
+        description: 'secret: reference of the key that encrypts sensitive values in the stored flow (12
+          or more characters).'
+        default: secret:nifi/sensitive-props-key
+      nifi_self_url: &id027
+        type: str
+        description: The service's own address (https://host:port) for the hooks; empty resolves the row
+          of nifi_logical_id from the registry.
+        default: ''
+      nifi_object_store_id: &id028
+        type: str
+        description: The object store's registry id; its url is resolved from the registry.
+        default: object-store
+      nifi_s3_url: &id029
+        type: str
+        description: 'scheme://host:port of the object store, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      nifi_catalog_id: &id030
+        type: str
+        description: The lake catalog's registry id.
+        default: lake-catalog
+      nifi_catalog_url: &id031
+        type: str
+        description: 'scheme://host:port of the catalog, overriding the registry (empty: resolve it).'
+        default: ''
+      nifi_query_id: &id032
+        type: str
+        description: The lake query engine's registry id.
+        default: lake-query
+      nifi_query_url: &id033
+        type: str
+        description: 'scheme://host:port of the query engine, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      nifi_events_id: &id034
+        type: str
+        description: The events service's registry id.
+        default: events
+      nifi_events_url: &id035
+        type: str
+        description: 'scheme://host:port of the events forwarder, overriding the registry (empty: resolve
+          it).'
+        default: ''
+      nifi_warehouse: &id036
+        type: str
+        description: The warehouse, fixed by the tables' metadata (s3://<bucket>/).
+        required: true
+      nifi_region: &id037
+        type: str
+        description: The S3 region flows sign with.
+        required: true
+      nifi_s3_access_key_ref: &id038
+        type: str
+        description: 'secret: reference of the lake key''s id (supplied to flows as a sensitive parameter).'
+        default: secret:nifi/s3-access-key
+      nifi_s3_signing_ref: &id039
+        type: str
+        description: 'secret: reference of the lake key''s secret (supplied to flows as a sensitive parameter).'
+        default: secret:nifi/s3-secret-key
+      nifi_events_auth_ref: &id040
+        type: str
+        description: 'secret: reference of the events forwarder credential, the whole Authorization header
+          value (a sensitive parameter).'
+        default: secret:nifi/events-token
+      nifi_extra_parameters: &id041
+        type: dict
+        description: 'More sensitive parameters a site''s flows read: HNX_* parameter name to secret:
+          reference.'
+        default: {}
+      nifi_parameter_provider: &id042
+        type: str
+        description: Name of the parameter provider the role keeps (it reads the container's environment).
+        default: hnx-environment
+      nifi_parameter_group: &id043
+        type: str
+        description: The provider's parameter group.
+        default: hnx
+      nifi_parameter_context: &id044
+        type: str
+        description: The parameter context the group fills (flows bind to it by name).
+        default: hnx-lake
+      nifi_registry_name: &id045
+        type: str
+        description: Name of the flow registry client.
+        default: hnx-flows
+      nifi_registry_url: &id046
+        type: str
+        description: API URL of the Git host for the flow registry client (https); empty means no client.
+        default: ''
+      nifi_registry_owner: &id047
+        type: str
+        description: Owner (user or organisation) of the flows repository.
+        default: ''
+      nifi_registry_repo: &id048
+        type: str
+        description: Name of the flows repository.
+        default: ''
+      nifi_registry_branch: &id049
+        type: str
+        description: Default branch.
+        default: main
+      nifi_registry_path: &id050
+        type: str
+        description: Directory of the repository the flows live in.
+        default: flows
+      nifi_registry_auth_ref: &id051
+        type: str
+        description: 'secret: reference of the repository access token; empty means no authentication.'
+        default: ''
+      nifi_smoke_enabled: &id052
+        type: bool
+        description: Run the smoke flow (a process group that writes one file a minute) that health reads.
+        default: true
+      nifi_smoke_max_age_minutes: &id053
+        type: int
+        description: How old the smoke flow's file may be before health fails.
+        default: 5
+      nifi_provenance_max_age: &id054
+        type: str
+        description: How long provenance is kept (for example 30 days).
+        default: 30 days
+      nifi_provenance_max_size: &id055
+        type: str
+        description: The provenance repository's size cap (for example 10 GB).
+        default: 10 GB
+      nifi_export_provenance: &id056
+        type: bool
+        description: Include the provenance repository in the exit copy (large; rebuilt as flows run).
+        default: false
+      nifi_start: &id057
+        type: bool
+        description: Start the service (false renders the files only).
+        default: true
+      nifi_validate_with_docker: &id058
+        type: bool
+        description: Validate the rendered compose file with docker compose config.
+        default: true
+      nifi_ready_timeout: &id059
+        type: int
+        description: Seconds to wait for the API after a start.
+        default: 420
+      nifi_health_timeout: &id060
+        type: int
+        description: Seconds each probe waits.
+        default: 30
+      nifi_restore_mode: &id061
+        type: str
+        description: state (the archive, with the service stopped) or flows (import the portable definitions
+          by name).
+        default: state
+  readiness:
+    short_description: Fail unless the container engine, every credential and the lake and bus dependencies
+      are ready.
+    options:
+      nifi_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dataflow).
+        required: true
+      nifi_image: *id001
+      nifi_bind: *id002
+      nifi_port: *id003
+      nifi_dir: *id004
+      nifi_data_root: *id005
+      nifi_export_dir: *id006
+      nifi_owner: *id007
+      nifi_group: *id008
+      nifi_uid: *id009
+      nifi_gid: *id010
+      nifi_heap: *id011
+      nifi_mem_limit: *id012
+      nifi_auth: *id013
+      nifi_single_user_name: *id014
+      nifi_user_pw_ref: *id015
+      nifi_oidc_issuer_url: *id016
+      nifi_oidc_client_id: *id017
+      nifi_oidc_cred_ref: *id018
+      nifi_oidc_claim: *id019
+      nifi_initial_admin: *id020
+      nifi_api_bearer_ref: *id021
+      nifi_tls_cert_ref: *id022
+      nifi_tls_key_ref: *id023
+      nifi_ca_ref: *id024
+      nifi_store_pw_ref: *id025
+      nifi_sensitive_props_key_ref: *id026
+      nifi_self_url: *id027
+      nifi_object_store_id: *id028
+      nifi_s3_url: *id029
+      nifi_catalog_id: *id030
+      nifi_catalog_url: *id031
+      nifi_query_id: *id032
+      nifi_query_url: *id033
+      nifi_events_id: *id034
+      nifi_events_url: *id035
+      nifi_warehouse: *id036
+      nifi_region: *id037
+      nifi_s3_access_key_ref: *id038
+      nifi_s3_signing_ref: *id039
+      nifi_events_auth_ref: *id040
+      nifi_extra_parameters: *id041
+      nifi_parameter_provider: *id042
+      nifi_parameter_group: *id043
+      nifi_parameter_context: *id044
+      nifi_registry_name: *id045
+      nifi_registry_url: *id046
+      nifi_registry_owner: *id047
+      nifi_registry_repo: *id048
+      nifi_registry_branch: *id049
+      nifi_registry_path: *id050
+      nifi_registry_auth_ref: *id051
+      nifi_smoke_enabled: *id052
+      nifi_smoke_max_age_minutes: *id053
+      nifi_provenance_max_age: *id054
+      nifi_provenance_max_size: *id055
+      nifi_export_provenance: *id056
+      nifi_start: *id057
+      nifi_validate_with_docker: *id058
+      nifi_ready_timeout: *id059
+      nifi_health_timeout: *id060
+      nifi_restore_mode: *id061
+  health:
+    short_description: Fail unless the container is healthy, the API refuses an anonymous request and
+      reports the expected single node, and the smoke flow runs.
+    options:
+      nifi_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dataflow).
+        required: true
+      nifi_image: *id001
+      nifi_bind: *id002
+      nifi_port: *id003
+      nifi_dir: *id004
+      nifi_data_root: *id005
+      nifi_export_dir: *id006
+      nifi_owner: *id007
+      nifi_group: *id008
+      nifi_uid: *id009
+      nifi_gid: *id010
+      nifi_heap: *id011
+      nifi_mem_limit: *id012
+      nifi_auth: *id013
+      nifi_single_user_name: *id014
+      nifi_user_pw_ref: *id015
+      nifi_oidc_issuer_url: *id016
+      nifi_oidc_client_id: *id017
+      nifi_oidc_cred_ref: *id018
+      nifi_oidc_claim: *id019
+      nifi_initial_admin: *id020
+      nifi_api_bearer_ref: *id021
+      nifi_tls_cert_ref: *id022
+      nifi_tls_key_ref: *id023
+      nifi_ca_ref: *id024
+      nifi_store_pw_ref: *id025
+      nifi_sensitive_props_key_ref: *id026
+      nifi_self_url: *id027
+      nifi_object_store_id: *id028
+      nifi_s3_url: *id029
+      nifi_catalog_id: *id030
+      nifi_catalog_url: *id031
+      nifi_query_id: *id032
+      nifi_query_url: *id033
+      nifi_events_id: *id034
+      nifi_events_url: *id035
+      nifi_warehouse: *id036
+      nifi_region: *id037
+      nifi_s3_access_key_ref: *id038
+      nifi_s3_signing_ref: *id039
+      nifi_events_auth_ref: *id040
+      nifi_extra_parameters: *id041
+      nifi_parameter_provider: *id042
+      nifi_parameter_group: *id043
+      nifi_parameter_context: *id044
+      nifi_registry_name: *id045
+      nifi_registry_url: *id046
+      nifi_registry_owner: *id047
+      nifi_registry_repo: *id048
+      nifi_registry_branch: *id049
+      nifi_registry_path: *id050
+      nifi_registry_auth_ref: *id051
+      nifi_smoke_enabled: *id052
+      nifi_smoke_max_age_minutes: *id053
+      nifi_provenance_max_age: *id054
+      nifi_provenance_max_size: *id055
+      nifi_export_provenance: *id056
+      nifi_start: *id057
+      nifi_validate_with_docker: *id058
+      nifi_ready_timeout: *id059
+      nifi_health_timeout: *id060
+      nifi_restore_mode: *id061
+  backup:
+    short_description: Write the backup manifest naming the data root.
+    options:
+      nifi_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dataflow).
+        required: true
+      nifi_image: *id001
+      nifi_bind: *id002
+      nifi_port: *id003
+      nifi_dir: *id004
+      nifi_data_root: *id005
+      nifi_export_dir: *id006
+      nifi_owner: *id007
+      nifi_group: *id008
+      nifi_uid: *id009
+      nifi_gid: *id010
+      nifi_heap: *id011
+      nifi_mem_limit: *id012
+      nifi_auth: *id013
+      nifi_single_user_name: *id014
+      nifi_user_pw_ref: *id015
+      nifi_oidc_issuer_url: *id016
+      nifi_oidc_client_id: *id017
+      nifi_oidc_cred_ref: *id018
+      nifi_oidc_claim: *id019
+      nifi_initial_admin: *id020
+      nifi_api_bearer_ref: *id021
+      nifi_tls_cert_ref: *id022
+      nifi_tls_key_ref: *id023
+      nifi_ca_ref: *id024
+      nifi_store_pw_ref: *id025
+      nifi_sensitive_props_key_ref: *id026
+      nifi_self_url: *id027
+      nifi_object_store_id: *id028
+      nifi_s3_url: *id029
+      nifi_catalog_id: *id030
+      nifi_catalog_url: *id031
+      nifi_query_id: *id032
+      nifi_query_url: *id033
+      nifi_events_id: *id034
+      nifi_events_url: *id035
+      nifi_warehouse: *id036
+      nifi_region: *id037
+      nifi_s3_access_key_ref: *id038
+      nifi_s3_signing_ref: *id039
+      nifi_events_auth_ref: *id040
+      nifi_extra_parameters: *id041
+      nifi_parameter_provider: *id042
+      nifi_parameter_group: *id043
+      nifi_parameter_context: *id044
+      nifi_registry_name: *id045
+      nifi_registry_url: *id046
+      nifi_registry_owner: *id047
+      nifi_registry_repo: *id048
+      nifi_registry_branch: *id049
+      nifi_registry_path: *id050
+      nifi_registry_auth_ref: *id051
+      nifi_smoke_enabled: *id052
+      nifi_smoke_max_age_minutes: *id053
+      nifi_provenance_max_age: *id054
+      nifi_provenance_max_size: *id055
+      nifi_export_provenance: *id056
+      nifi_start: *id057
+      nifi_validate_with_docker: *id058
+      nifi_ready_timeout: *id059
+      nifi_health_timeout: *id060
+      nifi_restore_mode: *id061
+  restore:
+    short_description: Restore the state archive (stopped service) or import the portable flow definitions
+      from an export.
+    options:
+      nifi_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dataflow).
+        required: true
+      nifi_image: *id001
+      nifi_bind: *id002
+      nifi_port: *id003
+      nifi_dir: *id004
+      nifi_data_root: *id005
+      nifi_export_dir: *id006
+      nifi_owner: *id007
+      nifi_group: *id008
+      nifi_uid: *id009
+      nifi_gid: *id010
+      nifi_heap: *id011
+      nifi_mem_limit: *id012
+      nifi_auth: *id013
+      nifi_single_user_name: *id014
+      nifi_user_pw_ref: *id015
+      nifi_oidc_issuer_url: *id016
+      nifi_oidc_client_id: *id017
+      nifi_oidc_cred_ref: *id018
+      nifi_oidc_claim: *id019
+      nifi_initial_admin: *id020
+      nifi_api_bearer_ref: *id021
+      nifi_tls_cert_ref: *id022
+      nifi_tls_key_ref: *id023
+      nifi_ca_ref: *id024
+      nifi_store_pw_ref: *id025
+      nifi_sensitive_props_key_ref: *id026
+      nifi_self_url: *id027
+      nifi_object_store_id: *id028
+      nifi_s3_url: *id029
+      nifi_catalog_id: *id030
+      nifi_catalog_url: *id031
+      nifi_query_id: *id032
+      nifi_query_url: *id033
+      nifi_events_id: *id034
+      nifi_events_url: *id035
+      nifi_warehouse: *id036
+      nifi_region: *id037
+      nifi_s3_access_key_ref: *id038
+      nifi_s3_signing_ref: *id039
+      nifi_events_auth_ref: *id040
+      nifi_extra_parameters: *id041
+      nifi_parameter_provider: *id042
+      nifi_parameter_group: *id043
+      nifi_parameter_context: *id044
+      nifi_registry_name: *id045
+      nifi_registry_url: *id046
+      nifi_registry_owner: *id047
+      nifi_registry_repo: *id048
+      nifi_registry_branch: *id049
+      nifi_registry_path: *id050
+      nifi_registry_auth_ref: *id051
+      nifi_smoke_enabled: *id052
+      nifi_smoke_max_age_minutes: *id053
+      nifi_provenance_max_age: *id054
+      nifi_provenance_max_size: *id055
+      nifi_export_provenance: *id056
+      nifi_start: *id057
+      nifi_validate_with_docker: *id058
+      nifi_ready_timeout: *id059
+      nifi_health_timeout: *id060
+      nifi_restore_mode: *id061
+      nifi_restore_source:
+        type: path
+        description: Directory holding an export (listing.jsonl, state.tar.gz, flows/).
+        required: true
+  upgrade:
+    short_description: Validate an image bump (tag and digest) and record it as pending.
+    options:
+      nifi_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dataflow).
+        required: true
+      nifi_image: *id001
+      nifi_bind: *id002
+      nifi_port: *id003
+      nifi_dir: *id004
+      nifi_data_root: *id005
+      nifi_export_dir: *id006
+      nifi_owner: *id007
+      nifi_group: *id008
+      nifi_uid: *id009
+      nifi_gid: *id010
+      nifi_heap: *id011
+      nifi_mem_limit: *id012
+      nifi_auth: *id013
+      nifi_single_user_name: *id014
+      nifi_user_pw_ref: *id015
+      nifi_oidc_issuer_url: *id016
+      nifi_oidc_client_id: *id017
+      nifi_oidc_cred_ref: *id018
+      nifi_oidc_claim: *id019
+      nifi_initial_admin: *id020
+      nifi_api_bearer_ref: *id021
+      nifi_tls_cert_ref: *id022
+      nifi_tls_key_ref: *id023
+      nifi_ca_ref: *id024
+      nifi_store_pw_ref: *id025
+      nifi_sensitive_props_key_ref: *id026
+      nifi_self_url: *id027
+      nifi_object_store_id: *id028
+      nifi_s3_url: *id029
+      nifi_catalog_id: *id030
+      nifi_catalog_url: *id031
+      nifi_query_id: *id032
+      nifi_query_url: *id033
+      nifi_events_id: *id034
+      nifi_events_url: *id035
+      nifi_warehouse: *id036
+      nifi_region: *id037
+      nifi_s3_access_key_ref: *id038
+      nifi_s3_signing_ref: *id039
+      nifi_events_auth_ref: *id040
+      nifi_extra_parameters: *id041
+      nifi_parameter_provider: *id042
+      nifi_parameter_group: *id043
+      nifi_parameter_context: *id044
+      nifi_registry_name: *id045
+      nifi_registry_url: *id046
+      nifi_registry_owner: *id047
+      nifi_registry_repo: *id048
+      nifi_registry_branch: *id049
+      nifi_registry_path: *id050
+      nifi_registry_auth_ref: *id051
+      nifi_smoke_enabled: *id052
+      nifi_smoke_max_age_minutes: *id053
+      nifi_provenance_max_age: *id054
+      nifi_provenance_max_size: *id055
+      nifi_export_provenance: *id056
+      nifi_start: *id057
+      nifi_validate_with_docker: *id058
+      nifi_ready_timeout: *id059
+      nifi_health_timeout: *id060
+      nifi_restore_mode: *id061
+      nifi_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the image to move to (the same repository, not
+          older).
+        required: true
+      nifi_allow_same_tag_rebuild:
+        type: bool
+        description: Accept a target with the same tag as the running image but another digest (a
+          rebuilt image); refused unless set.
+        default: false
+  export:
+    short_description: Write the flow definitions and a stopped-service archive of the state, with a listing
+      of sizes and hashes.
+    options:
+      nifi_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. dataflow).
+        required: true
+      nifi_image: *id001
+      nifi_bind: *id002
+      nifi_port: *id003
+      nifi_dir: *id004
+      nifi_data_root: *id005
+      nifi_export_dir: *id006
+      nifi_owner: *id007
+      nifi_group: *id008
+      nifi_uid: *id009
+      nifi_gid: *id010
+      nifi_heap: *id011
+      nifi_mem_limit: *id012
+      nifi_auth: *id013
+      nifi_single_user_name: *id014
+      nifi_user_pw_ref: *id015
+      nifi_oidc_issuer_url: *id016
+      nifi_oidc_client_id: *id017
+      nifi_oidc_cred_ref: *id018
+      nifi_oidc_claim: *id019
+      nifi_initial_admin: *id020
+      nifi_api_bearer_ref: *id021
+      nifi_tls_cert_ref: *id022
+      nifi_tls_key_ref: *id023
+      nifi_ca_ref: *id024
+      nifi_store_pw_ref: *id025
+      nifi_sensitive_props_key_ref: *id026
+      nifi_self_url: *id027
+      nifi_object_store_id: *id028
+      nifi_s3_url: *id029
+      nifi_catalog_id: *id030
+      nifi_catalog_url: *id031
+      nifi_query_id: *id032
+      nifi_query_url: *id033
+      nifi_events_id: *id034
+      nifi_events_url: *id035
+      nifi_warehouse: *id036
+      nifi_region: *id037
+      nifi_s3_access_key_ref: *id038
+      nifi_s3_signing_ref: *id039
+      nifi_events_auth_ref: *id040
+      nifi_extra_parameters: *id041
+      nifi_parameter_provider: *id042
+      nifi_parameter_group: *id043
+      nifi_parameter_context: *id044
+      nifi_registry_name: *id045
+      nifi_registry_url: *id046
+      nifi_registry_owner: *id047
+      nifi_registry_repo: *id048
+      nifi_registry_branch: *id049
+      nifi_registry_path: *id050
+      nifi_registry_auth_ref: *id051
+      nifi_smoke_enabled: *id052
+      nifi_smoke_max_age_minutes: *id053
+      nifi_provenance_max_age: *id054
+      nifi_provenance_max_size: *id055
+      nifi_export_provenance: *id056
+      nifi_start: *id057
+      nifi_validate_with_docker: *id058
+      nifi_ready_timeout: *id059
+      nifi_health_timeout: *id060
+      nifi_restore_mode: *id061

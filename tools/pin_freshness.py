@@ -107,6 +107,7 @@ SOURCES: dict[str, tuple[str, str]] = {
         "PostgreSQL release page by hand, within the pinned major version",
     ),
     "role:media/media_image": ("github", "jellyfin/jellyfin"),
+    "role:nifi/nifi_image": ("github", "apache/nifi"),
     "role:ntfy/ntfy_image": ("github", "binwiederhier/ntfy"),
     "role:llamacpp/llamacpp_image": (
         "none",
@@ -185,6 +186,12 @@ NOTES: dict[str, str] = {
         "an image (modules/trino): bump the tag and its digest together, with product.version in "
         "modules/trino/module.yml and the lab registry's version; read the release notes of every "
         "version crossed (catalog properties and procedure options change between releases)"
+    ),
+    "role:nifi/nifi_image": (
+        "an image (modules/nifi): bump the tag and its digest together, with product.version in "
+        "modules/nifi/module.yml, nifi_product_version in the role's vars and the lab registry's "
+        "version; the upgrade playbook exports the state first and a newer version migrates its "
+        "repositories forward only (the role refuses an older target)"
     ),
     "role:llamacpp/llamacpp_image": (
         "an image (modules/llamacpp, the vulkan build): bump the tag and its digest together, with "

@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# The configuration files (nifi.properties, bootstrap.conf, logback.xml, state-management.xml,
+# zookeeper.properties, authorizers.xml, login-identity-providers.xml) are the image's own, copied into
+# the data root's conf/ in a throwaway container of the pinned image, and the service's start-up script
+# then edits them from the environment. They are copied afresh whenever what they depend on changes (a
+# new image, the sign-in, the first administrator, the provenance retention): the start-up script's
+# edits only match a pristine file, and a file from an older image may not be read by a newer one.
+# flow.json.gz, users.xml and authorizations.xml (the service's state) are never touched.
+- name: Name what the configuration files depend on
+  ansible.builtin.set_fact:
+    nifi_seed_want: "{{ [nifi_image, nifi_auth, nifi_initial_admin, nifi_provenance_max_age, nifi_provenance_max_size] | join('|') | hash('sha256') }}"
+
+- name: Read the digest the configuration files were taken for
+  ansible.builtin.slurp:
+    src: "{{ nifi_data_root }}/conf/.hnx-seed"
+  register: nifi_seed_stamp
+  failed_when: false
+
+- name: Look for the compose file of an earlier run
+  ansible.builtin.stat:
+    path: "{{ nifi_dir }}/docker-compose.yml"
+  register: nifi_compose_file
+
+- name: Note whether the configuration files are owed
+  ansible.builtin.set_fact:
+    nifi_seed_owed: "{{ (nifi_seed_stamp.content | default('') | b64decode | trim) != nifi_seed_want }}"
+
+- name: Take the configuration files afresh
+  block:
+    - name: Stop the service (a start would write them while they are replaced)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ nifi_dir }}/docker-compose.yml", stop]
+      changed_when: true
+      when: nifi_compose_file.stat.exists
+    - name: Copy the image's files into the data root
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --user
+          - "{{ nifi_uid | int }}:{{ nifi_gid | int }}"
+          - --entrypoint
+          - sh
+          - -v
+          - "{{ nifi_data_root }}/conf:/seed"
+          - "{{ nifi_image }}"
+          - -c
+          - "cd {{ nifi_container_home }}/conf && cp -f {{ nifi_seed_files | join(' ') }} /seed/"
+      changed_when: true
+    - name: Set the provenance retention
+      ansible.builtin.lineinfile:
+        path: "{{ nifi_data_root }}/conf/nifi.properties"
+        regexp: "^{{ item.key | regex_escape }}="
+        line: "{{ item.key }}={{ item.value }}"
+        create: false
+      loop:
+        - {key: nifi.provenance.repository.max.storage.time, value: "{{ nifi_provenance_max_age }}"}
+        - {key: nifi.provenance.repository.max.storage.size, value: "{{ nifi_provenance_max_size }}"}
+    - name: Remember what the files were taken for
+      ansible.builtin.copy:
+        content: "{{ nifi_seed_want }}\n"
+        dest: "{{ nifi_data_root }}/conf/.hnx-seed"
+        owner: "{{ nifi_uid | int }}"
+        group: "{{ nifi_gid | int }}"
+        mode: "0600"
+  when: nifi_seed_owed | bool
