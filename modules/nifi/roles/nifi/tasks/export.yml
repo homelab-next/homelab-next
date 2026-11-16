@@ -3,8 +3,8 @@
 # The flow definitions (every top-level process group, sensitive values blank) come through the API
 # while the service runs; the stored flow, users, component state and repositories are archived with
 # the service STOPPED (a tar of files being written is not a consistent copy) and it is started again
-# whatever happened. Nothing is deleted: each file is written under a temporary name and renamed over
-# the last export's, and the listing, written last, names what this run wrote (a run that stopped half
+# whatever happened. The previous archive is kept as state.tar.gz.prev (one generation); each file is
+# written under a temporary name and renamed over the last export's, and the listing, written last, names what this run wrote (a run that stopped half
 # way leaves a listing that no longer matches its files, which a restore refuses). The seeded
 # configuration files (nifi.properties and the others) are left out: they hold the passwords the
 # container is given and are rebuilt from the image. Every run writes a new snapshot (the hook
@@ -66,6 +66,11 @@
         owner: "{{ nifi_owner }}"
         group: "{{ nifi_group }}"
         mode: "0600"
+    - name: Keep the previous archive as .prev (one generation) before it is replaced
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ nifi_export_dir }}/state.tar.gz", "{{ nifi_export_dir }}/state.tar.gz.prev"]
+        removes: "{{ nifi_export_dir }}/state.tar.gz"
+      changed_when: true
     - name: Move the archive into place
       ansible.builtin.command:
         argv: [mv, -f, "{{ nifi_export_dir }}/.state.tar.gz.tmp", "{{ nifi_export_dir }}/state.tar.gz"]

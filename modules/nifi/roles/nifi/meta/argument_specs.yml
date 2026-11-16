@@ -618,6 +618,11 @@ argument_specs:
         description: repository:tag@sha256:<digest> of the image to move to (the same repository, not
           older).
         required: true
+      nifi_allow_same_tag_rebuild:
+        type: bool
+        description: Accept a target with the same tag as the running image but another digest (a
+          rebuilt image); refused unless set.
+        default: false
   export:
     short_description: Write the flow definitions and a stopped-service archive of the state, with a listing
       of sizes and hashes.

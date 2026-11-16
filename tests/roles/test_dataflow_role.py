@@ -339,6 +339,80 @@ def test_upgrade_refuses_an_unpinned_a_foreign_and_an_older_target(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_upgrade_refuses_the_running_tag_at_another_digest_unless_allowed(tmp_path):
+    running = default_ref("image")
+    repo_tag, digest = running.split("@")
+    other = "sha256:" + "2b" * 32
+    (tmp_path / "app").mkdir()
+    v = vs(tmp_path, target_image=f"{repo_tag}@{other}")
+    assert run_role(tmp_path, ROLE, "upgrade", v, env=secrets()).returncode != 0
+    ok = run_role(
+        tmp_path, ROLE, "upgrade", dict(v, **{f"{P}_allow_same_tag_rebuild": True}), env=secrets()
+    )
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    same = vs(
+        tmp_path, target_image=f"{repo_tag}@{digest}"
+    )  # the pinned digest itself is no change
+    assert run_role(tmp_path, ROLE, "upgrade", same, env=secrets()).returncode == 0
+
+
+# ----------------------------------------------------------------------------- the scripts
+
+
+SCRIPT_VARS = [k for k in ROLE_VARS if k.startswith(f"{P}_") and k.endswith("_script")]
+
+
+def _secret_option_findings(script: str) -> list[str]:
+    """Every password-taking option in ``script`` whose value is a literal or an expansion (the
+    only safe forms read the value from the environment, or from a file or standard input)."""
+    bad = []
+    for line in script.splitlines():
+        for m in re.finditer(
+            r"(?<![\w-])(-(?:src|dest)?(?:store|key|trust)?(?:pass|passin|passout)(?::\w+)?|-pass(?:in|out)?|--password)\s+(\S+)",
+            line,
+        ):
+            opt, val = m.group(1), m.group(2)
+            if opt.endswith(":env"):
+                ok = re.fullmatch(r"[A-Z_]+", val) is not None  # a variable NAME
+            else:
+                ok = re.fullmatch(r"(env|file|fd):\S+", val) is not None and not val.startswith(
+                    "pass:"
+                )
+            if not ok:
+                bad.append(line.strip())
+    return bad
+
+
+def test_script_vars_exist_to_be_checked():
+    assert f"{P}_stores_script" in SCRIPT_VARS and f"{P}_api_script" in SCRIPT_VARS
+
+
+@pytest.mark.parametrize("name", SCRIPT_VARS)
+def test_no_script_gives_a_tool_a_password_on_its_command_line(name):
+    script = ROLE_VARS[name]
+    assert _secret_option_findings(script) == []
+    # the shell must never expand a password variable into an argument
+    for line in script.splitlines():
+        assert not re.search(r"\$\{?PW\b", line) or re.search(
+            r"(export PW|env:PW|:env PW)", line
+        ), line
+
+
+def test_the_stores_script_reads_the_password_from_stdin_and_hands_it_over_by_name():
+    script = ROLE_VARS[f"{P}_stores_script"]
+    assert "read -r PW" in script and "-storepass:env PW" in script and "-passout env:PW" in script
+    assert '-storepass "' not in script and not re.search(r"\bpass:", script)
+
+
+def test_the_option_check_catches_what_it_is_for():
+    assert _secret_option_findings('keytool -importcert -storepass "$PW"')
+    assert _secret_option_findings("keytool -storepass hunter2")
+    assert _secret_option_findings("openssl pkcs12 -export -passout pass:$PW")
+    assert _secret_option_findings("keytool -storepass:env $PW")
+    assert not _secret_option_findings("keytool -storepass:env PW -keypass:env PW")
+    assert not _secret_option_findings("openssl pkcs12 -passin env:PW -passout env:PW")
+
+
 # ----------------------------------------------------------------------------- the API script
 
 
@@ -657,6 +731,21 @@ def test_export_archives_the_state_with_the_service_stopped_and_lists_every_file
         c.__exit__()
 
 
+def test_a_second_export_keeps_the_previous_archive_as_prev(tmp_path):
+    c = converged_controller(tmp_path)
+    try:
+        _, env = exported(tmp_path, c)
+        out = tmp_path / "export"
+        first = (out / "state.tar.gz").read_bytes()
+        assert not (out / "state.tar.gz.prev").exists()
+        r = run_role(tmp_path, ROLE, "export", hook_vars(tmp_path, c), env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert (out / "state.tar.gz.prev").read_bytes() == first
+        assert (out / "state.tar.gz").is_file()
+    finally:
+        c.__exit__()
+
+
 def test_export_includes_provenance_only_when_asked_and_refuses_a_service_with_no_flow(tmp_path):
     c = converged_controller(tmp_path)
     try:
@@ -818,4 +907,13 @@ def test_backup_names_the_data_root(tmp_path):
     r = run_role(tmp_path, ROLE, "backup", vs(tmp_path), env=secrets())
     assert r.returncode == 0, r.stdout + r.stderr
     manifest = json.loads((tmp_path / "app" / "backup-manifest.json").read_text())
-    assert str(tmp_path / "data") in manifest["paths"]
+    assert str(tmp_path / "data") not in manifest["paths"]  # not the whole root: see below
+    data = str(tmp_path / "data")
+    for state in ROLE_VARS[f"{P}_state_files"] + ROLE_VARS[f"{P}_restore_dirs"]:
+        assert f"{data}/{state}" in manifest["paths"]
+    # the files that hold the sensitive-props key, the keystore passwords and the single-user hash
+    # (and the keys) are rebuilt, so no manifest path is, or contains, one of them
+    for path in manifest["paths"]:
+        for seeded in ROLE_VARS[f"{P}_seed_files"] + [".hnx-seed"]:
+            assert not path.endswith(seeded), path
+        assert path != f"{data}/conf" and "/tls" not in path, path

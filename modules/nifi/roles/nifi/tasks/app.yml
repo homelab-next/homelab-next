@@ -79,6 +79,9 @@
               - "{{ nifi_data_root }}/smoke:{{ nifi_container_home }}/smoke"
             mem_limit: "{{ nifi_mem_limit }}"
             healthcheck:
+              # LIVENESS ONLY: curl -k does not verify the certificate, and it runs inside the container against its
+              # own address, so it proves the listener is up and enforcing sign-in, nothing about TLS; the role's
+              # health hook verifies the chain against the lab CA. Do not copy this check elsewhere.
               # the service answers nothing without a credential: up and enforcing the sign-in is a 401; it listens on the
               # container's own address (the start-up script's default), not on localhost, and refuses a Host
               # header that is not one of the proxy hosts

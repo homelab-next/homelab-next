@@ -127,7 +127,7 @@ NiFi publishes to the events forwarder by **HTTP**, the way every other publishe
   outage of the forwarder delays events and loses none; a flow that goes silent is the freshness
   flow's and the invariants' to find.
 
-`tests/modules/test_nifi_module.py` pins this envelope against the repository's own event validator.
+`tests/modules/test_dataflow_module.py` pins this envelope against the repository's own event validator.
 
 ## Egress
 
@@ -145,10 +145,10 @@ The container's own network namespace is outside the host's per-slice ruleset (d
 |---|---|
 | `readiness` (also the module's preflight) | `docker_engine` readiness; every credential resolves in its form; the object store (200 or 403 unsigned) and the catalog (`/v1/config`) answer; the query engine and the bus accept a connection |
 | `health` | the container healthy; the API **refuses an anonymous request** (verified against the lab CA) and, with the credential, reports the expected version, a single node (not clustered), no invalid component and no failed registry sync, the parameter context holding every parameter with the right sensitivity, the registry client present exactly when one is configured, the smoke flow running, and its file younger than `nifi_smoke_max_age_minutes`. Read-only |
-| `backup` | the backup manifest names the data root (a crash-consistent copy, which NiFi recovers from) |
-| `export` | `flows/*.json` (every top-level group through the API, sensitive values blank), `state.tar.gz` (the stored flow, users and policies, state, flowfile, content and database repositories, and provenance when `nifi_export_provenance`) taken **with the service stopped** and started again whatever happened, and `listing.jsonl` (key, size, sha256). The seeded configuration files, which hold the container's passwords, are left out. Nothing is deleted: each file is renamed over the last export's and the listing is written last |
+| `backup` | the backup manifest names the same state the export keeps (the stored flow, users and policies, and the state and repositories), a crash-consistent copy which NiFi recovers from; `conf/nifi.properties`, `conf/login-identity-providers.xml` and the other seeded files (the sensitive-props key, the keystore passwords, the single-user hash), the `tls/` directory and the logs are left out and rebuilt |
+| `export` | `flows/*.json` (every top-level group through the API, sensitive values blank), `state.tar.gz` (the stored flow, users and policies, state, flowfile, content and database repositories, and provenance when `nifi_export_provenance`) taken **with the service stopped** and started again whatever happened, and `listing.jsonl` (key, size, sha256). The seeded configuration files, which hold the container's passwords, are left out. The previous archive is kept as `state.tar.gz.prev` (one generation; the generation before it is replaced), each flow file is replaced atomically, and the listing is written last. The listing's hash detects corruption and half-written exports, not tampering: it is stored beside the archive |
 | `restore` | `nifi_restore_source` (an export directory); mode `state` checks the archive's hash against the listing and its members (no link, no path outside the state's own), extracts beside the live data, then with the service stopped moves every replaced path aside under `<data root>/before-restore` (never deleted: move it away before the next restore, which refuses to go over it) and the staged ones in; mode `flows` imports the portable definitions by name where absent. The sensitive-props key must be the one the export was taken under |
-| `upgrade` | refuses a target that is not pinned by tag and digest, is another repository or is older; records the bump; the playbook exports first, then converges (the configuration files are taken afresh from the new image; NiFi migrates its repositories forward on first start) |
+| `upgrade` | refuses a target that is not pinned by tag and digest, is another repository, is older, or has the running tag at another digest (unless `nifi_allow_same_tag_rebuild`); records the bump; the playbook exports first, then converges (the configuration files are taken afresh from the new image; NiFi migrates its repositories forward on first start) |
 
 ## Overlay checklist
 

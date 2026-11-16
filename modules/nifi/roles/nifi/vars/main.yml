@@ -44,7 +44,8 @@ nifi_state_files: [conf/flow.json.gz, conf/users.xml, conf/authorizations.xml]
 nifi_state_dirs: [state, flowfile_repository, content_repository, database_repository]
 nifi_restore_dirs: [state, flowfile_repository, content_repository, database_repository, provenance_repository]
 # builds the keystore (key and chain) and the truststore (the CA) in /tls from its PEM files, with the
-# password read from standard input; the stores are root's with the container's group (0640 and 0644),
+# password read from standard input and handed to every tool through the environment (openssl
+# -passout env:, keytool -storepass:env: never an expanded value, which would sit in a process's argv); the stores are root's with the container's group (0640 and 0644),
 # like the certificate files beside them (run as root; NIFI_GID is the container's group)
 nifi_stores_script: |
   set -eu
@@ -53,7 +54,7 @@ nifi_stores_script: |
   export PW
   openssl pkcs12 -export -inkey /tls/server.key -in /tls/chain.pem -name nifi -out /tls/keystore.p12.new -passout env:PW
   rm -f /tls/truststore.p12.new
-  keytool -importcert -noprompt -alias lab-ca -file /tls/ca.pem -keystore /tls/truststore.p12.new -storetype PKCS12 -storepass "$PW"
+  keytool -importcert -noprompt -alias lab-ca -file /tls/ca.pem -keystore /tls/truststore.p12.new -storetype PKCS12 -storepass:env PW
   chown 0:"$NIFI_GID" /tls/keystore.p12.new /tls/truststore.p12.new
   chmod 0640 /tls/keystore.p12.new
   chmod 0644 /tls/truststore.p12.new

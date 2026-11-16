@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-# The backup takes the data root whole (the VM's backup job, or a file backup of the manifest's paths):
-# a copy of a running service's repositories is crash-consistent, which NiFi recovers from. The
+# The backup manifest names the state the export keeps (conf/flow.json.gz, users.xml, authorizations.xml
+# and the state and repository directories), NOT the data root whole: conf/nifi.properties holds the
+# sensitive-props key and the keystore passwords, login-identity-providers.xml the single-user hash, and
+# tls/ the keys; those are rebuilt (seed.yml, tls.yml) and the export leaves them out for the same reason.
+# A copy of a running service's repositories is crash-consistent, which NiFi recovers from. The
 # export hook is the consistent copy (the service stopped for the repositories, the flow definitions
 # through the API first), so a restore never depends on that.
 - block:
@@ -10,16 +13,11 @@
       ansible.builtin.include_tasks: app.yml
     - name: Create the data directories
       ansible.builtin.include_tasks: dirs.yml
-    - name: Delegate to compose_app (the backup manifest names the data root)
-      ansible.builtin.include_role:
-        name: compose_app
-        tasks_from: backup
-      vars:
-        compose_app_name: nifi
-        compose_app_dir: "{{ nifi_app.compose_app_dir }}"
-        compose_app_data_dir: "{{ nifi_app.compose_app_data_dir }}"
-        compose_app_export_dir: "{{ nifi_app.compose_app_export_dir }}"
-        compose_app_owner: "{{ nifi_app.compose_app_owner }}"
-        compose_app_group: "{{ nifi_app.compose_app_group }}"
-        compose_app_spec: "{{ nifi_app.compose_app_spec }}"
+    - name: Write the backup manifest (the state the export keeps; not the seeded configuration, not tls/)
+      ansible.builtin.copy:
+        dest: "{{ nifi_dir }}/backup-manifest.json"
+        content: "{{ {'app': 'nifi', 'paths': (nifi_state_files + nifi_restore_dirs) | map('regex_replace', '^', nifi_data_root ~ '/') | list | sort} | to_nice_json }}\n"
+        owner: "{{ nifi_owner }}"
+        group: "{{ nifi_group }}"
+        mode: "0640"
   tags: [backup]

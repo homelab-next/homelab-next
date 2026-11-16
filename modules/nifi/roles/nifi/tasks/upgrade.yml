@@ -10,6 +10,13 @@
       ansible.builtin.assert:
         that: nifi_target_image.split('@')[0].rsplit(':', 1)[1] is version(nifi_tag, '>=')
         fail_msg: "nifi: {{ nifi_target_image }} is older than the running {{ nifi_tag }}; a downgrade is a restore of an export taken with the older version"
+    - name: Refuse the running tag at another digest unless a rebuild is allowed
+      ansible.builtin.assert:
+        that: >-
+          nifi_allow_same_tag_rebuild | default(false) | bool
+          or nifi_target_image.split('@')[0].rsplit(':', 1)[1] != nifi_tag
+          or nifi_target_image.split('@')[1] == nifi_digest
+        fail_msg: "nifi: {{ nifi_target_image }} has the running tag {{ nifi_tag }} at a digest other than the pinned one; a tag is not a version (set nifi_allow_same_tag_rebuild only to take a deliberate rebuild)"
     - name: Validate the inputs
       ansible.builtin.include_tasks: validate.yml
     - name: Build the application spec
