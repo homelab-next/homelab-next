@@ -531,7 +531,47 @@ def test_compose_app_optional_fields_render_valid_yaml(first):
     assert doc["services"]["web"]["env_file"] == ["app.env"]
 
 
+def _gpu(tmp_path):
+    s = spec(devices=["/dev/dri/renderD128", "nvidia.com/gpu=0"], group_add=[992, "44"])
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(tmp_path, s, compose_app_validate_with_docker=False),
+    }
+
+
+@first_run(_gpu)
+def test_compose_app_renders_a_gpu_render_node_and_groups_by_number(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    web = doc["services"]["web"]
+    assert web["devices"] == ["/dev/dri/renderD128", "nvidia.com/gpu=0"]
+    assert web["group_add"] == ["992", "44"]
+    assert web["cap_drop"] == ["ALL"] and "privileged" not in web
+    assert "devices" not in doc["services"]["db"] and "group_add" not in doc["services"]["db"]
+
+
 REJECTED = {
+    "device /dev/mem": lambda s: s["services"]["web"].update(devices=["/dev/mem"]),
+    "device a disk": lambda s: s["services"]["web"].update(devices=["/dev/sda"]),
+    "device all of dri": lambda s: s["services"]["web"].update(devices=["/dev/dri"]),
+    "device the card node": lambda s: s["services"]["web"].update(devices=["/dev/dri/card0"]),
+    "device with a container path and mode": lambda s: s["services"]["web"].update(
+        devices=["/dev/dri/renderD128:/dev/x:rwm"]
+    ),
+    "device a newline": lambda s: s["services"]["web"].update(
+        devices=["/dev/dri/renderD128\n    privileged: true"]
+    ),
+    "device not a list": lambda s: s["services"]["web"].update(devices="/dev/dri/renderD128"),
+    "device twice": lambda s: s["services"]["web"].update(
+        devices=["/dev/dri/renderD128", "/dev/dri/renderD128"]
+    ),
+    "cdi any vendor": lambda s: s["services"]["web"].update(devices=["vendor.com/disk=all"]),
+    "group_add root": lambda s: s["services"]["web"].update(group_add=[0]),
+    "group_add a name": lambda s: s["services"]["web"].update(group_add=["render"]),
+    "group_add not a list": lambda s: s["services"]["web"].update(group_add="44"),
     "no healthcheck": lambda s: s["services"]["web"].pop("healthcheck"),
     "latest tag": lambda s: s["services"]["web"].update(tag="latest"),
     "no digest": lambda s: s["services"]["web"].pop("digest"),
