@@ -115,7 +115,7 @@ def fp(path: Path) -> tuple[int, str]:
 # ----------------------------------------------------------------------------- render
 
 
-def test_main_renders_one_container_with_the_credentials_only_in_the_env_file(tmp_path):
+def test_main_renders_one_container_with_the_application_secrets_only_as_read_only_files(tmp_path):
     v = pv(tmp_path)
     r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -130,7 +130,7 @@ def test_main_renders_one_container_with_the_credentials_only_in_the_env_file(tm
     assert s["volumes"] == [
         f"{tmp_path}/data/data:/var/lib/{P}", f"{tmp_path}/data/conf:/etc/{P}",
         f"{tmp_path}/data/export:/export", f"{tmp_path}/app/tls:/tls:ro",
-        f"{tmp_path}/app/sshkeys:/sshkeys:ro",
+        f"{tmp_path}/app/sshkeys:/sshkeys:ro", f"{tmp_path}/app/appsecrets:/appsecrets:ro",
     ]  # fmt: skip
     env = s["environment"]
     assert env[f"{P.upper()}__server__ROOT_URL"] == f"https://{NAME}:3443/"
@@ -142,13 +142,29 @@ def test_main_renders_one_container_with_the_credentials_only_in_the_env_file(tm
         and env[f"{P.upper()}__server__DOMAIN"] == NAME
     )
     assert "SSL_CERT_FILE" not in env  # only with an identity provider to trust
+    # no value anywhere `docker inspect` can show: not in the compose file, not in the environment,
+    # not in an env_file; the environment names a file for each of the three
     for secret in (*SECRETS.values(),):
         assert secret not in text and secret not in r.stdout
-    env_file = (tmp_path / "app" / "secrets" / f"{MID}.env").read_text()
-    assert f"{P.upper()}__security__SECRET_KEY='{'k' * 40}'" in env_file
-    assert f"{P.upper()}__oauth2__JWT_SECRET='{'j' * 43}'" in env_file
-    assert ADMIN not in env_file  # the administrator's password is never given to the container
-    assert oct((tmp_path / "app" / "secrets" / f"{MID}.env").stat().st_mode & 0o777) == "0o600"
+    assert "env_file" not in s and not (tmp_path / "app" / "secrets").exists()
+    for setting, name in (
+        ("security__SECRET_KEY", "secret_key"),
+        ("security__INTERNAL_TOKEN", "internal_token"),
+        ("oauth2__JWT_SECRET", "jwt_secret"),
+    ):
+        assert env[f"{P.upper()}__{setting}__FILE"] == f"/appsecrets/{name}"
+        assert f"{P.upper()}__{setting}" not in env
+    held = {
+        n: (tmp_path / "app" / "appsecrets" / n)
+        for n in ("secret_key", "internal_token", "jwt_secret")
+    }
+    assert [f.read_text() for f in held.values()] == ["k" * 40, "i" * 60, "j" * 43]  # no newline
+    assert all(oct(f.stat().st_mode & 0o777) == "0o440" for f in held.values())
+    assert oct((tmp_path / "app" / "appsecrets").stat().st_mode & 0o777) == "0o750"
+    for f in (tmp_path / "app").rglob("*"):
+        if f.is_file() and f.parent.name != "appsecrets":
+            assert not any(v.encode() in f.read_bytes() for v in ("k" * 40, "i" * 60, "j" * 43)), f
+    assert ADMIN not in text  # the administrator's password is never given to the container
     assert oct((tmp_path / "app" / "tls" / "server.key").stat().st_mode & 0o777) == "0o440"
     for t in SSH_TYPES:
         f = tmp_path / "app" / "sshkeys" / f"{P}.{t}"
@@ -403,9 +419,25 @@ def test_health_proves_the_pull_account_when_one_is_named(tmp_path):
         banner = Banner()
         ok = _health(tmp_path, front, banner, env, registry_pull_user="puller")
         assert ok.returncode == 0, ok.stdout + ok.stderr
+        probes = [r for r in front.requests if r.startswith("POST ")]
+        assert len(probes) == 2 and "/blobs/uploads/" in probes[0]  # a registry write, an API write
+        assert "/api/v1/user" in front.requests  # and a read outside the registry
         front.pull = "puller:other"
         bad = _health(tmp_path, front, banner, env, registry_pull_user="puller")
         assert bad.returncode != 0 and "pull account" in bad.stdout + bad.stderr
+        banner.close()
+
+
+def test_health_fails_when_the_pull_token_is_not_read_only(tmp_path):
+    ref = f"secret:{MID}/registry-pull-token"
+    env = {**_env(tmp_path), secret_env_name(ref): "t" * 20}
+    with Front(PKI[0], PKI[1], tmp_path, password=ADMIN, pull="puller:" + "t" * 20,
+               pull_writable=True) as front:  # fmt: skip
+        banner = Banner()
+        bad = _health(tmp_path, front, banner, env, registry_pull_user="puller")
+        assert bad.returncode != 0, bad.stdout
+        out = (bad.stdout + bad.stderr).lower()
+        assert "not read-only" in out and "registry write" in out and "t" * 20 not in out
         banner.close()
 
 
@@ -453,6 +485,17 @@ def test_export_stops_dumps_lists_and_starts_the_service_again(tmp_path):
         and m["product_version"] == DEFAULTS[f"{P}_image"].split(":")[1].split("-")[0]
     )
     assert (out / "repos.tsv").read_text() == tsv()
+    # the configuration (the application secrets) is not in the archive; the archive is 0600
+    import zipfile
+
+    with zipfile.ZipFile(out / "dump.zip") as z:
+        assert "app.ini" not in z.namelist() and "data/jwt/private.pem" in z.namelist()
+    assert oct((out / "dump.zip").stat().st_mode & 0o777) == "0o600"
+    assert oct(out.stat().st_mode & 0o777) == "0o700"
+    assert m["config_included"] is False
+    assert sorted(m["app_key_fingerprints"]) == ["internal_token", "jwt_secret", "secret_key"]
+    blob = b"".join(p.read_bytes() for p in out.iterdir())
+    assert not any(v.encode() in blob for v in ("k" * 40, "i" * 60, "j" * 43))
     log = calls(tmp_path)
     order = [next(i for i, c in enumerate(log) if k in c) for k in (" stop ", " run ", " up ")]
     assert order == sorted(order)  # stopped, dumped, started
@@ -607,3 +650,26 @@ def test_upgrade_records_only_a_pinned_newer_target_of_the_same_repository(tmp_p
     ):
         r = run_role(tmp_path, ROLE, "upgrade", pv(tmp_path, target_image=bad), env=env)
         assert r.returncode != 0, bad
+
+
+def test_restore_refuses_application_secrets_that_are_not_the_exports_before_stopping(tmp_path):
+    env = _stood(tmp_path)
+    src = _export(tmp_path, env)
+    n = len(calls(tmp_path))
+    other = {**env, secret_env_name(f"secret:{MID}/secret-key"): "q" * 40}
+    r = _restore(tmp_path, other, src)
+    text = r.stdout + r.stderr
+    assert r.returncode != 0 and "secret_key is not the source's" in text, text
+    assert "q" * 40 not in text and "k" * 40 not in text
+    assert not any(" stop " in c for c in calls(tmp_path)[n:])  # nothing was touched
+    assert not (tmp_path / "data" / "data" / f"{P}.db").exists()
+
+
+def test_restore_refuses_an_export_that_records_no_fingerprints(tmp_path):
+    env = _stood(tmp_path)
+    src = _export(tmp_path, env)
+    n = len(calls(tmp_path))
+    _relist(src, lambda m: m.pop("app_key_fingerprints"))
+    r = _restore(tmp_path, env, src)
+    assert r.returncode != 0 and "no fingerprint" in r.stdout + r.stderr
+    assert not any(" stop " in c for c in calls(tmp_path)[n:])

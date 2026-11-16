@@ -24,6 +24,35 @@
                "{{ gitea_service }}", gitea, --config, "{{ gitea_container_conf }}/app.ini",
                dump, --type, zip, --skip-log, --file, "{{ gitea_container_export }}/.dump.zip.tmp"]
       changed_when: true
+    # gitea dump carries the configuration (app.ini), which holds the three application secrets. The
+    # restore rebuilds the configuration from the secret store and never reads that member, so it is
+    # left out: a copy of the export then holds no application secret (it still holds the accounts'
+    # password hashes and token hashes, the signing keys and every repository: secret-bearing, 0600
+    # in a 0700 directory, see the README).
+    - name: Remove a partial copy an earlier failed run left (the one temporary file)
+      ansible.builtin.file:
+        path: "{{ gitea_data_root }}/export/.dump.stripped.tmp"
+        state: absent
+    - name: Leave the configuration (the application secrets) out of the archive
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        gitea_helper_cmd: strip
+        gitea_helper_extra:
+          zip: "{{ gitea_data_root }}/export/.dump.zip.tmp"
+          to: "{{ gitea_data_root }}/export/.dump.stripped.tmp"
+    - name: Replace the dump with the copy that has no configuration
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ gitea_data_root }}/export/.dump.stripped.tmp", "{{ gitea_data_root }}/export/.dump.zip.tmp"]
+      changed_when: true
+    - name: Fingerprint the application secrets (the manifest records the fingerprints, never the values)
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        gitea_helper_cmd: secretfp
+        gitea_helper_extra:
+          values: "{{ gitea_app_keymat }}"
+    - name: Keep the fingerprints
+      ansible.builtin.set_fact:
+        gitea_keymat_fps: "{{ gitea_facts.fingerprints }}"
     - name: Take the repositories' manifest
       ansible.builtin.include_tasks: repos.yml
     - name: Read the dump's database facts
@@ -52,6 +81,12 @@
       ansible.builtin.command:
         argv: [mv, -f, "{{ gitea_data_root }}/export/.dump.zip.tmp", "{{ gitea_data_root }}/export/dump.zip"]
       changed_when: true
+    - name: The archive is the container's, 0600 (it holds every account's password hash)
+      ansible.builtin.file:
+        path: "{{ gitea_data_root }}/export/dump.zip"
+        owner: "{{ gitea_uid | int }}"
+        group: "{{ gitea_gid | int }}"
+        mode: "0600"
     - name: Write the repositories' manifest
       ansible.builtin.copy:
         content: "{{ gitea_repos_lines | join('\n') }}\n"
@@ -64,6 +99,7 @@
         content: >-
           {{ {'format': 1, 'product_version': gitea_product_version, 'image': gitea_image,
               'counts': gitea_facts.counts, 'fingerprint': gitea_facts.fingerprint,
+              'app_key_fingerprints': gitea_keymat_fps, 'config_included': false,
               'repositories': gitea_repos_lines | length} | to_nice_json(sort_keys=true) }}
         dest: "{{ gitea_data_root }}/export/manifest.json"
         owner: "{{ gitea_owner }}"

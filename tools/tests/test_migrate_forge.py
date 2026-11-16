@@ -40,6 +40,8 @@ DEST = "ops@host.example.internal"
 DATA_ROOT = "/srv/data/forge"
 STAGE = "/srv/data/forge/export/incoming"
 REPOS = (("labs", "alpha"), ("labs", "beta"))
+# the three application secrets, built at run time from short pieces (never a long literal)
+KEYS = {"SECRET_KEY": "k" * 40, "INTERNAL_TOKEN": "i" * 60, "JWT_SECRET": "j" * 43}
 ALPHA = ("alpha" * 64)[:64]  # the digest the fake manifest gives labs/alpha
 
 
@@ -58,7 +60,18 @@ class Host:
     """One host's container: running or not, a repositories' manifest, a database file and the
     archive its dump command streams.  Every command the tool runs is interpreted from its argv."""
 
-    def __init__(self, work: Path, *, running=False, repos=REPOS, fsck="ok", users=2, hook=None):
+    def __init__(
+        self,
+        work: Path,
+        *,
+        running=False,
+        repos=REPOS,
+        fsck="ok",
+        users=2,
+        hook=None,
+        keys=None,
+        policy="always",
+    ):
         self.running, self.fsck, self.repos, self.files, self.log = (
             running,
             fsck,
@@ -66,7 +79,13 @@ class Host:
             {},
             [],
         )
-        self.users, self.hook = users, hook
+        self.users, self.hook, self.policy = users, hook, policy
+        k = {**KEYS, **(keys or {})}
+        self.config = (
+            "[server]\nSSH_PORT = 22\n"
+            f"[security]\nINSTALL_LOCK = true\nSECRET_KEY = {k['SECRET_KEY']}\n"
+            f"INTERNAL_TOKEN = {k['INTERNAL_TOKEN']}\n[oauth2]\nJWT_SECRET = {k['JWT_SECRET']}\n"
+        )
         self.zip = make_dump(work / "src.zip", repos=repos, users=users)
         self.db = work / "src.db"
         self.db.unlink(missing_ok=True)
@@ -102,11 +121,16 @@ class Host:
     def _run(self, cmd, stdin):
         if cmd[0] == "docker":
             if cmd[1] == "inspect":
+                if "RestartPolicy" in cmd[3]:
+                    return self.policy.encode()
                 return (
                     (b"true" if self.running else b"false")
                     if "State.Running" in cmd[3]
                     else b"img:1"
                 )
+            if cmd[1] == "update":
+                self.policy = cmd[2].split("=", 1)[1]
+                return b""
             if cmd[1] in ("stop", "start"):
                 self.running = cmd[1] == "start"
                 return b""
@@ -118,7 +142,7 @@ class Host:
             if inner[0] == "sh":
                 return self.lines().encode()
             if inner[0] == "cat":
-                return self.db.read_bytes()
+                return self.config.encode() if inner[1].endswith(".ini") else self.db.read_bytes()
             if inner[0] == mt.PRODUCT and "dump" in inner:
                 return 1 if self.fail_dump else self.zip.read_bytes()
         if cmd[0] == "mkdir":
@@ -395,10 +419,25 @@ def test_freeze_and_unfreeze_only_stop_and_start_the_container():
         Path(tempfile.mkdtemp(dir=ROOT / "build" if (ROOT / "build").exists() else None)),
         running=True,
     )
-    assert mt.freeze(ep(), _ctx=host.ctx()) == {"stopped": "forge-1", "running": False}
-    assert mt.unfreeze(ep(), _ctx=host.ctx()) == {"started": "forge-1", "running": True}
+    got = mt.freeze(ep(), _ctx=host.ctx())
+    assert got == {"stopped": "forge-1", "running": False, "restart_policy_was": "always"}
+    assert host.policy == "no"  # a reboot of the source's host cannot start it again
+    assert mt.unfreeze(ep(), restart=got["restart_policy_was"], _ctx=host.ctx()) == {
+        "started": "forge-1",
+        "running": True,
+    }
+    assert host.policy == "always"
     verbs = [shlex.split(a[-1])[3] for a in host.log if shlex.split(a[-1])[3] in ("stop", "start")]
     assert verbs == ["stop", "start"]
+    with pytest.raises(mt.MigrateError, match="--restart"):
+        mt.unfreeze(ep(), restart="sometimes", _ctx=host.ctx())
+
+
+def test_a_freeze_of_an_instance_with_no_restart_policy_changes_no_policy():
+    host = Host(Path(tempfile.mkdtemp(dir=ROOT / "build" if (ROOT / "build").exists() else None)),
+                running=True, policy="no")  # fmt: skip
+    assert mt.freeze(ep(), _ctx=host.ctx())["restart_policy_was"] == "no"
+    assert not any(shlex.split(a[-1])[3:4] == ["update"] for a in host.log)
 
 
 @pytest.mark.parametrize("path, ok", [
@@ -436,3 +475,81 @@ def test_the_command_line_maps_a_mismatch_to_1_and_a_usage_error_to_2(private, c
     assert mt.main(["verify", *base]) == 2  # no --dir
     assert mt.main(["stage", *base, "--dir", str(private / "out")]) == 2  # no --dest
     assert io.StringIO is not None
+
+
+# ----------------------------------------------------------------------------- the secrets
+
+
+def _zip_names(path):
+    import zipfile
+
+    with zipfile.ZipFile(path) as z:
+        return z.namelist()
+
+
+def test_the_export_has_no_configuration_and_records_fingerprints_never_values(private):
+    host = Host(private)
+    assert "app.ini" in _zip_names(host.zip)  # the product's dump carries it
+    m = _dump(private, host)
+    out = private / "out"
+    assert "app.ini" not in _zip_names(out / "dump.zip")
+    assert "data/jwt/private.pem" in _zip_names(out / "dump.zip")  # the rest of the archive is kept
+    assert sorted(m["app_key_fingerprints"]) == ["internal_token", "jwt_secret", "secret_key"]
+    assert m["config_included"] is False
+    blob = b"".join(p.read_bytes() for p in out.iterdir())
+    for value in KEYS.values():
+        assert value.encode() not in blob
+    assert not (out / ".dump.stripped").exists()
+    assert all(oct(p.stat().st_mode & 0o777) == "0o600" for p in out.iterdir())
+
+
+def test_a_target_with_the_sources_secrets_verifies_and_one_with_another_secret_key_is_refused(
+    private,
+):
+    _dump(private, Host(private))
+    ok = mt.verify(ep(), private / "out", _ctx=Host(private).ctx())
+    assert ok["verified"] is True
+    other = Host(private, keys={"SECRET_KEY": "x" * 40})
+    with pytest.raises(mt.VerifyMismatch, match="secret_key") as e:
+        mt.verify(ep(), private / "out", _ctx=other.ctx())
+    assert "x" * 40 not in str(e.value) and "k" * 40 not in str(e.value)
+    assert "internal_token" not in str(e.value)  # only the one that differs is named
+    for name in ("INTERNAL_TOKEN", "JWT_SECRET"):
+        with pytest.raises(mt.VerifyMismatch, match=name.lower()):
+            mt.verify(ep(), private / "out", _ctx=Host(private, keys={name: "y" * 50}).ctx())
+
+
+def test_an_export_with_no_fingerprints_and_a_target_without_the_keys_prove_nothing(private):
+    _dump(private, Host(private))
+    path = private / "out" / "manifest.json"
+    doc = json.loads(path.read_text())
+    del doc["app_key_fingerprints"]
+    path.write_text(json.dumps(doc))
+    rows = [json.loads(ln) for ln in (private / "out" / "listing.jsonl").read_text().splitlines()]
+    for r in rows:
+        if r["key"] == "manifest.json":
+            r["size"], r["sha256"] = mt._sha256(path)
+    (private / "out" / "listing.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    with pytest.raises(mt.VerifyMismatch, match="no fingerprint"):
+        mt.verify(ep(), private / "out", _ctx=Host(private).ctx())
+    bare = Host(private)
+    bare.config = "[server]\nSSH_PORT = 22\n"
+    with pytest.raises(mt.MigrateError, match="SECRET_KEY"):
+        mt.dump(ep(), private / "out3", _ctx=bare.ctx())
+    assert not (private / "out3" / "dump.zip").exists()
+
+
+def test_an_export_with_an_attach_statement_is_refused_and_creates_no_file(private):
+    import zipfile
+
+    target = private / "created-by-the-dump"
+    host = Host(private)
+    sql = f"ATTACH DATABASE '{target}' AS x;\nCREATE TABLE x.t (a);\n" + dump_sql()
+    bad = private / "bad.zip"
+    with zipfile.ZipFile(bad, "w") as z:
+        z.writestr(f"{mt.MID}-db.sql", sql)
+    host.zip = bad
+    with pytest.raises(mt.VerifyMismatch, match="SQL was refused"):
+        _dump(private, host)
+    assert not target.exists()
+    assert not (private / "out" / "dump.zip").exists()

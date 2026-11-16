@@ -91,10 +91,12 @@ class Front:
     check must catch), ``registry`` is the challenge header ("" for none), ``version`` what it reports."""
 
     def __init__(self, chain: str, key: str, workdir: Path, *, admin="admin", password="p" * 20,
-                 version="28.4.0", anonymous_ok=False, registry='Bearer realm="x"', pull=None):  # fmt: skip
+                 version="28.4.0", anonymous_ok=False, registry='Bearer realm="x"', pull=None,
+                 pull_writable=False):  # fmt: skip
         outer = self
         self.admin, self.password, self.version = admin, password, version
         self.anonymous_ok, self.registry, self.pull = anonymous_ok, registry, pull
+        self.pull_writable = pull_writable  # a wrongly scoped pull token: writes are accepted
         self.repos, self.requests = 2, []
 
         def authed(handler) -> bool:
@@ -116,6 +118,18 @@ class Front:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def do_POST(self):
+                outer.requests.append(f"POST {self.path}")
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                h = self.headers.get("Authorization", "")
+                if (
+                    outer.pull
+                    and h.startswith("Basic ")
+                    and base64.b64decode(h[6:]).decode() == outer.pull
+                ):
+                    return self._send(202 if outer.pull_writable else 403, {})
+                return self._send(401, {})
+
             def do_GET(self):
                 outer.requests.append(self.path)
                 p = self.path.split("?")[0]
@@ -129,6 +143,14 @@ class Front:
                     return self._send(
                         401, {}, [("WWW-Authenticate", outer.registry)] if outer.registry else []
                     )
+                h = self.headers.get("Authorization", "")
+                if (
+                    outer.pull
+                    and h.startswith("Basic ")
+                    and base64.b64decode(h[6:]).decode() == outer.pull
+                ):
+                    # the pull token reads the registry only: the API is out of its scope
+                    return self._send(200 if outer.pull_writable else 403, {"login": "puller"})
                 if not (authed(self) or outer.anonymous_ok):
                     return self._send(401, {"message": "user does not exist"})
                 if p == "/api/v1/version":

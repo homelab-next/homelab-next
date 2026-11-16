@@ -17,6 +17,9 @@ settings as JSON on standard input, never a command line: the credential is amon
 
 * ``wait``   -- poll ``/api/healthz`` over HTTPS until it passes or ``wait_s`` runs out.
 * ``health`` -- read-only checks of a running service (see :func:`health`); prints JSON facts.
+* ``strip`` -- copy a dump (``{"zip": path, "to": new path}``) without its ``app.ini``.
+* ``secretfp`` -- HMAC fingerprints of the three application secrets (``{"values": {...}}``);
+  with ``"expect"`` a refusal when they are not the export's.
 * ``signin`` -- whether the administrator's password signs in (``{"signin": bool}``).
 * ``dbcounts`` -- row counts and a content fingerprint of the instance's database, read from a
   dump's ``gitea-db.sql`` (``{"zip": path}``) or from a database file (``{"db": path}``, opened
@@ -30,8 +33,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import http.client
 import json
+import os
+import shutil
 import socket
 import sqlite3
 import ssl
@@ -60,10 +66,108 @@ FINGERPRINT = {
     "access_token": ("id", "uid", "token_hash"),
 }
 MAX_SQL = 1 << 30
+#: the three application secrets whose value must be the source's after a migration (the keys the
+#: accounts' two-factor seeds and stored credentials are encrypted and signed with)
+SECRET_NAMES = ("secret_key", "internal_token", "jwt_secret")
+_FP_MESSAGE = b"hnx-forge-secret-fingerprint-v1"
+#: the member of a dump that holds the configuration (and with it the application secrets)
+CONFIG_MEMBER = "app.ini"
 
 
 class HelperError(RuntimeError):
     pass
+
+
+def secret_fingerprint(value: str) -> str:
+    """A non-reversible fingerprint of a secret (HMAC-SHA256 of a fixed message, keyed by the secret).
+    Two places that hold the same secret compute the same text; nothing here can be turned back into
+    the secret, and the secret itself is never printed."""
+    if not value:
+        raise HelperError("a secret is empty: nothing to fingerprint")
+    return hmac.new(value.encode("utf-8"), _FP_MESSAGE, hashlib.sha256).hexdigest()
+
+
+def secret_fingerprints(values: dict) -> dict:
+    """Fingerprints of exactly the three application secrets (a missing or empty one is an error)."""
+    missing = [n for n in SECRET_NAMES if not values.get(n)]
+    if missing:
+        raise HelperError(f"no value for the application secret(s): {', '.join(missing)}")
+    return {n: secret_fingerprint(str(values[n])) for n in SECRET_NAMES}
+
+
+def compare_fingerprints(got: dict, want) -> None:
+    """Refuse when ``got`` is not ``want`` (the names are told, never a value); ``want`` missing or
+    incomplete is a refusal too (an export that cannot prove the secrets are the source's)."""
+    if not isinstance(want, dict) or sorted(want) != sorted(SECRET_NAMES):
+        raise HelperError(
+            "the export records no fingerprint of the application secrets: refusing to "
+            "go on without proof they are the source's"
+        )
+    differ = [n for n in SECRET_NAMES if not hmac.compare_digest(got[n], str(want[n]))]
+    if differ:
+        raise HelperError(
+            f"the configured {', '.join(differ)} is not the source's: accounts' two-factor "
+            "seeds and stored credentials would be unreadable (set the secret to the source's value)"
+        )
+
+
+def secretfp(cfg: dict) -> dict:
+    """Command: the fingerprints of ``cfg['values']``; with ``cfg['expect']`` present (even null),
+    a refusal when they are not the export's."""
+    got = secret_fingerprints(cfg["values"])
+    if "expect" in cfg:
+        compare_fingerprints(got, cfg["expect"])
+    return {"fingerprints": got}
+
+
+def sql_connection(path: str) -> sqlite3.Connection:
+    """A connection fit to run SQL that came out of an export: ATTACH (and with it VACUUM INTO) can
+    write a file anywhere the process may, so an authorizer refuses it, and the number of attachable
+    databases is set to 0 where the library has the limit."""
+    conn = sqlite3.connect(path)
+    if hasattr(conn, "setlimit") and hasattr(sqlite3, "SQLITE_LIMIT_ATTACHED"):
+        conn.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
+
+    def deny(action, *_args):
+        if action in (sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    conn.set_authorizer(deny)
+    return conn
+
+
+def load_sql(conn: sqlite3.Connection, sql: str) -> None:
+    """Run an export's SQL on a connection from :func:`sql_connection`."""
+    try:
+        conn.executescript(sql)
+    except sqlite3.DatabaseError as exc:
+        raise HelperError(f"the dump's SQL was refused: {exc}") from exc
+
+
+def strip_config(src: str, dst: str) -> dict:
+    """Copy the dump ``src`` to the NEW file ``dst`` (mode 0600, never overwritten) without its
+    configuration file, which holds the application secrets (the restore rebuilds it from the
+    secret store).  Returns the names left out."""
+    left_out = []
+    with zipfile.ZipFile(src) as zin:
+        fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w") as zout:
+                for info in zin.infolist():
+                    if info.filename.rstrip("/").rsplit("/", 1)[-1] == CONFIG_MEMBER:
+                        left_out.append(info.filename)
+                        continue
+                    with zin.open(info) as member, zout.open(info, "w", force_zip64=True) as out:
+                        shutil.copyfileobj(member, out, 1 << 20)
+        except BaseException:
+            os.unlink(dst)  # the one file this call created
+            raise
+    return {"left_out": left_out}
+
+
+def strip(cfg: dict) -> dict:
+    return strip_config(cfg["zip"], cfg["to"])
 
 
 def db_facts(conn: sqlite3.Connection) -> dict:
@@ -99,9 +203,10 @@ def dbcounts(cfg: dict) -> dict:
             if info.file_size > MAX_SQL:
                 raise HelperError("gitea-db.sql is too large to load")
             sql = z.read(info).decode("utf-8")
-        conn = sqlite3.connect(":memory:")
+        conn = sql_connection(":memory:")
         try:
-            conn.executescript(sql)
+            load_sql(conn, sql)
+            conn.set_authorizer(None)
             return db_facts(conn)
         finally:
             conn.close()
@@ -130,11 +235,20 @@ def _basic(user: str, password: str) -> dict:
     return {"Authorization": f"Basic {blob}"}
 
 
-def _get(cfg: dict, path: str, headers: dict | None = None) -> tuple[int, dict, bytes]:
+def _get(
+    cfg: dict,
+    path: str,
+    headers: dict | None = None,
+    *,
+    method: str = "GET",
+    body: bytes | None = None,
+) -> tuple[int, dict, bytes]:
     ctx = ssl.create_default_context(cafile=cfg["ca_file"])
     conn = _Conn(cfg["bind"], int(cfg["port"]), cfg["hostname"], ctx, float(cfg.get("timeout", 15)))
     try:
-        conn.request("GET", path, headers={"Accept": "application/json", **(headers or {})})
+        conn.request(
+            method, path, body=body, headers={"Accept": "application/json", **(headers or {})}
+        )
         resp = conn.getresponse()
         body = resp.read(1 << 20)
         merged: dict[str, str] = {}
@@ -193,6 +307,33 @@ def _host_key_fingerprints(cfg: dict) -> dict:
     return facts
 
 
+def _prove_pull_is_read_only(cfg: dict) -> None:
+    """The pull token is read-only by what the service REFUSES it, not by what it was meant for:
+    a write to the registry (opening a blob upload in the account's own namespace), a write through
+    the API (creating a repository) and a read outside the registry (the account itself) must each
+    be refused.  An answer other than a refusal is an error, and says which probe it was."""
+    auth = _basic(cfg["pull_user"], cfg["pull_token"])
+    user = cfg["pull_user"].lower()
+    probes = (
+        ("a registry write", "POST", f"/v2/{user}/hnx-health-probe/blobs/uploads/", None),
+        (
+            "an API write",
+            "POST",
+            "/api/v1/user/repos",
+            json.dumps({"name": "hnx-health-probe"}).encode(),
+        ),
+        ("a read outside the registry", "GET", "/api/v1/user", None),
+    )
+    for what, method, path, body in probes:
+        hdrs = {**auth, **({"Content-Type": "application/json"} if body else {})}
+        status, _, _ = _get(cfg, path, hdrs, method=method, body=body)
+        if status not in (401, 403):
+            raise HelperError(
+                f"the registry pull account {cfg['pull_user']!r} is not read-only: "
+                f"{what} was answered HTTP {status} (a token needs the read:package scope only)"
+            )
+
+
 def health(cfg: dict) -> dict:
     facts: dict = {}
     status, _, body = _get(cfg, "/api/healthz")
@@ -239,6 +380,8 @@ def health(cfg: dict) -> dict:
                 f"the registry pull account {cfg['pull_user']!r} was refused (HTTP {status})"
             )
         facts["registry_pull"] = "accepted"
+        _prove_pull_is_read_only(cfg)
+        facts["registry_pull_read_only"] = "writes refused"
     try:
         banner = socket.create_connection((cfg["bind"], int(cfg["ssh_port"])), 10)
     except OSError as exc:
@@ -260,13 +403,20 @@ def signin(cfg: dict) -> dict:
     return {"signin": status == 200}
 
 
-COMMANDS = {"wait": wait, "health": health, "dbcounts": dbcounts, "signin": signin}
+COMMANDS = {
+    "wait": wait,
+    "health": health,
+    "dbcounts": dbcounts,
+    "signin": signin,
+    "strip": strip,
+    "secretfp": secretfp,
+}
 
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2 or argv[1] not in COMMANDS:
         print(
-            "usage: hnx_gitea.py wait|health|signin|dbcounts (settings as JSON on stdin)",
+            "usage: hnx_gitea.py wait|health|signin|dbcounts|strip|secretfp (settings as JSON on stdin)",
             file=sys.stderr,
         )
         return 2

@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # The compose_app inputs (shared by main and the hooks that delegate to compose_app). Only the HTTPS
 # listener and the git SSH listener are published. The three application secrets reach the service
-# only through the 0600 env_file (compose_app_secret_env, built in main.yml); the certificate, its key
-# and the SSH host keys are mounted read-only from the project's own directories.
+# only as files (GITEA__<section>__<KEY>__FILE names the path), mounted read-only from the project's
+# own 0750 directory with the files 0440, so `docker inspect` shows a path and no value; the
+# certificate, its key and the SSH host keys are mounted the same way.
 - name: Name the settings that depend on the site
   ansible.builtin.set_fact:
     gitea_site_env: >-
@@ -47,6 +48,7 @@
               - "{{ gitea_data_root }}/export:{{ gitea_container_export }}"
               - "{{ gitea_dir }}/tls:{{ gitea_container_tls }}:ro"
               - "{{ gitea_dir }}/sshkeys:{{ gitea_container_sshkeys }}:ro"
+              - "{{ gitea_dir }}/appsecrets:{{ gitea_container_keydir }}:ro"
             mem_limit: "{{ gitea_mem_limit }}"
             # -k: a liveness probe from inside the container, which holds the certificate for the
             # service's public name, not for localhost; the hooks verify the chain and the name

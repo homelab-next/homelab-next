@@ -139,9 +139,10 @@ def build_db(zpath: str, dest: Path) -> dict:
             raise RestoreError(
                 "the dump has no gitea-db.sql (a dump of another database type?)"
             ) from None
-    conn = sqlite3.connect(str(dest))
+    conn = hnx_gitea.sql_connection(str(dest))
     try:
-        conn.executescript(sql)
+        hnx_gitea.load_sql(conn, sql)
+        conn.set_authorizer(None)
         conn.commit()
         if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RestoreError("the rebuilt database fails its integrity check")

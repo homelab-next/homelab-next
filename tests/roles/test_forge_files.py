@@ -278,3 +278,117 @@ def test_the_archive_must_be_a_regular_file(tmp_path, data):
         restore.restore(cfg(data, link))
     with pytest.raises(restore.RestoreError, match="not a regular file"):
         restore.restore(cfg(data, tmp_path / "missing.zip"))
+
+
+# ----------------------------------------------------------------------------- SQL from an export
+
+
+def _dump_with(tmp_path, statement: str) -> Path:
+    z = tmp_path / "hostile.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr(f"{P}-db.sql", statement + "\n" + dump_sql())
+        f.writestr("repos/labs/alpha.git/HEAD", "ref: refs/heads/main\n")
+    return z
+
+
+HOSTILE = [
+    "ATTACH DATABASE '{p}' AS x; CREATE TABLE x.t (a);",
+    "VACUUM INTO '{p}';",
+]
+
+
+@pytest.mark.parametrize("statement", HOSTILE)
+def test_an_export_that_attaches_a_database_is_refused_by_the_helper_and_creates_no_file(
+    tmp_path, statement
+):
+    target = tmp_path / "written-by-the-sql"
+    z = _dump_with(tmp_path, statement.format(p=target))
+    with pytest.raises(helper.HelperError, match="SQL was refused"):
+        helper.dbcounts({"zip": str(z)})
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("statement", HOSTILE)
+def test_the_restore_refuses_it_too_as_root_would_run_it_and_creates_no_file(
+    tmp_path, data, statement
+):
+    target = tmp_path / "written-by-the-sql"
+    z = _dump_with(tmp_path, statement.format(p=target))
+    with pytest.raises(helper.HelperError, match="SQL was refused"):
+        restore.restore(cfg(data, z))
+    assert not target.exists()
+    assert not (data / ".restore-stage").exists() and not (data / f"{P}.db").exists()
+
+
+def test_the_attached_database_limit_is_zero_where_the_library_has_it(tmp_path):
+    conn = helper.sql_connection(":memory:")
+    if hasattr(conn, "setlimit"):
+        assert conn.getlimit(sqlite3.SQLITE_LIMIT_ATTACHED) == 0
+    conn.close()
+
+
+# ----------------------------------------------------------------------------- secrets in an export
+
+
+def test_the_configuration_is_left_out_of_the_archive_and_nothing_else(tmp_path):
+    z = make_dump(
+        tmp_path / "a.zip", extra=(("custom/conf/app.ini", "[security]\nSECRET_KEY=x\n"),)
+    )
+    out = tmp_path / "b.zip"
+    got = helper.strip_config(str(z), str(out))
+    assert sorted(got["left_out"]) == ["app.ini", "custom/conf/app.ini"]
+    with zipfile.ZipFile(z) as a, zipfile.ZipFile(out) as b:
+        assert [n for n in a.namelist() if not n.endswith("app.ini")] == b.namelist()
+        assert b.testzip() is None
+        assert all(b.read(n) == a.read(n) for n in b.namelist())
+    assert oct(out.stat().st_mode & 0o777) == "0o600"
+    # it never overwrites, and a failed copy leaves nothing behind
+    with pytest.raises(FileExistsError):
+        helper.strip_config(str(z), str(out))
+    bad = tmp_path / "bad.zip"
+    bad.write_bytes(b"not a zip")
+    with pytest.raises(zipfile.BadZipFile):
+        helper.strip_config(str(bad), str(tmp_path / "c.zip"))
+    assert not (tmp_path / "c.zip").exists()
+
+
+def test_the_restore_takes_no_configuration_from_an_archive_that_has_one(tmp_path, data):
+    z = make_dump(tmp_path / "a.zip")  # its top-level app.ini is not a member the restore takes
+    restore.restore(cfg(data, z))
+    assert not (data / "app.ini").exists()
+
+
+VALUES = {"secret_key": "k" * 40, "internal_token": "i" * 60, "jwt_secret": "j" * 43}
+
+
+def test_a_fingerprint_is_the_same_for_the_same_secret_and_reveals_no_value():
+    a, b = helper.secret_fingerprints(VALUES), helper.secret_fingerprints(dict(VALUES))
+    assert a == b and len(set(a.values())) == 3
+    assert not any(v in str(a) for v in VALUES.values())
+    assert (
+        helper.secret_fingerprints({**VALUES, "secret_key": "x" * 40})["secret_key"]
+        != a["secret_key"]
+    )
+
+
+@pytest.mark.parametrize("name", sorted(VALUES))
+def test_a_secret_that_is_not_the_exports_is_refused_by_name_and_without_either_value(name):
+    want = helper.secret_fingerprints(VALUES)
+    assert helper.secretfp({"values": VALUES, "expect": want})["fingerprints"] == want
+    other = {**VALUES, name: "z" * 44}
+    with pytest.raises(helper.HelperError) as e:
+        helper.secretfp({"values": other, "expect": want})
+    assert (
+        name in str(e.value) and VALUES[name] not in str(e.value) and "z" * 44 not in str(e.value)
+    )
+
+
+@pytest.mark.parametrize("want", [None, {}, {"secret_key": "a"}, "text"])
+def test_an_export_that_records_no_fingerprints_cannot_be_restored(want):
+    with pytest.raises(helper.HelperError, match="no fingerprint"):
+        helper.secretfp({"values": VALUES, "expect": want})
+
+
+def test_a_missing_secret_is_an_error():
+    with pytest.raises(helper.HelperError, match="internal_token"):
+        helper.secret_fingerprints({**VALUES, "internal_token": ""})

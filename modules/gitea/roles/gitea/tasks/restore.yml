@@ -82,6 +82,17 @@
           - gitea_facts.counts == gitea_want.counts
           - gitea_facts.fingerprint == gitea_want.fingerprint
         fail_msg: "forge: the archive's database differs from the manifest's counts or fingerprint"
+    # The accounts' two-factor seeds and stored credentials are encrypted with the application
+    # secrets: a restore under different ones restores and passes every other check and is unusable.
+    # The manifest holds HMAC fingerprints of the source's (never the values); the configured ones
+    # must produce the same.
+    - name: The configured application secrets are the source's (a refusal names the secret, never a value)
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        gitea_helper_cmd: secretfp
+        gitea_helper_extra:
+          values: "{{ gitea_app_keymat }}"
+          expect: "{{ gitea_want.app_key_fingerprints | default(none) }}"
     - name: Restore with the service stopped, verify, and only then start
       block:
         - name: Stop the service

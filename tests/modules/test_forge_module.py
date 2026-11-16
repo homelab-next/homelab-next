@@ -156,13 +156,15 @@ def test_what_must_be_closed_is_closed_and_only_the_registry_is_opened():
     assert env[f"{ENV}__server__PROTOCOL"] == "https"
     assert env[f"{ENV}__packages__ENABLED"] == "true"
     assert env[f"{ENV}__database__DB_TYPE"] == "sqlite3"
-    assert not any(re.search(r"(?i)secret|token|passw", k) for k in env), (
-        "a secret in the plain environment"
-    )
+    # a secret-looking name is only ever a __FILE pointer to the read-only secrets directory
+    named = [k for k in env if re.search(r"(?i)secret|token|passw", k)]
+    assert named and all(
+        k.endswith("__FILE") and env[k].startswith("/appsecrets/") for k in named
+    ), "a secret in the plain environment"
     # every setting is the product's own <NAME>__<section>__<KEY> and every path is under the one data path
     assert all(k.startswith(f"{ENV}__") for k in env)
     for k, v in env.items():
-        if v.startswith("/") and not v.startswith(("/tls", "/sshkeys")):
+        if v.startswith("/") and not v.startswith(("/tls", "/sshkeys", "/appsecrets")):
             assert v.startswith(f"/var/lib/{P}"), k
 
 

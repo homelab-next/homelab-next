@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # The data root and the project's own directories. data/ (the container's /var/lib/gitea), conf/
-# (/etc/gitea) and export/ belong to the container's user; tls/, sshkeys/ and bin/ are root's, with the
-# container's group able to enter tls/ and sshkeys/. Nothing here is ever removed by the role (a
+# (/etc/gitea) and export/ belong to the container's user; tls/, sshkeys/, appsecrets/ and bin/ are root's, with the
+# container's group able to enter tls/, sshkeys/ and appsecrets/. Nothing here is ever removed by the role (a
 # bind-mounted directory taken away under a running container breaks it).
 - name: Create the data root, the container's directories and the project's
   ansible.builtin.file:
@@ -19,6 +19,7 @@
     - {path: "{{ gitea_dir }}/bin", owner: "{{ gitea_owner }}", group: "{{ gitea_group }}", mode: "0750"}
     - {path: "{{ gitea_dir }}/tls", owner: "{{ gitea_owner }}", group: "{{ gitea_gid | int }}", mode: "0750"}
     - {path: "{{ gitea_dir }}/sshkeys", owner: "{{ gitea_owner }}", group: "{{ gitea_gid | int }}", mode: "0750"}
+    - {path: "{{ gitea_dir }}/appsecrets", owner: "{{ gitea_owner }}", group: "{{ gitea_gid | int }}", mode: "0750"}
   loop_control:
     label: "{{ item.path }}"
   tags: [health, backup, restore, export, upgrade]

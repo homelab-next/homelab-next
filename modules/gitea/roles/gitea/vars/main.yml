@@ -9,6 +9,7 @@ gitea_container_data: /var/lib/gitea
 gitea_container_conf: /etc/gitea
 gitea_container_tls: /tls
 gitea_container_sshkeys: /sshkeys
+gitea_container_keydir: /appsecrets
 gitea_container_export: /export
 gitea_container_repos: /var/lib/gitea/git/repositories
 # the compose service name (also the container's)
@@ -31,6 +32,19 @@ gitea_pull_value_pattern: '^[A-Za-z0-9._~-]{8,128}\Z'
 gitea_ssh_key_types: [ed25519, rsa, ecdsa]
 # the ROOT_URL every link is built from: the port is part of it unless it is 443
 gitea_root_url: "https://{{ gitea_hostname }}{{ '' if gitea_port | int == 443 else ':' ~ (gitea_port | int) }}/"
+# the three application secrets: file name under the mounted directory -> the secret's reference
+# variable's name, and the product setting each one is read into. The environment holds only the
+# path (GITEA__<section>__<KEY>__FILE, which the product's own environment-to-ini reads at start):
+# `docker inspect` shows a path, never a value.
+gitea_app_secret_files:
+  secret_key: {setting: GITEA__security__SECRET_KEY__FILE, ref: gitea_app_key_ref}
+  internal_token: {setting: GITEA__security__INTERNAL_TOKEN__FILE, ref: gitea_internal_auth_ref}
+  jwt_secret: {setting: GITEA__oauth2__JWT_SECRET__FILE, ref: gitea_signing_ref}
+# the three secrets' values by name (the helper fingerprints them; used only under no_log)
+gitea_app_keymat:
+  secret_key: "{{ lookup('hnx_secret', gitea_app_key_ref) }}"
+  internal_token: "{{ lookup('hnx_secret', gitea_internal_auth_ref) }}"
+  jwt_secret: "{{ lookup('hnx_secret', gitea_signing_ref) }}"
 # Gitea's own settings, as its GITEA__<section>__<KEY> environment. Nothing here is a secret. The
 # layout is the source instance's (everything under one application data path), so a dump's data/
 # directory maps onto it name for name. No sign-up, no anonymous reading, no Actions runner, no
@@ -53,6 +67,9 @@ gitea_fixed_env:
   GITEA__picture__AVATAR_UPLOAD_PATH: /var/lib/gitea/avatars
   GITEA__picture__REPOSITORY_AVATAR_UPLOAD_PATH: /var/lib/gitea/repo-avatars
   GITEA__attachment__PATH: /var/lib/gitea/attachments
+  GITEA__security__SECRET_KEY__FILE: /appsecrets/secret_key
+  GITEA__security__INTERNAL_TOKEN__FILE: /appsecrets/internal_token
+  GITEA__oauth2__JWT_SECRET__FILE: /appsecrets/jwt_secret
   GITEA__security__INSTALL_LOCK: "true"
   GITEA__service__DISABLE_REGISTRATION: "true"
   GITEA__service__REQUIRE_SIGNIN_VIEW: "true"

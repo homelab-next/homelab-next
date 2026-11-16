@@ -49,11 +49,15 @@ those live only in the private overlay.
   loosen them): no sign-up, no anonymous reading (every API and page needs a sign-in), no Actions
   runner, no mail, no OpenID sign-in, no LFS server, no update checker, offline mode. The package
   registry is on.
-- **Secrets** (`SECRET_KEY`, `INTERNAL_TOKEN`, the OAuth2 `JWT_SECRET`) reach only the compose
-  env_file (`secrets/gitea.env`, 0600) through `hnx_secret` in `no_log` tasks; the plain environment
-  holds no secret (a test enforces it). The administrator's password travels in the environment of
-  the docker client, named without a value (`docker compose exec -e NAME`), so it is in no command
-  line and no log.
+- **Secrets** (`SECRET_KEY`, `INTERNAL_TOKEN`, the OAuth2 `JWT_SECRET`) reach the container as
+  **files**: written from `hnx_secret` in `no_log` tasks to `<gitea_dir>/appsecrets/<name>` (0440,
+  the directory 0750, owned by root with the container's group, mounted read-only at `/appsecrets`),
+  and named to the product by `GITEA__<section>__<KEY>__FILE` (the product's own
+  environment-to-ini reads the file). The compose file, the environment and `docker inspect` hold
+  a path and no value (a test renders the compose file and inspects the argv logs for the values).
+  The administrator's password travels in the environment of the docker client, named without a
+  value (`docker compose exec -e NAME`), so it is in no command line and no log. See "Where the
+  secrets live" for what the product itself writes down.
 - **Data** lives under `gitea_data_root` (`/var/lib/hnx-modules/gitea`): `data/` (mounted as the
   container's `/var/lib/gitea`: repositories, `gitea.db`, avatars, attachments, packages, the
   OAuth2 signing keys), `conf/` (`/etc/gitea`) and `export/`. The layout is the source instance's
@@ -73,7 +77,7 @@ a follow-up with its own migration, not a setting.
 | Hook | What it checks or does |
 |---|---|
 | `readiness` (also the module's preflight) | `docker_engine` readiness, the settings, and every credential resolves in its form: the three application secrets 16 to 512 of `A-Z a-z 0-9 . _ ~ -` and different from each other and from the admin password, the certificate and the CA PEM, the key PEM, each SSH host key a private key; a reference with no value is **named** and nothing is rendered |
-| `health` | the container running and healthy; `/api/healthz` passes **over HTTPS verified against the lab CA and for the service's name**; an **anonymous read is refused**; the administrator signs in with the secret's password and the service reports the expected version; `/v2/` answers its bearer challenge (the registry is on and closed), and with a pull account its token is accepted; the SSH port answers and presents **exactly the host keys the secrets hold**. Read-only |
+| `health` | the container running and healthy; `/api/healthz` passes **over HTTPS verified against the lab CA and for the service's name**; an **anonymous read is refused**; the administrator signs in with the secret's password and the service reports the expected version; `/v2/` answers its bearer challenge (the registry is on and closed), and with a pull account its token is accepted **and refused a registry write, an API write and a read outside the registry** (read-only proved, not assumed); the SSH port answers and presents **exactly the host keys the secrets hold**. Read-only |
 | `export` | the service **stopped** (a consistent state), `gitea dump` into `export/dump.zip`, `repos.tsv` (every repository's number of refs, the sha256 of its sorted refs, and its `git fsck` verdict), `manifest.json` (version, row counts and a content fingerprint **read from the dump itself**, repository count) and `listing.jsonl` (key, size, sha256); the previous archive is kept as `dump.zip.prev`; the service is started again whatever happened. It refuses a dump that proves nothing: no account, a failing fsck, or a database that lists a different number of repositories than are on disk |
 | `backup` | the export, then `compose_app`'s backup manifest (the data root, export included) |
 | `restore` | see "Migrating in" |
@@ -107,6 +111,52 @@ the secret store and never printed (read the key names first: `sudo docker exec 
 tool that does not echo them). The SSH host keys are the other carried identity: copied, a client's
 `known_hosts` entry for the old address and for the new name verifies the same key.
 
+### Where the secrets live (and what Gitea writes back)
+
+- `<gitea_dir>/appsecrets/{secret_key,internal_token,jwt_secret}` (0440, root and the container's
+  group) and `<gitea_dir>/tls/server.key`, `sshkeys/*` (0440): the sources, rewritten from the
+  secret store on every run.
+- **`<gitea_data_root>/conf/app.ini`**: the image's entrypoint turns every `GITEA__...` setting
+  (a `__FILE` one is read first) into the configuration file, and so **writes the resolved values
+  of the three secrets into `app.ini`**. That cannot be avoided with this image. It is held by
+  the directory: `conf/` is 0700 and the container's user's, so only that user and root on the
+  guest can read the file, whatever mode the product gives it. Anything that copies `conf/`
+  (a file-level backup of the data root: `backup` does include it) copies the secrets and must be
+  treated as secret-bearing.
+- A process in the container sees the values only as the product's own memory and its
+  configuration file. A member of the `docker` group sees paths in `docker inspect`, and cannot
+  read `appsecrets/` (0750, not their group) or `conf/` (0700) without root.
+
+## The export is secret-bearing
+
+`gitea dump` writes `app.ini`, so a stock `dump.zip` carries the three application secrets. The
+export therefore **leaves the configuration out** (`hnx_gitea.py strip`, and the same in
+`tools/migrate/forge.py dump`): the restore never read it (the configuration comes from the
+secret store), and `manifest.json` records an HMAC-SHA256 *fingerprint* of each secret instead
+(`app_key_fingerprints`, `config_included: false`). Everything else in the export is still sensitive: the
+database holds every account's **password hash**, access-token hashes and two-factor material
+encrypted under `SECRET_KEY`, `data/jwt` holds the signing key, and the repositories are the data.
+So the export directory is 0700 (the container's user), every file in it 0600 (`dump.zip`,
+`manifest.json`, `repos.tsv`, `listing.jsonl`, `dump.zip.prev`), and it belongs in the backup
+documentation as **secret-bearing**: copy it only to storage that is encrypted and access
+controlled, never to `/tmp`, never into a repository. `backup` (the data root, `conf/`
+included) is secret-bearing for the reason in "Where the secrets live". An export is not a
+substitute for the secrets: restoring it needs the same three application secrets (next section).
+
+## The three application secrets must be the source's (checked)
+
+A migration under a fresh `SECRET_KEY` restores and passes every count, fingerprint and fsck, and
+then every account's two-factor seed and stored credential is unreadable. So it is a check, not a
+step to remember. `dump` records `app_key_fingerprints` (HMAC-SHA256 of a fixed message keyed by each secret,
+computed from the source's configuration file in memory; a fingerprint reveals nothing about the
+value and neither the tool nor the role prints a secret). Then:
+
+- the role's **`restore` refuses** (before touching anything) when the configured
+  `gitea/secret-key`, `internal-token` or `jwt-secret` does not produce the manifest's
+  fingerprint, naming the secret, and refuses a manifest with no fingerprints;
+- **`forge.py verify` refuses** (exit 1) when the target's own configuration file does not
+  produce them.
+
 ## The registry (your own images by digest)
 
 Gitea's package registry is on, and its container registry answers on the same HTTPS port at
@@ -136,7 +186,10 @@ overlay grants it; the token is in no image, no compose file and no log). A **pu
 reference a module uses is `repo:tag@sha256:digest`, so what a guest runs is the bytes that were
 reviewed whatever the tag later points at, and `compose_app` already refuses an unpinned image. The
 digest is the control; the registry is only where the bytes are fetched from. (4) With
-`gitea_registry_pull_user` set, health proves the pull account's token is accepted.
+`gitea_registry_pull_user` set, health proves the pull account's token is accepted **and is read-only by what
+the service refuses it**: a write to the registry (opening a blob upload), a write through the API
+(creating a repository) and a read outside the registry (`/api/v1/user`) must each be answered 401 or
+403, so a token scoped `write:package` (or wider) turns health red.
 
 The registry serves `docker pull` and `docker push`, so it is reachable by every guest that pulls:
 the site's firewall admits those guests to `gitea_port`, and only the build machine may push (a
@@ -184,7 +237,7 @@ restored:
 
 ```sh
 # 0. the rehearsal copy (the source keeps running; nothing on it is changed)
-T=tools/migrate/gitea.py
+T=tools/migrate/forge.py
 SRC="--ssh root@<source> --container docs-core-gitea --exec-user git --config /data/gitea/conf/app.ini \
      --work-dir /data/gitea --repos-root /data/git/repositories --db-path /data/gitea/gitea.db"
 python3 $T dump $SRC --allow-live --dir <private dir, not /tmp>/forge-rehearsal      # exit 0
@@ -202,8 +255,11 @@ python3 $T verify $TGT --dir <that dir>                                         
 For the **cutover window**: `python3 $T freeze $SRC` (stops the source container: the only write
 the tool ever makes to it), `dump` again **without** `--allow-live` (a running source is refused),
 `stage`, restore, `verify --require-quiescent` (refuses an export taken from a source that ran), and
-only then change DNS and the firewall. `unfreeze` starts the source again if the window is
-abandoned. The source stays stopped, not deleted, until the operator signs off.
+only then change DNS and the firewall. `freeze` first sets the source's restart policy to `no` (a container restarted by `always` after a host
+reboot would be a second live instance) and prints the policy it had (`restart_policy_was`);
+`unfreeze --restart <that policy>` starts the source again if the window is abandoned (**never after
+the cutover**: both would serve). `verify` reads the target's database file without its WAL: run it
+with the target quiescent (right after the restore, before people use it). The source stays stopped, not deleted, until the operator signs off.
 
 **What the restore does and checks** (`tasks/restore.yml`, `files/gitea_restore.py`):
 
@@ -212,7 +268,8 @@ abandoned. The source stays stopped, not deleted, until the operator signs off.
    version **not newer** than the image, with accounts and repositories (an empty export is
    refused unless `gitea_restore_allow_empty`), every repository's fsck `ok`, one `repos.tsv` line
    per repository the database lists; and the database inside the archive says what the manifest
-   says (counts and fingerprint).
+   says (counts and fingerprint); and the configured application secrets are the source's (their
+   fingerprints equal the manifest's).
 2. *Placing*: with the service stopped, the archive is read member by member (an absolute name,
    `..`, a backslash or a link is refused; only `repos/` and the avatars, attachments, packages,
    signing keys and custom directories of `data/` are taken: the SSH host keys, configuration and

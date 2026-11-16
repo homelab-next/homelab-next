@@ -24,7 +24,11 @@ container that runs the instance; nothing here names a host, an address or a lab
   ``git fsck`` verdict, ``manifest.json`` the product version, the database's row counts and
   content fingerprint (read from the dump itself) and whether the source was stopped for the
   whole run (``frozen``/``quiescent``), and ``listing.jsonl`` the sha256 of the files.  The export
-  is the format the provider's role restores (the role's ``restore_source``).
+  is the format the provider's role restores (the role's ``restore_source``).  The product's dump
+  carries the configuration file, which holds the three application secrets: the export is made
+  WITHOUT it, and the manifest records an HMAC-SHA256 fingerprint of each secret instead (never a
+  value).  The files are 0600 in a 0700 directory all the same: the database inside holds every
+  account's password hash, and the repositories are the data.
 * :func:`stage` -- copy an export into a new directory under the target's data root over ssh
   (mode 0700, nothing overwritten); the role's restore reads it from there.
 * :func:`verify` -- on the target, **independently of the restore's own checks**: the database's
@@ -32,7 +36,10 @@ container that runs the instance; nothing here names a host, an address or a lab
   and fsck verdict, against the export; zero accounts or repositories where the export has some is
   an error.
 * :func:`freeze` / :func:`unfreeze` -- stop / start the instance's container (a *write*, done only
-  in the cutover window, only to stop and start).
+  in the cutover window, only to stop and start).  ``freeze`` first sets the restart policy to
+  ``no`` (a container with ``always`` would come back with the host: split brain) and reports the
+  policy it had; ``unfreeze --restart <policy>`` puts it back.  Never ``unfreeze`` the source after
+  the cutover.
 
 **The final delta.** A copy taken while people push is already stale: the cutover is ``freeze``,
 ``dump`` again (refused while the source runs, unless ``--allow-live``), ``stage``, the role's
@@ -48,6 +55,7 @@ lies outside the target's data root or is the export itself on the same host.
 from __future__ import annotations
 
 import argparse
+import configparser
 import hashlib
 import importlib.util
 import json
@@ -124,6 +132,15 @@ def _load_helper():
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+#: where each application secret lives in the instance's configuration file: name -> (section, key)
+SECRET_KEYS = {
+    "secret_key": ("security", "SECRET_KEY"),
+    "internal_token": ("security", "INTERNAL_TOKEN"),
+    "jwt_secret": ("oauth2", "JWT_SECRET"),
+}
+_RESTART_POLICIES = ("no", "always", "unless-stopped", "on-failure")
 
 
 def repos_script() -> str:
@@ -266,6 +283,35 @@ def _repo_lines(ctx: _Ctx, ep: Endpoint) -> list[str]:
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
+def _secret_fingerprints(ctx: _Ctx, ep: Endpoint, helper) -> dict:
+    """HMAC fingerprints of the endpoint's three application secrets, read from its configuration
+    file in memory (never printed, never written); a secret the file does not hold in plain text
+    (a ``*_URI`` file reference, say) is an error, not a skipped check."""
+    text = _in(ctx, ep, ["cat", ep.config]).decode("utf-8", "replace")
+    ini = configparser.ConfigParser(interpolation=None, strict=False, allow_no_value=True)
+    ini.optionxform = str  # type: ignore[assignment]  # the product's keys are case-sensitive
+    try:
+        ini.read_string(text)
+    except configparser.Error as exc:
+        raise MigrateError(
+            f"{ep.config}: not readable as a configuration ({type(exc).__name__})"
+        ) from None
+    values = {}
+    for name, (section, key) in SECRET_KEYS.items():
+        raw = ini.get(section, key, fallback=None)
+        value = (raw or "").strip().strip("`\"'")
+        if not value:
+            raise MigrateError(
+                f"{ep.config}: no {key} in [{section}] in plain text: cannot prove the secret is "
+                "the same on both sides (a *_URI or file reference is not supported)"
+            )
+        values[name] = value
+    try:
+        return helper.secret_fingerprints(values)
+    except helper.HelperError as exc:
+        raise MigrateError(str(exc)) from None
+
+
 def inventory(ep: Endpoint, *, _ctx: _Ctx | None = None) -> dict:
     """The repositories' manifest of a live endpoint (a read)."""
     ctx = _ctx or _Ctx()
@@ -360,6 +406,16 @@ def dump(
                 stdout=f,
             )
         helper = _load_helper()
+        # the dump holds the configuration, which holds the application secrets: the export is
+        # without it (the restore rebuilds the configuration from the secret store) and records
+        # only a fingerprint of the secrets, which verify compares with the target's
+        secrets = _secret_fingerprints(ctx, source, helper)
+        stripped = out / ".dump.stripped"
+        try:
+            helper.strip_config(str(zpath), str(stripped))
+            os.replace(stripped, zpath)
+        finally:
+            stripped.unlink(missing_ok=True)  # the one other file this run created
         try:
             facts = helper.dbcounts({"zip": str(zpath)})
         except helper.HelperError as exc:
@@ -377,6 +433,8 @@ def dump(
         "image": _image(ctx, source),
         "counts": facts["counts"],
         "fingerprint": facts["fingerprint"],
+        "app_key_fingerprints": secrets,
+        "config_included": False,
         "repositories": len(after),
         "source": {"frozen": frozen, "quiescent": frozen and before == after},
     }
@@ -451,6 +509,12 @@ def verify(
         if tmp.is_file() and not tmp.is_symlink() and tmp.parent.resolve() == src.resolve():
             tmp.unlink()
     problems = []
+    try:
+        helper.compare_fingerprints(
+            _secret_fingerprints(ctx, target, helper), manifest.get("app_key_fingerprints")
+        )
+    except helper.HelperError as exc:
+        problems.append(str(exc))
     if facts["counts"] != manifest["counts"]:
         diff = {
             k: (manifest["counts"].get(k), facts["counts"].get(k))
@@ -512,14 +576,47 @@ def stage(
 
 
 def freeze(source: Endpoint, *, _ctx: _Ctx | None = None) -> dict:
-    """Stop the instance (a write: only in the cutover window, only to stop)."""
+    """Stop the instance (a write: only in the cutover window, only to stop).
+
+    A container whose restart policy is ``always`` or ``unless-stopped`` would come back with its
+    host (two live instances: split brain), so the policy is set to ``no`` first and the one it had
+    is returned: pass it to :func:`unfreeze` (``--restart``) to put it back."""
     ctx = _ctx or _Ctx()
+    was = (
+        _run(
+            ctx,
+            source,
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{.HostConfig.RestartPolicy.Name}}",
+                source.container,
+            ],
+        )
+        .decode()
+        .strip()
+        or "no"
+    )
+    if was != "no":
+        _run(ctx, source, ["docker", "update", "--restart=no", source.container])
     _run(ctx, source, ["docker", "stop", source.container])
-    return {"stopped": source.container, "running": _running(ctx, source)}
+    return {
+        "stopped": source.container,
+        "running": _running(ctx, source),
+        "restart_policy_was": was,
+    }
 
 
-def unfreeze(source: Endpoint, *, _ctx: _Ctx | None = None) -> dict:
+def unfreeze(source: Endpoint, *, restart: str | None = None, _ctx: _Ctx | None = None) -> dict:
+    """Start the instance again, first putting back the restart policy ``freeze`` reported.
+
+    Never do this after the cutover: the source and the target would both serve."""
     ctx = _ctx or _Ctx()
+    if restart is not None:
+        if restart not in _RESTART_POLICIES:
+            raise MigrateError(f"--restart: one of {', '.join(_RESTART_POLICIES)}")
+        _run(ctx, source, ["docker", "update", f"--restart={restart}", source.container])
     _run(ctx, source, ["docker", "start", source.container])
     return {"started": source.container, "running": _running(ctx, source)}
 
@@ -564,6 +661,11 @@ def _parser() -> argparse.ArgumentParser:
         help="accept an instance with no account or repository",
     )
     ap.add_argument(
+        "--restart",
+        choices=_RESTART_POLICIES,
+        help="unfreeze: the restart policy freeze reported (restart_policy_was), put back before the start",
+    )
+    ap.add_argument(
         "--require-quiescent",
         action="store_true",
         help="verify: refuse an export not taken from a frozen source",
@@ -592,7 +694,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif a.command == "freeze":
             result = freeze(ep)
         else:
-            result = unfreeze(ep)
+            result = unfreeze(ep, restart=a.restart)
     except VerifyMismatch as e:
         print(f"forge-migrate: {e}", file=sys.stderr)
         return 1
