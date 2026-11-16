@@ -15,26 +15,32 @@ import json
 import urllib.request
 from typing import Any
 
+from homelabnext._http import no_redirect_urlopen, read_bounded
 from homelabnext.conform.adapters._env import resolve
 
 __all__ = ["ChatProbe", "make"]
 
 
 class ChatProbe:
+    """A bounded, redirect-free reader of the app's two anonymous JSON endpoints."""
+
     def __init__(self, base_url: str, timeout: float = 10.0) -> None:
         self._base = base_url.rstrip("/")
         self._timeout = timeout
 
-    def _get(self, path: str) -> str:
-        req = urllib.request.Request(self._base + path, method="GET")
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:
-            return r.read().decode("utf-8")
+    def _json(self, path: str) -> dict[str, Any]:
+        req = urllib.request.Request(self._base + path, headers={"Accept": "application/json"})
+        with no_redirect_urlopen(req, timeout=self._timeout) as resp:
+            doc = json.loads(read_bounded(resp))
+        if not isinstance(doc, dict):
+            raise ValueError(f"{path}: not a JSON object")
+        return doc
 
     def health(self) -> bool:
-        return json.loads(self._get("/health")).get("status") is True
+        return self._json("/health").get("status") is True
 
     def config(self) -> dict[str, Any]:
-        return json.loads(self._get("/api/config"))
+        return self._json("/api/config")
 
     def deployed(self) -> bool:
         """An administrator exists and sign-up is off."""
