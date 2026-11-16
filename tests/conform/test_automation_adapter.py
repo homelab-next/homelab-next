@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import secrets
 import socket
 import socketserver
 import threading
@@ -18,7 +19,9 @@ from homelabnext.conform.adapters import automation as adapter
 from homelabnext.conform.adapters._env import AdapterConfigError
 
 LOOPBACK = socket.gethostbyname("localhost")
-KEY = "k-0123456789abcdef"
+KEY = secrets.token_urlsafe(
+    12
+)  # a fresh stand-in per run: nothing a scanner could take for a credential
 
 
 class _Quick(http.server.HTTPServer):

@@ -28,7 +28,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import jinja2
 import pytest
 import yaml
 from rolerun import run_cases, run_role
@@ -429,6 +428,7 @@ def test_the_containers_join_the_role_slice_the_module_play_names(tmp_path):
 
 
 def _render(template: str, **vars_) -> str:
+    jinja2 = pytest.importorskip("jinja2", reason="jinja2 is not installed")
     env = jinja2.Environment(undefined=jinja2.StrictUndefined, keep_trailing_newline=True)
     return env.from_string((ROLE_DIR / "templates" / template).read_text()).render(**vars_)
 
