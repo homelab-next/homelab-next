@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+id: guest:infer-multi
+kind: vm
+provisioning: terraform
+placement: {node: hv-a, vmid: 231, vmid_scheme: freeform}
+resources:
+  cpu: {cores: 16}
+  memory: {size_mb: 65536}
+  disks:
+    - {name: rootfs, size_gb: 40, pool: fast}
+image: {logical: debian-12-cloudinit, kind: template-clone, os_type: linux-6}
+cloudinit: {user: ansible, ssh_authorized_keys: [operator]}
+network: {zone: compute, ip: 198.51.100.131}
+gpu: {profile: accel-a, resource_mapping: gpu-a, count: 4, tensor_parallel: 4}
+capability: cap:inference
+owners: {primary: ml-team}

@@ -216,13 +216,16 @@ def _vm(fleet: Fleet, g: Guest) -> str:
         L += ["", "  operating_system {", f"    type = {hq(_pve_ostype(img['os_type']))}", "  }"]
     if g.gpu:
         mapping = g.gpu.get("resource_mapping")
-        L += ["", "  hostpci {", '    device = "hostpci0"']
-        L.append(
-            f"    mapping = {hq(mapping)}"
-            if mapping
-            else "    # resource_mapping unset: set one before apply"
-        )
-        L += ["    pcie   = true", "  }"]
+        # gpu.count devices of the one mapping: each hostpciN names it and the hypervisor gives
+        # each a free device of it (PVE::QemuServer::PCI choose_hostpci_devices)
+        for i in range(int(g.gpu.get("count") or 1)):
+            L += ["", "  hostpci {", f'    device = "hostpci{i}"']
+            L.append(
+                f"    mapping = {hq(mapping)}"
+                if mapping
+                else "    # resource_mapping unset: set one before apply"
+            )
+            L += ["    pcie   = true", "  }"]
     ci = g.cloudinit
     if ci:
         L += ["", "  initialization {"]

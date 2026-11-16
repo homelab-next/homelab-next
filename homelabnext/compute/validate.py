@@ -389,6 +389,18 @@ def _check_guest(g: Guest, fleet: Fleet) -> list[Problem]:
             )
     if g.gpu is not None and g.kind != "vm":
         out.append(Problem(g.id, "gpu requires kind vm"))
+    if g.gpu is not None:
+        count, tp = g.gpu.get("count"), g.gpu.get("tensor_parallel")
+        # only an explicit count is held to tensor_parallel: a guest that never set one keeps the
+        # one-device render it always had
+        if (
+            isinstance(count, int)
+            and not isinstance(count, bool)
+            and isinstance(tp, int)
+            and not isinstance(tp, bool)
+            and tp > count
+        ):
+            out.append(Problem(g.id, f"gpu.tensor_parallel {tp} exceeds gpu.count {count}"))
     if g.provisioning == "manual" and not g.lifecycle.get("requires_root_steps"):
         out.append(
             Problem(
