@@ -264,6 +264,7 @@ MIGRATION_PROOF = {
     "projects": "reference: the projects protocol has no export/import_ yet",
     "records": "reference: the records protocol has no export/import_ yet",
     "secrets": "reference: the secrets protocol has no export/import_ yet",
+    "tts": "reference: the slot is provisional (no contract), so nothing can add export/import_",
 }
 
 

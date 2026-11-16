@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - tts_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - tts_image is match(tts_ref_pattern)
+      - tts_tag is not match('^latest\Z')
+      - tts_backend in tts_backends
+      # the image is built for one backend: its tag says which, and it must be the one configured
+      - tts_tag.endswith('-' ~ tts_backend)
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - tts_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - tts_bind != '0.0.0.0'
+      - tts_port | int >= 1024 and tts_port | int <= 65535
+      - tts_uid | int >= 1000 and tts_gid | int >= 1000
+      - tts_image_archive == '' or tts_image_archive is match(tts_path_pattern)
+      - >-
+        [tts_dir, tts_data_root, tts_cache_dir, tts_store_root] | reject('match', tts_path_pattern) | list | length == 0
+      # state never inside the weights' store, and the store never inside the module's state
+      - not (tts_data_root ~ '/').startswith(tts_store_root ~ '/') and not (tts_store_root ~ '/').startswith(tts_data_root ~ '/')
+      - not (tts_cache_dir ~ '/').startswith(tts_data_root ~ '/') and not (tts_data_root ~ '/').startswith(tts_cache_dir ~ '/')
+      - tts_model_repo is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\Z')
+      - tts_model_revision is match('^[0-9a-f]{40}\Z')
+      - tts_model_store_id is match('^[a-z][a-z0-9]*([-.][a-z0-9]+)*\Z')
+      - tts_model_digest is match(tts_digest_pattern)
+      - tts_models_gid | string == '' or tts_models_gid | string is match('^[1-9][0-9]{0,9}\Z')
+      - tts_voice_files is sequence and tts_voice_files is not string
+      - tts_voice_files | length >= 1 and tts_voice_files | length <= 16
+      - tts_voice_files | reject('match', tts_file_pattern) | list | length == 0
+      - tts_voice_files | unique | list | length == tts_voice_files | length
+      - tts_voice_expected_sha256 is mapping
+      - tts_voice_expected_sha256 | dict2items | map(attribute='key') | difference(tts_voice_files) | list | length == 0
+      - tts_voice_expected_sha256 | dict2items | map(attribute='value') | reject('match', '^[0-9a-f]{64}\Z') | list | length == 0
+      - tts_idle_unload_s | string == '' or tts_idle_unload_s | string is match('^[0-9]{1,6}\Z')
+      - tts_power_cap_max_watts | int >= 1 and tts_power_cap_max_watts | int <= tts_power_cap_ceiling_watts
+      - tts_gpu_index | int >= 0 and tts_gpu_index | int <= 63
+      - tts_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - tts_start is boolean and tts_validate_with_docker is boolean
+      - tts_check_timeout_s | int >= 10
+      - tts_check_min_seconds | float > 0 and tts_check_max_seconds | float > tts_check_min_seconds | float
+    fail_msg: >-
+      tts: a registry id, an image pinned by tag and digest whose tag ends in -<backend> (never latest), the
+      backend cpu or cuda, the guest's IPv4 address to publish on (not all interfaces), a port of 1024
+      or more, a container uid and gid of 1000 or more, absolute canonical directories with the data
+      root and the cache outside the model store and each other, the model repository, a 40-hex revision
+      and a sha256 digest, one to sixteen distinct .wav file names for the voice (and 64-hex sha256s
+      for those only), an idle timeout in whole seconds or empty, a power cap limit of 1 to
+      {{ tts_power_cap_ceiling_watts }} W (the operator's rule cannot be loosened), a card index, a
+      memory limit like 12g and a duration range for the health check
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: The image is the lab's own build
+  ansible.builtin.assert:
+    that:
+      - tts_build_repositories is sequence and tts_build_repositories is not string
+      - tts_build_repositories | length > 0
+      - tts_repository in tts_build_repositories
+    fail_msg: >-
+      tts: {{ tts_image | truncate(100) | to_json }} is not the lab's own build: this module runs the
+      image built from this repository (modules/tts/image/Dockerfile), from one of
+      {{ tts_build_repositories }} (tts_build_repositories), and no other image
+  tags: [health, backup, restore, export, upgrade, readiness]

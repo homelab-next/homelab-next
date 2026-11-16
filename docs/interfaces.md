@@ -556,7 +556,7 @@ change until its ADR is accepted):
 | `platform/mcp_server` | 1.4 | `schemas/platform/mcp_server.schema.json` | stable |
 | `platform/model_roles` | 1.4 | `schemas/platform/model_roles.json` | stable |
 | `platform/model_serving` | 2.0 | `schemas/platform/model_serving.schema.json` | stable |
-| `platform/model_store` | 1.0 | `schemas/platform/model_store.schema.json` | stable |
+| `platform/model_store` | 1.1 | `schemas/platform/model_store.schema.json` | stable |
 | `platform/module` | 1.0 | `schemas/platform/module.schema.json` | draft |
 | `platform/module_inventory` | 1.0 | `schemas/platform/module_inventory.schema.json` | draft |
 | `platform/module_lock` | 1.0 | `schemas/platform/module_lock.schema.json` | draft |

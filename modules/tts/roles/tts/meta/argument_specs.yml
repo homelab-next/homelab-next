@@ -1,0 +1,1067 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: 'Run the cloned-voice speech service as a compose_app container: the voice model
+      from the model store (read-only), the operator''s recordings as data, loaded per job, unloaded when
+      idle.'
+    options:
+      tts_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. tts).
+        required: true
+      tts_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (the tag
+          ends in -<backend>); no default: there is no published image to pin.'
+        required: true
+      tts_backend:
+        type: str
+        description: 'The engine backend: cpu, or cuda (NVIDIA, the card handed over by its CDI device,
+          loaded per job and unloaded when idle).'
+        default: cpu
+      tts_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest (the guest cannot pull: the image is built by the lab); empty: the daemon must have
+          it.'
+        default: ''
+      tts_build_repositories:
+        type: list
+        description: 'The repositories tts_image may name: the image built from this repository; any other
+          is refused.'
+        elements: str
+        default:
+        - localhost/hnx-tts
+      tts_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      tts_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8091
+      tts_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/tts
+      tts_data_root:
+        type: path
+        description: 'The module''s data root on the host: voice/ (the reference recordings), state/ (the
+          embeddings cache) and export/. Backed up.'
+        default: /var/lib/hnx-modules/tts
+      tts_cache_dir:
+        type: path
+        description: 'Scratch the libraries want (compiled kernels, a home directory): rebuilt, never
+          backed up.'
+        default: /var/cache/hnx-modules/tts
+      tts_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      tts_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns state/, the cache and
+          export/.
+        default: 61012
+      tts_gid:
+        type: int
+        description: The container's group id.
+        default: 61012
+      tts_store_root:
+        type: path
+        description: The model store root (role model_store); the entry's directory is mounted read-only.
+        default: /srv/models
+      tts_model_repo:
+        type: str
+        description: 'The voice model''s source repository (org/name): its directory under <store>/hf/hub/.'
+        default: coqui/XTTS-v2
+      tts_model_revision:
+        type: str
+        description: The pinned 40-hex commit of the model entry (the snapshot directory the service loads
+          from).
+        default: 6c2b0d75eae4b7047358e3b6bd9325f857d43f77
+      tts_model_store_id:
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: xtts-v2
+      tts_model_digest:
+        type: str
+        description: 'The entry''s digest, sha256: of its sha256sum listing (hnx models store list); the
+          service checks the listing against it and every file against the listing before every load.'
+        default: sha256:41212ef70a20240010e3846a6ff1dbb445409e21690f849e09384cdc7112bd24
+      tts_models_gid:
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      tts_voice_files:
+        type: list
+        description: 'The reference recordings (file names in <data root>/voice): the voice itself; the
+          service needs all of them.'
+        elements: str
+        default:
+        - ref1.wav
+        - ref2.wav
+        - ref3.wav
+        - ref4.wav
+      tts_voice_expected_sha256:
+        type: dict
+        description: 'Optional {file name: sha256} of recordings the site pins; each listed file must
+          be exactly those bytes before start, in health and in a restore.'
+        default: {}
+      tts_idle_unload_s:
+        type: str
+        description: 'Seconds idle before the engine is unloaded (the card''s memory freed); empty: 120
+          on cuda, never on cpu; 0 means never.'
+        default: ''
+      tts_power_cap_max_watts:
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (at every load): the
+          operator''s rule, 200 W; it can only be tightened.'
+        default: 200
+      tts_gpu_index:
+        type: int
+        description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>)
+          and nvidia-smi''s -i.'
+        default: 0
+      tts_mem_limit:
+        type: str
+        description: The container's memory limit, like 12g.
+        default: 12g
+      tts_start:
+        type: bool
+        description: 'Start (and wait for) the service (false: render only).'
+        default: true
+      tts_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      tts_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      tts_check_timeout_s:
+        type: int
+        description: Seconds the health hook's real synthesis may take (it may load the model; a CPU render
+          is tens of seconds).
+        default: 900
+      tts_check_min_seconds:
+        type: float
+        description: The shortest the health check's WAV may be, in seconds.
+        default: 0.8
+      tts_check_max_seconds:
+        type: float
+        description: The longest the health check's WAV may be, in seconds.
+        default: 15
+  health:
+    short_description: Fail unless the container is healthy, /health and /ready say so and one real synthesis
+      of a fixed sentence comes back as a 24 kHz mono WAV of a plausible length.
+    options:
+      tts_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. tts).
+        required: true
+      tts_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (the tag
+          ends in -<backend>); no default: there is no published image to pin.'
+        required: true
+      tts_backend:
+        type: str
+        description: 'The engine backend: cpu, or cuda (NVIDIA, the card handed over by its CDI device,
+          loaded per job and unloaded when idle).'
+        default: cpu
+      tts_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest (the guest cannot pull: the image is built by the lab); empty: the daemon must have
+          it.'
+        default: ''
+      tts_build_repositories:
+        type: list
+        description: 'The repositories tts_image may name: the image built from this repository; any other
+          is refused.'
+        elements: str
+        default:
+        - localhost/hnx-tts
+      tts_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      tts_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8091
+      tts_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/tts
+      tts_data_root:
+        type: path
+        description: 'The module''s data root on the host: voice/ (the reference recordings), state/ (the
+          embeddings cache) and export/. Backed up.'
+        default: /var/lib/hnx-modules/tts
+      tts_cache_dir:
+        type: path
+        description: 'Scratch the libraries want (compiled kernels, a home directory): rebuilt, never
+          backed up.'
+        default: /var/cache/hnx-modules/tts
+      tts_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      tts_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns state/, the cache and
+          export/.
+        default: 61012
+      tts_gid:
+        type: int
+        description: The container's group id.
+        default: 61012
+      tts_store_root:
+        type: path
+        description: The model store root (role model_store); the entry's directory is mounted read-only.
+        default: /srv/models
+      tts_model_repo:
+        type: str
+        description: 'The voice model''s source repository (org/name): its directory under <store>/hf/hub/.'
+        default: coqui/XTTS-v2
+      tts_model_revision:
+        type: str
+        description: The pinned 40-hex commit of the model entry (the snapshot directory the service loads
+          from).
+        default: 6c2b0d75eae4b7047358e3b6bd9325f857d43f77
+      tts_model_store_id:
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: xtts-v2
+      tts_model_digest:
+        type: str
+        description: 'The entry''s digest, sha256: of its sha256sum listing (hnx models store list); the
+          service checks the listing against it and every file against the listing before every load.'
+        default: sha256:41212ef70a20240010e3846a6ff1dbb445409e21690f849e09384cdc7112bd24
+      tts_models_gid:
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      tts_voice_files:
+        type: list
+        description: 'The reference recordings (file names in <data root>/voice): the voice itself; the
+          service needs all of them.'
+        elements: str
+        default:
+        - ref1.wav
+        - ref2.wav
+        - ref3.wav
+        - ref4.wav
+      tts_voice_expected_sha256:
+        type: dict
+        description: 'Optional {file name: sha256} of recordings the site pins; each listed file must
+          be exactly those bytes before start, in health and in a restore.'
+        default: {}
+      tts_idle_unload_s:
+        type: str
+        description: 'Seconds idle before the engine is unloaded (the card''s memory freed); empty: 120
+          on cuda, never on cpu; 0 means never.'
+        default: ''
+      tts_power_cap_max_watts:
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (at every load): the
+          operator''s rule, 200 W; it can only be tightened.'
+        default: 200
+      tts_gpu_index:
+        type: int
+        description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>)
+          and nvidia-smi''s -i.'
+        default: 0
+      tts_mem_limit:
+        type: str
+        description: The container's memory limit, like 12g.
+        default: 12g
+      tts_start:
+        type: bool
+        description: 'Start (and wait for) the service (false: render only).'
+        default: true
+      tts_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      tts_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      tts_check_timeout_s:
+        type: int
+        description: Seconds the health hook's real synthesis may take (it may load the model; a CPU render
+          is tens of seconds).
+        default: 900
+      tts_check_min_seconds:
+        type: float
+        description: The shortest the health check's WAV may be, in seconds.
+        default: 0.8
+      tts_check_max_seconds:
+        type: float
+        description: The longest the health check's WAV may be, in seconds.
+        default: 15
+  readiness:
+    short_description: Fail unless the container engine is ready, the model's weights and listing are
+      in the store and the voice recordings are there.
+    options:
+      tts_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. tts).
+        required: true
+      tts_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (the tag
+          ends in -<backend>); no default: there is no published image to pin.'
+        required: true
+      tts_backend:
+        type: str
+        description: 'The engine backend: cpu, or cuda (NVIDIA, the card handed over by its CDI device,
+          loaded per job and unloaded when idle).'
+        default: cpu
+      tts_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest (the guest cannot pull: the image is built by the lab); empty: the daemon must have
+          it.'
+        default: ''
+      tts_build_repositories:
+        type: list
+        description: 'The repositories tts_image may name: the image built from this repository; any other
+          is refused.'
+        elements: str
+        default:
+        - localhost/hnx-tts
+      tts_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      tts_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8091
+      tts_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/tts
+      tts_data_root:
+        type: path
+        description: 'The module''s data root on the host: voice/ (the reference recordings), state/ (the
+          embeddings cache) and export/. Backed up.'
+        default: /var/lib/hnx-modules/tts
+      tts_cache_dir:
+        type: path
+        description: 'Scratch the libraries want (compiled kernels, a home directory): rebuilt, never
+          backed up.'
+        default: /var/cache/hnx-modules/tts
+      tts_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      tts_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns state/, the cache and
+          export/.
+        default: 61012
+      tts_gid:
+        type: int
+        description: The container's group id.
+        default: 61012
+      tts_store_root:
+        type: path
+        description: The model store root (role model_store); the entry's directory is mounted read-only.
+        default: /srv/models
+      tts_model_repo:
+        type: str
+        description: 'The voice model''s source repository (org/name): its directory under <store>/hf/hub/.'
+        default: coqui/XTTS-v2
+      tts_model_revision:
+        type: str
+        description: The pinned 40-hex commit of the model entry (the snapshot directory the service loads
+          from).
+        default: 6c2b0d75eae4b7047358e3b6bd9325f857d43f77
+      tts_model_store_id:
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: xtts-v2
+      tts_model_digest:
+        type: str
+        description: 'The entry''s digest, sha256: of its sha256sum listing (hnx models store list); the
+          service checks the listing against it and every file against the listing before every load.'
+        default: sha256:41212ef70a20240010e3846a6ff1dbb445409e21690f849e09384cdc7112bd24
+      tts_models_gid:
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      tts_voice_files:
+        type: list
+        description: 'The reference recordings (file names in <data root>/voice): the voice itself; the
+          service needs all of them.'
+        elements: str
+        default:
+        - ref1.wav
+        - ref2.wav
+        - ref3.wav
+        - ref4.wav
+      tts_voice_expected_sha256:
+        type: dict
+        description: 'Optional {file name: sha256} of recordings the site pins; each listed file must
+          be exactly those bytes before start, in health and in a restore.'
+        default: {}
+      tts_idle_unload_s:
+        type: str
+        description: 'Seconds idle before the engine is unloaded (the card''s memory freed); empty: 120
+          on cuda, never on cpu; 0 means never.'
+        default: ''
+      tts_power_cap_max_watts:
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (at every load): the
+          operator''s rule, 200 W; it can only be tightened.'
+        default: 200
+      tts_gpu_index:
+        type: int
+        description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>)
+          and nvidia-smi''s -i.'
+        default: 0
+      tts_mem_limit:
+        type: str
+        description: The container's memory limit, like 12g.
+        default: 12g
+      tts_start:
+        type: bool
+        description: 'Start (and wait for) the service (false: render only).'
+        default: true
+      tts_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      tts_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      tts_check_timeout_s:
+        type: int
+        description: Seconds the health hook's real synthesis may take (it may load the model; a CPU render
+          is tens of seconds).
+        default: 900
+      tts_check_min_seconds:
+        type: float
+        description: The shortest the health check's WAV may be, in seconds.
+        default: 0.8
+      tts_check_max_seconds:
+        type: float
+        description: The longest the health check's WAV may be, in seconds.
+        default: 15
+  backup:
+    short_description: Name the data root (the recordings and the embeddings); the weights are the model
+      store's.
+    options:
+      tts_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. tts).
+        required: true
+      tts_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (the tag
+          ends in -<backend>); no default: there is no published image to pin.'
+        required: true
+      tts_backend:
+        type: str
+        description: 'The engine backend: cpu, or cuda (NVIDIA, the card handed over by its CDI device,
+          loaded per job and unloaded when idle).'
+        default: cpu
+      tts_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest (the guest cannot pull: the image is built by the lab); empty: the daemon must have
+          it.'
+        default: ''
+      tts_build_repositories:
+        type: list
+        description: 'The repositories tts_image may name: the image built from this repository; any other
+          is refused.'
+        elements: str
+        default:
+        - localhost/hnx-tts
+      tts_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      tts_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8091
+      tts_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/tts
+      tts_data_root:
+        type: path
+        description: 'The module''s data root on the host: voice/ (the reference recordings), state/ (the
+          embeddings cache) and export/. Backed up.'
+        default: /var/lib/hnx-modules/tts
+      tts_cache_dir:
+        type: path
+        description: 'Scratch the libraries want (compiled kernels, a home directory): rebuilt, never
+          backed up.'
+        default: /var/cache/hnx-modules/tts
+      tts_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      tts_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns state/, the cache and
+          export/.
+        default: 61012
+      tts_gid:
+        type: int
+        description: The container's group id.
+        default: 61012
+      tts_store_root:
+        type: path
+        description: The model store root (role model_store); the entry's directory is mounted read-only.
+        default: /srv/models
+      tts_model_repo:
+        type: str
+        description: 'The voice model''s source repository (org/name): its directory under <store>/hf/hub/.'
+        default: coqui/XTTS-v2
+      tts_model_revision:
+        type: str
+        description: The pinned 40-hex commit of the model entry (the snapshot directory the service loads
+          from).
+        default: 6c2b0d75eae4b7047358e3b6bd9325f857d43f77
+      tts_model_store_id:
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: xtts-v2
+      tts_model_digest:
+        type: str
+        description: 'The entry''s digest, sha256: of its sha256sum listing (hnx models store list); the
+          service checks the listing against it and every file against the listing before every load.'
+        default: sha256:41212ef70a20240010e3846a6ff1dbb445409e21690f849e09384cdc7112bd24
+      tts_models_gid:
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      tts_voice_files:
+        type: list
+        description: 'The reference recordings (file names in <data root>/voice): the voice itself; the
+          service needs all of them.'
+        elements: str
+        default:
+        - ref1.wav
+        - ref2.wav
+        - ref3.wav
+        - ref4.wav
+      tts_voice_expected_sha256:
+        type: dict
+        description: 'Optional {file name: sha256} of recordings the site pins; each listed file must
+          be exactly those bytes before start, in health and in a restore.'
+        default: {}
+      tts_idle_unload_s:
+        type: str
+        description: 'Seconds idle before the engine is unloaded (the card''s memory freed); empty: 120
+          on cuda, never on cpu; 0 means never.'
+        default: ''
+      tts_power_cap_max_watts:
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (at every load): the
+          operator''s rule, 200 W; it can only be tightened.'
+        default: 200
+      tts_gpu_index:
+        type: int
+        description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>)
+          and nvidia-smi''s -i.'
+        default: 0
+      tts_mem_limit:
+        type: str
+        description: The container's memory limit, like 12g.
+        default: 12g
+      tts_start:
+        type: bool
+        description: 'Start (and wait for) the service (false: render only).'
+        default: true
+      tts_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      tts_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      tts_check_timeout_s:
+        type: int
+        description: Seconds the health hook's real synthesis may take (it may load the model; a CPU render
+          is tens of seconds).
+        default: 900
+      tts_check_min_seconds:
+        type: float
+        description: The shortest the health check's WAV may be, in seconds.
+        default: 0.8
+      tts_check_max_seconds:
+        type: float
+        description: The longest the health check's WAV may be, in seconds.
+        default: 15
+  export:
+    short_description: Write the exit copy of the recordings and the embeddings (tts-data.tar.gz and its
+      listing).
+    options:
+      tts_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. tts).
+        required: true
+      tts_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (the tag
+          ends in -<backend>); no default: there is no published image to pin.'
+        required: true
+      tts_backend:
+        type: str
+        description: 'The engine backend: cpu, or cuda (NVIDIA, the card handed over by its CDI device,
+          loaded per job and unloaded when idle).'
+        default: cpu
+      tts_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest (the guest cannot pull: the image is built by the lab); empty: the daemon must have
+          it.'
+        default: ''
+      tts_build_repositories:
+        type: list
+        description: 'The repositories tts_image may name: the image built from this repository; any other
+          is refused.'
+        elements: str
+        default:
+        - localhost/hnx-tts
+      tts_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      tts_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8091
+      tts_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/tts
+      tts_data_root:
+        type: path
+        description: 'The module''s data root on the host: voice/ (the reference recordings), state/ (the
+          embeddings cache) and export/. Backed up.'
+        default: /var/lib/hnx-modules/tts
+      tts_cache_dir:
+        type: path
+        description: 'Scratch the libraries want (compiled kernels, a home directory): rebuilt, never
+          backed up.'
+        default: /var/cache/hnx-modules/tts
+      tts_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      tts_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns state/, the cache and
+          export/.
+        default: 61012
+      tts_gid:
+        type: int
+        description: The container's group id.
+        default: 61012
+      tts_store_root:
+        type: path
+        description: The model store root (role model_store); the entry's directory is mounted read-only.
+        default: /srv/models
+      tts_model_repo:
+        type: str
+        description: 'The voice model''s source repository (org/name): its directory under <store>/hf/hub/.'
+        default: coqui/XTTS-v2
+      tts_model_revision:
+        type: str
+        description: The pinned 40-hex commit of the model entry (the snapshot directory the service loads
+          from).
+        default: 6c2b0d75eae4b7047358e3b6bd9325f857d43f77
+      tts_model_store_id:
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: xtts-v2
+      tts_model_digest:
+        type: str
+        description: 'The entry''s digest, sha256: of its sha256sum listing (hnx models store list); the
+          service checks the listing against it and every file against the listing before every load.'
+        default: sha256:41212ef70a20240010e3846a6ff1dbb445409e21690f849e09384cdc7112bd24
+      tts_models_gid:
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      tts_voice_files:
+        type: list
+        description: 'The reference recordings (file names in <data root>/voice): the voice itself; the
+          service needs all of them.'
+        elements: str
+        default:
+        - ref1.wav
+        - ref2.wav
+        - ref3.wav
+        - ref4.wav
+      tts_voice_expected_sha256:
+        type: dict
+        description: 'Optional {file name: sha256} of recordings the site pins; each listed file must
+          be exactly those bytes before start, in health and in a restore.'
+        default: {}
+      tts_idle_unload_s:
+        type: str
+        description: 'Seconds idle before the engine is unloaded (the card''s memory freed); empty: 120
+          on cuda, never on cpu; 0 means never.'
+        default: ''
+      tts_power_cap_max_watts:
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (at every load): the
+          operator''s rule, 200 W; it can only be tightened.'
+        default: 200
+      tts_gpu_index:
+        type: int
+        description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>)
+          and nvidia-smi''s -i.'
+        default: 0
+      tts_mem_limit:
+        type: str
+        description: The container's memory limit, like 12g.
+        default: 12g
+      tts_start:
+        type: bool
+        description: 'Start (and wait for) the service (false: render only).'
+        default: true
+      tts_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      tts_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      tts_check_timeout_s:
+        type: int
+        description: Seconds the health hook's real synthesis may take (it may load the model; a CPU render
+          is tens of seconds).
+        default: 900
+      tts_check_min_seconds:
+        type: float
+        description: The shortest the health check's WAV may be, in seconds.
+        default: 0.8
+      tts_check_max_seconds:
+        type: float
+        description: The longest the health check's WAV may be, in seconds.
+        default: 15
+  restore:
+    short_description: Restore the recordings and the embeddings from an export, staged and checked, the
+      live ones moved aside.
+    options:
+      tts_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. tts).
+        required: true
+      tts_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (the tag
+          ends in -<backend>); no default: there is no published image to pin.'
+        required: true
+      tts_backend:
+        type: str
+        description: 'The engine backend: cpu, or cuda (NVIDIA, the card handed over by its CDI device,
+          loaded per job and unloaded when idle).'
+        default: cpu
+      tts_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest (the guest cannot pull: the image is built by the lab); empty: the daemon must have
+          it.'
+        default: ''
+      tts_build_repositories:
+        type: list
+        description: 'The repositories tts_image may name: the image built from this repository; any other
+          is refused.'
+        elements: str
+        default:
+        - localhost/hnx-tts
+      tts_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      tts_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8091
+      tts_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/tts
+      tts_data_root:
+        type: path
+        description: 'The module''s data root on the host: voice/ (the reference recordings), state/ (the
+          embeddings cache) and export/. Backed up.'
+        default: /var/lib/hnx-modules/tts
+      tts_cache_dir:
+        type: path
+        description: 'Scratch the libraries want (compiled kernels, a home directory): rebuilt, never
+          backed up.'
+        default: /var/cache/hnx-modules/tts
+      tts_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      tts_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns state/, the cache and
+          export/.
+        default: 61012
+      tts_gid:
+        type: int
+        description: The container's group id.
+        default: 61012
+      tts_store_root:
+        type: path
+        description: The model store root (role model_store); the entry's directory is mounted read-only.
+        default: /srv/models
+      tts_model_repo:
+        type: str
+        description: 'The voice model''s source repository (org/name): its directory under <store>/hf/hub/.'
+        default: coqui/XTTS-v2
+      tts_model_revision:
+        type: str
+        description: The pinned 40-hex commit of the model entry (the snapshot directory the service loads
+          from).
+        default: 6c2b0d75eae4b7047358e3b6bd9325f857d43f77
+      tts_model_store_id:
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: xtts-v2
+      tts_model_digest:
+        type: str
+        description: 'The entry''s digest, sha256: of its sha256sum listing (hnx models store list); the
+          service checks the listing against it and every file against the listing before every load.'
+        default: sha256:41212ef70a20240010e3846a6ff1dbb445409e21690f849e09384cdc7112bd24
+      tts_models_gid:
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      tts_voice_files:
+        type: list
+        description: 'The reference recordings (file names in <data root>/voice): the voice itself; the
+          service needs all of them.'
+        elements: str
+        default:
+        - ref1.wav
+        - ref2.wav
+        - ref3.wav
+        - ref4.wav
+      tts_voice_expected_sha256:
+        type: dict
+        description: 'Optional {file name: sha256} of recordings the site pins; each listed file must
+          be exactly those bytes before start, in health and in a restore.'
+        default: {}
+      tts_idle_unload_s:
+        type: str
+        description: 'Seconds idle before the engine is unloaded (the card''s memory freed); empty: 120
+          on cuda, never on cpu; 0 means never.'
+        default: ''
+      tts_power_cap_max_watts:
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (at every load): the
+          operator''s rule, 200 W; it can only be tightened.'
+        default: 200
+      tts_gpu_index:
+        type: int
+        description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>)
+          and nvidia-smi''s -i.'
+        default: 0
+      tts_mem_limit:
+        type: str
+        description: The container's memory limit, like 12g.
+        default: 12g
+      tts_start:
+        type: bool
+        description: 'Start (and wait for) the service (false: render only).'
+        default: true
+      tts_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      tts_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      tts_check_timeout_s:
+        type: int
+        description: Seconds the health hook's real synthesis may take (it may load the model; a CPU render
+          is tens of seconds).
+        default: 900
+      tts_check_min_seconds:
+        type: float
+        description: The shortest the health check's WAV may be, in seconds.
+        default: 0.8
+      tts_check_max_seconds:
+        type: float
+        description: The longest the health check's WAV may be, in seconds.
+        default: 15
+      tts_restore_source:
+        type: path
+        description: The directory holding tts-data.tar.gz and listing.jsonl.
+        required: true
+  upgrade:
+    short_description: Validate a new image of the same repository and backend and record it as pending.
+    options:
+      tts_logical_id:
+        type: str
+        description: The instance's registry id (the service row the site binds, e.g. tts).
+        required: true
+      tts_image:
+        type: str
+        description: 'repository:tag@sha256:<digest> of the image built from this repository (the tag
+          ends in -<backend>); no default: there is no published image to pin.'
+        required: true
+      tts_backend:
+        type: str
+        description: 'The engine backend: cpu, or cuda (NVIDIA, the card handed over by its CDI device,
+          loaded per job and unloaded when idle).'
+        default: cpu
+      tts_image_archive:
+        type: path
+        description: 'A local docker save of the pinned image (guest path), loaded when the daemon lacks
+          the digest (the guest cannot pull: the image is built by the lab); empty: the daemon must have
+          it.'
+        default: ''
+      tts_build_repositories:
+        type: list
+        description: 'The repositories tts_image may name: the image built from this repository; any other
+          is refused.'
+        elements: str
+        default:
+        - localhost/hnx-tts
+      tts_bind:
+        type: str
+        description: The guest's own IPv4 address the port is published on (never all interfaces).
+        default: '{{ ansible_host }}'
+      tts_port:
+        type: int
+        description: Host port (the registry row's port); 1024 or more.
+        default: 8091
+      tts_dir:
+        type: path
+        description: The compose project directory.
+        default: /opt/compose/tts
+      tts_data_root:
+        type: path
+        description: 'The module''s data root on the host: voice/ (the reference recordings), state/ (the
+          embeddings cache) and export/. Backed up.'
+        default: /var/lib/hnx-modules/tts
+      tts_cache_dir:
+        type: path
+        description: 'Scratch the libraries want (compiled kernels, a home directory): rebuilt, never
+          backed up.'
+        default: /var/cache/hnx-modules/tts
+      tts_owner:
+        type: str
+        description: Owner of the compose project and the data root.
+        default: root
+      tts_uid:
+        type: int
+        description: The container's user id (no account on the host has it); owns state/, the cache and
+          export/.
+        default: 61012
+      tts_gid:
+        type: int
+        description: The container's group id.
+        default: 61012
+      tts_store_root:
+        type: path
+        description: The model store root (role model_store); the entry's directory is mounted read-only.
+        default: /srv/models
+      tts_model_repo:
+        type: str
+        description: 'The voice model''s source repository (org/name): its directory under <store>/hf/hub/.'
+        default: coqui/XTTS-v2
+      tts_model_revision:
+        type: str
+        description: The pinned 40-hex commit of the model entry (the snapshot directory the service loads
+          from).
+        default: 6c2b0d75eae4b7047358e3b6bd9325f857d43f77
+      tts_model_store_id:
+        type: str
+        description: 'The entry''s id in the store manifest: names its listing under manifests/listings/.'
+        default: xtts-v2
+      tts_model_digest:
+        type: str
+        description: 'The entry''s digest, sha256: of its sha256sum listing (hnx models store list); the
+          service checks the listing against it and every file against the listing before every load.'
+        default: sha256:41212ef70a20240010e3846a6ff1dbb445409e21690f849e09384cdc7112bd24
+      tts_models_gid:
+        type: str
+        description: 'The model store''s readers'' group id; empty: read from the model''s directory.'
+        default: ''
+      tts_voice_files:
+        type: list
+        description: 'The reference recordings (file names in <data root>/voice): the voice itself; the
+          service needs all of them.'
+        elements: str
+        default:
+        - ref1.wav
+        - ref2.wav
+        - ref3.wav
+        - ref4.wav
+      tts_voice_expected_sha256:
+        type: dict
+        description: 'Optional {file name: sha256} of recordings the site pins; each listed file must
+          be exactly those bytes before start, in health and in a restore.'
+        default: {}
+      tts_idle_unload_s:
+        type: str
+        description: 'Seconds idle before the engine is unloaded (the card''s memory freed); empty: 120
+          on cuda, never on cpu; 0 means never.'
+        default: ''
+      tts_power_cap_max_watts:
+        type: int
+        description: 'The most the card''s power cap may be before any load starts (at every load): the
+          operator''s rule, 200 W; it can only be tightened.'
+        default: 200
+      tts_gpu_index:
+        type: int
+        description: 'cuda: the card''s index in the container toolkit''s CDI spec (nvidia.com/gpu=<index>)
+          and nvidia-smi''s -i.'
+        default: 0
+      tts_mem_limit:
+        type: str
+        description: The container's memory limit, like 12g.
+        default: 12g
+      tts_start:
+        type: bool
+        description: 'Start (and wait for) the service (false: render only).'
+        default: true
+      tts_validate_with_docker:
+        type: bool
+        description: Check the rendered compose file with docker compose config.
+        default: true
+      tts_health_timeout:
+        type: int
+        description: Seconds each health request waits.
+        default: 20
+      tts_check_timeout_s:
+        type: int
+        description: Seconds the health hook's real synthesis may take (it may load the model; a CPU render
+          is tens of seconds).
+        default: 900
+      tts_check_min_seconds:
+        type: float
+        description: The shortest the health check's WAV may be, in seconds.
+        default: 0.8
+      tts_check_max_seconds:
+        type: float
+        description: The longest the health check's WAV may be, in seconds.
+        default: 15
+      tts_target_image:
+        type: str
+        description: repository:tag@sha256:<digest> of the build to move to (same repository and backend).
+        required: true

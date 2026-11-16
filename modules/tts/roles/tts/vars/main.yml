@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+tts_backends: [cpu, cuda]
+tts_repository: "{{ tts_image.split('@')[0].rsplit(':', 1)[0] }}"
+tts_tag: "{{ tts_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+tts_digest: "{{ tts_image.split('@')[1] | default('') }}"
+# where the container sees the weights, the voice, its state and its scratch, and the port inside it
+tts_container_models_dir: /models
+tts_container_listing: /listing.sha256
+tts_container_voice_dir: /voice
+tts_container_state_dir: /state
+tts_container_cache_dir: /cache
+tts_container_port: 8091
+# canonical absolute paths: no //, no . or .. component, no trailing /
+tts_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+tts_digest_pattern: '^sha256:[0-9a-f]{64}\Z'
+tts_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+tts_file_pattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\.wav\Z'
+tts_model_top: "{{ tts_store_root }}/hf/hub/models--{{ tts_model_repo | replace('/', '--') }}"
+tts_listing: "{{ tts_store_root }}/manifests/listings/{{ tts_model_store_id }}.sha256"
+tts_container_model_dir: "{{ tts_container_models_dir }}/snapshots/{{ tts_model_revision }}"
+# the operator's power rule: no setting raises it above this many watts
+tts_power_cap_ceiling_watts: 200
+tts_idle_default_s: {cpu: 0, cuda: 120}
+tts_idle_effective_s: "{{ tts_idle_unload_s if tts_idle_unload_s | string != '' else tts_idle_default_s[tts_backend] }}"
+# what is archived by export and backup: the recordings and the embeddings (not the cache, not the weights)
+tts_export_members: [voice, state]
+tts_container_env:
+  TTS_BACKEND: "{{ tts_backend }}"
+  TTS_PORT: "{{ tts_container_port }}"
+  TTS_MODEL_DIR: "{{ tts_container_model_dir }}"
+  TTS_MODEL_LISTING: "{{ tts_container_listing }}"
+  TTS_MODEL_DIGEST: "{{ tts_model_digest }}"
+  TTS_REFS_DIR: "{{ tts_container_voice_dir }}"
+  TTS_REF_FILES: "{{ tts_voice_files | join(',') }}"
+  TTS_CACHE_DIR: "{{ tts_container_state_dir }}"
+  TTS_IDLE_UNLOAD_S: "{{ tts_idle_effective_s }}"
+  TTS_POWER_CAP_MAX_WATTS: "{{ tts_power_cap_max_watts }}"
+  TTS_GPU_INDEX: "{{ tts_gpu_index }}"

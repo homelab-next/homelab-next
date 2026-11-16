@@ -1,0 +1,152 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the recordings and the embeddings from an export (tts_restore_source: tts-data.tar.gz and
+# listing.jsonl): the archive's hash must equal the listing, it may hold no member that leaves the
+# directory, no link and no special file, and only voice/ and state/. It is extracted beside the live
+# data and checked (every recording present, the pinned bytes when the site set them) while the service
+# still runs; only then is the service stopped, each live directory moved aside (never deleted) and the
+# staged one moved in. The service is started only after a complete swap; a failure leaves it stopped
+# and says so. The recordings of the old lab go in through the same door: an archive of voice/ with the
+# four files (README.md, "The voice").
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Read the listing
+      ansible.builtin.slurp:
+        src: "{{ tts_restore_source }}/listing.jsonl"
+      register: tts_listing_file
+    - name: Hash the archive
+      ansible.builtin.stat:
+        path: "{{ tts_restore_source }}/tts-data.tar.gz"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: tts_restore_archive
+    - name: Refuse an archive that differs from its listing
+      ansible.builtin.assert:
+        that:
+          - (tts_listing_file.content | b64decode | from_json).sha256 == tts_restore_archive.stat.checksum
+        fail_msg: "tts: the export is not intact (its hash differs from the listing)"
+    - name: List the archive's members (names, and kinds for the links)
+      ansible.builtin.command:
+        argv: [tar, -tzf, "{{ tts_restore_source }}/tts-data.tar.gz"]
+      register: tts_members
+      changed_when: false
+    - name: List the archive's member types
+      ansible.builtin.command:
+        argv: [tar, -tvzf, "{{ tts_restore_source }}/tts-data.tar.gz"]
+      register: tts_member_types
+      changed_when: false
+    - name: Refuse an archive that leaves its directory, holds a link or a special file, or holds more than the data
+      ansible.builtin.assert:
+        that:
+          - tts_members.stdout_lines | select('match', '^/') | list | length == 0
+          - tts_members.stdout_lines | select('search', '(^|/)\.\.(/|$)') | list | length == 0
+          # a symlink (l), hard link (h), device, fifo: only regular files and directories are restored
+          - tts_member_types.stdout_lines | reject('match', '^[-d]') | list | length == 0
+          - >-
+            tts_members.stdout_lines | map('regex_replace', '^\./', '') | reject('match', '^(voice|state)(/|$)') | list | length == 0
+        fail_msg: "tts: the archive leaves its directory, holds a link or special file, or holds anything but voice/ and state/"
+    - name: Look for a staging directory an earlier restore left
+      ansible.builtin.stat:
+        path: "{{ tts_data_root }}/restoring"
+      register: tts_stale_staging
+    - name: Refuse to extract over it
+      ansible.builtin.assert:
+        that: not tts_stale_staging.stat.exists
+        fail_msg: "tts: {{ tts_data_root }}/restoring is left from an earlier restore; inspect it and move it away"
+    - name: Look for directories an earlier restore moved aside
+      ansible.builtin.stat:
+        path: "{{ tts_data_root }}/{{ item }}.before-restore"
+      loop: "{{ tts_export_members }}"
+      register: tts_stale_aside
+    - name: Refuse to move the live data over them (a move into an existing directory would nest)
+      ansible.builtin.assert:
+        that: not item.stat.exists
+        fail_msg: "tts: {{ tts_data_root }}/{{ item.item }}.before-restore is left from an earlier restore; inspect it and move it away"
+      loop: "{{ tts_stale_aside.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+    - name: Extract into a fresh directory beside the data (the service keeps running meanwhile)
+      block:
+        - name: Create the staging directory
+          ansible.builtin.file:
+            path: "{{ tts_data_root }}/restoring"
+            state: directory
+            mode: "0700"
+        - name: Extract the archive
+          ansible.builtin.command:
+            argv: [tar, -xzf, "{{ tts_restore_source }}/tts-data.tar.gz", -C, "{{ tts_data_root }}/restoring", --no-same-owner, --no-same-permissions]
+          changed_when: true
+        - name: Look for links in what was extracted
+          ansible.builtin.command:
+            argv: [find, "{{ tts_data_root }}/restoring", -type, l]
+          register: tts_staged_links
+          changed_when: false
+        - name: Look at every recording that was extracted
+          ansible.builtin.stat:
+            path: "{{ tts_data_root }}/restoring/voice/{{ item }}"
+            follow: false
+            checksum_algorithm: sha256
+            get_checksum: "{{ item in tts_voice_expected_sha256 }}"
+          loop: "{{ tts_voice_files }}"
+          register: tts_staged_voice
+        - name: The staged data is what it should be
+          ansible.builtin.assert:
+            that:
+              - tts_staged_links.stdout_lines | length == 0
+              - tts_staged_voice.results | selectattr('stat.exists') | selectattr('stat.isreg') | list | length == tts_voice_files | length
+            fail_msg: >-
+              tts: the staged data holds a link, or lacks one of the recordings {{ tts_voice_files }}. Nothing
+              was changed; the staging directory {{ tts_data_root }}/restoring is left for inspection.
+        - name: Each pinned recording is exactly those bytes
+          ansible.builtin.assert:
+            that: item.stat.checksum == tts_voice_expected_sha256[item.item]
+            fail_msg: "tts: the staged {{ item.item }} is not the recording the site pinned; nothing was changed ({{ tts_data_root }}/restoring is left for inspection)"
+          loop: "{{ tts_staged_voice.results | selectattr('item', 'in', tts_voice_expected_sha256) | list }}"
+          loop_control:
+            label: "{{ item.item }}"
+        - name: Give the staged state to the container's user and the voice to the owner
+          ansible.builtin.command:
+            argv: "{{ item }}"
+          loop:
+            - [mkdir, -p, "{{ tts_data_root }}/restoring/state"]
+            - [chown, -R, "{{ tts_uid | int }}:{{ tts_gid | int }}", "{{ tts_data_root }}/restoring/state"]
+            - [chown, -R, "{{ tts_owner }}:{{ tts_gid | int }}", "{{ tts_data_root }}/restoring/voice"]
+          changed_when: true
+    - name: Swap the staged data in with the service stopped
+      block:
+        - name: Stop the service
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ tts_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Move the live directories aside (never deleted)
+          ansible.builtin.command:
+            argv: [mv, "{{ tts_data_root }}/{{ item }}", "{{ tts_data_root }}/{{ item }}.before-restore"]
+            removes: "{{ tts_data_root }}/{{ item }}"
+          loop: "{{ tts_export_members }}"
+          changed_when: true
+        - name: Move the verified directories into place
+          ansible.builtin.command:
+            argv: [mv, "{{ tts_data_root }}/restoring/{{ item }}", "{{ tts_data_root }}/{{ item }}"]
+          loop: "{{ tts_export_members }}"
+          changed_when: true
+        - name: Remove the empty staging directory
+          ansible.builtin.command:
+            argv: [rmdir, "{{ tts_data_root }}/restoring"]
+          changed_when: true
+      rescue:
+        - name: Say that the service was left stopped
+          ansible.builtin.fail:
+            msg: >-
+              tts: the swap failed part way. The service is LEFT STOPPED. The previous directories are at
+              {{ tts_data_root }}/voice.before-restore and state.before-restore (or still in place) and the
+              verified ones under {{ tts_data_root }}/restoring; put them right by hand, then start the service.
+    - name: Start the service on the restored data
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ tts_dir }}/docker-compose.yml", up, -d]
+      changed_when: true
+      when: tts_start | bool
+  tags: [restore]
