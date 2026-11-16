@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# The compose_app inputs (shared by main and the hooks that delegate to compose_app). The keys are
+# not here: they reach the container through the env_file only (compose_app_secret_env, main).
+- name: Build the application spec
+  ansible.builtin.set_fact:
+    gateway_app:
+      compose_app_name: gateway
+      compose_app_dir: "{{ gateway_dir }}"
+      compose_app_data_dir: "{{ gateway_data_root }}"
+      compose_app_export_dir: "{{ gateway_data_root }}/export"
+      compose_app_owner: "{{ gateway_owner }}"
+      compose_app_group: "{{ gateway_group }}"
+      compose_app_start: "{{ gateway_start }}"
+      compose_app_validate_with_docker: "{{ gateway_validate_with_docker }}"
+      compose_app_spec:
+        services:
+          gateway:
+            image: "{{ gateway_repository }}"
+            tag: "{{ gateway_tag }}"
+            digest: "{{ gateway_digest }}"
+            # the image's entrypoint is the gateway; the listen address is the container's own
+            # (the host publishes it on the guest's address only), and plain http because the
+            # lab's callers reach it on a trusted segment, behind the guest's firewall
+            command:
+              - -config
+              - "{{ gateway_container_config_dir }}/{{ gateway_config_file }}"
+              - -usage
+              - "{{ gateway_container_state_dir }}/{{ gateway_usage_file }}"
+              - -listen
+              - "0.0.0.0:{{ gateway_container_port }}"
+              - -allow-plaintext
+              - -max-inflight
+              - "{{ gateway_max_inflight | int }}"
+              - -max-inflight-per-key
+              - "{{ gateway_max_inflight_per_key | int }}"
+              - -upstream-timeout
+              - "{{ gateway_upstream_timeout }}"
+              - -reserve-tokens
+              - "{{ gateway_reserve_output | int }}"
+            user: "{{ gateway_uid | int }}:{{ gateway_gid | int }}"
+            read_only: true
+            ports: ["{{ gateway_bind }}:{{ gateway_port | int }}:{{ gateway_container_port }}"]
+            volumes:
+              - "{{ gateway_data_root }}/config:{{ gateway_container_config_dir }}:ro"
+              - "{{ gateway_data_root }}/state:{{ gateway_container_state_dir }}"
+            mem_limit: "{{ gateway_mem_limit }}"
+            healthcheck:
+              test: [CMD, /usr/local/bin/healthcheck, "{{ gateway_container_port | string }}"]
+              interval: 30s
+              timeout: 5s
+              retries: 3
+              start_period: 10s
+  tags: [health, backup, restore, export, upgrade]

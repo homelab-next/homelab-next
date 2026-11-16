@@ -1,0 +1,145 @@
+# SPDX-License-Identifier: Apache-2.0
+# The gateway's configuration, rendered on the controller by the generator from THIS site's gateway
+# spec (`hnx gen gateway render SPEC OUT`, then the same command with --check: the render audited
+# against the spec and the locality rule). Read-only on the controller (a scratch directory,
+# removed whatever happens), so it runs under --check too. The rendered config is then held to
+# what this role promises beside the generator's own audit: it is not a test-only rendering, every
+# cloud deployment is on a host the site allowed, no deployment names a host the site refused, and
+# every key the config names can be placed on a secret: reference.
+- name: Render the configuration with the generator (on the controller)
+  block:
+    - name: Make a scratch directory on the controller
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: hnx-gateway-config-
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      register: gateway_scratch
+    - name: Render the gateway configuration from the spec
+      ansible.builtin.command:
+        argv: "{{ gateway_hnx_cli + ['gen', 'gateway', 'render', gateway_spec, gateway_scratch.path] }}"
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+    - name: Audit what was rendered against the spec and the locality rule
+      ansible.builtin.command:
+        argv: "{{ gateway_hnx_cli + ['gen', 'gateway', 'render', gateway_spec, gateway_scratch.path, '--check'] }}"
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+    - name: Look for the gateway's own configuration among the rendered files
+      ansible.builtin.stat:
+        path: "{{ gateway_scratch.path }}/gateway/{{ gateway_config_file }}"
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      register: gateway_rendered
+    - name: The generator wrote it
+      ansible.builtin.assert:
+        that: gateway_rendered.stat.exists and gateway_rendered.stat.isreg
+        fail_msg: >-
+          gateway: the generator wrote no gateway/{{ gateway_config_file }} for {{ gateway_spec }}:
+          the spec cannot be expressed in the gateway's contract (a cloud provider other than the
+          two it supports, an embedding role on one, a cost limit with no price); its own message
+          is above
+    - name: Read the rendered configuration
+      ansible.builtin.set_fact:
+        gateway_config_text: "{{ lookup('ansible.builtin.file', gateway_scratch.path ~ '/gateway/' ~ gateway_config_file, rstrip=false) }}"
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ gateway_scratch.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      changed_when: false
+      when: gateway_scratch.path is defined
+  tags: [readiness]
+
+- name: Read the configuration and the spec
+  ansible.builtin.set_fact:
+    gateway_config: "{{ gateway_config_text | from_json }}"
+    gateway_spec_text: "{{ lookup('ansible.builtin.file', gateway_spec) }}"
+  tags: [readiness]
+
+- name: List what the configuration names
+  ansible.builtin.set_fact:
+    gateway_deployments: >-
+      {{ gateway_config.roles | dict2items | map(attribute='value.deployments') | flatten }}
+    gateway_caller_envs: >-
+      {{ ([gateway_config.admin_key_env]
+          + (gateway_config['keys'] | map(attribute='key_env') | list)
+          + ([gateway_config.telemetry_reader.key_env] if gateway_config.telemetry_reader | default(none) else []))
+         | unique | list }}
+  tags: [readiness]
+
+- name: List the cloud hosts, every host, and the provider keys
+  ansible.builtin.set_fact:
+    gateway_cloud_urls: "{{ gateway_deployments | selectattr('locality', 'equalto', 'cloud') | map(attribute='base_url') | list }}"
+    gateway_all_hosts: "{{ gateway_deployments | map(attribute='base_url') | map('urlsplit', 'hostname') | map('lower') | unique | list }}"
+    gateway_upstream_envs: "{{ gateway_deployments | map(attribute='api_key_env') | select('string') | unique | list }}"
+  tags: [readiness]
+
+- name: The configuration is one this role may install
+  ansible.builtin.assert:
+    that:
+      - not (gateway_config.conformance_only | default(false) | bool)
+      - gateway_config.admin_key_env == gateway_admin_env
+      - gateway_cloud_urls | map('urlsplit', 'scheme') | reject('equalto', 'https') | list | length == 0
+      - gateway_cloud_urls | map('urlsplit', 'hostname') | map('lower') | difference(gateway_cloud_hosts_allowed) | list | length == 0
+      - gateway_all_hosts | intersect(gateway_refused_hosts) | length == 0
+    fail_msg: >-
+      gateway: the rendered configuration is not one this site allows: it must not be a test-only
+      (conformance) rendering ({{ gateway_config.conformance_only | default(false) }}); its admin key
+      must be gateway_admin_key_ref {{ gateway_admin_key_ref }} (the spec's master_key; it names
+      {{ gateway_config.admin_key_env }}, the role expects {{ gateway_admin_env }}); every cloud
+      deployment must be https on one of gateway_cloud_hosts_allowed {{ gateway_cloud_hosts_allowed }}
+      (the config calls {{ gateway_cloud_urls | map('urlsplit', 'hostname') | unique | list }}); and no
+      deployment may name a host of gateway_refused_hosts {{ gateway_refused_hosts }} (the config
+      names {{ gateway_all_hosts | intersect(gateway_refused_hosts) }})
+  tags: [readiness]
+
+- name: List the secret references the spec and the settings carry, and the variable each is delivered in
+  ansible.builtin.set_fact:
+    gateway_refs: "{{ (gateway_spec_text | regex_findall(gateway_ref_find_pattern) + gateway_key_refs_extra) | unique | list }}"
+  tags: [readiness]
+
+- name: Pair each reference with its variable
+  ansible.builtin.set_fact:
+    gateway_ref_pairs: >-
+      {{ gateway_refs
+         | zip(gateway_refs | map('regex_replace', '^secret:', '') | map('regex_replace', '[^A-Za-z0-9]', '_')
+               | map('upper') | map('regex_replace', '^', 'HNX_SECRET_'))
+         | list }}
+    gateway_env_refs: {}
+  tags: [readiness]
+
+- name: Place each variable the configuration names on one reference
+  ansible.builtin.set_fact:
+    gateway_env_refs: >-
+      {{ gateway_env_refs | combine({item: gateway_ref_pairs | selectattr('1', 'equalto', item) | map(attribute='0') | list}) }}
+  loop: "{{ gateway_caller_envs + gateway_upstream_envs }}"
+  tags: [readiness]
+
+- name: Name the variables that are not placed on exactly one reference
+  ansible.builtin.set_fact:
+    gateway_unplaced: >-
+      {{ gateway_env_refs.keys() | list
+         | zip(gateway_env_refs.values() | map('length') | list)
+         | rejectattr('1', 'equalto', 1) | map(attribute='0') | list }}
+  tags: [readiness]
+
+- name: Every variable is placed on exactly one reference
+  ansible.builtin.assert:
+    that: gateway_unplaced | length == 0
+    fail_msg: >-
+      gateway: the configuration names variables the spec's secret: references do not place on
+      exactly one reference each: {{ gateway_unplaced }}. A key the generator names itself
+      (one per agent profile, say) belongs in gateway_key_refs_extra, e.g.
+      secret:gateway/key-reader for the profile reader
+  tags: [readiness]

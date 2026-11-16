@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the settings
+  ansible.builtin.assert:
+    that:
+      - gateway_logical_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
+      - gateway_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
+      - gateway_tag != 'latest'
+      # an IPv4 address in dotted form (the guest's): a hostname and all interfaces are refused
+      - gateway_bind is match('^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z')
+      - gateway_bind != '0.0.0.0'
+      - gateway_port | int >= 1 and gateway_port | int <= 65535
+      - gateway_uid | int >= 1000 and gateway_gid | int >= 1000
+      # absolute, canonical paths (no //, no . or .. component, no trailing /)
+      - >-
+        [gateway_dir, gateway_data_root, gateway_spec] | reject('match', gateway_path_pattern) | list | length == 0
+      - gateway_restore_source is not defined or gateway_restore_source is match(gateway_path_pattern)
+      - gateway_image_archive == '' or gateway_image_archive is match(gateway_path_pattern)
+      - gateway_hnx_cli is sequence and gateway_hnx_cli is not string and gateway_hnx_cli | length > 0
+      - gateway_hnx_cli | reject('string') | list | length == 0
+      - gateway_max_inflight | int >= 1 and gateway_max_inflight_per_key | int >= 1
+      - gateway_max_inflight_per_key | int <= gateway_max_inflight | int
+      - gateway_reserve_output | int >= 1
+      - gateway_upstream_timeout is match(gateway_duration_pattern)
+      - gateway_mem_limit is match('^[1-9][0-9]{0,5}[kmg]\Z')
+      - gateway_usage_max_mb | int >= 1
+      - gateway_health_timeout | int >= 1
+      # lists of plain host names (lower case, no scheme, no port, no path) and secret references
+      - gateway_cloud_hosts_allowed is sequence and gateway_cloud_hosts_allowed is not string
+      - gateway_cloud_hosts_allowed | reject('string') | list | length == 0
+      - gateway_cloud_hosts_allowed | reject('match', gateway_host_pattern) | list | length == 0
+      - gateway_refused_hosts is sequence and gateway_refused_hosts is not string
+      - gateway_refused_hosts | reject('string') | list | length == 0
+      - gateway_refused_hosts | reject('match', gateway_host_pattern) | list | length == 0
+      - gateway_key_refs_extra is sequence and gateway_key_refs_extra is not string
+      - gateway_key_refs_extra | reject('string') | list | length == 0
+      - gateway_key_refs_extra | reject('match', gateway_ref_pattern) | list | length == 0
+    fail_msg: >-
+      gateway: a registry id, an image pinned by tag and digest (never latest), the guest's IPv4
+      address to publish on (not all interfaces), a port, a container uid and gid of 1000 or more,
+      absolute canonical directories and an absolute spec path, positive limits (per key at most the
+      total), a duration like 120s and a memory limit like 512m, host names for the allowed cloud
+      hosts and the refused hosts (no scheme or path), and secret: references
+  tags: [health, backup, restore, export, upgrade, readiness]
+
+- name: The image is the lab's own gateway
+  ansible.builtin.assert:
+    that:
+      - gateway_build_repositories is sequence and gateway_build_repositories is not string
+      - gateway_build_repositories | length > 0
+      - gateway_repository in gateway_build_repositories
+    fail_msg: >-
+      gateway: {{ gateway_image | truncate(100) | to_json }} is not the lab's own gateway: this module
+      runs the image built from this repository (modules/gateway/image/Dockerfile), from one of
+      {{ gateway_build_repositories }} (gateway_build_repositories), and no other image
+  tags: [health, backup, restore, export, upgrade, readiness]

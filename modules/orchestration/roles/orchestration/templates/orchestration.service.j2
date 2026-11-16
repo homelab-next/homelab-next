@@ -1,0 +1,69 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role orchestration, service {{ orchestration_logical_id }}); local changes are overwritten.
+# docs/orchestration-controller.md, "The controller binary": the repository's example unit, with
+# the paths and limits of this site. The sessions the controller starts run in this unit's cgroup,
+# under its user, its seccomp filter and its namespaces (the trust boundary that section names).
+#   {{ orchestration_config_dir }}/        the configuration, the token digests, the profiles, the homes
+#   {{ orchestration_data_root }}/        the database, the sessions' directories, the exports
+# A database that needs a migration stops the start with exit status 3, which is not restarted:
+# upgrade.yml takes the backup and migrates it with the unit stopped.
+[Unit]
+Description=Orchestration controller ({{ orchestration_logical_id }}: agent job queue and runner)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ orchestration_user }}
+Group={{ orchestration_group }}
+ExecStartPre={{ orchestration_bin }} check --config {{ orchestration_controller_yaml }}
+ExecStart={{ orchestration_bin }} serve --config {{ orchestration_controller_yaml }}
+{% if orchestration_events_forwarder_url != '' %}
+# the token is a systemd credential (read as root, placed under /run/credentials/<unit>/), never an
+# environment variable: the controller reads the file at start and then is not dumpable
+LoadCredential=events-token:{{ orchestration_events_token_file }}
+{% endif %}
+# SIGHUP reloads the tokens file; a rotation needs no restart (which would end every running job)
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=3
+# SIGTERM goes to the controller alone: it stops admitting, drains the API for up to 30 s, then
+# cancels the running sessions itself, so a session ends as the controller's cancel
+TimeoutStopSec=60
+KillMode=mixed
+{% if hnx_module_slice | default('') %}
+# the module role's slice (the module play's hnx_module_slice): its CPU and memory limits apply
+Slice={{ hnx_module_slice }}
+{% endif %}
+
+RuntimeDirectory=hnx-{{ orchestration_logical_id }}
+RuntimeDirectoryMode=0700
+UMask=0077
+ReadWritePaths={{ orchestration_data_root }}
+TasksMax={{ orchestration_tasks_max | int }}
+MemoryMax={{ orchestration_memory_max }}
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

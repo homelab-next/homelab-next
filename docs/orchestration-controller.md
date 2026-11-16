@@ -486,7 +486,7 @@ stage 3's runner starts sessions as a separate session user. What the runner doe
 - a session inherits no environment variable nobody listed (an empty `runner.env_allowlist`
   passes none);
 - `events.token_env` is never passed, and `check` refuses an allowlist entry that covers it;
-- the unit hides other users' processes (`ProtectProc=invisible`).
+- the controller is not dumpable once it serves (`PR_SET_DUMPABLE 0`), so a session of the same user cannot read its `/proc/<pid>/environ` or memory, and `events.token_file` (a systemd credential file) keeps the forwarder's token out of the environment altogether (`events.token_env` and `token_file` are exclusive); a session can still read every file its user can read, and `ProtectProc=invisible` (which hides other users' processes only) is not a boundary between them.
 Run only agents whose output you would let read the controller's state.
 
 - **`controller check --config FILE`** (ADR-0026 decision 17) loads the configuration, the

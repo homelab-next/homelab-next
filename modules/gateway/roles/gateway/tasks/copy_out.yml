@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copy the usage records into export/ as the container's user: through setpriv when the play runs
+# as anyone else (root, on a real host), directly when it already runs as that user. Never as
+# root, so no file appears that the gateway cannot open.
+- name: Read the user the play runs as on the host
+  ansible.builtin.command:
+    argv: [id, -u]
+  register: gateway_run_uid
+  changed_when: false
+  tags: [backup, export]
+
+- name: Copy the complete usage records and list them
+  ansible.builtin.command:
+    argv: >-
+      {{ ([] if (gateway_run_uid.stdout | trim | int) == (gateway_uid | int) else
+          ['setpriv', '--reuid=' ~ (gateway_uid | int), '--regid=' ~ (gateway_gid | int),
+           '--clear-groups', '--no-new-privs'])
+         + ['python3', '-I', '-c', gateway_export_script,
+            gateway_data_root ~ '/state', gateway_data_root ~ '/export'] }}
+  register: gateway_export
+  changed_when: true
+  tags: [backup, export]
