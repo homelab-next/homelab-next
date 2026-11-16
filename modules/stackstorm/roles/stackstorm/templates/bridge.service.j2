@@ -1,0 +1,36 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role stackstorm); local changes are overwritten.
+[Unit]
+Description=homelab-next event bridge (bus -> StackStorm webhook)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User={{ stackstorm_bridge_user }}
+Environment=HNX_ENDPOINT_EVENTS={{ stackstorm_events_endpoint }}
+# the webhook key and the bus password, by the names the bridge resolves: owner-only, read by systemd
+EnvironmentFile={{ stackstorm_bridge_conf_dir }}/secrets.env
+# StackStorm is on this guest: the webhook is reached on this guest's own address, so the key never
+# leaves the host (the plaintext opt-in is for exactly that)
+ExecStart={{ stackstorm_hnx_cli }} workflows st2 bridge \
+  --bridge-file {{ stackstorm_bridge_conf_dir }}/bridge.json \
+  --st2-url http://{{ stackstorm_bind }}:{{ stackstorm_port | int }} --allow-plaintext \
+  --stream {{ stackstorm_events_stream }} --subject-prefix {{ stackstorm_events_subject_prefix }} \
+  --events-user {{ stackstorm_events_user }} --events-password-secret {{ stackstorm_events_login_ref }} \
+{% if stackstorm_events_ca_file | length > 0 %}
+  --events-ca-file {{ stackstorm_events_ca_file }} \
+{% endif %}
+{% if stackstorm_events_api_prefix | length > 0 %}
+  --events-api-prefix {{ stackstorm_events_api_prefix }} \
+{% endif %}
+  --stats-file {{ stackstorm_bridge_state_dir }}/stats.json
+StateDirectory=hnx-st2-bridge
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

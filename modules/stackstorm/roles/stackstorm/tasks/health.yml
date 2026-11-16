@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: every container of the stack runs and is healthy (the timers engine and the rules
+# engine included); the API answers through the front and the pack is registered at the rendered
+# version with exactly the rendered rules, each enabled only when the site said so and every pack in
+# shadow mode; the pack's runtime imports under Python 3.11; a no-op execution goes through the
+# API, the scheduler and the action runner to `succeeded` (a one-shot local command run, without a
+# shell action); the status key lists executions and cannot start one, the
+# bridge key cannot read; and the bridge and the broker forward run. Read-only except for the one
+# no-op execution.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: stackstorm
+        compose_app_dir: "{{ stackstorm_app.compose_app_dir }}"
+        compose_app_spec: "{{ stackstorm_app.compose_app_spec }}"
+    - name: Read the rendered pack (what should be registered)
+      ansible.builtin.set_fact:
+        stackstorm_provenance: "{{ lookup('ansible.builtin.file', stackstorm_pack_src ~ '/provenance.json') | from_json }}"
+        stackstorm_pack_meta: "{{ lookup('ansible.builtin.file', stackstorm_pack_src ~ '/' ~ stackstorm_pack_ref ~ '/pack.yaml') | from_yaml }}"
+    - name: List the rendered rule files
+      ansible.builtin.find:
+        paths: "{{ stackstorm_pack_src }}/{{ stackstorm_pack_ref }}/rules"
+        patterns: "*.yaml"
+      delegate_to: localhost
+      become: false
+      register: stackstorm_rule_files
+    - name: Sign in as the admin
+      ansible.builtin.uri:
+        url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/auth/tokens"
+        method: POST
+        user: "{{ stackstorm_admin_user }}"
+        password: "{{ lookup('hnx_secret', stackstorm_admin_login_ref) }}"
+        force_basic_auth: true
+        body_format: json
+        body: {}
+        status_code: [200, 201]
+        timeout: "{{ stackstorm_health_timeout | int }}"
+      register: stackstorm_login
+      changed_when: false
+      no_log: true
+    - name: Read the pack and its rules
+      ansible.builtin.uri:
+        url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/{{ item }}"
+        headers:
+          X-Auth-Token: "{{ stackstorm_login.json.token }}"
+        status_code: 200
+        timeout: "{{ stackstorm_health_timeout | int }}"
+      loop: ["packs/{{ stackstorm_pack_ref }}", "rules?pack={{ stackstorm_pack_ref }}"]
+      register: stackstorm_api
+      changed_when: false
+      no_log: true
+    - name: The registered pack is the rendered one, its rules are the rendered ones, off unless named
+      vars:
+        _names: "{{ stackstorm_rule_files.files | map(attribute='path') | map('basename') | map('regex_replace', '\\.yaml\\Z', '') | sort | list }}"
+        _rules: "{{ stackstorm_api.results[1].json }}"
+      ansible.builtin.assert:
+        that:
+          - stackstorm_api.results[0].json.version == stackstorm_pack_meta.version
+          - _rules | map(attribute='name') | sort | list == _names
+          - _rules | selectattr('enabled') | map(attribute='name') | sort | list == (stackstorm_enabled_rules | sort | list)
+          - stackstorm_provenance.packs.values() | map(attribute='mode') | list | unique | difference(['shadow']) | length == 0 or stackstorm_allow_live_rules | bool
+        fail_msg: >-
+          stackstorm: the registered pack ({{ stackstorm_api.results[0].json.version | default('?') }}) or its rules do not match
+          the rendered tree ({{ stackstorm_pack_meta.version }}; rules {{ _names }}; enabled
+          {{ _rules | selectattr('enabled') | map(attribute='name') | sort | list }}, wanted {{ stackstorm_enabled_rules | sort }}),
+          or a pack is not in shadow mode: re-run main (it registers and applies the rule flags)
+      no_log: false
+    - name: The pack's runtime imports under Python 3.11
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", exec, -T, st2actionrunner,
+               "{{ stackstorm_c_virtualenvs }}/{{ stackstorm_pack_ref }}/bin/python", -c,
+               "import sys; from st2common.runners.base_action import Action; import homelabnext.workflows.st2_runtime; assert sys.version_info[:2] == (3, 11), sys.version"]
+      changed_when: false
+      check_mode: false
+    - name: A no-op execution goes through the API, the scheduler and the action runner
+      ansible.builtin.uri:
+        url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/executions"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ stackstorm_login.json.token }}"
+        body_format: json
+        body: {action: core.noop, parameters: {}}
+        status_code: [200, 201]
+        timeout: "{{ stackstorm_health_timeout | int }}"
+      register: stackstorm_smoke
+      changed_when: true
+      no_log: true
+    - name: It succeeds
+      ansible.builtin.uri:
+        url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/executions/{{ stackstorm_smoke.json.id }}"
+        headers:
+          X-Auth-Token: "{{ stackstorm_login.json.token }}"
+        status_code: 200
+        timeout: "{{ stackstorm_health_timeout | int }}"
+      register: stackstorm_smoke_state
+      until: stackstorm_smoke_state.json.status in ['succeeded', 'failed', 'timeout', 'abandoned']
+      retries: 20
+      delay: 3
+      changed_when: false
+      no_log: true
+    - name: The no-op execution succeeded
+      ansible.builtin.assert:
+        that: stackstorm_smoke_state.json.status == 'succeeded'
+        fail_msg: "stackstorm: the no-op execution {{ stackstorm_smoke.json.id }} ended {{ stackstorm_smoke_state.json.status }}: look at the scheduler, workflow engine and action runner logs"
+    - name: The status key lists executions and cannot start one; the bridge key cannot read
+      ansible.builtin.uri:
+        url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/{{ item.path }}"
+        method: "{{ item.method }}"
+        headers:
+          St2-Api-Key: "{{ lookup('hnx_secret', item.ref) }}"
+        body_format: json
+        body: "{{ item.body | default(omit) }}"
+        status_code: "{{ item.status }}"
+        timeout: "{{ stackstorm_health_timeout | int }}"
+      loop:
+        - {path: "executions?limit=1", method: GET, ref: "{{ stackstorm_status_key_ref }}", status: 200}
+        - {path: executions, method: POST, ref: "{{ stackstorm_status_key_ref }}", body: {action: core.noop, parameters: {}}, status: 403}
+        - {path: "rules", method: GET, ref: "{{ stackstorm_webhook_key_ref }}", status: 403}
+        - {path: "executions?limit=1", method: GET, ref: "{{ stackstorm_webhook_key_ref }}", status: 403}
+      loop_control:
+        label: "{{ item.method }} {{ item.path }} as {{ item.ref }}"
+      changed_when: false
+      no_log: true
+    - name: The event bridge runs
+      ansible.builtin.command:
+        argv: [systemctl, is-active, hnx-st2-bridge.service]
+      changed_when: false
+      check_mode: false
+      when: stackstorm_bridge_enabled | bool
+    - name: The broker forward runs and its socket is there
+      ansible.builtin.command:
+        argv: [systemctl, is-active, hnx-st2-broker-tunnel.service]
+      changed_when: false
+      check_mode: false
+      when: stackstorm_broker_tunnel_enabled | bool
+    - name: The forward's socket exists
+      ansible.builtin.stat:
+        path: "{{ stackstorm_broker_socket_dir }}/broker.sock"
+      register: stackstorm_broker_sock
+      when: stackstorm_broker_tunnel_enabled | bool
+    - name: It is a socket
+      ansible.builtin.assert:
+        that: stackstorm_broker_sock.stat.exists and stackstorm_broker_sock.stat.issock
+        fail_msg: "stackstorm: {{ stackstorm_broker_socket_dir }}/broker.sock is not there: the forward is not connected (broker host, key, pinned host key)"
+      when: stackstorm_broker_tunnel_enabled | bool
+  tags: [health]

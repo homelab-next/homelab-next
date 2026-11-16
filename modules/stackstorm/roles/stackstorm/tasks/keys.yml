@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: Apache-2.0
+# Signed in as the admin through the web front on this guest (the role runs on it): the two API keys are registered by the SHA-256 of the secret the site holds
+# (StackStorm keeps only the hash), each for its own user, and the pack runtime's datastore key
+# is stored encrypted. Each step reads before it writes, so a second run changes nothing and a
+# rotated secret replaces the old key.
+- name: Sign in as the admin
+  ansible.builtin.uri:
+    url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/auth/tokens"
+    method: POST
+    user: "{{ stackstorm_admin_user }}"
+    password: "{{ lookup('hnx_secret', stackstorm_admin_login_ref) }}"
+    force_basic_auth: true
+    body_format: json
+    body: {}
+    status_code: [200, 201]
+    timeout: "{{ stackstorm_health_timeout | int }}"
+  register: stackstorm_login
+  changed_when: false
+  no_log: true
+
+- name: Set the admin's token for the next calls
+  ansible.builtin.set_fact:
+    stackstorm_api_headers:
+      X-Auth-Token: "{{ stackstorm_login.json.token }}"
+  no_log: true
+
+- name: List the API keys (StackStorm masks each one's hash; the metadata names what this role registered)
+  ansible.builtin.uri:
+    url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/apikeys?limit=1000"
+    headers: "{{ stackstorm_api_headers }}"
+    status_code: 200
+    timeout: "{{ stackstorm_health_timeout | int }}"
+  register: stackstorm_apikeys
+  changed_when: false
+  no_log: true
+
+- name: Work out which keys are missing or stale
+  vars:
+    _want:
+      - {user: "{{ stackstorm_webhook_user }}", purpose: hnx-bridge, hash: "{{ (stackstorm_hash_input_prefix ~ lookup('hnx_secret', stackstorm_webhook_key_ref)) | hash('sha512') }}"}
+      - {user: "{{ stackstorm_status_user }}", purpose: hnx-status, hash: "{{ (stackstorm_hash_input_prefix ~ lookup('hnx_secret', stackstorm_status_key_ref)) | hash('sha512') }}"}
+  ansible.builtin.set_fact:
+    stackstorm_keys_to_create: >-
+      {%- set have = [] -%}
+      {%- for k in stackstorm_apikeys.json -%}
+      {%-   if k.metadata is defined and k.metadata.mark is defined -%}{%- set _ = have.append(k.metadata.mark) -%}{%- endif -%}
+      {%- endfor -%}
+      {%- set out = [] -%}
+      {%- for w in _want -%}
+      {%-   if w.hash[:24] not in have -%}{%- set _ = out.append(w) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    stackstorm_keys_to_delete: >-
+      {%- set wanted = _want | map(attribute='hash') | map('truncate', 24, true, '') | list -%}
+      {%- set out = [] -%}
+      {%- for k in stackstorm_apikeys.json -%}
+      {%-   if k.metadata is defined and k.metadata.purpose is defined and k.metadata.purpose in ['hnx-bridge', 'hnx-status']
+              and (k.metadata.mark | default('')) not in wanted -%}
+      {%-     set _ = out.append({'id': k.id}) -%}
+      {%-   endif -%}
+      {%- endfor -%}
+      {{ out }}
+  no_log: true
+
+- name: Delete a key this role registered whose secret has since changed
+  ansible.builtin.uri:
+    url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/apikeys/{{ item.id }}"
+    method: DELETE
+    headers: "{{ stackstorm_api_headers }}"
+    status_code: [200, 204]
+    timeout: "{{ stackstorm_health_timeout | int }}"
+  loop: "{{ stackstorm_keys_to_delete }}"
+  changed_when: true
+  loop_control:
+    label: "{{ item.id }}"
+  no_log: true
+
+- name: Register a key by its hash
+  ansible.builtin.uri:
+    url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/apikeys"
+    method: POST
+    headers: "{{ stackstorm_api_headers }}"
+    body_format: json
+    body:
+      user: "{{ item.user }}"
+      key_hash: "{{ item.hash }}"
+      metadata: {purpose: "{{ item.purpose }}", mark: "{{ item.hash[:24] }}"}
+      enabled: true
+    status_code: [200, 201]
+    timeout: "{{ stackstorm_health_timeout | int }}"
+  loop: "{{ stackstorm_keys_to_create }}"
+  changed_when: true
+  loop_control:
+    label: "{{ item.purpose }}"
+  no_log: true
+
+- name: Read the runtime's datastore key
+  ansible.builtin.uri:
+    url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/keys/{{ stackstorm_pack_ref }}.kv_key?decrypt=true"
+    headers: "{{ stackstorm_api_headers }}"
+    status_code: [200, 404]
+    timeout: "{{ stackstorm_health_timeout | int }}"
+  register: stackstorm_kv_current
+  changed_when: false
+  no_log: true
+
+- name: Store the runtime's datastore key, encrypted (only when it is not what is stored)
+  ansible.builtin.uri:
+    url: "http://{{ stackstorm_bind }}:{{ stackstorm_port | int }}/api/v1/keys/{{ stackstorm_pack_ref }}.kv_key"
+    method: PUT
+    headers: "{{ stackstorm_api_headers }}"
+    body_format: json
+    body:
+      name: "{{ stackstorm_pack_ref }}.kv_key"
+      value: "{{ lookup('hnx_secret', stackstorm_kv_key_ref) }}"
+      scope: st2kv.system
+      secret: true
+    status_code: [200, 201]
+    timeout: "{{ stackstorm_health_timeout | int }}"
+  changed_when: true
+  when: stackstorm_kv_current.status == 404 or (stackstorm_kv_current.json.value | default('')) != lookup('hnx_secret', stackstorm_kv_key_ref)
+  no_log: true

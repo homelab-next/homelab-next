@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Refuse a missing or malformed credential before a container sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Look for a stack that is already rendered (a first install has nothing to restart)
+  ansible.builtin.stat:
+    path: "{{ stackstorm_dir }}/docker-compose.yml"
+  register: stackstorm_compose_before
+
+- name: Create the data directories
+  ansible.builtin.include_tasks: dirs.yml
+
+- name: Provision the interpreter the pack's runtime needs
+  ansible.builtin.include_tasks: python.yml
+  when: stackstorm_start | bool
+
+- name: Stage the rendered pack, the wheel its actions import and the config
+  ansible.builtin.include_tasks: pack.yml
+
+- name: Build the application spec (it names the staged release)
+  ansible.builtin.include_tasks: app.yml
+
+- name: Stage the wheel and the dependency lock
+  ansible.builtin.include_tasks: dist.yml
+
+- name: Write the configuration, the sign-in file, the keys and the RBAC definitions
+  ansible.builtin.include_tasks: conf.yml
+
+- name: Read the container secrets
+  ansible.builtin.set_fact:
+    stackstorm_secret_env:
+      mongo:
+        MONGO_INITDB_ROOT_USERNAME: root
+        MONGO_INITDB_ROOT_PASSWORD: "{{ lookup('hnx_secret', stackstorm_mongo_root_login_ref) }}"
+        ST2_DB_PASSWORD: "{{ lookup('hnx_secret', stackstorm_mongo_login_ref) }}"
+      rabbitmq:
+        RABBITMQ_DEFAULT_PASS: "{{ lookup('hnx_secret', stackstorm_rabbitmq_login_ref) }}"
+  no_log: true
+
+- name: Render and start the stack
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ stackstorm_app.compose_app_name }}"
+    compose_app_dir: "{{ stackstorm_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ stackstorm_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ stackstorm_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ stackstorm_app.compose_app_owner }}"
+    compose_app_group: "{{ stackstorm_app.compose_app_group }}"
+    compose_app_start: "{{ stackstorm_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ stackstorm_app.compose_app_validate_with_docker }}"
+    compose_app_network_subnet: "{{ stackstorm_app.compose_app_network_subnet }}"
+    compose_app_spec: "{{ stackstorm_app.compose_app_spec }}"
+    compose_app_secret_env: "{{ stackstorm_secret_env }}"
+    compose_app_bind_extra: "{{ stackstorm_app.compose_app_bind_extra }}"
+  no_log: true
+
+# The services read st2.user.conf, the htpasswd and the keys at start: a changed one needs them restarted
+# on a stack that was already running (a first install starts them with the files in place).
+- name: Recreate the services that read a changed configuration
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", up, -d, --force-recreate, --no-deps,
+           st2api, st2auth, st2stream, st2scheduler, st2workflowengine, st2actionrunner, st2rulesengine,
+           st2timersengine, st2garbagecollector]
+  changed_when: true
+  register: stackstorm_recreated
+  when: >-
+    stackstorm_start | bool and not ansible_check_mode and stackstorm_compose_before.stat.exists and
+    (stackstorm_conf_written is changed or stackstorm_htpasswd_written is changed)
+
+# The front resolves its upstreams (the API, the sign-in and the stream services) when it starts and
+# keeps those addresses: a service that was recreated has a new one, and the front answers 503 for it
+# until it is restarted. Anything that recreates a service on a running stack (a changed pack
+# release, configuration or image) restarts it.
+- name: Restart the front when a service behind it was recreated
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ stackstorm_dir }}/docker-compose.yml", restart, "{{ stackstorm_front }}"]
+  changed_when: true
+  when: >-
+    stackstorm_start | bool and not ansible_check_mode and stackstorm_compose_before.stat.exists and
+    (stackstorm_recreated is changed or stackstorm_pack_changed | bool or (compose_app_rendered | default({})) is changed)
+
+- name: Bring the running stack to the declared state (register, RBAC, runtime, keys)
+  ansible.builtin.include_tasks: converge.yml
+  when: stackstorm_start | bool
+
+- name: Install the broker socket forward
+  ansible.builtin.include_tasks: tunnel.yml
+  when: stackstorm_broker_tunnel_enabled | bool
+
+- name: Install the event bridge
+  ansible.builtin.include_tasks: bridge.yml
+  when: stackstorm_bridge_enabled | bool
