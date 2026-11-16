@@ -244,9 +244,10 @@ def test_main_refuses_a_key_the_gateway_would_refuse_at_start(tmp_path, bad):
 def test_main_refuses_a_cloud_host_the_site_did_not_allow(tmp_path):
     r, _ = main(tmp_path, gateway_cloud_hosts_allowed=[])
     assert r.returncode != 0, r.stdout
-    assert "api.anthropic.com" in r.stdout and "gateway_cloud_hosts_allowed" in r.stdout
+    assert "is not one this site allows" in r.stdout and "gateway_cloud_hosts_allowed" in r.stdout
+    # a different provider's host does not admit this one's deployment
     other, _ = main(tmp_path, gateway_cloud_hosts_allowed=["api.openai.com"])
-    assert other.returncode != 0 and "api.anthropic.com" in other.stdout
+    assert other.returncode != 0 and "is not one this site allows" in other.stdout
     assert not (tmp_path / "data" / "config" / "gateway.json").exists()
 
 
