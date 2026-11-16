@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# The product's export carries no API token, so after an import the agents' token is gone. The role
+# therefore owns it: the secret's value is written into the product's token table for the account
+# documents_api_user (one token per account: a different one is replaced). The value goes to the
+# container through the environment of this one command, never an argument. An account that does not
+# exist yet (an empty library about to be imported) is reported, not an error: the next run, after
+# the import, seeds it, and health fails until it has.
+- name: Seed the API token of the service account
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T,
+           -e, HNX_API_USER, -e, HNX_API_TOKEN, app, python3, manage.py, shell, -c, "{{ documents_seed_code }}"]
+  environment:
+    HNX_API_USER: "{{ documents_api_user }}"
+    HNX_API_TOKEN: "{{ lookup('hnx_secret', documents_api_login_ref) }}"
+  register: documents_token
+  changed_when: "'HNX-TOKEN created' in documents_token.stdout or 'HNX-TOKEN replaced' in documents_token.stdout"
+  failed_when: documents_token.rc != 0 or 'HNX-TOKEN ' not in documents_token.stdout
+  no_log: true
+  tags: [restore]
+
+- name: Say that the service account does not exist yet
+  ansible.builtin.debug:
+    msg: >-
+      documents: no account named {{ documents_api_user }} yet, so the API token was not seeded.
+      Import the library (or create the account) and run the role again; health fails until it is seeded.
+  when: "'HNX-TOKEN no-user' in documents_token.stdout"
+  tags: [restore]

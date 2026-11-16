@@ -41,6 +41,7 @@ slots:
   projects:            {stage: null, contract: projects.py, stateful: true, export_formats: [object-tree]}
   agent-runtime:       {stage: null, contract: agent_runner.py, stateful: false, required_in_core: true}  # 1.0 tracks the x-draft schemas/runner until ADR-0051 is accepted
   media:               {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
+  documents:           {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   metrics:             {stage: null, contract: null, stateful: false}
   automation:          {stage: null, contract: null, stateful: true, export_formats: [object-tree]}
   dataflow:            {stage: null, contract: null, stateful: true, export_formats: [json]}

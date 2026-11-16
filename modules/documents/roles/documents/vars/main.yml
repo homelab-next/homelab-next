@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+documents_container_port: 8000
+documents_container_data: /usr/src/paperless/data
+documents_container_media: /usr/src/paperless/media
+documents_container_consume: /usr/src/paperless/consume
+documents_container_export: /usr/src/paperless/export
+documents_broker_url: "redis://broker"
+documents_repository: "{{ documents_image.split('@')[0].rsplit(':', 1)[0] }}"
+documents_tag: "{{ documents_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+documents_digest: "{{ documents_image.split('@')[1] | default('') }}"
+documents_broker_repository: "{{ documents_broker_image.split('@')[0].rsplit(':', 1)[0] }}"
+documents_broker_tag: "{{ documents_broker_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+documents_broker_digest: "{{ documents_broker_image.split('@')[1] | default('') }}"
+documents_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+# the application's own version tag: the pin carries the version, and an upgrade never goes back
+documents_version_tag_pattern: '^[0-9]+\.[0-9]+\.[0-9]+\Z'
+documents_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+documents_ref_pattern: '^secret:[a-z0-9][a-z0-9_-]*(/[a-z0-9][a-z0-9_-]*)+\Z'
+documents_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+# the OCR languages the image ships (Tesseract codes); anything else needs root at start to install
+documents_ocr_available: [deu, eng, fra, ita, spa]
+documents_user_pattern: '^[A-Za-z0-9@.+_-]{1,150}\Z'
+documents_url_pattern: '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?\Z'
+documents_extra_env_name_pattern: '^PAPERLESS_[A-Z0-9_]+\Z'
+documents_extra_env_value_pattern: "^[A-Za-z0-9 ._:/@+,=-]{0,256}\\Z"
+# what the role sets itself: a site cannot set it a second way through documents_extra_env
+documents_fixed_env_names:
+  - PAPERLESS_REDIS
+  - PAPERLESS_TIME_ZONE
+  - PAPERLESS_OCR_LANGUAGE
+  - PAPERLESS_URL
+  - PAPERLESS_ADMIN_USER
+  - PAPERLESS_CONSUMER_RECURSIVE
+  - PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS
+  - PAPERLESS_TASK_WORKERS
+  - PAPERLESS_THREADS_PER_WORKER
+  - PAPERLESS_DBENGINE
+  - PAPERLESS_DBHOST
+  - PAPERLESS_DATA_DIR
+  - PAPERLESS_MEDIA_ROOT
+  - PAPERLESS_CONSUMPTION_DIR
+documents_seed_code: |
+  import os
+  from django.contrib.auth import get_user_model
+  from rest_framework.authtoken.models import Token
+  user = get_user_model().objects.filter(username=os.environ["HNX_API_USER"]).first()
+  if user is None:
+      print("HNX-TOKEN no-user")
+  else:
+      want = os.environ["HNX_API_TOKEN"]
+      have = Token.objects.filter(user=user).first()
+      if have is not None and have.key == want:
+          print("HNX-TOKEN unchanged")
+      else:
+          state = "replaced" if have is not None else "created"
+          Token.objects.filter(user=user).delete()
+          Token.objects.create(user=user, key=want)
+          print("HNX-TOKEN " + state)
+documents_state_code: |
+  from django.contrib.auth.models import User
+  from documents.models import Document
+  users = User.objects.exclude(username__in=["consumer", "AnonymousUser"]).count()
+  print("HNX-STATE", Document.global_objects.count(), users)
+# run after an import, inside the container: the imported records (the export's manifest) equal what
+# the database now holds, and every document's original and archive copy on disk hashes to the
+# checksum the export recorded (32 hex = md5, 64 = sha256)
+documents_verify_code: |
+  import hashlib, json, os, sys
+  from django.contrib.auth.models import User
+  from documents.models import Correspondent, CustomField, Document, DocumentType, Note, Tag
+  root = os.environ["HNX_STAGING"]
+  records = json.load(open(os.path.join(root, "manifest.json")))
+  def of(model):
+      return [r for r in records if r["model"] == model]
+  def digest(path, want):
+      algo = {32: "md5", 64: "sha256"}.get(len(want or ""))
+      if algo is None or not os.path.isfile(path):
+          return None
+      h = hashlib.new(algo)
+      with open(path, "rb") as f:
+          for chunk in iter(lambda: f.read(1 << 20), b""):
+              h.update(chunk)
+      return h.hexdigest()
+  want = {
+      "documents": len(of("documents.document")), "tags": len(of("documents.tag")),
+      "correspondents": len(of("documents.correspondent")), "document_types": len(of("documents.documenttype")),
+      "custom_fields": len(of("documents.customfield")), "notes": len(of("documents.note")),
+  }
+  got = {
+      "documents": Document.global_objects.count(), "tags": Tag.objects.count(),
+      "correspondents": Correspondent.objects.count(), "document_types": DocumentType.objects.count(),
+      "custom_fields": CustomField.objects.count(), "notes": Note.global_objects.count(),
+  }
+  bad = []
+  for r in of("documents.document"):
+      d = Document.global_objects.filter(pk=r["pk"]).first()
+      if d is None or digest(d.source_path, r["fields"]["checksum"]) != r["fields"]["checksum"]:
+          bad.append(r["pk"])
+      elif r.get("__exported_archive_name__") and digest(d.archive_path, r["fields"].get("archive_checksum")) != r["fields"].get("archive_checksum"):
+          bad.append(r["pk"])
+  ok = want == got and want["documents"] > 0 and not bad
+  print("HNX-VERIFY", json.dumps({"ok": ok, "want": want, "got": got, "bad": bad[:20]}, sort_keys=True))
+  sys.exit(0 if ok else 1)

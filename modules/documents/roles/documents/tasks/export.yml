@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (object-tree, docs/modules/data.md): <data root>/export/{library.tar,listing.jsonl}.
+# library.tar is the product's own export (manifest.json with every record, the originals, the
+# archive copies, the thumbnails) of the whole library; the listing holds its size and sha256. The
+# exporter reads through the running application (no stop: the database is consistent to one read;
+# freeze the callers for a cutover copy, README "Migrating in"), into export/.library, which it
+# keeps between runs so the next one only copies what changed (-d removes what was deleted since).
+# A snapshot: every run writes a new tar (the hook reports changed).
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Export the library with the product's exporter
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ documents_dir }}/docker-compose.yml", exec, -T, app,
+               python3, manage.py, document_exporter, "{{ documents_container_export }}/.library",
+               --no-progress-bar, --delete, --compare-checksums]
+      changed_when: true
+    - name: Archive the export beside it
+      ansible.builtin.command:
+        argv: [tar, --create, --file, "{{ documents_data_root }}/export/.library.tar.tmp",
+               --directory, "{{ documents_data_root }}/export/.library", .]
+      changed_when: true
+    - name: Put the archive in place
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ documents_data_root }}/export/.library.tar.tmp", "{{ documents_data_root }}/export/library.tar"]
+      changed_when: true
+    - name: The archive belongs to the application's user and is private (it holds every account's password hash)
+      ansible.builtin.file:
+        path: "{{ documents_data_root }}/export/library.tar"
+        owner: "{{ documents_app_uid | int }}"
+        group: "{{ documents_app_gid | int }}"
+        mode: "0600"
+    - name: Read the archive (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ documents_data_root }}/export/library.tar"
+        checksum_algorithm: sha256
+      register: documents_export_stat
+    - name: Write the listing
+      ansible.builtin.copy:
+        content: "{{ {'key': 'library.tar', 'size': documents_export_stat.stat.size, 'sha256': documents_export_stat.stat.checksum} | to_json(sort_keys=true) }}\n"
+        dest: "{{ documents_data_root }}/export/listing.jsonl"
+        owner: "{{ documents_app_uid | int }}"
+        group: "{{ documents_app_gid | int }}"
+        mode: "0600"
+  tags: [export]

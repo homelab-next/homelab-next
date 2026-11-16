@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: both containers run and are healthy; the sign-in page answers 200; an anonymous
+# read of the library through the API is REFUSED (401 or 403: the library is private); and with the
+# service account's token the API answers, the database and the broker report OK with no migration
+# pending, and the library holds at least documents_expected_min_documents documents (a migrated
+# library is never "healthy" empty). Read-only: nothing is created, changed or consumed.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: documents
+        compose_app_dir: "{{ documents_app.compose_app_dir }}"
+        compose_app_spec: "{{ documents_app.compose_app_spec }}"
+    - name: The sign-in page answers
+      ansible.builtin.uri:
+        url: "http://{{ documents_bind }}:{{ documents_port | int }}/accounts/login/"
+        status_code: 200
+        timeout: "{{ documents_health_timeout | int }}"
+      changed_when: false
+      check_mode: false
+    - name: An anonymous read of the library is refused
+      ansible.builtin.uri:
+        url: "http://{{ documents_bind }}:{{ documents_port | int }}/api/documents/?page_size=1"
+        status_code: [401, 403]
+        timeout: "{{ documents_health_timeout | int }}"
+      changed_when: false
+      check_mode: false
+    - name: The service account reads the library
+      ansible.builtin.uri:
+        url: "http://{{ documents_bind }}:{{ documents_port | int }}/api/documents/?page_size=1"
+        headers:
+          Authorization: "Token {{ lookup('hnx_secret', documents_api_login_ref) }}"
+        status_code: 200
+        return_content: true
+        timeout: "{{ documents_health_timeout | int }}"
+      register: documents_library
+      changed_when: false
+      check_mode: false
+      no_log: true
+    - name: The library holds as many documents as it is expected to
+      ansible.builtin.assert:
+        that:
+          - documents_library.json.count is integer
+          - documents_library.json.count | int >= documents_expected_min_documents | int
+        fail_msg: >-
+          documents: the library answers with {{ documents_library.json.count | default('no count') }}
+          documents where at least {{ documents_expected_min_documents }} are expected (a migration
+          that lost documents, or an import that has not run)
+    - name: The application reports its database and broker
+      ansible.builtin.uri:
+        url: "http://{{ documents_bind }}:{{ documents_port | int }}/api/status/"
+        headers:
+          Authorization: "Token {{ lookup('hnx_secret', documents_api_login_ref) }}"
+        status_code: 200
+        return_content: true
+        timeout: "{{ documents_health_timeout | int }}"
+      register: documents_status
+      changed_when: false
+      check_mode: false
+      no_log: true
+    - name: The database is OK with no migration pending and the broker is OK
+      ansible.builtin.assert:
+        that:
+          - documents_status.json.database.status == 'OK'
+          - documents_status.json.database.migration_status.unapplied_migrations | length == 0
+          - documents_status.json.tasks.redis_status == 'OK'
+        fail_msg: >-
+          documents: /api/status/ reports the database {{ documents_status.json.database.status | default('?') }}
+          (pending migrations: {{ documents_status.json.database.migration_status.unapplied_migrations | default([]) | length }}),
+          the broker {{ documents_status.json.tasks.redis_status | default('?') }}
+  tags: [health]

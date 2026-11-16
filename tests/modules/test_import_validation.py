@@ -258,6 +258,7 @@ MIGRATION_PROOF = {
     "hot-index": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "idp": "reference: the idp protocol has no export/import_ yet",
     "lake-catalog": "reference: the lake protocol has no export/import_ yet",
+    "documents": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "media": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "object-store": "reference: the object_store protocol has no export/import_ yet",
     "orchestration": "reference: the orchestration protocol has no export/import_ yet",
