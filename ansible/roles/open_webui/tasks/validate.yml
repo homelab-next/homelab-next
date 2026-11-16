@@ -3,12 +3,45 @@
   ansible.builtin.assert:
     that:
       - open_webui_gateway_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)*\Z')
-      - open_webui_gateway_id is not match(open_webui_backend_id_pattern)
+      - open_webui_gateway_impls | length > 0 or open_webui_gateway_id is not match(open_webui_backend_id_pattern)
       - open_webui_gateway_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
       - open_webui_session_key_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\Z')
       - open_webui_gateway_key_ref != open_webui_session_key_ref
       - open_webui_image is match('^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z')
       - open_webui_port | int >= 1 and open_webui_port | int <= 65535
+      - open_webui_gateway_capabilities is sequence
+      - open_webui_gateway_impls is sequence
+      - open_webui_gateway_capabilities | length > 0
+      - open_webui_gateway_capabilities | reject('match', '^[a-z][a-z0-9]*(-[a-z0-9]+)*\\Z') | list | length == 0
+      # the headers the gateway reads: a TLP label it accepts (empty: none), a tag prefix
+      # (the gateway's own pattern: nothing a header value cannot carry)
+      - open_webui_gateway_tlp is string
+      - open_webui_gateway_tlp == '' or open_webui_gateway_tlp in open_webui_tlp_labels
+      - open_webui_gateway_tag_prefix is string
+      - open_webui_gateway_tag_prefix is match('^[A-Za-z0-9._:/-]{0,64}\\Z')
+      - open_webui_gateway_tag_per_user is boolean
+      # sign-in: an https issuer, this app's client, its secret by reference and a public URL to
+      # redirect back to, all or none
+      - open_webui_oidc_issuer_url is string
+      - >-
+        open_webui_oidc_issuer_url == '' or open_webui_oidc_issuer_url
+        is match('^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[1-9][0-9]{0,4})?(/[A-Za-z0-9._~-]+)*\\Z')
+      - >-
+        open_webui_oidc_issuer_url == '' or (open_webui_oidc_client_id
+        is match('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\Z')
+        and open_webui_oidc_client_secret_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\\Z')
+        and open_webui_public_url | length > 0)
+      - open_webui_oidc_provider_name is match('^[A-Za-z0-9][A-Za-z0-9 ._-]{0,31}\\Z')
+      # the break-glass administrator: an email and its password's reference, both or neither
+      - open_webui_admin_email is string
+      - (open_webui_admin_email == '') == (open_webui_admin_password_ref == '')
+      - open_webui_admin_email == '' or open_webui_admin_email is match('^[A-Za-z0-9._+-]{1,64}@[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\Z')
+      - open_webui_admin_password_ref == '' or open_webui_admin_password_ref is match('^secret:[a-z0-9][a-z0-9/_.-]*\\Z')
+      - >-
+        [open_webui_gateway_key_ref, open_webui_session_key_ref, open_webui_oidc_client_secret_ref,
+         open_webui_admin_password_ref] | select('!=', '') | list | length
+        == [open_webui_gateway_key_ref, open_webui_session_key_ref, open_webui_oidc_client_secret_ref,
+            open_webui_admin_password_ref] | select('!=', '') | list | unique | length
       - open_webui_extra_env is mapping
       - open_webui_extra_env | list | reject('in', open_webui_allowed_env) | list | length == 0
       - open_webui_extra_env | list | select('in', open_webui_fixed_env) | list | length == 0
@@ -47,9 +80,20 @@
 
 - name: Resolve the gateway id through the registry
   ansible.builtin.assert:
-    that: lookup('hnx_registry', open_webui_gateway_id, field='capability') == open_webui_gateway_capability
+    that: lookup('hnx_registry', open_webui_gateway_id, field='capability') in open_webui_gateway_capabilities
     fail_msg: >-
       open_webui: {{ open_webui_gateway_id }} is registry service with capability
       '{{ lookup('hnx_registry', open_webui_gateway_id, field='capability') }}', not
-      {{ open_webui_gateway_capability }}: Open WebUI talks to the LLM gateway only, never to an
+      {{ open_webui_gateway_capabilities | join(' or ') }}: Open WebUI talks to the LLM gateway only, never to an
       engine or another service, whatever the id is called
+
+- name: Resolve the gateway's product through the registry
+  ansible.builtin.assert:
+    that: >-
+      open_webui_gateway_impls | length == 0
+      or lookup('hnx_registry', open_webui_gateway_id, field='impl') in open_webui_gateway_impls
+    fail_msg: >-
+      open_webui: {{ open_webui_gateway_id }} is registry service of product
+      '{{ lookup('hnx_registry', open_webui_gateway_id, field='impl') }}', not
+      {{ open_webui_gateway_impls | join(' or ') }}: Open WebUI talks to the LLM gateway only,
+      never to an engine behind it

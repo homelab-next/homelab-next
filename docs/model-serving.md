@@ -257,9 +257,19 @@ go through the gateway with their own key instead (`GatewayResolver`; ADR-0007 d
 
 - `OPENAI_API_BASE_URLS` is the gateway's registry URL plus `/v1` (`open_webui_gateway_id`,
   required). A backend id (`inference-*`, `vllm*`, `llama*`, `ollama*`) is refused, and the id is
-  resolved through the registry: its service's `capability` must be `llm-gateway`
-  (`open_webui_gateway_capability`), so an id such as `gpu-01` that points at a vLLM is refused
-  whatever it is called. There is no way to point it at an engine.
+  resolved through the registry: its service's `capability` must be one of
+  `open_webui_gateway_capabilities` (default `llm-gateway`), so an id such as `gpu-01` that points
+  at a vLLM is refused whatever it is called. When the capability is shared with the engines (the
+  lab's own gateway answers as `inference`, as an engine does), `open_webui_gateway_impls` names the
+  product the row's `impl` must be, and the backend-name rule gives way to it. There is no way to
+  point it at an engine.
+- Optional, off by default: `open_webui_gateway_tlp` and `open_webui_gateway_tag_prefix` (with
+  `open_webui_gateway_tag_per_user`) set the `X-HNX-TLP` and `X-HNX-Tag` headers the gateway reads,
+  as the one connection's `headers` setting (`OPENAI_API_CONFIGS`), so every call of it carries them
+  and Open WebUI substitutes the signed-in user's id; `open_webui_oidc_*` sign in through an OpenID
+  Connect issuer (PKCE, roles claim, needs `open_webui_public_url`); `open_webui_admin_email` and
+  `open_webui_admin_password_ref` create a break-glass administrator at start while no user exists.
+  The chat provider module (`modules/openwebui`) wraps the role with these set.
 - The key is this app's own gateway key, by secret name (`open_webui_gateway_key_ref`, default
   `secret:llm-gateway/key-chat-ui`, the `chat-ui` key in `examples/model-serving/gateway.yml`).
   The gateway scopes it to the roles chat may use and limits it. The key goes only into compose's

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# The registry row (platform/service) this provider contributes: keyed by the slot, renamed to the
+# instance the site selects; version is product.version (never repeated here), host the module's
+# host role (docs/modules/registry-rows.md). Public through the edge only, which is how a browser
+# reaches it: public_hostname is declared here with an example value and is the SITE's to fill
+# (its presence is compared, not its value; an internal-only name on the lab's own DNS is as good as
+# a public one, the edge is the front door either way). auth: idp: the realm gets a confidential
+# client named after the row (redirects under the public hostname, PKCE) and the edge lets in the
+# `roles` groups only; Open WebUI then signs the person in through that same client. The row's
+# tls is none: the edge reaches the guest over the lab's own network.
+services:
+  chat:
+    capability: chat
+    impl: open-webui
+    host: server
+    protocol: http
+    port: 8080
+    health: {kind: http, path: /health, expect_status: 200}
+    upstreams: [inference]
+    owner: operator
+    tls: none
+    auth: idp
+    public_hostname: chat.example.internal
+    roles: {user: [lab-users], admin: [lab-admins]}
+    tags: [ai, chat]
+    description: Open WebUI, the chat front end; models only through the lab's gateway with its own key, sign-in through the identity provider plus one break-glass local administrator. No other egress.

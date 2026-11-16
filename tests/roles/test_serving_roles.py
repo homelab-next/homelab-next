@@ -1269,6 +1269,116 @@ def test_open_webui_allowlist_and_reserved_names_stay_apart():
     assert [n for n in own if not reserved.search(n)] == []
 
 
+SIGNIN = {
+    "open_webui_public_url": "https://chat.example.internal",
+    "open_webui_oidc_issuer_url": "https://sso.example.internal/realms/lab",
+    "open_webui_oidc_client_id": "chat",
+    "open_webui_oidc_client_secret_ref": "secret:idp/clients/chat",
+    "open_webui_admin_email": "admin@example.internal",
+    "open_webui_admin_password_ref": "secret:open-webui/admin-password",
+}
+SIGNIN_ENV = {
+    **SECRETS,
+    "HNX_SECRET_IDP_CLIENTS_CHAT": "client-fake",
+    "HNX_SECRET_OPEN_WEBUI_ADMIN_PASSWORD": "admin-fake",
+}
+
+
+def _headers_and_signin(tmp_path):
+    v = webui_vars(
+        tmp_path,
+        open_webui_gateway_tlp="amber",
+        open_webui_gateway_tag_prefix="chat",
+        open_webui_gateway_tag_per_user=True,
+        **SIGNIN,
+    )
+    return {"role": "open_webui", "tasks_from": "main", "extra_vars": v, "env": SIGNIN_ENV}
+
+
+@first_run(_headers_and_signin)
+def test_open_webui_sends_the_gateways_headers_and_signs_in_through_the_issuer(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"][
+        "open-webui"
+    ]["environment"]
+    # the connection's static headers; {{USER_ID}} is substituted by Open WebUI per request
+    cfg = json.loads(env["OPENAI_API_CONFIGS"])
+    assert cfg == {"0": {"headers": {"X-HNX-TLP": "amber", "X-HNX-Tag": "chat:{{USER_ID}}"}}}
+    assert env["ENABLE_WEB_SEARCH"] == "false"
+    assert env["OPENID_PROVIDER_URL"] == (
+        "https://sso.example.internal/realms/lab/.well-known/openid-configuration"
+    )
+    assert env["OPENID_REDIRECT_URI"] == "https://chat.example.internal/oauth/oidc/callback"
+    assert env["OAUTH_CODE_CHALLENGE_METHOD"] == "S256"
+    assert env["ENABLE_OAUTH_ROLE_MANAGEMENT"] == "true" and env["OAUTH_ADMIN_ROLES"] == "admin"
+    assert env["ENABLE_SIGNUP"] == "false" and env["WEBUI_ADMIN_EMAIL"] == "admin@example.internal"
+    assert not any("SECRET" in k or "PASSWORD" in k for k in env)  # only in the env_file
+    secrets = (tmp_path / "app" / "secrets" / "open-webui.env").read_text()
+    assert "OAUTH_CLIENT_SECRET='client-fake'" in secrets
+    assert "WEBUI_ADMIN_PASSWORD='admin-fake'" in secrets
+    assert "client-fake" not in r.stdout and "admin-fake" not in r.stdout
+
+
+def test_the_tag_the_role_renders_is_a_tag_the_gateway_accepts():
+    """The usage tag is ``<prefix>:<user id>``, valid even when Open WebUI substitutes nothing."""
+    import re
+
+    pattern = re.compile(r"^[A-Za-z0-9._:/-]{0,64}[A-Za-z0-9._:-]{1,128}\Z")
+    for user_id in ("", "0b7c9a52-3f0e-4c53-9b1a-77a0d5b1c001"):
+        assert pattern.match("chat:" + user_id)
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"open_webui_gateway_tlp": "purple"},
+        {"open_webui_gateway_tag_prefix": "has space"},
+        {"open_webui_gateway_tag_prefix": "x" * 65},
+        {"open_webui_oidc_issuer_url": "http://sso.example.internal/realms/lab"},
+        {"open_webui_public_url": ""},  # the redirect needs a public address
+        {"open_webui_oidc_client_secret_ref": "client-plain-fake"},
+        {
+            "open_webui_oidc_client_secret_ref": "secret:open-webui/session-key"
+        },  # one secret, two uses
+        {"open_webui_admin_email": ""},  # an email without its password's reference, or the reverse
+        {"open_webui_admin_password_ref": ""},
+        {"open_webui_admin_email": "not an email"},
+        {"open_webui_gateway_capabilities": []},
+    ],
+)
+@first_run(lambda tmp, over: {"role": "open_webui", "tasks_from": "main",
+                               "extra_vars": {**webui_vars(tmp, **SIGNIN), **over},
+                               "env": SIGNIN_ENV})  # fmt: skip
+def test_open_webui_refuses_a_bad_header_signin_or_administrator_setting(first, over):
+    r, tmp_path = first
+    assert r.returncode != 0 and "Open WebUI talks to the LLM" in r.stdout, over
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+def _impl_row(tmp, impl, ok):
+    reg = yaml.safe_load((ROOT / "ansible/inventory/example/registry.yml").read_text())
+    reg["services"]["front-01"] = {"host": "front-01.example.internal", "port": 4100,
+                                   "scheme": "http", "capability": "inference", "impl": impl}  # fmt: skip
+    (tmp / "registry.yml").write_text(yaml.safe_dump(reg))
+    v = webui_vars(tmp, open_webui_gateway_id="front-01", hnx_registry_file=str(tmp / "registry.yml"),
+                   open_webui_gateway_capabilities=["inference"],
+                   open_webui_gateway_impls=["own-gate"])  # fmt: skip
+    return {"role": "open_webui", "tasks_from": "main", "extra_vars": v, "env": SECRETS}
+
+
+@pytest.mark.parametrize(("impl", "ok"), [("own-gate", True), ("an-engine", False)])
+@first_run(_impl_row)
+def test_open_webui_requires_the_gateways_product_when_one_is_named(first, impl, ok):
+    """The gateway and an engine behind it both answer ``inference``: the product tells them apart,
+    and a gateway id the backend-name pattern would refuse (here ``front`` is fine, ``inference``
+    would not be) is judged by it instead."""
+    r, _ = first
+    assert (r.returncode == 0) is ok, r.stdout
+    if not ok:
+        assert "Open WebUI talks to the LLM gateway only" in r.stdout
+
+
 def test_open_webui_health_reads_the_container_and_the_port(tmp_path):
     bindir = tmp_path / "bin"
     bindir.mkdir()
