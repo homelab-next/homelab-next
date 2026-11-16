@@ -229,7 +229,7 @@ network, the exported store) works. Two options, not implemented here:
   row's `tls` changed to `internal` and `edge_tls.ca` naming the CA, with the broker host trusting
   that CA. One certificate story for the whole lab, the CA's renewal is already automated, and the
   firewall can then admit only the edge on 8088.
-* **A local proxy on the guest** (a TLS terminator on 443 in front of 127.0.0.1:8088): the
+* **A local proxy on the guest** (a TLS terminator on 443 in front of the loopback port 8088): the
   controller could then bind loopback only, but this adds a second certificate lifecycle and a
   second unit to this module.
 
