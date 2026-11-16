@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# The gateway image is built by the lab (modules/gateway/README.md, "The image"), not pulled from a
+# registry. When gateway_image_archive names a local `docker save` of that exact image (compressed
+# or not; docker load reads gzip, xz and zstd), the image is loaded from it if the daemon lacks the
+# digest, and the role refuses to go on if the digest is still missing. The daemon must keep image
+# digests across save and load (the containerd image store, the default of current Docker).
+- name: Ask whether the daemon already has the pinned image
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ gateway_repository }}@{{ gateway_digest }}"]
+  register: gateway_have_image
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Load the pinned image from the archive when the daemon lacks it
+  when: gateway_have_image.rc != 0
+  block:
+    - name: The archive is a regular file
+      ansible.builtin.stat:
+        path: "{{ gateway_image_archive }}"
+        follow: false
+      register: gateway_archive
+    - name: Refuse anything but a regular archive
+      ansible.builtin.assert:
+        that: gateway_archive.stat.exists and gateway_archive.stat.isreg
+        fail_msg: "gateway: {{ gateway_image_archive }} is not a regular file"
+    - name: Load the image
+      ansible.builtin.command:
+        argv: [docker, load, -i, "{{ gateway_image_archive }}"]
+      changed_when: true
+    - name: The pinned digest is there now
+      ansible.builtin.command:
+        argv: [docker, image, inspect, --format, "{{ '{{.Id}}' }}", "{{ gateway_repository }}@{{ gateway_digest }}"]
+      changed_when: false
+      register: gateway_loaded
+      failed_when: gateway_loaded.rc != 0

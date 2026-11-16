@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the `inference` suite
+# through the shared gateway adapter, which resolves the endpoint from HNX_ENDPOINT_INFERENCE
+# (never a URL here) and reads every key from HNX_SECRET_<NAME> at each call. The features are the
+# ones the gateway proves with local roles only: no check below calls a role that leaves the lab,
+# so a run spends nothing at the cloud provider. (The cloud-facing checks, `tlp-ceiling` and
+# `tlp-admit`, run in this repository's CI against the fake inference server; to run them against
+# a lab, add the keys and roles they name, docs/llm-gateway.md "Running the suite against the
+# lab's own gateway".)
+#   HNX_ENDPOINT_INFERENCE=http://<host>:4100 HNX_SECRET_GATEWAY_MASTER_KEY=... \
+#   HNX_SECRET_GATEWAY_KEY_CONFORMANCE_THROTTLE=... HNX_SECRET_GATEWAY_KEY_TELEMETRY_READER=... \
+#     hnx conform run inference --target modules/gateway/conformance/target.yml
+# The gateway is reached over plain http inside the lab's network: the adapter refuses to send a
+# key over http to a host that is not loopback, so a run against the lab's instance sets
+# allow_plaintext: true in a copy of this file (a decision for that run, not a default here).
+# The copy also names the lab's own role table (`roles`, relative to its checkout) and the lab's
+# local roles (`model` and `throttle_model`, a role that chats; `embed_model`, one that embeds);
+# the lab's gateway spec must declare the throttle key (local-only, `window_s: 60`,
+# `max_requests: 3`, scoped to `throttle_model`) and the telemetry reader.
+name: gateway
+capabilities:
+  inference:
+    adapter: homelabnext.conform.adapters.llm_gateway:make
+    features: [streaming, embeddings, gateway, turn-records]
+    config:
+      roles: lab/model_roles.json
+      key: secret:gateway/master-key
+      capability: inference
+      model: fast-classifier
+      embed_model: embedder
+      throttle_key: secret:gateway/key-conformance-throttle
+      throttle_model: fast-classifier
+      throttle_requests: 3
+      telemetry_key: secret:gateway/key-telemetry-reader

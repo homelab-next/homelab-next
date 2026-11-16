@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (gateway_target_image, tag and digest of a new
+# build of the same repository), export the usage records first, then converge with the new pin
+# (set gateway_image to the target in the overlay).
+#   ansible-playbook -i <inventory> modules/gateway/playbooks/upgrade.yml -e gateway_target_image=<ref>
+- name: Upgrade the LLM gateway
+  hosts: mod_gateway_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: upgrade
+    - name: Export the usage records before the new image opens them
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: gateway
+      vars:
+        gateway_image: "{{ gateway_target_image }}"

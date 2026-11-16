@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, /healthz answers and reports no dropped usage
+# record (a dropped record is accounting lost for good), a call without a key and a call with a
+# wrong one are each refused, the admin key lists exactly the role aliases the installed
+# configuration names (so the process serves the file on disk, not an older one), and the usage file
+# is within its bound (the gateway does not rotate it). It calls no model: a call would spend a
+# backend's time or the provider's money, and the conformance run is where chat is proved.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Every container of the spec is running and healthy
+      ansible.builtin.include_role:
+        name: compose_app
+        tasks_from: health
+      vars:
+        compose_app_name: gateway
+        compose_app_dir: "{{ gateway_app.compose_app_dir }}"
+        compose_app_spec: "{{ gateway_app.compose_app_spec }}"
+    - name: The gateway answers /healthz and says it is serving
+      ansible.builtin.uri:
+        url: "http://{{ gateway_bind }}:{{ gateway_port | int }}/healthz"
+        status_code: 200
+        return_content: true
+        timeout: "{{ gateway_health_timeout | int }}"
+      register: gateway_health
+      changed_when: false
+    - name: No usage record has been dropped
+      ansible.builtin.assert:
+        that:
+          - gateway_health.json.status | default('') == 'ok'
+          - gateway_health.json.usage_records_dropped | default(-1) | int == 0
+        fail_msg: >-
+          gateway: /healthz reports status {{ gateway_health.json.status | default('?') }} and
+          {{ gateway_health.json.usage_records_dropped | default('?') }} usage records dropped (the
+          usage file could not be written fast enough or at all: those calls have no record; check the
+          state directory's disk and ownership)
+    - name: A call without a key is refused
+      ansible.builtin.uri:
+        url: "http://{{ gateway_bind }}:{{ gateway_port | int }}/v1/models"
+        status_code: [401, 403]
+        timeout: "{{ gateway_health_timeout | int }}"
+      changed_when: false
+    - name: A call with a wrong key is refused
+      ansible.builtin.uri:
+        url: "http://{{ gateway_bind }}:{{ gateway_port | int }}/v1/models"
+        headers:
+          Authorization: "Bearer {{ 'wrong-key-' ~ ('x' * 40) }}"
+        status_code: [401, 403]
+        timeout: "{{ gateway_health_timeout | int }}"
+      changed_when: false
+    - name: Read the installed configuration
+      ansible.builtin.slurp:
+        src: "{{ gateway_data_root }}/config/{{ gateway_config_file }}"
+      register: gateway_installed
+      no_log: true
+    - name: The admin key lists the served role aliases
+      ansible.builtin.uri:
+        url: "http://{{ gateway_bind }}:{{ gateway_port | int }}/v1/models"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', gateway_admin_key_ref) }}"
+        status_code: 200
+        return_content: true
+        timeout: "{{ gateway_health_timeout | int }}"
+      register: gateway_models
+      changed_when: false
+      no_log: true
+    - name: The served aliases are exactly the configured role aliases
+      ansible.builtin.assert:
+        that:
+          - (gateway_models.json.data | map(attribute='id') | sort | list) == ((gateway_installed.content | b64decode | from_json).roles.keys() | sort | list)
+        fail_msg: >-
+          gateway: /v1/models lists {{ gateway_models.json.data | map(attribute='id') | sort | list }}
+          but the installed configuration's role aliases are
+          {{ (gateway_installed.content | b64decode | from_json).roles.keys() | sort | list }}: the
+          running process is not serving the file on disk (restart it)
+    - name: Look at the usage file
+      ansible.builtin.stat:
+        path: "{{ gateway_data_root }}/state/{{ gateway_usage_file }}"
+        follow: false
+      register: gateway_usage_stat
+    - name: The usage file is within its bound
+      ansible.builtin.assert:
+        that:
+          - not gateway_usage_stat.stat.exists or gateway_usage_stat.stat.size <= (gateway_usage_max_mb | int) * 1048576
+        fail_msg: >-
+          gateway: {{ gateway_usage_file }} is {{ ((gateway_usage_stat.stat.size | default(0)) / 1048576) | round(1) }} MiB,
+          over gateway_usage_max_mb ({{ gateway_usage_max_mb }}): the gateway does not rotate it. Export
+          it (the export hook), then move the old records aside with the gateway stopped
+  tags: [health]
