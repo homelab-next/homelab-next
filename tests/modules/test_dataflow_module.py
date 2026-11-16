@@ -321,7 +321,7 @@ def test_the_module_asks_for_no_internet_egress_so_no_grant_is_owed(tmp_path, ca
 class Fake:
     """A stand-in for the controller's four read endpoints, refusing a request with no bearer."""
 
-    def __init__(self, token="tok-0123456789abcdef0123"):
+    def __init__(self, token="t" * 24):
         outer = self
         self.token, self.seen = token, []
         about = {"about": {"title": "x", "version": "2.12.0"}}
@@ -377,14 +377,14 @@ def _make(monkeypatch, url, **config):
 
 
 def test_the_probe_reads_version_cluster_status_and_bulletins_with_a_bearer(monkeypatch):
-    monkeypatch.setenv(BEARER_ENV, "tok-0123456789abcdef0123")
+    monkeypatch.setenv(BEARER_ENV, "t" * 24)
     with Fake() as f:
         t = _make(monkeypatch, f.url, credential=BEARER_REF)
         assert t.version() == "2.12.0"
         assert t.cluster_summary()["clustered"] is False
         assert "flowFilesQueued" in t.status() or "queued" in t.status()
         assert t.bulletins(limit=5) and all(isinstance(b, dict) for b in t.bulletins())
-        assert ("/x-api/flow/bulletin-board?limit=5", "Bearer tok-0123456789abcdef0123") in f.seen
+        assert ("/x-api/flow/bulletin-board?limit=5", "Bearer " + "t" * 24) in f.seen
 
 
 def test_the_probe_does_not_pass_a_request_the_service_refused(monkeypatch):
@@ -392,11 +392,11 @@ def test_the_probe_does_not_pass_a_request_the_service_refused(monkeypatch):
         t = _make(monkeypatch, f.url)  # no credential: the service says 401
         with pytest.raises(adapter.DataflowError, match="HTTP 401"):
             t.version()
-        monkeypatch.setenv(BEARER_ENV, "wrong-token-0123456789ab")
+        monkeypatch.setenv(BEARER_ENV, "w" * 24)
         t = _make(monkeypatch, f.url, credential=BEARER_REF)
         with pytest.raises(adapter.DataflowError, match="HTTP 401"):
             t.status()
-        f.token = "wrong-token-0123456789ab"
+        f.token = "w" * 24
         f.routes["/x-api/flow/about"] = {"about": "not an object"}
         with pytest.raises(adapter.DataflowError, match="no about section"):
             t.version()
@@ -405,7 +405,7 @@ def test_the_probe_does_not_pass_a_request_the_service_refused(monkeypatch):
 @pytest.mark.parametrize(
     "config, why",
     [
-        ({"credential": "tok-0123456789abcdef0123"}, "secret name"),
+        ({"credential": "t" * 24}, "secret name"),
         ({"credential": "Bad/Name"}, "secret name"),
         ({"token": "x"}, "unknown setting"),
         ({"api_root": "x-api/"}, "api_root"),
@@ -413,7 +413,7 @@ def test_the_probe_does_not_pass_a_request_the_service_refused(monkeypatch):
 )
 def test_the_probe_refuses_a_credential_that_is_a_value_and_a_bad_setting(monkeypatch, config, why):
     monkeypatch.setenv("HNX_ENDPOINT_DATAFLOW", SELF)
-    monkeypatch.setenv(BEARER_ENV, "tok-0123456789abcdef0123")
+    monkeypatch.setenv(BEARER_ENV, "t" * 24)
     config = {"api_root": "/x-api", **config}
     with pytest.raises((ValueError, AdapterConfigError), match=why):
         adapter.make(**config)

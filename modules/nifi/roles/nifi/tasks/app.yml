@@ -17,7 +17,7 @@
       HNX_EVENTS_URL: "{{ nifi_events_endpoint }}"
       HNX_TRUSTSTORE_PATH: "{{ nifi_container_tls }}/truststore.p12"
     nifi_sensitive_parameter_refs: >-
-      {{ dict(['HNX_LAKE_S3_ACCESS_KEY', 'HNX_LAKE_S3_SECRET_KEY', 'HNX_EVENTS_TOKEN', 'HNX_TRUSTSTORE_PASSWORD']
+      {{ dict(nifi_sensitive_fixed_names
               | zip([nifi_s3_access_key_ref, nifi_s3_signing_ref, nifi_events_auth_ref, nifi_store_pw_ref]))
          | combine(nifi_extra_parameters) }}
 

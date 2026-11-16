@@ -33,6 +33,8 @@ nifi_heap_gb: "{{ (nifi_heap[:-1] | int) / (1 if nifi_heap.endswith('g') else 10
 nifi_mem_limit_gb: "{{ (nifi_mem_limit[:-1] | int) / (1 if nifi_mem_limit.endswith('g') else 1024) }}"
 # the parameters the role always supplies (the fixed names; a site adds more in nifi_extra_parameters)
 nifi_fixed_parameter_names: [HNX_LAKE_S3_ENDPOINT, HNX_LAKE_S3_REGION, HNX_LAKE_WAREHOUSE, HNX_LAKE_CATALOG_URI, HNX_LAKE_QUERY_URL, HNX_EVENTS_URL, HNX_TRUSTSTORE_PATH, HNX_LAKE_S3_ACCESS_KEY, HNX_LAKE_S3_SECRET_KEY, HNX_EVENTS_TOKEN, HNX_TRUSTSTORE_PASSWORD]
+# the sensitive ones among them (their values come from secret references)
+nifi_sensitive_fixed_names: [HNX_LAKE_S3_ACCESS_KEY, HNX_LAKE_S3_SECRET_KEY, HNX_EVENTS_TOKEN, HNX_TRUSTSTORE_PASSWORD]
 # the configuration files the seed step takes from the image (the others, flow.json.gz, users.xml and
 # authorizations.xml, are the service's state and are never overwritten)
 nifi_seed_files: [nifi.properties, bootstrap.conf, logback.xml, state-management.xml, zookeeper.properties, authorizers.xml, login-identity-providers.xml]

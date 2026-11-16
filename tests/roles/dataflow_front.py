@@ -38,7 +38,7 @@ def make_pki(directory: Path) -> tuple[Path, Path]:
 
 
 class Controller:
-    def __init__(self, *, user="admin", password="pw-0123456789ab", bearer=None, version="2.12.0",
+    def __init__(self, *, user="admin", password="p" * 14, bearer=None, version="2.12.0",
                  https=None, root_id="root-0", allow_anonymous=False):  # fmt: skip
         self.user, self.password, self.bearer = user, password, bearer
         self.version, self.root_id, self.allow_anonymous = version, root_id, allow_anonymous

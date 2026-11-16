@@ -26,7 +26,6 @@ import re
 import subprocess
 import sys
 import tarfile
-import time
 from pathlib import Path
 
 import pytest
@@ -69,6 +68,9 @@ P = MID  # the role's variable prefix is the module's id
 ROLE_DIR = ROOT / "modules" / MID / "roles" / MID
 ROLE = str(ROLE_DIR)
 SCRIPT = yaml.safe_load((ROLE_DIR / "vars" / "main.yml").read_text())[f"{P}_api_script"]
+ROLE_VARS = yaml.safe_load((ROLE_DIR / "vars" / "main.yml").read_text())
+FIXED_NAMES = ROLE_VARS[f"{P}_fixed_parameter_names"]  # every parameter the role always supplies
+SENSITIVE_NAMES = ROLE_VARS[f"{P}_sensitive_fixed_names"]  # the ones among them from secret refs
 SMOKE_FILE = ROLE_DIR / "files" / "hnx-smoke.json"
 S3_URL = url("http", "store.example.internal", 3900)
 CATALOG_URL = url("http", "catalog.example.internal", 8181)
@@ -77,7 +79,7 @@ EVENTS_URL = url("https", "events.example.internal", 8099)
 KEY_ID = "GK" + "ab12" * 6
 KEY_SECRET = "c0de" * 16
 STORE_PW = "store-pass-0123456789"
-PROPS_KEY = "props-key-0123456789"
+PROPS_KEY = "k" * 24
 USER_PW = "single-user-pass-123"
 EVENTS_AUTH = "Bearer events-0123456789"
 CERT, KEY = make_pki(Path(__import__("tempfile").mkdtemp()))
@@ -170,10 +172,10 @@ def test_main_renders_the_service_with_no_secret_in_the_compose_file(tmp_path):
     envfile = tmp_path / "app" / "secrets" / f"{MID}.env"
     assert oct(envfile.stat().st_mode & 0o777) == "0o600"
     body = envfile.read_text()
-    for name in ("KEYSTORE_PASSWORD", "TRUSTSTORE_PASSWORD", "_SENSITIVE_PROPS_KEY",
-                 "SINGLE_USER_CREDENTIALS_USERNAME", "SINGLE_USER_CREDENTIALS_PASSWORD",
-                 "HNX_LAKE_S3_ACCESS_KEY", "HNX_LAKE_S3_SECRET_KEY", "HNX_EVENTS_TOKEN",
-                 "HNX_TRUSTSTORE_PASSWORD"):  # fmt: skip
+    for name in (
+        "KEYSTORE_PASSWORD", "TRUSTSTORE_PASSWORD", "_SENSITIVE_PROPS_KEY",
+        "SINGLE_USER_CREDENTIALS_USERNAME", "SINGLE_USER_CREDENTIALS_PASSWORD", *SENSITIVE_NAMES,
+    ):  # fmt: skip
         assert re.search(r"^(\w*)" + name + "=", body, re.M), name
     for value in values:
         assert value in body
@@ -331,8 +333,10 @@ def test_upgrade_refuses_an_unpinned_a_foreign_and_an_older_target(tmp_path):
     ):
         v = vs(tmp_path, target_image=target)
         assert run_role(tmp_path, ROLE, "upgrade", v, env=secrets()).returncode != 0, target
+    (tmp_path / "app").mkdir()  # the project directory the bump is recorded in
     v = vs(tmp_path, target_image=f"{repo}:2.99.0@{digest}")
-    assert run_role(tmp_path, ROLE, "upgrade", v, env=secrets()).returncode == 0
+    r = run_role(tmp_path, ROLE, "upgrade", v, env=secrets())
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 # ----------------------------------------------------------------------------- the API script
@@ -366,7 +370,7 @@ def cfg_for(c: Controller, **over) -> dict:
 def test_converge_builds_the_context_the_client_and_the_running_smoke_flow_and_is_idempotent():
     with Controller() as c:
         reg = {"url": "https://git.example.internal/api", "owner": "o", "repo": "r",
-               "branch": "main", "path": "flows", "token": "tok-0123456789"}  # fmt: skip
+               "branch": "main", "path": "flows", "token": "t" * 12}  # fmt: skip
         cfg = cfg_for(c, registry=reg)
         out = run_script("converge", cfg)
         assert out == {"parameters": 2, "registry_client": "present", "smoke": "running"}
@@ -564,20 +568,8 @@ def test_health_passes_and_fails_with_the_smoke_flow_and_the_container(tmp_path)
             == 0
         )
         c.contexts["hnx-lake"] = {}
-        names = sorted(
-            [
-                "HNX_LAKE_S3_ENDPOINT", "HNX_LAKE_S3_REGION", "HNX_LAKE_WAREHOUSE",
-                "HNX_LAKE_CATALOG_URI", "HNX_LAKE_QUERY_URL", "HNX_EVENTS_URL", "HNX_TRUSTSTORE_PATH",
-                "HNX_LAKE_S3_ACCESS_KEY", "HNX_LAKE_S3_SECRET_KEY", "HNX_EVENTS_TOKEN",
-                "HNX_TRUSTSTORE_PASSWORD",
-            ]
-        )  # fmt: skip
-        sens = {
-            "HNX_LAKE_S3_ACCESS_KEY",
-            "HNX_LAKE_S3_SECRET_KEY",
-            "HNX_EVENTS_TOKEN",
-            "HNX_TRUSTSTORE_PASSWORD",
-        }
+        names = sorted(FIXED_NAMES)
+        sens = set(SENSITIVE_NAMES)
         for n in names:
             c.contexts["hnx-lake"][n] = {"sensitive": n in sens, "provided": True}
         gid = c.nid("pg")
@@ -593,8 +585,7 @@ def test_health_passes_and_fails_with_the_smoke_flow_and_the_container(tmp_path)
         r = run_role(tmp_path, ROLE, "health", v, env=env)
         assert r.returncode == 0, r.stdout + r.stderr
         # a stale file fails it, a missing file fails it
-        old = time.time() - 3600
-        os.utime(beat, (old, old))
+        os.utime(beat, (1, 1))  # the epoch's first second: stale whatever the date is
         r = run_role(tmp_path, ROLE, "health", v, env=env)
         assert r.returncode != 0 and "smoke flow" in r.stdout
         beat.unlink()
@@ -603,7 +594,8 @@ def test_health_passes_and_fails_with_the_smoke_flow_and_the_container(tmp_path)
         # an unhealthy container fails it before the API is asked
         r = run_role(tmp_path, ROLE, "health", v, env=hook_env(tmp_path, health="unhealthy"))
         assert r.returncode != 0 and "unhealthy" in r.stdout
-        # no smoke flow expected: no file needed
+        # no smoke flow expected: no file needed (and a healthy container again: the fake is one file)
+        env = hook_env(tmp_path)
         beat.unlink()
         v2 = hook_vars(tmp_path, c, smoke_enabled=False)
         c.groups.clear()
