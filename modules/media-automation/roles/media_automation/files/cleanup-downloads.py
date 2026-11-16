@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Carried by the media-automation module (modules/media-automation/roles/media_automation/files): do not edit on the host.
 
 Replaces cleanuparr (the user reported it never worked reliably) for the
@@ -56,6 +57,7 @@ Safety model for everything else — this is the whole point of the script, not 
     MIN_AGE_HOURS, so it never races an import still in progress).
   - Run with --dry-run to preview every action with no deletions at all.
 """
+
 import argparse
 import fnmatch
 import http.cookiejar
@@ -70,20 +72,24 @@ import urllib.request
 # because this script runs on the guest itself, against the address the vpn
 # container publishes the WebUI on (qBittorrent shares its network namespace and has
 # no identity of its own: `gluetun` from inside the compose network).
-QBIT_URL = os.environ.get("QBIT_URL", "")  # the unit sets it to the published address; empty fails closed
+QBIT_URL = os.environ.get(
+    "QBIT_URL", ""
+)  # the unit sets it to the published address; empty fails closed
 QBIT_USER = os.environ.get("QBIT_USER", "admin")
 QBIT_PASS = os.environ.get("QBIT_PASS", "")
 
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", "/srv/media")
 COMPLETED_ROOT = os.environ.get(
-    "COMPLETED_ROOT", os.path.join(MEDIA_ROOT, "downloads", "qbittorrent", "completed"))
+    "COMPLETED_ROOT", os.path.join(MEDIA_ROOT, "downloads", "qbittorrent", "completed")
+)
 # The real library folders to check for a hardlinked copy before deleting
 # anything from downloads — deliberately NOT including `downloads` itself.
 LIBRARY_DIRS = ["movies", "shows", "music", "books", "audiobooks", "workouts"]
 MIN_AGE_HOURS = 6
 BLACKLIST_FILE = os.environ.get(
-    "BLACKLIST_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   "qbittorrent-excluded-file-names.txt"))
+    "BLACKLIST_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "qbittorrent-excluded-file-names.txt"),
+)
 
 
 def load_blacklist_patterns(path: str) -> list[str]:
@@ -144,8 +150,9 @@ def build_qbittorrent_path_index(url: str, user: str, password: str) -> set[str]
     )
     try:
         data = urllib.parse.urlencode({"username": user, "password": password}).encode()
-        login = urllib.request.Request(f"{url}/api/v2/auth/login", data=data,
-                                       headers={"Referer": url})
+        login = urllib.request.Request(
+            f"{url}/api/v2/auth/login", data=data, headers={"Referer": url}
+        )
         with opener.open(login, timeout=30) as r:
             # qBittorrent signals a successful login as 200 with the body "Ok."
             # on some builds and as a bare 204 with an EMPTY body on others
@@ -156,12 +163,15 @@ def build_qbittorrent_path_index(url: str, user: str, password: str) -> set[str]
             # a success.
             body = r.read().decode("utf-8", "replace").strip()
             if r.status not in (200, 204) or "fails" in body.lower():
-                logging.error("qBittorrent login rejected (HTTP %s, body %r) — skipping cleanup",
-                              r.status, body[:60])
+                logging.error(
+                    "qBittorrent login rejected (HTTP %s, body %r) — skipping cleanup",
+                    r.status,
+                    body[:60],
+                )
                 return None
         with opener.open(f"{url}/api/v2/torrents/info", timeout=30) as r:
             torrents = json.loads(r.read().decode("utf-8", "replace"))
-    except Exception as exc:  # noqa: BLE001 — any failure means "unknown", fail closed
+    except Exception as exc:
         logging.error("qBittorrent unreachable (%s) — skipping cleanup", exc)
         return None
     paths: set[str] = set()
@@ -181,8 +191,9 @@ def _is_held_by_torrent(path: str, torrent_paths: set[str]) -> bool:
     return any(p.startswith(tp + os.sep) for tp in torrent_paths)
 
 
-def remove_safe_files(completed_root: str, library_index: set[tuple[int, int]],
-                      torrent_paths: set[str], dry_run: bool) -> None:
+def remove_safe_files(
+    completed_root: str, library_index: set[tuple[int, int]], torrent_paths: set[str], dry_run: bool
+) -> None:
     for dirpath, _dirnames, filenames in os.walk(completed_root):
         for name in filenames:
             path = os.path.join(dirpath, name)
@@ -200,7 +211,9 @@ def remove_safe_files(completed_root: str, library_index: set[tuple[int, int]],
                     logging.info("leaving alone (still loaded in qBittorrent): %s", path)
                     continue
                 if dry_run:
-                    logging.info("[dry-run] would remove (confirmed hardlinked in library): %s", path)
+                    logging.info(
+                        "[dry-run] would remove (confirmed hardlinked in library): %s", path
+                    )
                 else:
                     try:
                         os.remove(path)
@@ -211,8 +224,9 @@ def remove_safe_files(completed_root: str, library_index: set[tuple[int, int]],
                 logging.debug("leaving alone (no matching library copy found): %s", path)
 
 
-def remove_stale_partfiles(completed_root: str, torrent_paths: set[str],
-                            min_age_seconds: float, dry_run: bool) -> None:
+def remove_stale_partfiles(
+    completed_root: str, torrent_paths: set[str], min_age_seconds: float, dry_run: bool
+) -> None:
     """Reclaim orphaned libtorrent `.parts` control files — see the module docstring for why
     the hardlink test in remove_safe_files() can never match one. `torrent_paths` is the same
     qBittorrent-loaded-path index built for the seeding gate above; a `.parts` file still held
@@ -277,11 +291,28 @@ def remove_empty_dirs(empty_dirs: list[str], dry_run: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dry-run", action="store_true", help="Log every action without deleting anything")
-    parser.add_argument("--media-root", default=MEDIA_ROOT, help="Media mount root (default: %(default)s)")
-    parser.add_argument("--completed-root", default=COMPLETED_ROOT, help="qBittorrent completed-downloads folder (default: %(default)s)")
-    parser.add_argument("--min-age-hours", type=float, default=MIN_AGE_HOURS, help="Minimum directory age before an empty one is removed (default: %(default)s)")
-    parser.add_argument("--blacklist-file", default=BLACKLIST_FILE, help="Path to the filename-pattern blacklist (default: %(default)s)")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Log every action without deleting anything"
+    )
+    parser.add_argument(
+        "--media-root", default=MEDIA_ROOT, help="Media mount root (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--completed-root",
+        default=COMPLETED_ROOT,
+        help="qBittorrent completed-downloads folder (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--min-age-hours",
+        type=float,
+        default=MIN_AGE_HOURS,
+        help="Minimum directory age before an empty one is removed (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--blacklist-file",
+        default=BLACKLIST_FILE,
+        help="Path to the filename-pattern blacklist (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -294,7 +325,9 @@ def main() -> None:
     remove_blacklisted_files(args.completed_root, blacklist_patterns, args.dry_run)
 
     library_index = build_library_inode_index(args.media_root, LIBRARY_DIRS)
-    logging.info("indexed %d files across library folders: %s", len(library_index), ", ".join(LIBRARY_DIRS))
+    logging.info(
+        "indexed %d files across library folders: %s", len(library_index), ", ".join(LIBRARY_DIRS)
+    )
 
     # Seeding gate: only files no longer held by any loaded torrent are
     # eligible. None means qBittorrent's state is unknown — skip rather than
@@ -305,8 +338,9 @@ def main() -> None:
         logging.error("skipping orphaned-partfile cleanup this run (qBittorrent state unknown)")
     else:
         remove_safe_files(args.completed_root, library_index, torrent_paths, args.dry_run)
-        remove_stale_partfiles(args.completed_root, torrent_paths,
-                                args.min_age_hours * 3600, args.dry_run)
+        remove_stale_partfiles(
+            args.completed_root, torrent_paths, args.min_age_hours * 3600, args.dry_run
+        )
 
     empty_dirs = find_empty_dirs(args.completed_root, args.min_age_hours * 3600)
     remove_empty_dirs(empty_dirs, args.dry_run)

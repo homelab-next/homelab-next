@@ -220,7 +220,9 @@ def app_counts(app: str, base: Path) -> dict[str, int]:
                 raise ImportFailed(
                     f"seerr: db.sqlite3: unrecognised schema, no table {', '.join(missing)}"
                 )
-            return {t: c.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in REQUEST_TABLES}
+            return {
+                t: c.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in REQUEST_TABLES
+            }
         finally:
             c.close()
     if app == "qbittorrent":

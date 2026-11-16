@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Cleans up messy torrent-release-style filenames (brackets, duplicated
 extensions, site tags) across the whole Sonarr/Radarr library, using each
 app's own /rename preview endpoint to compute the CORRECT clean name
@@ -26,6 +27,7 @@ API keys are read directly from each app's own config.xml at runtime
 something this repo's Ansible roles set, so this stays correct even if a
 key is ever rotated by hand.
 """
+
 import json
 import os
 import re
@@ -84,8 +86,11 @@ def api(base, key, path, method="GET", body=None, retries=2, backoff_s=5):
         except (urllib.error.HTTPError, urllib.error.URLError) as e:
             last_exc = e
             if attempt < retries:
-                print(f"[!] {base}{path} attempt {attempt + 1}/{retries + 1} failed "
-                      f"({e}) -- retrying in {backoff_s}s", file=sys.stderr)
+                print(
+                    f"[!] {base}{path} attempt {attempt + 1}/{retries + 1} failed "
+                    f"({e}) -- retrying in {backoff_s}s",
+                    file=sys.stderr,
+                )
                 time.sleep(backoff_s)
     raise last_exc
 
@@ -131,8 +136,13 @@ def process_sonarr(key: str):
             if rename_on_disk(root, p["existingPath"], p["newPath"]):
                 renamed += 1
         if renamed:
-            api(SONARR_URL, key, "/api/v3/command", method="POST",
-                body={"name": "RescanSeries", "seriesId": s["id"]})
+            api(
+                SONARR_URL,
+                key,
+                "/api/v3/command",
+                method="POST",
+                body={"name": "RescanSeries", "seriesId": s["id"]},
+            )
         if renamed:
             print(f"[sonarr] {s['title']}: {renamed} file(s) renamed")
         total += renamed
@@ -154,8 +164,13 @@ def process_radarr(key: str):
             if rename_on_disk(root, p["existingPath"], p["newPath"]):
                 renamed += 1
         if renamed:
-            api(RADARR_URL, key, "/api/v3/command", method="POST",
-                body={"name": "RescanMovie", "movieIds": [m["id"]]})
+            api(
+                RADARR_URL,
+                key,
+                "/api/v3/command",
+                method="POST",
+                body={"name": "RescanMovie", "movieIds": [m["id"]]},
+            )
         if renamed:
             print(f"[radarr] {m['title']}: {renamed} file(s) renamed")
         total += renamed
@@ -171,7 +186,8 @@ def trigger_media_server_refresh():
         return
     req = urllib.request.Request(
         f"{MEDIA_SERVER_BASE}/Library/Refresh",
-        headers={"X-Emby-Token": MEDIA_SERVER_KEY}, method="POST",
+        headers={"X-Emby-Token": MEDIA_SERVER_KEY},
+        method="POST",
     )
     urllib.request.urlopen(req, timeout=30)
     print("[media-server] library refresh triggered")
@@ -195,8 +211,10 @@ def main() -> int:
     try:
         trigger_media_server_refresh()
     except Exception as e:
-        print(f"[media-server] library refresh failed (non-fatal, renames already done): {e}",
-              file=sys.stderr)
+        print(
+            f"[media-server] library refresh failed (non-fatal, renames already done): {e}",
+            file=sys.stderr,
+        )
     return 0
 
 

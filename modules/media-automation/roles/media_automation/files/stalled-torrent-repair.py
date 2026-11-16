@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Carried by the media-automation module (modules/media-automation/roles/media_automation/files): do not edit on the host.
 
 Remove + re-search any torrent whose download progress has not moved in >=24h (operator
@@ -29,12 +30,12 @@ SAFETY
   full stall-hours window of grace before it is eligible for removal, even if it happens to be
   stuck at 0% the very first time it's observed.
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import os
-import subprocess
 import sys
 import time
 import urllib.error
@@ -50,14 +51,27 @@ QBIT_USER = os.environ.get("QBIT_USER", "admin")
 QBIT_PASS = os.environ.get("QBIT_PASS", "")
 SONARR_URL = os.environ.get("SONARR_URL", "")
 RADARR_URL = os.environ.get("RADARR_URL", "")
-STATE_FILE = Path(os.environ.get("STALLED_TORRENT_STATE",
-                                  "/var/lib/hnx-modules/media-automation/state/stalled-torrents.json"))
+STATE_FILE = Path(
+    os.environ.get(
+        "STALLED_TORRENT_STATE", "/var/lib/hnx-modules/media-automation/state/stalled-torrents.json"
+    )
+)
 STALL_HOURS = float(os.environ.get("STALLED_TORRENT_HOURS", "24"))
 NOTIFY = os.environ.get("STALLED_TORRENT_NOTIFY", "")  # empty: no notification
 
 # Paused/queued/checking states are BY DESIGN not progressing -- never accumulate stall age.
-EXEMPT_STATES = {"pausedDL", "pausedUP", "queuedDL", "queuedUP", "checkingDL", "checkingUP",
-                  "checkingResumeData", "moving", "allocating", "metaDL"}
+EXEMPT_STATES = {
+    "pausedDL",
+    "pausedUP",
+    "queuedDL",
+    "queuedUP",
+    "checkingDL",
+    "checkingUP",
+    "checkingResumeData",
+    "moving",
+    "allocating",
+    "metaDL",
+}
 # Completed/seeding states -- "is this download progressing" doesn't apply once it's done.
 DONE_STATES = {"uploading", "stalledUP", "queuedUP", "pausedUP", "forcedUP"}
 
@@ -103,8 +117,9 @@ def fetch_imported_hashes(base: str, key: str, page_size: int = 200) -> set[str]
     """GET /api/v3/history (most recent `page_size` records — currently-tracked qBittorrent
     torrents are inherently recent, so this does not need to page through the whole history)
     and return the lowercased downloadId of every IMPORTED_EVENT_TYPES record."""
-    hist = arr_get(base, key,
-                    f"/api/v3/history?pageSize={page_size}&sortKey=date&sortDirection=descending")
+    hist = arr_get(
+        base, key, f"/api/v3/history?pageSize={page_size}&sortKey=date&sortDirection=descending"
+    )
     records = (hist or {}).get("records", []) if isinstance(hist, dict) else []
     return {
         r["downloadId"].lower()
@@ -174,7 +189,9 @@ def remove_unimportable(base: str, key: str, item_id) -> None:
     immediate re-search hits the same flooded indexer listing that produced the stuck item."""
     req = urllib.request.Request(
         base + f"/api/v3/queue/{item_id}?removeFromClient=true&blocklist=true&skipRedownload=true",
-        method="DELETE", headers={"X-Api-Key": key})
+        method="DELETE",
+        headers={"X-Api-Key": key},
+    )
     urllib.request.urlopen(req, timeout=20)
 
 
@@ -184,12 +201,13 @@ def _api_key_from_container(app: str) -> str:
     secret store, it is an internal self-generated key, and reading it live is correct even if it
     is ever regenerated. The name is kept (the callers pass the app's name)."""
     import re
+
     root = os.environ.get("APP_CONFIG_ROOT", "/var/lib/hnx-modules/media-automation/config")
     try:
         text = (Path(root) / app / "config.xml").read_text(encoding="utf-8")
         m = re.search(r"<ApiKey>([^<]+)</ApiKey>", text)
         return m.group(1) if m else ""
-    except Exception as exc:  # noqa: BLE001 — a missing key degrades to "can't re-search", not a crash
+    except Exception as exc:
         logger.warning("could not read API key of %s: %s", app, exc)
         return ""
 
@@ -198,7 +216,8 @@ def qbit_login() -> str:
     req = urllib.request.Request(
         QBIT_URL + "/api/v2/auth/login",
         data=urllib.parse.urlencode({"username": QBIT_USER, "password": QBIT_PASS}).encode(),
-        method="POST")
+        method="POST",
+    )
     resp = urllib.request.urlopen(req, timeout=15)
     return resp.headers.get("Set-Cookie", "").split(";")[0]
 
@@ -211,8 +230,10 @@ def qbit_torrents(cookie: str) -> list[dict]:
 def qbit_delete(cookie: str, torrent_hash: str) -> None:
     req = urllib.request.Request(
         QBIT_URL + "/api/v2/torrents/delete",
-        data=f"hashes={torrent_hash}&deleteFiles=true".encode(), method="POST",
-        headers={"Cookie": cookie})
+        data=f"hashes={torrent_hash}&deleteFiles=true".encode(),
+        method="POST",
+        headers={"Cookie": cookie},
+    )
     urllib.request.urlopen(req, timeout=15)
 
 
@@ -223,8 +244,11 @@ def arr_get(base: str, key: str, path: str):
 
 def arr_post(base: str, key: str, path: str, payload: dict):
     req = urllib.request.Request(
-        base + path, data=json.dumps(payload).encode(), method="POST",
-        headers={"X-Api-Key": key, "Content-Type": "application/json"})
+        base + path,
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={"X-Api-Key": key, "Content-Type": "application/json"},
+    )
     return json.loads(urllib.request.urlopen(req, timeout=20).read())
 
 
@@ -244,8 +268,9 @@ def save_state(state: dict) -> None:
     tmp.replace(STATE_FILE)  # atomic — a killed run must never leave a half-written state file
 
 
-def find_stalled(torrents: list[dict], prior_state: dict, now: float,
-                  stall_hours: float = STALL_HOURS) -> tuple[list[dict], dict]:
+def find_stalled(
+    torrents: list[dict], prior_state: dict, now: float, stall_hours: float = STALL_HOURS
+) -> tuple[list[dict], dict]:
     """Pure function, the actual decision logic -- see module docstring. Returns
     (stalled_torrents, next_state). `next_state` already excludes stalled torrents (they're
     about to be deleted; if deletion fails for some reason, the NEXT run will just see them as
@@ -279,7 +304,7 @@ def repair_one(cookie: str, torrent: dict, sonarr_key: str, radarr_key: str) -> 
     try:
         qbit_delete(cookie, torrent["hash"])
         result["deleted"] = True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         result["error"] = f"delete failed: {exc}"
         return result
 
@@ -292,25 +317,37 @@ def repair_one(cookie: str, torrent: dict, sonarr_key: str, radarr_key: str) -> 
             if not sonarr_key:
                 result["error"] = "no re-search: the library manager API key is unavailable"
                 return result
-            parsed = arr_get(SONARR_URL, sonarr_key, "/api/v3/parse?title=" + urllib.parse.quote(name))
+            parsed = arr_get(
+                SONARR_URL, sonarr_key, "/api/v3/parse?title=" + urllib.parse.quote(name)
+            )
             eps = parsed.get("episodes") or []
             if not eps:
                 result["error"] = "no re-search: sonarr could not parse release title"
                 return result
-            arr_post(SONARR_URL, sonarr_key, "/api/v3/command",
-                     {"name": "EpisodeSearch", "episodeIds": [e["id"] for e in eps]})
+            arr_post(
+                SONARR_URL,
+                sonarr_key,
+                "/api/v3/command",
+                {"name": "EpisodeSearch", "episodeIds": [e["id"] for e in eps]},
+            )
             result["researched"] = True
         else:
             if not radarr_key:
                 result["error"] = "no re-search: the library manager API key is unavailable"
                 return result
-            parsed = arr_get(RADARR_URL, radarr_key, "/api/v3/parse?title=" + urllib.parse.quote(name))
+            parsed = arr_get(
+                RADARR_URL, radarr_key, "/api/v3/parse?title=" + urllib.parse.quote(name)
+            )
             movie = parsed.get("movie")
             if not movie:
                 result["error"] = "no re-search: radarr could not parse release title"
                 return result
-            arr_post(RADARR_URL, radarr_key, "/api/v3/command",
-                     {"name": "MoviesSearch", "movieIds": [movie["id"]]})
+            arr_post(
+                RADARR_URL,
+                radarr_key,
+                "/api/v3/command",
+                {"name": "MoviesSearch", "movieIds": [movie["id"]]},
+            )
             result["researched"] = True
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
         result["error"] = f"re-search failed: {exc}"
@@ -321,24 +358,31 @@ def notify(title: str, body: str) -> None:
     if not NOTIFY:
         return
     try:
-        urllib.request.urlopen(urllib.request.Request(
-            NOTIFY, data=body.encode(),
-            headers={"Title": title, "Tags": "recycle,robot"}), timeout=10)
-    except Exception as exc:  # noqa: BLE001
+        urllib.request.urlopen(
+            urllib.request.Request(
+                NOTIFY, data=body.encode(), headers={"Title": title, "Tags": "recycle,robot"}
+            ),
+            timeout=10,
+        )
+    except Exception as exc:
         logger.warning("notification failed: %s", exc)
 
 
 def main() -> int:
     import argparse
+
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dry-run", action="store_true",
-                     help="Log what would be removed/researched; touch no state, delete nothing.")
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log what would be removed/researched; touch no state, delete nothing.",
+    )
     args = ap.parse_args()
 
     try:
         cookie = qbit_login()
         torrents = qbit_torrents(cookie)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.error("could not reach qBittorrent: %s", exc)
         return 2
 
@@ -354,9 +398,10 @@ def main() -> int:
             continue
         try:
             imported_hashes |= fetch_imported_hashes(app_base, app_key)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("imported-missing-files check: could not read history from %s: %s",
-                            app_base, exc)
+        except Exception as exc:
+            logger.warning(
+                "imported-missing-files check: could not read history from %s: %s", app_base, exc
+            )
 
     already_imported = find_imported_missing_files(torrents, imported_hashes)
     removed_imported = []
@@ -369,13 +414,15 @@ def main() -> int:
             qbit_delete(cookie, t["hash"])
             removed_imported.append(name)
             logger.info("ALREADY-IMPORTED MISSINGFILES REMOVED: %s", name)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("imported-missing-files check: failed to remove %s: %s", name, exc)
     if removed_imported and not args.dry_run:
-        notify("stalled-torrent-repair: already-imported torrent(s) removed",
-             f"{len(removed_imported)} torrent(s) removed -- content was already successfully "
-             f"imported (confirmed via *arr history), the qBittorrent entry was just stale:\n\n"
-             + "\n".join(f"- {n}" for n in removed_imported))
+        notify(
+            "stalled-torrent-repair: already-imported torrent(s) removed",
+            f"{len(removed_imported)} torrent(s) removed -- content was already successfully "
+            f"imported (confirmed via *arr history), the qBittorrent entry was just stale:\n\n"
+            + "\n".join(f"- {n}" for n in removed_imported),
+        )
     # Never re-process an already-imported torrent as a progress-stall candidate this run.
     removed_hash_set = {t["hash"] for t in already_imported} if not args.dry_run else set()
     torrents = [t for t in torrents if t.get("hash") not in removed_hash_set]
@@ -400,13 +447,21 @@ def main() -> int:
         results = []
         for t in stalled:
             if args.dry_run:
-                logger.info("DRY RUN would remove+research: %s (%.0f%%, category=%s)",
-                            t.get("name"), (t.get("progress") or 0) * 100, t.get("category"))
+                logger.info(
+                    "DRY RUN would remove+research: %s (%.0f%%, category=%s)",
+                    t.get("name"),
+                    (t.get("progress") or 0) * 100,
+                    t.get("category"),
+                )
                 continue
             r = repair_one(cookie, t, sonarr_key, radarr_key)
             results.append(r)
-            tag = "OK" if r["researched"] else ("DELETED, NO RESEARCH" if r["deleted"] else "FAILED")
-            logger.info("%s: %s%s", tag, r["name"], f" ({r.get('error')})" if r.get("error") else "")
+            tag = (
+                "OK" if r["researched"] else ("DELETED, NO RESEARCH" if r["deleted"] else "FAILED")
+            )
+            logger.info(
+                "%s: %s%s", tag, r["name"], f" ({r.get('error')})" if r.get("error") else ""
+            )
 
         if not args.dry_run:
             save_state(next_state)
@@ -414,10 +469,12 @@ def main() -> int:
             problems = [r for r in results if r.get("error")]
             # Constant title, counts in the body (LL-208): this is a one-shot "action taken"
             # report, and a count in the title made every run its own permanent status.json row.
-            notify("stalled-torrent-repair: stalled torrent(s) removed",
-                 f"{len(stalled)} removed; {researched}/{len(stalled)} re-searched "
-                 f"successfully.\n\n" +
-                 "\n".join(f"- {r['name']}: {r.get('error', 'ok')}" for r in results))
+            notify(
+                "stalled-torrent-repair: stalled torrent(s) removed",
+                f"{len(stalled)} removed; {researched}/{len(stalled)} re-searched "
+                f"successfully.\n\n"
+                + "\n".join(f"- {r['name']}: {r.get('error', 'ok')}" for r in results),
+            )
             if problems:
                 logger.warning("%d/%d had a problem (see log above)", len(problems), len(stalled))
 
@@ -439,7 +496,7 @@ def main() -> int:
                 continue
             queue = arr_get(base, key, "/api/v3/queue?pageSize=100")
             records = (queue or {}).get("records", []) if isinstance(queue, dict) else []
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("unimportable-check: could not reach %s: %s", app, exc)
             continue
         for item in find_unimportable_queue_items(records):
@@ -451,14 +508,17 @@ def main() -> int:
                 remove_unimportable(base, key, item["id"])
                 removed_unimportable.append(f"{app}: {title}")
                 logger.info("UNIMPORTABLE REMOVED (%s): %s", app, title)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("unimportable-check: failed to remove %s item %s: %s",
-                                app, title, exc)
+            except Exception as exc:
+                logger.warning(
+                    "unimportable-check: failed to remove %s item %s: %s", app, title, exc
+                )
 
     if removed_unimportable and not args.dry_run:
-        notify("stalled-torrent-repair: unimportable release(s) removed",
-             f"{len(removed_unimportable)} structurally-unimportable release(s) blocklisted "
-             f"and removed (LL-200):\n\n" + "\n".join(f"- {r}" for r in removed_unimportable))
+        notify(
+            "stalled-torrent-repair: unimportable release(s) removed",
+            f"{len(removed_unimportable)} structurally-unimportable release(s) blocklisted "
+            f"and removed (LL-200):\n\n" + "\n".join(f"- {r}" for r in removed_unimportable),
+        )
     elif not removed_unimportable:
         # Symmetric with the progress-stall pass's own "no stalled torrents" line -- a clean
         # pass should say so explicitly, not just be silence indistinguishable from "never ran".
