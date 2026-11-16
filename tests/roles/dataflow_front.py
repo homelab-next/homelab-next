@@ -106,7 +106,8 @@ class Controller:
         self._tmp = None
         if https:
             cert, key = https
-            ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)  # TLS 1.2 or later
+            ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             ctx.load_cert_chain(str(cert), str(key))
             self._httpd.socket = ctx.wrap_socket(self._httpd.socket, server_side=True)
         self.scheme = "https" if https else "http"
