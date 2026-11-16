@@ -32,6 +32,31 @@
         prometheus_node_text: "{{ lookup('ansible.builtin.file', prometheus_scratch.path ~ '/' ~ prometheus_node_targets_file, rstrip=false) }}"
         prometheus_scrape_auths: "{{ (lookup('ansible.builtin.file', prometheus_scratch.path ~ '/' ~ prometheus_authlist_file) | from_json).credentials }}"
       no_log: true
+    # The service's own row (its job's `service` label is this instance's id) is scraped INSIDE its
+    # container at localhost, not through the guest's address: a container reaching the guest's own
+    # address arrives on the guest's INPUT chain, which has no rule for it. The `instance` label stays
+    # the address the registry gives (a static label wins over the target), so series, dashboards and
+    # alerts do not change. Only a plain-http job is rewritten (localhost has no certificate name).
+    - name: Scrape the service itself inside its own container
+      ansible.builtin.set_fact:
+        prometheus_scrape_text: >-
+          {{ (prometheus_scrape_text | regex_search('\A(#[^\n]*\n)+') | default('', true))
+             ~ ({'scrape_configs': prometheus_scrape_jobs} | to_nice_yaml(indent=2)) }}
+      vars:
+        prometheus_scrape_jobs: >-
+          {%- set ns = namespace(jobs=[]) -%}
+          {%- for j in (prometheus_scrape_text | from_yaml).scrape_configs -%}
+          {%-   set sc = j.static_configs[0] -%}
+          {%-   if sc.labels.service == prometheus_logical_id and j.scheme | default('http') == 'http' -%}
+          {%-     set _ = ns.jobs.append(j | combine({'static_configs': [{
+                    'targets': ['localhost:' ~ (prometheus_container_port | string)],
+                    'labels': sc.labels | combine({'instance': sc.targets[0]})}]})) -%}
+          {%-   else -%}
+          {%-     set _ = ns.jobs.append(j) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ ns.jobs }}
+      no_log: true
   always:
     - name: Remove the scratch directory
       ansible.builtin.file:

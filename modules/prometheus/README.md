@@ -30,6 +30,10 @@ names a real host, address, VM id or secret value; those live only in the privat
   it), and every host of the registry is a host-exporter target on the one port. The lab's registry
   holds the new lab only, so no other lab's host can become a target. An appliance with no exporter
   is named in `prometheus_node_exporter_exclude`, never left to alert as down.
+- **The service scrapes itself inside its own container.** The generated job for the instance's
+  own row targets port 9090 on `localhost` inside the container (no round trip through the guest's address),
+  with the `instance` label kept as the registry's address, so series, dashboards and alerts do not
+  change. Only a plain-http row is rewritten.
 - **Host metrics on every guest** are the core role `node_exporter` (below), bound to a baseline
   control the overlay attaches to every guest.
 - **Retention** is `prometheus_retention_time` (default `30d`), with an optional size cap
@@ -91,8 +95,9 @@ package starts on all of them until the first restart, which the role does at on
 textfile collector off and pseudo filesystems excluded, so the alert rules read real disks. Its
 `port` is required (no default): the one number the overlay also gives the generator
 (`prometheus_node_exporter_port`). `health` asks `/metrics` and requires the metric families the
-default rules read. The endpoint has no authentication, so **the hypervisor's per-VM firewall must
-admit only the metrics guest** on that port (the guest file's `firewall_rules`, as ntfy's).
+default rules read. The endpoint has no authentication, so **the guest's `firewall_rules` must
+admit only the metrics guest** on that port (as ntfy's), and, on the metrics guest itself, the
+container's subnet (next section).
 
 The role is bound to a baseline control by the overlay's `guests/_baselines.yml` (the example
 baselines are the platform's and bind none, so every site chooses; the control id is the
@@ -119,6 +124,34 @@ host (`apt`, `ansible_host` as the bind address). The hypervisor's own host fire
 Debian-family, or that the site does not manage with this role, is named in
 `prometheus_node_exporter_exclude` and monitored another way; it is never left as a permanent
 `TargetDown`.
+
+## The guest's own exporter (the metrics guest scrapes itself)
+
+Prometheus runs in the compose network `prometheus_default`. A packet from the container to the
+guest's **own** address never leaves the VM: it arrives on the guest's `INPUT` chain with the
+container's address as the source, where a guest with the `host-firewall` baseline drops it unless a
+rule names it. (The hypervisor's per-VM firewall never sees it.) So the target for the metrics
+guest's own exporter, `<guest address>:<port>`, is down ("context deadline exceeded") until the
+guest admits the container. The platform has no hook by which a module contributes a rule to a
+guest's firewall (the rules are the guest file's `firewall_rules`, one language for the hypervisor
+and the guest), so the module does two things and the site does one:
+
+1. **The module pins the network** (`prometheus_network_subnet`, **required**, an IPv4 CIDR from
+   /16 to /29, no default: an address range is the site's), so the source address is stable across
+   recreates. The first apply after pinning recreates the network and the container.
+2. **The site admits exactly that subnet to exactly that port** on the metrics guest, nothing wider
+   (the overlay's guest file, beside the other readers):
+
+   ```yaml
+   firewall_rules:
+     inbound_allow:
+       - {name: metrics-self-exporter, proto: tcp, ports: "9100", source: <prometheus_network_subnet>}
+   ```
+
+   The rule's `ports` is `prometheus_node_exporter_port`. The container's own port 9090 needs no
+   rule (see "What it does").
+
+Pick a range that overlaps neither the guest's networks nor docker's other bridges.
 
 ## Reaching the interface (the decision)
 
@@ -174,7 +207,7 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
 4. **The secrets**, by name, in the store (above).
 5. **The role's variables** (`group_vars/mod_prometheus_server.yml`): `prometheus_logical_id:
    <instance>`, `prometheus_registry: <absolute path of lab/services.yml on the controller>`,
-   `prometheus_node_exporter_port: 9100`, and the `hnx` command (`prometheus_hnx_cli`, default
+   `prometheus_node_exporter_port: 9100`, `prometheus_network_subnet: <a CIDR of the site's own>` (and the guest's rule for it, above), and the `hnx` command (`prometheus_hnx_cli`, default
    `[hnx]`), optionally `prometheus_node_exporter_exclude`, `prometheus_retention_time`,
    `prometheus_notify_id`/`prometheus_notify_topic`, `prometheus_alert_readonly_ignore`, `prometheus_alert_schedule` (every minute, or every 30 seconds), and `prometheus_notify_allow_plain_http: true`
    while the notify service has no TLS (LAN only; the role says so in the run).
@@ -186,8 +219,10 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
 
 - **Plain HTTP and no login inside the lab.** Prometheus listens on the guest's own address with
   no authentication, and the alert token travels in clear to a notify endpoint without TLS (the
-  explicit opt-in). The hypervisor's per-VM firewall is the control, not a firewall inside the
-  guest (Docker publishes the port through its own NAT).
+  explicit opt-in). The guest's `firewall_rules` are the control for traffic from other machines
+  (the hypervisor's per-VM firewall, and the guest's own where it has the `host-firewall`
+  baseline); a container's traffic to the guest's own address is only ever seen by the guest's own
+  firewall (above).
 - **Targets are addressed by the registry's alias names** (`<capability>.svc.<domain>`), so the lab's
   resolver must serve them to the metrics guest; a name that does not resolve is a `TargetDown`.
 - **One channel, no inhibition or grouping.** A burst of unrelated alerts is one message per

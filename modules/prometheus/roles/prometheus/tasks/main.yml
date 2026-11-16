@@ -29,6 +29,7 @@
     compose_app_group: "{{ prometheus_app.compose_app_group }}"
     compose_app_start: "{{ prometheus_app.compose_app_start }}"
     compose_app_validate_with_docker: "{{ prometheus_app.compose_app_validate_with_docker }}"
+    compose_app_network_subnet: "{{ prometheus_app.compose_app_network_subnet }}"
     compose_app_spec: "{{ prometheus_app.compose_app_spec }}"
 
 # A running Prometheus reads its configuration at start or on SIGHUP: when a file or a credential

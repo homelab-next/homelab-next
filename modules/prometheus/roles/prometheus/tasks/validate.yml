@@ -12,6 +12,8 @@
       - prometheus_uid | int >= 1000 and prometheus_gid | int >= 1000
       - >-
         [prometheus_dir, prometheus_data_root, prometheus_state_dir] | reject('match', prometheus_path_pattern) | list | length == 0
+      # a /16 to /29 IPv4 network
+      - prometheus_network_subnet is match('^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(?:1[6-9]|2[0-9])\Z')
       - prometheus_retention_time is match(prometheus_duration_pattern)
       - prometheus_retention_size == '' or prometheus_retention_size is match('^[1-9][0-9]{0,5}[KMGT]B\Z')
       - prometheus_scrape_interval is match(prometheus_interval_pattern)
@@ -44,7 +46,7 @@
     fail_msg: >-
       prometheus: a registry id, an image pinned by tag and digest, the guest's IPv4 address to
       publish on (not all interfaces), ports, a container uid and gid of 1000 or more, absolute
-      canonical directories, a retention like 30d (and a size like 20GB or nothing), scrape and
+      canonical directories, a pinned network subnet (an IPv4 CIDR, /16 to /29), a retention like 30d (and a size like 20GB or nothing), scrape and
       evaluation intervals like 30s, a memory limit like 768m, the hnx command (bare or by absolute
       path, or an absolute python running homelabnext.cli), an absolute registry path, plain host names to exclude, alert durations like 10m and
       percentages 1-99, a notify logical id and topic, a priority 1-5, a secret:<name> token

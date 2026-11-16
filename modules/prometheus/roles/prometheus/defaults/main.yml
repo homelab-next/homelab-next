@@ -6,12 +6,20 @@
 # prometheus_logical_id (required): the instance's registry id, e.g. metrics
 # prometheus_registry (required): absolute path of the lab registry on the controller (services.yml)
 # prometheus_node_exporter_port (required): the port of the host exporter on every guest
+# prometheus_network_subnet (required): the pinned compose network, an IPv4 CIDR from /16 to /29
 prometheus_image: "docker.io/prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
 # published on the guest's own address (the inventory's ansible_host), never all interfaces; the
 # guest firewall admits the lab's readers (the status hub, the operator's tooling)
 prometheus_bind: "{{ ansible_host }}"
 prometheus_port: 9090
 prometheus_dir: /opt/compose/prometheus
+# The compose network the container lives in, pinned so a host firewall rule can name it. The
+# container reaches the guest's OWN address (the host exporter of its own guest) through the
+# guest's INPUT chain, with the container's address as the source, so the guest's firewall_rules
+# must admit this subnet to the exporter port (and only that: README, "The guest's own exporter").
+# It must not overlap the guest's real networks or docker's other bridges. Required (no default:
+# an address range is the site's, and one that clashed would be a silent outage); changing it
+# recreates the network and the container.
 prometheus_owner: root
 prometheus_group: "{{ prometheus_gid }}"
 # the module's data root on its host (docs/modules/data.md): config/ (rendered), tsdb/ (the

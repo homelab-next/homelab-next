@@ -80,3 +80,10 @@ services:
         max-size: {{ q(compose_app_log_max_size) }}
         max-file: {{ q(compose_app_log_max_file) }}
 {% endfor %}
+{% if compose_app_network_subnet | length > 0 %}
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: {{ q(compose_app_network_subnet) }}
+{% endif %}

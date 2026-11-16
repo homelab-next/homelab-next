@@ -59,6 +59,12 @@ IMAGE = yaml.safe_load((MODULE / "roles" / "prometheus" / "defaults" / "main.yml
 ]
 RENDER = ["validate", "app", "generate", "credentials", "dirs", "render"]
 HOSTS = sorted(load(REGISTRY).hosts)
+_NET = ".".join(
+    GUEST.split(".")[:3]
+)  # the example lab's own network, one /24 stands in for the site's
+SUBNET = _NET + ".0/24"
+SELF = "localhost"  # the container itself
+SELF_PORT = 9090  # the port the service listens on inside it
 
 
 def pvars(tmp_path: Path, **kw) -> dict:
@@ -73,6 +79,7 @@ def pvars(tmp_path: Path, **kw) -> dict:
         "prometheus_gid": os.getgid(),
         "prometheus_registry": str(REGISTRY),
         "prometheus_node_exporter_port": 9100,
+        "prometheus_network_subnet": SUBNET,
         "prometheus_hnx_cli": [sys.executable, "-m", "homelabnext.cli"],
         "prometheus_start": False,
         "prometheus_validate_with_docker": False,
@@ -181,7 +188,13 @@ def test_the_installed_target_lists_are_the_generators_for_this_registry(tmp_pat
     assert r.returncode == 0, r.stdout + r.stderr
     gen = generate(load(REGISTRY), ["prometheus"], {"node_targets": {"port": 9100}})["prometheus"]
     out = tmp_path / "data" / "config" / "generated"
-    assert (out / "scrape_configs.yml").read_text() == gen["prometheus/scrape_configs.yml"]
+    # byte-identical but for the one job the role points at the container itself (next tests)
+    mine = yaml.safe_load((out / "scrape_configs.yml").read_text())["scrape_configs"]
+    theirs = yaml.safe_load(gen["prometheus/scrape_configs.yml"])["scrape_configs"]
+    assert [j for j in mine if j["job_name"] != "metrics"] == [
+        j for j in theirs if j["job_name"] != "metrics"
+    ]
+    assert (out / "scrape_configs.yml").read_text().startswith("#")  # the header survives
     assert (out / "node_targets.yml").read_text() == gen["prometheus/node_targets.yml"]
     nodes = yaml.safe_load((out / "node_targets.yml").read_text())
     assert [n["labels"]["host"] for n in nodes] == HOSTS
@@ -190,6 +203,70 @@ def test_the_installed_target_lists_are_the_generators_for_this_registry(tmp_pat
         for j in yaml.safe_load((out / "scrape_configs.yml").read_text())["scrape_configs"]
     }
     assert {"metrics", AUTH_ROW} <= jobs  # a job per row with a metrics block
+
+
+def _jobs(tmp_path: Path) -> dict:
+    cfg = yaml.safe_load((tmp_path / "data/config/generated/scrape_configs.yml").read_text())
+    return {j["job_name"]: j for j in cfg["scrape_configs"]}
+
+
+def test_the_service_scrapes_itself_inside_its_container_with_its_instance_name_kept(tmp_path):
+    """A container reaching the guest's own address arrives on the guest's INPUT chain, which has
+    no rule for it (a live 'context deadline exceeded'): the self job targets localhost in the
+    container, and the instance label stays the registry's address so series do not change."""
+    r = render(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    gen = generate(load(REGISTRY), ["prometheus"], {"node_targets": {"port": 9100}})["prometheus"]
+    orig = {
+        j["job_name"]: j
+        for j in yaml.safe_load(gen["prometheus/scrape_configs.yml"])["scrape_configs"]
+    }["metrics"]
+    own = _jobs(tmp_path)["metrics"]
+    (sc,) = own["static_configs"]
+    assert sc["targets"] == [f"{SELF}:{SELF_PORT}"]
+    assert sc["labels"] == {
+        **orig["static_configs"][0]["labels"],
+        "instance": orig["static_configs"][0]["targets"][0],
+    }
+    assert {k: v for k, v in own.items() if k != "static_configs"} == {
+        k: v for k, v in orig.items() if k != "static_configs"
+    }
+
+
+def test_the_self_job_follows_the_container_port_not_the_published_one(tmp_path):
+    assert render(tmp_path, prometheus_port=9191).returncode == 0
+    assert _jobs(tmp_path)["metrics"]["static_configs"][0]["targets"] == [f"{SELF}:{SELF_PORT}"]
+
+
+def test_the_own_host_exporter_target_is_unchanged(tmp_path):
+    """Its address is the host's, reached through the pinned subnet's firewall rule, not a rewrite."""
+    assert render(tmp_path).returncode == 0
+    nodes = yaml.safe_load((tmp_path / "data/config/generated/node_targets.yml").read_text())
+    assert f"{GUEST}:9100" in [x for n in nodes for x in n["targets"]]
+
+
+def test_the_pinned_subnet_reaches_compose_app_from_the_spec_and_the_run():
+    """compose_app renders the network (tests/roles/test_role_render.py); here the role must hand
+    it the setting in the spec and in the play that includes compose_app."""
+    tasks = MODULE / "roles" / "prometheus" / "tasks"
+    assert '"{{ prometheus_network_subnet }}"' in (tasks / "app.yml").read_text()
+    main = (tasks / "main.yml").read_text()
+    assert 'compose_app_network_subnet: "{{ prometheus_app.compose_app_network_subnet }}"' in main
+
+
+@pytest.mark.parametrize(
+    "bad", ["", _NET + ".0", _NET + ".0/8", _NET + ".0/30", "x/24", "300.1.1.1/24"]
+)
+def test_a_network_subnet_that_is_not_a_cidr_is_refused(tmp_path, bad):
+    r = render(tmp_path, prometheus_network_subnet=bad)
+    assert r.returncode != 0 and "pinned network subnet" in r.stdout + r.stderr
+
+
+def test_the_network_subnet_has_no_default(tmp_path):
+    v = pvars(tmp_path)
+    del v["prometheus_network_subnet"]
+    r = run_steps(tmp_path, ["validate"], v, SECRETS)
+    assert r.returncode != 0 and "network_subnet" in r.stdout + r.stderr
 
 
 def test_an_excluded_host_is_not_a_target(tmp_path):

@@ -380,6 +380,50 @@ def test_compose_app_output_passes_docker_compose_config(first):
     assert cfg["services"]["web"]["depends_on"]["db"]["condition"] == "service_healthy"
 
 
+def _pinned(tmp_path):
+    return {
+        "runner": run_role,
+        "role": "compose_app",
+        "tasks_from": "main",
+        "extra_vars": app_vars(
+            tmp_path,
+            compose_app_validate_with_docker=False,
+            compose_app_network_subnet="203.0.113.0/24",
+        ),
+    }
+
+
+@first_run(_pinned)
+def test_compose_app_pins_the_default_network_when_asked(first):
+    r, tmp_path = first
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    assert doc["networks"] == {"default": {"ipam": {"config": [{"subnet": "203.0.113.0/24"}]}}}
+
+
+def test_compose_app_renders_no_network_block_by_default(tmp_path):
+    r = run_role(
+        tmp_path, "compose_app", "main", app_vars(tmp_path, compose_app_validate_with_docker=False)
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "networks" not in yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["203.0.113.0", "203.0.113.0/8", "203.0.113.0/30", "0/24", "a/24", "203.0.113.0/24\nx: y"],
+)
+def test_compose_app_refuses_a_network_subnet_that_is_not_a_cidr(tmp_path, bad):
+    r = run_role(
+        tmp_path,
+        "compose_app",
+        "main",
+        app_vars(tmp_path, compose_app_validate_with_docker=False, compose_app_network_subnet=bad),
+    )
+    assert r.returncode != 0 and "compose_app_network_subnet must be" in r.stdout + r.stderr
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
 def _first(tmp_path):
     s = spec(command=["serve", "--port", "80"], user=1000, env_file=["app.env"])
     return {
