@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Conformance target (docs/conformance.md, Targets) for this provider: the orchestration suite
+# through the shared adapter on a controller. The adapter resolves the endpoint from
+# HNX_ENDPOINT_ORCHESTRATION and writes the profiles it defines into HNX_ORCHESTRATION_PROFILES_DIR,
+# and it sends no token, so a run needs a controller with authentication off (a loopback bind only)
+# and the conformance session as its runner: not the deployed instance, whose API is authenticated
+# and whose runner is the site's. The module's own binary is proved that way by CI
+# (tools/orchestration_conformance.py, strict, with fault injection: make orchestration-conformance),
+# and `hnx modules check` holds this file to the slot's adapter.
+#   make orchestration-conformance
+name: orchestration-module
+capabilities:
+  orchestration:
+    adapter: homelabnext.conform.adapters.orchestrator:make
+    config: {wait_floor: 0, fault_injection: true}

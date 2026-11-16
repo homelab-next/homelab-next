@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root and config/ are the project owner's (root) and readable by the container's group;
+# state/ (the usage records) and export/ belong to the container's user, so the gateway and the
+# export (run as that user) create files it can open.
+- name: Create the data root and its directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ gateway_data_root }}", owner: "{{ gateway_owner }}", group: "{{ gateway_group }}", mode: "0750"}
+    - {path: "{{ gateway_data_root }}/config", owner: "{{ gateway_owner }}", group: "{{ gateway_group }}", mode: "0750"}
+    - {path: "{{ gateway_data_root }}/state", owner: "{{ gateway_uid | int }}", group: "{{ gateway_gid | int }}", mode: "0700"}
+    - {path: "{{ gateway_data_root }}/export", owner: "{{ gateway_uid | int }}", group: "{{ gateway_gid | int }}", mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [backup, export, restore]

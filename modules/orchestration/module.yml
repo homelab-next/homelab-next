@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: Apache-2.0
+# The orchestration provider on this repository's own controller (docs/modules.md; README.md beside
+# this file): the Go controller (orchestrator/cmd/controller, ADR-0026) run as a hardened systemd
+# unit under its own system user, from a binary pinned by sha256 and copied from the control host
+# (the model of role hnx_runtime's wheel), with its API's token digests, its profiles and its runner
+# homes rendered from the site's settings. The exec runner is the one built-in kind; its default
+# command is a smoke session that needs no model. Model calls, when a runner makes them, go only
+# through the gateway found in the registry. Every real value (the guest, the pin, the profiles,
+# the secret values) is the site's: the overlay's lab/modules.yml, lab/services.yml, group_vars and
+# secret store.
+manifest_version: "1.0"
+id: orchestration
+kind: provider
+title: Agent sessions on the orchestration controller
+description: Fills the orchestration slot with this repository's controller, run as one hardened
+  systemd unit from a sha256-pinned binary; agent jobs are admitted against live backend load,
+  retried a bounded number of times and cancelled on request, the store is one SQLite file under
+  the module's data root with a consistent export and a checked restore, and the job events and
+  /metrics series are the telemetry; proved by the orchestration suite through the shared adapter.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: agent-job-controller
+  version: 0.1.0
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:orchestration/admin-token
+    identity: token
+    holder: provider
+    purpose: the operator caller's admin token (the health hook, the profile reload and the operator's own tooling); only its sha256 reaches the host
+  - secret: secret:orchestration/jobs-token
+    identity: token
+    holder: granted
+    purpose: the broker's caller token, jobs scope (ORCHESTRATOR_JOBS_TOKEN of the agent.job.submit handler); only its sha256 reaches the host
+  - secret: secret:orchestration/status-token
+    identity: token
+    holder: granted
+    purpose: the status hub's caller token, read scope (GET /admin/queue-summary); only its sha256 reaches the host
+  - secret: secret:orchestration/metrics-token
+    identity: token
+    holder: granted
+    purpose: the metrics scraper's caller token, metrics scope (GET /metrics, the registry row's metrics.auth); only its sha256 reaches the host
+  - secret: secret:orchestration/events-token
+    identity: token
+    holder: provider
+    purpose: the bearer token for the events forwarder, read only when orchestration_events_forwarder_url is set; written to a root-only environment file
+  - secret: secret:orchestration/gateway-key
+    identity: api-key
+    holder: provider
+    purpose: the key each runner home carries for the model gateway, read only when orchestration_gateway_id is set
+identifiers:
+  - {kind: secret-name, name: orchestration, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the caller tokens, the events token and the gateway key are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 2048, disk_gb: 20}
+      guest:
+        baselines: [base]
+      roles: [role:orchestration]
+      purpose: runs the controller unit and, in its cgroup, every agent session it starts
+prefers:
+  capabilities:
+    - cap: cap:inference
+      version: "1.0"
+      purpose: the gateway the runner homes name; sessions reach a model only through it
+      fallback:
+        behaviour: the runner homes carry no model endpoint and a session that needs a model fails
+          its attempt; the smoke session needs none
+    - cap: cap:events
+      version: "1.0"
+      purpose: the job lifecycle events (agent.job.finished, agent.job.failed) leave through the controller's durable outbox to a forwarder
+      fallback:
+        behaviour: events are off; jobs run, and the telemetry page and the failure retry see nothing
+provides:
+  slots:
+    orchestration:
+      adapter: homelabnext.conform.adapters.orchestrator:make
+      features: [admission, fault-injection]
+      conformance:
+        target: conformance/target.yml
+      migration: {formats: [jsonl], export: role:orchestration, import: role:orchestration}
+egress: none
+contributes:
+  roles:
+    - file: roles/orchestration
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:orchestration, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: store
+    kind: state
+    description: The controller's SQLite store (controller.db) - every job with its idempotency key, state, task and answer, the event outbox and the backend drains - exported as a consistent database copy plus every row as jsonl, with a sha256 listing.
+    export: {formats: [jsonl], via: role:orchestration}
+    import: {formats: [jsonl], via: role:orchestration}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned binary bump (a new sha256): the role's upgrade hook validates and records it, the store is exported, then it converges; a store whose schema must change is migrated behind a backup with -e orchestration_migrate=true"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

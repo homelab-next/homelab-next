@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: Apache-2.0
+# The LLM gateway provider on the lab's own gateway (docs/gateway.md, ADR-0038; README.md beside
+# this file): one container from an image built from this repository (image/Dockerfile), run by
+# compose_app on a guest that already has docker_engine. Roles, their ordered backends (local
+# first, a cloud provider last), the caller keys and their limits are DATA: the site's gateway
+# spec and role table, rendered on the controller by `hnx gen gateway render` and audited for the
+# locality rule. Every caller has a key of its own, by secret: reference. No public route: the
+# callers are the lab's own services, on the guest's address. Every real value (the guest, its
+# address, the backends, the secret values) is the site's: the overlay's lab/modules.yml,
+# lab/services.yml, gateway spec and secret store.
+manifest_version: "1.0"
+id: gateway
+kind: provider
+title: LLM gateway
+description: Fills the inference slot with the lab's own LLM gateway, run as one compose_app
+  container; the model roles, their ordered backends and fallbacks, and every caller's key and
+  limits come from the site's gateway spec (rendered and audited by the generator), calls are
+  recorded per caller for usage and cost, and the cloud provider is the only host it may call
+  beyond the lab.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: hnx-llmgate
+  version: 0.1.0
+licence:
+  kind: open-source
+  spdx: Apache-2.0
+credentials:
+  - secret: secret:gateway/master-key
+    identity: api-key
+    holder: provider
+    purpose: the gateway's admin key (may call every role and read every usage record); the health hook lists the served roles with it
+  - secret: secret:gateway/key-telemetry-reader
+    identity: api-key
+    holder: granted
+    purpose: the read-only key that may call GET /v1/usage and nothing else, for orchestration telemetry and the status hub
+  - secret: secret:gateway/upstream-cloud
+    identity: api-key
+    holder: provider
+    purpose: the key the gateway presents to the cloud model provider the site's roles fall back to (a spend-limited key of its own)
+  - secret: secret:gateway/key-caller
+    identity: api-key
+    holder: consumers
+    purpose: one key per caller, named key-<caller> in the site's gateway spec, with its own roles, limits and usage records
+identifiers:
+  - {kind: secret-name, name: gateway, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the admin, reader, caller and provider keys are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 1, memory_mb: 512, disk_gb: 10}
+      guest:
+        baselines: [base]
+      roles: [role:gateway]
+      purpose: runs the gateway container (docker_engine applied first, compose_app renders it); its usage records grow in the data root until exported
+provides:
+  slots:
+    inference:
+      adapter: homelabnext.conform.adapters.llm_gateway:make
+      features: [streaming, gateway, turn-records]
+      conformance:
+        target: conformance/target.yml
+egress:
+  - host: server
+    to: [internet]
+    purpose: calls to the cloud model provider's API for roles that end there; the role refuses any host the site did not allow
+contributes:
+  roles:
+    - file: roles/gateway
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:gateway, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: usage
+    kind: state
+    description: usage.jsonl, one record per model call (caller, role, deployment, tokens, cost, status, tag), the per-caller accounting the status hub and orchestration telemetry read over GET /v1/usage; not rotated by the gateway.
+    export: {formats: [object-tree], via: role:gateway}
+    import: {formats: [object-tree], via: role:gateway}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest of a new build of the same repository): the role's upgrade hook validates and records it, the usage records are exported, then it converges; the rate-limit windows are in memory and start again at the restart"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

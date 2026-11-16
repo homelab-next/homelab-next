@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the unit is active, /healthz answers, authentication is in force (no token is
+# refused, a token without the scope is refused, each caller's own scope works), the token file the
+# host holds is the digest set the secrets say (a rotation applied), and, while the runner is the
+# smoke session, a job submitted with the broker's token runs to done with the session's answer.
+# One deviation from role interface v1's "health does not mutate the service": that round trip
+# leaves one finished job row, keyed by a fresh idempotency key; nothing else changes.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: The unit is active
+      ansible.builtin.command:
+        argv: ["{{ orchestration_systemctl_cli }}", is-active, "{{ orchestration_unit }}"]
+      register: orchestration_health_active
+      changed_when: false
+      failed_when: orchestration_health_active.stdout | trim != 'active'
+    - name: The controller answers /healthz
+      ansible.builtin.uri:
+        url: "{{ orchestration_base_url }}/healthz"
+        status_code: 200
+        timeout: "{{ orchestration_health_timeout | int }}"
+      changed_when: false
+    - name: A request without a token is refused
+      ansible.builtin.uri:
+        url: "{{ orchestration_base_url }}/jobs"
+        status_code: [401, 403]
+        timeout: "{{ orchestration_health_timeout | int }}"
+      changed_when: false
+    - name: A jobs token does not reach the admin routes
+      ansible.builtin.uri:
+        url: "{{ orchestration_base_url }}/admin/backend-inflight"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', orchestration_jobs_ref) }}"
+        status_code: 403
+        timeout: "{{ orchestration_health_timeout | int }}"
+      changed_when: false
+      no_log: true
+    - name: The admin token reaches them
+      ansible.builtin.uri:
+        url: "{{ orchestration_base_url }}/admin/backend-inflight"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', orchestration_admin_ref) }}"
+        status_code: 200
+        timeout: "{{ orchestration_health_timeout | int }}"
+      changed_when: false
+      no_log: true
+    - name: The status token reads the queue summary
+      ansible.builtin.uri:
+        url: "{{ orchestration_base_url }}/admin/queue-summary"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', orchestration_status_ref) }}"
+        status_code: 200
+        timeout: "{{ orchestration_health_timeout | int }}"
+      changed_when: false
+      no_log: true
+    - name: The metrics token reads /metrics, and the jobs token does not
+      ansible.builtin.uri:
+        url: "{{ orchestration_base_url }}/metrics"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', item.ref) }}"
+        status_code: "{{ item.status }}"
+        return_content: true
+        timeout: "{{ orchestration_health_timeout | int }}"
+      register: orchestration_metrics_reads
+      changed_when: false
+      no_log: true
+      loop:
+        - {ref: "{{ orchestration_metrics_ref }}", status: 200}
+        - {ref: "{{ orchestration_jobs_ref }}", status: 403}
+    - name: The metrics are the controller's
+      ansible.builtin.assert:
+        that: "'hnx_orchestrator_' in orchestration_metrics_reads.results[0].content"
+        fail_msg: "orchestration: /metrics does not carry the hnx_orchestrator_ series"
+    - name: Read the token file the host holds
+      ansible.builtin.slurp:
+        src: "{{ orchestration_callers_yaml }}"
+      register: orchestration_digest_file_read
+      no_log: true
+    - name: The token file holds the digests the secrets say (a rotation is applied)
+      ansible.builtin.assert:
+        that:
+          - >-
+            (orchestration_digest_file_read.content | b64decode | from_yaml).tokens
+            | map(attribute='sha256') | sort | list
+            == (orchestration_bearer_digests | sort | list)
+        fail_msg: >-
+          orchestration: {{ orchestration_callers_yaml }} does not hold the digests of the current
+          tokens (a rotated secret not applied: run the role, then systemctl reload {{ orchestration_unit }})
+      no_log: true
+    - name: Name this run's idempotency key
+      ansible.builtin.set_fact:
+        orchestration_health_key: "hnx-health-{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=16) }}"
+      when: orchestration_health_job_on | bool
+    - name: Submit the health job with the broker's token
+      ansible.builtin.uri:
+        url: "{{ orchestration_base_url }}/jobs"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', orchestration_jobs_ref) }}"
+          Idempotency-Key: "{{ orchestration_health_key }}"
+        body_format: json
+        body:
+          agent_key: "{{ orchestration_health_agent_key }}"
+          task_description: the health check
+          idempotency_key: "{{ orchestration_health_key }}"
+        status_code: [200, 201]
+        timeout: "{{ orchestration_health_timeout | int }}"
+      register: orchestration_health_submit
+      changed_when: false
+      no_log: true
+      when: orchestration_health_job_on | bool
+    - name: Wait for the job to finish
+      ansible.builtin.uri:
+        url: "{{ orchestration_base_url }}/jobs/{{ orchestration_health_submit.json.run_id }}"
+        headers:
+          Authorization: "Bearer {{ lookup('hnx_secret', orchestration_jobs_ref) }}"
+        return_content: true
+        timeout: "{{ orchestration_health_timeout | int }}"
+      register: orchestration_health_job_state
+      until: orchestration_health_job_state.json.state | default('') in ['done', 'failed', 'cancelled', 'budget_killed']
+      retries: "{{ orchestration_health_job_wait_seconds | int }}"
+      delay: 1
+      changed_when: false
+      no_log: true
+      when: orchestration_health_job_on | bool
+    - name: The job ran to done with the session's answer
+      ansible.builtin.assert:
+        that:
+          - orchestration_health_job_state.json.state == 'done'
+          - orchestration_health_answer in (orchestration_health_job_state.json.response_body | default(''))
+        fail_msg: >-
+          orchestration: the health job {{ orchestration_health_submit.json.run_id | default('') }}
+          ended {{ orchestration_health_job_state.json.state | default('unknown') }}
+          ({{ orchestration_health_job_state.json.local_failed_reason | default('no reason given') }})
+      when: orchestration_health_job_on | bool
+  tags: [health]

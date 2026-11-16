@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# The exit copy (data usage, object-tree): <data root>/export/{usage.jsonl,listing.jsonl}, the
+# records up to the last complete line, copied while the gateway runs, as the container's user.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Copy the usage records (the export)
+      ansible.builtin.include_tasks: copy_out.yml
+  tags: [export]

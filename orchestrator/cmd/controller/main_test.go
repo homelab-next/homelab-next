@@ -539,6 +539,29 @@ func TestRunner_TheForwarderTokenNeverReachesASession(t *testing.T) {
 	}
 }
 
+// The controller is not dumpable once it serves: a session of the same user cannot read its
+// environment or memory through /proc.
+func TestServe_IsNotDumpable(t *testing.T) {
+	cfg, _ := siteConfig(t, nil)
+	base, _, _, _, _ := serveSite(t, cfg)
+	if code := get(t, base+"/jobs", "token-one"); code != http.StatusOK {
+		t.Fatalf("serve is not up: %d", code)
+	}
+	if got, err := unix.PrctlRetInt(unix.PR_GET_DUMPABLE, 0, 0, 0, 0); err != nil || got != 0 {
+		t.Fatalf("PR_GET_DUMPABLE = %d, %v: want 0", got, err)
+	}
+}
+
+func TestCheck_TheForwarderTokenIsNamedOnce(t *testing.T) {
+	cfg, _ := siteConfig(t, func(s string) string {
+		return s + "events: {forwarder_url: https://forwarder.example.invalid/in, token_env: HNX_EV_T, token_file: /run/x/token}\n"
+	})
+	code, out, errs := runCmd(t, "check", "--config", cfg)
+	if code == exitOK || !strings.Contains(out+errs, "both set") {
+		t.Fatalf("check = %d\n%s%s", code, out, errs)
+	}
+}
+
 // The controller is not the child subreaper of what it starts: it waits only for the processes
 // os/exec started, so an orphan reparented to it would stay a zombie. Orphans go to init, and the
 // unit's KillMode ends them with the service.

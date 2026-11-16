@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# Restore the usage records from an export (vars/main.yml gateway_restore_script): the source is
+# checked first, without writing (owner, modes, the listing, a single-link regular file of the
+# listed size and sha256, every line a record); then the gateway is stopped, the file copied through
+# the descriptor that was opened, hashed again as staged and renamed into place as the container's
+# user; the gateway is started again whatever happened. The previous usage file is kept beside it (usage.jsonl.before-restore-<date>); a file of that name already there refuses the restore.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Create the data directories
+      ansible.builtin.include_tasks: dirs.yml
+    - name: Check the export before changing anything
+      ansible.builtin.command:
+        argv: "{{ ['python3', '-I', '-c', gateway_restore_script, 'check', gateway_restore_source, (gateway_uid | int | string), gateway_data_root ~ '/state'] }}"
+      changed_when: false
+    - name: Replace the usage records with the gateway stopped
+      block:
+        - name: Stop the gateway
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ gateway_dir }}/docker-compose.yml", stop]
+          changed_when: true
+        - name: Copy, verify and install the listed records
+          ansible.builtin.command:
+            argv: >-
+              {{ ['python3', '-I', '-c', gateway_restore_script, 'apply', gateway_restore_source,
+                  gateway_data_root ~ '/state', (gateway_uid | int | string), (gateway_gid | int | string)] }}
+          changed_when: true
+      always:
+        - name: Start the gateway again
+          ansible.builtin.command:
+            argv: [docker, compose, -f, "{{ gateway_dir }}/docker-compose.yml", up, -d]
+          changed_when: true
+    - name: Wait until the gateway answers again
+      ansible.builtin.uri:
+        url: "http://{{ gateway_bind }}:{{ gateway_port | int }}/healthz"
+        status_code: 200
+        timeout: "{{ gateway_health_timeout | int }}"
+      register: gateway_ready
+      until: gateway_ready.status == 200
+      retries: 30
+      delay: 2
+      changed_when: false
+      when: gateway_wait_ready | bool and not ansible_check_mode
+  tags: [restore]
