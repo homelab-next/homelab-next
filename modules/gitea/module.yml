@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: Apache-2.0
+# The forge provider on Gitea (docs/modules.md; README.md beside this file): git hosting over HTTPS
+# and SSH and the lab's own container registry, run as one compose_app container (the rootless
+# image, SQLite, the database and the repositories under the module's data root). HTTPS only, with a
+# certificate from the lab's internal CA; accounts of its own (an OpenID Connect sign-in is opt-in);
+# no public route. Every real value (the guest, its address, the names, the secret values) is the
+# site's: the overlay's lab/modules.yml, lab/services.yml, group variables and secret store.
+manifest_version: "1.0"
+id: gitea
+kind: provider
+title: Git hosting and container registry on Gitea
+description: Fills the forge slot with Gitea, git over HTTPS and SSH plus an OCI container and
+  package registry, run as one compose_app container with TLS from the lab CA, the SSH host keys and
+  the application secrets carried by reference, local accounts (OpenID Connect optional), and an
+  export and restore of the whole instance that verifies every repository's refs and integrity.
+owner: operator
+author: agent:claude
+status: draft
+version: 0.1.0
+origin: {kind: in-tree}
+product:
+  name: gitea
+  display: Gitea
+  version: 28.4.0
+licence:
+  kind: open-source
+  spdx: MIT
+credentials:
+  - secret: secret:gitea/secret-key
+    identity: key
+    holder: provider
+    purpose: the key Gitea encrypts two-factor seeds and stored credentials with; on a migration the source's value (another one leaves them unreadable)
+  - secret: secret:gitea/internal-token
+    identity: token
+    holder: provider
+    purpose: the token Gitea's own processes (the git hooks) call its internal API with; on a migration the source instance's value
+  - secret: secret:gitea/jwt-secret
+    identity: key
+    holder: provider
+    purpose: the secret that signs the OAuth2 provider's tokens; on a migration the source instance's value
+  - secret: secret:gitea/admin-password
+    identity: password
+    holder: provider
+    purpose: the administrator's password, which creates the first administrator on an empty database and signs the health hook in (after a restore it must equal the restored administrator's)
+  - secret: secret:gitea/tls-cert
+    identity: certificate
+    holder: provider
+    purpose: the server certificate (PEM, with its chain) the lab's internal CA issued for the service's internal name
+  - secret: secret:gitea/tls-key
+    identity: private-key
+    holder: provider
+    purpose: the server certificate's private key (PEM), readable by the container's user only
+  - secret: secret:gitea/ca
+    identity: certificate
+    holder: provider
+    purpose: the lab CA's certificate, what the role's hooks verify the service with (and what the service trusts for an identity provider's discovery)
+  - secret: secret:gitea/ssh-host-key-ed
+    identity: private-key
+    holder: provider
+    purpose: the SSH host key (OpenSSH private key format) the git SSH server presents; on a migration the source's, so clients' known_hosts entries stay valid
+  - secret: secret:gitea/ssh-host-key-rsa
+    identity: private-key
+    holder: provider
+    purpose: the RSA SSH host key, as above
+  - secret: secret:gitea/ssh-host-key-ecdsa
+    identity: private-key
+    holder: provider
+    purpose: the ECDSA SSH host key, as above
+  - secret: secret:gitea/oidc-client-secret
+    identity: client-secret
+    holder: provider
+    purpose: the client secret of the identity provider's OpenID Connect client for this service; read only when gitea_oidc_enabled
+  - secret: secret:gitea/registry-pull-token
+    identity: token
+    holder: granted
+    purpose: the read:package access token of the registry pull account the lab's guests log in with; created once in Gitea, read here only when gitea_registry_pull_user is set
+identifiers:
+  - {kind: secret-name, name: gitea, on_remove: keep}
+requires:
+  capabilities:
+    - cap: cap:secrets
+      version: "1.0"
+      purpose: the application secrets, the certificate and the SSH host keys are read by name at deploy time
+  hosts:
+    - role: server
+      kind: vm
+      footprint: {cpu: 2, memory_mb: 2048, disk_gb: 20}
+      guest:
+        baselines: [base]
+      roles: [role:gitea]
+      purpose: runs the Gitea container (docker_engine applied first, compose_app renders it)
+provides:
+  slots:
+    forge:
+      adapter: homelabnext.conform.adapters.forge:make
+      provisional: true
+      reason: forge has no contract yet; the obvious standard is the service answering its health and version, listing its repositories to an authenticated reader and serving a container registry challenge, which is what the role's health hook and a consumer's pull read
+      migration: {formats: [object-tree], export: role:gitea, import: role:gitea}
+egress: none
+contributes:
+  roles:
+    - file: roles/gitea
+  services:
+    - file: registry/services.yml
+  preflight:
+    - {role: role:gitea, hook: readiness}
+  docs:
+    - file: README.md
+data:
+  - id: instance
+    kind: state
+    description: The whole instance as Gitea's own dump (gitea dump, a zip of the repositories, the database as SQL, the avatars, attachments, packages and keys), taken with the service stopped, beside a manifest of counts and a per-repository refs digest and integrity verdict.
+    export: {formats: [object-tree], via: role:gitea}
+    import: {formats: [object-tree], via: role:gitea}
+    retention: {keep: forever}
+lifecycle:
+  install: {playbook: playbooks/install.yml}
+  upgrade: {playbook: playbooks/upgrade.yml, note: "a pinned image bump (tag and digest): the role's upgrade hook validates it (same repository, never an older version) and records it, the instance is exported, then it converges (Gitea migrates its database forward on first start)"}
+  remove:
+    playbook: playbooks/remove.yml
+    export_first: true
+    audit: [inventory, playbooks, live-refs, monitoring, secret-names, dns, contributions]

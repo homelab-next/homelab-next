@@ -1,0 +1,609 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Role of the module that fills the ``forge`` slot (modules/<id>/roles/<id>), run on localhost
+against fakes (CI is unprivileged): main renders one container with every credential only in the
+env_file and a second run is ``changed=0``; a reference with no value in the secret store, or a
+malformed input or credential, is refused by name before anything is written; with the container
+"started" (a fake docker and an HTTPS stand-in verified against a lab CA) the first administrator is
+created once, from a password that is in no command line, and the certificate change restarts the
+service; health passes and fails on every check it makes (version, an open anonymous read, the
+registry challenge, the SSH host keys, the administrator's sign-in); export stops the service, dumps
+it, writes a listing and starts it again whatever happened; restore refuses a tampered or vacuous
+export before writing anything, verifies the restored instance before the service starts and leaves
+it stopped on a mismatch; upgrade refuses a target that is unpinned, from another repository or older."""
+
+from __future__ import annotations
+
+import grp
+import hashlib
+import json
+import os
+import pwd
+from pathlib import Path
+
+import pytest
+import yaml
+from forge_front import (
+    LOOPBACK,
+    NAME,
+    Banner,
+    Front,
+    calls,
+    docker,
+    free_port,
+    make_dump,
+    make_pki,
+    pem,
+    ssh_tools,
+    tsv,
+)
+from rolerun import run_role
+
+from homelabnext.registry.model import secret_env_name
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _module_id() -> str:
+    for d in sorted((ROOT / "modules").iterdir()):
+        m = d / "module.yml"
+        if m.is_file() and "forge" in (
+            yaml.safe_load(m.read_text()).get("provides", {}).get("slots") or {}
+        ):
+            return d.name
+    raise AssertionError("no module fills the forge slot")
+
+
+MID = _module_id()
+ROLE = str(ROOT / "modules" / MID / "roles" / MID)
+P = MID
+USER = pwd.getpwuid(os.getuid()).pw_name
+GUEST = yaml.safe_load((ROOT / "examples" / "services.yml").read_text())["hosts"]["edge-core"][
+    "address"
+]
+DEFAULTS = yaml.safe_load((Path(ROLE) / "defaults" / "main.yml").read_text())
+REPO = DEFAULTS[f"{MID}_image"].split("@")[0].rsplit(":", 1)[0]
+PKI = make_pki(Path(__import__("tempfile").mkdtemp()))
+SSH_TYPES = ("ed25519", "rsa", "ecdsa")
+SUFFIX = {"ed25519": "ed", "rsa": "rsa", "ecdsa": "ecdsa"}
+VALUES = {
+    f"secret:{MID}/secret-key": "k" * 40,
+    f"secret:{MID}/internal-token": "i" * 60,
+    f"secret:{MID}/jwt-secret": "j" * 43,
+    f"secret:{MID}/admin-password": "Admin-password-fake-01",
+    f"secret:{MID}/tls-cert": PKI[0],
+    f"secret:{MID}/tls-key": PKI[1],
+    f"secret:{MID}/ca": PKI[2],
+    **{
+        f"secret:{MID}/ssh-host-key-{SUFFIX[t]}": pem("OPENSSH|PRIVATE|KEY", "b" * 30)
+        for t in SSH_TYPES
+    },
+}
+SECRETS = {secret_env_name(r): v for r, v in VALUES.items()}
+ADMIN = "Admin-password-fake-01"
+
+
+def pv(tmp_path: Path, **kw) -> dict:
+    v = {
+        f"{P}_logical_id": "forge",
+        f"{P}_hostname": NAME,
+        "ansible_host": GUEST,
+        f"{P}_dir": str(tmp_path / "app"),
+        f"{P}_data_root": str(tmp_path / "data"),
+        f"{P}_owner": USER,
+        f"{P}_group": grp.getgrgid(os.getgid()).gr_name,
+        # the unprivileged test's own ids (the role requires 1000 or more): it can chown to no other
+        f"{P}_uid": os.getuid(),
+        f"{P}_gid": os.getgid(),
+        f"{P}_admin_user": "admin",
+        f"{P}_start": False,
+        f"{P}_validate_with_docker": False,
+    }
+    v.update(
+        {
+            (f"{P}_{k}" if not k.startswith(("ansible", "hnx", P)) else k): val
+            for k, val in kw.items()
+        }
+    )
+    return v
+
+
+def fp(path: Path) -> tuple[int, str]:
+    b = path.read_bytes()
+    return len(b), hashlib.sha256(b).hexdigest()
+
+
+# ----------------------------------------------------------------------------- render
+
+
+def test_main_renders_one_container_with_the_credentials_only_in_the_env_file(tmp_path):
+    v = pv(tmp_path)
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (tmp_path / "app" / "docker-compose.yml").read_text()
+    svc = yaml.safe_load(text)["services"]
+    assert sorted(svc) == [MID]
+    s = svc[MID]
+    assert s["image"] == DEFAULTS[f"{P}_image"]
+    assert s["cap_drop"] == ["ALL"] and s["security_opt"] == ["no-new-privileges:true"]
+    assert s["user"] == f"{os.getuid()}:{os.getgid()}"
+    assert s["ports"] == [f"{GUEST}:3443:3000", f"{GUEST}:2222:2222"]
+    assert s["volumes"] == [
+        f"{tmp_path}/data/data:/var/lib/{P}", f"{tmp_path}/data/conf:/etc/{P}",
+        f"{tmp_path}/data/export:/export", f"{tmp_path}/app/tls:/tls:ro",
+        f"{tmp_path}/app/sshkeys:/sshkeys:ro",
+    ]  # fmt: skip
+    env = s["environment"]
+    assert env[f"{P.upper()}__server__ROOT_URL"] == f"https://{NAME}:3443/"
+    assert env[f"{P.upper()}__server__SSH_SERVER_HOST_KEYS"] == ",".join(
+        f"/sshkeys/{P}.{t}" for t in sorted(SSH_TYPES)
+    )
+    assert (
+        env[f"{P.upper()}__server__SSH_PORT"] == "2222"
+        and env[f"{P.upper()}__server__DOMAIN"] == NAME
+    )
+    assert "SSL_CERT_FILE" not in env  # only with an identity provider to trust
+    for secret in (*SECRETS.values(),):
+        assert secret not in text and secret not in r.stdout
+    env_file = (tmp_path / "app" / "secrets" / f"{MID}.env").read_text()
+    assert f"{P.upper()}__security__SECRET_KEY='{'k' * 40}'" in env_file
+    assert f"{P.upper()}__oauth2__JWT_SECRET='{'j' * 43}'" in env_file
+    assert ADMIN not in env_file  # the administrator's password is never given to the container
+    assert oct((tmp_path / "app" / "secrets" / f"{MID}.env").stat().st_mode & 0o777) == "0o600"
+    assert oct((tmp_path / "app" / "tls" / "server.key").stat().st_mode & 0o777) == "0o440"
+    for t in SSH_TYPES:
+        f = tmp_path / "app" / "sshkeys" / f"{P}.{t}"
+        assert oct(f.stat().st_mode & 0o777) == "0o440" and f.read_text().startswith(
+            "-----BEGIN OPENSSH"
+        )
+    assert oct((tmp_path / "data" / "conf").stat().st_mode & 0o777) == "0o700"
+    again = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert again.returncode == 0 and "changed=0" in again.stdout, again.stdout
+
+
+def test_main_puts_the_container_in_the_role_slice_the_module_play_names(tmp_path):
+    v = pv(tmp_path, hnx_module_slice=f"hnx-{MID}-server.slice")
+    r = run_role(tmp_path, ROLE, "main", v, env=SECRETS)
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())
+    assert {s["cgroup_parent"] for s in doc["services"].values()} == {f"hnx-{MID}-server.slice"}
+
+
+def test_an_identity_provider_adds_its_ca_to_the_trust_and_nothing_else_to_the_environment(
+    tmp_path,
+):
+    ref = f"secret:{MID}/oidc-client-secret"
+    env = {**SECRETS, secret_env_name(ref): "o" * 24}
+    v = pv(
+        tmp_path,
+        oidc_enabled=True,
+        oidc_issuer_url="https://sso.example.internal/realms/lab",
+        oidc_client_id="forge",
+    )
+    r = run_role(tmp_path, ROLE, "main", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    svc = yaml.safe_load((tmp_path / "app" / "docker-compose.yml").read_text())["services"][MID]
+    assert svc["environment"]["SSL_CERT_FILE"] == "/tls/ca.pem"
+    assert "o" * 24 not in (tmp_path / "app" / "docker-compose.yml").read_text()
+
+
+# ----------------------------------------------------------------------------- refusals
+
+
+@pytest.mark.parametrize("ref", sorted(VALUES))
+def test_main_refuses_an_unset_secret_naming_the_reference_and_writes_nothing(tmp_path, ref):
+    """Review Focus 3: a module deployed before its secret exists is refused, by name."""
+    env = {**SECRETS, secret_env_name(ref): ""}
+    r = run_role(tmp_path, ROLE, "main", pv(tmp_path), env=env)
+    assert r.returncode != 0, r.stdout
+    assert ref in r.stdout + r.stderr
+    assert not (tmp_path / "app").exists() and not (tmp_path / "data").exists()
+    for value in SECRETS.values():
+        assert value not in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("which, extra_env", [
+    ("oidc", {"oidc_enabled": True, "oidc_issuer_url": "https://sso.example.internal/r", "oidc_client_id": "forge"}),
+    ("pull", {"registry_pull_user": "puller"}),
+])  # fmt: skip
+def test_an_optional_secret_is_refused_by_name_only_when_its_feature_is_on(
+    tmp_path, which, extra_env
+):
+    ref = f"secret:{MID}/" + ("oidc-client-secret" if which == "oidc" else "registry-pull-token")
+    (tmp_path / "off").mkdir()
+    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **extra_env), env=SECRETS)
+    assert r.returncode != 0 and ref in r.stdout + r.stderr
+    assert not (tmp_path / "app").exists()
+    # the same configuration with the feature off never reads the reference
+    off = run_role(tmp_path / "off", ROLE, "main", pv(tmp_path / "off"), env=SECRETS)
+    assert off.returncode == 0, off.stdout + off.stderr
+
+
+@pytest.mark.parametrize(
+    "over, env",
+    [
+        ({"image": f"{REPO}:latest"}, {}),
+        ({"image": f"{REPO}:28.4.0@sha256:" + "a" * 64}, {}),  # not the rootless build
+        ({"image": f"{REPO}:28.4.0-rootless"}, {}),  # no digest
+        ({"ansible_host": "0.0.0.0"}, {}),
+        ({"ansible_host": "git.example.internal"}, {}),
+        ({"hostname": "Git"}, {}),
+        ({"hostname": "localhost"}, {}),
+        ({"logical_id": "Forge"}, {}),
+        ({"ssh_port": 3443}, {}),
+        ({"port": 70000}, {}),
+        ({"uid": 0}, {}),
+        ({"data_root": "/var/lib/../etc"}, {}),
+        ({"dir": "relative/dir"}, {}),
+        ({"mem_limit": "lots"}, {}),
+        ({"ssh_host_key_refs": {}}, {}),
+        ({"ssh_host_key_refs": {"dsa": f"secret:{MID}/ssh-host-key-rsa"}}, {}),
+        ({"admin_login_ref": f"secret:{MID}/secret-key"}, {}),
+        ({"oidc_enabled": True}, {}),  # no issuer, no client
+        ({}, {secret_env_name(f"secret:{MID}/secret-key"): "short"}),
+        ({}, {secret_env_name(f"secret:{MID}/secret-key"): "has'quote-" + "k" * 30}),
+        ({}, {secret_env_name(f"secret:{MID}/internal-token"): "k" * 40}),  # equals the app key
+        ({}, {secret_env_name(f"secret:{MID}/admin-password"): "k" * 40}),
+        ({}, {secret_env_name(f"secret:{MID}/tls-cert"): "not pem"}),
+        ({}, {secret_env_name(f"secret:{MID}/tls-key"): "not pem"}),
+        ({}, {secret_env_name(f"secret:{MID}/ssh-host-key-rsa"): "not a key"}),
+    ],
+)  # fmt: skip
+def test_main_refuses_bad_inputs_and_credentials(tmp_path, over, env):
+    r = run_role(tmp_path, ROLE, "main", pv(tmp_path, **over), env={**SECRETS, **env})
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "app" / "docker-compose.yml").exists()
+
+
+# ----------------------------------------------------------------------------- started
+
+
+def _live(tmp_path, front, banner, **kw):
+    kw.setdefault("start", True)
+    return pv(
+        tmp_path,
+        bind=LOOPBACK,
+        port=front.port,
+        ssh_port=banner.port,
+        ready_timeout=15,
+        **kw,
+    ) | {"ansible_host": LOOPBACK}
+
+
+def _env(tmp_path, **kw):
+    ssh_tools(tmp_path / "bin")
+    return {**SECRETS, **docker(tmp_path, **kw)}
+
+
+def test_the_first_administrator_is_created_once_from_a_password_in_no_command_line(tmp_path):
+    with Front(PKI[0], PKI[1], tmp_path, password=ADMIN) as front:
+        banner = Banner()
+        env = _env(tmp_path)
+        v = _live(tmp_path, front, banner)
+        r = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        log = calls(tmp_path)
+        creates = [c for c in log if "user create" in c]
+        assert len(creates) == 1 and ADMIN not in "\n".join(log)
+        assert "-e HNX_FORGE_PASSWORD" in creates[0]
+        assert (tmp_path / "env.log").read_text().splitlines() == ["HNX_FORGE_PASSWORD=set"]
+        assert any(" restart " in c for c in log)  # the first certificate is read at the next start
+        before = len(log)
+        again = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert again.returncode == 0, again.stdout + again.stderr
+        new = calls(tmp_path)[before:]
+        assert not any("user create" in c for c in new)  # the account exists now
+        assert not any(" restart " in c for c in new)  # nothing changed
+        banner.close()
+
+
+def test_a_password_that_does_not_sign_in_is_set_only_when_the_sync_is_on(tmp_path):
+    with Front(PKI[0], PKI[1], tmp_path, password="v" * 20) as front:
+        banner = Banner()
+        env = _env(tmp_path, users="ID\tUsername\n1\tadmin\n")
+        off = run_role(tmp_path, ROLE, "main", _live(tmp_path, front, banner), env=env)
+        assert off.returncode == 0 and not any("change-password" in c for c in calls(tmp_path))
+        on = run_role(
+            tmp_path,
+            ROLE,
+            "main",
+            _live(tmp_path, front, banner, admin_password_sync=True),
+            env=env,
+        )
+        assert on.returncode == 0, on.stdout + on.stderr
+        changes = [c for c in calls(tmp_path) if "change-password" in c]
+        assert len(changes) == 1 and ADMIN not in changes[0]
+        banner.close()
+
+
+def test_the_identity_provider_source_is_created_then_updated_with_its_secret_in_no_command_line(
+    tmp_path,
+):
+    ref = f"secret:{MID}/oidc-client-secret"
+    secret = "o" * 24
+    with Front(PKI[0], PKI[1], tmp_path, password=ADMIN) as front:
+        banner = Banner()
+        env = {**_env(tmp_path, users="ID\tUsername\n1\tadmin\n"), secret_env_name(ref): secret}
+        v = _live(
+            tmp_path,
+            front,
+            banner,
+            oidc_enabled=True,
+            oidc_issuer_url="https://sso.example.internal/realms/lab",
+            oidc_client_id="forge",
+        )
+        first = run_role(tmp_path, ROLE, "main", v, env=env)
+        assert first.returncode == 0, first.stdout[-3000:]
+        adds = [c for c in calls(tmp_path) if "add-oauth" in c or "update-oauth" in c]
+        assert len(adds) == 1 and secret not in adds[0] and "add-oauth" in adds[0]
+        assert "https://sso.example.internal/realms/lab/.well-known/openid-configuration" in adds[0]
+        (tmp_path / "auth.txt").write_text("ID\tName\tType\tEnabled\n7\tsso\tOAuth2\ttrue\n")
+        assert run_role(tmp_path, ROLE, "main", v, env=env).returncode == 0
+        updates = [c for c in calls(tmp_path) if "update-oauth" in c]
+        assert (
+            len(updates) == 1
+            and secret not in updates[0]
+            and updates[0].rstrip().endswith("openid-configuration")
+        )
+        assert " 7 " in updates[0]
+        banner.close()
+
+
+# ----------------------------------------------------------------------------- health
+
+
+def _health(tmp_path, front, banner, env, **kw):
+    """Health on an installed instance: main first (it writes the certificate and the host keys the
+    checks verify against), nothing started."""
+    v = _live(tmp_path, front, banner, start=False, **kw)
+    assert run_role(tmp_path, ROLE, "main", v, env=env).returncode == 0
+    return run_role(tmp_path, ROLE, "health", v, env=env)
+
+
+def test_health_passes_against_a_service_that_does_everything_it_checks(tmp_path):
+    with Front(PKI[0], PKI[1], tmp_path, password=ADMIN) as front:
+        banner = Banner()
+        r = _health(tmp_path, front, banner, _env(tmp_path))
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "/v2/" in front.requests and "/api/healthz" in front.requests
+        banner.close()
+
+
+@pytest.mark.parametrize("front_kw, banner_ok, ssh, message", [
+    ({"version": "27.0.0"}, True, {}, "version"),
+    ({"anonymous_ok": True}, True, {}, "anonymous"),
+    ({"registry": ""}, True, {}, "registry"),
+    ({"password": "w" * 20}, True, {}, "cannot sign in"),
+    ({}, False, {}, "ssh"),
+    ({}, True, {"presented": "AAAAdifferent"}, "host key"),
+])  # fmt: skip
+def test_health_fails_on_each_check_it_makes(tmp_path, front_kw, banner_ok, ssh, message):
+    with Front(PKI[0], PKI[1], tmp_path, **{"password": ADMIN, **front_kw}) as front:
+        banner = Banner()
+        env = {**SECRETS, **docker(tmp_path)}
+        ssh_tools(tmp_path / "bin", **ssh)
+        port = banner.port
+        if not banner_ok:
+            banner.close()
+            port = free_port()  # nothing listens there
+        v = pv(tmp_path, bind=LOOPBACK, port=front.port, ssh_port=port) | {"ansible_host": LOOPBACK}
+        assert run_role(tmp_path, ROLE, "main", v, env=env).returncode == 0
+        r = run_role(tmp_path, ROLE, "health", v, env=env)
+        assert r.returncode != 0 and message.lower() in (r.stdout + r.stderr).lower(), (
+            r.stdout + r.stderr
+        )
+        for value in SECRETS.values():
+            assert value not in r.stdout + r.stderr
+        banner.close()
+
+
+def test_health_proves_the_pull_account_when_one_is_named(tmp_path):
+    ref = f"secret:{MID}/registry-pull-token"
+    env = {**_env(tmp_path), secret_env_name(ref): "t" * 20}
+    with Front(PKI[0], PKI[1], tmp_path, password=ADMIN, pull="puller:" + "t" * 20) as front:
+        banner = Banner()
+        ok = _health(tmp_path, front, banner, env, registry_pull_user="puller")
+        assert ok.returncode == 0, ok.stdout + ok.stderr
+        front.pull = "puller:other"
+        bad = _health(tmp_path, front, banner, env, registry_pull_user="puller")
+        assert bad.returncode != 0 and "pull account" in bad.stdout + bad.stderr
+        banner.close()
+
+
+# ----------------------------------------------------------------------------- export, restore
+
+
+def _stood(tmp_path, **kw):
+    """The data directories the export and restore hooks expect, with a fake docker whose dump is a
+    real archive of two repositories."""
+    dump = make_dump(tmp_path / "source.zip")
+    env = {**_env(tmp_path, dump=dump, repos_out=tsv()), **kw}
+    (tmp_path / "data" / "export").mkdir(parents=True, exist_ok=True)
+    return env
+
+
+def _export(tmp_path, env):
+    v = pv(tmp_path, start=True)
+    r = run_role(tmp_path, ROLE, "export", v, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return tmp_path / "data" / "export"
+
+
+def test_export_stops_dumps_lists_and_starts_the_service_again(tmp_path):
+    env = _stood(tmp_path)
+    out = _export(tmp_path, env)
+    assert sorted(p.name for p in out.iterdir()) == [
+        "dump.zip",
+        "listing.jsonl",
+        "manifest.json",
+        "repos.tsv",
+    ]
+    listing = [json.loads(ln) for ln in (out / "listing.jsonl").read_text().splitlines()]
+    assert sorted(r["key"] for r in listing) == ["dump.zip", "manifest.json", "repos.tsv"]
+    for r in listing:
+        assert (r["size"], r["sha256"]) == fp(out / r["key"])
+    m = json.loads((out / "manifest.json").read_text())
+    assert (
+        m["format"] == 1
+        and m["counts"]["users"] == 2
+        and m["counts"]["orgs"] == 1
+        and m["counts"]["repos"] == 2
+    )
+    assert (
+        m["repositories"] == 2
+        and m["product_version"] == DEFAULTS[f"{P}_image"].split(":")[1].split("-")[0]
+    )
+    assert (out / "repos.tsv").read_text() == tsv()
+    log = calls(tmp_path)
+    order = [next(i for i, c in enumerate(log) if k in c) for k in (" stop ", " run ", " up ")]
+    assert order == sorted(order)  # stopped, dumped, started
+    again = _export(tmp_path, env)
+    assert (again / "dump.zip.prev").is_file()  # one previous generation is kept
+
+
+def test_export_starts_the_service_again_even_when_the_dump_fails(tmp_path):
+    env = _stood(tmp_path)
+    (tmp_path / "dump.fails").write_text("")
+    r = run_role(tmp_path, ROLE, "export", pv(tmp_path, start=True), env=env)
+    assert r.returncode != 0
+    log = calls(tmp_path)
+    assert any(" stop " in c for c in log) and any(" up " in c for c in log)
+    assert not (tmp_path / "data" / "export" / "dump.zip").exists()
+
+
+@pytest.mark.parametrize("repos_out, why", [
+    (tsv(fsck="fail"), "failing fsck"),
+    (tsv(repos=(("labs", "alpha"),)), "fewer repositories on disk than the database lists"),
+    ("", "no repository on disk"),
+])  # fmt: skip
+def test_export_refuses_a_dump_that_proves_nothing_and_puts_nothing_in_place(
+    tmp_path, repos_out, why
+):
+    env = _stood(tmp_path)
+    (tmp_path / "repos.out").write_text(repos_out)
+    r = run_role(tmp_path, ROLE, "export", pv(tmp_path, start=True), env=env)
+    assert r.returncode != 0 and "nothing was put in place" in r.stdout + r.stderr, why
+    assert not (tmp_path / "data" / "export" / "dump.zip").exists()
+    assert any(" up " in c for c in calls(tmp_path))  # and the service is back
+
+
+def _restore(tmp_path, env, source, front=None, banner=None, **kw):
+    if front is not None:
+        v = _live(tmp_path, front, banner, restore_source=str(source), **kw)
+    else:
+        v = pv(tmp_path, restore_source=str(source), ready_timeout=3, **kw)
+    return run_role(tmp_path, ROLE, "restore", v, env=env)
+
+
+def test_restore_refuses_a_tampered_export_and_writes_nothing(tmp_path):
+    env = _stood(tmp_path)
+    src = _export(tmp_path, env)
+    calls_before = len(calls(tmp_path))
+    with (src / "dump.zip").open("ab") as f:
+        f.write(b"x")
+    r = _restore(tmp_path, env, src)
+    assert r.returncode != 0 and "not an intact export" in r.stdout + r.stderr
+    assert not any(
+        " stop " in c for c in calls(tmp_path)[calls_before:]
+    )  # the service was not touched
+    assert not (tmp_path / "data" / "data" / f"{P}.db").exists()
+
+
+def test_restore_places_verifies_and_only_then_starts_the_service(tmp_path):
+    env = _stood(tmp_path)
+    src = _export(tmp_path, env)
+    n = len(calls(tmp_path))
+    with Front(PKI[0], PKI[1], tmp_path, password=ADMIN) as front:
+        banner = Banner()
+        # the instance is installed first (the certificate and the host keys the checks verify against)
+        installed = run_role(
+            tmp_path, ROLE, "main", _live(tmp_path, front, banner, start=False), env=env
+        )
+        assert installed.returncode == 0, installed.stdout[-2000:]
+        r = _restore(tmp_path, env, src, front, banner, start=True)
+        banner.close()
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = calls(tmp_path)[n:]
+    stop = next(i for i, c in enumerate(log) if " stop " in c)
+    run = [i for i, c in enumerate(log) if " run " in c]
+    up = next(i for i, c in enumerate(log) if " up " in c)
+    assert run and stop < run[0] and run[-1] < up  # verified while stopped, then started
+    assert any("regenerate hooks" in c for c in log[up:])
+    data = tmp_path / "data" / "data"
+    assert (data / "git" / "repositories" / "labs" / "alpha.git" / "HEAD").is_file()
+    assert (data / "avatars" / "a.png").is_file() and (data / "jwt" / "private.pem").is_file()
+    assert not (data / "ssh").exists() and not (data / "log").exists()  # not the role's to take
+    assert not (data / ".restore-stage").exists()
+    db = __import__("sqlite3").connect(str(data / f"{P}.db"))
+    assert db.execute('SELECT count(*) FROM "user"').fetchone()[0] == 3
+    db.close()
+
+
+def test_restore_leaves_the_service_stopped_when_a_repository_differs(tmp_path):
+    env = _stood(tmp_path)
+    src = _export(tmp_path, env)
+    n = len(calls(tmp_path))
+    (tmp_path / "repos.out").write_text(
+        tsv().replace("alpha", "alpha", 1).replace(("alpha" * 64)[:64], "f" * 64)
+    )
+    r = _restore(tmp_path, env, src)
+    assert (
+        r.returncode != 0 and "STOPPED" in r.stdout + r.stderr
+    ) or "left stopped" in r.stdout + r.stderr
+    assert not any(" up " in c for c in calls(tmp_path)[n:])
+
+
+def _relist(src: Path, edit) -> None:
+    """Rewrite an export's manifest with ``edit`` and make its listing say what the files now are, so
+    only the manifest's own content is what the restore can object to."""
+    m = json.loads((src / "manifest.json").read_text())
+    edit(m)
+    (src / "manifest.json").write_text(json.dumps(m))
+    rows = []
+    for name in ("dump.zip", "manifest.json", "repos.tsv"):
+        size, digest = fp(src / name)
+        rows.append(json.dumps({"key": name, "size": size, "sha256": digest}))
+    (src / "listing.jsonl").write_text("\n".join(rows) + "\n")
+
+
+def test_restore_refuses_a_vacuous_export_and_one_whose_repositories_are_not_listed(tmp_path):
+    env = _stood(tmp_path)
+    src = _export(tmp_path, env)
+
+    def vacuous(m):
+        m["counts"]["repos"] = 0
+        m["repositories"] = 0
+
+    (src / "repos.tsv").write_text("")
+    _relist(src, vacuous)
+    r = _restore(tmp_path, env, src)
+    assert r.returncode != 0 and "not one to restore from" in r.stdout + r.stderr
+    assert not (tmp_path / "data" / "data" / f"{P}.db").exists()
+
+
+def test_restore_refuses_an_export_of_a_newer_version(tmp_path):
+    env = _stood(tmp_path)
+    src = _export(tmp_path, env)
+    _relist(src, lambda m: m.update(product_version="99.0.0"))
+    r = _restore(tmp_path, env, src)
+    assert r.returncode != 0 and "not one to restore from" in r.stdout + r.stderr
+
+
+# ----------------------------------------------------------------------------- upgrade
+
+
+def test_upgrade_records_only_a_pinned_newer_target_of_the_same_repository(tmp_path):
+    env = _stood(tmp_path)
+    base = DEFAULTS[f"{P}_image"].split("@")[0].rsplit(":", 1)[0]
+    ok = f"{base}:28.5.0-rootless@sha256:" + "a" * 64
+    r = run_role(tmp_path, ROLE, "main", pv(tmp_path), env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    good = run_role(tmp_path, ROLE, "upgrade", pv(tmp_path, target_image=ok), env=env)
+    assert good.returncode == 0, good.stdout + good.stderr
+    for bad in (
+        f"{base}:28.3.0-rootless@sha256:" + "b" * 64,  # older
+        f"{base}:28.5.0-rootless",  # not pinned
+        f"{base}:28.5.0@sha256:" + "c" * 64,  # not the rootless build
+        "docker.io/other/image:28.5.0-rootless@sha256:" + "d" * 64,  # another repository
+    ):
+        r = run_role(tmp_path, ROLE, "upgrade", pv(tmp_path, target_image=bad), env=env)
+        assert r.returncode != 0, bad

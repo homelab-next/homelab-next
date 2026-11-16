@@ -1,0 +1,438 @@
+# SPDX-License-Identifier: Apache-2.0
+"""tools/migrate/forge.py: dump, stage, verify, freeze and unfreeze over ssh pipes, against a fake
+host (a stopped or running container behind the ``docker`` command line the tool builds, a real
+dump archive and a real SQLite database).  What is pinned: the dump is read-only on the source and
+refused while it runs unless the caller says so; the export is never staged in a temporary
+directory; counts, a content fingerprint and every repository's refs digest and fsck verdict are
+recorded and compared; a source that proves nothing or disagrees with itself is refused; verify
+finds a repository that moved, a changed account, a missing repository and a damaged export, and
+removes only its own temporary file; stage creates a new directory under the data root and
+overwrites nothing."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import io
+import json
+import shlex
+import shutil
+import sqlite3
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tests" / "roles"))
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location(
+    "forge_migrate_tool", ROOT / "tools" / "migrate" / "forge.py"
+)
+mt = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = mt
+_spec.loader.exec_module(mt)
+
+from forge_front import dump_sql, make_dump, tsv
+
+DEST = "ops@host.example.internal"
+DATA_ROOT = "/srv/data/forge"
+STAGE = "/srv/data/forge/export/incoming"
+REPOS = (("labs", "alpha"), ("labs", "beta"))
+ALPHA = ("alpha" * 64)[:64]  # the digest the fake manifest gives labs/alpha
+
+
+@pytest.fixture
+def private():
+    """A directory outside the system temporary directory, which the tool refuses for a dump."""
+    base = ROOT / "build"
+    base.mkdir(exist_ok=True)
+    d = Path(tempfile.mkdtemp(prefix="migrate-", dir=base))
+    assert not any(str(d).startswith(p) for p in mt.SCRATCH_DIRS)
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
+class Host:
+    """One host's container: running or not, a repositories' manifest, a database file and the
+    archive its dump command streams.  Every command the tool runs is interpreted from its argv."""
+
+    def __init__(self, work: Path, *, running=False, repos=REPOS, fsck="ok", users=2, hook=None):
+        self.running, self.fsck, self.repos, self.files, self.log = (
+            running,
+            fsck,
+            list(repos),
+            {},
+            [],
+        )
+        self.users, self.hook = users, hook
+        self.zip = make_dump(work / "src.zip", repos=repos, users=users)
+        self.db = work / "src.db"
+        self.db.unlink(missing_ok=True)
+        sqlite3.connect(self.db).executescript(dump_sql(repos=repos, users=users))
+        self.fail_dump = False
+
+    def lines(self) -> str:
+        return tsv(self.repos, self.fsck)
+
+    def __call__(self, argv, *, stdin=None, stdout=None):
+        self.log.append(list(argv))
+        cmd = shlex.split(argv[-1]) if argv[0] == "ssh" else list(argv)
+        if cmd[:2] == ["sudo", "-n"]:
+            cmd = cmd[2:]
+        out = self._run(cmd, stdin)
+        if isinstance(out, int):
+            return out, b"", b"failed"
+        if stdout is not None:
+            stdout.write(out)
+            return 0, b"", b""
+        return 0, out, b""
+
+    def _inner(self, cmd):
+        """The command a ``docker exec`` or one-off ``docker run`` runs in the container."""
+        if cmd[1] == "exec":
+            rest = cmd[2:]
+            if rest[0] == "-u":
+                rest = rest[2:]
+            return rest[1:]
+        i = cmd.index("--entrypoint")
+        return [cmd[i + 1], *cmd[i + 3 :]]
+
+    def _run(self, cmd, stdin):
+        if cmd[0] == "docker":
+            if cmd[1] == "inspect":
+                return (
+                    (b"true" if self.running else b"false")
+                    if "State.Running" in cmd[3]
+                    else b"img:1"
+                )
+            if cmd[1] in ("stop", "start"):
+                self.running = cmd[1] == "start"
+                return b""
+            inner = self._inner(cmd)
+            if self.hook:
+                self.hook(self, inner)
+            if inner[:2] == [mt.PRODUCT, "--version"]:
+                return f"{mt.PRODUCT} version 28.4.0 built with go".encode()
+            if inner[0] == "sh":
+                return self.lines().encode()
+            if inner[0] == "cat":
+                return self.db.read_bytes()
+            if inner[0] == mt.PRODUCT and "dump" in inner:
+                return 1 if self.fail_dump else self.zip.read_bytes()
+        if cmd[0] == "mkdir":
+            if cmd[-1] in self.files.get("dirs", set()):
+                return 1
+            self.files.setdefault("dirs", set()).add(cmd[-1])
+            return b""
+        if cmd[0] == "sh":
+            path = cmd[-1]
+            if path in self.files:
+                return 1
+            self.files[path] = stdin.read()
+            return b""
+        if cmd[0] == "sha256sum":
+            return f"{hashlib.sha256(self.files[cmd[-1]]).hexdigest()}  {cmd[-1]}\n".encode()
+        raise AssertionError(f"unexpected command {cmd}")
+
+    def ctx(self):
+        return mt._Ctx(runner=self)
+
+
+def ep(**kw):
+    return mt.Endpoint(container="forge-1", ssh=DEST, data_root=DATA_ROOT, **kw)
+
+
+def _dump(private, host, **kw):
+    return mt.dump(ep(), private / "out", _ctx=host.ctx(), **kw)
+
+
+# ----------------------------------------------------------------------------- dump
+
+
+def test_a_stopped_source_is_dumped_read_only_with_counts_fingerprint_and_every_repository(private):
+    host = Host(private)
+    m = _dump(private, host)
+    out = private / "out"
+    assert sorted(p.name for p in out.iterdir()) == [
+        "dump.zip",
+        "listing.jsonl",
+        "manifest.json",
+        "repos.tsv",
+    ]
+    assert (
+        oct(out.stat().st_mode & 0o777) == "0o700"
+        and oct((out / "dump.zip").stat().st_mode & 0o777) == "0o600"
+    )
+    assert m["counts"]["users"] == 2 and m["counts"]["repos"] == 2 and m["repositories"] == 2
+    assert m["product_version"] == "28.4.0" and m["source"] == {"frozen": True, "quiescent": True}
+    assert (out / "repos.tsv").read_text() == tsv(REPOS)
+    for row in map(json.loads, (out / "listing.jsonl").read_text().splitlines()):
+        assert hashlib.sha256((out / row["key"]).read_bytes()).hexdigest() == row["sha256"]
+    # a stopped source is read through a one-off container over its volumes: nothing is started
+    assert not any(shlex.split(a[-1])[3:4] in (["stop"], ["start"], ["rm"]) for a in host.log)
+    assert any("--volumes-from" in a[-1] for a in host.log) and not any(
+        " exec " in a[-1] for a in host.log
+    )
+
+
+def test_a_running_source_is_refused_unless_a_live_copy_is_asked_for_and_then_says_it_was_not_frozen(
+    private,
+):
+    host = Host(private, running=True)
+    with pytest.raises(mt.MigrateError, match="freeze it first"):
+        _dump(private, host)
+    assert not any("dump" in a[-1] for a in host.log)
+    m = mt.dump(ep(), private / "live", allow_live=True, _ctx=host.ctx())
+    assert m["source"] == {"frozen": False, "quiescent": False}
+    assert any(" exec " in a[-1] for a in host.log)
+
+
+def test_a_source_whose_repositories_move_during_the_dump_is_not_quiescent(private):
+    host = Host(private)
+    moved = tsv((*REPOS[:1], ("labs", "beta"))).replace(ALPHA, "9" * 64)
+    states = iter([tsv(REPOS)])
+    host.lines = lambda: next(states, moved)  # the first read, then a push has landed
+    m = mt.dump(ep(), private / "out2", _ctx=host.ctx())
+    assert m["source"]["frozen"] is True and m["source"]["quiescent"] is False
+
+
+def test_an_export_is_never_staged_in_a_temporary_directory_or_a_non_empty_one(private):
+    host = Host(private)
+    with pytest.raises(mt.MigrateError, match="password hash"):
+        mt.dump(ep(), Path(tempfile.gettempdir()) / "forge-x", _ctx=host.ctx())
+    (private / "full").mkdir()
+    (private / "full" / "f").write_text("x")
+    with pytest.raises(mt.MigrateError, match="not empty"):
+        mt.dump(ep(), private / "full", _ctx=host.ctx())
+    assert (private / "full" / "f").read_text() == "x" and not any(
+        "dump" in a[-1] for a in host.log
+    )
+
+
+@pytest.mark.parametrize("kw, message", [
+    ({"fsck": "fail"}, "fsck fails"),
+    ({"users": 0}, "no account|vacuous"),
+    ({"repos": ()}, "vacuous"),
+])  # fmt: skip
+def test_a_source_that_proves_nothing_or_is_damaged_is_refused_and_leaves_no_archive(
+    private, kw, message
+):
+    host = Host(private, **kw)
+    with pytest.raises(mt.VerifyMismatch, match=message):
+        _dump(private, host)
+    assert not (private / "out" / "dump.zip").exists()
+
+
+def test_a_database_and_a_disk_that_disagree_are_refused(private):
+    host = Host(private)
+    host.repos = host.repos[:1]  # the manifest the disk gives has one repository, the database two
+    with pytest.raises(mt.VerifyMismatch, match="disagrees with itself"):
+        _dump(private, host)
+
+
+def test_a_failing_dump_command_leaves_no_partial_archive(private):
+    host = Host(private)
+    host.fail_dump = True
+    with pytest.raises(mt.MigrateError, match="failed"):
+        _dump(private, host)
+    assert not (private / "out" / "dump.zip").exists()
+
+
+def test_an_empty_instance_is_dumped_only_when_it_is_asked_for(private):
+    host = Host(private, repos=())
+    with pytest.raises(mt.VerifyMismatch):
+        _dump(private, host)
+    m = mt.dump(ep(), private / "empty", allow_empty=True, _ctx=host.ctx())
+    assert m["counts"]["repos"] == 0
+
+
+# ----------------------------------------------------------------------------- verify
+
+
+def _exported(private, **kw):
+    src = Host(private / "s" if False else private, **kw)
+    mt.dump(ep(), private / "out", _ctx=src.ctx())
+    return src
+
+
+def test_a_target_equal_to_the_export_verifies_and_the_temporary_file_is_gone(private):
+    _exported(private)
+    target = Host(private)
+    r = mt.verify(ep(), private / "out", _ctx=target.ctx())
+    assert r["verified"] is True and r["repositories"] == 2 and r["counts"]["users"] == 2
+    assert [p.name for p in (private / "out").iterdir() if p.name.startswith(".")] == []
+
+
+@pytest.mark.parametrize("make, message", [
+    (lambda w: Host(w, users=3), "counts differ"),
+    (lambda w: Host(w, repos=(("labs", "alpha"), ("labs", "zeta"))), "repositories differ"),
+    (lambda w: Host(w, fsck="fail"), "repositories differ"),
+])  # fmt: skip
+def test_a_target_that_differs_is_named(private, make, message):
+    _exported(private)
+    with pytest.raises(mt.VerifyMismatch, match=message):
+        mt.verify(ep(), private / "out", _ctx=make(private).ctx())
+    assert not (private / "out" / ".verify.db").exists()  # removed even on failure
+
+
+def test_a_changed_account_that_moves_no_count_is_found_by_the_fingerprint(private):
+    _exported(private)
+    target = Host(private)
+    db = sqlite3.connect(target.db)
+    db.execute("UPDATE \"user\" SET passwd = 'other' WHERE id = 1")
+    db.commit()
+    db.close()
+    with pytest.raises(mt.VerifyMismatch, match="content of user differs"):
+        mt.verify(ep(), private / "out", _ctx=target.ctx())
+
+
+def test_a_repository_that_moved_is_found_by_its_refs_digest(private):
+    _exported(private)
+    target = Host(private)
+    target.lines = lambda: tsv(REPOS).replace(ALPHA, "9" * 64)
+    with pytest.raises(mt.VerifyMismatch, match=r"labs/alpha\.git"):
+        mt.verify(ep(), private / "out", _ctx=target.ctx())
+
+
+def test_a_damaged_export_is_refused_before_the_target_is_read(private):
+    _exported(private)
+    with (private / "out" / "dump.zip").open("ab") as f:
+        f.write(b"x")
+    target = Host(private)
+    with pytest.raises(mt.VerifyMismatch, match="differs from its listing"):
+        mt.verify(ep(), private / "out", _ctx=target.ctx())
+    assert target.log == []
+
+
+def test_an_export_that_holds_nothing_verifies_nothing(private):
+    _exported(private)
+    m = json.loads((private / "out" / "manifest.json").read_text())
+    m["counts"]["repos"] = 0
+    (private / "out" / "manifest.json").write_text(json.dumps(m))
+    rows = []
+    for n in ("dump.zip", "manifest.json", "repos.tsv"):
+        b = (private / "out" / n).read_bytes()
+        rows.append(json.dumps({"key": n, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()}))
+    (private / "out" / "listing.jsonl").write_text("\n".join(rows) + "\n")
+    with pytest.raises(mt.MigrateError, match="refusing to call anything verified"):
+        mt.verify(ep(), private / "out", _ctx=Host(private).ctx())
+
+
+def test_a_final_delta_needs_an_export_from_a_frozen_source(private):
+    mt.dump(ep(), private / "out", allow_live=True, _ctx=Host(private, running=True).ctx())
+    with pytest.raises(mt.MigrateError, match="not dumped from a frozen source"):
+        mt.verify(ep(), private / "out", require_quiescent=True, _ctx=Host(private).ctx())
+
+
+# ----------------------------------------------------------------------------- stage
+
+
+def test_stage_creates_a_new_directory_under_the_data_root_and_checks_every_file(private):
+    _exported(private)
+    target = Host(private)
+    assert mt.stage(ep(), private / "out", STAGE, _ctx=target.ctx()) == STAGE
+    assert sorted(k.rsplit("/", 1)[1] for k in target.files if k != "dirs") == [
+        "dump.zip",
+        "listing.jsonl",
+        "manifest.json",
+        "repos.tsv",
+    ]
+    assert target.files[f"{STAGE}/dump.zip"] == (private / "out" / "dump.zip").read_bytes()
+    with pytest.raises(mt.MigrateError, match="failed"):  # a second stage into the same directory
+        mt.stage(ep(), private / "out", STAGE, _ctx=target.ctx())
+
+
+@pytest.mark.parametrize("dest", [
+    "/", "/srv", "/srv/data", "/srv/data/forge", "relative/dir", "/srv/data/forge/../x/y",
+    "/srv/data/forge//x", "/srv/data/forge/x/", "/etc/forge/incoming", "/srv/data/forgery/incoming",
+])  # fmt: skip
+def test_a_destination_that_is_shallow_not_canonical_or_outside_the_data_root_is_refused(
+    private, dest
+):
+    _exported(private)
+    target = Host(private)
+    with pytest.raises(mt.MigrateError):
+        mt.stage(ep(), private / "out", dest, _ctx=target.ctx())
+    assert target.log == []
+
+
+def test_stage_needs_the_data_root_and_an_intact_export(private):
+    _exported(private)
+    with pytest.raises(mt.MigrateError, match="data root"):
+        mt.stage(
+            mt.Endpoint(container="c", ssh=DEST), private / "out", STAGE, _ctx=Host(private).ctx()
+        )
+    with (private / "out" / "repos.tsv").open("a") as f:
+        f.write("x\n")
+    target = Host(private)
+    with pytest.raises(mt.MigrateError, match="differs from its listing"):
+        mt.stage(ep(), private / "out", STAGE, _ctx=target.ctx())
+    assert target.log == []
+
+
+def test_a_copy_that_arrives_different_is_an_error(private):
+    _exported(private)
+    target = Host(private)
+    real = target._run
+
+    def bad(cmd, stdin):
+        if cmd[0] == "sha256sum":
+            return b"0" * 64 + b"  x\n"
+        return real(cmd, stdin)
+
+    target._run = bad
+    with pytest.raises(mt.MigrateError, match="sha256 differs"):
+        mt.stage(ep(), private / "out", STAGE, _ctx=target.ctx())
+
+
+# ----------------------------------------------------------------------------- freeze, guards, cli
+
+
+def test_freeze_and_unfreeze_only_stop_and_start_the_container():
+    host = Host(
+        Path(tempfile.mkdtemp(dir=ROOT / "build" if (ROOT / "build").exists() else None)),
+        running=True,
+    )
+    assert mt.freeze(ep(), _ctx=host.ctx()) == {"stopped": "forge-1", "running": False}
+    assert mt.unfreeze(ep(), _ctx=host.ctx()) == {"started": "forge-1", "running": True}
+    verbs = [shlex.split(a[-1])[3] for a in host.log if shlex.split(a[-1])[3] in ("stop", "start")]
+    assert verbs == ["stop", "start"]
+
+
+@pytest.mark.parametrize("path, ok", [
+    ("/srv/data/x", True), ("/srv/data", False), ("/", False), ("/srv", False), ("srv/data/x", False),
+    ("/srv/data/../x", False), ("/srv//data/x", False), ("/srv/data/x/", False), ("/srv/./data/x", False),
+])  # fmt: skip
+def test_guard_dir_refuses_shallow_and_non_canonical_paths(path, ok):
+    if ok:
+        assert mt.guard_dir(path) == path
+    else:
+        with pytest.raises(mt.MigrateError):
+            mt.guard_dir(path)
+
+
+def test_guard_dir_keeps_a_path_inside_its_root_and_the_endpoint_refuses_relative_paths():
+    assert mt.guard_dir("/srv/data/forge/x", root="/srv/data/forge")
+    for bad in ("/srv/data/forge", "/srv/data/other/x", "/srv/data/forgery/x"):
+        with pytest.raises(mt.MigrateError):
+            mt.guard_dir(bad, root="/srv/data/forge")
+    with pytest.raises(mt.MigrateError):
+        mt.Endpoint(container="c", db_path="relative.db")
+
+
+def test_the_command_line_maps_a_mismatch_to_1_and_a_usage_error_to_2(private, capsys, monkeypatch):
+    host = Host(private)
+    monkeypatch.setattr(mt, "_subprocess_runner", host)
+    base = ["--ssh", DEST, "--container", "forge-1"]
+    assert mt.main(["dump", *base, "--dir", str(private / "out")]) == 0
+    assert json.loads(capsys.readouterr().out)["counts"]["users"] == 2
+    host.users = 3
+    host.db.unlink()
+    sqlite3.connect(host.db).executescript(dump_sql(users=3))
+    assert mt.main(["verify", *base, "--dir", str(private / "out")]) == 1
+    assert "counts differ" in capsys.readouterr().err
+    assert mt.main(["verify", *base]) == 2  # no --dir
+    assert mt.main(["stage", *base, "--dir", str(private / "out")]) == 2  # no --dest
+    assert io.StringIO is not None

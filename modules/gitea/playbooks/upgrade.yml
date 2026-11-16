@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Upgrade: validate and record a pinned image bump (gitea_target_image: the same repository, a tag
+# not older than the running one), export first (a newer Gitea migrates its database forward and
+# cannot be taken back), then converge with the new pin (set gitea_image to the target in the
+# overlay).
+#   ansible-playbook -i <inventory> modules/gitea/playbooks/upgrade.yml -e gitea_target_image=<ref>
+- name: Upgrade the forge provider
+  hosts: mod_gitea_server
+  become: true
+  tasks:
+    - name: Validate and record the bump
+      ansible.builtin.include_role:
+        name: gitea
+        tasks_from: upgrade
+    - name: Export the instance before the new image opens its database
+      ansible.builtin.include_role:
+        name: gitea
+        tasks_from: export
+    - name: Converge on the new pin
+      ansible.builtin.include_role:
+        name: gitea
+      vars:
+        gitea_image: "{{ gitea_target_image }}"

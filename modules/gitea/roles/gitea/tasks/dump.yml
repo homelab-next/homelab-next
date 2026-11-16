@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+# The export (object-tree) under <data root>/export/: dump.zip (gitea dump: the repositories, the
+# database as SQL, the avatars, attachments, packages and keys), repos.tsv (the repositories'
+# manifest: refs digest and fsck verdict), manifest.json (the product version, the database's counts
+# and fingerprint read from the dump itself, the repositories' count) and listing.jsonl (key, size,
+# sha256 of the three). A snapshot taken with the service STOPPED, so the repositories, the database
+# and the manifest are one state; the service is started again whatever happened, and the previous
+# archive is kept as dump.zip.prev. Every run writes a new one (the hook reports changed).
+- name: Take the instance down for a consistent dump
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", stop, "{{ gitea_service }}"]
+  changed_when: true
+  tags: [backup, export]
+
+- name: Dump, list and describe the stopped instance
+  block:
+    - name: Remove a partial dump an earlier failed run left (the one temporary file)
+      ansible.builtin.file:
+        path: "{{ gitea_data_root }}/export/.dump.zip.tmp"
+        state: absent
+    - name: Dump the instance (gitea dump; the image's entrypoint prepares its temporary directory first)
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", run, --rm, -T, --no-deps,
+               "{{ gitea_service }}", gitea, --config, "{{ gitea_container_conf }}/app.ini",
+               dump, --type, zip, --skip-log, --file, "{{ gitea_container_export }}/.dump.zip.tmp"]
+      changed_when: true
+    - name: Take the repositories' manifest
+      ansible.builtin.include_tasks: repos.yml
+    - name: Read the dump's database facts
+      ansible.builtin.include_tasks: helper.yml
+      vars:
+        gitea_helper_cmd: dbcounts
+        gitea_helper_extra: {zip: "{{ gitea_data_root }}/export/.dump.zip.tmp"}
+    - name: Refuse a dump that proves nothing
+      ansible.builtin.assert:
+        that:
+          - gitea_facts.counts.users | int > 0
+          - gitea_repos_lines | select('search', '\tfail\Z') | list | length == 0
+          - (gitea_repos_lines | reject('search', '\.wiki\.git\t') | list | length) == gitea_facts.counts.repos | int
+        fail_msg: >-
+          forge: the dump does not describe the repositories on disk (accounts {{ gitea_facts.counts.users }},
+          repositories in the database {{ gitea_facts.counts.repos }}, on disk
+          {{ gitea_repos_lines | reject('search', '\.wiki\.git\t') | list | length }}, failing fsck
+          {{ gitea_repos_lines | select('search', '\tfail\Z') | list | length }}); nothing was put in place
+    - name: Keep the previous archive
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ gitea_data_root }}/export/dump.zip", "{{ gitea_data_root }}/export/dump.zip.prev"]
+      args:
+        removes: "{{ gitea_data_root }}/export/dump.zip"
+      changed_when: true
+    - name: Put the dump in place
+      ansible.builtin.command:
+        argv: [mv, -f, "{{ gitea_data_root }}/export/.dump.zip.tmp", "{{ gitea_data_root }}/export/dump.zip"]
+      changed_when: true
+    - name: Write the repositories' manifest
+      ansible.builtin.copy:
+        content: "{{ gitea_repos_lines | join('\n') }}\n"
+        dest: "{{ gitea_data_root }}/export/repos.tsv"
+        owner: "{{ gitea_owner }}"
+        group: "{{ gitea_group }}"
+        mode: "0600"
+    - name: Write the manifest
+      ansible.builtin.copy:
+        content: >-
+          {{ {'format': 1, 'product_version': gitea_product_version, 'image': gitea_image,
+              'counts': gitea_facts.counts, 'fingerprint': gitea_facts.fingerprint,
+              'repositories': gitea_repos_lines | length} | to_nice_json(sort_keys=true) }}
+        dest: "{{ gitea_data_root }}/export/manifest.json"
+        owner: "{{ gitea_owner }}"
+        group: "{{ gitea_group }}"
+        mode: "0600"
+    - name: Read the three files (size, sha256)
+      ansible.builtin.stat:
+        path: "{{ gitea_data_root }}/export/{{ item }}"
+        checksum_algorithm: sha256
+      loop: [dump.zip, manifest.json, repos.tsv]
+      register: gitea_export_stat
+    - name: Write the listing
+      ansible.builtin.copy:
+        content: |
+          {% for r in gitea_export_stat.results %}{{ {'key': r.item, 'size': r.stat.size, 'sha256': r.stat.checksum} | to_json(sort_keys=true) }}
+          {% endfor %}
+        dest: "{{ gitea_data_root }}/export/listing.jsonl"
+        owner: "{{ gitea_owner }}"
+        group: "{{ gitea_group }}"
+        mode: "0600"
+  always:
+    - name: Start the instance again
+      ansible.builtin.command:
+        argv: [docker, compose, -f, "{{ gitea_dir }}/docker-compose.yml", up, -d, --wait, "{{ gitea_service }}"]
+      changed_when: true
+      when: gitea_start | bool
+  tags: [backup, export]

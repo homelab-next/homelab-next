@@ -254,6 +254,7 @@ MIGRATION_PROOF = {
     "dataflow": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "detections": "reference: the detections protocol has no export/import_ yet",
     "dns": "reference: the dns protocol has no export/import_ yet",
+    "forge": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "events": "reference: the events protocol has no export/import_ yet",
     "hot-index": "reference: the slot is provisional (no contract), so nothing can add export/import_",
     "idp": "reference: the idp protocol has no export/import_ yet",

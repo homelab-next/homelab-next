@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# The data root and the project's own directories. data/ (the container's /var/lib/gitea), conf/
+# (/etc/gitea) and export/ belong to the container's user; tls/, sshkeys/ and bin/ are root's, with the
+# container's group able to enter tls/ and sshkeys/. Nothing here is ever removed by the role (a
+# bind-mounted directory taken away under a running container breaks it).
+- name: Create the data root, the container's directories and the project's
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ gitea_data_root }}", owner: "{{ gitea_owner }}", group: "{{ gitea_group }}", mode: "0750"}
+    - {path: "{{ gitea_data_root }}/data", owner: "{{ gitea_uid | int }}", group: "{{ gitea_gid | int }}", mode: "0750"}
+    - {path: "{{ gitea_data_root }}/conf", owner: "{{ gitea_uid | int }}", group: "{{ gitea_gid | int }}", mode: "0700"}
+    - {path: "{{ gitea_data_root }}/export", owner: "{{ gitea_uid | int }}", group: "{{ gitea_gid | int }}", mode: "0700"}
+    - {path: "{{ gitea_dir }}", owner: "{{ gitea_owner }}", group: "{{ gitea_group }}", mode: "0750"}
+    - {path: "{{ gitea_dir }}/bin", owner: "{{ gitea_owner }}", group: "{{ gitea_group }}", mode: "0750"}
+    - {path: "{{ gitea_dir }}/tls", owner: "{{ gitea_owner }}", group: "{{ gitea_gid | int }}", mode: "0750"}
+    - {path: "{{ gitea_dir }}/sshkeys", owner: "{{ gitea_owner }}", group: "{{ gitea_gid | int }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+  tags: [health, backup, restore, export, upgrade]
+
+- name: Install the helpers the hooks run
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ gitea_dir }}/bin/{{ item }}"
+    owner: "{{ gitea_owner }}"
+    group: "{{ gitea_group }}"
+    mode: "0640"
+  loop: [hnx_gitea.py, gitea_restore.py]
+  tags: [health, backup, restore, export, upgrade]
