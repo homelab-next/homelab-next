@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+# The connector's dependencies are the container engine (docker_engine, applied to the guest before
+# this module) and the tunnel token in the secret store; it calls no service of the lab.
+- block:
+    - name: The container engine is ready (docker_engine readiness)
+      ansible.builtin.include_role:
+        name: docker_engine
+        tasks_from: readiness
+    - name: The tunnel token resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+  tags: [readiness]

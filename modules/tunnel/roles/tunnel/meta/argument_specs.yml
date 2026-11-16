@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: Apache-2.0
+argument_specs:
+  main:
+    short_description: Run the connector of a remotely managed tunnel as a compose_app, outbound only, with the tunnel token as its only credential and no ingress configuration.
+    options:
+      tunnel_logical_id: &logical
+        type: str
+        description: "The instance's registry id (the service row the site binds, e.g. edge-tunnel; not the module id, which is a core name)."
+        required: true
+      tunnel_image: &image
+        type: str
+        description: "repository:tag@sha256:<digest> of the connector image."
+        default: "docker.io/cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba"
+      tunnel_bind: &bind
+        type: str
+        description: "The guest's own IPv4 address the metrics and readiness port is published on (never all interfaces)."
+        default: "{{ ansible_host }}"
+      tunnel_port: &port
+        type: int
+        description: "Host port of the metrics and readiness listener (the registry row's port)."
+        default: 20241
+      tunnel_dir: &dir
+        type: path
+        description: "The compose project directory."
+        default: /opt/compose/tunnel
+      tunnel_data_root: &root
+        type: path
+        description: "The data root compose_app creates (the connector keeps no data in it)."
+        default: /var/lib/hnx-modules/tunnel
+      tunnel_owner: &owner
+        type: str
+        description: "Owner of the compose project."
+        default: root
+      tunnel_group: &group
+        type: str
+        description: "Group of the compose project."
+        default: root
+      tunnel_uid: &uid
+        type: int
+        description: "The container's user id (the image's non-root user)."
+        default: 65532
+      tunnel_gid: &gid
+        type: int
+        description: "The container's group id."
+        default: 65532
+      tunnel_join_ref: &token
+        type: str
+        description: "secret:<name> of the tunnel token (base64 JSON naming the account, tunnel and secret). Refused when empty or malformed."
+        default: secret:tunnel/token
+      tunnel_mem_limit: &mem
+        type: str
+        description: "Container memory limit."
+        default: 256m
+      tunnel_min_connections: &minconn
+        type: int
+        description: "The least number of ready connections the health hook accepts."
+        default: 1
+      tunnel_udp_buffer_bytes: &udp
+        type: int
+        description: "Bytes net.core.rmem_max and wmem_max are raised to when below (never lowered): (QUIC; 7340032 or more)."
+        default: 8388608
+      tunnel_sysctl_manage: &sysctl_manage
+        type: bool
+        description: "Persist the UDP buffer ceilings in a sysctl.d file."
+        default: true
+      tunnel_sysctl_apply: &sysctl_apply
+        type: bool
+        description: "Apply the ceilings now when the file changed."
+        default: true
+      tunnel_sysctl_cli: &sysctl_cli
+        type: str
+        description: "The sysctl command (read the live ceilings, raise them)."
+        default: sysctl
+      tunnel_sysctl_file: &sysctl_file
+        type: path
+        description: "The sysctl.d file the ceilings are written to."
+        default: /etc/sysctl.d/00-hnx-tunnel-udp.conf
+      tunnel_start: &start
+        type: bool
+        description: "Run docker compose up after rendering."
+        default: true
+      tunnel_validate_with_docker: &validate
+        type: bool
+        description: "Run docker compose config on the rendered file."
+        default: true
+      tunnel_docker_cli: &cli
+        type: str
+        description: "The docker command."
+        default: docker
+      tunnel_health_timeout: &htimeout
+        type: int
+        description: "Seconds for each health request."
+        default: 10
+  health:
+    short_description: Fail unless the container is healthy, its port is on the guest's address only and /ready answers 200 with the least number of ready connections.
+    options:
+      tunnel_logical_id: *logical
+      tunnel_image: *image
+      tunnel_bind: *bind
+      tunnel_port: *port
+      tunnel_dir: *dir
+      tunnel_data_root: *root
+      tunnel_owner: *owner
+      tunnel_group: *group
+      tunnel_uid: *uid
+      tunnel_gid: *gid
+      tunnel_join_ref: *token
+      tunnel_mem_limit: *mem
+      tunnel_min_connections: *minconn
+      tunnel_udp_buffer_bytes: *udp
+      tunnel_sysctl_file: *sysctl_file
+      tunnel_sysctl_cli: *sysctl_cli
+      tunnel_start: *start
+      tunnel_validate_with_docker: *validate
+      tunnel_docker_cli: *cli
+      tunnel_health_timeout: *htimeout
+  readiness:
+    short_description: Fail unless the container engine is ready and the tunnel token resolves, is not empty and has the form the connector reads.
+    options:
+      tunnel_join_ref: *token
+  backup:
+    short_description: Nothing to back up; the connector keeps no state.
+    options: {}
+  restore:
+    short_description: Nothing to restore; re-running main renders it again.
+    options: {}
+  export:
+    short_description: Nothing to export; the connector holds no data of its own.
+    options: {}
+  upgrade:
+    short_description: Validate an image bump (tag and digest, same repository) and record it as pending.
+    options:
+      tunnel_logical_id: *logical
+      tunnel_image: *image
+      tunnel_bind: *bind
+      tunnel_port: *port
+      tunnel_dir: *dir
+      tunnel_data_root: *root
+      tunnel_owner: *owner
+      tunnel_group: *group
+      tunnel_uid: *uid
+      tunnel_gid: *gid
+      tunnel_join_ref: *token
+      tunnel_mem_limit: *mem
+      tunnel_min_connections: *minconn
+      tunnel_udp_buffer_bytes: *udp
+      tunnel_sysctl_file: *sysctl_file
+      tunnel_sysctl_cli: *sysctl_cli
+      tunnel_start: *start
+      tunnel_validate_with_docker: *validate
+      tunnel_docker_cli: *cli
+      tunnel_health_timeout: *htimeout
+      tunnel_target_image:
+        type: str
+        description: "repository:tag@sha256:<digest> to move to."
+        required: true

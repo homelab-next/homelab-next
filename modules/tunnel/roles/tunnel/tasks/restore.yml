@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Nothing to restore (re-run main to render and start the connector again)
+  ansible.builtin.debug:
+    msg: tunnel keeps no data of its own; its token is in the secret store and re-running main renders it again
+  tags: [restore]

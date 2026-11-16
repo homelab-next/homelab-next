@@ -26,6 +26,7 @@ slots:
   detections:          {stage: 4, contract: detections.py, stateful: true, export_formats: [sigma], formats: {in: [sigma, ocsf], out: [ocsf]}}
   cases:               {stage: 6, contract: cases.py, stateful: true, export_formats: [jsonl, markdown-tree], formats: {in: [cloudevents], out: [cloudevents]}, egress: true}
   exposure-management: {stage: 8, contract: null, stateful: false, formats: {in: [], out: [sarif, ocsf]}}
+  tunnel:              {stage: null, contract: null, stateful: false, formats: {in: [], out: []}}
   static-hosting:      {stage: 10, contract: null, stateful: false, formats: {in: [], out: []}, egress: true}
   secrets:             {stage: null, contract: secrets.py, stateful: true, export_formats: [json], required_in_core: true, privileged: true, authority: true}
   idp:                 {stage: null, contract: idp.py, stateful: true, export_formats: [json], required_in_core: true, privileged: true, authority: true, granted_upstream: true}

@@ -106,6 +106,7 @@ capabilities:
   cap:exposure-management: [exec]
   cap:records-db: [file-write]
   cap:static-hosting: [file-write]
+  cap:tunnel: [exec]  # the connector that publishes a lab name to the internet: changing what it serves acts on every user
   cap:media: [read]  # the media slot: a server that plays a library to its clients
   # the capabilities the other example registries use (examples/four-box-lab, lab-topology,
   # minimal); each would otherwise be unclassified, refused to every profile, and an overlay would

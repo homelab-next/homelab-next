@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: Apache-2.0
+- name: Validate the inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Build the application spec
+  ansible.builtin.include_tasks: app.yml
+
+# An empty or malformed token is refused here, before anything is rendered or started.
+- name: Refuse a missing or malformed tunnel token before the connector sees it
+  ansible.builtin.include_tasks: credentials.yml
+
+- name: Keep the UDP buffers QUIC needs
+  ansible.builtin.include_tasks: sysctl.yml
+  when: tunnel_sysctl_manage | bool
+
+# The token goes to a file the container reads (mounted read-only, owned by the container's user,
+# 0400), never into its environment. Only the write task handles the token, and it is no_log.
+# (under the data root: compose_app keeps its own secrets/ directory out of any bind source)
+- name: Create the token directory
+  ansible.builtin.file:
+    path: "{{ tunnel_data_root }}/join"
+    state: directory
+    owner: "{{ tunnel_owner }}"
+    group: "{{ tunnel_group }}"
+    mode: "0700"
+
+- name: Write the token file
+  ansible.builtin.copy:
+    dest: "{{ tunnel_data_root }}/join/token"
+    content: "{{ lookup('hnx_secret', tunnel_join_ref) | trim }}"
+    owner: "{{ tunnel_uid | int }}"
+    group: "{{ tunnel_gid | int }}"
+    mode: "0400"
+  register: tunnel_join_written
+  no_log: true
+
+# No blanket no_log here: docker pull / compose up failures stay readable. compose_app hides the
+# secret env files it writes itself, and this role passes it none.
+- name: Render and start the connector
+  ansible.builtin.include_role:
+    name: compose_app
+  vars:
+    compose_app_name: "{{ tunnel_app.compose_app_name }}"
+    compose_app_dir: "{{ tunnel_app.compose_app_dir }}"
+    compose_app_data_dir: "{{ tunnel_app.compose_app_data_dir }}"
+    compose_app_export_dir: "{{ tunnel_app.compose_app_export_dir }}"
+    compose_app_owner: "{{ tunnel_app.compose_app_owner }}"
+    compose_app_group: "{{ tunnel_app.compose_app_group }}"
+    compose_app_start: "{{ tunnel_app.compose_app_start }}"
+    compose_app_validate_with_docker: "{{ tunnel_app.compose_app_validate_with_docker }}"
+    compose_app_spec: "{{ tunnel_app.compose_app_spec }}"
+
+# cloudflared reads the token file only at start and compose does not see a bind-mounted file's
+# content change, so a rotated secret:tunnel/token needs the container recreated.
+- name: Recreate the connector so a changed token is used
+  ansible.builtin.command:
+    argv: ["{{ tunnel_docker_cli }}", compose, -f, "{{ tunnel_app.compose_app_dir }}/docker-compose.yml", up, -d, --force-recreate, tunnel]
+  when: tunnel_join_written is changed and tunnel_start | bool
+  changed_when: true

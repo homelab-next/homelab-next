@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Healthy means: the container runs and is healthy, its port is published on the guest's address
+# only, and the connector's own readiness endpoint answers 200 with at least tunnel_min_connections
+# ready connections to the provider's edge (the daemon's view, not the LAN's: LL-173). Whether a
+# public name works end to end is a different question, answered from the Cloudflare edge alone
+# (LL-107), never from a LAN resolver. Read-only.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Build the application spec
+      ansible.builtin.include_tasks: app.yml
+    - name: Nothing to check yet (tunnel_start is false, so not started by design)
+      ansible.builtin.debug:
+        msg: >-
+          tunnel - tunnel_start is false, so the connector is deliberately not running (the hand-off
+          deploys it stopped); health checks the running connector only once tunnel_start is true
+      when: not (tunnel_start | bool)
+    - name: The running connector
+      when: tunnel_start | bool
+      block:
+        - name: Every container of the spec is running and healthy
+          ansible.builtin.include_role:
+            name: compose_app
+            tasks_from: health
+          vars:
+            compose_app_name: tunnel
+            compose_app_dir: "{{ tunnel_app.compose_app_dir }}"
+            compose_app_spec: "{{ tunnel_app.compose_app_spec }}"
+        - name: The published port is bound to the guest's address only
+          ansible.builtin.command:
+            argv: ["{{ tunnel_docker_cli }}", compose, -f, "{{ tunnel_app.compose_app_dir }}/docker-compose.yml", port, tunnel, "{{ tunnel_container_metrics_listen[1:] }}"]
+          register: tunnel_published
+          changed_when: false
+          check_mode: false
+          failed_when: >-
+            tunnel_published.rc != 0 or
+            (tunnel_published.stdout_lines | default([])) | length == 0 or
+            (tunnel_published.stdout_lines | default([])) | reject('equalto', tunnel_bind ~ ':' ~ (tunnel_port | int)) | list | length > 0
+        - name: The connector reports itself ready (/ready is 200 only with a connection)
+          ansible.builtin.uri:
+            url: "http://{{ tunnel_bind }}:{{ tunnel_port | int }}/ready"
+            status_code: 200
+            return_content: true
+            timeout: "{{ tunnel_health_timeout | int }}"
+          register: tunnel_ready
+          changed_when: false
+        - name: It holds at least the least number of ready connections
+          ansible.builtin.assert:
+            that:
+              - (tunnel_ready.content | from_json).readyConnections | default(0) | int >= tunnel_min_connections | int
+            fail_msg: >-
+              tunnel: the connector reports {{ (tunnel_ready.content | from_json).readyConnections | default(0) }} ready
+              connection(s), fewer than {{ tunnel_min_connections }}: it is up but not joined to the tunnel
+              (is the token the right tunnel's, and may the guest reach the provider's edge on 7844?)
+  tags: [health]

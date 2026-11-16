@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fixed, not settings: role vars outrank inventory, so a deployment cannot loosen them.
+# The connector reads its whole configuration from the tunnel (remotely managed): the container is
+# given the token (env_file) and these flags, never a config file, so there is no ingress to render.
+# The metrics/readiness listener (":20241", no host part) listens on every interface INSIDE the
+# container only so the published port reaches it; the host publishes it on the guest's address alone.
+tunnel_container_metrics_listen: ":20241"
+# where the token file is mounted in the container (read-only)
+tunnel_container_join_path: /run/tunnel-join
+tunnel_pinned_ref_pattern: '^[^@:]+(/[^@:]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}\Z'
+tunnel_ipv4_pattern: '^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}\Z'
+tunnel_path_pattern: '^(/(?!\.\.?(?:/|\Z))[A-Za-z0-9_.-]+)+\Z'
+tunnel_ref_form: '^secret:[a-z0-9][a-z0-9/_.-]*\Z'
+# a tunnel token is base64 (standard or URL-safe, padded or not) of a JSON object {"a","t","s"}
+tunnel_join_form: '^[A-Za-z0-9+/_=-]{60,}\Z'
+tunnel_join_keys: [a, s, t]
+tunnel_repository: "{{ tunnel_image.split('@')[0].rsplit(':', 1)[0] }}"
+tunnel_tag: "{{ tunnel_image.split('@')[0].rsplit(':', 1)[1] | default('') }}"
+tunnel_digest: "{{ tunnel_image.split('@')[1] | default('') }}"
