@@ -12,7 +12,7 @@ overlay.
 | | |
 |---|---|
 | Slot | `inference` (contract `conformance/protocols/inference.py`), stateless |
-| Adapter | the shared `homelabnext.conform.adapters.llm_gateway:make`, features `streaming`, `embeddings`, `gateway`, `turn-records` |
+| Adapter | the shared `homelabnext.conform.adapters.llm_gateway:make`, features `streaming`, `gateway`, `turn-records` |
 | Product | the lab's own gateway, `orchestrator/cmd/gateway`, as the image `image/Dockerfile` builds |
 | Host role | `server`: kind `vm`, baseline `base`, footprint 1 vCPU, 512 MB, 10 GB |
 | Role | `gateway` (role interface v1), a wrapper of the core `compose_app` |
@@ -36,9 +36,10 @@ beside it, and the choice is made on these facts:
   March and **1.107.0 in October, a credential stealer on PyPI and Docker Hub** (the old lab's
   incident of 2026-10-21, C2 `litellm.dev`). This gateway is Go, standard library only, built from
   this repository's own commit with no module download (`go.sum` is not even consulted for a
-  dependency), and the image is **empty but for one static binary**. The role refuses an image that
-  names the other product at all (`gateway_refused_words`), whatever its tag or digest, and a test
-  holds that.
+  dependency), and the image is **empty but for one static binary**. The role accepts an image only
+  from the repositories the site lists (`gateway_build_repositories`, default the build's own
+  `localhost/hnx-llm-gateway`); an image of any other repository is refused, whatever its tag or
+  digest, and a test holds that.
 - **It reads the request's TLP label** (`X-HNX-TLP`, ADR-0038 decision 5): a request above a
   role's ceiling is refused before any backend is called, and an unlabelled request to a role that
   leaves the lab is refused (`unlabelled`). LiteLLM can enforce key scope only.
@@ -93,8 +94,7 @@ two), it speaks the OpenAI protocol and Anthropic's only, and the callers must s
 - **A changed config or key restarts it** (`docker compose restart -t 135`: SIGTERM drains calls in
   flight for the upstream timeout plus 5 s). The gateway reads both once, at start. A restart clears
   the rate-limit windows.
-- **The image is the lab's own gateway**: an image that names the other gateway product is refused by
-  name, whatever its tag or digest.
+- **The image is the lab's own gateway**: an image from a repository not in `gateway_build_repositories` is refused, whatever its tag or digest.
 
 Data lives under the module's data root `gateway_data_root` (`/var/lib/hnx-modules/gateway`):
 `config/` (root's, readable by the container's group, mounted read-only), `state/` (the container's,
@@ -179,9 +179,9 @@ The overlay carries every real value ([selection](../../docs/modules/selection.m
 ## Conformance
 
 `conformance/target.yml` is the `inference` suite through the shared gateway adapter, with the features
-that call only **local** roles (`streaming`, `embeddings`, `gateway`, `turn-records`): a run against the
+that call only **local** roles (`streaming`, `gateway`, `turn-records`): a run against the
 lab's instance spends nothing at the cloud provider. It needs, in a copy of the file, `allow_plaintext:
-true` (the lab's http), the lab's role table path, a chat role and an embedding role, and in the spec a
+true` (the lab's http), the lab's role table path, a chat role, and in the spec a
 `conformance-throttle` key (local-only, `window_s: 60`, `max_requests: 3`) and the telemetry reader. The
 cloud-facing checks (`tlp-ceiling`, `tlp-admit`, the refused-fallback check) run in this repository's CI
 against the fake inference server, on the same source.
@@ -196,6 +196,7 @@ HNX_SECRET_GATEWAY_KEY_CONFORMANCE_THROTTLE=... HNX_SECRET_GATEWAY_KEY_TELEMETRY
 
 ## Known limits
 
+- **No `embeddings` feature in the module's target yet**: no embedding backend exists in the new lab, so the target does not check one. Add `embeddings` to `module.yml` and the target (with an `embed_model` role) when a backend exists.
 - **The usage file is not rotated** by the gateway. `health` fails past `gateway_usage_max_mb`; export it,
   stop the gateway and move the old file aside. A rotation timer is a later change.
 - **Limits are in memory and per process**: a restart (a key rotation, a config change) clears them; two

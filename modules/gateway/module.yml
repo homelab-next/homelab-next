@@ -64,7 +64,7 @@ provides:
   slots:
     inference:
       adapter: homelabnext.conform.adapters.llm_gateway:make
-      features: [streaming, embeddings, gateway, turn-records]
+      features: [streaming, gateway, turn-records]
       conformance:
         target: conformance/target.yml
 egress:

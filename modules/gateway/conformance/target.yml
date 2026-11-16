@@ -14,20 +14,20 @@
 # key over http to a host that is not loopback, so a run against the lab's instance sets
 # allow_plaintext: true in a copy of this file (a decision for that run, not a default here).
 # The copy also names the lab's own role table (`roles`, relative to its checkout) and the lab's
-# local roles (`model` and `throttle_model`, a role that chats; `embed_model`, one that embeds);
+# local roles (`model` and `throttle_model`, a role that chats; add `embeddings` to the features and an
+# `embed_model` role when the lab has an embedding backend);
 # the lab's gateway spec must declare the throttle key (local-only, `window_s: 60`,
 # `max_requests: 3`, scoped to `throttle_model`) and the telemetry reader.
 name: gateway
 capabilities:
   inference:
     adapter: homelabnext.conform.adapters.llm_gateway:make
-    features: [streaming, embeddings, gateway, turn-records]
+    features: [streaming, gateway, turn-records]
     config:
       roles: lab/model_roles.json
       key: secret:gateway/master-key
       capability: inference
       model: fast-classifier
-      embed_model: embedder
       throttle_key: secret:gateway/key-conformance-throttle
       throttle_model: fast-classifier
       throttle_requests: 3
