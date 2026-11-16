@@ -1,0 +1,8 @@
+{# SPDX-License-Identifier: Apache-2.0 -#}
+# Managed by homelabnext (role orchestration): the health check's one agent, a local-only job the
+# smoke session answers. Present only while the runner is the smoke session.
+id: hnx-health-v1
+agent_key: {{ orchestration_health_agent_key }}
+toolsets: {real: hnx-health, shadow: hnx-health}
+local_only: true
+default_task_description: The health check's job.

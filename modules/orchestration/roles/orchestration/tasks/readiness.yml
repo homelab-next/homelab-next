@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: Apache-2.0
+# Fail unless every dependency is there before anything is written: systemd and setpriv on the host,
+# the pinned binary and the site's profiles on the control host, every credential in its form, and
+# the gateway in the registry when one is asked for. The controller has no dependency on another
+# service to start: its callers, the events forwarder and the gateway are reached when a job needs
+# them, and a refused one fails that job, never the controller.
+- block:
+    - name: Validate the inputs
+      ansible.builtin.include_tasks: validate.yml
+    - name: Every credential resolves in its form
+      ansible.builtin.include_tasks: credentials.yml
+    - name: Look for systemd on the host
+      ansible.builtin.stat:
+        path: /run/systemd/system
+      register: orchestration_systemd_dir_stat
+    - name: The host runs systemd and has setpriv
+      ansible.builtin.assert:
+        that: orchestration_systemd_dir_stat.stat.isdir | default(false)
+        fail_msg: "orchestration: the host does not run systemd ({{ orchestration_unit }} is a unit)"
+    - name: Look for setpriv (the service user's check and export run through it)
+      ansible.builtin.command:
+        argv: [setpriv, --version]
+      changed_when: false
+    - name: Hash the pinned binary where the play controls it
+      ansible.builtin.stat:
+        path: "{{ orchestration_binary }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: orchestration_src_stat
+      delegate_to: localhost
+      become: false
+    - name: The binary is there and is the pinned one
+      ansible.builtin.assert:
+        that:
+          - orchestration_src_stat.stat.exists
+          - orchestration_src_stat.stat.isreg | default(false)
+          - orchestration_src_stat.stat.checksum == orchestration_binary_sha256
+        fail_msg: >-
+          orchestration: {{ orchestration_binary }} is missing, not a regular file, or does not hash
+          to the pinned {{ orchestration_binary_sha256 }} (make orchestration-binary builds it and
+          prints the sha256 to pin)
+    - name: List the site's profile files
+      ansible.builtin.find:
+        paths: "{{ orchestration_profiles_src }}"
+        patterns: ["*.yaml"]
+        file_type: file
+        recurse: false
+      register: orchestration_src_profiles
+      delegate_to: localhost
+      become: false
+    - name: There is at least one profile
+      ansible.builtin.assert:
+        that: orchestration_src_profiles.files | length > 0
+        fail_msg: "orchestration: {{ orchestration_profiles_src }} holds no *.yaml profile"
+    - name: The gateway is in the registry
+      ansible.builtin.assert:
+        that: lookup('hnx_registry', orchestration_gateway_id, field='url') is match('^https?://')
+        fail_msg: "orchestration: {{ orchestration_gateway_id }} is not a service of the registry"
+      when: orchestration_gateway_id != ''
+  tags: [readiness]

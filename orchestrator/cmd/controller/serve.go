@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/homelab-next/homelab-next/orchestrator/internal/api"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/backends"
 	"github.com/homelab-next/homelab-next/orchestrator/internal/events"
@@ -84,6 +86,13 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 		return exitUsage
 	}
 	lg := log.New(stderr, "", log.LstdFlags|log.LUTC)
+	// Not dumpable: another process of the same user (a session) cannot read this process's
+	// environment, memory or descriptors through /proc, nor attach to it. A session's own exec
+	// resets the flag for itself.
+	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+		lg.Printf("controller: PR_SET_DUMPABLE 0: %v", err)
+		return exitProblem
+	}
 
 	s, problems := loadSite(*cfgPath)
 	if len(problems) > 0 {
@@ -137,6 +146,14 @@ func serve(args []string, stderr io.Writer, hooks *serveHooks) int {
 		token := ""
 		if cfg.Events.TokenEnv != "" {
 			token = os.Getenv(cfg.Events.TokenEnv)
+		}
+		if cfg.Events.TokenFile != "" {
+			b, err := os.ReadFile(cfg.Events.TokenFile)
+			token = strings.TrimSpace(string(b))
+			if err != nil || token == "" {
+				lg.Printf("controller: events.token_file %s: unreadable or empty", cfg.Events.TokenFile)
+				return exitProblem
+			}
 		}
 		var err error
 		sender, err = events.NewOutboxSender(events.Config{URL: cfg.Events.ForwarderURL, BearerToken: token}, st, 0)
